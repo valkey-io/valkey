@@ -1240,7 +1240,6 @@ void raxFreeWithCallback(rax *rax, void (*free_callback)(void *)) {
 /* Free a whole radix tree. */
 void raxFree(rax *rax) {
     raxFreeWithCallback(rax, NULL);
-    rax->alloc = sizeof(rax);
 }
 
 /* ------------------------------- Iterator --------------------------------- */

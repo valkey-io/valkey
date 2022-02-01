@@ -6643,6 +6643,12 @@ int main(int argc, char **argv) {
                 flags |= TEST_LARGE_MEMORY;
             else if (!strcasecmp(arg, "--valgrind"))
                 flags |= TEST_VALGRIND;
+            else if (!strcasecmp(arg, "--benchmark"))
+                flags |= TEST_BENCHMARK;
+            else if (!strcasecmp(arg, "--fuzz-cluster"))
+                flags |= TEST_FUZZ_CLUSTER;
+            else if (!strcasecmp(arg, "--huge-key"))
+                flags |= TEST_HUGE_KEY;
         }
 
         if (!strcasecmp(argv[2], "all")) {

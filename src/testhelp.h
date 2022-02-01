@@ -42,6 +42,9 @@
 #define TEST_ACCURATE (1 << 0)
 #define TEST_LARGE_MEMORY (1 << 1)
 #define TEST_VALGRIND (1 << 2)
+#define TEST_BENCHMARK (1 << 3)
+#define TEST_FUZZ_CLUSTER (1 << 4)
+#define TEST_HUGE_KEY (1 << 5)
 
 extern int __failed_tests;
 extern int __test_num;

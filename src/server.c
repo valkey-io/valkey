@@ -6595,6 +6595,7 @@ int iAmPrimary(void) {
 #ifdef SERVER_TEST
 #include "testhelp.h"
 #include "intset.h" /* Compact integer set structure */
+#include "rax-test.c"
 
 int __failed_tests = 0;
 int __test_num = 0;
@@ -6612,6 +6613,7 @@ struct serverTest {
     {"zipmap", zipmapTest},
     {"dict", dictTest},
     {"listpack", listpackTest},
+    {"rax", raxTest},
 };
 serverTestProc *getTestProcByName(const char *name) {
     int numtests = sizeof(serverTests) / sizeof(struct serverTest);

@@ -3541,6 +3541,8 @@ int dictSdsKeyCaseCompare(dict *d, const void *key1, const void *key2);
 void dictSdsDestructor(dict *d, void *val);
 void dictListDestructor(dict *d, void *val);
 void *dictSdsDup(dict *d, const void *key);
+size_t dictSdsKeyToBytes(unsigned char *buf, const void *key, unsigned char *header_size);
+size_t dictSdsKeyLen(const void *key);
 
 /* Git SHA1 */
 char *serverGitSHA1(void);

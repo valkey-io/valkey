@@ -722,12 +722,6 @@ dictEntry *kvstoreDictGetFairRandomKey(kvstore *kvs, int didx) {
     return dictGetFairRandomKey(d);
 }
 
-dictEntry *kvstoreDictFindEntryByPtrAndHash(kvstore *kvs, int didx, const void *oldptr, uint64_t hash) {
-    dict *d = kvstoreGetDict(kvs, didx);
-    if (!d) return NULL;
-    return dictFindEntryByPtrAndHash(d, oldptr, hash);
-}
-
 unsigned int kvstoreDictGetSomeKeys(kvstore *kvs, int didx, dictEntry **des, unsigned int count) {
     dict *d = kvstoreGetDict(kvs, didx);
     if (!d) return 0;

@@ -1559,7 +1559,7 @@ NULL
             return;
         }
         size_t usage = objectComputeSize(c->argv[2], dictGetVal(de), samples, c->db->id);
-        usage += sdsZmallocSize(dictGetKey(de));
+        usage += sdsAllocSize((sds)dictGetKey(de));
         usage += dictEntryMemUsage();
         addReplyLongLong(c, usage);
     } else if (!strcasecmp(c->argv[1]->ptr, "stats") && c->argc == 2) {

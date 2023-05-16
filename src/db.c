@@ -201,7 +201,6 @@ static void dbAddInternal(serverDb *db, robj *key, robj *val, int update_if_exis
         return;
     }
     serverAssertWithInfo(NULL, key, de != NULL);
-    kvstoreDictSetKey(db->keys, slot, de, sdsdup(key->ptr));
     initObjectLRUOrLFU(val);
     kvstoreDictSetVal(db->keys, slot, de, val);
     signalKeyAsReady(db, key, val->type);

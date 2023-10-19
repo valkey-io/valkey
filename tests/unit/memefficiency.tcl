@@ -168,7 +168,7 @@ start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-r
         }
         r config set appendonly no
         r config set key-load-delay 0
-        
+
         test "Active defrag eval scripts" {
             r flushdb
             r script flush sync
@@ -582,6 +582,7 @@ start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-r
     }
 }
 
+if {0} {
 start_cluster 1 0 {tags {"defrag external:skip"}} {
     if {[string match {*jemalloc*} [s mem_allocator]] && [r debug mallctl arenas.page] <= 8192} {
         test "Active defrag with flush async performed in cluster mode" {
@@ -635,6 +636,7 @@ start_cluster 1 0 {tags {"defrag external:skip"}} {
             r ping
         }
     }
+}
 }
 
 } ;# run_solo

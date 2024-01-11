@@ -1064,12 +1064,12 @@ NULL
 
         /* Terminate the link based on the direction or all. */
         if (!strcasecmp(c->argv[3]->ptr,"from")) {
-            freeClusterLink(n->inbound_link);
+            if (n->inbound_link) freeClusterLink(n->inbound_link);
         } else if (!strcasecmp(c->argv[3]->ptr,"to")) {
-            freeClusterLink(n->link);
+            if (n->link) freeClusterLink(n->link);
         } else if (!strcasecmp(c->argv[3]->ptr,"all")) {
-            freeClusterLink(n->link);
-            freeClusterLink(n->inbound_link);
+            if (n->link) freeClusterLink(n->link);
+            if (n->inbound_link) freeClusterLink(n->inbound_link);
         } else {
             addReplyErrorFormat(c, "Unknown direction %s", (char*) c->argv[3]->ptr);
         }

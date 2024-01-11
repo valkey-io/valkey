@@ -30,6 +30,13 @@ tags {tls:skip external:skip cluster} {
             assert {[llength [get_cluster_nodes 0]] == 1}
         }
 
+        test "Killing absent cluster links is safe" {
+            set node_id [R 0 CLUSTER MYID]
+            foreach direction {to from all all} {
+                assert_equal OK [R 0 DEBUG CLUSTERLINK KILL $direction $node_id]
+            }
+        }
+
         test "Allocate slots" {
             cluster_allocate_slots 2 0;# primaries replicas
         }

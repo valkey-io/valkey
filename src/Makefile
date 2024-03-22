@@ -6,8 +6,8 @@
 # what is needed for Redis plus the standard CFLAGS and LDFLAGS passed.
 # However when building the dependencies (Jemalloc, Lua, Hiredis, ...)
 # CFLAGS and LDFLAGS are propagated to the dependencies, so to pass
-# flags only to be used when compiling / linking Redis itself REDIS_CFLAGS
-# and REDIS_LDFLAGS are used instead (this is the case of 'make gcov').
+# flags only to be used when compiling / linking Redis itself SERVER_CFLAGS
+# and SERVER_LDFLAGS are used instead (this is the case of 'make gcov').
 #
 # Dependencies are stored in the Makefile.dep file. To rebuild this file
 # Just use 'make dep', but this is only needed by developers.
@@ -16,26 +16,23 @@ release_hdr := $(shell sh -c './mkreleasehdr.sh')
 uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')
 uname_M := $(shell sh -c 'uname -m 2>/dev/null || echo not')
 CLANG := $(findstring clang,$(shell sh -c '$(CC) --version | head -1'))
-
-# Optimization flags. To override, the OPTIMIZATION variable can be passed, but
-# some automatic defaults are added to it. To specify optimization flags
-# explicitly without any defaults added, pass the OPT variable instead.
 OPTIMIZATION?=-O3
 ifeq ($(OPTIMIZATION),-O3)
 	ifeq (clang,$(CLANG))
-		OPTIMIZATION+=-flto
+		SERVER_CFLAGS+=-flto
 	else
-		OPTIMIZATION+=-flto=auto
+		SERVER_CFLAGS+=-flto=auto
 	endif
+	SERVER_LDFLAGS+=-O3 -flto
 endif
 ifneq ($(OPTIMIZATION),-O0)
-	OPTIMIZATION+=-fno-omit-frame-pointer
+	SERVER_CFLAGS+=-fno-omit-frame-pointer
 endif
 DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram fpconv
 NODEPS:=clean distclean
 
 # Default settings
-STD=-pedantic -DREDIS_STATIC=''
+STD=-pedantic -DSERVER_STATIC=''
 
 # Use -Wno-c11-extensions on clang, either where explicitly used or on
 # platforms we can assume it's being used.
@@ -122,8 +119,8 @@ endif
 # Override default settings if possible
 -include .make-settings
 
-FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
-FINAL_LDFLAGS=$(LDFLAGS) $(OPT) $(REDIS_LDFLAGS) $(DEBUG)
+FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(SERVER_CFLAGS)
+FINAL_LDFLAGS=$(LDFLAGS) $(SERVER_LDFLAGS) $(DEBUG)
 FINAL_LIBS=-lm
 DEBUG=-g -ggdb
 
@@ -299,7 +296,7 @@ BUILD_MODULE:=2
 ifeq ($(BUILD_TLS),yes)
 	FINAL_CFLAGS+=-DUSE_OPENSSL=$(BUILD_YES) $(OPENSSL_CFLAGS) -DBUILD_TLS_MODULE=$(BUILD_NO)
 	FINAL_LDFLAGS+=$(OPENSSL_LDFLAGS)
-	FINAL_LIBS += ../deps/hiredis/libhiredis_ssl.a $(LIBSSL_LIBS) $(LIBCRYPTO_LIBS)
+	FINAL_LIBS += ../deps/hiredis/libhiENGINE_ssl.a $(LIBSSL_LIBS) $(LIBCRYPTO_LIBS)
 endif
 
 TLS_MODULE=
@@ -307,7 +304,7 @@ TLS_MODULE_NAME:=redis-tls$(PROG_SUFFIX).so
 TLS_MODULE_CFLAGS:=$(FINAL_CFLAGS)
 ifeq ($(BUILD_TLS),module)
 	FINAL_CFLAGS+=-DUSE_OPENSSL=$(BUILD_MODULE) $(OPENSSL_CFLAGS)
-	TLS_CLIENT_LIBS = ../deps/hiredis/libhiredis_ssl.a $(LIBSSL_LIBS) $(LIBCRYPTO_LIBS)
+	TLS_CLIENT_LIBS = ../deps/hiredis/libhiENGINE_ssl.a $(LIBSSL_LIBS) $(LIBCRYPTO_LIBS)
 	TLS_MODULE=$(TLS_MODULE_NAME)
 	TLS_MODULE_CFLAGS+=-DUSE_OPENSSL=$(BUILD_MODULE) $(OPENSSL_CFLAGS) -DBUILD_TLS_MODULE=$(BUILD_MODULE)
 endif
@@ -323,9 +320,9 @@ else
     endef
 endif
 
-REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
-REDIS_LD=$(QUIET_LINK)$(CC) $(FINAL_LDFLAGS)
-REDIS_INSTALL=$(QUIET_INSTALL)$(INSTALL)
+SERVER_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
+SERVER_LD=$(QUIET_LINK)$(CC) $(FINAL_LDFLAGS)
+ENGINE_INSTALL=$(QUIET_INSTALL)$(INSTALL)
 
 CCCOLOR="\033[34m"
 LINKCOLOR="\033[34;1m"
@@ -341,7 +338,7 @@ QUIET_LINK = @printf '    %b %b\n' $(LINKCOLOR)LINK$(ENDCOLOR) $(BINCOLOR)$@$(EN
 QUIET_INSTALL = @printf '    %b %b\n' $(LINKCOLOR)INSTALL$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR) 1>&2;
 endif
 
-ifneq (, $(findstring LOG_REQ_RES, $(REDIS_CFLAGS)))
+ifneq (, $(findstring LOG_REQ_RES, $(SERVER_CFLAGS)))
 	COMMANDS_DEF_FILENAME=commands_with_reply_schema
 	GEN_COMMANDS_FLAGS=--with-reply-schema
 else
@@ -349,24 +346,25 @@ else
 	GEN_COMMANDS_FLAGS=
 endif
 
-REDIS_SERVER_NAME=redis-server$(PROG_SUFFIX)
-REDIS_SENTINEL_NAME=redis-sentinel$(PROG_SUFFIX)
-REDIS_SERVER_OBJ=threads_mngr.o adlist.o quicklist.o ae.o anet.o dict.o kvstore.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o cluster_legacy.o crc16.o endianconv.o slowlog.o eval.o bio.o rio.o rand.o memtest.o syscheck.o crcspeed.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o redis-check-rdb.o redis-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o acl.o tracking.o socket.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script_lua.o script.o functions.o function_lua.o commands.o strl.o connection.o unix.o logreqres.o
-REDIS_CLI_NAME=redis-cli$(PROG_SUFFIX)
-REDIS_CLI_OBJ=anet.o adlist.o dict.o redis-cli.o zmalloc.o release.o ae.o redisassert.o crcspeed.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o cli_commands.o
-REDIS_BENCHMARK_NAME=redis-benchmark$(PROG_SUFFIX)
-REDIS_BENCHMARK_OBJ=ae.o anet.o redis-benchmark.o adlist.o dict.o zmalloc.o redisassert.o release.o crcspeed.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o
-REDIS_CHECK_RDB_NAME=redis-check-rdb$(PROG_SUFFIX)
-REDIS_CHECK_AOF_NAME=redis-check-aof$(PROG_SUFFIX)
-ALL_SOURCES=$(sort $(patsubst %.o,%.c,$(REDIS_SERVER_OBJ) $(REDIS_CLI_OBJ) $(REDIS_BENCHMARK_OBJ)))
+ENGINE_NAME=placeholderkv
+SERVER_NAME=$(ENGINE_NAME)-server$(PROG_SUFFIX)
+ENGINE_SENTINEL_NAME=$(ENGINE_NAME)-sentinel$(PROG_SUFFIX)
+ENGINE_SERVER_OBJ=threads_mngr.o adlist.o quicklist.o ae.o anet.o dict.o kvstore.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o cluster_legacy.o crc16.o endianconv.o slowlog.o eval.o bio.o rio.o rand.o memtest.o syscheck.o crcspeed.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o redis-check-rdb.o redis-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o acl.o tracking.o socket.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script_lua.o script.o functions.o function_lua.o commands.o strl.o connection.o unix.o logreqres.o
+ENGINE_CLI_NAME=$(ENGINE_NAME)-cli$(PROG_SUFFIX)
+ENGINE_CLI_OBJ=anet.o adlist.o dict.o redis-cli.o zmalloc.o release.o ae.o redisassert.o crcspeed.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o cli_commands.o
+ENGINE_BENCHMARK_NAME=$(ENGINE_NAME)-benchmark$(PROG_SUFFIX)
+ENGINE_BENCHMARK_OBJ=ae.o anet.o redis-benchmark.o adlist.o dict.o zmalloc.o redisassert.o release.o crcspeed.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o
+ENGINE_CHECK_RDB_NAME=$(ENGINE_NAME)-check-rdb$(PROG_SUFFIX)
+ENGINE_CHECK_AOF_NAME=$(ENGINE_NAME)-check-aof$(PROG_SUFFIX)
+ALL_SOURCES=$(sort $(patsubst %.o,%.c,$(ENGINE_SERVER_OBJ) $(ENGINE_CLI_OBJ) $(ENGINE_BENCHMARK_OBJ)))
 
-all: $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME) $(TLS_MODULE)
+all: $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(TLS_MODULE)
 	@echo ""
 	@echo "Hint: It's a good idea to run 'make test' ;)"
 	@echo ""
 
 Makefile.dep:
-	-$(REDIS_CC) -MM $(ALL_SOURCES) > Makefile.dep 2> /dev/null || true
+	-$(SERVER_CC) -MM $(ALL_SOURCES) > Makefile.dep 2> /dev/null || true
 
 ifeq (0, $(words $(findstring $(MAKECMDGOALS), $(NODEPS))))
 -include Makefile.dep
@@ -383,8 +381,8 @@ persist-settings: distclean
 	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
 	echo CFLAGS=$(CFLAGS) >> .make-settings
 	echo LDFLAGS=$(LDFLAGS) >> .make-settings
-	echo REDIS_CFLAGS=$(REDIS_CFLAGS) >> .make-settings
-	echo REDIS_LDFLAGS=$(REDIS_LDFLAGS) >> .make-settings
+	echo SERVER_CFLAGS=$(SERVER_CFLAGS) >> .make-settings
+	echo SERVER_LDFLAGS=$(SERVER_LDFLAGS) >> .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
 	-(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))
@@ -405,41 +403,41 @@ ifneq ($(strip $(PREV_FINAL_LDFLAGS)), $(strip $(FINAL_LDFLAGS)))
 endif
 
 # redis-server
-$(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ)
-	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
+$(SERVER_NAME): $(ENGINE_SERVER_OBJ)
+	$(SERVER_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
 
 # redis-sentinel
-$(REDIS_SENTINEL_NAME): $(REDIS_SERVER_NAME)
-	$(REDIS_INSTALL) $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME)
+$(ENGINE_SENTINEL_NAME): $(SERVER_NAME)
+	$(ENGINE_INSTALL) $(SERVER_NAME) $(ENGINE_SENTINEL_NAME)
 
 # redis-check-rdb
-$(REDIS_CHECK_RDB_NAME): $(REDIS_SERVER_NAME)
-	$(REDIS_INSTALL) $(REDIS_SERVER_NAME) $(REDIS_CHECK_RDB_NAME)
+$(ENGINE_CHECK_RDB_NAME): $(SERVER_NAME)
+	$(ENGINE_INSTALL) $(SERVER_NAME) $(ENGINE_CHECK_RDB_NAME)
 
 # redis-check-aof
-$(REDIS_CHECK_AOF_NAME): $(REDIS_SERVER_NAME)
-	$(REDIS_INSTALL) $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME)
+$(ENGINE_CHECK_AOF_NAME): $(SERVER_NAME)
+	$(ENGINE_INSTALL) $(SERVER_NAME) $(ENGINE_CHECK_AOF_NAME)
 
 # redis-tls.so
-$(TLS_MODULE_NAME): $(REDIS_SERVER_NAME)
+$(TLS_MODULE_NAME): $(SERVER_NAME)
 	$(QUIET_CC)$(CC) -o $@ tls.c -shared -fPIC $(TLS_MODULE_CFLAGS) $(TLS_CLIENT_LIBS)
 
 # redis-cli
-$(REDIS_CLI_NAME): $(REDIS_CLI_OBJ)
-	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/linenoise/linenoise.o $(FINAL_LIBS) $(TLS_CLIENT_LIBS)
+$(ENGINE_CLI_NAME): $(ENGINE_CLI_OBJ)
+	$(SERVER_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/linenoise/linenoise.o $(FINAL_LIBS) $(TLS_CLIENT_LIBS)
 
 # redis-benchmark
-$(REDIS_BENCHMARK_NAME): $(REDIS_BENCHMARK_OBJ)
-	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/hdr_histogram/libhdrhistogram.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS)
+$(ENGINE_BENCHMARK_NAME): $(ENGINE_BENCHMARK_OBJ)
+	$(SERVER_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/hdr_histogram/libhdrhistogram.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS)
 
-DEP = $(REDIS_SERVER_OBJ:%.o=%.d) $(REDIS_CLI_OBJ:%.o=%.d) $(REDIS_BENCHMARK_OBJ:%.o=%.d)
+DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_OBJ:%.o=%.d)
 -include $(DEP)
 
 # Because the jemalloc.h header is generated as a part of the jemalloc build,
 # building it should complete before building any other object. Instead of
 # depending on a single artifact, build all dependencies first.
 %.o: %.c .make-prerequisites
-	$(REDIS_CC) -MMD -o $@ -c $<
+	$(SERVER_CC) -MMD -o $@ -c $<
 
 # The following files are checked in and don't normally need to be rebuilt. They
 # are built only if python is available and their prereqs are modified.
@@ -456,7 +454,7 @@ endif
 commands.c: $(COMMANDS_DEF_FILENAME).def
 
 clean:
-	rm -rf $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME) *.o *.gcda *.gcno *.gcov redis.info lcov-html Makefile.dep *.so
+	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) *.o *.gcda *.gcno *.gcov redis.info lcov-html Makefile.dep *.so
 	rm -f $(DEP)
 
 .PHONY: clean
@@ -469,16 +467,16 @@ distclean: clean
 
 .PHONY: distclean
 
-test: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME)
+test: $(SERVER_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME)
 	@(cd ..; ./runtest)
 
-test-modules: $(REDIS_SERVER_NAME)
+test-modules: $(SERVER_NAME)
 	@(cd ..; ./runtest-moduleapi)
 
-test-sentinel: $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME)
+test-sentinel: $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME)
 	@(cd ..; ./runtest-sentinel)
 
-test-cluster: $(REDIS_SERVER_NAME) $(REDIS_CLI_NAME)
+test-cluster: $(SERVER_NAME) $(ENGINE_CLI_NAME)
 	@(cd ..; ./runtest-cluster)
 
 check: test
@@ -491,8 +489,8 @@ lcov:
 
 .PHONY: lcov
 
-bench: $(REDIS_BENCHMARK_NAME)
-	./$(REDIS_BENCHMARK_NAME)
+bench: $(ENGINE_BENCHMARK_NAME)
+	./$(ENGINE_BENCHMARK_NAME)
 
 32bit:
 	@echo ""
@@ -501,7 +499,7 @@ bench: $(REDIS_BENCHMARK_NAME)
 	$(MAKE) CFLAGS="-m32" LDFLAGS="-m32"
 
 gcov:
-	$(MAKE) REDIS_CFLAGS="-fprofile-arcs -ftest-coverage -DCOVERAGE_TEST" REDIS_LDFLAGS="-fprofile-arcs -ftest-coverage"
+	$(MAKE) SERVER_CFLAGS="-fprofile-arcs -ftest-coverage -DCOVERAGE_TEST" SERVER_LDFLAGS="-fprofile-arcs -ftest-coverage"
 
 noopt:
 	$(MAKE) OPTIMIZATION="-O0"
@@ -510,16 +508,16 @@ valgrind:
 	$(MAKE) OPTIMIZATION="-O0" MALLOC="libc"
 
 helgrind:
-	$(MAKE) OPTIMIZATION="-O0" MALLOC="libc" CFLAGS="-D__ATOMIC_VAR_FORCE_SYNC_MACROS" REDIS_CFLAGS="-I/usr/local/include" REDIS_LDFLAGS="-L/usr/local/lib"
+	$(MAKE) OPTIMIZATION="-O0" MALLOC="libc" CFLAGS="-D__ATOMIC_VAR_FORCE_SYNC_MACROS" SERVER_CFLAGS="-I/usr/local/include" SERVER_LDFLAGS="-L/usr/local/lib"
 
 install: all
 	@mkdir -p $(INSTALL_BIN)
-	$(call MAKE_INSTALL,$(REDIS_SERVER_NAME),$(INSTALL_BIN))
-	$(call MAKE_INSTALL,$(REDIS_BENCHMARK_NAME),$(INSTALL_BIN))
-	$(call MAKE_INSTALL,$(REDIS_CLI_NAME),$(INSTALL_BIN))
-	@ln -sf $(REDIS_SERVER_NAME) $(INSTALL_BIN)/$(REDIS_CHECK_RDB_NAME)
-	@ln -sf $(REDIS_SERVER_NAME) $(INSTALL_BIN)/$(REDIS_CHECK_AOF_NAME)
-	@ln -sf $(REDIS_SERVER_NAME) $(INSTALL_BIN)/$(REDIS_SENTINEL_NAME)
+	$(call MAKE_INSTALL,$(SERVER_NAME),$(INSTALL_BIN))
+	$(call MAKE_INSTALL,$(ENGINE_BENCHMARK_NAME),$(INSTALL_BIN))
+	$(call MAKE_INSTALL,$(ENGINE_CLI_NAME),$(INSTALL_BIN))
+	@ln -sf $(SERVER_NAME) $(INSTALL_BIN)/$(ENGINE_CHECK_RDB_NAME)
+	@ln -sf $(SERVER_NAME) $(INSTALL_BIN)/$(ENGINE_CHECK_AOF_NAME)
+	@ln -sf $(SERVER_NAME) $(INSTALL_BIN)/$(ENGINE_SENTINEL_NAME)
 
 uninstall:
-	rm -f $(INSTALL_BIN)/{$(REDIS_SERVER_NAME),$(REDIS_BENCHMARK_NAME),$(REDIS_CLI_NAME),$(REDIS_CHECK_RDB_NAME),$(REDIS_CHECK_AOF_NAME),$(REDIS_SENTINEL_NAME)}
+	rm -f $(INSTALL_BIN)/{$(SERVER_NAME),$(ENGINE_BENCHMARK_NAME),$(ENGINE_CLI_NAME),$(ENGINE_CHECK_RDB_NAME),$(ENGINE_CHECK_AOF_NAME),$(ENGINE_SENTINEL_NAME)}

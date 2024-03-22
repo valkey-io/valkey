@@ -40,7 +40,7 @@ start_server {} {
     }
 
     set cycle_start_time [clock milliseconds]
-    set bench_pid [exec src/redis-benchmark -s $R_unixsocket(0) -n 10000000 -r 1000 incr __rand_int__ > /dev/null &]
+    set bench_pid [exec src/placeholderkv-benchmark -s $R_unixsocket(0) -n 10000000 -r 1000 incr __rand_int__ > /dev/null &]
     while 1 {
         set elapsed [expr {[clock milliseconds]-$cycle_start_time}]
         if {$elapsed > $duration*1000} break

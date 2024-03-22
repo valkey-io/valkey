@@ -13,7 +13,7 @@ proc rediscli_tls_config {testsdir} {
 
 # Returns command line for executing redis-cli
 proc rediscli {host port {opts {}}} {
-    set cmd [list src/redis-cli -h $host -p $port]
+    set cmd [list src/placeholderkv-cli -h $host -p $port]
     lappend cmd {*}[rediscli_tls_config "tests"]
     lappend cmd {*}$opts
     return $cmd
@@ -21,7 +21,7 @@ proc rediscli {host port {opts {}}} {
 
 # Returns command line for executing redis-cli with a unix socket address
 proc rediscli_unixsocket {unixsocket {opts {}}} {
-    return [list src/redis-cli -s $unixsocket {*}$opts]
+    return [list src/placeholderkv-cli -s $unixsocket {*}$opts]
 }
 
 # Run redis-cli with specified args on the server of specified level.

@@ -37,7 +37,7 @@ test "Set allow-replica-migration no" {
 set master0_id [dict get [get_myself 0] id]
 test "Resharding all the master #0 slots away from it" {
     set output [exec \
-        ../../../src/redis-cli --cluster rebalance \
+        ../../../src/placeholderkv-cli --cluster rebalance \
         127.0.0.1:[get_instance_attrib redis 0 port] \
         {*}[rediscli_tls_config "../../../tests"] \
         --cluster-weight ${master0_id}=0 >@ stdout ]

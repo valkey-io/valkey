@@ -8,7 +8,7 @@ proc config_set_all_nodes {keyword value} {
 
 proc fix_cluster {addr} {
     set code [catch {
-        exec ../../../src/redis-cli {*}[rediscli_tls_config "../../../tests"] --cluster fix $addr << yes
+        exec ../../../src/placeholderkv-cli {*}[rediscli_tls_config "../../../tests"] --cluster fix $addr << yes
     } result]
     if {$code != 0} {
         puts "redis-cli --cluster fix returns non-zero exit code, output below:\n$result"
@@ -17,7 +17,7 @@ proc fix_cluster {addr} {
     # but we can ignore that and rely on the check below.
     assert_cluster_state ok
     wait_for_condition 100 100 {
-        [catch {exec ../../../src/redis-cli {*}[rediscli_tls_config "../../../tests"] --cluster check $addr} result] == 0
+        [catch {exec ../../../src/placeholderkv-cli {*}[rediscli_tls_config "../../../tests"] --cluster check $addr} result] == 0
     } else {
         puts "redis-cli --cluster check returns non-zero exit code, output below:\n$result"
         fail "Cluster could not settle with configuration"
@@ -26,7 +26,7 @@ proc fix_cluster {addr} {
 
 proc wait_cluster_stable {} {
     wait_for_condition 1000 50 {
-        [catch {exec ../../../src/redis-cli --cluster \
+        [catch {exec ../../../src/placeholderkv-cli --cluster \
             check 127.0.0.1:[get_instance_attrib redis 0 port] \
             {*}[rediscli_tls_config "../../../tests"] \
             }] == 0

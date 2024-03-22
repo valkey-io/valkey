@@ -12,21 +12,21 @@ proc redisbenchmark_tls_config {testsdir} {
 }
 
 proc redisbenchmark {host port {opts {}}} {
-    set cmd [list src/redis-benchmark -h $host -p $port]
+    set cmd [list src/placeholderkv-benchmark -h $host -p $port]
     lappend cmd {*}[redisbenchmark_tls_config "tests"]
     lappend cmd {*}$opts
     return $cmd
 }
 
 proc redisbenchmarkuri {host port {opts {}}} {
-    set cmd [list src/redis-benchmark -u redis://$host:$port]
+    set cmd [list src/placeholderkv-benchmark -u redis://$host:$port]
     lappend cmd {*}[redisbenchmark_tls_config "tests"]
     lappend cmd {*}$opts
     return $cmd
 }
 
 proc redisbenchmarkuriuserpass {host port user pass {opts {}}} {
-    set cmd [list src/redis-benchmark -u redis://$user:$pass@$host:$port]
+    set cmd [list src/placeholderkv-benchmark -u redis://$user:$pass@$host:$port]
     lappend cmd {*}[redisbenchmark_tls_config "tests"]
     lappend cmd {*}$opts
     return $cmd

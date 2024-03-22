@@ -4,9 +4,9 @@ on:
   pull_request:
     branches:
       # any PR to a release branch.
-      - '[0-9].[0-9]'
+      # - '[0-9].[0-9]'
   schedule:
-    - cron: '0 0 * * *'
+    # - cron: '0 0 * * *' We don't have the resources for this atm. Will enable later
   workflow_dispatch:
     inputs:
       skipjobs:
@@ -23,7 +23,7 @@ on:
         default: ''
       use_repo:
         description: 'repo owner and name'
-        default: 'redis/redis'
+        default: 'madolson/placeholderkv'
       use_git_ref:
         description: 'git branch or sha to use'
         default: 'unstable'
@@ -34,7 +34,7 @@ jobs:
   test-ubuntu-jemalloc:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'ubuntu')
     timeout-minutes: 14400
     steps:
@@ -69,12 +69,12 @@ jobs:
       run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
     - name: unittest
       if: true && !contains(github.event.inputs.skiptests, 'unittest')
-      run: ./src/redis-server test all --accurate
+      run: ./src/placeholderkv-server test all --accurate
 
   test-ubuntu-jemalloc-fortify:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'fortify')
     container: ubuntu:lunar
     timeout-minutes: 14400
@@ -113,12 +113,12 @@ jobs:
       run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
     - name: unittest
       if: true && !contains(github.event.inputs.skiptests, 'unittest')
-      run: ./src/redis-server test all --accurate
+      run: ./src/placeholderkv-server test all --accurate
 
   test-ubuntu-libc-malloc:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'malloc')
     timeout-minutes: 14400
     steps:
@@ -155,7 +155,7 @@ jobs:
   test-ubuntu-no-malloc-usable-size:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'malloc')
     timeout-minutes: 14400
     steps:
@@ -192,7 +192,7 @@ jobs:
   test-ubuntu-32bit:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, '32bit')
     timeout-minutes: 14400
     steps:
@@ -231,12 +231,12 @@ jobs:
       run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
     - name: unittest
       if: true && !contains(github.event.inputs.skiptests, 'unittest')
-      run: ./src/redis-server test all --accurate
+      run: ./src/placeholderkv-server test all --accurate
 
   test-ubuntu-tls:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     timeout-minutes: 14400
     steps:
@@ -280,7 +280,7 @@ jobs:
   test-ubuntu-tls-no-tls:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     timeout-minutes: 14400
     steps:
@@ -324,7 +324,7 @@ jobs:
   test-ubuntu-io-threads:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'iothreads')
     timeout-minutes: 14400
     steps:
@@ -356,7 +356,7 @@ jobs:
   test-ubuntu-reclaim-cache:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'specific')
     timeout-minutes: 14400
     steps:
@@ -383,19 +383,19 @@ jobs:
         mkdir /tmp/slave
     - name: warm up
       run: |
-        ./src/redis-server --daemonize yes --logfile /dev/null
-        ./src/redis-benchmark -n 1 > /dev/null
-        ./src/redis-cli save | grep OK > /dev/null
+        ./src/placeholderkv-server --daemonize yes --logfile /dev/null
+        ./src/placeholderkv-benchmark -n 1 > /dev/null
+        ./src/placeholderkv-cli save | grep OK > /dev/null
         vmtouch -v ./dump.rdb > /dev/null
     - name: test
       run: |
         echo "test SAVE doesn't increase cache"
         CACHE0=$(grep -w file /sys/fs/cgroup/memory.stat | awk '{print $2}')
         echo "$CACHE0"
-        ./src/redis-server --daemonize yes --logfile /dev/null --dir /tmp/master --port 8080 --repl-diskless-sync no --pidfile /tmp/master/redis.pid --rdbcompression no --enable-debug-command yes
-        ./src/redis-cli -p 8080 debug populate 10000 k 102400
-        ./src/redis-server --daemonize yes --logfile /dev/null --dir /tmp/slave --port 8081 --repl-diskless-load disabled --rdbcompression no
-        ./src/redis-cli -p 8080 save > /dev/null
+        ./src/placeholderkv-server --daemonize yes --logfile /dev/null --dir /tmp/master --port 8080 --repl-diskless-sync no --pidfile /tmp/master/redis.pid --rdbcompression no --enable-debug-command yes
+        ./src/placeholderkv-cli -p 8080 debug populate 10000 k 102400
+        ./src/placeholderkv-server --daemonize yes --logfile /dev/null --dir /tmp/slave --port 8081 --repl-diskless-load disabled --rdbcompression no
+        ./src/placeholderkv-cli -p 8080 save > /dev/null
         VMOUT=$(vmtouch -v /tmp/master/dump.rdb)
         echo $VMOUT
         grep -q " 0%" <<< $VMOUT 
@@ -404,8 +404,8 @@ jobs:
         if [ "$(( $CACHE-$CACHE0 ))" -gt "8000000" ]; then exit 1; fi
 
         echo "test replication doesn't increase cache"
-        ./src/redis-cli -p 8081 REPLICAOF 127.0.0.1 8080 > /dev/null
-        while [ $(./src/redis-cli -p 8081 info replication | grep "master_link_status:down") ]; do sleep 1; done;
+        ./src/placeholderkv-cli -p 8081 REPLICAOF 127.0.0.1 8080 > /dev/null
+        while [ $(./src/placeholderkv-cli -p 8081 info replication | grep "master_link_status:down") ]; do sleep 1; done;
         sleep 1 # wait for the completion of cache reclaim bio
         VMOUT=$(vmtouch -v /tmp/master/dump.rdb)
         echo $VMOUT
@@ -421,8 +421,8 @@ jobs:
         PID=$(cat /tmp/master/redis.pid)
         kill -15 $PID
         while [ -x /proc/${PID} ]; do sleep 1; done
-        ./src/redis-server --daemonize yes --logfile /dev/null --dir /tmp/master --port 8080
-        while [ $(./src/redis-cli -p 8080 info persistence | grep "loading:1") ]; do sleep 1; done;
+        ./src/placeholderkv-server --daemonize yes --logfile /dev/null --dir /tmp/master --port 8080
+        while [ $(./src/placeholderkv-cli -p 8080 info persistence | grep "loading:1") ]; do sleep 1; done;
         sleep 1 # wait for the completion of cache reclaim bio
         VMOUT=$(vmtouch -v /tmp/master/dump.rdb)
         echo $VMOUT
@@ -434,7 +434,7 @@ jobs:
   test-valgrind-test:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !contains(github.event.inputs.skiptests, 'redis')
     timeout-minutes: 14400
     steps:
@@ -464,7 +464,7 @@ jobs:
   test-valgrind-misc:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !(contains(github.event.inputs.skiptests, 'modules') && contains(github.event.inputs.skiptests, 'unittest'))
     timeout-minutes: 14400
     steps:
@@ -493,13 +493,13 @@ jobs:
     - name: unittest
       if: true && !contains(github.event.inputs.skiptests, 'unittest')
       run: |
-        valgrind --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.txt ./src/redis-server test all --valgrind
+        valgrind --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.txt ./src/placeholderkv-server test all --valgrind
         if grep -q 0x err.txt; then cat err.txt; exit 1; fi
 
   test-valgrind-no-malloc-usable-size-test:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !contains(github.event.inputs.skiptests, 'redis')
     timeout-minutes: 14400
     steps:
@@ -529,7 +529,7 @@ jobs:
   test-valgrind-no-malloc-usable-size-misc:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !(contains(github.event.inputs.skiptests, 'modules') && contains(github.event.inputs.skiptests, 'unittest'))
     timeout-minutes: 14400
     steps:
@@ -558,13 +558,13 @@ jobs:
     - name: unittest
       if: true && !contains(github.event.inputs.skiptests, 'unittest')
       run: |
-        valgrind --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.txt ./src/redis-server test all --valgrind
+        valgrind --track-origins=yes --suppressions=./src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full --log-file=err.txt ./src/placeholderkv-server test all --valgrind
         if grep -q 0x err.txt; then cat err.txt; exit 1; fi
 
   test-sanitizer-address:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'sanitizer')
     timeout-minutes: 14400
     strategy:
@@ -608,12 +608,12 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/redis-server test all
+        run: ./src/placeholderkv-server test all
 
   test-sanitizer-undefined:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'sanitizer')
     timeout-minutes: 14400
     strategy:
@@ -655,12 +655,12 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/redis-server test all --accurate
+        run: ./src/placeholderkv-server test all --accurate
 
   test-centos7-jemalloc:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'centos')
     container: centos:7
     timeout-minutes: 14400
@@ -700,7 +700,7 @@ jobs:
   test-centos7-tls-module:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     container: centos:7
     timeout-minutes: 14400
@@ -747,7 +747,7 @@ jobs:
   test-centos7-tls-module-no-tls:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     container: centos:7
     timeout-minutes: 14400
@@ -794,7 +794,7 @@ jobs:
   test-macos-latest:
     runs-on: macos-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'macos') && !(contains(github.event.inputs.skiptests, 'redis') && contains(github.event.inputs.skiptests, 'modules'))
     timeout-minutes: 14400
     steps:
@@ -823,7 +823,7 @@ jobs:
   test-macos-latest-sentinel:
     runs-on: macos-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'macos') && !contains(github.event.inputs.skiptests, 'sentinel')
     timeout-minutes: 14400
     steps:
@@ -849,7 +849,7 @@ jobs:
   test-macos-latest-cluster:
     runs-on: macos-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'macos') && !contains(github.event.inputs.skiptests, 'cluster')
     timeout-minutes: 14400
     steps:
@@ -878,7 +878,7 @@ jobs:
         os: [macos-11, macos-13]
     runs-on: ${{ matrix.os }}
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'macos')
     timeout-minutes: 14400
     steps:
@@ -904,7 +904,7 @@ jobs:
   test-freebsd:
     runs-on: macos-12
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'freebsd')
     timeout-minutes: 14400
     steps:
@@ -932,7 +932,7 @@ jobs:
   test-alpine-jemalloc:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'alpine')
     container: alpine:latest
     steps:
@@ -971,7 +971,7 @@ jobs:
   test-alpine-libc-malloc:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'alpine')
     container: alpine:latest
     steps:
@@ -1011,7 +1011,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 14400
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'redis/redis')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'madolson/placeholderkv')) &&
       !contains(github.event.inputs.skipjobs, 'reply-schema')
     steps:
     - name: prep

@@ -4,7 +4,7 @@ on:
     pull_request:
     push:
     schedule:
-      - cron: '0 0 * * *'
+      # - cron: '0 0 * * *', We don't have the resources for this atm. Will enable later
 
 jobs:
   test-external-standalone:
@@ -17,7 +17,7 @@ jobs:
       run: make REDIS_CFLAGS=-Werror
     - name: Start redis-server
       run: |
-        ./src/redis-server --daemonize yes --save "" --logfile external-redis.log \
+        ./src/placeholderkv-server --daemonize yes --save "" --logfile external-redis.log \
           --enable-protected-configs yes --enable-debug-command yes --enable-module-command yes
     - name: Run external test
       run: |
@@ -42,10 +42,10 @@ jobs:
       run: make REDIS_CFLAGS=-Werror
     - name: Start redis-server
       run: |
-        ./src/redis-server --cluster-enabled yes --daemonize yes --save "" --logfile external-redis.log \
+        ./src/placeholderkv-server --cluster-enabled yes --daemonize yes --save "" --logfile external-redis.log \
           --enable-protected-configs yes --enable-debug-command yes --enable-module-command yes
     - name: Create a single node cluster
-      run: ./src/redis-cli cluster addslots $(for slot in {0..16383}; do echo $slot; done); sleep 5
+      run: ./src/placeholderkv-cli cluster addslots $(for slot in {0..16383}; do echo $slot; done); sleep 5
     - name: Run external test
       run: |
           ./runtest \
@@ -70,7 +70,7 @@ jobs:
         run: make REDIS_CFLAGS=-Werror
       - name: Start redis-server
         run: |
-          ./src/redis-server --daemonize yes --save "" --logfile external-redis.log
+          ./src/placeholderkv-server --daemonize yes --save "" --logfile external-redis.log
       - name: Run external test
         run: |
           ./runtest \

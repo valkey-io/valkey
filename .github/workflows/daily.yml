@@ -5,8 +5,6 @@ on:
     branches:
       # any PR to a release branch.
       # - '[0-9].[0-9]'
-  schedule:
-    # - cron: '0 0 * * *' We don't have the resources for this atm. Will enable later
   workflow_dispatch:
     inputs:
       skipjobs:

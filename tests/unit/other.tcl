@@ -403,7 +403,7 @@ start_server {tags {"other external:skip"}} {
             set cmdline [read_proc_title [srv 0 pid]]
 
             assert_equal "TEST" [lindex $cmdline 0]
-            assert_match "*/redis-server" [lindex $cmdline 1]
+            assert_match "*/placeholderkv-server" [lindex $cmdline 1]
             
             if {$::tls} {
                 set expect_port [srv 0 pport]

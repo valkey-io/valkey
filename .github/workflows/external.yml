@@ -4,7 +4,6 @@ on:
     pull_request:
     push:
     schedule:
-      # - cron: '0 0 * * *', We don't have the resources for this atm. Will enable later
 
 jobs:
   test-external-standalone:

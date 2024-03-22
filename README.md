@@ -6,7 +6,7 @@ This README is just a fast *quick start* document. We are currently working on a
 
 What is PlaceHolderKV?
 --------------
-The name is temporary, as we work to find a new name that the community accepts. It also happens to be a very easy strong to search for. 
+The name is temporary, as we work to find a new name that the community accepts. It also happens to be a very easy string to search for. 
 
 Building PlaceHolderKV
 --------------

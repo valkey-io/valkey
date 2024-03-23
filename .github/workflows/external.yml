@@ -4,19 +4,20 @@ on:
     pull_request:
     push:
     schedule:
+    - cron: '* * * * *'
 
 jobs:
   test-external-standalone:
     runs-on: ubuntu-latest
-    if: github.event_name != 'schedule' || github.repository == 'redis/redis'
+    if: github.event_name != 'schedule' || github.repository == 'placeholderkv/placeholderkv'
     timeout-minutes: 14400
     steps:
     - uses: actions/checkout@v3
     - name: Build
-      run: make REDIS_CFLAGS=-Werror
-    - name: Start redis-server
+      run: make SERVER_CFLAGS=-Werror
+    - name: Start placeholderkv-server
       run: |
-        ./src/placeholderkv-server --daemonize yes --save "" --logfile external-redis.log \
+        ./src/placeholderkv-server --daemonize yes --save "" --logfile external-server.log \
           --enable-protected-configs yes --enable-debug-command yes --enable-module-command yes
     - name: Run external test
       run: |
@@ -24,24 +25,24 @@ jobs:
             --host 127.0.0.1 --port 6379 \
             --verbose \
             --tags -slow
-    - name: Archive redis log
+    - name: Archive server log
       if: ${{ failure() }}
       uses: actions/upload-artifact@v3
       with:
-        name: test-external-redis-log
-        path: external-redis.log
+        name: test-external-server-log
+        path: external-server.log
 
   test-external-cluster:
     runs-on: ubuntu-latest
-    if: github.event_name != 'schedule' || github.repository == 'redis/redis'
+    if: github.event_name != 'schedule' || github.repository == 'placeholderkv/placeholderkv'
     timeout-minutes: 14400
     steps:
     - uses: actions/checkout@v3
     - name: Build
-      run: make REDIS_CFLAGS=-Werror
-    - name: Start redis-server
+      run: make SERVER_CFLAGS=-Werror
+    - name: Start placeholderkv-server
       run: |
-        ./src/placeholderkv-server --cluster-enabled yes --daemonize yes --save "" --logfile external-redis.log \
+        ./src/placeholderkv-server --cluster-enabled yes --daemonize yes --save "" --logfile external-server.log \
           --enable-protected-configs yes --enable-debug-command yes --enable-module-command yes
     - name: Create a single node cluster
       run: ./src/placeholderkv-cli cluster addslots $(for slot in {0..16383}; do echo $slot; done); sleep 5
@@ -52,33 +53,33 @@ jobs:
             --verbose \
             --cluster-mode \
             --tags -slow
-    - name: Archive redis log
+    - name: Archive server log
       if: ${{ failure() }}
       uses: actions/upload-artifact@v3
       with:
         name: test-external-cluster-log
-        path: external-redis.log
+        path: external-server.log
 
   test-external-nodebug:
     runs-on: ubuntu-latest
-    if: github.event_name != 'schedule' || github.repository == 'redis/redis'
+    if: github.event_name != 'schedule' || github.repository == 'placeholderkv/placeholderkv'
     timeout-minutes: 14400
     steps:
       - uses: actions/checkout@v3
       - name: Build
-        run: make REDIS_CFLAGS=-Werror
-      - name: Start redis-server
+        run: make SERVER_CFLAGS=-Werror
+      - name: Start placeholderkv-server
         run: |
-          ./src/placeholderkv-server --daemonize yes --save "" --logfile external-redis.log
+          ./src/placeholderkv-server --daemonize yes --save "" --logfile external-server.log
       - name: Run external test
         run: |
           ./runtest \
             --host 127.0.0.1 --port 6379 \
             --verbose \
             --tags "-slow -needs:debug"
-      - name: Archive redis log
+      - name: Archive server log
         if: ${{ failure() }}
         uses: actions/upload-artifact@v3
         with:
-          name: test-external-redis-log
-          path: external-redis.log
+          name: test-external-server-log
+          path: external-server.log

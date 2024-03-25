@@ -9,7 +9,7 @@ source distribution.
 GitHub issues SHOULD ONLY BE USED to report bugs and for DETAILED feature
 requests. Everything else should be asked on Discord:
       
-    https://discord.gg/qqHWHXh3u9
+    https://discord.gg/zbcPa5umUB
 
 PLEASE DO NOT POST GENERAL QUESTIONS that are not about bugs or suspected
 bugs in the GitHub issues system. We'll be delighted to help you and provide

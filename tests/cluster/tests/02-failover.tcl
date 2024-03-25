@@ -62,4 +62,5 @@ test "Instance #0 gets converted into a slave" {
     } else {
         fail "Old master was not converted into slave"
     }
+    wait_for_cluster_propagation
 }

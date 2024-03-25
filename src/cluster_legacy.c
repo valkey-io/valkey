@@ -110,6 +110,31 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen);
 void freeClusterLink(clusterLink *link);
 int verifyClusterNodeId(const char *name, int length);
 
+int isClusterSlotsResponseCached(enum connTypeForCaching conn_type) {
+    if (server.cluster->cached_cluster_slot_info[conn_type] &&
+        sdslen(server.cluster->cached_cluster_slot_info[conn_type])) {
+        return 1;
+    }
+    return 0;
+}
+
+sds getClusterSlotReply(enum connTypeForCaching conn_type) {
+    return server.cluster->cached_cluster_slot_info[conn_type];
+}
+
+void clearCachedClusterSlotsResp(void) {
+    for (enum connTypeForCaching conn_type = CACHE_CONN_TCP; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
+        if (server.cluster->cached_cluster_slot_info[conn_type]) {
+            sdsfree(server.cluster->cached_cluster_slot_info[conn_type]);
+            server.cluster->cached_cluster_slot_info[conn_type] = NULL;
+        }
+    }
+}
+
+void cacheSlotsResponse(sds response_to_cache, enum connTypeForCaching conn_type) {
+    server.cluster->cached_cluster_slot_info[conn_type] = response_to_cache;
+}
+
 int getNodeDefaultClientPort(clusterNode *n) {
     return server.tls_cluster ? n->tls_port : n->tcp_port;
 }
@@ -492,6 +517,7 @@ int clusterLoadConfig(char *filename) {
         }
         *p = '\0';
         memcpy(n->ip,aux_argv[0],strlen(aux_argv[0])+1);
+        clearCachedClusterSlotsResp();
         char *port = p+1;
         char *busp = strchr(port,'@');
         if (busp) {
@@ -887,6 +913,7 @@ void clusterUpdateMyselfIp(void) {
         } else {
             myself->ip[0] = '\0'; /* Force autodetection. */
         }
+        clearCachedClusterSlotsResp();
     }
 }
 
@@ -904,6 +931,7 @@ static void updateAnnouncedHostname(clusterNode *node, char *new) {
     } else if (sdslen(node->hostname) != 0) {
         sdsclear(node->hostname);
     }
+    clearCachedClusterSlotsResp();
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
@@ -1028,6 +1056,9 @@ void clusterInit(void) {
 
     server.cluster->mf_end = 0;
     server.cluster->mf_slave = NULL;
+    for (enum connTypeForCaching conn_type = CACHE_CONN_TCP; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
+        server.cluster->cached_cluster_slot_info[conn_type] = NULL;
+    }
     resetManualFailover();
     clusterUpdateMyselfFlags();
     clusterUpdateMyselfIp();
@@ -1352,6 +1383,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->repl_offset_time = 0;
     node->repl_offset = 0;
     listSetFreeMethod(node->fail_reports,zfree);
+    node->node_health = 0;
     return node;
 }
 
@@ -1480,6 +1512,7 @@ int clusterNodeAddSlave(clusterNode *master, clusterNode *slave) {
     master->slaves[master->numslaves] = slave;
     master->numslaves++;
     master->flags |= CLUSTER_NODE_MIGRATE_TO;
+    clearCachedClusterSlotsResp();
     return C_OK;
 }
 
@@ -1526,6 +1559,7 @@ void clusterAddNode(clusterNode *node) {
     retval = dictAdd(server.cluster->nodes,
             sdsnewlen(node->name,CLUSTER_NAMELEN), node);
     serverAssert(retval == DICT_OK);
+    clearCachedClusterSlotsResp();
 }
 
 /* Remove a node from the cluster. The function performs the high level
@@ -1567,6 +1601,7 @@ void clusterDelNode(clusterNode *delnode) {
 
     /* 3) Remove the node from the owning shard */
     clusterRemoveNodeFromShard(delnode);
+    clearCachedClusterSlotsResp();
 
     /* 4) Free the node, unlinking it from the cluster. */
     freeClusterNode(delnode);
@@ -2184,6 +2219,7 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
                 node->tls_port = msg_tls_port;
                 node->cport = ntohs(g->cport);
                 node->flags &= ~CLUSTER_NODE_NOADDR;
+                clearCachedClusterSlotsResp();
             }
         } else if (!node) {
             /* If it's not in NOADDR state and we don't have it, we
@@ -2279,6 +2315,7 @@ int nodeUpdateAddressIfNeeded(clusterNode *node, clusterLink *link,
     serverLog(LL_NOTICE,"Address updated for node %.40s (%s), now %s:%d",
         node->name, node->human_nodename, node->ip, getNodeDefaultClientPort(node)); 
 
+    clearCachedClusterSlotsResp();
     /* Check if this is our master and we have to change the
      * replication target as well. */
     if (nodeIsSlave(myself) && myself->slaveof == node)
@@ -2300,6 +2337,7 @@ void clusterSetNodeAsMaster(clusterNode *n) {
     n->flags |= CLUSTER_NODE_MASTER;
     n->slaveof = NULL;
 
+    clearCachedClusterSlotsResp();
     /* Update config and state. */
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG|
                          CLUSTER_TODO_UPDATE_STATE);
@@ -2344,7 +2382,9 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
         serverLog(LL_NOTICE,"Discarding UPDATE message about myself.");
         return;
     }
-
+    
+    clearCachedClusterSlotsResp();
+    
     for (j = 0; j < CLUSTER_SLOTS; j++) {
         if (bitmapTestBit(slots,j)) {
             sender_slots++;
@@ -2851,6 +2891,7 @@ int clusterProcessPacket(clusterLink *link) {
                 strcmp(ip,myself->ip))
             {
                 memcpy(myself->ip,ip,NET_IP_STR_LEN);
+                clearCachedClusterSlotsResp();
                 serverLog(LL_NOTICE,"IP address for this node updated to %s",
                     myself->ip);
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
@@ -2933,6 +2974,7 @@ int clusterProcessPacket(clusterLink *link) {
                 link->node->cport = 0;
                 freeClusterLink(link);
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+                clearCachedClusterSlotsResp();
                 return 0;
             }
         }
@@ -4177,6 +4219,7 @@ void clusterFailoverReplaceYourMaster(void) {
     /* 3) Update state and save config. */
     clusterUpdateState();
     clusterSaveConfigOrDie(1);
+    clearCachedClusterSlotsResp();
 
     /* 4) Pong all the other nodes so that they can update the state
      *    accordingly and detect that we switched to master role. */
@@ -4233,6 +4276,7 @@ void clusterHandleSlaveFailover(void) {
         server.cluster->cant_failover_reason = CLUSTER_CANT_FAILOVER_NONE;
         return;
     }
+    clearCachedClusterSlotsResp();
 
     /* Set data_age to the number of milliseconds we are disconnected from
      * the master. */
@@ -4961,6 +5005,7 @@ int clusterAddSlot(clusterNode *n, int slot) {
     if (server.cluster->slots[slot]) return C_ERR;
     clusterNodeSetSlotBit(n,slot);
     server.cluster->slots[slot] = n;
+    clearCachedClusterSlotsResp();
     return C_OK;
 }
 
@@ -4979,6 +5024,7 @@ int clusterDelSlot(int slot) {
     server.cluster->slots[slot] = NULL;
     /* Make owner_not_claiming_slot flag consistent with slot ownership information. */
     bitmapClearBit(server.cluster->owner_not_claiming_slot, slot);
+    clearCachedClusterSlotsResp();
     return C_OK;
 }
 
@@ -5603,6 +5649,14 @@ void clusterUpdateSlots(client *c, unsigned char *slots, int del) {
     }
 }
 
+long long getNodeOffSet(clusterNode *node) {
+    if (node->flags & CLUSTER_NODE_MYSELF) {
+        return nodeIsSlave(node) ? replicationGetSlaveOffset() : server.master_repl_offset;
+    } else {
+        return node->repl_offset;
+    }
+}
+
 /* Add detailed information of a node to the output buffer of the given client. */
 void addNodeDetailsToShardReply(client *c, clusterNode *node) {
     int reply_count = 0;
@@ -5637,12 +5691,7 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
         reply_count++;
     }
 
-    long long node_offset;
-    if (node->flags & CLUSTER_NODE_MYSELF) {
-        node_offset = nodeIsSlave(node) ? replicationGetSlaveOffset() : server.master_repl_offset;
-    } else {
-        node_offset = node->repl_offset;
-    }
+    long long node_offset = getNodeOffSet(node);
 
     addReplyBulkCString(c, "role");
     addReplyBulkCString(c, nodeIsSlave(node) ? "replica" : "master");
@@ -6516,4 +6565,32 @@ int clusterAllowFailoverCmd(client *c) {
 
 void clusterPromoteSelfToMaster(void) {
     replicationUnsetMaster();
+}
+
+void updateNodesHealth(void) {
+    dictIterator *di;
+    dictEntry *de;
+    clusterNode *node;
+    int overall_health_changed = 0;
+    di = dictGetSafeIterator(server.cluster->nodes);
+    while((de = dictNext(di)) != NULL) {
+        node = dictGetVal(de);
+        int present_node_health;
+
+        long long node_offset = getNodeOffSet(node);
+
+        if (nodeFailed(node) || (nodeIsSlave(node) && node_offset == 0)) {
+            present_node_health = 0;
+        } else {
+            present_node_health = 1;
+        }
+
+        if (present_node_health != node->node_health) {
+            overall_health_changed = 1;
+        }
+        node->node_health = present_node_health;
+    }
+    dictReleaseIterator(di);
+
+    if (overall_health_changed) clearCachedClusterSlotsResp();
 }

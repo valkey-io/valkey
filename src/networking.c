@@ -317,6 +317,42 @@ int prepareClientToWrite(client *c) {
     return C_OK;
 }
 
+/* Returns everything in the client reply linked list in a SDS format. */
+static sds getClientOutputBuffer(client *c) {
+    sds cmd_response = sdsempty();
+    listIter li;
+    listNode *ln;
+    clientReplyBlock *val_block;
+    listRewind(c->reply,&li);
+    
+    serverAssert(c->bufpos == 0);
+    while ((ln = listNext(&li)) != NULL) {
+        val_block = (clientReplyBlock *)listNodeValue(ln);
+        cmd_response = sdscatlen(cmd_response, val_block->buf,val_block->used);
+    }
+    return cmd_response;
+}
+
+/* This function creates and returns a fake client for recording the command response 
+ * to initiate caching of any command response.
+ *
+ * It needs be paired with `stopCaching` function to stop caching. */
+client *createCachedResponseClient(void) {
+    struct client *recording_client = createClient(NULL);
+    recording_client->conn  = zcalloc(sizeof(connection));
+    return recording_client;
+}
+
+/* This function is used to stop caching of any command response after `createCachedResponseClient` is called.
+ * It returns the command response as SDS from the recording_client's reply buffer. */
+sds stopCaching(client *recording_client) {
+    zfree(recording_client->conn);
+    recording_client->conn = NULL;
+    sds output_buff = getClientOutputBuffer(recording_client);
+    freeClient(recording_client);
+    return output_buff;
+}
+
 /* -----------------------------------------------------------------------------
  * Low level functions to add more data to output buffers.
  * -------------------------------------------------------------------------- */

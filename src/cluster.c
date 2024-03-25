@@ -1402,20 +1402,11 @@ void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, in
     serverAssert(nested_elements == 3); /* Original 3 elements */
 }
 
-void clusterCommandSlots(client * c) {
-    /* Format: 1) 1) start slot
-     *            2) end slot
-     *            3) 1) master IP
-     *               2) master port
-     *               3) node ID
-     *            4) 1) replica IP
-     *               2) replica port
-     *               3) node ID
-     *           ... continued until done
-     */
+sds generateClusterSlotResponse(void) {
+    client *recording_client = createCachedResponseClient();
     clusterNode *n = NULL;
     int num_masters = 0, start = -1;
-    void *slot_replylen = addReplyDeferredLen(c);
+    void *slot_replylen = addReplyDeferredLen(recording_client);
 
     for (int i = 0; i <= CLUSTER_SLOTS; i++) {
         /* Find start node and slot id. */
@@ -1429,14 +1420,48 @@ void clusterCommandSlots(client * c) {
         /* Add cluster slots info when occur different node with start
          * or end of slot. */
         if (i == CLUSTER_SLOTS || n != getNodeBySlot(i)) {
-            addNodeReplyForClusterSlot(c, n, start, i-1);
+            addNodeReplyForClusterSlot(recording_client, n, start, i-1);
             num_masters++;
             if (i == CLUSTER_SLOTS) break;
             n = getNodeBySlot(i);
             start = i;
         }
     }
-    setDeferredArrayLen(c, slot_replylen, num_masters);
+    setDeferredArrayLen(recording_client, slot_replylen, num_masters);
+    return stopCaching(recording_client);
+}
+
+int verifyCachedClusterSlotsResponse(sds cached_response) {
+    sds generated_response = generateClusterSlotResponse();
+    int result = !sdscmp(generated_response, cached_response);
+    if (!result) serverLog(LL_NOTICE,"\ngenerated_response:\n%s\n\ncached_response:\n%s", generated_response, cached_response);
+    sdsfree(generated_response);
+    return result;
+}
+
+void clusterCommandSlots(client * c) {
+    /* Format: 1) 1) start slot
+     *            2) end slot
+     *            3) 1) master IP
+     *               2) master port
+     *               3) node ID
+     *            4) 1) replica IP
+     *               2) replica port
+     *               3) node ID
+     *           ... continued until done
+     */
+    enum connTypeForCaching conn_type = connIsTLS(c->conn);
+
+    /* Check if we have a response cached for cluster slots for early exit. */
+    updateNodesHealth();    
+    if (isClusterSlotsResponseCached(conn_type)) {
+        debugServerAssertWithInfo(c, NULL, verifyCachedClusterSlotsResponse(getClusterSlotReply(conn_type)) == 1);
+        addReplyProto(c, getClusterSlotReply(conn_type), sdslen(getClusterSlotReply(conn_type)));
+        return;
+    }
+
+    cacheSlotsResponse(generateClusterSlotResponse(), conn_type);
+    addReplyProto(c, getClusterSlotReply(conn_type), sdslen(getClusterSlotReply(conn_type)));
 }
 
 /* -----------------------------------------------------------------------------

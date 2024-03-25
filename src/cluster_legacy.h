@@ -305,6 +305,7 @@ struct _clusterNode {
     clusterLink *link;          /* TCP/IP link established toward this node */
     clusterLink *inbound_link;  /* TCP/IP link accepted from this node */
     list *fail_reports;         /* List of nodes signaling this as failing */
+    int node_health;            /* Last updated node health, can be stale. Update by calling updateNodesHealth() */
 };
 
 struct clusterState {
@@ -353,6 +354,7 @@ struct clusterState {
      * stops claiming the slot. This prevents spreading incorrect information (that
      * source still owns the slot) using UPDATE messages. */
     unsigned char owner_not_claiming_slot[CLUSTER_SLOTS / 8];
+    sds cached_cluster_slot_info[CACHE_CONN_TYPE_MAX];
 };
 
 

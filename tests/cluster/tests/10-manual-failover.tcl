@@ -65,6 +65,7 @@ test "Wait for failover" {
     } else {
         fail "No failover detected"
     }
+    wait_for_cluster_propagation
 }
 
 test "Cluster should eventually be up again" {
@@ -92,6 +93,7 @@ test "Instance #0 gets converted into a slave" {
     } else {
         fail "Old master was not converted into slave"
     }
+    wait_for_cluster_propagation
 }
 
 ## Check that manual failover does not happen if we can't talk with the master.

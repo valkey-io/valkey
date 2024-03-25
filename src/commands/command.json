@@ -1,7 +1,7 @@
 {
     "COMMAND": {
         "summary": "Returns detailed information about all commands.",
-        "complexity": "O(N) where N is the total number of Redis commands",
+        "complexity": "O(N) where N is the total number of commands",
         "group": "server",
         "since": "2.8.13",
         "arity": -1,

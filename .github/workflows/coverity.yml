@@ -8,16 +8,16 @@ on:
   workflow_dispatch:
 jobs:
   coverity:
-    if: github.repository == 'redis/redis'
+    if: github.repository == 'placeholderkv/placeholderkv'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@main
     - name: Download and extract the Coverity Build Tool
       run: |
-          wget -q https://scan.coverity.com/download/cxx/linux64 --post-data "token=${{ secrets.COVERITY_SCAN_TOKEN }}&project=redis-unstable" -O cov-analysis-linux64.tar.gz
+          wget -q https://scan.coverity.com/download/cxx/linux64 --post-data "token=${{ secrets.COVERITY_SCAN_TOKEN }}&project=placeholderkv-unstable" -O cov-analysis-linux64.tar.gz
           mkdir cov-analysis-linux64
           tar xzf cov-analysis-linux64.tar.gz --strip 1 -C cov-analysis-linux64
-    - name: Install Redis dependencies
+    - name: Install placeholderkv dependencies
       run: sudo apt install -y gcc tcl8.6 tclx procps libssl-dev
     - name: Build with cov-build
       run: cov-analysis-linux64/bin/cov-build --dir cov-int make
@@ -25,7 +25,7 @@ jobs:
       run: |
           tar czvf cov-int.tgz cov-int
           curl \
-            --form project=redis-unstable \
+            --form project=placeholderkv-unstable \
             --form email=${{ secrets.COVERITY_SCAN_EMAIL }} \
             --form token=${{ secrets.COVERITY_SCAN_TOKEN }} \
             --form file=@cov-int.tgz \

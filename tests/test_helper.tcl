@@ -322,7 +322,9 @@ proc cleanup {} {
     if {!$::quiet} {puts -nonewline "Cleanup: may take some time... "}
     flush stdout
     catch {exec rm -rf {*}[glob tests/tmp/valkey.conf.*]}
-    catch {exec rm -rf {*}[glob tests/tmp/server.*]}
+    catch {exec rm -rf {*}[glob tests/tmp/redis.conf.*]}
+    catch {exec rm -rf {*}[glob tests/tmp/server*.*]}
+    catch {exec rm -rf {*}[glob tests/tmp/*.acl.*]}
     if {!$::quiet} {puts "OK"}
 }
 

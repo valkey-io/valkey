@@ -16,7 +16,7 @@
             "CONNECTION"
         ],
         "reply_schema": {
-            "description": "List of keys from the given Redis command.",
+            "description": "List of keys from the given command.",
             "type": "array",
             "items": {
                 "type": "string"

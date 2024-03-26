@@ -32,7 +32,7 @@
                             "type": "string"
                         },
                         "since": {
-                            "description": "the Redis version that added the command (or for module commands, the module version).",
+                            "description": "the server version that added the command (or for module commands, the module version).",
                             "type": "string"
                         },
                         "group": {
@@ -118,7 +118,7 @@
                             }
                         },
                         "deprecated_since": {
-                            "description": "the Redis version that deprecated the command (or for module commands, the module version)",
+                            "description": "the server version that deprecated the command (or for module commands, the module version)",
                             "type": "string"
                         },
                         "replaced_by": {
@@ -135,7 +135,7 @@
                                 "items": [
                                     {
                                         "type": "string",
-                                        "description": "The Redis version that the entry applies to."
+                                        "description": "The server version that the entry applies to."
                                     },
                                     {
                                         "type": "string",

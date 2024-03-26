@@ -1,6 +1,6 @@
 {
     "FAILOVER": {
-        "summary": "Forces a Redis Sentinel failover.",
+        "summary": "Forces a Sentinel failover.",
         "group": "sentinel",
         "since": "2.8.4",
         "arity": 3,

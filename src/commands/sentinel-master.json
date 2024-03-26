@@ -1,6 +1,6 @@
 {
     "MASTER": {
-        "summary": "Returns the state of a master Redis instance.",
+        "summary": "Returns the state of a master instance.",
         "complexity": "O(1)",
         "group": "sentinel",
         "since": "2.8.4",

@@ -50,7 +50,7 @@ proc exec_instance {type dirname cfgfile} {
     if {$type eq "redis"} {
         set prgname placeholderkv-server
     } elseif {$type eq "sentinel"} {
-        set prgname redis-sentinel
+        set prgname placeholderkv-sentinel
     } else {
         error "Unknown instance type."
     }

@@ -6612,9 +6612,9 @@ void dismissMemoryInChild(void) {
 void memtest(size_t megabytes, int passes);
 
 /* Returns 1 if there is --sentinel among the arguments or if
- * executable name contains "redis-sentinel". */
+ * executable name contains "placeholderkv-sentinel". */
 int checkForSentinelMode(int argc, char **argv, char *exec_name) {
-    if (strstr(exec_name,"redis-sentinel") != NULL) return 1;
+    if (strstr(exec_name,"placeholderkv-sentinel") != NULL) return 1;
 
     for (int j = 1; j < argc; j++)
         if (!strcmp(argv[j],"--sentinel")) return 1;

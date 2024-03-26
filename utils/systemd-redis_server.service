@@ -1,4 +1,4 @@
-# example systemd service unit file for redis-server
+# example systemd service unit file for placeholderkv-server
 #
 # In order to use this as a template for providing a redis service in your
 # environment, _at the very least_ make sure to adapt the redis configuration
@@ -24,9 +24,9 @@ Wants=network-online.target
 After=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/redis-server --supervised systemd --daemonize no
-## Alternatively, have redis-server load a configuration file:
-#ExecStart=/usr/local/bin/redis-server /path/to/your/redis.conf
+ExecStart=/usr/local/bin/placeholderkv-server --supervised systemd --daemonize no
+## Alternatively, have placeholderkv-server load a configuration file:
+#ExecStart=/usr/local/bin/placeholderkv-server /path/to/your/redis.conf
 LimitNOFILE=10032
 NoNewPrivileges=yes
 #OOMScoreAdjust=-900

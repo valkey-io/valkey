@@ -20,15 +20,15 @@ proc run-tests branches {
         exec -ignorestderr make 2> /dev/null
 
         if {$branch_id == 0} {
-            puts "  copy redis-benchmark from unstable to /tmp..."
-            exec -ignorestderr cp ./redis-benchmark /tmp
+            puts "  copy placeholderkv-benchmark from unstable to /tmp..."
+            exec -ignorestderr cp ./placeholderkv-benchmark /tmp
             incr branch_id
             continue
         }
 
-        # Start the Redis server
-        puts "  starting the server... [exec ./redis-server -v]"
-        set pids [exec echo "port $::port\nloglevel warning\n" | ./redis-server - > /dev/null 2> /dev/null &]
+        # Start the Placeholderkv server
+        puts "  starting the server... [exec ./placeholderkv-server -v]"
+        set pids [exec echo "port $::port\nloglevel warning\n" | ./placeholderkv-server - > /dev/null 2> /dev/null &]
         puts "  pids: $pids"
         after 1000
         puts "  running the benchmark"
@@ -38,7 +38,7 @@ proc run-tests branches {
         puts "  redis INFO shows version: [lindex [split $i] 0]"
         $r close
 
-        set output [exec /tmp/redis-benchmark -n $::requests -t $::tests -d $::datasize --csv -p $::port]
+        set output [exec /tmp/placeholderkv-benchmark -n $::requests -t $::tests -d $::datasize --csv -p $::port]
         lappend runs $b $output
         puts "  killing server..."
         catch {exec kill -9 [lindex $pids 0]}
@@ -83,7 +83,7 @@ proc combine-results {results} {
 }
 
 proc main {} {
-    # Note: the first branch is only used in order to get the redis-benchmark
+    # Note: the first branch is only used in order to get the placeholderkv-benchmark
     # executable. Tests are performed starting from the second branch.
     set branches {
         slowset 2.2.0 2.4.0 unstable slowset

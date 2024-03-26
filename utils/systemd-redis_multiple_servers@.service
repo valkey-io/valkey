@@ -1,26 +1,26 @@
-# example systemd template service unit file for multiple redis-servers
+# example systemd template service unit file for multiple placeholderkv-server
 #
 # You can use this file as a blueprint for your actual template service unit
-# file, if you intend to run multiple independent redis-server instances in
+# file, if you intend to run multiple independent placeholderkv-server instances in
 # parallel using systemd's "template unit files" feature. If you do, you will
 # want to choose a better basename for your service unit by renaming this file
 # when copying it.
 #
-# Please take a look at the provided "systemd-redis_server.service" example
+# Please take a look at the provided "systemd-placeholderkv_server.service" example
 # service unit file, too, if you choose to use this approach at managing
-# multiple redis-server instances via systemd.
+# multiple placeholderkv-server instances via systemd.
 
 [Unit]
 Description=Redis data structure server - instance %i
 Documentation=https://redis.io/documentation
-# This template unit assumes your redis-server configuration file(s)
-# to live at /etc/redis/redis_server_<INSTANCE_NAME>.conf
-AssertPathExists=/etc/redis/redis_server_%i.conf
+# This template unit assumes your placeholderkv-server configuration file(s)
+# to live at /etc/redis/placeholder_server_<INSTANCE_NAME>.conf
+AssertPathExists=/etc/redis/placeholder_server_%i.conf
 #Before=your_application.service another_example_application.service
 #AssertPathExists=/var/lib/redis
 
 [Service]
-ExecStart=/usr/local/bin/redis-server /etc/redis/redis_server_%i.conf
+ExecStart=/usr/local/bin/placeholderkv-server /etc/redis/placeholderkv_server_%i.conf
 LimitNOFILE=10032
 NoNewPrivileges=yes
 #OOMScoreAdjust=-900

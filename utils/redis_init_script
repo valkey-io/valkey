@@ -12,8 +12,8 @@
 ### END INIT INFO
 
 REDISPORT=6379
-EXEC=/usr/local/bin/redis-server
-CLIEXEC=/usr/local/bin/redis-cli
+EXEC=/usr/local/bin/placeholderkv-server
+CLIEXEC=/usr/local/bin/placeholderkv-cli
 
 PIDFILE=/var/run/redis_${REDISPORT}.pid
 CONF="/etc/redis/${REDISPORT}.conf"
@@ -24,7 +24,7 @@ case "$1" in
         then
                 echo "$PIDFILE exists, process is already running or crashed"
         else
-                echo "Starting Redis server..."
+                echo "Starting Placeholderkv server..."
                 $EXEC $CONF
         fi
         ;;
@@ -38,10 +38,10 @@ case "$1" in
                 $CLIEXEC -p $REDISPORT shutdown
                 while [ -x /proc/${PID} ]
                 do
-                    echo "Waiting for Redis to shutdown ..."
+                    echo "Waiting for Placeholderkv to shutdown ..."
                     sleep 1
                 done
-                echo "Redis stopped"
+                echo "Placeholderkv stopped"
         fi
         ;;
     *)

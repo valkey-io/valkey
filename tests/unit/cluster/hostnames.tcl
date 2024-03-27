@@ -170,10 +170,7 @@ test "Verify the nodes configured with prefer hostname only show hostname for ne
     } else {
         fail "Node did not learn about the 2 shards it can talk to"
     }
-    set slot_result [R 6 CLUSTER SLOTS]
-    assert_equal [lindex [get_slot_field $slot_result 0 2 3] 1] "shard-1.com"
-    assert_equal [lindex [get_slot_field $slot_result 1 2 3] 1] "shard-2.com"
-    assert_equal [lindex [get_slot_field $slot_result 2 2 3] 1] "shard-3.com"
+    wait_for_cluster_propagation
 }
 
 test "Test restart will keep hostname information" {

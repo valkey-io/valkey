@@ -434,6 +434,8 @@ void debugCommand(client *c) {
 "    Show low level info about `key` and associated value.",
 "DROP-CLUSTER-PACKET-FILTER <packet-type>",
 "    Drop all packets that match the filtered type. Set to -1 allow all packets.",
+"PROCESS-CLUSTERMSG-EXTENSIONS <0|1>",
+"    Enable/disable cluster message extensions parsing and dispatch.",
 "OOM",
 "    Crash the server simulating an out-of-memory error.",
 "PANIC",
@@ -596,6 +598,9 @@ NULL
         }
         server.dirty = 0; /* Prevent AOF / replication */
         serverLog(LL_NOTICE,"Append Only File loaded by DEBUG LOADAOF");
+        addReply(c,shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr,"process-clustermsg-extensions") && c->argc == 3) {
+        server.process_clustermsg_extensions = atoi(c->argv[2]->ptr);
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"drop-cluster-packet-filter") && c->argc == 3) {
         long packet_type;

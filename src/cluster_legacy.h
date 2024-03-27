@@ -267,9 +267,9 @@ static_assert(offsetof(clusterMsg, data) == 2256, "unexpected field offset");
 /* Message flags better specify the packet content or are used to
  * provide some information about the node state. */
 #define CLUSTERMSG_FLAG0_PAUSED (1<<0) /* Master paused for manual failover. */
-#define CLUSTERMSG_FLAG0_FORCEACK (1<<1) /* Give ACK to AUTH_REQUEST even if
-                                            master is up. */
+#define CLUSTERMSG_FLAG0_FORCEACK (1<<1) /* Give ACK to AUTH_REQUEST even if master is up. */
 #define CLUSTERMSG_FLAG0_EXT_DATA (1<<2) /* Message contains extension data */
+#define CLUSTERMSG_FLAG0_NODE_SUPPORTS_EXTENSIONS (1<<3) /* Node supports extension parsing */
 
 struct _clusterNode {
     mstime_t ctime; /* Node object creation time. */
@@ -305,6 +305,7 @@ struct _clusterNode {
     clusterLink *link;          /* TCP/IP link established toward this node */
     clusterLink *inbound_link;  /* TCP/IP link accepted from this node */
     list *fail_reports;         /* List of nodes signaling this as failing */
+    uint16_t extensions_supported; /* Does the node support parsing ping extensions. */
 };
 
 struct clusterState {

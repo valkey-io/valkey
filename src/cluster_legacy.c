@@ -1351,6 +1351,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->orphaned_time = 0;
     node->repl_offset_time = 0;
     node->repl_offset = 0;
+    node->extensions_supported = 0;
     listSetFreeMethod(node->fail_reports,zfree);
     return node;
 }
@@ -2527,6 +2528,9 @@ clusterMsgPingExt *nextPingExt(clusterMsgPingExt *ext) {
  *    written extension and will return the amount of bytes
  *    written. */
 uint32_t writePingExt(clusterMsg *hdr, int gossipcount)  {
+    if (!server.process_clustermsg_extensions) {
+        return 0;
+    }
     uint16_t extensions = 0;
     uint32_t totlen = 0;
     clusterMsgPingExt *cursor = NULL;
@@ -2610,6 +2614,9 @@ uint32_t writePingExt(clusterMsg *hdr, int gossipcount)  {
 /* We previously validated the extensions, so this function just needs to
  * handle the extensions. */
 void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
+    if (!server.process_clustermsg_extensions) {
+        return;
+    }
     clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
     char *ext_hostname = NULL;
     char *ext_humannodename = NULL;
@@ -2738,7 +2745,7 @@ int clusterProcessPacket(clusterLink *link) {
 
         /* If there is extension data, which doesn't have a fixed length,
          * loop through them and validate the length of it now. */
-        if (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
+        if (server.process_clustermsg_extensions && (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA)) {
             clusterMsgPingExt *ext = getInitialPingExt(hdr, count);
             while (extensions--) {
                 uint16_t extlen = getPingExtLength(ext);
@@ -2790,6 +2797,8 @@ int clusterProcessPacket(clusterLink *link) {
     }
 
     sender = getNodeFromLinkAndMsg(link, hdr);
+
+    if (sender) sender->extensions_supported = (hdr->mflags[0] & CLUSTERMSG_FLAG0_NODE_SUPPORTS_EXTENSIONS);
 
     /* Update the last time we saw any data from this node. We
      * use this in order to avoid detecting a timeout from a node that
@@ -3633,7 +3642,9 @@ void clusterSendPing(clusterLink *link, int type) {
      * to put inside the packet. */
     estlen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
     estlen += (sizeof(clusterMsgDataGossip)*(wanted + pfail_wanted));
-    estlen += writePingExt(NULL, 0);
+    if (link->node && link->node->extensions_supported) {
+        estlen += writePingExt(NULL, 0);
+    }
     /* Note: clusterBuildMessageHdr() expects the buffer to be always at least
      * sizeof(clusterMsg) or more. */
     if (estlen < (int)sizeof(clusterMsg)) estlen = sizeof(clusterMsg);
@@ -3703,7 +3714,13 @@ void clusterSendPing(clusterLink *link, int type) {
 
     /* Compute the actual total length and send! */
     uint32_t totlen = 0;
-    totlen += writePingExt(hdr, gossipcount);
+
+    if (server.process_clustermsg_extensions) {
+        hdr->mflags[0] |= CLUSTERMSG_FLAG0_NODE_SUPPORTS_EXTENSIONS;
+        if (link->node && link->node->extensions_supported) {
+            totlen += writePingExt(hdr, gossipcount);
+        }
+    }
     totlen += sizeof(clusterMsg)-sizeof(union clusterMsgData);
     totlen += (sizeof(clusterMsgDataGossip)*gossipcount);
     serverAssert(gossipcount < USHRT_MAX);

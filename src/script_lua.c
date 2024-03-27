@@ -1384,22 +1384,23 @@ void luaSetTableProtectionRecursively(lua_State *lua) {
 
 void luaRegisterVersion(lua_State* lua) {
     /* For legacy compatibility reasons, also include Redis version. */
-    lua_pushstring(lua,"REDIS_VERSION");
-    lua_pushstring(lua,REDIS_VERSION);
-    lua_settable(lua,-3);
-
     lua_pushstring(lua,"REDIS_VERSION_NUM");
     lua_pushnumber(lua,REDIS_VERSION_NUM);
     lua_settable(lua,-3);
 
+    lua_pushstring(lua,"REDIS_VERSION");
+    lua_pushstring(lua,REDIS_VERSION);
+    lua_settable(lua,-3);
+
     /* Now push the new table values*/
+    lua_pushstring(lua,"SERVER_VERSION_NUM");
+    lua_pushnumber(lua,SERVER_VERSION_NUM);
+    lua_settable(lua,-3);
+
     lua_pushstring(lua,"SERVER_VERSION");
     lua_pushstring(lua,SERVER_VERSION);
     lua_settable(lua,-3);
 
-    lua_pushstring(lua,"SERVER_VERSION_NUM");
-    lua_pushnumber(lua,SERVER_VERSION_NUM);
-    lua_settable(lua,-3);
 }
 
 void luaRegisterLogFunction(lua_State* lua) {

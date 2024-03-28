@@ -6612,9 +6612,9 @@ void dismissMemoryInChild(void) {
 void memtest(size_t megabytes, int passes);
 
 /* Returns 1 if there is --sentinel among the arguments or if
- * executable name contains "placeholderkv-sentinel". */
+ * executable name contains "valkey-sentinel". */
 int checkForSentinelMode(int argc, char **argv, char *exec_name) {
-    if (strstr(exec_name,"placeholderkv-sentinel") != NULL) return 1;
+    if (strstr(exec_name,"valkey-sentinel") != NULL) return 1;
 
     for (int j = 1; j < argc; j++)
         if (!strcmp(argv[j],"--sentinel")) return 1;
@@ -6995,9 +6995,9 @@ int main(int argc, char **argv) {
     /* Check if we need to start in redis-check-rdb/aof mode. We just execute
      * the program main. However the program is part of the Redis executable
      * so that we can easily execute an RDB check on loading errors. */
-    if (strstr(exec_name,"placeholderkv-check-rdb") != NULL)
+    if (strstr(exec_name,"valkey-check-rdb") != NULL)
         redis_check_rdb_main(argc,argv,NULL);
-    else if (strstr(exec_name,"placeholderkv-check-aof") != NULL)
+    else if (strstr(exec_name,"valkey-check-aof") != NULL)
         redis_check_aof_main(argc,argv);
 
     if (argc >= 2) {

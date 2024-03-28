@@ -10,7 +10,7 @@ jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
-    if: github.event_name != 'schedule' || github.repository == 'placeholderkv/placeholderkv'
+    if: github.event_name != 'schedule' || github.repository == 'valkey-io/valkey'
 
     strategy:
       fail-fast: false

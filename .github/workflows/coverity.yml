@@ -17,7 +17,7 @@ jobs:
           wget -q https://scan.coverity.com/download/cxx/linux64 --post-data "token=${{ secrets.COVERITY_SCAN_TOKEN }}&project=valkey-unstable" -O cov-analysis-linux64.tar.gz
           mkdir cov-analysis-linux64
           tar xzf cov-analysis-linux64.tar.gz --strip 1 -C cov-analysis-linux64
-    - name: Install valkey dependencies
+    - name: Install Valkey dependencies
       run: sudo apt install -y gcc tcl8.6 tclx procps libssl-dev
     - name: Build with cov-build
       run: cov-analysis-linux64/bin/cov-build --dir cov-int make

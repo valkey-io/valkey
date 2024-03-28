@@ -43,7 +43,7 @@
             }
         ],
         "reply_schema": {
-            "description": "the counter's value",
+            "description": "The counter's value.",
             "type": "integer"
         }
     }

@@ -59,17 +59,17 @@
             }
         ],
         "reply_schema": {
-            "description": "cursor and scan response in array form",
+            "description": "Cursor and scan response in array form.",
             "type": "array",
             "minItems": 2,
             "maxItems": 2,
             "items": [
                 {
-                    "description": "cursor",
+                    "description": "Cursor.",
                     "type": "string"
                 },
                 {
-                    "description": "list of elements of the sorted set, where each even element is the member, and each odd value is its associated score",
+                    "description": "List of elements of the sorted set, where each even element is the member, and each odd value is its associated score.",
                     "type": "array",
                     "items": {
                         "type": "string"

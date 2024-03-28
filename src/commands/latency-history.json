@@ -27,12 +27,12 @@
                 "maxItems": 2,
                 "items": [
                     {
-                        "description": "timestamp of the event",
+                        "description": "Timestamp of the event.",
                         "type": "integer",
                         "minimum": 0
                     },
                     {
-                        "description": "latency of the event",
+                        "description": "Latency of the event.",
                         "type": "integer",
                         "minimum": 0
                     }

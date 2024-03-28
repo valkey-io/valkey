@@ -13,7 +13,7 @@
             "RESPONSE_POLICY:SPECIAL"
         ],
         "reply_schema": {
-            "description": "memory usage details",
+            "description": "Memory usage details.",
             "type": "object",
             "additionalProperties": false,
             "properties": {

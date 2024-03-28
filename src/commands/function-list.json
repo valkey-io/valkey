@@ -23,26 +23,26 @@
                 "additionalProperties": false,
                 "properties": {
                     "library_name": {
-                        "description": " the name of the library",
+                        "description": "The name of the library.",
                         "type": "string"
                     },
                     "engine": {
-                        "description": "the engine of the library",
+                        "description": "The engine of the library.",
                         "type": "string"
                     },
                     "functions": {
-                        "description": "the list of functions in the library",
+                        "description": "The list of functions in the library.",
                         "type": "array",
                         "items": {
                             "type": "object",
                             "additionalProperties": false,
                             "properties": {
                                 "name": {
-                                    "description": "the name of the function",
+                                    "description": "The name of the function.",
                                     "type": "string"
                                 },
                                 "description": {
-                                    "description": "the function's description",
+                                    "description": "The function's description.",
                                     "oneOf": [
                                         {
                                             "type": "null"
@@ -53,7 +53,7 @@
                                     ]
                                 },
                                 "flags": {
-                                    "description": "an array of function flags",
+                                    "description": "An array of function flags.",
                                     "type": "array",
                                     "items": {
                                         "type": "string"
@@ -63,7 +63,7 @@
                         }
                     },
                     "library_code": {
-                        "description": "the library's source code (when given the WITHCODE modifier)",
+                        "description": "The library's source code (when given the WITHCODE modifier).",
                         "type": "string"
                     }
                 }

@@ -21,11 +21,11 @@
             }
         ],
         "reply_schema": {
-            "description": "a list of replica nodes replicating from the specified master node provided in the same format used by CLUSTER NODES",
+            "description": "A list of replica nodes replicating from the specified master node provided in the same format used by CLUSTER NODES.",
             "type": "array",
             "items": {
                 "type": "string",
-                "description": "the serialized cluster configuration"
+                "description": "The serialized cluster configuration."
             }
         }
     }

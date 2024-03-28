@@ -19,9 +19,9 @@ There is also an active community of Redis users at Stack Overflow:
 
     https://stackoverflow.com/questions/tagged/redis
 
-Issues and pull requests for documentation belong on the placeholderkv-doc repo:
+Issues and pull requests for documentation belong on the valkey-doc repo:
 
-    https://github.com/placeholderkv/placeholderkv-doc
+    https://github.com/valkey-io-doc
 
 If you are reporting a security bug or vulnerability, see SECURITY.md.
 
@@ -58,7 +58,7 @@ By making a contribution to this project, I certify that:
     involved.
  ```
 
-We require that every contribution to placeholderkv to be signed with a DCO. We require the usage of known identity (such as a real or preferred name). We do not accept anonymous contributors nor those utilizing pseudonyms. A DCO signed commit will contain a line like:
+We require that every contribution to Valkey to be signed with a DCO. We require the usage of known identity (such as a real or preferred name). We do not accept anonymous contributors nor those utilizing pseudonyms. A DCO signed commit will contain a line like:
 
 ```
 Signed-off-by: Jane Smith <jane.smith@email.com>
@@ -75,7 +75,7 @@ to accomplish and why. Use cases are important for features to be accepted.
 Here you can see if there is consensus about your idea.
 
 2. If in step 1 you get an acknowledgment from the project leaders, use the following procedure to submit a patch:
-    1. Fork placeholderkv on GitHub ( https://docs.github.com/en/github/getting-started-with-github/fork-a-repo )
+    1. Fork Valkey on GitHub ( https://docs.github.com/en/github/getting-started-with-github/fork-a-repo )
     1. Create a topic branch (git checkout -b my_branch)
     1. Make the needed changes and commit with a DCO. (git commit -s)
     1. Push to your branch (git push origin my_branch)

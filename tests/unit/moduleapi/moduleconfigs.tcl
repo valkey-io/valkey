@@ -221,15 +221,15 @@ start_server {tags {"modules"}} {
     }
     test {startup moduleconfigs} {
         # No loadmodule directive
-        catch {exec src/placeholderkv-server --moduleconfigs.string "hello"} err
+        catch {exec src/valkey-server --moduleconfigs.string "hello"} err
         assert_match {*Module Configuration detected without loadmodule directive or no ApplyConfig call: aborting*} $err
 
         # Bad config value
-        catch {exec src/placeholderkv-server --loadmodule "$testmodule" --moduleconfigs.string "rejectisfreed"} err
+        catch {exec src/valkey-server --loadmodule "$testmodule" --moduleconfigs.string "rejectisfreed"} err
         assert_match {*Issue during loading of configuration moduleconfigs.string : Cannot set string to 'rejectisfreed'*} $err
 
         # missing LoadConfigs call
-        catch {exec src/placeholderkv-server --loadmodule "$testmodule" noload --moduleconfigs.string "hello"} err
+        catch {exec src/valkey-server --loadmodule "$testmodule" noload --moduleconfigs.string "hello"} err
         assert_match {*Module Configurations were not set, likely a missing LoadConfigs call. Unloading the module.*} $err
 
         # successful

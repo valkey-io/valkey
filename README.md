@@ -127,7 +127,7 @@ If you want to see a more verbose output, use the following:
 Running Valkey
 -------------
 
-To run valkey with the default configuration, just type:
+To run Valkey with the default configuration, just type:
 
     % cd src
     % ./valkey-server

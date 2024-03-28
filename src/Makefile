@@ -123,8 +123,15 @@ endif
 -include .make-settings
 
 # For added compatibility REDIS_CFLAGS and REDIS_LDFLAGS are also supported.
-FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(SERVER_CFLAGS) $(REDIS_CFLAGS)
-FINAL_LDFLAGS=$(LDFLAGS) $(OPT) $(SERVER_LDFLAGS) $(DEBUG) $(REDIS_LDFLAGS)
+ifdef REDIS_CFLAGS
+    SERVER_CFLAGS := $(REDIS_CFLAGS)
+endif
+ifdef REDIS_LDFLAGS
+    SERVER_LDFLAGS := $(REDIS_LDFLAGS)
+endif
+
+FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(SERVER_CFLAGS)
+FINAL_LDFLAGS=$(LDFLAGS) $(OPT) $(SERVER_LDFLAGS) $(DEBUG)
 FINAL_LIBS=-lm
 DEBUG=-g -ggdb
 
@@ -342,7 +349,7 @@ QUIET_LINK = @printf '    %b %b\n' $(LINKCOLOR)LINK$(ENDCOLOR) $(BINCOLOR)$@$(EN
 QUIET_INSTALL = @printf '    %b %b\n' $(LINKCOLOR)INSTALL$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR) 1>&2;
 endif
 
-ifneq (,$(or $(findstring LOG_REQ_RES,$(SERVER_CFLAGS)), $(findstring LOG_REQ_RES,$(REDIS_CFLAGS))))
+ifneq (, $(findstring LOG_REQ_RES, $(SERVER_CFLAGS)))
 	COMMANDS_DEF_FILENAME=commands_with_reply_schema
 	GEN_COMMANDS_FLAGS=--with-reply-schema
 else
@@ -387,8 +394,6 @@ persist-settings: distclean
 	echo LDFLAGS=$(LDFLAGS) >> .make-settings
 	echo SERVER_CFLAGS=$(SERVER_CFLAGS) >> .make-settings
 	echo SERVER_LDFLAGS=$(SERVER_LDFLAGS) >> .make-settings
-	echo REDIS_CFLAGS=$(REDIS_CFLAGS) >> .make-settings
-	echo REDIS_LDFLAGS=$(REDIS_LDFLAGS) >> .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
 	-(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))

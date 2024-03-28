@@ -138,7 +138,7 @@ parameter (the path of the configuration file):
     % cd src
     % ./valkey-server /path/to/valkey.conf
 
-It is possible to alter the valkey configuration by passing parameters directly
+It is possible to alter the Valkey configuration by passing parameters directly
 as options using the command line. Examples:
 
     % ./valkey-server --port 9999 --replicaof 127.0.0.1 6379
@@ -147,16 +147,16 @@ as options using the command line. Examples:
 All the options in valkey.conf are also supported as options using the command
 line, with exactly the same name.
 
-Running valkey with TLS:
+Running Valkey with TLS:
 ------------------
 
 Please consult the [TLS.md](TLS.md) file for more information on
-how to use valkey with TLS.
+how to use Valkey with TLS.
 
-Playing with valkey
+Playing with Valkey
 ------------------
 
-You can use Valkey-cli to play with Valkey. Start a Valkey-server instance,
+You can use valkey-cli to play with Valkey. Start a valkey-server instance,
 then in another terminal try the following:
 
     % cd src

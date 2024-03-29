@@ -4526,7 +4526,7 @@ int finishShutdown(void) {
 
 
     serverLog(LL_WARNING,"%s is now ready to exit, bye bye...",
-        server.sentinel_mode ? "Sentinel" : "Valkey");
+        server.sentinel_mode ? "Sentinel" : "Redis");
     return C_OK;
 
 error:
@@ -7152,9 +7152,9 @@ int main(int argc, char **argv) {
     int background = server.daemonize && !server.supervised;
     if (background) daemonize();
 
-    serverLog(LL_NOTICE, "oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo");
+    serverLog(LL_NOTICE, "oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo");
     serverLog(LL_NOTICE,
-        "Valkey version=%s, bits=%d, commit=%s, modified=%d, pid=%d, just started",
+        "Redis version=%s, bits=%d, commit=%s, modified=%d, pid=%d, just started",
             REDIS_VERSION,
             (sizeof(long) == 8) ? 64 : 32,
             redisGitSHA1(),

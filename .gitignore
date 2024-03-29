@@ -23,6 +23,7 @@ release.h
 src/transfer.sh
 src/configs
 redis.ds
+src/valkey.conf
 src/redis.conf
 src/nodes.conf
 deps/lua/src/lua

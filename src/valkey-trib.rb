@@ -104,10 +104,10 @@ end
 $command = ARGV.shift
 $opts, $args = parse_options($command) if $command
 
-puts "WARNING: redis-trib.rb is not longer available!".yellow
+puts "WARNING: valkey-trib.rb is not longer available!".yellow
 puts "You should use #{'valkey-cli'.bold} instead."
 puts ''
-puts "All commands and features belonging to redis-trib.rb "+
+puts "All commands and features belonging to valkey-trib.rb "+
      "have been moved\nto valkey-cli."
 puts "In order to use them you should call valkey-cli with the #{'--cluster'.bold}"
 puts "option followed by the subcommand name, arguments and options."

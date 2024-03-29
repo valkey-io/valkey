@@ -1108,7 +1108,7 @@ start_server {tags {"scripting"}} {
 
     test {FUNCTION - redis version api} {
         r FUNCTION load replace {#!lua name=test
-            local version = redis.REDIS_VERSION_NUM
+            local version = redis.VALKEY_VERSION_NUM
 
             redis.register_function{function_name='get_version_v1', callback=function()
               return string.format('%s.%s.%s',

@@ -119,7 +119,7 @@ aofInfo *aofInfoDup(aofInfo *orig) {
 
 /* Format aofInfo as a string and it will be a line in the manifest.
  *
- * When update this format, make sure to update redis-check-aof as well. */
+ * When update this format, make sure to update valkey-check-aof as well. */
 sds aofInfoFormat(sds buf, aofInfo *ai) {
     sds filename_repr = NULL;
 
@@ -253,7 +253,7 @@ void aofLoadManifestFromDisk(void) {
     sdsfree(am_filepath);
 }
 
-/* Generic manifest loading function, used in `aofLoadManifestFromDisk` and redis-check-aof tool. */
+/* Generic manifest loading function, used in `aofLoadManifestFromDisk` and valkey-check-aof tool. */
 #define MANIFEST_MAX_LINE 1024
 aofManifest *aofLoadManifestFromFile(sds am_filepath) {
     const char *err = NULL;
@@ -1634,14 +1634,14 @@ uxeof: /* Unexpected AOF end of file. */
         }
     }
     serverLog(LL_WARNING, "Unexpected end of file reading the append only file %s. You can: "
-        "1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename.manifest>. "
+        "1) Make a backup of your AOF file, then use ./valkey-check-aof --fix <filename.manifest>. "
         "2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server.", filename);
     ret = AOF_FAILED;
     goto cleanup;
 
 fmterr: /* Format error. */
     serverLog(LL_WARNING, "Bad file format reading the append only file %s: "
-        "make a backup of your AOF file, then use ./redis-check-aof --fix <filename.manifest>", filename);
+        "make a backup of your AOF file, then use ./valkey-check-aof --fix <filename.manifest>", filename);
     ret = AOF_FAILED;
     /* fall through to cleanup. */
 

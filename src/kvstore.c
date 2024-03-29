@@ -43,7 +43,7 @@
 
 #include "zmalloc.h"
 #include "kvstore.h"
-#include "redisassert.h"
+#include "valkeyassert.h"
 #include "monotonic.h"
 
 #define UNUSED(V) ((void) V)

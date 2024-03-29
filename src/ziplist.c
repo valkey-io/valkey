@@ -190,7 +190,7 @@
 #include "ziplist.h"
 #include "config.h"
 #include "endianconv.h"
-#include "redisassert.h"
+#include "valkeyassert.h"
 
 #define ZIP_END 255         /* Special "end of ziplist" entry. */
 #define ZIP_BIG_PREVLEN 254 /* ZIP_BIG_PREVLEN - 1 is the max number of bytes of
@@ -350,7 +350,7 @@ static inline unsigned int zipIntSize(unsigned char encoding) {
     if (encoding >= ZIP_INT_IMM_MIN && encoding <= ZIP_INT_IMM_MAX)
         return 0; /* 4 bit immediate */
     /* bad encoding, covered by a previous call to ZIP_ASSERT_ENCODING */
-    redis_unreachable();
+    valkey_unreachable();
     return 0;
 }
 

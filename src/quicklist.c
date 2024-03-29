@@ -37,7 +37,7 @@
 #include "listpack.h"
 #include "util.h" /* for ll2string */
 #include "lzf.h"
-#include "redisassert.h"
+#include "valkeyassert.h"
 
 #ifndef REDIS_STATIC
 #define REDIS_STATIC static
@@ -499,7 +499,7 @@ int quicklistNodeExceedsLimit(int fill, size_t new_sz, unsigned int new_count) {
         return new_count > count_limit;
     }
 
-    redis_unreachable();
+    valkey_unreachable();
 }
 
 /* Determines whether a given size qualifies as a large element based on a threshold

@@ -42,7 +42,7 @@
 
 #include "listpack.h"
 #include "listpack_malloc.h"
-#include "redisassert.h"
+#include "valkeyassert.h"
 #include "util.h"
 
 #define LP_HDR_SIZE 6       /* 32 bit total len + 16 bit number of elements. */
@@ -885,7 +885,7 @@ unsigned char *lpInsert(unsigned char *lp, unsigned char *elestr, unsigned char 
         } else if (elestr) {
             lpEncodeString(dst,elestr,size);
         } else {
-            redis_unreachable();
+            valkey_unreachable();
         }
         dst += enclen;
         memcpy(dst,backlen,backlen_size);

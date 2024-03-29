@@ -45,7 +45,7 @@
 
 #include "dict.h"
 #include "zmalloc.h"
-#include "redisassert.h"
+#include "valkeyassert.h"
 #include "monotonic.h"
 
 /* Using dictSetResizeEnabled() we make possible to disable

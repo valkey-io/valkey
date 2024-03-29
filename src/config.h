@@ -138,9 +138,9 @@
 #endif
 
 #if __GNUC__ >= 5 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 5)
-#define redis_unreachable __builtin_unreachable
+#define valkey_unreachable __builtin_unreachable
 #else
-#define redis_unreachable abort
+#define valkey_unreachable abort
 #endif
 
 #if __GNUC__ >= 3

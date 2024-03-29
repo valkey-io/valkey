@@ -85,7 +85,7 @@ but there are probably other good reasons to improve that part anyway.
 To-Do List
 ----------
 
-- [ ] redis-benchmark support. The current implementation is a mix of using
+- [ ] valkey-benchmark support. The current implementation is a mix of using
   hiredis for parsing and basic networking (establishing connections), but
   directly manipulating sockets for most actions. This will need to be cleaned
   up for proper TLS support. The best approach is probably to migrate to hiredis

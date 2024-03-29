@@ -65,7 +65,7 @@ set ::all_tests {
     integration/psync2-master-restart
     integration/failover
     integration/redis-cli
-    integration/redis-benchmark
+    integration/valkey-benchmark
     integration/dismiss-mem
     unit/pubsub
     unit/pubsubshard

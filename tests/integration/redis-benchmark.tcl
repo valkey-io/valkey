@@ -5,14 +5,14 @@ proc cmdstat {cmd} {
     return [cmdrstat $cmd r]
 }
 
-# common code to reset stats, flush the db and run redis-benchmark
+# common code to reset stats, flush the db and run valkey-benchmark
 proc common_bench_setup {cmd} {
     r config resetstat
     r flushall
     if {[catch { exec {*}$cmd } error]} {
         set first_line [lindex [split $error "\n"] 0]
-        puts [colorstr red "redis-benchmark non zero code. first line: $first_line"]
-        fail "redis-benchmark non zero code. first line: $first_line"
+        puts [colorstr red "valkey-benchmark non zero code. first line: $first_line"]
+        fail "valkey-benchmark non zero code. first line: $first_line"
     }
 }
 
@@ -164,8 +164,8 @@ tags {"benchmark network external:skip logreqres:skip"} {
                             puts "Skipping test, TLSv1.3 not supported."
                         }
                     } else {
-                        puts [colorstr red "redis-benchmark non zero code. first line: $first_line"]
-                        fail "redis-benchmark non zero code. first line: $first_line"
+                        puts [colorstr red "valkey-benchmark non zero code. first line: $first_line"]
+                        fail "valkey-benchmark non zero code. first line: $first_line"
                     }
                 }
                 if {$ciphersuites_supported} {

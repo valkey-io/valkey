@@ -1403,7 +1403,7 @@ int parseOptions(int argc, char **argv) {
             config.numclients = atoi(argv[++i]);
         } else if (!strcmp(argv[i],"-v") || !strcmp(argv[i], "--version")) {
             sds version = cliVersion();
-            printf("redis-benchmark %s\n", version);
+            printf("valkey-benchmark %s\n", version);
             sdsfree(version);
             exit(0);
         } else if (!strcmp(argv[i],"-n")) {
@@ -1435,7 +1435,7 @@ int parseOptions(int argc, char **argv) {
             if (lastarg) goto invalid;
             config.conn_info.user = sdsnew(argv[++i]);
         } else if (!strcmp(argv[i],"-u") && !lastarg) {
-            parseRedisUri(argv[++i],"redis-benchmark",&config.conn_info,&config.tls);
+            parseRedisUri(argv[++i],"valkey-benchmark",&config.conn_info,&config.tls);
             if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
                 fprintf(stderr, "Invalid server port.\n");
                 exit(1);
@@ -1585,7 +1585,7 @@ usage:
 
     printf(
 "%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
-"Usage: redis-benchmark [OPTIONS] [COMMAND ARGS...]\n\n"
+"Usage: valkey-benchmark [OPTIONS] [COMMAND ARGS...]\n\n"
 "Options:\n"
 " -h <hostname>      Server hostname (default 127.0.0.1)\n"
 " -p <port>          Server port (default 6379)\n"
@@ -1637,17 +1637,17 @@ tls_usage,
 " --version          Output version and exit.\n\n"
 "Examples:\n\n"
 " Run the benchmark with the default configuration against 127.0.0.1:6379:\n"
-"   $ redis-benchmark\n\n"
+"   $ valkey-benchmark\n\n"
 " Use 20 parallel clients, for a total of 100k requests, against 192.168.1.1:\n"
-"   $ redis-benchmark -h 192.168.1.1 -p 6379 -n 100000 -c 20\n\n"
+"   $ valkey-benchmark -h 192.168.1.1 -p 6379 -n 100000 -c 20\n\n"
 " Fill 127.0.0.1:6379 with about 1 million keys only using the SET test:\n"
-"   $ redis-benchmark -t set -n 1000000 -r 100000000\n\n"
+"   $ valkey-benchmark -t set -n 1000000 -r 100000000\n\n"
 " Benchmark 127.0.0.1:6379 for a few commands producing CSV output:\n"
-"   $ redis-benchmark -t ping,set,get -n 100000 --csv\n\n"
+"   $ valkey-benchmark -t ping,set,get -n 100000 --csv\n\n"
 " Benchmark a specific command line:\n"
-"   $ redis-benchmark -r 10000 -n 10000 eval 'return redis.call(\"ping\")' 0\n\n"
+"   $ valkey-benchmark -r 10000 -n 10000 eval 'return redis.call(\"ping\")' 0\n\n"
 " Fill a list with 10000 random elements:\n"
-"   $ redis-benchmark -r 10000 -n 10000 lpush mylist __rand_int__\n\n"
+"   $ valkey-benchmark -r 10000 -n 10000 lpush mylist __rand_int__\n\n"
 " On user specified command lines __rand_int__ is replaced with a random integer\n"
 " with a range of values selected by the -r option.\n"
     );

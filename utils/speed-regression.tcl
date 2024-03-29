@@ -20,8 +20,8 @@ proc run-tests branches {
         exec -ignorestderr make 2> /dev/null
 
         if {$branch_id == 0} {
-            puts "  copy redis-benchmark from unstable to /tmp..."
-            exec -ignorestderr cp ./redis-benchmark /tmp
+            puts "  copy valkey-benchmark from unstable to /tmp..."
+            exec -ignorestderr cp ./valkey-benchmark /tmp
             incr branch_id
             continue
         }
@@ -38,7 +38,7 @@ proc run-tests branches {
         puts "  redis INFO shows version: [lindex [split $i] 0]"
         $r close
 
-        set output [exec /tmp/redis-benchmark -n $::requests -t $::tests -d $::datasize --csv -p $::port]
+        set output [exec /tmp/valkey-benchmark -n $::requests -t $::tests -d $::datasize --csv -p $::port]
         lappend runs $b $output
         puts "  killing server..."
         catch {exec kill -9 [lindex $pids 0]}
@@ -83,7 +83,7 @@ proc combine-results {results} {
 }
 
 proc main {} {
-    # Note: the first branch is only used in order to get the redis-benchmark
+    # Note: the first branch is only used in order to get the valkey-benchmark
     # executable. Tests are performed starting from the second branch.
     set branches {
         slowset 2.2.0 2.4.0 unstable slowset

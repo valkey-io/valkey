@@ -40,7 +40,7 @@
                                 "maxItems": 3,
                                 "items": [
                                     {
-                                        "description": "Replica ip.",
+                                        "description": "Replica IP.",
                                         "type": "string"
                                     },
                                     {
@@ -65,7 +65,7 @@
                             "const": "slave"
                         },
                         {
-                            "description": "Ip of master.",
+                            "description": "IP of master.",
                             "type": "string"
                         },
                         {

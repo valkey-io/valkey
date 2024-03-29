@@ -62,7 +62,7 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 # base config
-cat > ${tmpdir}/redis.conf <<EOF
+cat > ${tmpdir}/valkey.conf <<EOF
 pidfile ${PID_FILE}
 port ${REDIS_PORT}
 unixsocket ${SOCK_FILE}
@@ -71,7 +71,7 @@ EOF
 
 # if not running in docker add these:
 if [ ! -n "${REDIS_DOCKER}" ]; then
-cat >> ${tmpdir}/redis.conf <<EOF
+cat >> ${tmpdir}/valkey.conf <<EOF
 daemonize yes
 ${ENABLE_DEBUG_CMD}
 bind 127.0.0.1
@@ -80,7 +80,7 @@ fi
 
 # if doing ssl, add these
 if [ "$TEST_SSL" = "1" ]; then
-    cat >> ${tmpdir}/redis.conf <<EOF
+    cat >> ${tmpdir}/valkey.conf <<EOF
 tls-port ${REDIS_SSL_PORT}
 tls-ca-cert-file ${SSL_CA_CERT}
 tls-cert-file ${SSL_CERT}
@@ -89,7 +89,7 @@ EOF
 fi
 
 echo ${tmpdir}
-cat ${tmpdir}/redis.conf
+cat ${tmpdir}/valkey.conf
 if [ -n "${REDIS_DOCKER}" ] ; then
     chmod a+wx ${tmpdir}
     chmod a+r ${tmpdir}/*
@@ -98,9 +98,9 @@ if [ -n "${REDIS_DOCKER}" ] ; then
         -p ${REDIS_SSL_PORT}:${REDIS_SSL_PORT} \
         -v ${tmpdir}:${tmpdir} \
         ${REDIS_DOCKER} \
-        redis-server ${tmpdir}/redis.conf
+        redis-server ${tmpdir}/valkey.conf
 else
-    ${REDIS_SERVER} ${tmpdir}/redis.conf
+    ${REDIS_SERVER} ${tmpdir}/valkey.conf
 fi
 # Wait until we detect the unix socket
 echo waiting for server

@@ -24,6 +24,7 @@ src/transfer.sh
 src/configs
 redis.ds
 src/redis.conf
+src/valkey.conf
 src/nodes.conf
 deps/lua/src/lua
 deps/lua/src/luac

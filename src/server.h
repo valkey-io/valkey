@@ -1734,7 +1734,7 @@ struct redisServer {
     durationStats duration_stats[EL_DURATION_TYPE_NUM];
 
     /* Configuration */
-    int verbosity;                  /* Loglevel in redis.conf */
+    int verbosity;                  /* Loglevel in valkey.conf */
     int maxidletime;                /* Client timeout in seconds */
     int tcpkeepalive;               /* Set SO_KEEPALIVE if non-zero. */
     int active_expire_enabled;      /* Can be disabled for testing purposes. */
@@ -1959,7 +1959,7 @@ struct redisServer {
     int sort_alpha;
     int sort_bypattern;
     int sort_store;
-    /* Zip structure config, see redis.conf for more information  */
+    /* Zip structure config, see valkey.conf for more information  */
     size_t hash_max_listpack_entries;
     size_t hash_max_listpack_value;
     size_t set_max_intset_entries;
@@ -2314,7 +2314,7 @@ typedef int redisGetKeysProc(struct redisCommand *cmd, robj **argv, int argc, ge
  *
  * The following additional flags are only used in order to put commands
  * in a specific ACL category. Commands can have multiple ACL categories.
- * See redis.conf for the exact meaning of each.
+ * See valkey.conf for the exact meaning of each.
  *
  * @keyspace, @read, @write, @set, @sortedset, @list, @hash, @string, @bitmap,
  * @hyperloglog, @stream, @admin, @fast, @slow, @pubsub, @blocking, @dangerous,

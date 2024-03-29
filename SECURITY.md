@@ -1,6 +1,6 @@
 # Security Policy
 
-PlaceHolderKV is under development, more information will become available.
+Valkey is under development, more information will become available.
 
 ## Reporting a Vulnerability
 

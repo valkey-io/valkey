@@ -1847,7 +1847,7 @@ void loadSentinelConfigFromQueue(void) {
 
 loaderr:
     fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR (Redis %s) ***\n",
-        REDIS_VERSION);
+        VALKEY_VERSION);
     fprintf(stderr, "Reading the configuration file, at line %d\n", linenum);
     fprintf(stderr, ">>> '%s'\n", line);
     fprintf(stderr, "%s\n", err);

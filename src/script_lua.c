@@ -1383,12 +1383,12 @@ void luaSetTableProtectionRecursively(lua_State *lua) {
 }
 
 void luaRegisterVersion(lua_State* lua) {
-    lua_pushstring(lua,"REDIS_VERSION_NUM");
-    lua_pushnumber(lua,REDIS_VERSION_NUM);
+    lua_pushstring(lua,"VALKEY_VERSION_NUM");
+    lua_pushnumber(lua,VALKEY_VERSION_NUM);
     lua_settable(lua,-3);
 
-    lua_pushstring(lua,"REDIS_VERSION");
-    lua_pushstring(lua,REDIS_VERSION);
+    lua_pushstring(lua,"VALKEY_VERSION");
+    lua_pushstring(lua,VALKEY_VERSION);
     lua_settable(lua,-3);
 }
 

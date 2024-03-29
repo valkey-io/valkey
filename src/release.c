@@ -38,19 +38,19 @@
 #include "crc64.h"
 
 char *redisGitSHA1(void) {
-    return REDIS_GIT_SHA1;
+    return VALKEY_GIT_SHA1;
 }
 
 char *redisGitDirty(void) {
-    return REDIS_GIT_DIRTY;
+    return VALKEY_GIT_DIRTY;
 }
 
 const char *redisBuildIdRaw(void) {
-    return REDIS_BUILD_ID_RAW;
+    return VALKEY_BUILD_ID_RAW;
 }
 
 uint64_t redisBuildId(void) {
-    char *buildid = REDIS_BUILD_ID_RAW;
+    char *buildid = VALKEY_BUILD_ID_RAW;
 
     return crc64(0,(unsigned char*)buildid,strlen(buildid));
 }

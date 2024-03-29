@@ -1,2 +1,2 @@
-#define REDIS_VERSION "255.255.255"
-#define REDIS_VERSION_NUM 0x00ffffff
+#define VALKEY_VERSION "255.255.255"
+#define VALKEY_VERSION_NUM 0x00ffffff

@@ -84,7 +84,7 @@ def parse_options(cmd)
 end
 
 def command_example(cmd, args, opts)
-    cmd = "redis-cli --cluster #{cmd}"
+    cmd = "valkey-cli --cluster #{cmd}"
     args.each{|a| 
         a = a.to_s
         a = a.inspect if a[' ']
@@ -105,25 +105,25 @@ $command = ARGV.shift
 $opts, $args = parse_options($command) if $command
 
 puts "WARNING: redis-trib.rb is not longer available!".yellow
-puts "You should use #{'redis-cli'.bold} instead."
+puts "You should use #{'valkey-cli'.bold} instead."
 puts ''
 puts "All commands and features belonging to redis-trib.rb "+
-     "have been moved\nto redis-cli."
-puts "In order to use them you should call redis-cli with the #{'--cluster'.bold}"
+     "have been moved\nto valkey-cli."
+puts "In order to use them you should call valkey-cli with the #{'--cluster'.bold}"
 puts "option followed by the subcommand name, arguments and options."
 puts ''
 puts "Use the following syntax:"
-puts "redis-cli --cluster SUBCOMMAND [ARGUMENTS] [OPTIONS]".bold
+puts "valkey-cli --cluster SUBCOMMAND [ARGUMENTS] [OPTIONS]".bold
 puts ''
 puts "Example:"
 if $command
     example = command_example $command, $args, $opts
 else
-    example = "redis-cli --cluster info 127.0.0.1:7000"
+    example = "valkey-cli --cluster info 127.0.0.1:7000"
 end
 puts example.bold
 puts ''
 puts "To get help about all subcommands, type:"
-puts "redis-cli --cluster help".bold
+puts "valkey-cli --cluster help".bold
 puts ''
 exit 1

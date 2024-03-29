@@ -49,9 +49,9 @@ For TLS module mode:
         --tls-ca-cert-file ./tests/tls/ca.crt \
         --loadmodule src/redis-tls.so
 
-To connect to this Redis server with `redis-cli`:
+To connect to this Redis server with `valkey-cli`:
 
-    ./src/redis-cli --tls \
+    ./src/valkey-cli --tls \
         --cert ./tests/tls/redis.crt \
         --key ./tests/tls/redis.key \
         --cacert ./tests/tls/ca.crt
@@ -90,7 +90,7 @@ To-Do List
   directly manipulating sockets for most actions. This will need to be cleaned
   up for proper TLS support. The best approach is probably to migrate to hiredis
   async mode.
-- [ ] redis-cli `--slave` and `--rdb` support.
+- [ ] valkey-cli `--slave` and `--rdb` support.
 
 Multi-port
 ----------

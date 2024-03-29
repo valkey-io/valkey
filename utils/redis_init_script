@@ -13,7 +13,7 @@
 
 REDISPORT=6379
 EXEC=/usr/local/bin/redis-server
-CLIEXEC=/usr/local/bin/redis-cli
+CLIEXEC=/usr/local/bin/valkey-cli
 
 PIDFILE=/var/run/redis_${REDISPORT}.pid
 CONF="/etc/redis/${REDISPORT}.conf"

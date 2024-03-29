@@ -509,7 +509,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         wait_for_condition 500 100 {
             [string match {*slave0:*state=online*} [r info]]
         } else {
-            fail "redis-cli --replica did not connect"
+            fail "valkey-cli --replica did not connect"
         }
 
         for {set i 0} {$i < 100} {incr i} {
@@ -519,7 +519,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         wait_for_condition 500 100 {
             [string match {*test-value-99*} [read_cli $fd]]
         } else {
-            fail "redis-cli --replica didn't read commands"
+            fail "valkey-cli --replica didn't read commands"
         }
 
         fconfigure $fd -blocking true

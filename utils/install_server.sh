@@ -142,9 +142,9 @@ if [ ! -x "$REDIS_EXECUTABLE" ] ; then
 fi
 
 #check the default for redis cli
-CLI_EXEC=`command -v redis-cli`
+CLI_EXEC=`command -v valkey-cli`
 if [ -z "$CLI_EXEC" ] ; then
-	CLI_EXEC=`dirname $REDIS_EXECUTABLE`"/redis-cli"
+	CLI_EXEC=`dirname $REDIS_EXECUTABLE`"/valkey-cli"
 fi
 
 echo "Selected config:"

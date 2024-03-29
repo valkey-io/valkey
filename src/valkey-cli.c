@@ -954,14 +954,14 @@ static void cliOutputCommandHelp(struct commandDocs *help, int group) {
 static void cliOutputGenericHelp(void) {
     sds version = cliVersion();
     printf(
-        "redis-cli %s\n"
+        "valkey-cli %s\n"
         "To get help about Redis commands type:\n"
         "      \"help @<group>\" to get a list of commands in <group>\n"
         "      \"help <command>\" for help on <command>\n"
         "      \"help <tab>\" to get a list of possible help topics\n"
         "      \"quit\" to exit\n"
         "\n"
-        "To set redis-cli preferences:\n"
+        "To set valkey-cli preferences:\n"
         "      \":set hints\" enable online hints\n"
         "      \":set nohints\" disable online hints\n"
         "Set your preferences in ~/.redisclirc\n",
@@ -986,7 +986,7 @@ static void cliOutputHelp(int argc, char **argv) {
 
     if (helpEntries == NULL) {
         /* Initialize the help using the results of the COMMAND command.
-         * In case we are using redis-cli help XXX, we need to init it. */
+         * In case we are using valkey-cli help XXX, we need to init it. */
         cliInitHelp();
     }
 
@@ -1602,7 +1602,7 @@ static int cliSelect(void) {
     return result;
 }
 
-/* Select RESP3 mode if redis-cli was started with the -3 option.  */
+/* Select RESP3 mode if valkey-cli was started with the -3 option.  */
 static int cliSwitchProto(void) {
     redisReply *reply;
     if (!config.resp3 || config.resp2) return REDIS_OK;
@@ -2685,7 +2685,7 @@ static int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i],"--user") && !lastarg) {
             config.conn_info.user = sdsnew(argv[++i]);
         } else if (!strcmp(argv[i],"-u") && !lastarg) {
-            parseRedisUri(argv[++i],"redis-cli",&config.conn_info,&config.tls);
+            parseRedisUri(argv[++i],"valkey-cli",&config.conn_info,&config.tls);
             if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
                 fprintf(stderr, "Invalid server port.\n");
                 exit(1);
@@ -2904,7 +2904,7 @@ static int parseOptions(int argc, char **argv) {
 #endif
         } else if (!strcmp(argv[i],"-v") || !strcmp(argv[i], "--version")) {
             sds version = cliVersion();
-            printf("redis-cli %s\n", version);
+            printf("valkey-cli %s\n", version);
             sdsfree(version);
             exit(0);
         } else if (!strcmp(argv[i],"-2")) {
@@ -3023,9 +3023,9 @@ static void usage(int err) {
 "";
 
     fprintf(target,
-"redis-cli %s\n"
+"valkey-cli %s\n"
 "\n"
-"Usage: redis-cli [OPTIONS] [cmd [arg [arg ...]]]\n"
+"Usage: valkey-cli [OPTIONS] [cmd [arg [arg ...]]]\n"
 "  -h <hostname>      Server hostname (default: 127.0.0.1).\n"
 "  -p <port>          Server port (default: 6379).\n"
 "  -t <timeout>       Server connection timeout in seconds (decimals allowed).\n"
@@ -3130,19 +3130,19 @@ version,tls_usage);
 "  Use --cluster help to list all available cluster manager commands.\n"
 "\n"
 "Examples:\n"
-"  redis-cli -u redis://default:PASSWORD@localhost:6379/0\n"
-"  cat /etc/passwd | redis-cli -x set mypasswd\n"
-"  redis-cli -D \"\" --raw dump key > key.dump && redis-cli -X dump_tag restore key2 0 dump_tag replace < key.dump\n"
-"  redis-cli -r 100 lpush mylist x\n"
-"  redis-cli -r 100 -i 1 info | grep used_memory_human:\n"
-"  redis-cli --quoted-input set '\"null-\\x00-separated\"' value\n"
-"  redis-cli --eval myscript.lua key1 key2 , arg1 arg2 arg3\n"
-"  redis-cli --scan --pattern '*:12345*'\n"
-"  redis-cli --scan --pattern '*:12345*' --count 100\n"
+"  valkey-cli -u redis://default:PASSWORD@localhost:6379/0\n"
+"  cat /etc/passwd | valkey-cli -x set mypasswd\n"
+"  valkey-cli -D \"\" --raw dump key > key.dump && valkey-cli -X dump_tag restore key2 0 dump_tag replace < key.dump\n"
+"  valkey-cli -r 100 lpush mylist x\n"
+"  valkey-cli -r 100 -i 1 info | grep used_memory_human:\n"
+"  valkey-cli --quoted-input set '\"null-\\x00-separated\"' value\n"
+"  valkey-cli --eval myscript.lua key1 key2 , arg1 arg2 arg3\n"
+"  valkey-cli --scan --pattern '*:12345*'\n"
+"  valkey-cli --scan --pattern '*:12345*' --count 100\n"
 "\n"
 "  (Note: when using --eval the comma separates KEYS[] from ARGV[] items)\n"
 "\n"
-"When no command is given, redis-cli starts in interactive mode.\n"
+"When no command is given, valkey-cli starts in interactive mode.\n"
 "Type \"help\" in interactive mode for information on available commands\n"
 "and settings.\n"
 "\n");
@@ -3245,12 +3245,12 @@ void cliSetPreferences(char **argv, int argc, int interactive) {
         if (!strcasecmp(argv[1],"hints")) pref.hints = 1;
         else if (!strcasecmp(argv[1],"nohints")) pref.hints = 0;
         else {
-            printf("%sunknown redis-cli preference '%s'\n",
+            printf("%sunknown valkey-cli preference '%s'\n",
                 interactive ? "" : ".redisclirc: ",
                 argv[1]);
         }
     } else {
-        printf("%sunknown redis-cli internal command '%s'\n",
+        printf("%sunknown valkey-cli internal command '%s'\n",
             interactive ? "" : ".redisclirc: ",
             argv[0]);
     }
@@ -3424,7 +3424,7 @@ static void repl(void) {
             repeat = strtol(argv[0], &endptr, 10);
             if (argc > 1 && *endptr == '\0') {
                 if (errno == ERANGE || errno == EINVAL || repeat <= 0) {
-                    fputs("Invalid redis-cli repeat command option value.\n", stdout);
+                    fputs("Invalid valkey-cli repeat command option value.\n", stdout);
                     sdsfreesplitres(argv, argc);
                     linenoiseFree(line);
                     continue;
@@ -5974,7 +5974,7 @@ static int clusterManagerFixSlotsCoverage(char *all_slots) {
                     CLUSTER_MANAGER_CMD_FLAG_FIX_WITH_UNREACHABLE_MASTERS;
 
     if (cluster_manager.unreachable_masters > 0 && !force_fix) {
-        clusterManagerLogWarn("*** Fixing slots coverage with %d unreachable masters is dangerous: redis-cli will assume that slots about masters that are not reachable are not covered, and will try to reassign them to the reachable nodes. This can cause data loss and is rarely what you want to do. If you really want to proceed use the --cluster-fix-with-unreachable-masters option.\n", cluster_manager.unreachable_masters);
+        clusterManagerLogWarn("*** Fixing slots coverage with %d unreachable masters is dangerous: valkey-cli will assume that slots about masters that are not reachable are not covered, and will try to reassign them to the reachable nodes. This can cause data loss and is rarely what you want to do. If you really want to proceed use the --cluster-fix-with-unreachable-masters option.\n", cluster_manager.unreachable_masters);
         exit(1);
     }
 
@@ -6176,7 +6176,7 @@ static int clusterManagerFixOpenSlot(int slot) {
                     CLUSTER_MANAGER_CMD_FLAG_FIX_WITH_UNREACHABLE_MASTERS;
 
     if (cluster_manager.unreachable_masters > 0 && !force_fix) {
-        clusterManagerLogWarn("*** Fixing open slots with %d unreachable masters is dangerous: redis-cli will assume that slots about masters that are not reachable are not covered, and will try to reassign them to the reachable nodes. This can cause data loss and is rarely what you want to do. If you really want to proceed use the --cluster-fix-with-unreachable-masters option.\n", cluster_manager.unreachable_masters);
+        clusterManagerLogWarn("*** Fixing open slots with %d unreachable masters is dangerous: valkey-cli will assume that slots about masters that are not reachable are not covered, and will try to reassign them to the reachable nodes. This can cause data loss and is rarely what you want to do. If you really want to proceed use the --cluster-fix-with-unreachable-masters option.\n", cluster_manager.unreachable_masters);
         exit(1);
     }
 
@@ -6487,7 +6487,7 @@ static int clusterManagerFixOpenSlot(int slot) {
         } else {
 unhandled_case:
             success = 0;
-            clusterManagerLogErr("[ERR] Sorry, redis-cli can't fix this slot "
+            clusterManagerLogErr("[ERR] Sorry, valkey-cli can't fix this slot "
                                  "yet (work in progress). Slot is set as "
                                  "migrating in %s, as importing in %s, "
                                  "owner is %s:%d\n", migrating_str,
@@ -6873,7 +6873,7 @@ static void clusterManagerPrintNotClusterNodeError(clusterManagerNode *node,
     clusterManagerLogErr("[ERR] Node %s:%d %s\n", node->ip, node->port, msg);
 }
 
-/* Execute redis-cli in Cluster Manager mode */
+/* Execute valkey-cli in Cluster Manager mode */
 static void clusterManagerMode(clusterManagerCommandProc *proc) {
     int argc = config.cluster_manager_command.argc;
     char **argv = config.cluster_manager_command.argv;

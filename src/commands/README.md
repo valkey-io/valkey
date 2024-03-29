@@ -2,7 +2,7 @@ This directory contains JSON files, one for each command.
 
 Each JSON contains all the information about the command itself, but these JSON files are not to be used directly!
 Any third party who needs access to command information must get it from `COMMAND INFO` and `COMMAND DOCS`.
-The output can be extracted in a JSON format by using `redis-cli --json`, in the same manner as in `utils/generate-commands-json.py`.
+The output can be extracted in a JSON format by using `valkey-cli --json`, in the same manner as in `utils/generate-commands-json.py`.
 
 The JSON files are used to generate commands.def within this repo and JSON files for documentation, and
 despite looking similar to the output of `COMMAND` there are some fields and flags that are implicitly populated, and that's the

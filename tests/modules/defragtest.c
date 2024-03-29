@@ -1,7 +1,7 @@
 /* A module that implements defrag callback mechanisms.
  */
 
-#include "redismodule.h"
+#include "valkeymodule.h"
 #include <stdlib.h>
 
 static RedisModuleType *FragType;

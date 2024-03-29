@@ -439,17 +439,17 @@ typedef struct RedisModuleKeyOptCtx {
 } RedisModuleKeyOptCtx;
 
 /* Data structures related to redis module configurations */
-/* The function signatures for module config get callbacks. These are identical to the ones exposed in redismodule.h. */
+/* The function signatures for module config get callbacks. These are identical to the ones exposed in valkeymodule.h. */
 typedef RedisModuleString * (*RedisModuleConfigGetStringFunc)(const char *name, void *privdata);
 typedef long long (*RedisModuleConfigGetNumericFunc)(const char *name, void *privdata);
 typedef int (*RedisModuleConfigGetBoolFunc)(const char *name, void *privdata);
 typedef int (*RedisModuleConfigGetEnumFunc)(const char *name, void *privdata);
-/* The function signatures for module config set callbacks. These are identical to the ones exposed in redismodule.h. */
+/* The function signatures for module config set callbacks. These are identical to the ones exposed in valkeymodule.h. */
 typedef int (*RedisModuleConfigSetStringFunc)(const char *name, RedisModuleString *val, void *privdata, RedisModuleString **err);
 typedef int (*RedisModuleConfigSetNumericFunc)(const char *name, long long val, void *privdata, RedisModuleString **err);
 typedef int (*RedisModuleConfigSetBoolFunc)(const char *name, int val, void *privdata, RedisModuleString **err);
 typedef int (*RedisModuleConfigSetEnumFunc)(const char *name, int val, void *privdata, RedisModuleString **err);
-/* Apply signature, identical to redismodule.h */
+/* Apply signature, identical to valkeymodule.h */
 typedef int (*RedisModuleConfigApplyFunc)(RedisModuleCtx *ctx, void *privdata, RedisModuleString **err);
 
 /* Struct representing a module config. These are stored in a list in the module struct */
@@ -786,7 +786,7 @@ int moduleDelKeyIfEmpty(RedisModuleKey *key) {
  *
  * Note that all the exported APIs are called RM_<funcname> in the core
  * and RedisModule_<funcname> in the module side (defined as function
- * pointers in redismodule.h). In this way the dynamic linker does not
+ * pointers in valkeymodule.h). In this way the dynamic linker does not
  * mess with our global function pointers, overriding it with the symbols
  * defined in the main executable having the same names.
  * -------------------------------------------------------------------------- */
@@ -797,7 +797,7 @@ int RM_GetApi(const char *funcname, void **targetPtrPtr) {
      * named API, otherwise REDISMODULE_OK.
      *
      * This function is not meant to be used by modules developer, it is only
-     * used implicitly by including redismodule.h. */
+     * used implicitly by including valkeymodule.h. */
     dictEntry *he = dictFind(server.moduleapi, funcname);
     if (!he) return REDISMODULE_ERR;
     *targetPtrPtr = dictGetVal(he);
@@ -11650,7 +11650,7 @@ int RM_SubscribeToServerEvent(RedisModuleCtx *ctx, RedisModuleEvent event, Redis
     /* Protect in case of calls from contexts without a module reference. */
     if (ctx->module == NULL) return REDISMODULE_ERR;
     if (event.id >= _REDISMODULE_EVENT_NEXT) return REDISMODULE_ERR;
-    if (event.dataver > moduleEventVersions[event.id]) return REDISMODULE_ERR; /* Module compiled with a newer redismodule.h than we support */
+    if (event.dataver > moduleEventVersions[event.id]) return REDISMODULE_ERR; /* Module compiled with a newer valkeymodule.h than we support */
 
     /* Search an event matching this module and event ID. */
     listIter li;

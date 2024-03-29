@@ -2,7 +2,7 @@
 #define _BSD_SOURCE
 #define _DEFAULT_SOURCE
 
-#include "redismodule.h"
+#include "valkeymodule.h"
 
 #include <string.h>
 #include <unistd.h>

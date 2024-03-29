@@ -31,7 +31,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "../redismodule.h"
+#include "../valkeymodule.h"
 #include <pthread.h>
 #include <unistd.h>
 

@@ -7,7 +7,7 @@
 #define _DEFAULT_SOURCE
 #include <unistd.h>
 
-#include "redismodule.h"
+#include "valkeymodule.h"
 
 static RedisModuleType *datatype = NULL;
 static int load_encver = 0;

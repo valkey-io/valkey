@@ -1,7 +1,7 @@
 /* This module emulates a linked list for lazyfree testing of modules, which
  is a simplified version of 'hellotype.c'
  */
-#include "redismodule.h"
+#include "valkeymodule.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>

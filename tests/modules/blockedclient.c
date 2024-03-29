@@ -3,7 +3,7 @@
 #define _DEFAULT_SOURCE
 #include <unistd.h>
 
-#include "redismodule.h"
+#include "valkeymodule.h"
 #include <assert.h>
 #include <stdio.h>
 #include <pthread.h>

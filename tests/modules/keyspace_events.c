@@ -33,7 +33,7 @@
 #define _BSD_SOURCE
 #define _DEFAULT_SOURCE /* For usleep */
 
-#include "redismodule.h"
+#include "valkeymodule.h"
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>

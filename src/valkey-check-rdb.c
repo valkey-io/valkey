@@ -397,7 +397,7 @@ err:
 }
 
 /* RDB check main: called form server.c when Redis is executed with the
- * redis-check-rdb alias, on during RDB loading errors.
+ * valkey-check-rdb alias, on during RDB loading errors.
  *
  * The function works in two ways: can be called with argc/argv as a
  * standalone executable, or called with a non NULL 'fp' argument if we
@@ -416,7 +416,7 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
         exit(1);
     } else if (!strcmp(argv[1],"-v") || !strcmp(argv[1], "--version")) {
         sds version = getVersion();
-        printf("redis-check-rdb %s\n", version);
+        printf("valkey-check-rdb %s\n", version);
         sdsfree(version);
         exit(0);
     }

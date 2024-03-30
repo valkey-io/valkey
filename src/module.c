@@ -11650,7 +11650,7 @@ int RM_SubscribeToServerEvent(RedisModuleCtx *ctx, RedisModuleEvent event, Redis
     /* Protect in case of calls from contexts without a module reference. */
     if (ctx->module == NULL) return REDISMODULE_ERR;
     if (event.id >= _REDISMODULE_EVENT_NEXT) return REDISMODULE_ERR;
-    if (event.dataver > moduleEventVersions[event.id]) return REDISMODULE_ERR; /* Module compiled with a newer valkeymodule.h than we support */
+    if (event.dataver > moduleEventVersions[event.id]) return REDISMODULE_ERR; /* Module compiled with a newer redismodule.h than we support */
 
     /* Search an event matching this module and event ID. */
     listIter li;

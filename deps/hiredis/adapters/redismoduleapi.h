@@ -1,7 +1,7 @@
 #ifndef __HIREDIS_REDISMODULEAPI_H__
 #define __HIREDIS_REDISMODULEAPI_H__
 
-#include "valkeymodule.h"
+#include "redismodule.h"
 
 #include "../async.h"
 #include "../hiredis.h"

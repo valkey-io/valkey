@@ -1,6 +1,7 @@
 This README is under construction as we work to build a new community driven high performance key-value store.
 
 This project was forked from the open source Redis project right before the transition to their new source available licenses.
+Redis is an in-memory database that persists on disk. The data model is key-value, but many different kind of values are supported: Strings, Lists, Sets, Sorted Sets, Hashes, Streams, HyperLogLogs, Bitmaps.
 
 This README is just a fast *quick start* document. We are currently working on a more permanent documentation page.
 

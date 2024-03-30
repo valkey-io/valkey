@@ -23,7 +23,7 @@ Issues and pull requests for documentation belong on the valkey-doc repo:
 
     https://github.com/valkey-io/valkey-doc
 
-If you are reporting a security bug or vulnerability, see [SECURITY.md](./SECURITY.md).
+If you are reporting a security bug or vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Developer Certificate of Origin
 

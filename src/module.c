@@ -449,7 +449,7 @@ typedef int (*RedisModuleConfigSetStringFunc)(const char *name, RedisModuleStrin
 typedef int (*RedisModuleConfigSetNumericFunc)(const char *name, long long val, void *privdata, RedisModuleString **err);
 typedef int (*RedisModuleConfigSetBoolFunc)(const char *name, int val, void *privdata, RedisModuleString **err);
 typedef int (*RedisModuleConfigSetEnumFunc)(const char *name, int val, void *privdata, RedisModuleString **err);
-/* Apply signature, identical to valkeymodule.h */
+/* Apply signature, identical to redismodule.h */
 typedef int (*RedisModuleConfigApplyFunc)(RedisModuleCtx *ctx, void *privdata, RedisModuleString **err);
 
 /* Struct representing a module config. These are stored in a list in the module struct */

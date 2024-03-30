@@ -1,12 +1,12 @@
-# Redis Makefile
+# Valkey Makefile
 # Copyright (C) 2009 Salvatore Sanfilippo <antirez at gmail dot com>
 # This file is released under the BSD license, see the COPYING file
 #
 # The Makefile composes the final FINAL_CFLAGS and FINAL_LDFLAGS using
-# what is needed for Redis plus the standard CFLAGS and LDFLAGS passed.
+# what is needed for Valkey plus the standard CFLAGS and LDFLAGS passed.
 # However when building the dependencies (Jemalloc, Lua, Hiredis, ...)
 # CFLAGS and LDFLAGS are propagated to the dependencies, so to pass
-# flags only to be used when compiling / linking Redis itself SERVER_CFLAGS
+# flags only to be used when compiling / linking Valkey itself SERVER_CFLAGS
 # and SERVER_LDFLAGS are used instead (this is the case of 'make gcov').
 #
 # Dependencies are stored in the Makefile.dep file. To rebuild this file
@@ -70,7 +70,7 @@ ifeq ($(uname_S),Linux)
 	MALLOC=jemalloc
 endif
 
-# To get ARM stack traces if Redis crashes we need a special C flag.
+# To get ARM stack traces if Valkey crashes we need a special C flag.
 ifneq (,$(filter aarch64 armv%,$(uname_M)))
         CFLAGS+=-funwind-tables
 endif
@@ -115,6 +115,14 @@ endif
 
 # Override default settings if possible
 -include .make-settings
+
+# For added compatibility REDIS_CFLAGS and REDIS_LDFLAGS are also supported.
+ifdef REDIS_CFLAGS
+    SERVER_CFLAGS := $(REDIS_CFLAGS)
+endif
+ifdef REDIS_LDFLAGS
+    SERVER_LDFLAGS := $(REDIS_LDFLAGS)
+endif
 
 FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(SERVER_CFLAGS)
 FINAL_LDFLAGS=$(LDFLAGS) $(SERVER_LDFLAGS) $(DEBUG)

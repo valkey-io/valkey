@@ -444,7 +444,7 @@ typedef RedisModuleString * (*RedisModuleConfigGetStringFunc)(const char *name, 
 typedef long long (*RedisModuleConfigGetNumericFunc)(const char *name, void *privdata);
 typedef int (*RedisModuleConfigGetBoolFunc)(const char *name, void *privdata);
 typedef int (*RedisModuleConfigGetEnumFunc)(const char *name, void *privdata);
-/* The function signatures for module config set callbacks. These are identical to the ones exposed in valkeymodule.h. */
+/* The function signatures for module config set callbacks. These are identical to the ones exposed in redismodule.h. */
 typedef int (*RedisModuleConfigSetStringFunc)(const char *name, RedisModuleString *val, void *privdata, RedisModuleString **err);
 typedef int (*RedisModuleConfigSetNumericFunc)(const char *name, long long val, void *privdata, RedisModuleString **err);
 typedef int (*RedisModuleConfigSetBoolFunc)(const char *name, int val, void *privdata, RedisModuleString **err);

@@ -786,7 +786,7 @@ int moduleDelKeyIfEmpty(RedisModuleKey *key) {
  *
  * Note that all the exported APIs are called RM_<funcname> in the core
  * and RedisModule_<funcname> in the module side (defined as function
- * pointers in valkeymodule.h). In this way the dynamic linker does not
+ * pointers in redismodule.h). In this way the dynamic linker does not
  * mess with our global function pointers, overriding it with the symbols
  * defined in the main executable having the same names.
  * -------------------------------------------------------------------------- */

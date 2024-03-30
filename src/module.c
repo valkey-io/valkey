@@ -797,7 +797,7 @@ int RM_GetApi(const char *funcname, void **targetPtrPtr) {
      * named API, otherwise REDISMODULE_OK.
      *
      * This function is not meant to be used by modules developer, it is only
-     * used implicitly by including valkeymodule.h. */
+     * used implicitly by including redismodule.h. */
     dictEntry *he = dictFind(server.moduleapi, funcname);
     if (!he) return REDISMODULE_ERR;
     *targetPtrPtr = dictGetVal(he);

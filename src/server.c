@@ -2575,7 +2575,7 @@ void resetServerStats(void) {
 }
 
 /* Make the thread killable at any time, so that kill threads functions
- * can work reliably (default cancelability type is PTHREAD_CANCEL_DEFERRED).
+ * can work reliably (default cancellability type is PTHREAD_CANCEL_DEFERRED).
  * Needed for pthread_cancel used by the fast memory test used by the crash report. */
 void makeThreadKillable(void) {
     pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
@@ -6580,7 +6580,7 @@ void dismissClientMemory(client *c) {
 /* In the child process, we don't need some buffers anymore, and these are
  * likely to change in the parent when there's heavy write traffic.
  * We dismiss them right away, to avoid CoW.
- * see dismissMemeory(). */
+ * see dismissMemory(). */
 void dismissMemoryInChild(void) {
     /* madvise(MADV_DONTNEED) may not work if Transparent Huge Pages is enabled. */
     if (server.thp_enabled) return;

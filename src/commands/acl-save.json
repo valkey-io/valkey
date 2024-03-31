@@ -1,7 +1,7 @@
 {
     "SAVE": {
         "summary": "Saves the effective ACL rules in the configured ACL file.",
-        "complexity": "O(N). Where N is the number of configured users.",
+        "complexity": "O(N) where N is the number of configured users.",
         "group": "server",
         "since": "6.0.0",
         "arity": 2,
@@ -15,8 +15,8 @@
             "SENTINEL"
         ],
         "command_tips": [
-          "REQUEST_POLICY:ALL_NODES",
-          "RESPONSE_POLICY:ALL_SUCCEEDED"
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
         ],
         "reply_schema": {
             "const": "OK"

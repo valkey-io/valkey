@@ -1,7 +1,7 @@
 {
     "SETUSER": {
         "summary": "Creates and modifies an ACL user and its rules.",
-        "complexity": "O(N). Where N is the number of rules provided.",
+        "complexity": "O(N) where N is the number of rules provided.",
         "group": "server",
         "since": "6.0.0",
         "arity": -3,
@@ -14,7 +14,7 @@
             ],
             [
                 "7.0.0",
-                "Added selectors and key based permissions."
+                "Added selectors and key-based permissions."
             ]
         ],
         "command_flags": [
@@ -25,8 +25,8 @@
             "SENTINEL"
         ],
         "command_tips": [
-          "REQUEST_POLICY:ALL_NODES",
-          "RESPONSE_POLICY:ALL_SUCCEEDED"
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
         ],        
         "reply_schema": {
             "const": "OK"

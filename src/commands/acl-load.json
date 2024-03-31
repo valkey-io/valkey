@@ -1,7 +1,7 @@
 {
     "LOAD": {
         "summary": "Reloads the rules from the configured ACL file.",
-        "complexity": "O(N). Where N is the number of configured users.",
+        "complexity": "O(N) where N is the number of configured users.",
         "group": "server",
         "since": "6.0.0",
         "arity": 2,

@@ -1,7 +1,7 @@
 {
     "GETUSER": {
         "summary": "Lists the ACL rules of a user.",
-        "complexity": "O(N). Where N is the number of password, command and pattern rules that the user has.",
+        "complexity": "O(N) where N is the number of password, command, and pattern rules that the user has.",
         "group": "server",
         "since": "6.0.0",
         "arity": 3,
@@ -33,7 +33,7 @@
         "reply_schema": {
             "oneOf": [
                 {
-                    "description": "a set of ACL rule definitions for the user",
+                    "description": "A set of ACL rule definitions for the user.",
                     "type": "object",
                     "additionalProperties": false,
                     "properties": {
@@ -50,15 +50,15 @@
                             }
                         },
                         "commands": {
-                            "description": "root selector's commands",
+                            "description": "Root selector's commands.",
                             "type": "string"
                         },
                         "keys": {
-                            "description": "root selector's keys",
+                            "description": "Root selector's keys.",
                             "type": "string"
                         },
                         "channels": {
-                            "description": "root selector's channels",
+                            "description": "Root selector's channels.",
                             "type": "string"
                         },
                         "selectors": {
@@ -82,7 +82,7 @@
                     }
                 },
                 {
-                    "description": "If user does not exist",
+                    "description": "If the user does not exist.",
                     "type": "null"
                 }
             ]

@@ -1,6 +1,6 @@
 {
     "DRYRUN": {
-        "summary": "Simulates the execution of a command by a user, without executing the command.",
+        "summary": "Simulates the execution of a command by a user without executing the command.",
         "complexity": "O(1).",
         "group": "server",
         "since": "7.0.0",
@@ -23,7 +23,7 @@
                 },
                 {
                     "type": "string",
-                    "description": "The description of the problem, in case the user is not allowed to run the given command."
+                    "description": "The description of the problem in case the user is not allowed to run the given command."
                 }
             ]
         },

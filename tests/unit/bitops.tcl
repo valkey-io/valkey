@@ -128,6 +128,15 @@ start_server {tags {"bitops"}} {
         }
     }
 
+    test {BITCOUNT with start} {
+        set s "foobar"
+        r set s $s
+        assert_equal [r bitcount s 0] [count_bits "foobar"]
+        assert_equal [r bitcount s 1] [count_bits "oobar"]
+        assert_equal [r bitcount s -1] [count_bits "r"]
+        assert_equal [r bitcount s -2] [count_bits "ar"]
+    }
+
     test {BITCOUNT with start, end} {
         set s "foobar"
         r set s $s

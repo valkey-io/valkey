@@ -806,10 +806,6 @@ void bitcountCommand(client *c) {
     if (c-> argc == 3 || c->argc == 4 || c->argc == 5) {
         if (getLongLongFromObjectOrReply(c,c->argv[2],&start,NULL) != C_OK)
             return;
-        if (c->argc >= 4) {
-            if (getLongLongFromObjectOrReply(c,c->argv[3],&end,NULL) != C_OK)
-                return;
-        }
         if (c->argc == 5) {
             if (!strcasecmp(c->argv[4]->ptr,"bit")) isbit = 1;
             else if (!strcasecmp(c->argv[4]->ptr,"byte")) isbit = 0;
@@ -818,6 +814,14 @@ void bitcountCommand(client *c) {
                 return;
             }
         }
+        if (c->argc >= 4) {
+            if (getLongLongFromObjectOrReply(c,c->argv[3],&end,NULL) != C_OK)
+                return;
+        }
+        else if (c->argc < 4) {
+            end = totlen-1;
+        }
+        
         /* Lookup, check for type. */
         o = lookupKeyRead(c->db, c->argv[1]);
         if (checkType(c, o, OBJ_STRING)) return;
@@ -826,11 +830,6 @@ void bitcountCommand(client *c) {
 
         /* Make sure we will not overflow */
         serverAssert(totlen <= LLONG_MAX >> 3);
-
-        if (c->argc < 4) {
-            if (isbit) end = (totlen<<3) + 7;
-            else end = totlen-1;
-        }
 
         /* Convert negative indexes */
         if (start < 0 && end < 0 && start > end) {
@@ -929,6 +928,9 @@ void bitposCommand(client *c) {
                 return;
             end_given = 1;
         }
+        else if (c->argc < 5) {
+            end = totlen-1;
+        }
 
         /* Lookup, check for type. */
         o = lookupKeyRead(c->db, c->argv[1]);
@@ -938,11 +940,6 @@ void bitposCommand(client *c) {
         /* Make sure we will not overflow */
         long long totlen = strlen;
         serverAssert(totlen <= LLONG_MAX >> 3);
-
-        if (c->argc < 5) {
-            if (isbit) end = (totlen<<3) + 7;
-            else end = totlen-1;
-        }
 
         if (isbit) totlen <<= 3;
         /* Convert negative indexes */

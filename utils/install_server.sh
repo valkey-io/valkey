@@ -37,7 +37,7 @@
 # 		 REDIS_CONFIG_FILE=/etc/redis/1234.conf \
 # 		 REDIS_LOG_FILE=/var/log/redis_1234.log \
 # 		 REDIS_DATA_DIR=/var/lib/redis/1234 \
-# 		 REDIS_EXECUTABLE=`command -v redis-server` ./utils/install_server.sh
+# 		 REDIS_EXECUTABLE=`command -v valkey-server` ./utils/install_server.sh
 #
 # This generates a redis config file and an /etc/init.d script, and installs them.
 #
@@ -129,19 +129,19 @@ fi
 if [ ! -x "$REDIS_EXECUTABLE" ] ; then
 	_MANUAL_EXECUTION=true
 	#get the redis executable path
-	_REDIS_EXECUTABLE=`command -v redis-server`
-	read -p "Please select the redis executable path [$_REDIS_EXECUTABLE] " REDIS_EXECUTABLE
+	_REDIS_EXECUTABLE=`command -v valkey-server`
+	read -p "Please select the valkey executable path [$_REDIS_EXECUTABLE] " REDIS_EXECUTABLE
 	if [ ! -x "$REDIS_EXECUTABLE" ] ; then
 		REDIS_EXECUTABLE=$_REDIS_EXECUTABLE
 
 		if [ ! -x "$REDIS_EXECUTABLE" ] ; then
-			echo "Mmmmm...  it seems like you don't have a redis executable. Did you run make install yet?"
+			echo "Mmmmm...  it seems like you don't have a valkey executable. Did you run make install yet?"
 			exit 1
 		fi
 	fi
 fi
 
-#check the default for redis cli
+#check the default for valkey cli
 CLI_EXEC=`command -v valkey-cli`
 if [ -z "$CLI_EXEC" ] ; then
 	CLI_EXEC=`dirname $REDIS_EXECUTABLE`"/valkey-cli"
@@ -160,9 +160,9 @@ if $_MANUAL_EXECUTION == true ; then
 	read -p "Is this ok? Then press ENTER to go on or Ctrl-C to abort." _UNUSED_
 fi
 
-mkdir -p `dirname "$REDIS_CONFIG_FILE"` || die "Could not create redis config directory"
-mkdir -p `dirname "$REDIS_LOG_FILE"` || die "Could not create redis log dir"
-mkdir -p "$REDIS_DATA_DIR" || die "Could not create redis data directory"
+mkdir -p `dirname "$REDIS_CONFIG_FILE"` || die "Could not create valkey config directory"
+mkdir -p `dirname "$REDIS_LOG_FILE"` || die "Could not create valkey log dir"
+mkdir -p "$REDIS_DATA_DIR" || die "Could not create valkey data directory"
 
 #render the templates
 TMP_FILE="/tmp/${REDIS_PORT}.conf"

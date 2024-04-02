@@ -37,13 +37,13 @@ To manually run a Redis server with TLS mode (assuming `gen-test-certs.sh` was
 invoked so sample certificates/keys are available):
 
 For TLS built-in mode:
-    ./src/redis-server --tls-port 6379 --port 0 \
+    ./src/valkey-server --tls-port 6379 --port 0 \
         --tls-cert-file ./tests/tls/redis.crt \
         --tls-key-file ./tests/tls/redis.key \
         --tls-ca-cert-file ./tests/tls/ca.crt
 
 For TLS module mode:
-    ./src/redis-server --tls-port 6379 --port 0 \
+    ./src/valkey-server --tls-port 6379 --port 0 \
         --tls-cert-file ./tests/tls/redis.crt \
         --tls-key-file ./tests/tls/redis.key \
         --tls-ca-cert-file ./tests/tls/ca.crt \

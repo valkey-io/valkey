@@ -27,8 +27,8 @@ proc run-tests branches {
         }
 
         # Start the Redis server
-        puts "  starting the server... [exec ./redis-server -v]"
-        set pids [exec echo "port $::port\nloglevel warning\n" | ./redis-server - > /dev/null 2> /dev/null &]
+        puts "  starting the server... [exec ./valkey-server -v]"
+        set pids [exec echo "port $::port\nloglevel warning\n" | ./valkey-server - > /dev/null 2> /dev/null &]
         puts "  pids: $pids"
         after 1000
         puts "  running the benchmark"

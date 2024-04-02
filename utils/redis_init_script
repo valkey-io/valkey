@@ -12,7 +12,7 @@
 ### END INIT INFO
 
 REDISPORT=6379
-EXEC=/usr/local/bin/redis-server
+EXEC=/usr/local/bin/valkey-server
 CLIEXEC=/usr/local/bin/valkey-cli
 
 PIDFILE=/var/run/redis_${REDISPORT}.pid

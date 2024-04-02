@@ -13292,7 +13292,7 @@ int RM_GetServerVersion(void) {
 }
 
 /**
- * Return the current redis-server runtime value of REDISMODULE_TYPE_METHOD_VERSION.
+ * Return the current valkey-server runtime value of REDISMODULE_TYPE_METHOD_VERSION.
  * You can use that when calling RM_CreateDataType to know which fields of
  * RedisModuleTypeMethods are gonna be supported and which will be ignored.
  */

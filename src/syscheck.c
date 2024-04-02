@@ -127,7 +127,7 @@ int checkXenClocksource(sds *error_msg) {
     } else if (strcmp(curr, "xen") == 0) {
         *error_msg = sdsnew(
             "Your system is configured to use the 'xen' clocksource which might lead to degraded performance. "
-            "Check the result of the [slow-clocksource] system check: run 'redis-server --check-system' to check if "
+            "Check the result of the [slow-clocksource] system check: run 'valkey-server --check-system' to check if "
             "the system's clocksource isn't degrading performance.");
         res = -1;
     }

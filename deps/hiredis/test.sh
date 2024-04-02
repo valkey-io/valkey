@@ -1,6 +1,6 @@
 #!/bin/sh -ue
 
-REDIS_SERVER=${REDIS_SERVER:-redis-server}
+REDIS_SERVER=${REDIS_SERVER:-valkey-server}
 REDIS_PORT=${REDIS_PORT:-56379}
 REDIS_SSL_PORT=${REDIS_SSL_PORT:-56443}
 TEST_SSL=${TEST_SSL:-0}
@@ -10,8 +10,8 @@ SSL_TEST_ARGS=
 SKIPS_ARG=${SKIPS_ARG:-}
 REDIS_DOCKER=${REDIS_DOCKER:-}
 
-# We need to enable the DEBUG command for redis-server >= 7.0.0
-REDIS_MAJOR_VERSION="$(redis-server --version|awk -F'[^0-9]+' '{ print $2 }')"
+# We need to enable the DEBUG command for valkey-server >= 7.0.0
+REDIS_MAJOR_VERSION="$(valkey-server --version|awk -F'[^0-9]+' '{ print $2 }')"
 if [ "$REDIS_MAJOR_VERSION" -gt "6" ]; then
     ENABLE_DEBUG_CMD="enable-debug-command local"
 fi
@@ -98,7 +98,7 @@ if [ -n "${REDIS_DOCKER}" ] ; then
         -p ${REDIS_SSL_PORT}:${REDIS_SSL_PORT} \
         -v ${tmpdir}:${tmpdir} \
         ${REDIS_DOCKER} \
-        redis-server ${tmpdir}/redis.conf
+        valkey-server ${tmpdir}/redis.conf
 else
     ${REDIS_SERVER} ${tmpdir}/redis.conf
 fi

@@ -1809,7 +1809,7 @@ dictType BenchmarkDictType = {
     printf(msg ": %ld items in %lld ms\n", count, elapsed); \
 } while(0)
 
-/* ./redis-server test dict [<count> | --accurate] */
+/* ./valkey-server test dict [<count> | --accurate] */
 int dictTest(int argc, char **argv, int flags) {
     long j;
     long long start, elapsed;

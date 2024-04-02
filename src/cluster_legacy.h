@@ -232,7 +232,7 @@ typedef struct {
 } clusterMsg;
 
 /* clusterMsg defines the gossip wire protocol exchanged among Redis cluster
- * members, which can be running different versions of redis-server bits,
+ * members, which can be running different versions of valkey-server bits,
  * especially during cluster rolling upgrades.
  *
  * Therefore, fields in this struct should remain at the same offset from

@@ -903,7 +903,7 @@ char *stringFromInt(int value) {
     return s;
 }
 
-/* ./redis-server test kvstore */
+/* ./valkey-server test kvstore */
 int kvstoreTest(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);

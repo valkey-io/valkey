@@ -1177,7 +1177,7 @@ int RedisModule_OnLoad(void *ctx, RedisModuleString **argv, int argc) {
 
     /* Connection modules must be part of the same build as redis. */
     if (strcmp(REDIS_BUILD_ID_RAW, redisBuildIdRaw())) {
-        serverLog(LL_NOTICE, "Connection type %s was not built together with the redis-server used.", CONN_TYPE_TLS);
+        serverLog(LL_NOTICE, "Connection type %s was not built together with the valkey-server used.", CONN_TYPE_TLS);
         return REDISMODULE_ERR;
     }
 

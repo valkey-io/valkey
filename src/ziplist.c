@@ -190,7 +190,7 @@
 #include "ziplist.h"
 #include "config.h"
 #include "endianconv.h"
-#include "redisassert.h"
+#include "serverassert.h"
 
 #define ZIP_END 255         /* Special "end of ziplist" entry. */
 #define ZIP_BIG_PREVLEN 254 /* ZIP_BIG_PREVLEN - 1 is the max number of bytes of

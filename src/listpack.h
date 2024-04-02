@@ -99,7 +99,7 @@ unsigned char *lpNextRandom(unsigned char *lp, unsigned char *p, unsigned int *i
 int lpSafeToAdd(unsigned char* lp, size_t add);
 void lpRepr(unsigned char *lp);
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 int listpackTest(int argc, char *argv[], int flags);
 #endif
 

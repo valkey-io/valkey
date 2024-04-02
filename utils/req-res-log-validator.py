@@ -241,7 +241,7 @@ def fetch_schemas(cli, port, args, docs):
 
     while True:
         try:
-            print('Connecting to Redis...')
+            print('Connecting to Valkey...')
             r = redis.Redis(port=port)
             r.ping()
             break
@@ -282,8 +282,8 @@ if __name__ == '__main__':
 
     docs = dict()
 
-    # Fetch schemas from a Redis instance
-    print('Starting Redis server')
+    # Fetch schemas from a Valkey instance
+    print('Starting Valkey server')
     redis_args = [args.server, '--port', str(args.port)]
     for module in args.module:
         redis_args += ['--loadmodule', 'tests/modules/%s.so' % module]
@@ -291,7 +291,7 @@ if __name__ == '__main__':
     fetch_schemas(args.cli, args.port, redis_args, docs)
 
     # Fetch schemas from a sentinel
-    print('Starting Redis sentinel')
+    print('Starting Valkey sentinel')
 
     # Sentinel needs a config file to start
     config_file = "tmpsentinel.conf"
@@ -347,4 +347,3 @@ if __name__ == '__main__':
         if args.fail_commands_not_all_hit:
             print("ERROR! at least one command was not hit by the tests")
             sys.exit(1)
-

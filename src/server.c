@@ -2575,7 +2575,7 @@ void resetServerStats(void) {
 }
 
 /* Make the thread killable at any time, so that kill threads functions
- * can work reliably (default cancelability type is PTHREAD_CANCEL_DEFERRED).
+ * can work reliably (default cancellability type is PTHREAD_CANCEL_DEFERRED).
  * Needed for pthread_cancel used by the fast memory test used by the crash report. */
 void makeThreadKillable(void) {
     pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
@@ -6580,7 +6580,7 @@ void dismissClientMemory(client *c) {
 /* In the child process, we don't need some buffers anymore, and these are
  * likely to change in the parent when there's heavy write traffic.
  * We dismiss them right away, to avoid CoW.
- * see dismissMemeory(). */
+ * see dismissMemory(). */
 void dismissMemoryInChild(void) {
     /* madvise(MADV_DONTNEED) may not work if Transparent Huge Pages is enabled. */
     if (server.thp_enabled) return;
@@ -6855,7 +6855,7 @@ int iAmMaster(void) {
             (server.cluster_enabled && clusterNodeIsMaster(getMyClusterNode())));
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include "testhelp.h"
 #include "intset.h"  /* Compact integer set structure */
 
@@ -6901,7 +6901,7 @@ int main(int argc, char **argv) {
     int j;
     char config_from_stdin = 0;
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
     monotonicInit(); /* Required for dict tests, that are relying on monotime during dict rehashing. */
     if (argc >= 3 && !strcasecmp(argv[1], "test")) {
         int flags = 0;

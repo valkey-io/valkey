@@ -1679,7 +1679,7 @@ void lpRepr(unsigned char *lp) {
     printf("{end}\n\n");
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 
 #include <sys/time.h>
 #include "adlist.h"

@@ -1755,7 +1755,7 @@ void dictGetStats(char *buf, size_t bufsize, dict *d, int full) {
 
 /* ------------------------------- Benchmark ---------------------------------*/
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include "testhelp.h"
 
 #define UNUSED(V) ((void) V)

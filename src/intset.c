@@ -342,7 +342,7 @@ int intsetValidateIntegrity(const unsigned char *p, size_t size, int deep) {
     return 1;
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include <sys/time.h>
 #include <time.h>
 

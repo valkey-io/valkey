@@ -47,7 +47,7 @@ size_t zipmapBlobLen(unsigned char *zm);
 void zipmapRepr(unsigned char *p);
 int zipmapValidateIntegrity(unsigned char *zm, size_t size, int deep);
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 int zipmapTest(int argc, char *argv[], int flags);
 #endif
 

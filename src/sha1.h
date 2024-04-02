@@ -21,7 +21,7 @@ void SHA1Init(SHA1_CTX* context);
 __attribute__((noinline)) void SHA1Update(SHA1_CTX* context, const unsigned char* data, uint32_t len);
 void SHA1Final(unsigned char digest[20], SHA1_CTX* context);
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 int sha1Test(int argc, char **argv, int flags);
 #endif
 #endif

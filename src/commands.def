@@ -36,6 +36,7 @@ const char *commandGroupStr(int index) {
 /* BITCOUNT history */
 commandHistory BITCOUNT_History[] = {
 {"7.0.0","Added the `BYTE|BIT` option."},
+{"8.0.0","`end` made optional; when called without argument the command reports the last BYTE."},
 };
 #endif
 
@@ -10650,7 +10651,7 @@ struct COMMAND_ARG WATCH_Args[] = {
 /* Main command table */
 struct COMMAND_STRUCT redisCommandTable[] = {
 /* bitmap */
-{MAKE_CMD("bitcount","Counts the number of set bits (population counting) in a string.","O(N)","2.6.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,BITCOUNT_History,1,BITCOUNT_Tips,0,bitcountCommand,-2,CMD_READONLY,ACL_CATEGORY_BITMAP,BITCOUNT_Keyspecs,1,NULL,2),.args=BITCOUNT_Args},
+{MAKE_CMD("bitcount","Counts the number of set bits (population counting) in a string.","O(N)","2.6.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,BITCOUNT_History,2,BITCOUNT_Tips,0,bitcountCommand,-2,CMD_READONLY,ACL_CATEGORY_BITMAP,BITCOUNT_Keyspecs,1,NULL,2),.args=BITCOUNT_Args},
 {MAKE_CMD("bitfield","Performs arbitrary bitfield integer operations on strings.","O(1) for each subcommand specified","3.2.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,BITFIELD_History,0,BITFIELD_Tips,0,bitfieldCommand,-2,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_BITMAP,BITFIELD_Keyspecs,1,bitfieldGetKeys,2),.args=BITFIELD_Args},
 {MAKE_CMD("bitfield_ro","Performs arbitrary read-only bitfield integer operations on strings.","O(1) for each subcommand specified","6.0.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,BITFIELD_RO_History,0,BITFIELD_RO_Tips,0,bitfieldroCommand,-2,CMD_READONLY|CMD_FAST,ACL_CATEGORY_BITMAP,BITFIELD_RO_Keyspecs,1,NULL,2),.args=BITFIELD_RO_Args},
 {MAKE_CMD("bitop","Performs bitwise operations on multiple strings, and stores the result.","O(N)","2.6.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,BITOP_History,0,BITOP_Tips,0,bitopCommand,-4,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_BITMAP,BITOP_Keyspecs,2,NULL,3),.args=BITOP_Args},

@@ -1116,7 +1116,7 @@ start_server {tags {"scripting"}} {
                                     bit.band(bit.rshift(version, 8), 0x000000ff),
                                     bit.band(version, 0x000000ff))
             end}
-            redis.register_function{function_name='get_version_v2', callback=function() return redis.REDIS_VERSION end}
+            redis.register_function{function_name='get_version_v2', callback=function() return redis.VALKEY_VERSION end}
         }
 
         catch {[r fcall f1 0]} e

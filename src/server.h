@@ -82,7 +82,7 @@ typedef long long ustime_t; /* microsecond time type. */
 
 #define REDISMODULE_CORE 1
 typedef struct redisObject robj;
-#include "valkeymodule.h"    /* Redis modules API defines. */
+#include "redismodule.h"    /* Redis modules API defines. */
 
 /* Following includes allow test functions to be called from Redis main() */
 #include "zipmap.h"

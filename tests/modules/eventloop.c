@@ -11,7 +11,7 @@
  * 4- test.oneshot   : Test for oneshot API
  */
 
-#include "valkeymodule.h"
+#include "redismodule.h"
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>

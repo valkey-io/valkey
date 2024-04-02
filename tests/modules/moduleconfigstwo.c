@@ -1,4 +1,4 @@
-#include "valkeymodule.h"
+#include "redismodule.h"
 #include <strings.h>
 
 /* Second module configs module, for testing.

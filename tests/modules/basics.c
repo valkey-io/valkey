@@ -30,7 +30,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "valkeymodule.h"
+#include "redismodule.h"
 #include <string.h>
 #include <stdlib.h>
 

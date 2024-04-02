@@ -50,7 +50,7 @@
 
 #include "server.h"
 #include "script.h"
-#include "valkeymodule.h"
+#include "redismodule.h"
 
 typedef struct functionLibInfo functionLibInfo;
 

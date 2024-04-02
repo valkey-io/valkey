@@ -1,4 +1,4 @@
-#include "valkeymodule.h"
+#include "redismodule.h"
 
 #include <string.h>
 #include <strings.h>

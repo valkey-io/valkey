@@ -532,7 +532,7 @@ typedef void (*RedisModuleEventCallback)(struct RedisModuleCtx *ctx, RedisModule
  *          2
  *      }
  * The reason for that is forward-compatibility: We want that module that
- * compiled with a new valkeymodule.h to be able to work with a old server,
+ * compiled with a new redismodule.h to be able to work with a old server,
  * unless the author explicitly decided to use the newer event type.
  */
 static const RedisModuleEvent

@@ -439,7 +439,7 @@ typedef struct RedisModuleKeyOptCtx {
 } RedisModuleKeyOptCtx;
 
 /* Data structures related to redis module configurations */
-/* The function signatures for module config get callbacks. These are identical to the ones exposed in valkeymodule.h. */
+/* The function signatures for module config get callbacks. These are identical to the ones exposed in redismodule.h. */
 typedef RedisModuleString * (*RedisModuleConfigGetStringFunc)(const char *name, void *privdata);
 typedef long long (*RedisModuleConfigGetNumericFunc)(const char *name, void *privdata);
 typedef int (*RedisModuleConfigGetBoolFunc)(const char *name, void *privdata);

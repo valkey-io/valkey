@@ -2,7 +2,7 @@
  * A module the tests RM_ReplyWith family of commands
  */
 
-#include "valkeymodule.h"
+#include "redismodule.h"
 #include <math.h>
 
 int rw_string(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {

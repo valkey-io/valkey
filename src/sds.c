@@ -35,7 +35,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <limits.h>
-#include "redisassert.h"
+#include "serverassert.h"
 #include "sds.h"
 #include "sdsalloc.h"
 #include "util.h"
@@ -1229,7 +1229,7 @@ error:
     return NULL;
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include <stdio.h>
 #include <limits.h>
 #include "testhelp.h"

@@ -6855,7 +6855,7 @@ int iAmMaster(void) {
             (server.cluster_enabled && clusterNodeIsMaster(getMyClusterNode())));
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include "testhelp.h"
 #include "intset.h"  /* Compact integer set structure */
 
@@ -6901,7 +6901,7 @@ int main(int argc, char **argv) {
     int j;
     char config_from_stdin = 0;
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
     monotonicInit(); /* Required for dict tests, that are relying on monotime during dict rehashing. */
     if (argc >= 3 && !strcasecmp(argv[1], "test")) {
         int flags = 0;

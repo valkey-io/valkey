@@ -441,7 +441,7 @@ int zipmapValidateIntegrity(unsigned char *zm, size_t size, int deep) {
 #undef OUT_OF_RANGE
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 static void zipmapRepr(unsigned char *p) {
     unsigned int l;
 

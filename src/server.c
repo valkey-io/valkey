@@ -5584,9 +5584,9 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
         }
 
         info = sdscatfmt(info, "# Server\r\n" FMTARGS(
-            "server_version:%s\r\n", SERVER_VERSION,
-            "server_name:%s\r\n", "placeholderkv",
             "redis_version:%s\r\n", REDIS_VERSION,
+            "server_name:%s\r\n", SERVER_NAME,
+            "server_version:%s\r\n", SERVER_VERSION,
             "redis_git_sha1:%s\r\n", redisGitSHA1(),
             "redis_git_dirty:%i\r\n", strtol(redisGitDirty(),NULL,10) > 0,
             "redis_build_id:%s\r\n", redisBuildIdString(),

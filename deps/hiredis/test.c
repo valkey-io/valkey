@@ -105,8 +105,8 @@ static long long usec(void) {
 #endif
 
 /* Helper to extract Redis version information.  Aborts on any failure. */
-#define SERVER_VERSION_FIELD "server_version:"
-void get_server_version(redisContext *c, int *majorptr, int *minorptr) {
+#define REDIS_VERSION_FIELD "redis_version:"
+void get_redis_version(redisContext *c, int *majorptr, int *minorptr) {
     redisReply *reply;
     char *eptr, *s, *e;
     int major, minor;
@@ -114,10 +114,10 @@ void get_server_version(redisContext *c, int *majorptr, int *minorptr) {
     reply = redisCommand(c, "INFO");
     if (reply == NULL || c->err || reply->type != REDIS_REPLY_STRING)
         goto abort;
-    if ((s = strstr(reply->str, SERVER_VERSION_FIELD)) == NULL)
+    if ((s = strstr(reply->str, REDIS_VERSION_FIELD)) == NULL)
         goto abort;
 
-    s += strlen(SERVER_VERSION_FIELD);
+    s += strlen(REDIS_VERSION_FIELD);
 
     /* We need a field terminator and at least 'x.y.z' (5) bytes of data */
     if ((e = strstr(s, "\r\n")) == NULL || (e - s) < 5)
@@ -137,7 +137,7 @@ void get_server_version(redisContext *c, int *majorptr, int *minorptr) {
 
 abort:
     freeReplyObject(reply);
-    fprintf(stderr, "Error:  Cannot determine server version, aborting\n");
+    fprintf(stderr, "Error:  Cannot determine Redis version, aborting\n");
     exit(1);
 }
 
@@ -1201,7 +1201,7 @@ static void test_blocking_connection(struct config config) {
     assert(redisAppendCommand(c, "PING") == REDIS_OK);
     test_cond(redisGetReply(c, NULL) == REDIS_OK);
 
-    get_server_version(c, &major, NULL);
+    get_redis_version(c, &major, NULL);
     if (major >= 6) test_resp3_push_handler(c);
     test_resp3_push_options(config);
 
@@ -1301,7 +1301,7 @@ static void test_blocking_io_errors(struct config config) {
 
     /* Connect to target given by config. */
     c = do_connect(config);
-    get_server_version(c, &major, &minor);
+    get_redis_version(c, &major, &minor);
 
     test("Returns I/O error when the connection is lost: ");
     reply = redisCommand(c,"QUIT");
@@ -2390,7 +2390,7 @@ int main(int argc, char **argv) {
 
     int major;
     redisContext *c = do_connect(cfg);
-    get_server_version(c, &major, NULL);
+    get_redis_version(c, &major, NULL);
     disconnect(c, 0);
 
     test_pubsub_handling(cfg);

@@ -1400,7 +1400,6 @@ void luaRegisterVersion(lua_State* lua) {
     lua_pushstring(lua,"SERVER_VERSION");
     lua_pushstring(lua,SERVER_VERSION);
     lua_settable(lua,-3);
-
 }
 
 void luaRegisterLogFunction(lua_State* lua) {

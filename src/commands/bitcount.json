@@ -10,6 +10,10 @@
             [
                 "7.0.0",
                 "Added the `BYTE|BIT` option."
+            ],
+            [
+                "8.0.0",
+                "`end` made optional; when called without argument the command reports the last BYTE."
             ]
         ],
         "command_flags": [

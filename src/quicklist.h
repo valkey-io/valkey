@@ -204,7 +204,7 @@ quicklistNode *quicklistBookmarkFind(quicklist *ql, const char *name);
 void quicklistBookmarksClear(quicklist *ql);
 int quicklistSetPackedThreshold(size_t sz);
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 int quicklistTest(int argc, char *argv[], int flags);
 #endif
 

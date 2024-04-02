@@ -1686,7 +1686,7 @@ unsigned int ziplistRandomPairsUnique(unsigned char *zl, unsigned int count, zip
     return picked;
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include <sys/time.h>
 #include "adlist.h"
 #include "sds.h"

@@ -101,7 +101,7 @@ uint64_t intrev64(uint64_t v) {
     return v;
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include <stdio.h>
 
 #define UNUSED(x) (void)(x)

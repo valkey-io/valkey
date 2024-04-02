@@ -908,7 +908,7 @@ size_t zmalloc_get_memory_size(void) {
 #endif
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include "testhelp.h"
 #include "redisassert.h"
 

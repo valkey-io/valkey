@@ -26,7 +26,7 @@ After=network-online.target
 [Service]
 ExecStart=/usr/local/bin/redis-server --supervised systemd --daemonize no
 ## Alternatively, have redis-server load a configuration file:
-#ExecStart=/usr/local/bin/redis-server /path/to/your/redis.conf
+#ExecStart=/usr/local/bin/redis-server /path/to/your/valkey.conf
 LimitNOFILE=10032
 NoNewPrivileges=yes
 #OOMScoreAdjust=-900

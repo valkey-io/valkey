@@ -1229,7 +1229,7 @@ error:
     return NULL;
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include <stdio.h>
 #include <limits.h>
 #include "testhelp.h"

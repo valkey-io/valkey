@@ -1375,7 +1375,7 @@ int snprintf_async_signal_safe(char *to, size_t n, const char *fmt, ...) {
     return result;
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include <assert.h>
 #include <sys/mman.h>
 #include "testhelp.h"

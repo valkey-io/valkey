@@ -73,11 +73,11 @@
         "reply_schema": {
             "oneOf": [
                 {
-                    "description": "key was renamed to newkey",
+                    "description": "Key was renamed to newkey.",
                     "const": 1
                 },
                 {
-                    "description": "new key already exists",
+                    "description": "New key already exists.",
                     "const": 0
                 }
             ]

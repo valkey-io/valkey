@@ -142,13 +142,13 @@
             }
         ],
         "reply_schema": {
-            "description": "Array of matched members information",
+            "description": "Array of matched members information.",
             "anyOf": [
                 {
-                    "description": "If no WITH* option is specified, array of matched members names",
+                    "description": "If no WITH* option is specified, array of matched members names.",
                     "type": "array",
                     "items": {
-                        "description": "name",
+                        "description": "Name.",
                         "type": "string"
                     }
                 },
@@ -160,32 +160,32 @@
                         "maxItems": 4,
                         "items": [
                             {
-                                "description": "Matched member name",
+                                "description": "Matched member name.",
                                 "type": "string"
                             }
                         ],
                         "additionalItems": {
                             "oneOf": [
                                 {
-                                    "description": "If WITHDIST option is specified, the distance from the center as a floating point number, in the same unit specified in the radius",
+                                    "description": "If WITHDIST option is specified, the distance from the center as a floating point number, in the same unit specified in the radius.",
                                     "type": "string"
                                 },
                                 {
-                                    "description": "If WITHHASH option is specified, the geohash integer",
+                                    "description": "If WITHHASH option is specified, the geohash integer.",
                                     "type": "integer"
                                 },
                                 {
-                                    "description": "If WITHCOORD option is specified, the coordinates as a two items x,y array (longitude,latitude)",
+                                    "description": "If WITHCOORD option is specified, the coordinates as a two items x,y array (longitude,latitude).",
                                     "type": "array",
                                     "minItems": 2,
                                     "maxItems": 2,
                                     "items": [
                                         {
-                                            "description": "latitude (x)",
+                                            "description": "Latitude (x).",
                                             "type": "number"
                                         },
                                         {
-                                            "description": "longitude (y)",
+                                            "description": "Longitude (y).",
                                             "type": "number"
                                         }
                                     ]

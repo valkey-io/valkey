@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install typos
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.32.2
         with:
           tool: typos
 

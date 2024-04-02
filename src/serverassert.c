@@ -1,8 +1,8 @@
-/* valkeyassert.c -- Implement the default _serverAssert and _serverPanic which 
+/* serverassert.c -- Implement the default _serverAssert and _serverPanic which 
  * simply print stack trace to standard error stream.
  * 
  * This file is shared by those modules that try to print some logs about stack trace 
- * but don't have their own implementations of functions in valkeyassert.h.
+ * but don't have their own implementations of functions in serverassert.h.
  *
  * ----------------------------------------------------------------------------
  *

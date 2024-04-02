@@ -628,7 +628,7 @@ size_t zmalloc_get_rss(void) {
 
 #if defined(USE_JEMALLOC)
 
-#include "valkeyassert.h"
+#include "serverassert.h"
 
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)
@@ -910,7 +910,7 @@ size_t zmalloc_get_memory_size(void) {
 
 #ifdef REDIS_TEST
 #include "testhelp.h"
-#include "valkeyassert.h"
+#include "serverassert.h"
 
 #define TEST(name) printf("test — %s\n", name);
 

@@ -35,7 +35,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <limits.h>
-#include "valkeyassert.h"
+#include "serverassert.h"
 #include "sds.h"
 #include "sdsalloc.h"
 #include "util.h"

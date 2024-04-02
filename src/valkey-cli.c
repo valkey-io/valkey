@@ -4026,7 +4026,7 @@ static sds clusterManagerGetNodeRDBFilename(clusterManagerNode *node) {
     sds filename = sdsnew(config.cluster_manager_command.backup_dir);
     if (filename[sdslen(filename) - 1] != '/')
         filename = sdscat(filename, "/");
-    filename = sdscatprintf(filename, "redis-node-%s-%d-%s.rdb", node->ip,
+    filename = sdscatprintf(filename, "valkey-node-%s-%d-%s.rdb", node->ip,
                             node->port, node->name);
     return filename;
 }

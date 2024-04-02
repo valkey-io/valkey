@@ -12109,6 +12109,13 @@ void moduleLoadFromQueue(void) {
         listDelNode(server.loadmodule_queue, ln);
     }
     if (dictSize(server.module_configs_queue)) {
+        dictIterator *di = dictGetSafeIterator(server.module_configs_queue);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            const char *moduleConfigName = dictGetKey(de);
+            serverLog(LL_WARNING, "Unused Module Configuration: %s", moduleConfigName);
+        }
+        dictReleaseIterator(di);
         serverLog(LL_WARNING, "Module Configuration detected without loadmodule directive or no ApplyConfig call: aborting");
         exit(1);
     }

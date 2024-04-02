@@ -167,7 +167,7 @@ mkdir -p "$REDIS_DATA_DIR" || die "Could not create valkey data directory"
 #render the templates
 TMP_FILE="/tmp/${REDIS_PORT}.conf"
 DEFAULT_CONFIG="${SCRIPTPATH}/../redis.conf"
-INIT_TPL_FILE="${SCRIPTPATH}/redis_init_script.tpl"
+INIT_TPL_FILE="${SCRIPTPATH}/valkey_init_script.tpl"
 INIT_SCRIPT_DEST="/etc/init.d/redis_${REDIS_PORT}"
 PIDFILE="/var/run/redis_${REDIS_PORT}.pid"
 

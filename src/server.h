@@ -2235,7 +2235,7 @@ typedef enum {
     COMMAND_GROUP_STREAM,
     COMMAND_GROUP_BITMAP,
     COMMAND_GROUP_MODULE,
-} redisCommandGroup;
+} serverCommandGroup;
 
 typedef void redisCommandProc(client *c);
 typedef int redisGetKeysProc(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
@@ -2343,7 +2343,7 @@ struct redisCommand {
     int doc_flags; /* Flags for documentation (see CMD_DOC_*). */
     const char *replaced_by; /* In case the command is deprecated, this is the successor command. */
     const char *deprecated_since; /* In case the command is deprecated, when did it happen? */
-    redisCommandGroup group; /* Command group */
+    serverCommandGroup group; /* Command group */
     commandHistory *history; /* History of the command */
     int num_history;
     const char **tips; /* An array of strings that are meant to be tips for clients/proxies regarding this command */

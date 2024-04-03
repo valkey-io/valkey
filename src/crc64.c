@@ -152,10 +152,3 @@ int crc64Test(int argc, char *argv[], int flags) {
 }
 
 #endif
-
-#ifdef REDIS_TEST_MAIN
-int main(int argc, char *argv[]) {
-    return crc64Test(argc, argv);
-}
-
-#endif

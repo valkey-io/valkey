@@ -3118,7 +3118,7 @@ void resetErrorTableStats(void) {
 /* ========================== Redis OP Array API ============================ */
 
 int serverOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int target) {
-    redisOp *op;
+    serverOp *op;
     int prev_capacity = oa->capacity;
 
     if (oa->numops == 0) {
@@ -3128,7 +3128,7 @@ int serverOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int 
     }
 
     if (prev_capacity != oa->capacity)
-        oa->ops = zrealloc(oa->ops,sizeof(redisOp)*oa->capacity);
+        oa->ops = zrealloc(oa->ops,sizeof(serverOp)*oa->capacity);
     op = oa->ops+oa->numops;
     op->dbid = dbid;
     op->argv = argv;
@@ -3141,7 +3141,7 @@ int serverOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int 
 void serverOpArrayFree(serverOpArray *oa) {
     while(oa->numops) {
         int j;
-        redisOp *op;
+        serverOp *op;
 
         oa->numops--;
         op = oa->ops+oa->numops;
@@ -3385,7 +3385,7 @@ static void propagatePendingCommands(void) {
         return;
 
     int j;
-    redisOp *rop;
+    serverOp *rop;
 
     /* If we got here it means we have finished an execution-unit.
      * If that unit has caused propagation of multiple commands, they

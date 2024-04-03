@@ -1371,16 +1371,16 @@ typedef struct clientBufferLimitsConfig {
 
 extern clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT];
 
-/* The redisOp structure defines a Redis Operation, that is an instance of
+/* The serverOp structure defines a Redis Operation, that is an instance of
  * a command with an argument vector, database ID, propagation target
  * (PROPAGATE_*), and command pointer.
  *
  * Currently only used to additionally propagate more commands to AOF/Replication
  * after the propagation of the executed command. */
-typedef struct redisOp {
+typedef struct serverOp {
     robj **argv;
     int argc, dbid, target;
-} redisOp;
+} serverOp;
 
 /* Defines an array of Redis operations. There is an API to add to this
  * structure in an easy way.
@@ -1389,7 +1389,7 @@ typedef struct redisOp {
  * void serverOpArrayFree(serverOpArray *oa);
  */
 typedef struct serverOpArray {
-    redisOp *ops;
+    serverOp *ops;
     int numops;
     int capacity;
 } serverOpArray;

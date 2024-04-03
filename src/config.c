@@ -1264,7 +1264,7 @@ int rewriteConfigRewriteLine(struct rewriteConfigState *state, const char *optio
 }
 
 /* Write the long long 'bytes' value as a string in a way that is parsable
- * inside redis.conf. If possible uses the GB, MB, KB notation. */
+ * inside valkey.conf. If possible uses the GB, MB, KB notation. */
 int rewriteConfigFormatMemory(char *buf, size_t len, long long bytes) {
     int gb = 1024*1024*1024;
     int mb = 1024*1024;
@@ -1462,7 +1462,7 @@ void rewriteConfigReplicaOfOption(standardConfig *config, const char *name, stru
 
     /* If this is a master, we want all the slaveof config options
      * in the file to be removed. Note that if this is a cluster instance
-     * we don't want a slaveof directive inside redis.conf. */
+     * we don't want a slaveof directive inside valkey.conf. */
     if (server.cluster_enabled || server.masterhost == NULL) {
         rewriteConfigMarkAsProcessed(state, name);
         return;

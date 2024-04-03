@@ -89,7 +89,7 @@ double R_Zero, R_PosInf, R_NegInf, R_Nan;
 /*================================= Globals ================================= */
 
 /* Global vars */
-struct redisServer server; /* Server global state */
+struct valkeyServer server; /* Server global state */
 
 /*============================ Internal prototypes ========================== */
 

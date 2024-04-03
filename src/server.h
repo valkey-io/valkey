@@ -2390,23 +2390,23 @@ struct serverError {
     long long count;
 };
 
-struct redisFunctionSym {
+struct serverFunctionSym {
     char *name;
     unsigned long pointer;
 };
 
-typedef struct _redisSortObject {
+typedef struct _serverSortObject {
     robj *obj;
     union {
         double score;
         robj *cmpobj;
     } u;
-} redisSortObject;
+} serverSortObject;
 
-typedef struct _redisSortOperation {
+typedef struct _serverSortOperation {
     int type;
     robj *pattern;
-} redisSortOperation;
+} serverSortOperation;
 
 /* Structure to hold list iteration abstraction. */
 typedef struct {

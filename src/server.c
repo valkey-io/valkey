@@ -1082,7 +1082,7 @@ void databasesCron(void) {
         if (dbs_per_call > server.dbnum) dbs_per_call = server.dbnum;
 
         for (j = 0; j < dbs_per_call; j++) {
-            redisDb *db = &server.db[resize_db % server.dbnum];
+            serverDb *db = &server.db[resize_db % server.dbnum];
             kvstoreTryResizeDicts(db->keys, CRON_DICTS_PER_DB);
             kvstoreTryResizeDicts(db->expires, CRON_DICTS_PER_DB);
             resize_db++;
@@ -1092,7 +1092,7 @@ void databasesCron(void) {
         if (server.activerehashing) {
             uint64_t elapsed_us = 0;
             for (j = 0; j < dbs_per_call; j++) {
-                redisDb *db = &server.db[rehash_db % server.dbnum];
+                serverDb *db = &server.db[rehash_db % server.dbnum];
                 elapsed_us += kvstoreIncrementallyRehash(db->keys, INCREMENTAL_REHASHING_THRESHOLD_US - elapsed_us);
                 if (elapsed_us >= INCREMENTAL_REHASHING_THRESHOLD_US)
                     break;
@@ -2655,7 +2655,7 @@ void initServer(void) {
             strerror(errno));
         exit(1);
     }
-    server.db = zmalloc(sizeof(redisDb)*server.dbnum);
+    server.db = zmalloc(sizeof(server)*server.dbnum);
 
     /* Create the Redis databases, and initialize other internal state. */
     int slot_count_bits = 0;

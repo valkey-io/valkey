@@ -537,7 +537,7 @@ void loadServerConfigFromString(char *config) {
         if (!strcasecmp(argv[0],"include") && argc == 2) {
             loadServerConfig(argv[1], 0, NULL);
         } else if (!strcasecmp(argv[0],"rename-command") && argc == 3) {
-            struct redisCommand *cmd = lookupCommandBySds(argv[1]);
+            struct serverCommand *cmd = lookupCommandBySds(argv[1]);
             int retval;
 
             if (!cmd) {

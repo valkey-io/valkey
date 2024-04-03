@@ -500,9 +500,9 @@ static int moduleValidateCommandInfo(const RedisModuleCommandInfo *info);
 static int64_t moduleConvertKeySpecsFlags(int64_t flags, int from_api);
 static int moduleValidateCommandArgs(RedisModuleCommandArg *args,
                                      const RedisModuleCommandInfoVersion *version);
-static struct redisCommandArg *moduleCopyCommandArgs(RedisModuleCommandArg *args,
+static struct serverCommandArg *moduleCopyCommandArgs(RedisModuleCommandArg *args,
                                                      const RedisModuleCommandInfoVersion *version);
-static redisCommandArgType moduleConvertArgType(RedisModuleCommandArgType type, int *error);
+static serverCommandArgType moduleConvertArgType(RedisModuleCommandArgType type, int *error);
 static int moduleConvertArgFlags(int flags);
 void moduleCreateContext(RedisModuleCtx *out_ctx, RedisModule *module, int ctx_flags);
 
@@ -1450,7 +1450,7 @@ moduleCmdArgAt(const RedisModuleCommandInfoVersion *version,
 
 /* Recursively populate the args structure (setting num_args to the number of
  * subargs) and return the number of args. */
-int populateArgsStructure(struct redisCommandArg *args) {
+int populateArgsStructure(struct serverCommandArg *args) {
     if (!args)
         return 0;
     int count = 0;
@@ -2197,13 +2197,13 @@ static int moduleValidateCommandArgs(RedisModuleCommandArg *args,
 }
 
 /* Converts an array of RedisModuleCommandArg into a freshly allocated array of
- * struct redisCommandArg. */
-static struct redisCommandArg *moduleCopyCommandArgs(RedisModuleCommandArg *args,
+ * struct serverCommandArg. */
+static struct serverCommandArg *moduleCopyCommandArgs(RedisModuleCommandArg *args,
                                                      const RedisModuleCommandInfoVersion *version) {
     size_t count = 0;
     while (moduleCmdArgAt(version, args, count)->name) count++;
-    serverAssert(count < SIZE_MAX / sizeof(struct redisCommandArg));
-    struct redisCommandArg *realargs = zcalloc((count+1) * sizeof(redisCommandArg));
+    serverAssert(count < SIZE_MAX / sizeof(struct serverCommandArg));
+    struct serverCommandArg *realargs = zcalloc((count+1) * sizeof(serverCommandArg));
 
     for (size_t j = 0; j < count; j++) {
         RedisModuleCommandArg *arg = moduleCmdArgAt(version, args, j);
@@ -2224,7 +2224,7 @@ static struct redisCommandArg *moduleCopyCommandArgs(RedisModuleCommandArg *args
     return realargs;
 }
 
-static redisCommandArgType moduleConvertArgType(RedisModuleCommandArgType type, int *error) {
+static serverCommandArgType moduleConvertArgType(RedisModuleCommandArgType type, int *error) {
     if (error) *error = 0;
     switch (type) {
     case REDISMODULE_ARG_TYPE_STRING: return ARG_TYPE_STRING;
@@ -12132,7 +12132,7 @@ void moduleFreeModuleStructure(struct RedisModule *module) {
     zfree(module);
 }
 
-void moduleFreeArgs(struct redisCommandArg *args, int num_args) {
+void moduleFreeArgs(struct serverCommandArg *args, int num_args) {
     for (int j = 0; j < num_args; j++) {
         zfree((char *)args[j].name);
         zfree((char *)args[j].token);

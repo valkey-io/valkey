@@ -2361,7 +2361,7 @@ struct serverCommand {
     /* Array of subcommands (may be NULL) */
     struct serverCommand *subcommands;
     /* Array of arguments (may be NULL) */
-    struct redisCommandArg *args;
+    struct serverCommandArg *args;
 #ifdef LOG_REQ_RES
     /* Reply schema */
     struct jsonObject *reply_schema;

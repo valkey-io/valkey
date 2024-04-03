@@ -4318,7 +4318,7 @@ int prepareForShutdown(int flags) {
 
     serverLog(LL_NOTICE,"User requested shutdown...");
     if (server.supervised_mode == SUPERVISED_SYSTEMD)
-        redisCommunicateSystemd("STOPPING=1\n");
+        serverCommunicateSystemd("STOPPING=1\n");
 
     /* If we have any replicas, let them catch up the replication offset before
      * we shut down, to avoid data loss. */
@@ -4454,7 +4454,7 @@ int finishShutdown(void) {
             } else {
                 serverLog(LL_WARNING, "Writing initial AOF, can't exit.");
                 if (server.supervised_mode == SUPERVISED_SYSTEMD)
-                    redisCommunicateSystemd("STATUS=Writing initial AOF, can't exit.\n");
+                    serverCommunicateSystemd("STATUS=Writing initial AOF, can't exit.\n");
                 goto error;
             }
         }
@@ -4476,7 +4476,7 @@ int finishShutdown(void) {
     if ((server.saveparamslen > 0 && !nosave) || save) {
         serverLog(LL_NOTICE,"Saving the final RDB snapshot before exiting.");
         if (server.supervised_mode == SUPERVISED_SYSTEMD)
-            redisCommunicateSystemd("STATUS=Saving the final RDB snapshot\n");
+            serverCommunicateSystemd("STATUS=Saving the final RDB snapshot\n");
         /* Snapshotting. Perform a SYNC SAVE and exit */
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
@@ -4492,7 +4492,7 @@ int finishShutdown(void) {
             } else {
                 serverLog(LL_WARNING,"Error trying to save the DB, can't exit.");
                 if (server.supervised_mode == SUPERVISED_SYSTEMD)
-                    redisCommunicateSystemd("STATUS=Error trying to save the DB, can't exit.\n");
+                    serverCommunicateSystemd("STATUS=Error trying to save the DB, can't exit.\n");
                 goto error;
             }
         }
@@ -6349,7 +6349,7 @@ int changeListener(connListener *listener) {
 
     /* Just close the server if port disabled */
     if (listener->port == 0) {
-        if (server.set_proc_title) redisSetProcTitle(NULL);
+        if (server.set_proc_title) serverSetProcTitle(NULL);
         return C_OK;
     }
 
@@ -6363,7 +6363,7 @@ int changeListener(connListener *listener) {
         serverPanic("Unrecoverable error creating %s accept handler.", listener->ct->get_type(NULL));
     }
 
-    if (server.set_proc_title) redisSetProcTitle(NULL);
+    if (server.set_proc_title) serverSetProcTitle(NULL);
 
     return C_OK;
 }
@@ -6449,7 +6449,7 @@ void closeChildUnusedResourceAfterFork(void) {
 }
 
 /* purpose is one of CHILD_TYPE_ types */
-int redisFork(int purpose) {
+int serverFork(int purpose) {
     if (isMutuallyExclusiveChildType(purpose)) {
         if (hasActiveChildProcess()) {
             errno = EEXIST;
@@ -6749,7 +6749,7 @@ int validateProcTitleTemplate(const char *template) {
     return ok;
 }
 
-int redisSetProcTitle(char *title) {
+int serverSetProcTitle(char *title) {
 #ifdef USE_SETPROCTITLE
     if (!title) title = server.exec_argv[0];
     sds proc_title = expandProcTitleTemplate(server.proc_title_template, title);
@@ -6764,7 +6764,7 @@ int redisSetProcTitle(char *title) {
     return C_OK;
 }
 
-void redisSetCpuAffinity(const char *cpulist) {
+void serverSetCpuAffinity(const char *cpulist) {
 #ifdef USE_SETCPUAFFINITY
     setcpuaffinity(cpulist);
 #else
@@ -6774,7 +6774,7 @@ void redisSetCpuAffinity(const char *cpulist) {
 
 /* Send a notify message to systemd. Returns sd_notify return code which is
  * a positive number on success. */
-int redisCommunicateSystemd(const char *sd_notify_msg) {
+int serverCommunicateSystemd(const char *sd_notify_msg) {
 #ifdef HAVE_LIBSYSTEMD
     int ret = sd_notify(0, sd_notify_msg);
 
@@ -6812,7 +6812,7 @@ static int redisSupervisedSystemd(void) {
             "systemd supervision requested or auto-detected, but Redis is compiled without libsystemd support!");
     return 0;
 #else
-    if (redisCommunicateSystemd("STATUS=Redis is loading...\n") <= 0)
+    if (serverCommunicateSystemd("STATUS=Redis is loading...\n") <= 0)
         return 0;
     serverLog(LL_NOTICE,
         "Supervised by systemd. Please make sure you set appropriate values for TimeoutStartSec and TimeoutStopSec in your service unit.");
@@ -7169,7 +7169,7 @@ int main(int argc, char **argv) {
 
     initServer();
     if (background || server.pidfile) createPidFile();
-    if (server.set_proc_title) redisSetProcTitle(NULL);
+    if (server.set_proc_title) serverSetProcTitle(NULL);
     redisAsciiArt();
     checkTcpBacklogSettings();
     if (server.cluster_enabled) {
@@ -7207,17 +7207,17 @@ int main(int argc, char **argv) {
 
         if (server.supervised_mode == SUPERVISED_SYSTEMD) {
             if (!server.masterhost) {
-                redisCommunicateSystemd("STATUS=Ready to accept connections\n");
+                serverCommunicateSystemd("STATUS=Ready to accept connections\n");
             } else {
-                redisCommunicateSystemd("STATUS=Ready to accept connections in read-only mode. Waiting for MASTER <-> REPLICA sync\n");
+                serverCommunicateSystemd("STATUS=Ready to accept connections in read-only mode. Waiting for MASTER <-> REPLICA sync\n");
             }
-            redisCommunicateSystemd("READY=1\n");
+            serverCommunicateSystemd("READY=1\n");
         }
     } else {
         sentinelIsRunning();
         if (server.supervised_mode == SUPERVISED_SYSTEMD) {
-            redisCommunicateSystemd("STATUS=Ready to accept connections\n");
-            redisCommunicateSystemd("READY=1\n");
+            serverCommunicateSystemd("STATUS=Ready to accept connections\n");
+            serverCommunicateSystemd("READY=1\n");
         }
     }
 
@@ -7226,7 +7226,7 @@ int main(int argc, char **argv) {
         serverLog(LL_WARNING,"WARNING: You specified a maxmemory value that is less than 1MB (current value is %llu bytes). Are you sure this is what you really want?", server.maxmemory);
     }
 
-    redisSetCpuAffinity(server.server_cpulist);
+    serverSetCpuAffinity(server.server_cpulist);
     setOOMScoreAdj(-1);
 
     aeMain(server.el);

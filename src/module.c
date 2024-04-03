@@ -11248,9 +11248,9 @@ int RM_ScanKey(RedisModuleKey *key, RedisModuleScanCursor *cursor, RedisModuleSc
 int RM_Fork(RedisModuleForkDoneHandler cb, void *user_data) {
     pid_t childpid;
 
-    if ((childpid = redisFork(CHILD_TYPE_MODULE)) == 0) {
+    if ((childpid = serverFork(CHILD_TYPE_MODULE)) == 0) {
         /* Child */
-        redisSetProcTitle("redis-module-fork");
+        serverSetProcTitle("redis-module-fork");
     } else if (childpid == -1) {
         serverLog(LL_WARNING,"Can't fork for module: %s", strerror(errno));
     } else {

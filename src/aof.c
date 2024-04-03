@@ -2467,12 +2467,12 @@ int rewriteAppendOnlyFileBackground(void) {
 
     server.stat_aof_rewrites++;
 
-    if ((childpid = redisFork(CHILD_TYPE_AOF)) == 0) {
+    if ((childpid = serverFork(CHILD_TYPE_AOF)) == 0) {
         char tmpfile[256];
 
         /* Child */
-        redisSetProcTitle("redis-aof-rewrite");
-        redisSetCpuAffinity(server.aof_rewrite_cpulist);
+        serverSetProcTitle("redis-aof-rewrite");
+        serverSetCpuAffinity(server.aof_rewrite_cpulist);
         snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) getpid());
         if (rewriteAppendOnlyFile(tmpfile) == C_OK) {
             serverLog(LL_NOTICE,

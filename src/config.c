@@ -2445,7 +2445,7 @@ static int updateLocaleCollate(const char **err) {
 }
 
 static int updateProcTitleTemplate(const char **err) {
-    if (redisSetProcTitle(NULL) == C_ERR) {
+    if (serverSetProcTitle(NULL) == C_ERR) {
         *err = "failed to set process title";
         return 0;
     }

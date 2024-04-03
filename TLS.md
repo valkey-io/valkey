@@ -38,22 +38,22 @@ invoked so sample certificates/keys are available):
 
 For TLS built-in mode:
     ./src/redis-server --tls-port 6379 --port 0 \
-        --tls-cert-file ./tests/tls/redis.crt \
-        --tls-key-file ./tests/tls/redis.key \
+        --tls-cert-file ./tests/tls/valkey.crt \
+        --tls-key-file ./tests/tls/valkey.key \
         --tls-ca-cert-file ./tests/tls/ca.crt
 
 For TLS module mode:
     ./src/redis-server --tls-port 6379 --port 0 \
-        --tls-cert-file ./tests/tls/redis.crt \
-        --tls-key-file ./tests/tls/redis.key \
+        --tls-cert-file ./tests/tls/valkey.crt \
+        --tls-key-file ./tests/tls/valkey.key \
         --tls-ca-cert-file ./tests/tls/ca.crt \
         --loadmodule src/redis-tls.so
 
 To connect to this Redis server with `redis-cli`:
 
     ./src/redis-cli --tls \
-        --cert ./tests/tls/redis.crt \
-        --key ./tests/tls/redis.key \
+        --cert ./tests/tls/valkey.crt \
+        --key ./tests/tls/valkey.key \
         --cacert ./tests/tls/ca.crt
 
 This will disable TCP and enable TLS on port 6379. It's also possible to have

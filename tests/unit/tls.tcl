@@ -100,8 +100,8 @@ start_server {tags {"tls"}} {
             set master_port [srv 0 port]
 
             # Use a non-restricted client/server cert for the replica
-            set redis_crt [format "%s/tests/tls/redis.crt" [pwd]]
-            set redis_key [format "%s/tests/tls/redis.key" [pwd]]
+            set redis_crt [format "%s/tests/tls/valkey.crt" [pwd]]
+            set redis_key [format "%s/tests/tls/valkey.key" [pwd]]
 
             start_server [list overrides [list tls-cert-file $redis_crt tls-key-file $redis_key] \
                                omit [list tls-client-cert-file tls-client-key-file]] {

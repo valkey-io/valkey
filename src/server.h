@@ -1475,7 +1475,7 @@ struct malloc_stats {
  * TLS Context Configuration
  *----------------------------------------------------------------------------*/
 
-typedef struct redisTLSContextConfig {
+typedef struct serverTLSContextConfig {
     char *cert_file;                /* Server side and optionally client side cert file name */
     char *key_file;                 /* Private key filename for cert_file */
     char *key_file_pass;            /* Optional password for key_file */
@@ -1492,7 +1492,7 @@ typedef struct redisTLSContextConfig {
     int session_caching;
     int session_cache_size;
     int session_cache_timeout;
-} redisTLSContextConfig;
+} serverTLSContextConfig;
 
 /*-----------------------------------------------------------------------------
  * AOF manifest definition
@@ -2050,7 +2050,7 @@ struct redisServer {
     int tls_cluster;
     int tls_replication;
     int tls_auth_clients;
-    redisTLSContextConfig tls_ctx_config;
+    serverTLSContextConfig tls_ctx_config;
     /* cpu affinity */
     char *server_cpulist; /* cpu affinity list of redis server main/io thread. */
     char *bio_cpulist; /* cpu affinity list of bio thread. */

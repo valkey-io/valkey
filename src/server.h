@@ -1385,14 +1385,14 @@ typedef struct redisOp {
 /* Defines an array of Redis operations. There is an API to add to this
  * structure in an easy way.
  *
- * int redisOpArrayAppend(redisOpArray *oa, int dbid, robj **argv, int argc, int target);
- * void redisOpArrayFree(redisOpArray *oa);
+ * int serverOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int target);
+ * void serverOpArrayFree(serverOpArray *oa);
  */
-typedef struct redisOpArray {
+typedef struct serverOpArray {
     redisOp *ops;
     int numops;
     int capacity;
-} redisOpArray;
+} serverOpArray;
 
 /* This structure is returned by the getMemoryOverheadData() function in
  * order to return memory overhead information. */
@@ -1844,7 +1844,7 @@ struct redisServer {
     int child_info_pipe[2];         /* Pipe used to write the child_info_data. */
     int child_info_nread;           /* Num of bytes of the last read from pipe */
     /* Propagation of commands in AOF / replication */
-    redisOpArray also_propagate;    /* Additional command to propagate. */
+    serverOpArray also_propagate;    /* Additional command to propagate. */
     int replication_allowed;        /* Are we allowed to replicate? */
     /* Logging */
     char *logfile;                  /* Path of log file */
@@ -3065,7 +3065,7 @@ int incrCommandStatsOnError(struct redisCommand *cmd, int flags);
 void call(client *c, int flags);
 void alsoPropagate(int dbid, robj **argv, int argc, int target);
 void postExecutionUnitOperations(void);
-void redisOpArrayFree(redisOpArray *oa);
+void serverOpArrayFree(serverOpArray *oa);
 void forceCommandPropagation(client *c, int flags);
 void preventCommandPropagation(client *c);
 void preventCommandAOF(client *c);

@@ -4195,7 +4195,7 @@ void processEventsWhileBlocked(void) {
 #endif
 
 typedef struct __attribute__((aligned(CACHE_LINE_SIZE))) threads_pending {
-    redisAtomic unsigned long value;
+    serverAtomic unsigned long value;
 } threads_pending;
 
 pthread_t io_threads[IO_THREADS_MAX_NUM];

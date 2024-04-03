@@ -1594,7 +1594,7 @@ struct redisServer {
     int module_pipe[2];         /* Pipe used to awake the event loop by module threads. */
     pid_t child_pid;            /* PID of current child */
     int child_type;             /* Type of current child */
-    redisAtomic int module_gil_acquring; /* Indicates whether the GIL is being acquiring by the main thread. */
+    serverAtomic int module_gil_acquring; /* Indicates whether the GIL is being acquiring by the main thread. */
     /* Networking */
     int port;                   /* TCP listening port */
     int tls_port;               /* TLS listening port */
@@ -1633,7 +1633,7 @@ struct redisServer {
     pause_event client_pause_per_purpose[NUM_PAUSE_PURPOSES];
     char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
     dict *migrate_cached_sockets;/* MIGRATE cached sockets */
-    redisAtomic uint64_t next_client_id; /* Next client unique ID. Incremental. */
+    serverAtomic uint64_t next_client_id; /* Next client unique ID. Incremental. */
     int protected_mode;         /* Don't accept external connections. */
     int io_threads_num;         /* Number of IO threads to use. */
     int io_threads_do_reads;    /* Read and parse from IO threads? */
@@ -1689,10 +1689,10 @@ struct redisServer {
     long long slowlog_log_slower_than; /* SLOWLOG time limit (to get logged) */
     unsigned long slowlog_max_len;     /* SLOWLOG max number of items logged */
     struct malloc_stats cron_malloc_stats; /* sampled in serverCron(). */
-    redisAtomic long long stat_net_input_bytes; /* Bytes read from network. */
-    redisAtomic long long stat_net_output_bytes; /* Bytes written to network. */
-    redisAtomic long long stat_net_repl_input_bytes; /* Bytes read during replication, added to stat_net_input_bytes in 'info'. */
-    redisAtomic long long stat_net_repl_output_bytes; /* Bytes written during replication, added to stat_net_output_bytes in 'info'. */
+    serverAtomic long long stat_net_input_bytes; /* Bytes read from network. */
+    serverAtomic long long stat_net_output_bytes; /* Bytes written to network. */
+    serverAtomic long long stat_net_repl_input_bytes; /* Bytes read during replication, added to stat_net_input_bytes in 'info'. */
+    serverAtomic long long stat_net_repl_output_bytes; /* Bytes written during replication, added to stat_net_output_bytes in 'info'. */
     size_t stat_current_cow_peak;   /* Peak size of copy on write bytes. */
     size_t stat_current_cow_bytes;  /* Copy on write bytes while child is active. */
     monotime stat_current_cow_updated;  /* Last update time of stat_current_cow_bytes */
@@ -1709,9 +1709,9 @@ struct redisServer {
     long long stat_dump_payload_sanitizations; /* Number deep dump payloads integrity validations. */
     long long stat_io_reads_processed; /* Number of read events processed by IO / Main threads */
     long long stat_io_writes_processed; /* Number of write events processed by IO / Main threads */
-    redisAtomic long long stat_total_reads_processed; /* Total number of read events processed */
-    redisAtomic long long stat_total_writes_processed; /* Total number of write events processed */
-    redisAtomic long long stat_client_qbuf_limit_disconnections;  /* Total number of clients reached query buf length limit */
+    serverAtomic long long stat_total_reads_processed; /* Total number of read events processed */
+    serverAtomic long long stat_total_writes_processed; /* Total number of write events processed */
+    serverAtomic long long stat_client_qbuf_limit_disconnections;  /* Total number of clients reached query buf length limit */
     long long stat_client_outbuf_limit_disconnections;  /* Total number of clients reached output buf length limit */
     /* The following two are used to track instantaneous metrics, like
      * number of operations per second, network traffic. */
@@ -1800,8 +1800,8 @@ struct redisServer {
     int aof_last_write_errno;       /* Valid if aof write/fsync status is ERR */
     int aof_load_truncated;         /* Don't stop on unexpected AOF EOF. */
     int aof_use_rdb_preamble;       /* Specify base AOF to use RDB encoding on AOF rewrites. */
-    redisAtomic int aof_bio_fsync_status; /* Status of AOF fsync in bio job. */
-    redisAtomic int aof_bio_fsync_errno;  /* Errno of AOF fsync in bio job. */
+    serverAtomic int aof_bio_fsync_status; /* Status of AOF fsync in bio job. */
+    serverAtomic int aof_bio_fsync_errno;  /* Errno of AOF fsync in bio job. */
     aofManifest *aof_manifest;       /* Used to track AOFs. */
     int aof_disable_auto_gc;         /* If disable automatically deleting HISTORY type AOFs?
                                         default no. (for testings). */
@@ -1866,7 +1866,7 @@ struct redisServer {
     char replid2[CONFIG_RUN_ID_SIZE+1]; /* replid inherited from master*/
     long long master_repl_offset;   /* My current replication offset */
     long long second_replid_offset; /* Accept offsets up to this for replid2. */
-    redisAtomic long long fsynced_reploff_pending;/* Largest replication offset to
+    serverAtomic long long fsynced_reploff_pending;/* Largest replication offset to
                                      * potentially have been fsynced, applied to
                                        fsynced_reploff only when AOF state is AOF_ON
                                        (not during the initial rewrite) */
@@ -1974,7 +1974,7 @@ struct redisServer {
     int list_max_listpack_size;
     int list_compress_depth;
     /* time cache */
-    redisAtomic time_t unixtime; /* Unix time sampled every cron cycle. */
+    serverAtomic time_t unixtime; /* Unix time sampled every cron cycle. */
     time_t timezone;            /* Cached timezone. As set by tzset(). */
     int daylight_active;        /* Currently in daylight saving time. */
     mstime_t mstime;            /* 'unixtime' in milliseconds. */

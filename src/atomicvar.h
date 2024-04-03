@@ -80,8 +80,8 @@
 #ifndef __ATOMIC_VAR_H
 #define __ATOMIC_VAR_H
 
-/* Define redisAtomic for atomic variable. */
-#define redisAtomic
+/* Define serverAtomic for atomic variable. */
+#define serverAtomic
 
 /* To test Redis with Helgrind (a Valgrind tool) it is useful to define
  * the following macro, so that __sync macros are used: those can be detected
@@ -109,8 +109,8 @@
 #if !defined(__ATOMIC_VAR_FORCE_SYNC_MACROS) && defined(__STDC_VERSION__) && \
     (__STDC_VERSION__ >= 201112L) && !defined(__STDC_NO_ATOMICS__)
 /* Use '_Atomic' keyword if the compiler supports. */
-#undef  redisAtomic
-#define redisAtomic _Atomic
+#undef  serverAtomic
+#define serverAtomic _Atomic
 /* Implementation using _Atomic in C11. */
 
 #include <stdatomic.h>

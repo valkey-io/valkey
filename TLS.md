@@ -37,21 +37,21 @@ To manually run a Redis server with TLS mode (assuming `gen-test-certs.sh` was
 invoked so sample certificates/keys are available):
 
 For TLS built-in mode:
-    ./src/redis-server --tls-port 6379 --port 0 \
+    ./src/valkey-server --tls-port 6379 --port 0 \
         --tls-cert-file ./tests/tls/valkey.crt \
         --tls-key-file ./tests/tls/valkey.key \
         --tls-ca-cert-file ./tests/tls/ca.crt
 
 For TLS module mode:
-    ./src/redis-server --tls-port 6379 --port 0 \
+    ./src/valkey-server --tls-port 6379 --port 0 \
         --tls-cert-file ./tests/tls/valkey.crt \
         --tls-key-file ./tests/tls/valkey.key \
         --tls-ca-cert-file ./tests/tls/ca.crt \
         --loadmodule src/redis-tls.so
 
-To connect to this Redis server with `redis-cli`:
+To connect to this valkey server with `redis-cli`:
 
-    ./src/redis-cli --tls \
+    ./src/valkey-cli --tls \
         --cert ./tests/tls/valkey.crt \
         --key ./tests/tls/valkey.key \
         --cacert ./tests/tls/ca.crt
@@ -60,7 +60,7 @@ This will disable TCP and enable TLS on port 6379. It's also possible to have
 both TCP and TLS available, but you'll need to assign different ports.
 
 To make a Replica connect to the master using TLS, use `--tls-replication yes`,
-and to make Redis Cluster use TLS across nodes use `--tls-cluster yes`.
+and to make valkey Cluster use TLS across nodes use `--tls-cluster yes`.
 
 Connections
 -----------
@@ -90,7 +90,7 @@ To-Do List
   directly manipulating sockets for most actions. This will need to be cleaned
   up for proper TLS support. The best approach is probably to migrate to hiredis
   async mode.
-- [ ] redis-cli `--slave` and `--rdb` support.
+- [ ] valkey-cli `--slave` and `--rdb` support.
 
 Multi-port
 ----------

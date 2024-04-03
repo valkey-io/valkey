@@ -3,10 +3,10 @@
 # Generate some test certificates which are used by the regression test suite:
 #
 #   tests/tls/ca.{crt,key}          Self signed CA certificate.
-#   tests/tls/redis.{crt,key}       A certificate with no key usage/policy restrictions.
+#   tests/tls/valkey.{crt,key}      A certificate with no key usage/policy restrictions.
 #   tests/tls/client.{crt,key}      A certificate restricted for SSL client usage.
 #   tests/tls/server.{crt,key}      A certificate restricted for SSL server usage.
-#   tests/tls/valkey.dh              DH Params file.
+#   tests/tls/valkey.dh             DH Params file.
 
 generate_cert() {
     local name=$1

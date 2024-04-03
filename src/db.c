@@ -1970,7 +1970,7 @@ keyReference *getKeysPrepareResult(getKeysResult *result, int numkeys) {
 
 /* Returns a bitmask with all the flags found in any of the key specs of the command.
  * The 'inv' argument means we'll return a mask with all flags that are missing in at least one spec. */
-int64_t getAllKeySpecsFlags(struct redisCommand *cmd, int inv) {
+int64_t getAllKeySpecsFlags(struct serverCommand *cmd, int inv) {
     int64_t flags = 0;
     for (int j = 0; j < cmd->key_specs_num; j++) {
         keySpec *spec = cmd->key_specs + j;
@@ -1986,7 +1986,7 @@ int64_t getAllKeySpecsFlags(struct redisCommand *cmd, int inv) {
  * GET_KEYSPEC_RETURN_PARTIAL:   Skips invalid and incomplete keyspecs but returns the keys
  *                               found in other valid keyspecs. 
  */
-int getKeysUsingKeySpecs(struct redisCommand *cmd, robj **argv, int argc, int search_flags, getKeysResult *result) {
+int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int search_flags, getKeysResult *result) {
     int j, i, last, first, step;
     keyReference *keys;
     serverAssert(result->numkeys == 0); /* caller should initialize or reset it */
@@ -2111,9 +2111,9 @@ invalid_spec:
  * Along with the position, this command also returns the flags that are
  * associated with how Redis will access the key.
  *
- * 'cmd' must be point to the corresponding entry into the redisCommand
+ * 'cmd' must be point to the corresponding entry into the serverCommand
  * table, according to the command name in argv[0]. */
-int getKeysFromCommandWithSpecs(struct redisCommand *cmd, robj **argv, int argc, int search_flags, getKeysResult *result) {
+int getKeysFromCommandWithSpecs(struct serverCommand *cmd, robj **argv, int argc, int search_flags, getKeysResult *result) {
     /* The command has at least one key-spec not marked as NOT_KEY */
     int has_keyspec = (getAllKeySpecsFlags(cmd, 1) & CMD_KEY_NOT_KEY);
     /* The command has at least one key-spec marked as VARIABLE_FLAGS */
@@ -2140,7 +2140,7 @@ int getKeysFromCommandWithSpecs(struct redisCommand *cmd, robj **argv, int argc,
 }
 
 /* This function returns a sanity check if the command may have keys. */
-int doesCommandHaveKeys(struct redisCommand *cmd) {
+int doesCommandHaveKeys(struct serverCommand *cmd) {
     return cmd->getkeys_proc ||                                 /* has getkeys_proc (non modules) */
         (cmd->flags & CMD_MODULE_GETKEYS) ||                    /* module with GETKEYS */
         (getAllKeySpecsFlags(cmd, 1) & CMD_KEY_NOT_KEY);        /* has at least one key-spec not marked as NOT_KEY */
@@ -2170,7 +2170,7 @@ ChannelSpecs commands_with_channels[] = {
 
 /* Returns 1 if the command may access any channels matched by the flags
  * argument. */
-int doesCommandHaveChannelsWithFlags(struct redisCommand *cmd, int flags) {
+int doesCommandHaveChannelsWithFlags(struct serverCommand *cmd, int flags) {
     /* If a module declares get channels, we are just going to assume
      * has channels. This API is allowed to return false positives. */
     if (cmd->flags & CMD_MODULE_GETCHANNELS) {
@@ -2195,9 +2195,9 @@ int doesCommandHaveChannelsWithFlags(struct redisCommand *cmd, int flags) {
  * Along with the position, this command also returns the flags that are
  * associated with how Redis will access the channel.
  *
- * 'cmd' must be point to the corresponding entry into the redisCommand
+ * 'cmd' must be point to the corresponding entry into the serverCommand
  * table, according to the command name in argv[0]. */
-int getChannelsFromCommand(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int getChannelsFromCommand(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     keyReference *keys;
     /* If a module declares get channels, use that. */
     if (cmd->flags & CMD_MODULE_GETCHANNELS) {
@@ -2232,7 +2232,7 @@ int getChannelsFromCommand(struct redisCommand *cmd, robj **argv, int argc, getK
  * 
  * NOTE: This function does not guarantee populating the flags for 
  * the keys, in order to get flags you should use getKeysUsingKeySpecs. */
-int getKeysUsingLegacyRangeSpec(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int getKeysUsingLegacyRangeSpec(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     int j, i = 0, last, first, step;
     keyReference *keys;
     UNUSED(argv);
@@ -2282,12 +2282,12 @@ int getKeysUsingLegacyRangeSpec(struct redisCommand *cmd, robj **argv, int argc,
  * so the actual return value is a heap allocated array of integers. The
  * length of the array is returned by reference into *numkeys.
  *
- * 'cmd' must be point to the corresponding entry into the redisCommand
+ * 'cmd' must be point to the corresponding entry into the serverCommand
  * table, according to the command name in argv[0].
  *
  * This function uses the command table if a command-specific helper function
  * is not required, otherwise it calls the command-specific function. */
-int getKeysFromCommand(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int getKeysFromCommand(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     if (cmd->flags & CMD_MODULE_GETKEYS) {
         return moduleGetCommandKeysViaAPI(cmd,argv,argc,result);
     } else if (cmd->getkeys_proc) {
@@ -2346,47 +2346,47 @@ int genericGetKeys(int storeKeyOfs, int keyCountOfs, int firstKeyOfs, int keySte
     return result->numkeys;
 }
 
-int sintercardGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int sintercardGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     UNUSED(cmd);
     return genericGetKeys(0, 1, 2, 1, argv, argc, result);
 }
 
-int zunionInterDiffStoreGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int zunionInterDiffStoreGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     UNUSED(cmd);
     return genericGetKeys(1, 2, 3, 1, argv, argc, result);
 }
 
-int zunionInterDiffGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int zunionInterDiffGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     UNUSED(cmd);
     return genericGetKeys(0, 1, 2, 1, argv, argc, result);
 }
 
-int evalGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int evalGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     UNUSED(cmd);
     return genericGetKeys(0, 2, 3, 1, argv, argc, result);
 }
 
-int functionGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int functionGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     UNUSED(cmd);
     return genericGetKeys(0, 2, 3, 1, argv, argc, result);
 }
 
-int lmpopGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int lmpopGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     UNUSED(cmd);
     return genericGetKeys(0, 1, 2, 1, argv, argc, result);
 }
 
-int blmpopGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int blmpopGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     UNUSED(cmd);
     return genericGetKeys(0, 2, 3, 1, argv, argc, result);
 }
 
-int zmpopGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int zmpopGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     UNUSED(cmd);
     return genericGetKeys(0, 1, 2, 1, argv, argc, result);
 }
 
-int bzmpopGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int bzmpopGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     UNUSED(cmd);
     return genericGetKeys(0, 2, 3, 1, argv, argc, result);
 }
@@ -2401,7 +2401,7 @@ int bzmpopGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult
  * implementation to fetch the keys.
  *
  * This command declares incomplete keys, so the flags are correctly set for this function */
-int sortROGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int sortROGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     keyReference *keys;
     UNUSED(cmd);
     UNUSED(argv);
@@ -2423,7 +2423,7 @@ int sortROGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult
  * correctly identify keys in the "STORE" option. 
  * 
  * This command declares incomplete keys, so the flags are correctly set for this function */
-int sortGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int sortGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     int i, j, num, found_store = 0;
     keyReference *keys;
     UNUSED(cmd);
@@ -2468,7 +2468,7 @@ int sortGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *
 }
 
 /* This command declares incomplete keys, so the flags are correctly set for this function */
-int migrateGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int migrateGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     int i, j, num, first;
     keyReference *keys;
     UNUSED(cmd);
@@ -2525,7 +2525,7 @@ int migrateGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResul
  * GEORADIUSBYMEMBER key member radius unit ... options ...
  * 
  * This command has a fully defined keyspec, so returning flags isn't needed. */
-int georadiusGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int georadiusGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     int i, num;
     keyReference *keys;
     UNUSED(cmd);
@@ -2566,7 +2566,7 @@ int georadiusGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysRes
  *       STREAMS key_1 key_2 ... key_N ID_1 ID_2 ... ID_N
  *
  * This command has a fully defined keyspec, so returning flags isn't needed. */
-int xreadGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int xreadGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     int i, num = 0;
     keyReference *keys;
     UNUSED(cmd);
@@ -2614,7 +2614,7 @@ int xreadGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult 
 
 /* Helper function to extract keys from the SET command, which may have
  * a read flag if the GET argument is passed in. */
-int setGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int setGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     keyReference *keys;
     UNUSED(cmd);
 
@@ -2639,7 +2639,7 @@ int setGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *r
 
 /* Helper function to extract keys from the BITFIELD command, which may be
  * read-only if the BITFIELD GET subcommand is used. */
-int bitfieldGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     keyReference *keys;
     int readonly = 1;
     UNUSED(cmd);

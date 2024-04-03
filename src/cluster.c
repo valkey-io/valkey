@@ -990,7 +990,7 @@ void clusterCommand(client *c) {
  *
  * CLUSTER_REDIR_DOWN_STATE and CLUSTER_REDIR_DOWN_RO_STATE if the cluster is
  * down but the user attempts to execute a command that addresses one or more keys. */
-clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, int argc, int *hashslot, int *error_code) {
+clusterNode *getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int *hashslot, int *error_code) {
     clusterNode *myself = getMyClusterNode();
     clusterNode *n = NULL;
     robj *firstkey = NULL;
@@ -1039,7 +1039,7 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
     /* Check that all the keys are in the same hash slot, and obtain this
      * slot and the node associated. */
     for (i = 0; i < ms->count; i++) {
-        struct redisCommand *mcmd;
+        struct serverCommand *mcmd;
         robj **margv;
         int margc, numkeys, j;
         keyReference *keyindex;

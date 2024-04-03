@@ -208,7 +208,7 @@ typedef struct clusterManagerCommand {
 static int createClusterManagerCommand(char *cmdname, int argc, char **argv);
 
 
-static redisContext *context;
+static serverContext *context;
 static struct config {
     cliConnInfo conn_info;
     struct timeval connect_timeout;
@@ -1556,7 +1556,7 @@ static void cliPressAnyKeyTTY(void) {
  *--------------------------------------------------------------------------- */
 
 /* Send AUTH command to the server */
-static int cliAuth(redisContext *ctx, char *user, char *auth) {
+static int cliAuth(serverContext *ctx, char *user, char *auth) {
     redisReply *reply;
     if (auth == NULL) return REDIS_OK;
 
@@ -2587,7 +2587,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
 }
 
 /* Send a command reconnecting the link if needed. */
-static redisReply *reconnectingRedisCommand(redisContext *c, const char *fmt, ...) {
+static redisReply *reconnectingRedisCommand(serverContext *c, const char *fmt, ...) {
     redisReply *reply = NULL;
     int tries = 0;
     va_list ap;
@@ -3651,7 +3651,7 @@ static struct clusterManager {
 dict *clusterManagerUncoveredSlots = NULL;
 
 typedef struct clusterManagerNode {
-    redisContext *context;
+    serverContext *context;
     sds name;
     char *ip;
     int port;
@@ -7916,7 +7916,7 @@ static int clusterManagerCommandImport(int argc, char **argv) {
     char *reply_err = NULL;
     redisReply *src_reply = NULL;
     // Connect to the source node.
-    redisContext *src_ctx = redisConnectWrapper(src_ip, src_port, config.connect_timeout);
+    serverContext *src_ctx = redisConnectWrapper(src_ip, src_port, config.connect_timeout);
     if (src_ctx->err) {
         success = 0;
         fprintf(stderr,"Could not connect to Redis at %s:%d: %s.\n", src_ip,
@@ -8458,10 +8458,10 @@ void sendRdbOnly(void) {
     sendReplconf("rdb-only", "1");
 }
 
-/* Read raw bytes through a redisContext. The read operation is not greedy
+/* Read raw bytes through a serverContext. The read operation is not greedy
  * and may not fill the buffer entirely.
  */
-static ssize_t readConn(redisContext *c, char *buf, size_t len)
+static ssize_t readConn(serverContext *c, char *buf, size_t len)
 {
     return c->funcs->read(c, buf, len);
 }
@@ -8476,7 +8476,7 @@ static ssize_t readConn(redisContext *c, char *buf, size_t len)
  * is unknown, also returns 0 in case a PSYNC +CONTINUE was found (no RDB payload).
  *
  * The out_full_mode parameter if 1 means this is a full sync, if 0 means this is partial mode. */
-unsigned long long sendSync(redisContext *c, int send_sync, char *out_eof, int *out_full_mode) {
+unsigned long long sendSync(serverContext *c, int send_sync, char *out_eof, int *out_full_mode) {
     /* To start we need to send the SYNC command and return the payload.
      * The hiredis client lib does not understand this part of the protocol
      * and we don't want to mess with its buffers, so everything is performed
@@ -8626,7 +8626,7 @@ static void slaveMode(int send_sync) {
  * to fetch the RDB file from a remote server. */
 static void getRDB(clusterManagerNode *node) {
     int fd;
-    redisContext *s;
+    serverContext *s;
     char *filename;
     if (node != NULL) {
         assert(node->context);

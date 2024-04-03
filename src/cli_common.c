@@ -56,7 +56,7 @@ char *redisGitDirty(void);
 /* Wrapper around redisSecureConnection to avoid hiredis_ssl dependencies if
  * not building with TLS support.
  */
-int cliSecureConnection(redisContext *c, cliSSLconfig config, const char **err) {
+int cliSecureConnection(serverContext *c, cliSSLconfig config, const char **err) {
 #ifdef USE_OPENSSL
     static SSL_CTX *ssl_ctx = NULL;
 
@@ -138,11 +138,11 @@ error:
  * work transparently.
  */
 
-/* Write a raw buffer through a redisContext. If we already have something
+/* Write a raw buffer through a serverContext. If we already have something
  * in the buffer (leftovers from hiredis operations) it will be written
  * as well.
  */
-ssize_t cliWriteConn(redisContext *c, const char *buf, size_t buf_len)
+ssize_t cliWriteConn(serverContext *c, const char *buf, size_t buf_len)
 {
     int done = 0;
 
@@ -426,7 +426,7 @@ sds cliVersion(void) {
 }
 
 /* This is a wrapper to call redisConnect or redisConnectWithTimeout. */
-redisContext *redisConnectWrapper(const char *ip, int port, const struct timeval tv) {
+serverContext *redisConnectWrapper(const char *ip, int port, const struct timeval tv) {
     if (tv.tv_sec == 0 && tv.tv_usec == 0) {
         return redisConnect(ip, port);
     } else {
@@ -435,7 +435,7 @@ redisContext *redisConnectWrapper(const char *ip, int port, const struct timeval
 }
 
 /* This is a wrapper to call redisConnectUnix or redisConnectUnixWithTimeout. */
-redisContext *redisConnectUnixWrapper(const char *path, const struct timeval tv) {
+serverContext *redisConnectUnixWrapper(const char *path, const struct timeval tv) {
     if (tv.tv_sec == 0 && tv.tv_usec == 0) {
         return redisConnectUnix(path);
     } else {

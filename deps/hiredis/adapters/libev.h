@@ -149,7 +149,7 @@ static void redisLibevSetTimeout(void *privdata, struct timeval tv) {
 }
 
 static int redisLibevAttach(EV_P_ redisAsyncContext *ac) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     redisLibevEvents *e;
 
     /* Nothing should be attached when something is already attached */

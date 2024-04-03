@@ -141,20 +141,20 @@ redisSSLContext *redisCreateSSLContextWithOptions(redisSSLOptions *options,
 void redisFreeSSLContext(redisSSLContext *redis_ssl_ctx);
 
 /**
- * Initiate SSL on an existing redisContext.
+ * Initiate SSL on an existing serverContext.
  *
  * This is similar to redisInitiateSSL() but does not require the caller
  * to directly interact with OpenSSL, and instead uses a redisSSLContext
  * previously created using redisCreateSSLContext().
  */
 
-int redisInitiateSSLWithContext(redisContext *c, redisSSLContext *redis_ssl_ctx);
+int redisInitiateSSLWithContext(serverContext *c, redisSSLContext *redis_ssl_ctx);
 
 /**
  * Initiate SSL/TLS negotiation on a provided OpenSSL SSL object.
  */
 
-int redisInitiateSSL(redisContext *c, struct ssl_st *ssl);
+int redisInitiateSSL(serverContext *c, struct ssl_st *ssl);
 
 #ifdef __cplusplus
 }

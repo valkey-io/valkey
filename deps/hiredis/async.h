@@ -64,7 +64,7 @@ typedef void(redisTimerCallback)(void *timer, void *privdata);
 /* Context for an async connection to Redis */
 typedef struct redisAsyncContext {
     /* Hold the regular context, so it can be realloc'ed. */
-    redisContext c;
+    serverContext c;
 
     /* Setup error flags so they can be used directly. */
     int err;

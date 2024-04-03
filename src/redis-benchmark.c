@@ -128,7 +128,7 @@ static struct config {
 } config;
 
 typedef struct _client {
-    redisContext *context;
+    serverContext *context;
     sds obuf;
     char **randptr;         /* Pointers to :rand: strings inside the command buf */
     size_t randlen;         /* Number of pointers in client->randptr */
@@ -193,7 +193,7 @@ static void *execBenchmarkThread(void *ptr);
 static clusterNode *createClusterNode(char *ip, int port);
 static redisConfig *getRedisConfig(const char *ip, int port,
                                    const char *hostsocket);
-static redisContext *getRedisContext(const char *ip, int port,
+static serverContext *getRedisContext(const char *ip, int port,
                                      const char *hostsocket);
 static void freeRedisConfig(redisConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
@@ -235,10 +235,10 @@ static int dictSdsKeyCompare(dict *d, const void *key1, const void *key2)
     return memcmp(key1, key2, l1) == 0;
 }
 
-static redisContext *getRedisContext(const char *ip, int port,
+static serverContext *getRedisContext(const char *ip, int port,
                                      const char *hostsocket)
 {
-    redisContext *ctx = NULL;
+    serverContext *ctx = NULL;
     redisReply *reply =  NULL;
     if (hostsocket == NULL)
         ctx = redisConnect(ip, port);
@@ -297,7 +297,7 @@ static redisConfig *getRedisConfig(const char *ip, int port,
 {
     redisConfig *cfg = zcalloc(sizeof(*cfg));
     if (!cfg) return NULL;
-    redisContext *c = NULL;
+    serverContext *c = NULL;
     redisReply *reply = NULL, *sub_reply = NULL;
     c = getRedisContext(ip, port, hostsocket);
     if (c == NULL) {
@@ -1100,7 +1100,7 @@ static clusterNode **addClusterNode(clusterNode *node) {
  */
 static int fetchClusterConfiguration(void) {
     int success = 1;
-    redisContext *ctx = NULL;
+    serverContext *ctx = NULL;
     redisReply *reply =  NULL;
     ctx = getRedisContext(config.conn_info.hostip, config.conn_info.hostport, config.hostsocket);
     if (ctx == NULL) {
@@ -1293,7 +1293,7 @@ static int fetchClusterSlotsConfiguration(client c) {
     };
     /* printf("[%d] fetchClusterSlotsConfiguration\n", c->thread_id); */
     dict *masters = dictCreate(&dtype);
-    redisContext *ctx = NULL;
+    serverContext *ctx = NULL;
     for (i = 0; i < (size_t) config.cluster_node_count; i++) {
         clusterNode *node = config.cluster_nodes[i];
         assert(node->ip != NULL);

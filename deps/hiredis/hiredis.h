@@ -51,7 +51,7 @@ typedef long long ssize_t;
 #define HIREDIS_SONAME 1.1.0
 
 /* Connection type can be blocking or non-blocking and is set in the
- * least significant bit of the flags field in redisContext. */
+ * least significant bit of the flags field in serverContext. */
 #define REDIS_BLOCK 0x1
 
 /* Connection may be disconnected before being free'd. The second bit
@@ -105,7 +105,7 @@ typedef long long ssize_t;
 
 /* Forward declarations for structs defined elsewhere */
 struct redisAsyncContext;
-struct redisContext;
+struct serverContext;
 
 /* RESP3 push helpers and callback prototypes */
 #define redisIsPushReply(r) (((redisReply*)(r))->type == REDIS_REPLY_PUSH)
@@ -238,8 +238,8 @@ typedef struct {
         (opts)->free_privdata = dtor;                      \
     } while(0)
 
-typedef struct redisContextFuncs {
-    void (*close)(struct redisContext *);
+typedef struct serverContextFuncs {
+    void (*close)(struct serverContext *);
     void (*free_privctx)(void *);
     void (*async_read)(struct redisAsyncContext *);
     void (*async_write)(struct redisAsyncContext *);
@@ -248,14 +248,14 @@ typedef struct redisContextFuncs {
      * number of bytes read/written.  In the event of an unrecoverable error
      * these functions shall return a value < 0.  In the event of a
      * recoverable error, they should return 0. */
-    ssize_t (*read)(struct redisContext *, char *, size_t);
-    ssize_t (*write)(struct redisContext *);
-} redisContextFuncs;
+    ssize_t (*read)(struct serverContext *, char *, size_t);
+    ssize_t (*write)(struct serverContext *);
+} serverContextFuncs;
 
 
 /* Context for a connection to Redis */
-typedef struct redisContext {
-    const redisContextFuncs *funcs;   /* Function table */
+typedef struct serverContext {
+    const serverContextFuncs *funcs;   /* Function table */
 
     int err; /* Error flags, 0 when there is no error */
     char errstr[128]; /* String representation of error when applicable */
@@ -283,7 +283,7 @@ typedef struct redisContext {
     size_t addrlen;
 
     /* Optional data and corresponding destructor users can use to provide
-     * context to a given redisContext.  Not used by hiredis. */
+     * context to a given serverContext.  Not used by hiredis. */
     void *privdata;
     void (*free_privdata)(void *);
 
@@ -293,20 +293,20 @@ typedef struct redisContext {
 
     /* An optional RESP3 PUSH handler */
     redisPushFn *push_cb;
-} redisContext;
+} serverContext;
 
-redisContext *redisConnectWithOptions(const redisOptions *options);
-redisContext *redisConnect(const char *ip, int port);
-redisContext *redisConnectWithTimeout(const char *ip, int port, const struct timeval tv);
-redisContext *redisConnectNonBlock(const char *ip, int port);
-redisContext *redisConnectBindNonBlock(const char *ip, int port,
+serverContext *redisConnectWithOptions(const redisOptions *options);
+serverContext *redisConnect(const char *ip, int port);
+serverContext *redisConnectWithTimeout(const char *ip, int port, const struct timeval tv);
+serverContext *redisConnectNonBlock(const char *ip, int port);
+serverContext *redisConnectBindNonBlock(const char *ip, int port,
                                        const char *source_addr);
-redisContext *redisConnectBindNonBlockWithReuse(const char *ip, int port,
+serverContext *redisConnectBindNonBlockWithReuse(const char *ip, int port,
                                                 const char *source_addr);
-redisContext *redisConnectUnix(const char *path);
-redisContext *redisConnectUnixWithTimeout(const char *path, const struct timeval tv);
-redisContext *redisConnectUnixNonBlock(const char *path);
-redisContext *redisConnectFd(redisFD fd);
+serverContext *redisConnectUnix(const char *path);
+serverContext *redisConnectUnixWithTimeout(const char *path, const struct timeval tv);
+serverContext *redisConnectUnixNonBlock(const char *path);
+serverContext *redisConnectFd(redisFD fd);
 
 /**
  * Reconnect the given context using the saved information.
@@ -317,43 +317,43 @@ redisContext *redisConnectFd(redisFD fd);
  *
  * Returns REDIS_OK on successful connect or REDIS_ERR otherwise.
  */
-int redisReconnect(redisContext *c);
+int redisReconnect(serverContext *c);
 
-redisPushFn *redisSetPushCallback(redisContext *c, redisPushFn *fn);
-int redisSetTimeout(redisContext *c, const struct timeval tv);
-int redisEnableKeepAlive(redisContext *c);
-int redisEnableKeepAliveWithInterval(redisContext *c, int interval);
-int redisSetTcpUserTimeout(redisContext *c, unsigned int timeout);
-void redisFree(redisContext *c);
-redisFD redisFreeKeepFd(redisContext *c);
-int redisBufferRead(redisContext *c);
-int redisBufferWrite(redisContext *c, int *done);
+redisPushFn *redisSetPushCallback(serverContext *c, redisPushFn *fn);
+int redisSetTimeout(serverContext *c, const struct timeval tv);
+int redisEnableKeepAlive(serverContext *c);
+int redisEnableKeepAliveWithInterval(serverContext *c, int interval);
+int redisSetTcpUserTimeout(serverContext *c, unsigned int timeout);
+void redisFree(serverContext *c);
+redisFD redisFreeKeepFd(serverContext *c);
+int redisBufferRead(serverContext *c);
+int redisBufferWrite(serverContext *c, int *done);
 
 /* In a blocking context, this function first checks if there are unconsumed
  * replies to return and returns one if so. Otherwise, it flushes the output
  * buffer to the socket and reads until it has a reply. In a non-blocking
  * context, it will return unconsumed replies until there are no more. */
-int redisGetReply(redisContext *c, void **reply);
-int redisGetReplyFromReader(redisContext *c, void **reply);
+int redisGetReply(serverContext *c, void **reply);
+int redisGetReplyFromReader(serverContext *c, void **reply);
 
 /* Write a formatted command to the output buffer. Use these functions in blocking mode
  * to get a pipeline of commands. */
-int redisAppendFormattedCommand(redisContext *c, const char *cmd, size_t len);
+int redisAppendFormattedCommand(serverContext *c, const char *cmd, size_t len);
 
 /* Write a command to the output buffer. Use these functions in blocking mode
  * to get a pipeline of commands. */
-int redisvAppendCommand(redisContext *c, const char *format, va_list ap);
-int redisAppendCommand(redisContext *c, const char *format, ...);
-int redisAppendCommandArgv(redisContext *c, int argc, const char **argv, const size_t *argvlen);
+int redisvAppendCommand(serverContext *c, const char *format, va_list ap);
+int redisAppendCommand(serverContext *c, const char *format, ...);
+int redisAppendCommandArgv(serverContext *c, int argc, const char **argv, const size_t *argvlen);
 
 /* Issue a command to Redis. In a blocking context, it is identical to calling
  * redisAppendCommand, followed by redisGetReply. The function will return
  * NULL if there was an error in performing the request, otherwise it will
  * return the reply. In a non-blocking context, it is identical to calling
  * only redisAppendCommand and will always return NULL. */
-void *redisvCommand(redisContext *c, const char *format, va_list ap);
-void *redisCommand(redisContext *c, const char *format, ...);
-void *redisCommandArgv(redisContext *c, int argc, const char **argv, const size_t *argvlen);
+void *redisvCommand(serverContext *c, const char *format, va_list ap);
+void *redisCommand(serverContext *c, const char *format, ...);
+void *redisCommandArgv(serverContext *c, int argc, const char **argv, const size_t *argvlen);
 
 #ifdef __cplusplus
 }

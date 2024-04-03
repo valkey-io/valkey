@@ -40,7 +40,7 @@
         exit(-1); \
     } while (0)
 
-static void assertReplyAndFree(redisContext *context, redisReply *reply, int type) {
+static void assertReplyAndFree(serverContext *context, redisReply *reply, int type) {
     if (reply == NULL)
         panicAbort("NULL reply from server (error: %s)", context->errstr);
 
@@ -55,7 +55,7 @@ static void assertReplyAndFree(redisContext *context, redisReply *reply, int typ
 }
 
 /* Switch to the RESP3 protocol and enable client tracking */
-static void enableClientTracking(redisContext *c) {
+static void enableClientTracking(serverContext *c) {
     redisReply *reply = redisCommand(c, "HELLO 3");
     if (reply == NULL || c->err) {
         panicAbort("NULL reply or server error (error: %s)", c->errstr);
@@ -105,7 +105,7 @@ void privdata_dtor(void *privdata) {
 
 int main(int argc, char **argv) {
     unsigned int j, invalidations = 0;
-    redisContext *c;
+    serverContext *c;
     redisReply *reply;
 
     const char *hostname = (argc > 1) ? argv[1] : "127.0.0.1";

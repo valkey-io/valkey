@@ -145,7 +145,7 @@ static void redisLibsdeventSetTimeout(void *userdata, struct timeval tv) {
 }
 
 static int redisLibsdeventAttach(redisAsyncContext *ac, struct sd_event *event) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     redisLibsdeventEvents *e;
 
     /* Nothing should be attached when something is already attached */

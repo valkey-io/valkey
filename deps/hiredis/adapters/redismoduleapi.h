@@ -111,7 +111,7 @@ static inline int redisModuleCompatibilityCheck(void) {
 }
 
 static inline int redisModuleAttach(redisAsyncContext *ac, RedisModuleCtx *module_ctx) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     redisModuleEvents *e;
 
     /* Nothing should be attached when something is already attached */

@@ -47,7 +47,7 @@ static void redisIvykisCleanup(void *privdata) {
 }
 
 static int redisIvykisAttach(redisAsyncContext *ac) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     redisIvykisEvents *e;
 
     /* Nothing should be attached when something is already attached */

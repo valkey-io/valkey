@@ -61,7 +61,7 @@
 
 #define OPENSSL_1_1_0 0x10100000L
 
-void __redisSetError(redisContext *c, int type, const char *str);
+void __redisSetError(serverContext *c, int type, const char *str);
 
 struct redisSSLContext {
     /* Associated OpenSSL SSL_CTX as created by redisCreateSSLContext() */
@@ -95,7 +95,7 @@ typedef struct redisSSL {
 } redisSSL;
 
 /* Forward declaration */
-redisContextFuncs redisContextSSLFuncs;
+serverContextFuncs serverContextSSLFuncs;
 
 /**
  * OpenSSL global initialization and locking handling callbacks.
@@ -352,9 +352,9 @@ error:
  */
 
 
-static int redisSSLConnect(redisContext *c, SSL *ssl) {
+static int redisSSLConnect(serverContext *c, SSL *ssl) {
     if (c->privctx) {
-        __redisSetError(c, REDIS_ERR_OTHER, "redisContext was already associated");
+        __redisSetError(c, REDIS_ERR_OTHER, "serverContext was already associated");
         return REDIS_ERR;
     }
 
@@ -364,7 +364,7 @@ static int redisSSLConnect(redisContext *c, SSL *ssl) {
         return REDIS_ERR;
     }
 
-    c->funcs = &redisContextSSLFuncs;
+    c->funcs = &serverContextSSLFuncs;
     rssl->ssl = ssl;
 
     SSL_set_mode(rssl->ssl, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
@@ -406,7 +406,7 @@ static int redisSSLConnect(redisContext *c, SSL *ssl) {
  * create their own SSL object.
  */
 
-int redisInitiateSSL(redisContext *c, SSL *ssl) {
+int redisInitiateSSL(serverContext *c, SSL *ssl) {
     return redisSSLConnect(c, ssl);
 }
 
@@ -415,7 +415,7 @@ int redisInitiateSSL(redisContext *c, SSL *ssl) {
  * manage their own SSL objects.
  */
 
-int redisInitiateSSLWithContext(redisContext *c, redisSSLContext *redis_ssl_ctx)
+int redisInitiateSSLWithContext(serverContext *c, redisSSLContext *redis_ssl_ctx)
 {
     if (!c || !redis_ssl_ctx)
         return REDIS_ERR;
@@ -482,7 +482,7 @@ static void redisSSLFree(void *privctx){
     hi_free(rsc);
 }
 
-static ssize_t redisSSLRead(redisContext *c, char *buf, size_t bufcap) {
+static ssize_t redisSSLRead(serverContext *c, char *buf, size_t bufcap) {
     redisSSL *rssl = c->privctx;
 
     int nread = SSL_read(rssl->ssl, buf, bufcap);
@@ -524,7 +524,7 @@ static ssize_t redisSSLRead(redisContext *c, char *buf, size_t bufcap) {
     }
 }
 
-static ssize_t redisSSLWrite(redisContext *c) {
+static ssize_t redisSSLWrite(serverContext *c) {
     redisSSL *rssl = c->privctx;
 
     size_t len = rssl->lastLen ? rssl->lastLen : hi_sdslen(c->obuf);
@@ -549,7 +549,7 @@ static ssize_t redisSSLWrite(redisContext *c) {
 static void redisSSLAsyncRead(redisAsyncContext *ac) {
     int rv;
     redisSSL *rssl = ac->c.privctx;
-    redisContext *c = &ac->c;
+    serverContext *c = &ac->c;
 
     rssl->wantRead = 0;
 
@@ -579,7 +579,7 @@ static void redisSSLAsyncRead(redisAsyncContext *ac) {
 static void redisSSLAsyncWrite(redisAsyncContext *ac) {
     int rv, done = 0;
     redisSSL *rssl = ac->c.privctx;
-    redisContext *c = &ac->c;
+    serverContext *c = &ac->c;
 
     rssl->pendingWrite = 0;
     rv = redisBufferWrite(c, &done);
@@ -606,7 +606,7 @@ static void redisSSLAsyncWrite(redisAsyncContext *ac) {
     _EL_ADD_READ(ac);
 }
 
-redisContextFuncs redisContextSSLFuncs = {
+serverContextFuncs serverContextSSLFuncs = {
     .close = redisNetClose,
     .free_privctx = redisSSLFree,
     .async_read = redisSSLAsyncRead,

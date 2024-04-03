@@ -85,7 +85,7 @@ static void redisLibhvSetTimeout(void *privdata, struct timeval tv) {
 }
 
 static int redisLibhvAttach(redisAsyncContext* ac, hloop_t* loop) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     redisLibhvEvents *events;
     hio_t* io = NULL;
 

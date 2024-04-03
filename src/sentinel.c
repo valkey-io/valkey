@@ -359,7 +359,7 @@ static void redisAeCleanup(void *privdata) {
 }
 
 static int redisAeAttach(aeEventLoop *loop, redisAsyncContext *ac) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     redisAeEvents *e;
 
     /* Nothing should be attached when something is already attached */

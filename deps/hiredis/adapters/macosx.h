@@ -75,7 +75,7 @@ static void redisMacOSAsyncCallback(CFSocketRef __unused s, CFSocketCallBackType
 }
 
 static int redisMacOSAttach(redisAsyncContext *redisAsyncCtx, CFRunLoopRef runLoop) {
-    redisContext *redisCtx = &(redisAsyncCtx->c);
+    serverContext *redisCtx = &(redisAsyncCtx->c);
 
     /* Nothing should be attached when something is already attached */
     if( redisAsyncCtx->ev.data != NULL ) return REDIS_ERR;

@@ -7,7 +7,7 @@
 #include <winsock2.h> /* For struct timeval */
 #endif
 
-static void example_argv_command(redisContext *c, size_t n) {
+static void example_argv_command(serverContext *c, size_t n) {
     char **argv, tmp[42];
     size_t *argvlen;
     redisReply *reply;
@@ -57,7 +57,7 @@ static void example_argv_command(redisContext *c, size_t n) {
 
 int main(int argc, char **argv) {
     unsigned int j, isunix = 0;
-    redisContext *c;
+    serverContext *c;
     redisReply *reply;
     const char *hostname = (argc > 1) ? argv[1] : "127.0.0.1";
 

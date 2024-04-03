@@ -164,7 +164,7 @@ static void redisPollScheduleTimer(void *data, struct timeval tv)
 }
 
 static int redisPollAttach(redisAsyncContext *ac) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     redisPollEvents *e;
 
     /* Nothing should be attached when something is already attached */

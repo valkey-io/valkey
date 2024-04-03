@@ -37,21 +37,21 @@
 
 #include "hiredis.h"
 
-void redisNetClose(redisContext *c);
-ssize_t redisNetRead(redisContext *c, char *buf, size_t bufcap);
-ssize_t redisNetWrite(redisContext *c);
+void redisNetClose(serverContext *c);
+ssize_t redisNetRead(serverContext *c, char *buf, size_t bufcap);
+ssize_t redisNetWrite(serverContext *c);
 
-int redisCheckSocketError(redisContext *c);
-int redisContextSetTimeout(redisContext *c, const struct timeval tv);
-int redisContextConnectTcp(redisContext *c, const char *addr, int port, const struct timeval *timeout);
-int redisContextConnectBindTcp(redisContext *c, const char *addr, int port,
+int redisCheckSocketError(serverContext *c);
+int redisContextSetTimeout(serverContext *c, const struct timeval tv);
+int redisContextConnectTcp(serverContext *c, const char *addr, int port, const struct timeval *timeout);
+int redisContextConnectBindTcp(serverContext *c, const char *addr, int port,
                                const struct timeval *timeout,
                                const char *source_addr);
-int redisContextConnectUnix(redisContext *c, const char *path, const struct timeval *timeout);
-int redisKeepAlive(redisContext *c, int interval);
-int redisCheckConnectDone(redisContext *c, int *completed);
+int redisContextConnectUnix(serverContext *c, const char *path, const struct timeval *timeout);
+int redisKeepAlive(serverContext *c, int interval);
+int redisCheckConnectDone(serverContext *c, int *completed);
 
-int redisSetTcpNoDelay(redisContext *c);
-int redisContextSetTcpUserTimeout(redisContext *c, unsigned int timeout);
+int redisSetTcpNoDelay(serverContext *c);
+int redisContextSetTcpUserTimeout(serverContext *c, unsigned int timeout);
 
 #endif

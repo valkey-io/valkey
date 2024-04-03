@@ -144,7 +144,7 @@ static void redisLibeventSetTimeout(void *privdata, struct timeval tv) {
 }
 
 static int redisLibeventAttach(redisAsyncContext *ac, struct event_base *base) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     redisLibeventEvents *e;
 
     /* Nothing should be attached when something is already attached */

@@ -53,8 +53,8 @@
 #endif
 
 /* Forward declarations of hiredis.c functions */
-int __redisAppendCommand(redisContext *c, const char *cmd, size_t len);
-void __redisSetError(redisContext *c, int type, const char *str);
+int __redisAppendCommand(serverContext *c, const char *cmd, size_t len);
+void __redisSetError(serverContext *c, int type, const char *str);
 
 /* Functions managing dictionary of callbacks for pub/sub. */
 static unsigned int callbackHash(const void *key) {
@@ -103,7 +103,7 @@ static dictType callbackDict = {
     callbackValDestructor
 };
 
-static redisAsyncContext *redisAsyncInitialize(redisContext *c) {
+static redisAsyncContext *redisAsyncInitialize(serverContext *c) {
     redisAsyncContext *ac;
     dict *channels = NULL, *patterns = NULL;
 
@@ -159,19 +159,19 @@ oom:
 }
 
 /* We want the error field to be accessible directly instead of requiring
- * an indirection to the redisContext struct. */
+ * an indirection to the serverContext struct. */
 static void __redisAsyncCopyError(redisAsyncContext *ac) {
     if (!ac)
         return;
 
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     ac->err = c->err;
     ac->errstr = c->errstr;
 }
 
 redisAsyncContext *redisAsyncConnectWithOptions(const redisOptions *options) {
     redisOptions myOptions = *options;
-    redisContext *c;
+    serverContext *c;
     redisAsyncContext *ac;
 
     /* Clear any erroneously set sync callback and flag that we don't want to
@@ -305,7 +305,7 @@ static int __redisShiftCallback(redisCallbackList *list, redisCallback *target) 
 }
 
 static void __redisRunCallback(redisAsyncContext *ac, redisCallback *cb, redisReply *reply) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     if (cb->fn != NULL) {
         c->flags |= REDIS_IN_CALLBACK;
         cb->fn(ac,reply,cb->privdata);
@@ -360,7 +360,7 @@ static void __redisRunDisconnectCallback(redisAsyncContext *ac, int status)
 
 /* Helper function to free the context. */
 static void __redisAsyncFree(redisAsyncContext *ac) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     redisCallback cb;
     dictIterator it;
     dictEntry *de;
@@ -416,7 +416,7 @@ void redisAsyncFree(redisAsyncContext *ac) {
     if (ac == NULL)
         return;
 
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
 
     c->flags |= REDIS_FREEING;
     if (!(c->flags & REDIS_IN_CALLBACK))
@@ -425,7 +425,7 @@ void redisAsyncFree(redisAsyncContext *ac) {
 
 /* Helper function to make the disconnect happen and clean up. */
 void __redisAsyncDisconnect(redisAsyncContext *ac) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
 
     /* Make sure error is accessible if there is any */
     __redisAsyncCopyError(ac);
@@ -458,7 +458,7 @@ void __redisAsyncDisconnect(redisAsyncContext *ac) {
  * to redisProcessCallbacks(). Otherwise, we can only disconnect immediately
  * when there are no pending callbacks. */
 void redisAsyncDisconnect(redisAsyncContext *ac) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     c->flags |= REDIS_DISCONNECTING;
 
     /** unset the auto-free flag here, because disconnect undoes this */
@@ -468,7 +468,7 @@ void redisAsyncDisconnect(redisAsyncContext *ac) {
 }
 
 static int __redisGetSubscribeCallback(redisAsyncContext *ac, redisReply *reply, redisCallback *dstcb) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     dict *callbacks;
     redisCallback *cb = NULL;
     dictEntry *de;
@@ -568,7 +568,7 @@ static int redisIsSubscribeReply(redisReply *reply) {
 }
 
 void redisProcessCallbacks(redisAsyncContext *ac) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     void *reply = NULL;
     int status;
 
@@ -671,7 +671,7 @@ static void __redisAsyncHandleConnectFailure(redisAsyncContext *ac) {
  * is called with a REDIS_ERR status and the context is free'd. */
 static int __redisAsyncHandleConnect(redisAsyncContext *ac) {
     int completed = 0;
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
 
     if (redisCheckConnectDone(c, &completed) == REDIS_ERR) {
         /* Error! */
@@ -707,7 +707,7 @@ static int __redisAsyncHandleConnect(redisAsyncContext *ac) {
 }
 
 void redisAsyncRead(redisAsyncContext *ac) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
 
     if (redisBufferRead(c) == REDIS_ERR) {
         __redisAsyncDisconnect(ac);
@@ -722,7 +722,7 @@ void redisAsyncRead(redisAsyncContext *ac) {
  * It processes all replies that can be read and executes their callbacks.
  */
 void redisAsyncHandleRead(redisAsyncContext *ac) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     /* must not be called from a callback */
     assert(!(c->flags & REDIS_IN_CALLBACK));
 
@@ -739,7 +739,7 @@ void redisAsyncHandleRead(redisAsyncContext *ac) {
 }
 
 void redisAsyncWrite(redisAsyncContext *ac) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     int done = 0;
 
     if (redisBufferWrite(c,&done) == REDIS_ERR) {
@@ -757,7 +757,7 @@ void redisAsyncWrite(redisAsyncContext *ac) {
 }
 
 void redisAsyncHandleWrite(redisAsyncContext *ac) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     /* must not be called from a callback */
     assert(!(c->flags & REDIS_IN_CALLBACK));
 
@@ -774,7 +774,7 @@ void redisAsyncHandleWrite(redisAsyncContext *ac) {
 }
 
 void redisAsyncHandleTimeout(redisAsyncContext *ac) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     redisCallback cb;
     /* must not be called from a callback */
     assert(!(c->flags & REDIS_IN_CALLBACK));
@@ -832,7 +832,7 @@ static const char *nextArgument(const char *start, const char **str, size_t *len
  * formatted command to the output buffer and registers the provided callback
  * function with the context. */
 static int __redisAsyncCommand(redisAsyncContext *ac, redisCallbackFn *fn, void *privdata, const char *cmd, size_t len) {
-    redisContext *c = &(ac->c);
+    serverContext *c = &(ac->c);
     redisCallback cb;
     struct dict *cbdict;
     dictIterator it;

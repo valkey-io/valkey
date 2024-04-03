@@ -106,7 +106,7 @@ static long long usec(void) {
 
 /* Helper to extract Redis version information.  Aborts on any failure. */
 #define REDIS_VERSION_FIELD "redis_version:"
-void get_redis_version(redisContext *c, int *majorptr, int *minorptr) {
+void get_redis_version(serverContext *c, int *majorptr, int *minorptr) {
     redisReply *reply;
     char *eptr, *s, *e;
     int major, minor;
@@ -141,7 +141,7 @@ abort:
     exit(1);
 }
 
-static redisContext *select_database(redisContext *c) {
+static serverContext *select_database(serverContext *c) {
     redisReply *reply;
 
     /* Switch to DB 9 for testing, now that we know we can chat. */
@@ -164,7 +164,7 @@ static redisContext *select_database(redisContext *c) {
 }
 
 /* Switch protocol */
-static void send_hello(redisContext *c, int version) {
+static void send_hello(serverContext *c, int version) {
     redisReply *reply;
     int expected;
 
@@ -175,7 +175,7 @@ static void send_hello(redisContext *c, int version) {
 }
 
 /* Togggle client tracking */
-static void send_client_tracking(redisContext *c, const char *str) {
+static void send_client_tracking(serverContext *c, const char *str) {
     redisReply *reply;
 
     reply = redisCommand(c, "CLIENT TRACKING %s", str);
@@ -183,7 +183,7 @@ static void send_client_tracking(redisContext *c, const char *str) {
     freeReplyObject(reply);
 }
 
-static int disconnect(redisContext *c, int keep_fd) {
+static int disconnect(serverContext *c, int keep_fd) {
     redisReply *reply;
 
     /* Make sure we're on DB 9. */
@@ -201,7 +201,7 @@ static int disconnect(redisContext *c, int keep_fd) {
     return -1;
 }
 
-static void do_ssl_handshake(redisContext *c) {
+static void do_ssl_handshake(serverContext *c) {
 #ifdef HIREDIS_TEST_SSL
     redisInitiateSSLWithContext(c, _ssl_ctx);
     if (c->err) {
@@ -214,8 +214,8 @@ static void do_ssl_handshake(redisContext *c) {
 #endif
 }
 
-static redisContext *do_connect(struct config config) {
-    redisContext *c = NULL;
+static serverContext *do_connect(struct config config) {
+    serverContext *c = NULL;
 
     if (config.type == CONN_TCP) {
         c = redisConnect(config.tcp.host, config.tcp.port);
@@ -225,7 +225,7 @@ static redisContext *do_connect(struct config config) {
         c = redisConnectUnix(config.unix_sock.path);
     } else if (config.type == CONN_FD) {
         /* Create a dummy connection just to get an fd to inherit */
-        redisContext *dummy_ctx = redisConnectUnix(config.unix_sock.path);
+        serverContext *dummy_ctx = redisConnectUnix(config.unix_sock.path);
         if (dummy_ctx) {
             int fd = disconnect(dummy_ctx, 1);
             printf("Connecting to inherited fd %d\n", fd);
@@ -251,7 +251,7 @@ static redisContext *do_connect(struct config config) {
     return select_database(c);
 }
 
-static void do_reconnect(redisContext *c, struct config config) {
+static void do_reconnect(serverContext *c, struct config config) {
     redisReconnect(c);
 
     if (config.type == CONN_SSL) {
@@ -384,7 +384,7 @@ static void test_format_commands(void) {
 }
 
 static void test_append_formatted_commands(struct config config) {
-    redisContext *c;
+    serverContext *c;
     redisReply *reply;
     char *cmd;
     int len;
@@ -406,7 +406,7 @@ static void test_append_formatted_commands(struct config config) {
 }
 
 static void test_tcp_options(struct config cfg) {
-    redisContext *c;
+    serverContext *c;
 
     c = do_connect(cfg);
 
@@ -869,8 +869,8 @@ static void test_allocator_injection(void) {
     // Override hiredis allocators
     hiredisSetAllocators(&ha);
 
-    test("redisContext uses injected allocators: ");
-    redisContext *c = redisConnect("localhost", 6379);
+    test("serverContext uses injected allocators: ");
+    serverContext *c = redisConnect("localhost", 6379);
     test_cond(c == NULL);
 
     test("redisReader uses injected allocators: ");
@@ -892,7 +892,7 @@ static void test_allocator_injection(void) {
 static void test_blocking_connection_errors(void) {
     struct addrinfo hints = {.ai_family = AF_INET};
     struct addrinfo *ai_tmp = NULL;
-    redisContext *c;
+    serverContext *c;
 
     int rv = getaddrinfo(HIREDIS_BAD_DOMAIN, "6379", &hints, &ai_tmp);
     if (rv != 0) {
@@ -973,7 +973,7 @@ void push_handler_async(redisAsyncContext *ac, void *reply) {
     (void)reply;
 }
 
-static void test_resp3_push_handler(redisContext *c) {
+static void test_resp3_push_handler(serverContext *c) {
     struct pushCounters pc = {0};
     redisPushFn *old = NULL;
     redisReply *reply;
@@ -1055,10 +1055,10 @@ redisOptions get_redis_tcp_options(struct config config) {
 
 static void test_resp3_push_options(struct config config) {
     redisAsyncContext *ac;
-    redisContext *c;
+    serverContext *c;
     redisOptions options;
 
-    test("We set a default RESP3 handler for redisContext: ");
+    test("We set a default RESP3 handler for serverContext: ");
     options = get_redis_tcp_options(config);
     assert((c = redisConnectWithOptions(&options)) != NULL);
     test_cond(c->push_cb != NULL);
@@ -1077,7 +1077,7 @@ static void test_resp3_push_options(struct config config) {
     test_cond(c->push_cb == NULL);
     redisFree(c);
 
-    test("We can use redisOptions to set a custom PUSH handler for redisContext: ");
+    test("We can use redisOptions to set a custom PUSH handler for serverContext: ");
     options = get_redis_tcp_options(config);
     options.push_cb = push_handler;
     assert((c = redisConnectWithOptions(&options)) != NULL);
@@ -1100,7 +1100,7 @@ void free_privdata(void *privdata) {
 static void test_privdata_hooks(struct config config) {
     struct privdata data = {0};
     redisOptions options;
-    redisContext *c;
+    serverContext *c;
 
     test("We can use redisOptions to set privdata: ");
     options = get_redis_tcp_options(config);
@@ -1114,7 +1114,7 @@ static void test_privdata_hooks(struct config config) {
 }
 
 static void test_blocking_connection(struct config config) {
-    redisContext *c;
+    serverContext *c;
     redisReply *reply;
     int major;
 
@@ -1211,7 +1211,7 @@ static void test_blocking_connection(struct config config) {
 }
 
 /* Send DEBUG SLEEP 0 to detect if we have this command */
-static int detect_debug_sleep(redisContext *c) {
+static int detect_debug_sleep(serverContext *c) {
     int detected;
     redisReply *reply = redisCommand(c, "DEBUG SLEEP 0\r\n");
 
@@ -1228,7 +1228,7 @@ static int detect_debug_sleep(redisContext *c) {
 }
 
 static void test_blocking_connection_timeouts(struct config config) {
-    redisContext *c;
+    serverContext *c;
     redisReply *reply;
     ssize_t s;
     const char *sleep_cmd = "DEBUG SLEEP 3\r\n";
@@ -1294,7 +1294,7 @@ static void test_blocking_connection_timeouts(struct config config) {
 }
 
 static void test_blocking_io_errors(struct config config) {
-    redisContext *c;
+    serverContext *c;
     redisReply *reply;
     void *_reply;
     int major, minor;
@@ -1340,7 +1340,7 @@ static void test_blocking_io_errors(struct config config) {
 }
 
 static void test_invalid_timeout_errors(struct config config) {
-    redisContext *c;
+    serverContext *c;
 
     test("Set error when an invalid timeout usec value is used during connect: ");
 
@@ -1388,7 +1388,7 @@ void *hi_malloc_safe(size_t size) {
 }
 
 static void test_throughput(struct config config) {
-    redisContext *c = do_connect(config);
+    serverContext *c = do_connect(config);
     redisReply **replies;
     int i, num;
     long long t1, t2;
@@ -1477,14 +1477,14 @@ static void test_throughput(struct config config) {
 }
 
 // static long __test_callback_flags = 0;
-// static void __test_callback(redisContext *c, void *privdata) {
+// static void __test_callback(serverContext *c, void *privdata) {
 //     ((void)c);
 //     /* Shift to detect execution order */
 //     __test_callback_flags <<= 8;
 //     __test_callback_flags |= (long)privdata;
 // }
 //
-// static void __test_reply_callback(redisContext *c, redisReply *reply, void *privdata) {
+// static void __test_reply_callback(serverContext *c, redisReply *reply, void *privdata) {
 //     ((void)c);
 //     /* Shift to detect execution order */
 //     __test_callback_flags <<= 8;
@@ -1492,14 +1492,14 @@ static void test_throughput(struct config config) {
 //     if (reply) freeReplyObject(reply);
 // }
 //
-// static redisContext *__connect_nonblock() {
+// static serverContext *__connect_nonblock() {
 //     /* Reset callback flags */
 //     __test_callback_flags = 0;
 //     return redisConnectNonBlock("127.0.0.1", port, NULL);
 // }
 //
 // static void test_nonblocking_connection() {
-//     redisContext *c;
+//     serverContext *c;
 //     int wdone = 0;
 //
 //     test("Calls command callback when command is issued: ");
@@ -1610,7 +1610,7 @@ void unexpected_cb(redisAsyncContext *ac, void *r, void *privdata) {
 
 /* Helper function to publish a message via own client. */
 void publish_msg(redisOptions *options, const char* channel, const char* msg) {
-    redisContext *c = redisConnectWithOptions(options);
+    serverContext *c = redisConnectWithOptions(options);
     assert(c != NULL);
     redisReply *reply = redisCommand(c,"PUBLISH %s %s",channel,msg);
     assert(reply->type == REDIS_REPLY_INTEGER && reply->integer == 1);
@@ -1958,7 +1958,7 @@ void monitor_cb(redisAsyncContext *ac, void *r, void *privdata) {
 
     if (state->checkpoint == 1) {
         /* Response from MONITOR */
-        redisContext *c = redisConnectWithOptions(state->options);
+        serverContext *c = redisConnectWithOptions(state->options);
         assert(c != NULL);
         redisReply *reply = redisCommand(c,"SET first 1");
         assert(reply->type == REDIS_REPLY_STATUS);
@@ -1967,7 +1967,7 @@ void monitor_cb(redisAsyncContext *ac, void *r, void *privdata) {
     } else if (state->checkpoint == 2) {
         /* Response for monitored command 'SET first 1' */
         assert(strstr(reply->str,"first") != NULL);
-        redisContext *c = redisConnectWithOptions(state->options);
+        serverContext *c = redisConnectWithOptions(state->options);
         assert(c != NULL);
         redisReply *reply = redisCommand(c,"SET second 2");
         assert(reply->type == REDIS_REPLY_STATUS);
@@ -2137,7 +2137,7 @@ static redisAsyncContext *do_aconnect(struct config config, astest_no testno)
     } else if (config.type == CONN_FD) {
         options.type = REDIS_CONN_USERFD;
         /* Create a dummy connection just to get an fd to inherit */
-        redisContext *dummy_ctx = redisConnectUnix(config.unix_sock.path);
+        serverContext *dummy_ctx = redisConnectUnix(config.unix_sock.path);
         if (dummy_ctx) {
             redisFD fd = disconnect(dummy_ctx, 1);
             printf("Connecting to inherited fd %d\n", (int)fd);
@@ -2389,7 +2389,7 @@ int main(int argc, char **argv) {
     cfg.type = CONN_TCP;
 
     int major;
-    redisContext *c = do_connect(cfg);
+    serverContext *c = do_connect(cfg);
     get_redis_version(c, &major, NULL);
     disconnect(c, 0);
 

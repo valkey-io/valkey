@@ -44,10 +44,10 @@
 #include "async.h"
 #include "win32.h"
 
-extern int redisContextUpdateConnectTimeout(redisContext *c, const struct timeval *timeout);
-extern int redisContextUpdateCommandTimeout(redisContext *c, const struct timeval *timeout);
+extern int redisContextUpdateConnectTimeout(serverContext *c, const struct timeval *timeout);
+extern int redisContextUpdateCommandTimeout(serverContext *c, const struct timeval *timeout);
 
-static redisContextFuncs redisContextDefaultFuncs = {
+static serverContextFuncs serverContextDefaultFuncs = {
     .close = redisNetClose,
     .free_privctx = NULL,
     .async_read = redisAsyncRead,
@@ -681,7 +681,7 @@ void redisFreeCommand(char *cmd) {
     hi_free(cmd);
 }
 
-void __redisSetError(redisContext *c, int type, const char *str) {
+void __redisSetError(serverContext *c, int type, const char *str) {
     size_t len;
 
     c->err = type;
@@ -706,14 +706,14 @@ static void redisPushAutoFree(void *privdata, void *reply) {
     freeReplyObject(reply);
 }
 
-static redisContext *redisContextInit(void) {
-    redisContext *c;
+static serverContext *redisContextInit(void) {
+    serverContext *c;
 
     c = hi_calloc(1, sizeof(*c));
     if (c == NULL)
         return NULL;
 
-    c->funcs = &redisContextDefaultFuncs;
+    c->funcs = &serverContextDefaultFuncs;
 
     c->obuf = hi_sdsempty();
     c->reader = redisReaderCreate();
@@ -727,7 +727,7 @@ static redisContext *redisContextInit(void) {
     return c;
 }
 
-void redisFree(redisContext *c) {
+void redisFree(serverContext *c) {
     if (c == NULL)
         return;
 
@@ -754,14 +754,14 @@ void redisFree(redisContext *c) {
     hi_free(c);
 }
 
-redisFD redisFreeKeepFd(redisContext *c) {
+redisFD redisFreeKeepFd(serverContext *c) {
     redisFD fd = c->fd;
     c->fd = REDIS_INVALID_FD;
     redisFree(c);
     return fd;
 }
 
-int redisReconnect(redisContext *c) {
+int redisReconnect(serverContext *c) {
     c->err = 0;
     memset(c->errstr, '\0', strlen(c->errstr));
 
@@ -805,8 +805,8 @@ int redisReconnect(redisContext *c) {
     return ret;
 }
 
-redisContext *redisConnectWithOptions(const redisOptions *options) {
-    redisContext *c = redisContextInit();
+serverContext *redisConnectWithOptions(const redisOptions *options) {
+    serverContext *c = redisContextInit();
     if (c == NULL) {
         return NULL;
     }
@@ -872,27 +872,27 @@ redisContext *redisConnectWithOptions(const redisOptions *options) {
 /* Connect to a Redis instance. On error the field error in the returned
  * context will be set to the return value of the error function.
  * When no set of reply functions is given, the default set will be used. */
-redisContext *redisConnect(const char *ip, int port) {
+serverContext *redisConnect(const char *ip, int port) {
     redisOptions options = {0};
     REDIS_OPTIONS_SET_TCP(&options, ip, port);
     return redisConnectWithOptions(&options);
 }
 
-redisContext *redisConnectWithTimeout(const char *ip, int port, const struct timeval tv) {
+serverContext *redisConnectWithTimeout(const char *ip, int port, const struct timeval tv) {
     redisOptions options = {0};
     REDIS_OPTIONS_SET_TCP(&options, ip, port);
     options.connect_timeout = &tv;
     return redisConnectWithOptions(&options);
 }
 
-redisContext *redisConnectNonBlock(const char *ip, int port) {
+serverContext *redisConnectNonBlock(const char *ip, int port) {
     redisOptions options = {0};
     REDIS_OPTIONS_SET_TCP(&options, ip, port);
     options.options |= REDIS_OPT_NONBLOCK;
     return redisConnectWithOptions(&options);
 }
 
-redisContext *redisConnectBindNonBlock(const char *ip, int port,
+serverContext *redisConnectBindNonBlock(const char *ip, int port,
                                        const char *source_addr) {
     redisOptions options = {0};
     REDIS_OPTIONS_SET_TCP(&options, ip, port);
@@ -901,7 +901,7 @@ redisContext *redisConnectBindNonBlock(const char *ip, int port,
     return redisConnectWithOptions(&options);
 }
 
-redisContext *redisConnectBindNonBlockWithReuse(const char *ip, int port,
+serverContext *redisConnectBindNonBlockWithReuse(const char *ip, int port,
                                                 const char *source_addr) {
     redisOptions options = {0};
     REDIS_OPTIONS_SET_TCP(&options, ip, port);
@@ -910,27 +910,27 @@ redisContext *redisConnectBindNonBlockWithReuse(const char *ip, int port,
     return redisConnectWithOptions(&options);
 }
 
-redisContext *redisConnectUnix(const char *path) {
+serverContext *redisConnectUnix(const char *path) {
     redisOptions options = {0};
     REDIS_OPTIONS_SET_UNIX(&options, path);
     return redisConnectWithOptions(&options);
 }
 
-redisContext *redisConnectUnixWithTimeout(const char *path, const struct timeval tv) {
+serverContext *redisConnectUnixWithTimeout(const char *path, const struct timeval tv) {
     redisOptions options = {0};
     REDIS_OPTIONS_SET_UNIX(&options, path);
     options.connect_timeout = &tv;
     return redisConnectWithOptions(&options);
 }
 
-redisContext *redisConnectUnixNonBlock(const char *path) {
+serverContext *redisConnectUnixNonBlock(const char *path) {
     redisOptions options = {0};
     REDIS_OPTIONS_SET_UNIX(&options, path);
     options.options |= REDIS_OPT_NONBLOCK;
     return redisConnectWithOptions(&options);
 }
 
-redisContext *redisConnectFd(redisFD fd) {
+serverContext *redisConnectFd(redisFD fd) {
     redisOptions options = {0};
     options.type = REDIS_CONN_USERFD;
     options.endpoint.fd = fd;
@@ -938,28 +938,28 @@ redisContext *redisConnectFd(redisFD fd) {
 }
 
 /* Set read/write timeout on a blocking socket. */
-int redisSetTimeout(redisContext *c, const struct timeval tv) {
+int redisSetTimeout(serverContext *c, const struct timeval tv) {
     if (c->flags & REDIS_BLOCK)
         return redisContextSetTimeout(c,tv);
     return REDIS_ERR;
 }
 
-int redisEnableKeepAliveWithInterval(redisContext *c, int interval) {
+int redisEnableKeepAliveWithInterval(serverContext *c, int interval) {
     return redisKeepAlive(c, interval);
 }
 
 /* Enable connection KeepAlive. */
-int redisEnableKeepAlive(redisContext *c) {
+int redisEnableKeepAlive(serverContext *c) {
     return redisKeepAlive(c, REDIS_KEEPALIVE_INTERVAL);
 }
 
 /* Set the socket option TCP_USER_TIMEOUT. */
-int redisSetTcpUserTimeout(redisContext *c, unsigned int timeout) {
+int redisSetTcpUserTimeout(serverContext *c, unsigned int timeout) {
     return redisContextSetTcpUserTimeout(c, timeout);
 }
 
 /* Set a user provided RESP3 PUSH handler and return any old one set. */
-redisPushFn *redisSetPushCallback(redisContext *c, redisPushFn *fn) {
+redisPushFn *redisSetPushCallback(serverContext *c, redisPushFn *fn) {
     redisPushFn *old = c->push_cb;
     c->push_cb = fn;
     return old;
@@ -970,7 +970,7 @@ redisPushFn *redisSetPushCallback(redisContext *c, redisPushFn *fn) {
  *
  * After this function is called, you may use redisGetReplyFromReader to
  * see if there is a reply available. */
-int redisBufferRead(redisContext *c) {
+int redisBufferRead(serverContext *c) {
     char buf[1024*16];
     int nread;
 
@@ -998,7 +998,7 @@ int redisBufferRead(redisContext *c) {
  * Returns REDIS_ERR if an unrecoverable error occurred in the underlying
  * c->funcs->write function.
  */
-int redisBufferWrite(redisContext *c, int *done) {
+int redisBufferWrite(serverContext *c, int *done) {
 
     /* Return early when the context has seen an error. */
     if (c->err)
@@ -1029,7 +1029,7 @@ oom:
 
 /* Internal helper that returns 1 if the reply was a RESP3 PUSH
  * message and we handled it with a user-provided callback. */
-static int redisHandledPushReply(redisContext *c, void *reply) {
+static int redisHandledPushReply(serverContext *c, void *reply) {
     if (reply && c->push_cb && redisIsPushReply(reply)) {
         c->push_cb(c->privdata, reply);
         return 1;
@@ -1039,7 +1039,7 @@ static int redisHandledPushReply(redisContext *c, void *reply) {
 }
 
 /* Get a reply from our reader or set an error in the context. */
-int redisGetReplyFromReader(redisContext *c, void **reply) {
+int redisGetReplyFromReader(serverContext *c, void **reply) {
     if (redisReaderGetReply(c->reader, reply) == REDIS_ERR) {
         __redisSetError(c,c->reader->err,c->reader->errstr);
         return REDIS_ERR;
@@ -1051,7 +1051,7 @@ int redisGetReplyFromReader(redisContext *c, void **reply) {
 /* Internal helper to get the next reply from our reader while handling
  * any PUSH messages we encounter along the way.  This is separate from
  * redisGetReplyFromReader so as to not change its behavior. */
-static int redisNextInBandReplyFromReader(redisContext *c, void **reply) {
+static int redisNextInBandReplyFromReader(serverContext *c, void **reply) {
     do {
         if (redisGetReplyFromReader(c, reply) == REDIS_ERR)
             return REDIS_ERR;
@@ -1060,7 +1060,7 @@ static int redisNextInBandReplyFromReader(redisContext *c, void **reply) {
     return REDIS_OK;
 }
 
-int redisGetReply(redisContext *c, void **reply) {
+int redisGetReply(serverContext *c, void **reply) {
     int wdone = 0;
     void *aux = NULL;
 
@@ -1103,7 +1103,7 @@ int redisGetReply(redisContext *c, void **reply) {
  * is used, you need to call redisGetReply yourself to retrieve
  * the reply (or replies in pub/sub).
  */
-int __redisAppendCommand(redisContext *c, const char *cmd, size_t len) {
+int __redisAppendCommand(serverContext *c, const char *cmd, size_t len) {
     hisds newbuf;
 
     newbuf = hi_sdscatlen(c->obuf,cmd,len);
@@ -1116,7 +1116,7 @@ int __redisAppendCommand(redisContext *c, const char *cmd, size_t len) {
     return REDIS_OK;
 }
 
-int redisAppendFormattedCommand(redisContext *c, const char *cmd, size_t len) {
+int redisAppendFormattedCommand(serverContext *c, const char *cmd, size_t len) {
 
     if (__redisAppendCommand(c, cmd, len) != REDIS_OK) {
         return REDIS_ERR;
@@ -1125,7 +1125,7 @@ int redisAppendFormattedCommand(redisContext *c, const char *cmd, size_t len) {
     return REDIS_OK;
 }
 
-int redisvAppendCommand(redisContext *c, const char *format, va_list ap) {
+int redisvAppendCommand(serverContext *c, const char *format, va_list ap) {
     char *cmd;
     int len;
 
@@ -1147,7 +1147,7 @@ int redisvAppendCommand(redisContext *c, const char *format, va_list ap) {
     return REDIS_OK;
 }
 
-int redisAppendCommand(redisContext *c, const char *format, ...) {
+int redisAppendCommand(serverContext *c, const char *format, ...) {
     va_list ap;
     int ret;
 
@@ -1157,7 +1157,7 @@ int redisAppendCommand(redisContext *c, const char *format, ...) {
     return ret;
 }
 
-int redisAppendCommandArgv(redisContext *c, int argc, const char **argv, const size_t *argvlen) {
+int redisAppendCommandArgv(serverContext *c, int argc, const char **argv, const size_t *argvlen) {
     hisds cmd;
     long long len;
 
@@ -1187,7 +1187,7 @@ int redisAppendCommandArgv(redisContext *c, int argc, const char **argv, const s
  * otherwise. When NULL is returned in a blocking context, the error field
  * in the context will be set.
  */
-static void *__redisBlockForReply(redisContext *c) {
+static void *__redisBlockForReply(serverContext *c) {
     void *reply;
 
     if (c->flags & REDIS_BLOCK) {
@@ -1198,13 +1198,13 @@ static void *__redisBlockForReply(redisContext *c) {
     return NULL;
 }
 
-void *redisvCommand(redisContext *c, const char *format, va_list ap) {
+void *redisvCommand(serverContext *c, const char *format, va_list ap) {
     if (redisvAppendCommand(c,format,ap) != REDIS_OK)
         return NULL;
     return __redisBlockForReply(c);
 }
 
-void *redisCommand(redisContext *c, const char *format, ...) {
+void *redisCommand(serverContext *c, const char *format, ...) {
     va_list ap;
     va_start(ap,format);
     void *reply = redisvCommand(c,format,ap);
@@ -1212,7 +1212,7 @@ void *redisCommand(redisContext *c, const char *format, ...) {
     return reply;
 }
 
-void *redisCommandArgv(redisContext *c, int argc, const char **argv, const size_t *argvlen) {
+void *redisCommandArgv(serverContext *c, int argc, const char **argv, const size_t *argvlen) {
     if (redisAppendCommandArgv(c,argc,argv,argvlen) != REDIS_OK)
         return NULL;
     return __redisBlockForReply(c);

@@ -52,9 +52,9 @@ typedef enum {
     KEY_DELETED /* The key was deleted now. */
 } keyStatus;
 
-keyStatus expireIfNeeded(redisDb *db, robj *key, int flags);
-int keyIsExpired(redisDb *db, robj *key);
-static void dbSetValue(redisDb *db, robj *key, robj *val, int overwrite, dictEntry *de);
+keyStatus expireIfNeeded(serverDb *db, robj *key, int flags);
+int keyIsExpired(serverDb *db, robj *key);
+static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEntry *de);
 
 /* Update LFU when an object is accessed.
  * Firstly, decrement the counter if the decrement time is reached.
@@ -92,7 +92,7 @@ void updateLFU(robj *val) {
  * Even if the key expiry is master-driven, we can correctly report a key is
  * expired on replicas even if the master is lagging expiring our key via DELs
  * in the replication link. */
-robj *lookupKey(redisDb *db, robj *key, int flags) {
+robj *lookupKey(serverDb *db, robj *key, int flags) {
     dictEntry *de = dbFind(db, key->ptr);
     robj *val = NULL;
     if (de) {
@@ -155,14 +155,14 @@ robj *lookupKey(redisDb *db, robj *key, int flags) {
  * This function is equivalent to lookupKey(). The point of using this function
  * rather than lookupKey() directly is to indicate that the purpose is to read
  * the key. */
-robj *lookupKeyReadWithFlags(redisDb *db, robj *key, int flags) {
+robj *lookupKeyReadWithFlags(serverDb *db, robj *key, int flags) {
     serverAssert(!(flags & LOOKUP_WRITE));
     return lookupKey(db, key, flags);
 }
 
 /* Like lookupKeyReadWithFlags(), but does not use any flag, which is the
  * common case. */
-robj *lookupKeyRead(redisDb *db, robj *key) {
+robj *lookupKeyRead(serverDb *db, robj *key) {
     return lookupKeyReadWithFlags(db,key,LOOKUP_NONE);
 }
 
@@ -172,11 +172,11 @@ robj *lookupKeyRead(redisDb *db, robj *key) {
  *
  * Returns the linked value object if the key exists or NULL if the key
  * does not exist in the specified DB. */
-robj *lookupKeyWriteWithFlags(redisDb *db, robj *key, int flags) {
+robj *lookupKeyWriteWithFlags(serverDb *db, robj *key, int flags) {
     return lookupKey(db, key, flags | LOOKUP_WRITE);
 }
 
-robj *lookupKeyWrite(redisDb *db, robj *key) {
+robj *lookupKeyWrite(serverDb *db, robj *key) {
     return lookupKeyWriteWithFlags(db, key, LOOKUP_NONE);
 }
 
@@ -197,7 +197,7 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
  *
  * If the update_if_existing argument is false, the program is aborted
  * if the key already exists, otherwise, it can fall back to dbOverwrite. */
-static void dbAddInternal(redisDb *db, robj *key, robj *val, int update_if_existing) {
+static void dbAddInternal(serverDb *db, robj *key, robj *val, int update_if_existing) {
     dictEntry *existing;
     int slot = getKeySlot(key->ptr);
     dictEntry *de = kvstoreDictAddRaw(db->keys, slot, key->ptr, &existing);
@@ -213,7 +213,7 @@ static void dbAddInternal(redisDb *db, robj *key, robj *val, int update_if_exist
     notifyKeyspaceEvent(NOTIFY_NEW,"new",key,db->id);
 }
 
-void dbAdd(redisDb *db, robj *key, robj *val) {
+void dbAdd(serverDb *db, robj *key, robj *val) {
     dbAddInternal(db, key, val, 0);
 }
 
@@ -251,7 +251,7 @@ int getKeySlot(sds key) {
  * The function returns 1 if the key was added to the database, taking
  * ownership of the SDS string, otherwise 0 is returned, and is up to the
  * caller to free the SDS string. */
-int dbAddRDBLoad(redisDb *db, sds key, robj *val) {
+int dbAddRDBLoad(serverDb *db, sds key, robj *val) {
     int slot = getKeySlot(key);
     dictEntry *de = kvstoreDictAddRaw(db->keys, slot, key, NULL);
     if (de == NULL) return 0;
@@ -272,7 +272,7 @@ int dbAddRDBLoad(redisDb *db, sds key, robj *val) {
  * The dictEntry input is optional, can be used if we already have one.
  *
  * The program is aborted if the key was not already present. */
-static void dbSetValue(redisDb *db, robj *key, robj *val, int overwrite, dictEntry *de) {
+static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEntry *de) {
     int slot = getKeySlot(key->ptr);
     if (!de) de = kvstoreDictFind(db->keys, slot, key->ptr);
     serverAssertWithInfo(NULL,key,de != NULL);
@@ -304,7 +304,7 @@ static void dbSetValue(redisDb *db, robj *key, robj *val, int overwrite, dictEnt
 
 /* Replace an existing key with a new value, we just replace value and don't
  * emit any events */
-void dbReplaceValue(redisDb *db, robj *key, robj *val) {
+void dbReplaceValue(serverDb *db, robj *key, robj *val) {
     dbSetValue(db, key, val, 0, NULL);
 }
 
@@ -321,7 +321,7 @@ void dbReplaceValue(redisDb *db, robj *key, robj *val) {
  * All the new keys in the database should be created via this interface.
  * The client 'c' argument may be set to NULL if the operation is performed
  * in a context where there is no clear client performing the operation. */
-void setKey(client *c, redisDb *db, robj *key, robj *val, int flags) {
+void setKey(client *c, serverDb *db, robj *key, robj *val, int flags) {
     int keyfound = 0;
 
     if (flags & SETKEY_ALREADY_EXIST)
@@ -347,7 +347,7 @@ void setKey(client *c, redisDb *db, robj *key, robj *val, int flags) {
  * If there are no keys, NULL is returned.
  *
  * The function makes sure to return keys not already expired. */
-robj *dbRandomKey(redisDb *db) {
+robj *dbRandomKey(serverDb *db) {
     dictEntry *de;
     int maxtries = 100;
     int allvolatile = kvstoreSize(db->keys) == kvstoreSize(db->expires);
@@ -383,7 +383,7 @@ robj *dbRandomKey(redisDb *db) {
 }
 
 /* Helper for sync and async delete. */
-int dbGenericDelete(redisDb *db, robj *key, int async, int flags) {
+int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
     dictEntry **plink;
     int table;
     int slot = getKeySlot(key->ptr);
@@ -417,19 +417,19 @@ int dbGenericDelete(redisDb *db, robj *key, int async, int flags) {
 }
 
 /* Delete a key, value, and associated expiration entry if any, from the DB */
-int dbSyncDelete(redisDb *db, robj *key) {
+int dbSyncDelete(serverDb *db, robj *key) {
     return dbGenericDelete(db, key, 0, DB_FLAG_KEY_DELETED);
 }
 
 /* Delete a key, value, and associated expiration entry if any, from the DB. If
  * the value consists of many allocations, it may be freed asynchronously. */
-int dbAsyncDelete(redisDb *db, robj *key) {
+int dbAsyncDelete(serverDb *db, robj *key) {
     return dbGenericDelete(db, key, 1, DB_FLAG_KEY_DELETED);
 }
 
 /* This is a wrapper whose behavior depends on the Redis lazy free
  * configuration. Deletes the key synchronously or asynchronously. */
-int dbDelete(redisDb *db, robj *key) {
+int dbDelete(serverDb *db, robj *key) {
     return dbGenericDelete(db, key, server.lazyfree_lazy_server_del, DB_FLAG_KEY_DELETED);
 }
 
@@ -460,7 +460,7 @@ int dbDelete(redisDb *db, robj *key) {
  * At this point the caller is ready to modify the object, for example
  * using an sdscat() call to append some data, or anything else.
  */
-robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o) {
+robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
     serverAssert(o->type == OBJ_STRING);
     if (o->refcount != 1 || o->encoding != OBJ_ENCODING_RAW) {
         robj *decoded = getDecodedObject(o);
@@ -477,7 +477,7 @@ robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o) {
  * The dbnum can be -1 if all the DBs should be emptied, or the specified
  * DB index if we want to empty only a single database.
  * The function returns the number of keys removed from the database(s). */
-long long emptyDbStructure(redisDb *dbarray, int dbnum, int async,
+long long emptyDbStructure(serverDb *dbarray, int dbnum, int async,
                            void(callback)(dict*))
 {
     long long removed = 0;
@@ -562,14 +562,14 @@ long long emptyData(int dbnum, int flags, void(callback)(dict*)) {
 }
 
 /* Initialize temporary db on replica for use during diskless replication. */
-redisDb *initTempDb(void) {
+serverDb *initTempDb(void) {
     int slot_count_bits = 0;
     int flags = KVSTORE_ALLOCATE_DICTS_ON_DEMAND;
     if (server.cluster_enabled) {
         slot_count_bits = CLUSTER_SLOT_MASK_BITS;
         flags |= KVSTORE_FREE_EMPTY_DICTS;
     }
-    redisDb *tempDb = zcalloc(sizeof(redisDb)*server.dbnum);
+    serverDb *tempDb = zcalloc(sizeof(serverDb)*server.dbnum);
     for (int i=0; i<server.dbnum; i++) {
         tempDb[i].id = i;
         tempDb[i].keys = kvstoreCreate(&dbDictType, slot_count_bits, flags);
@@ -580,7 +580,7 @@ redisDb *initTempDb(void) {
 }
 
 /* Discard tempDb, this can be slow (similar to FLUSHALL), but it's always async. */
-void discardTempDb(redisDb *tempDb, void(callback)(dict*)) {
+void discardTempDb(serverDb *tempDb, void(callback)(dict*)) {
     int async = 1;
 
     /* Release temp DBs. */
@@ -620,7 +620,7 @@ long long dbTotalServerKeyCount(void) {
 
 /* Note that the 'c' argument may be NULL if the key was modified out of
  * a context of a client. */
-void signalModifiedKey(client *c, redisDb *db, robj *key) {
+void signalModifiedKey(client *c, serverDb *db, robj *key) {
     touchWatchedKey(db,key);
     trackingInvalidateKey(c,key,1);
 }
@@ -1348,7 +1348,7 @@ void renamenxCommand(client *c) {
 
 void moveCommand(client *c) {
     robj *o;
-    redisDb *src, *dst;
+    serverDb *src, *dst;
     int srcid, dbid;
     long long expire;
 
@@ -1410,7 +1410,7 @@ void moveCommand(client *c) {
 
 void copyCommand(client *c) {
     robj *o;
-    redisDb *src, *dst;
+    serverDb *src, *dst;
     int srcid, dbid;
     long long expire;
     int j, replace = 0, delete = 0;
@@ -1514,7 +1514,7 @@ void copyCommand(client *c) {
  * one or more blocked clients for B[LR]POP or other blocking commands
  * and signal the keys as ready if they are of the right type. See the comment
  * where the function is used for more info. */
-void scanDatabaseForReadyKeys(redisDb *db) {
+void scanDatabaseForReadyKeys(serverDb *db) {
     dictEntry *de;
     dictIterator *di = dictGetSafeIterator(db->blocking_keys);
     while((de = dictNext(di)) != NULL) {
@@ -1531,7 +1531,7 @@ void scanDatabaseForReadyKeys(redisDb *db) {
 /* Since we are unblocking XREADGROUP clients in the event the
  * key was deleted/overwritten we must do the same in case the
  * database was flushed/swapped. */
-void scanDatabaseForDeletedKeys(redisDb *emptied, redisDb *replaced_with) {
+void scanDatabaseForDeletedKeys(serverDb *emptied, serverDb *replaced_with) {
     dictEntry *de;
     dictIterator *di = dictGetSafeIterator(emptied->blocking_keys);
     while((de = dictNext(di)) != NULL) {
@@ -1573,8 +1573,8 @@ int dbSwapDatabases(int id1, int id2) {
     if (id1 < 0 || id1 >= server.dbnum ||
         id2 < 0 || id2 >= server.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
-    redisDb aux = server.db[id1];
-    redisDb *db1 = &server.db[id1], *db2 = &server.db[id2];
+    serverDb aux = server.db[id1];
+    serverDb *db1 = &server.db[id1], *db2 = &server.db[id2];
 
     /* Swapdb should make transaction fail if there is any
      * client watching keys */
@@ -1615,10 +1615,10 @@ int dbSwapDatabases(int id1, int id2) {
 /* Logically, this discards (flushes) the old main database, and apply the newly loaded
  * database (temp) as the main (active) database, the actual freeing of old database
  * (which will now be placed in the temp one) is done later. */
-void swapMainDbWithTempDb(redisDb *tempDb) {
+void swapMainDbWithTempDb(serverDb *tempDb) {
     for (int i=0; i<server.dbnum; i++) {
-        redisDb aux = server.db[i];
-        redisDb *activedb = &server.db[i], *newdb = &tempDb[i];
+        serverDb aux = server.db[i];
+        serverDb *activedb = &server.db[i], *newdb = &tempDb[i];
 
         /* Swapping databases should make transaction fail if there is any
          * client watching keys. */
@@ -1691,7 +1691,7 @@ void swapdbCommand(client *c) {
  * Expires API
  *----------------------------------------------------------------------------*/
 
-int removeExpire(redisDb *db, robj *key) {
+int removeExpire(serverDb *db, robj *key) {
     return kvstoreDictDelete(db->expires, getKeySlot(key->ptr), key->ptr) == DICT_OK;
 }
 
@@ -1699,7 +1699,7 @@ int removeExpire(redisDb *db, robj *key) {
  * of an user calling a command 'c' is the client, otherwise 'c' is set
  * to NULL. The 'when' parameter is the absolute unix time in milliseconds
  * after which the key will no longer be considered valid. */
-void setExpire(client *c, redisDb *db, robj *key, long long when) {
+void setExpire(client *c, serverDb *db, robj *key, long long when) {
     dictEntry *kde, *de, *existing;
 
     /* Reuse the sds from the main dict in the expire dict */
@@ -1720,7 +1720,7 @@ void setExpire(client *c, redisDb *db, robj *key, long long when) {
 
 /* Return the expire time of the specified key, or -1 if no expire
  * is associated with this key (i.e. the key is non volatile) */
-long long getExpire(redisDb *db, robj *key) {
+long long getExpire(serverDb *db, robj *key) {
     dictEntry *de;
 
     if ((de = dbFindExpires(db, key->ptr)) == NULL)
@@ -1730,7 +1730,7 @@ long long getExpire(redisDb *db, robj *key) {
 }
 
 /* Delete the specified expired key and propagate expire. */
-void deleteExpiredKeyAndPropagate(redisDb *db, robj *keyobj) {
+void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj) {
     mstime_t expire_latency;
     latencyStartMonitor(expire_latency);
     dbGenericDelete(db,keyobj,server.lazyfree_lazy_expire,DB_FLAG_KEY_EXPIRED);
@@ -1761,7 +1761,7 @@ void deleteExpiredKeyAndPropagate(redisDb *db, robj *keyobj) {
  *    postExecutionUnitOperations, preferably just after a
  *    single deletion batch, so that DEL/UNLINK will NOT be wrapped
  *    in MULTI/EXEC */
-void propagateDeletion(redisDb *db, robj *key, int lazy) {
+void propagateDeletion(serverDb *db, robj *key, int lazy) {
     robj *argv[2];
 
     argv[0] = lazy ? shared.unlink : shared.del;
@@ -1781,7 +1781,7 @@ void propagateDeletion(redisDb *db, robj *key, int lazy) {
 }
 
 /* Check if the key is expired. */
-int keyIsExpired(redisDb *db, robj *key) {
+int keyIsExpired(serverDb *db, robj *key) {
     /* Don't expire anything while loading. It will be done later. */
     if (server.loading) return 0;
 
@@ -1827,7 +1827,7 @@ int keyIsExpired(redisDb *db, robj *key) {
  * The return value of the function is KEY_VALID if the key is still valid.
  * The function returns KEY_EXPIRED if the key is expired BUT not deleted, 
  * or returns KEY_DELETED if the key is expired and deleted. */
-keyStatus expireIfNeeded(redisDb *db, robj *key, int flags) {
+keyStatus expireIfNeeded(serverDb *db, robj *key, int flags) {
     if (server.lazy_expire_disabled) return KEY_VALID;
     if (!keyIsExpired(db,key)) return KEY_VALID;
 
@@ -1905,11 +1905,11 @@ static int dbExpandGeneric(kvstore *kvs, uint64_t db_size, int try_expand) {
     return ret? C_OK : C_ERR;
 }
 
-int dbExpand(redisDb *db, uint64_t db_size, int try_expand) {
+int dbExpand(serverDb *db, uint64_t db_size, int try_expand) {
     return dbExpandGeneric(db->keys, db_size, try_expand);
 }
 
-int dbExpandExpires(redisDb *db, uint64_t db_size, int try_expand) {
+int dbExpandExpires(serverDb *db, uint64_t db_size, int try_expand) {
     return dbExpandGeneric(db->expires, db_size, try_expand);
 }
 
@@ -1917,19 +1917,19 @@ static dictEntry *dbFindGeneric(kvstore *kvs, void *key) {
     return kvstoreDictFind(kvs, getKeySlot(key), key);
 }
 
-dictEntry *dbFind(redisDb *db, void *key) {
+dictEntry *dbFind(serverDb *db, void *key) {
     return dbFindGeneric(db->keys, key);
 }
 
-dictEntry *dbFindExpires(redisDb *db, void *key) {
+dictEntry *dbFindExpires(serverDb *db, void *key) {
     return dbFindGeneric(db->expires, key);
 }
 
-unsigned long long dbSize(redisDb *db) {
+unsigned long long dbSize(serverDb *db) {
     return kvstoreSize(db->keys);
 }
 
-unsigned long long dbScan(redisDb *db, unsigned long long cursor, dictScanFunction *scan_cb, void *privdata) {
+unsigned long long dbScan(serverDb *db, unsigned long long cursor, dictScanFunction *scan_cb, void *privdata) {
     return kvstoreScan(db->keys, cursor, -1, scan_cb, NULL, privdata);
 }
 

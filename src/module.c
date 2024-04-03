@@ -189,7 +189,7 @@ typedef struct RedisModuleCtx RedisModuleCtx;
 /* This represents a Redis key opened with RM_OpenKey(). */
 struct RedisModuleKey {
     RedisModuleCtx *ctx;
-    redisDb *db;
+    serverDb *db;
     robj *key;      /* Key name object. */
     robj *value;    /* Value object, or NULL if the key was not found. */
     void *iter;     /* Iterator. */

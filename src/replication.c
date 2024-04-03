@@ -1840,13 +1840,13 @@ static int useDisklessLoad(void) {
 /* Helper function for readSyncBulkPayload() to initialize tempDb
  * before socket-loading the new db from master. The tempDb may be populated
  * by swapMainDbWithTempDb or freed by disklessLoadDiscardTempDb later. */
-redisDb *disklessLoadInitTempDb(void) {
+serverDb *disklessLoadInitTempDb(void) {
     return initTempDb();
 }
 
 /* Helper function for readSyncBulkPayload() to discard our tempDb
  * when the loading succeeded or failed. */
-void disklessLoadDiscardTempDb(redisDb *tempDb) {
+void disklessLoadDiscardTempDb(serverDb *tempDb) {
     discardTempDb(tempDb, replicationEmptyDbCallback);
 }
 
@@ -1870,7 +1870,7 @@ void readSyncBulkPayload(connection *conn) {
     char buf[PROTO_IOBUF_LEN];
     ssize_t nread, readlen, nwritten;
     int use_diskless_load = useDisklessLoad();
-    redisDb *diskless_load_tempDb = NULL;
+    serverDb *diskless_load_tempDb = NULL;
     functionsLibCtx* temp_functions_lib_ctx = NULL;
     int empty_db_flags = server.repl_slave_lazy_flush ? EMPTYDB_ASYNC :
                                                         EMPTYDB_NO_FLAGS;
@@ -2088,7 +2088,7 @@ void readSyncBulkPayload(connection *conn) {
     rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
     if (use_diskless_load) {
         rio rdb;
-        redisDb *dbarray;
+        serverDb *dbarray;
         functionsLibCtx* functions_lib_ctx;
         int asyncLoading = 0;
 

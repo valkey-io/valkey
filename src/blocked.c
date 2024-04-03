@@ -453,7 +453,7 @@ static blocking_type getBlockedTypeByType(int type) {
  * made by a script or in the context of MULTI/EXEC.
  *
  * The list will be finally processed by handleClientsBlockedOnKeys() */
-static void signalKeyAsReadyLogic(redisDb *db, robj *key, int type, int deleted) {
+static void signalKeyAsReadyLogic(serverDb *db, robj *key, int type, int deleted) {
     readyList *rl;
 
     /* Quick returns. */
@@ -548,11 +548,11 @@ static void releaseBlockedEntry(client *c, dictEntry *de, int remove_key) {
         dictDelete(c->bstate.keys, key);
 }
 
-void signalKeyAsReady(redisDb *db, robj *key, int type) {
+void signalKeyAsReady(serverDb *db, robj *key, int type) {
     signalKeyAsReadyLogic(db, key, type, 0);
 }
 
-void signalDeletedKeyAsReady(redisDb *db, robj *key, int type) {
+void signalDeletedKeyAsReady(serverDb *db, robj *key, int type) {
     signalKeyAsReadyLogic(db, key, type, 1);
 }
 

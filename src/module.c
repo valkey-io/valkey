@@ -430,7 +430,7 @@ typedef struct RedisModuleUser {
 
 /* This is a structure used to export some meta-information such as dbid to the module. */
 typedef struct RedisModuleKeyOptCtx {
-    struct redisObject *from_key, *to_key; /* Optional name of key processed, NULL when unknown. 
+    struct serverObject *from_key, *to_key; /* Optional name of key processed, NULL when unknown. 
                                               In most cases, only 'from_key' is valid, but in callbacks 
                                               such as `copy2`, both 'from_key' and 'to_key' are valid. */
     int from_dbid, to_dbid;                /* The dbid of the key being processed, -1 when unknown.
@@ -13430,7 +13430,7 @@ const char *RM_GetCurrentCommandName(RedisModuleCtx *ctx) {
 struct RedisModuleDefragCtx {
     long long int endtime;
     unsigned long *cursor;
-    struct redisObject *key; /* Optional name of key processed, NULL when unknown. */
+    struct serverObject *key; /* Optional name of key processed, NULL when unknown. */
     int dbid;                /* The dbid of the key being processed, -1 when unknown. */
 };
 

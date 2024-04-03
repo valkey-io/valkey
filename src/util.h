@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __REDIS_UTIL_H
-#define __REDIS_UTIL_H
+#ifndef VALKEY_UTIL_H
+#define VALKEY_UTIL_H
 
 #include <stdint.h>
 #include "sds.h"

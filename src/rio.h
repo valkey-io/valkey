@@ -29,8 +29,8 @@
  */
 
 
-#ifndef __REDIS_RIO_H
-#define __REDIS_RIO_H
+#ifndef VALKEY_RIO_H
+#define VALKEY_RIO_H
 
 #include <stdio.h>
 #include <stdint.h>

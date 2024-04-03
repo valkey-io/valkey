@@ -1,5 +1,5 @@
-#ifndef REDISMODULE_H
-#define REDISMODULE_H
+#ifndef VALKEYMODULE_H
+#define VALKEYMODULE_H
 
 #include <sys/types.h>
 #include <stdint.h>
@@ -1692,4 +1692,4 @@ static int RedisModule_Init(RedisModuleCtx *ctx, const char *name, int ver, int 
 #define RMAPI_FUNC_SUPPORTED(func) (func != NULL)
 
 #endif /* REDISMODULE_CORE */
-#endif /* REDISMODULE_H */
+#endif /* VALKEYMODULE_H */

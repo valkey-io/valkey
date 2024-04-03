@@ -35,8 +35,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __REDIS_ASSERT_H__
-#define __REDIS_ASSERT_H__
+#ifndef VALKEY_ASSERT_H
+#define VALKEY_ASSERT_H
 
 #include "config.h"
 

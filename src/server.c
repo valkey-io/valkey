@@ -3117,7 +3117,7 @@ void resetErrorTableStats(void) {
 
 /* ========================== Redis OP Array API ============================ */
 
-int redisOpArrayAppend(redisOpArray *oa, int dbid, robj **argv, int argc, int target) {
+int redisOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int target) {
     redisOp *op;
     int prev_capacity = oa->capacity;
 
@@ -3138,7 +3138,7 @@ int redisOpArrayAppend(redisOpArray *oa, int dbid, robj **argv, int argc, int ta
     return oa->numops;
 }
 
-void redisOpArrayFree(redisOpArray *oa) {
+void redisOpArrayFree(serverOpArray *oa) {
     while(oa->numops) {
         int j;
         redisOp *op;

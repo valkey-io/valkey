@@ -390,7 +390,7 @@ void touchWatchedKey(serverDb *db, robj *key) {
     /* Check if we are already watching for this key */
     listRewind(clients,&li);
     while((ln = listNext(&li))) {
-        watchedKey *wk = redis_member2struct(watchedKey, node, ln);
+        watchedKey *wk = server_member2struct(watchedKey, node, ln);
         client *c = wk->client;
 
         if (wk->expired) {
@@ -443,7 +443,7 @@ void touchAllWatchedKeysInDb(serverDb *emptied, serverDb *replaced_with) {
             if (!clients) continue;
             listRewind(clients,&li);
             while((ln = listNext(&li))) {
-                watchedKey *wk = redis_member2struct(watchedKey, node, ln);
+                watchedKey *wk = server_member2struct(watchedKey, node, ln);
                 if (wk->expired) {
                     if (!replaced_with || !dbFind(replaced_with, key->ptr)) {
                         /* Expired key now deleted. No logical change. Clear the

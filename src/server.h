@@ -103,7 +103,7 @@ struct hdr_histogram;
 #define max(a, b) ((a) > (b) ? (a) : (b))
 
 /* Get the pointer of the outer struct from a member address */
-#define redis_member2struct(struct_name, member_name, member_addr) \
+#define server_member2struct(struct_name, member_name, member_addr) \
             ((struct_name *)((char*)member_addr - offsetof(struct_name, member_name)))
 
 /* Error codes */

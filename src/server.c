@@ -7155,8 +7155,7 @@ int main(int argc, char **argv) {
     if (background) daemonize();
 
     serverLog(LL_NOTICE, "oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo");
-    serverLog(LL_NOTICE,
-        "Redis version=%s, bits=%d, commit=%s, modified=%d, pid=%d, just started",
+    serverLog(LL_NOTICE, SERVER_NAME " version=%s, bits=%d, commit=%s, modified=%d, pid=%d, just started",
             SERVER_VERSION,
             (sizeof(long) == 8) ? 64 : 32,
             redisGitSHA1(),

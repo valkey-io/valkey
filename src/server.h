@@ -1396,7 +1396,7 @@ typedef struct redisOpArray {
 
 /* This structure is returned by the getMemoryOverheadData() function in
  * order to return memory overhead information. */
-struct redisMemOverhead {
+struct serverMemOverhead {
     size_t peak_allocated;
     size_t total_allocated;
     size_t startup_allocated;
@@ -3104,8 +3104,8 @@ void activeDefragCycle(void);
 unsigned int getLRUClock(void);
 unsigned int LRU_CLOCK(void);
 const char *evictPolicyToString(void);
-struct redisMemOverhead *getMemoryOverheadData(void);
-void freeMemoryOverheadData(struct redisMemOverhead *mh);
+struct serverMemOverhead *getMemoryOverheadData(void);
+void freeMemoryOverheadData(struct serverMemOverhead *mh);
 void checkChildrenDone(void);
 int setOOMScoreAdj(int process_class);
 void rejectCommandFormat(client *c, const char *fmt, ...);

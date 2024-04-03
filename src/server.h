@@ -3470,11 +3470,11 @@ void dictListDestructor(dict *d, void *val);
 void *dictSdsDup(dict *d, const void *key);
 
 /* Git SHA1 */
-char *redisGitSHA1(void);
-char *redisGitDirty(void);
-uint64_t redisBuildId(void);
-const char *redisBuildIdRaw(void);
-char *redisBuildIdString(void);
+char *serverGitSHA1(void);
+char *serverGitDirty(void);
+uint64_t serverBuildId(void);
+const char *serverBuildIdRaw(void);
+char *serverBuildIdString(void);
 
 /* Commands prototypes */
 void authCommand(client *c);

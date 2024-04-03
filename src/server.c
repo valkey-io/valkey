@@ -5585,9 +5585,9 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
 
         info = sdscatfmt(info, "# Server\r\n" FMTARGS(
             "redis_version:%s\r\n", REDIS_VERSION,
-            "redis_git_sha1:%s\r\n", redisGitSHA1(),
-            "redis_git_dirty:%i\r\n", strtol(redisGitDirty(),NULL,10) > 0,
-            "redis_build_id:%s\r\n", redisBuildIdString(),
+            "redis_git_sha1:%s\r\n", serverGitSHA1(),
+            "redis_git_dirty:%i\r\n", strtol(serverGitDirty(),NULL,10) > 0,
+            "redis_build_id:%s\r\n", serverBuildIdString(),
             "redis_mode:%s\r\n", mode,
             "os:%s", name.sysname,
             " %s", name.release,
@@ -6266,11 +6266,11 @@ sds getVersion(void) {
     sds version = sdscatprintf(sdsempty(),
         "v=%s sha=%s:%d malloc=%s bits=%d build=%llx",
         REDIS_VERSION,
-        redisGitSHA1(),
-        atoi(redisGitDirty()) > 0,
+        serverGitSHA1(),
+        atoi(serverGitDirty()) > 0,
         ZMALLOC_LIB,
         sizeof(long) == 4 ? 32 : 64,
-        (unsigned long long) redisBuildId());
+        (unsigned long long) serverBuildId());
     return version;
 }
 
@@ -6320,8 +6320,8 @@ void redisAsciiArt(void) {
     } else {
         snprintf(buf,1024*16,ascii_logo,
             REDIS_VERSION,
-            redisGitSHA1(),
-            strtol(redisGitDirty(),NULL,10) > 0,
+            serverGitSHA1(),
+            strtol(serverGitDirty(),NULL,10) > 0,
             (sizeof(long) == 8) ? "64" : "32",
             mode, server.port ? server.port : server.tls_port,
             (long) getpid()
@@ -7157,8 +7157,8 @@ int main(int argc, char **argv) {
         "Redis version=%s, bits=%d, commit=%s, modified=%d, pid=%d, just started",
             REDIS_VERSION,
             (sizeof(long) == 8) ? 64 : 32,
-            redisGitSHA1(),
-            strtol(redisGitDirty(),NULL,10) > 0,
+            serverGitSHA1(),
+            strtol(serverGitDirty(),NULL,10) > 0,
             (int)getpid());
 
     if (argc == 1) {

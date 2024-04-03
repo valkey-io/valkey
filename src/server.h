@@ -2551,11 +2551,11 @@ void getRandomHexChars(char *p, size_t len);
 void getRandomBytes(unsigned char *p, size_t len);
 uint64_t crc64(uint64_t crc, const unsigned char *s, uint64_t l);
 void exitFromChild(int retcode);
-long long redisPopcount(void *s, long count);
-int redisSetProcTitle(char *title);
+long long serverPopcount(void *s, long count);
+int serverSetProcTitle(char *title);
 int validateProcTitleTemplate(const char *template);
-int redisCommunicateSystemd(const char *sd_notify_msg);
-void redisSetCpuAffinity(const char *cpulist);
+int serverCommunicateSystemd(const char *sd_notify_msg);
+void serverSetCpuAffinity(const char *cpulist);
 
 /* afterErrorReply flags */
 #define ERR_REPLY_FLAG_NO_STATS_UPDATE (1ULL<<0) /* Indicating that we should not update
@@ -2906,7 +2906,7 @@ void sendChildInfo(childInfoType info_type, size_t keys, char *pname);
 void receiveChildInfo(void);
 
 /* Fork helpers */
-int redisFork(int purpose);
+int serverFork(int purpose);
 int hasActiveChildProcess(void);
 void resetChildState(void);
 int isMutuallyExclusiveChildType(int type);

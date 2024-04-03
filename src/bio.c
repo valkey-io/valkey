@@ -212,7 +212,7 @@ void *bioProcessBackgroundJobs(void *arg) {
 
     redis_set_thread_title(bio_worker_title[worker]);
 
-    redisSetCpuAffinity(server.bio_cpulist);
+    serverSetCpuAffinity(server.bio_cpulist);
 
     makeThreadKillable();
 

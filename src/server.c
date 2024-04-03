@@ -6269,7 +6269,7 @@ sds getVersion(void) {
         "v=%s sha=%s:%d malloc=%s bits=%d build=%llx",
         SERVER_VERSION,
         serverGitSHA1(),
-        atoi(redisGitDirty()) > 0,
+        atoi(serverGitDirty()) > 0,
         ZMALLOC_LIB,
         sizeof(long) == 4 ? 32 : 64,
         (unsigned long long) serverBuildId());
@@ -6323,7 +6323,7 @@ void redisAsciiArt(void) {
         snprintf(buf,1024*16,ascii_logo,
             SERVER_VERSION,
             serverGitSHA1(),
-            strtol(redisGitDirty(),NULL,10) > 0,
+            strtol(serverGitDirty(),NULL,10) > 0,
             (sizeof(long) == 8) ? "64" : "32",
             mode, server.port ? server.port : server.tls_port,
             (long) getpid()

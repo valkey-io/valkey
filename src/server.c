@@ -5588,7 +5588,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "server_name:%s\r\n", SERVER_NAME,
             "server_version:%s\r\n", SERVER_VERSION,
             "redis_git_sha1:%s\r\n", serverGitSHA1(),
-            "redis_git_dirty:%i\r\n", strtol(redisGitDirty(),NULL,10) > 0,
+            "redis_git_dirty:%i\r\n", strtol(serverGitDirty(),NULL,10) > 0,
             "redis_build_id:%s\r\n", serverBuildIdString(),
             "redis_mode:%s\r\n", mode,
             "os:%s", name.sysname,

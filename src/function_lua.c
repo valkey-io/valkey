@@ -354,7 +354,6 @@ error:
 static int luaRegisterFunctionReadPositionalArgs(lua_State *lua, registerFunctionArgs *register_f_args) {
     char *err = NULL;
     sds name = NULL;
-    sds desc = NULL;
     luaFunctionCtx *lua_f_ctx = NULL;
     if (!(name = luaGetStringSds(lua, 1))) {
         err = "first argument to redis.register_function must be a string";
@@ -377,7 +376,6 @@ static int luaRegisterFunctionReadPositionalArgs(lua_State *lua, registerFunctio
 
 error:
     if (name) sdsfree(name);
-    if (desc) sdsfree(desc);
     luaPushError(lua, err);
     return C_ERR;
 }

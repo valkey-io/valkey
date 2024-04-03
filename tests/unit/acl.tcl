@@ -612,7 +612,7 @@ start_server {tags {"acl external:skip"}} {
         r ACL SETUSER adv-test -@all +select|0 +select|0 +debug|segfault +debug
         assert_equal "-@all +select|0 +debug" [dict get [r ACL getuser adv-test] commands]
 
-        # Unnecessary categories are retained for potentional future compatibility
+        # Unnecessary categories are retained for potential future compatibility
         r ACL SETUSER adv-test -@all -@dangerous
         assert_equal "-@all -@dangerous" [dict get [r ACL getuser adv-test] commands]
 

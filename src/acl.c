@@ -649,7 +649,7 @@ void ACLUpdateCommandRules(aclSelector *selector, const char *rule, int allow) {
 
 /* This function is used to allow/block a specific command.
  * Allowing/blocking a container command also applies for its subcommands */
-void ACLChangeSelectorPerm(aclSelector *selector, struct redisCommand *cmd, int allow) {
+void ACLChangeSelectorPerm(aclSelector *selector, struct serverCommand *cmd, int allow) {
     unsigned long id = cmd->id;
     ACLSetSelectorCommandBit(selector,id,allow);
     ACLResetFirstArgsForCommand(selector,id);
@@ -657,7 +657,7 @@ void ACLChangeSelectorPerm(aclSelector *selector, struct redisCommand *cmd, int 
         dictEntry *de;
         dictIterator *di = dictGetSafeIterator(cmd->subcommands_dict);
         while((de = dictNext(di)) != NULL) {
-            struct redisCommand *sub = (struct redisCommand *)dictGetVal(de);
+            struct serverCommand *sub = (struct serverCommand *)dictGetVal(de);
             ACLSetSelectorCommandBit(selector,sub->id,allow);
         }
         dictReleaseIterator(di);
@@ -674,7 +674,7 @@ void ACLSetSelectorCommandBitsForCategory(dict *commands, aclSelector *selector,
     dictIterator *di = dictGetIterator(commands);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
-        struct redisCommand *cmd = dictGetVal(de);
+        struct serverCommand *cmd = dictGetVal(de);
         if (cmd->acl_categories & cflag) {
             ACLChangeSelectorPerm(selector,cmd,value);
         }
@@ -738,7 +738,7 @@ void ACLCountCategoryBitsForCommands(dict *commands, aclSelector *selector, unsi
     dictIterator *di = dictGetIterator(commands);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
-        struct redisCommand *cmd = dictGetVal(de);
+        struct serverCommand *cmd = dictGetVal(de);
         if (cmd->acl_categories & cflag) {
             if (ACLGetSelectorCommandBit(selector,cmd->id))
                 (*on)++;
@@ -922,8 +922,8 @@ robj *ACLDescribeUser(user *u) {
 /* Get a command from the original command table, that is not affected
  * by the command renaming operations: we base all the ACL work from that
  * table, so that ACLs are valid regardless of command renaming. */
-struct redisCommand *ACLLookupCommand(const char *name) {
-    struct redisCommand *cmd;
+struct serverCommand *ACLLookupCommand(const char *name) {
+    struct serverCommand *cmd;
     sds sdsname = sdsnew(name);
     cmd = lookupCommandBySdsLogic(server.orig_commands,sdsname);
     sdsfree(sdsname);
@@ -1140,7 +1140,7 @@ int ACLSetSelector(aclSelector *selector, const char* op, size_t oplen) {
         selector->flags &= ~SELECTOR_FLAG_ALLCHANNELS;
     } else if (op[0] == '+' && op[1] != '@') {
         if (strrchr(op,'|') == NULL) {
-            struct redisCommand *cmd = ACLLookupCommand(op+1);
+            struct serverCommand *cmd = ACLLookupCommand(op+1);
             if (cmd == NULL) {
                 errno = ENOENT;
                 return C_ERR;
@@ -1154,7 +1154,7 @@ int ACLSetSelector(aclSelector *selector, const char* op, size_t oplen) {
             sub[0] = '\0';
             sub++;
 
-            struct redisCommand *cmd = ACLLookupCommand(copy);
+            struct serverCommand *cmd = ACLLookupCommand(copy);
 
             /* Check if the command exists. We can't check the
              * first-arg to see if it is valid. */
@@ -1203,7 +1203,7 @@ int ACLSetSelector(aclSelector *selector, const char* op, size_t oplen) {
             zfree(copy);
         }
     } else if (op[0] == '-' && op[1] != '@') {
-        struct redisCommand *cmd = ACLLookupCommand(op+1);
+        struct serverCommand *cmd = ACLLookupCommand(op+1);
         if (cmd == NULL) {
             errno = ENOENT;
             return C_ERR;
@@ -1699,7 +1699,7 @@ void cleanupACLKeyResultCache(aclKeyResultCache *cache) {
  * command cannot be executed because the selector is not allowed to run such
  * command, the second and third if the command is denied because the selector is trying
  * to access a key or channel that are not among the specified patterns. */
-static int ACLSelectorCheckCmd(aclSelector *selector, struct redisCommand *cmd, robj **argv, int argc, int *keyidxptr, aclKeyResultCache *cache) {
+static int ACLSelectorCheckCmd(aclSelector *selector, struct serverCommand *cmd, robj **argv, int argc, int *keyidxptr, aclKeyResultCache *cache) {
     uint64_t id = cmd->id;
     int ret;
     if (!(selector->flags & SELECTOR_FLAG_ALLCOMMANDS) && !(cmd->flags & CMD_NO_AUTH)) {
@@ -1799,7 +1799,7 @@ int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags) {
  * granted in addition to the access required by the command. Returns 1 
  * if the user has access or 0 otherwise.
  */
-int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct redisCommand *cmd, robj **argv, int argc, int flags) {
+int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd, robj **argv, int argc, int flags) {
     listIter li;
     listNode *ln;
     int local_idxptr;
@@ -1858,7 +1858,7 @@ int ACLUserCheckChannelPerm(user *u, sds channel, int is_pattern) {
  * If the command fails an ACL check, idxptr will be to set to the first argv entry that
  * causes the failure, either 0 if the command itself fails or the idx of the key/channel
  * that causes the failure */
-int ACLCheckAllUserCommandPerm(user *u, struct redisCommand *cmd, robj **argv, int argc, int *idxptr) {
+int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int *idxptr) {
     listIter li;
     listNode *ln;
 
@@ -2754,7 +2754,7 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
     }
 }
 
-sds getAclErrorMessage(int acl_res, user *user, struct redisCommand *cmd, sds errored_val, int verbose) {
+sds getAclErrorMessage(int acl_res, user *user, struct serverCommand *cmd, sds errored_val, int verbose) {
     switch (acl_res) {
     case ACL_DENIED_CMD:
         return sdscatfmt(sdsempty(), "User %S has no permissions to run "
@@ -2787,7 +2787,7 @@ void aclCatWithFlags(client *c, dict *commands, uint64_t cflag, int *arraylen) {
     dictIterator *di = dictGetIterator(commands);
 
     while ((de = dictNext(di)) != NULL) {
-        struct redisCommand *cmd = dictGetVal(de);
+        struct serverCommand *cmd = dictGetVal(de);
         if (cmd->flags & CMD_MODULE) continue;
         if (cmd->acl_categories & cflag) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
@@ -3127,7 +3127,7 @@ void aclCommand(client *c) {
             addReplyLongLong(c, le->ctime);
         }
     } else if (!strcasecmp(sub,"dryrun") && c->argc >= 4) {
-        struct redisCommand *cmd;
+        struct serverCommand *cmd;
         user *u = ACLGetUserByName(c->argv[2]->ptr,sdslen(c->argv[2]->ptr));
         if (u == NULL) {
             addReplyErrorFormat(c, "User '%s' not found", (char *)c->argv[2]->ptr);
@@ -3191,7 +3191,7 @@ NULL
     }
 }
 
-void addReplyCommandCategories(client *c, struct redisCommand *cmd) {
+void addReplyCommandCategories(client *c, struct serverCommand *cmd) {
     int flagcount = 0;
     void *flaglen = addReplyDeferredLen(c);
     for (int j = 0; ACLCommandCategories[j].flag != 0; j++) {

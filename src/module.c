@@ -189,7 +189,7 @@ typedef struct RedisModuleCtx RedisModuleCtx;
 /* This represents a Redis key opened with RM_OpenKey(). */
 struct RedisModuleKey {
     RedisModuleCtx *ctx;
-    redisDb *db;
+    serverDb *db;
     robj *key;      /* Key name object. */
     robj *value;    /* Value object, or NULL if the key was not found. */
     void *iter;     /* Iterator. */
@@ -238,7 +238,7 @@ typedef void (*RedisModuleDisconnectFunc) (RedisModuleCtx *ctx, struct RedisModu
 struct RedisModuleCommand {
     struct RedisModule *module;
     RedisModuleCmdFunc func;
-    struct redisCommand *rediscmd;
+    struct serverCommand *rediscmd;
 };
 typedef struct RedisModuleCommand RedisModuleCommand;
 
@@ -430,7 +430,7 @@ typedef struct RedisModuleUser {
 
 /* This is a structure used to export some meta-information such as dbid to the module. */
 typedef struct RedisModuleKeyOptCtx {
-    struct redisObject *from_key, *to_key; /* Optional name of key processed, NULL when unknown. 
+    struct serverObject *from_key, *to_key; /* Optional name of key processed, NULL when unknown. 
                                               In most cases, only 'from_key' is valid, but in callbacks 
                                               such as `copy2`, both 'from_key' and 'to_key' are valid. */
     int from_dbid, to_dbid;                /* The dbid of the key being processed, -1 when unknown.
@@ -959,7 +959,7 @@ void RedisModuleCommandDispatcher(client *c) {
  * In order to accomplish its work, the module command is called, flagging
  * the context in a way that the command can recognize this is a special
  * "get keys" call by calling RedisModule_IsKeysPositionRequest(ctx). */
-int moduleGetCommandKeysViaAPI(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int moduleGetCommandKeysViaAPI(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     RedisModuleCommand *cp = cmd->module_cmd;
     RedisModuleCtx ctx;
     moduleCreateContext(&ctx, cp->module, REDISMODULE_CTX_KEYS_POS_REQUEST);
@@ -979,7 +979,7 @@ int moduleGetCommandKeysViaAPI(struct redisCommand *cmd, robj **argv, int argc, 
 /* This function returns the list of channels, with the same interface as
  * moduleGetCommandKeysViaAPI, for modules that declare "getchannels-api"
  * during registration. Unlike keys, this is the only way to declare channels. */
-int moduleGetCommandChannelsViaAPI(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+int moduleGetCommandChannelsViaAPI(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
     RedisModuleCommand *cp = cmd->module_cmd;
     RedisModuleCtx ctx;
     moduleCreateContext(&ctx, cp->module, REDISMODULE_CTX_CHANNELS_POS_REQUEST);
@@ -1301,7 +1301,7 @@ int RM_CreateCommand(RedisModuleCtx *ctx, const char *name, RedisModuleCmdFunc c
  * Function will take the ownership of both 'declared_name' and 'fullname' SDS.
  */
 RedisModuleCommand *moduleCreateCommandProxy(struct RedisModule *module, sds declared_name, sds fullname, RedisModuleCmdFunc cmdfunc, int64_t flags, int firstkey, int lastkey, int keystep) {
-    struct redisCommand *rediscmd;
+    struct serverCommand *rediscmd;
     RedisModuleCommand *cp;
 
     /* Create a command "proxy", which is a structure that is referenced
@@ -1352,7 +1352,7 @@ RedisModuleCommand *moduleCreateCommandProxy(struct RedisModule *module, sds dec
  * * The command doesn't belong to the calling module
  */
 RedisModuleCommand *RM_GetCommand(RedisModuleCtx *ctx, const char *name) {
-    struct redisCommand *cmd = lookupCommandByCString(name);
+    struct serverCommand *cmd = lookupCommandByCString(name);
 
     if (!cmd || !(cmd->flags & CMD_MODULE))
         return NULL;
@@ -1399,7 +1399,7 @@ int RM_CreateSubcommand(RedisModuleCommand *parent, const char *name, RedisModul
     if ((flags & CMD_MODULE_NO_CLUSTER) && server.cluster_enabled)
         return REDISMODULE_ERR;
 
-    struct redisCommand *parent_cmd = parent->rediscmd;
+    struct serverCommand *parent_cmd = parent->rediscmd;
 
     if (parent_cmd->parent)
         return REDISMODULE_ERR; /* We don't allow more than one level of subcommands */
@@ -1553,7 +1553,7 @@ int RM_SetCommandACLCategories(RedisModuleCommand *command, const char *aclflags
     if (!command || !command->module || !command->module->onload) return REDISMODULE_ERR;
     int64_t categories_flags = aclflags ? categoryFlagsFromString((char*)aclflags) : 0;
     if (categories_flags == -1) return REDISMODULE_ERR;
-    struct redisCommand *rcmd = command->rediscmd;
+    struct serverCommand *rcmd = command->rediscmd;
     rcmd->acl_categories = categories_flags; /* ACL categories flags for module command */
     command->module->num_commands_with_acl_categories++;
     return REDISMODULE_OK;
@@ -1866,7 +1866,7 @@ int RM_SetCommandInfo(RedisModuleCommand *command, const RedisModuleCommandInfo 
         return REDISMODULE_ERR;
     }
 
-    struct redisCommand *cmd = command->rediscmd;
+    struct serverCommand *cmd = command->rediscmd;
 
     /* Check if any info has already been set. Overwriting info involves freeing
      * the old info, which is not implemented. */
@@ -2038,7 +2038,7 @@ static int moduleValidateCommandInfo(const RedisModuleCommandInfo *info) {
                 moduleCmdKeySpecAt(version, info->key_specs, j);
             if (j >= INT_MAX) {
                 serverLog(LL_WARNING, "Invalid command info: Too many key specs");
-                return 0; /* redisCommand.key_specs_num is an int. */
+                return 0; /* serverCommand.key_specs_num is an int. */
             }
 
             /* Flags. Exactly one flag in a group is set if and only if the
@@ -2256,7 +2256,7 @@ void *moduleGetHandleByName(char *modulename) {
 }
 
 /* Returns 1 if `cmd` is a command of the module `modulename`. 0 otherwise. */
-int moduleIsModuleCommand(void *module_handle, struct redisCommand *cmd) {
+int moduleIsModuleCommand(void *module_handle, struct serverCommand *cmd) {
     if (cmd->proc != RedisModuleCommandDispatcher)
         return 0;
     if (module_handle == NULL)
@@ -3578,7 +3578,7 @@ int RM_ReplyWithLongDouble(RedisModuleCtx *ctx, long double ld) {
  * The command returns REDISMODULE_ERR if the format specifiers are invalid
  * or the command name does not belong to a known command. */
 int RM_Replicate(RedisModuleCtx *ctx, const char *cmdname, const char *fmt, ...) {
-    struct redisCommand *cmd;
+    struct serverCommand *cmd;
     robj **argv = NULL;
     int argc = 0, flags = 0, j;
     va_list ap;
@@ -6773,7 +6773,7 @@ const char *moduleTypeModuleName(moduleType *mt) {
 }
 
 /* Return the module name from a module command */
-const char *moduleNameFromCommand(struct redisCommand *cmd) {
+const char *moduleNameFromCommand(struct serverCommand *cmd) {
     serverAssert(cmd->proc == RedisModuleCommandDispatcher);
 
     RedisModuleCommand *cp = cmd->module_cmd;
@@ -7528,7 +7528,7 @@ int RM_GetDbIdFromDigest(RedisModuleDigest *dig) {
  * handling is performed by Redis itself. */
 void RM_EmitAOF(RedisModuleIO *io, const char *cmdname, const char *fmt, ...) {
     if (io->error) return;
-    struct redisCommand *cmd;
+    struct serverCommand *cmd;
     robj **argv = NULL;
     int argc = 0, flags = 0, j;
     va_list ap;
@@ -9722,7 +9722,7 @@ RedisModuleUser *RM_GetModuleUserFromUserName(RedisModuleString *name) {
  */
 int RM_ACLCheckCommandPermissions(RedisModuleUser *user, RedisModuleString **argv, int argc) {
     int keyidxptr;
-    struct redisCommand *cmd;
+    struct serverCommand *cmd;
 
     /* Find command */
     if ((cmd = lookupCommand(argv, argc)) == NULL) {
@@ -12109,6 +12109,13 @@ void moduleLoadFromQueue(void) {
         listDelNode(server.loadmodule_queue, ln);
     }
     if (dictSize(server.module_configs_queue)) {
+        dictIterator *di = dictGetSafeIterator(server.module_configs_queue);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            const char *moduleConfigName = dictGetKey(de);
+            serverLog(LL_WARNING, "Unused Module Configuration: %s", moduleConfigName);
+        }
+        dictReleaseIterator(di);
         serverLog(LL_WARNING, "Module Configuration detected without loadmodule directive or no ApplyConfig call: aborting");
         exit(1);
     }
@@ -12147,7 +12154,7 @@ void moduleFreeArgs(struct redisCommandArg *args, int num_args) {
  * Note that caller needs to handle the deletion of the command table dict,
  * and after that needs to free the command->fullname and the command itself.
  */
-int moduleFreeCommand(struct RedisModule *module, struct redisCommand *cmd) {
+int moduleFreeCommand(struct RedisModule *module, struct serverCommand *cmd) {
     if (cmd->proc != RedisModuleCommandDispatcher)
         return C_ERR;
 
@@ -12186,7 +12193,7 @@ int moduleFreeCommand(struct RedisModule *module, struct redisCommand *cmd) {
         dictEntry *de;
         dictIterator *di = dictGetSafeIterator(cmd->subcommands_dict);
         while ((de = dictNext(di)) != NULL) {
-            struct redisCommand *sub = dictGetVal(de);
+            struct serverCommand *sub = dictGetVal(de);
             if (moduleFreeCommand(module, sub) != C_OK) continue;
 
             serverAssert(dictDelete(cmd->subcommands_dict, sub->declared_name) == DICT_OK);
@@ -12206,7 +12213,7 @@ void moduleUnregisterCommands(struct RedisModule *module) {
     dictIterator *di = dictGetSafeIterator(server.commands);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
-        struct redisCommand *cmd = dictGetVal(de);
+        struct serverCommand *cmd = dictGetVal(de);
         if (moduleFreeCommand(module, cmd) != C_OK) continue;
 
         serverAssert(dictDelete(server.commands, cmd->fullname) == DICT_OK);
@@ -13356,7 +13363,7 @@ int RM_ModuleTypeReplaceValue(RedisModuleKey *key, moduleType *mt, void *new_val
  */
 int *RM_GetCommandKeysWithFlags(RedisModuleCtx *ctx, RedisModuleString **argv, int argc, int *num_keys, int **out_flags) {
     UNUSED(ctx);
-    struct redisCommand *cmd;
+    struct serverCommand *cmd;
     int *res = NULL;
 
     /* Find command */
@@ -13423,7 +13430,7 @@ const char *RM_GetCurrentCommandName(RedisModuleCtx *ctx) {
 struct RedisModuleDefragCtx {
     long long int endtime;
     unsigned long *cursor;
-    struct redisObject *key; /* Optional name of key processed, NULL when unknown. */
+    struct serverObject *key; /* Optional name of key processed, NULL when unknown. */
     int dbid;                /* The dbid of the key being processed, -1 when unknown. */
 };
 

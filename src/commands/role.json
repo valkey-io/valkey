@@ -28,11 +28,11 @@
                             "const": "master"
                         },
                         {
-                            "description": "current replication master offset",
+                            "description": "Current replication master offset.",
                             "type": "integer"
                         },
                         {
-                            "description": "connected replicas",
+                            "description": "Connected replicas.",
                             "type": "array",
                             "items": {
                                 "type": "array",
@@ -40,15 +40,15 @@
                                 "maxItems": 3,
                                 "items": [
                                     {
-                                        "description": "replica ip",
+                                        "description": "Replica IP.",
                                         "type": "string"
                                     },
                                     {
-                                        "description": "replica port",
+                                        "description": "Replica port.",
                                         "type": "string"
                                     },
                                     {
-                                        "description": "last acknowledged replication offset",
+                                        "description": "Last acknowledged replication offset.",
                                         "type": "string"
                                     }
                                 ]
@@ -65,48 +65,48 @@
                             "const": "slave"
                         },
                         {
-                            "description": "ip of master",
+                            "description": "IP of master.",
                             "type": "string"
                         },
                         {
-                            "description": "port number of master",
+                            "description": "Port number of master.",
                             "type": "integer"
                         },
                         {
-                            "description": "state of the replication from the point of view of the master",
+                            "description": "State of the replication from the point of view of the master.",
                             "oneOf": [
                                 {
-                                    "description": "the instance is in handshake with its master",
+                                    "description": "The instance is in handshake with its master.",
                                     "const": "handshake"
                                 },
                                 {
-                                    "description": "the instance in not active",
+                                    "description": "The instance in not active.",
                                     "const": "none"
                                 },
                                 {
-                                    "description": "the instance needs to connect to its master",
+                                    "description": "The instance needs to connect to its master.",
                                     "const": "connect"
                                 },
                                 {
-                                    "description": "the master-replica connection is in progress",
+                                    "description": "The master-replica connection is in progress.",
                                     "const": "connecting"
                                 },
                                 {
-                                    "description": "the master and replica are trying to perform the synchronization",
+                                    "description": "The master and replica are trying to perform the synchronization.",
                                     "const": "sync"
                                 },
                                 {
-                                    "description": "the replica is online",
+                                    "description": "The replica is online.",
                                     "const": "connected"
                                 },
                                 {
-                                    "description": "instance state is unknown",
+                                    "description": "Instance state is unknown.",
                                     "const": "unknown"
                                 }
                             ]
                         },
                         {
-                            "description": "the amount of data received from the replica so far in terms of master replication offset",
+                            "description": "The amount of data received from the replica so far in terms of master replication offset.",
                             "type": "integer"
                         }
                     ]
@@ -120,7 +120,7 @@
                             "const": "sentinel"
                         },
                         {
-                            "description": "list of master names monitored by this sentinel instance",
+                            "description": "List of master names monitored by this sentinel instance.",
                             "type": "array",
                             "items": {
                                 "type": "string"

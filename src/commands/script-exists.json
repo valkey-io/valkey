@@ -30,11 +30,11 @@
             "items": {
                 "oneOf": [
                     {
-                        "description": "sha1 hash exists in script cache",
+                        "description": "Sha1 hash exists in script cache.",
                         "const": 1
                     },
                     {
-                        "description": "sha1 hash does not exist in script cache",
+                        "description": "Sha1 hash does not exist in script cache.",
                         "const": 0
                     }
                 ]

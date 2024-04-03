@@ -36,7 +36,7 @@
 #include <errno.h>
 #include <math.h>
 #include "rax.h"
-#include "redisassert.h"
+#include "serverassert.h"
 
 #ifndef RAX_MALLOC_INCLUDE
 #define RAX_MALLOC_INCLUDE "rax_malloc.h"

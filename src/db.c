@@ -2149,7 +2149,7 @@ int doesCommandHaveKeys(struct redisCommand *cmd) {
 /* A simplified channel spec table that contains all of the redis commands
  * and which channels they have and how they are accessed. */
 typedef struct ChannelSpecs {
-    redisCommandProc *proc; /* Command procedure to match against */
+    serverCommandProc *proc; /* Command procedure to match against */
     uint64_t flags;         /* CMD_CHANNEL_* flags for this command */
     int start;              /* The initial position of the first channel */
     int count;              /* The number of channels, or -1 if all remaining

@@ -2237,8 +2237,8 @@ typedef enum {
     COMMAND_GROUP_MODULE,
 } redisCommandGroup;
 
-typedef void redisCommandProc(client *c);
-typedef int redisGetKeysProc(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
+typedef void serverCommandProc(client *c);
+typedef int serverGetKeysProc(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
 
 /* Redis command structure.
  *
@@ -2348,7 +2348,7 @@ struct redisCommand {
     int num_history;
     const char **tips; /* An array of strings that are meant to be tips for clients/proxies regarding this command */
     int num_tips;
-    redisCommandProc *proc; /* Command implementation */
+    serverCommandProc *proc; /* Command implementation */
     int arity; /* Number of arguments, it is possible to use -N to say >= N */
     uint64_t flags; /* Command flags, see CMD_*. */
     uint64_t acl_categories; /* ACl categories, see ACL_CATEGORY_*. */
@@ -2356,7 +2356,7 @@ struct redisCommand {
     int key_specs_num;
     /* Use a function to determine keys arguments in a command line.
      * Used for Redis Cluster redirect (may be NULL) */
-    redisGetKeysProc *getkeys_proc;
+    serverGetKeysProc *getkeys_proc;
     int num_args; /* Length of args array. */
     /* Array of subcommands (may be NULL) */
     struct redisCommand *subcommands;

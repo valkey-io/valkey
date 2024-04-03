@@ -1589,7 +1589,7 @@ void rewriteConfigLoadmoduleOption(struct rewriteConfigState *state) {
     dictIterator *di = dictGetIterator(modules);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
-        struct RedisModule *module = dictGetVal(de);
+        struct ServerModule *module = dictGetVal(de);
         line = sdsnew("loadmodule ");
         line = sdscatsds(line, module->loadmod->path);
         for (int i = 0; i < module->loadmod->argc; i++) {

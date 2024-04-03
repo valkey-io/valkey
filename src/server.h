@@ -733,7 +733,7 @@ typedef enum {
 #define REDISMODULE_AUX_BEFORE_RDB (1<<0)
 #define REDISMODULE_AUX_AFTER_RDB (1<<1)
 
-struct RedisModule;
+struct ServerModule;
 struct RedisModuleIO;
 struct RedisModuleDigest;
 struct RedisModuleCtx;
@@ -770,7 +770,7 @@ typedef int (*moduleTypeAuthCallback)(struct RedisModuleCtx *ctx, void *username
  * the methods and links to the module exporting the type. */
 typedef struct RedisModuleType {
     uint64_t id; /* Higher 54 bits of type ID + 10 lower bits of encoding ver. */
-    struct RedisModule *module;
+    struct ServerModule *module;
     moduleTypeLoadFunc rdb_load;
     moduleTypeSaveFunc rdb_save;
     moduleTypeRewriteFunc aof_rewrite;
@@ -813,7 +813,7 @@ typedef struct moduleValue {
 } moduleValue;
 
 /* This structure represents a module inside the system. */
-struct RedisModule {
+struct ServerModule {
     void *handle;   /* Module dlopen() handle. */
     char *name;     /* Module name. */
     int ver;        /* Module version. We use just progressive integers. */
@@ -835,7 +835,7 @@ struct RedisModule {
     int onload;     /* Flag to identify if the call is being made from Onload (0 or 1) */
     size_t num_acl_categories_added; /* Number of acl categories added by this module. */
 };
-typedef struct RedisModule RedisModule;
+typedef struct ServerModule ServerModule;
 
 /* This is a wrapper for the 'rio' streams used inside rdb.c in Redis, so that
  * the user does not have to take the total count of the written bytes nor

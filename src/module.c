@@ -13295,7 +13295,7 @@ int RM_GetKeyspaceNotificationFlagsAll(void) {
  * Example for 6.0.7 the return value will be 0x00060007.
  */
 int RM_GetServerVersion(void) {
-    return REDIS_VERSION_NUM;
+    return SERVER_VERSION_NUM;
 }
 
 /**

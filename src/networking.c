@@ -3650,7 +3650,7 @@ void helloCommand(client *c) {
     addReplyBulkCString(c,"redis");
 
     addReplyBulkCString(c,"version");
-    addReplyBulkCString(c,REDIS_VERSION);
+    addReplyBulkCString(c,SERVER_VERSION);
 
     addReplyBulkCString(c,"proto");
     addReplyLongLong(c,c->resp);

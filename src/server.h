@@ -1544,7 +1544,7 @@ typedef enum childInfoType {
     CHILD_INFO_TYPE_MODULE_COW_SIZE
 } childInfoType;
 
-struct redisServer {
+struct valkeyServer {
     /* General */
     pid_t pid;                  /* Main process pid. */
     pthread_t main_thread_id;         /* Main thread id */
@@ -2462,7 +2462,7 @@ extern int io_threads_op;
  * Extern declarations
  *----------------------------------------------------------------------------*/
 
-extern struct redisServer server;
+extern struct valkeyServer server;
 extern struct sharedObjectsStruct shared;
 extern dictType objectKeyPointerValueDictType;
 extern dictType objectKeyHeapPointerValueDictType;

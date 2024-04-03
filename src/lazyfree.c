@@ -4,8 +4,8 @@
 #include "functions.h"
 #include "cluster.h"
 
-static redisAtomic size_t lazyfree_objects = 0;
-static redisAtomic size_t lazyfreed_objects = 0;
+static serverAtomic size_t lazyfree_objects = 0;
+static serverAtomic size_t lazyfreed_objects = 0;
 
 /* Release objects from the lazyfree thread. It's just decrRefCount()
  * updating the count of objects to release. */

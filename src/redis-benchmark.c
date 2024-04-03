@@ -85,11 +85,11 @@ static struct config {
     int tls;
     struct cliSSLconfig sslconfig;
     int numclients;
-    redisAtomic int liveclients;
+    serverAtomic int liveclients;
     int requests;
-    redisAtomic int requests_issued;
-    redisAtomic int requests_finished;
-    redisAtomic int previous_requests_finished;
+    serverAtomic int requests_issued;
+    serverAtomic int requests_finished;
+    serverAtomic int previous_requests_finished;
     int last_printed_bytes;
     long long previous_tick;
     int keysize;
@@ -118,9 +118,9 @@ static struct config {
     struct redisConfig *redis_config;
     struct hdr_histogram* latency_histogram;
     struct hdr_histogram* current_sec_latency_histogram;
-    redisAtomic int is_fetching_slots;
-    redisAtomic int is_updating_slots;
-    redisAtomic int slots_last_update;
+    serverAtomic int is_fetching_slots;
+    serverAtomic int is_updating_slots;
+    serverAtomic int slots_last_update;
     int enable_tracking;
     pthread_mutex_t liveclients_mutex;
     pthread_mutex_t is_updating_slots_mutex;

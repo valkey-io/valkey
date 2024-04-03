@@ -1,5 +1,5 @@
-#ifndef __REDIS_COMMANDS_H
-#define __REDIS_COMMANDS_H
+#ifndef VALKEY_COMMANDS_H
+#define VALKEY_COMMANDS_H
 
 /* Must be synced with ARG_TYPE_STR and generate-command-code.py */
 typedef enum {

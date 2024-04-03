@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef REDIS_RANDOM_H
-#define REDIS_RANDOM_H
+#ifndef VALKEY_RANDOM_H
+#define VALKEY_RANDOM_H
 
 int32_t redisLrand48(void);
 void redisSrand48(int32_t seedval);

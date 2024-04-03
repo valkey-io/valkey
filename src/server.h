@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __REDIS_H
-#define __REDIS_H
+#ifndef VALKEY_H
+#define VALKEY_H
 
 #include "fmacros.h"
 #include "config.h"

@@ -230,14 +230,14 @@ struct RedisModuleKey {
 /* Function pointer type of a function representing a command inside
  * a Redis module. */
 struct RedisModuleBlockedClient;
-typedef int (*RedisModuleCmdFunc) (RedisModuleCtx *ctx, void **argv, int argc);
+typedef int (*ServerModuleCmdFunc) (RedisModuleCtx *ctx, void **argv, int argc);
 typedef int (*RedisModuleAuthCallback)(RedisModuleCtx *ctx, void *username, void *password, RedisModuleString **err);
 typedef void (*RedisModuleDisconnectFunc) (RedisModuleCtx *ctx, struct RedisModuleBlockedClient *bc);
 
 /* This struct holds the information about a command registered by a module.*/
 struct RedisModuleCommand {
     struct ServerModule *module;
-    RedisModuleCmdFunc func;
+    ServerModuleCmdFunc func;
     struct redisCommand *rediscmd;
 };
 typedef struct RedisModuleCommand RedisModuleCommand;
@@ -264,10 +264,10 @@ typedef struct RedisModuleBlockedClient {
     client *client;  /* Pointer to the blocked client. or NULL if the client
                         was destroyed during the life of this object. */
     ServerModule *module;    /* Module blocking the client. */
-    RedisModuleCmdFunc reply_callback; /* Reply callback on normal completion.*/
+    ServerModuleCmdFunc reply_callback; /* Reply callback on normal completion.*/
     RedisModuleAuthCallback auth_reply_cb; /* Reply callback on completing blocking
                                                     module authentication. */
-    RedisModuleCmdFunc timeout_callback; /* Reply callback on timeout. */
+    ServerModuleCmdFunc timeout_callback; /* Reply callback on timeout. */
     RedisModuleDisconnectFunc disconnect_callback; /* Called on disconnection.*/
     void (*free_privdata)(RedisModuleCtx*,void*);/* privdata cleanup callback.*/
     void *privdata;     /* Module private data that may be used by the reply
@@ -1169,7 +1169,7 @@ int64_t commandFlagsFromString(char *s) {
     return flags;
 }
 
-RedisModuleCommand *moduleCreateCommandProxy(struct ServerModule *module, sds declared_name, sds fullname, RedisModuleCmdFunc cmdfunc, int64_t flags, int firstkey, int lastkey, int keystep);
+RedisModuleCommand *moduleCreateCommandProxy(struct ServerModule *module, sds declared_name, sds fullname, ServerModuleCmdFunc cmdfunc, int64_t flags, int firstkey, int lastkey, int keystep);
 
 /* Register a new command in the Redis server, that will be handled by
  * calling the function pointer 'cmdfunc' using the ServerModule calling
@@ -1267,7 +1267,7 @@ RedisModuleCommand *moduleCreateCommandProxy(struct ServerModule *module, sds de
  * For non-trivial key arguments, you may pass 0,0,0 and use
  * RedisModule_SetCommandInfo to set key specs using a more advanced scheme and use
  * RedisModule_SetCommandACLCategories to set Redis ACL categories of the commands. */
-int RM_CreateCommand(RedisModuleCtx *ctx, const char *name, RedisModuleCmdFunc cmdfunc, const char *strflags, int firstkey, int lastkey, int keystep) {
+int RM_CreateCommand(RedisModuleCtx *ctx, const char *name, ServerModuleCmdFunc cmdfunc, const char *strflags, int firstkey, int lastkey, int keystep) {
     if (!ctx->module->onload)
         return REDISMODULE_ERR;
     int64_t flags = strflags ? commandFlagsFromString((char*)strflags) : 0;
@@ -1300,7 +1300,7 @@ int RM_CreateCommand(RedisModuleCtx *ctx, const char *name, RedisModuleCmdFunc c
  *
  * Function will take the ownership of both 'declared_name' and 'fullname' SDS.
  */
-RedisModuleCommand *moduleCreateCommandProxy(struct ServerModule *module, sds declared_name, sds fullname, RedisModuleCmdFunc cmdfunc, int64_t flags, int firstkey, int lastkey, int keystep) {
+RedisModuleCommand *moduleCreateCommandProxy(struct ServerModule *module, sds declared_name, sds fullname, ServerModuleCmdFunc cmdfunc, int64_t flags, int firstkey, int lastkey, int keystep) {
     struct redisCommand *rediscmd;
     RedisModuleCommand *cp;
 
@@ -1387,11 +1387,11 @@ RedisModuleCommand *RM_GetCommand(RedisModuleCtx *ctx, const char *name) {
  * * Error while parsing `strflags`
  * * Command is marked as `no-cluster` but cluster mode is enabled
  * * `parent` is already a subcommand (we do not allow more than one level of command nesting)
- * * `parent` is a command with an implementation (RedisModuleCmdFunc) (A parent command should be a pure container of subcommands)
+ * * `parent` is a command with an implementation (ServerModuleCmdFunc) (A parent command should be a pure container of subcommands)
  * * `parent` already has a subcommand called `name`
  * * Creating a subcommand is called outside of RedisModule_OnLoad.
  */
-int RM_CreateSubcommand(RedisModuleCommand *parent, const char *name, RedisModuleCmdFunc cmdfunc, const char *strflags, int firstkey, int lastkey, int keystep) {
+int RM_CreateSubcommand(RedisModuleCommand *parent, const char *name, ServerModuleCmdFunc cmdfunc, const char *strflags, int firstkey, int lastkey, int keystep) {
     if (!parent->module->onload)
         return REDISMODULE_ERR;
     int64_t flags = strflags ? commandFlagsFromString((char*)strflags) : 0;
@@ -7775,9 +7775,9 @@ void unblockClientFromModule(client *c) {
  * reply callback the privdata that is set here while blocking.
  *
  */
-RedisModuleBlockedClient *moduleBlockClient(RedisModuleCtx *ctx, RedisModuleCmdFunc reply_callback,
+RedisModuleBlockedClient *moduleBlockClient(RedisModuleCtx *ctx, ServerModuleCmdFunc reply_callback,
                                             RedisModuleAuthCallback auth_reply_callback,
-                                            RedisModuleCmdFunc timeout_callback, void (*free_privdata)(RedisModuleCtx*,void*),
+                                            ServerModuleCmdFunc timeout_callback, void (*free_privdata)(RedisModuleCtx*,void*),
                                             long long timeout_ms, RedisModuleString **keys, int numkeys, void *privdata,
                                             int flags) {
     client *c = ctx->client;
@@ -8089,8 +8089,8 @@ int moduleTryServeClientBlockedOnKey(client *c, robj *key) {
  * use RM_BlockedClientMeasureTimeStart() and RM_BlockedClientMeasureTimeEnd() one,
  * or multiple times within the blocking command background work.
  */
-RedisModuleBlockedClient *RM_BlockClient(RedisModuleCtx *ctx, RedisModuleCmdFunc reply_callback,
-                                         RedisModuleCmdFunc timeout_callback, void (*free_privdata)(RedisModuleCtx*,void*),
+RedisModuleBlockedClient *RM_BlockClient(RedisModuleCtx *ctx, ServerModuleCmdFunc reply_callback,
+                                         ServerModuleCmdFunc timeout_callback, void (*free_privdata)(RedisModuleCtx*,void*),
                                          long long timeout_ms) {
     return moduleBlockClient(ctx,reply_callback,NULL,timeout_callback,free_privdata,timeout_ms, NULL,0,NULL,0);
 }
@@ -8180,8 +8180,8 @@ void RM_BlockClientSetPrivateData(RedisModuleBlockedClient *blocked_client, void
  *       handled as if it were timed-out (You must implement the timeout
  *       callback in that case).
  */
-RedisModuleBlockedClient *RM_BlockClientOnKeys(RedisModuleCtx *ctx, RedisModuleCmdFunc reply_callback,
-                                               RedisModuleCmdFunc timeout_callback, void (*free_privdata)(RedisModuleCtx*,void*),
+RedisModuleBlockedClient *RM_BlockClientOnKeys(RedisModuleCtx *ctx, ServerModuleCmdFunc reply_callback,
+                                               ServerModuleCmdFunc timeout_callback, void (*free_privdata)(RedisModuleCtx*,void*),
                                                long long timeout_ms, RedisModuleString **keys, int numkeys, void *privdata) {
     return moduleBlockClient(ctx,reply_callback,NULL,timeout_callback,free_privdata,timeout_ms, keys,numkeys,privdata,0);
 }
@@ -8195,8 +8195,8 @@ RedisModuleBlockedClient *RM_BlockClientOnKeys(RedisModuleCtx *ctx, RedisModuleC
  * - `REDISMODULE_BLOCK_UNBLOCK_DELETED`: The clients should to be awakened in case any of `keys` are deleted.
  *                                        Mostly useful for commands that require the key to exist (like XREADGROUP)
  */
-RedisModuleBlockedClient *RM_BlockClientOnKeysWithFlags(RedisModuleCtx *ctx, RedisModuleCmdFunc reply_callback,
-                                                        RedisModuleCmdFunc timeout_callback, void (*free_privdata)(RedisModuleCtx*,void*),
+RedisModuleBlockedClient *RM_BlockClientOnKeysWithFlags(RedisModuleCtx *ctx, ServerModuleCmdFunc reply_callback,
+                                                        ServerModuleCmdFunc timeout_callback, void (*free_privdata)(RedisModuleCtx*,void*),
                                                         long long timeout_ms, RedisModuleString **keys, int numkeys, void *privdata,
                                                         int flags) {
     return moduleBlockClient(ctx,reply_callback,NULL,timeout_callback,free_privdata,timeout_ms, keys,numkeys,privdata,flags);

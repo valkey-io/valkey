@@ -840,6 +840,7 @@ static size_t cliLegacyCountCommands(struct commandDocs *commands, sds version) 
  * Stores the result in config.server_version.
  * When not connected, or not possible, returns NULL. */
 static sds cliGetServerVersion(void) {
+    static const char *key = "\nredis_version:";
     redisReply *serverInfo = NULL;
     char *pos;
 
@@ -857,25 +858,10 @@ static sds cliGetServerVersion(void) {
     assert(serverInfo->type == REDIS_REPLY_STRING || serverInfo->type == REDIS_REPLY_VERB);
     sds info = serverInfo->str;
 
-    /* Finds the first appearance of "server_version" in the INFO SERVER reply. */
-    static const char *new_key = "\nserver_version:";
-    pos = strstr(info, new_key);
+    /* Finds the first appearance of "redis_version" in the INFO SERVER reply. */
+    pos = strstr(info, key);
     if (pos) {
-        pos += strlen(new_key);
-        char *end = strchr(pos, '\r');
-        if (end) {
-            sds version = sdsnewlen(pos, end - pos);
-            freeReplyObject(serverInfo);
-            config.server_version = version;
-            return version;
-        }
-    }
-
-    /* We didn't find the new key, check the legacy "redis_version" which exists for compatibility" */
-    static const char *legacy_key = "\nredis_version:";
-    pos = strstr(info, legacy_key);
-    if (pos) {
-        pos += strlen(legacy_key);
+        pos += strlen(key);
         char *end = strchr(pos, '\r');
         if (end) {
             sds version = sdsnewlen(pos, end - pos);

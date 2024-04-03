@@ -2142,7 +2142,7 @@ void initServerConfig(void) {
 
     /* Command table -- we initialize it here as it is part of the
      * initial configuration, since command names may be changed via
-     * redis.conf using the rename-command directive. */
+     * valkey.conf using the rename-command directive. */
     server.commands = dictCreate(&commandTableDictType);
     server.orig_commands = dictCreate(&commandTableDictType);
     populateCommandTable();
@@ -3081,7 +3081,7 @@ void populateCommandTable(void) {
 
         retval1 = dictAdd(server.commands, sdsdup(c->fullname), c);
         /* Populate an additional dictionary that will be unaffected
-         * by rename-command statements in redis.conf. */
+         * by rename-command statements in valkey.conf. */
         retval2 = dictAdd(server.orig_commands, sdsdup(c->fullname), c);
         serverAssert(retval1 == DICT_OK && retval2 == DICT_OK);
     }
@@ -3236,7 +3236,7 @@ struct serverCommand *lookupCommandByCString(const char *s) {
 
 /* Lookup the command in the current table, if not found also check in
  * the original table containing the original command names unaffected by
- * redis.conf rename-command statement.
+ * valkey.conf rename-command statement.
  *
  * This is used by functions rewriting the argument vector such as
  * rewriteClientCommandVector() in order to set client->cmd pointer
@@ -6275,7 +6275,7 @@ sds getVersion(void) {
 }
 
 void usage(void) {
-    fprintf(stderr,"Usage: ./redis-server [/path/to/redis.conf] [options] [-]\n");
+    fprintf(stderr,"Usage: ./redis-server [/path/to/valkey.conf] [options] [-]\n");
     fprintf(stderr,"       ./redis-server - (read config from stdin)\n");
     fprintf(stderr,"       ./redis-server -v or --version\n");
     fprintf(stderr,"       ./redis-server -h or --help\n");
@@ -6285,11 +6285,11 @@ void usage(void) {
     fprintf(stderr,"Examples:\n");
     fprintf(stderr,"       ./redis-server (run the server with default conf)\n");
     fprintf(stderr,"       echo 'maxmemory 128mb' | ./redis-server -\n");
-    fprintf(stderr,"       ./redis-server /etc/redis/6379.conf\n");
+    fprintf(stderr,"       ./redis-server /etc/valkey/6379.conf\n");
     fprintf(stderr,"       ./redis-server --port 7777\n");
     fprintf(stderr,"       ./redis-server --port 7777 --replicaof 127.0.0.1 8888\n");
-    fprintf(stderr,"       ./redis-server /etc/myredis.conf --loglevel verbose -\n");
-    fprintf(stderr,"       ./redis-server /etc/myredis.conf --loglevel verbose\n\n");
+    fprintf(stderr,"       ./redis-server /etc/myvalkey.conf --loglevel verbose -\n");
+    fprintf(stderr,"       ./redis-server /etc/myvalkey.conf --loglevel verbose\n\n");
     fprintf(stderr,"Sentinel mode:\n");
     fprintf(stderr,"       ./redis-server /etc/sentinel.conf --sentinel\n");
     exit(1);
@@ -6306,7 +6306,7 @@ void redisAsciiArt(void) {
 
     /* Show the ASCII logo if: log file is stdout AND stdout is a
      * tty AND syslog logging is disabled. Also show logo if the user
-     * forced us to do so via redis.conf. */
+     * forced us to do so via valkey.conf. */
     int show_logo = ((!server.syslog_enabled &&
                       server.logfile[0] == '\0' &&
                       isatty(fileno(stdout))) ||
@@ -6700,7 +6700,7 @@ void redisOutOfMemoryHandler(size_t allocation_size) {
         allocation_size);
 }
 
-/* Callback for sdstemplate on proc-title-template. See redis.conf for
+/* Callback for sdstemplate on proc-title-template. See valkey.conf for
  * supported variables.
  */
 static sds redisProcTitleGetVariable(const sds varname, void *arg)

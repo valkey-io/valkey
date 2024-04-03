@@ -20,7 +20,7 @@
         ],        
         "reply_schema": {
             "type": "integer",
-            "description": "The number of users that were deleted"
+            "description": "The number of users that were deleted."
         },
         "arguments": [
             {

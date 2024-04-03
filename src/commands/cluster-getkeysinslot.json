@@ -24,10 +24,10 @@
             }
         ],
         "reply_schema": {
-            "description": "an array with up to count elements",
+            "description": "An array with up to count elements.",
             "type": "array",
             "items": {
-                "description": "key name",
+                "description": "Key name.",
                 "type": "string"
             }
         }

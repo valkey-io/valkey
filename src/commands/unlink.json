@@ -46,7 +46,7 @@
             }
         ],
         "reply_schema": {
-            "description": "the number of keys that were unlinked",
+            "description": "The number of keys that were unlinked.",
             "type": "integer",
             "minimum": 0
         }

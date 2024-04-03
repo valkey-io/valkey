@@ -805,7 +805,7 @@ int clusterLockConfig(char *filename) {
      * we'll retain the lock to the file as long as the process exists.
      *
      * After fork, the child process will get the fd opened by the parent process,
-     * we need save `fd` to `cluster_config_file_lock_fd`, so that in redisFork(),
+     * we need save `fd` to `cluster_config_file_lock_fd`, so that in serverFork(),
      * it will be closed in the child process.
      * If it is not closed, when the main process is killed -9, but the child process
      * (redis-aof-rewrite) is still alive, the fd(lock) will still be held by the

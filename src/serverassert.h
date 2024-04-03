@@ -1,12 +1,13 @@
-/* redisassert.c -- Implement the default _serverAssert and _serverPanic which 
- * simply print stack trace to standard error stream.
- * 
- * This file is shared by those modules that try to print some logs about stack trace 
- * but don't have their own implementations of functions in redisassert.h.
+/* serverassert.h -- Drop in replacements assert.h that prints the stack trace
+ *                  in the Redis logs.
+ *
+ * This file should be included instead of "assert.h" inside libraries used by
+ * Redis that are using assertions, so instead of Redis disappearing with
+ * SIGABORT, we get the details and stack trace inside the log file.
  *
  * ----------------------------------------------------------------------------
  *
- * Copyright (c) 2021, Andy Pan <panjf2000@gmail.com> and Redis Labs
+ * Copyright (c) 2006-2012, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -34,20 +35,15 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifndef __REDIS_ASSERT_H__
+#define __REDIS_ASSERT_H__
 
-#include <stdio.h> 
-#include <stdlib.h>
-#include <signal.h>
+#include "config.h"
 
-void _serverAssert(const char *estr, const char *file, int line) {
-    fprintf(stderr, "=== ASSERTION FAILED ===");
-    fprintf(stderr, "==> %s:%d '%s' is not true",file,line,estr);
-    raise(SIGSEGV);
-}
+#define assert(_e) (likely((_e))?(void)0 : (_serverAssert(#_e,__FILE__,__LINE__),redis_unreachable()))
+#define panic(...) _serverPanic(__FILE__,__LINE__,__VA_ARGS__),redis_unreachable()
 
-void _serverPanic(const char *file, int line, const char *msg, ...) {
-    fprintf(stderr, "------------------------------------------------");
-    fprintf(stderr, "!!! Software Failure. Press left mouse button to continue");
-    fprintf(stderr, "Guru Meditation: %s #%s:%d",msg,file,line);
-    abort();
-}
+void _serverAssert(const char *estr, const char *file, int line);
+void _serverPanic(const char *file, int line, const char *msg, ...);
+
+#endif

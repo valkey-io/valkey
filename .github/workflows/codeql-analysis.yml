@@ -10,7 +10,7 @@ jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
-    if: github.event_name != 'schedule' || github.repository == 'placeholderkv/placeholderkv'
+    if: github.event_name != 'schedule' || github.repository == 'valkey-io/valkey'
 
     strategy:
       fail-fast: false
@@ -19,7 +19,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v3

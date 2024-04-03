@@ -37,7 +37,7 @@
 /* Count number of bits set in the binary array pointed by 's' and long
  * 'count' bytes. The implementation of this function is required to
  * work with an input string length up to 512 MB or more (server.proto_max_bulk_len) */
-long long redisPopcount(void *s, long count) {
+long long serverPopcount(void *s, long count) {
     long long bits = 0;
     unsigned char *p = s;
     uint32_t *p4;
@@ -870,7 +870,7 @@ void bitcountCommand(client *c) {
         addReply(c,shared.czero);
     } else {
         long bytes = (long)(end-start+1);
-        long long count = redisPopcount(p+start,bytes);
+        long long count = serverPopcount(p+start,bytes);
         if (first_byte_neg_mask != 0 || last_byte_neg_mask != 0) {
             unsigned char firstlast[2] = {0, 0};
             /* We may count bits of first byte and last byte which are out of
@@ -878,7 +878,7 @@ void bitcountCommand(client *c) {
             * bits in the range to zero. So these bit will not be excluded. */
             if (first_byte_neg_mask != 0) firstlast[0] = p[start] & first_byte_neg_mask;
             if (last_byte_neg_mask != 0) firstlast[1] = p[end] & last_byte_neg_mask;
-            count -= redisPopcount(firstlast,2);
+            count -= serverPopcount(firstlast,2);
         }
         addReplyLongLong(c,count);
     }

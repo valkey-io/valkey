@@ -1307,7 +1307,7 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
     static long long info_updated_time = 0;
     char *pname = (rdbflags & RDBFLAGS_AOF_PREAMBLE) ? "AOF rewrite" :  "RDB";
 
-    redisDb *db = server.db + dbid;
+    serverDb *db = server.db + dbid;
     unsigned long long int db_size = kvstoreSize(db->keys);
     if (db_size == 0) return 0;
 
@@ -1579,12 +1579,12 @@ int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
     server.dirty_before_bgsave = server.dirty;
     server.lastbgsave_try = time(NULL);
 
-    if ((childpid = redisFork(CHILD_TYPE_RDB)) == 0) {
+    if ((childpid = serverFork(CHILD_TYPE_RDB)) == 0) {
         int retval;
 
         /* Child */
-        redisSetProcTitle("redis-rdb-bgsave");
-        redisSetCpuAffinity(server.bgsave_cpulist);
+        serverSetProcTitle("redis-rdb-bgsave");
+        serverSetCpuAffinity(server.bgsave_cpulist);
         retval = rdbSave(req, filename,rsi,rdbflags);
         if (retval == C_OK) {
             sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
@@ -3035,7 +3035,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     int type, rdbver;
     uint64_t db_size = 0, expires_size = 0;
     int should_expand_db = 0;
-    redisDb *db = rdb_loading_ctx->dbarray+0;
+    serverDb *db = rdb_loading_ctx->dbarray+0;
     char buf[1024];
     int error;
     long long empty_keys_skipped = 0;
@@ -3588,7 +3588,7 @@ int rdbSaveToSlavesSockets(int req, rdbSaveInfo *rsi) {
     }
 
     /* Create the child process. */
-    if ((childpid = redisFork(CHILD_TYPE_RDB)) == 0) {
+    if ((childpid = serverFork(CHILD_TYPE_RDB)) == 0) {
         /* Child */
         int retval, dummy;
         rio rdb;
@@ -3599,8 +3599,8 @@ int rdbSaveToSlavesSockets(int req, rdbSaveInfo *rsi) {
          * get a write error and exit. */
         close(server.rdb_pipe_read);
 
-        redisSetProcTitle("redis-rdb-to-slaves");
-        redisSetCpuAffinity(server.bgsave_cpulist);
+        serverSetProcTitle("redis-rdb-to-slaves");
+        serverSetCpuAffinity(server.bgsave_cpulist);
 
         retval = rdbSaveRioWithEOFMark(req,&rdb,NULL,rsi);
         if (retval == C_OK && rioFlush(&rdb) == 0)

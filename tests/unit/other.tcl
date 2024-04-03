@@ -403,7 +403,7 @@ start_server {tags {"other external:skip"}} {
             set cmdline [read_proc_title [srv 0 pid]]
 
             assert_equal "TEST" [lindex $cmdline 0]
-            assert_match "*/placeholderkv-server" [lindex $cmdline 1]
+            assert_match "*/valkey-server" [lindex $cmdline 1]
             
             if {$::tls} {
                 set expect_port [srv 0 pport]
@@ -419,7 +419,7 @@ start_server {tags {"other external:skip"}} {
             assert_equal $expect_port [lindex $cmdline 3]
             assert_equal $expect_tls_port [lindex $cmdline 4]
             assert_match "*/tests/tmp/server.*/socket" [lindex $cmdline 5]
-            assert_match "*/tests/tmp/redis.conf.*" [lindex $cmdline 6]
+            assert_match "*/tests/tmp/valkey.conf.*" [lindex $cmdline 6]
 
             # Try setting a bad template
             catch {r config set "proc-title-template" "{invalid-var}"} err

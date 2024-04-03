@@ -47,29 +47,29 @@
             "anyOf": [
                 {
                     "type": "array",
-                    "description": "List of the elements in the specified score range, as not WITHSCORES",
+                    "description": "List of the elements in the specified score range, as not WITHSCORES.",
                     "uniqueItems": true,
                     "items": {
                         "type": "string",
-                        "description": "Element"
+                        "description": "Element."
                     }
                 },
                 {
                     "type": "array",
-                    "description": "List of the elements and their scores in the specified score range, as WITHSCORES used",
+                    "description": "List of the elements and their scores in the specified score range, as WITHSCORES used.",
                     "uniqueItems": true,
                     "items": {
                         "type": "array",
-                        "description": "Tuple of element and its score",
+                        "description": "Tuple of element and its score.",
                         "minItems": 2,
                         "maxItems": 2,
                         "items": [
                             {
-                                "description": "element",
+                                "description": "Element.",
                                 "type": "string"
                             },
                             {
-                                "description": "score",
+                                "description": "Score.",
                                 "type": "number"
                             }
                         ]

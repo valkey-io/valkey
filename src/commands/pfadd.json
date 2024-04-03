@@ -50,11 +50,11 @@
         "reply_schema": {
             "oneOf": [
                 {
-                    "description": "if at least 1 HyperLogLog internal register was altered",
+                    "description": "If at least 1 HyperLogLog internal register was altered.",
                     "const": 1
                 },
                 {
-                    "description": "if no HyperLogLog internal register were altered",
+                    "description": "If no HyperLogLog internal register were altered.",
                     "const": 0
                 }
             ]

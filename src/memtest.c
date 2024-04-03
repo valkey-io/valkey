@@ -38,7 +38,7 @@
 #include <stropts.h>
 #endif
 #include "config.h"
-#include "redisassert.h"
+#include "serverassert.h"
 
 #if (ULONG_MAX == 4294967295UL)
 #define MEMTEST_32BIT

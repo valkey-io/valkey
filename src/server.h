@@ -202,7 +202,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 /* Hash table parameters */
 #define HASHTABLE_MAX_LOAD_FACTOR 1.618   /* Maximum hash table load factor. */
 
-/* Command flags. Please check the definition of struct redisCommand in this file
+/* Command flags. Please check the definition of struct serverCommand in this file
  * for more information about the meaning of every flag. */
 #define CMD_WRITE (1ULL<<0)
 #define CMD_READONLY (1ULL<<1)
@@ -1007,7 +1007,7 @@ typedef struct multiCmd {
     robj **argv;
     int argv_len;
     int argc;
-    struct redisCommand *cmd;
+    struct serverCommand *cmd;
 } multiCmd;
 
 typedef struct multiState {
@@ -1177,8 +1177,8 @@ typedef struct client {
     int original_argc;      /* Num of arguments of original command if arguments were rewritten. */
     robj **original_argv;   /* Arguments of original command if arguments were rewritten. */
     size_t argv_len_sum;    /* Sum of lengths of objects in argv list. */
-    struct redisCommand *cmd, *lastcmd;  /* Last command executed. */
-    struct redisCommand *realcmd; /* The original command that was executed by the client,
+    struct serverCommand *cmd, *lastcmd;  /* Last command executed. */
+    struct serverCommand *realcmd; /* The original command that was executed by the client,
                                      Used to update error stats in case the c->cmd was modified
                                      during the command invocation (like on GEOADD for example). */
     user *user;             /* User associated with this connection. If the
@@ -2238,7 +2238,7 @@ typedef enum {
 } serverCommandGroup;
 
 typedef void serverCommandProc(client *c);
-typedef int serverGetKeysProc(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
+typedef int serverGetKeysProc(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 
 /* Redis command structure.
  *
@@ -2333,7 +2333,7 @@ typedef int serverGetKeysProc(struct redisCommand *cmd, robj **argv, int argc, g
  *    specific data structures, such as: DEL, RENAME, MOVE, SELECT,
  *    TYPE, EXPIRE*, PEXPIRE*, TTL, PTTL, ...
  */
-struct redisCommand {
+struct serverCommand {
     /* Declarative data */
     const char *declared_name; /* A string representing the command declared_name.
                                 * It is a const char * for native commands and SDS for module commands. */
@@ -2359,7 +2359,7 @@ struct redisCommand {
     serverGetKeysProc *getkeys_proc;
     int num_args; /* Length of args array. */
     /* Array of subcommands (may be NULL) */
-    struct redisCommand *subcommands;
+    struct serverCommand *subcommands;
     /* Array of arguments (may be NULL) */
     struct redisCommandArg *args;
 #ifdef LOG_REQ_RES
@@ -2381,8 +2381,8 @@ struct redisCommand {
                                      * we can still support the reply format of
                                      * COMMAND INFO and COMMAND GETKEYS */
     dict *subcommands_dict; /* A dictionary that holds the subcommands, the key is the subcommand sds name
-                             * (not the fullname), and the value is the redisCommand structure pointer. */
-    struct redisCommand *parent;
+                             * (not the fullname), and the value is the serverCommand structure pointer. */
+    struct serverCommand *parent;
     struct RedisModuleCommand *module_cmd; /* A pointer to the module command data (NULL if native command) */
 };
 
@@ -2488,7 +2488,7 @@ extern dict *modules;
  *----------------------------------------------------------------------------*/
 
 /* Command metadata */
-void populateCommandLegacyRangeSpec(struct redisCommand *c);
+void populateCommandLegacyRangeSpec(struct serverCommand *c);
 
 /* Modules */
 void moduleInitModulesSystem(void);
@@ -2497,14 +2497,14 @@ void modulesCron(void);
 int moduleLoad(const char *path, void **argv, int argc, int is_loadex);
 int moduleUnload(sds name, const char **errmsg);
 void moduleLoadFromQueue(void);
-int moduleGetCommandKeysViaAPI(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
-int moduleGetCommandChannelsViaAPI(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int moduleGetCommandKeysViaAPI(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int moduleGetCommandChannelsViaAPI(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 moduleType *moduleTypeLookupModuleByID(uint64_t id);
 moduleType *moduleTypeLookupModuleByName(const char *name);
 moduleType *moduleTypeLookupModuleByNameIgnoreCase(const char *name);
 void moduleTypeNameByID(char *name, uint64_t moduleid);
 const char *moduleTypeModuleName(moduleType *mt);
-const char *moduleNameFromCommand(struct redisCommand *cmd);
+const char *moduleNameFromCommand(struct serverCommand *cmd);
 void moduleFreeContext(struct RedisModuleCtx *ctx);
 void moduleCallCommandUnblockedHandler(client *c);
 int isModuleClientUnblocked(client *c);
@@ -2541,7 +2541,7 @@ int moduleDefragValue(robj *key, robj *obj, int dbid);
 int moduleLateDefrag(robj *key, robj *value, unsigned long *cursor, long long endtime, int dbid);
 void moduleDefragGlobals(void);
 void *moduleGetHandleByName(char *modulename);
-int moduleIsModuleCommand(void *module_handle, struct redisCommand *cmd);
+int moduleIsModuleCommand(void *module_handle, struct serverCommand *cmd);
 
 /* Utils */
 long long ustime(void);
@@ -2950,8 +2950,8 @@ void ACLClearCommandID(void);
 user *ACLGetUserByName(const char *name, size_t namelen);
 int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags);
 int ACLUserCheckChannelPerm(user *u, sds channel, int literal);
-int ACLCheckAllUserCommandPerm(user *u, struct redisCommand *cmd, robj **argv, int argc, int *idxptr);
-int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct redisCommand *cmd, robj **argv, int argc, int flags);
+int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int *idxptr);
+int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd, robj **argv, int argc, int flags);
 int ACLCheckAllPerm(client *c, int *idxptr);
 int ACLSetUser(user *u, const char *op, ssize_t oplen);
 sds ACLStringSetUser(user *u, sds username, sds *argv, int argc);
@@ -2963,11 +2963,11 @@ const char *ACLSetUserStringError(void);
 int ACLLoadConfiguredUsers(void);
 robj *ACLDescribeUser(user *u);
 void ACLLoadUsersAtStartup(void);
-void addReplyCommandCategories(client *c, struct redisCommand *cmd);
+void addReplyCommandCategories(client *c, struct serverCommand *cmd);
 user *ACLCreateUnlinkedUser(void);
 void ACLFreeUserAndKillClients(user *u);
 void addACLLogEntry(client *c, int reason, int context, int argpos, sds username, sds object);
-sds getAclErrorMessage(int acl_res, user *user, struct redisCommand *cmd, sds errored_val, int verbose);
+sds getAclErrorMessage(int acl_res, user *user, struct serverCommand *cmd, sds errored_val, int verbose);
 void ACLUpdateDefaultUserPassword(sds password);
 sds genRedisInfoStringACLStats(sds info);
 void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void);
@@ -3051,17 +3051,17 @@ int createSocketAcceptHandler(connListener *sfd, aeFileProc *accept_handler);
 connListener *listenerByType(const char *typename);
 int changeListener(connListener *listener);
 void closeListener(connListener *listener);
-struct redisCommand *lookupSubcommand(struct redisCommand *container, sds sub_name);
-struct redisCommand *lookupCommand(robj **argv, int argc);
-struct redisCommand *lookupCommandBySdsLogic(dict *commands, sds s);
-struct redisCommand *lookupCommandBySds(sds s);
-struct redisCommand *lookupCommandByCStringLogic(dict *commands, const char *s);
-struct redisCommand *lookupCommandByCString(const char *s);
-struct redisCommand *lookupCommandOrOriginal(robj **argv, int argc);
+struct serverCommand *lookupSubcommand(struct serverCommand *container, sds sub_name);
+struct serverCommand *lookupCommand(robj **argv, int argc);
+struct serverCommand *lookupCommandBySdsLogic(dict *commands, sds s);
+struct serverCommand *lookupCommandBySds(sds s);
+struct serverCommand *lookupCommandByCStringLogic(dict *commands, const char *s);
+struct serverCommand *lookupCommandByCString(const char *s);
+struct serverCommand *lookupCommandOrOriginal(robj **argv, int argc);
 int commandCheckExistence(client *c, sds *err);
 int commandCheckArity(client *c, sds *err);
 void startCommandExecution(void);
-int incrCommandStatsOnError(struct redisCommand *cmd, int flags);
+int incrCommandStatsOnError(struct serverCommand *cmd, int flags);
 void call(client *c, int flags);
 void alsoPropagate(int dbid, robj **argv, int argc, int target);
 void postExecutionUnitOperations(void);
@@ -3070,7 +3070,7 @@ void forceCommandPropagation(client *c, int flags);
 void preventCommandPropagation(client *c);
 void preventCommandAOF(client *c);
 void preventCommandReplication(client *c);
-void slowlogPushCurrentCommand(client *c, struct redisCommand *cmd, ustime_t duration);
+void slowlogPushCurrentCommand(client *c, struct serverCommand *cmd, ustime_t duration);
 void updateCommandLatencyHistogram(struct hdr_histogram** latency_histogram, int64_t duration_hist);
 int prepareForShutdown(int flags);
 void replyToClientsBlockedOnShutdown(void);
@@ -3337,29 +3337,29 @@ void freeReplicationBacklogRefMemAsync(list *blocks, rax *index);
 #define GET_KEYSPEC_INCLUDE_NOT_KEYS (1<<0) /* Consider 'fake' keys as keys */
 #define GET_KEYSPEC_RETURN_PARTIAL (1<<1) /* Return all keys that can be found */
 
-int getKeysFromCommandWithSpecs(struct redisCommand *cmd, robj **argv, int argc, int search_flags, getKeysResult *result);
+int getKeysFromCommandWithSpecs(struct serverCommand *cmd, robj **argv, int argc, int search_flags, getKeysResult *result);
 keyReference *getKeysPrepareResult(getKeysResult *result, int numkeys);
-int getKeysFromCommand(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
-int doesCommandHaveKeys(struct redisCommand *cmd);
-int getChannelsFromCommand(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
-int doesCommandHaveChannelsWithFlags(struct redisCommand *cmd, int flags);
+int getKeysFromCommand(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int doesCommandHaveKeys(struct serverCommand *cmd);
+int getChannelsFromCommand(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int doesCommandHaveChannelsWithFlags(struct serverCommand *cmd, int flags);
 void getKeysFreeResult(getKeysResult *result);
-int sintercardGetKeys(struct redisCommand *cmd,robj **argv, int argc, getKeysResult *result);
-int zunionInterDiffGetKeys(struct redisCommand *cmd,robj **argv, int argc, getKeysResult *result);
-int zunionInterDiffStoreGetKeys(struct redisCommand *cmd,robj **argv, int argc, getKeysResult *result);
-int evalGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
-int functionGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
-int sortGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
-int sortROGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
-int migrateGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
-int georadiusGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
-int xreadGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
-int lmpopGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
-int blmpopGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
-int zmpopGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
-int bzmpopGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
-int setGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
-int bitfieldGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int sintercardGetKeys(struct serverCommand *cmd,robj **argv, int argc, getKeysResult *result);
+int zunionInterDiffGetKeys(struct serverCommand *cmd,robj **argv, int argc, getKeysResult *result);
+int zunionInterDiffStoreGetKeys(struct serverCommand *cmd,robj **argv, int argc, getKeysResult *result);
+int evalGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int functionGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int sortGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int sortROGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int migrateGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int georadiusGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int xreadGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int lmpopGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int blmpopGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int zmpopGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int bzmpopGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int setGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 
 unsigned short crc16(const char *buf, int len);
 
@@ -3766,7 +3766,7 @@ int memtest_preserving_test(unsigned long *m, size_t bytes, int passes);
 void mixDigest(unsigned char *digest, const void *ptr, size_t len);
 void xorDigest(unsigned char *digest, const void *ptr, size_t len);
 sds catSubCommandFullname(const char *parent_name, const char *sub_name);
-void commandAddSubcommand(struct redisCommand *parent, struct redisCommand *subcommand, const char *declared_name);
+void commandAddSubcommand(struct serverCommand *parent, struct serverCommand *subcommand, const char *declared_name);
 void debugDelay(int usec);
 void killIOThreads(void);
 void killThreads(void);

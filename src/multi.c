@@ -149,7 +149,7 @@ void execCommand(client *c) {
     int j;
     robj **orig_argv;
     int orig_argc, orig_argv_len;
-    struct redisCommand *orig_cmd;
+    struct serverCommand *orig_cmd;
 
     if (!(c->flags & CLIENT_MULTI)) {
         addReplyError(c,"EXEC without MULTI");

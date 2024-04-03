@@ -1385,8 +1385,8 @@ typedef struct redisOp {
 /* Defines an array of Redis operations. There is an API to add to this
  * structure in an easy way.
  *
- * int redisOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int target);
- * void redisOpArrayFree(serverOpArray *oa);
+ * int serverOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int target);
+ * void serverOpArrayFree(serverOpArray *oa);
  */
 typedef struct serverOpArray {
     redisOp *ops;
@@ -3065,7 +3065,7 @@ int incrCommandStatsOnError(struct redisCommand *cmd, int flags);
 void call(client *c, int flags);
 void alsoPropagate(int dbid, robj **argv, int argc, int target);
 void postExecutionUnitOperations(void);
-void redisOpArrayFree(serverOpArray *oa);
+void serverOpArrayFree(serverOpArray *oa);
 void forceCommandPropagation(client *c, int flags);
 void preventCommandPropagation(client *c);
 void preventCommandAOF(client *c);

@@ -3117,7 +3117,7 @@ void resetErrorTableStats(void) {
 
 /* ========================== Redis OP Array API ============================ */
 
-int redisOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int target) {
+int serverOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int target) {
     redisOp *op;
     int prev_capacity = oa->capacity;
 
@@ -3138,7 +3138,7 @@ int redisOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int t
     return oa->numops;
 }
 
-void redisOpArrayFree(serverOpArray *oa) {
+void serverOpArrayFree(serverOpArray *oa) {
     while(oa->numops) {
         int j;
         redisOp *op;
@@ -3322,7 +3322,7 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target) {
         argvcopy[j] = argv[j];
         incrRefCount(argv[j]);
     }
-    redisOpArrayAppend(&server.also_propagate,dbid,argvcopy,argc,target);
+    serverOpArrayAppend(&server.also_propagate,dbid,argvcopy,argc,target);
 }
 
 /* It is possible to call the function forceCommandPropagation() inside a
@@ -3419,7 +3419,7 @@ static void propagatePendingCommands(void) {
         propagateNow(-1,&shared.exec,1,PROPAGATE_AOF|PROPAGATE_REPL);
     }
 
-    redisOpArrayFree(&server.also_propagate);
+    serverOpArrayFree(&server.also_propagate);
 }
 
 /* Performs operations that should be performed after an execution unit ends.

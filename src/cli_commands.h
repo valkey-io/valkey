@@ -11,7 +11,7 @@
 /* Syntax specifications for a command argument. */
 typedef struct cliCommandArg {
     char *name;
-    redisCommandArgType type;
+    serverCommandArgType type;
     char *token;
     char *since;
     int flags;

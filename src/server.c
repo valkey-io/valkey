@@ -4699,7 +4699,7 @@ void addReplyFlagsForKeyArgs(client *c, uint64_t flags) {
     addReplyCommandFlags(c, flags, docFlagNames);
 }
 
-/* Must match redisCommandArgType */
+/* Must match serverCommandArgType */
 const char *ARG_TYPE_STR[] = {
     "string",
     "integer",
@@ -4722,7 +4722,7 @@ void addReplyFlagsForArg(client *c, uint64_t flags) {
     addReplyCommandFlags(c, flags, argFlagNames);
 }
 
-void addReplyCommandArgList(client *c, struct redisCommandArg *args, int num_args) {
+void addReplyCommandArgList(client *c, struct serverCommandArg *args, int num_args) {
     addReplyArrayLen(c, num_args);
     for (int j = 0; j<num_args; j++) {
         /* Count our reply len so we don't have to use deferred reply. */

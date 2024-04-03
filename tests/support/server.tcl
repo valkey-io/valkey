@@ -275,7 +275,7 @@ proc create_server_config_file {filename config config_lines} {
 }
 
 proc spawn_server {config_file stdout stderr args} {
-    set cmd [list src/placeholderkv-server $config_file]
+    set cmd [list src/valkey-server $config_file]
     set args {*}$args
     if {[llength $args] > 0} {
         lappend cmd {*}$args
@@ -536,7 +536,7 @@ proc start_server {options {code undefined}} {
     }
 
     # write new configuration to temporary file
-    set config_file [tmpfile redis.conf]
+    set config_file [tmpfile valkey.conf]
     create_server_config_file $config_file $config $config_lines
 
     set stdout [format "%s/%s" [dict get $config "dir"] "stdout"]

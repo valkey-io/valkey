@@ -466,7 +466,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         # rm_call in script mode
         assert_error {MISCONF *} {r test.rm_call_flags S set x 1}
 
-        # repeate with script
+        # repeat with script
         assert_error {MISCONF *} {r test.rm_call eval {
             return redis.call('set','x',1)
             } 1 x

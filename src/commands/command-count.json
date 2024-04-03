@@ -16,7 +16,7 @@
             "CONNECTION"
         ],
         "reply_schema": {
-            "description": "Number of total commands in this Redis server.",
+            "description": "Number of total commands in this server.",
             "type": "integer"
         }
     }

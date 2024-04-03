@@ -48,9 +48,9 @@ if {[catch {cd tmp}]} {
 # the provided configuration file. Returns the PID of the process.
 proc exec_instance {type dirname cfgfile} {
     if {$type eq "redis"} {
-        set prgname placeholderkv-server
+        set prgname valkey-server
     } elseif {$type eq "sentinel"} {
-        set prgname redis-sentinel
+        set prgname valkey-sentinel
     } else {
         error "Unknown instance type."
     }

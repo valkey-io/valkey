@@ -4246,11 +4246,11 @@ void incrementErrorCount(const char *fullerr, size_t namelen) {
             return;
         }
 
-        struct redisError *error = zmalloc(sizeof(*error));
+        struct serverError *error = zmalloc(sizeof(*error));
         error->count = 1;
         raxInsert(server.errors,(unsigned char*)fullerr,namelen,error,NULL);
     } else {
-        struct redisError *error = result;
+        struct serverError *error = result;
         error->count++;
     }
 }
@@ -6071,10 +6071,10 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
         raxIterator ri;
         raxStart(&ri,server.errors);
         raxSeek(&ri,"^",NULL,0);
-        struct redisError *e;
+        struct serverError *e;
         while(raxNext(&ri)) {
             char *tmpsafe;
-            e = (struct redisError *) ri.data;
+            e = (struct serverError *) ri.data;
             info = sdscatprintf(info,
                 "errorstat_%.*s:count=%lld\r\n",
                 (int)ri.key_len, getSafeInfoString((char *) ri.key, ri.key_len, &tmpsafe), e->count);

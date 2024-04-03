@@ -2386,7 +2386,7 @@ struct serverCommand {
     struct RedisModuleCommand *module_cmd; /* A pointer to the module command data (NULL if native command) */
 };
 
-struct redisError {
+struct serverError {
     long long count;
 };
 

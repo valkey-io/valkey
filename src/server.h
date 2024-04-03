@@ -739,7 +739,7 @@ struct RedisModuleDigest;
 struct RedisModuleCtx;
 struct moduleLoadQueueEntry;
 struct RedisModuleKeyOptCtx;
-struct RedisModuleCommand;
+struct ServerModuleCommand;
 struct clusterState;
 
 /* Each module type implementation should export a set of methods in order
@@ -2383,7 +2383,7 @@ struct redisCommand {
     dict *subcommands_dict; /* A dictionary that holds the subcommands, the key is the subcommand sds name
                              * (not the fullname), and the value is the redisCommand structure pointer. */
     struct redisCommand *parent;
-    struct RedisModuleCommand *module_cmd; /* A pointer to the module command data (NULL if native command) */
+    struct ServerModuleCommand *module_cmd; /* A pointer to the module command data (NULL if native command) */
 };
 
 struct redisError {

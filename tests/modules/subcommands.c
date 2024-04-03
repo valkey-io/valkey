@@ -42,7 +42,7 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
 
     if (RedisModule_CreateCommand(ctx,"subcommands.bitarray",NULL,"",0,0,0) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
-    RedisModuleCommand *parent = RedisModule_GetCommand(ctx,"subcommands.bitarray");
+    ServerModuleCommand *parent = RedisModule_GetCommand(ctx,"subcommands.bitarray");
 
     if (RedisModule_CreateSubcommand(parent,"set",cmd_set,"",0,0,0) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
@@ -52,7 +52,7 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
     RedisModule_Assert(RedisModule_CreateSubcommand(parent,"char@",cmd_set,"",0,0,0) == REDISMODULE_ERR);
     RedisModule_Assert(RedisModule_CreateSubcommand(parent,"char=",cmd_set,"",0,0,0) == REDISMODULE_ERR);
 
-    RedisModuleCommand *subcmd = RedisModule_GetCommand(ctx,"subcommands.bitarray|set");
+    ServerModuleCommand *subcmd = RedisModule_GetCommand(ctx,"subcommands.bitarray|set");
     RedisModuleCommandInfo cmd_set_info = {
         .version = REDISMODULE_COMMAND_INFO_VERSION,
         .key_specs = (RedisModuleCommandKeySpec[]){
@@ -96,7 +96,7 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
     if (RedisModule_CreateCommand(ctx,"subcommands.sub",NULL,"",0,0,0) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
-    RedisModuleCommand *fullname_parent = RedisModule_GetCommand(ctx,"subcommands.sub");
+    ServerModuleCommand *fullname_parent = RedisModule_GetCommand(ctx,"subcommands.sub");
     if (RedisModule_CreateSubcommand(fullname_parent,"get_fullname",cmd_get_fullname,"",0,0,0) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 

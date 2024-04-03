@@ -235,12 +235,12 @@ typedef int (*RedisModuleAuthCallback)(RedisModuleCtx *ctx, void *username, void
 typedef void (*RedisModuleDisconnectFunc) (RedisModuleCtx *ctx, struct RedisModuleBlockedClient *bc);
 
 /* This struct holds the information about a command registered by a module.*/
-struct RedisModuleCommand {
+struct ServerModuleCommand {
     struct ServerModule *module;
     ServerModuleCmdFunc func;
     struct redisCommand *rediscmd;
 };
-typedef struct RedisModuleCommand RedisModuleCommand;
+typedef struct ServerModuleCommand ServerModuleCommand;
 
 #define REDISMODULE_REPLYFLAG_NONE 0
 #define REDISMODULE_REPLYFLAG_TOPARSE (1<<0) /* Protocol must be parsed. */
@@ -925,7 +925,7 @@ void moduleCreateContext(RedisModuleCtx *out_ctx, ServerModule *module, int ctx_
 /* This Redis command binds the normal Redis command invocation with commands
  * exported by modules. */
 void RedisModuleCommandDispatcher(client *c) {
-    RedisModuleCommand *cp = c->cmd->module_cmd;
+    ServerModuleCommand *cp = c->cmd->module_cmd;
     RedisModuleCtx ctx;
     moduleCreateContext(&ctx, cp->module, REDISMODULE_CTX_COMMAND);
 
@@ -960,7 +960,7 @@ void RedisModuleCommandDispatcher(client *c) {
  * the context in a way that the command can recognize this is a special
  * "get keys" call by calling RedisModule_IsKeysPositionRequest(ctx). */
 int moduleGetCommandKeysViaAPI(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
-    RedisModuleCommand *cp = cmd->module_cmd;
+    ServerModuleCommand *cp = cmd->module_cmd;
     RedisModuleCtx ctx;
     moduleCreateContext(&ctx, cp->module, REDISMODULE_CTX_KEYS_POS_REQUEST);
 
@@ -980,7 +980,7 @@ int moduleGetCommandKeysViaAPI(struct redisCommand *cmd, robj **argv, int argc, 
  * moduleGetCommandKeysViaAPI, for modules that declare "getchannels-api"
  * during registration. Unlike keys, this is the only way to declare channels. */
 int moduleGetCommandChannelsViaAPI(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result) {
-    RedisModuleCommand *cp = cmd->module_cmd;
+    ServerModuleCommand *cp = cmd->module_cmd;
     RedisModuleCtx ctx;
     moduleCreateContext(&ctx, cp->module, REDISMODULE_CTX_CHANNELS_POS_REQUEST);
 
@@ -1169,7 +1169,7 @@ int64_t commandFlagsFromString(char *s) {
     return flags;
 }
 
-RedisModuleCommand *moduleCreateCommandProxy(struct ServerModule *module, sds declared_name, sds fullname, ServerModuleCmdFunc cmdfunc, int64_t flags, int firstkey, int lastkey, int keystep);
+ServerModuleCommand *moduleCreateCommandProxy(struct ServerModule *module, sds declared_name, sds fullname, ServerModuleCmdFunc cmdfunc, int64_t flags, int firstkey, int lastkey, int keystep);
 
 /* Register a new command in the Redis server, that will be handled by
  * calling the function pointer 'cmdfunc' using the ServerModule calling
@@ -1284,7 +1284,7 @@ int RM_CreateCommand(RedisModuleCtx *ctx, const char *name, ServerModuleCmdFunc 
         return REDISMODULE_ERR;
 
     sds declared_name = sdsnew(name);
-    RedisModuleCommand *cp = moduleCreateCommandProxy(ctx->module, declared_name, sdsdup(declared_name), cmdfunc, flags, firstkey, lastkey, keystep);
+    ServerModuleCommand *cp = moduleCreateCommandProxy(ctx->module, declared_name, sdsdup(declared_name), cmdfunc, flags, firstkey, lastkey, keystep);
     cp->rediscmd->arity = cmdfunc ? -1 : -2; /* Default value, can be changed later via dedicated API */
 
     serverAssert(dictAdd(server.commands, sdsdup(declared_name), cp->rediscmd) == DICT_OK);
@@ -1300,9 +1300,9 @@ int RM_CreateCommand(RedisModuleCtx *ctx, const char *name, ServerModuleCmdFunc 
  *
  * Function will take the ownership of both 'declared_name' and 'fullname' SDS.
  */
-RedisModuleCommand *moduleCreateCommandProxy(struct ServerModule *module, sds declared_name, sds fullname, ServerModuleCmdFunc cmdfunc, int64_t flags, int firstkey, int lastkey, int keystep) {
+ServerModuleCommand *moduleCreateCommandProxy(struct ServerModule *module, sds declared_name, sds fullname, ServerModuleCmdFunc cmdfunc, int64_t flags, int firstkey, int lastkey, int keystep) {
     struct redisCommand *rediscmd;
-    RedisModuleCommand *cp;
+    ServerModuleCommand *cp;
 
     /* Create a command "proxy", which is a structure that is referenced
      * in the command table, so that the generic command that works as
@@ -1351,13 +1351,13 @@ RedisModuleCommand *moduleCreateCommandProxy(struct ServerModule *module, sds de
  * * The command is not a module command
  * * The command doesn't belong to the calling module
  */
-RedisModuleCommand *RM_GetCommand(RedisModuleCtx *ctx, const char *name) {
+ServerModuleCommand *RM_GetCommand(RedisModuleCtx *ctx, const char *name) {
     struct redisCommand *cmd = lookupCommandByCString(name);
 
     if (!cmd || !(cmd->flags & CMD_MODULE))
         return NULL;
 
-    RedisModuleCommand *cp = cmd->module_cmd;
+    ServerModuleCommand *cp = cmd->module_cmd;
     if (cp->module != ctx->module)
         return NULL;
 
@@ -1374,7 +1374,7 @@ RedisModuleCommand *RM_GetCommand(RedisModuleCtx *ctx, const char *name) {
  *      if (RedisModule_CreateCommand(ctx,"module.config",NULL,"",0,0,0) == REDISMODULE_ERR)
  *          return REDISMODULE_ERR;
  *
- *      RedisModuleCommand *parent = RedisModule_GetCommand(ctx,,"module.config");
+ *      ServerModuleCommand *parent = RedisModule_GetCommand(ctx,,"module.config");
  *
  *      if (RedisModule_CreateSubcommand(parent,"set",cmd_config_set,"",0,0,0) == REDISMODULE_ERR)
  *         return REDISMODULE_ERR;
@@ -1391,7 +1391,7 @@ RedisModuleCommand *RM_GetCommand(RedisModuleCtx *ctx, const char *name) {
  * * `parent` already has a subcommand called `name`
  * * Creating a subcommand is called outside of RedisModule_OnLoad.
  */
-int RM_CreateSubcommand(RedisModuleCommand *parent, const char *name, ServerModuleCmdFunc cmdfunc, const char *strflags, int firstkey, int lastkey, int keystep) {
+int RM_CreateSubcommand(ServerModuleCommand *parent, const char *name, ServerModuleCmdFunc cmdfunc, const char *strflags, int firstkey, int lastkey, int keystep) {
     if (!parent->module->onload)
         return REDISMODULE_ERR;
     int64_t flags = strflags ? commandFlagsFromString((char*)strflags) : 0;
@@ -1404,7 +1404,7 @@ int RM_CreateSubcommand(RedisModuleCommand *parent, const char *name, ServerModu
     if (parent_cmd->parent)
         return REDISMODULE_ERR; /* We don't allow more than one level of subcommands */
 
-    RedisModuleCommand *parent_cp = parent_cmd->module_cmd;
+    ServerModuleCommand *parent_cp = parent_cmd->module_cmd;
     if (parent_cp->func)
         return REDISMODULE_ERR; /* A parent command should be a pure container of subcommands */
 
@@ -1420,7 +1420,7 @@ int RM_CreateSubcommand(RedisModuleCommand *parent, const char *name, ServerModu
     }
 
     sds fullname = catSubCommandFullname(parent_cmd->fullname, name);
-    RedisModuleCommand *cp = moduleCreateCommandProxy(parent->module, declared_name, fullname, cmdfunc, flags, firstkey, lastkey, keystep);
+    ServerModuleCommand *cp = moduleCreateCommandProxy(parent->module, declared_name, fullname, cmdfunc, flags, firstkey, lastkey, keystep);
     cp->rediscmd->arity = -2;
 
     commandAddSubcommand(parent_cmd, cp->rediscmd, name);
@@ -1549,7 +1549,7 @@ int64_t categoryFlagsFromString(char *aclflags) {
  * This function can only be called during the RedisModule_OnLoad function. If called
  * outside of this function, an error is returned.
  */
-int RM_SetCommandACLCategories(RedisModuleCommand *command, const char *aclflags) {
+int RM_SetCommandACLCategories(ServerModuleCommand *command, const char *aclflags) {
     if (!command || !command->module || !command->module->onload) return REDISMODULE_ERR;
     int64_t categories_flags = aclflags ? categoryFlagsFromString((char*)aclflags) : 0;
     if (categories_flags == -1) return REDISMODULE_ERR;
@@ -1860,7 +1860,7 @@ int RM_SetCommandACLCategories(RedisModuleCommand *command, const char *aclflags
  * and `errno` is set to EINVAL if invalid info was provided or EEXIST if info
  * has already been set. If the info is invalid, a warning is logged explaining
  * which part of the info is invalid and why. */
-int RM_SetCommandInfo(RedisModuleCommand *command, const RedisModuleCommandInfo *info) {
+int RM_SetCommandInfo(ServerModuleCommand *command, const RedisModuleCommandInfo *info) {
     if (!moduleValidateCommandInfo(info)) {
         errno = EINVAL;
         return REDISMODULE_ERR;
@@ -2261,7 +2261,7 @@ int moduleIsModuleCommand(void *module_handle, struct redisCommand *cmd) {
         return 0;
     if (module_handle == NULL)
         return 0;
-    RedisModuleCommand *cp = cmd->module_cmd;
+    ServerModuleCommand *cp = cmd->module_cmd;
     return (cp->module == module_handle);
 }
 
@@ -6776,7 +6776,7 @@ const char *moduleTypeModuleName(moduleType *mt) {
 const char *moduleNameFromCommand(struct redisCommand *cmd) {
     serverAssert(cmd->proc == RedisModuleCommandDispatcher);
 
-    RedisModuleCommand *cp = cmd->module_cmd;
+    ServerModuleCommand *cp = cmd->module_cmd;
     return cp->module->name;
 }
 
@@ -12158,7 +12158,7 @@ int moduleFreeCommand(struct ServerModule *module, struct redisCommand *cmd) {
     if (cmd->proc != RedisModuleCommandDispatcher)
         return C_ERR;
 
-    RedisModuleCommand *cp = cmd->module_cmd;
+    ServerModuleCommand *cp = cmd->module_cmd;
     if (cp->module != module)
         return C_ERR;
 

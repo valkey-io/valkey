@@ -40,7 +40,7 @@ int createKspecTwoRanges(RedisModuleCtx *ctx) {
     if (RedisModule_CreateCommand(ctx,"kspec.tworanges",kspec_impl,"",0,0,0) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
-    RedisModuleCommand *command = RedisModule_GetCommand(ctx,"kspec.tworanges");
+    ServerModuleCommand *command = RedisModule_GetCommand(ctx,"kspec.tworanges");
     RedisModuleCommandInfo info = {
         .version = REDISMODULE_COMMAND_INFO_VERSION,
         .arity = -2,
@@ -73,7 +73,7 @@ int createKspecTwoRangesWithGap(RedisModuleCtx *ctx) {
     if (RedisModule_CreateCommand(ctx,"kspec.tworangeswithgap",kspec_impl,"",0,0,0) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
-    RedisModuleCommand *command = RedisModule_GetCommand(ctx,"kspec.tworangeswithgap");
+    ServerModuleCommand *command = RedisModule_GetCommand(ctx,"kspec.tworangeswithgap");
     RedisModuleCommandInfo info = {
         .version = REDISMODULE_COMMAND_INFO_VERSION,
         .arity = -2,
@@ -105,7 +105,7 @@ int createKspecKeyword(RedisModuleCtx *ctx) {
     if (RedisModule_CreateCommand(ctx,"kspec.keyword",kspec_impl,"",3,-1,1) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
-    RedisModuleCommand *command = RedisModule_GetCommand(ctx,"kspec.keyword");
+    ServerModuleCommand *command = RedisModule_GetCommand(ctx,"kspec.keyword");
     RedisModuleCommandInfo info = {
         .version = REDISMODULE_COMMAND_INFO_VERSION,
         .key_specs = (RedisModuleCommandKeySpec[]){
@@ -131,7 +131,7 @@ int createKspecComplex1(RedisModuleCtx *ctx) {
     if (RedisModule_CreateCommand(ctx,"kspec.complex1",kspec_impl,"",1,1,1) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
-    RedisModuleCommand *command = RedisModule_GetCommand(ctx,"kspec.complex1");
+    ServerModuleCommand *command = RedisModule_GetCommand(ctx,"kspec.complex1");
     RedisModuleCommandInfo info = {
         .version = REDISMODULE_COMMAND_INFO_VERSION,
         .key_specs = (RedisModuleCommandKeySpec[]){
@@ -168,7 +168,7 @@ int createKspecComplex2(RedisModuleCtx *ctx) {
     if (RedisModule_CreateCommand(ctx,"kspec.complex2",kspec_impl,"",0,0,0) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
-    RedisModuleCommand *command = RedisModule_GetCommand(ctx,"kspec.complex2");
+    ServerModuleCommand *command = RedisModule_GetCommand(ctx,"kspec.complex2");
     RedisModuleCommandInfo info = {
         .version = REDISMODULE_COMMAND_INFO_VERSION,
         .key_specs = (RedisModuleCommandKeySpec[]){

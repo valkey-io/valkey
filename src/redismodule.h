@@ -868,7 +868,7 @@ typedef void (*RedisModuleUserChangedFunc) (uint64_t client_id, void *privdata);
 
 /* Incomplete structures for compiler checks but opaque access. */
 typedef struct RedisModuleCtx RedisModuleCtx;
-typedef struct RedisModuleCommand RedisModuleCommand;
+typedef struct ServerModuleCommand ServerModuleCommand;
 typedef struct RedisModuleCallReply RedisModuleCallReply;
 typedef struct RedisModuleType RedisModuleType;
 typedef struct RedisModuleBlockedClient RedisModuleBlockedClient;
@@ -966,10 +966,10 @@ REDISMODULE_API void * (*RedisModule_TryCalloc)(size_t nmemb, size_t size) REDIS
 REDISMODULE_API char * (*RedisModule_Strdup)(const char *str) REDISMODULE_ATTR;
 REDISMODULE_API int (*RedisModule_GetApi)(const char *, void *) REDISMODULE_ATTR;
 REDISMODULE_API int (*RedisModule_CreateCommand)(RedisModuleCtx *ctx, const char *name, ServerModuleCmdFunc cmdfunc, const char *strflags, int firstkey, int lastkey, int keystep) REDISMODULE_ATTR;
-REDISMODULE_API RedisModuleCommand *(*RedisModule_GetCommand)(RedisModuleCtx *ctx, const char *name) REDISMODULE_ATTR;
-REDISMODULE_API int (*RedisModule_CreateSubcommand)(RedisModuleCommand *parent, const char *name, ServerModuleCmdFunc cmdfunc, const char *strflags, int firstkey, int lastkey, int keystep) REDISMODULE_ATTR;
-REDISMODULE_API int (*RedisModule_SetCommandInfo)(RedisModuleCommand *command, const RedisModuleCommandInfo *info) REDISMODULE_ATTR;
-REDISMODULE_API int (*RedisModule_SetCommandACLCategories)(RedisModuleCommand *command, const char *ctgrsflags) REDISMODULE_ATTR;
+REDISMODULE_API ServerModuleCommand *(*RedisModule_GetCommand)(RedisModuleCtx *ctx, const char *name) REDISMODULE_ATTR;
+REDISMODULE_API int (*RedisModule_CreateSubcommand)(ServerModuleCommand *parent, const char *name, ServerModuleCmdFunc cmdfunc, const char *strflags, int firstkey, int lastkey, int keystep) REDISMODULE_ATTR;
+REDISMODULE_API int (*RedisModule_SetCommandInfo)(ServerModuleCommand *command, const RedisModuleCommandInfo *info) REDISMODULE_ATTR;
+REDISMODULE_API int (*RedisModule_SetCommandACLCategories)(ServerModuleCommand *command, const char *ctgrsflags) REDISMODULE_ATTR;
 REDISMODULE_API int (*RedisModule_AddACLCategory)(RedisModuleCtx *ctx, const char *name) REDISMODULE_ATTR;
 REDISMODULE_API void (*RedisModule_SetModuleAttribs)(RedisModuleCtx *ctx, const char *name, int ver, int apiver) REDISMODULE_ATTR;
 REDISMODULE_API int (*RedisModule_IsModuleNameBusy)(const char *name) REDISMODULE_ATTR;

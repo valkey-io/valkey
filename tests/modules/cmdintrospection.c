@@ -18,7 +18,7 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
     if (RedisModule_CreateCommand(ctx,"cmdintrospection.xadd",cmd_xadd,"write deny-oom random fast",0,0,0) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
-    RedisModuleCommand *xadd = RedisModule_GetCommand(ctx,"cmdintrospection.xadd");
+    ServerModuleCommand *xadd = RedisModule_GetCommand(ctx,"cmdintrospection.xadd");
 
     RedisModuleCommandInfo info = {
         .version = REDISMODULE_COMMAND_INFO_VERSION,

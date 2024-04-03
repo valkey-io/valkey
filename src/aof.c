@@ -1481,7 +1481,7 @@ int loadSingleAppendOnlyFile(char *filename) {
         robj **argv;
         char buf[AOF_ANNOTATION_LINE_MAX_LEN];
         sds argsds;
-        struct redisCommand *cmd;
+        struct serverCommand *cmd;
 
         /* Serve the clients from time to time */
         if (!(loops++ % 1024)) {

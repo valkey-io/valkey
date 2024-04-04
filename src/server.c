@@ -6915,7 +6915,7 @@ int main(int argc, char **argv) {
         }
 
         if (!strcasecmp(argv[2], "all")) {
-            int numtests = sizeof(serverTest)/sizeof(struct redisTest);
+            int numtests = sizeof(serverTests)/sizeof(struct serverTest);
             for (j = 0; j < numtests; j++) {
                 serverTests[j].failed = (serverTests[j].proc(argc,argv,flags) != 0);
             }

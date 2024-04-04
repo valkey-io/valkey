@@ -1513,7 +1513,6 @@ void luaRegisterRedisAPI(lua_State* lua) {
      * This is not a deep copy but is enough for our purpose here. */
     lua_getglobal(lua,SERVER_API_NAME);
     lua_setglobal(lua,REDIS_API_NAME);
- 
     /* Replace math.random and math.randomseed with our implementations. */
     lua_getglobal(lua,"math");
 

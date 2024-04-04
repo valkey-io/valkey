@@ -183,7 +183,10 @@ In order to install Valkey binaries into /usr/local/bin, just use:
 You can use `make PREFIX=/some/other/directory install` if you wish to use a
 different destination.
 
-_Note_: For compatibility with redis, we will create symlinks with the old names (redis-cli, etc.) to these in `make install` (the switch in `src/Makefile` is `ENABLE_REDIS_SYMBLINK` and its default value is `true`). These are located at the same place as the installed binaries, e.g. under `/usr/local/bin/` or similar. **Also, these identically named files are removed when `make unstalll`.**
+_Note_: For compatibility with Redis, we create symlinks from the Redis names (redis-server, redis-cli, etc.) to the Valkey binaries created by the `make install`.
+The symlinks are created in same directory as the the Valkey binaries.
+The symlinks are removed when using `make uninstall`.
+The creation of the symlinks can be skipped by setting the environment variable `CONFIGURE_REDIS_SYMLINKS=false`.
 
 `make install` will just install binaries in your system, but will not configure
 init scripts and configuration files in the appropriate place. This is not

@@ -356,7 +356,7 @@ start_server {tags {"other"}} {
 }
 
 start_server {tags {"other external:skip"}} {
-    test {Don't rehash if redis has child process} {
+    test {Don't rehash if server has child process} {
         r config set save ""
         r config set rdb-key-save-delay 1000000
 

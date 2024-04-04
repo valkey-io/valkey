@@ -1871,17 +1871,17 @@ void createSharedObjects(void) {
     shared.noscripterr = createObject(OBJ_STRING,sdsnew(
         "-NOSCRIPT No matching script. Please use EVAL.\r\n"));
     shared.loadingerr = createObject(OBJ_STRING,sdsnew(
-        "-LOADING Redis is loading the dataset in memory\r\n"));
+        "-LOADING Server is loading the dataset in memory\r\n"));
     shared.slowevalerr = createObject(OBJ_STRING,sdsnew(
-        "-BUSY Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.\r\n"));
+        "-BUSY Server is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.\r\n"));
     shared.slowscripterr = createObject(OBJ_STRING,sdsnew(
-        "-BUSY Redis is busy running a script. You can only call FUNCTION KILL or SHUTDOWN NOSAVE.\r\n"));
+        "-BUSY Server is busy running a script. You can only call FUNCTION KILL or SHUTDOWN NOSAVE.\r\n"));
     shared.slowmoduleerr = createObject(OBJ_STRING,sdsnew(
-        "-BUSY Redis is busy running a module command.\r\n"));
+        "-BUSY Server is busy running a module command.\r\n"));
     shared.masterdownerr = createObject(OBJ_STRING,sdsnew(
         "-MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.\r\n"));
     shared.bgsaveerr = createObject(OBJ_STRING,sdsnew(
-        "-MISCONF Redis is configured to save RDB snapshots, but it's currently unable to persist to disk. Commands that may modify the data set are disabled, because this instance is configured to report errors during writes if RDB snapshotting fails (stop-writes-on-bgsave-error option). Please check the Redis logs for details about the RDB error.\r\n"));
+        "-MISCONF Valkey is configured to save RDB snapshots, but it's currently unable to persist to disk. Commands that may modify the data set are disabled, because this instance is configured to report errors during writes if RDB snapshotting fails (stop-writes-on-bgsave-error option). Please check the Server logs for details about the RDB error.\r\n"));
     shared.roslaveerr = createObject(OBJ_STRING,sdsnew(
         "-READONLY You can't write against a read only replica.\r\n"));
     shared.noautherr = createObject(OBJ_STRING,sdsnew(
@@ -4526,7 +4526,7 @@ int finishShutdown(void) {
 
 
     serverLog(LL_WARNING,"%s is now ready to exit, bye bye...",
-        server.sentinel_mode ? "Sentinel" : "Redis");
+        server.sentinel_mode ? "Sentinel" : "Server");
     return C_OK;
 
 error:
@@ -5303,23 +5303,23 @@ void commandGetKeysCommand(client *c) {
 void commandHelpCommand(client *c) {
     const char *help[] = {
 "(no subcommand)",
-"    Return details about all Redis commands.",
+"    Return details about all Valkey commands.",
 "COUNT",
-"    Return the total number of commands in this Redis server.",
+"    Return the total number of commands in this Valkey server.",
 "LIST",
-"    Return a list of all commands in this Redis server.",
+"    Return a list of all commands in this Valkey server.",
 "INFO [<command-name> ...]",
-"    Return details about multiple Redis commands.",
+"    Return details about multiple Valkey commands.",
 "    If no command names are given, documentation details for all",
 "    commands are returned.",
 "DOCS [<command-name> ...]",
-"    Return documentation details about multiple Redis commands.",
+"    Return documentation details about multiple Valkey commands.",
 "    If no command names are given, documentation details for all",
 "    commands are returned.",
 "GETKEYS <full-command>",
-"    Return the keys from a full Redis command.",
+"    Return the keys from a full Valkey command.",
 "GETKEYSANDFLAGS <full-command>",
-"    Return the keys and the access flags from a full Redis command.",
+"    Return the keys and the access flags from a full Valkey command.",
 NULL
     };
 
@@ -6698,7 +6698,7 @@ void loadDataFromDisk(void) {
 void serverOutOfMemoryHandler(size_t allocation_size) {
     serverLog(LL_WARNING,"Out Of Memory allocating %zu bytes!",
         allocation_size);
-    serverPanic("Redis aborting for OUT OF MEMORY. Allocating %zu bytes!",
+    serverPanic("Server aborting for OUT OF MEMORY. Allocating %zu bytes!",
         allocation_size);
 }
 
@@ -6811,10 +6811,10 @@ static int serverSupervisedUpstart(void) {
 static int serverSupervisedSystemd(void) {
 #ifndef HAVE_LIBSYSTEMD
     serverLog(LL_WARNING,
-            "systemd supervision requested or auto-detected, but Redis is compiled without libsystemd support!");
+            "systemd supervision requested or auto-detected, but Valkey Server is compiled without libsystemd support!");
     return 0;
 #else
-    if (serverCommunicateSystemd("STATUS=Redis is loading...\n") <= 0)
+    if (serverCommunicateSystemd("STATUS=Server is loading...\n") <= 0)
         return 0;
     serverLog(LL_NOTICE,
         "Supervised by systemd. Please make sure you set appropriate values for TimeoutStartSec and TimeoutStopSec in your service unit.");
@@ -7023,7 +7023,7 @@ int main(int argc, char **argv) {
                 exit(0);
             } else {
                 fprintf(stderr,"Please specify the amount of memory to test in megabytes.\n");
-                fprintf(stderr,"Example: ./redis-server --test-memory 4096\n\n");
+                fprintf(stderr,"Example: ./valkey-server --test-memory 4096\n\n");
                 exit(1);
             }
         } if (strcmp(argv[1], "--check-system") == 0) {
@@ -7141,7 +7141,7 @@ int main(int argc, char **argv) {
             serverLog(LL_WARNING, "Failed to test the kernel for a bug that could lead to data corruption during background save. "
                                   "Your system could be affected, please report this error.");
         if (!checkIgnoreWarning("ARM64-COW-BUG")) {
-            serverLog(LL_WARNING,"Redis will now exit to prevent data corruption. "
+            serverLog(LL_WARNING,"Valkey Server will now exit to prevent data corruption. "
                                  "Note that it is possible to suppress this warning by setting the following config: ignore-warnings ARM64-COW-BUG");
             exit(1);
         }
@@ -7154,7 +7154,7 @@ int main(int argc, char **argv) {
     int background = server.daemonize && !server.supervised;
     if (background) daemonize();
 
-    serverLog(LL_NOTICE, "oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo");
+    serverLog(LL_NOTICE, "oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo");
     serverLog(LL_NOTICE, SERVER_NAME " version=%s, bits=%d, commit=%s, modified=%d, pid=%d, just started",
             SERVER_VERSION,
             (sizeof(long) == 8) ? 64 : 32,
@@ -7163,7 +7163,7 @@ int main(int argc, char **argv) {
             (int)getpid());
 
     if (argc == 1) {
-        serverLog(LL_WARNING, "Warning: no config file specified, using the default config. In order to specify a config file use %s /path/to/redis.conf", argv[0]);
+        serverLog(LL_WARNING, "Warning: no config file specified, using the default config. In order to specify a config file use %s /path/to/valkey.conf", argv[0]);
     } else {
         serverLog(LL_NOTICE, "Configuration loaded");
     }

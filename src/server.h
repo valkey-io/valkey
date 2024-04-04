@@ -80,7 +80,7 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "rax.h"     /* Radix tree */
 #include "connection.h" /* Connection abstraction */
 
-#define REDISMODULE_CORE 1
+#define SERVERMODULE_CORE 1
 typedef struct serverObject robj;
 #include "redismodule.h"    /* Redis modules API defines. */
 
@@ -724,14 +724,14 @@ typedef enum {
 #define OBJ_TYPE_MAX 7  /* Maximum number of object types */
 
 /* Extract encver / signature from a module type ID. */
-#define REDISMODULE_TYPE_ENCVER_BITS 10
-#define REDISMODULE_TYPE_ENCVER_MASK ((1<<REDISMODULE_TYPE_ENCVER_BITS)-1)
-#define REDISMODULE_TYPE_ENCVER(id) ((id) & REDISMODULE_TYPE_ENCVER_MASK)
-#define REDISMODULE_TYPE_SIGN(id) (((id) & ~((uint64_t)REDISMODULE_TYPE_ENCVER_MASK)) >>REDISMODULE_TYPE_ENCVER_BITS)
+#define SERVERMODULE_TYPE_ENCVER_BITS 10
+#define SERVERMODULE_TYPE_ENCVER_MASK ((1<<SERVERMODULE_TYPE_ENCVER_BITS)-1)
+#define SERVERMODULE_TYPE_ENCVER(id) ((id) & SERVERMODULE_TYPE_ENCVER_MASK)
+#define SERVERMODULE_TYPE_SIGN(id) (((id) & ~((uint64_t)SERVERMODULE_TYPE_ENCVER_MASK)) >>SERVERMODULE_TYPE_ENCVER_BITS)
 
 /* Bit flags for moduleTypeAuxSaveFunc */
-#define REDISMODULE_AUX_BEFORE_RDB (1<<0)
-#define REDISMODULE_AUX_AFTER_RDB (1<<1)
+#define SERVERMODULE_AUX_BEFORE_RDB (1<<0)
+#define SERVERMODULE_AUX_AFTER_RDB (1<<1)
 
 struct RedisModule;
 struct RedisModuleIO;
@@ -2014,7 +2014,7 @@ struct valkeyServer {
     int cluster_module_flags;      /* Set of flags that Redis modules are able
                                       to set in order to suppress certain
                                       native Redis Cluster features. Check the
-                                      REDISMODULE_CLUSTER_FLAG_*. */
+                                      SERVERMODULE_CLUSTER_FLAG_*. */
     int cluster_allow_reads_when_down; /* Are reads allowed when the cluster
                                         is down? */
     int cluster_config_file_lock_fd;   /* cluster config fd, will be flocked. */

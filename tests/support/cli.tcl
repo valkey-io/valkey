@@ -19,6 +19,13 @@ proc rediscli {host port {opts {}}} {
     return $cmd
 }
 
+proc valkeycliuri {scheme host port {opts {}}} {
+    set cmd [list src/valkey-cli -u $scheme$host:$port]
+    lappend cmd {*}[rediscli_tls_config "tests"]
+    lappend cmd {*}$opts
+    return $cmd
+}
+
 # Returns command line for executing redis-cli with a unix socket address
 proc rediscli_unixsocket {unixsocket {opts {}}} {
     return [list src/valkey-cli -s $unixsocket {*}$opts]

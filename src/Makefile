@@ -328,7 +328,7 @@ ifndef V
 
     define CREATE_SYMLINK
         @ln -sf $(1) $(2)/$(3)
-        @printf '    %b %b %b %b %b %b %b\n' $(LINKCOLOR)CREATE SYMLINK$(ENDCOLOR) from $(BINCOLOR)$(3)$(ENDCOLOR) to $(BINCOLOR)$(1)$(ENDCOLOR)  1>&2
+        @printf '    %b %b %b %b %b %b %b\n' $(LINKCOLOR)INSTALL SYMLINK$(ENDCOLOR) $(BINCOLOR)$(3)$(ENDCOLOR) -\> $(BINCOLOR)$(1)$(ENDCOLOR)  1>&2
     endef
 else
     define MAKE_INSTALL

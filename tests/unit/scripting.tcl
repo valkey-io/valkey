@@ -1,13 +1,37 @@
 foreach is_eval {0 1} {
+foreach script_compatibility {server redis} {
+
+if {$script_compatibility eq "server"} {
+    proc replaceLuaRedisAPI {args} {
+        set new_string [regsub -all {redis\.} [lindex $args 0] {server.}]
+        return lreplace $args 0 0 $new_string
+    }
+
+    proc get_api_name {} {
+        # TODO: Replace this with server when it is working
+        return "redis"
+    }
+} else {
+    proc replaceLuaRedisAPI {args} {
+        return lreplace $args 0 0 [lindex $args 0]
+    }
+
+    proc get_api_name {} {
+        return "redis"
+    }
+}
 
 if {$is_eval == 1} {
     proc run_script {args} {
+        set args [replaceLuaRedisAPI $args]
         r eval {*}$args
     }
     proc run_script_ro {args} {
+        set args [replaceLuaRedisAPI $args]
         r eval_ro {*}$args
     }
     proc run_script_on_connection {args} {
+        set args [replaceLuaRedisAPI $args]
         [lindex $args 0] eval {*}[lrange $args 1 end]
     }
     proc kill_script {args} {
@@ -15,7 +39,8 @@ if {$is_eval == 1} {
     }
 } else {
     proc run_script {args} {
-        r function load replace [format "#!lua name=test\nredis.register_function('test', function(KEYS, ARGV)\n %s \nend)" [lindex $args 0]]
+        set args [replaceLuaRedisAPI $args]
+        r function load replace [format "#!lua name=test\n%s.register_function('test', function(KEYS, ARGV)\n %s \nend)" [get_api_name] [lindex $args 0]]
         if {[r readingraw] eq 1} {
             # read name
             assert_equal {test} [r read]
@@ -23,7 +48,8 @@ if {$is_eval == 1} {
         r fcall test {*}[lrange $args 1 end]
     }
     proc run_script_ro {args} {
-        r function load replace [format "#!lua name=test\nredis.register_function{function_name='test', callback=function(KEYS, ARGV)\n %s \nend, flags={'no-writes'}}" [lindex $args 0]]
+        set args [replaceLuaRedisAPI $args]
+        r function load replace [format "#!lua name=test\n%s.register_function{function_name='test', callback=function(KEYS, ARGV)\n %s \nend, flags={'no-writes'}}" [get_api_name] [lindex $args 0]]
         if {[r readingraw] eq 1} {
             # read name
             assert_equal {test} [r read]
@@ -31,8 +57,9 @@ if {$is_eval == 1} {
         r fcall_ro test {*}[lrange $args 1 end]
     }
     proc run_script_on_connection {args} {
+        set args [replaceLuaRedisAPI $args]
         set rd [lindex $args 0]
-        $rd function load replace [format "#!lua name=test\nredis.register_function('test', function(KEYS, ARGV)\n %s \nend)" [lindex $args 1]]
+        $rd function load replace [format "#!lua name=test\n%s.register_function('test', function(KEYS, ARGV)\n %s \nend)" [get_api_name] [lindex $args 1]]
         # read name
         $rd read
         $rd fcall test {*}[lrange $args 2 end]
@@ -44,7 +71,7 @@ if {$is_eval == 1} {
 
 start_server {tags {"scripting"}} {
 
-    if {$is_eval eq 1} {
+    if {$is_eval eq 1 && $script_compatibility == "redis"} {
     test {Script - disallow write on OOM} {
         r config set maxmemory 1
 
@@ -113,12 +140,7 @@ start_server {tags {"scripting"}} {
         run_script {return redis.call('get',KEYS[1])} 1 mykey
     } {myval}
 
-    test {EVAL - is Lua able to call Server API?} { 
-        r set mykey myval
-        run_script {return server.call('get',KEYS[1])} 1 mykey 
-    }
-
-    if {$is_eval eq 1} {
+    if {$is_eval eq 1 && $script_compatibility == "redis"} {
     # eval sha is only relevant for is_eval Lua
     test {EVALSHA - Can we call a SHA1 if already defined?} {
         r evalsha fd758d1589d044dd850a6f05d52f2eefd27f033f 1 mykey
@@ -317,12 +339,6 @@ start_server {tags {"scripting"}} {
     test {EVAL - No arguments to redis.call/pcall is considered an error} {
         set e {}
         catch {run_script {return redis.call()} 0} e
-        set e
-    } {*one argument*}
-   
-    test {EVAL - No arguments to server.call/pcall is considered an error} {
-        set e {}
-        catch {run_script {return server.call()} 0} e
         set e
     } {*one argument*}
 
@@ -577,18 +593,13 @@ start_server {tags {"scripting"}} {
         assert_equal bar [run_script_ro {return redis.call('get', KEYS[1]);} 1 foo]
     }
 
-    test {EVAL_RO - Successful case via server.call} { 
-        r set server_foo server_bar 
-        assert_equal server_bar [run_script_ro {return redis.call('get', KEYS[1]);} 1 server_foo]
-    }
-
     test {EVAL_RO - Cannot run write commands} {
         r set foo bar
         catch {run_script_ro {redis.call('del', KEYS[1]);} 1 foo} e
         set e
     } {ERR Write commands are not allowed from read-only scripts*}
 
-    if {$is_eval eq 1} {
+    if {$is_eval eq 1 && $script_compatibility == "redis"} {
     # script command is only relevant for is_eval Lua
     test {SCRIPTING FLUSH - is able to clear the scripts cache?} {
         r set mykey myval
@@ -728,7 +739,7 @@ start_server {tags {"scripting"}} {
         set res
     } {4 3 2 2 2}
 
-    if {$is_eval eq 1} {
+    if {$is_eval eq 1 && $script_compatibility == "redis"} {
     # random handling is only relevant for is_eval Lua
     test {random numbers are random now} {
         set rand1 [r eval {return tostring(math.random())} 0]
@@ -770,7 +781,7 @@ start_server {tags {"scripting"}} {
         r get x
     } {10000}
 
-    if {$is_eval eq 1} {
+    if {$is_eval eq 1 && $script_compatibility == "redis"} {
     test {SPOP: We can call scripts rewriting client->argv from Lua} {
         set repl [attach_to_replication_stream]
         #this sadd operation is for external-cluster test. If myset doesn't exist, 'del myset' won't get propagated.
@@ -1316,7 +1327,7 @@ start_server {tags {"scripting"}} {
                 }
             }
 
-            if {$is_eval eq 1} {
+            if {$is_eval eq 1 && $script_compatibility == "redis"} {
             test "Now use EVALSHA against the master, with both SHAs" {
                 # The server should replicate successful and unsuccessful
                 # commands as EVAL instead of EVALSHA.
@@ -1352,7 +1363,7 @@ start_server {tags {"scripting"}} {
                 set res
             } {a 1}
 
-            if {$is_eval eq 1} {
+            if {$is_eval eq 1 && $script_compatibility == "redis"} {
             test "EVALSHA replication when first call is readonly" {
                 r del x
                 r eval {if tonumber(ARGV[1]) > 0 then redis.call('incr', KEYS[1]) end} 1 x 0
@@ -1456,7 +1467,7 @@ start_server {tags {"scripting repl external:skip"}} {
         }
 
         test "PRNG is seeded randomly for command replication" {
-            if {$is_eval eq 1} {
+            if {$is_eval eq 1 && $script_compatibility == "redis"} {
                 # on is_eval Lua we need to call redis.replicate_commands() to get real randomization
                 set a [
                     run_script {
@@ -1501,7 +1512,7 @@ start_server {tags {"scripting repl external:skip"}} {
     }
 }
 
-if {$is_eval eq 1} {
+if {$is_eval eq 1 && $script_compatibility == "redis"} {
 start_server {tags {"scripting external:skip"}} {
     r script debug sync
     r eval {return 'hello'} 0
@@ -1892,6 +1903,7 @@ start_server {tags {"scripting needs:debug"}} {
     r debug set-disable-deny-scripts 0
 }
 } ;# foreach is_eval
+} ;# foreach script_compatibility
 
 
 # Scripting "shebang" notation tests

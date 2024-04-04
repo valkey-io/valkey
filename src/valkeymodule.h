@@ -1,3 +1,19 @@
+/*
+ * valkeymodule.h
+ *
+ * This header file is renamed from redismodule.h to reflect the new naming conventions adopted in Valkey.
+ * 
+ * Key Changes:
+ * - Symbolic names have been changed from REDISMODULE_* to VALKEYMODULE_* to align with the
+ *   new module naming convention. Developers must use these new symbolic names in their module
+ *   implementations.
+ * - Terminology has been updated to be more inclusive: "slave" is now "replica", and "master" 
+ *   is now "primary". These changes are part of an effort to use more accurate and inclusive language.
+ *
+ * When developing modules for Valkey, ensure to include "valkeymodule.h". This header file contains
+ * the updated definitions and should be used to maintain compatibility with the changes made in Valkey.
+ */
+
 #ifndef VALKEYMODULE_H
 #define VALKEYMODULE_H
 

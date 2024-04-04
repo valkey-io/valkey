@@ -1481,7 +1481,7 @@ int loadSingleAppendOnlyFile(char *filename) {
         robj **argv;
         char buf[AOF_ANNOTATION_LINE_MAX_LEN];
         sds argsds;
-        struct redisCommand *cmd;
+        struct serverCommand *cmd;
 
         /* Serve the clients from time to time */
         if (!(loops++ % 1024)) {
@@ -2260,7 +2260,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
 
     for (j = 0; j < server.dbnum; j++) {
         char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
-        redisDb *db = server.db + j;
+        serverDb *db = server.db + j;
         if (kvstoreSize(db->keys) == 0) continue;
 
         /* SELECT the new DB */
@@ -2467,12 +2467,12 @@ int rewriteAppendOnlyFileBackground(void) {
 
     server.stat_aof_rewrites++;
 
-    if ((childpid = redisFork(CHILD_TYPE_AOF)) == 0) {
+    if ((childpid = serverFork(CHILD_TYPE_AOF)) == 0) {
         char tmpfile[256];
 
         /* Child */
-        redisSetProcTitle("redis-aof-rewrite");
-        redisSetCpuAffinity(server.aof_rewrite_cpulist);
+        serverSetProcTitle("redis-aof-rewrite");
+        serverSetCpuAffinity(server.aof_rewrite_cpulist);
         snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) getpid());
         if (rewriteAppendOnlyFile(tmpfile) == C_OK) {
             serverLog(LL_NOTICE,

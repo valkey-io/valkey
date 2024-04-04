@@ -46,10 +46,10 @@ static const clock_t RUN_ON_THREADS_TIMEOUT = 2;
 
 static run_on_thread_cb g_callback = NULL;
 static volatile size_t g_tids_len = 0;
-static redisAtomic size_t g_num_threads_done = 0;
+static serverAtomic size_t g_num_threads_done = 0;
 
 /* This flag is set while ThreadsManager_runOnThreads is running */
-static redisAtomic int g_in_progress = 0;
+static serverAtomic int g_in_progress = 0;
 
 /*============================ Internal prototypes ========================== */
 

@@ -90,7 +90,7 @@ void zlibc_free(void *ptr) {
 #define update_zmalloc_stat_alloc(__n) atomicIncr(used_memory,(__n))
 #define update_zmalloc_stat_free(__n) atomicDecr(used_memory,(__n))
 
-static redisAtomic size_t used_memory = 0;
+static serverAtomic size_t used_memory = 0;
 
 static void zmalloc_default_oom(size_t size) {
     fprintf(stderr, "zmalloc: Out of memory trying to allocate %zu bytes\n",
@@ -628,7 +628,7 @@ size_t zmalloc_get_rss(void) {
 
 #if defined(USE_JEMALLOC)
 
-#include "redisassert.h"
+#include "serverassert.h"
 
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)
@@ -908,9 +908,9 @@ size_t zmalloc_get_memory_size(void) {
 #endif
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include "testhelp.h"
-#include "redisassert.h"
+#include "serverassert.h"
 
 #define TEST(name) printf("test — %s\n", name);
 

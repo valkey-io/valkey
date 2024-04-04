@@ -11,7 +11,7 @@
             "STALE"
         ],
         "reply_schema": {
-            "description": "the node id",
+            "description": "The node id.",
             "type": "string"
         }
     }

@@ -43,7 +43,7 @@
 
 #include "zmalloc.h"
 #include "kvstore.h"
-#include "redisassert.h"
+#include "serverassert.h"
 #include "monotonic.h"
 
 #define UNUSED(V) ((void) V)
@@ -866,7 +866,7 @@ int kvstoreDictDelete(kvstore *kvs, int didx, const void *key) {
     return ret;
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include <stdio.h>
 #include "testhelp.h"
 

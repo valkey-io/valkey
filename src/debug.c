@@ -142,7 +142,7 @@ void mixStringObjectDigest(unsigned char *digest, robj *o) {
  * Note that this function does not reset the initial 'digest' passed, it
  * will continue mixing this object digest to anything that was already
  * present. */
-void xorObjectDigest(redisDb *db, robj *keyobj, unsigned char *digest, robj *o) {
+void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o) {
     uint32_t aux = htonl(o->type);
     mixDigest(digest,&aux,sizeof(aux));
     long long expiretime = getExpire(db,keyobj);
@@ -288,7 +288,7 @@ void computeDatasetDigest(unsigned char *final) {
     memset(final,0,20); /* Start with a clean result */
 
     for (j = 0; j < server.dbnum; j++) {
-        redisDb *db = server.db+j;
+        serverDb *db = server.db+j;
         if (kvstoreSize(db->keys) == 0)
             continue;
         kvstoreIterator *kvs_it = kvstoreIteratorInit(db->keys);
@@ -2252,7 +2252,7 @@ static void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
 
     bugReportStart();
     serverLog(LL_WARNING,
-        "Redis %s crashed by signal: %d, si_code: %d", REDIS_VERSION, sig, info->si_code);
+        SERVER_NAME " %s crashed by signal: %d, si_code: %d", SERVER_VERSION, sig, info->si_code);
     if (sig == SIGSEGV || sig == SIGBUS) {
         serverLog(LL_WARNING,
         "Accessing address: %p", (void*)info->si_addr);

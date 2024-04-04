@@ -1,10 +1,10 @@
 name: External Server Tests
 
 on:
-    pull_request:
-    push:
-    schedule:
-    - cron: '* * * * *'
+  pull_request:
+  push:
+  schedule:
+    - cron: '0 0 * * *'
 
 jobs:
   test-external-standalone:
@@ -12,7 +12,7 @@ jobs:
     if: github.event_name != 'schedule' || github.repository == 'valkey-io/valkey'
     timeout-minutes: 14400
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Build
       run: make SERVER_CFLAGS=-Werror
     - name: Start valkey-server
@@ -37,7 +37,7 @@ jobs:
     if: github.event_name != 'schedule' || github.repository == 'valkey-io/valkey'
     timeout-minutes: 14400
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Build
       run: make SERVER_CFLAGS=-Werror
     - name: Start valkey-server
@@ -65,7 +65,7 @@ jobs:
     if: github.event_name != 'schedule' || github.repository == 'valkey-io/valkey'
     timeout-minutes: 14400
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Build
         run: make SERVER_CFLAGS=-Werror
       - name: Start valkey-server

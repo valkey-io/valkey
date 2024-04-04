@@ -319,7 +319,7 @@ void scriptKill(client *c, int is_eval) {
     addReply(c, shared.ok);
 }
 
-static int scriptVerifyCommandArity(struct redisCommand *cmd, int argc, sds *err) {
+static int scriptVerifyCommandArity(struct serverCommand *cmd, int argc, sds *err) {
     if (!cmd || ((cmd->arity > 0 && cmd->arity != argc) || (argc < -cmd->arity))) {
         if (cmd)
             *err = sdsnew("Wrong number of args calling Redis command from script");
@@ -541,7 +541,7 @@ void scriptCall(scriptRunCtx *run_ctx, sds *err) {
     /* Process module hooks */
     moduleCallCommandFilters(c);
 
-    struct redisCommand *cmd = lookupCommand(c->argv, c->argc);
+    struct serverCommand *cmd = lookupCommand(c->argv, c->argc);
     c->cmd = c->lastcmd = c->realcmd = cmd;
     if (scriptVerifyCommandArity(cmd, c->argc, err) != C_OK) {
         goto error;

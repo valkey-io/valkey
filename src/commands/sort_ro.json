@@ -114,7 +114,7 @@
             }
         ],
         "reply_schema": {
-            "description": "a list of sorted elements",
+            "description": "A list of sorted elements.",
             "type": "array",
             "items": {
                 "oneOf": [
@@ -122,7 +122,7 @@
                         "type": "string"
                     },
                     {
-                        "description": "GET option is specified, but no object was found",
+                        "description": "GET option is specified, but no object was found.",
                         "type": "null"
                     }
                 ]

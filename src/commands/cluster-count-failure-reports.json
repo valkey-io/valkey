@@ -21,7 +21,7 @@
             }
         ],
         "reply_schema": {
-            "description": "the number of active failure reports for the node",
+            "description": "The number of active failure reports for the node.",
             "type": "integer",
             "minimum": 0
         }

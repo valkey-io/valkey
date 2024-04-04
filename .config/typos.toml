@@ -8,8 +8,10 @@ extend-exclude = [
 ]
 
 [default.extend-words]
+advices = "advices"
 exat = "exat"
 optin = "optin"
+ro = "ro"
 smove = "smove"
 
 [type.c]
@@ -30,6 +32,7 @@ extend-ignore-re = [
 module_gil_acquring = "module_gil_acquring"
 
 [type.c.extend-identifiers]
+ang = "ang"
 clen = "clen"
 fle = "fle"
 module_gil_acquring = "module_gil_acquring"
@@ -47,10 +50,14 @@ fo = "fo"
 seeked = "seeked"
 
 [type.c.extend-words]
+arange = "arange"
 fo = "fo"
+frst = "frst"
 limite = "limite"
+pn = "pn"
 seeked = "seeked"
 tre = "tre"
+ws = "ws"
 
 [type.systemd.extend-words]
 # systemd = .conf
@@ -58,4 +65,5 @@ ake = "ake"
 
 [type.tcl.extend-words]
 fo = "fo"
+lst = "lst"
 tre = "tre"

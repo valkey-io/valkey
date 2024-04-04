@@ -349,7 +349,7 @@ void activeDefragQuickListNodes(quicklist *ql) {
 /* when the value has lots of elements, we want to handle it later and not as
  * part of the main dictionary scan. this is needed in order to prevent latency
  * spikes when handling large items */
-void defragLater(redisDb *db, dictEntry *kde) {
+void defragLater(serverDb *db, dictEntry *kde) {
     sds key = sdsdup(dictGetKey(kde));
     listAddNodeTail(db->defrag_later, key);
 }
@@ -449,7 +449,7 @@ void scanLaterHash(robj *ob, unsigned long *cursor) {
     *cursor = dictScanDefrag(d, *cursor, scanCallbackCountScanned, &defragfns, NULL);
 }
 
-void defragQuicklist(redisDb *db, dictEntry *kde) {
+void defragQuicklist(serverDb *db, dictEntry *kde) {
     robj *ob = dictGetVal(kde);
     quicklist *ql = ob->ptr, *newql;
     serverAssert(ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST);
@@ -461,7 +461,7 @@ void defragQuicklist(redisDb *db, dictEntry *kde) {
         activeDefragQuickListNodes(ql);
 }
 
-void defragZsetSkiplist(redisDb *db, dictEntry *kde) {
+void defragZsetSkiplist(serverDb *db, dictEntry *kde) {
     robj *ob = dictGetVal(kde);
     zset *zs = (zset*)ob->ptr;
     zset *newzs;
@@ -490,7 +490,7 @@ void defragZsetSkiplist(redisDb *db, dictEntry *kde) {
         zs->dict = newdict;
 }
 
-void defragHash(redisDb *db, dictEntry *kde) {
+void defragHash(serverDb *db, dictEntry *kde) {
     robj *ob = dictGetVal(kde);
     dict *d, *newd;
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HT);
@@ -504,7 +504,7 @@ void defragHash(redisDb *db, dictEntry *kde) {
         ob->ptr = newd;
 }
 
-void defragSet(redisDb *db, dictEntry *kde) {
+void defragSet(serverDb *db, dictEntry *kde) {
     robj *ob = dictGetVal(kde);
     dict *d, *newd;
     serverAssert(ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HT);
@@ -657,7 +657,7 @@ void* defragStreamConsumerGroup(raxIterator *ri, void *privdata) {
     return NULL;
 }
 
-void defragStream(redisDb *db, dictEntry *kde) {
+void defragStream(serverDb *db, dictEntry *kde) {
     robj *ob = dictGetVal(kde);
     serverAssert(ob->type == OBJ_STREAM && ob->encoding == OBJ_ENCODING_STREAM);
     stream *s = ob->ptr, *news;
@@ -681,7 +681,7 @@ void defragStream(redisDb *db, dictEntry *kde) {
 /* Defrag a module key. This is either done immediately or scheduled
  * for later. Returns then number of pointers defragged.
  */
-void defragModule(redisDb *db, dictEntry *kde) {
+void defragModule(serverDb *db, dictEntry *kde) {
     robj *obj = dictGetVal(kde);
     serverAssert(obj->type == OBJ_MODULE);
 
@@ -696,7 +696,7 @@ void defragKey(defragCtx *ctx, dictEntry *de) {
     robj *newob, *ob;
     unsigned char *newzl;
     sds newsds;
-    redisDb *db = ctx->privdata;
+    serverDb *db = ctx->privdata;
     int slot = ctx->slot;
     /* Try to defrag the key name. */
     newsds = activeDefragSds(keysds);
@@ -884,7 +884,7 @@ static sds defrag_later_current_key = NULL;
 static unsigned long defrag_later_cursor = 0;
 
 /* returns 0 if no more work needs to be been done, and 1 if time is up and more work is needed. */
-int defragLaterStep(redisDb *db, int slot, long long endtime) {
+int defragLaterStep(serverDb *db, int slot, long long endtime) {
     unsigned int iterations = 0;
     unsigned long long prev_defragged = server.stat_active_defrag_hits;
     unsigned long long prev_scanned = server.stat_active_defrag_scanned;
@@ -993,7 +993,7 @@ void activeDefragCycle(void) {
     static int defrag_later_item_in_progress = 0;
     static int defrag_stage = 0;
     static unsigned long defrag_cursor = 0;
-    static redisDb *db = NULL;
+    static serverDb *db = NULL;
     static long long start_scan, start_stat;
     unsigned int iterations = 0;
     unsigned long long prev_defragged = server.stat_active_defrag_hits;

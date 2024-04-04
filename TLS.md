@@ -33,25 +33,25 @@ To run Redis test suite with TLS, you'll need TLS support for TCL (i.e.
 
 ### Running manually
 
-To manually run a Redis server with TLS mode (assuming `gen-test-certs.sh` was
+To manually run a Valkey server with TLS mode (assuming `gen-test-certs.sh` was
 invoked so sample certificates/keys are available):
 
 For TLS built-in mode:
-    ./src/redis-server --tls-port 6379 --port 0 \
-        --tls-cert-file ./tests/tls/redis.crt \
-        --tls-key-file ./tests/tls/redis.key \
+    ./src/valkey-server --tls-port 6379 --port 0 \
+        --tls-cert-file ./tests/tls/valkey.crt \
+        --tls-key-file ./tests/tls/valkey.key \
         --tls-ca-cert-file ./tests/tls/ca.crt
 
 For TLS module mode:
-    ./src/redis-server --tls-port 6379 --port 0 \
-        --tls-cert-file ./tests/tls/redis.crt \
-        --tls-key-file ./tests/tls/redis.key \
+    ./src/valkey-server --tls-port 6379 --port 0 \
+        --tls-cert-file ./tests/tls/valkey.crt \
+        --tls-key-file ./tests/tls/valkey.key \
         --tls-ca-cert-file ./tests/tls/ca.crt \
-        --loadmodule src/redis-tls.so
+        --loadmodule src/valkey-tls.so
 
-To connect to this Redis server with `redis-cli`:
+To connect to this Redis server with `valkey-cli`:
 
-    ./src/redis-cli --tls \
+    ./src/valkey-cli --tls \
         --cert ./tests/tls/redis.crt \
         --key ./tests/tls/redis.key \
         --cacert ./tests/tls/ca.crt

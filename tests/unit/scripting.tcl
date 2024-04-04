@@ -2,36 +2,35 @@ foreach is_eval {0 1} {
 foreach script_compatibility {server redis} {
 
 if {$script_compatibility eq "server"} {
-    proc replaceLuaRedisAPI {args} {
+    proc replace_lua_redis_api_with_server {args} {
         set new_string [regsub -all {redis\.} [lindex $args 0] {server.}]
         return lreplace $args 0 0 $new_string
     }
 
-    proc get_api_name {} {
-        # TODO: Replace this with server when it is working
-        return "redis"
+    proc get_lua_api_name {} {
+        return "server"
     }
 } else {
-    proc replaceLuaRedisAPI {args} {
+    proc replace_lua_redis_api_with_server {args} {
         return lreplace $args 0 0 [lindex $args 0]
     }
 
-    proc get_api_name {} {
+    proc get_lua_api_name {} {
         return "redis"
     }
 }
 
 if {$is_eval == 1} {
     proc run_script {args} {
-        set args [replaceLuaRedisAPI $args]
+        set args [replace_lua_redis_api_with_server $args]
         r eval {*}$args
     }
     proc run_script_ro {args} {
-        set args [replaceLuaRedisAPI $args]
+        set args [replace_lua_redis_api_with_server $args]
         r eval_ro {*}$args
     }
     proc run_script_on_connection {args} {
-        set args [replaceLuaRedisAPI $args]
+        set args [replace_lua_redis_api_with_server $args]
         [lindex $args 0] eval {*}[lrange $args 1 end]
     }
     proc kill_script {args} {
@@ -39,8 +38,8 @@ if {$is_eval == 1} {
     }
 } else {
     proc run_script {args} {
-        set args [replaceLuaRedisAPI $args]
-        r function load replace [format "#!lua name=test\n%s.register_function('test', function(KEYS, ARGV)\n %s \nend)" [get_api_name] [lindex $args 0]]
+        set args [replace_lua_redis_api_with_server $args]
+        r function load replace [format "#!lua name=test\n%s.register_function('test', function(KEYS, ARGV)\n %s \nend)" [get_lua_api_name] [lindex $args 0]]
         if {[r readingraw] eq 1} {
             # read name
             assert_equal {test} [r read]
@@ -48,8 +47,8 @@ if {$is_eval == 1} {
         r fcall test {*}[lrange $args 1 end]
     }
     proc run_script_ro {args} {
-        set args [replaceLuaRedisAPI $args]
-        r function load replace [format "#!lua name=test\n%s.register_function{function_name='test', callback=function(KEYS, ARGV)\n %s \nend, flags={'no-writes'}}" [get_api_name] [lindex $args 0]]
+        set args [replace_lua_redis_api_with_server $args]
+        r function load replace [format "#!lua name=test\n%s.register_function{function_name='test', callback=function(KEYS, ARGV)\n %s \nend, flags={'no-writes'}}" [get_lua_api_name] [lindex $args 0]]
         if {[r readingraw] eq 1} {
             # read name
             assert_equal {test} [r read]
@@ -57,9 +56,9 @@ if {$is_eval == 1} {
         r fcall_ro test {*}[lrange $args 1 end]
     }
     proc run_script_on_connection {args} {
-        set args [replaceLuaRedisAPI $args]
+        set args [replace_lua_redis_api_with_server $args]
         set rd [lindex $args 0]
-        $rd function load replace [format "#!lua name=test\n%s.register_function('test', function(KEYS, ARGV)\n %s \nend)" [get_api_name] [lindex $args 1]]
+        $rd function load replace [format "#!lua name=test\n%s.register_function('test', function(KEYS, ARGV)\n %s \nend)" [get_lua_api_name] [lindex $args 1]]
         # read name
         $rd read
         $rd fcall test {*}[lrange $args 2 end]

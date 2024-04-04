@@ -5303,23 +5303,23 @@ void commandGetKeysCommand(client *c) {
 void commandHelpCommand(client *c) {
     const char *help[] = {
 "(no subcommand)",
-"    Return details about all Redis commands.",
+"    Return details about all commands.",
 "COUNT",
-"    Return the total number of commands in this Redis server.",
+"    Return the total number of commands in this server.",
 "LIST",
-"    Return a list of all commands in this Redis server.",
+"    Return a list of all commands in this server.",
 "INFO [<command-name> ...]",
-"    Return details about multiple Redis commands.",
+"    Return details about multiple commands.",
 "    If no command names are given, documentation details for all",
 "    commands are returned.",
 "DOCS [<command-name> ...]",
-"    Return documentation details about multiple Redis commands.",
+"    Return documentation details about multiple commands.",
 "    If no command names are given, documentation details for all",
 "    commands are returned.",
 "GETKEYS <full-command>",
-"    Return the keys from a full Redis command.",
+"    Return the keys from a full command.",
 "GETKEYSANDFLAGS <full-command>",
-"    Return the keys and the access flags from a full Redis command.",
+"    Return the keys and the access flags from a full command.",
 NULL
     };
 

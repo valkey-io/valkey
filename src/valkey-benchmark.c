@@ -191,7 +191,7 @@ static void freeBenchmarkThread(benchmarkThread *thread);
 static void freeBenchmarkThreads(void);
 static void *execBenchmarkThread(void *ptr);
 static clusterNode *createClusterNode(char *ip, int port);
-static serverConfig *getRedisConfig(const char *ip, int port,
+static serverConfig *getServerConfig(const char *ip, int port,
                                    const char *hostsocket);
 static redisContext *getRedisContext(const char *ip, int port,
                                      const char *hostsocket);
@@ -292,7 +292,7 @@ cleanup:
 
 
 
-static serverConfig *getRedisConfig(const char *ip, int port,
+static serverConfig *getServerConfig(const char *ip, int port,
                                    const char *hostsocket)
 {
     serverConfig *cfg = zcalloc(sizeof(*cfg));
@@ -1803,7 +1803,7 @@ int main(int argc, char **argv) {
             printf("Master %d: ", i);
             if (node->name) printf("%s ", node->name);
             printf("%s:%d\n", node->ip, node->port);
-            node->redis_config = getRedisConfig(node->ip, node->port, NULL);
+            node->redis_config = getServerConfig(node->ip, node->port, NULL);
             if (node->redis_config == NULL) {
                 fprintf(stderr, "WARNING: Could not fetch node CONFIG %s:%d\n",
                         node->ip, node->port);
@@ -1816,7 +1816,7 @@ int main(int argc, char **argv) {
             config.num_threads = config.cluster_node_count;
     } else {
         config.redis_config =
-            getRedisConfig(config.conn_info.hostip, config.conn_info.hostport, config.hostsocket);
+            getServerConfig(config.conn_info.hostip, config.conn_info.hostport, config.hostsocket);
         if (config.redis_config == NULL) {
             fprintf(stderr, "WARNING: Could not fetch server CONFIG\n");
         }

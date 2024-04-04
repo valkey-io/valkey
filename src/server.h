@@ -3781,9 +3781,9 @@ sds getVersion(void);
         _serverLog(level, __VA_ARGS__);\
     } while(0)
 
-#define redisDebug(fmt, ...) \
+#define serverDebug(fmt, ...) \
     printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)
-#define redisDebugMark() \
+#define serverDebugMark() \
     printf("-- MARK %s:%d --\n", __FILE__, __LINE__)
 
 int iAmMaster(void);

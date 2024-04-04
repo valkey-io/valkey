@@ -41,6 +41,6 @@ struct commandDocs {
     char *params; /* A string describing the syntax of the command arguments. */
 };
 
-extern struct commandDocs redisCommandTable[];
+extern struct commandDocs serverCommandTable[];
 
 #endif

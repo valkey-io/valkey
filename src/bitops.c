@@ -98,7 +98,7 @@ long long serverPopcount(void *s, long count) {
  * no zero bit is found, it returns count*8 assuming the string is zero
  * padded on the right. However if 'bit' is 1 it is possible that there is
  * not a single set bit in the bitmap. In this special case -1 is returned. */
-long long redisBitpos(void *s, unsigned long count, int bit) {
+long long serverBitpos(void *s, unsigned long count, int bit) {
     unsigned long *l;
     unsigned char *c;
     unsigned long skipval, word = 0, one;
@@ -181,7 +181,7 @@ long long redisBitpos(void *s, unsigned long count, int bit) {
 
     /* If we reached this point, there is a bug in the algorithm, since
      * the case of no match is handled as a special case before. */
-    serverPanic("End of redisBitpos() reached.");
+    serverPanic("End of serverBitpos() reached.");
     return 0; /* Just to avoid warnings. */
 }
 
@@ -989,7 +989,7 @@ void bitposCommand(client *c) {
                 if (bit) tmpchar = tmpchar & ~last_byte_neg_mask;
                 else tmpchar = tmpchar | last_byte_neg_mask;
             }
-            pos = redisBitpos(&tmpchar,1,bit);
+            pos = serverBitpos(&tmpchar,1,bit);
             /* If there are no more bytes or we get valid pos, we can exit early */
             if (bytes == 1 || (pos != -1 && pos != 8)) goto result;
             start++;
@@ -998,7 +998,7 @@ void bitposCommand(client *c) {
         /* If the last byte has not bits in the range, we should exclude it */
         long curbytes = bytes - (last_byte_neg_mask ? 1 : 0);
         if (curbytes > 0) {
-            pos = redisBitpos(p+start,curbytes,bit);
+            pos = serverBitpos(p+start,curbytes,bit);
             /* If there is no more bytes or we get valid pos, we can exit early */
             if (bytes == curbytes || (pos != -1 && pos != (long long)curbytes<<3)) goto result;
             start += curbytes;
@@ -1006,14 +1006,14 @@ void bitposCommand(client *c) {
         }
         if (bit) tmpchar = p[end] & ~last_byte_neg_mask;
         else tmpchar = p[end] | last_byte_neg_mask;
-        pos = redisBitpos(&tmpchar,1,bit);
+        pos = serverBitpos(&tmpchar,1,bit);
 
     result:
         /* If we are looking for clear bits, and the user specified an exact
          * range with start-end, we can't consider the right of the range as
          * zero padded (as we do when no explicit end is given).
          *
-         * So if redisBitpos() returns the first bit outside the range,
+         * So if serverBitpos() returns the first bit outside the range,
          * we return -1 to the caller, to mean, in the specified range there
          * is not a single "0" bit. */
         if (end_given && bit == 0 && pos == (long long)bytes<<3) {

@@ -3060,7 +3060,7 @@ int populateCommandStructure(struct serverCommand *c) {
     return C_OK;
 }
 
-extern struct serverCommand redisCommandTable[];
+extern struct serverCommand serverCommandTable[];
 
 /* Populates the Redis Command Table dict from the static table in commands.c
  * which is auto generated from the json files in the commands folder. */
@@ -3069,7 +3069,7 @@ void populateCommandTable(void) {
     struct serverCommand *c;
 
     for (j = 0;; j++) {
-        c = redisCommandTable + j;
+        c = serverCommandTable + j;
         if (c->declared_name == NULL)
             break;
 
@@ -6297,7 +6297,7 @@ void usage(void) {
     exit(1);
 }
 
-void redisAsciiArt(void) {
+void serverAsciiArt(void) {
 #include "asciilogo.h"
     char *buf = zmalloc(1024*16);
     char *mode;
@@ -6695,7 +6695,7 @@ void loadDataFromDisk(void) {
     }
 }
 
-void redisOutOfMemoryHandler(size_t allocation_size) {
+void serverOutOfMemoryHandler(size_t allocation_size) {
     serverLog(LL_WARNING,"Out Of Memory allocating %zu bytes!",
         allocation_size);
     serverPanic("Redis aborting for OUT OF MEMORY. Allocating %zu bytes!",
@@ -6705,7 +6705,7 @@ void redisOutOfMemoryHandler(size_t allocation_size) {
 /* Callback for sdstemplate on proc-title-template. See valkey.conf for
  * supported variables.
  */
-static sds redisProcTitleGetVariable(const sds varname, void *arg)
+static sds serverProcTitleGetVariable(const sds varname, void *arg)
 {
     if (!strcmp(varname, "title")) {
         return sdsnew(arg);
@@ -6735,7 +6735,7 @@ static sds redisProcTitleGetVariable(const sds varname, void *arg)
 /* Expand the specified proc-title-template string and return a newly
  * allocated sds, or NULL. */
 static sds expandProcTitleTemplate(const char *template, const char *title) {
-    sds res = sdstemplate(template, redisProcTitleGetVariable, (void *) title);
+    sds res = sdstemplate(template, serverProcTitleGetVariable, (void *) title);
     if (!res)
         return NULL;
     return sdstrim(res, " ");
@@ -6792,7 +6792,7 @@ int serverCommunicateSystemd(const char *sd_notify_msg) {
 }
 
 /* Attempt to set up upstart supervision. Returns 1 if successful. */
-static int redisSupervisedUpstart(void) {
+static int serverSupervisedUpstart(void) {
     const char *upstart_job = getenv("UPSTART_JOB");
 
     if (!upstart_job) {
@@ -6808,7 +6808,7 @@ static int redisSupervisedUpstart(void) {
 }
 
 /* Attempt to set up systemd supervision. Returns 1 if successful. */
-static int redisSupervisedSystemd(void) {
+static int serverSupervisedSystemd(void) {
 #ifndef HAVE_LIBSYSTEMD
     serverLog(LL_WARNING,
             "systemd supervision requested or auto-detected, but Redis is compiled without libsystemd support!");
@@ -6837,10 +6837,10 @@ int redisIsSupervised(int mode) {
 
     switch (mode) {
         case SUPERVISED_UPSTART:
-            ret = redisSupervisedUpstart();
+            ret = serverSupervisedUpstart();
             break;
         case SUPERVISED_SYSTEMD:
-            ret = redisSupervisedSystemd();
+            ret = serverSupervisedSystemd();
             break;
         default:
             break;
@@ -6867,12 +6867,12 @@ int __test_num = 0;
 /* The flags are the following:
 * --accurate:     Runs tests with more iterations.
 * --large-memory: Enables tests that consume more than 100mb. */
-typedef int redisTestProc(int argc, char **argv, int flags);
-struct redisTest {
+typedef int serverTestProc(int argc, char **argv, int flags);
+struct serverTest {
     char *name;
-    redisTestProc *proc;
+    serverTestProc *proc;
     int failed;
-} redisTests[] = {
+} serverTests[] = {
     {"ziplist", ziplistTest},
     {"quicklist", quicklistTest},
     {"intset", intsetTest},
@@ -6887,11 +6887,11 @@ struct redisTest {
     {"listpack", listpackTest},
     {"kvstore", kvstoreTest},
 };
-redisTestProc *getTestProcByName(const char *name) {
-    int numtests = sizeof(redisTests)/sizeof(struct redisTest);
+serverTestProc *getTestProcByName(const char *name) {
+    int numtests = sizeof(serverTests)/sizeof(struct serverTest);
     for (int j = 0; j < numtests; j++) {
-        if (!strcasecmp(name,redisTests[j].name)) {
-            return redisTests[j].proc;
+        if (!strcasecmp(name,serverTests[j].name)) {
+            return serverTests[j].proc;
         }
     }
     return NULL;
@@ -6915,19 +6915,19 @@ int main(int argc, char **argv) {
         }
 
         if (!strcasecmp(argv[2], "all")) {
-            int numtests = sizeof(redisTests)/sizeof(struct redisTest);
+            int numtests = sizeof(serverTest)/sizeof(struct redisTest);
             for (j = 0; j < numtests; j++) {
-                redisTests[j].failed = (redisTests[j].proc(argc,argv,flags) != 0);
+                serverTests[j].failed = (serverTests[j].proc(argc,argv,flags) != 0);
             }
 
             /* Report tests result */
             int failed_num = 0;
             for (j = 0; j < numtests; j++) {
-                if (redisTests[j].failed) {
+                if (serverTests[j].failed) {
                     failed_num++;
-                    printf("[failed] Test - %s\n", redisTests[j].name);
+                    printf("[failed] Test - %s\n", serverTests[j].name);
                 } else {
-                    printf("[ok] Test - %s\n", redisTests[j].name);
+                    printf("[ok] Test - %s\n", serverTests[j].name);
                 }
             }
 
@@ -6936,7 +6936,7 @@ int main(int argc, char **argv) {
 
             return failed_num == 0 ? 0 : 1;
         } else {
-            redisTestProc *proc = getTestProcByName(argv[2]);
+            serverTestProc *proc = getTestProcByName(argv[2]);
             if (!proc) return -1; /* test not found */
             return proc(argc,argv,flags);
         }
@@ -6950,7 +6950,7 @@ int main(int argc, char **argv) {
     spt_init(argc, argv);
 #endif
     tzset(); /* Populates 'timezone' global. */
-    zmalloc_set_oom_handler(redisOutOfMemoryHandler);
+    zmalloc_set_oom_handler(serverOutOfMemoryHandler);
 
     /* To achieve entropy, in case of containers, their time() and getpid() can
      * be the same. But value of tv_usec is fast enough to make the difference */
@@ -7171,7 +7171,7 @@ int main(int argc, char **argv) {
     initServer();
     if (background || server.pidfile) createPidFile();
     if (server.set_proc_title) serverSetProcTitle(NULL);
-    redisAsciiArt();
+    serverAsciiArt();
     checkTcpBacklogSettings();
     if (server.cluster_enabled) {
         clusterInit();

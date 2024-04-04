@@ -618,7 +618,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
     }
 
     if {$::tls} {
-        test "Valid Connection Scheme: redis://" {
+        test "Valid Connection Scheme: rediss://" {
             set cmdline [valkeycliuri "rediss://" [srv host] [srv port]]
             exec {*}$cmdline PING
         }

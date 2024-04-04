@@ -113,6 +113,11 @@ start_server {tags {"scripting"}} {
         run_script {return redis.call('get',KEYS[1])} 1 mykey
     } {myval}
 
+    test {EVAL - is Lua able to call Server API?} { 
+        r set mykey myval
+        run_script {return server.call('get',KEYS[1])} 1 mykey 
+    }
+
     if {$is_eval eq 1} {
     # eval sha is only relevant for is_eval Lua
     test {EVALSHA - Can we call a SHA1 if already defined?} {
@@ -312,6 +317,12 @@ start_server {tags {"scripting"}} {
     test {EVAL - No arguments to redis.call/pcall is considered an error} {
         set e {}
         catch {run_script {return redis.call()} 0} e
+        set e
+    } {*one argument*}
+   
+    test {EVAL - No arguments to server.call/pcall is considered an error} {
+        set e {}
+        catch {run_script {return server.call()} 0} e
         set e
     } {*one argument*}
 
@@ -564,6 +575,11 @@ start_server {tags {"scripting"}} {
     test {EVAL_RO - Successful case} {
         r set foo bar
         assert_equal bar [run_script_ro {return redis.call('get', KEYS[1]);} 1 foo]
+    }
+
+    test {EVAL_RO - Successful case via server.call} { 
+        r set server_foo server_bar 
+        assert_equal server_bar [run_script_ro {return redis.call('get', KEYS[1]);} 1 server_foo]
     }
 
     test {EVAL_RO - Cannot run write commands} {

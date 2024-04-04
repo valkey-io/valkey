@@ -30,8 +30,8 @@
 #ifndef VALKEY_RANDOM_H
 #define VALKEY_RANDOM_H
 
-int32_t redisLrand48(void);
-void redisSrand48(int32_t seedval);
+int32_t serverLrand48(void);
+void serverSrand48(int32_t seedval);
 
 #define REDIS_LRAND48_MAX INT32_MAX
 

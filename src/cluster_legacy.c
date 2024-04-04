@@ -5242,12 +5242,12 @@ void clusterSetMaster(clusterNode *n) {
  * Nodes to string representation functions.
  * -------------------------------------------------------------------------- */
 
-struct redisNodeFlags {
+struct clusterNodeFlags {
     uint16_t flag;
     char *name;
 };
 
-static struct redisNodeFlags redisNodeFlagsTable[] = {
+static struct clusterNodeFlags clusterNodeFlagsTable[] = {
     {CLUSTER_NODE_MYSELF,       "myself,"},
     {CLUSTER_NODE_MASTER,       "master,"},
     {CLUSTER_NODE_SLAVE,        "slave,"},
@@ -5262,9 +5262,9 @@ static struct redisNodeFlags redisNodeFlagsTable[] = {
  * string 'ci'. */
 sds representClusterNodeFlags(sds ci, uint16_t flags) {
     size_t orig_len = sdslen(ci);
-    int i, size = sizeof(redisNodeFlagsTable)/sizeof(struct redisNodeFlags);
+    int i, size = sizeof(clusterNodeFlagsTable)/sizeof(struct clusterNodeFlags);
     for (i = 0; i < size; i++) {
-        struct redisNodeFlags *nodeflag = redisNodeFlagsTable + i;
+        struct clusterNodeFlags *nodeflag = clusterNodeFlagsTable + i;
         if (flags & nodeflag->flag) ci = sdscat(ci, nodeflag->name);
     }
     /* If no flag was added, add the "noflags" special flag. */

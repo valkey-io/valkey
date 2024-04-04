@@ -878,10 +878,10 @@ static void cliLegacyInitHelp(dict *groups) {
     sds serverVersion = cliGetServerVersion();
     
     /* Scan the commandDocs array and fill in the entries */
-    helpEntriesLen = cliLegacyCountCommands(redisCommandTable, serverVersion);
+    helpEntriesLen = cliLegacyCountCommands(serverCommandTable, serverVersion);
     helpEntries = zmalloc(sizeof(helpEntry)*helpEntriesLen);
 
-    helpEntriesLen = cliLegacyInitCommandHelpEntries(redisCommandTable, groups, serverVersion);
+    helpEntriesLen = cliLegacyInitCommandHelpEntries(serverCommandTable, groups, serverVersion);
     cliInitGroupHelpEntries(groups);
 
     qsort(helpEntries, helpEntriesLen, sizeof(helpEntry), helpEntryCompare);

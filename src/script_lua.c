@@ -1542,11 +1542,11 @@ static void luaCreateArray(lua_State *lua, robj **elev, int elec) {
  * (for the same seed) in every arch. */
 
 /* The following implementation is the one shipped with Lua itself but with
- * rand() replaced by redisLrand48(). */
+ * rand() replaced by serverLrand48(). */
 static int redis_math_random (lua_State *L) {
   /* the `%' avoids the (rare) case of r==1, and is needed also because on
      some systems (SunOS!) `rand()' may return a value larger than RAND_MAX */
-  lua_Number r = (lua_Number)(redisLrand48()%REDIS_LRAND48_MAX) /
+  lua_Number r = (lua_Number)(serverLrand48()%REDIS_LRAND48_MAX) /
                                 (lua_Number)REDIS_LRAND48_MAX;
   switch (lua_gettop(L)) {  /* check number of arguments */
     case 0: {  /* no arguments */
@@ -1572,7 +1572,7 @@ static int redis_math_random (lua_State *L) {
 }
 
 static int redis_math_randomseed (lua_State *L) {
-  redisSrand48(luaL_checkint(L, 1));
+  serverSrand48(luaL_checkint(L, 1));
   return 0;
 }
 

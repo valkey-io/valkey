@@ -7011,7 +7011,7 @@ int main(int argc, char **argv) {
             strcmp(argv[1], "--version") == 0)
         {
             sds version = getVersion();
-            printf("Redis server %s\n", version);
+            printf("Valkey server %s\n", version);
             sdsfree(version);
             exit(0);
         }

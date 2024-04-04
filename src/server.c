@@ -6822,7 +6822,7 @@ static int serverSupervisedSystemd(void) {
 #endif
 }
 
-int redisIsSupervised(int mode) {
+int serverIsSupervised(int mode) {
     int ret = 0;
 
     if (mode == SUPERVISED_AUTODETECT) {
@@ -7150,7 +7150,7 @@ int main(int argc, char **argv) {
 #endif /* __linux__ */
 
     /* Daemonize if needed */
-    server.supervised = redisIsSupervised(server.supervised_mode);
+    server.supervised = serverIsSupervised(server.supervised_mode);
     int background = server.daemonize && !server.supervised;
     if (background) daemonize();
 

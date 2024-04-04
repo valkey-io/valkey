@@ -76,7 +76,7 @@
 
 struct benchmarkThread;
 struct clusterNode;
-struct redisConfig;
+struct serverConfig;
 
 static struct config {
     aeEventLoop *el;
@@ -115,7 +115,7 @@ static struct config {
     int cluster_mode;
     int cluster_node_count;
     struct clusterNode **cluster_nodes;
-    struct redisConfig *redis_config;
+    struct serverConfig *redis_config;
     struct hdr_histogram* latency_histogram;
     struct hdr_histogram* current_sec_latency_histogram;
     serverAtomic int is_fetching_slots;
@@ -175,13 +175,13 @@ typedef struct clusterNode {
                      * strings are the source node IDs. */
     int migrating_count; /* Length of the migrating array (migrating slots*2) */
     int importing_count; /* Length of the importing array (importing slots*2) */
-    struct redisConfig *redis_config;
+    struct serverConfig *redis_config;
 } clusterNode;
 
-typedef struct redisConfig {
+typedef struct serverConfig {
     sds save;
     sds appendonly;
-} redisConfig;
+} serverConfig;
 
 /* Prototypes */
 static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask);
@@ -191,11 +191,11 @@ static void freeBenchmarkThread(benchmarkThread *thread);
 static void freeBenchmarkThreads(void);
 static void *execBenchmarkThread(void *ptr);
 static clusterNode *createClusterNode(char *ip, int port);
-static redisConfig *getRedisConfig(const char *ip, int port,
+static serverConfig *getServerConfig(const char *ip, int port,
                                    const char *hostsocket);
 static redisContext *getRedisContext(const char *ip, int port,
                                      const char *hostsocket);
-static void freeRedisConfig(redisConfig *cfg);
+static void freeServerConfig(serverConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
 int showThroughput(struct aeEventLoop *eventLoop, long long id,
@@ -292,16 +292,16 @@ cleanup:
 
 
 
-static redisConfig *getRedisConfig(const char *ip, int port,
+static serverConfig *getServerConfig(const char *ip, int port,
                                    const char *hostsocket)
 {
-    redisConfig *cfg = zcalloc(sizeof(*cfg));
+    serverConfig *cfg = zcalloc(sizeof(*cfg));
     if (!cfg) return NULL;
     redisContext *c = NULL;
     redisReply *reply = NULL, *sub_reply = NULL;
     c = getRedisContext(ip, port, hostsocket);
     if (c == NULL) {
-        freeRedisConfig(cfg);
+        freeServerConfig(cfg);
         exit(1);
     }
     redisAppendCommand(c, "CONFIG GET %s", "save");
@@ -340,11 +340,11 @@ fail:
     }
     freeReplyObject(reply);
     redisFree(c);
-    freeRedisConfig(cfg);
+    freeServerConfig(cfg);
     if (abort_test) exit(1);
     return NULL;
 }
-static void freeRedisConfig(redisConfig *cfg) {
+static void freeServerConfig(serverConfig *cfg) {
     if (cfg->save) sdsfree(cfg->save);
     if (cfg->appendonly) sdsfree(cfg->appendonly);
     zfree(cfg);
@@ -870,7 +870,7 @@ static void showLatencyReport(void) {
             int m ;
             for (m = 0; m < config.cluster_node_count; m++) {
                 clusterNode *node =  config.cluster_nodes[m];
-                redisConfig *cfg = node->redis_config;
+                serverConfig *cfg = node->redis_config;
                 if (cfg == NULL) continue;
                 printf("  node [%d] configuration:\n",m );
                 printf("    save: %s\n",
@@ -1071,7 +1071,7 @@ static void freeClusterNode(clusterNode *node) {
      * config.conn_info.hostip and config.conn_info.hostport, then the node ip has been
      * allocated by fetchClusterConfiguration, so it must be freed. */
     if (node->ip && strcmp(node->ip, config.conn_info.hostip) != 0) sdsfree(node->ip);
-    if (node->redis_config != NULL) freeRedisConfig(node->redis_config);
+    if (node->redis_config != NULL) freeServerConfig(node->redis_config);
     zfree(node->slots);
     zfree(node);
 }
@@ -1803,7 +1803,7 @@ int main(int argc, char **argv) {
             printf("Master %d: ", i);
             if (node->name) printf("%s ", node->name);
             printf("%s:%d\n", node->ip, node->port);
-            node->redis_config = getRedisConfig(node->ip, node->port, NULL);
+            node->redis_config = getServerConfig(node->ip, node->port, NULL);
             if (node->redis_config == NULL) {
                 fprintf(stderr, "WARNING: Could not fetch node CONFIG %s:%d\n",
                         node->ip, node->port);
@@ -1816,7 +1816,7 @@ int main(int argc, char **argv) {
             config.num_threads = config.cluster_node_count;
     } else {
         config.redis_config =
-            getRedisConfig(config.conn_info.hostip, config.conn_info.hostport, config.hostsocket);
+            getServerConfig(config.conn_info.hostip, config.conn_info.hostport, config.hostsocket);
         if (config.redis_config == NULL) {
             fprintf(stderr, "WARNING: Could not fetch server CONFIG\n");
         }
@@ -1884,7 +1884,7 @@ int main(int argc, char **argv) {
         sdsfreesplitres(sds_args, argc);
 
         sdsfree(title);
-        if (config.redis_config != NULL) freeRedisConfig(config.redis_config);
+        if (config.redis_config != NULL) freeServerConfig(config.redis_config);
         zfree(argvlen);
         return 0;
     }
@@ -2041,7 +2041,7 @@ int main(int argc, char **argv) {
 
     zfree(data);
     freeCliConnInfo(config.conn_info);
-    if (config.redis_config != NULL) freeRedisConfig(config.redis_config);
+    if (config.redis_config != NULL) freeServerConfig(config.redis_config);
 
     return 0;
 }

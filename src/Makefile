@@ -540,8 +540,8 @@ install: all
 	@ln -sf $(SERVER_NAME) $(INSTALL_BIN)/$(ENGINE_CHECK_AOF_NAME)
 	@ln -sf $(SERVER_NAME) $(INSTALL_BIN)/$(ENGINE_SENTINEL_NAME)
 
-    # Create some symlinks like `redis-server` link to `valkey-server` for compatibility
-    ifeq ($(ENABLE_REDIS_SYMBLINK), true)
+	# Create some symlinks like `redis-server` link to `valkey-server` for compatibility
+	ifeq ($(ENABLE_REDIS_SYMBLINK), true)
 		$(call CREATE_SYMLINK,$(SERVER_NAME),$(INSTALL_BIN),$(subst $(ENGINE_NAME),redis,$(SERVER_NAME)))
 		$(call CREATE_SYMLINK,$(ENGINE_CLI_NAME),$(INSTALL_BIN),$(subst $(ENGINE_NAME),redis,$(ENGINE_CLI_NAME)))
 		$(call CREATE_SYMLINK,$(ENGINE_BENCHMARK_NAME),$(INSTALL_BIN),$(subst $(ENGINE_NAME),redis,$(ENGINE_BENCHMARK_NAME)))

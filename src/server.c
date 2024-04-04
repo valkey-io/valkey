@@ -677,8 +677,8 @@ void resetChildState(void) {
     server.stat_current_save_keys_total = 0;
     updateDictResizePolicy();
     closeChildInfoPipe();
-    moduleFireServerEvent(SERVERMODULE_EVENT_FORK_CHILD,
-                          SERVERMODULE_SUBEVENT_FORK_CHILD_DIED,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_FORK_CHILD,
+                          VALKEYMODULE_SUBEVENT_FORK_CHILD_DIED,
                           NULL);
 }
 
@@ -1523,8 +1523,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* Fire the cron loop modules event. */
-    RedisModuleCronLoopV1 ei = {SERVERMODULE_CRON_LOOP_VERSION,server.hz};
-    moduleFireServerEvent(SERVERMODULE_EVENT_CRON_LOOP,
+    RedisModuleCronLoopV1 ei = {VALKEYMODULE_CRON_LOOP_VERSION,server.hz};
+    moduleFireServerEvent(VALKEYMODULE_EVENT_CRON_LOOP,
                           0,
                           &ei);
 
@@ -1686,8 +1686,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
     if (moduleCount()) {
-        moduleFireServerEvent(SERVERMODULE_EVENT_EVENTLOOP,
-                              SERVERMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP,
+                              VALKEYMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP,
                               NULL);
     }
 
@@ -1816,8 +1816,8 @@ void afterSleep(struct aeEventLoop *eventLoop) {
             atomicSet(server.module_gil_acquring, 1);
             moduleAcquireGIL();
             atomicSet(server.module_gil_acquring, 0);
-            moduleFireServerEvent(SERVERMODULE_EVENT_EVENTLOOP,
-                                  SERVERMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP,
+            moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP,
+                                  VALKEYMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP,
                                   NULL);
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("module-acquire-GIL",latency);
@@ -4502,7 +4502,7 @@ int finishShutdown(void) {
     if (server.aof_manifest) aofManifestFree(server.aof_manifest);
 
     /* Fire the shutdown modules event. */
-    moduleFireServerEvent(SERVERMODULE_EVENT_SHUTDOWN,0,NULL);
+    moduleFireServerEvent(VALKEYMODULE_EVENT_SHUTDOWN,0,NULL);
 
     /* Remove the pid file if possible and needed. */
     if (server.daemonize || server.pidfile) {
@@ -6514,8 +6514,8 @@ int serverFork(int purpose) {
         }
 
         updateDictResizePolicy();
-        moduleFireServerEvent(SERVERMODULE_EVENT_FORK_CHILD,
-                              SERVERMODULE_SUBEVENT_FORK_CHILD_BORN,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_FORK_CHILD,
+                              VALKEYMODULE_SUBEVENT_FORK_CHILD_BORN,
                               NULL);
     }
     return childpid;

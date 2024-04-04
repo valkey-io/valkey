@@ -1397,7 +1397,7 @@ int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     snprintf(magic,sizeof(magic),"REDIS%04d",RDB_VERSION);
     if (rdbWriteRaw(rdb,magic,9) == -1) goto werr;
     if (rdbSaveInfoAuxFields(rdb,rdbflags,rsi) == -1) goto werr;
-    if (!(req & SLAVE_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, SERVERMODULE_AUX_BEFORE_RDB) == -1) goto werr;
+    if (!(req & SLAVE_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, VALKEYMODULE_AUX_BEFORE_RDB) == -1) goto werr;
 
     /* save functions */
     if (!(req & SLAVE_REQ_RDB_EXCLUDE_FUNCTIONS) && rdbSaveFunctions(rdb) == -1) goto werr;
@@ -1409,7 +1409,7 @@ int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
         }
     }
 
-    if (!(req & SLAVE_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, SERVERMODULE_AUX_AFTER_RDB) == -1) goto werr;
+    if (!(req & SLAVE_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, VALKEYMODULE_AUX_AFTER_RDB) == -1) goto werr;
 
     /* EOF opcode */
     if (rdbSaveType(rdb,RDB_OPCODE_EOF) == -1) goto werr;
@@ -2881,12 +2881,12 @@ void startLoading(size_t size, int rdbflags, int async) {
     /* Fire the loading modules start event. */
     int subevent;
     if (rdbflags & RDBFLAGS_AOF_PREAMBLE)
-        subevent = SERVERMODULE_SUBEVENT_LOADING_AOF_START;
+        subevent = VALKEYMODULE_SUBEVENT_LOADING_AOF_START;
     else if(rdbflags & RDBFLAGS_REPLICATION)
-        subevent = SERVERMODULE_SUBEVENT_LOADING_REPL_START;
+        subevent = VALKEYMODULE_SUBEVENT_LOADING_REPL_START;
     else
-        subevent = SERVERMODULE_SUBEVENT_LOADING_RDB_START;
-    moduleFireServerEvent(SERVERMODULE_EVENT_LOADING,subevent,NULL);
+        subevent = VALKEYMODULE_SUBEVENT_LOADING_RDB_START;
+    moduleFireServerEvent(VALKEYMODULE_EVENT_LOADING,subevent,NULL);
 }
 
 /* Mark that we are loading in the global state and setup the fields
@@ -2924,10 +2924,10 @@ void stopLoading(int success) {
     rdbFileBeingLoaded = NULL;
 
     /* Fire the loading modules end event. */
-    moduleFireServerEvent(SERVERMODULE_EVENT_LOADING,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_LOADING,
                           success?
-                            SERVERMODULE_SUBEVENT_LOADING_ENDED:
-                            SERVERMODULE_SUBEVENT_LOADING_FAILED,
+                            VALKEYMODULE_SUBEVENT_LOADING_ENDED:
+                            VALKEYMODULE_SUBEVENT_LOADING_FAILED,
                            NULL);
 }
 
@@ -2935,22 +2935,22 @@ void startSaving(int rdbflags) {
     /* Fire the persistence modules start event. */
     int subevent;
     if (rdbflags & RDBFLAGS_AOF_PREAMBLE && getpid() != server.pid)
-        subevent = SERVERMODULE_SUBEVENT_PERSISTENCE_AOF_START;
+        subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_AOF_START;
     else if (rdbflags & RDBFLAGS_AOF_PREAMBLE)
-        subevent = SERVERMODULE_SUBEVENT_PERSISTENCE_SYNC_AOF_START;
+        subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_SYNC_AOF_START;
     else if (getpid()!=server.pid)
-        subevent = SERVERMODULE_SUBEVENT_PERSISTENCE_RDB_START;
+        subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_RDB_START;
     else
-        subevent = SERVERMODULE_SUBEVENT_PERSISTENCE_SYNC_RDB_START;
-    moduleFireServerEvent(SERVERMODULE_EVENT_PERSISTENCE,subevent,NULL);
+        subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_SYNC_RDB_START;
+    moduleFireServerEvent(VALKEYMODULE_EVENT_PERSISTENCE,subevent,NULL);
 }
 
 void stopSaving(int success) {
     /* Fire the persistence modules end event. */
-    moduleFireServerEvent(SERVERMODULE_EVENT_PERSISTENCE,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_PERSISTENCE,
                           success?
-                            SERVERMODULE_SUBEVENT_PERSISTENCE_ENDED:
-                            SERVERMODULE_SUBEVENT_PERSISTENCE_FAILED,
+                            VALKEYMODULE_SUBEVENT_PERSISTENCE_ENDED:
+                            VALKEYMODULE_SUBEVENT_PERSISTENCE_FAILED,
                           NULL);
 }
 
@@ -3233,7 +3233,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                     moduleFreeContext(io.ctx);
                     zfree(io.ctx);
                 }
-                if (rc != SERVERMODULE_OK || io.error) {
+                if (rc != VALKEYMODULE_OK || io.error) {
                     moduleTypeNameByID(name,moduleid);
                     serverLog(LL_WARNING,"The RDB file contains module AUX data for the module type '%s', that the responsible module is not able to load. Check for modules log above for additional clues.", name);
                     goto eoferr;

@@ -1309,8 +1309,8 @@ void clientAcceptHandler(connection *conn) {
     }
 
     server.stat_numconnections++;
-    moduleFireServerEvent(SERVERMODULE_EVENT_CLIENT_CHANGE,
-                          SERVERMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE,
+                          VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED,
                           c);
 }
 
@@ -1574,8 +1574,8 @@ void freeClient(client *c) {
 
     /* For connected clients, call the disconnection event of modules hooks. */
     if (c->conn) {
-        moduleFireServerEvent(SERVERMODULE_EVENT_CLIENT_CHANGE,
-                              SERVERMODULE_SUBEVENT_CLIENT_CHANGE_DISCONNECTED,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE,
+                              VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_DISCONNECTED,
                               c);
     }
 
@@ -1695,8 +1695,8 @@ void freeClient(client *c) {
         refreshGoodSlavesCount();
         /* Fire the replica change modules event. */
         if (c->replstate == SLAVE_STATE_ONLINE)
-            moduleFireServerEvent(SERVERMODULE_EVENT_REPLICA_CHANGE,
-                                  SERVERMODULE_SUBEVENT_REPLICA_CHANGE_OFFLINE,
+            moduleFireServerEvent(VALKEYMODULE_EVENT_REPLICA_CHANGE,
+                                  VALKEYMODULE_SUBEVENT_REPLICA_CHANGE_OFFLINE,
                                   NULL);
     }
 

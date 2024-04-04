@@ -1,10 +1,10 @@
 /*
  * valkeymodule.h
  *
- * This header file is renamed from redismodule.h to reflect the new naming conventions adopted in Valkey.
+ * This header file is renamed from valkeymodule.h to reflect the new naming conventions adopted in Valkey.
  * 
  * Key Changes:
- * - Symbolic names have been changed from REDISMODULE_* to VALKEYMODULE_* to align with the
+ * - Symbolic names have been changed from VALKEYMODULE_* to VALKEYMODULE_* to align with the
  *   new module naming convention. Developers must use these new symbolic names in their module
  *   implementations.
  * - Terminology has been updated to be more inclusive: "slave" is now "replica", and "master" 
@@ -548,7 +548,7 @@ typedef void (*RedisModuleEventCallback)(struct RedisModuleCtx *ctx, RedisModule
  *          2
  *      }
  * The reason for that is forward-compatibility: We want that module that
- * compiled with a new redismodule.h to be able to work with a old server,
+ * compiled with a new valkeymodule.h to be able to work with a old server,
  * unless the author explicitly decided to use the newer event type.
  */
 static const RedisModuleEvent

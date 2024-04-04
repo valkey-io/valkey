@@ -325,9 +325,18 @@ ifndef V
         @printf '    %b %b\n' $(LINKCOLOR)INSTALL$(ENDCOLOR) $(BINCOLOR)$(1)$(ENDCOLOR) 1>&2
         @$(INSTALL) $(1) $(2)
     endef
+
+    define CREATE_SYMLINK
+        @ln -sf $(1) $(2)/$(3)
+        @printf '    %b %b %b %b %b %b %b\n' $(LINKCOLOR)CREATE SYMLINK$(ENDCOLOR) from $(BINCOLOR)$(3)$(ENDCOLOR) to $(BINCOLOR)$(1)$(ENDCOLOR)  1>&2
+    endef
 else
     define MAKE_INSTALL
         $(INSTALL) $(1) $(2)
+    endef
+
+    define CREATE_SYMLINK
+        @ln -sf $(1) $(2)/$(3)
     endef
 endif
 
@@ -358,6 +367,7 @@ else
 endif
 
 ENGINE_NAME=valkey
+ENABLE_REDIS_SYMBLINK=true
 SERVER_NAME=$(ENGINE_NAME)-server$(PROG_SUFFIX)
 ENGINE_SENTINEL_NAME=$(ENGINE_NAME)-sentinel$(PROG_SUFFIX)
 ENGINE_SERVER_OBJ=threads_mngr.o adlist.o quicklist.o ae.o anet.o dict.o kvstore.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o cluster_legacy.o crc16.o endianconv.o slowlog.o eval.o bio.o rio.o rand.o memtest.o syscheck.o crcspeed.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o valkey-check-rdb.o valkey-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o acl.o tracking.o socket.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script_lua.o script.o functions.o function_lua.o commands.o strl.o connection.o unix.o logreqres.o
@@ -530,5 +540,24 @@ install: all
 	@ln -sf $(SERVER_NAME) $(INSTALL_BIN)/$(ENGINE_CHECK_AOF_NAME)
 	@ln -sf $(SERVER_NAME) $(INSTALL_BIN)/$(ENGINE_SENTINEL_NAME)
 
+    # Create some symlinks like `redis-server` link to `valkey-server` for compatibility
+    ifeq ($(ENABLE_REDIS_SYMBLINK), true)
+		$(call CREATE_SYMLINK,$(SERVER_NAME),$(INSTALL_BIN),$(subst $(ENGINE_NAME),redis,$(SERVER_NAME)))
+		$(call CREATE_SYMLINK,$(ENGINE_CLI_NAME),$(INSTALL_BIN),$(subst $(ENGINE_NAME),redis,$(ENGINE_CLI_NAME)))
+		$(call CREATE_SYMLINK,$(ENGINE_BENCHMARK_NAME),$(INSTALL_BIN),$(subst $(ENGINE_NAME),redis,$(ENGINE_BENCHMARK_NAME)))
+		$(call CREATE_SYMLINK,$(ENGINE_CHECK_RDB_NAME),$(INSTALL_BIN),$(subst $(ENGINE_NAME),redis,$(ENGINE_CHECK_RDB_NAME)))
+		$(call CREATE_SYMLINK,$(ENGINE_CHECK_AOF_NAME),$(INSTALL_BIN),$(subst $(ENGINE_NAME),redis,$(ENGINE_CHECK_AOF_NAME)))
+		$(call CREATE_SYMLINK,$(ENGINE_SENTINEL_NAME),$(INSTALL_BIN),$(subst $(ENGINE_NAME),redis,$(ENGINE_SENTINEL_NAME)))
+    endif
+
 uninstall:
-	rm -f $(INSTALL_BIN)/{$(SERVER_NAME),$(ENGINE_BENCHMARK_NAME),$(ENGINE_CLI_NAME),$(ENGINE_CHECK_RDB_NAME),$(ENGINE_CHECK_AOF_NAME),$(ENGINE_SENTINEL_NAME)}
+	@rm -f $(INSTALL_BIN)/{$(SERVER_NAME),$(ENGINE_BENCHMARK_NAME),$(ENGINE_CLI_NAME),$(ENGINE_CHECK_RDB_NAME),$(ENGINE_CHECK_AOF_NAME),$(ENGINE_SENTINEL_NAME)}
+
+ifeq ($(ENABLE_REDIS_SYMBLINK), true)
+	@rm -f $(INSTALL_BIN)/{$(subst $(ENGINE_NAME),redis,$(SERVER_NAME)),\
+	$(subst $(ENGINE_NAME),redis,$(ENGINE_CLI_NAME)),\
+	$(subst $(ENGINE_NAME),redis,$(ENGINE_BENCHMARK_NAME)),\
+	$(subst $(ENGINE_NAME),redis,$(ENGINE_CHECK_RDB_NAME)),\
+	$(subst $(ENGINE_NAME),redis,$(ENGINE_CHECK_AOF_NAME)),\
+	$(subst $(ENGINE_NAME),redis,$(ENGINE_SENTINEL_NAME))}
+endif

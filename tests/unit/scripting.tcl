@@ -321,7 +321,7 @@ start_server {tags {"scripting"}} {
             run_script "redis.call('nosuchcommand')" 0
         } e
         set e
-    } {*Unknown Redis*}
+    } {*Unknown command*}
 
     test {EVAL - redis.call variant raises a Lua error on Redis cmd error (1)} {
         set e {}
@@ -868,8 +868,8 @@ start_server {tags {"scripting"}} {
     } {ERR Number of keys can't be negative}
 
     test {Scripts can handle commands with incorrect arity} {
-        assert_error "ERR Wrong number of args calling Redis command from script*" {run_script "redis.call('set','invalid')" 0}
-        assert_error "ERR Wrong number of args calling Redis command from script*" {run_script "redis.call('incr')" 0}
+        assert_error "ERR Wrong number of args calling command from script*" {run_script "redis.call('set','invalid')" 0}
+        assert_error "ERR Wrong number of args calling command from script*" {run_script "redis.call('incr')" 0}
     }
 
     test {Correct handling of reused argv (issue #1939)} {
@@ -994,7 +994,7 @@ start_server {tags {"scripting"}} {
         } 0] {}
 
         # Check error due to invalid command
-        assert_error {ERR *Invalid command passed to redis.acl_check_cmd()*} {run_script {
+        assert_error {ERR *Invalid command passed to server.acl_check_cmd()*} {run_script {
             return redis.acl_check_cmd('invalid-cmd','arg')
         } 0}
     }
@@ -1514,7 +1514,7 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         r write $cmd
         r flush
         set ret [r read]
-        assert_match {*Unknown Redis command called from script*} $ret
+        assert_match {*Unknown command called from script*} $ret
         # make sure the server is still ok
         reconnect
         assert_equal [r ping] {PONG}
@@ -2343,7 +2343,7 @@ start_server {tags {"scripting"}} {
     }
 
     test "LUA test pcall with non string/integer arg" {
-        assert_error "ERR Lua redis lib command arguments must be strings or integers*" {
+        assert_error "ERR Command arguments must be strings or integers*" {
             r eval {
                 local x={}
                 return redis.call("ping", x)

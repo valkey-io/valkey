@@ -164,11 +164,11 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx, client *engine_client, client *ca
             int deny_write_type = writeCommandsDeniedByDiskError();
             if (deny_write_type != DISK_ERROR_TYPE_NONE && !obey_client) {
                 if (deny_write_type == DISK_ERROR_TYPE_RDB)
-                    addReplyError(caller, "-MISCONF Redis is configured to save RDB snapshots, "
+                    addReplyError(caller, "-MISCONF The server is configured to save RDB snapshots, "
                                      "but it's currently unable to persist to disk. "
                                      "Writable scripts are blocked. Use 'no-writes' flag for read only scripts.");
                 else
-                    addReplyErrorFormat(caller, "-MISCONF Redis is configured to persist data to AOF, "
+                    addReplyErrorFormat(caller, "-MISCONF The server is configured to persist data to AOF, "
                                            "but it's currently unable to persist to disk. "
                                            "Writable scripts are blocked. Use 'no-writes' flag for read only scripts. "
                                            "AOF error: %s", strerror(server.aof_last_write_errno));
@@ -322,9 +322,9 @@ void scriptKill(client *c, int is_eval) {
 static int scriptVerifyCommandArity(struct serverCommand *cmd, int argc, sds *err) {
     if (!cmd || ((cmd->arity > 0 && cmd->arity != argc) || (argc < -cmd->arity))) {
         if (cmd)
-            *err = sdsnew("Wrong number of args calling Redis command from script");
+            *err = sdsnew("Wrong number of args calling command from script");
         else
-            *err = sdsnew("Unknown Redis command called from script");
+            *err = sdsnew("Unknown command called from script");
         return C_ERR;
     }
     return C_OK;

@@ -1871,17 +1871,17 @@ void createSharedObjects(void) {
     shared.noscripterr = createObject(OBJ_STRING,sdsnew(
         "-NOSCRIPT No matching script. Please use EVAL.\r\n"));
     shared.loadingerr = createObject(OBJ_STRING,sdsnew(
-        "-LOADING Redis is loading the dataset in memory\r\n"));
+        "-LOADING The server is loading the dataset in memory\r\n"));
     shared.slowevalerr = createObject(OBJ_STRING,sdsnew(
-        "-BUSY Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.\r\n"));
+        "-BUSY The server is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.\r\n"));
     shared.slowscripterr = createObject(OBJ_STRING,sdsnew(
-        "-BUSY Redis is busy running a script. You can only call FUNCTION KILL or SHUTDOWN NOSAVE.\r\n"));
+        "-BUSY The server is busy running a script. You can only call FUNCTION KILL or SHUTDOWN NOSAVE.\r\n"));
     shared.slowmoduleerr = createObject(OBJ_STRING,sdsnew(
-        "-BUSY Redis is busy running a module command.\r\n"));
+        "-BUSY The server is busy running a module command.\r\n"));
     shared.masterdownerr = createObject(OBJ_STRING,sdsnew(
         "-MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.\r\n"));
     shared.bgsaveerr = createObject(OBJ_STRING,sdsnew(
-        "-MISCONF Redis is configured to save RDB snapshots, but it's currently unable to persist to disk. Commands that may modify the data set are disabled, because this instance is configured to report errors during writes if RDB snapshotting fails (stop-writes-on-bgsave-error option). Please check the Redis logs for details about the RDB error.\r\n"));
+        "-MISCONF The server is configured to save RDB snapshots, but it's currently unable to persist to disk. Commands that may modify the data set are disabled, because this instance is configured to report errors during writes if RDB snapshotting fails (stop-writes-on-bgsave-error option). Please check the server logs for details about the RDB error.\r\n"));
     shared.roslaveerr = createObject(OBJ_STRING,sdsnew(
         "-READONLY You can't write against a read only replica.\r\n"));
     shared.noautherr = createObject(OBJ_STRING,sdsnew(

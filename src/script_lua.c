@@ -799,7 +799,7 @@ static robj **luaArgsToRedisArgv(lua_State *lua, int *argc, int *argv_len) {
     /* Require at least one argument */
     *argc = lua_gettop(lua);
     if (*argc == 0) {
-        luaPushError(lua, "Please specify at least one argument for this redis lib call");
+        luaPushError(lua, "Please specify at least one argument for this call");
         return NULL;
     }
 
@@ -858,7 +858,7 @@ static robj **luaArgsToRedisArgv(lua_State *lua, int *argc, int *argv_len) {
      * integers as well). */
     if (j != *argc) {
         freeLuaRedisArgv(lua_argv, j, lua_argv_size);
-        luaPushError(lua, "Lua redis lib command arguments must be strings or integers");
+        luaPushError(lua, "Command arguments must be strings or integers");
         return NULL;
     }
 
@@ -1145,7 +1145,7 @@ static int luaRedisAclCheckCmdPermissionsCommand(lua_State *lua) {
     /* Find command */
     struct serverCommand *cmd;
     if ((cmd = lookupCommand(argv, argc)) == NULL) {
-        luaPushError(lua, "Invalid command passed to redis.acl_check_cmd()");
+        luaPushError(lua, "Invalid command passed to server.acl_check_cmd()");
         raise_error = 1;
     } else {
         int keyidxptr;

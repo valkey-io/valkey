@@ -1984,9 +1984,9 @@ void createSharedObjects(void) {
     shared.redacted = makeObjectShared(createStringObject("(redacted)",10));
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
-        shared.integers[j] =
-            makeObjectShared(createObject(OBJ_STRING,(void*)(long)j));
-        initObjectLRUOrLFU(shared.integers[j]);
+        robj *o = createObject(OBJ_STRING,(void*)(long)j);
+        initObjectLRUOrLFU(o);
+        shared.integers[j] = makeObjectShared(o);
         shared.integers[j]->encoding = OBJ_ENCODING_INT;
     }
     for (j = 0; j < OBJ_SHARED_BULKHDR_LEN; j++) {

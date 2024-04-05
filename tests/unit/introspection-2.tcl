@@ -242,4 +242,15 @@ start_server {tags {"introspection"}} {
         }
     }
 
+    test {lfu/lru value of the shared object key} {
+        r config set maxmemory 0
+        r config set maxmemory-policy allkeys-lfu
+        r incr foo
+        assert {[getlru foo] > 0}
+
+        r del foo
+        r config set maxmemory-policy allkeys-lru
+        r incr foo
+        assert {[getlru foo] > 0}
+     } 
 }

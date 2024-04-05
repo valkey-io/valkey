@@ -1515,7 +1515,7 @@ void ldbEval(lua_State *lua, sds *argv, int argc) {
     lua_pop(lua,1);
 }
 
-/* Implement the debugger "server command". We use a trick in order to make
+/* Implement the debugger "server" command. We use a trick in order to make
  * the implementation very simple: we just call the Lua redis.call() command
  * implementation, with ldb.step enabled, so as a side effect the command
  * and its reply are logged. */

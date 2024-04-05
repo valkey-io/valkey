@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
+ * Copyright (c) 2024, Valkey contributors
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -28,20 +29,20 @@
  */
 
 const char *ascii_logo =
-"                     ___   ___                                                           \n"
-"                    (   ) (   )                                                         \n"
-" ___  ___    .---.   | |   | |   ___     .--.    ___  ___                               \n"
-"(   )(   )  / .-, \\  | |   | |  (   )   /    \\  (   )(   )   Valkey %s (%s/%d) %s bit  \n"
-" | |  | |  (__) ; |  | |   | |  ' /    |  .-. ;  | |  | |                               \n"
-" | |  | |    .'`  |  | |   | |,' /     |  | | |  | |  | |    Running in %s mode         \n"
-" | |  | |   / .'| |  | |   | .  '.     |  |/  |  | '  | |    Port: %d                   \n"
-" | |  | |  | /  | |  | |   | | `. \\    |  ' _.'  '  `-' |    PID: %ld                 \n"
-" ' '  ; '  ; |  ; |  | |   | |   \\ \\   |  .'.-.   `.__. |                            \n"
-"  \\ `' /   ' `-'  |  | |   | |    \\ .  '  `-' /   ___ | |                             \n"
-"   \\__/    `.__.'_. (___) (___ )  (___) `.__.'   (   )' |    https://valkey.io\n"
-"                                                  ; `-' '                               \n"
-"                                                   .__.'                                \n"
-"                                                                                        \n"
-"                                                                                        \n\n";
-
-
+"                _._                                                  \n"
+"           _,-od@@@bo-._                                             \n"
+"      _,-od@@@@p'^'q@@@@bo-._           Valkey %s (%s/%d) %s bit\n"
+"  ,-od@@@@p^``       ''^q@@@@boo-.                                   \n"
+" |@@@@p``      _.-._      ''^q@@@@|     Running in %s mode\n"
+" |@@@|    _,odd@@@@@bbo._     |@@@|     Port: %d\n"
+" |@@@|   |@@@@@@@@@@@@@@@|    |@@@|     PID: %ld\n"
+" |@@@|   |@@@@p'` `'q@@@@|    |@@@|                                  \n"
+" |@@@|   |@@@@(     )@@@@|    |@@@|                                  \n"
+" |@@@|   |@@@@b.   .d@@@@|    |@@@|           https://valkey.io      \n"
+" |@@@|    `q@@@|   |@@@p-'    |@@@|                                  \n"
+" |@@@@b.    |@@|   |p-'       |@@@|                                  \n"
+" |@@@@@|    |@@|   '      _,-d@@@@|                                  \n"
+"  `-q@@|    |@@|      _,-d@@@@p-'                                    \n"
+"      `:    |@@@. _,-d@@@@p-'                                        \n"
+"            'q@@@@@@@@p-'                                            \n"
+"              `*@q@*'                                                \n\n";

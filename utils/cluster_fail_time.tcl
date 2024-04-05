@@ -15,11 +15,11 @@ proc avg vector {
 
 set samples {}
 while 1 {
-    exec redis-cli -p $::fail_port debug sleep $::sleep_time > /dev/null &
+    exec valkey-cli -p $::fail_port debug sleep $::sleep_time > /dev/null &
 
     # Wait for fail? to appear.
     while 1 {
-        set output [exec redis-cli -p $::other_port cluster nodes]
+        set output [exec valkey-cli -p $::other_port cluster nodes]
         if {[string match {*fail\?*} $output]} break
         after 100
     }
@@ -29,7 +29,7 @@ while 1 {
 
     # Wait for fail? to disappear.
     while 1 {
-        set output [exec redis-cli -p $::other_port cluster nodes]
+        set output [exec valkey-cli -p $::other_port cluster nodes]
         if {![string match {*fail\?*} $output]} break
         after 100
     }
@@ -43,7 +43,7 @@ while 1 {
     puts "AVG([llength $samples]): [avg $samples]"
 
     # Wait for the instance to be available again.
-    exec redis-cli -p $::fail_port ping
+    exec valkey-cli -p $::fail_port ping
 
     # Wait for the fail flag to be cleared.
     after 2000

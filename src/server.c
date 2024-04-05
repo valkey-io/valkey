@@ -5586,7 +5586,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
         info = sdscatfmt(info, "# Server\r\n" FMTARGS(
             "redis_version:%s\r\n", REDIS_VERSION,
             "server_name:%s\r\n", SERVER_NAME,
-            "server_version:%s\r\n", SERVER_VERSION,
+            "valkey_version:%s\r\n", VALKEY_VERSION,
             "redis_git_sha1:%s\r\n", serverGitSHA1(),
             "redis_git_dirty:%i\r\n", strtol(serverGitDirty(),NULL,10) > 0,
             "redis_build_id:%s\r\n", serverBuildIdString(),
@@ -6267,7 +6267,7 @@ void daemonize(void) {
 sds getVersion(void) {
     sds version = sdscatprintf(sdsempty(),
         "v=%s sha=%s:%d malloc=%s bits=%d build=%llx",
-        SERVER_VERSION,
+        VALKEY_VERSION,
         serverGitSHA1(),
         atoi(serverGitDirty()) > 0,
         ZMALLOC_LIB,
@@ -6321,7 +6321,7 @@ void serverAsciiArt(void) {
         );
     } else {
         snprintf(buf,1024*16,ascii_logo,
-            SERVER_VERSION,
+            VALKEY_VERSION,
             serverGitSHA1(),
             strtol(serverGitDirty(),NULL,10) > 0,
             (sizeof(long) == 8) ? "64" : "32",
@@ -7156,7 +7156,7 @@ int main(int argc, char **argv) {
 
     serverLog(LL_NOTICE, "oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo");
     serverLog(LL_NOTICE, SERVER_NAME " version=%s, bits=%d, commit=%s, modified=%d, pid=%d, just started",
-            SERVER_VERSION,
+            VALKEY_VERSION,
             (sizeof(long) == 8) ? 64 : 32,
             serverGitSHA1(),
             strtol(serverGitDirty(),NULL,10) > 0,

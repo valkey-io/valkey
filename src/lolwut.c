@@ -44,7 +44,7 @@ void lolwut6Command(client *c);
  * This is what unstable versions of Redis will display. */
 void lolwutUnstableCommand(client *c) {
     sds rendered = sdsnew("Redis ver. ");
-    rendered = sdscat(rendered,SERVER_VERSION);
+    rendered = sdscat(rendered,VALKEY_VERSION);
     rendered = sdscatlen(rendered,"\n",1);
     addReplyVerbatim(c,rendered,sdslen(rendered),"txt");
     sdsfree(rendered);
@@ -52,7 +52,7 @@ void lolwutUnstableCommand(client *c) {
 
 /* LOLWUT [VERSION <version>] [... version specific arguments ...] */
 void lolwutCommand(client *c) {
-    char *v = SERVER_VERSION;
+    char *v = VALKEY_VERSION;
     char verstr[64];
 
     if (c->argc >= 3 && !strcasecmp(c->argv[1]->ptr,"version")) {

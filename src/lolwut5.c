@@ -169,7 +169,7 @@ void lolwut5Command(client *c) {
     sds rendered = renderCanvas(canvas);
     rendered = sdscat(rendered,
         "\nGeorg Nees - schotter, plotter on paper, 1968. Redis ver. ");
-    rendered = sdscat(rendered,SERVER_VERSION);
+    rendered = sdscat(rendered,VALKEY_VERSION);
     rendered = sdscatlen(rendered,"\n",1);
     addReplyVerbatim(c,rendered,sdslen(rendered),"txt");
     sdsfree(rendered);

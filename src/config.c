@@ -634,7 +634,7 @@ void loadServerConfigFromString(char *config) {
 
 loaderr:
     if (argv) sdsfreesplitres(argv,argc);
-    fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR (Version %s) ***\n", SERVER_VERSION);
+    fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR (Version %s) ***\n", VALKEY_VERSION);
     if (i < totlines) {
         fprintf(stderr, "Reading the configuration file, at line %d\n", linenum);
         fprintf(stderr, ">>> '%s'\n", lines[i]);

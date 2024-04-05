@@ -12309,7 +12309,7 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
         onload = (int (*)(void *, void **, int))(unsigned long) dlsym(handle, onLoadNames[i]);
         if (onload != NULL) {
             if (i != 0) {
-                serverLog(LL_NOTICE, "Legacy Redis Module %s found",path);
+                serverLog(LL_NOTICE, "Legacy Redis Module %s found", path);
             }
             break;
         }
@@ -12412,8 +12412,18 @@ int moduleUnload(sds name, const char **errmsg) {
     }
 
     /* Give module a chance to clean up. */
-    int (*onunload)(void *);
-    onunload = (int (*)(void *))(unsigned long) dlsym(module->handle, "ValkeyModule_OnUnload");
+    const char *onUnloadNames[] = {"ValkeyModule_OnUnload", "RedisModule_OnUnload"};
+    int (*onunload)(void *) = NULL;
+    for (size_t i = 0; i < sizeof(onUnloadNames) / sizeof(onUnloadNames[0]); i++) {
+        onunload = (int (*)(void *))(unsigned long)dlsym(module->handle, onUnloadNames[i]);
+        if (onunload) {
+            if (i != 0) {
+                serverLog(LL_NOTICE, "Legacy Redis Module %s found", name);
+            }
+            break;
+        }
+    }
+
     if (onunload) {
         ValkeyModuleCtx ctx;
         moduleCreateContext(&ctx, module, VALKEYMODULE_CTX_TEMP_CLIENT);
@@ -12421,7 +12431,7 @@ int moduleUnload(sds name, const char **errmsg) {
         moduleFreeContext(&ctx);
 
         if (unload_status == VALKEYMODULE_ERR) {
-            serverLog(LL_WARNING, "Module %s OnUnload failed.  Unload canceled.", name);
+            serverLog(LL_WARNING, "Module %s OnUnload failed. Unload canceled.", name);
             errno = ECANCELED;
             return C_ERR;
         }
@@ -12529,6 +12539,7 @@ sds genModulesInfoStringRenderModuleOptions(struct ValkeyModule *module) {
  * output.
  *
  * After the call, the passed sds info string is no longer valid and all the
+ *
  * references must be substituted with the new pointer returned by the call. */
 sds genModulesInfoString(sds info) {
     dictIterator *di = dictGetIterator(modules);

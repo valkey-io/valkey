@@ -35,9 +35,36 @@ tests/tls/*
 *.dSYM
 Makefile.dep
 .vscode/*
-.idea/*
+.idea/
 .ccls
 .ccls-cache/*
 compile_commands.json
 redis.code-workspace
 .cache
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+# Python unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+# Python environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/

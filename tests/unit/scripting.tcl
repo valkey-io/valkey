@@ -67,7 +67,7 @@ start_server {tags {"scripting"}} {
         run_script {local a = {}; setmetatable(a,{__index=function() foo() end}) return a} 0
     } {}
 
-    test {EVAL - Return table with a metatable that call redis} {
+    test {EVAL - Return table with a metatable that call server} {
         run_script {local a = {}; setmetatable(a,{__index=function() redis.call('set', 'x', '1') end}) return a} 1 x
         # make sure x was not set
         r get x
@@ -1042,7 +1042,7 @@ start_server {tags {"scripting"}} {
         set _ $e
     } {*Attempt to modify a readonly table*}
 
-    test "Try trick readonly table on redis table" {
+    test "Try trick readonly table on valkey table" {
         catch {
             run_script {
                 redis.call = function() return 1 end

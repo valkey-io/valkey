@@ -1106,7 +1106,7 @@ start_server {tags {"scripting"}} {
         set _ {}
     } {} {external:skip}
 
-    test {FUNCTION - redis version api} {
+    test {FUNCTION - valkey version api} {
         r FUNCTION load replace {#!lua name=test
             local version = redis.REDIS_VERSION_NUM
 

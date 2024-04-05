@@ -99,7 +99,7 @@ static inline void redisModuleSetTimeout(void *privdata, struct timeval tv) {
     e->timer_active = 1;
 }
 
-/* Check if Redis version is compatible with the adapter. */
+/* Check if the server version is compatible with the adapter. */
 static inline int redisModuleCompatibilityCheck(void) {
     if (!RedisModule_EventLoopAdd ||
         !RedisModule_EventLoopDel ||

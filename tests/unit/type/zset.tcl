@@ -1826,7 +1826,7 @@ start_server {tags {"zset"}} {
                 # Make sure data is the same in both sides
                 assert {[r zrange zset 0 -1] eq $lexset}
 
-                # Get the Redis output
+                # Get the server output
                 set output [r $cmd zset $cmin $cmax]
                 if {$rev} {
                     set outlen [r zlexcount zset $cmax $cmin]
@@ -1842,7 +1842,7 @@ start_server {tags {"zset"}} {
                     # Empty output when ranges are inverted.
                 } else {
                     if {$rev} {
-                        # Invert the Tcl array using Redis itself.
+                        # Invert the Tcl array using the server itself.
                         set copy [r zrevrange zset 0 -1]
                         # Invert min / max as well
                         lassign [list $min $max $mininc $maxinc] \

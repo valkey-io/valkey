@@ -745,7 +745,7 @@ start_server {tags {"tracking network logreqres:skip"}} {
 
     test {Regression test for #11715} {
         # This issue manifests when a client invalidates keys through the max key
-        # limit, which invalidates keys to get Redis below the limit, but no command is
+        # limit, which invalidates keys to get the server below the limit, but no command is
         # then executed. This can occur in several ways but the simplest is through 
         # multi-exec which queues commands.
         clean_all

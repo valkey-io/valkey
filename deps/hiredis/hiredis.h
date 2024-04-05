@@ -253,7 +253,7 @@ typedef struct redisContextFuncs {
 } redisContextFuncs;
 
 
-/* Context for a connection to Redis */
+/* Context for a connection to the server */
 typedef struct redisContext {
     const redisContextFuncs *funcs;   /* Function table */
 
@@ -346,7 +346,7 @@ int redisvAppendCommand(redisContext *c, const char *format, va_list ap);
 int redisAppendCommand(redisContext *c, const char *format, ...);
 int redisAppendCommandArgv(redisContext *c, int argc, const char **argv, const size_t *argvlen);
 
-/* Issue a command to Redis. In a blocking context, it is identical to calling
+/* Issue a command to the server. In a blocking context, it is identical to calling
  * redisAppendCommand, followed by redisGetReply. The function will return
  * NULL if there was an error in performing the request, otherwise it will
  * return the reply. In a non-blocking context, it is identical to calling

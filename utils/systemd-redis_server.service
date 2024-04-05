@@ -1,13 +1,13 @@
-# example systemd service unit file for redis-server
+# example systemd service unit file for the server
 #
-# In order to use this as a template for providing a redis service in your
-# environment, _at the very least_ make sure to adapt the redis configuration
+# In order to use this as a template for providing a service in your
+# environment, _at the very least_ make sure to adapt the server configuration
 # file you intend to use as needed (make sure to set "supervised systemd"), and
 # to set sane TimeoutStartSec and TimeoutStopSec property values in the unit's
 # "[Service]" section to fit your needs.
 #
 # Some properties, such as User= and Group=, are highly desirable for virtually
-# all deployments of redis, but cannot be provided in a manner that fits all
+# all deployments of the server, but cannot be provided in a manner that fits all
 # expectable environments. Some of these properties have been commented out in
 # this example service unit file, but you are highly encouraged to set them to
 # fit your needs.
@@ -25,7 +25,7 @@ After=network-online.target
 
 [Service]
 ExecStart=/usr/local/bin/valkey-server --supervised systemd --daemonize no
-## Alternatively, have redis-server load a configuration file:
+## Alternatively, have the server load a configuration file:
 #ExecStart=/usr/local/bin/valkey-server /path/to/your/valkey.conf
 LimitNOFILE=10032
 NoNewPrivileges=yes

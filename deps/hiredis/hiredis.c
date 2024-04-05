@@ -238,7 +238,7 @@ static void *createDoubleObject(const redisReadTask *task, double value, char *s
 
     /* The double reply also has the original protocol string representing a
      * double as a null terminated string. This way the caller does not need
-     * to format back for string conversion, especially since Redis does efforts
+     * to format back for string conversion, especially since the server does efforts
      * to make the string more human readable avoiding the calssical double
      * decimal string conversion artifacts. */
     memcpy(r->str, str, len);
@@ -550,7 +550,7 @@ cleanup:
     return error_type;
 }
 
-/* Format a command according to the Redis protocol. This function
+/* Format a command according to the RESP protocol. This function
  * takes a format similar to printf:
  *
  * %s represents a C null terminated string you want to interpolate
@@ -577,7 +577,7 @@ int redisFormatCommand(char **target, const char *format, ...) {
     return len;
 }
 
-/* Format a command according to the Redis protocol using an hisds string and
+/* Format a command according to the RESP protocol using an hisds string and
  * hi_sdscatfmt for the processing of arguments. This function takes the
  * number of arguments, an array with arguments and an array with their
  * lengths. If the latter is set to NULL, strlen will be used to compute the
@@ -634,7 +634,7 @@ void redisFreeSdsCommand(hisds cmd) {
     hi_sdsfree(cmd);
 }
 
-/* Format a command according to the Redis protocol. This function takes the
+/* Format a command according to the RESP protocol. This function takes the
  * number of arguments, an array with arguments and an array with their
  * lengths. If the latter is set to NULL, strlen will be used to compute the
  * argument lengths.
@@ -869,7 +869,7 @@ redisContext *redisConnectWithOptions(const redisOptions *options) {
     return c;
 }
 
-/* Connect to a Redis instance. On error the field error in the returned
+/* Connect to an instance. On error the field error in the returned
  * context will be set to the return value of the error function.
  * When no set of reply functions is given, the default set will be used. */
 redisContext *redisConnect(const char *ip, int port) {

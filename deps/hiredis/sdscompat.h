@@ -32,8 +32,8 @@
  * SDS compatibility header.
  *
  * This simple file maps sds types and calls to their unique hiredis symbol names.
- * It's useful when we build Hiredis as a dependency of Redis and want to call
- * Hiredis' sds symbols rather than the ones built into Redis, as the libraries
+ * It's useful when we build Hiredis as a dependency of the server and want to call
+ * Hiredis' sds symbols rather than the ones built into the server, as the libraries
  * have slightly diverged and could cause hard to track down ABI incompatibility
  * bugs.
  *

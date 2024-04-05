@@ -84,7 +84,7 @@ static int redisMacOSAttach(redisAsyncContext *redisAsyncCtx, CFRunLoopRef runLo
     if (redisRunLoop == NULL)
         return REDIS_ERR;
 
-    /* Setup redis stuff */
+    /* Setup stuff for the server */
     redisRunLoop->context = redisAsyncCtx;
 
     redisAsyncCtx->ev.addRead  = redisMacOSAddRead;

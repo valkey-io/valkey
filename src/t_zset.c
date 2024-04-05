@@ -36,9 +36,9 @@
  * in order to get O(log(N)) INSERT and REMOVE operations into a sorted
  * data structure.
  *
- * The elements are added to a hash table mapping Redis objects to scores.
+ * The elements are added to a hash table mapping Objects to scores.
  * At the same time the elements are added to a skip list mapping scores
- * to Redis objects (so objects are sorted by scores in this "view").
+ * to Objects (so objects are sorted by scores in this "view").
  *
  * Note that the SDS string representing the element is the same in both
  * the hash table and skiplist in order to save memory. What we do in order
@@ -598,7 +598,7 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
   * - means the min string possible
   * + means the max string possible
   *
-  * If the string is valid the *dest pointer is set to the redis object
+  * If the string is valid the *dest pointer is set to the Object
   * that will be used for the comparison, and ex will be set to 0 or 1
   * respectively if the item is exclusive or inclusive. C_OK will be
   * returned.

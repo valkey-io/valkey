@@ -64,7 +64,7 @@ typedef enum {
 
 /* Constants that mirror OpenSSL's verify modes. By default,
  * REDIS_SSL_VERIFY_PEER is used with redisCreateSSLContext().
- * Some Redis clients disable peer verification if there are no
+ * Some clients disable peer verification if there are no
  * certificates specified.
  */
 #define REDIS_SSL_VERIFY_NONE 0x00

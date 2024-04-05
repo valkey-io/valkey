@@ -5,7 +5,7 @@ proc cmdstat {cmd} {
     return [cmdrstat $cmd r]
 }
 
-# common code to reset stats, flush the db and run redis-benchmark
+# common code to reset stats, flush the db and run valkey-benchmark
 proc common_bench_setup {cmd} {
     r config resetstat
     r flushall

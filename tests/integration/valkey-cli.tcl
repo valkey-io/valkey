@@ -360,7 +360,7 @@ start_server {tags {"cli"}} {
 
 if {!$::tls} { ;# fake_redis_node doesn't support TLS
     test_nontty_cli "ASK redirect test" {
-        # Set up two fake Redis nodes.
+        # Set up two fake nodes.
         set tclsh [info nameofexecutable]
         set script "tests/helpers/fake_redis_node.tcl"
         set port1 [find_available_port $::baseport $::portcount]

@@ -225,7 +225,7 @@ void setproctitle(const char *fmt, ...);
 
 /* Sometimes after including an OS-specific header that defines the
  * endianness we end with __BYTE_ORDER but not with BYTE_ORDER that is what
- * the Redis code uses. In this case let's define everything without the
+ * the server code uses. In this case let's define everything without the
  * underscores. */
 #ifndef BYTE_ORDER
 #ifdef __BYTE_ORDER

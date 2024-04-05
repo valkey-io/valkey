@@ -446,7 +446,7 @@ void zmadvise_dontneed(void *ptr) {
 /* Get the RSS information in an OS-specific way.
  *
  * WARNING: the function zmalloc_get_rss() is not designed to be fast
- * and may not be called in the busy loops where Redis tries to release
+ * and may not be called in the busy loops where the server tries to release
  * memory expiring or swapping out objects.
  *
  * For this kind of "fast RSS reporting" usages use instead the
@@ -769,7 +769,7 @@ void zlibc_trim(void) {
 /* For proc_pidinfo() used later in zmalloc_get_smap_bytes_by_field().
  * Note that this file cannot be included in zmalloc.h because it includes
  * a Darwin queue.h file where there is a "LIST_HEAD" macro (!) defined
- * conficting with Redis user code. */
+ * conficting with user code. */
 #include <libproc.h>
 #endif
 

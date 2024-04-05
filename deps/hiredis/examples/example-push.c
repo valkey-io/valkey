@@ -134,7 +134,7 @@ int main(int argc, char **argv) {
     /* Enable RESP3 and turn on client tracking */
     enableClientTracking(c);
 
-    /* Set some keys and then read them back.  Once we do that, Redis will deliver
+    /* Set some keys and then read them back.  Once we do that, the server will deliver
      * invalidation push messages whenever the key is modified */
     for (j = 0; j < KEY_COUNT; j++) {
         reply = redisCommand(c, "SET key:%d initial:%d", j, j);

@@ -66,7 +66,7 @@ typedef struct clusterNodeFailReport {
     mstime_t time;             /* Time of the last report from this node. */
 } clusterNodeFailReport;
 
-/* Redis cluster messages header */
+/* Cluster messages header */
 
 /* Message types.
  *
@@ -204,7 +204,7 @@ union clusterMsgData {
 #define CLUSTER_PROTO_VER 1 /* Cluster bus protocol version. */
 
 typedef struct {
-    char sig[4];        /* Signature "RCmb" (Redis Cluster message bus). */
+    char sig[4];        /* Signature "RCmb" (Cluster message bus). */
     uint32_t totlen;    /* Total length of this message */
     uint16_t ver;       /* Protocol version, currently set to 1. */
     uint16_t port;      /* Primary port number (TCP or TLS). */
@@ -231,8 +231,8 @@ typedef struct {
     union clusterMsgData data;
 } clusterMsg;
 
-/* clusterMsg defines the gossip wire protocol exchanged among Redis cluster
- * members, which can be running different versions of redis-server bits,
+/* clusterMsg defines the gossip wire protocol exchanged among cluster
+ * members, which can be running different versions of server bits,
  * especially during cluster rolling upgrades.
  *
  * Therefore, fields in this struct should remain at the same offset from

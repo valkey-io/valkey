@@ -451,7 +451,7 @@ void __redisAsyncDisconnect(redisAsyncContext *ac) {
     }
 }
 
-/* Tries to do a clean disconnect from Redis, meaning it stops new commands
+/* Tries to do a clean disconnect from the server, meaning it stops new commands
  * from being issued, but tries to flush the output buffer and execute
  * callbacks for all remaining replies. When this function is called from a
  * callback, there might be more replies and we can safely defer disconnecting

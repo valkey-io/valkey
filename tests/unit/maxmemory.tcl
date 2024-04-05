@@ -272,7 +272,7 @@ start_server {tags {"maxmemory external:skip"}} {
                 incr numkeys
             }
             # Now we add the same number of volatile keys already added.
-            # We expect Redis to evict only volatile keys in order to make
+            # We expect the server to evict only volatile keys in order to make
             # space.
             set err 0
             for {set j 0} {$j < $numkeys} {incr j} {
@@ -435,7 +435,7 @@ start_server {tags {"maxmemory external:skip"}} {
         # Next writing command will trigger evicting some keys if last
         # command trigger DB dict rehash
         r set k2 v2
-        # There must be 4098 keys because redis doesn't evict keys.
+        # There must be 4098 keys because the server doesn't evict keys.
         r dbsize
     } {4098}
 }

@@ -191,7 +191,7 @@ start_cluster 3 0 {tags {external:skip cluster}} {
 
         # On primary1, set cluster link send buffer limit to 256KB, which is large enough to not be
         # overflowed by regular gossip messages but also small enough that it doesn't take too much
-        # memory to overflow it. If it is set too high, Redis may get OOM killed by kernel before this
+        # memory to overflow it. If it is set too high, the server may get OOM killed by kernel before this
         # limit is overflowed in some RAM-limited test environments.
         set oldlimit [lindex [$primary1 CONFIG get cluster-link-sendbuf-limit] 1]
         $primary1 CONFIG set cluster-link-sendbuf-limit [expr 256*1024]

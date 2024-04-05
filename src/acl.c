@@ -168,7 +168,7 @@ typedef struct {
      * execute this command.
      *
      * If the bit for a given command is NOT set and the command has
-     * allowed first-args, Redis will also check allowed_firstargs in order to
+     * allowed first-args, the server will also check allowed_firstargs in order to
      * understand if the command can be executed. */
     uint64_t allowed_commands[USER_COMMAND_BITS_COUNT/64];
     /* allowed_firstargs is used by ACL rules to block access to a command unless a
@@ -502,7 +502,7 @@ void ACLFreeUserAndKillClients(user *u) {
         if (c->user == u) {
             /* We'll free the connection asynchronously, so
              * in theory to set a different user is not needed.
-             * However if there are bugs in Redis, soon or later
+             * However if there are bugs in the server, soon or later
              * this may result in some security hole: it's much
              * more defensive to set the default user and put
              * it in non authenticated mode. */
@@ -1023,7 +1023,7 @@ cleanup:
  * +@<category> Allow the execution of all the commands in such category
  *              with valid categories are like @admin, @set, @sortedset, ...
  *              and so forth, see the full list in the server.c file where
- *              the Redis command table is described and defined.
+ *              the command table is described and defined.
  *              The special category @all means all the commands, but currently
  *              present in the server, and that will be loaded in the future
  *              via modules.
@@ -3204,7 +3204,7 @@ void addReplyCommandCategories(client *c, struct serverCommand *cmd) {
 }
 
 /* AUTH <password>
- * AUTH <username> <password> (Redis >= 6.0 form)
+ * AUTH <username> <password> (Redis OSS >= 6.0 form)
  *
  * When the user is omitted it means that we are trying to authenticate
  * against the default user. */

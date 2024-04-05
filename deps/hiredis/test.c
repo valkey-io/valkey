@@ -104,7 +104,7 @@ static long long usec(void) {
 #define assert(e) (void)(e)
 #endif
 
-/* Helper to extract Redis version information.  Aborts on any failure. */
+/* Helper to extract the server version information.  Aborts on any failure. */
 #define REDIS_VERSION_FIELD "redis_version:"
 void get_redis_version(redisContext *c, int *majorptr, int *minorptr) {
     redisReply *reply;
@@ -1000,7 +1000,7 @@ static void test_resp3_push_handler(redisContext *c) {
     old = redisSetPushCallback(c, push_handler);
     test("We can set a custom RESP3 PUSH handler: ");
     reply = redisCommand(c, "SET key:0 val:0");
-    /* We need another command because depending on the version of Redis, the
+    /* We need another command because depending on the version of the server, the
      * notification may be delivered after the command's reply. */
     assert(reply != NULL);
     freeReplyObject(reply);
@@ -1023,7 +1023,7 @@ static void test_resp3_push_handler(redisContext *c) {
     assert((reply = redisCommand(c, "GET key:0")) != NULL);
     freeReplyObject(reply);
     assert((reply = redisCommand(c, "SET key:0 invalid")) != NULL);
-    /* Depending on Redis version, we may receive either push notification or
+    /* Depending on the server version, we may receive either push notification or
      * status reply. Both cases are valid. */
     if (reply->type == REDIS_REPLY_STATUS) {
         freeReplyObject(reply);
@@ -1270,7 +1270,7 @@ static void test_blocking_connection_timeouts(struct config config) {
 #endif
         freeReplyObject(reply);
 
-        // wait for the DEBUG SLEEP to complete so that Redis server is unblocked for the following tests
+        // wait for the DEBUG SLEEP to complete so that the server is unblocked for the following tests
         millisleep(3000);
     } else {
         test_skipped();

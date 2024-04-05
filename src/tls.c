@@ -27,7 +27,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#define VALKEYMODULE_CORE_MODULE /* A module that's part of the redis core, uses server.h too. */
+#define VALKEYMODULE_CORE_MODULE /* A module that's part of the server core, uses server.h too. */
 
 #include "server.h"
 #include "connhelpers.h"
@@ -1175,7 +1175,7 @@ int ValkeyModule_OnLoad(void *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argv);
     UNUSED(argc);
 
-    /* Connection modules must be part of the same build as redis. */
+    /* Connection modules must be part of the same build as the server. */
     if (strcmp(REDIS_BUILD_ID_RAW, serverBuildIdRaw())) {
         serverLog(LL_NOTICE, "Connection type %s was not built together with the redis-server used.", CONN_TYPE_TLS);
         return VALKEYMODULE_ERR;

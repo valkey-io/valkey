@@ -93,13 +93,13 @@ sds keyspaceEventsFlagsToString(int flags) {
     return res;
 }
 
-/* The API provided to the rest of the Redis core is a simple function:
+/* The API provided to the rest of the serer core is a simple function:
  *
  * notifyKeyspaceEvent(int type, char *event, robj *key, int dbid);
  *
  * 'type' is the notification class we define in `server.h`.
  * 'event' is a C string representing the event name.
- * 'key' is a Redis object representing the key name.
+ * 'key' is an Object representing the key name.
  * 'dbid' is the database ID where the key lives.  */
 void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
     sds chan;

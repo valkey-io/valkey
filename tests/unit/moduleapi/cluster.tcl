@@ -1,4 +1,4 @@
-# Primitive tests on cluster-enabled redis with modules
+# Primitive tests on cluster-enabled server with modules
 
 source tests/support/cli.tcl
 

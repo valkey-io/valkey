@@ -77,7 +77,7 @@ start_server {} {
 start_server {} {
     set master_id 0                 ; # Current master
     set start_time [clock seconds]  ; # Test start time
-    set counter_value 0             ; # Current value of the Redis counter "x"
+    set counter_value 0             ; # Current value of the server counter "x"
 
     # Config
     set debug_msg 0                 ; # Enable additional debug messages

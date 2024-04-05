@@ -57,7 +57,7 @@ static int checkStringLength(client *c, long long size, long long append) {
  *
  * 'flags' changes the behavior of the command (NX, XX or GET, see below).
  *
- * 'expire' represents an expire to set in form of a Redis object as passed
+ * 'expire' represents an expire to set in the form of an Object as passed
  * by the user. It is interpreted according to the specified 'unit'.
  *
  * 'ok_reply' and 'abort_reply' is what the function will reply to the client

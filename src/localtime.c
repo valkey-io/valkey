@@ -31,9 +31,9 @@
 
 /* This is a safe version of localtime() which contains no locks and is
  * fork() friendly. Even the _r version of localtime() cannot be used safely
- * in Redis. Another thread may be calling localtime() while the main thread
+ * in the server. Another thread may be calling localtime() while the main thread
  * forks(). Later when the child process calls localtime() again, for instance
- * in order to log something to the Redis log, it may deadlock: in the copy
+ * in order to log something to the server log, it may deadlock: in the copy
  * of the address space of the forked process the lock will never be released.
  *
  * This function takes the timezone 'tz' as argument, and the 'dst' flag is
@@ -47,7 +47,7 @@
  * should be refreshed at safe times.
  *
  * Note that this function does not work for dates < 1/1/1970, it is solely
- * designed to work with what time(NULL) may return, and to support Redis
+ * designed to work with what time(NULL) may return, and to support server
  * logging of the dates, it's not really a complete implementation. */
 static int is_leap_year(time_t year) {
     if (year % 4) return 0;         /* A year not divisible by 4 is not leap. */

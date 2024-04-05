@@ -151,7 +151,7 @@ foreach call_type {nested normal} {
             $rd slow_fg_command 200000
         }
         $rd flush
-        after 10 ;# try to make sure redis started running the command before we proceed
+        after 10 ;# try to make sure the server started running the command before we proceed
 
         # make sure we didn't get BUSY error, it simply blocked till the command was done
         r ping

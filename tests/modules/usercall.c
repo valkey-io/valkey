@@ -117,7 +117,7 @@ void *bg_call_worker(void *arg) {
     bg_call_data *bg = arg;
     RedisModuleBlockedClient *bc = bg->bc;
 
-    // Get Redis module context
+    // Get module context
     RedisModuleCtx *ctx = RedisModule_GetThreadSafeContext(bg->bc);
 
     // Acquire GIL
@@ -157,7 +157,7 @@ void *bg_call_worker(void *arg) {
     // Unblock client
     RedisModule_UnblockClient(bc, NULL);
 
-    // Free the Redis module context
+    // Free the module context
     RedisModule_FreeThreadSafeContext(ctx);
 
     return NULL;

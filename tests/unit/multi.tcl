@@ -883,7 +883,7 @@ start_server {tags {"multi"}} {
         r set foo bar
         r config set maxmemory bla
 
-        # letting the redis parser read it, it'll throw an exception instead of
+        # letting the server parser read it, it'll throw an exception instead of
         # reply with an array that contains an error, so we switch to reading
         # raw RESP instead
         r readraw 1

@@ -32,7 +32,7 @@ proc streamRandomID {min_id max_id} {
     return $ms-$seq
 }
 
-# Tcl-side implementation of XRANGE to perform fuzz testing in the Redis
+# Tcl-side implementation of XRANGE to perform fuzz testing in the server
 # XRANGE implementation.
 proc streamSimulateXRANGE {items start end} {
     set res {}

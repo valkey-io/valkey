@@ -13,7 +13,7 @@ proc fix_cluster {addr} {
     if {$code != 0} {
         puts "redis-cli --cluster fix returns non-zero exit code, output below:\n$result"
     }
-    # Note: redis-cli --cluster fix may return a non-zero exit code if nodes don't agree,
+    # Note: valkey-cli --cluster fix may return a non-zero exit code if nodes don't agree,
     # but we can ignore that and rely on the check below.
     assert_cluster_state ok
     wait_for_condition 100 100 {

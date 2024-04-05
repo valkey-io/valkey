@@ -23,7 +23,7 @@ INSTALL_INCLUDE_PATH= $(DESTDIR)$(PREFIX)/$(INCLUDE_PATH)
 INSTALL_LIBRARY_PATH= $(DESTDIR)$(PREFIX)/$(LIBRARY_PATH)
 INSTALL_PKGCONF_PATH= $(INSTALL_LIBRARY_PATH)/$(PKGCONF_PATH)
 
-# redis-server configuration used for testing
+# valkey-server configuration used for testing
 REDIS_PORT=56379
 REDIS_SERVER=redis-server
 define REDIS_TEST_CONFIG

@@ -1870,7 +1870,7 @@ robj *streamTypeLookupWriteOrCreate(client *c, robj *key, int no_create) {
     return o;
 }
 
-/* Parse a stream ID in the format given by clients to Redis, that is
+/* Parse a stream ID in the format given by clients to the server, that is
  * <ms>-<seq>, and converts it into a streamID structure. If
  * the specified ID is invalid C_ERR is returned and an error is reported
  * to the client, otherwise C_OK is returned. The ID may be in incomplete

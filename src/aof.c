@@ -2201,7 +2201,7 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
  * that is exported by a module and is not handled by Redis itself.
  * The function returns 0 on error, 1 on success. */
 int rewriteModuleObject(rio *r, robj *key, robj *o, int dbid) {
-    RedisModuleIO io;
+    ValkeyModuleIO io;
     moduleValue *mv = o->ptr;
     moduleType *mt = mv->type;
     moduleInitIOContext(io,mt,r,key,dbid);

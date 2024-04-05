@@ -821,8 +821,8 @@ int masterTryPartialResynchronization(client *c, long long psync_offset) {
     refreshGoodSlavesCount();
 
     /* Fire the replica change modules event. */
-    moduleFireServerEvent(REDISMODULE_EVENT_REPLICA_CHANGE,
-                          REDISMODULE_SUBEVENT_REPLICA_CHANGE_ONLINE,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_REPLICA_CHANGE,
+                          VALKEYMODULE_SUBEVENT_REPLICA_CHANGE_ONLINE,
                           NULL);
 
     return C_OK; /* The caller can return, no full resync needed. */
@@ -1304,8 +1304,8 @@ int replicaPutOnline(client *slave) {
 
     refreshGoodSlavesCount();
     /* Fire the replica change modules event. */
-    moduleFireServerEvent(REDISMODULE_EVENT_REPLICA_CHANGE,
-                          REDISMODULE_SUBEVENT_REPLICA_CHANGE_ONLINE,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_REPLICA_CHANGE,
+                          VALKEYMODULE_SUBEVENT_REPLICA_CHANGE_ONLINE,
                           NULL);
     serverLog(LL_NOTICE,"Synchronization with replica %s succeeded",
         replicationGetSlaveName(slave));
@@ -2064,8 +2064,8 @@ void readSyncBulkPayload(connection *conn) {
         diskless_load_tempDb = disklessLoadInitTempDb();
         temp_functions_lib_ctx = functionsLibCtxCreate();
 
-        moduleFireServerEvent(REDISMODULE_EVENT_REPL_ASYNC_LOAD,
-                              REDISMODULE_SUBEVENT_REPL_ASYNC_LOAD_STARTED,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_REPL_ASYNC_LOAD,
+                              VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_STARTED,
                               NULL);
     } else {
         replicationAttachToNewMaster();
@@ -2138,8 +2138,8 @@ void readSyncBulkPayload(connection *conn) {
 
             if (server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
                 /* Discard potentially partially loaded tempDb. */
-                moduleFireServerEvent(REDISMODULE_EVENT_REPL_ASYNC_LOAD,
-                                      REDISMODULE_SUBEVENT_REPL_ASYNC_LOAD_ABORTED,
+                moduleFireServerEvent(VALKEYMODULE_EVENT_REPL_ASYNC_LOAD,
+                                      VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_ABORTED,
                                       NULL);
 
                 disklessLoadDiscardTempDb(diskless_load_tempDb);
@@ -2169,8 +2169,8 @@ void readSyncBulkPayload(connection *conn) {
             /* swap existing functions ctx with the temporary one */
             functionsLibCtxSwapWithCurrent(temp_functions_lib_ctx);
 
-            moduleFireServerEvent(REDISMODULE_EVENT_REPL_ASYNC_LOAD,
-                        REDISMODULE_SUBEVENT_REPL_ASYNC_LOAD_COMPLETED,
+            moduleFireServerEvent(VALKEYMODULE_EVENT_REPL_ASYNC_LOAD,
+                        VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_COMPLETED,
                         NULL);
 
             /* Delete the old db as it's useless now. */
@@ -2261,8 +2261,8 @@ void readSyncBulkPayload(connection *conn) {
     server.repl_down_since = 0;
 
     /* Fire the master link modules event. */
-    moduleFireServerEvent(REDISMODULE_EVENT_MASTER_LINK_CHANGE,
-                          REDISMODULE_SUBEVENT_MASTER_LINK_UP,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE,
+                          VALKEYMODULE_SUBEVENT_PRIMARY_LINK_UP,
                           NULL);
 
     /* After a full resynchronization we use the replication ID and
@@ -3036,14 +3036,14 @@ void replicationSetMaster(char *ip, int port) {
     }
 
     /* Fire the role change modules event. */
-    moduleFireServerEvent(REDISMODULE_EVENT_REPLICATION_ROLE_CHANGED,
-                          REDISMODULE_EVENT_REPLROLECHANGED_NOW_REPLICA,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_REPLICATION_ROLE_CHANGED,
+                          VALKEYMODULE_EVENT_REPLROLECHANGED_NOW_REPLICA,
                           NULL);
 
     /* Fire the master link modules event. */
     if (server.repl_state == REPL_STATE_CONNECTED)
-        moduleFireServerEvent(REDISMODULE_EVENT_MASTER_LINK_CHANGE,
-                              REDISMODULE_SUBEVENT_MASTER_LINK_DOWN,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE,
+                              VALKEYMODULE_SUBEVENT_PRIMARY_LINK_DOWN,
                               NULL);
 
     server.repl_state = REPL_STATE_CONNECT;
@@ -3058,8 +3058,8 @@ void replicationUnsetMaster(void) {
 
     /* Fire the master link modules event. */
     if (server.repl_state == REPL_STATE_CONNECTED)
-        moduleFireServerEvent(REDISMODULE_EVENT_MASTER_LINK_CHANGE,
-                              REDISMODULE_SUBEVENT_MASTER_LINK_DOWN,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE,
+                              VALKEYMODULE_SUBEVENT_PRIMARY_LINK_DOWN,
                               NULL);
 
     /* Clear masterhost first, since the freeClient calls
@@ -3100,8 +3100,8 @@ void replicationUnsetMaster(void) {
     server.repl_down_since = 0;
 
     /* Fire the role change modules event. */
-    moduleFireServerEvent(REDISMODULE_EVENT_REPLICATION_ROLE_CHANGED,
-                          REDISMODULE_EVENT_REPLROLECHANGED_NOW_MASTER,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_REPLICATION_ROLE_CHANGED,
+                          VALKEYMODULE_EVENT_REPLROLECHANGED_NOW_PRIMARY,
                           NULL);
 
     /* Restart the AOF subsystem in case we shut it down during a sync when
@@ -3114,8 +3114,8 @@ void replicationUnsetMaster(void) {
 void replicationHandleMasterDisconnection(void) {
     /* Fire the master link modules event. */
     if (server.repl_state == REPL_STATE_CONNECTED)
-        moduleFireServerEvent(REDISMODULE_EVENT_MASTER_LINK_CHANGE,
-                              REDISMODULE_SUBEVENT_MASTER_LINK_DOWN,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE,
+                              VALKEYMODULE_SUBEVENT_PRIMARY_LINK_DOWN,
                               NULL);
 
     server.master = NULL;
@@ -3403,8 +3403,8 @@ void replicationResurrectCachedMaster(connection *conn) {
     server.repl_down_since = 0;
 
     /* Fire the master link modules event. */
-    moduleFireServerEvent(REDISMODULE_EVENT_MASTER_LINK_CHANGE,
-                          REDISMODULE_SUBEVENT_MASTER_LINK_UP,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE,
+                          VALKEYMODULE_SUBEVENT_PRIMARY_LINK_UP,
                           NULL);
 
     /* Re-add to the list of clients. */

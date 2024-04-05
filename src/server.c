@@ -532,7 +532,7 @@ dictType keylistDictType = {
 };
 
 /* Modules system dictionary type. Keys are module name,
- * values are pointer to RedisModule struct. */
+ * values are pointer to ValkeyModule struct. */
 dictType modulesDictType = {
     dictSdsCaseHash,            /* hash function */
     NULL,                       /* key dup */
@@ -671,8 +671,8 @@ void resetChildState(void) {
     server.stat_current_save_keys_total = 0;
     updateDictResizePolicy();
     closeChildInfoPipe();
-    moduleFireServerEvent(REDISMODULE_EVENT_FORK_CHILD,
-                          REDISMODULE_SUBEVENT_FORK_CHILD_DIED,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_FORK_CHILD,
+                          VALKEYMODULE_SUBEVENT_FORK_CHILD_DIED,
                           NULL);
 }
 
@@ -1514,8 +1514,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* Fire the cron loop modules event. */
-    RedisModuleCronLoopV1 ei = {REDISMODULE_CRON_LOOP_VERSION,server.hz};
-    moduleFireServerEvent(REDISMODULE_EVENT_CRON_LOOP,
+    ValkeyModuleCronLoopV1 ei = {VALKEYMODULE_CRON_LOOP_VERSION,server.hz};
+    moduleFireServerEvent(VALKEYMODULE_EVENT_CRON_LOOP,
                           0,
                           &ei);
 
@@ -1677,8 +1677,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
     if (moduleCount()) {
-        moduleFireServerEvent(REDISMODULE_EVENT_EVENTLOOP,
-                              REDISMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP,
+                              VALKEYMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP,
                               NULL);
     }
 
@@ -1794,8 +1794,8 @@ void afterSleep(struct aeEventLoop *eventLoop) {
             latencyStartMonitor(latency);
 
             moduleAcquireGIL();
-            moduleFireServerEvent(REDISMODULE_EVENT_EVENTLOOP,
-                                  REDISMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP,
+            moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP,
+                                  VALKEYMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP,
                                   NULL);
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("module-acquire-GIL",latency);
@@ -4424,7 +4424,7 @@ int finishShutdown(void) {
     if (server.aof_manifest) aofManifestFree(server.aof_manifest);
 
     /* Fire the shutdown modules event. */
-    moduleFireServerEvent(REDISMODULE_EVENT_SHUTDOWN,0,NULL);
+    moduleFireServerEvent(VALKEYMODULE_EVENT_SHUTDOWN,0,NULL);
 
     /* Remove the pid file if possible and needed. */
     if (server.daemonize || server.pidfile) {
@@ -5489,8 +5489,8 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
         info = sdscatfmt(info,
             "# Server\r\n"
             "redis_version:%s\r\n"
-            "server_name:%s\r\n",
-            "valkey_version:%s\r\n",
+            "server_name:%s\r\n"
+            "valkey_version:%s\r\n"
             "redis_git_sha1:%s\r\n"
             "redis_git_dirty:%i\r\n"
             "redis_build_id:%s\r\n"
@@ -6652,8 +6652,8 @@ int redisFork(int purpose) {
         }
 
         updateDictResizePolicy();
-        moduleFireServerEvent(REDISMODULE_EVENT_FORK_CHILD,
-                              REDISMODULE_SUBEVENT_FORK_CHILD_BORN,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_FORK_CHILD,
+                              VALKEYMODULE_SUBEVENT_FORK_CHILD_BORN,
                               NULL);
     }
     return childpid;

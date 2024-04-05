@@ -253,4 +253,4 @@ start_server {tags {"introspection"}} {
         r incr foo
         assert {[getlru foo] > 0}
      } 
-}
+} {} {needs:debug}

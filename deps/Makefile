@@ -1,4 +1,4 @@
-# Redis dependency Makefile
+# Dependency Makefile
 
 uname_S:= $(shell sh -c 'uname -s 2>/dev/null || echo not')
 

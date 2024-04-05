@@ -568,7 +568,7 @@ dictType objToDictDictType = {
 };
 
 /* Modules system dictionary type. Keys are module name,
- * values are pointer to RedisModule struct. */
+ * values are pointer to ValkeyModule struct. */
 dictType modulesDictType = {
     dictSdsCaseHash,            /* hash function */
     NULL,                       /* key dup */
@@ -1523,7 +1523,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* Fire the cron loop modules event. */
-    RedisModuleCronLoopV1 ei = {VALKEYMODULE_CRON_LOOP_VERSION,server.hz};
+    ValkeyModuleCronLoopV1 ei = {VALKEYMODULE_CRON_LOOP_VERSION,server.hz};
     moduleFireServerEvent(VALKEYMODULE_EVENT_CRON_LOOP,
                           0,
                           &ei);

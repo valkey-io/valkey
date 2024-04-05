@@ -1,7 +1,7 @@
 /*
  * valkeymodule.h
  *
- * This header file is renamed from valkeymodule.h to reflect the new naming conventions adopted in Valkey.
+ * This header file is forked from redismodule.h to reflect the new naming conventions adopted in Valkey.
  * 
  * Key Changes:
  * - Symbolic names have been changed from VALKEYMODULE_* to VALKEYMODULE_* to align with the
@@ -23,8 +23,8 @@
 #include <stdlib.h>
 
 
-typedef struct RedisModuleString RedisModuleString;
-typedef struct RedisModuleKey RedisModuleKey;
+typedef struct ValkeyModuleString ValkeyModuleString;
+typedef struct ValkeyModuleKey ValkeyModuleKey;
 
 /* -------------- Defines NOT common between core and modules ------------- */
 
@@ -32,7 +32,7 @@ typedef struct RedisModuleKey RedisModuleKey;
 /* Things only defined for the modules core (server), not exported to modules
  * that include this file. */
 
-#define RedisModuleString robj
+#define ValkeyModuleString robj
 
 #endif /* defined VALKEYMODULE_CORE */
 
@@ -57,7 +57,7 @@ typedef long long ustime_t;
 /* API versions. */
 #define VALKEYMODULE_APIVER_1 1
 
-/* Version of the RedisModuleTypeMethods structure. Once the RedisModuleTypeMethods 
+/* Version of the ValkeyModuleTypeMethods structure. Once the ValkeyModuleTypeMethods 
  * structure is changed, this version number needs to be changed synchronistically. */
 #define VALKEYMODULE_TYPE_METHOD_VERSION 5
 
@@ -65,7 +65,7 @@ typedef long long ustime_t;
 #define VALKEYMODULE_READ (1<<0)
 #define VALKEYMODULE_WRITE (1<<1)
 
-/* RedisModule_OpenKey extra flags for the 'mode' argument.
+/* ValkeyModule_OpenKey extra flags for the 'mode' argument.
  * Avoid touching the LRU/LFU of the key when opened. */
 #define VALKEYMODULE_OPEN_KEY_NOTOUCH (1<<16)
 /* Don't trigger keyspace event on key misses. */
@@ -146,10 +146,10 @@ typedef long long ustime_t;
 #define VALKEYMODULE_CONFIG_BITFLAGS (1ULL<<8) /* Indicates if this value can be set as a multiple enum values */
 
 /* StreamID type. */
-typedef struct RedisModuleStreamID {
+typedef struct ValkeyModuleStreamID {
     uint64_t ms;
     uint64_t seq;
-} RedisModuleStreamID;
+} ValkeyModuleStreamID;
 
 /* StreamAdd() flags. */
 #define VALKEYMODULE_STREAM_ADD_AUTOID (1<<0)
@@ -164,7 +164,7 @@ typedef struct RedisModuleStreamID {
 
 /* The command is running in the context of a Lua script */
 #define VALKEYMODULE_CTX_FLAGS_LUA (1<<0)
-/* The command is running inside a Redis transaction */
+/* The command is running inside a Valkey transaction */
 #define VALKEYMODULE_CTX_FLAGS_MULTI (1<<1)
 /* The instance is a primary */
 #define VALKEYMODULE_CTX_FLAGS_PRIMARY (1<<2)
@@ -182,13 +182,13 @@ typedef struct RedisModuleStreamID {
 #define VALKEYMODULE_CTX_FLAGS_MAXMEMORY (1<<8)
 /* Maxmemory is set and has an eviction policy that may delete keys */
 #define VALKEYMODULE_CTX_FLAGS_EVICT (1<<9)
-/* Redis is out of memory according to the maxmemory flag. */
+/* Valkey is out of memory according to the maxmemory flag. */
 #define VALKEYMODULE_CTX_FLAGS_OOM (1<<10)
 /* Less than 25% of memory available according to maxmemory. */
 #define VALKEYMODULE_CTX_FLAGS_OOM_WARNING (1<<11)
 /* The command was sent over the replication link. */
 #define VALKEYMODULE_CTX_FLAGS_REPLICATED (1<<12)
-/* Redis is currently loading either from AOF or RDB. */
+/* Valkey is currently loading either from AOF or RDB. */
 #define VALKEYMODULE_CTX_FLAGS_LOADING (1<<13)
 /* The replica has no link with its primary, note that
  * there is the inverse flag as well:
@@ -208,21 +208,21 @@ typedef struct RedisModuleStreamID {
 #define VALKEYMODULE_CTX_FLAGS_ACTIVE_CHILD (1<<18)
 /* The next EXEC will fail due to dirty CAS (touched keys). */
 #define VALKEYMODULE_CTX_FLAGS_MULTI_DIRTY (1<<19)
-/* Redis is currently running inside background child process. */
+/* Valkey is currently running inside background child process. */
 #define VALKEYMODULE_CTX_FLAGS_IS_CHILD (1<<20)
 /* The current client does not allow blocking, either called from
  * within multi, lua, or from another module using RM_Call */
 #define VALKEYMODULE_CTX_FLAGS_DENY_BLOCKING (1<<21)
 /* The current client uses RESP3 protocol */
 #define VALKEYMODULE_CTX_FLAGS_RESP3 (1<<22)
-/* Redis is currently async loading database for diskless replication. */
+/* Valkey is currently async loading database for diskless replication. */
 #define VALKEYMODULE_CTX_FLAGS_ASYNC_LOADING (1<<23)
-/* Redis is starting. */
+/* Valkey is starting. */
 #define VALKEYMODULE_CTX_FLAGS_SERVER_STARTUP (1<<24)
 
 /* Next context flag, must be updated when adding new flags above!
 This flag should not be used directly by the module.
- * Use RedisModule_GetContextFlagsAll instead. */
+ * Use ValkeyModule_GetContextFlagsAll instead. */
 #define _VALKEYMODULE_CTX_FLAGS_NEXT (1<<25)
 
 /* Keyspace changes notification classes. Every class is associated with a
@@ -246,14 +246,14 @@ This flag should not be used directly by the module.
 
 /* Next notification flag, must be updated when adding new flags above!
 This flag should not be used directly by the module.
- * Use RedisModule_GetKeyspaceNotificationFlagsAll instead. */
+ * Use ValkeyModule_GetKeyspaceNotificationFlagsAll instead. */
 #define _VALKEYMODULE_NOTIFY_NEXT (1<<15)
 
 #define VALKEYMODULE_NOTIFY_ALL (VALKEYMODULE_NOTIFY_GENERIC | VALKEYMODULE_NOTIFY_STRING | VALKEYMODULE_NOTIFY_LIST | VALKEYMODULE_NOTIFY_SET | VALKEYMODULE_NOTIFY_HASH | VALKEYMODULE_NOTIFY_ZSET | VALKEYMODULE_NOTIFY_EXPIRED | VALKEYMODULE_NOTIFY_EVICTED | VALKEYMODULE_NOTIFY_STREAM | VALKEYMODULE_NOTIFY_MODULE)      /* A */
 
 /* A special pointer that we can use between the core and the module to signal
  * field deletion, and that is impossible to be a valid pointer. */
-#define VALKEYMODULE_HASH_DELETE ((RedisModuleString*)(long)1)
+#define VALKEYMODULE_HASH_DELETE ((ValkeyModuleString*)(long)1)
 
 /* Error messages. */
 #define VALKEYMODULE_ERRORMSG_WRONGTYPE "WRONGTYPE Operation against a key holding the wrong kind of value"
@@ -298,22 +298,22 @@ This flag should not be used directly by the module.
  * registered and used in order to invalidate a timer. It's just a 64 bit
  * number, because this is how each timer is represented inside the radix tree
  * of timers that are going to expire, sorted by expire time. */
-typedef uint64_t RedisModuleTimerID;
+typedef uint64_t ValkeyModuleTimerID;
 
 /* CommandFilter Flags */
 
-/* Do filter RedisModule_Call() commands initiated by module itself. */
+/* Do filter ValkeyModule_Call() commands initiated by module itself. */
 #define VALKEYMODULE_CMDFILTER_NOSELF    (1<<0)
 
-/* Declare that the module can handle errors with RedisModule_SetModuleOptions. */
+/* Declare that the module can handle errors with ValkeyModule_SetModuleOptions. */
 #define VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS    (1<<0)
 
-/* When set, Redis will not call RedisModule_SignalModifiedKey(), implicitly in
- * RedisModule_CloseKey, and the module needs to do that when manually when keys
+/* When set, Valkey will not call ValkeyModule_SignalModifiedKey(), implicitly in
+ * ValkeyModule_CloseKey, and the module needs to do that when manually when keys
  * are modified from the user's perspective, to invalidate WATCH. */
 #define VALKEYMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED (1<<1)
 
-/* Declare that the module can handle diskless async replication with RedisModule_SetModuleOptions. */
+/* Declare that the module can handle diskless async replication with ValkeyModule_SetModuleOptions. */
 #define VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD    (1<<2)
 
 /* Declare that the module want to get nested key space notifications.
@@ -322,10 +322,10 @@ typedef uint64_t RedisModuleTimerID;
 
 /* Next option flag, must be updated when adding new module flags above!
  * This flag should not be used directly by the module.
- * Use RedisModule_GetModuleOptionsAll instead. */
+ * Use ValkeyModule_GetModuleOptionsAll instead. */
 #define _VALKEYMODULE_OPTIONS_FLAGS_NEXT (1<<4)
 
-/* Definitions for RedisModule_SetCommandInfo. */
+/* Definitions for ValkeyModule_SetCommandInfo. */
 
 typedef enum {
     VALKEYMODULE_ARG_TYPE_STRING,
@@ -337,7 +337,7 @@ typedef enum {
     VALKEYMODULE_ARG_TYPE_PURE_TOKEN,
     VALKEYMODULE_ARG_TYPE_ONEOF, /* Must have sub-arguments */
     VALKEYMODULE_ARG_TYPE_BLOCK /* Must have sub-arguments */
-} RedisModuleCommandArgType;
+} ValkeyModuleCommandArgType;
 
 #define VALKEYMODULE_CMD_ARG_NONE            (0)
 #define VALKEYMODULE_CMD_ARG_OPTIONAL        (1<<0) /* The argument is optional (like GET in SET command) */
@@ -352,7 +352,7 @@ typedef enum {
     VALKEYMODULE_KSPEC_BS_UNKNOWN,
     VALKEYMODULE_KSPEC_BS_INDEX,
     VALKEYMODULE_KSPEC_BS_KEYWORD
-} RedisModuleKeySpecBeginSearchType;
+} ValkeyModuleKeySpecBeginSearchType;
 
 typedef enum {
     VALKEYMODULE_KSPEC_FK_OMITTED = 0, /* Used when the field is absent in a
@@ -361,10 +361,10 @@ typedef enum {
     VALKEYMODULE_KSPEC_FK_UNKNOWN,
     VALKEYMODULE_KSPEC_FK_RANGE,
     VALKEYMODULE_KSPEC_FK_KEYNUM
-} RedisModuleKeySpecFindKeysType;
+} ValkeyModuleKeySpecFindKeysType;
 
 /* Key-spec flags. For details, see the documentation of
- * RedisModule_SetCommandInfo and the key-spec flags in server.h. */
+ * ValkeyModule_SetCommandInfo and the key-spec flags in server.h. */
 #define VALKEYMODULE_CMD_KEY_RO (1ULL<<0)
 #define VALKEYMODULE_CMD_KEY_RW (1ULL<<1)
 #define VALKEYMODULE_CMD_KEY_OW (1ULL<<2)
@@ -378,15 +378,15 @@ typedef enum {
 #define VALKEYMODULE_CMD_KEY_VARIABLE_FLAGS (1ULL<<10)
 
 /* Channel flags, for details see the documentation of
- * RedisModule_ChannelAtPosWithFlags. */
+ * ValkeyModule_ChannelAtPosWithFlags. */
 #define VALKEYMODULE_CMD_CHANNEL_PATTERN (1ULL<<0)
 #define VALKEYMODULE_CMD_CHANNEL_PUBLISH (1ULL<<1)
 #define VALKEYMODULE_CMD_CHANNEL_SUBSCRIBE (1ULL<<2)
 #define VALKEYMODULE_CMD_CHANNEL_UNSUBSCRIBE (1ULL<<3)
 
-typedef struct RedisModuleCommandArg {
+typedef struct ValkeyModuleCommandArg {
     const char *name;
-    RedisModuleCommandArgType type;
+    ValkeyModuleCommandArgType type;
     int key_spec_index;       /* If type is KEY, this is a zero-based index of
                                * the key_spec in the command. For other types,
                                * you may specify -1. */
@@ -395,19 +395,19 @@ typedef struct RedisModuleCommandArg {
     const char *since;
     int flags;                /* The VALKEYMODULE_CMD_ARG_* macros. */
     const char *deprecated_since;
-    struct RedisModuleCommandArg *subargs;
+    struct ValkeyModuleCommandArg *subargs;
     const char *display_text;
-} RedisModuleCommandArg;
+} ValkeyModuleCommandArg;
 
 typedef struct {
     const char *since;
     const char *changes;
-} RedisModuleCommandHistoryEntry;
+} ValkeyModuleCommandHistoryEntry;
 
 typedef struct {
     const char *notes;
     uint64_t flags; /* VALKEYMODULE_CMD_KEY_* macros. */
-    RedisModuleKeySpecBeginSearchType begin_search_type;
+    ValkeyModuleKeySpecBeginSearchType begin_search_type;
     union {
         struct {
             /* The index from which we start the search for keys */
@@ -422,7 +422,7 @@ typedef struct {
             int startfrom;
         } keyword;
     } bs;
-    RedisModuleKeySpecFindKeysType find_keys_type;
+    ValkeyModuleKeySpecFindKeysType find_keys_type;
     union {
         struct {
             /* Index of the last key relative to the result of the begin search
@@ -451,50 +451,49 @@ typedef struct {
             int keystep;
         } keynum;
     } fk;
-} RedisModuleCommandKeySpec;
+} ValkeyModuleCommandKeySpec;
 
 typedef struct {
     int version;
     size_t sizeof_historyentry;
     size_t sizeof_keyspec;
     size_t sizeof_arg;
-} RedisModuleCommandInfoVersion;
+} ValkeyModuleCommandInfoVersion;
 
-static const RedisModuleCommandInfoVersion RedisModule_CurrentCommandInfoVersion = {
+static const ValkeyModuleCommandInfoVersion ValkeyModule_CurrentCommandInfoVersion = {
     .version = 1,
-    .sizeof_historyentry = sizeof(RedisModuleCommandHistoryEntry),
-    .sizeof_keyspec = sizeof(RedisModuleCommandKeySpec),
-    .sizeof_arg = sizeof(RedisModuleCommandArg)
+    .sizeof_historyentry = sizeof(ValkeyModuleCommandHistoryEntry),
+    .sizeof_keyspec = sizeof(ValkeyModuleCommandKeySpec),
+    .sizeof_arg = sizeof(ValkeyModuleCommandArg)
 };
 
-#define VALKEYMODULE_COMMAND_INFO_VERSION (&RedisModule_CurrentCommandInfoVersion)
+#define VALKEYMODULE_COMMAND_INFO_VERSION (&ValkeyModule_CurrentCommandInfoVersion)
 
 typedef struct {
     /* Always set version to VALKEYMODULE_COMMAND_INFO_VERSION */
-    const RedisModuleCommandInfoVersion *version;
-    /* Version 1 fields (added in Redis 7.0.0) */
+    const ValkeyModuleCommandInfoVersion *version;
     const char *summary;          /* Summary of the command */
     const char *complexity;       /* Complexity description */
     const char *since;            /* Debut module version of the command */
-    RedisModuleCommandHistoryEntry *history; /* History */
+    ValkeyModuleCommandHistoryEntry *history; /* History */
     /* A string of space-separated tips meant for clients/proxies regarding this
      * command */
     const char *tips;
     /* Number of arguments, it is possible to use -N to say >= N */
     int arity;
-    RedisModuleCommandKeySpec *key_specs;
-    RedisModuleCommandArg *args;
-} RedisModuleCommandInfo;
+    ValkeyModuleCommandKeySpec *key_specs;
+    ValkeyModuleCommandArg *args;
+} ValkeyModuleCommandInfo;
 
 /* Eventloop definitions. */
 #define VALKEYMODULE_EVENTLOOP_READABLE 1
 #define VALKEYMODULE_EVENTLOOP_WRITABLE 2
-typedef void (*RedisModuleEventLoopFunc)(int fd, void *user_data, int mask);
-typedef void (*RedisModuleEventLoopOneShotFunc)(void *user_data);
+typedef void (*ValkeyModuleEventLoopFunc)(int fd, void *user_data, int mask);
+typedef void (*ValkeyModuleEventLoopOneShotFunc)(void *user_data);
 
 /* Server events definitions.
  * Those flags should not be used directly by the module, instead
- * the module should use RedisModuleEvent_* variables.
+ * the module should use ValkeyModuleEvent_* variables.
  * Note: This must be synced with moduleEventVersions */
 #define VALKEYMODULE_EVENT_REPLICATION_ROLE_CHANGED 0
 #define VALKEYMODULE_EVENT_PERSISTENCE 1
@@ -508,7 +507,7 @@ typedef void (*RedisModuleEventLoopOneShotFunc)(void *user_data);
 #define VALKEYMODULE_EVENT_MODULE_CHANGE 9
 #define VALKEYMODULE_EVENT_LOADING_PROGRESS 10
 #define VALKEYMODULE_EVENT_SWAPDB 11
-#define VALKEYMODULE_EVENT_REPL_BACKUP 12 /* Deprecated since Redis 7.0, not used anymore. */
+#define VALKEYMODULE_EVENT_REPL_BACKUP 12 /* Not used anymore. */
 #define VALKEYMODULE_EVENT_FORK_CHILD 13
 #define VALKEYMODULE_EVENT_REPL_ASYNC_LOAD 14
 #define VALKEYMODULE_EVENT_EVENTLOOP 15
@@ -516,34 +515,34 @@ typedef void (*RedisModuleEventLoopOneShotFunc)(void *user_data);
 #define VALKEYMODULE_EVENT_KEY 17
 #define _VALKEYMODULE_EVENT_NEXT 18 /* Next event flag, should be updated if a new event added. */
 
-typedef struct RedisModuleEvent {
+typedef struct ValkeyModuleEvent {
     uint64_t id;        /* VALKEYMODULE_EVENT_... defines. */
     uint64_t dataver;   /* Version of the structure we pass as 'data'. */
-} RedisModuleEvent;
+} ValkeyModuleEvent;
 
-struct RedisModuleCtx;
-struct RedisModuleDefragCtx;
-typedef void (*RedisModuleEventCallback)(struct RedisModuleCtx *ctx, RedisModuleEvent eid, uint64_t subevent, void *data);
+struct ValkeyModuleCtx;
+struct ValkeyModuleDefragCtx;
+typedef void (*ValkeyModuleEventCallback)(struct ValkeyModuleCtx *ctx, ValkeyModuleEvent eid, uint64_t subevent, void *data);
 
 /* IMPORTANT: When adding a new version of one of below structures that contain
- * event data (RedisModuleFlushInfoV1 for example) we have to avoid renaming the
- * old RedisModuleEvent structure.
- * For example, if we want to add RedisModuleFlushInfoV2, the RedisModuleEvent
+ * event data (ValkeyModuleFlushInfoV1 for example) we have to avoid renaming the
+ * old ValkeyModuleEvent structure.
+ * For example, if we want to add ValkeyModuleFlushInfoV2, the ValkeyModuleEvent
  * structures should be:
- *      RedisModuleEvent_FlushDB = {
+ *      ValkeyModuleEvent_FlushDB = {
  *          VALKEYMODULE_EVENT_FLUSHDB,
  *          1
  *      },
- *      RedisModuleEvent_FlushDBV2 = {
+ *      ValkeyModuleEvent_FlushDBV2 = {
  *          VALKEYMODULE_EVENT_FLUSHDB,
  *          2
  *      }
  * and NOT:
- *      RedisModuleEvent_FlushDBV1 = {
+ *      ValkeyModuleEvent_FlushDBV1 = {
  *          VALKEYMODULE_EVENT_FLUSHDB,
  *          1
  *      },
- *      RedisModuleEvent_FlushDB = {
+ *      ValkeyModuleEvent_FlushDB = {
  *          VALKEYMODULE_EVENT_FLUSHDB,
  *          2
  *      }
@@ -551,78 +550,72 @@ typedef void (*RedisModuleEventCallback)(struct RedisModuleCtx *ctx, RedisModule
  * compiled with a new valkeymodule.h to be able to work with a old server,
  * unless the author explicitly decided to use the newer event type.
  */
-static const RedisModuleEvent
-    RedisModuleEvent_ReplicationRoleChanged = {
+static const ValkeyModuleEvent
+    ValkeyModuleEvent_ReplicationRoleChanged = {
         VALKEYMODULE_EVENT_REPLICATION_ROLE_CHANGED,
         1
     },
-    RedisModuleEvent_Persistence = {
+    ValkeyModuleEvent_Persistence = {
         VALKEYMODULE_EVENT_PERSISTENCE,
         1
     },
-    RedisModuleEvent_FlushDB = {
+    ValkeyModuleEvent_FlushDB = {
         VALKEYMODULE_EVENT_FLUSHDB,
         1
     },
-    RedisModuleEvent_Loading = {
+    ValkeyModuleEvent_Loading = {
         VALKEYMODULE_EVENT_LOADING,
         1
     },
-    RedisModuleEvent_ClientChange = {
+    ValkeyModuleEvent_ClientChange = {
         VALKEYMODULE_EVENT_CLIENT_CHANGE,
         1
     },
-    RedisModuleEvent_Shutdown = {
+    ValkeyModuleEvent_Shutdown = {
         VALKEYMODULE_EVENT_SHUTDOWN,
         1
     },
-    RedisModuleEvent_ReplicaChange = {
+    ValkeyModuleEvent_ReplicaChange = {
         VALKEYMODULE_EVENT_REPLICA_CHANGE,
         1
     },
-    RedisModuleEvent_CronLoop = {
+    ValkeyModuleEvent_CronLoop = {
         VALKEYMODULE_EVENT_CRON_LOOP,
         1
     },
-    RedisModuleEvent_MasterLinkChange = {
+    ValkeyModuleEvent_MasterLinkChange = {
         VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE,
         1
     },
-    RedisModuleEvent_ModuleChange = {
+    ValkeyModuleEvent_ModuleChange = {
         VALKEYMODULE_EVENT_MODULE_CHANGE,
         1
     },
-    RedisModuleEvent_LoadingProgress = {
+    ValkeyModuleEvent_LoadingProgress = {
         VALKEYMODULE_EVENT_LOADING_PROGRESS,
         1
     },
-    RedisModuleEvent_SwapDB = {
+    ValkeyModuleEvent_SwapDB = {
         VALKEYMODULE_EVENT_SWAPDB,
         1
     },
-    /* Deprecated since Redis 7.0, not used anymore. */
-    __attribute__ ((deprecated))
-    RedisModuleEvent_ReplBackup = {
-        VALKEYMODULE_EVENT_REPL_BACKUP, 
-        1
-    },
-    RedisModuleEvent_ReplAsyncLoad = {
+    ValkeyModuleEvent_ReplAsyncLoad = {
         VALKEYMODULE_EVENT_REPL_ASYNC_LOAD,
         1
     },
-    RedisModuleEvent_ForkChild = {
+    ValkeyModuleEvent_ForkChild = {
         VALKEYMODULE_EVENT_FORK_CHILD,
         1
     },
-    RedisModuleEvent_EventLoop = {
+    ValkeyModuleEvent_EventLoop = {
         VALKEYMODULE_EVENT_EVENTLOOP,
         1
     },
-    RedisModuleEvent_Config = {
+    ValkeyModuleEvent_Config = {
         VALKEYMODULE_EVENT_CONFIG,
         1
     },
-    RedisModuleEvent_Key = {
+    ValkeyModuleEvent_Key = {
         VALKEYMODULE_EVENT_KEY,
         1
     };
@@ -674,12 +667,6 @@ static const RedisModuleEvent
 #define VALKEYMODULE_SUBEVENT_LOADING_PROGRESS_AOF 1
 #define _VALKEYMODULE_SUBEVENT_LOADING_PROGRESS_NEXT 2
 
-/* Replication Backup events are deprecated since Redis 7.0 and are never fired. */
-#define VALKEYMODULE_SUBEVENT_REPL_BACKUP_CREATE 0
-#define VALKEYMODULE_SUBEVENT_REPL_BACKUP_RESTORE 1
-#define VALKEYMODULE_SUBEVENT_REPL_BACKUP_DISCARD 2
-#define _VALKEYMODULE_SUBEVENT_REPL_BACKUP_NEXT 3
-
 #define VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_STARTED 0
 #define VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_ABORTED 1
 #define VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_COMPLETED 2
@@ -703,7 +690,7 @@ static const RedisModuleEvent
 #define _VALKEYMODULE_SUBEVENT_CRON_LOOP_NEXT 0
 #define _VALKEYMODULE_SUBEVENT_SWAPDB_NEXT 0
 
-/* RedisModuleClientInfo flags. */
+/* ValkeyModuleClientInfo flags. */
 #define VALKEYMODULE_CLIENTINFO_FLAG_SSL (1<<0)
 #define VALKEYMODULE_CLIENTINFO_FLAG_PUBSUB (1<<1)
 #define VALKEYMODULE_CLIENTINFO_FLAG_BLOCKED (1<<2)
@@ -713,7 +700,7 @@ static const RedisModuleEvent
 
 /* Here we take all the structures that the module pass to the core
  * and the other way around. Notably the list here contains the structures
- * used by the hooks API RedisModule_RegisterToServerEvent().
+ * used by the hooks API ValkeyModule_RegisterToServerEvent().
  *
  * The structures always start with a 'version' field. This is useful
  * when we want to pass a reference to the structure to the core APIs,
@@ -727,21 +714,21 @@ static const RedisModuleEvent
  * public name for the module to use. */
 
 #define VALKEYMODULE_CLIENTINFO_VERSION 1
-typedef struct RedisModuleClientInfo {
+typedef struct ValkeyModuleClientInfo {
     uint64_t version;       /* Version of this structure for ABI compat. */
     uint64_t flags;         /* VALKEYMODULE_CLIENTINFO_FLAG_* */
     uint64_t id;            /* Client ID. */
     char addr[46];          /* IPv4 or IPv6 address. */
     uint16_t port;          /* TCP port. */
     uint16_t db;            /* Selected DB. */
-} RedisModuleClientInfoV1;
+} ValkeyModuleClientInfoV1;
 
-#define RedisModuleClientInfo RedisModuleClientInfoV1
+#define ValkeyModuleClientInfo ValkeyModuleClientInfoV1
 
 #define VALKEYMODULE_CLIENTINFO_INITIALIZER_V1 { .version = 1 }
 
 #define VALKEYMODULE_REPLICATIONINFO_VERSION 1
-typedef struct RedisModuleReplicationInfo {
+typedef struct ValkeyModuleReplicationInfo {
     uint64_t version;       /* Not used since this structure is never passed
                                from the module to the core right now. Here
                                for future compatibility. */
@@ -752,104 +739,104 @@ typedef struct RedisModuleReplicationInfo {
     char *replid2;          /* Secondary replication ID */
     uint64_t repl1_offset;  /* Main replication offset */
     uint64_t repl2_offset;  /* Offset of replid2 validity */
-} RedisModuleReplicationInfoV1;
+} ValkeyModuleReplicationInfoV1;
 
-#define RedisModuleReplicationInfo RedisModuleReplicationInfoV1
+#define ValkeyModuleReplicationInfo ValkeyModuleReplicationInfoV1
 
 #define VALKEYMODULE_FLUSHINFO_VERSION 1
-typedef struct RedisModuleFlushInfo {
+typedef struct ValkeyModuleFlushInfo {
     uint64_t version;       /* Not used since this structure is never passed
                                from the module to the core right now. Here
                                for future compatibility. */
     int32_t sync;           /* Synchronous or threaded flush?. */
     int32_t dbnum;          /* Flushed database number, -1 for ALL. */
-} RedisModuleFlushInfoV1;
+} ValkeyModuleFlushInfoV1;
 
-#define RedisModuleFlushInfo RedisModuleFlushInfoV1
+#define ValkeyModuleFlushInfo ValkeyModuleFlushInfoV1
 
 #define VALKEYMODULE_MODULE_CHANGE_VERSION 1
-typedef struct RedisModuleModuleChange {
+typedef struct ValkeyModuleModuleChange {
     uint64_t version;       /* Not used since this structure is never passed
                                from the module to the core right now. Here
                                for future compatibility. */
     const char* module_name;/* Name of module loaded or unloaded. */
     int32_t module_version; /* Module version. */
-} RedisModuleModuleChangeV1;
+} ValkeyModuleModuleChangeV1;
 
-#define RedisModuleModuleChange RedisModuleModuleChangeV1
+#define ValkeyModuleModuleChange ValkeyModuleModuleChangeV1
 
 #define VALKEYMODULE_CONFIGCHANGE_VERSION 1
-typedef struct RedisModuleConfigChange {
+typedef struct ValkeyModuleConfigChange {
     uint64_t version;       /* Not used since this structure is never passed
                                from the module to the core right now. Here
                                for future compatibility. */
-    uint32_t num_changes;   /* how many redis config options were changed */
+    uint32_t num_changes;   /* how many Valkey config options were changed */
     const char **config_names; /* the config names that were changed */
-} RedisModuleConfigChangeV1;
+} ValkeyModuleConfigChangeV1;
 
-#define RedisModuleConfigChange RedisModuleConfigChangeV1
+#define ValkeyModuleConfigChange ValkeyModuleConfigChangeV1
 
 #define VALKEYMODULE_CRON_LOOP_VERSION 1
-typedef struct RedisModuleCronLoopInfo {
+typedef struct ValkeyModuleCronLoopInfo {
     uint64_t version;       /* Not used since this structure is never passed
                                from the module to the core right now. Here
                                for future compatibility. */
     int32_t hz;             /* Approximate number of events per second. */
-} RedisModuleCronLoopV1;
+} ValkeyModuleCronLoopV1;
 
-#define RedisModuleCronLoop RedisModuleCronLoopV1
+#define ValkeyModuleCronLoop ValkeyModuleCronLoopV1
 
 #define VALKEYMODULE_LOADING_PROGRESS_VERSION 1
-typedef struct RedisModuleLoadingProgressInfo {
+typedef struct ValkeyModuleLoadingProgressInfo {
     uint64_t version;       /* Not used since this structure is never passed
                                from the module to the core right now. Here
                                for future compatibility. */
     int32_t hz;             /* Approximate number of events per second. */
     int32_t progress;       /* Approximate progress between 0 and 1024, or -1
                              * if unknown. */
-} RedisModuleLoadingProgressV1;
+} ValkeyModuleLoadingProgressV1;
 
-#define RedisModuleLoadingProgress RedisModuleLoadingProgressV1
+#define ValkeyModuleLoadingProgress ValkeyModuleLoadingProgressV1
 
 #define VALKEYMODULE_SWAPDBINFO_VERSION 1
-typedef struct RedisModuleSwapDbInfo {
+typedef struct ValkeyModuleSwapDbInfo {
     uint64_t version;       /* Not used since this structure is never passed
                                from the module to the core right now. Here
                                for future compatibility. */
     int32_t dbnum_first;    /* Swap Db first dbnum */
     int32_t dbnum_second;   /* Swap Db second dbnum */
-} RedisModuleSwapDbInfoV1;
+} ValkeyModuleSwapDbInfoV1;
 
-#define RedisModuleSwapDbInfo RedisModuleSwapDbInfoV1
+#define ValkeyModuleSwapDbInfo ValkeyModuleSwapDbInfoV1
 
 #define VALKEYMODULE_KEYINFO_VERSION 1
-typedef struct RedisModuleKeyInfo {
+typedef struct ValkeyModuleKeyInfo {
     uint64_t version;       /* Not used since this structure is never passed
                                from the module to the core right now. Here
                                for future compatibility. */
-    RedisModuleKey *key;    /* Opened key. */
-} RedisModuleKeyInfoV1;
+    ValkeyModuleKey *key;    /* Opened key. */
+} ValkeyModuleKeyInfoV1;
 
-#define RedisModuleKeyInfo RedisModuleKeyInfoV1
+#define ValkeyModuleKeyInfo ValkeyModuleKeyInfoV1
 
 typedef enum {
     VALKEYMODULE_ACL_LOG_AUTH = 0, /* Authentication failure */
     VALKEYMODULE_ACL_LOG_CMD, /* Command authorization failure */
     VALKEYMODULE_ACL_LOG_KEY, /* Key authorization failure */
     VALKEYMODULE_ACL_LOG_CHANNEL /* Channel authorization failure */
-} RedisModuleACLLogEntryReason;
+} ValkeyModuleACLLogEntryReason;
 
 /* Incomplete structures needed by both the core and modules. */
-typedef struct RedisModuleIO RedisModuleIO;
-typedef struct RedisModuleDigest RedisModuleDigest;
-typedef struct RedisModuleInfoCtx RedisModuleInfoCtx;
-typedef struct RedisModuleDefragCtx RedisModuleDefragCtx;
+typedef struct ValkeyModuleIO ValkeyModuleIO;
+typedef struct ValkeyModuleDigest ValkeyModuleDigest;
+typedef struct ValkeyModuleInfoCtx ValkeyModuleInfoCtx;
+typedef struct ValkeyModuleDefragCtx ValkeyModuleDefragCtx;
 
 /* Function pointers needed by both the core and modules, these needs to be
  * exposed since you can't cast a function pointer to (void *). */
-typedef void (*RedisModuleInfoFunc)(RedisModuleInfoCtx *ctx, int for_crash_report);
-typedef void (*RedisModuleDefragFunc)(RedisModuleDefragCtx *ctx);
-typedef void (*RedisModuleUserChangedFunc) (uint64_t client_id, void *privdata);
+typedef void (*ValkeyModuleInfoFunc)(ValkeyModuleInfoCtx *ctx, int for_crash_report);
+typedef void (*ValkeyModuleDefragFunc)(ValkeyModuleDefragCtx *ctx);
+typedef void (*ValkeyModuleUserChangedFunc) (uint64_t client_id, void *privdata);
 
 /* ------------------------- End of common defines ------------------------ */
 
@@ -883,84 +870,84 @@ typedef void (*RedisModuleUserChangedFunc) (uint64_t client_id, void *privdata);
 #endif
 
 /* Incomplete structures for compiler checks but opaque access. */
-typedef struct RedisModuleCtx RedisModuleCtx;
-typedef struct RedisModuleCommand RedisModuleCommand;
-typedef struct RedisModuleCallReply RedisModuleCallReply;
-typedef struct RedisModuleType RedisModuleType;
-typedef struct RedisModuleBlockedClient RedisModuleBlockedClient;
-typedef struct RedisModuleClusterInfo RedisModuleClusterInfo;
-typedef struct RedisModuleDict RedisModuleDict;
-typedef struct RedisModuleDictIter RedisModuleDictIter;
-typedef struct RedisModuleCommandFilterCtx RedisModuleCommandFilterCtx;
-typedef struct RedisModuleCommandFilter RedisModuleCommandFilter;
-typedef struct RedisModuleServerInfoData RedisModuleServerInfoData;
-typedef struct RedisModuleScanCursor RedisModuleScanCursor;
-typedef struct RedisModuleUser RedisModuleUser;
-typedef struct RedisModuleKeyOptCtx RedisModuleKeyOptCtx;
-typedef struct RedisModuleRdbStream RedisModuleRdbStream;
+typedef struct ValkeyModuleCtx ValkeyModuleCtx;
+typedef struct ValkeyModuleCommand ValkeyModuleCommand;
+typedef struct ValkeyModuleCallReply ValkeyModuleCallReply;
+typedef struct ValkeyModuleType ValkeyModuleType;
+typedef struct ValkeyModuleBlockedClient ValkeyModuleBlockedClient;
+typedef struct ValkeyModuleClusterInfo ValkeyModuleClusterInfo;
+typedef struct ValkeyModuleDict ValkeyModuleDict;
+typedef struct ValkeyModuleDictIter ValkeyModuleDictIter;
+typedef struct ValkeyModuleCommandFilterCtx ValkeyModuleCommandFilterCtx;
+typedef struct ValkeyModuleCommandFilter ValkeyModuleCommandFilter;
+typedef struct ValkeyModuleServerInfoData ValkeyModuleServerInfoData;
+typedef struct ValkeyModuleScanCursor ValkeyModuleScanCursor;
+typedef struct ValkeyModuleUser ValkeyModuleUser;
+typedef struct ValkeyModuleKeyOptCtx ValkeyModuleKeyOptCtx;
+typedef struct ValkeyModuleRdbStream ValkeyModuleRdbStream;
 
-typedef int (*RedisModuleCmdFunc)(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
-typedef void (*RedisModuleDisconnectFunc)(RedisModuleCtx *ctx, RedisModuleBlockedClient *bc);
-typedef int (*RedisModuleNotificationFunc)(RedisModuleCtx *ctx, int type, const char *event, RedisModuleString *key);
-typedef void (*RedisModulePostNotificationJobFunc) (RedisModuleCtx *ctx, void *pd);
-typedef void *(*RedisModuleTypeLoadFunc)(RedisModuleIO *rdb, int encver);
-typedef void (*RedisModuleTypeSaveFunc)(RedisModuleIO *rdb, void *value);
-typedef int (*RedisModuleTypeAuxLoadFunc)(RedisModuleIO *rdb, int encver, int when);
-typedef void (*RedisModuleTypeAuxSaveFunc)(RedisModuleIO *rdb, int when);
-typedef void (*RedisModuleTypeRewriteFunc)(RedisModuleIO *aof, RedisModuleString *key, void *value);
-typedef size_t (*RedisModuleTypeMemUsageFunc)(const void *value);
-typedef size_t (*RedisModuleTypeMemUsageFunc2)(RedisModuleKeyOptCtx *ctx, const void *value, size_t sample_size);
-typedef void (*RedisModuleTypeDigestFunc)(RedisModuleDigest *digest, void *value);
-typedef void (*RedisModuleTypeFreeFunc)(void *value);
-typedef size_t (*RedisModuleTypeFreeEffortFunc)(RedisModuleString *key, const void *value);
-typedef size_t (*RedisModuleTypeFreeEffortFunc2)(RedisModuleKeyOptCtx *ctx, const void *value);
-typedef void (*RedisModuleTypeUnlinkFunc)(RedisModuleString *key, const void *value);
-typedef void (*RedisModuleTypeUnlinkFunc2)(RedisModuleKeyOptCtx *ctx, const void *value);
-typedef void *(*RedisModuleTypeCopyFunc)(RedisModuleString *fromkey, RedisModuleString *tokey, const void *value);
-typedef void *(*RedisModuleTypeCopyFunc2)(RedisModuleKeyOptCtx *ctx, const void *value);
-typedef int (*RedisModuleTypeDefragFunc)(RedisModuleDefragCtx *ctx, RedisModuleString *key, void **value);
-typedef void (*RedisModuleClusterMessageReceiver)(RedisModuleCtx *ctx, const char *sender_id, uint8_t type, const unsigned char *payload, uint32_t len);
-typedef void (*RedisModuleTimerProc)(RedisModuleCtx *ctx, void *data);
-typedef void (*RedisModuleCommandFilterFunc) (RedisModuleCommandFilterCtx *filter);
-typedef void (*RedisModuleForkDoneHandler) (int exitcode, int bysignal, void *user_data);
-typedef void (*RedisModuleScanCB)(RedisModuleCtx *ctx, RedisModuleString *keyname, RedisModuleKey *key, void *privdata);
-typedef void (*RedisModuleScanKeyCB)(RedisModuleKey *key, RedisModuleString *field, RedisModuleString *value, void *privdata);
-typedef RedisModuleString * (*RedisModuleConfigGetStringFunc)(const char *name, void *privdata);
-typedef long long (*RedisModuleConfigGetNumericFunc)(const char *name, void *privdata);
-typedef int (*RedisModuleConfigGetBoolFunc)(const char *name, void *privdata);
-typedef int (*RedisModuleConfigGetEnumFunc)(const char *name, void *privdata);
-typedef int (*RedisModuleConfigSetStringFunc)(const char *name, RedisModuleString *val, void *privdata, RedisModuleString **err);
-typedef int (*RedisModuleConfigSetNumericFunc)(const char *name, long long val, void *privdata, RedisModuleString **err);
-typedef int (*RedisModuleConfigSetBoolFunc)(const char *name, int val, void *privdata, RedisModuleString **err);
-typedef int (*RedisModuleConfigSetEnumFunc)(const char *name, int val, void *privdata, RedisModuleString **err);
-typedef int (*RedisModuleConfigApplyFunc)(RedisModuleCtx *ctx, void *privdata, RedisModuleString **err);
-typedef void (*RedisModuleOnUnblocked)(RedisModuleCtx *ctx, RedisModuleCallReply *reply, void *private_data);
-typedef int (*RedisModuleAuthCallback)(RedisModuleCtx *ctx, RedisModuleString *username, RedisModuleString *password, RedisModuleString **err);
+typedef int (*ValkeyModuleCmdFunc)(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc);
+typedef void (*ValkeyModuleDisconnectFunc)(ValkeyModuleCtx *ctx, ValkeyModuleBlockedClient *bc);
+typedef int (*ValkeyModuleNotificationFunc)(ValkeyModuleCtx *ctx, int type, const char *event, ValkeyModuleString *key);
+typedef void (*ValkeyModulePostNotificationJobFunc) (ValkeyModuleCtx *ctx, void *pd);
+typedef void *(*ValkeyModuleTypeLoadFunc)(ValkeyModuleIO *rdb, int encver);
+typedef void (*ValkeyModuleTypeSaveFunc)(ValkeyModuleIO *rdb, void *value);
+typedef int (*ValkeyModuleTypeAuxLoadFunc)(ValkeyModuleIO *rdb, int encver, int when);
+typedef void (*ValkeyModuleTypeAuxSaveFunc)(ValkeyModuleIO *rdb, int when);
+typedef void (*ValkeyModuleTypeRewriteFunc)(ValkeyModuleIO *aof, ValkeyModuleString *key, void *value);
+typedef size_t (*ValkeyModuleTypeMemUsageFunc)(const void *value);
+typedef size_t (*ValkeyModuleTypeMemUsageFunc2)(ValkeyModuleKeyOptCtx *ctx, const void *value, size_t sample_size);
+typedef void (*ValkeyModuleTypeDigestFunc)(ValkeyModuleDigest *digest, void *value);
+typedef void (*ValkeyModuleTypeFreeFunc)(void *value);
+typedef size_t (*ValkeyModuleTypeFreeEffortFunc)(ValkeyModuleString *key, const void *value);
+typedef size_t (*ValkeyModuleTypeFreeEffortFunc2)(ValkeyModuleKeyOptCtx *ctx, const void *value);
+typedef void (*ValkeyModuleTypeUnlinkFunc)(ValkeyModuleString *key, const void *value);
+typedef void (*ValkeyModuleTypeUnlinkFunc2)(ValkeyModuleKeyOptCtx *ctx, const void *value);
+typedef void *(*ValkeyModuleTypeCopyFunc)(ValkeyModuleString *fromkey, ValkeyModuleString *tokey, const void *value);
+typedef void *(*ValkeyModuleTypeCopyFunc2)(ValkeyModuleKeyOptCtx *ctx, const void *value);
+typedef int (*ValkeyModuleTypeDefragFunc)(ValkeyModuleDefragCtx *ctx, ValkeyModuleString *key, void **value);
+typedef void (*ValkeyModuleClusterMessageReceiver)(ValkeyModuleCtx *ctx, const char *sender_id, uint8_t type, const unsigned char *payload, uint32_t len);
+typedef void (*ValkeyModuleTimerProc)(ValkeyModuleCtx *ctx, void *data);
+typedef void (*ValkeyModuleCommandFilterFunc) (ValkeyModuleCommandFilterCtx *filter);
+typedef void (*ValkeyModuleForkDoneHandler) (int exitcode, int bysignal, void *user_data);
+typedef void (*ValkeyModuleScanCB)(ValkeyModuleCtx *ctx, ValkeyModuleString *keyname, ValkeyModuleKey *key, void *privdata);
+typedef void (*ValkeyModuleScanKeyCB)(ValkeyModuleKey *key, ValkeyModuleString *field, ValkeyModuleString *value, void *privdata);
+typedef ValkeyModuleString * (*ValkeyModuleConfigGetStringFunc)(const char *name, void *privdata);
+typedef long long (*ValkeyModuleConfigGetNumericFunc)(const char *name, void *privdata);
+typedef int (*ValkeyModuleConfigGetBoolFunc)(const char *name, void *privdata);
+typedef int (*ValkeyModuleConfigGetEnumFunc)(const char *name, void *privdata);
+typedef int (*ValkeyModuleConfigSetStringFunc)(const char *name, ValkeyModuleString *val, void *privdata, ValkeyModuleString **err);
+typedef int (*ValkeyModuleConfigSetNumericFunc)(const char *name, long long val, void *privdata, ValkeyModuleString **err);
+typedef int (*ValkeyModuleConfigSetBoolFunc)(const char *name, int val, void *privdata, ValkeyModuleString **err);
+typedef int (*ValkeyModuleConfigSetEnumFunc)(const char *name, int val, void *privdata, ValkeyModuleString **err);
+typedef int (*ValkeyModuleConfigApplyFunc)(ValkeyModuleCtx *ctx, void *privdata, ValkeyModuleString **err);
+typedef void (*ValkeyModuleOnUnblocked)(ValkeyModuleCtx *ctx, ValkeyModuleCallReply *reply, void *private_data);
+typedef int (*ValkeyModuleAuthCallback)(ValkeyModuleCtx *ctx, ValkeyModuleString *username, ValkeyModuleString *password, ValkeyModuleString **err);
 
-typedef struct RedisModuleTypeMethods {
+typedef struct ValkeyModuleTypeMethods {
     uint64_t version;
-    RedisModuleTypeLoadFunc rdb_load;
-    RedisModuleTypeSaveFunc rdb_save;
-    RedisModuleTypeRewriteFunc aof_rewrite;
-    RedisModuleTypeMemUsageFunc mem_usage;
-    RedisModuleTypeDigestFunc digest;
-    RedisModuleTypeFreeFunc free;
-    RedisModuleTypeAuxLoadFunc aux_load;
-    RedisModuleTypeAuxSaveFunc aux_save;
+    ValkeyModuleTypeLoadFunc rdb_load;
+    ValkeyModuleTypeSaveFunc rdb_save;
+    ValkeyModuleTypeRewriteFunc aof_rewrite;
+    ValkeyModuleTypeMemUsageFunc mem_usage;
+    ValkeyModuleTypeDigestFunc digest;
+    ValkeyModuleTypeFreeFunc free;
+    ValkeyModuleTypeAuxLoadFunc aux_load;
+    ValkeyModuleTypeAuxSaveFunc aux_save;
     int aux_save_triggers;
-    RedisModuleTypeFreeEffortFunc free_effort;
-    RedisModuleTypeUnlinkFunc unlink;
-    RedisModuleTypeCopyFunc copy;
-    RedisModuleTypeDefragFunc defrag;
-    RedisModuleTypeMemUsageFunc2 mem_usage2;
-    RedisModuleTypeFreeEffortFunc2 free_effort2;
-    RedisModuleTypeUnlinkFunc2 unlink2;
-    RedisModuleTypeCopyFunc2 copy2;
-    RedisModuleTypeAuxSaveFunc aux_save2;
-} RedisModuleTypeMethods;
+    ValkeyModuleTypeFreeEffortFunc free_effort;
+    ValkeyModuleTypeUnlinkFunc unlink;
+    ValkeyModuleTypeCopyFunc copy;
+    ValkeyModuleTypeDefragFunc defrag;
+    ValkeyModuleTypeMemUsageFunc2 mem_usage2;
+    ValkeyModuleTypeFreeEffortFunc2 free_effort2;
+    ValkeyModuleTypeUnlinkFunc2 unlink2;
+    ValkeyModuleTypeCopyFunc2 copy2;
+    ValkeyModuleTypeAuxSaveFunc aux_save2;
+} ValkeyModuleTypeMethods;
 
 #define VALKEYMODULE_GET_API(name) \
-    RedisModule_GetApi("RedisModule_" #name, ((void **)&RedisModule_ ## name))
+    ValkeyModule_GetApi("ValkeyModule_" #name, ((void **)&ValkeyModule_ ## name))
 
 /* Default API declaration prefix (not 'extern' for backwards compatibility) */
 #ifndef VALKEYMODULE_API
@@ -972,373 +959,373 @@ typedef struct RedisModuleTypeMethods {
 #define VALKEYMODULE_ATTR VALKEYMODULE_ATTR_COMMON
 #endif
 
-VALKEYMODULE_API void * (*RedisModule_Alloc)(size_t bytes) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void * (*RedisModule_TryAlloc)(size_t bytes) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void * (*RedisModule_Realloc)(void *ptr, size_t bytes) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void * (*RedisModule_TryRealloc)(void *ptr, size_t bytes) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_Free)(void *ptr) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void * (*RedisModule_Calloc)(size_t nmemb, size_t size) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void * (*RedisModule_TryCalloc)(size_t nmemb, size_t size) VALKEYMODULE_ATTR;
-VALKEYMODULE_API char * (*RedisModule_Strdup)(const char *str) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetApi)(const char *, void *) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_CreateCommand)(RedisModuleCtx *ctx, const char *name, RedisModuleCmdFunc cmdfunc, const char *strflags, int firstkey, int lastkey, int keystep) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleCommand *(*RedisModule_GetCommand)(RedisModuleCtx *ctx, const char *name) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_CreateSubcommand)(RedisModuleCommand *parent, const char *name, RedisModuleCmdFunc cmdfunc, const char *strflags, int firstkey, int lastkey, int keystep) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_SetCommandInfo)(RedisModuleCommand *command, const RedisModuleCommandInfo *info) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_SetCommandACLCategories)(RedisModuleCommand *command, const char *ctgrsflags) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_AddACLCategory)(RedisModuleCtx *ctx, const char *name) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_SetModuleAttribs)(RedisModuleCtx *ctx, const char *name, int ver, int apiver) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_IsModuleNameBusy)(const char *name) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_WrongArity)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithLongLong)(RedisModuleCtx *ctx, long long ll) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetSelectedDb)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_SelectDb)(RedisModuleCtx *ctx, int newid) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_KeyExists)(RedisModuleCtx *ctx, RedisModuleString *keyname) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleKey * (*RedisModule_OpenKey)(RedisModuleCtx *ctx, RedisModuleString *keyname, int mode) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetOpenKeyModesAll)(void) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_CloseKey)(RedisModuleKey *kp) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_KeyType)(RedisModuleKey *kp) VALKEYMODULE_ATTR;
-VALKEYMODULE_API size_t (*RedisModule_ValueLength)(RedisModuleKey *kp) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ListPush)(RedisModuleKey *kp, int where, RedisModuleString *ele) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_ListPop)(RedisModuleKey *key, int where) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_ListGet)(RedisModuleKey *key, long index) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ListSet)(RedisModuleKey *key, long index, RedisModuleString *value) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ListInsert)(RedisModuleKey *key, long index, RedisModuleString *value) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ListDelete)(RedisModuleKey *key, long index) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleCallReply * (*RedisModule_Call)(RedisModuleCtx *ctx, const char *cmdname, const char *fmt, ...) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const char * (*RedisModule_CallReplyProto)(RedisModuleCallReply *reply, size_t *len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_FreeCallReply)(RedisModuleCallReply *reply) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_CallReplyType)(RedisModuleCallReply *reply) VALKEYMODULE_ATTR;
-VALKEYMODULE_API long long (*RedisModule_CallReplyInteger)(RedisModuleCallReply *reply) VALKEYMODULE_ATTR;
-VALKEYMODULE_API double (*RedisModule_CallReplyDouble)(RedisModuleCallReply *reply) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_CallReplyBool)(RedisModuleCallReply *reply) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const char* (*RedisModule_CallReplyBigNumber)(RedisModuleCallReply *reply, size_t *len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const char* (*RedisModule_CallReplyVerbatim)(RedisModuleCallReply *reply, size_t *len, const char **format) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleCallReply * (*RedisModule_CallReplySetElement)(RedisModuleCallReply *reply, size_t idx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_CallReplyMapElement)(RedisModuleCallReply *reply, size_t idx, RedisModuleCallReply **key, RedisModuleCallReply **val) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_CallReplyAttributeElement)(RedisModuleCallReply *reply, size_t idx, RedisModuleCallReply **key, RedisModuleCallReply **val) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_CallReplyPromiseSetUnblockHandler)(RedisModuleCallReply *reply, RedisModuleOnUnblocked on_unblock, void *private_data) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_CallReplyPromiseAbort)(RedisModuleCallReply *reply, void **private_data) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleCallReply * (*RedisModule_CallReplyAttribute)(RedisModuleCallReply *reply) VALKEYMODULE_ATTR;
-VALKEYMODULE_API size_t (*RedisModule_CallReplyLength)(RedisModuleCallReply *reply) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleCallReply * (*RedisModule_CallReplyArrayElement)(RedisModuleCallReply *reply, size_t idx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_CreateString)(RedisModuleCtx *ctx, const char *ptr, size_t len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_CreateStringFromLongLong)(RedisModuleCtx *ctx, long long ll) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_CreateStringFromULongLong)(RedisModuleCtx *ctx, unsigned long long ull) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_CreateStringFromDouble)(RedisModuleCtx *ctx, double d) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_CreateStringFromLongDouble)(RedisModuleCtx *ctx, long double ld, int humanfriendly) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_CreateStringFromString)(RedisModuleCtx *ctx, const RedisModuleString *str) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_CreateStringFromStreamID)(RedisModuleCtx *ctx, const RedisModuleStreamID *id) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_CreateStringPrintf)(RedisModuleCtx *ctx, const char *fmt, ...) VALKEYMODULE_ATTR_PRINTF(2,3) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_FreeString)(RedisModuleCtx *ctx, RedisModuleString *str) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const char * (*RedisModule_StringPtrLen)(const RedisModuleString *str, size_t *len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithError)(RedisModuleCtx *ctx, const char *err) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithErrorFormat)(RedisModuleCtx *ctx, const char *fmt, ...) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithSimpleString)(RedisModuleCtx *ctx, const char *msg) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithArray)(RedisModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithMap)(RedisModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithSet)(RedisModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithAttribute)(RedisModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithNullArray)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithEmptyArray)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_ReplySetArrayLength)(RedisModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_ReplySetMapLength)(RedisModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_ReplySetSetLength)(RedisModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_ReplySetAttributeLength)(RedisModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_ReplySetPushLength)(RedisModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithStringBuffer)(RedisModuleCtx *ctx, const char *buf, size_t len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithCString)(RedisModuleCtx *ctx, const char *buf) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithString)(RedisModuleCtx *ctx, RedisModuleString *str) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithEmptyString)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithVerbatimString)(RedisModuleCtx *ctx, const char *buf, size_t len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithVerbatimStringType)(RedisModuleCtx *ctx, const char *buf, size_t len, const char *ext) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithNull)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithBool)(RedisModuleCtx *ctx, int b) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithLongDouble)(RedisModuleCtx *ctx, long double d) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithDouble)(RedisModuleCtx *ctx, double d) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithBigNumber)(RedisModuleCtx *ctx, const char *bignum, size_t len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplyWithCallReply)(RedisModuleCtx *ctx, RedisModuleCallReply *reply) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_StringToLongLong)(const RedisModuleString *str, long long *ll) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_StringToULongLong)(const RedisModuleString *str, unsigned long long *ull) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_StringToDouble)(const RedisModuleString *str, double *d) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_StringToLongDouble)(const RedisModuleString *str, long double *d) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_StringToStreamID)(const RedisModuleString *str, RedisModuleStreamID *id) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_AutoMemory)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_Replicate)(RedisModuleCtx *ctx, const char *cmdname, const char *fmt, ...) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ReplicateVerbatim)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const char * (*RedisModule_CallReplyStringPtr)(RedisModuleCallReply *reply, size_t *len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_CreateStringFromCallReply)(RedisModuleCallReply *reply) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_DeleteKey)(RedisModuleKey *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_UnlinkKey)(RedisModuleKey *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_StringSet)(RedisModuleKey *key, RedisModuleString *str) VALKEYMODULE_ATTR;
-VALKEYMODULE_API char * (*RedisModule_StringDMA)(RedisModuleKey *key, size_t *len, int mode) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_StringTruncate)(RedisModuleKey *key, size_t newlen) VALKEYMODULE_ATTR;
-VALKEYMODULE_API mstime_t (*RedisModule_GetExpire)(RedisModuleKey *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_SetExpire)(RedisModuleKey *key, mstime_t expire) VALKEYMODULE_ATTR;
-VALKEYMODULE_API mstime_t (*RedisModule_GetAbsExpire)(RedisModuleKey *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_SetAbsExpire)(RedisModuleKey *key, mstime_t expire) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_ResetDataset)(int restart_aof, int async) VALKEYMODULE_ATTR;
-VALKEYMODULE_API unsigned long long (*RedisModule_DbSize)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_RandomKey)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ZsetAdd)(RedisModuleKey *key, double score, RedisModuleString *ele, int *flagsptr) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ZsetIncrby)(RedisModuleKey *key, double score, RedisModuleString *ele, int *flagsptr, double *newscore) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ZsetScore)(RedisModuleKey *key, RedisModuleString *ele, double *score) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ZsetRem)(RedisModuleKey *key, RedisModuleString *ele, int *deleted) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_ZsetRangeStop)(RedisModuleKey *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ZsetFirstInScoreRange)(RedisModuleKey *key, double min, double max, int minex, int maxex) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ZsetLastInScoreRange)(RedisModuleKey *key, double min, double max, int minex, int maxex) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ZsetFirstInLexRange)(RedisModuleKey *key, RedisModuleString *min, RedisModuleString *max) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ZsetLastInLexRange)(RedisModuleKey *key, RedisModuleString *min, RedisModuleString *max) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_ZsetRangeCurrentElement)(RedisModuleKey *key, double *score) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ZsetRangeNext)(RedisModuleKey *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ZsetRangePrev)(RedisModuleKey *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ZsetRangeEndReached)(RedisModuleKey *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_HashSet)(RedisModuleKey *key, int flags, ...) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_HashGet)(RedisModuleKey *key, int flags, ...) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_StreamAdd)(RedisModuleKey *key, int flags, RedisModuleStreamID *id, RedisModuleString **argv, int64_t numfields) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_StreamDelete)(RedisModuleKey *key, RedisModuleStreamID *id) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_StreamIteratorStart)(RedisModuleKey *key, int flags, RedisModuleStreamID *startid, RedisModuleStreamID *endid) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_StreamIteratorStop)(RedisModuleKey *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_StreamIteratorNextID)(RedisModuleKey *key, RedisModuleStreamID *id, long *numfields) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_StreamIteratorNextField)(RedisModuleKey *key, RedisModuleString **field_ptr, RedisModuleString **value_ptr) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_StreamIteratorDelete)(RedisModuleKey *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API long long (*RedisModule_StreamTrimByLength)(RedisModuleKey *key, int flags, long long length) VALKEYMODULE_ATTR;
-VALKEYMODULE_API long long (*RedisModule_StreamTrimByID)(RedisModuleKey *key, int flags, RedisModuleStreamID *id) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_IsKeysPositionRequest)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_KeyAtPos)(RedisModuleCtx *ctx, int pos) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_KeyAtPosWithFlags)(RedisModuleCtx *ctx, int pos, int flags) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_IsChannelsPositionRequest)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_ChannelAtPosWithFlags)(RedisModuleCtx *ctx, int pos, int flags) VALKEYMODULE_ATTR;
-VALKEYMODULE_API unsigned long long (*RedisModule_GetClientId)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_GetClientUserNameById)(RedisModuleCtx *ctx, uint64_t id) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetClientInfoById)(void *ci, uint64_t id) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_GetClientNameById)(RedisModuleCtx *ctx, uint64_t id) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_SetClientNameById)(uint64_t id, RedisModuleString *name) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_PublishMessage)(RedisModuleCtx *ctx, RedisModuleString *channel, RedisModuleString *message) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_PublishMessageShard)(RedisModuleCtx *ctx, RedisModuleString *channel, RedisModuleString *message) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetContextFlags)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_AvoidReplicaTraffic)(void) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void * (*RedisModule_PoolAlloc)(RedisModuleCtx *ctx, size_t bytes) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleType * (*RedisModule_CreateDataType)(RedisModuleCtx *ctx, const char *name, int encver, RedisModuleTypeMethods *typemethods) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ModuleTypeSetValue)(RedisModuleKey *key, RedisModuleType *mt, void *value) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ModuleTypeReplaceValue)(RedisModuleKey *key, RedisModuleType *mt, void *new_value, void **old_value) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleType * (*RedisModule_ModuleTypeGetType)(RedisModuleKey *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void * (*RedisModule_ModuleTypeGetValue)(RedisModuleKey *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_IsIOError)(RedisModuleIO *io) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_SetModuleOptions)(RedisModuleCtx *ctx, int options) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_SignalModifiedKey)(RedisModuleCtx *ctx, RedisModuleString *keyname) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_SaveUnsigned)(RedisModuleIO *io, uint64_t value) VALKEYMODULE_ATTR;
-VALKEYMODULE_API uint64_t (*RedisModule_LoadUnsigned)(RedisModuleIO *io) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_SaveSigned)(RedisModuleIO *io, int64_t value) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int64_t (*RedisModule_LoadSigned)(RedisModuleIO *io) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_EmitAOF)(RedisModuleIO *io, const char *cmdname, const char *fmt, ...) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_SaveString)(RedisModuleIO *io, RedisModuleString *s) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_SaveStringBuffer)(RedisModuleIO *io, const char *str, size_t len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_LoadString)(RedisModuleIO *io) VALKEYMODULE_ATTR;
-VALKEYMODULE_API char * (*RedisModule_LoadStringBuffer)(RedisModuleIO *io, size_t *lenptr) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_SaveDouble)(RedisModuleIO *io, double value) VALKEYMODULE_ATTR;
-VALKEYMODULE_API double (*RedisModule_LoadDouble)(RedisModuleIO *io) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_SaveFloat)(RedisModuleIO *io, float value) VALKEYMODULE_ATTR;
-VALKEYMODULE_API float (*RedisModule_LoadFloat)(RedisModuleIO *io) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_SaveLongDouble)(RedisModuleIO *io, long double value) VALKEYMODULE_ATTR;
-VALKEYMODULE_API long double (*RedisModule_LoadLongDouble)(RedisModuleIO *io) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void * (*RedisModule_LoadDataTypeFromString)(const RedisModuleString *str, const RedisModuleType *mt) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void * (*RedisModule_LoadDataTypeFromStringEncver)(const RedisModuleString *str, const RedisModuleType *mt, int encver) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_SaveDataTypeToString)(RedisModuleCtx *ctx, void *data, const RedisModuleType *mt) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_Log)(RedisModuleCtx *ctx, const char *level, const char *fmt, ...) VALKEYMODULE_ATTR VALKEYMODULE_ATTR_PRINTF(3,4);
-VALKEYMODULE_API void (*RedisModule_LogIOError)(RedisModuleIO *io, const char *levelstr, const char *fmt, ...) VALKEYMODULE_ATTR VALKEYMODULE_ATTR_PRINTF(3,4);
-VALKEYMODULE_API void (*RedisModule__Assert)(const char *estr, const char *file, int line) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_LatencyAddSample)(const char *event, mstime_t latency) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_StringAppendBuffer)(RedisModuleCtx *ctx, RedisModuleString *str, const char *buf, size_t len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_TrimStringAllocation)(RedisModuleString *str) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_RetainString)(RedisModuleCtx *ctx, RedisModuleString *str) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_HoldString)(RedisModuleCtx *ctx, RedisModuleString *str) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_StringCompare)(const RedisModuleString *a, const RedisModuleString *b) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleCtx * (*RedisModule_GetContextFromIO)(RedisModuleIO *io) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const RedisModuleString * (*RedisModule_GetKeyNameFromIO)(RedisModuleIO *io) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const RedisModuleString * (*RedisModule_GetKeyNameFromModuleKey)(RedisModuleKey *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetDbIdFromModuleKey)(RedisModuleKey *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetDbIdFromIO)(RedisModuleIO *io) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetDbIdFromOptCtx)(RedisModuleKeyOptCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetToDbIdFromOptCtx)(RedisModuleKeyOptCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const RedisModuleString * (*RedisModule_GetKeyNameFromOptCtx)(RedisModuleKeyOptCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const RedisModuleString * (*RedisModule_GetToKeyNameFromOptCtx)(RedisModuleKeyOptCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API mstime_t (*RedisModule_Milliseconds)(void) VALKEYMODULE_ATTR;
-VALKEYMODULE_API uint64_t (*RedisModule_MonotonicMicroseconds)(void) VALKEYMODULE_ATTR;
-VALKEYMODULE_API ustime_t (*RedisModule_Microseconds)(void) VALKEYMODULE_ATTR;
-VALKEYMODULE_API ustime_t (*RedisModule_CachedMicroseconds)(void) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_DigestAddStringBuffer)(RedisModuleDigest *md, const char *ele, size_t len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_DigestAddLongLong)(RedisModuleDigest *md, long long ele) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_DigestEndSequence)(RedisModuleDigest *md) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetDbIdFromDigest)(RedisModuleDigest *dig) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const RedisModuleString * (*RedisModule_GetKeyNameFromDigest)(RedisModuleDigest *dig) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleDict * (*RedisModule_CreateDict)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_FreeDict)(RedisModuleCtx *ctx, RedisModuleDict *d) VALKEYMODULE_ATTR;
-VALKEYMODULE_API uint64_t (*RedisModule_DictSize)(RedisModuleDict *d) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_DictSetC)(RedisModuleDict *d, void *key, size_t keylen, void *ptr) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_DictReplaceC)(RedisModuleDict *d, void *key, size_t keylen, void *ptr) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_DictSet)(RedisModuleDict *d, RedisModuleString *key, void *ptr) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_DictReplace)(RedisModuleDict *d, RedisModuleString *key, void *ptr) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void * (*RedisModule_DictGetC)(RedisModuleDict *d, void *key, size_t keylen, int *nokey) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void * (*RedisModule_DictGet)(RedisModuleDict *d, RedisModuleString *key, int *nokey) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_DictDelC)(RedisModuleDict *d, void *key, size_t keylen, void *oldval) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_DictDel)(RedisModuleDict *d, RedisModuleString *key, void *oldval) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleDictIter * (*RedisModule_DictIteratorStartC)(RedisModuleDict *d, const char *op, void *key, size_t keylen) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleDictIter * (*RedisModule_DictIteratorStart)(RedisModuleDict *d, const char *op, RedisModuleString *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_DictIteratorStop)(RedisModuleDictIter *di) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_DictIteratorReseekC)(RedisModuleDictIter *di, const char *op, void *key, size_t keylen) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_DictIteratorReseek)(RedisModuleDictIter *di, const char *op, RedisModuleString *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void * (*RedisModule_DictNextC)(RedisModuleDictIter *di, size_t *keylen, void **dataptr) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void * (*RedisModule_DictPrevC)(RedisModuleDictIter *di, size_t *keylen, void **dataptr) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_DictNext)(RedisModuleCtx *ctx, RedisModuleDictIter *di, void **dataptr) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_DictPrev)(RedisModuleCtx *ctx, RedisModuleDictIter *di, void **dataptr) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_DictCompareC)(RedisModuleDictIter *di, const char *op, void *key, size_t keylen) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_DictCompare)(RedisModuleDictIter *di, const char *op, RedisModuleString *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_RegisterInfoFunc)(RedisModuleCtx *ctx, RedisModuleInfoFunc cb) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_RegisterAuthCallback)(RedisModuleCtx *ctx, RedisModuleAuthCallback cb) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_InfoAddSection)(RedisModuleInfoCtx *ctx, const char *name) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_InfoBeginDictField)(RedisModuleInfoCtx *ctx, const char *name) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_InfoEndDictField)(RedisModuleInfoCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_InfoAddFieldString)(RedisModuleInfoCtx *ctx, const char *field, RedisModuleString *value) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_InfoAddFieldCString)(RedisModuleInfoCtx *ctx, const char *field,const  char *value) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_InfoAddFieldDouble)(RedisModuleInfoCtx *ctx, const char *field, double value) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_InfoAddFieldLongLong)(RedisModuleInfoCtx *ctx, const char *field, long long value) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_InfoAddFieldULongLong)(RedisModuleInfoCtx *ctx, const char *field, unsigned long long value) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleServerInfoData * (*RedisModule_GetServerInfo)(RedisModuleCtx *ctx, const char *section) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_FreeServerInfo)(RedisModuleCtx *ctx, RedisModuleServerInfoData *data) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_ServerInfoGetField)(RedisModuleCtx *ctx, RedisModuleServerInfoData *data, const char* field) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const char * (*RedisModule_ServerInfoGetFieldC)(RedisModuleServerInfoData *data, const char* field) VALKEYMODULE_ATTR;
-VALKEYMODULE_API long long (*RedisModule_ServerInfoGetFieldSigned)(RedisModuleServerInfoData *data, const char* field, int *out_err) VALKEYMODULE_ATTR;
-VALKEYMODULE_API unsigned long long (*RedisModule_ServerInfoGetFieldUnsigned)(RedisModuleServerInfoData *data, const char* field, int *out_err) VALKEYMODULE_ATTR;
-VALKEYMODULE_API double (*RedisModule_ServerInfoGetFieldDouble)(RedisModuleServerInfoData *data, const char* field, int *out_err) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_SubscribeToServerEvent)(RedisModuleCtx *ctx, RedisModuleEvent event, RedisModuleEventCallback callback) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_SetLRU)(RedisModuleKey *key, mstime_t lru_idle) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetLRU)(RedisModuleKey *key, mstime_t *lru_idle) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_SetLFU)(RedisModuleKey *key, long long lfu_freq) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetLFU)(RedisModuleKey *key, long long *lfu_freq) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleBlockedClient * (*RedisModule_BlockClientOnKeys)(RedisModuleCtx *ctx, RedisModuleCmdFunc reply_callback, RedisModuleCmdFunc timeout_callback, void (*free_privdata)(RedisModuleCtx*,void*), long long timeout_ms, RedisModuleString **keys, int numkeys, void *privdata) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleBlockedClient * (*RedisModule_BlockClientOnKeysWithFlags)(RedisModuleCtx *ctx, RedisModuleCmdFunc reply_callback, RedisModuleCmdFunc timeout_callback, void (*free_privdata)(RedisModuleCtx*,void*), long long timeout_ms, RedisModuleString **keys, int numkeys, void *privdata, int flags) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_SignalKeyAsReady)(RedisModuleCtx *ctx, RedisModuleString *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_GetBlockedClientReadyKey)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleScanCursor * (*RedisModule_ScanCursorCreate)(void) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_ScanCursorRestart)(RedisModuleScanCursor *cursor) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_ScanCursorDestroy)(RedisModuleScanCursor *cursor) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_Scan)(RedisModuleCtx *ctx, RedisModuleScanCursor *cursor, RedisModuleScanCB fn, void *privdata) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ScanKey)(RedisModuleKey *key, RedisModuleScanCursor *cursor, RedisModuleScanKeyCB fn, void *privdata) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetContextFlagsAll)(void) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetModuleOptionsAll)(void) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetKeyspaceNotificationFlagsAll)(void) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_IsSubEventSupported)(RedisModuleEvent event, uint64_t subevent) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetServerVersion)(void) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetTypeMethodVersion)(void) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_Yield)(RedisModuleCtx *ctx, int flags, const char *busy_reply) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleBlockedClient * (*RedisModule_BlockClient)(RedisModuleCtx *ctx, RedisModuleCmdFunc reply_callback, RedisModuleCmdFunc timeout_callback, void (*free_privdata)(RedisModuleCtx*,void*), long long timeout_ms) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void * (*RedisModule_BlockClientGetPrivateData)(RedisModuleBlockedClient *blocked_client) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_BlockClientSetPrivateData)(RedisModuleBlockedClient *blocked_client, void *private_data) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleBlockedClient * (*RedisModule_BlockClientOnAuth)(RedisModuleCtx *ctx, RedisModuleAuthCallback reply_callback, void (*free_privdata)(RedisModuleCtx*,void*)) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_UnblockClient)(RedisModuleBlockedClient *bc, void *privdata) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_IsBlockedReplyRequest)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_IsBlockedTimeoutRequest)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void * (*RedisModule_GetBlockedClientPrivateData)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleBlockedClient * (*RedisModule_GetBlockedClientHandle)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_AbortBlock)(RedisModuleBlockedClient *bc) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_BlockedClientMeasureTimeStart)(RedisModuleBlockedClient *bc) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_BlockedClientMeasureTimeEnd)(RedisModuleBlockedClient *bc) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleCtx * (*RedisModule_GetThreadSafeContext)(RedisModuleBlockedClient *bc) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleCtx * (*RedisModule_GetDetachedThreadSafeContext)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_FreeThreadSafeContext)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_ThreadSafeContextLock)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ThreadSafeContextTryLock)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_ThreadSafeContextUnlock)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_SubscribeToKeyspaceEvents)(RedisModuleCtx *ctx, int types, RedisModuleNotificationFunc cb) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_AddPostNotificationJob)(RedisModuleCtx *ctx, RedisModulePostNotificationJobFunc callback, void *pd, void (*free_pd)(void*)) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_NotifyKeyspaceEvent)(RedisModuleCtx *ctx, int type, const char *event, RedisModuleString *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetNotifyKeyspaceEvents)(void) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_BlockedClientDisconnected)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_RegisterClusterMessageReceiver)(RedisModuleCtx *ctx, uint8_t type, RedisModuleClusterMessageReceiver callback) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_SendClusterMessage)(RedisModuleCtx *ctx, const char *target_id, uint8_t type, const char *msg, uint32_t len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetClusterNodeInfo)(RedisModuleCtx *ctx, const char *id, char *ip, char *master_id, int *port, int *flags) VALKEYMODULE_ATTR;
-VALKEYMODULE_API char ** (*RedisModule_GetClusterNodesList)(RedisModuleCtx *ctx, size_t *numnodes) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_FreeClusterNodesList)(char **ids) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleTimerID (*RedisModule_CreateTimer)(RedisModuleCtx *ctx, mstime_t period, RedisModuleTimerProc callback, void *data) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_StopTimer)(RedisModuleCtx *ctx, RedisModuleTimerID id, void **data) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetTimerInfo)(RedisModuleCtx *ctx, RedisModuleTimerID id, uint64_t *remaining, void **data) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const char * (*RedisModule_GetMyClusterID)(void) VALKEYMODULE_ATTR;
-VALKEYMODULE_API size_t (*RedisModule_GetClusterSize)(void) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_GetRandomBytes)(unsigned char *dst, size_t len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_GetRandomHexChars)(char *dst, size_t len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_SetDisconnectCallback)(RedisModuleBlockedClient *bc, RedisModuleDisconnectFunc callback) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_SetClusterFlags)(RedisModuleCtx *ctx, uint64_t flags) VALKEYMODULE_ATTR;
-VALKEYMODULE_API unsigned int (*RedisModule_ClusterKeySlot)(RedisModuleString *key) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const char *(*RedisModule_ClusterCanonicalKeyNameInSlot)(unsigned int slot) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ExportSharedAPI)(RedisModuleCtx *ctx, const char *apiname, void *func) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void * (*RedisModule_GetSharedAPI)(RedisModuleCtx *ctx, const char *apiname) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleCommandFilter * (*RedisModule_RegisterCommandFilter)(RedisModuleCtx *ctx, RedisModuleCommandFilterFunc cb, int flags) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_UnregisterCommandFilter)(RedisModuleCtx *ctx, RedisModuleCommandFilter *filter) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_CommandFilterArgsCount)(RedisModuleCommandFilterCtx *fctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_CommandFilterArgGet)(RedisModuleCommandFilterCtx *fctx, int pos) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_CommandFilterArgInsert)(RedisModuleCommandFilterCtx *fctx, int pos, RedisModuleString *arg) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_CommandFilterArgReplace)(RedisModuleCommandFilterCtx *fctx, int pos, RedisModuleString *arg) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_CommandFilterArgDelete)(RedisModuleCommandFilterCtx *fctx, int pos) VALKEYMODULE_ATTR;
-VALKEYMODULE_API unsigned long long (*RedisModule_CommandFilterGetClientId)(RedisModuleCommandFilterCtx *fctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_Fork)(RedisModuleForkDoneHandler cb, void *user_data) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_SendChildHeartbeat)(double progress) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ExitFromChild)(int retcode) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_KillForkChild)(int child_pid) VALKEYMODULE_ATTR;
-VALKEYMODULE_API float (*RedisModule_GetUsedMemoryRatio)(void) VALKEYMODULE_ATTR;
-VALKEYMODULE_API size_t (*RedisModule_MallocSize)(void* ptr) VALKEYMODULE_ATTR;
-VALKEYMODULE_API size_t (*RedisModule_MallocUsableSize)(void *ptr) VALKEYMODULE_ATTR;
-VALKEYMODULE_API size_t (*RedisModule_MallocSizeString)(RedisModuleString* str) VALKEYMODULE_ATTR;
-VALKEYMODULE_API size_t (*RedisModule_MallocSizeDict)(RedisModuleDict* dict) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleUser * (*RedisModule_CreateModuleUser)(const char *name) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_FreeModuleUser)(RedisModuleUser *user) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_SetContextUser)(RedisModuleCtx *ctx, const RedisModuleUser *user) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_SetModuleUserACL)(RedisModuleUser *user, const char* acl) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_SetModuleUserACLString)(RedisModuleCtx * ctx, RedisModuleUser *user, const char* acl, RedisModuleString **error) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_GetModuleUserACLString)(RedisModuleUser *user) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_GetCurrentUserName)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleUser * (*RedisModule_GetModuleUserFromUserName)(RedisModuleString *name) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ACLCheckCommandPermissions)(RedisModuleUser *user, RedisModuleString **argv, int argc) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ACLCheckKeyPermissions)(RedisModuleUser *user, RedisModuleString *key, int flags) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_ACLCheckChannelPermissions)(RedisModuleUser *user, RedisModuleString *ch, int literal) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_ACLAddLogEntry)(RedisModuleCtx *ctx, RedisModuleUser *user, RedisModuleString *object, RedisModuleACLLogEntryReason reason) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_ACLAddLogEntryByUserName)(RedisModuleCtx *ctx, RedisModuleString *user, RedisModuleString *object, RedisModuleACLLogEntryReason reason) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_AuthenticateClientWithACLUser)(RedisModuleCtx *ctx, const char *name, size_t len, RedisModuleUserChangedFunc callback, void *privdata, uint64_t *client_id) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_AuthenticateClientWithUser)(RedisModuleCtx *ctx, RedisModuleUser *user, RedisModuleUserChangedFunc callback, void *privdata, uint64_t *client_id) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_DeauthenticateAndCloseClient)(RedisModuleCtx *ctx, uint64_t client_id) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_RedactClientCommandArgument)(RedisModuleCtx *ctx, int pos) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString * (*RedisModule_GetClientCertificate)(RedisModuleCtx *ctx, uint64_t id) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int *(*RedisModule_GetCommandKeys)(RedisModuleCtx *ctx, RedisModuleString **argv, int argc, int *num_keys) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int *(*RedisModule_GetCommandKeysWithFlags)(RedisModuleCtx *ctx, RedisModuleString **argv, int argc, int *num_keys, int **out_flags) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const char *(*RedisModule_GetCurrentCommandName)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_RegisterDefragFunc)(RedisModuleCtx *ctx, RedisModuleDefragFunc func) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void *(*RedisModule_DefragAlloc)(RedisModuleDefragCtx *ctx, void *ptr) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleString *(*RedisModule_DefragRedisModuleString)(RedisModuleDefragCtx *ctx, RedisModuleString *str) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_DefragShouldStop)(RedisModuleDefragCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_DefragCursorSet)(RedisModuleDefragCtx *ctx, unsigned long cursor) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_DefragCursorGet)(RedisModuleDefragCtx *ctx, unsigned long *cursor) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_GetDbIdFromDefragCtx)(RedisModuleDefragCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const RedisModuleString * (*RedisModule_GetKeyNameFromDefragCtx)(RedisModuleDefragCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_EventLoopAdd)(int fd, int mask, RedisModuleEventLoopFunc func, void *user_data) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_EventLoopDel)(int fd, int mask) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_EventLoopAddOneShot)(RedisModuleEventLoopOneShotFunc func, void *user_data) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_RegisterBoolConfig)(RedisModuleCtx *ctx, const char *name, int default_val, unsigned int flags, RedisModuleConfigGetBoolFunc getfn, RedisModuleConfigSetBoolFunc setfn, RedisModuleConfigApplyFunc applyfn, void *privdata) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_RegisterNumericConfig)(RedisModuleCtx *ctx, const char *name, long long default_val, unsigned int flags, long long min, long long max, RedisModuleConfigGetNumericFunc getfn, RedisModuleConfigSetNumericFunc setfn, RedisModuleConfigApplyFunc applyfn, void *privdata) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_RegisterStringConfig)(RedisModuleCtx *ctx, const char *name, const char *default_val, unsigned int flags, RedisModuleConfigGetStringFunc getfn, RedisModuleConfigSetStringFunc setfn, RedisModuleConfigApplyFunc applyfn, void *privdata) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_RegisterEnumConfig)(RedisModuleCtx *ctx, const char *name, int default_val, unsigned int flags, const char **enum_values, const int *int_values, int num_enum_vals, RedisModuleConfigGetEnumFunc getfn, RedisModuleConfigSetEnumFunc setfn, RedisModuleConfigApplyFunc applyfn, void *privdata) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_LoadConfigs)(RedisModuleCtx *ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API RedisModuleRdbStream *(*RedisModule_RdbStreamCreateFromFile)(const char *filename) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*RedisModule_RdbStreamFree)(RedisModuleRdbStream *stream) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_RdbLoad)(RedisModuleCtx *ctx, RedisModuleRdbStream *stream, int flags) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*RedisModule_RdbSave)(RedisModuleCtx *ctx, RedisModuleRdbStream *stream, int flags) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void * (*ValkeyModule_Alloc)(size_t bytes) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void * (*ValkeyModule_TryAlloc)(size_t bytes) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void * (*ValkeyModule_Realloc)(void *ptr, size_t bytes) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void * (*ValkeyModule_TryRealloc)(void *ptr, size_t bytes) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_Free)(void *ptr) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void * (*ValkeyModule_Calloc)(size_t nmemb, size_t size) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void * (*ValkeyModule_TryCalloc)(size_t nmemb, size_t size) VALKEYMODULE_ATTR;
+VALKEYMODULE_API char * (*ValkeyModule_Strdup)(const char *str) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetApi)(const char *, void *) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_CreateCommand)(ValkeyModuleCtx *ctx, const char *name, ValkeyModuleCmdFunc cmdfunc, const char *strflags, int firstkey, int lastkey, int keystep) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleCommand *(*ValkeyModule_GetCommand)(ValkeyModuleCtx *ctx, const char *name) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_CreateSubcommand)(ValkeyModuleCommand *parent, const char *name, ValkeyModuleCmdFunc cmdfunc, const char *strflags, int firstkey, int lastkey, int keystep) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_SetCommandInfo)(ValkeyModuleCommand *command, const ValkeyModuleCommandInfo *info) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_SetCommandACLCategories)(ValkeyModuleCommand *command, const char *ctgrsflags) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_AddACLCategory)(ValkeyModuleCtx *ctx, const char *name) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_SetModuleAttribs)(ValkeyModuleCtx *ctx, const char *name, int ver, int apiver) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_IsModuleNameBusy)(const char *name) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_WrongArity)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithLongLong)(ValkeyModuleCtx *ctx, long long ll) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetSelectedDb)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_SelectDb)(ValkeyModuleCtx *ctx, int newid) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_KeyExists)(ValkeyModuleCtx *ctx, ValkeyModuleString *keyname) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleKey * (*ValkeyModule_OpenKey)(ValkeyModuleCtx *ctx, ValkeyModuleString *keyname, int mode) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetOpenKeyModesAll)(void) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_CloseKey)(ValkeyModuleKey *kp) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_KeyType)(ValkeyModuleKey *kp) VALKEYMODULE_ATTR;
+VALKEYMODULE_API size_t (*ValkeyModule_ValueLength)(ValkeyModuleKey *kp) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ListPush)(ValkeyModuleKey *kp, int where, ValkeyModuleString *ele) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_ListPop)(ValkeyModuleKey *key, int where) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_ListGet)(ValkeyModuleKey *key, long index) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ListSet)(ValkeyModuleKey *key, long index, ValkeyModuleString *value) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ListInsert)(ValkeyModuleKey *key, long index, ValkeyModuleString *value) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ListDelete)(ValkeyModuleKey *key, long index) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleCallReply * (*ValkeyModule_Call)(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...) VALKEYMODULE_ATTR;
+VALKEYMODULE_API const char * (*ValkeyModule_CallReplyProto)(ValkeyModuleCallReply *reply, size_t *len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_FreeCallReply)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_CallReplyType)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
+VALKEYMODULE_API long long (*ValkeyModule_CallReplyInteger)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
+VALKEYMODULE_API double (*ValkeyModule_CallReplyDouble)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_CallReplyBool)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
+VALKEYMODULE_API const char* (*ValkeyModule_CallReplyBigNumber)(ValkeyModuleCallReply *reply, size_t *len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API const char* (*ValkeyModule_CallReplyVerbatim)(ValkeyModuleCallReply *reply, size_t *len, const char **format) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleCallReply * (*ValkeyModule_CallReplySetElement)(ValkeyModuleCallReply *reply, size_t idx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_CallReplyMapElement)(ValkeyModuleCallReply *reply, size_t idx, ValkeyModuleCallReply **key, ValkeyModuleCallReply **val) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_CallReplyAttributeElement)(ValkeyModuleCallReply *reply, size_t idx, ValkeyModuleCallReply **key, ValkeyModuleCallReply **val) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_CallReplyPromiseSetUnblockHandler)(ValkeyModuleCallReply *reply, ValkeyModuleOnUnblocked on_unblock, void *private_data) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_CallReplyPromiseAbort)(ValkeyModuleCallReply *reply, void **private_data) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleCallReply * (*ValkeyModule_CallReplyAttribute)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
+VALKEYMODULE_API size_t (*ValkeyModule_CallReplyLength)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleCallReply * (*ValkeyModule_CallReplyArrayElement)(ValkeyModuleCallReply *reply, size_t idx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_CreateString)(ValkeyModuleCtx *ctx, const char *ptr, size_t len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_CreateStringFromLongLong)(ValkeyModuleCtx *ctx, long long ll) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_CreateStringFromULongLong)(ValkeyModuleCtx *ctx, unsigned long long ull) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_CreateStringFromDouble)(ValkeyModuleCtx *ctx, double d) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_CreateStringFromLongDouble)(ValkeyModuleCtx *ctx, long double ld, int humanfriendly) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_CreateStringFromString)(ValkeyModuleCtx *ctx, const ValkeyModuleString *str) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_CreateStringFromStreamID)(ValkeyModuleCtx *ctx, const ValkeyModuleStreamID *id) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_CreateStringPrintf)(ValkeyModuleCtx *ctx, const char *fmt, ...) VALKEYMODULE_ATTR_PRINTF(2,3) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_FreeString)(ValkeyModuleCtx *ctx, ValkeyModuleString *str) VALKEYMODULE_ATTR;
+VALKEYMODULE_API const char * (*ValkeyModule_StringPtrLen)(const ValkeyModuleString *str, size_t *len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithError)(ValkeyModuleCtx *ctx, const char *err) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithErrorFormat)(ValkeyModuleCtx *ctx, const char *fmt, ...) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithSimpleString)(ValkeyModuleCtx *ctx, const char *msg) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithArray)(ValkeyModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithMap)(ValkeyModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithSet)(ValkeyModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithAttribute)(ValkeyModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithNullArray)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithEmptyArray)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ReplySetArrayLength)(ValkeyModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ReplySetMapLength)(ValkeyModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ReplySetSetLength)(ValkeyModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ReplySetAttributeLength)(ValkeyModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ReplySetPushLength)(ValkeyModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithStringBuffer)(ValkeyModuleCtx *ctx, const char *buf, size_t len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithCString)(ValkeyModuleCtx *ctx, const char *buf) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithString)(ValkeyModuleCtx *ctx, ValkeyModuleString *str) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithEmptyString)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithVerbatimString)(ValkeyModuleCtx *ctx, const char *buf, size_t len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithVerbatimStringType)(ValkeyModuleCtx *ctx, const char *buf, size_t len, const char *ext) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithNull)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithBool)(ValkeyModuleCtx *ctx, int b) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithLongDouble)(ValkeyModuleCtx *ctx, long double d) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithDouble)(ValkeyModuleCtx *ctx, double d) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithBigNumber)(ValkeyModuleCtx *ctx, const char *bignum, size_t len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithCallReply)(ValkeyModuleCtx *ctx, ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StringToLongLong)(const ValkeyModuleString *str, long long *ll) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StringToULongLong)(const ValkeyModuleString *str, unsigned long long *ull) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StringToDouble)(const ValkeyModuleString *str, double *d) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StringToLongDouble)(const ValkeyModuleString *str, long double *d) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StringToStreamID)(const ValkeyModuleString *str, ValkeyModuleStreamID *id) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_AutoMemory)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_Replicate)(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplicateVerbatim)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API const char * (*ValkeyModule_CallReplyStringPtr)(ValkeyModuleCallReply *reply, size_t *len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_CreateStringFromCallReply)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DeleteKey)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_UnlinkKey)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StringSet)(ValkeyModuleKey *key, ValkeyModuleString *str) VALKEYMODULE_ATTR;
+VALKEYMODULE_API char * (*ValkeyModule_StringDMA)(ValkeyModuleKey *key, size_t *len, int mode) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StringTruncate)(ValkeyModuleKey *key, size_t newlen) VALKEYMODULE_ATTR;
+VALKEYMODULE_API mstime_t (*ValkeyModule_GetExpire)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_SetExpire)(ValkeyModuleKey *key, mstime_t expire) VALKEYMODULE_ATTR;
+VALKEYMODULE_API mstime_t (*ValkeyModule_GetAbsExpire)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_SetAbsExpire)(ValkeyModuleKey *key, mstime_t expire) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ResetDataset)(int restart_aof, int async) VALKEYMODULE_ATTR;
+VALKEYMODULE_API unsigned long long (*ValkeyModule_DbSize)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_RandomKey)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ZsetAdd)(ValkeyModuleKey *key, double score, ValkeyModuleString *ele, int *flagsptr) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ZsetIncrby)(ValkeyModuleKey *key, double score, ValkeyModuleString *ele, int *flagsptr, double *newscore) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ZsetScore)(ValkeyModuleKey *key, ValkeyModuleString *ele, double *score) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ZsetRem)(ValkeyModuleKey *key, ValkeyModuleString *ele, int *deleted) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ZsetRangeStop)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ZsetFirstInScoreRange)(ValkeyModuleKey *key, double min, double max, int minex, int maxex) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ZsetLastInScoreRange)(ValkeyModuleKey *key, double min, double max, int minex, int maxex) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ZsetFirstInLexRange)(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModuleString *max) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ZsetLastInLexRange)(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModuleString *max) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_ZsetRangeCurrentElement)(ValkeyModuleKey *key, double *score) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ZsetRangeNext)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ZsetRangePrev)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ZsetRangeEndReached)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_HashSet)(ValkeyModuleKey *key, int flags, ...) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_HashGet)(ValkeyModuleKey *key, int flags, ...) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StreamAdd)(ValkeyModuleKey *key, int flags, ValkeyModuleStreamID *id, ValkeyModuleString **argv, int64_t numfields) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StreamDelete)(ValkeyModuleKey *key, ValkeyModuleStreamID *id) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StreamIteratorStart)(ValkeyModuleKey *key, int flags, ValkeyModuleStreamID *startid, ValkeyModuleStreamID *endid) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StreamIteratorStop)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StreamIteratorNextID)(ValkeyModuleKey *key, ValkeyModuleStreamID *id, long *numfields) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StreamIteratorNextField)(ValkeyModuleKey *key, ValkeyModuleString **field_ptr, ValkeyModuleString **value_ptr) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StreamIteratorDelete)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API long long (*ValkeyModule_StreamTrimByLength)(ValkeyModuleKey *key, int flags, long long length) VALKEYMODULE_ATTR;
+VALKEYMODULE_API long long (*ValkeyModule_StreamTrimByID)(ValkeyModuleKey *key, int flags, ValkeyModuleStreamID *id) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_IsKeysPositionRequest)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_KeyAtPos)(ValkeyModuleCtx *ctx, int pos) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_KeyAtPosWithFlags)(ValkeyModuleCtx *ctx, int pos, int flags) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_IsChannelsPositionRequest)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ChannelAtPosWithFlags)(ValkeyModuleCtx *ctx, int pos, int flags) VALKEYMODULE_ATTR;
+VALKEYMODULE_API unsigned long long (*ValkeyModule_GetClientId)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_GetClientUserNameById)(ValkeyModuleCtx *ctx, uint64_t id) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetClientInfoById)(void *ci, uint64_t id) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_GetClientNameById)(ValkeyModuleCtx *ctx, uint64_t id) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_SetClientNameById)(uint64_t id, ValkeyModuleString *name) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_PublishMessage)(ValkeyModuleCtx *ctx, ValkeyModuleString *channel, ValkeyModuleString *message) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_PublishMessageShard)(ValkeyModuleCtx *ctx, ValkeyModuleString *channel, ValkeyModuleString *message) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetContextFlags)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_AvoidReplicaTraffic)(void) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void * (*ValkeyModule_PoolAlloc)(ValkeyModuleCtx *ctx, size_t bytes) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleType * (*ValkeyModule_CreateDataType)(ValkeyModuleCtx *ctx, const char *name, int encver, ValkeyModuleTypeMethods *typemethods) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ModuleTypeSetValue)(ValkeyModuleKey *key, ValkeyModuleType *mt, void *value) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ModuleTypeReplaceValue)(ValkeyModuleKey *key, ValkeyModuleType *mt, void *new_value, void **old_value) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleType * (*ValkeyModule_ModuleTypeGetType)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void * (*ValkeyModule_ModuleTypeGetValue)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_IsIOError)(ValkeyModuleIO *io) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_SetModuleOptions)(ValkeyModuleCtx *ctx, int options) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_SignalModifiedKey)(ValkeyModuleCtx *ctx, ValkeyModuleString *keyname) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_SaveUnsigned)(ValkeyModuleIO *io, uint64_t value) VALKEYMODULE_ATTR;
+VALKEYMODULE_API uint64_t (*ValkeyModule_LoadUnsigned)(ValkeyModuleIO *io) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_SaveSigned)(ValkeyModuleIO *io, int64_t value) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int64_t (*ValkeyModule_LoadSigned)(ValkeyModuleIO *io) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_EmitAOF)(ValkeyModuleIO *io, const char *cmdname, const char *fmt, ...) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_SaveString)(ValkeyModuleIO *io, ValkeyModuleString *s) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_SaveStringBuffer)(ValkeyModuleIO *io, const char *str, size_t len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_LoadString)(ValkeyModuleIO *io) VALKEYMODULE_ATTR;
+VALKEYMODULE_API char * (*ValkeyModule_LoadStringBuffer)(ValkeyModuleIO *io, size_t *lenptr) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_SaveDouble)(ValkeyModuleIO *io, double value) VALKEYMODULE_ATTR;
+VALKEYMODULE_API double (*ValkeyModule_LoadDouble)(ValkeyModuleIO *io) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_SaveFloat)(ValkeyModuleIO *io, float value) VALKEYMODULE_ATTR;
+VALKEYMODULE_API float (*ValkeyModule_LoadFloat)(ValkeyModuleIO *io) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_SaveLongDouble)(ValkeyModuleIO *io, long double value) VALKEYMODULE_ATTR;
+VALKEYMODULE_API long double (*ValkeyModule_LoadLongDouble)(ValkeyModuleIO *io) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void * (*ValkeyModule_LoadDataTypeFromString)(const ValkeyModuleString *str, const ValkeyModuleType *mt) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void * (*ValkeyModule_LoadDataTypeFromStringEncver)(const ValkeyModuleString *str, const ValkeyModuleType *mt, int encver) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_SaveDataTypeToString)(ValkeyModuleCtx *ctx, void *data, const ValkeyModuleType *mt) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_Log)(ValkeyModuleCtx *ctx, const char *level, const char *fmt, ...) VALKEYMODULE_ATTR VALKEYMODULE_ATTR_PRINTF(3,4);
+VALKEYMODULE_API void (*ValkeyModule_LogIOError)(ValkeyModuleIO *io, const char *levelstr, const char *fmt, ...) VALKEYMODULE_ATTR VALKEYMODULE_ATTR_PRINTF(3,4);
+VALKEYMODULE_API void (*ValkeyModule__Assert)(const char *estr, const char *file, int line) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_LatencyAddSample)(const char *event, mstime_t latency) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StringAppendBuffer)(ValkeyModuleCtx *ctx, ValkeyModuleString *str, const char *buf, size_t len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_TrimStringAllocation)(ValkeyModuleString *str) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_RetainString)(ValkeyModuleCtx *ctx, ValkeyModuleString *str) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_HoldString)(ValkeyModuleCtx *ctx, ValkeyModuleString *str) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StringCompare)(const ValkeyModuleString *a, const ValkeyModuleString *b) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleCtx * (*ValkeyModule_GetContextFromIO)(ValkeyModuleIO *io) VALKEYMODULE_ATTR;
+VALKEYMODULE_API const ValkeyModuleString * (*ValkeyModule_GetKeyNameFromIO)(ValkeyModuleIO *io) VALKEYMODULE_ATTR;
+VALKEYMODULE_API const ValkeyModuleString * (*ValkeyModule_GetKeyNameFromModuleKey)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetDbIdFromModuleKey)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetDbIdFromIO)(ValkeyModuleIO *io) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetDbIdFromOptCtx)(ValkeyModuleKeyOptCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetToDbIdFromOptCtx)(ValkeyModuleKeyOptCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API const ValkeyModuleString * (*ValkeyModule_GetKeyNameFromOptCtx)(ValkeyModuleKeyOptCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API const ValkeyModuleString * (*ValkeyModule_GetToKeyNameFromOptCtx)(ValkeyModuleKeyOptCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API mstime_t (*ValkeyModule_Milliseconds)(void) VALKEYMODULE_ATTR;
+VALKEYMODULE_API uint64_t (*ValkeyModule_MonotonicMicroseconds)(void) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ustime_t (*ValkeyModule_Microseconds)(void) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ustime_t (*ValkeyModule_CachedMicroseconds)(void) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_DigestAddStringBuffer)(ValkeyModuleDigest *md, const char *ele, size_t len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_DigestAddLongLong)(ValkeyModuleDigest *md, long long ele) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_DigestEndSequence)(ValkeyModuleDigest *md) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetDbIdFromDigest)(ValkeyModuleDigest *dig) VALKEYMODULE_ATTR;
+VALKEYMODULE_API const ValkeyModuleString * (*ValkeyModule_GetKeyNameFromDigest)(ValkeyModuleDigest *dig) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleDict * (*ValkeyModule_CreateDict)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_FreeDict)(ValkeyModuleCtx *ctx, ValkeyModuleDict *d) VALKEYMODULE_ATTR;
+VALKEYMODULE_API uint64_t (*ValkeyModule_DictSize)(ValkeyModuleDict *d) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DictSetC)(ValkeyModuleDict *d, void *key, size_t keylen, void *ptr) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DictReplaceC)(ValkeyModuleDict *d, void *key, size_t keylen, void *ptr) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DictSet)(ValkeyModuleDict *d, ValkeyModuleString *key, void *ptr) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DictReplace)(ValkeyModuleDict *d, ValkeyModuleString *key, void *ptr) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void * (*ValkeyModule_DictGetC)(ValkeyModuleDict *d, void *key, size_t keylen, int *nokey) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void * (*ValkeyModule_DictGet)(ValkeyModuleDict *d, ValkeyModuleString *key, int *nokey) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DictDelC)(ValkeyModuleDict *d, void *key, size_t keylen, void *oldval) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DictDel)(ValkeyModuleDict *d, ValkeyModuleString *key, void *oldval) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleDictIter * (*ValkeyModule_DictIteratorStartC)(ValkeyModuleDict *d, const char *op, void *key, size_t keylen) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleDictIter * (*ValkeyModule_DictIteratorStart)(ValkeyModuleDict *d, const char *op, ValkeyModuleString *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_DictIteratorStop)(ValkeyModuleDictIter *di) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DictIteratorReseekC)(ValkeyModuleDictIter *di, const char *op, void *key, size_t keylen) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DictIteratorReseek)(ValkeyModuleDictIter *di, const char *op, ValkeyModuleString *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void * (*ValkeyModule_DictNextC)(ValkeyModuleDictIter *di, size_t *keylen, void **dataptr) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void * (*ValkeyModule_DictPrevC)(ValkeyModuleDictIter *di, size_t *keylen, void **dataptr) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_DictNext)(ValkeyModuleCtx *ctx, ValkeyModuleDictIter *di, void **dataptr) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_DictPrev)(ValkeyModuleCtx *ctx, ValkeyModuleDictIter *di, void **dataptr) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DictCompareC)(ValkeyModuleDictIter *di, const char *op, void *key, size_t keylen) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DictCompare)(ValkeyModuleDictIter *di, const char *op, ValkeyModuleString *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_RegisterInfoFunc)(ValkeyModuleCtx *ctx, ValkeyModuleInfoFunc cb) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_RegisterAuthCallback)(ValkeyModuleCtx *ctx, ValkeyModuleAuthCallback cb) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_InfoAddSection)(ValkeyModuleInfoCtx *ctx, const char *name) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_InfoBeginDictField)(ValkeyModuleInfoCtx *ctx, const char *name) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_InfoEndDictField)(ValkeyModuleInfoCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_InfoAddFieldString)(ValkeyModuleInfoCtx *ctx, const char *field, ValkeyModuleString *value) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_InfoAddFieldCString)(ValkeyModuleInfoCtx *ctx, const char *field,const  char *value) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_InfoAddFieldDouble)(ValkeyModuleInfoCtx *ctx, const char *field, double value) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_InfoAddFieldLongLong)(ValkeyModuleInfoCtx *ctx, const char *field, long long value) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_InfoAddFieldULongLong)(ValkeyModuleInfoCtx *ctx, const char *field, unsigned long long value) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleServerInfoData * (*ValkeyModule_GetServerInfo)(ValkeyModuleCtx *ctx, const char *section) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_FreeServerInfo)(ValkeyModuleCtx *ctx, ValkeyModuleServerInfoData *data) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_ServerInfoGetField)(ValkeyModuleCtx *ctx, ValkeyModuleServerInfoData *data, const char* field) VALKEYMODULE_ATTR;
+VALKEYMODULE_API const char * (*ValkeyModule_ServerInfoGetFieldC)(ValkeyModuleServerInfoData *data, const char* field) VALKEYMODULE_ATTR;
+VALKEYMODULE_API long long (*ValkeyModule_ServerInfoGetFieldSigned)(ValkeyModuleServerInfoData *data, const char* field, int *out_err) VALKEYMODULE_ATTR;
+VALKEYMODULE_API unsigned long long (*ValkeyModule_ServerInfoGetFieldUnsigned)(ValkeyModuleServerInfoData *data, const char* field, int *out_err) VALKEYMODULE_ATTR;
+VALKEYMODULE_API double (*ValkeyModule_ServerInfoGetFieldDouble)(ValkeyModuleServerInfoData *data, const char* field, int *out_err) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_SubscribeToServerEvent)(ValkeyModuleCtx *ctx, ValkeyModuleEvent event, ValkeyModuleEventCallback callback) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_SetLRU)(ValkeyModuleKey *key, mstime_t lru_idle) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetLRU)(ValkeyModuleKey *key, mstime_t *lru_idle) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_SetLFU)(ValkeyModuleKey *key, long long lfu_freq) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetLFU)(ValkeyModuleKey *key, long long *lfu_freq) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleBlockedClient * (*ValkeyModule_BlockClientOnKeys)(ValkeyModuleCtx *ctx, ValkeyModuleCmdFunc reply_callback, ValkeyModuleCmdFunc timeout_callback, void (*free_privdata)(ValkeyModuleCtx*,void*), long long timeout_ms, ValkeyModuleString **keys, int numkeys, void *privdata) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleBlockedClient * (*ValkeyModule_BlockClientOnKeysWithFlags)(ValkeyModuleCtx *ctx, ValkeyModuleCmdFunc reply_callback, ValkeyModuleCmdFunc timeout_callback, void (*free_privdata)(ValkeyModuleCtx*,void*), long long timeout_ms, ValkeyModuleString **keys, int numkeys, void *privdata, int flags) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_SignalKeyAsReady)(ValkeyModuleCtx *ctx, ValkeyModuleString *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_GetBlockedClientReadyKey)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleScanCursor * (*ValkeyModule_ScanCursorCreate)(void) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ScanCursorRestart)(ValkeyModuleScanCursor *cursor) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ScanCursorDestroy)(ValkeyModuleScanCursor *cursor) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_Scan)(ValkeyModuleCtx *ctx, ValkeyModuleScanCursor *cursor, ValkeyModuleScanCB fn, void *privdata) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ScanKey)(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, ValkeyModuleScanKeyCB fn, void *privdata) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetContextFlagsAll)(void) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetModuleOptionsAll)(void) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetKeyspaceNotificationFlagsAll)(void) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_IsSubEventSupported)(ValkeyModuleEvent event, uint64_t subevent) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetServerVersion)(void) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetTypeMethodVersion)(void) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_Yield)(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleBlockedClient * (*ValkeyModule_BlockClient)(ValkeyModuleCtx *ctx, ValkeyModuleCmdFunc reply_callback, ValkeyModuleCmdFunc timeout_callback, void (*free_privdata)(ValkeyModuleCtx*,void*), long long timeout_ms) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void * (*ValkeyModule_BlockClientGetPrivateData)(ValkeyModuleBlockedClient *blocked_client) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_BlockClientSetPrivateData)(ValkeyModuleBlockedClient *blocked_client, void *private_data) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleBlockedClient * (*ValkeyModule_BlockClientOnAuth)(ValkeyModuleCtx *ctx, ValkeyModuleAuthCallback reply_callback, void (*free_privdata)(ValkeyModuleCtx*,void*)) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_UnblockClient)(ValkeyModuleBlockedClient *bc, void *privdata) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_IsBlockedReplyRequest)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_IsBlockedTimeoutRequest)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void * (*ValkeyModule_GetBlockedClientPrivateData)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleBlockedClient * (*ValkeyModule_GetBlockedClientHandle)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_AbortBlock)(ValkeyModuleBlockedClient *bc) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_BlockedClientMeasureTimeStart)(ValkeyModuleBlockedClient *bc) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_BlockedClientMeasureTimeEnd)(ValkeyModuleBlockedClient *bc) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleCtx * (*ValkeyModule_GetThreadSafeContext)(ValkeyModuleBlockedClient *bc) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleCtx * (*ValkeyModule_GetDetachedThreadSafeContext)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_FreeThreadSafeContext)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ThreadSafeContextLock)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ThreadSafeContextTryLock)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ThreadSafeContextUnlock)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_SubscribeToKeyspaceEvents)(ValkeyModuleCtx *ctx, int types, ValkeyModuleNotificationFunc cb) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_AddPostNotificationJob)(ValkeyModuleCtx *ctx, ValkeyModulePostNotificationJobFunc callback, void *pd, void (*free_pd)(void*)) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_NotifyKeyspaceEvent)(ValkeyModuleCtx *ctx, int type, const char *event, ValkeyModuleString *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetNotifyKeyspaceEvents)(void) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_BlockedClientDisconnected)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_RegisterClusterMessageReceiver)(ValkeyModuleCtx *ctx, uint8_t type, ValkeyModuleClusterMessageReceiver callback) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_SendClusterMessage)(ValkeyModuleCtx *ctx, const char *target_id, uint8_t type, const char *msg, uint32_t len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetClusterNodeInfo)(ValkeyModuleCtx *ctx, const char *id, char *ip, char *master_id, int *port, int *flags) VALKEYMODULE_ATTR;
+VALKEYMODULE_API char ** (*ValkeyModule_GetClusterNodesList)(ValkeyModuleCtx *ctx, size_t *numnodes) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_FreeClusterNodesList)(char **ids) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleTimerID (*ValkeyModule_CreateTimer)(ValkeyModuleCtx *ctx, mstime_t period, ValkeyModuleTimerProc callback, void *data) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StopTimer)(ValkeyModuleCtx *ctx, ValkeyModuleTimerID id, void **data) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetTimerInfo)(ValkeyModuleCtx *ctx, ValkeyModuleTimerID id, uint64_t *remaining, void **data) VALKEYMODULE_ATTR;
+VALKEYMODULE_API const char * (*ValkeyModule_GetMyClusterID)(void) VALKEYMODULE_ATTR;
+VALKEYMODULE_API size_t (*ValkeyModule_GetClusterSize)(void) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_GetRandomBytes)(unsigned char *dst, size_t len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_GetRandomHexChars)(char *dst, size_t len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_SetDisconnectCallback)(ValkeyModuleBlockedClient *bc, ValkeyModuleDisconnectFunc callback) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_SetClusterFlags)(ValkeyModuleCtx *ctx, uint64_t flags) VALKEYMODULE_ATTR;
+VALKEYMODULE_API unsigned int (*ValkeyModule_ClusterKeySlot)(ValkeyModuleString *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API const char *(*ValkeyModule_ClusterCanonicalKeyNameInSlot)(unsigned int slot) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ExportSharedAPI)(ValkeyModuleCtx *ctx, const char *apiname, void *func) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void * (*ValkeyModule_GetSharedAPI)(ValkeyModuleCtx *ctx, const char *apiname) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleCommandFilter * (*ValkeyModule_RegisterCommandFilter)(ValkeyModuleCtx *ctx, ValkeyModuleCommandFilterFunc cb, int flags) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_UnregisterCommandFilter)(ValkeyModuleCtx *ctx, ValkeyModuleCommandFilter *filter) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_CommandFilterArgsCount)(ValkeyModuleCommandFilterCtx *fctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_CommandFilterArgGet)(ValkeyModuleCommandFilterCtx *fctx, int pos) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_CommandFilterArgInsert)(ValkeyModuleCommandFilterCtx *fctx, int pos, ValkeyModuleString *arg) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_CommandFilterArgReplace)(ValkeyModuleCommandFilterCtx *fctx, int pos, ValkeyModuleString *arg) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_CommandFilterArgDelete)(ValkeyModuleCommandFilterCtx *fctx, int pos) VALKEYMODULE_ATTR;
+VALKEYMODULE_API unsigned long long (*ValkeyModule_CommandFilterGetClientId)(ValkeyModuleCommandFilterCtx *fctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_Fork)(ValkeyModuleForkDoneHandler cb, void *user_data) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_SendChildHeartbeat)(double progress) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ExitFromChild)(int retcode) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_KillForkChild)(int child_pid) VALKEYMODULE_ATTR;
+VALKEYMODULE_API float (*ValkeyModule_GetUsedMemoryRatio)(void) VALKEYMODULE_ATTR;
+VALKEYMODULE_API size_t (*ValkeyModule_MallocSize)(void* ptr) VALKEYMODULE_ATTR;
+VALKEYMODULE_API size_t (*ValkeyModule_MallocUsableSize)(void *ptr) VALKEYMODULE_ATTR;
+VALKEYMODULE_API size_t (*ValkeyModule_MallocSizeString)(ValkeyModuleString* str) VALKEYMODULE_ATTR;
+VALKEYMODULE_API size_t (*ValkeyModule_MallocSizeDict)(ValkeyModuleDict* dict) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleUser * (*ValkeyModule_CreateModuleUser)(const char *name) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_FreeModuleUser)(ValkeyModuleUser *user) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_SetContextUser)(ValkeyModuleCtx *ctx, const ValkeyModuleUser *user) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_SetModuleUserACL)(ValkeyModuleUser *user, const char* acl) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_SetModuleUserACLString)(ValkeyModuleCtx * ctx, ValkeyModuleUser *user, const char* acl, ValkeyModuleString **error) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_GetModuleUserACLString)(ValkeyModuleUser *user) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_GetCurrentUserName)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleUser * (*ValkeyModule_GetModuleUserFromUserName)(ValkeyModuleString *name) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ACLCheckCommandPermissions)(ValkeyModuleUser *user, ValkeyModuleString **argv, int argc) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ACLCheckKeyPermissions)(ValkeyModuleUser *user, ValkeyModuleString *key, int flags) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ACLCheckChannelPermissions)(ValkeyModuleUser *user, ValkeyModuleString *ch, int literal) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ACLAddLogEntry)(ValkeyModuleCtx *ctx, ValkeyModuleUser *user, ValkeyModuleString *object, ValkeyModuleACLLogEntryReason reason) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ACLAddLogEntryByUserName)(ValkeyModuleCtx *ctx, ValkeyModuleString *user, ValkeyModuleString *object, ValkeyModuleACLLogEntryReason reason) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_AuthenticateClientWithACLUser)(ValkeyModuleCtx *ctx, const char *name, size_t len, ValkeyModuleUserChangedFunc callback, void *privdata, uint64_t *client_id) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_AuthenticateClientWithUser)(ValkeyModuleCtx *ctx, ValkeyModuleUser *user, ValkeyModuleUserChangedFunc callback, void *privdata, uint64_t *client_id) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DeauthenticateAndCloseClient)(ValkeyModuleCtx *ctx, uint64_t client_id) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_RedactClientCommandArgument)(ValkeyModuleCtx *ctx, int pos) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString * (*ValkeyModule_GetClientCertificate)(ValkeyModuleCtx *ctx, uint64_t id) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int *(*ValkeyModule_GetCommandKeys)(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int *num_keys) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int *(*ValkeyModule_GetCommandKeysWithFlags)(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc, int *num_keys, int **out_flags) VALKEYMODULE_ATTR;
+VALKEYMODULE_API const char *(*ValkeyModule_GetCurrentCommandName)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_RegisterDefragFunc)(ValkeyModuleCtx *ctx, ValkeyModuleDefragFunc func) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void *(*ValkeyModule_DefragAlloc)(ValkeyModuleDefragCtx *ctx, void *ptr) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_DefragModuleString)(ValkeyModuleDefragCtx *ctx, ValkeyModuleString *str) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DefragShouldStop)(ValkeyModuleDefragCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DefragCursorSet)(ValkeyModuleDefragCtx *ctx, unsigned long cursor) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DefragCursorGet)(ValkeyModuleDefragCtx *ctx, unsigned long *cursor) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetDbIdFromDefragCtx)(ValkeyModuleDefragCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API const ValkeyModuleString * (*ValkeyModule_GetKeyNameFromDefragCtx)(ValkeyModuleDefragCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_EventLoopAdd)(int fd, int mask, ValkeyModuleEventLoopFunc func, void *user_data) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_EventLoopDel)(int fd, int mask) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_EventLoopAddOneShot)(ValkeyModuleEventLoopOneShotFunc func, void *user_data) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_RegisterBoolConfig)(ValkeyModuleCtx *ctx, const char *name, int default_val, unsigned int flags, ValkeyModuleConfigGetBoolFunc getfn, ValkeyModuleConfigSetBoolFunc setfn, ValkeyModuleConfigApplyFunc applyfn, void *privdata) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_RegisterNumericConfig)(ValkeyModuleCtx *ctx, const char *name, long long default_val, unsigned int flags, long long min, long long max, ValkeyModuleConfigGetNumericFunc getfn, ValkeyModuleConfigSetNumericFunc setfn, ValkeyModuleConfigApplyFunc applyfn, void *privdata) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_RegisterStringConfig)(ValkeyModuleCtx *ctx, const char *name, const char *default_val, unsigned int flags, ValkeyModuleConfigGetStringFunc getfn, ValkeyModuleConfigSetStringFunc setfn, ValkeyModuleConfigApplyFunc applyfn, void *privdata) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_RegisterEnumConfig)(ValkeyModuleCtx *ctx, const char *name, int default_val, unsigned int flags, const char **enum_values, const int *int_values, int num_enum_vals, ValkeyModuleConfigGetEnumFunc getfn, ValkeyModuleConfigSetEnumFunc setfn, ValkeyModuleConfigApplyFunc applyfn, void *privdata) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_LoadConfigs)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleRdbStream *(*ValkeyModule_RdbStreamCreateFromFile)(const char *filename) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_RdbStreamFree)(ValkeyModuleRdbStream *stream) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_RdbLoad)(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_RdbSave)(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) VALKEYMODULE_ATTR;
 
-#define RedisModule_IsAOFClient(id) ((id) == UINT64_MAX)
+#define ValkeyModule_IsAOFClient(id) ((id) == UINT64_MAX)
 
-/* This is included inline inside each Redis module. */
-static int RedisModule_Init(RedisModuleCtx *ctx, const char *name, int ver, int apiver) VALKEYMODULE_ATTR_UNUSED;
-static int RedisModule_Init(RedisModuleCtx *ctx, const char *name, int ver, int apiver) {
+/* This is included inline inside each Valkey module. */
+static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, int apiver) VALKEYMODULE_ATTR_UNUSED;
+static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, int apiver) {
     void *getapifuncptr = ((void**)ctx)[0];
-    RedisModule_GetApi = (int (*)(const char *, void *)) (unsigned long)getapifuncptr;
+    ValkeyModule_GetApi = (int (*)(const char *, void *)) (unsigned long)getapifuncptr;
     VALKEYMODULE_GET_API(Alloc);
     VALKEYMODULE_GET_API(TryAlloc);
     VALKEYMODULE_GET_API(Calloc);
@@ -1679,7 +1666,7 @@ static int RedisModule_Init(RedisModuleCtx *ctx, const char *name, int ver, int 
     VALKEYMODULE_GET_API(GetCurrentCommandName);
     VALKEYMODULE_GET_API(RegisterDefragFunc);
     VALKEYMODULE_GET_API(DefragAlloc);
-    VALKEYMODULE_GET_API(DefragRedisModuleString);
+    VALKEYMODULE_GET_API(DefragModuleString);
     VALKEYMODULE_GET_API(DefragShouldStop);
     VALKEYMODULE_GET_API(DefragCursorSet);
     VALKEYMODULE_GET_API(DefragCursorGet);
@@ -1698,12 +1685,12 @@ static int RedisModule_Init(RedisModuleCtx *ctx, const char *name, int ver, int 
     VALKEYMODULE_GET_API(RdbLoad);
     VALKEYMODULE_GET_API(RdbSave);
 
-    if (RedisModule_IsModuleNameBusy && RedisModule_IsModuleNameBusy(name)) return VALKEYMODULE_ERR;
-    RedisModule_SetModuleAttribs(ctx,name,ver,apiver);
+    if (ValkeyModule_IsModuleNameBusy && ValkeyModule_IsModuleNameBusy(name)) return VALKEYMODULE_ERR;
+    ValkeyModule_SetModuleAttribs(ctx,name,ver,apiver);
     return VALKEYMODULE_OK;
 }
 
-#define RedisModule_Assert(_e) ((_e)?(void)0 : (RedisModule__Assert(#_e,__FILE__,__LINE__),exit(1)))
+#define ValkeyModule_Assert(_e) ((_e)?(void)0 : (ValkeyModule__Assert(#_e,__FILE__,__LINE__),exit(1)))
 
 #define RMAPI_FUNC_SUPPORTED(func) (func != NULL)
 

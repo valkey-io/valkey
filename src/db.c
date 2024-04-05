@@ -524,7 +524,7 @@ long long emptyDbStructure(serverDb *dbarray, int dbnum, int async,
 long long emptyData(int dbnum, int flags, void(callback)(dict*)) {
     int async = (flags & EMPTYDB_ASYNC);
     int with_functions = !(flags & EMPTYDB_NOFUNCTIONS);
-    RedisModuleFlushInfoV1 fi = {VALKEYMODULE_FLUSHINFO_VERSION,!async,dbnum};
+    ValkeyModuleFlushInfoV1 fi = {VALKEYMODULE_FLUSHINFO_VERSION,!async,dbnum};
     long long removed = 0;
 
     if (dbnum < -1 || dbnum >= server.dbnum) {
@@ -1680,7 +1680,7 @@ void swapdbCommand(client *c) {
         addReplyError(c,"DB index is out of range");
         return;
     } else {
-        RedisModuleSwapDbInfo si = {VALKEYMODULE_SWAPDBINFO_VERSION,id1,id2};
+        ValkeyModuleSwapDbInfo si = {VALKEYMODULE_SWAPDBINFO_VERSION,id1,id2};
         moduleFireServerEvent(VALKEYMODULE_EVENT_SWAPDB,0,&si);
         server.dirty++;
         addReply(c,shared.ok);

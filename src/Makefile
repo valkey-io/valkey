@@ -320,44 +320,34 @@ ifeq ($(BUILD_TLS),module)
 	TLS_MODULE_CFLAGS+=-DUSE_OPENSSL=$(BUILD_MODULE) $(OPENSSL_CFLAGS) -DBUILD_TLS_MODULE=$(BUILD_MODULE)
 endif
 
-define MAYBE_UNINSTALL_REDIS_SYMLINK
-    @if [ $(USE_REDIS_SYMLINKS) = "yes" ]; then \
-		rm -f $(1)/$(subst $(ENGINE_NAME),redis,$(2)); \
-    fi
-endef
-
 ifndef V
     define MAKE_INSTALL
         @printf '    %b %b\n' $(LINKCOLOR)INSTALL$(ENDCOLOR) $(BINCOLOR)$(1)$(ENDCOLOR) 1>&2
         @$(INSTALL) $(1) $(2)
     endef
 
-    define MAYBE_INSTALL_REDIS_SYMLINK
-        @if [ $(USE_REDIS_SYMLINKS) = "yes" ]; then \
-            $(call INSTALL_REDIS_SYMLINK,$(1),$(2)) \
-        fi
-    endef
-
-	define INSTALL_REDIS_SYMLINK
-        ln -sf $(1) $(2)/$(subst $(ENGINE_NAME),redis,$(1)); \
-        printf '    %b %b %b %b %b %b %b\n' \
+    define INSTALL_REDIS_SYMLINK
+        @printf '    %b %b %b %b %b %b %b\n' \
         $(LINKCOLOR)INSTALL SYMLINK$(ENDCOLOR) \
-        $(BINCOLOR)$(subst $(ENGINE_NAME),redis,$(1))$(ENDCOLOR) -\> $(BINCOLOR)$(1)$(ENDCOLOR) 1>&2;
+        $(BINCOLOR)$(subst $(ENGINE_NAME),redis,$(1))$(ENDCOLOR) -\> $(BINCOLOR)$(1)$(ENDCOLOR) 1>&2
+        @ln -sf $(1) $(2)/$(subst $(ENGINE_NAME),redis,$(1))
     endef
 else
     define MAKE_INSTALL
         $(INSTALL) $(1) $(2)
     endef
 
-    define MAYBE_INSTALL_REDIS_SYMLINK
-        if [ $(USE_REDIS_SYMLINKS) = "yes" ]; then \
-            $(call INSTALL_REDIS_SYMLINK,$(1),$(2)) \
-        fi
+    define INSTALL_REDIS_SYMLINK
+        ln -sf $(1) $(2)/$(subst $(ENGINE_NAME),redis,$(1))
     endef
+endif
 
-	define INSTALL_REDIS_SYMLINK
-        ln -sf $(1) $(2)/$(subst $(ENGINE_NAME),redis,$(1));
-    endef
+ifeq ($(USE_REDIS_SYMLINKS),no)
+	MAYBE_INSTALL_REDIS_SYMLINK=
+	MAYBE_UNINSTALL_REDIS_SYMLINK=
+else
+	MAYBE_INSTALL_REDIS_SYMLINK=$(INSTALL_REDIS_SYMLINK)
+	MAYBE_UNINSTALL_REDIS_SYMLINK=@rm -f $(1)/$(subst $(ENGINE_NAME),redis,$(2))
 endif
 
 SERVER_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
@@ -556,11 +546,9 @@ install: all
 	$(call MAKE_INSTALL,$(SERVER_NAME),$(INSTALL_BIN))
 	$(call MAKE_INSTALL,$(ENGINE_BENCHMARK_NAME),$(INSTALL_BIN))
 	$(call MAKE_INSTALL,$(ENGINE_CLI_NAME),$(INSTALL_BIN))
-
 	@ln -sf $(SERVER_NAME) $(INSTALL_BIN)/$(ENGINE_CHECK_RDB_NAME)
 	@ln -sf $(SERVER_NAME) $(INSTALL_BIN)/$(ENGINE_CHECK_AOF_NAME)
 	@ln -sf $(SERVER_NAME) $(INSTALL_BIN)/$(ENGINE_SENTINEL_NAME)
-
 	$(call MAYBE_INSTALL_REDIS_SYMLINK,$(SERVER_NAME),$(INSTALL_BIN))
 	$(call MAYBE_INSTALL_REDIS_SYMLINK,$(ENGINE_CLI_NAME),$(INSTALL_BIN))
 	$(call MAYBE_INSTALL_REDIS_SYMLINK,$(ENGINE_BENCHMARK_NAME),$(INSTALL_BIN))
@@ -570,7 +558,6 @@ install: all
 
 uninstall:
 	@rm -f $(INSTALL_BIN)/{$(SERVER_NAME),$(ENGINE_BENCHMARK_NAME),$(ENGINE_CLI_NAME),$(ENGINE_CHECK_RDB_NAME),$(ENGINE_CHECK_AOF_NAME),$(ENGINE_SENTINEL_NAME)}
-
 	$(call MAYBE_UNINSTALL_REDIS_SYMLINK,$(INSTALL_BIN),$(SERVER_NAME))
 	$(call MAYBE_UNINSTALL_REDIS_SYMLINK,$(INSTALL_BIN),$(ENGINE_CLI_NAME))
 	$(call MAYBE_UNINSTALL_REDIS_SYMLINK,$(INSTALL_BIN),$(ENGINE_BENCHMARK_NAME))

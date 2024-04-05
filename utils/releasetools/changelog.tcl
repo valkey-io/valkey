@@ -15,7 +15,7 @@ if {[llength $::argv] == 3} {
 
 set template {
 ================================================================================
-Redis %ver%     Released %date%
+Valkey %ver%     Released %date%
 ================================================================================
 
 Upgrade urgency <URGENCY>: <DESCRIPTION>

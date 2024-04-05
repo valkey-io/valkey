@@ -11957,8 +11957,11 @@ int moduleRegisterApi(const char *funcname, void *funcptr) {
     return dictAdd(server.moduleapi, (char*)funcname, funcptr);
 }
 
+/* Register Module APIs under both RedisModule_ and ValkeyModule_ namespaces
+ * so that legacy Redis module binaries can continue to function */
 #define REGISTER_API(name) \
-    moduleRegisterApi("ValkeyModule_" #name, (void *)(unsigned long)VK_ ## name)
+    moduleRegisterApi("ValkeyModule_" #name, (void *)(unsigned long)VK_ ## name);\
+    moduleRegisterApi("RedisModule_" #name, (void *)(unsigned long)VK_ ## name);\
 
 /* Global initialization at Redis startup. */
 void moduleRegisterCoreAPI(void);
@@ -12300,11 +12303,22 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
         serverLog(LL_WARNING, "Module %s failed to load: %s", path, dlerror());
         return C_ERR;
     }
-    onload = (int (*)(void *, void **, int))(unsigned long) dlsym(handle,"ValkeyModule_OnLoad");
+
+    const char *onLoadNames[] = {"ValkeyModule_OnLoad", "RedisModule_OnLoad"};
+    for (size_t i = 0; i < sizeof(onLoadNames) / sizeof(onLoadNames[0]); i++) {
+        onload = (int (*)(void *, void **, int))(unsigned long) dlsym(handle, onLoadNames[i]);
+        if (onload != NULL) {
+            if (i != 0) {
+                serverLog(LL_NOTICE, "Legacy Redis Module %s found",path);
+            }
+            break;
+        }
+    }
+
     if (onload == NULL) {
         dlclose(handle);
         serverLog(LL_WARNING,
-            "Module %s does not export ValkeyModule_OnLoad() "
+            "Module %s does not export ValkeyModule_OnLoad() or RedisModule_OnLoad() "
             "symbol. Module not loaded.",path);
         return C_ERR;
     }

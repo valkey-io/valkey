@@ -1,4 +1,4 @@
-# Server dependency Makefile
+# Redis dependency Makefile
 
 uname_S:= $(shell sh -c 'uname -s 2>/dev/null || echo not')
 
@@ -92,8 +92,8 @@ ifeq ($(LUA_COVERAGE),yes)
 endif
 
 # lua's Makefile defines AR="ar rcu", which is unusual, and makes it more
-# challenging to cross-compile lua (and the server).  These defines make it easier
-# to fit the server into cross-compilation environments, which typically set AR.
+# challenging to cross-compile lua (and redis).  These defines make it easier
+# to fit redis into cross-compilation environments, which typically set AR.
 AR=ar
 ARFLAGS=rc
 

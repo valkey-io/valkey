@@ -92,8 +92,8 @@ jobs:
         run: MSBuild hiredis.vcxproj /p:Configuration=Debug
       - name: Build hiredis-test
         run: MSBuild hiredis-test.vcxproj /p:Configuration=Debug
-      # use memurai, a Redis protocol compatible server, since it is easy to install.  Can't
-      # install official containers on the windows runner
+      # use memurai, redis compatible server, since it is easy to install.  Can't
+      # install official redis containers on the windows runner
       - name: Install Memurai redis server
         run: choco install -y memurai-developer.install
       - name: Run tests

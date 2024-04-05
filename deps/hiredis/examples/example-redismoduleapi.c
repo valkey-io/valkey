@@ -50,12 +50,14 @@ void disconnectCallback(const redisAsyncContext *c, int status) {
 }
 
 /*
+ * This example requires Redis 7.0 or above.
+ *
  * 1- Compile this file as a shared library. Directory of "redismodule.h" must
  *    be in the include path.
  *       gcc -fPIC -shared -I../../redis/src/ -I.. example-redismoduleapi.c -o example-redismoduleapi.so
  *
  * 2- Load module:
- *       valkey-server --loadmodule ./example-redismoduleapi.so value
+ *       redis-server --loadmodule ./example-redismoduleapi.so value
  */
 int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 

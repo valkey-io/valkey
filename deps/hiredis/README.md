@@ -707,7 +707,7 @@ if(ssl_context == NULL || ssl_error != REDIS_SSL_CTX_NONE) {
     */
 }
 
-/* Create context and establish connection */
+/* Create Redis context and establish connection */
 c = redisConnect("localhost", 6443);
 if (c == NULL || c->err) {
     /* Handle error and abort... */

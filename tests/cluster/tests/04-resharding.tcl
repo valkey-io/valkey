@@ -90,7 +90,7 @@ test "Cluster consistency during live resharding" {
                 --cluster-to $target \
                 --cluster-slots 100 \
                 --cluster-yes \
-                {*}[rediscli_tls_config "../../../tests"] \
+                {*}[valkeycli_tls_config "../../../tests"] \
                 | [info nameofexecutable] \
                 ../tests/helpers/onlydots.tcl \
                 &] 0]

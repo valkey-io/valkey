@@ -1,5 +1,5 @@
 /*
- * RedisModule Compatibility Header
+ * RedisModule Compatibility Header - Snapshot for Redis 7.2.4 
  *
  * This header file facilitates backward compatibility for existing Redis modules
  * by mapping legacy REDISMODULE_* prefixed macros and identifiers to their
@@ -8,11 +8,15 @@
  * with the newer VALKEYMODULE API without requiring source code changes. New modules
  * should be developed using "valkeymodule.h" instead.
  *
+ * Important Note: 
+ * This file represents a snapshot of the Redis module interfaces as they existed
+ * in Redis 7.2.4. Compatibility with future Redis versions is not guaranteed.
+ * 
  * Usage:
  * Include this header in Redis modules that originally depend on the older
  * REDISMODULE_* definitions. This file should be included instead of
- * directly including the servermodule.h to ensure the legacy code recognizes
- * the new macro definitions.
+ * directly including valkeymodule.h to ensure the legacy code recognizes
+ * the new Valkey module interfaces.
  *
  * Example:
  * #include "redismodule.h"

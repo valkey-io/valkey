@@ -258,7 +258,7 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
         }
         streamIteratorStop(&si);
     } else if (o->type == OBJ_MODULE) {
-        RedisModuleDigest md = {{0},{0},keyobj,db->id};
+        ValkeyModuleDigest md = {{0},{0},keyobj,db->id};
         moduleValue *mv = o->ptr;
         moduleType *mt = mv->type;
         moduleInitDigestContext(md);

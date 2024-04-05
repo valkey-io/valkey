@@ -2021,7 +2021,7 @@ struct redisServer {
     unsigned long long cluster_link_msg_queue_limit_bytes;  /* Memory usage limit on individual link msg queue */
     int cluster_drop_packet_filter; /* Debug config that allows tactically
                                    * dropping packets of a specific type */
-    int process_clustermsg_extensions; /* Debug config that allows disabling aux cluster message extensions feature. */                                  
+    int dbg_node_send_extensions; /* Debug config that allows disabling aux cluster message extensions send functionality. */
     /* Scripting */
     mstime_t busy_reply_threshold;  /* Script / module timeout in milliseconds */
     int pre_command_oom_state;         /* OOM before command (script?) was started */

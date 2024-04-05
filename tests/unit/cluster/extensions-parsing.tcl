@@ -1,16 +1,17 @@
 
-proc are_hostnames_propagated_by_index {start_node end_node match_string} {
+proc is_hostname_propagated {start_node end_node match_string} {
+    set cnt 0
     for {set j $start_node} {$j < $end_node} {incr j} {
         set cfg [R $j cluster slots]
         foreach node $cfg {
             for {set i 2} {$i < [llength $node]} {incr i} {
-                if {! [string match $match_string [lindex [lindex [lindex $node $i] 3] 1]] } {
-                    return 0
+                if {[string match $match_string [lindex [lindex [lindex $node $i] 3] 1]] } {
+                    incr cnt
                 }
             }
         }
     }
-    return 1
+    return $cnt
 }
 
 start_cluster 2 2 {tags {external:skip cluster}} {
@@ -19,50 +20,33 @@ start_cluster 2 2 {tags {external:skip cluster}} {
         wait_for_cluster_state "ok"
     }
 
-    test "Disable cluster extensions handling" {
-        for {set j 0} {$j < [llength $::servers]} {incr j} {
-            R $j DEBUG process-clustermsg-extensions 0
-        }
-    } {} {needs:debug}
+    test "Set cluster hostnames on primary of shard 0 and verify they are propagated after enabling extensions processing" {
+        R 0 config set cluster-announce-hostname "host-0.com"
 
-    test "Cluster state should be healthy" {
-        wait_for_cluster_state "ok"
-    }
-
-    test "Set cluster hostnames on primary and verify they are propagated after enabling extensions processing" {
-        # Enable cluster message processing on primary nodes and set hostname(s).
-        for {set j 0} {$j < 2} {incr j} {
-            R $j DEBUG process-clustermsg-extensions 1
-            R $j config set cluster-announce-hostname "host-$j.com"
-        }
-        
-
-        # Verify primary nodes have received the hostname via cluster message extensions.
+        # Verify all nodes have received the hostname for host 0 via cluster message extensions.
         wait_for_condition 50 100 {
-            [are_hostnames_propagated_by_index 0 2 "host-*.com"] eq 1
+            [is_hostname_propagated 0 4 "host-0.com"] eq [llength $::servers]
         } else {
-            fail "cluster hostnames were not propagated to primary"
+            fail "cluster hostname for primary 0 were not propagated to all nodes"
         }
 
-        # Verify replica nodes have not received the hostname.
+        R 1 debug send-clustermsg-extensions 0
+        R 1 config set cluster-announce-hostname "host-1.com"
+
+        # Verify only self (node) has received the hostname.
         wait_for_condition 50 100 {
-            [are_hostnames_propagated_by_index 2 4 "host-*.com"] eq 0
+            [is_hostname_propagated 0 4 "host-1.com"] eq 1
         } else {
-            fail "cluster hostnames were propagated to replicas"
+            fail "cluster hostname for primary 1 was propagated to other nodes"
         }
 
+        R 1 debug send-clustermsg-extensions 1
 
-        # Enable cluster message extensions processing on all nodes and set hostname(s).
-        for {set j 0} {$j < [llength $::servers]} {incr j} {
-            R $j DEBUG process-clustermsg-extensions 1
-            R $j config set cluster-announce-hostname "host-$j.com"
-        }
-
-        # Verify all nodes have received the hostname.
+        # Verify all nodes have received the hostname for host 1 via cluster message extensions.
         wait_for_condition 50 100 {
-            [are_hostnames_propagated "host-*.com"] eq 1
+            [is_hostname_propagated 0 4 "host-1.com"] eq [llength $::servers]
         } else {
-            fail "cluster hostnames were not propagated to all nodes"
+            fail "cluster hostname for primary 1 were not propagated to all nodes"
         }
 
         # Now that everything is propagated, assert everyone agrees

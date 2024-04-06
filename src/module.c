@@ -13321,7 +13321,7 @@ int VM_GetKeyspaceNotificationFlagsAll(void) {
  * Example for 6.0.7 the return value will be 0x00060007.
  */
 int VM_GetServerVersion(void) {
-    return SERVER_VERSION_NUM;
+    return VALKEY_VERSION_NUM;
 }
 
 /**

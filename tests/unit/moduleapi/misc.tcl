@@ -21,7 +21,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
     }
 
     test {test redis version} {
-        assert_equal [s server_version] [r test.redisversion]
+        assert_equal [s valkey_version] [r test.serverversion]
     }
 
     test {test long double conversions} {

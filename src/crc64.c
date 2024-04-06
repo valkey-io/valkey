@@ -123,7 +123,7 @@ uint64_t crc64(uint64_t crc, const unsigned char *s, uint64_t l) {
 }
 
 /* Test main */
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include <stdio.h>
 
 #define UNUSED(x) (void)(x)
@@ -149,13 +149,6 @@ int crc64Test(int argc, char *argv[], int flags) {
     printf("[64speed]: c7794709e69683b3 == %016" PRIx64 "\n",
            (uint64_t)crc64(0, (unsigned char*)li, sizeof(li)));
     return 0;
-}
-
-#endif
-
-#ifdef REDIS_TEST_MAIN
-int main(int argc, char *argv[]) {
-    return crc64Test(argc, argv);
 }
 
 #endif

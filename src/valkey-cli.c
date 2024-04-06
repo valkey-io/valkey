@@ -878,10 +878,10 @@ static void cliLegacyInitHelp(dict *groups) {
     sds serverVersion = cliGetServerVersion();
     
     /* Scan the commandDocs array and fill in the entries */
-    helpEntriesLen = cliLegacyCountCommands(redisCommandTable, serverVersion);
+    helpEntriesLen = cliLegacyCountCommands(serverCommandTable, serverVersion);
     helpEntries = zmalloc(sizeof(helpEntry)*helpEntriesLen);
 
-    helpEntriesLen = cliLegacyInitCommandHelpEntries(redisCommandTable, groups, serverVersion);
+    helpEntriesLen = cliLegacyInitCommandHelpEntries(serverCommandTable, groups, serverVersion);
     cliInitGroupHelpEntries(groups);
 
     qsort(helpEntries, helpEntriesLen, sizeof(helpEntry), helpEntryCompare);
@@ -2904,7 +2904,7 @@ static int parseOptions(int argc, char **argv) {
 #endif
         } else if (!strcmp(argv[i],"-v") || !strcmp(argv[i], "--version")) {
             sds version = cliVersion();
-            printf("redis-cli %s\n", version);
+            printf("valkey-cli %s\n", version);
             sdsfree(version);
             exit(0);
         } else if (!strcmp(argv[i],"-2")) {
@@ -3023,9 +3023,9 @@ static void usage(int err) {
 "";
 
     fprintf(target,
-"redis-cli %s\n"
+"valkey-cli %s\n"
 "\n"
-"Usage: redis-cli [OPTIONS] [cmd [arg [arg ...]]]\n"
+"Usage: valkey-cli [OPTIONS] [cmd [arg [arg ...]]]\n"
 "  -h <hostname>      Server hostname (default: 127.0.0.1).\n"
 "  -p <port>          Server port (default: 6379).\n"
 "  -t <timeout>       Server connection timeout in seconds (decimals allowed).\n"
@@ -3130,19 +3130,19 @@ version,tls_usage);
 "  Use --cluster help to list all available cluster manager commands.\n"
 "\n"
 "Examples:\n"
-"  redis-cli -u redis://default:PASSWORD@localhost:6379/0\n"
-"  cat /etc/passwd | redis-cli -x set mypasswd\n"
-"  redis-cli -D \"\" --raw dump key > key.dump && redis-cli -X dump_tag restore key2 0 dump_tag replace < key.dump\n"
-"  redis-cli -r 100 lpush mylist x\n"
-"  redis-cli -r 100 -i 1 info | grep used_memory_human:\n"
-"  redis-cli --quoted-input set '\"null-\\x00-separated\"' value\n"
-"  redis-cli --eval myscript.lua key1 key2 , arg1 arg2 arg3\n"
-"  redis-cli --scan --pattern '*:12345*'\n"
-"  redis-cli --scan --pattern '*:12345*' --count 100\n"
+"  valkey-cli -u redis://default:PASSWORD@localhost:6379/0\n"
+"  cat /etc/passwd | valkey-cli -x set mypasswd\n"
+"  valkey-cli -D \"\" --raw dump key > key.dump && valkey-cli -X dump_tag restore key2 0 dump_tag replace < key.dump\n"
+"  valkey-cli -r 100 lpush mylist x\n"
+"  valkey-cli -r 100 -i 1 info | grep used_memory_human:\n"
+"  valkey-cli --quoted-input set '\"null-\\x00-separated\"' value\n"
+"  valkey-cli --eval myscript.lua key1 key2 , arg1 arg2 arg3\n"
+"  valkey-cli --scan --pattern '*:12345*'\n"
+"  valkey-cli --scan --pattern '*:12345*' --count 100\n"
 "\n"
 "  (Note: when using --eval the comma separates KEYS[] from ARGV[] items)\n"
 "\n"
-"When no command is given, redis-cli starts in interactive mode.\n"
+"When no command is given, valkey-cli starts in interactive mode.\n"
 "Type \"help\" in interactive mode for information on available commands\n"
 "and settings.\n"
 "\n");

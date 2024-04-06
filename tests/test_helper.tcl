@@ -64,8 +64,8 @@ set ::all_tests {
     integration/psync2-pingoff
     integration/psync2-master-restart
     integration/failover
-    integration/redis-cli
-    integration/redis-benchmark
+    integration/valkey-cli
+    integration/valkey-benchmark
     integration/dismiss-mem
     unit/pubsub
     unit/pubsubshard
@@ -327,7 +327,7 @@ proc run_solo {name code} {
 proc cleanup {} {
     if {!$::quiet} {puts -nonewline "Cleanup: may take some time... "}
     flush stdout
-    catch {exec rm -rf {*}[glob tests/tmp/redis.conf.*]}
+    catch {exec rm -rf {*}[glob tests/tmp/valkey.conf.*]}
     catch {exec rm -rf {*}[glob tests/tmp/server*.*]}
     catch {exec rm -rf {*}[glob tests/tmp/*.acl.*]}
     if {!$::quiet} {puts "OK"}

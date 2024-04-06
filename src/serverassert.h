@@ -1,4 +1,4 @@
-/* redisassert.h -- Drop in replacements assert.h that prints the stack trace
+/* serverassert.h -- Drop in replacements assert.h that prints the stack trace
  *                  in the Redis logs.
  *
  * This file should be included instead of "assert.h" inside libraries used by
@@ -35,8 +35,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __REDIS_ASSERT_H__
-#define __REDIS_ASSERT_H__
+#ifndef VALKEY_ASSERT_H
+#define VALKEY_ASSERT_H
 
 #include "config.h"
 

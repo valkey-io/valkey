@@ -21,11 +21,11 @@
         "reply_schema": {
             "oneOf": [
                 {
-                    "description": "when the database is empty",
+                    "description": "When the database is empty.",
                     "type": "null"
                 },
                 {
-                    "description": "random key in db",
+                    "description": "Random key in db.",
                     "type": "string"
                 }
             ]

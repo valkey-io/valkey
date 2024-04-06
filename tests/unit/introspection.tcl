@@ -706,57 +706,57 @@ start_server {tags {"introspection"}} {
         assert {[dict exists $res bind]}  
     }
 
-    test {redis-server command line arguments - error cases} {
+    test {valkey-server command line arguments - error cases} {
         # Take '--invalid' as the option.
-        catch {exec src/placeholderkv-server --invalid} err
+        catch {exec src/valkey-server --invalid} err
         assert_match {*Bad directive or wrong number of arguments*} $err
 
-        catch {exec src/placeholderkv-server --port} err
+        catch {exec src/valkey-server --port} err
         assert_match {*'port'*wrong number of arguments*} $err
 
-        catch {exec src/placeholderkv-server --port 6380 --loglevel} err
+        catch {exec src/valkey-server --port 6380 --loglevel} err
         assert_match {*'loglevel'*wrong number of arguments*} $err
 
         # Take `6379` and `6380` as the port option value.
-        catch {exec src/placeholderkv-server --port 6379 6380} err
+        catch {exec src/valkey-server --port 6379 6380} err
         assert_match {*'port "6379" "6380"'*wrong number of arguments*} $err
 
         # Take `--loglevel` and `verbose` as the port option value.
-        catch {exec src/placeholderkv-server --port --loglevel verbose} err
+        catch {exec src/valkey-server --port --loglevel verbose} err
         assert_match {*'port "--loglevel" "verbose"'*wrong number of arguments*} $err
 
         # Take `--bla` as the port option value.
-        catch {exec src/placeholderkv-server --port --bla --loglevel verbose} err
+        catch {exec src/valkey-server --port --bla --loglevel verbose} err
         assert_match {*'port "--bla"'*argument couldn't be parsed into an integer*} $err
 
         # Take `--bla` as the loglevel option value.
-        catch {exec src/placeholderkv-server --logfile --my--log--file --loglevel --bla} err
+        catch {exec src/valkey-server --logfile --my--log--file --loglevel --bla} err
         assert_match {*'loglevel "--bla"'*argument(s) must be one of the following*} $err
 
         # Using MULTI_ARG's own check, empty option value
-        catch {exec src/placeholderkv-server --shutdown-on-sigint} err
+        catch {exec src/valkey-server --shutdown-on-sigint} err
         assert_match {*'shutdown-on-sigint'*argument(s) must be one of the following*} $err
-        catch {exec src/placeholderkv-server --shutdown-on-sigint "now force" --shutdown-on-sigterm} err
+        catch {exec src/valkey-server --shutdown-on-sigint "now force" --shutdown-on-sigterm} err
         assert_match {*'shutdown-on-sigterm'*argument(s) must be one of the following*} $err
 
         # Something like `redis-server --some-config --config-value1 --config-value2 --loglevel debug` would break,
         # because if you want to pass a value to a config starting with `--`, it can only be a single value.
-        catch {exec src/placeholderkv-server --replicaof 127.0.0.1 abc} err
+        catch {exec src/valkey-server --replicaof 127.0.0.1 abc} err
         assert_match {*'replicaof "127.0.0.1" "abc"'*Invalid master port*} $err
-        catch {exec src/placeholderkv-server --replicaof --127.0.0.1 abc} err
+        catch {exec src/valkey-server --replicaof --127.0.0.1 abc} err
         assert_match {*'replicaof "--127.0.0.1" "abc"'*Invalid master port*} $err
-        catch {exec src/placeholderkv-server --replicaof --127.0.0.1 --abc} err
+        catch {exec src/valkey-server --replicaof --127.0.0.1 --abc} err
         assert_match {*'replicaof "--127.0.0.1"'*wrong number of arguments*} $err
     } {} {external:skip}
 
-    test {redis-server command line arguments - allow passing option name and option value in the same arg} {
+    test {valkey-server command line arguments - allow passing option name and option value in the same arg} {
         start_server {config "default.conf" args {"--maxmemory 700mb" "--maxmemory-policy volatile-lru"}} {
             assert_match [r config get maxmemory] {maxmemory 734003200}
             assert_match [r config get maxmemory-policy] {maxmemory-policy volatile-lru}
         }
     } {} {external:skip}
 
-    test {redis-server command line arguments - wrong usage that we support anyway} {
+    test {valkey-server command line arguments - wrong usage that we support anyway} {
         start_server {config "default.conf" args {loglevel verbose "--maxmemory '700mb'" "--maxmemory-policy 'volatile-lru'"}} {
             assert_match [r config get loglevel] {loglevel verbose}
             assert_match [r config get maxmemory] {maxmemory 734003200}
@@ -764,21 +764,21 @@ start_server {tags {"introspection"}} {
         }
     } {} {external:skip}
 
-    test {redis-server command line arguments - allow option value to use the `--` prefix} {
+    test {valkey-server command line arguments - allow option value to use the `--` prefix} {
         start_server {config "default.conf" args {--proc-title-template --my--title--template --loglevel verbose}} {
             assert_match [r config get proc-title-template] {proc-title-template --my--title--template}
             assert_match [r config get loglevel] {loglevel verbose}
         }
     } {} {external:skip}
 
-    test {redis-server command line arguments - option name and option value in the same arg and `--` prefix} {
+    test {valkey-server command line arguments - option name and option value in the same arg and `--` prefix} {
         start_server {config "default.conf" args {"--proc-title-template --my--title--template" "--loglevel verbose"}} {
             assert_match [r config get proc-title-template] {proc-title-template --my--title--template}
             assert_match [r config get loglevel] {loglevel verbose}
         }
     } {} {external:skip}
 
-    test {redis-server command line arguments - save with empty input} {
+    test {valkey-server command line arguments - save with empty input} {
         start_server {config "default.conf" args {--save --loglevel verbose}} {
             assert_match [r config get save] {save {}}
             assert_match [r config get loglevel] {loglevel verbose}
@@ -807,7 +807,7 @@ start_server {tags {"introspection"}} {
 
     } {} {external:skip}
 
-    test {redis-server command line arguments - take one bulk string with spaces for MULTI_ARG configs parsing} {
+    test {valkey-server command line arguments - take one bulk string with spaces for MULTI_ARG configs parsing} {
         start_server {config "default.conf" args {--shutdown-on-sigint nosave force now --shutdown-on-sigterm "nosave force"}} {
             assert_match [r config get shutdown-on-sigint] {shutdown-on-sigint {nosave now force}}
             assert_match [r config get shutdown-on-sigterm] {shutdown-on-sigterm {nosave force}}

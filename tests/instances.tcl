@@ -48,9 +48,9 @@ if {[catch {cd tmp}]} {
 # the provided configuration file. Returns the PID of the process.
 proc exec_instance {type dirname cfgfile} {
     if {$type eq "redis"} {
-        set prgname placeholderkv-server
+        set prgname valkey-server
     } elseif {$type eq "sentinel"} {
-        set prgname placeholderkv-sentinel
+        set prgname valkey-sentinel
     } else {
         error "Unknown instance type."
     }
@@ -100,7 +100,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
             puts $cfg [format "tls-key-file %s/../../tls/server.key" [pwd]]
             puts $cfg [format "tls-client-cert-file %s/../../tls/client.crt" [pwd]]
             puts $cfg [format "tls-client-key-file %s/../../tls/client.key" [pwd]]
-            puts $cfg [format "tls-dh-params-file %s/../../tls/redis.dh" [pwd]]
+            puts $cfg [format "tls-dh-params-file %s/../../tls/valkey.dh" [pwd]]
             puts $cfg [format "tls-ca-cert-file %s/../../tls/ca.crt" [pwd]]
         } else {
             puts $cfg "port $port"

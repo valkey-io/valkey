@@ -493,10 +493,10 @@ void fillCommandCDF(client *c, struct hdr_histogram* histogram) {
 void latencyAllCommandsFillCDF(client *c, dict *commands, int *command_with_data) {
     dictIterator *di = dictGetSafeIterator(commands);
     dictEntry *de;
-    struct redisCommand *cmd;
+    struct serverCommand *cmd;
 
     while((de = dictNext(di)) != NULL) {
-        cmd = (struct redisCommand *) dictGetVal(de);
+        cmd = (struct serverCommand *) dictGetVal(de);
         if (cmd->latency_histogram) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
             fillCommandCDF(c, cmd->latency_histogram);
@@ -516,7 +516,7 @@ void latencySpecificCommandsFillCDF(client *c) {
     void *replylen = addReplyDeferredLen(c);
     int command_with_data = 0;
     for (int j = 2; j < c->argc; j++){
-        struct redisCommand *cmd = lookupCommandBySds(c->argv[j]->ptr);
+        struct serverCommand *cmd = lookupCommandBySds(c->argv[j]->ptr);
         /* If the command does not exist we skip the reply */
         if (cmd == NULL) {
             continue;
@@ -533,7 +533,7 @@ void latencySpecificCommandsFillCDF(client *c) {
             dictIterator *di = dictGetSafeIterator(cmd->subcommands_dict);
 
             while ((de = dictNext(di)) != NULL) {
-                struct redisCommand *sub = dictGetVal(de);
+                struct serverCommand *sub = dictGetVal(de);
                 if (sub->latency_histogram) {
                     addReplyBulkCBuffer(c, sub->fullname, sdslen(sub->fullname));
                     fillCommandCDF(c, sub->latency_histogram);

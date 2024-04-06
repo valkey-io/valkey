@@ -84,13 +84,13 @@ test "Cluster consistency during live resharding" {
             flush stdout
             set target [dict get [get_myself [randomInt 5]] id]
             set tribpid [lindex [exec \
-                ../../../src/placeholderkv-cli --cluster reshard \
+                ../../../src/valkey-cli --cluster reshard \
                 127.0.0.1:[get_instance_attrib redis 0 port] \
                 --cluster-from all \
                 --cluster-to $target \
                 --cluster-slots 100 \
                 --cluster-yes \
-                {*}[rediscli_tls_config "../../../tests"] \
+                {*}[valkeycli_tls_config "../../../tests"] \
                 | [info nameofexecutable] \
                 ../tests/helpers/onlydots.tcl \
                 &] 0]

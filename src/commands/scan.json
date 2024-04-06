@@ -50,17 +50,17 @@
             }
         ],
         "reply_schema": {
-            "description": "cursor and scan response in array form",
+            "description": "Cursor and scan response in array form.",
             "type": "array",
             "minItems": 2,
             "maxItems": 2,
             "items": [
                 {
-                    "description": "cursor",
+                    "description": "Cursor.",
                     "type": "string"
                 },
                 {
-                    "description": "list of keys",
+                    "description": "List of keys.",
                     "type": "array",
                     "items": {
                         "type": "string"

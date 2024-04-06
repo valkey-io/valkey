@@ -51,7 +51,7 @@
             }
         ],
         "reply_schema": {
-            "description": "replicaOf status",
+            "description": "ReplicaOf status.",
             "type": "string",
             "pattern": "OK*"
         }

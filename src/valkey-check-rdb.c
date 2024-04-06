@@ -416,7 +416,7 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
         exit(1);
     } else if (!strcmp(argv[1],"-v") || !strcmp(argv[1], "--version")) {
         sds version = getVersion();
-        printf("redis-check-rdb %s\n", version);
+        printf("valkey-check-rdb %s\n", version);
         sdsfree(version);
         exit(0);
     }

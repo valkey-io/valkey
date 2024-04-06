@@ -1143,7 +1143,7 @@ static int luaRedisAclCheckCmdPermissionsCommand(lua_State *lua) {
     if (argv == NULL) return luaError(lua);
 
     /* Find command */
-    struct redisCommand *cmd;
+    struct serverCommand *cmd;
     if ((cmd = lookupCommand(argv, argc)) == NULL) {
         luaPushError(lua, "Invalid command passed to redis.acl_check_cmd()");
         raise_error = 1;
@@ -1383,12 +1383,26 @@ void luaSetTableProtectionRecursively(lua_State *lua) {
 }
 
 void luaRegisterVersion(lua_State* lua) {
+    /* For legacy compatibility reasons include Redis versions. */
     lua_pushstring(lua,"REDIS_VERSION_NUM");
     lua_pushnumber(lua,REDIS_VERSION_NUM);
     lua_settable(lua,-3);
 
     lua_pushstring(lua,"REDIS_VERSION");
     lua_pushstring(lua,REDIS_VERSION);
+    lua_settable(lua,-3);
+
+    /* Now push the Valkey version information. */
+    lua_pushstring(lua,"SERVER_VERSION_NUM");
+    lua_pushnumber(lua,SERVER_VERSION_NUM);
+    lua_settable(lua,-3);
+
+    lua_pushstring(lua,"SERVER_VERSION");
+    lua_pushstring(lua,SERVER_VERSION);
+    lua_settable(lua,-3);
+
+    lua_pushstring(lua,"SERVER_NAME");
+    lua_pushstring(lua,SERVER_NAME);
     lua_settable(lua,-3);
 }
 
@@ -1528,11 +1542,11 @@ static void luaCreateArray(lua_State *lua, robj **elev, int elec) {
  * (for the same seed) in every arch. */
 
 /* The following implementation is the one shipped with Lua itself but with
- * rand() replaced by redisLrand48(). */
+ * rand() replaced by serverLrand48(). */
 static int redis_math_random (lua_State *L) {
   /* the `%' avoids the (rare) case of r==1, and is needed also because on
      some systems (SunOS!) `rand()' may return a value larger than RAND_MAX */
-  lua_Number r = (lua_Number)(redisLrand48()%REDIS_LRAND48_MAX) /
+  lua_Number r = (lua_Number)(serverLrand48()%REDIS_LRAND48_MAX) /
                                 (lua_Number)REDIS_LRAND48_MAX;
   switch (lua_gettop(L)) {  /* check number of arguments */
     case 0: {  /* no arguments */
@@ -1558,7 +1572,7 @@ static int redis_math_random (lua_State *L) {
 }
 
 static int redis_math_randomseed (lua_State *L) {
-  redisSrand48(luaL_checkint(L, 1));
+  serverSrand48(luaL_checkint(L, 1));
   return 0;
 }
 

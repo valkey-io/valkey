@@ -221,7 +221,7 @@
             }
         ],
         "reply_schema": {
-            "description": "the number of elements in the resulting set",
+            "description": "The number of elements in the resulting set.",
             "type": "integer"
         }
     }

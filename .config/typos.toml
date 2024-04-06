@@ -1,0 +1,69 @@
+# See https://github.com/crate-ci/typos/blob/master/docs/reference.md to configure typos
+
+[files]
+extend-exclude = [
+    "deps/",
+    # crc16_slottable is primarily pre-generated random strings.
+    "src/crc16_slottable.h",
+]
+
+[default.extend-words]
+advices = "advices"
+exat = "exat"
+optin = "optin"
+ro = "ro"
+smove = "smove"
+
+[type.c]
+extend-ignore-re = [
+    "BA3E2571", # sha1.c
+    "D4C4DAA4", # sha1.c
+    "Georg Nees",
+    "\\[l\\]ist", # eval.c
+]
+
+[type.tcl]
+extend-ignore-re = [
+    "DUMPed",
+]
+
+[type.sv.extend-identifiers]
+# sv = .h
+module_gil_acquring = "module_gil_acquring"
+
+[type.c.extend-identifiers]
+ang = "ang"
+clen = "clen"
+fle = "fle"
+module_gil_acquring = "module_gil_acquring"
+nd = "nd"
+ot = "ot"
+
+[type.tcl.extend-identifiers]
+fo = "fo"
+oll = "oll"
+stressers = "stressers"
+
+[type.sv.extend-words]
+# sv = .h
+fo = "fo"
+seeked = "seeked"
+
+[type.c.extend-words]
+arange = "arange"
+fo = "fo"
+frst = "frst"
+limite = "limite"
+pn = "pn"
+seeked = "seeked"
+tre = "tre"
+ws = "ws"
+
+[type.systemd.extend-words]
+# systemd = .conf
+ake = "ake"
+
+[type.tcl.extend-words]
+fo = "fo"
+lst = "lst"
+tre = "tre"

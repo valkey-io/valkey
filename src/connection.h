@@ -28,8 +28,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __REDIS_CONNECTION_H
-#define __REDIS_CONNECTION_H
+#ifndef VALKEY_CONNECTION_H
+#define VALKEY_CONNECTION_H
 
 #include <errno.h>
 #include <stdio.h>

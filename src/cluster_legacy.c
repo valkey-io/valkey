@@ -805,7 +805,7 @@ int clusterLockConfig(char *filename) {
      * we'll retain the lock to the file as long as the process exists.
      *
      * After fork, the child process will get the fd opened by the parent process,
-     * we need save `fd` to `cluster_config_file_lock_fd`, so that in redisFork(),
+     * we need save `fd` to `cluster_config_file_lock_fd`, so that in serverFork(),
      * it will be closed in the child process.
      * If it is not closed, when the main process is killed -9, but the child process
      * (redis-aof-rewrite) is still alive, the fd(lock) will still be held by the
@@ -5252,12 +5252,12 @@ void clusterSetMaster(clusterNode *n) {
  * Nodes to string representation functions.
  * -------------------------------------------------------------------------- */
 
-struct redisNodeFlags {
+struct clusterNodeFlags {
     uint16_t flag;
     char *name;
 };
 
-static struct redisNodeFlags redisNodeFlagsTable[] = {
+static struct clusterNodeFlags clusterNodeFlagsTable[] = {
     {CLUSTER_NODE_MYSELF,       "myself,"},
     {CLUSTER_NODE_MASTER,       "master,"},
     {CLUSTER_NODE_SLAVE,        "slave,"},
@@ -5272,9 +5272,9 @@ static struct redisNodeFlags redisNodeFlagsTable[] = {
  * string 'ci'. */
 sds representClusterNodeFlags(sds ci, uint16_t flags) {
     size_t orig_len = sdslen(ci);
-    int i, size = sizeof(redisNodeFlagsTable)/sizeof(struct redisNodeFlags);
+    int i, size = sizeof(clusterNodeFlagsTable)/sizeof(struct clusterNodeFlags);
     for (i = 0; i < size; i++) {
-        struct redisNodeFlags *nodeflag = redisNodeFlagsTable + i;
+        struct clusterNodeFlags *nodeflag = clusterNodeFlagsTable + i;
         if (flags & nodeflag->flag) ci = sdscat(ci, nodeflag->name);
     }
     /* If no flag was added, add the "noflags" special flag. */

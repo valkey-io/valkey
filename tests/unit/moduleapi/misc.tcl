@@ -21,8 +21,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
     }
 
     test {test redis version} {
-        set version [s redis_version]
-        assert_equal $version [r test.redisversion]
+        assert_equal [s server_version] [r test.redisversion]
     }
 
     test {test long double conversions} {
@@ -466,7 +465,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         # rm_call in script mode
         assert_error {MISCONF *} {r test.rm_call_flags S set x 1}
 
-        # repeate with script
+        # repeat with script
         assert_error {MISCONF *} {r test.rm_call eval {
             return redis.call('set','x',1)
             } 1 x

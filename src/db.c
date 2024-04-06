@@ -524,7 +524,7 @@ long long emptyDbStructure(serverDb *dbarray, int dbnum, int async,
 long long emptyData(int dbnum, int flags, void(callback)(dict*)) {
     int async = (flags & EMPTYDB_ASYNC);
     int with_functions = !(flags & EMPTYDB_NOFUNCTIONS);
-    RedisModuleFlushInfoV1 fi = {REDISMODULE_FLUSHINFO_VERSION,!async,dbnum};
+    ValkeyModuleFlushInfoV1 fi = {VALKEYMODULE_FLUSHINFO_VERSION,!async,dbnum};
     long long removed = 0;
 
     if (dbnum < -1 || dbnum >= server.dbnum) {
@@ -533,8 +533,8 @@ long long emptyData(int dbnum, int flags, void(callback)(dict*)) {
     }
 
     /* Fire the flushdb modules event. */
-    moduleFireServerEvent(REDISMODULE_EVENT_FLUSHDB,
-                          REDISMODULE_SUBEVENT_FLUSHDB_START,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_FLUSHDB,
+                          VALKEYMODULE_SUBEVENT_FLUSHDB_START,
                           &fi);
 
     /* Make sure the WATCHed keys are affected by the FLUSH* commands.
@@ -554,8 +554,8 @@ long long emptyData(int dbnum, int flags, void(callback)(dict*)) {
 
     /* Also fire the end event. Note that this event will fire almost
      * immediately after the start event if the flush is asynchronous. */
-    moduleFireServerEvent(REDISMODULE_EVENT_FLUSHDB,
-                          REDISMODULE_SUBEVENT_FLUSHDB_END,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_FLUSHDB,
+                          VALKEYMODULE_SUBEVENT_FLUSHDB_END,
                           &fi);
 
     return removed;
@@ -865,7 +865,7 @@ int objectTypeCompare(robj *o, long long target) {
             return 1;
     }
     /* module type compare */
-    long long mt = (long long)REDISMODULE_TYPE_SIGN(((moduleValue *)o->ptr)->type->id);
+    long long mt = (long long)VALKEYMODULE_TYPE_SIGN(((moduleValue *)o->ptr)->type->id);
     if (target != -mt)
         return 0;
     else 
@@ -951,7 +951,7 @@ long long getObjectTypeByName(char *name) {
     }
 
     moduleType *mt = moduleTypeLookupModuleByNameIgnoreCase(name);
-    if (mt != NULL) return -(REDISMODULE_TYPE_SIGN(mt->id));
+    if (mt != NULL) return -(VALKEYMODULE_TYPE_SIGN(mt->id));
 
     return LLONG_MAX;
 }
@@ -1680,8 +1680,8 @@ void swapdbCommand(client *c) {
         addReplyError(c,"DB index is out of range");
         return;
     } else {
-        RedisModuleSwapDbInfo si = {REDISMODULE_SWAPDBINFO_VERSION,id1,id2};
-        moduleFireServerEvent(REDISMODULE_EVENT_SWAPDB,0,&si);
+        ValkeyModuleSwapDbInfo si = {VALKEYMODULE_SWAPDBINFO_VERSION,id1,id2};
+        moduleFireServerEvent(VALKEYMODULE_EVENT_SWAPDB,0,&si);
         server.dirty++;
         addReply(c,shared.ok);
     }

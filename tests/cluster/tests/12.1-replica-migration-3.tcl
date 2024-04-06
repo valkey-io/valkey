@@ -39,7 +39,7 @@ test "Resharding all the master #0 slots away from it" {
     set output [exec \
         ../../../src/valkey-cli --cluster rebalance \
         127.0.0.1:[get_instance_attrib redis 0 port] \
-        {*}[rediscli_tls_config "../../../tests"] \
+        {*}[valkeycli_tls_config "../../../tests"] \
         --cluster-weight ${master0_id}=0 >@ stdout ]
 }
 

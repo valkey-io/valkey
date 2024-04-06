@@ -149,9 +149,17 @@ test "Verify the nodes configured with prefer hostname only show hostname for ne
     } else {
         fail "Node did not learn about the 2 shards it can talk to"
     }
-    set slot_result [R 6 CLUSTER SLOTS]
-    assert_equal [lindex [get_slot_field $slot_result 0 2 3] 1] "shard-2.com"
-    assert_equal [lindex [get_slot_field $slot_result 1 2 3] 1] "shard-3.com"
+    wait_for_condition 50 100 {
+        [lindex [get_slot_field [R 6 CLUSTER SLOTS] 0 2 3] 1] eq "shard-2.com"
+    } else {
+        fail "hostname for shard-2 didn't reach node 6"
+    }
+
+    wait_for_condition 50 100 {
+        [lindex [get_slot_field [R 6 CLUSTER SLOTS] 1 2 3] 1] eq "shard-3.com"
+    } else {
+        fail "hostname for shard-3 didn't reach node 6"
+    }
 
     # Also make sure we know about the isolated master, we 
     # just can't reach it.

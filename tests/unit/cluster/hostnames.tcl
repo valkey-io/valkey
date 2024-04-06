@@ -116,10 +116,11 @@ test "Verify the nodes configured with prefer hostname only show hostname for ne
     # Have everyone forget node 6 and isolate it from the cluster.
     isolate_node 6
 
-    # Set hostnames for the masters, now that the node is isolated
-    R 0 config set cluster-announce-hostname "shard-1.com"
-    R 1 config set cluster-announce-hostname "shard-2.com"
-    R 2 config set cluster-announce-hostname "shard-3.com"
+    set primaries 3
+    for {set j 0} {$j < $primaries} {incr j} {
+        # Set hostnames for the masters, now that the node is isolated
+        R $j config set cluster-announce-hostname "shard-$j.com"
+    }
 
     # Prevent Node 0 and Node 6 from properly meeting,
     # they'll hang in the handshake phase. This allows us to 
@@ -150,13 +151,13 @@ test "Verify the nodes configured with prefer hostname only show hostname for ne
         fail "Node did not learn about the 2 shards it can talk to"
     }
     wait_for_condition 50 100 {
-        [lindex [get_slot_field [R 6 CLUSTER SLOTS] 0 2 3] 1] eq "shard-2.com"
+        [lindex [get_slot_field [R 6 CLUSTER SLOTS] 0 2 3] 1] eq "shard-1.com"
     } else {
         fail "hostname for shard-2 didn't reach node 6"
     }
 
     wait_for_condition 50 100 {
-        [lindex [get_slot_field [R 6 CLUSTER SLOTS] 1 2 3] 1] eq "shard-3.com"
+        [lindex [get_slot_field [R 6 CLUSTER SLOTS] 1 2 3] 1] eq "shard-2.com"
     } else {
         fail "hostname for shard-3 didn't reach node 6"
     }
@@ -178,7 +179,14 @@ test "Verify the nodes configured with prefer hostname only show hostname for ne
     } else {
         fail "Node did not learn about the 2 shards it can talk to"
     }
-    wait_for_cluster_propagation
+
+    for {set j 0} {$j < $primaries} {incr j} {
+        wait_for_condition 50 100 {
+            [lindex [get_slot_field [R 6 CLUSTER SLOTS] $j 2 3] 1] eq "shard-$j.com"
+        } else {
+            fail "hostname information for shard-$j didn't reach node 6"
+        }
+    }
 }
 
 test "Test restart will keep hostname information" {

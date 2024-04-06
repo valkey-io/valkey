@@ -251,7 +251,7 @@ int test_setlfu(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
     return REDISMODULE_OK;
 }
 
-int test_redisversion(RedisModuleCtx *ctx, RedisModuleString **argv, int argc){
+int test_serverversion(RedisModuleCtx *ctx, RedisModuleString **argv, int argc){
     (void) argv;
     (void) argc;
 
@@ -543,7 +543,7 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
         return REDISMODULE_ERR;
     if (RedisModule_CreateCommand(ctx,"test.setname", test_setname,"",0,0,0) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"test.redisversion", test_redisversion,"",0,0,0) == REDISMODULE_ERR)
+    if (RedisModule_CreateCommand(ctx,"test.serverversion", test_serverversion,"",0,0,0) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
     if (RedisModule_CreateCommand(ctx,"test.getclientcert", test_getclientcert,"",0,0,0) == REDISMODULE_ERR)
         return REDISMODULE_ERR;

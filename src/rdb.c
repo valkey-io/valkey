@@ -1195,9 +1195,7 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     int aof_base = (rdbflags & RDBFLAGS_AOF_PREAMBLE) != 0;
 
     /* Add a few fields about the state when the RDB was created. */
-    if (rdbSaveAuxFieldStrStr(rdb,"server-ver",SERVER_VERSION) == -1) return -1;
-    /* Print Redis version for backwards compatibility with redis. */
-    if (rdbSaveAuxFieldStrStr(rdb,"redis-ver",REDIS_VERSION) == -1) return -1;
+    if (rdbSaveAuxFieldStrStr(rdb,"valkey-ver",VALKEY_VERSION) == -1) return -1;
     if (rdbSaveAuxFieldStrInt(rdb,"redis-bits",redis_bits) == -1) return -1;
     if (rdbSaveAuxFieldStrInt(rdb,"ctime",time(NULL)) == -1) return -1;
     if (rdbSaveAuxFieldStrInt(rdb,"used-mem",zmalloc_used_memory()) == -1) return -1;
@@ -3142,8 +3140,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             } else if (!strcasecmp(auxkey->ptr,"redis-ver")) {
                 serverLog(LL_NOTICE,"Loading RDB produced by Redis version %s",
                     (char*)auxval->ptr);
-            } else if (!strcasecmp(auxkey->ptr,"server-ver")) {
-                serverLog(LL_NOTICE,"Loading RDB produced by server version %s",
+            } else if (!strcasecmp(auxkey->ptr,"valkey-ver")) {
+                serverLog(LL_NOTICE,"Loading RDB produced by valkey version %s",
                     (char*)auxval->ptr);
             } else if (!strcasecmp(auxkey->ptr,"ctime")) {
                 time_t age = time(NULL)-strtol(auxval->ptr,NULL,10);

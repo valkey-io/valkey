@@ -1846,7 +1846,7 @@ void loadSentinelConfigFromQueue(void) {
     return;
 
 loaderr:
-    fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR (Version %s) ***\n", SERVER_VERSION);
+    fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR (Version %s) ***\n", VALKEY_VERSION);
     fprintf(stderr, "Reading the configuration file, at line %d\n", linenum);
     fprintf(stderr, ">>> '%s'\n", line);
     fprintf(stderr, "%s\n", err);

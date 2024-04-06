@@ -1383,12 +1383,12 @@ void luaRegisterVersion(lua_State* lua) {
     lua_settable(lua,-3);
 
     /* Now push the Valkey version information. */
-    lua_pushstring(lua,"SERVER_VERSION_NUM");
-    lua_pushnumber(lua,SERVER_VERSION_NUM);
+    lua_pushstring(lua,"VALKEY_VERSION_NUM");
+    lua_pushnumber(lua,VALKEY_VERSION_NUM);
     lua_settable(lua,-3);
 
-    lua_pushstring(lua,"SERVER_VERSION");
-    lua_pushstring(lua,SERVER_VERSION);
+    lua_pushstring(lua,"VALKEY_VERSION");
+    lua_pushstring(lua,VALKEY_VERSION);
     lua_settable(lua,-3);
 
     lua_pushstring(lua,"SERVER_NAME");

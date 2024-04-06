@@ -342,12 +342,15 @@ else
     endef
 endif
 
-ifeq ($(USE_REDIS_SYMLINKS),no)
-	MAYBE_INSTALL_REDIS_SYMLINK=
-	MAYBE_UNINSTALL_REDIS_SYMLINK=
-else
+# Determine install/unstall Redis symlinks for compatibility when 
+# installing/uninstalling Valkey binaries (defaulting to `yes`)
+USE_REDIS_SYMLINKS?=yes
+ifeq ($(USE_REDIS_SYMLINKS),yes)
 	MAYBE_INSTALL_REDIS_SYMLINK=$(INSTALL_REDIS_SYMLINK)
 	MAYBE_UNINSTALL_REDIS_SYMLINK=@rm -f $(1)/$(subst $(ENGINE_NAME),redis,$(2))
+else
+	MAYBE_INSTALL_REDIS_SYMLINK=
+	MAYBE_UNINSTALL_REDIS_SYMLINK=
 endif
 
 SERVER_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
@@ -377,7 +380,6 @@ else
 endif
 
 ENGINE_NAME=valkey
-USE_REDIS_SYMLINKS?=yes
 SERVER_NAME=$(ENGINE_NAME)-server$(PROG_SUFFIX)
 ENGINE_SENTINEL_NAME=$(ENGINE_NAME)-sentinel$(PROG_SUFFIX)
 ENGINE_SERVER_OBJ=threads_mngr.o adlist.o quicklist.o ae.o anet.o dict.o kvstore.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o cluster_legacy.o crc16.o endianconv.o slowlog.o eval.o bio.o rio.o rand.o memtest.o syscheck.o crcspeed.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o valkey-check-rdb.o valkey-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o acl.o tracking.o socket.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script_lua.o script.o functions.o function_lua.o commands.o strl.o connection.o unix.o logreqres.o

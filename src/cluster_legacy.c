@@ -2598,9 +2598,7 @@ uint32_t writePingExt(clusterMsg *hdr, int gossipcount)  {
     extensions++;
 
     if (hdr != NULL) {
-        if (extensions != 0) {
-            hdr->mflags[0] |= CLUSTERMSG_FLAG0_EXT_DATA;
-        }
+        hdr->mflags[0] |= CLUSTERMSG_FLAG0_EXT_DATA;
         hdr->extensions = htons(extensions);
     }
 

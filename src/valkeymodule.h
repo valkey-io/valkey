@@ -1300,7 +1300,7 @@ VALKEYMODULE_API int *(*ValkeyModule_GetCommandKeysWithFlags)(ValkeyModuleCtx *c
 VALKEYMODULE_API const char *(*ValkeyModule_GetCurrentCommandName)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_RegisterDefragFunc)(ValkeyModuleCtx *ctx, ValkeyModuleDefragFunc func) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void *(*ValkeyModule_DefragAlloc)(ValkeyModuleDefragCtx *ctx, void *ptr) VALKEYMODULE_ATTR;
-VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_DefragModuleString)(ValkeyModuleDefragCtx *ctx, ValkeyModuleString *str) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_DefragValkeyModuleString)(ValkeyModuleDefragCtx *ctx, ValkeyModuleString *str) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_DefragShouldStop)(ValkeyModuleDefragCtx *ctx) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_DefragCursorSet)(ValkeyModuleDefragCtx *ctx, unsigned long cursor) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_DefragCursorGet)(ValkeyModuleDefragCtx *ctx, unsigned long *cursor) VALKEYMODULE_ATTR;

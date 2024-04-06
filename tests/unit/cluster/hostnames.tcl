@@ -153,13 +153,13 @@ test "Verify the nodes configured with prefer hostname only show hostname for ne
     wait_for_condition 50 100 {
         [lindex [get_slot_field [R 6 CLUSTER SLOTS] 0 2 3] 1] eq "shard-1.com"
     } else {
-        fail "hostname for shard-2 didn't reach node 6"
+        fail "hostname for shard-1 didn't reach node 6"
     }
 
     wait_for_condition 50 100 {
         [lindex [get_slot_field [R 6 CLUSTER SLOTS] 1 2 3] 1] eq "shard-2.com"
     } else {
-        fail "hostname for shard-3 didn't reach node 6"
+        fail "hostname for shard-2 didn't reach node 6"
     }
 
     # Also make sure we know about the isolated master, we 

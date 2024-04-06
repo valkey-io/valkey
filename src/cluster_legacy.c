@@ -3635,7 +3635,7 @@ void clusterSendPing(clusterLink *link, int type) {
      * to put inside the packet. */
     estlen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
     estlen += (sizeof(clusterMsgDataGossip)*(wanted + pfail_wanted));
-    if (server.dbg_node_send_extensions && link->node && nodeSupportsExtensions(link->node)) {
+    if (link->node && nodeSupportsExtensions(link->node)) {
         estlen += writePingExt(NULL, 0);
     }
     /* Note: clusterBuildMessageHdr() expects the buffer to be always at least
@@ -3708,7 +3708,7 @@ void clusterSendPing(clusterLink *link, int type) {
     /* Compute the actual total length and send! */
     uint32_t totlen = 0;
 
-    if (server.dbg_node_send_extensions && link->node && nodeSupportsExtensions(link->node)) {
+    if (link->node && nodeSupportsExtensions(link->node)) {
         totlen += writePingExt(hdr, gossipcount);
     } else {
         serverLog(LL_DEBUG, "Unable to send extensions data, however setting ext data flag to true");

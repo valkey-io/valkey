@@ -599,9 +599,6 @@ NULL
         server.dirty = 0; /* Prevent AOF / replication */
         serverLog(LL_NOTICE,"Append Only File loaded by DEBUG LOADAOF");
         addReply(c,shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr,"send-clustermsg-extensions") && c->argc == 3) {
-        server.dbg_node_send_extensions = atoi(c->argv[2]->ptr);
-        addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"drop-cluster-packet-filter") && c->argc == 3) {
         long packet_type;
         if (getLongFromObjectOrReply(c, c->argv[2], &packet_type, NULL) != C_OK)

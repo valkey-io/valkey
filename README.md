@@ -184,9 +184,9 @@ You can use `make PREFIX=/some/other/directory install` if you wish to use a
 different destination.
 
 _Note_: For compatibility with Redis, we create symlinks from the Redis names (`redis-server`, `redis-cli`, etc.) to the Valkey binaries installed by `make install`.
-The symlinks are created in same directory as the the Valkey binaries.
+The symlinks are created in same directory as the Valkey binaries.
 The symlinks are removed when using `make uninstall`.
-The creation of the symlinks can be skipped by setting the environment variable `USE_REDIS_SYMLINKS=no`.
+The creation of the symlinks can be skipped by setting the makefile variable `USE_REDIS_SYMLINKS=no`.
 
 `make install` will just install binaries in your system, but will not configure
 init scripts and configuration files in the appropriate place. This is not

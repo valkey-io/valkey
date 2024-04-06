@@ -1666,7 +1666,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(GetCurrentCommandName);
     VALKEYMODULE_GET_API(RegisterDefragFunc);
     VALKEYMODULE_GET_API(DefragAlloc);
-    VALKEYMODULE_GET_API(DefragModuleString);
+    VALKEYMODULE_GET_API(DefragValkeyModuleString);
     VALKEYMODULE_GET_API(DefragShouldStop);
     VALKEYMODULE_GET_API(DefragCursorSet);
     VALKEYMODULE_GET_API(DefragCursorGet);

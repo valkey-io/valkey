@@ -4,7 +4,7 @@
  * This header file is forked from redismodule.h to reflect the new naming conventions adopted in Valkey.
  * 
  * Key Changes:
- * - Symbolic names have been changed from VALKEYMODULE_* to VALKEYMODULE_* to align with the
+ * - Symbolic names have been changed from REDISMODULE_* to VALKEYMODULE_* to align with the
  *   new module naming convention. Developers must use these new symbolic names in their module
  *   implementations.
  * - Terminology has been updated to be more inclusive: "slave" is now "replica", and "master" 

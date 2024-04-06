@@ -41,3 +41,4 @@ Makefile.dep
 compile_commands.json
 redis.code-workspace
 .cache
+.cscope.*

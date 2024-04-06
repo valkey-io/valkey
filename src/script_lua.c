@@ -57,7 +57,8 @@ static char *libraries_allow_list[] = {
 
 /* Redis Lua API globals */
 static char *redis_api_allow_list[] = {
-    "redis",
+    SERVER_API_NAME,
+    REDIS_API_NAME,
     "__redis__err__handler", /* error handler for eval, currently located on globals.
                                 Should move to registry. */
     NULL,
@@ -1504,9 +1505,14 @@ void luaRegisterRedisAPI(lua_State* lua) {
     lua_pushcfunction(lua,luaRedisAclCheckCmdPermissionsCommand);
     lua_settable(lua,-3);
 
-    /* Finally set the table as 'redis' global var. */
+    /* Finally set the table as 'server' global var. 
+     * We will also alias it to 'redis' global var for backwards compatibility. */
+    lua_setglobal(lua,SERVER_API_NAME);
+    /* lua_getglobal invocation retrieves the 'server' variable value to the stack. 
+     * lua_setglobal invocation uses the value from stack to set 'redis' global variable. 
+     * This is not a deep copy but is enough for our purpose here. */
+    lua_getglobal(lua,SERVER_API_NAME);
     lua_setglobal(lua,REDIS_API_NAME);
-
     /* Replace math.random and math.randomseed with our implementations. */
     lua_getglobal(lua,"math");
 

@@ -27,6 +27,13 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+/*
+ * This file initializes the global LUA object and registers functions to call Valkey API from within the LUA language. 
+ * It heavily invokes LUA's C API documented at https://www.lua.org/pil/24.html. There are 2 entrypoint functions in this file: 
+ * 1. evalCommand() - Gets invoked everytime a user runs LUA script via eval command on Valkey. 
+ * 2. scriptingInit() - initServer() function from server.c invokes this to initialize LUA at startup. 
+ *                      It is also invoked between 2 eval invocations to reset Lua. 
+ */
 #include "server.h"
 #include "sha1.h"
 #include "rand.h"

@@ -13556,7 +13556,7 @@ void *VM_DefragAlloc(ValkeyModuleDefragCtx *ctx, void *ptr) {
  * by the module, will end up with a single reference (because the reference
  * on the Redis side is dropped as soon as the command callback returns).
  */
-ValkeyModuleString *VM_DefragModuleString(ValkeyModuleDefragCtx *ctx, ValkeyModuleString *str) {
+ValkeyModuleString *VM_DefragValkeyModuleString(ValkeyModuleDefragCtx *ctx, ValkeyModuleString *str) {
     UNUSED(ctx);
     return activeDefragStringOb(str);
 }
@@ -13998,7 +13998,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(GetTypeMethodVersion);
     REGISTER_API(RegisterDefragFunc);
     REGISTER_API(DefragAlloc);
-    REGISTER_API(DefragModuleString);
+    REGISTER_API(DefragValkeyModuleString);
     REGISTER_API(DefragShouldStop);
     REGISTER_API(DefragCursorSet);
     REGISTER_API(DefragCursorGet);

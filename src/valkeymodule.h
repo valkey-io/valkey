@@ -4,7 +4,7 @@
  * This header file is forked from redismodule.h to reflect the new naming conventions adopted in Valkey.
  * 
  * Key Changes:
- * - Symbolic names have been changed from VALKEYMODULE_* to VALKEYMODULE_* to align with the
+ * - Symbolic names have been changed from containing RedisModule, REDISMODULE, etc. to ValkeyModule, VALKEYMODULE, etc. to align with the
  *   new module naming convention. Developers must use these new symbolic names in their module
  *   implementations.
  * - Terminology has been updated to be more inclusive: "slave" is now "replica", and "master" 
@@ -1300,7 +1300,7 @@ VALKEYMODULE_API int *(*ValkeyModule_GetCommandKeysWithFlags)(ValkeyModuleCtx *c
 VALKEYMODULE_API const char *(*ValkeyModule_GetCurrentCommandName)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_RegisterDefragFunc)(ValkeyModuleCtx *ctx, ValkeyModuleDefragFunc func) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void *(*ValkeyModule_DefragAlloc)(ValkeyModuleDefragCtx *ctx, void *ptr) VALKEYMODULE_ATTR;
-VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_DefragModuleString)(ValkeyModuleDefragCtx *ctx, ValkeyModuleString *str) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_DefragValkeyModuleString)(ValkeyModuleDefragCtx *ctx, ValkeyModuleString *str) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_DefragShouldStop)(ValkeyModuleDefragCtx *ctx) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_DefragCursorSet)(ValkeyModuleDefragCtx *ctx, unsigned long cursor) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_DefragCursorGet)(ValkeyModuleDefragCtx *ctx, unsigned long *cursor) VALKEYMODULE_ATTR;
@@ -1666,7 +1666,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(GetCurrentCommandName);
     VALKEYMODULE_GET_API(RegisterDefragFunc);
     VALKEYMODULE_GET_API(DefragAlloc);
-    VALKEYMODULE_GET_API(DefragModuleString);
+    VALKEYMODULE_GET_API(DefragValkeyModuleString);
     VALKEYMODULE_GET_API(DefragShouldStop);
     VALKEYMODULE_GET_API(DefragCursorSet);
     VALKEYMODULE_GET_API(DefragCursorGet);

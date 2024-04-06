@@ -434,8 +434,6 @@ void debugCommand(client *c) {
 "    Show low level info about `key` and associated value.",
 "DROP-CLUSTER-PACKET-FILTER <packet-type>",
 "    Drop all packets that match the filtered type. Set to -1 allow all packets.",
-"PROCESS-CLUSTERMSG-EXTENSIONS <0|1>",
-"    Enable/disable cluster message extensions parsing and dispatch.",
 "OOM",
 "    Crash the server simulating an out-of-memory error.",
 "PANIC",

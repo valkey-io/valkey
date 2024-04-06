@@ -439,6 +439,11 @@ int luaEngineInitEngine(void) {
     luaRegisterVersion(lua_engine_ctx->lua);
 
     luaSetErrorMetatable(lua_engine_ctx->lua);
+    lua_setfield(lua_engine_ctx->lua, -2, SERVER_API_NAME);
+
+    /* Get the server object and also set it to the Redis API
+     * compatibility namespace. */
+    lua_getfield(lua_engine_ctx->lua, -1, SERVER_API_NAME);
     lua_setfield(lua_engine_ctx->lua, -2, REDIS_API_NAME);
 
     luaSetErrorMetatable(lua_engine_ctx->lua);

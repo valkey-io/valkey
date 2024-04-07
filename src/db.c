@@ -122,6 +122,10 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
             server.current_client->cmd->proc != touchCommand)
             flags |= LOOKUP_NOTOUCH;
         if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)) {
+            if (!canUseSharedObject() && val->refcount == OBJ_SHARED_REFCOUNT) {
+                val = dupStringObject(val);
+                kvstoreDictSetVal(db->keys, getKeySlot(key->ptr), de, val);
+            }
             if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
                 updateLFU(val);
             } else {

@@ -342,7 +342,7 @@ else
     endef
 endif
 
-# Determine install/unstall Redis symlinks for compatibility when 
+# Determine install/uninstall Redis symlinks for compatibility when 
 # installing/uninstalling Valkey binaries (defaulting to `yes`)
 USE_REDIS_SYMLINKS?=yes
 ifeq ($(USE_REDIS_SYMLINKS),yes)

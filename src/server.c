@@ -568,7 +568,7 @@ dictType objToDictDictType = {
 };
 
 /* Modules system dictionary type. Keys are module name,
- * values are pointer to RedisModule struct. */
+ * values are pointer to ValkeyModule struct. */
 dictType modulesDictType = {
     dictSdsCaseHash,            /* hash function */
     NULL,                       /* key dup */
@@ -677,8 +677,8 @@ void resetChildState(void) {
     server.stat_current_save_keys_total = 0;
     updateDictResizePolicy();
     closeChildInfoPipe();
-    moduleFireServerEvent(REDISMODULE_EVENT_FORK_CHILD,
-                          REDISMODULE_SUBEVENT_FORK_CHILD_DIED,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_FORK_CHILD,
+                          VALKEYMODULE_SUBEVENT_FORK_CHILD_DIED,
                           NULL);
 }
 
@@ -1523,8 +1523,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* Fire the cron loop modules event. */
-    RedisModuleCronLoopV1 ei = {REDISMODULE_CRON_LOOP_VERSION,server.hz};
-    moduleFireServerEvent(REDISMODULE_EVENT_CRON_LOOP,
+    ValkeyModuleCronLoopV1 ei = {VALKEYMODULE_CRON_LOOP_VERSION,server.hz};
+    moduleFireServerEvent(VALKEYMODULE_EVENT_CRON_LOOP,
                           0,
                           &ei);
 
@@ -1686,8 +1686,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
     if (moduleCount()) {
-        moduleFireServerEvent(REDISMODULE_EVENT_EVENTLOOP,
-                              REDISMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP,
+                              VALKEYMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP,
                               NULL);
     }
 
@@ -1816,8 +1816,8 @@ void afterSleep(struct aeEventLoop *eventLoop) {
             atomicSet(server.module_gil_acquring, 1);
             moduleAcquireGIL();
             atomicSet(server.module_gil_acquring, 0);
-            moduleFireServerEvent(REDISMODULE_EVENT_EVENTLOOP,
-                                  REDISMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP,
+            moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP,
+                                  VALKEYMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP,
                                   NULL);
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("module-acquire-GIL",latency);
@@ -4502,7 +4502,7 @@ int finishShutdown(void) {
     if (server.aof_manifest) aofManifestFree(server.aof_manifest);
 
     /* Fire the shutdown modules event. */
-    moduleFireServerEvent(REDISMODULE_EVENT_SHUTDOWN,0,NULL);
+    moduleFireServerEvent(VALKEYMODULE_EVENT_SHUTDOWN,0,NULL);
 
     /* Remove the pid file if possible and needed. */
     if (server.daemonize || server.pidfile) {
@@ -5303,23 +5303,23 @@ void commandGetKeysCommand(client *c) {
 void commandHelpCommand(client *c) {
     const char *help[] = {
 "(no subcommand)",
-"    Return details about all Redis commands.",
+"    Return details about all commands.",
 "COUNT",
-"    Return the total number of commands in this Redis server.",
+"    Return the total number of commands in this server.",
 "LIST",
-"    Return a list of all commands in this Redis server.",
+"    Return a list of all commands in this server.",
 "INFO [<command-name> ...]",
-"    Return details about multiple Redis commands.",
+"    Return details about multiple commands.",
 "    If no command names are given, documentation details for all",
 "    commands are returned.",
 "DOCS [<command-name> ...]",
-"    Return documentation details about multiple Redis commands.",
+"    Return documentation details about multiple commands.",
 "    If no command names are given, documentation details for all",
 "    commands are returned.",
 "GETKEYS <full-command>",
-"    Return the keys from a full Redis command.",
+"    Return the keys from a full command.",
 "GETKEYSANDFLAGS <full-command>",
-"    Return the keys and the access flags from a full Redis command.",
+"    Return the keys and the access flags from a full command.",
 NULL
     };
 
@@ -5586,7 +5586,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
         info = sdscatfmt(info, "# Server\r\n" FMTARGS(
             "redis_version:%s\r\n", REDIS_VERSION,
             "server_name:%s\r\n", SERVER_NAME,
-            "server_version:%s\r\n", SERVER_VERSION,
+            "valkey_version:%s\r\n", VALKEY_VERSION,
             "redis_git_sha1:%s\r\n", serverGitSHA1(),
             "redis_git_dirty:%i\r\n", strtol(serverGitDirty(),NULL,10) > 0,
             "redis_build_id:%s\r\n", serverBuildIdString(),
@@ -6267,7 +6267,7 @@ void daemonize(void) {
 sds getVersion(void) {
     sds version = sdscatprintf(sdsempty(),
         "v=%s sha=%s:%d malloc=%s bits=%d build=%llx",
-        SERVER_VERSION,
+        VALKEY_VERSION,
         serverGitSHA1(),
         atoi(serverGitDirty()) > 0,
         ZMALLOC_LIB,
@@ -6321,7 +6321,7 @@ void serverAsciiArt(void) {
         );
     } else {
         snprintf(buf,1024*16,ascii_logo,
-            SERVER_VERSION,
+            VALKEY_VERSION,
             serverGitSHA1(),
             strtol(serverGitDirty(),NULL,10) > 0,
             (sizeof(long) == 8) ? "64" : "32",
@@ -6514,8 +6514,8 @@ int serverFork(int purpose) {
         }
 
         updateDictResizePolicy();
-        moduleFireServerEvent(REDISMODULE_EVENT_FORK_CHILD,
-                              REDISMODULE_SUBEVENT_FORK_CHILD_BORN,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_FORK_CHILD,
+                              VALKEYMODULE_SUBEVENT_FORK_CHILD_BORN,
                               NULL);
     }
     return childpid;
@@ -6822,7 +6822,7 @@ static int serverSupervisedSystemd(void) {
 #endif
 }
 
-int redisIsSupervised(int mode) {
+int serverIsSupervised(int mode) {
     int ret = 0;
 
     if (mode == SUPERVISED_AUTODETECT) {
@@ -6915,7 +6915,7 @@ int main(int argc, char **argv) {
         }
 
         if (!strcasecmp(argv[2], "all")) {
-            int numtests = sizeof(serverTest)/sizeof(struct redisTest);
+            int numtests = sizeof(serverTests)/sizeof(struct serverTest);
             for (j = 0; j < numtests; j++) {
                 serverTests[j].failed = (serverTests[j].proc(argc,argv,flags) != 0);
             }
@@ -7001,6 +7001,16 @@ int main(int argc, char **argv) {
         redis_check_rdb_main(argc,argv,NULL);
     else if (strstr(exec_name,"valkey-check-aof") != NULL)
         redis_check_aof_main(argc,argv);
+    
+    /* If enable USE_REDIS_SYMLINKS, valkey may install symlinks like 
+     * redis-server -> valkey-server, redis-check-rdb -> valkey-check-rdb,
+     * redis-check-aof -> valkey-check-aof, etc. */
+#ifdef USE_REDIS_SYMLINKS
+    if (strstr(exec_name,"redis-check-rdb") != NULL)
+        redis_check_rdb_main(argc, argv, NULL);
+    else if (strstr(exec_name,"redis-check-aof") != NULL)
+        redis_check_aof_main(argc,argv);
+#endif
 
     if (argc >= 2) {
         j = 1; /* First option to parse in argv[] */
@@ -7150,13 +7160,13 @@ int main(int argc, char **argv) {
 #endif /* __linux__ */
 
     /* Daemonize if needed */
-    server.supervised = redisIsSupervised(server.supervised_mode);
+    server.supervised = serverIsSupervised(server.supervised_mode);
     int background = server.daemonize && !server.supervised;
     if (background) daemonize();
 
     serverLog(LL_NOTICE, "oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo");
     serverLog(LL_NOTICE, SERVER_NAME " version=%s, bits=%d, commit=%s, modified=%d, pid=%d, just started",
-            SERVER_VERSION,
+            VALKEY_VERSION,
             (sizeof(long) == 8) ? 64 : 32,
             serverGitSHA1(),
             strtol(serverGitDirty(),NULL,10) > 0,

@@ -634,7 +634,7 @@ void loadServerConfigFromString(char *config) {
 
 loaderr:
     if (argv) sdsfreesplitres(argv,argc);
-    fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR (Version %s) ***\n", SERVER_VERSION);
+    fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR (Version %s) ***\n", VALKEY_VERSION);
     if (i < totlines) {
         fprintf(stderr, "Reading the configuration file, at line %d\n", linenum);
         fprintf(stderr, ">>> '%s'\n", lines[i]);
@@ -934,8 +934,8 @@ void configSetCommand(client *c) {
         goto err;
     }
 
-    RedisModuleConfigChangeV1 cc = {.num_changes = config_count, .config_names = config_names};
-    moduleFireServerEvent(REDISMODULE_EVENT_CONFIG, REDISMODULE_SUBEVENT_CONFIG_CHANGE, &cc);
+    ValkeyModuleConfigChangeV1 cc = {.num_changes = config_count, .config_names = config_names};
+    moduleFireServerEvent(VALKEYMODULE_EVENT_CONFIG, VALKEYMODULE_SUBEVENT_CONFIG_CHANGE, &cc);
     addReply(c,shared.ok);
     goto end;
 
@@ -1588,7 +1588,7 @@ void rewriteConfigLoadmoduleOption(struct rewriteConfigState *state) {
     dictIterator *di = dictGetIterator(modules);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
-        struct RedisModule *module = dictGetVal(de);
+        struct ValkeyModule *module = dictGetVal(de);
         line = sdsnew("loadmodule ");
         line = sdscatsds(line, module->loadmod->path);
         for (int i = 0; i < module->loadmod->argc; i++) {

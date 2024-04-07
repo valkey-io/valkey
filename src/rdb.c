@@ -1079,7 +1079,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
         }
     } else if (o->type == OBJ_MODULE) {
         /* Save a module-specific value. */
-        RedisModuleIO io;
+        ValkeyModuleIO io;
         moduleValue *mv = o->ptr;
         moduleType *mt = mv->type;
 
@@ -1195,9 +1195,7 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     int aof_base = (rdbflags & RDBFLAGS_AOF_PREAMBLE) != 0;
 
     /* Add a few fields about the state when the RDB was created. */
-    if (rdbSaveAuxFieldStrStr(rdb,"server-ver",SERVER_VERSION) == -1) return -1;
-    /* Print Redis version for backwards compatibility with redis. */
-    if (rdbSaveAuxFieldStrStr(rdb,"redis-ver",REDIS_VERSION) == -1) return -1;
+    if (rdbSaveAuxFieldStrStr(rdb,"valkey-ver",VALKEY_VERSION) == -1) return -1;
     if (rdbSaveAuxFieldStrInt(rdb,"redis-bits",redis_bits) == -1) return -1;
     if (rdbSaveAuxFieldStrInt(rdb,"ctime",time(NULL)) == -1) return -1;
     if (rdbSaveAuxFieldStrInt(rdb,"used-mem",zmalloc_used_memory()) == -1) return -1;
@@ -1217,7 +1215,7 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 
 ssize_t rdbSaveSingleModuleAux(rio *rdb, int when, moduleType *mt) {
     /* Save a module-specific aux value. */
-    RedisModuleIO io;
+    ValkeyModuleIO io;
     int retval = 0;
     moduleInitIOContext(io,mt,rdb,NULL,-1);
 
@@ -1397,7 +1395,7 @@ int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     snprintf(magic,sizeof(magic),"REDIS%04d",RDB_VERSION);
     if (rdbWriteRaw(rdb,magic,9) == -1) goto werr;
     if (rdbSaveInfoAuxFields(rdb,rdbflags,rsi) == -1) goto werr;
-    if (!(req & SLAVE_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, REDISMODULE_AUX_BEFORE_RDB) == -1) goto werr;
+    if (!(req & SLAVE_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, VALKEYMODULE_AUX_BEFORE_RDB) == -1) goto werr;
 
     /* save functions */
     if (!(req & SLAVE_REQ_RDB_EXCLUDE_FUNCTIONS) && rdbSaveFunctions(rdb) == -1) goto werr;
@@ -1409,7 +1407,7 @@ int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
         }
     }
 
-    if (!(req & SLAVE_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, REDISMODULE_AUX_AFTER_RDB) == -1) goto werr;
+    if (!(req & SLAVE_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, VALKEYMODULE_AUX_AFTER_RDB) == -1) goto werr;
 
     /* EOF opcode */
     if (rdbSaveType(rdb,RDB_OPCODE_EOF) == -1) goto werr;
@@ -2814,7 +2812,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             rdbReportCorruptRDB("The RDB file contains module data I can't load: no matching module type '%s'", name);
             return NULL;
         }
-        RedisModuleIO io;
+        ValkeyModuleIO io;
         robj keyobj;
         initStaticStringObject(keyobj,key);
         moduleInitIOContext(io,mt,rdb,&keyobj,dbid);
@@ -2881,12 +2879,12 @@ void startLoading(size_t size, int rdbflags, int async) {
     /* Fire the loading modules start event. */
     int subevent;
     if (rdbflags & RDBFLAGS_AOF_PREAMBLE)
-        subevent = REDISMODULE_SUBEVENT_LOADING_AOF_START;
+        subevent = VALKEYMODULE_SUBEVENT_LOADING_AOF_START;
     else if(rdbflags & RDBFLAGS_REPLICATION)
-        subevent = REDISMODULE_SUBEVENT_LOADING_REPL_START;
+        subevent = VALKEYMODULE_SUBEVENT_LOADING_REPL_START;
     else
-        subevent = REDISMODULE_SUBEVENT_LOADING_RDB_START;
-    moduleFireServerEvent(REDISMODULE_EVENT_LOADING,subevent,NULL);
+        subevent = VALKEYMODULE_SUBEVENT_LOADING_RDB_START;
+    moduleFireServerEvent(VALKEYMODULE_EVENT_LOADING,subevent,NULL);
 }
 
 /* Mark that we are loading in the global state and setup the fields
@@ -2924,10 +2922,10 @@ void stopLoading(int success) {
     rdbFileBeingLoaded = NULL;
 
     /* Fire the loading modules end event. */
-    moduleFireServerEvent(REDISMODULE_EVENT_LOADING,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_LOADING,
                           success?
-                            REDISMODULE_SUBEVENT_LOADING_ENDED:
-                            REDISMODULE_SUBEVENT_LOADING_FAILED,
+                            VALKEYMODULE_SUBEVENT_LOADING_ENDED:
+                            VALKEYMODULE_SUBEVENT_LOADING_FAILED,
                            NULL);
 }
 
@@ -2935,22 +2933,22 @@ void startSaving(int rdbflags) {
     /* Fire the persistence modules start event. */
     int subevent;
     if (rdbflags & RDBFLAGS_AOF_PREAMBLE && getpid() != server.pid)
-        subevent = REDISMODULE_SUBEVENT_PERSISTENCE_AOF_START;
+        subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_AOF_START;
     else if (rdbflags & RDBFLAGS_AOF_PREAMBLE)
-        subevent = REDISMODULE_SUBEVENT_PERSISTENCE_SYNC_AOF_START;
+        subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_SYNC_AOF_START;
     else if (getpid()!=server.pid)
-        subevent = REDISMODULE_SUBEVENT_PERSISTENCE_RDB_START;
+        subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_RDB_START;
     else
-        subevent = REDISMODULE_SUBEVENT_PERSISTENCE_SYNC_RDB_START;
-    moduleFireServerEvent(REDISMODULE_EVENT_PERSISTENCE,subevent,NULL);
+        subevent = VALKEYMODULE_SUBEVENT_PERSISTENCE_SYNC_RDB_START;
+    moduleFireServerEvent(VALKEYMODULE_EVENT_PERSISTENCE,subevent,NULL);
 }
 
 void stopSaving(int success) {
     /* Fire the persistence modules end event. */
-    moduleFireServerEvent(REDISMODULE_EVENT_PERSISTENCE,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_PERSISTENCE,
                           success?
-                            REDISMODULE_SUBEVENT_PERSISTENCE_ENDED:
-                            REDISMODULE_SUBEVENT_PERSISTENCE_FAILED,
+                            VALKEYMODULE_SUBEVENT_PERSISTENCE_ENDED:
+                            VALKEYMODULE_SUBEVENT_PERSISTENCE_FAILED,
                           NULL);
 }
 
@@ -3166,8 +3164,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             } else if (!strcasecmp(auxkey->ptr,"redis-ver")) {
                 serverLog(LL_NOTICE,"Loading RDB produced by Redis version %s",
                     (char*)auxval->ptr);
-            } else if (!strcasecmp(auxkey->ptr,"server-ver")) {
-                serverLog(LL_NOTICE,"Loading RDB produced by server version %s",
+            } else if (!strcasecmp(auxkey->ptr,"valkey-ver")) {
+                serverLog(LL_NOTICE,"Loading RDB produced by valkey version %s",
                     (char*)auxval->ptr);
             } else if (!strcasecmp(auxkey->ptr,"ctime")) {
                 time_t age = time(NULL)-strtol(auxval->ptr,NULL,10);
@@ -3224,7 +3222,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                     exit(1);
                 }
 
-                RedisModuleIO io;
+                ValkeyModuleIO io;
                 moduleInitIOContext(io,mt,rdb,NULL,-1);
                 /* Call the rdb_load method of the module providing the 10 bit
                  * encoding version in the lower 10 bits of the module ID. */
@@ -3233,7 +3231,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                     moduleFreeContext(io.ctx);
                     zfree(io.ctx);
                 }
-                if (rc != REDISMODULE_OK || io.error) {
+                if (rc != VALKEYMODULE_OK || io.error) {
                     moduleTypeNameByID(name,moduleid);
                     serverLog(LL_WARNING,"The RDB file contains module AUX data for the module type '%s', that the responsible module is not able to load. Check for modules log above for additional clues.", name);
                     goto eoferr;

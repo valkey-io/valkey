@@ -706,7 +706,7 @@ start_server {tags {"introspection"}} {
         assert {[dict exists $res bind]}  
     }
 
-    test {redis-server command line arguments - error cases} {
+    test {valkey-server command line arguments - error cases} {
         # Take '--invalid' as the option.
         catch {exec src/valkey-server --invalid} err
         assert_match {*Bad directive or wrong number of arguments*} $err
@@ -749,14 +749,14 @@ start_server {tags {"introspection"}} {
         assert_match {*'replicaof "--127.0.0.1"'*wrong number of arguments*} $err
     } {} {external:skip}
 
-    test {redis-server command line arguments - allow passing option name and option value in the same arg} {
+    test {valkey-server command line arguments - allow passing option name and option value in the same arg} {
         start_server {config "default.conf" args {"--maxmemory 700mb" "--maxmemory-policy volatile-lru"}} {
             assert_match [r config get maxmemory] {maxmemory 734003200}
             assert_match [r config get maxmemory-policy] {maxmemory-policy volatile-lru}
         }
     } {} {external:skip}
 
-    test {redis-server command line arguments - wrong usage that we support anyway} {
+    test {valkey-server command line arguments - wrong usage that we support anyway} {
         start_server {config "default.conf" args {loglevel verbose "--maxmemory '700mb'" "--maxmemory-policy 'volatile-lru'"}} {
             assert_match [r config get loglevel] {loglevel verbose}
             assert_match [r config get maxmemory] {maxmemory 734003200}
@@ -764,21 +764,21 @@ start_server {tags {"introspection"}} {
         }
     } {} {external:skip}
 
-    test {redis-server command line arguments - allow option value to use the `--` prefix} {
+    test {valkey-server command line arguments - allow option value to use the `--` prefix} {
         start_server {config "default.conf" args {--proc-title-template --my--title--template --loglevel verbose}} {
             assert_match [r config get proc-title-template] {proc-title-template --my--title--template}
             assert_match [r config get loglevel] {loglevel verbose}
         }
     } {} {external:skip}
 
-    test {redis-server command line arguments - option name and option value in the same arg and `--` prefix} {
+    test {valkey-server command line arguments - option name and option value in the same arg and `--` prefix} {
         start_server {config "default.conf" args {"--proc-title-template --my--title--template" "--loglevel verbose"}} {
             assert_match [r config get proc-title-template] {proc-title-template --my--title--template}
             assert_match [r config get loglevel] {loglevel verbose}
         }
     } {} {external:skip}
 
-    test {redis-server command line arguments - save with empty input} {
+    test {valkey-server command line arguments - save with empty input} {
         start_server {config "default.conf" args {--save --loglevel verbose}} {
             assert_match [r config get save] {save {}}
             assert_match [r config get loglevel] {loglevel verbose}
@@ -807,7 +807,7 @@ start_server {tags {"introspection"}} {
 
     } {} {external:skip}
 
-    test {redis-server command line arguments - take one bulk string with spaces for MULTI_ARG configs parsing} {
+    test {valkey-server command line arguments - take one bulk string with spaces for MULTI_ARG configs parsing} {
         start_server {config "default.conf" args {--shutdown-on-sigint nosave force now --shutdown-on-sigterm "nosave force"}} {
             assert_match [r config get shutdown-on-sigint] {shutdown-on-sigint {nosave now force}}
             assert_match [r config get shutdown-on-sigterm] {shutdown-on-sigterm {nosave force}}

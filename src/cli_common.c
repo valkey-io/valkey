@@ -426,7 +426,7 @@ sds escapeJsonString(sds s, const char *p, size_t len) {
 }
 
 sds cliVersion(void) {
-    sds version = sdscatprintf(sdsempty(), "%s", SERVER_VERSION);
+    sds version = sdscatprintf(sdsempty(), "%s", VALKEY_VERSION);
 
     /* Add git commit and working tree status when available. */
     if (strtoll(serverGitSHA1(),NULL,16)) {

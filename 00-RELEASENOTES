@@ -21,11 +21,12 @@ Upgrade urgency LOW: Initial compatibility release of Valkey with compatibility 
 Changes to support valkey compatibility
 =========
 
-* Introduce 6 new binaries `valkey-server`, `valkey-cli`, `valkey-benchmark`, `valkey-check-aof`, `valkey-check-rdb` and `valkey-sentinel`. (#62)
-* Build symlinks mapping from the corresopnding Redis binaries to the new valkey binaries. (#193)
-* Introduce `valkey-version` field and `sever-name` to info fields. The `redis-version` will indicate the OSS Redis version this valkey version is compatible with. (#47)
+* Rename the 6 Redis binaries to ones with valkey prefixes: `valkey-server`, `valkey-cli`, `valkey-benchmark`, `valkey-check-aof`, `valkey-check-rdb` and `valkey-sentinel`. (#62)
+* Build symlinks mapping from the corresponding Redis binaries to the new Valkey binaries. (#193)
+* Introduce `valkey-version` and `sever-name` as info fields. The `redis-version` will indicate the OSS Redis version this valkey version is compatible with. (#47)
 * Introduce `valkey-ver` RDB field to indicate an RDB field was produced by a Valkey instance. (#47)
-* Introduce Valkey module namespace and add backwards compatility support to continue support old Redis modules. (#146, #243)
-* Introduce server lua call space for functions and scripts. (#213)
+* Introduce ValkeyModule_* namespace and add support for running modules compiled against the RedisModule_* namespace. (#194, #243)
+* Remove all legacy usage of slave and master in ValkeyModule, replacing them with replica and primary (#194)
+* Introduce server lua call space for functions and scripts, allowing users to replace `redis.call(...)` with `server.call(...)`. (#213)
 * Introduce `SERVER_CFLAGS` and `SERVER_LDFLAGS` as an alternative to `REDIS_CFLAGS` and `REDIS_LDFLAGS`. (#46)
-* Update config files to always reference Valkey. (#29, #171)
+* Update config files to replace references of Redis with Valkey. (#29, #171)

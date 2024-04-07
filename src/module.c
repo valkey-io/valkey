@@ -12153,7 +12153,7 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
         return C_ERR;
     }
 
-    const char *onLoadNames[] = {"ValkeyModule_OnLoad", "ValkeyModule_OnLoad"};
+    const char *onLoadNames[] = {"ValkeyModule_OnLoad", "RedisModule_OnLoad"};
     for (size_t i = 0; i < sizeof(onLoadNames) / sizeof(onLoadNames[0]); i++) {
         onload = (int (*)(void *, void **, int))(unsigned long) dlsym(handle, onLoadNames[i]);
         if (onload != NULL) {
@@ -12167,7 +12167,7 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
     if (onload == NULL) {
         dlclose(handle);
         serverLog(LL_WARNING,
-            "Module %s does not export ValkeyModule_OnLoad() or ValkeyModule_OnLoad() "
+            "Module %s does not export ValkeyModule_OnLoad() or RedisModule_OnLoad() "
             "symbol. Module not loaded.",path);
         return C_ERR;
     }
@@ -12260,7 +12260,7 @@ int moduleUnload(sds name, const char **errmsg) {
     }
 
     /* Give module a chance to clean up. */
-    const char *onUnloadNames[] = {"ValkeyModule_OnUnload", "ValkeyModule_OnUnload"};
+    const char *onUnloadNames[] = {"ValkeyModule_OnUnload", "RedisModule_OnUnload"};
     int (*onunload)(void *) = NULL;
     for (size_t i = 0; i < sizeof(onUnloadNames) / sizeof(onUnloadNames[0]); i++) {
         onunload = (int (*)(void *))(unsigned long)dlsym(module->handle, onUnloadNames[i]);

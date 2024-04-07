@@ -23,8 +23,8 @@ SOCK_FILE=${tmpdir}/hiredis-test-redis.sock
 if [ "$TEST_SSL" = "1" ]; then
     SSL_CA_CERT=${tmpdir}/ca.crt
     SSL_CA_KEY=${tmpdir}/ca.key
-    SSL_CERT=${tmpdir}/redis.crt
-    SSL_KEY=${tmpdir}/redis.key
+    SSL_CERT=${tmpdir}/valkey.crt
+    SSL_KEY=${tmpdir}/valkey.key
 
     openssl genrsa -out ${tmpdir}/ca.key 4096
     openssl req \

@@ -1161,20 +1161,20 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
 }
 
 /* Release data obtained with getMemoryOverheadData(). */
-void freeMemoryOverheadData(struct redisMemOverhead *mh) {
+void freeMemoryOverheadData(struct serverMemOverhead *mh) {
     zfree(mh->db);
     zfree(mh);
 }
 
-/* Return a struct redisMemOverhead filled with memory overhead
+/* Return a struct serverMemOverhead filled with memory overhead
  * information used for the MEMORY OVERHEAD and INFO command. The returned
  * structure pointer should be freed calling freeMemoryOverheadData(). */
-struct redisMemOverhead *getMemoryOverheadData(void) {
+struct serverMemOverhead *getMemoryOverheadData(void) {
     int j;
     size_t mem_total = 0;
     size_t mem = 0;
     size_t zmalloc_used = zmalloc_used_memory();
-    struct redisMemOverhead *mh = zcalloc(sizeof(*mh));
+    struct serverMemOverhead *mh = zcalloc(sizeof(*mh));
 
     mh->total_allocated = zmalloc_used;
     mh->startup_allocated = server.initial_memory_usage;
@@ -1245,7 +1245,7 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
     mem_total+=mh->functions_caches;
 
     for (j = 0; j < server.dbnum; j++) {
-        redisDb *db = server.db+j;
+        serverDb *db = server.db+j;
         if (!kvstoreNumAllocatedDicts(db->keys)) continue;
 
         unsigned long long keyscount = kvstoreSize(db->keys);
@@ -1309,7 +1309,7 @@ sds getMemoryDoctorReport(void) {
     int big_client_buf = 0; /* Client buffers are too big. */
     int many_scripts = 0;   /* Script cache has too many scripts. */
     int num_reports = 0;
-    struct redisMemOverhead *mh = getMemoryOverheadData();
+    struct serverMemOverhead *mh = getMemoryOverheadData();
 
     if (mh->total_allocated < (1024*1024*5)) {
         empty = 1;
@@ -1562,7 +1562,7 @@ NULL
         usage += dictEntryMemUsage();
         addReplyLongLong(c,usage);
     } else if (!strcasecmp(c->argv[1]->ptr,"stats") && c->argc == 2) {
-        struct redisMemOverhead *mh = getMemoryOverheadData();
+        struct serverMemOverhead *mh = getMemoryOverheadData();
 
         addReplyMapLen(c,31+mh->num_dbs);
 

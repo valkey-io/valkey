@@ -29,8 +29,8 @@
  */
 
 
-#ifndef __REDIS_RIO_H
-#define __REDIS_RIO_H
+#ifndef VALKEY_RIO_H
+#define VALKEY_RIO_H
 
 #include <stdio.h>
 #include <stdint.h>
@@ -175,8 +175,8 @@ size_t rioWriteBulkString(rio *r, const char *buf, size_t len);
 size_t rioWriteBulkLongLong(rio *r, long long l);
 size_t rioWriteBulkDouble(rio *r, double d);
 
-struct redisObject;
-int rioWriteBulkObject(rio *r, struct redisObject *obj);
+struct serverObject;
+int rioWriteBulkObject(rio *r, struct serverObject *obj);
 
 void rioGenericUpdateChecksum(rio *r, const void *buf, size_t len);
 void rioSetAutoSync(rio *r, off_t bytes);

@@ -42,7 +42,7 @@
 
 #include "listpack.h"
 #include "listpack_malloc.h"
-#include "redisassert.h"
+#include "serverassert.h"
 #include "util.h"
 
 #define LP_HDR_SIZE 6       /* 32 bit total len + 16 bit number of elements. */
@@ -1679,7 +1679,7 @@ void lpRepr(unsigned char *lp) {
     printf("{end}\n\n");
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 
 #include <sys/time.h>
 #include "adlist.h"

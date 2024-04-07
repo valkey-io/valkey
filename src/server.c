@@ -89,7 +89,7 @@ double R_Zero, R_PosInf, R_NegInf, R_Nan;
 /*================================= Globals ================================= */
 
 /* Global vars */
-struct redisServer server; /* Server global state */
+struct valkeyServer server; /* Server global state */
 
 /*============================ Internal prototypes ========================== */
 
@@ -568,7 +568,7 @@ dictType objToDictDictType = {
 };
 
 /* Modules system dictionary type. Keys are module name,
- * values are pointer to RedisModule struct. */
+ * values are pointer to ValkeyModule struct. */
 dictType modulesDictType = {
     dictSdsCaseHash,            /* hash function */
     NULL,                       /* key dup */
@@ -677,8 +677,8 @@ void resetChildState(void) {
     server.stat_current_save_keys_total = 0;
     updateDictResizePolicy();
     closeChildInfoPipe();
-    moduleFireServerEvent(REDISMODULE_EVENT_FORK_CHILD,
-                          REDISMODULE_SUBEVENT_FORK_CHILD_DIED,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_FORK_CHILD,
+                          VALKEYMODULE_SUBEVENT_FORK_CHILD_DIED,
                           NULL);
 }
 
@@ -1082,7 +1082,7 @@ void databasesCron(void) {
         if (dbs_per_call > server.dbnum) dbs_per_call = server.dbnum;
 
         for (j = 0; j < dbs_per_call; j++) {
-            redisDb *db = &server.db[resize_db % server.dbnum];
+            serverDb *db = &server.db[resize_db % server.dbnum];
             kvstoreTryResizeDicts(db->keys, CRON_DICTS_PER_DB);
             kvstoreTryResizeDicts(db->expires, CRON_DICTS_PER_DB);
             resize_db++;
@@ -1092,7 +1092,7 @@ void databasesCron(void) {
         if (server.activerehashing) {
             uint64_t elapsed_us = 0;
             for (j = 0; j < dbs_per_call; j++) {
-                redisDb *db = &server.db[rehash_db % server.dbnum];
+                serverDb *db = &server.db[rehash_db % server.dbnum];
                 elapsed_us += kvstoreIncrementallyRehash(db->keys, INCREMENTAL_REHASHING_THRESHOLD_US - elapsed_us);
                 if (elapsed_us >= INCREMENTAL_REHASHING_THRESHOLD_US)
                     break;
@@ -1523,8 +1523,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* Fire the cron loop modules event. */
-    RedisModuleCronLoopV1 ei = {REDISMODULE_CRON_LOOP_VERSION,server.hz};
-    moduleFireServerEvent(REDISMODULE_EVENT_CRON_LOOP,
+    ValkeyModuleCronLoopV1 ei = {VALKEYMODULE_CRON_LOOP_VERSION,server.hz};
+    moduleFireServerEvent(VALKEYMODULE_EVENT_CRON_LOOP,
                           0,
                           &ei);
 
@@ -1686,8 +1686,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
     if (moduleCount()) {
-        moduleFireServerEvent(REDISMODULE_EVENT_EVENTLOOP,
-                              REDISMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP,
+                              VALKEYMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP,
                               NULL);
     }
 
@@ -1816,8 +1816,8 @@ void afterSleep(struct aeEventLoop *eventLoop) {
             atomicSet(server.module_gil_acquring, 1);
             moduleAcquireGIL();
             atomicSet(server.module_gil_acquring, 0);
-            moduleFireServerEvent(REDISMODULE_EVENT_EVENTLOOP,
-                                  REDISMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP,
+            moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP,
+                                  VALKEYMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP,
                                   NULL);
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("module-acquire-GIL",latency);
@@ -2142,7 +2142,7 @@ void initServerConfig(void) {
 
     /* Command table -- we initialize it here as it is part of the
      * initial configuration, since command names may be changed via
-     * redis.conf using the rename-command directive. */
+     * valkey.conf using the rename-command directive. */
     server.commands = dictCreate(&commandTableDictType);
     server.orig_commands = dictCreate(&commandTableDictType);
     populateCommandTable();
@@ -2575,7 +2575,7 @@ void resetServerStats(void) {
 }
 
 /* Make the thread killable at any time, so that kill threads functions
- * can work reliably (default cancelability type is PTHREAD_CANCEL_DEFERRED).
+ * can work reliably (default cancellability type is PTHREAD_CANCEL_DEFERRED).
  * Needed for pthread_cancel used by the fast memory test used by the crash report. */
 void makeThreadKillable(void) {
     pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
@@ -2656,7 +2656,7 @@ void initServer(void) {
             strerror(errno));
         exit(1);
     }
-    server.db = zmalloc(sizeof(redisDb)*server.dbnum);
+    server.db = zmalloc(sizeof(server)*server.dbnum);
 
     /* Create the Redis databases, and initialize other internal state. */
     int slot_count_bits = 0;
@@ -2907,7 +2907,7 @@ void InitServerLast(void) {
  * because anyway the legacy (first,last,step) spec is to be deprecated
  * and one should use the new key specs scheme.
  */
-void populateCommandLegacyRangeSpec(struct redisCommand *c) {
+void populateCommandLegacyRangeSpec(struct serverCommand *c) {
     memset(&c->legacy_range_key_spec, 0, sizeof(c->legacy_range_key_spec));
 
     /* Set the movablekeys flag if we have a GETKEYS flag for modules.
@@ -2986,7 +2986,7 @@ sds catSubCommandFullname(const char *parent_name, const char *sub_name) {
     return sdscatfmt(sdsempty(), "%s|%s", parent_name, sub_name);
 }
 
-void commandAddSubcommand(struct redisCommand *parent, struct redisCommand *subcommand, const char *declared_name) {
+void commandAddSubcommand(struct serverCommand *parent, struct serverCommand *subcommand, const char *declared_name) {
     if (!parent->subcommands_dict)
         parent->subcommands_dict = dictCreate(&commandTableDictType);
 
@@ -2997,8 +2997,8 @@ void commandAddSubcommand(struct redisCommand *parent, struct redisCommand *subc
 }
 
 /* Set implicit ACl categories (see comment above the definition of
- * struct redisCommand). */
-void setImplicitACLCategories(struct redisCommand *c) {
+ * struct serverCommand). */
+void setImplicitACLCategories(struct serverCommand *c) {
     if (c->flags & CMD_WRITE)
         c->acl_categories |= ACL_CATEGORY_WRITE;
     /* Exclude scripting commands from the RO category. */
@@ -3022,7 +3022,7 @@ void setImplicitACLCategories(struct redisCommand *c) {
  *
  * On success, the function return C_OK. Otherwise C_ERR is returned and we won't
  * add this command in the commands dict. */
-int populateCommandStructure(struct redisCommand *c) {
+int populateCommandStructure(struct serverCommand *c) {
     /* If the command marks with CMD_SENTINEL, it exists in sentinel. */
     if (!(c->flags & CMD_SENTINEL) && server.sentinel_mode)
         return C_ERR;
@@ -3048,7 +3048,7 @@ int populateCommandStructure(struct redisCommand *c) {
     /* Handle subcommands */
     if (c->subcommands) {
         for (int j = 0; c->subcommands[j].declared_name; j++) {
-            struct redisCommand *sub = c->subcommands+j;
+            struct serverCommand *sub = c->subcommands+j;
 
             sub->fullname = catSubCommandFullname(c->declared_name, sub->declared_name);
             if (populateCommandStructure(sub) == C_ERR)
@@ -3061,16 +3061,16 @@ int populateCommandStructure(struct redisCommand *c) {
     return C_OK;
 }
 
-extern struct redisCommand redisCommandTable[];
+extern struct serverCommand serverCommandTable[];
 
 /* Populates the Redis Command Table dict from the static table in commands.c
  * which is auto generated from the json files in the commands folder. */
 void populateCommandTable(void) {
     int j;
-    struct redisCommand *c;
+    struct serverCommand *c;
 
     for (j = 0;; j++) {
-        c = redisCommandTable + j;
+        c = serverCommandTable + j;
         if (c->declared_name == NULL)
             break;
 
@@ -3082,20 +3082,20 @@ void populateCommandTable(void) {
 
         retval1 = dictAdd(server.commands, sdsdup(c->fullname), c);
         /* Populate an additional dictionary that will be unaffected
-         * by rename-command statements in redis.conf. */
+         * by rename-command statements in valkey.conf. */
         retval2 = dictAdd(server.orig_commands, sdsdup(c->fullname), c);
         serverAssert(retval1 == DICT_OK && retval2 == DICT_OK);
     }
 }
 
 void resetCommandTableStats(dict* commands) {
-    struct redisCommand *c;
+    struct serverCommand *c;
     dictEntry *de;
     dictIterator *di;
 
     di = dictGetSafeIterator(commands);
     while((de = dictNext(di)) != NULL) {
-        c = (struct redisCommand *) dictGetVal(de);
+        c = (struct serverCommand *) dictGetVal(de);
         c->microseconds = 0;
         c->calls = 0;
         c->rejected_calls = 0;
@@ -3118,8 +3118,8 @@ void resetErrorTableStats(void) {
 
 /* ========================== Redis OP Array API ============================ */
 
-int redisOpArrayAppend(redisOpArray *oa, int dbid, robj **argv, int argc, int target) {
-    redisOp *op;
+int serverOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int target) {
+    serverOp *op;
     int prev_capacity = oa->capacity;
 
     if (oa->numops == 0) {
@@ -3129,7 +3129,7 @@ int redisOpArrayAppend(redisOpArray *oa, int dbid, robj **argv, int argc, int ta
     }
 
     if (prev_capacity != oa->capacity)
-        oa->ops = zrealloc(oa->ops,sizeof(redisOp)*oa->capacity);
+        oa->ops = zrealloc(oa->ops,sizeof(serverOp)*oa->capacity);
     op = oa->ops+oa->numops;
     op->dbid = dbid;
     op->argv = argv;
@@ -3139,10 +3139,10 @@ int redisOpArrayAppend(redisOpArray *oa, int dbid, robj **argv, int argc, int ta
     return oa->numops;
 }
 
-void redisOpArrayFree(redisOpArray *oa) {
+void serverOpArrayFree(serverOpArray *oa) {
     while(oa->numops) {
         int j;
-        redisOp *op;
+        serverOp *op;
 
         oa->numops--;
         op = oa->ops+oa->numops;
@@ -3157,12 +3157,12 @@ void redisOpArrayFree(redisOpArray *oa) {
 /* ====================== Commands lookup and execution ===================== */
 
 int isContainerCommandBySds(sds s) {
-    struct redisCommand *base_cmd = dictFetchValue(server.commands, s);
+    struct serverCommand *base_cmd = dictFetchValue(server.commands, s);
     int has_subcommands = base_cmd && base_cmd->subcommands_dict;
     return has_subcommands;
 }
 
-struct redisCommand *lookupSubcommand(struct redisCommand *container, sds sub_name) {
+struct serverCommand *lookupSubcommand(struct serverCommand *container, sds sub_name) {
     return dictFetchValue(container->subcommands_dict, sub_name);
 }
 
@@ -3174,8 +3174,8 @@ struct redisCommand *lookupSubcommand(struct redisCommand *container, sds sub_na
  * name (e.g. in COMMAND INFO) rather than to find the command
  * a user requested to execute (in processCommand).
  */
-struct redisCommand *lookupCommandLogic(dict *commands, robj **argv, int argc, int strict) {
-    struct redisCommand *base_cmd = dictFetchValue(commands, argv[0]->ptr);
+struct serverCommand *lookupCommandLogic(dict *commands, robj **argv, int argc, int strict) {
+    struct serverCommand *base_cmd = dictFetchValue(commands, argv[0]->ptr);
     int has_subcommands = base_cmd && base_cmd->subcommands_dict;
     if (argc == 1 || !has_subcommands) {
         if (strict && argc != 1)
@@ -3190,11 +3190,11 @@ struct redisCommand *lookupCommandLogic(dict *commands, robj **argv, int argc, i
     }
 }
 
-struct redisCommand *lookupCommand(robj **argv, int argc) {
+struct serverCommand *lookupCommand(robj **argv, int argc) {
     return lookupCommandLogic(server.commands,argv,argc,0);
 }
 
-struct redisCommand *lookupCommandBySdsLogic(dict *commands, sds s) {
+struct serverCommand *lookupCommandBySdsLogic(dict *commands, sds s) {
     int argc, j;
     sds *strings = sdssplitlen(s,sdslen(s),"|",1,&argc);
     if (strings == NULL)
@@ -3213,17 +3213,17 @@ struct redisCommand *lookupCommandBySdsLogic(dict *commands, sds s) {
         argv[j] = &objects[j];
     }
 
-    struct redisCommand *cmd = lookupCommandLogic(commands,argv,argc,1);
+    struct serverCommand *cmd = lookupCommandLogic(commands,argv,argc,1);
     sdsfreesplitres(strings,argc);
     return cmd;
 }
 
-struct redisCommand *lookupCommandBySds(sds s) {
+struct serverCommand *lookupCommandBySds(sds s) {
     return lookupCommandBySdsLogic(server.commands,s);
 }
 
-struct redisCommand *lookupCommandByCStringLogic(dict *commands, const char *s) {
-    struct redisCommand *cmd;
+struct serverCommand *lookupCommandByCStringLogic(dict *commands, const char *s) {
+    struct serverCommand *cmd;
     sds name = sdsnew(s);
 
     cmd = lookupCommandBySdsLogic(commands,name);
@@ -3231,19 +3231,19 @@ struct redisCommand *lookupCommandByCStringLogic(dict *commands, const char *s) 
     return cmd;
 }
 
-struct redisCommand *lookupCommandByCString(const char *s) {
+struct serverCommand *lookupCommandByCString(const char *s) {
     return lookupCommandByCStringLogic(server.commands,s);
 }
 
 /* Lookup the command in the current table, if not found also check in
  * the original table containing the original command names unaffected by
- * redis.conf rename-command statement.
+ * valkey.conf rename-command statement.
  *
  * This is used by functions rewriting the argument vector such as
  * rewriteClientCommandVector() in order to set client->cmd pointer
  * correctly even if the command was renamed. */
-struct redisCommand *lookupCommandOrOriginal(robj **argv ,int argc) {
-    struct redisCommand *cmd = lookupCommandLogic(server.commands, argv, argc, 0);
+struct serverCommand *lookupCommandOrOriginal(robj **argv ,int argc) {
+    struct serverCommand *cmd = lookupCommandLogic(server.commands, argv, argc, 0);
 
     if (!cmd) cmd = lookupCommandLogic(server.orig_commands, argv, argc, 0);
     return cmd;
@@ -3323,7 +3323,7 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target) {
         argvcopy[j] = argv[j];
         incrRefCount(argv[j]);
     }
-    redisOpArrayAppend(&server.also_propagate,dbid,argvcopy,argc,target);
+    serverOpArrayAppend(&server.also_propagate,dbid,argvcopy,argc,target);
 }
 
 /* It is possible to call the function forceCommandPropagation() inside a
@@ -3353,7 +3353,7 @@ void preventCommandReplication(client *c) {
 }
 
 /* Log the last command a client executed into the slowlog. */
-void slowlogPushCurrentCommand(client *c, struct redisCommand *cmd, ustime_t duration) {
+void slowlogPushCurrentCommand(client *c, struct serverCommand *cmd, ustime_t duration) {
     /* Some commands may contain sensitive data that should not be available in the slowlog. */
     if (cmd->flags & CMD_SKIP_SLOWLOG)
         return;
@@ -3386,7 +3386,7 @@ static void propagatePendingCommands(void) {
         return;
 
     int j;
-    redisOp *rop;
+    serverOp *rop;
 
     /* If we got here it means we have finished an execution-unit.
      * If that unit has caused propagation of multiple commands, they
@@ -3420,7 +3420,7 @@ static void propagatePendingCommands(void) {
         propagateNow(-1,&shared.exec,1,PROPAGATE_AOF|PROPAGATE_REPL);
     }
 
-    redisOpArrayFree(&server.also_propagate);
+    serverOpArrayFree(&server.also_propagate);
 }
 
 /* Performs operations that should be performed after an execution unit ends.
@@ -3460,7 +3460,7 @@ void postExecutionUnitOperations(void) {
  * twice, its possible to pass a NULL cmd value to indicate that the error was counted elsewhere.
  *
  * The function returns true if stats was updated and false if not. */
-int incrCommandStatsOnError(struct redisCommand *cmd, int flags) {
+int incrCommandStatsOnError(struct serverCommand *cmd, int flags) {
     /* hold the prev error count captured on the last command execution */
     static long long prev_err_count = 0;
     int res = 0;
@@ -3517,7 +3517,7 @@ int incrCommandStatsOnError(struct redisCommand *cmd, int flags) {
 void call(client *c, int flags) {
     long long dirty;
     uint64_t client_old_flags = c->flags;
-    struct redisCommand *real_cmd = c->realcmd;
+    struct serverCommand *real_cmd = c->realcmd;
     client *prev_client = server.executing_client;
     server.executing_client = c;
 
@@ -4247,11 +4247,11 @@ void incrementErrorCount(const char *fullerr, size_t namelen) {
             return;
         }
 
-        struct redisError *error = zmalloc(sizeof(*error));
+        struct serverError *error = zmalloc(sizeof(*error));
         error->count = 1;
         raxInsert(server.errors,(unsigned char*)fullerr,namelen,error,NULL);
     } else {
-        struct redisError *error = result;
+        struct serverError *error = result;
         error->count++;
     }
 }
@@ -4319,7 +4319,7 @@ int prepareForShutdown(int flags) {
 
     serverLog(LL_NOTICE,"User requested shutdown...");
     if (server.supervised_mode == SUPERVISED_SYSTEMD)
-        redisCommunicateSystemd("STOPPING=1\n");
+        serverCommunicateSystemd("STOPPING=1\n");
 
     /* If we have any replicas, let them catch up the replication offset before
      * we shut down, to avoid data loss. */
@@ -4455,7 +4455,7 @@ int finishShutdown(void) {
             } else {
                 serverLog(LL_WARNING, "Writing initial AOF, can't exit.");
                 if (server.supervised_mode == SUPERVISED_SYSTEMD)
-                    redisCommunicateSystemd("STATUS=Writing initial AOF, can't exit.\n");
+                    serverCommunicateSystemd("STATUS=Writing initial AOF, can't exit.\n");
                 goto error;
             }
         }
@@ -4477,7 +4477,7 @@ int finishShutdown(void) {
     if ((server.saveparamslen > 0 && !nosave) || save) {
         serverLog(LL_NOTICE,"Saving the final RDB snapshot before exiting.");
         if (server.supervised_mode == SUPERVISED_SYSTEMD)
-            redisCommunicateSystemd("STATUS=Saving the final RDB snapshot\n");
+            serverCommunicateSystemd("STATUS=Saving the final RDB snapshot\n");
         /* Snapshotting. Perform a SYNC SAVE and exit */
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
@@ -4493,7 +4493,7 @@ int finishShutdown(void) {
             } else {
                 serverLog(LL_WARNING,"Error trying to save the DB, can't exit.");
                 if (server.supervised_mode == SUPERVISED_SYSTEMD)
-                    redisCommunicateSystemd("STATUS=Error trying to save the DB, can't exit.\n");
+                    serverCommunicateSystemd("STATUS=Error trying to save the DB, can't exit.\n");
                 goto error;
             }
         }
@@ -4503,7 +4503,7 @@ int finishShutdown(void) {
     if (server.aof_manifest) aofManifestFree(server.aof_manifest);
 
     /* Fire the shutdown modules event. */
-    moduleFireServerEvent(REDISMODULE_EVENT_SHUTDOWN,0,NULL);
+    moduleFireServerEvent(VALKEYMODULE_EVENT_SHUTDOWN,0,NULL);
 
     /* Remove the pid file if possible and needed. */
     if (server.daemonize || server.pidfile) {
@@ -4641,7 +4641,7 @@ void addReplyCommandFlags(client *c, uint64_t flags, replyFlagNames *replyFlags)
     }
 }
 
-void addReplyFlagsForCommand(client *c, struct redisCommand *cmd) {
+void addReplyFlagsForCommand(client *c, struct serverCommand *cmd) {
     replyFlagNames flagNames[] = {
         {CMD_WRITE,             "write"},
         {CMD_READONLY,          "readonly"},
@@ -4673,7 +4673,7 @@ void addReplyFlagsForCommand(client *c, struct redisCommand *cmd) {
     addReplyCommandFlags(c, cmd->flags, flagNames);
 }
 
-void addReplyDocFlagsForCommand(client *c, struct redisCommand *cmd) {
+void addReplyDocFlagsForCommand(client *c, struct serverCommand *cmd) {
     replyFlagNames docFlagNames[] = {
         {CMD_DOC_DEPRECATED,         "deprecated"},
         {CMD_DOC_SYSCMD,             "syscmd"},
@@ -4700,7 +4700,7 @@ void addReplyFlagsForKeyArgs(client *c, uint64_t flags) {
     addReplyCommandFlags(c, flags, docFlagNames);
 }
 
-/* Must match redisCommandArgType */
+/* Must match serverCommandArgType */
 const char *ARG_TYPE_STR[] = {
     "string",
     "integer",
@@ -4723,7 +4723,7 @@ void addReplyFlagsForArg(client *c, uint64_t flags) {
     addReplyCommandFlags(c, flags, argFlagNames);
 }
 
-void addReplyCommandArgList(client *c, struct redisCommandArg *args, int num_args) {
+void addReplyCommandArgList(client *c, struct serverCommandArg *args, int num_args) {
     addReplyArrayLen(c, num_args);
     for (int j = 0; j<num_args; j++) {
         /* Count our reply len so we don't have to use deferred reply. */
@@ -4819,7 +4819,7 @@ void addReplyJson(client *c, struct jsonObject *rs) {
 
 #endif
 
-void addReplyCommandHistory(client *c, struct redisCommand *cmd) {
+void addReplyCommandHistory(client *c, struct serverCommand *cmd) {
     addReplySetLen(c, cmd->num_history);
     for (int j = 0; j<cmd->num_history; j++) {
         addReplyArrayLen(c, 2);
@@ -4828,14 +4828,14 @@ void addReplyCommandHistory(client *c, struct redisCommand *cmd) {
     }
 }
 
-void addReplyCommandTips(client *c, struct redisCommand *cmd) {
+void addReplyCommandTips(client *c, struct serverCommand *cmd) {
     addReplySetLen(c, cmd->num_tips);
     for (int j = 0; j<cmd->num_tips; j++) {
         addReplyBulkCString(c, cmd->tips[j]);
     }
 }
 
-void addReplyCommandKeySpecs(client *c, struct redisCommand *cmd) {
+void addReplyCommandKeySpecs(client *c, struct serverCommand *cmd) {
     addReplySetLen(c, cmd->key_specs_num);
     for (int i = 0; i < cmd->key_specs_num; i++) {
         int maplen = 3;
@@ -4932,7 +4932,7 @@ void addReplyCommandKeySpecs(client *c, struct redisCommand *cmd) {
 }
 
 /* Reply with an array of sub-command using the provided reply callback. */
-void addReplyCommandSubCommands(client *c, struct redisCommand *cmd, void (*reply_function)(client*, struct redisCommand*), int use_map) {
+void addReplyCommandSubCommands(client *c, struct serverCommand *cmd, void (*reply_function)(client*, struct serverCommand*), int use_map) {
     if (!cmd->subcommands_dict) {
         addReplySetLen(c, 0);
         return;
@@ -4945,7 +4945,7 @@ void addReplyCommandSubCommands(client *c, struct redisCommand *cmd, void (*repl
     dictEntry *de;
     dictIterator *di = dictGetSafeIterator(cmd->subcommands_dict);
     while((de = dictNext(di)) != NULL) {
-        struct redisCommand *sub = (struct redisCommand *)dictGetVal(de);
+        struct serverCommand *sub = (struct serverCommand *)dictGetVal(de);
         if (use_map)
             addReplyBulkCBuffer(c, sub->fullname, sdslen(sub->fullname));
         reply_function(c, sub);
@@ -4954,7 +4954,7 @@ void addReplyCommandSubCommands(client *c, struct redisCommand *cmd, void (*repl
 }
 
 /* Output the representation of a Redis command. Used by the COMMAND command and COMMAND INFO. */
-void addReplyCommandInfo(client *c, struct redisCommand *cmd) {
+void addReplyCommandInfo(client *c, struct serverCommand *cmd) {
     if (!cmd) {
         addReplyNull(c);
     } else {
@@ -4982,7 +4982,7 @@ void addReplyCommandInfo(client *c, struct redisCommand *cmd) {
 }
 
 /* Output the representation of a Redis command. Used by the COMMAND DOCS. */
-void addReplyCommandDocs(client *c, struct redisCommand *cmd) {
+void addReplyCommandDocs(client *c, struct serverCommand *cmd) {
     /* Count our reply len so we don't have to use deferred reply. */
     long maplen = 1;
     if (cmd->summary) maplen++;
@@ -5055,7 +5055,7 @@ void addReplyCommandDocs(client *c, struct redisCommand *cmd) {
 
 /* Helper for COMMAND GETKEYS and GETKEYSANDFLAGS */
 void getKeysSubcommandImpl(client *c, int with_flags) {
-    struct redisCommand *cmd = lookupCommand(c->argv+2,c->argc-2);
+    struct serverCommand *cmd = lookupCommand(c->argv+2,c->argc-2);
     getKeysResult result = GETKEYS_RESULT_INIT;
     int j;
 
@@ -5139,7 +5139,7 @@ typedef struct {
     } cache;
 } commandListFilter;
 
-int shouldFilterFromCommandList(struct redisCommand *cmd, commandListFilter *filter) {
+int shouldFilterFromCommandList(struct serverCommand *cmd, commandListFilter *filter) {
     switch (filter->type) {
         case (COMMAND_LIST_FILTER_MODULE):
             if (!filter->cache.valid) {
@@ -5171,7 +5171,7 @@ void commandListWithFilter(client *c, dict *commands, commandListFilter filter, 
     dictIterator *di = dictGetIterator(commands);
 
     while ((de = dictNext(di)) != NULL) {
-        struct redisCommand *cmd = dictGetVal(de);
+        struct serverCommand *cmd = dictGetVal(de);
         if (!shouldFilterFromCommandList(cmd,&filter)) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
             (*numcmds)++;
@@ -5190,7 +5190,7 @@ void commandListWithoutFilter(client *c, dict *commands, int *numcmds) {
     dictIterator *di = dictGetIterator(commands);
 
     while ((de = dictNext(di)) != NULL) {
-        struct redisCommand *cmd = dictGetVal(de);
+        struct serverCommand *cmd = dictGetVal(de);
         addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
         (*numcmds)++;
 
@@ -5274,7 +5274,7 @@ void commandDocsCommand(client *c) {
         addReplyMapLen(c, dictSize(server.commands));
         di = dictGetIterator(server.commands);
         while ((de = dictNext(di)) != NULL) {
-            struct redisCommand *cmd = dictGetVal(de);
+            struct serverCommand *cmd = dictGetVal(de);
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
             addReplyCommandDocs(c, cmd);
         }
@@ -5284,7 +5284,7 @@ void commandDocsCommand(client *c) {
         int numcmds = 0;
         void *replylen = addReplyDeferredLen(c);
         for (i = 2; i < c->argc; i++) {
-            struct redisCommand *cmd = lookupCommandBySds(c->argv[i]->ptr);
+            struct serverCommand *cmd = lookupCommandBySds(c->argv[i]->ptr);
             if (!cmd)
                 continue;
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
@@ -5304,23 +5304,23 @@ void commandGetKeysCommand(client *c) {
 void commandHelpCommand(client *c) {
     const char *help[] = {
 "(no subcommand)",
-"    Return details about all Redis commands.",
+"    Return details about all commands.",
 "COUNT",
-"    Return the total number of commands in this Redis server.",
+"    Return the total number of commands in this server.",
 "LIST",
-"    Return a list of all commands in this Redis server.",
+"    Return a list of all commands in this server.",
 "INFO [<command-name> ...]",
-"    Return details about multiple Redis commands.",
+"    Return details about multiple commands.",
 "    If no command names are given, documentation details for all",
 "    commands are returned.",
 "DOCS [<command-name> ...]",
-"    Return documentation details about multiple Redis commands.",
+"    Return documentation details about multiple commands.",
 "    If no command names are given, documentation details for all",
 "    commands are returned.",
 "GETKEYS <full-command>",
-"    Return the keys from a full Redis command.",
+"    Return the keys from a full command.",
 "GETKEYSANDFLAGS <full-command>",
-"    Return the keys and the access flags from a full Redis command.",
+"    Return the keys and the access flags from a full command.",
 NULL
     };
 
@@ -5406,13 +5406,13 @@ const char *getSafeInfoString(const char *s, size_t len, char **tmp) {
 }
 
 sds genRedisInfoStringCommandStats(sds info, dict *commands) {
-    struct redisCommand *c;
+    struct serverCommand *c;
     dictEntry *de;
     dictIterator *di;
     di = dictGetSafeIterator(commands);
     while((de = dictNext(di)) != NULL) {
         char *tmpsafe;
-        c = (struct redisCommand *) dictGetVal(de);
+        c = (struct serverCommand *) dictGetVal(de);
         if (c->calls || c->failed_calls || c->rejected_calls) {
             info = sdscatprintf(info,
                 "cmdstat_%s:calls=%lld,usec=%lld,usec_per_call=%.2f"
@@ -5446,13 +5446,13 @@ sds genRedisInfoStringACLStats(sds info) {
 }
 
 sds genRedisInfoStringLatencyStats(sds info, dict *commands) {
-    struct redisCommand *c;
+    struct serverCommand *c;
     dictEntry *de;
     dictIterator *di;
     di = dictGetSafeIterator(commands);
     while((de = dictNext(di)) != NULL) {
         char *tmpsafe;
-        c = (struct redisCommand *) dictGetVal(de);
+        c = (struct serverCommand *) dictGetVal(de);
         if (c->latency_histogram) {
             info = fillPercentileDistributionLatencies(info,
                 getSafeInfoString(c->fullname, sdslen(c->fullname), &tmpsafe),
@@ -5586,9 +5586,11 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
 
         info = sdscatfmt(info, "# Server\r\n" FMTARGS(
             "redis_version:%s\r\n", REDIS_VERSION,
-            "redis_git_sha1:%s\r\n", redisGitSHA1(),
-            "redis_git_dirty:%i\r\n", strtol(redisGitDirty(),NULL,10) > 0,
-            "redis_build_id:%s\r\n", redisBuildIdString(),
+            "server_name:%s\r\n", SERVER_NAME,
+            "valkey_version:%s\r\n", VALKEY_VERSION,
+            "redis_git_sha1:%s\r\n", serverGitSHA1(),
+            "redis_git_dirty:%i\r\n", strtol(serverGitDirty(),NULL,10) > 0,
+            "redis_build_id:%s\r\n", serverBuildIdString(),
             "redis_mode:%s\r\n", mode,
             "os:%s", name.sysname,
             " %s", name.release,
@@ -5661,7 +5663,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
         const char *evict_policy = evictPolicyToString();
         long long memory_lua = evalMemory();
         long long memory_functions = functionsMemory();
-        struct redisMemOverhead *mh = getMemoryOverheadData();
+        struct serverMemOverhead *mh = getMemoryOverheadData();
 
         /* Peak memory is updated from time to time by serverCron() so it
          * may happen that the instantaneous value is slightly bigger than
@@ -6072,10 +6074,10 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
         raxIterator ri;
         raxStart(&ri,server.errors);
         raxSeek(&ri,"^",NULL,0);
-        struct redisError *e;
+        struct serverError *e;
         while(raxNext(&ri)) {
             char *tmpsafe;
-            e = (struct redisError *) ri.data;
+            e = (struct serverError *) ri.data;
             info = sdscatprintf(info,
                 "errorstat_%.*s:count=%lld\r\n",
                 (int)ri.key_len, getSafeInfoString((char *) ri.key, ri.key_len, &tmpsafe), e->count);
@@ -6266,37 +6268,37 @@ void daemonize(void) {
 sds getVersion(void) {
     sds version = sdscatprintf(sdsempty(),
         "v=%s sha=%s:%d malloc=%s bits=%d build=%llx",
-        REDIS_VERSION,
-        redisGitSHA1(),
-        atoi(redisGitDirty()) > 0,
+        VALKEY_VERSION,
+        serverGitSHA1(),
+        atoi(serverGitDirty()) > 0,
         ZMALLOC_LIB,
         sizeof(long) == 4 ? 32 : 64,
-        (unsigned long long) redisBuildId());
+        (unsigned long long) serverBuildId());
     return version;
 }
 
 void usage(void) {
-    fprintf(stderr,"Usage: ./redis-server [/path/to/redis.conf] [options] [-]\n");
-    fprintf(stderr,"       ./redis-server - (read config from stdin)\n");
-    fprintf(stderr,"       ./redis-server -v or --version\n");
-    fprintf(stderr,"       ./redis-server -h or --help\n");
-    fprintf(stderr,"       ./redis-server --test-memory <megabytes>\n");
-    fprintf(stderr,"       ./redis-server --check-system\n");
+    fprintf(stderr,"Usage: ./valkey-server [/path/to/valkey.conf] [options] [-]\n");
+    fprintf(stderr,"       ./valkey-server - (read config from stdin)\n");
+    fprintf(stderr,"       ./valkey-server -v or --version\n");
+    fprintf(stderr,"       ./valkey-server -h or --help\n");
+    fprintf(stderr,"       ./valkey-server --test-memory <megabytes>\n");
+    fprintf(stderr,"       ./valkey-server --check-system\n");
     fprintf(stderr,"\n");
     fprintf(stderr,"Examples:\n");
-    fprintf(stderr,"       ./redis-server (run the server with default conf)\n");
-    fprintf(stderr,"       echo 'maxmemory 128mb' | ./redis-server -\n");
-    fprintf(stderr,"       ./redis-server /etc/redis/6379.conf\n");
-    fprintf(stderr,"       ./redis-server --port 7777\n");
-    fprintf(stderr,"       ./redis-server --port 7777 --replicaof 127.0.0.1 8888\n");
-    fprintf(stderr,"       ./redis-server /etc/myredis.conf --loglevel verbose -\n");
-    fprintf(stderr,"       ./redis-server /etc/myredis.conf --loglevel verbose\n\n");
+    fprintf(stderr,"       ./valkey-server (run the server with default conf)\n");
+    fprintf(stderr,"       echo 'maxmemory 128mb' | ./valkey-server -\n");
+    fprintf(stderr,"       ./valkey-server /etc/valkey/6379.conf\n");
+    fprintf(stderr,"       ./valkey-server --port 7777\n");
+    fprintf(stderr,"       ./valkey-server --port 7777 --replicaof 127.0.0.1 8888\n");
+    fprintf(stderr,"       ./valkey-server /etc/myvalkey.conf --loglevel verbose -\n");
+    fprintf(stderr,"       ./valkey-server /etc/myvalkey.conf --loglevel verbose\n\n");
     fprintf(stderr,"Sentinel mode:\n");
-    fprintf(stderr,"       ./redis-server /etc/sentinel.conf --sentinel\n");
+    fprintf(stderr,"       ./valkey-server /etc/sentinel.conf --sentinel\n");
     exit(1);
 }
 
-void redisAsciiArt(void) {
+void serverAsciiArt(void) {
 #include "asciilogo.h"
     char *buf = zmalloc(1024*16);
     char *mode;
@@ -6307,7 +6309,7 @@ void redisAsciiArt(void) {
 
     /* Show the ASCII logo if: log file is stdout AND stdout is a
      * tty AND syslog logging is disabled. Also show logo if the user
-     * forced us to do so via redis.conf. */
+     * forced us to do so via valkey.conf. */
     int show_logo = ((!server.syslog_enabled &&
                       server.logfile[0] == '\0' &&
                       isatty(fileno(stdout))) ||
@@ -6320,9 +6322,9 @@ void redisAsciiArt(void) {
         );
     } else {
         snprintf(buf,1024*16,ascii_logo,
-            REDIS_VERSION,
-            redisGitSHA1(),
-            strtol(redisGitDirty(),NULL,10) > 0,
+            VALKEY_VERSION,
+            serverGitSHA1(),
+            strtol(serverGitDirty(),NULL,10) > 0,
             (sizeof(long) == 8) ? "64" : "32",
             mode, server.port ? server.port : server.tls_port,
             (long) getpid()
@@ -6350,7 +6352,7 @@ int changeListener(connListener *listener) {
 
     /* Just close the server if port disabled */
     if (listener->port == 0) {
-        if (server.set_proc_title) redisSetProcTitle(NULL);
+        if (server.set_proc_title) serverSetProcTitle(NULL);
         return C_OK;
     }
 
@@ -6364,7 +6366,7 @@ int changeListener(connListener *listener) {
         serverPanic("Unrecoverable error creating %s accept handler.", listener->ct->get_type(NULL));
     }
 
-    if (server.set_proc_title) redisSetProcTitle(NULL);
+    if (server.set_proc_title) serverSetProcTitle(NULL);
 
     return C_OK;
 }
@@ -6450,7 +6452,7 @@ void closeChildUnusedResourceAfterFork(void) {
 }
 
 /* purpose is one of CHILD_TYPE_ types */
-int redisFork(int purpose) {
+int serverFork(int purpose) {
     if (isMutuallyExclusiveChildType(purpose)) {
         if (hasActiveChildProcess()) {
             errno = EEXIST;
@@ -6513,8 +6515,8 @@ int redisFork(int purpose) {
         }
 
         updateDictResizePolicy();
-        moduleFireServerEvent(REDISMODULE_EVENT_FORK_CHILD,
-                              REDISMODULE_SUBEVENT_FORK_CHILD_BORN,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_FORK_CHILD,
+                              VALKEYMODULE_SUBEVENT_FORK_CHILD_BORN,
                               NULL);
     }
     return childpid;
@@ -6581,7 +6583,7 @@ void dismissClientMemory(client *c) {
 /* In the child process, we don't need some buffers anymore, and these are
  * likely to change in the parent when there's heavy write traffic.
  * We dismiss them right away, to avoid CoW.
- * see dismissMemeory(). */
+ * see dismissMemory(). */
 void dismissMemoryInChild(void) {
     /* madvise(MADV_DONTNEED) may not work if Transparent Huge Pages is enabled. */
     if (server.thp_enabled) return;
@@ -6694,17 +6696,17 @@ void loadDataFromDisk(void) {
     }
 }
 
-void redisOutOfMemoryHandler(size_t allocation_size) {
+void serverOutOfMemoryHandler(size_t allocation_size) {
     serverLog(LL_WARNING,"Out Of Memory allocating %zu bytes!",
         allocation_size);
     serverPanic("Redis aborting for OUT OF MEMORY. Allocating %zu bytes!",
         allocation_size);
 }
 
-/* Callback for sdstemplate on proc-title-template. See redis.conf for
+/* Callback for sdstemplate on proc-title-template. See valkey.conf for
  * supported variables.
  */
-static sds redisProcTitleGetVariable(const sds varname, void *arg)
+static sds serverProcTitleGetVariable(const sds varname, void *arg)
 {
     if (!strcmp(varname, "title")) {
         return sdsnew(arg);
@@ -6734,7 +6736,7 @@ static sds redisProcTitleGetVariable(const sds varname, void *arg)
 /* Expand the specified proc-title-template string and return a newly
  * allocated sds, or NULL. */
 static sds expandProcTitleTemplate(const char *template, const char *title) {
-    sds res = sdstemplate(template, redisProcTitleGetVariable, (void *) title);
+    sds res = sdstemplate(template, serverProcTitleGetVariable, (void *) title);
     if (!res)
         return NULL;
     return sdstrim(res, " ");
@@ -6750,7 +6752,7 @@ int validateProcTitleTemplate(const char *template) {
     return ok;
 }
 
-int redisSetProcTitle(char *title) {
+int serverSetProcTitle(char *title) {
 #ifdef USE_SETPROCTITLE
     if (!title) title = server.exec_argv[0];
     sds proc_title = expandProcTitleTemplate(server.proc_title_template, title);
@@ -6765,7 +6767,7 @@ int redisSetProcTitle(char *title) {
     return C_OK;
 }
 
-void redisSetCpuAffinity(const char *cpulist) {
+void serverSetCpuAffinity(const char *cpulist) {
 #ifdef USE_SETCPUAFFINITY
     setcpuaffinity(cpulist);
 #else
@@ -6775,7 +6777,7 @@ void redisSetCpuAffinity(const char *cpulist) {
 
 /* Send a notify message to systemd. Returns sd_notify return code which is
  * a positive number on success. */
-int redisCommunicateSystemd(const char *sd_notify_msg) {
+int serverCommunicateSystemd(const char *sd_notify_msg) {
 #ifdef HAVE_LIBSYSTEMD
     int ret = sd_notify(0, sd_notify_msg);
 
@@ -6791,7 +6793,7 @@ int redisCommunicateSystemd(const char *sd_notify_msg) {
 }
 
 /* Attempt to set up upstart supervision. Returns 1 if successful. */
-static int redisSupervisedUpstart(void) {
+static int serverSupervisedUpstart(void) {
     const char *upstart_job = getenv("UPSTART_JOB");
 
     if (!upstart_job) {
@@ -6807,13 +6809,13 @@ static int redisSupervisedUpstart(void) {
 }
 
 /* Attempt to set up systemd supervision. Returns 1 if successful. */
-static int redisSupervisedSystemd(void) {
+static int serverSupervisedSystemd(void) {
 #ifndef HAVE_LIBSYSTEMD
     serverLog(LL_WARNING,
             "systemd supervision requested or auto-detected, but Redis is compiled without libsystemd support!");
     return 0;
 #else
-    if (redisCommunicateSystemd("STATUS=Redis is loading...\n") <= 0)
+    if (serverCommunicateSystemd("STATUS=Redis is loading...\n") <= 0)
         return 0;
     serverLog(LL_NOTICE,
         "Supervised by systemd. Please make sure you set appropriate values for TimeoutStartSec and TimeoutStopSec in your service unit.");
@@ -6821,7 +6823,7 @@ static int redisSupervisedSystemd(void) {
 #endif
 }
 
-int redisIsSupervised(int mode) {
+int serverIsSupervised(int mode) {
     int ret = 0;
 
     if (mode == SUPERVISED_AUTODETECT) {
@@ -6836,10 +6838,10 @@ int redisIsSupervised(int mode) {
 
     switch (mode) {
         case SUPERVISED_UPSTART:
-            ret = redisSupervisedUpstart();
+            ret = serverSupervisedUpstart();
             break;
         case SUPERVISED_SYSTEMD:
-            ret = redisSupervisedSystemd();
+            ret = serverSupervisedSystemd();
             break;
         default:
             break;
@@ -6856,7 +6858,7 @@ int iAmMaster(void) {
             (server.cluster_enabled && clusterNodeIsMaster(getMyClusterNode())));
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include "testhelp.h"
 #include "intset.h"  /* Compact integer set structure */
 
@@ -6866,12 +6868,12 @@ int __test_num = 0;
 /* The flags are the following:
 * --accurate:     Runs tests with more iterations.
 * --large-memory: Enables tests that consume more than 100mb. */
-typedef int redisTestProc(int argc, char **argv, int flags);
-struct redisTest {
+typedef int serverTestProc(int argc, char **argv, int flags);
+struct serverTest {
     char *name;
-    redisTestProc *proc;
+    serverTestProc *proc;
     int failed;
-} redisTests[] = {
+} serverTests[] = {
     {"ziplist", ziplistTest},
     {"quicklist", quicklistTest},
     {"intset", intsetTest},
@@ -6886,11 +6888,11 @@ struct redisTest {
     {"listpack", listpackTest},
     {"kvstore", kvstoreTest},
 };
-redisTestProc *getTestProcByName(const char *name) {
-    int numtests = sizeof(redisTests)/sizeof(struct redisTest);
+serverTestProc *getTestProcByName(const char *name) {
+    int numtests = sizeof(serverTests)/sizeof(struct serverTest);
     for (int j = 0; j < numtests; j++) {
-        if (!strcasecmp(name,redisTests[j].name)) {
-            return redisTests[j].proc;
+        if (!strcasecmp(name,serverTests[j].name)) {
+            return serverTests[j].proc;
         }
     }
     return NULL;
@@ -6902,7 +6904,7 @@ int main(int argc, char **argv) {
     int j;
     char config_from_stdin = 0;
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
     monotonicInit(); /* Required for dict tests, that are relying on monotime during dict rehashing. */
     if (argc >= 3 && !strcasecmp(argv[1], "test")) {
         int flags = 0;
@@ -6914,19 +6916,19 @@ int main(int argc, char **argv) {
         }
 
         if (!strcasecmp(argv[2], "all")) {
-            int numtests = sizeof(redisTests)/sizeof(struct redisTest);
+            int numtests = sizeof(serverTests)/sizeof(struct serverTest);
             for (j = 0; j < numtests; j++) {
-                redisTests[j].failed = (redisTests[j].proc(argc,argv,flags) != 0);
+                serverTests[j].failed = (serverTests[j].proc(argc,argv,flags) != 0);
             }
 
             /* Report tests result */
             int failed_num = 0;
             for (j = 0; j < numtests; j++) {
-                if (redisTests[j].failed) {
+                if (serverTests[j].failed) {
                     failed_num++;
-                    printf("[failed] Test - %s\n", redisTests[j].name);
+                    printf("[failed] Test - %s\n", serverTests[j].name);
                 } else {
-                    printf("[ok] Test - %s\n", redisTests[j].name);
+                    printf("[ok] Test - %s\n", serverTests[j].name);
                 }
             }
 
@@ -6935,7 +6937,7 @@ int main(int argc, char **argv) {
 
             return failed_num == 0 ? 0 : 1;
         } else {
-            redisTestProc *proc = getTestProcByName(argv[2]);
+            serverTestProc *proc = getTestProcByName(argv[2]);
             if (!proc) return -1; /* test not found */
             return proc(argc,argv,flags);
         }
@@ -6949,7 +6951,7 @@ int main(int argc, char **argv) {
     spt_init(argc, argv);
 #endif
     tzset(); /* Populates 'timezone' global. */
-    zmalloc_set_oom_handler(redisOutOfMemoryHandler);
+    zmalloc_set_oom_handler(serverOutOfMemoryHandler);
 
     /* To achieve entropy, in case of containers, their time() and getpid() can
      * be the same. But value of tv_usec is fast enough to make the difference */
@@ -7000,6 +7002,16 @@ int main(int argc, char **argv) {
         redis_check_rdb_main(argc,argv,NULL);
     else if (strstr(exec_name,"valkey-check-aof") != NULL)
         redis_check_aof_main(argc,argv);
+    
+    /* If enable USE_REDIS_SYMLINKS, valkey may install symlinks like 
+     * redis-server -> valkey-server, redis-check-rdb -> valkey-check-rdb,
+     * redis-check-aof -> valkey-check-aof, etc. */
+#ifdef USE_REDIS_SYMLINKS
+    if (strstr(exec_name,"redis-check-rdb") != NULL)
+        redis_check_rdb_main(argc, argv, NULL);
+    else if (strstr(exec_name,"redis-check-aof") != NULL)
+        redis_check_aof_main(argc,argv);
+#endif
 
     if (argc >= 2) {
         j = 1; /* First option to parse in argv[] */
@@ -7010,7 +7022,7 @@ int main(int argc, char **argv) {
             strcmp(argv[1], "--version") == 0)
         {
             sds version = getVersion();
-            printf("Redis server %s\n", version);
+            printf("Valkey server %s\n", version);
             sdsfree(version);
             exit(0);
         }
@@ -7149,17 +7161,16 @@ int main(int argc, char **argv) {
 #endif /* __linux__ */
 
     /* Daemonize if needed */
-    server.supervised = redisIsSupervised(server.supervised_mode);
+    server.supervised = serverIsSupervised(server.supervised_mode);
     int background = server.daemonize && !server.supervised;
     if (background) daemonize();
 
     serverLog(LL_NOTICE, "oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo");
-    serverLog(LL_NOTICE,
-        "Redis version=%s, bits=%d, commit=%s, modified=%d, pid=%d, just started",
-            REDIS_VERSION,
+    serverLog(LL_NOTICE, SERVER_NAME " version=%s, bits=%d, commit=%s, modified=%d, pid=%d, just started",
+            VALKEY_VERSION,
             (sizeof(long) == 8) ? 64 : 32,
-            redisGitSHA1(),
-            strtol(redisGitDirty(),NULL,10) > 0,
+            serverGitSHA1(),
+            strtol(serverGitDirty(),NULL,10) > 0,
             (int)getpid());
 
     if (argc == 1) {
@@ -7170,8 +7181,8 @@ int main(int argc, char **argv) {
 
     initServer();
     if (background || server.pidfile) createPidFile();
-    if (server.set_proc_title) redisSetProcTitle(NULL);
-    redisAsciiArt();
+    if (server.set_proc_title) serverSetProcTitle(NULL);
+    serverAsciiArt();
     checkTcpBacklogSettings();
     if (server.cluster_enabled) {
         clusterInit();
@@ -7208,17 +7219,17 @@ int main(int argc, char **argv) {
 
         if (server.supervised_mode == SUPERVISED_SYSTEMD) {
             if (!server.masterhost) {
-                redisCommunicateSystemd("STATUS=Ready to accept connections\n");
+                serverCommunicateSystemd("STATUS=Ready to accept connections\n");
             } else {
-                redisCommunicateSystemd("STATUS=Ready to accept connections in read-only mode. Waiting for MASTER <-> REPLICA sync\n");
+                serverCommunicateSystemd("STATUS=Ready to accept connections in read-only mode. Waiting for MASTER <-> REPLICA sync\n");
             }
-            redisCommunicateSystemd("READY=1\n");
+            serverCommunicateSystemd("READY=1\n");
         }
     } else {
         sentinelIsRunning();
         if (server.supervised_mode == SUPERVISED_SYSTEMD) {
-            redisCommunicateSystemd("STATUS=Ready to accept connections\n");
-            redisCommunicateSystemd("READY=1\n");
+            serverCommunicateSystemd("STATUS=Ready to accept connections\n");
+            serverCommunicateSystemd("READY=1\n");
         }
     }
 
@@ -7227,7 +7238,7 @@ int main(int argc, char **argv) {
         serverLog(LL_WARNING,"WARNING: You specified a maxmemory value that is less than 1MB (current value is %llu bytes). Are you sure this is what you really want?", server.maxmemory);
     }
 
-    redisSetCpuAffinity(server.server_cpulist);
+    serverSetCpuAffinity(server.server_cpulist);
     setOOMScoreAdj(-1);
 
     aeMain(server.el);

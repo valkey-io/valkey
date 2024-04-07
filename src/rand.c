@@ -68,12 +68,12 @@
 static uint32_t x[3] = { X0, X1, X2 }, a[3] = { A0, A1, A2 }, c = C;
 static void next(void);
 
-int32_t redisLrand48(void) {
+int32_t serverLrand48(void) {
     next();
     return (((int32_t)x[2] << (N - 1)) + (x[1] >> 1));
 }
 
-void redisSrand48(int32_t seedval) {
+void serverSrand48(int32_t seedval) {
     SEED(X0, LOW(seedval), HIGH(seedval));
 }
 

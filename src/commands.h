@@ -1,5 +1,5 @@
-#ifndef __REDIS_COMMANDS_H
-#define __REDIS_COMMANDS_H
+#ifndef VALKEY_COMMANDS_H
+#define VALKEY_COMMANDS_H
 
 /* Must be synced with ARG_TYPE_STR and generate-command-code.py */
 typedef enum {
@@ -12,7 +12,7 @@ typedef enum {
     ARG_TYPE_PURE_TOKEN,
     ARG_TYPE_ONEOF, /* Has subargs */
     ARG_TYPE_BLOCK /* Has subargs */
-} redisCommandArgType;
+} serverCommandArgType;
 
 #define CMD_ARG_NONE            (0)
 #define CMD_ARG_OPTIONAL        (1<<0)
@@ -20,9 +20,9 @@ typedef enum {
 #define CMD_ARG_MULTIPLE_TOKEN  (1<<2)
 
 /* Must be compatible with RedisModuleCommandArg. See moduleCopyCommandArgs. */
-typedef struct redisCommandArg {
+typedef struct serverCommandArg {
     const char *name;
-    redisCommandArgType type;
+    serverCommandArgType type;
     int key_spec_index;
     const char *token;
     const char *summary;
@@ -30,9 +30,9 @@ typedef struct redisCommandArg {
     int flags;
     const char *deprecated_since;
     int num_args;
-    struct redisCommandArg *subargs;
+    struct serverCommandArg *subargs;
     const char *display_text;
-} redisCommandArg;
+} serverCommandArg;
 
 /* Returns the command group name by group number. */
 const char *commandGroupStr(int index);

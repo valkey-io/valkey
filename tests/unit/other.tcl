@@ -356,7 +356,7 @@ start_server {tags {"other"}} {
 }
 
 start_server {tags {"other external:skip"}} {
-    test {Don't rehash if redis has child process} {
+    test {Don't rehash if server has child process} {
         r config set save ""
         r config set rdb-key-save-delay 1000000
 
@@ -419,7 +419,7 @@ start_server {tags {"other external:skip"}} {
             assert_equal $expect_port [lindex $cmdline 3]
             assert_equal $expect_tls_port [lindex $cmdline 4]
             assert_match "*/tests/tmp/server.*/socket" [lindex $cmdline 5]
-            assert_match "*/tests/tmp/redis.conf.*" [lindex $cmdline 6]
+            assert_match "*/tests/tmp/valkey.conf.*" [lindex $cmdline 6]
 
             # Try setting a bad template
             catch {r config set "proc-title-template" "{invalid-var}"} err

@@ -2,8 +2,8 @@
  * It contains alternative structs which omit the parts of the commands table
  * that are not suitable for redis-cli, e.g. the command proc. */
 
-#ifndef __REDIS_CLI_COMMANDS_H
-#define __REDIS_CLI_COMMANDS_H
+#ifndef VALKEY_CLI_COMMANDS_H
+#define VALKEY_CLI_COMMANDS_H
 
 #include <stddef.h>
 #include "commands.h"
@@ -11,7 +11,7 @@
 /* Syntax specifications for a command argument. */
 typedef struct cliCommandArg {
     char *name;
-    redisCommandArgType type;
+    serverCommandArgType type;
     char *token;
     char *since;
     int flags;
@@ -41,6 +41,6 @@ struct commandDocs {
     char *params; /* A string describing the syntax of the command arguments. */
 };
 
-extern struct commandDocs redisCommandTable[];
+extern struct commandDocs serverCommandTable[];
 
 #endif

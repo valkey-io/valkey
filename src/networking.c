@@ -385,7 +385,7 @@ void _addReplyProtoToList(client *c, list *reply_list, const char *s, size_t len
 /* The subscribe / unsubscribe command family has a push as a reply,
  * or in other words, it responds with a push (or several of them
  * depending on how many arguments it got), and has no reply. */
-int cmdHasPushAsReply(struct redisCommand *cmd) {
+int cmdHasPushAsReply(struct serverCommand *cmd) {
     if (!cmd) return 0;
     return cmd->proc == subscribeCommand  || cmd->proc == unsubscribeCommand ||
            cmd->proc == psubscribeCommand || cmd->proc == punsubscribeCommand ||
@@ -1309,8 +1309,8 @@ void clientAcceptHandler(connection *conn) {
     }
 
     server.stat_numconnections++;
-    moduleFireServerEvent(REDISMODULE_EVENT_CLIENT_CHANGE,
-                          REDISMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE,
+                          VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED,
                           c);
 }
 
@@ -1574,8 +1574,8 @@ void freeClient(client *c) {
 
     /* For connected clients, call the disconnection event of modules hooks. */
     if (c->conn) {
-        moduleFireServerEvent(REDISMODULE_EVENT_CLIENT_CHANGE,
-                              REDISMODULE_SUBEVENT_CLIENT_CHANGE_DISCONNECTED,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE,
+                              VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_DISCONNECTED,
                               c);
     }
 
@@ -1695,8 +1695,8 @@ void freeClient(client *c) {
         refreshGoodSlavesCount();
         /* Fire the replica change modules event. */
         if (c->replstate == SLAVE_STATE_ONLINE)
-            moduleFireServerEvent(REDISMODULE_EVENT_REPLICA_CHANGE,
-                                  REDISMODULE_SUBEVENT_REPLICA_CHANGE_OFFLINE,
+            moduleFireServerEvent(VALKEYMODULE_EVENT_REPLICA_CHANGE,
+                                  VALKEYMODULE_SUBEVENT_REPLICA_CHANGE_OFFLINE,
                                   NULL);
     }
 
@@ -2075,7 +2075,7 @@ int handleClientsWithPendingWrites(void) {
 
 /* resetClient prepare the client to process the next command */
 void resetClient(client *c) {
-    redisCommandProc *prevcmd = c->cmd ? c->cmd->proc : NULL;
+    serverCommandProc *prevcmd = c->cmd ? c->cmd->proc : NULL;
 
     freeClientArgv(c);
     c->cur_script = NULL;
@@ -3650,7 +3650,7 @@ void helloCommand(client *c) {
     addReplyBulkCString(c,"redis");
 
     addReplyBulkCString(c,"version");
-    addReplyBulkCString(c,REDIS_VERSION);
+    addReplyBulkCString(c,VALKEY_VERSION);
 
     addReplyBulkCString(c,"proto");
     addReplyLongLong(c,c->resp);
@@ -4195,7 +4195,7 @@ void processEventsWhileBlocked(void) {
 #endif
 
 typedef struct __attribute__((aligned(CACHE_LINE_SIZE))) threads_pending {
-    redisAtomic unsigned long value;
+    serverAtomic unsigned long value;
 } threads_pending;
 
 pthread_t io_threads[IO_THREADS_MAX_NUM];
@@ -4226,7 +4226,7 @@ void *IOThreadMain(void *myid) {
 
     snprintf(thdname, sizeof(thdname), "io_thd_%ld", id);
     redis_set_thread_title(thdname);
-    redisSetCpuAffinity(server.server_cpulist);
+    serverSetCpuAffinity(server.server_cpulist);
     makeThreadKillable();
 
     while(1) {

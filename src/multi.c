@@ -149,7 +149,7 @@ void execCommand(client *c) {
     int j;
     robj **orig_argv;
     int orig_argc, orig_argv_len;
-    struct redisCommand *orig_cmd;
+    struct serverCommand *orig_cmd;
 
     if (!(c->flags & CLIENT_MULTI)) {
         addReplyError(c,"EXEC without MULTI");
@@ -274,7 +274,7 @@ void execCommand(client *c) {
 typedef struct watchedKey {
     listNode node;
     robj *key;
-    redisDb *db;
+    serverDb *db;
     client *client;
     unsigned expired:1; /* Flag that we're watching an already expired key. */
 } watchedKey;
@@ -377,7 +377,7 @@ int isWatchedKeyExpired(client *c) {
 
 /* "Touch" a key, so that if this key is being WATCHed by some client the
  * next EXEC will fail. */
-void touchWatchedKey(redisDb *db, robj *key) {
+void touchWatchedKey(serverDb *db, robj *key) {
     list *clients;
     listIter li;
     listNode *ln;
@@ -390,7 +390,7 @@ void touchWatchedKey(redisDb *db, robj *key) {
     /* Check if we are already watching for this key */
     listRewind(clients,&li);
     while((ln = listNext(&li))) {
-        watchedKey *wk = redis_member2struct(watchedKey, node, ln);
+        watchedKey *wk = server_member2struct(watchedKey, node, ln);
         client *c = wk->client;
 
         if (wk->expired) {
@@ -425,7 +425,7 @@ void touchWatchedKey(redisDb *db, robj *key) {
  * replaced_with: for SWAPDB, the WATCH should be invalidated if
  * the key exists in either of them, and skipped only if it
  * doesn't exist in both. */
-void touchAllWatchedKeysInDb(redisDb *emptied, redisDb *replaced_with) {
+void touchAllWatchedKeysInDb(serverDb *emptied, serverDb *replaced_with) {
     listIter li;
     listNode *ln;
     dictEntry *de;
@@ -443,7 +443,7 @@ void touchAllWatchedKeysInDb(redisDb *emptied, redisDb *replaced_with) {
             if (!clients) continue;
             listRewind(clients,&li);
             while((ln = listNext(&li))) {
-                watchedKey *wk = redis_member2struct(watchedKey, node, ln);
+                watchedKey *wk = server_member2struct(watchedKey, node, ln);
                 if (wk->expired) {
                     if (!replaced_with || !dbFind(replaced_with, key->ptr)) {
                         /* Expired key now deleted. No logical change. Clear the

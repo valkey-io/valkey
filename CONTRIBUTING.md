@@ -104,4 +104,7 @@ view, and so forth. This helps.
 
 4. For minor fixes - open a pull request on GitHub.
 
+To link a pull request to an existing issue, please write "Fixes #xyz" somewhere
+in the pull request description, where xyz is the issue number.
+
 Thanks!

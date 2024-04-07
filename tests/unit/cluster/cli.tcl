@@ -156,14 +156,14 @@ start_multiple_servers 3 [list overrides $base_conf] {
 
 } ;# stop servers
 
-# Test redis-cli -- cluster create, add-node, call.
+# Test valkey-cli -- cluster create, add-node, call.
 # Test that functions are propagated on add-node
 start_multiple_servers 5 [list overrides $base_conf] {
 
     set node4_rd [redis_client -3]
     set node5_rd [redis_client -4]
 
-    test {Functions are added to new node on redis-cli cluster add-node} {
+    test {Functions are added to new node on valkey-cli cluster add-node} {
         exec src/valkey-cli --cluster-yes --cluster create \
                            127.0.0.1:[srv 0 port] \
                            127.0.0.1:[srv -1 port] \
@@ -221,9 +221,9 @@ start_multiple_servers 5 [list overrides $base_conf] {
     }
 } ;# stop servers
 
-# Test redis-cli --cluster create, add-node.
+# Test valkey-cli --cluster create, add-node.
 # Test that one slot can be migrated to and then away from the new node.
-test {Migrate the last slot away from a node using redis-cli} {
+test {Migrate the last slot away from a node using valkey-cli} {
     start_multiple_servers 4 [list overrides $base_conf] {
 
         # Create a cluster of 3 nodes
@@ -329,7 +329,7 @@ test {Migrate the last slot away from a node using redis-cli} {
 
 foreach ip_or_localhost {127.0.0.1 localhost} {
 
-# Test redis-cli --cluster create, add-node with cluster-port.
+# Test valkey-cli --cluster create, add-node with cluster-port.
 # Create five nodes, three with custom cluster_port and two with default values.
 start_server [list overrides [list cluster-enabled yes cluster-node-timeout 1 cluster-port [find_available_port $::baseport $::portcount]]] {
 start_server [list overrides [list cluster-enabled yes cluster-node-timeout 1]] {
@@ -340,7 +340,7 @@ start_server [list overrides [list cluster-enabled yes cluster-node-timeout 1 cl
     # The first three are used to test --cluster create.
     # The last two are used to test --cluster add-node
 
-    test "redis-cli -4 --cluster create using $ip_or_localhost with cluster-port" {
+    test "valkey-cli -4 --cluster create using $ip_or_localhost with cluster-port" {
         exec src/valkey-cli -4 --cluster-yes --cluster create \
                            $ip_or_localhost:[srv 0 port] \
                            $ip_or_localhost:[srv -1 port] \
@@ -360,7 +360,7 @@ start_server [list overrides [list cluster-enabled yes cluster-node-timeout 1 cl
         assert_equal 3 [CI 2 cluster_known_nodes]
     }
 
-    test "redis-cli -4 --cluster add-node using $ip_or_localhost with cluster-port" {
+    test "valkey-cli -4 --cluster add-node using $ip_or_localhost with cluster-port" {
         # Adding node to the cluster (without cluster-port)
         exec src/valkey-cli -4 --cluster-yes --cluster add-node \
                            $ip_or_localhost:[srv -3 port] \

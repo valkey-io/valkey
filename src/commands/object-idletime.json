@@ -43,7 +43,7 @@
             }
         ],
         "reply_schema": {
-            "description": "the idle time in seconds",
+            "description": "The idle time in seconds.",
             "type": "integer"
         }
     }

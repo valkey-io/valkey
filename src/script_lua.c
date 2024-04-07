@@ -57,7 +57,8 @@ static char *libraries_allow_list[] = {
 
 /* Redis Lua API globals */
 static char *redis_api_allow_list[] = {
-    "redis",
+    SERVER_API_NAME,
+    REDIS_API_NAME,
     "__redis__err__handler", /* error handler for eval, currently located on globals.
                                 Should move to registry. */
     NULL,
@@ -1143,7 +1144,7 @@ static int luaRedisAclCheckCmdPermissionsCommand(lua_State *lua) {
     if (argv == NULL) return luaError(lua);
 
     /* Find command */
-    struct redisCommand *cmd;
+    struct serverCommand *cmd;
     if ((cmd = lookupCommand(argv, argc)) == NULL) {
         luaPushError(lua, "Invalid command passed to redis.acl_check_cmd()");
         raise_error = 1;
@@ -1383,12 +1384,26 @@ void luaSetTableProtectionRecursively(lua_State *lua) {
 }
 
 void luaRegisterVersion(lua_State* lua) {
+    /* For legacy compatibility reasons include Redis versions. */
     lua_pushstring(lua,"REDIS_VERSION_NUM");
     lua_pushnumber(lua,REDIS_VERSION_NUM);
     lua_settable(lua,-3);
 
     lua_pushstring(lua,"REDIS_VERSION");
     lua_pushstring(lua,REDIS_VERSION);
+    lua_settable(lua,-3);
+
+    /* Now push the Valkey version information. */
+    lua_pushstring(lua,"VALKEY_VERSION_NUM");
+    lua_pushnumber(lua,VALKEY_VERSION_NUM);
+    lua_settable(lua,-3);
+
+    lua_pushstring(lua,"VALKEY_VERSION");
+    lua_pushstring(lua,VALKEY_VERSION);
+    lua_settable(lua,-3);
+
+    lua_pushstring(lua,"SERVER_NAME");
+    lua_pushstring(lua,SERVER_NAME);
     lua_settable(lua,-3);
 }
 
@@ -1490,9 +1505,14 @@ void luaRegisterRedisAPI(lua_State* lua) {
     lua_pushcfunction(lua,luaRedisAclCheckCmdPermissionsCommand);
     lua_settable(lua,-3);
 
-    /* Finally set the table as 'redis' global var. */
+    /* Finally set the table as 'server' global var. 
+     * We will also alias it to 'redis' global var for backwards compatibility. */
+    lua_setglobal(lua,SERVER_API_NAME);
+    /* lua_getglobal invocation retrieves the 'server' variable value to the stack. 
+     * lua_setglobal invocation uses the value from stack to set 'redis' global variable. 
+     * This is not a deep copy but is enough for our purpose here. */
+    lua_getglobal(lua,SERVER_API_NAME);
     lua_setglobal(lua,REDIS_API_NAME);
-
     /* Replace math.random and math.randomseed with our implementations. */
     lua_getglobal(lua,"math");
 
@@ -1528,11 +1548,11 @@ static void luaCreateArray(lua_State *lua, robj **elev, int elec) {
  * (for the same seed) in every arch. */
 
 /* The following implementation is the one shipped with Lua itself but with
- * rand() replaced by redisLrand48(). */
+ * rand() replaced by serverLrand48(). */
 static int redis_math_random (lua_State *L) {
   /* the `%' avoids the (rare) case of r==1, and is needed also because on
      some systems (SunOS!) `rand()' may return a value larger than RAND_MAX */
-  lua_Number r = (lua_Number)(redisLrand48()%REDIS_LRAND48_MAX) /
+  lua_Number r = (lua_Number)(serverLrand48()%REDIS_LRAND48_MAX) /
                                 (lua_Number)REDIS_LRAND48_MAX;
   switch (lua_gettop(L)) {  /* check number of arguments */
     case 0: {  /* no arguments */
@@ -1558,7 +1578,7 @@ static int redis_math_random (lua_State *L) {
 }
 
 static int redis_math_randomseed (lua_State *L) {
-  redisSrand48(luaL_checkint(L, 1));
+  serverSrand48(luaL_checkint(L, 1));
   return 0;
 }
 

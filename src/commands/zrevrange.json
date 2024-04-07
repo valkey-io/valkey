@@ -57,11 +57,11 @@
                         "maxItems": 2,
                         "items": [
                             {
-                                "description": "member",
+                                "description": "Member.",
                                 "type": "string"
                             },
                             {
-                                "description": "score",
+                                "description": "Score.",
                                 "type": "number"
                             }
                         ]

@@ -55,7 +55,7 @@ static double avg_ttl_factor[16] = {0.98, 0.9604, 0.941192, 0.922368, 0.903921, 
  *
  * The parameter 'now' is the current time in milliseconds as is passed
  * to the function to avoid too many gettimeofday() syscalls. */
-int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
+int activeExpireCycleTryExpire(serverDb *db, dictEntry *de, long long now) {
     long long t = dictGetSignedIntegerVal(de);
     if (now > t) {
         enterExecutionUnit(1, 0);
@@ -118,7 +118,7 @@ int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
 
 /* Data used by the expire dict scan callback. */
 typedef struct {
-    redisDb *db;
+    serverDb *db;
     long long now;
     unsigned long sampled; /* num keys checked */
     unsigned long expired; /* num keys expired */
@@ -242,7 +242,7 @@ void activeExpireCycle(int type) {
         data.ttl_sum = 0;
         data.ttl_samples = 0;
 
-        redisDb *db = server.db+(current_db % server.dbnum);
+        serverDb *db = server.db+(current_db % server.dbnum);
         data.db = db;
 
         int db_done = 0; /* The scan of the current DB is done? */
@@ -429,7 +429,7 @@ void expireSlaveKeys(void) {
         int dbid = 0;
         while(dbids && dbid < server.dbnum) {
             if ((dbids & 1) != 0) {
-                redisDb *db = server.db+dbid;
+                serverDb *db = server.db+dbid;
                 dictEntry *expire = dbFindExpires(db, keyname);
                 int expired = 0;
 
@@ -474,7 +474,7 @@ void expireSlaveKeys(void) {
 
 /* Track keys that received an EXPIRE or similar command in the context
  * of a writable slave. */
-void rememberSlaveKeyWithExpire(redisDb *db, robj *key) {
+void rememberSlaveKeyWithExpire(serverDb *db, robj *key) {
     if (slaveKeysWithExpire == NULL) {
         static dictType dt = {
             dictSdsHash,                /* hash function */

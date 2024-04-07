@@ -537,7 +537,7 @@ void loadServerConfigFromString(char *config) {
         if (!strcasecmp(argv[0],"include") && argc == 2) {
             loadServerConfig(argv[1], 0, NULL);
         } else if (!strcasecmp(argv[0],"rename-command") && argc == 3) {
-            struct redisCommand *cmd = lookupCommandBySds(argv[1]);
+            struct serverCommand *cmd = lookupCommandBySds(argv[1]);
             int retval;
 
             if (!cmd) {
@@ -634,8 +634,7 @@ void loadServerConfigFromString(char *config) {
 
 loaderr:
     if (argv) sdsfreesplitres(argv,argc);
-    fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR (Redis %s) ***\n",
-        REDIS_VERSION);
+    fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR (Version %s) ***\n", VALKEY_VERSION);
     if (i < totlines) {
         fprintf(stderr, "Reading the configuration file, at line %d\n", linenum);
         fprintf(stderr, ">>> '%s'\n", lines[i]);
@@ -935,8 +934,8 @@ void configSetCommand(client *c) {
         goto err;
     }
 
-    RedisModuleConfigChangeV1 cc = {.num_changes = config_count, .config_names = config_names};
-    moduleFireServerEvent(REDISMODULE_EVENT_CONFIG, REDISMODULE_SUBEVENT_CONFIG_CHANGE, &cc);
+    ValkeyModuleConfigChangeV1 cc = {.num_changes = config_count, .config_names = config_names};
+    moduleFireServerEvent(VALKEYMODULE_EVENT_CONFIG, VALKEYMODULE_SUBEVENT_CONFIG_CHANGE, &cc);
     addReply(c,shared.ok);
     goto end;
 
@@ -1275,7 +1274,7 @@ int rewriteConfigRewriteLine(struct rewriteConfigState *state, const char *optio
 }
 
 /* Write the long long 'bytes' value as a string in a way that is parsable
- * inside redis.conf. If possible uses the GB, MB, KB notation. */
+ * inside valkey.conf. If possible uses the GB, MB, KB notation. */
 int rewriteConfigFormatMemory(char *buf, size_t len, long long bytes) {
     int gb = 1024*1024*1024;
     int mb = 1024*1024;
@@ -1473,7 +1472,7 @@ void rewriteConfigReplicaOfOption(standardConfig *config, const char *name, stru
 
     /* If this is a master, we want all the slaveof config options
      * in the file to be removed. Note that if this is a cluster instance
-     * we don't want a slaveof directive inside redis.conf. */
+     * we don't want a slaveof directive inside valkey.conf. */
     if (server.cluster_enabled || server.masterhost == NULL) {
         rewriteConfigMarkAsProcessed(state, name);
         return;
@@ -1589,7 +1588,7 @@ void rewriteConfigLoadmoduleOption(struct rewriteConfigState *state) {
     dictIterator *di = dictGetIterator(modules);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
-        struct RedisModule *module = dictGetVal(de);
+        struct ValkeyModule *module = dictGetVal(de);
         line = sdsnew("loadmodule ");
         line = sdscatsds(line, module->loadmod->path);
         for (int i = 0; i < module->loadmod->argc; i++) {
@@ -2445,7 +2444,7 @@ static int updateLocaleCollate(const char **err) {
 }
 
 static int updateProcTitleTemplate(const char **err) {
-    if (redisSetProcTitle(NULL) == C_ERR) {
+    if (serverSetProcTitle(NULL) == C_ERR) {
         *err = "failed to set process title";
         return 0;
     }

@@ -5612,6 +5612,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "lru_clock:%u\r\n", server.lruclock,
             "executable:%s\r\n", server.executable ? server.executable : "",
             "config_file:%s\r\n", server.configfile ? server.configfile : "",
+            "io_threads_maximum_num:%i\r\n", server.io_threads_num,
             "io_threads_active_num:%i\r\n", server.io_threads_active_num));
 
         /* Conditional properties */

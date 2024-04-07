@@ -10,7 +10,7 @@ if {$system_name eq {darwin}} {
     # Avoid the test on libmusl, which does not support backtrace
     # and on static binaries (ldd exit code 1) where we can't detect libmusl
     catch {
-        set ldd [exec ldd src/redis-server]
+        set ldd [exec ldd src/valkey-server]
         if {![string match {*libc.*musl*} $ldd]} {
             set backtrace_supported 1
         }

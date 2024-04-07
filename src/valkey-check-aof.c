@@ -199,7 +199,7 @@ int processAnnotations(FILE *fp, char *filename, int last_file) {
             printf("Failed to truncate AOF %s to timestamp %ld to offset %ld because it is not the last file.\n",
                 filename, to_timestamp, (long int)epos);
             printf("If you insist, please delete all files after this file according to the manifest "
-                "file and delete the corresponding records in manifest file manually. Then re-run redis-check-aof.\n");
+                "file and delete the corresponding records in manifest file manually. Then re-run valkey-check-aof.\n");
             exit(1);
         }
         /* Truncate remaining AOF if exceeding 'to_timestamp' */
@@ -416,7 +416,7 @@ int fileIsManifest(char *filepath) {
  * AOF_RDB_PREAMBLE: Old-style RDB-preamble AOF
  * AOF_MULTI_PART: manifest in Multi Part AOF 
  * 
- * redis-check-aof tool will automatically perform different 
+ * valkey-check-aof tool will automatically perform different 
  * verification logic according to different file formats.
  * */
 input_file_type getInputFileType(char *filepath) {

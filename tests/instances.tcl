@@ -48,9 +48,9 @@ if {[catch {cd tmp}]} {
 # the provided configuration file. Returns the PID of the process.
 proc exec_instance {type dirname cfgfile} {
     if {$type eq "redis"} {
-        set prgname redis-server
+        set prgname valkey-server
     } elseif {$type eq "sentinel"} {
-        set prgname redis-sentinel
+        set prgname valkey-sentinel
     } else {
         error "Unknown instance type."
     }
@@ -87,7 +87,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
 
         if {$::tls} {
             if {$::tls_module} {
-                puts $cfg [format "loadmodule %s/../../../src/redis-tls.so" [pwd]]
+                puts $cfg [format "loadmodule %s/../../../src/valkey-tls.so" [pwd]]
             }
 
             puts $cfg "tls-port $port"
@@ -342,7 +342,7 @@ proc pause_on_error {} {
         set cmd [lindex $argv 0]
         if {$cmd eq {continue}} {
             break
-        } elseif {$cmd eq {show-redis-logs}} {
+        } elseif {$cmd eq {show-valkey-logs}} {
             set count 10
             if {[lindex $argv 1] ne {}} {set count [lindex $argv 1]}
             foreach_redis_id id {
@@ -393,7 +393,7 @@ proc pause_on_error {} {
         } elseif {$cmd eq {help}} {
             puts "ls                     List Sentinel and Redis instances."
             puts "show-sentinel-logs \[N\] Show latest N lines of logs."
-            puts "show-redis-logs \[N\]    Show latest N lines of logs."
+            puts "show-valkey-logs \[N\]    Show latest N lines of logs."
             puts "S <id> cmd ... arg     Call command in Sentinel <id>."
             puts "R <id> cmd ... arg     Call command in Redis <id>."
             puts "SI <id> <field>        Show Sentinel <id> INFO <field>."

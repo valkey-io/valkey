@@ -272,7 +272,7 @@ proc create_server_config_file {filename config config_lines} {
 }
 
 proc spawn_server {config_file stdout stderr args} {
-    set cmd [list src/redis-server $config_file]
+    set cmd [list src/valkey-server $config_file]
     set args {*}$args
     if {[llength $args] > 0} {
         lappend cmd {*}$args
@@ -471,7 +471,7 @@ proc start_server {options {code undefined}} {
     set config {}
     if {$::tls} {
         if {$::tls_module} {
-            lappend config_lines [list "loadmodule" [format "%s/src/redis-tls.so" [pwd]]]
+            lappend config_lines [list "loadmodule" [format "%s/src/valkey-tls.so" [pwd]]]
         }
         dict set config "tls-cert-file" [format "%s/tests/tls/server.crt" [pwd]]
         dict set config "tls-key-file" [format "%s/tests/tls/server.key" [pwd]]

@@ -7129,9 +7129,9 @@ int main(int argc, char **argv) {
     /* Check if we need to start in redis-check-rdb/aof mode. We just execute
      * the program main. However the program is part of the Redis executable
      * so that we can easily execute an RDB check on loading errors. */
-    if (strstr(exec_name,"redis-check-rdb") != NULL)
+    if (strstr(exec_name,"valkey-check-rdb") != NULL)
         redis_check_rdb_main(argc,argv,NULL);
-    else if (strstr(exec_name,"redis-check-aof") != NULL)
+    else if (strstr(exec_name,"valkey-check-aof") != NULL)
         redis_check_aof_main(argc,argv);
 
     if (argc >= 2) {

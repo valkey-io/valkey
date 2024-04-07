@@ -6,8 +6,8 @@
 # what is needed for Redis plus the standard CFLAGS and LDFLAGS passed.
 # However when building the dependencies (Jemalloc, Lua, Hiredis, ...)
 # CFLAGS and LDFLAGS are propagated to the dependencies, so to pass
-# flags only to be used when compiling / linking Redis itself REDIS_CFLAGS
-# and REDIS_LDFLAGS are used instead (this is the case of 'make gcov').
+# flags only to be used when compiling / linking Redis itself SERVER_CFLAGS
+# and SERVER_LDFLAGS are used instead (this is the case of 'make gcov').
 #
 # Dependencies are stored in the Makefile.dep file. To rebuild this file
 # Just use 'make dep', but this is only needed by developers.
@@ -19,11 +19,11 @@ CLANG := $(findstring clang,$(shell sh -c '$(CC) --version | head -1'))
 OPTIMIZATION?=-O3
 ifeq ($(OPTIMIZATION),-O3)
 	ifeq (clang,$(CLANG))
-		REDIS_CFLAGS+=-flto
+		SERVER_CFLAGS+=-flto
 	else
-		REDIS_CFLAGS+=-flto=auto
+		SERVER_CFLAGS+=-flto=auto
 	endif
-	REDIS_LDFLAGS+=-O3 -flto
+	SERVER_LDFLAGS+=-O3 -flto
 endif
 DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram fpconv
 NODEPS:=clean distclean
@@ -116,8 +116,8 @@ endif
 # Override default settings if possible
 -include .make-settings
 
-FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(REDIS_CFLAGS)
-FINAL_LDFLAGS=$(LDFLAGS) $(REDIS_LDFLAGS) $(DEBUG)
+FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(SERVER_CFLAGS)
+FINAL_LDFLAGS=$(LDFLAGS) $(SERVER_LDFLAGS) $(DEBUG)
 FINAL_LIBS=-lm
 DEBUG=-g -ggdb
 
@@ -297,7 +297,7 @@ ifeq ($(BUILD_TLS),yes)
 endif
 
 TLS_MODULE=
-TLS_MODULE_NAME:=redis-tls$(PROG_SUFFIX).so
+TLS_MODULE_NAME:=valkey-tls$(PROG_SUFFIX).so
 TLS_MODULE_CFLAGS:=$(FINAL_CFLAGS)
 ifeq ($(BUILD_TLS),module)
 	FINAL_CFLAGS+=-DUSE_OPENSSL=$(BUILD_MODULE) $(OPENSSL_CFLAGS)
@@ -335,7 +335,7 @@ QUIET_LINK = @printf '    %b %b\n' $(LINKCOLOR)LINK$(ENDCOLOR) $(BINCOLOR)$@$(EN
 QUIET_INSTALL = @printf '    %b %b\n' $(LINKCOLOR)INSTALL$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR) 1>&2;
 endif
 
-ifneq (, $(findstring LOG_REQ_RES, $(REDIS_CFLAGS)))
+ifneq (, $(findstring LOG_REQ_RES, $(SERVER_CFLAGS)))
 	COMMANDS_DEF_FILENAME=commands_with_reply_schema
 	GEN_COMMANDS_FLAGS=--with-reply-schema
 else
@@ -343,15 +343,15 @@ else
 	GEN_COMMANDS_FLAGS=
 endif
 
-REDIS_SERVER_NAME=redis-server$(PROG_SUFFIX)
-REDIS_SENTINEL_NAME=redis-sentinel$(PROG_SUFFIX)
-REDIS_SERVER_OBJ=adlist.o quicklist.o ae.o anet.o dict.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o crc16.o endianconv.o slowlog.o eval.o bio.o rio.o rand.o memtest.o syscheck.o crcspeed.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o redis-check-rdb.o redis-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o acl.o tracking.o socket.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script_lua.o script.o functions.o function_lua.o commands.o strl.o connection.o unix.o logreqres.o
-REDIS_CLI_NAME=redis-cli$(PROG_SUFFIX)
-REDIS_CLI_OBJ=anet.o adlist.o dict.o redis-cli.o zmalloc.o release.o ae.o redisassert.o crcspeed.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o cli_commands.o
-REDIS_BENCHMARK_NAME=redis-benchmark$(PROG_SUFFIX)
-REDIS_BENCHMARK_OBJ=ae.o anet.o redis-benchmark.o adlist.o dict.o zmalloc.o redisassert.o release.o crcspeed.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o
-REDIS_CHECK_RDB_NAME=redis-check-rdb$(PROG_SUFFIX)
-REDIS_CHECK_AOF_NAME=redis-check-aof$(PROG_SUFFIX)
+REDIS_SERVER_NAME=valkey-server$(PROG_SUFFIX)
+REDIS_SENTINEL_NAME=valkey-sentinel$(PROG_SUFFIX)
+REDIS_SERVER_OBJ=adlist.o quicklist.o ae.o anet.o dict.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o crc16.o endianconv.o slowlog.o eval.o bio.o rio.o rand.o memtest.o syscheck.o crcspeed.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o valkey-check-rdb.o valkey-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o acl.o tracking.o socket.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script_lua.o script.o functions.o function_lua.o commands.o strl.o connection.o unix.o logreqres.o
+REDIS_CLI_NAME=valkey-cli$(PROG_SUFFIX)
+REDIS_CLI_OBJ=anet.o adlist.o dict.o valkey-cli.o zmalloc.o release.o ae.o redisassert.o crcspeed.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o cli_commands.o
+REDIS_BENCHMARK_NAME=valkey-benchmark$(PROG_SUFFIX)
+REDIS_BENCHMARK_OBJ=ae.o anet.o valkey-benchmark.o adlist.o dict.o zmalloc.o redisassert.o release.o crcspeed.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o
+REDIS_CHECK_RDB_NAME=valkey-check-rdb$(PROG_SUFFIX)
+REDIS_CHECK_AOF_NAME=valkey-check-aof$(PROG_SUFFIX)
 ALL_SOURCES=$(sort $(patsubst %.o,%.c,$(REDIS_SERVER_OBJ) $(REDIS_CLI_OBJ) $(REDIS_BENCHMARK_OBJ)))
 
 all: $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME) $(TLS_MODULE)
@@ -377,8 +377,8 @@ persist-settings: distclean
 	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
 	echo CFLAGS=$(CFLAGS) >> .make-settings
 	echo LDFLAGS=$(LDFLAGS) >> .make-settings
-	echo REDIS_CFLAGS=$(REDIS_CFLAGS) >> .make-settings
-	echo REDIS_LDFLAGS=$(REDIS_LDFLAGS) >> .make-settings
+	echo SERVER_CFLAGS=$(SERVER_CFLAGS) >> .make-settings
+	echo SERVER_LDFLAGS=$(SERVER_LDFLAGS) >> .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
 	-(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))
@@ -398,31 +398,31 @@ ifneq ($(strip $(PREV_FINAL_LDFLAGS)), $(strip $(FINAL_LDFLAGS)))
 .make-prerequisites: persist-settings
 endif
 
-# redis-server
+# valkey-server
 $(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ)
 	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
 
-# redis-sentinel
+# valkey-sentinel
 $(REDIS_SENTINEL_NAME): $(REDIS_SERVER_NAME)
 	$(REDIS_INSTALL) $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME)
 
-# redis-check-rdb
+# valkey-check-rdb
 $(REDIS_CHECK_RDB_NAME): $(REDIS_SERVER_NAME)
 	$(REDIS_INSTALL) $(REDIS_SERVER_NAME) $(REDIS_CHECK_RDB_NAME)
 
-# redis-check-aof
+# valkey-check-aof
 $(REDIS_CHECK_AOF_NAME): $(REDIS_SERVER_NAME)
 	$(REDIS_INSTALL) $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME)
 
-# redis-tls.so
+# valkey-tls.so
 $(TLS_MODULE_NAME): $(REDIS_SERVER_NAME)
 	$(QUIET_CC)$(CC) -o $@ tls.c -shared -fPIC $(TLS_MODULE_CFLAGS) $(TLS_CLIENT_LIBS)
 
-# redis-cli
+# valkey-cli
 $(REDIS_CLI_NAME): $(REDIS_CLI_OBJ)
 	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/linenoise/linenoise.o $(FINAL_LIBS) $(TLS_CLIENT_LIBS)
 
-# redis-benchmark
+# valkey-benchmark
 $(REDIS_BENCHMARK_NAME): $(REDIS_BENCHMARK_OBJ)
 	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/hdr_histogram/libhdrhistogram.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS)
 
@@ -490,7 +490,7 @@ bench: $(REDIS_BENCHMARK_NAME)
 	$(MAKE) CFLAGS="-m32" LDFLAGS="-m32"
 
 gcov:
-	$(MAKE) REDIS_CFLAGS="-fprofile-arcs -ftest-coverage -DCOVERAGE_TEST" REDIS_LDFLAGS="-fprofile-arcs -ftest-coverage"
+	$(MAKE) SERVER_CFLAGS="-fprofile-arcs -ftest-coverage -DCOVERAGE_TEST" SERVER_LDFLAGS="-fprofile-arcs -ftest-coverage"
 
 noopt:
 	$(MAKE) OPTIMIZATION="-O0"
@@ -499,7 +499,7 @@ valgrind:
 	$(MAKE) OPTIMIZATION="-O0" MALLOC="libc"
 
 helgrind:
-	$(MAKE) OPTIMIZATION="-O0" MALLOC="libc" CFLAGS="-D__ATOMIC_VAR_FORCE_SYNC_MACROS" REDIS_CFLAGS="-I/usr/local/include" REDIS_LDFLAGS="-L/usr/local/lib"
+	$(MAKE) OPTIMIZATION="-O0" MALLOC="libc" CFLAGS="-D__ATOMIC_VAR_FORCE_SYNC_MACROS" SERVER_CFLAGS="-I/usr/local/include" SERVER_LDFLAGS="-L/usr/local/lib"
 
 install: all
 	@mkdir -p $(INSTALL_BIN)

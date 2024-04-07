@@ -476,7 +476,7 @@ void addReplyProto(client *c, const char *s, size_t len) {
 }
 
 /* Low level function called by the addReplyError...() functions.
- * It emits the protocol for a server error, in the form:
+ * It emits the protocol for an error reply, in the form:
  *
  * -ERRORCODE Error Message<CR><LF>
  *

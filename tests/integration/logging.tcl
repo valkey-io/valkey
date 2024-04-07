@@ -8,7 +8,7 @@ if {$system_name eq {linux}} {
 }
 
 # look for the DEBUG command in the backtrace, used when we triggered
-# a stack trace print while we know the server4 is running that command.
+# a stack trace print while we know the server is running that command.
 proc check_log_backtrace_for_debug {log_pattern} {
     # search for the final line in the stacktraces generation to make sure it was completed.
     set pattern "* STACK TRACE DONE *"

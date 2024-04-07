@@ -701,7 +701,7 @@ typedef enum {
 
 /* An Object, that is a type able to hold a string / list / set */
 
-/* The actua Object */
+/* The actual Object */
 #define OBJ_STRING 0    /* String object. */
 #define OBJ_LIST 1      /* List object. */
 #define OBJ_SET 2       /* Set object. */

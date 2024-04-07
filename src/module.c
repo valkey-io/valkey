@@ -7674,7 +7674,7 @@ void VM_LogIOError(ValkeyModuleIO *io, const char *levelstr, const char *fmt, ..
     va_end(ap);
 }
 
-/* serverAssert-like function.
+/* Valkey assert function.
  *
  * The macro `ValkeyModule_Assert(expression)` is recommended, rather than
  * calling this function directly.

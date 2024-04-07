@@ -169,7 +169,7 @@ dictType clusterSdsToListType = {
         NULL                        /* allow to expand */
 };
 
-/* Aux fields were introduced to support the persistence
+/* Aux fields were introduced in Redis OSS 7.2 to support the persistence
  * of various important node properties, such as shard id, in nodes.conf.
  * Aux fields take an explicit format of name=value pairs and have no
  * intrinsic order among them. Aux fields are always grouped together

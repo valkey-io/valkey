@@ -617,7 +617,7 @@ int sentinelAddrEqualsHostname(sentinelAddr *a, char *hostname) {
                     sentinel.resolve_hostnames ? ANET_NONE : ANET_IP_ONLY) == ANET_ERR) {
 
         /* If failed resolve then compare based on hostnames. That is our best effort as
-         * long as the server is unavailable for some reason. It is fine since a
+         * long as the server is unavailable for some reason. It is fine since an
          * instance cannot have multiple hostnames for a given setup */
         return !strcasecmp(sentinel.resolve_hostnames ? a->hostname : a->ip, hostname);
     }

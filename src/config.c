@@ -615,6 +615,8 @@ void loadServerConfigFromString(char *config) {
     if (server.audit_logfile[0] != '\0') {
         FILE *audit_logfp;
 
+        /* Test if we are able to open the file. The server will not
+         * be able to abort just for this problem later... */
         audit_logfp = fopen(server.audit_logfile,"a");
         if (audit_logfp == NULL) {
             err = sdscatprintf(sdsempty(),
@@ -622,6 +624,11 @@ void loadServerConfigFromString(char *config) {
             goto loaderr;
         }
         fclose(audit_logfp);
+
+        /* Edit verbosity if audit-logfile is defined. Default LL_NOTICE. */
+        if server.verbosity > LL_VERBOSE {
+            server.verbosity = LL_VERBOSE;
+        }
     }
 
     /* Sanity checks. */

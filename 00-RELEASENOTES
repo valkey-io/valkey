@@ -18,7 +18,7 @@ Valkey 7.2.4 RC1  -  Released Tue 09 Apr 2024 12:00:00 UTC
 
 Upgrade urgency LOW: Initial release of Valkey with API compatibility for OSS
 Redis 7.2.4. This release is based off of OSS Redis 7.2.4, with additional
-functionailty to better brand the server as Valkey instead of Redis. All changes
+functionality to better brand the server as Valkey instead of Redis. All changes
 are fully backwards compatible.
 
 Changes to support Valkey branding

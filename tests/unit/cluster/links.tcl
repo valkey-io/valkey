@@ -74,7 +74,7 @@ start_cluster 1 2 {tags {external:skip cluster}} {
     set primary [Rn $primary_id]
     set replica1 [Rn $replica1_id]
 
-    test "Broadcast message across a cluster shard while a cluster link is down" {
+    test "Broadcast message on a primary across a cluster shard while a cluster link is down" {
         set replica1_node_id [$replica1 CLUSTER MYID]
 
         set channelname ch3
@@ -94,7 +94,7 @@ start_cluster 1 2 {tags {external:skip cluster}} {
         # Verify number of links with cluster stable state
         assert_equal [expr [number_of_peers $primary_id]*2] [number_of_links $primary_id]
 
-        # Disconnect the cluster between primary and replica1 and publish a message.
+        # Disconnect the cluster link from primary to replica1 and publish a message.
         $primary MULTI
         $primary DEBUG CLUSTERLINK KILL TO $replica1_node_id
         $primary SPUBLISH $channelname hello
@@ -113,7 +113,8 @@ start_cluster 1 2 {tags {external:skip cluster}} {
         # Publish a message afterwards.
         $primary SPUBLISH $channelname world
 
-        # Verify replica1 has received only (world) / hello is lost.
+        # Verify replica1 has received both (hello/world), irrespective of the cluster link health.
+        assert_equal "smessage ch3 hello" [$subscribeclient1 read]
         assert_equal "smessage ch3 world" [$subscribeclient1 read]
 
         # Verify replica2 has received both messages (hello/world)

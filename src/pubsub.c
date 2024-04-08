@@ -717,9 +717,8 @@ void channelList(client *c, sds pat, kvstore *pubsub_channels) {
 
 /* SPUBLISH <shardchannel> <message> */
 void spublishCommand(client *c) {
-    int receivers = pubsubPublishMessageAndPropagateToCluster(c->argv[1],c->argv[2],1);
-    if (!server.cluster_enabled)
-        forceCommandPropagation(c,PROPAGATE_REPL);
+    int receivers = pubsubPublishMessage(c->argv[1], c->argv[2], 1);
+    forceCommandPropagation(c, PROPAGATE_REPL);
     addReplyLongLong(c,receivers);
 }
 

@@ -5,13 +5,19 @@ start_cluster 1 1 {tags {external:skip cluster}} {
     set primary [Rn $primary_id]
     set replica [Rn $replica1_id]
 
+    test "Sharded pubsub publish behavior on a primary" {
+        assert_equal 0 [$primary spublish ch1 "hello"]
+    }
+
+    test "Sharded pubsub publish behavior on a replica" {
+        assert_error "*MOVED*" {$replica spublish ch1 "hello"}
+    }
+
+
     test "Sharded pubsub publish behavior within multi/exec" {
-        foreach {node} {primary replica} {
-            set node [set $node]
-            $node MULTI
-            $node SPUBLISH ch1 "hello"
-            $node EXEC
-        }
+        $primary MULTI
+        $primary SPUBLISH ch1 "hello"
+        $primary EXEC
     }
 
     test "Sharded pubsub within multi/exec with cross slot operation" {
@@ -29,10 +35,9 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $primary EXEC
     } {0 {}}
 
-    test "Sharded pubsub publish behavior within multi/exec with read operation on replica" {
+    test "Sharded pubsub publish behavior within multi/exec on replica" {
         $replica MULTI
-        $replica SPUBLISH foo "hello"
-        catch {[$replica GET foo]} err
+        catch {[$replica SPUBLISH foo "hello"]} err
         assert_match {MOVED*} $err
         catch {[$replica EXEC]} err
         assert_match {EXECABORT*} $err
@@ -44,13 +49,4 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         $primary SET foo bar
         $primary EXEC
     } {0 OK}
-
-    test "Sharded pubsub publish behavior within multi/exec with write operation on replica" {
-        $replica MULTI
-        $replica SPUBLISH foo "hello"
-        catch {[$replica SET foo bar]} err
-        assert_match {MOVED*} $err
-        catch {[$replica EXEC]} err
-        assert_match {EXECABORT*} $err
-    }
 }

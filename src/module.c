@@ -4525,7 +4525,6 @@ int moduleListIteratorSeek(ValkeyModuleKey *key, long index, int mode) {
  * - EBADF if the key is not opened for writing.
  *
  * Note: Before Redis OSS 7.0, `errno` was not set by this function. */
- */
 int VM_ListPush(ValkeyModuleKey *key, int where, ValkeyModuleString *ele) {
     if (!key || !ele) {
         errno = EINVAL;

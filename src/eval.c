@@ -888,7 +888,7 @@ int ldbStartSession(client *c) {
             /* Log the creation of the child and close the listening
              * socket to make sure if the parent crashes a reset is sent
              * to the clients. */
-            serverLog(LL_NOTICE,"Redis forked for debugging eval");
+            serverLog(LL_NOTICE,"Valkey forked for debugging eval");
         } else {
             /* Parent */
             listAddNodeTail(ldb.children,(void*)(unsigned long)cp);
@@ -897,7 +897,7 @@ int ldbStartSession(client *c) {
         }
     } else {
         serverLog(LL_NOTICE,
-            "Redis synchronous debugging eval session started");
+            "Valkey synchronous debugging eval session started");
     }
 
     /* Setup our debugging session. */
@@ -934,7 +934,7 @@ void ldbEndSession(client *c) {
         exitFromChild(0);
     } else {
         serverLog(LL_NOTICE,
-            "Redis synchronous debugging eval session ended");
+            "Vakey synchronous debugging eval session ended");
     }
 
     /* Otherwise let's restore client's state. */

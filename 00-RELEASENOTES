@@ -1,5 +1,5 @@
 Valkey 7.2 release notes
-=======================
+========================
 
 --------------------------------------------------------------------------------
 Upgrade urgency levels:
@@ -13,20 +13,55 @@ SECURITY: There are security fixes in the release.
 
 
 ================================================================================
-Valkey 7.2.4 RC1
+Valkey 7.2.4 RC1  -  Released Tue 09 Apr 2024 12:00:00 UTC
 ================================================================================
 
-Upgrade urgency LOW: Initial compatibility release of Valkey with compatibility with Redis 7.2.4.
+Upgrade urgency LOW: Initial release of Valkey with API compatibility for OSS
+Redis 7.2.4. This release is based off of OSS Redis 7.2.4, with additional
+functionailty to better brand the server as Valkey instead of Redis. All changes
+are fully backwards compatible.
 
-Changes to support valkey compatibility
+Changes to support Valkey branding
 =========
 
-* Rename the 6 Redis binaries to ones with valkey prefixes: `valkey-server`, `valkey-cli`, `valkey-benchmark`, `valkey-check-aof`, `valkey-check-rdb` and `valkey-sentinel`. (#62)
-* During install, add support for making symlinks mapping from the corresponding Redis binaries to the new Valkey binaries. (#193)
-* Introduce `valkey-version` and `sever-name` as info fields. The `redis-version` will continue to exist and will indicate the OSS Redis version the server compatible with. (#47, #232)
-* Introduce `valkey-ver` RDB field to indicate an RDB file was produced by a Valkey instance. (#47)
-* Introduce ValkeyModule_* namespace and add support for running modules compiled against the RedisModule_* namespace. (#194, #243)
-* Remove all legacy usage of slave and master in ValkeyModule, replacing them with replica and primary (#194)
-* Introduce server lua call space for functions and scripts, allowing users to replace `redis.call(...)` with `server.call(...)` for example. (#213)
-* Introduce `SERVER_CFLAGS` and `SERVER_LDFLAGS` as an alternative to `REDIS_CFLAGS` and `REDIS_LDFLAGS`. (#46)
-* Update config files to replace references of Redis with Valkey. (#29, #171)
+* Rename the 6 Redis binaries to ones with `valkey` prefixes: `valkey-server`,
+  `valkey-cli`, `valkey-benchmark`, `valkey-check-aof`, `valkey-check-rdb` and
+  `valkey-sentinel`. (#62)
+* During install, create symlinks mapping the corresponding Redis binary names
+  to the new Valkey binaries. (#193)
+* INFO fields: Introduce `valkey_version` and `server_name` fields. The
+  `redis_version` will continue to be present and will indicate the Redis OSS
+  version that the server is compatible with. (#47, #232)
+* RDB file format: Introduce a `valkey-ver` RDB field to indicate an RDB file
+  was produced by a Valkey server. This field is ignored when the file is
+  loaded by Redis OSS. (#47)
+* Module API changes: Introduce Valkey Module API in a new file, valkeymodule.h,
+  with functions and types prefixed by ValkeyModule. Valkey is still fully ABI
+  compatible with the Redis Module API, meaning Valkey supports running modules
+  compiled with either the Redis or Valkey Module APIs. For full source
+  compatibility, the Redis Module API (redismodule.h) is also kept with the
+  RedisModule prefixed functions and types. (#194, #243)
+* Scripting: Introduce a new top level `server` object for functions and scripts
+  that replaces the existing `redis` object. This allows users to replace calls
+  like `redis.call(...)` with `server.call(...)`. (#213)
+* Makefile: Introduce `SERVER_CFLAGS` and `SERVER_LDFLAGS` as an alternative to
+  `REDIS_CFLAGS` and `REDIS_LDFLAGS`. (#46)
+* Update template config files to replace references to Redis with Valkey. The
+  file valkey.conf replaces redis.conf. (#29, #171)
+* Logging: Update startup and and shutdown logs to reference Valkey instead of
+  Redis. Valkey server will also show the Valkey logo at startup (#251, #252)
+
+A special thank you for the amount of work put into this release by:
+
+- Viktor Söderqvist
+- Wen Hui
+- Ping Xie
+- Parth Patel
+- Roshan Katri
+- Zhu Binbin
+- Zhao Zhao
+- 0del
+- Harkrishn Patro
+- Vitah Lin
+- Ziyang Zeng (For creating the logo!)
+- The many other community members who provided their support!

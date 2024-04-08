@@ -583,7 +583,7 @@ static const ValkeyModuleEvent
         VALKEYMODULE_EVENT_CRON_LOOP,
         1
     },
-    ValkeyModuleEvent_MasterLinkChange = {
+    ValkeyModuleEvent_PrimaryLinkChange = {
         VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE,
         1
     },

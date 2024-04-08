@@ -3377,10 +3377,10 @@ void sentinelInfoCommand(client *c);
 void sentinelPublishCommand(client *c);
 void sentinelRoleCommand(client *c);
 
-/* redis-check-rdb & aof */
-int redis_check_rdb(char *rdbfilename, FILE *fp);
-int redis_check_rdb_main(int argc, char **argv, FILE *fp);
-int redis_check_aof_main(int argc, char **argv);
+/* valkey-check-rdb & aof */
+int valkey_check_rdb(char *rdbfilename, FILE *fp);
+int valkey_check_rdb_main(int argc, char **argv, FILE *fp);
+int valkey_check_aof_main(int argc, char **argv);
 
 /* Scripting */
 void scriptingInit(int setup);

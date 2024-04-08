@@ -246,7 +246,7 @@ int checkSingleAof(char *aof_filename, char *aof_filepath, int last_file, int fi
 
     if (preamble) {
         char *argv[2] = {NULL, aof_filepath};
-        if (redis_check_rdb_main(2, argv, fp) == C_ERR) {
+        if (valkey_check_rdb_main(2, argv, fp) == C_ERR) {
             printf("RDB preamble of AOF file is not sane, aborting.\n");
             exit(1);
         } else {
@@ -515,7 +515,7 @@ void checkOldStyleAof(char *filepath, int fix, int preamble) {
     printAofStyle(ret, filepath, (char *)"AOF");
 }
 
-int redis_check_aof_main(int argc, char **argv) {
+int valkey_check_aof_main(int argc, char **argv) {
     char *filepath;
     char temp_filepath[PATH_MAX + 1];
     char *dirpath;

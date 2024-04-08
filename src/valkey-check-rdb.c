@@ -192,7 +192,7 @@ void rdbCheckSetupSignals(void) {
  * 1 is returned.
  * The file is specified as a filename in 'rdbfilename' if 'fp' is NULL,
  * otherwise the already open file 'fp' is checked. */
-int redis_check_rdb(char *rdbfilename, FILE *fp) {
+int valkey_check_rdb(char *rdbfilename, FILE *fp) {
     uint64_t dbid;
     int selected_dbid = -1;
     int type, rdbver;
@@ -396,8 +396,8 @@ err:
     return 1;
 }
 
-/* RDB check main: called form server.c when Redis is executed with the
- * redis-check-rdb alias, on during RDB loading errors.
+/* RDB check main: called form server.c when Valkey is executed with the
+ * valkey-check-rdb alias, on during RDB loading errors.
  *
  * The function works in two ways: can be called with argc/argv as a
  * standalone executable, or called with a non NULL 'fp' argument if we
@@ -408,7 +408,7 @@ err:
  * status code according to success (RDB is sane) or error (RDB is corrupted).
  * Otherwise if called with a non NULL fp, the function returns C_OK or
  * C_ERR depending on the success or failure. */
-int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
+int valkey_check_rdb_main(int argc, char **argv, FILE *fp) {
     struct timeval tv;
 
     if (argc != 2 && fp == NULL) {
@@ -434,7 +434,7 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
     rdbCheckMode = 1;
     rdbCheckInfo("Checking RDB file %s", argv[1]);
     rdbCheckSetupSignals();
-    int retval = redis_check_rdb(argv[1],fp);
+    int retval = valkey_check_rdb(argv[1], fp);
     if (retval == 0) {
         rdbCheckInfo("\\o/ RDB looks OK! \\o/");
         rdbShowGenericInfo();

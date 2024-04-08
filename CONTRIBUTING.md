@@ -3,6 +3,12 @@ Contributing to Valkey
 
 Welcome and thank you for wanting to contribute!
 
+# Project governance
+
+The Valkey project is led by a Technical Steering Committee, whose responsibilities are laid out in [GOVERNANCE.md](GOVERNANCE.md).
+
+# IMPORTANT: HOW TO USE VALKEY GITHUB ISSUES
+
 ## Get started
 
 * Have a question? Ask it on

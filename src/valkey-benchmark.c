@@ -1787,7 +1787,7 @@ int main(int argc, char **argv) {
             }
             exit(1);
         }
-        if (config.cluster_node_count <= 1) {
+        if (config.cluster_node_count == 0) {
             fprintf(stderr, "Invalid cluster: %d node(s).\n",
                     config.cluster_node_count);
             exit(1);

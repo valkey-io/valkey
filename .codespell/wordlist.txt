@@ -19,4 +19,4 @@ filetest
 ro
 exat
 clen
-Parth
+parth

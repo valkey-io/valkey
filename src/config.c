@@ -612,6 +612,18 @@ void loadServerConfigFromString(char *config) {
         fclose(logfp);
     }
 
+    if (server.audit_logfile[0] != '\0') {
+        FILE *audit_logfp;
+
+        audit_logfp = fopen(server.audit_logfile,"a");
+        if (audit_logfp == NULL) {
+            err = sdscatprintf(sdsempty(),
+                               "Can't open the audit log file: %s", strerror(errno));
+            goto loaderr;
+        }
+        fclose(audit_logfp);
+    }
+
     /* Sanity checks. */
     if (server.cluster_enabled && server.masterhost) {
         err = "replicaof directive not allowed in cluster mode";

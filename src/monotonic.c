@@ -13,7 +13,7 @@ static char monotonic_info_string[32];
 
 /* Using the processor clock (aka TSC on x86) can provide improved performance
  * throughout the server wherever the monotonic clock is used.  The processor clock
- * is significantly faster than calling 'clock_getting' (POSIX).  While this is
+ * is significantly faster than calling 'clock_gettime' (POSIX).  While this is
  * generally safe on modern systems, this link provides additional information
  * about use of the x86 TSC: http://oliveryang.net/2015/09/pitfalls-of-TSC-usage
  *

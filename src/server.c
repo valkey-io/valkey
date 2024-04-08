@@ -4526,7 +4526,7 @@ int finishShutdown(void) {
 
 
     serverLog(LL_WARNING,"%s is now ready to exit, bye bye...",
-        server.sentinel_mode ? "Sentinel" : "Redis");
+        server.sentinel_mode ? "Sentinel" : "Valkey");
     return C_OK;
 
 error:
@@ -7164,8 +7164,8 @@ int main(int argc, char **argv) {
     int background = server.daemonize && !server.supervised;
     if (background) daemonize();
 
-    serverLog(LL_NOTICE, "oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo");
-    serverLog(LL_NOTICE, SERVER_NAME " version=%s, bits=%d, commit=%s, modified=%d, pid=%d, just started",
+    serverLog(LL_NOTICE, "oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo");
+    serverLog(LL_NOTICE, "Valkey version=%s, bits=%d, commit=%s, modified=%d, pid=%d, just started",
             VALKEY_VERSION,
             (sizeof(long) == 8) ? 64 : 32,
             serverGitSHA1(),
@@ -7173,7 +7173,7 @@ int main(int argc, char **argv) {
             (int)getpid());
 
     if (argc == 1) {
-        serverLog(LL_WARNING, "Warning: no config file specified, using the default config. In order to specify a config file use %s /path/to/redis.conf", argv[0]);
+        serverLog(LL_WARNING, "Warning: no config file specified, using the default config. In order to specify a config file use %s /path/to/valkey.conf", argv[0]);
     } else {
         serverLog(LL_NOTICE, "Configuration loaded");
     }

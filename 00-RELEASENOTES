@@ -43,8 +43,8 @@ Changes to support Valkey branding
   compatibility, the Redis Module API (redismodule.h) is also kept with the
   RedisModule prefixed functions and types. (#194, #243, #262)
 * Scripting: Introduce a new top level `server` object for functions and scripts
-  that replaces the existing `redis` object. This allows users to replace calls
-  like `redis.call(...)` with `server.call(...)`. (#213)
+  that can be instead of the existing `redis` object. This allows users to
+  replace calls like `redis.call(...)` with `server.call(...)`. (#213)
 * Makefile: Introduce `SERVER_CFLAGS` and `SERVER_LDFLAGS` as an alternative to
   `REDIS_CFLAGS` and `REDIS_LDFLAGS`. (#46)
 * Update template config files to replace references to Redis with Valkey. The

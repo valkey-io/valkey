@@ -962,7 +962,7 @@ NULL
     } else if (!strcasecmp(c->argv[1]->ptr,"stringmatch-test") && c->argc == 2)
     {
         stringmatchlen_fuzz_test();
-        addReplyStatus(c,"Apparently Redis did not crash: test passed");
+        addReplyStatus(c,"Apparently Valkey did not crash: test passed");
     } else if (!strcasecmp(c->argv[1]->ptr,"set-disable-deny-scripts") && c->argc == 3)
     {
         server.script_disable_deny_script = atoi(c->argv[2]->ptr);
@@ -1158,7 +1158,7 @@ int bugReportStart(void) {
     pthread_mutex_lock(&bug_report_start_mutex);
     if (bug_report_start == 0) {
         serverLogRaw(LL_WARNING|LL_RAW,
-        "\n\n=== REDIS BUG REPORT START: Cut & paste starting from here ===\n");
+        "\n\n=== VALKEY BUG REPORT START: Cut & paste starting from here ===\n");
         bug_report_start = 1;
         pthread_mutex_unlock(&bug_report_start_mutex);
         return 1;
@@ -2380,12 +2380,12 @@ void bugReportEnd(int killViaSignal, int sig) {
     struct sigaction act;
 
     serverLogRawFromHandler(LL_WARNING|LL_RAW,
-"\n=== REDIS BUG REPORT END. Make sure to include from START to END. ===\n\n"
+"\n=== VALKEY BUG REPORT END. Make sure to include from START to END. ===\n\n"
 "       Please report the crash by opening an issue on github:\n\n"
-"           http://github.com/redis/redis/issues\n\n"
-"  If a Redis module was involved, please open in the module's repo instead.\n\n"
-"  Suspect RAM error? Use redis-server --test-memory to verify it.\n\n"
-"  Some other issues could be detected by redis-server --check-system\n"
+"           https://github.com/valkey-io/valkey/issues\n\n"
+"  If a Valkey module was involved, please open in the module's repo instead.\n\n"
+"  Suspect RAM error? Use valkey-server --test-memory to verify it.\n\n"
+"  Some other issues could be detected by valkey-server --check-system\n"
 );
 
     /* free(messages); Don't call free() with possibly corrupted memory. */

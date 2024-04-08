@@ -108,7 +108,7 @@ start_server {tags {"acl external:skip"}} {
     } {*NOPERM*channel*}
 
     test {By default, only default user is able to subscribe to any channel} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd AUTH default pwd
         $rd read
         $rd SUBSCRIBE foo
@@ -124,7 +124,7 @@ start_server {tags {"acl external:skip"}} {
     } {*NOPERM*channel*}
 
     test {By default, only default user is able to subscribe to any shard channel} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd AUTH default pwd
         $rd read
         $rd SSUBSCRIBE foo
@@ -140,7 +140,7 @@ start_server {tags {"acl external:skip"}} {
     } {*NOPERM*channel*}
 
     test {By default, only default user is able to subscribe to any pattern} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd AUTH default pwd
         $rd read
         $rd PSUBSCRIBE bar*
@@ -209,7 +209,7 @@ start_server {tags {"acl external:skip"}} {
     }
 
     test {It's possible to allow subscribing to a subset of channels} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd AUTH psuser pspass
         $rd read
         $rd SUBSCRIBE foo:1
@@ -222,7 +222,7 @@ start_server {tags {"acl external:skip"}} {
     } {*NOPERM*channel*}
 
     test {It's possible to allow subscribing to a subset of shard channels} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd AUTH psuser pspass
         $rd read
         $rd SSUBSCRIBE foo:1
@@ -235,7 +235,7 @@ start_server {tags {"acl external:skip"}} {
     } {*NOPERM*channel*}
 
     test {It's possible to allow subscribing to a subset of channel patterns} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd AUTH psuser pspass
         $rd read
         $rd PSUBSCRIBE foo:1
@@ -248,7 +248,7 @@ start_server {tags {"acl external:skip"}} {
     } {*NOPERM*channel*}
     
     test {Subscribers are killed when revoked of channel permission} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r ACL setuser psuser resetchannels &foo:1
         $rd AUTH psuser pspass
         $rd read
@@ -262,7 +262,7 @@ start_server {tags {"acl external:skip"}} {
     } {0}
 
     test {Subscribers are killed when revoked of channel permission} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r ACL setuser psuser resetchannels &foo:1
         $rd AUTH psuser pspass
         $rd read
@@ -276,7 +276,7 @@ start_server {tags {"acl external:skip"}} {
     } {0}
 
     test {Subscribers are killed when revoked of pattern permission} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r ACL setuser psuser resetchannels &bar:*
         $rd AUTH psuser pspass
         $rd read
@@ -290,7 +290,7 @@ start_server {tags {"acl external:skip"}} {
     } {0}
 
     test {Subscribers are killed when revoked of allchannels permission} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r ACL setuser psuser allchannels
         $rd AUTH psuser pspass
         $rd read
@@ -304,7 +304,7 @@ start_server {tags {"acl external:skip"}} {
     } {0}
 
     test {Subscribers are pardoned if literal permissions are retained and/or gaining allchannels} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r ACL setuser psuser resetchannels &foo:1 &bar:* &orders
         $rd AUTH psuser pspass
         $rd read
@@ -326,7 +326,7 @@ start_server {tags {"acl external:skip"}} {
     test {blocked command gets rejected when reprocessed after permission change} {
         r auth default ""
         r config resetstat
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r ACL setuser psuser reset on nopass +@all allkeys
         $rd AUTH psuser pspass
         $rd read
@@ -754,7 +754,7 @@ start_server {tags {"acl external:skip"}} {
     }
 
     test {ACL LOG can distinguish the transaction context (2)} {
-        set rd1 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
         r ACL SETUSER antirez +incr
 
         r AUTH antirez foo
@@ -830,7 +830,7 @@ start_server {tags {"acl external:skip"}} {
 
     test {When default user is off, new connections are not authenticated} {
         r ACL setuser default off
-        catch {set rd1 [redis_deferring_client]} e
+        catch {set rd1 [valkey_deferring_client]} e
         r ACL setuser default on
         set e
     } {*NOAUTH*}
@@ -1024,8 +1024,8 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allc
         reconnect
         r ACL SETUSER doug on nopass resetchannels &test* +@all ~*
 
-        set rd1 [redis_deferring_client]
-        set rd2 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
 
         $rd1 AUTH alice alice
         $rd1 read
@@ -1055,8 +1055,8 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allc
         reconnect
         r ACL SETUSER mortimer on >mortimer ~* &* +@all
 
-        set rd1 [redis_deferring_client]
-        set rd2 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
 
         $rd1 AUTH alice alice
         $rd1 read

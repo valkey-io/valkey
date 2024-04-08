@@ -64,7 +64,7 @@ start_server {tags {"modules"}} {
         r config set busy-reply-threshold 5000 ;# make sure we're using a high default
         # trigger slow loading
         r datatype.slow_loading 1
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         set start [clock clicks -milliseconds]
         $rd debug reload
 

@@ -14,7 +14,7 @@ if { ! [ catch {
 }
 
 proc generate_collections {suffix elements} {
-    set rd [redis_deferring_client]
+    set rd [valkey_deferring_client]
     for {set j 0} {$j < $elements} {incr j} {
         # add both string values and integers
         if {$j % 2 == 0} {set val $j} else {set val "_$j"}

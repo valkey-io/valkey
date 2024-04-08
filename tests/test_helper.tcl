@@ -255,7 +255,7 @@ proc reconnect {args} {
     lset ::servers end+$level $srv
 }
 
-proc redis_deferring_client {args} {
+proc valkey_deferring_client {args} {
     set level 0
     if {[llength $args] > 0 && [string is integer [lindex $args 0]]} {
         set level [lindex $args 0]

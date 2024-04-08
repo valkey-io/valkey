@@ -127,7 +127,7 @@ test {Blocking Commands don't run through command filter when reprocessed} {
 
         r lpush list2{t} a b c d e
 
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         # we're asking to pop from the left, but the command filter swaps the two arguments,
         # if it didn't swap it, we would end up with e d c b a 5 (5 being the left most of the following lpush)
         # but since we swap the arguments, we end up with 1 e d c b a (1 being the right most of it).

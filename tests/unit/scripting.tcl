@@ -770,7 +770,7 @@ start_server {tags {"scripting"}} {
         r script flush ;# reset Lua VM
         r set x 0
         # Use a non blocking client to speedup the loop.
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         for {set j 0} {$j < 10000} {incr j} {
             run_script_on_connection $rd {return redis.call("incr",KEYS[1])} 1 x
         }
@@ -1138,7 +1138,7 @@ start_server {tags {"scripting"}} {
 # instance at all.
 start_server {tags {"scripting"}} {
     test {Timedout read-only scripts can be killed by SCRIPT KILL} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r config set lua-time-limit 10
         run_script_on_connection $rd {while true do end} 0
         after 200
@@ -1151,7 +1151,7 @@ start_server {tags {"scripting"}} {
     }
 
     test {Timedout read-only scripts can be killed by SCRIPT KILL even when use pcall} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r config set lua-time-limit 10
         run_script_on_connection $rd {local f = function() while 1 do redis.call('ping') end end while 1 do pcall(f) end} 0
 
@@ -1179,7 +1179,7 @@ start_server {tags {"scripting"}} {
     }
 
     test {Timedout script does not cause a false dead client} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r config set lua-time-limit 10
 
         # senging (in a pipeline):
@@ -1240,8 +1240,8 @@ start_server {tags {"scripting"}} {
         r config set appendonly yes
 
         # create clients, and set one to block waiting for key 'x'
-        set rd [redis_deferring_client]
-        set rd2 [redis_deferring_client]
+        set rd [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
         set r3 [redis_client]
         $rd2 blpop x 0
         wait_for_blocked_clients_count 1
@@ -1280,7 +1280,7 @@ start_server {tags {"scripting"}} {
     } {OK} {external:skip needs:debug}
 
     test {Timedout scripts that modified data can't be killed by SCRIPT KILL} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r config set lua-time-limit 10
         run_script_on_connection $rd {redis.call('set',KEYS[1],'y'); while true do end} 1 x
         after 200
@@ -1300,7 +1300,7 @@ start_server {tags {"scripting"}} {
         assert_match {BUSY*} $e
         catch {r shutdown nosave}
         # Make sure the server was killed
-        catch {set rd [redis_deferring_client]} e
+        catch {set rd [valkey_deferring_client]} e
         assert_match {*connection refused*} $e
     } {} {external:skip}
 }
@@ -1348,7 +1348,7 @@ start_server {tags {"scripting"}} {
             } ;# is_eval
 
             test "Replication of script multiple pushes to list with BLPOP" {
-                set rd [redis_deferring_client]
+                set rd [valkey_deferring_client]
                 $rd brpop a 0
                 run_script {
                     redis.call("lpush",KEYS[1],"1");
@@ -2125,7 +2125,7 @@ start_server {tags {"scripting"}} {
 
             # run a slow script that does one write, then waits for INFO to indicate
             # that the replica dropped, and then runs another write
-            set rd [redis_deferring_client -1]
+            set rd [valkey_deferring_client -1]
             $rd eval {
                 redis.call('set','x',"script value")
                 while true do

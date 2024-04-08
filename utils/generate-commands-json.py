@@ -102,7 +102,7 @@ srcdir = os.path.abspath(os.path.dirname(os.path.abspath(__file__)) + "/../src")
 # MAIN
 if __name__ == '__main__':
     opts = {
-        'description': 'Transform the output from `redis-cli --json` using COMMAND and COMMAND DOCS to a single commands.json format.',
+        'description': 'Transform the output from `valkey-cli --json` using COMMAND and COMMAND DOCS to a single commands.json format.',
         'epilog': f'Usage example: {argv[0]} --cli src/valkey-cli --port 6379 > commands.json'
     }
     parser = argparse.ArgumentParser(**opts)

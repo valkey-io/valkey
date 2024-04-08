@@ -1618,7 +1618,7 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
         client *slave = ln->value;
 
         if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_END) {
-            struct redis_stat buf;
+            struct valkey_stat buf;
 
             if (bgsaveerr != C_OK) {
                 freeClientAsync(slave);
@@ -1666,8 +1666,8 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
                 }
                 slave->repl_start_cmd_stream_on_ack = 1;
             } else {
-                if ((slave->repldbfd = open(server.rdb_filename,O_RDONLY)) == -1 ||
-                    redis_fstat(slave->repldbfd,&buf) == -1) {
+                if ((slave->repldbfd = open(server.rdb_filename, O_RDONLY)) == -1 ||
+                    valkey_fstat(slave->repldbfd, &buf) == -1) {
                     freeClientAsync(slave);
                     serverLog(LL_WARNING,"SYNC failed. Can't open/stat DB after BGSAVE: %s", strerror(errno));
                     continue;

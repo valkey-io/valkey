@@ -149,7 +149,7 @@ static size_t rioFileWrite(rio *r, const void *buf, size_t len) {
                     return 0;
             }
 #else
-            if (redis_fsync(fileno(r->io.file.fp)) == -1) return 0;
+            if (valkey_fsync(fileno(r->io.file.fp)) == -1) return 0;
 #endif
             if (r->io.file.reclaim_cache) {
                 /* In Linux sync_file_range just issue a writeback request to

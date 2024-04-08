@@ -231,8 +231,8 @@ int checkSingleAof(char *aof_filename, char *aof_filepath, int last_file, int fi
         exit(1);
     }
 
-    struct redis_stat sb;
-    if (redis_fstat(fileno(fp),&sb) == -1) {
+    struct valkey_stat sb;
+    if (valkey_fstat(fileno(fp), &sb) == -1) {
         printf("Cannot stat file: %s, aborting...\n", aof_filename);
         fclose(fp);
         exit(1);
@@ -343,8 +343,8 @@ int fileIsRDB(char *filepath) {
         exit(1);
     }
 
-    struct redis_stat sb;
-    if (redis_fstat(fileno(fp), &sb) == -1) {
+    struct valkey_stat sb;
+    if (valkey_fstat(fileno(fp), &sb) == -1) {
         printf("Cannot stat file: %s\n", filepath);
         fclose(fp);
         exit(1);
@@ -380,8 +380,8 @@ int fileIsManifest(char *filepath) {
         exit(1);
     }
 
-    struct redis_stat sb;
-    if (redis_fstat(fileno(fp), &sb) == -1) {
+    struct valkey_stat sb;
+    if (valkey_fstat(fileno(fp), &sb) == -1) {
         printf("Cannot stat file: %s\n", filepath);
         fclose(fp);
         exit(1);

@@ -210,7 +210,7 @@ void *bioProcessBackgroundJobs(void *arg) {
     /* Check that the worker is within the right interval. */
     serverAssert(worker < BIO_WORKER_NUM);
 
-    redis_set_thread_title(bio_worker_title[worker]);
+    valkey_set_thread_title(bio_worker_title[worker]);
 
     serverSetCpuAffinity(server.bio_cpulist);
 
@@ -245,7 +245,7 @@ void *bioProcessBackgroundJobs(void *arg) {
 
         if (job_type == BIO_CLOSE_FILE) {
             if (job->fd_args.need_fsync &&
-                redis_fsync(job->fd_args.fd) == -1 &&
+                valkey_fsync(job->fd_args.fd) == -1 &&
                 errno != EBADF && errno != EINVAL)
             {
                 serverLog(LL_WARNING, "Fail to fsync the AOF file: %s",strerror(errno));
@@ -260,7 +260,7 @@ void *bioProcessBackgroundJobs(void *arg) {
             /* The fd may be closed by main thread and reused for another
              * socket, pipe, or file. We just ignore these errno because
              * aof fsync did not really fail. */
-            if (redis_fsync(job->fd_args.fd) == -1 &&
+            if (valkey_fsync(job->fd_args.fd) == -1 &&
                 errno != EBADF && errno != EINVAL)
             {
                 int last_status;

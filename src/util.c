@@ -1161,7 +1161,7 @@ int fsyncFileDir(const char *filename) {
     }
     /* Some OSs don't allow us to fsync directories at all, so we can ignore
      * those errors. */
-    if (redis_fsync(dir_fd) == -1 && !(errno == EBADF || errno == EINVAL)) {
+    if (valkey_fsync(dir_fd) == -1 && !(errno == EBADF || errno == EINVAL)) {
         int save_errno = errno;
         close(dir_fd);
         errno = save_errno;
@@ -1620,7 +1620,7 @@ static void test_reclaimFilePageCache(void) {
     char buf[4] = "foo";
     assert(write(fd, buf, sizeof(buf)) > 0);
     assert(cache_exist(fd));
-    assert(redis_fsync(fd) == 0);
+    assert(valkey_fsync(fd) == 0);
     assert(reclaimFilePageCache(fd, 0, 0) == 0);
     assert(!cache_exist(fd));
 

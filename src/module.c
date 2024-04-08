@@ -11375,7 +11375,7 @@ static uint64_t moduleEventVersions[] = {
  *
  *         int32_t hz;  // Approximate number of events per second.
  *
- * * ValkeyModuleEvent_MasterLinkChange
+ * * ValkeyModuleEvent_PrimaryLinkChange
  *
  *     This is called for replicas in order to notify when the
  *     replication link becomes functional (up) with our master,

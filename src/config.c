@@ -626,7 +626,7 @@ void loadServerConfigFromString(char *config) {
         fclose(audit_logfp);
 
         /* Edit verbosity if audit-logfile is defined. Default LL_NOTICE. */
-        if server.verbosity > LL_VERBOSE {
+        if (server.verbosity > LL_VERBOSE) {
             server.verbosity = LL_VERBOSE;
         }
     }

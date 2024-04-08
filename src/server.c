@@ -121,7 +121,9 @@ void serverLogRaw(int level, const char *msg) {
     level &= 0xff; /* clear flags */
     if (level < server.verbosity) return;
 
-    fp = log_to_stdout ? stdout : fopen(server.logfile,"a");
+    fp = log_to_stdout ? stdout :
+                         (server.verbosity <= LL_VERBOSE ? fopen(server.audit_logfile,"a") :
+                                                           fopen(server.logfile,"a"));
     if (!fp) return;
 
     if (rawmode) {

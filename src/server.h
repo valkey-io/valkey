@@ -1848,6 +1848,7 @@ struct valkeyServer {
     int replication_allowed;        /* Are we allowed to replicate? */
     /* Logging */
     char *logfile;                  /* Path of log file */
+    char *audit_logfile;            /* Path of audit log file*/
     int syslog_enabled;             /* Is syslog enabled? */
     char *syslog_ident;             /* Syslog ident */
     int syslog_facility;            /* Syslog facility */

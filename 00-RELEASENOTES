@@ -49,9 +49,9 @@ Changes to support Valkey branding
   `REDIS_CFLAGS` and `REDIS_LDFLAGS`. (#46)
 * Update template config files to replace references to Redis with Valkey. The
   file valkey.conf replaces redis.conf. (#29, #171)
-* Logging: Update startup and and shutdown logs to reference Valkey instead of
+* Logging: Update startup, shutdown, and help logs to reference Valkey instead of
   Redis. Valkey server will also show the Valkey logo at startup and show the
-  Valkey repositories when crashing. (#251, #252, #263)
+  Valkey repositories when crashing. (#251, #252, #263, #113)
 
 Bug fixes
 =========

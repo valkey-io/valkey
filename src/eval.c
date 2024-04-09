@@ -136,7 +136,7 @@ void sha1hex(char *digest, char *script, size_t len) {
     digest[40] = '\0';
 }
 
-/* server.breakpoint()
+/* Adds server.breakpoint() function used by lua debugger.  
  *
  * Allows to stop execution during a debugging session from within
  * the Lua code implementation, like if a breakpoint was set in the code
@@ -151,7 +151,7 @@ int luaServerBreakpointCommand(lua_State *lua) {
     return 1;
 }
 
-/* server.debug()
+/* Adds server.debug() function used by lua debugger
  *
  * Log a string message into the output console.
  * Can take multiple arguments that will be separated by commas.
@@ -168,7 +168,7 @@ int luaServerDebugCommand(lua_State *lua) {
     return 0;
 }
 
-/* server.replicate_commands()
+/* Adds server.replicate_commands()
  *
  * DEPRECATED: Now do nothing and always return true.
  * Turn on single commands replication if the script never called
@@ -208,25 +208,25 @@ void scriptingInit(int setup) {
 
     luaRegisterServerAPI(lua);
 
-    /* register debug commands */
-    lua_getglobal(lua, "server");
+    /* register debug commands. we only need to add it under 'server' as 'redis' is effectively aliased to 'server' table at this point. */
+    lua_getglobal(lua,"server");
 
     /* server.breakpoint */
-    lua_pushstring(lua, "breakpoint");
-    lua_pushcfunction(lua, luaServerBreakpointCommand);
-    lua_settable(lua, -3);
+    lua_pushstring(lua,"breakpoint");
+    lua_pushcfunction(lua,luaServerBreakpointCommand);
+    lua_settable(lua,-3);
 
     /* server.debug */
-    lua_pushstring(lua, "debug");
-    lua_pushcfunction(lua, luaServerDebugCommand);
-    lua_settable(lua, -3);
+    lua_pushstring(lua,"debug");
+    lua_pushcfunction(lua,luaServerDebugCommand);
+    lua_settable(lua,-3);
 
     /* server.replicate_commands */
     lua_pushstring(lua, "replicate_commands");
     lua_pushcfunction(lua, luaServerReplicateCommandsCommand);
     lua_settable(lua, -3);
 
-    lua_setglobal(lua, "server");
+    lua_setglobal(lua,"server");
 
     /* Add a helper function we use for pcall error reporting.
      * Note that when the error is in the C function we want to report the
@@ -577,7 +577,7 @@ void evalGenericCommand(client *c, int evalsha) {
         evalCalcFunctionName(evalsha, c->argv[1]->ptr, funcname);
 
     /* Push the pcall error handler function on the stack. */
-    lua_getglobal(lua, "__redis__err__handler");
+    lua_getglobal(lua, "__server__err__handler");
 
     /* Try to lookup the Lua function */
     lua_getfield(lua, LUA_REGISTRYINDEX, funcname);
@@ -1365,7 +1365,7 @@ char *ldbRespToHuman_Double(sds *o, char *reply) {
 /* Log a RESP reply as debugger output, in a human readable format.
  * If the resulting string is longer than 'len' plus a few more chars
  * used as prefix, it gets truncated. */
-void ldbLogRespReply(char *reply) {
+void ldbLogServerReply(char *reply) {
     sds log = sdsnew("<reply> ");
     ldbRespToHuman(&log, reply);
     ldbLogWithMaxLen(log);
@@ -1518,18 +1518,19 @@ void ldbServer(lua_State *lua, sds *argv, int argc) {
          * given by the user (without the first argument) and we also push the 'server' global table and
          * 'server.call' function so:
          * (1 (server table)) + (1 (server.call function)) + (argc - 1 (all arguments without the first)) = argc + 1*/
-        ldbLogRespReply("max lua stack reached");
+        ldbLogServerReply("max lua stack reached");
         return;
     }
 
     lua_getglobal(lua, "server");
     lua_pushstring(lua, "call");
-    lua_gettable(lua, -2); /* Stack: server, server.call */
-    for (j = 1; j < argc; j++) lua_pushlstring(lua, argv[j], sdslen(argv[j]));
-    ldb.step = 1;                   /* Force server.call() to log. */
-    lua_pcall(lua, argc - 1, 1, 0); /* Stack: server, result */
-    ldb.step = 0;                   /* Disable logging. */
-    lua_pop(lua, 2);                /* Discard the result and clean the stack. */
+    lua_gettable(lua, -2);       /* Stack: server, server.call */
+    for (j = 1; j < argc; j++)
+        lua_pushlstring(lua, argv[j], sdslen(argv[j]));
+    ldb.step = 1;               /* Force server.call() to log. */
+    lua_pcall(lua, argc-1, 1, 0);  /* Stack: server, result */
+    ldb.step = 0;               /* Disable logging. */
+    lua_pop(lua, 2);             /* Discard the result and clean the stack. */
 }
 
 /* Implements "trace" command of the Lua debugger. It just prints a backtrace

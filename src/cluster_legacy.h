@@ -161,7 +161,7 @@ typedef struct {
 
 typedef struct {
     uint32_t length; /* Total length of this extension message (including this header) */
-    uint16_t type; /* Type of this extension message (see clusterMsgPingExtTypes) */
+    uint16_t type; /* Type of this extension message (see clusterMsgPingtypes) */
     uint16_t unused; /* 16 bits of padding to make this structure 8 byte aligned. */
     union {
         clusterMsgPingExtHostname hostname;
@@ -208,7 +208,7 @@ union clusterMsgData {
 typedef struct {
     char sig[4];        /* Signature "RCmb" (Cluster message bus). */
     uint32_t totlen;    /* Total length of this message */
-    uint16_t ver;       /* Protocol version, currently set to 1. */
+    uint16_t ver;       /* Protocol version, currently set to CLUSTER_PROTO_VER. */
     uint16_t port;      /* Primary port number (TCP or TLS). */
     uint16_t type;      /* Message type */
     uint16_t count;     /* Only used for some kind of messages. */

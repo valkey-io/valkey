@@ -1450,6 +1450,10 @@ int clusterNodeFailureReportsCount(clusterNode *node) {
     return listLength(node->fail_reports);
 }
 
+static int clusterNodeNameComparator(const void *node1, const void *node2) {
+    return strncasecmp((*(clusterNode **)node1)->name, (*(clusterNode **)node2)->name, CLUSTER_NAMELEN);
+}
+
 int clusterNodeRemoveSlave(clusterNode *master, clusterNode *slave) {
     int j;
 
@@ -1479,6 +1483,7 @@ int clusterNodeAddSlave(clusterNode *master, clusterNode *slave) {
         sizeof(clusterNode*)*(master->numslaves+1));
     master->slaves[master->numslaves] = slave;
     master->numslaves++;
+    qsort(master->slaves, master->numslaves, sizeof(clusterNode *), clusterNodeNameComparator);
     master->flags |= CLUSTER_NODE_MIGRATE_TO;
     return C_OK;
 }
@@ -2598,9 +2603,7 @@ uint32_t writePingExt(clusterMsg *hdr, int gossipcount)  {
     extensions++;
 
     if (hdr != NULL) {
-        if (extensions != 0) {
-            hdr->mflags[0] |= CLUSTERMSG_FLAG0_EXT_DATA;
-        }
+        hdr->mflags[0] |= CLUSTERMSG_FLAG0_EXT_DATA;
         hdr->extensions = htons(extensions);
     }
 
@@ -2790,6 +2793,10 @@ int clusterProcessPacket(clusterLink *link) {
     }
 
     sender = getNodeFromLinkAndMsg(link, hdr);
+
+    if (sender && (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA)) {
+        sender->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
+    }
 
     /* Update the last time we saw any data from this node. We
      * use this in order to avoid detecting a timeout from a node that
@@ -3633,7 +3640,9 @@ void clusterSendPing(clusterLink *link, int type) {
      * to put inside the packet. */
     estlen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
     estlen += (sizeof(clusterMsgDataGossip)*(wanted + pfail_wanted));
-    estlen += writePingExt(NULL, 0);
+    if (link->node && nodeSupportsExtensions(link->node)) {
+        estlen += writePingExt(NULL, 0);
+    }
     /* Note: clusterBuildMessageHdr() expects the buffer to be always at least
      * sizeof(clusterMsg) or more. */
     if (estlen < (int)sizeof(clusterMsg)) estlen = sizeof(clusterMsg);
@@ -3703,7 +3712,13 @@ void clusterSendPing(clusterLink *link, int type) {
 
     /* Compute the actual total length and send! */
     uint32_t totlen = 0;
-    totlen += writePingExt(hdr, gossipcount);
+
+    if (link->node && nodeSupportsExtensions(link->node)) {
+        totlen += writePingExt(hdr, gossipcount);
+    } else {
+        serverLog(LL_DEBUG, "Unable to send extensions data, however setting ext data flag to true");
+        hdr->mflags[0] |= CLUSTERMSG_FLAG0_EXT_DATA;
+    }
     totlen += sizeof(clusterMsg)-sizeof(union clusterMsgData);
     totlen += (sizeof(clusterMsgDataGossip)*gossipcount);
     serverAssert(gossipcount < USHRT_MAX);

@@ -80,13 +80,13 @@ start_cluster 1 2 {tags {external:skip cluster}} {
         set channelname ch3
 
         # subscribe on replica1
-        set subscribeclient1 [redis_deferring_client -1]
+        set subscribeclient1 [valkey_deferring_client -1]
         $subscribeclient1 deferred 1
         $subscribeclient1 SSUBSCRIBE $channelname
         $subscribeclient1 read
 
         # subscribe on replica2
-        set subscribeclient2 [redis_deferring_client -2]
+        set subscribeclient2 [valkey_deferring_client -2]
         $subscribeclient2 deferred 1
         $subscribeclient2 SSUBSCRIBE $channelname
         $subscribeclient2 read

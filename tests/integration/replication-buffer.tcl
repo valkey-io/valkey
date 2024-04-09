@@ -294,7 +294,7 @@ test {Replica client-output-buffer size is limited to backlog_limit/16 when no r
 
             # Before this fix (#11905), the test would trigger an assertion in 'o->used >= c->ref_block_pos'
             test {The update of replBufBlock's repl_offset is ok - Regression test for #11666} {
-                set rd [redis_deferring_client]
+                set rd [valkey_deferring_client]
                 set replid [status $master master_replid]
                 set offset [status $master repl_backlog_first_byte_offset]
                 $rd psync $replid $offset

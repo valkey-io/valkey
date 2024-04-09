@@ -44,9 +44,9 @@ start_server {tags {"introspection"}} {
         # 3 retries of increasing sleep_time, i.e. start with 2s, then go 4s, 8s.
         set sleep_time 2
         for {set i 0} {$i < 3} {incr i} {
-            set rd1 [redis_deferring_client]
+            set rd1 [valkey_deferring_client]
             r debug sleep $sleep_time
-            set rd2 [redis_deferring_client]
+            set rd2 [valkey_deferring_client]
             r acl setuser dummy on nopass +ping
             $rd1 auth dummy ""
             $rd1 read
@@ -80,16 +80,16 @@ start_server {tags {"introspection"}} {
 
     test {CLIENT KILL SKIPME YES/NO will kill all clients} {
         # Kill all clients except `me`
-        set rd1 [redis_deferring_client]
-        set rd2 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
         set connected_clients [s connected_clients]
         assert {$connected_clients >= 3}
         set res [r client kill skipme yes]
         assert {$res == $connected_clients - 1}
 
         # Kill all clients, including `me`
-        set rd3 [redis_deferring_client]
-        set rd4 [redis_deferring_client]
+        set rd3 [valkey_deferring_client]
+        set rd4 [valkey_deferring_client]
         set connected_clients [s connected_clients]
         assert {$connected_clients == 3}
         set res [r client kill skipme no]
@@ -162,7 +162,7 @@ start_server {tags {"introspection"}} {
     } {} {needs:save}
 
     test "CLIENT REPLY OFF/ON: disable all commands reply" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         # These replies were silenced.
         $rd client reply off
@@ -178,7 +178,7 @@ start_server {tags {"introspection"}} {
     }
 
     test "CLIENT REPLY SKIP: skip the next command reply" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         # The first pong reply was silenced.
         $rd client reply skip
@@ -191,7 +191,7 @@ start_server {tags {"introspection"}} {
     }
 
     test "CLIENT REPLY ON: unset SKIP flag" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         $rd client reply skip
         $rd client reply on
@@ -204,7 +204,7 @@ start_server {tags {"introspection"}} {
     }
 
     test {MONITOR can log executed commands} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd monitor
         assert_match {*OK*} [$rd read]
         r set foo bar
@@ -215,7 +215,7 @@ start_server {tags {"introspection"}} {
     } {*"set" "foo"*"get" "foo"*}
 
     test {MONITOR can log commands issued by the scripting engine} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd monitor
         $rd read ;# Discard the OK
         r eval {redis.call('set',KEYS[1],ARGV[1])} 1 foo bar
@@ -228,7 +228,7 @@ start_server {tags {"introspection"}} {
         r function load replace {#!lua name=test
             redis.register_function('test', function() return redis.call('set', 'foo', 'bar') end)
         }
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd monitor
         $rd read ;# Discard the OK
         r fcall test 0
@@ -238,7 +238,7 @@ start_server {tags {"introspection"}} {
     }
 
     test {MONITOR supports redacting command arguments} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd monitor
         $rd read ; # Discard the OK
 
@@ -267,7 +267,7 @@ start_server {tags {"introspection"}} {
     } {0} {needs:repl}
 
     test {MONITOR correctly handles multi-exec cases} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd monitor
         $rd read ; # Discard the OK
 
@@ -296,8 +296,8 @@ start_server {tags {"introspection"}} {
         # need to reconnect in order to reset the clients state
         reconnect
         
-        set rd [redis_deferring_client]
-        set bc [redis_deferring_client]
+        set rd [valkey_deferring_client]
+        set bc [valkey_deferring_client]
         r del mylist
         
         $rd monitor
@@ -363,7 +363,7 @@ start_server {tags {"introspection"}} {
     } {*name=someothername*}
 
     test {After CLIENT SETNAME, connection can still be closed} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd client setname foobar
         assert_equal [$rd read] "OK"
         assert_match {*foobar*} [r client list]

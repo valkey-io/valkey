@@ -143,7 +143,7 @@ void reqresReset(client *c, int free_buf) {
  * Ideally, we would just have this code inside reqresAppendRequest, which is called
  * from processCommand, but we cannot save the reply offset inside processCommand
  * because of the following pipe-lining scenario:
- * set rd [redis_deferring_client]
+ * set rd [valkey_deferring_client]
  * set buf ""
  * append buf "SET key vale\r\n"
  * append buf "BLPOP mylist 0\r\n"

@@ -108,7 +108,7 @@ start_server {tags {"repl external:skip"}} {
 
         test {BRPOPLPUSH replication, when blocking against empty list} {
             $A config resetstat
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             $rd brpoplpush a b 5
             r lpush a foo
             wait_for_condition 50 100 {
@@ -122,7 +122,7 @@ start_server {tags {"repl external:skip"}} {
 
         test {BRPOPLPUSH replication, list exists} {
             $A config resetstat
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             r lpush c 1
             r lpush c 2
             r lpush c 3
@@ -137,7 +137,7 @@ start_server {tags {"repl external:skip"}} {
             foreach whereto {left right} {
                 test "BLMOVE ($wherefrom, $whereto) replication, when blocking against empty list" {
                     $A config resetstat
-                    set rd [redis_deferring_client]
+                    set rd [valkey_deferring_client]
                     $rd blmove a b $wherefrom $whereto 5
                     r lpush a foo
                     wait_for_condition 50 100 {
@@ -151,7 +151,7 @@ start_server {tags {"repl external:skip"}} {
 
                 test "BLMOVE ($wherefrom, $whereto) replication, list exists" {
                     $A config resetstat
-                    set rd [redis_deferring_client]
+                    set rd [valkey_deferring_client]
                     r lpush c 1
                     r lpush c 2
                     r lpush c 3
@@ -165,7 +165,7 @@ start_server {tags {"repl external:skip"}} {
         }
 
         test {BLPOP followed by role change, issue #2473} {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             $rd blpop foo 0 ; # Block while B is a master
 
             # Turn B into master of A
@@ -637,7 +637,7 @@ foreach testType {Successful Aborted} {
                     }
 
                     test {Busy script during async loading} {
-                        set rd_replica [redis_deferring_client -1]
+                        set rd_replica [valkey_deferring_client -1]
                         $replica config set lua-time-limit 10
                         $rd_replica eval {while true do end} 0
                         after 200
@@ -1146,7 +1146,7 @@ test {replicaof right after disconnection} {
                     fail "Can't turn the instance into a replica"
                 }
 
-                set rd [redis_deferring_client -1]
+                set rd [valkey_deferring_client -1]
                 $rd debug sleep 1
                 after 100
 
@@ -1344,7 +1344,7 @@ test {replica can handle EINTR if use diskless load} {
 
 start_server {tags {"repl" "external:skip"}} {
     test "replica do not write the reply to the replication link - SYNC (_addReplyToBufferOrList)" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         set lines [count_log_lines 0]
 
         $rd sync
@@ -1361,7 +1361,7 @@ start_server {tags {"repl" "external:skip"}} {
     }
 
     test "replica do not write the reply to the replication link - SYNC (addReplyDeferredLen)" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         set lines [count_log_lines 0]
 
         $rd sync
@@ -1378,7 +1378,7 @@ start_server {tags {"repl" "external:skip"}} {
     }
 
     test "replica do not write the reply to the replication link - PSYNC (_addReplyToBufferOrList)" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         set lines [count_log_lines 0]
 
         $rd psync replicationid -1
@@ -1398,7 +1398,7 @@ start_server {tags {"repl" "external:skip"}} {
     }
 
     test "replica do not write the reply to the replication link - PSYNC (addReplyDeferredLen)" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         set lines [count_log_lines 0]
 
         $rd psync replicationid -1

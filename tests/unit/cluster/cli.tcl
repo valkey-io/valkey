@@ -17,7 +17,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
     set node2 [srv -1 client]
     set node3 [srv -2 client]
     set node3_pid [srv -2 pid]
-    set node3_rd [redis_deferring_client -2]
+    set node3_rd [valkey_deferring_client -2]
 
     test {Create 3 node cluster} {
         exec src/valkey-cli --cluster-yes --cluster create \
@@ -79,7 +79,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
         }
     }
 
-    set node1_rd [redis_deferring_client 0]
+    set node1_rd [valkey_deferring_client 0]
 
     test "use previous hostip in \"cluster-preferred-endpoint-type unknown-endpoint\" mode" {
         

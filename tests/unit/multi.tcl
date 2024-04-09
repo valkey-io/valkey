@@ -68,7 +68,7 @@ start_server {tags {"multi"}} {
     } {0 0}
 
     test {EXEC fails if there are errors while queueing commands #2} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r del foo1{t} foo2{t}
         r multi
         r set foo1{t} bar1
@@ -523,7 +523,7 @@ start_server {tags {"multi"}} {
     } {OK} {needs:repl cluster:skip}
 
     test {DISCARD should not fail during OOM} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd config set maxmemory 1
         assert  {[$rd read] eq {OK}}
         r multi
@@ -539,7 +539,7 @@ start_server {tags {"multi"}} {
     test {MULTI and script timeout} {
         # check that if MULTI arrives during timeout, it is either refused, or
         # allowed to pass, and we don't end up executing half of the transaction
-        set rd1 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
         set r2 [redis_client]
         r config set lua-time-limit 10
         r set xx 1
@@ -564,7 +564,7 @@ start_server {tags {"multi"}} {
     test {EXEC and script timeout} {
         # check that if EXEC arrives during timeout, we don't end up executing
         # half of the transaction, and also that we exit the multi state
-        set rd1 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
         set r2 [redis_client]
         r config set lua-time-limit 10
         r set xx 1
@@ -589,7 +589,7 @@ start_server {tags {"multi"}} {
     test {MULTI-EXEC body and script timeout} {
         # check that we don't run an incomplete transaction due to some commands
         # arriving during busy script
-        set rd1 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
         set r2 [redis_client]
         r config set lua-time-limit 10
         r set xx 1
@@ -614,7 +614,7 @@ start_server {tags {"multi"}} {
     test {just EXEC and script timeout} {
         # check that if EXEC arrives during timeout, we don't end up executing
         # actual commands during busy script, and also that we exit the multi state
-        set rd1 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
         set r2 [redis_client]
         r config set lua-time-limit 10
         r set xx 1

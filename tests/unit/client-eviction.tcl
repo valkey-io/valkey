@@ -1,6 +1,6 @@
 tags {"external:skip logreqres:skip"} {
 
-# Get info about a redis client connection:
+# Get info about a server client connection:
 # name - name of client we want to query
 # f - field name from "CLIENT LIST" we want to get
 proc client_field {name f} {
@@ -27,7 +27,7 @@ proc gen_client {} {
     return [list $rr $name]
 }
 
-# Sum a value across all redis client connections:
+# Sum a value across all server client connections:
 # f - the field name from "CLIENT LIST" we want to sum
 proc clients_sum {f} {
     set sum 0

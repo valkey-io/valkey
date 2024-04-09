@@ -374,7 +374,7 @@ tags {"aof external:skip"} {
         }
     }
 
-    # redis could load AOF which has timestamp annotations inside
+    # The server could load AOF which has timestamp annotations inside
     create_aof $aof_dirpath $aof_file {
         append_to_aof "#TS:1628217470\r\n"
         append_to_aof [formatCommand set foo1 bar1]

@@ -377,7 +377,7 @@ start_server {tags {"scripting"}} {
 
     test {EVAL - JSON numeric decoding} {
         # We must return the table as a string because otherwise
-        # Redis converts floats to ints and we get 0 and 1023 instead
+        # the server converts floats to ints and we get 0 and 1023 instead
         # of 0.0003 and 1023.2 as the parsed output.
         run_script {return
                  table.concat(
@@ -1414,7 +1414,7 @@ start_server {tags {"scripting repl external:skip"}} {
             }
         }
 
-        # replicate_commands is the default on Redis Function
+        # replicate_commands is the default on server Functions
         test "Redis.replicate_commands() can be issued anywhere now" {
             r eval {
                 redis.call('set','foo','bar');
@@ -2227,7 +2227,7 @@ start_server {tags {"scripting"}} {
     test "Consistent eval error reporting" {
         r config resetstat
         r config set maxmemory 1
-        # Script aborted due to Redis state (OOM) should report script execution error with detailed internal error
+        # Script aborted due to server state (OOM) should report script execution error with detailed internal error
         assert_error {OOM command not allowed when used memory > 'maxmemory'*} {
             r eval {return redis.call('set','x','y')} 1 x
         }
@@ -2236,7 +2236,7 @@ start_server {tags {"scripting"}} {
         assert_match {calls=0*rejected_calls=1,failed_calls=0*} [cmdrstat set r]
         assert_match {calls=1*rejected_calls=0,failed_calls=1*} [cmdrstat eval r]
 
-        # redis.pcall() failure due to Redis state (OOM) returns lua error table with Redis error message without '-' prefix
+        # redis.pcall() failure due to server state (OOM) returns lua error table with server error message without '-' prefix
         r config resetstat
         assert_equal [
             r eval {
@@ -2268,7 +2268,7 @@ start_server {tags {"scripting"}} {
 
         r config set maxmemory 0
         r config resetstat
-        # Script aborted due to error result of Redis command
+        # Script aborted due to error result of server command
         assert_error {ERR DB index is out of range*} {
             r eval {return redis.call('select',99)} 0
         }
@@ -2277,7 +2277,7 @@ start_server {tags {"scripting"}} {
         assert_match {calls=1*rejected_calls=0,failed_calls=1*} [cmdrstat select r]
         assert_match {calls=1*rejected_calls=0,failed_calls=1*} [cmdrstat eval r]
         
-        # redis.pcall() failure due to error in Redis command returns lua error table with redis error message without '-' prefix
+        # redis.pcall() failure due to error in server command returns lua error table with server error message without '-' prefix
         r config resetstat
         assert_equal [
             r eval {
@@ -2304,7 +2304,7 @@ start_server {tags {"scripting"}} {
         assert_match {calls=0*rejected_calls=1,failed_calls=0*} [cmdrstat set r]
         assert_match {calls=1*rejected_calls=0,failed_calls=1*} [cmdrstat eval_ro r]
 
-        # redis.pcall() failure due to scripting specific error state (write cmd with eval_ro) returns lua error table with Redis error message without '-' prefix
+        # redis.pcall() failure due to scripting specific error state (write cmd with eval_ro) returns lua error table with server error message without '-' prefix
         r config resetstat
         assert_equal [
             r eval_ro {

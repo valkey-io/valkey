@@ -1,4 +1,4 @@
-/* Helloworld module -- A few examples of the Redis Modules API in the form
+/* Helloworld module -- A few examples of the Modules API in the form
  * of commands showing how to accomplish common tasks.
  *
  * This module does not do anything useful, if not for a few commands. The
@@ -42,7 +42,7 @@
 
 /* HELLO.SIMPLE is among the simplest commands you can implement.
  * It just returns the currently selected DB id, a functionality which is
- * missing in Redis. The command uses two important API calls: one to
+ * missing in the server. The command uses two important API calls: one to
  * fetch the currently selected DB, the other in order to send the client
  * an integer reply as response. */
 int HelloSimple_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
@@ -73,8 +73,8 @@ int HelloPushNative_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, 
 }
 
 /* HELLO.PUSH.CALL implements RPUSH using an higher level approach, calling
- * a Redis command instead of working with the key in a low level way. This
- * approach is useful when you need to call Redis commands that are not
+ * a command instead of working with the key in a low level way. This
+ * approach is useful when you need to call commands that are not
  * available as low level APIs, or when you don't need the maximum speed
  * possible but instead prefer implementation simplicity. */
 int HelloPushCall_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
@@ -106,7 +106,7 @@ int HelloPushCall2_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, i
 }
 
 /* HELLO.LIST.SUM.LEN returns the total length of all the items inside
- * a Redis list, by using the high level Call() API.
+ * a list, by using the high level Call() API.
  * This command is an example of the array reply access. */
 int HelloListSumLen_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
 {
@@ -492,7 +492,7 @@ int HelloHCopy_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int a
  * This is an implementation of the infamous LEFTPAD function, that
  * was at the center of an issue with the npm modules system in March 2016.
  *
- * LEFTPAD is a good example of using a Redis Modules API called
+ * LEFTPAD is a good example of using a Modules API called
  * "pool allocator", that was a famous way to allocate memory in yet another
  * open source project, the Apache web server.
  *
@@ -540,8 +540,8 @@ int HelloLeftPad_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int
     return VALKEYMODULE_OK;
 }
 
-/* This function must be present on each Redis module. It is used in order to
- * register the commands into the Redis server. */
+/* This function must be present on each module. It is used in order to
+ * register the commands into the server. */
 int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     if (RedisModule_Init(ctx,"helloworld",1,VALKEYMODULE_APIVER_1)
         == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;

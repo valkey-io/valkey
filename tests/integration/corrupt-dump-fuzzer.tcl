@@ -5,7 +5,7 @@
 tags {"dump" "corruption" "external:skip" "logreqres:skip"} {
 
 # catch sigterm so that in case one of the random command hangs the test,
-# usually due to redis not putting a response in the output buffers,
+# usually due to the server not putting a response in the output buffers,
 # we'll know which command it was
 if { ! [ catch {
     package require Tclx

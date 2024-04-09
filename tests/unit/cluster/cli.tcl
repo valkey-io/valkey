@@ -1,4 +1,4 @@
-# Primitive tests on cluster-enabled redis using redis-cli
+# Primitive tests on cluster-enabled server using valkey-cli
 
 source tests/support/cli.tcl
 
@@ -87,7 +87,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
         set endpoint_type_before_set [lindex [split [$node1 CONFIG GET cluster-preferred-endpoint-type] " "] 1]
         $node1 CONFIG SET cluster-preferred-endpoint-type unknown-endpoint
 
-        # when redis-cli not in cluster mode, return MOVE with empty host
+        # when valkey-cli not in cluster mode, return MOVE with empty host
         set slot_for_foo [$node1 CLUSTER KEYSLOT foo]
         assert_error "*MOVED $slot_for_foo :*" {$node1 set foo bar}
 
@@ -272,7 +272,7 @@ test {Migrate the last slot away from a node using valkey-cli} {
         set owner_r [redis $owner_host $owner_port 0 $::tls]
         set owner_id [$owner_r CLUSTER MYID]
 
-        # Move slot to new node using plain Redis commands
+        # Move slot to new node using plain commands
         assert_equal OK [$newnode_r CLUSTER SETSLOT $slot IMPORTING $owner_id]
         assert_equal OK [$owner_r CLUSTER SETSLOT $slot MIGRATING $newnode_id]
         assert_equal {foo} [$owner_r CLUSTER GETKEYSINSLOT $slot 10]
@@ -295,7 +295,7 @@ test {Migrate the last slot away from a node using valkey-cli} {
             fail "Cluster doesn't stabilize"
         }
 
-        # Move the only slot back to original node using redis-cli
+        # Move the only slot back to original node using valkey-cli
         exec src/valkey-cli --cluster reshard 127.0.0.1:[srv -3 port] \
             --cluster-from $newnode_id \
             --cluster-to $owner_id \

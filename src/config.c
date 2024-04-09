@@ -1919,7 +1919,7 @@ static int sdsConfigSet(standardConfig *config, sds *argv, int argc, const char 
     /* if prev and new configuration are not equal, set the new one */
     if (new != prev && (new == NULL || prev == NULL || sdscmp(prev, new))) {
         /* If MODULE_CONFIG flag is set, then free temporary prev getModuleStringConfig returned.
-         * Otherwise, free the actual previous config value Redis held (Same action, different reasons) */
+         * Otherwise, free the actual previous config value the server held (Same action, different reasons) */
         sdsfree(prev);
 
         if (config->flags & MODULE_CONFIG) {
@@ -2585,7 +2585,7 @@ int updateRequirePass(const char **err) {
     /* The old "requirepass" directive just translates to setting
      * a password to the default user. The only thing we do
      * additionally is to remember the cleartext password in this
-     * case, for backward compatibility with Redis <= 5. */
+     * case, for backward compatibility. */
     ACLUpdateDefaultUserPassword(server.requirepass);
     return 1;
 }

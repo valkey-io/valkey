@@ -102,7 +102,7 @@ unsigned long long estimateObjectIdleTime(robj *o) {
 
 /* LRU approximation algorithm
  *
- * Redis uses an approximation of the LRU algorithm that runs in constant
+ * The server uses an approximation of the LRU algorithm that runs in constant
  * memory. Every time there is a key to expire, we sample N keys (with
  * N very small, usually in around 5) to populate a pool of best keys to
  * evict of M keys (the pool size is defined by EVPOOL_SIZE).
@@ -436,7 +436,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
 }
 
 /* Return 1 if used memory is more than maxmemory after allocating more memory,
- * return 0 if not. Redis may reject user's requests or evict some keys if used
+ * return 0 if not. The server may reject user's requests or evict some keys if used
  * memory exceeds maxmemory, especially, when we allocate huge memory at once. */
 int overMaxmemoryAfterAlloc(size_t moremem) {
     if (!server.maxmemory) return  0; /* No limit. */
@@ -517,10 +517,10 @@ static unsigned long evictionTimeLimitUs(void) {
 /* Check that memory usage is within the current "maxmemory" limit.  If over
  * "maxmemory", attempt to free memory by evicting data (if it's safe to do so).
  *
- * It's possible for Redis to suddenly be significantly over the "maxmemory"
+ * It's possible for the server to suddenly be significantly over the "maxmemory"
  * setting.  This can happen if there is a large allocation (like a hash table
  * resize) or even if the "maxmemory" setting is manually adjusted.  Because of
- * this, it's important to evict for a managed period of time - otherwise Redis
+ * this, it's important to evict for a managed period of time - otherwise the server
  * would become unresponsive while evicting.
  *
  * The goal of this function is to improve the memory situation - not to

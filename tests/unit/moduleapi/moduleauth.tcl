@@ -291,7 +291,7 @@ start_server {tags {"modules"}} {
         r acl setuser foo >pwd on ~* &* +@all
         set rd [redis_deferring_client]
 
-        # Attempt blocking module auth and disable the Redis user while module auth is in progress.
+        # Attempt blocking module auth and disable the user while module auth is in progress.
         $rd AUTH foo pwd
         wait_for_blocked_clients_count 1
         r acl setuser foo >pwd off ~* &* +@all
@@ -339,8 +339,8 @@ start_server {tags {"modules"}} {
         r acl setuser foo >defaultpwd on ~* &* +@all
         set rd [redis_deferring_client]
 
-        # Start the module auth attempt with the standard Redis auth password for the user. This
-        # will result in all module auth cbs attempted and then standard Redis auth will be tried.
+        # Start the module auth attempt with the standard auth password for the user. This
+        # will result in all module auth cbs attempted and then standard auth will be tried.
         $rd AUTH foo defaultpwd
         wait_for_blocked_clients_count 1
 

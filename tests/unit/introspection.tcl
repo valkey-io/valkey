@@ -612,7 +612,7 @@ start_server {tags {"introspection"}} {
     }
 
     test {CONFIG SET rollback on apply error} {
-        # This test tries to configure a used port number in redis. This is expected
+        # This test tries to configure a used port number in the server. This is expected
         # to pass the `CONFIG SET` validity checking implementation but fail on 
         # actual "apply" of the setting. This will validate that after an "apply"
         # failure we rollback to the previous values.
@@ -645,7 +645,7 @@ start_server {tags {"introspection"}} {
         set used_port [find_available_port $::baseport $::portcount]
         dict set some_configs port $used_port
 
-        # Run a dummy server on used_port so we know we can't configure redis to 
+        # Run a dummy server on used_port so we know we can't configure the server to
         # use it. It's ok for this to fail because that means used_port is invalid 
         # anyway
         catch {socket -server dummy_accept -myaddr 127.0.0.1 $used_port} e

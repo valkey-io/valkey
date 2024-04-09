@@ -255,7 +255,7 @@ start_server {overrides {save ""}} {
         assert {[s rdb_last_cow_size] == 0}
 
         # using a 200us delay, the bgsave is empirically taking about 10 seconds.
-        # we need it to take more than some 5 seconds, since redis only report COW once a second.
+        # we need it to take more than some 5 seconds, since the server only report COW once a second.
         r config set rdb-key-save-delay 200
         r config set loglevel debug
 

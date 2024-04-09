@@ -12,7 +12,7 @@ start_server {
         r del tosort
         for {set i 0} {$i < $num} {incr i} {
             # Make sure all the weights are different because
-            # Redis does not use a stable sort but Tcl does.
+            # the server does not use a stable sort but Tcl does.
             while 1 {
                 randpath {
                     set rint [expr int(rand()*1000000)]

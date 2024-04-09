@@ -233,7 +233,7 @@ int prepareReplicasToWrite(void) {
     return prepared;
 }
 
-/* Wrapper for feedReplicationBuffer() that takes Redis string objects
+/* Wrapper for feedReplicationBuffer() that takes string Objects
  * as input. */
 void feedReplicationBufferWithObject(robj *o) {
     char llstr[LONG_STR_SIZE];
@@ -1030,7 +1030,7 @@ void syncCommand(client *c) {
         }
     } else {
         /* If a slave uses SYNC, we are dealing with an old implementation
-         * of the replication protocol (like redis-cli --slave). Flag the client
+         * of the replication protocol (like valkey-cli --slave). Flag the client
          * so that we don't expect to receive REPLCONF ACK feedbacks. */
         c->flags |= CLIENT_PRE_PSYNC;
     }
@@ -1142,7 +1142,7 @@ void syncCommand(client *c) {
  *
  * - listening-port <port>
  * - ip-address <ip>
- * What is the listening ip and port of the Replica redis instance, so that
+ * What is the listening ip and port of the Replica instance, so that
  * the master can accurately lists replicas and their listening ports in the
  * INFO output.
  *
@@ -2038,7 +2038,7 @@ void readSyncBulkPayload(connection *conn) {
     /* We reach this point in one of the following cases:
      *
      * 1. The replica is using diskless replication, that is, it reads data
-     *    directly from the socket to the Redis memory, without using
+     *    directly from the socket to the server memory, without using
      *    a temporary RDB file on disk. In that case we just block and
      *    read everything from the socket.
      *
@@ -2342,7 +2342,7 @@ char *sendCommand(connection *conn, ...) {
     size_t argslen = 0;
     char *arg;
 
-    /* Create the command to send to the master, we use redis binary
+    /* Create the command to send to the master, we use binary
      * protocol to make sure correct arguments are sent. This function
      * is not safe for all binary data. */
     va_start(ap,conn);
@@ -2665,7 +2665,7 @@ void syncWithMaster(connection *conn) {
 
         /* We accept only two replies as valid, a positive +PONG reply
          * (we just check for "+") or an authentication error.
-         * Note that older versions of Redis replied with "operation not
+         * Note that older versions of Redis OSS replied with "operation not
          * permitted" instead of using a proper error code, so we test
          * both. */
         if (err[0] != '+' &&
@@ -2765,7 +2765,7 @@ void syncWithMaster(connection *conn) {
     if (server.repl_state == REPL_STATE_RECEIVE_PORT_REPLY) {
         err = receiveSynchronousResponse(conn);
         if (err == NULL) goto no_response_error;
-        /* Ignore the error if any, not all the Redis versions support
+        /* Ignore the error if any, not all the Redis OSS versions support
          * REPLCONF listening-port. */
         if (err[0] == '-') {
             serverLog(LL_NOTICE,"(Non critical) Master does not understand "
@@ -2783,7 +2783,7 @@ void syncWithMaster(connection *conn) {
     if (server.repl_state == REPL_STATE_RECEIVE_IP_REPLY) {
         err = receiveSynchronousResponse(conn);
         if (err == NULL) goto no_response_error;
-        /* Ignore the error if any, not all the Redis versions support
+        /* Ignore the error if any, not all the Redis OSS versions support
          * REPLCONF ip-address. */
         if (err[0] == '-') {
             serverLog(LL_NOTICE,"(Non critical) Master does not understand "
@@ -2798,7 +2798,7 @@ void syncWithMaster(connection *conn) {
     if (server.repl_state == REPL_STATE_RECEIVE_CAPA_REPLY) {
         err = receiveSynchronousResponse(conn);
         if (err == NULL) goto no_response_error;
-        /* Ignore the error if any, not all the Redis versions support
+        /* Ignore the error if any, not all the Redis OSS versions support
          * REPLCONF capa. */
         if (err[0] == '-') {
             serverLog(LL_NOTICE,"(Non critical) Master does not understand "
@@ -3465,9 +3465,9 @@ int checkGoodReplicasStatus(void) {
 }
 
 /* ----------------------- SYNCHRONOUS REPLICATION --------------------------
- * Redis synchronous replication design can be summarized in points:
+ * Synchronous replication design can be summarized in points:
  *
- * - Redis masters have a global replication offset, used by PSYNC.
+ * - Masters have a global replication offset, used by PSYNC.
  * - Master increment the offset every time new commands are sent to slaves.
  * - Slaves ping back masters with the offset processed so far.
  *
@@ -3777,7 +3777,7 @@ void replicationCron(void) {
         listLength(server.slaves))
     {
         /* Note that we don't send the PING if the clients are paused during
-         * a Redis Cluster manual failover: the PING we send will otherwise
+         * a Cluster manual failover: the PING we send will otherwise
          * alter the replication offsets of master and slave, and will no longer
          * match the one stored into 'mf_master_offset' state. */
         int manual_failover_in_progress =
@@ -3895,7 +3895,7 @@ void replicationCron(void) {
 
     replicationStartPendingFork();
 
-    /* Remove the RDB file used for replication if Redis is not running
+    /* Remove the RDB file used for replication if the server is not running
      * with any persistence. */
     removeRDBUsedToSyncReplicas();
 

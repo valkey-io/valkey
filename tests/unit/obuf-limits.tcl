@@ -131,7 +131,7 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         $rd flush
         after 100
 
-        # Before we read reply, redis will close this client.
+        # Before we read reply, the server will close this client.
         set clients [r client list]
         assert_no_match "*name=mybiglist*" $clients
         set cur_mem [s used_memory]
@@ -143,7 +143,7 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         assert_equal {} [$rd rawread]
     }
 
-    # Note: This test assumes that what's written with one write, will be read by redis in one read.
+    # Note: This test assumes that what's written with one write, will be read by the server in one read.
     # this assumption is wrong, but seem to work empirically (for now)
     test {No response for multi commands in pipeline if client output buffer limit is enforced} {
         r config set client-output-buffer-limit {normal 100000 0 0}
@@ -154,7 +154,7 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         $rd2 client setname multicommands
         assert_equal "OK" [$rd2 read]
 
-        # Let redis sleep 1s firstly
+        # Let the server sleep 1s firstly
         $rd1 debug sleep 1
         $rd1 flush
         after 100
@@ -162,7 +162,7 @@ start_server {tags {"obuf-limits external:skip logreqres:skip"}} {
         # Create a pipeline of commands that will be processed in one socket read.
         # It is important to use one write, in TLS mode independent writes seem
         # to wait for response from the server.
-        # Total size should be less than OS socket buffer, redis can
+        # Total size should be less than OS socket buffer, the server can
         # execute all commands in this pipeline when it wakes up.
         set buf ""
         for {set i 0} {$i < 15} {incr i} {

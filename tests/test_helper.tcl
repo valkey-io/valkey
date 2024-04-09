@@ -1,4 +1,4 @@
-# Redis test suite. Copyright (C) 2009 Salvatore Sanfilippo antirez@gmail.com
+# Server test suite. Copyright (C) 2009 Salvatore Sanfilippo antirez@gmail.com
 # This software is released under the BSD License. See the COPYING file for
 # more information.
 
@@ -112,7 +112,7 @@ set ::next_test 0
 
 set ::host 127.0.0.1
 set ::port 6379; # port for external server
-set ::baseport 21111; # initial port for spawned redis servers
+set ::baseport 21111; # initial port for spawned servers
 set ::portcount 8000; # we don't wanna use more than 10000 to avoid collision with cluster bus ports
 set ::traceleaks 0
 set ::valgrind 0
@@ -138,7 +138,7 @@ set ::accurate 0; # If true runs fuzz tests with more iterations
 set ::force_failure 0
 set ::timeout 1200; # 20 minutes without progresses will quit the test.
 set ::last_progress [clock seconds]
-set ::active_servers {} ; # Pids of active Redis instances.
+set ::active_servers {} ; # Pids of active server instances.
 set ::dont_clean 0
 set ::dont_pre_clean 0
 set ::wait_server 0
@@ -154,7 +154,7 @@ set ::large_memory 0
 set ::log_req_res 0
 set ::force_resp3 0
 
-# Set to 1 when we are running in client mode. The Redis test uses a
+# Set to 1 when we are running in client mode. The server test uses a
 # server-client model to run tests simultaneously. The server instance
 # runs the specified number of client instances that will actually run tests.
 # The server is responsible of showing the result to the user, and exit with
@@ -218,7 +218,7 @@ proc r {args} {
     [srv $level "client"] {*}$args
 }
 
-# Returns a Redis instance by index.
+# Returns a server instance by index.
 proc Rn {n} {
     set level [expr -1*$n]
     return [srv $level "client"]
@@ -909,7 +909,7 @@ proc close_replication_stream {s} {
     return
 }
 
-# With the parallel test running multiple Redis instances at the same time
+# With the parallel test running multiple server instances at the same time
 # we need a fast enough computer, otherwise a lot of tests may generate
 # false positives.
 # If the computer is too slow we revert the sequential test without any

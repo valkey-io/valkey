@@ -526,7 +526,7 @@ start_server {tags {"acl external:skip"}} {
         }
     }
 
-    # Note that the order of the generated ACL rules is not stable in Redis
+    # Note that the order of the generated ACL rules is not stable in the server
     # so we need to match the different parts and not as a whole string.
     test {ACL GETUSER is able to translate back command permissions} {
         # Subtractive

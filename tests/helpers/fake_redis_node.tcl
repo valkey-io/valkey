@@ -1,4 +1,4 @@
-# A fake Redis node for replaying predefined/expected traffic with a client.
+# A fake node for replaying predefined/expected traffic with a client.
 #
 # Usage: tclsh fake_redis_node.tcl PORT COMMAND REPLY [ COMMAND REPLY [ ... ] ]
 #

@@ -1,6 +1,6 @@
 /* This is a small program used in order to understand the collision rate
  * of CRC64 (ISO version) VS other stronger hashing functions in the context
- * of hashing keys for the Redis "tracking" feature (client side caching
+ * of hashing keys for the "tracking" feature (client side caching
  * assisted by the server).
  *
  * The program attempts to hash keys with common names in the form of

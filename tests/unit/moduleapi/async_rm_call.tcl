@@ -165,7 +165,7 @@ start_server {tags {"modules"}} {
         $rd do_rm_call_async blpop l 0
         wait_for_blocked_clients_count 1
 
-        #become a replica of a not existing redis
+        #become a replica of a not existing server
         r replicaof localhost 30000
 
         catch {[$rd read]} e

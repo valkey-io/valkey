@@ -10,7 +10,7 @@
 #define LIST_SIZE 1024
 
 /* The FSL (Fixed-Size List) data type is a low-budget imitation of the
- * native Redis list, in order to test list-like commands implemented
+ * list data type, in order to test list-like commands implemented
  * by a module.
  * Examples: FSL.PUSH, FSL.BPOP, etc. */
 

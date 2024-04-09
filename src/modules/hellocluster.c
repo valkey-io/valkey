@@ -86,8 +86,8 @@ void PongReceiver(RedisModuleCtx *ctx, const char *sender_id, uint8_t type, cons
         type,VALKEYMODULE_NODE_ID_LEN,sender_id,(int)len, payload);
 }
 
-/* This function must be present on each Redis module. It is used in order to
- * register the commands into the Redis server. */
+/* This function must be present on each module. It is used in order to
+ * register the commands into the server. */
 int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -103,7 +103,7 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
         ListCommand_RedisCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
-    /* Disable Redis Cluster sharding and redirections. This way every node
+    /* Disable Cluster sharding and redirections. This way every node
      * will be able to access every possible key, regardless of the hash slot.
      * This way the PING message handler will be able to increment a specific
      * variable. Normally you do that in order for the distributed system

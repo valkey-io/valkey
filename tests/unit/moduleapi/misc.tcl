@@ -119,7 +119,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
     }
 
     test {tracking with rm_call sanity} {
-        set rd_trk [redis_client]
+        set rd_trk [valkey_client]
         $rd_trk HELLO 3
         $rd_trk CLIENT TRACKING on
         r MSET key1{t} 1 key2{t} 1
@@ -134,7 +134,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
     }
 
     test {tracking with rm_call with script} {
-        set rd_trk [redis_client]
+        set rd_trk [valkey_client]
         $rd_trk HELLO 3
         $rd_trk CLIENT TRACKING on
         r MSET key1{t} 1 key2{t} 1

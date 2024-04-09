@@ -86,7 +86,7 @@ start_server {tags {"pause network"}} {
     test "Test read/admin multi-execs are not blocked by pause RO" {
         r SET FOO BAR
         r client PAUSE 100000 WRITE
-        set rr [redis_client]
+        set rr [valkey_client]
         assert_equal [$rr MULTI] "OK"
         assert_equal [$rr PING] "QUEUED"
         assert_equal [$rr GET FOO] "QUEUED"
@@ -141,7 +141,7 @@ start_server {tags {"pause network"}} {
         }
 
         r client PAUSE 6000000 WRITE
-        set rr [redis_client]
+        set rr [valkey_client]
 
         # test an eval that's for sure not in the script cache
         assert_equal [$rr EVAL {#!lua flags=no-writes
@@ -177,7 +177,7 @@ start_server {tags {"pause network"}} {
     test "Test read-only scripts in multi-exec are not blocked by pause RO" {
         r SET FOO BAR
         r client PAUSE 100000 WRITE
-        set rr [redis_client]
+        set rr [valkey_client]
         assert_equal [$rr MULTI] "OK"
         assert_equal [$rr EVAL {#!lua flags=no-writes
                 return 12

@@ -15,7 +15,7 @@ start_server {tags {"replybufsize"}} {
         r debug replybuffer peak-reset-time 100
         
         # Create a simple idle test client
-        variable tc [redis_client]
+        variable tc [valkey_client]
         $tc client setname test_client
          
         # make sure the client is idle for 1 seconds to make it shrink the reply buffer

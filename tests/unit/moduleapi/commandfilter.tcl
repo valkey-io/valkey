@@ -148,7 +148,7 @@ test {Filtering based on client id} {
     start_server {tags {"modules"}} {
         r module load $testmodule log-key 0
 
-        set rr [redis_client]
+        set rr [valkey_client]
         set cid [$rr client id]
         r unfilter_clientid $cid
 

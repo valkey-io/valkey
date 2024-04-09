@@ -353,7 +353,7 @@ tags {"wait aof network external:skip"} {
 
             test {WAITAOF master client didn't send any write command} {
                 $master config set repl-ping-replica-period 1
-                set client [redis_client -1]
+                set client [valkey_client -1]
                 after 1200 ;# wait for PING
                 assert_equal [$master waitaof 1 1 0] {1 1}
                 $client close

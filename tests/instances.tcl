@@ -87,7 +87,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
 
         if {$::tls} {
             if {$::tls_module} {
-                puts $cfg [format "loadmodule %s/../../../src/redis-tls.so" [pwd]]
+                puts $cfg [format "loadmodule %s/../../../src/valkey-tls.so" [pwd]]
             }
 
             puts $cfg "tls-port $port"

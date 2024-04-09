@@ -1,5 +1,5 @@
-Redis 7.2 release notes
-=======================
+Valkey 7.2 release notes
+========================
 
 --------------------------------------------------------------------------------
 Upgrade urgency levels:
@@ -13,498 +13,65 @@ SECURITY: There are security fixes in the release.
 
 
 ================================================================================
-Redis 7.2.4    Released Tue 09 Jan 2024 10:45:52 IST
+Valkey 7.2.4 RC1  -  Released Tue 09 Apr 2024
 ================================================================================
 
-Upgrade urgency SECURITY: See security fixes below.
+Upgrade urgency LOW: Initial release of Valkey with API compatibility for OSS
+Redis 7.2.4. This release is based off of OSS Redis 7.2.4, with additional
+functionality to better brand the server as Valkey instead of Redis. All APIs
+are fully backwards compatible and care was taken to minimize the number of
+log lines that were changed to best support existing tooling around log parsing.
 
-Security fixes
-==============
-* (CVE-2023-41056) In some cases, Redis may incorrectly handle resizing of memory
-  buffers which can result in incorrect accounting of buffer sizes and lead to
-  heap overflow and potential remote code execution.
+Changes to support Valkey branding
+=========
+
+* Rename the 6 Redis binaries to ones with `valkey` prefixes: `valkey-server`,
+  `valkey-cli`, `valkey-benchmark`, `valkey-check-aof`, `valkey-check-rdb` and
+  `valkey-sentinel`. (#62)
+* During install, create symlinks mapping the corresponding Redis binary names
+  to the new Valkey binaries. (#193)
+* INFO fields: Introduce `valkey_version` and `server_name` fields. The
+  `redis_version` will continue to be present and will indicate the Redis OSS
+  version that the server is compatible with. (#47, #232)
+* RDB file format: Introduce a `valkey-ver` RDB field to indicate an RDB file
+  was produced by a Valkey server. This field is ignored when the file is
+  loaded by Redis OSS. (#47)
+* Module API changes: Introduce Valkey Module API in a new file, valkeymodule.h,
+  with functions and types prefixed by ValkeyModule. Valkey is still fully ABI
+  compatible with the Redis Module API, meaning Valkey supports running modules
+  compiled with either the Redis or Valkey Module APIs. For full source
+  compatibility, the Redis Module API (redismodule.h) is also kept with the
+  RedisModule prefixed functions and types. (#194, #243, #262)
+* Scripting: Introduce a new top level `server` object for functions and scripts
+  that can be instead of the existing `redis` object. This allows users to
+  replace calls like `redis.call(...)` with `server.call(...)`. (#213)
+* Makefile: Introduce `SERVER_CFLAGS` and `SERVER_LDFLAGS` as an alternative to
+  `REDIS_CFLAGS` and `REDIS_LDFLAGS`. (#46)
+* Update template config files to replace references to Redis with Valkey. The
+  file valkey.conf replaces redis.conf. (#29, #171)
+* Logging: Update startup, shutdown, and help logs to reference Valkey instead of
+  Redis. Valkey server will also show the Valkey logo at startup and show the
+  Valkey repositories when crashing. (#251, #252, #263, #113)
 
 Bug fixes
 =========
-
-* Fix crashes of cluster commands clusters with mixed versions of 7.0 and 7.2 (#12805, #12832)
-* Fix slot ownership not being properly handled when deleting a slot from a node (#12564)
-* Fix atomicity issues with the RedisModuleEvent_Key module API event (#12733)
-
-
-================================================================================
-Redis 7.2.3    Released Wed 01 Nov 2023 12:00:00 IST
-================================================================================
-
-Upgrade urgency: HIGH, Fixes critical bugs affecting most users.
-
-Bug fixes
-=========
-
-* Fix file descriptor leak preventing deleted files from freeing disk space on
-  replicas (#12693)
-* Fix a possible crash after cluster node removal (#12702)
-
-
-================================================================================
-Redis 7.2.2    Released Wed 18 Oct 2023 10:33:40 IDT
-================================================================================
-
-Upgrade urgency SECURITY: See security fixes below.
-
-Security fixes
-==============
-
-* (CVE-2023-45145) The wrong order of listen(2) and chmod(2) calls creates a
-  race condition that can be used by another process to bypass desired Unix
-  socket permissions on startup.
-
-
-Platform / toolchain support related changes
-=================================================
-
-* Fix compilation error on MacOS 13 (#12611)
-
-Bug fixes
-=========
-
-* WAITAOF could timeout in the absence of write traffic in case a new AOF is
-  created and an AOF rewrite can't immediately start (#12620)
-
-Redis cluster
-=============
-
-* Fix crash when running rebalance command in a mixed cluster of 7.0 and 7.2
-  nodes (#12604)
-* Fix the return type of the slot number in cluster shards to integer, which
-  makes it consistent with past behavior (#12561)
-* Fix CLUSTER commands are called from modules or scripts to return TLS info
-  appropriately (#12569)
-
-Changes in CLI tools
-====================
-
-* redis-cli, fix crash on reconnect when in SUBSCRIBE mode (#12571)
-
-Module API changes
-==================
-
-* Fix overflow calculation for next timer event (#12474)
-
-
-================================================================================
-Redis 7.2.1    Released Wed 06 Sep 2023 15:00:00 IDT
-================================================================================
-
-Upgrade urgency SECURITY: See security fixes below.
-
-Security Fixes
-==============
-
-* (CVE-2023-41053) Redis does not correctly identify keys accessed by SORT_RO and,
-  as a result, may grant users executing this command access to keys that are not
-  explicitly authorized by the ACL configuration.
-
-
-Bug Fixes
-=========
-
-* Fix crashes when joining a node to an existing 7.0 Redis Cluster (#12538)
-* Correct request_policy and response_policy command tips on for some admin /
-  configuration commands (#12545, #12530)
-
-
-================================================================================
-Redis 7.2.0 GA   Released Tue Aug 15 12:00:00 IDT 2023
-================================================================================
-
-Upgrade urgency LOW: This is the first stable Release for Redis 7.2.
-
-Bug Fixes
-=========
-
-* redis-cli in cluster mode handles `unknown-endpoint` (#12273)
-* Update request / response policy hints for a few commands (#12417)
-* Ensure that the function load timeout is disabled during loading from RDB/AOF and on replicas. (#12451)
-* Fix false success and a memory leak for ACL selector with bad parenthesis combination (#12452)
-* Fix the assertion when script timeout occurs after it signaled a blocked client (#12459)
-
-Fixes for issues in previous releases of Redis 7.2
---------------------------------------------------
-
-* Update MONITOR client's memory correctly for INFO and client-eviction (#12420)
-* The response of cluster nodes was unnecessarily adding an extra comma when no
-  hostname was present. (#12411)
-
-================================================================================
-Redis 7.2 RC3   Released Mon July 10 12:00:00 IDT 2023
-================================================================================
-
-Upgrade urgency LOW: This is the third Release Candidate for Redis 7.2.
-Upgrade urgency SECURITY: If you're using a previous release candidate of 7.2.
-
-Security Fixes:
-* (CVE-2022-24834) A specially crafted Lua script executing in Redis can trigger
-  a heap overflow in the cjson and cmsgpack libraries, and result in heap
-  corruption and potentially remote code execution. The problem exists in all
-  versions of Redis with Lua scripting support, starting from 2.6, and affects
-  only authenticated and authorized users.
-* (CVE-2023-36824) Extracting key names from a command and a list of arguments
-  may, in some cases, trigger a heap overflow and result in reading random heap
-  memory, heap corruption and potentially remote code execution. Specifically:
-  using COMMAND GETKEYS* and validation of key names in ACL rules.
-
-New Features
-============
-
-New administrative and introspection commands and command arguments
--------------------------------------------------------------------
-
-* Make SENTINEL CONFIG [SET|GET] variadic. (#10362)
-
-Potentially Breaking / Behavior Changes
-=======================================
-
-* Cluster SHARD IDs are no longer visible in the cluster nodes output,
-  introduced in 7.2-RC1. (#10536, #12166)
-* When calling PUBLISH with a RESP3 client that's also subscribed to the same channel,
-  the order is changed and the reply is sent before the published message (#12326)
-
-New configuration options
-=========================
-
-* Add a new loglevel "nothing" to disable logging (#12133)
-* Add cluster-announce-human-nodename - a unique identifier for a node that is
-  be used in logs for debugging (#9564)
-
-Other General Improvements
-==========================
-
-* Allow CLUSTER SLOTS / SHARDS commands during loading (#12269)
-* Support TLS service when "tls-cluster" is not enabled and persist both plain
-  and TLS port in nodes.conf (#12233)
-* Update SPOP and RESTORE commands to replicate unlink commands to replicas
-  when the server is configured to use async server deletes (#12320)
-* Try lazyfree the temporary zset in ZUNION / ZINTER / ZDIFF (#12229)
-
-Performance and resource utilization improvements
-=================================================
-
-* Optimize PSUBSCRIBE and PUNSUBSCRIBE from O(N*M) to O(N) (#12298)
-* Optimize SCAN, SSCAN, HSCAN, ZSCAN commands (#12209)
-* Set Jemalloc --disable-cache-oblivious to reduce memory overhead (#12315)
-* Optimize ZINTERCARD to avoid create a temporary zset (#12229)
-* Optimize HRANDFIELD and ZRANDMEMBER listpack encoded (#12205)
-* Numerous other optimizations (#12155, #12082, #11626, #11944, #12316, #12250,
-  #12177, #12185)
-
-
-Changes in CLI tools
-====================
-
-* redis-cli: Handle RESP3 double responses that contain a NaN (#12254)
-* redis-cli: Support URIs with IPv6 (#11834)
-
-Module API changes
-==================
-
-* Align semantics of the new (v7.2 RC2) RM_ReplyWithErrorFormat with RM_ReplyWithError.
-  This is a breaking change that affects the generated error code. (#12321)
-* Forbid RM_AddPostNotificationJob on loading and on read-only replicas (#12304)
-* Add ability for module command filter to know which client is being handled (#12219)
-
-Bug Fixes
-=========
-
-* Fix broken protocol when PUBLISH is used inside MULTI when the RESP3
-  publishing client is also subscribed for the channel (#12326)
-* Fix WAIT to be effective after a blocked module command being unblocked (#12220)
-* Re-enable downscale rehashing while there is a fork child (#12276)
-* Fix possible hang in HRANDFIELD, SRANDMEMBER, ZRANDMEMBER when used with `<count>` (#12276)
-* Improve fairness issue in RANDOMKEY, HRANDFIELD, SRANDMEMBER, ZRANDMEMBER, SPOP, and eviction (#12276)
-* Cluster: fix a race condition where a slot migration may revert on a subsequent failover or node joining (#12344)
-
-Fixes for issues in previous releases of Redis 7.2
---------------------------------------------------
-
-* Fix XREADGROUP BLOCK with ">" from hanging (#12301)
-* Fix assertion when a blocked command is rejected when re-processed. (#12247)
-* Fix use after free on a blocking RM_Call. (#12342)
-
-================================================================================
-Redis 7.2 RC2   Released Mon May 15 12:00:00 IST 2023
-================================================================================
-
-Upgrade urgency LOW: This is the second Release Candidate for Redis 7.2.
-
-INFO fields and introspection changes
-=====================================
-
-* Add a few low level event loop metrics to help diagnose latency (#11963)
-
-Performance and resource utilization improvements
-=================================================
-
-* Minor performance improvement to SADD and HSET (#12019)
-
-Platform / toolchain support related changes
-=================================================
-
-* Upgrade to Jemalloc 5.3.0, resolves a rare fork child hang (#12115)
-* Fix a compiler fortification induced crash when used with link time optimizations (#11982)
-* Fix local clients detection, 127.*.*.* instead of 127.0.0.1 (#11664)
-* Report AOF failure status to systemd in shutdown (#12065)
-
-Changes in CLI tools
-====================
-
-* redis-cli: Reimplement and improve help hints based on actual command arg docs (#10515)
-* redis-cli: Add option --count for tuning SCAN based features (#12042)
-* redis-benchmark: Add --seed option to seed the random number generator (#11945)
-
-Module API changes
-==================
-
-* Add RM_RdbLoad and RM_RdbSave APIs (#11852)
-* Add RM_ReplyWithErrorFormat that can support format string (#11923)
-* Fix: Delete empty key when RM_ZsetAdd, RM_ZsetIncrby, RM_StreamAdd fail (#12129)
-
-Bug Fixes
-=========
-
-* LPOS with RANK set to LONG_MIN returning wrong result (#12167)
-* Avoid unnecessary full sync after master restart in a rare case (#12088)
-* Iterate clients fairly when processing background chores (#12025)
-* Avoid incorrect shrinking of query buffer when reading large data from clients (#12000)
-* Sentinel: Fix config rewrite error when old known-slave is used (#11775)
-* ACL: Disconnect pub-sub subscribers when revoking allchannels permission (#11992)
-* Add a missing fsync of AOF file in rare cases (#11973)
-
-Fixes for issues in previous releases of Redis 7.2
---------------------------------------------------
-
-* Fix tracking of command duration metrics for MULTI, EVAL, WAIT and modules (#11970)
-
-================================================================================
-Redis 7.2 RC1   Released Wed Mar 22 12:00:00 IST 2023
-================================================================================
-
-Upgrade urgency LOW: This is the first Release Candidate for Redis 7.2.
-
-Redis Release Candidate (RC) versions are early versions that are made available
-for early adopters in the community to test them. We do not consider
-them suitable for production environments.
-
-Introduction to the Redis 7.2 release
-=====================================
-
-Redis 7.2 includes optimizations, several new commands, some improvements,
-bug fixes, and several new module APIs.
-
-In particular, users should be aware of the following changes:
-
-1. Redis 7.2 uses a new format (version 11) for RDB files, which is incompatible
-   with older versions.
-2. See section about breaking changes mentioned below.
-3. If you use modules, see the module API breaking changes section below.
-
-Here is a comprehensive list of changes in this release compared to 7.0.10.
-Each one includes the PR number that added it so that you can get more details
-at https://github.com/redis/redis/pull/<number>
-
-New Features
-============
-
-* Introduce WAITAOF command, to block the client until a specified number
-  of Redises have synced all previous write commands to the AOF on disk,
-  see https://redis.io/commands/waitaof/
-
-New user commands or command arguments
---------------------------------------
-
-* WAITAOF blocks until writes have been synced to disk (#11713)
-* Add WITHSCORE option to ZRANK and ZREVRANK (#11235)
-
-New administrative and introspection commands and command arguments
--------------------------------------------------------------------
-
-* CLIENT SETINFO lets client library report name and version Redis (#11758)
-* CLIENT NO-TOUCH for clients to run commands without affecting LRU/LFU of keys (#11483)
-* Introduce Shard IDs to logically group nodes in cluster mode based on
-  replication. Shard IDs are automatically assigned and visible via
-  `CLUSTER MYSHARDID`. (#10536)
-
-Command replies that have been extended
----------------------------------------
-
-* ACL LOG - Add entry id, timestamp created, and timestamp last updated time (#11477)
-* COMMAND DOCS - Repurpose arg names as the unique ID (#11051)
-* CLIENT LIST has `T` flag to indicate CLIENT NO-TOUCH (#11483)
-* CLIENT LIST show lib-name, lib-ver (#11758)
-
-Potentially Breaking / Behavior Changes
-=======================================
-
-* Client side tracking for scripts now tracks the keys that are read by the
-  script instead of the keys that are declared by the caller of EVAL / FCALL (#11770)
-* Freeze time sampling during command execution and in scripts (#10300)
-* When a blocked command is being unblocked, checks like ACL, OOM, etc are
-  re-evaluated (#11012)
-* Unify ACL failure error message text and error codes (#11160)
-* Blocked stream command that's released when key no longer exists carries a
-  different error code (#11012)
-* Command stats are updated for blocked commands only when / if the command
-  actually executes (#11012)
-* The way ACL users are stored internally no longer removes redundant command
-  and category rules, which may alter the way those rules are displayed as part
-  of `ACL SAVE`, `ACL GETUSER` and `ACL LIST` (#11224)
-* Client connections created for TLS-based replication use SNI if possible (#11458)
-* Stream consumers: Re-purpose seen-time, add active-time (#11099)
-* XREADGROUP and X[AUTO]CLAIM create the consumer regardless of whether it was
-  able to perform some reading/claiming (#11099)
-* ACL default newly created user set sanitize-payload flag in ACL LIST/GETUSER #11279
-* Fix HELLO command not to affect the client state unless successful (#11659)
-* Normalize `NAN` in replies to a single nan type, like we do with `inf` (#11597)
-
-Deprecations
-============
-
-* Mark the QUIT command as deprecated (#11439)
-* Delete RDB loading code for pre-release RDB formats (#11058)
-
-Performance and resource utilization improvements
-=================================================
-
-* Significant memory optimization of small list type keys (#11303)
-* Significant memory optimization for small set type keys (#11290)
-* Significant memory optimization for large sets (#11595)
-* Significant speed optimization in ZRANGE replies WITHSCORES in case of integer scores (#11779)
-* Significant speed optimization in double replies, mainly sorted sets commands (#10587)
-* Optimize the performance of commands with multiple keys in cluster mode (#11044)
-* Incrementally reclaim OS page cache of RDB file (#11248)
-* Improve memory management of cluster bus links when there is a large number of pending messages (#11343)
-* Minor performance improvement for workloads that use commands without pipelining (#11220)
-
-Changes in CLI tools
-====================
-
-* redis-cli accepts commands in subscribed mode (#11873)
-
-Other General Improvements
-==========================
-
-* WAIT now no longer waits for the replication offset after your last command,
-  but rather the replication offset after your last write (#11713)
-* Automatically propagate node deletion to other nodes in a cluster when
-  `CLUSTER FORGET` is called, allowing nodes to be deleted with a single call
-  in most cases (#10869)
-* Blocking commands that were disallowed in scripts now behave in scripts the
-  same they did in MULTI (#11568)
-
-Platform / toolchain support related changes
-=================================================
-
-* 32-bit builds compiled without HAVE_MALLOC_SIZE (not jemalloc or glibc)
-  will consume more memory (#11595)
-* Use jemalloc by default also on ARM (#11407)
-* Adds stack trace and register dump support in crash report for illumos/solaris (#11335)
-
-
-New configuration options
-=========================
-
-* locale-collate runtime config to control setlocale affecting Lua and SORT (#11059)
-* Add CONFIG SET and GET loglevel feature in Sentinel (#11214)
-
-INFO fields and introspection changes
-=====================================
-
-* Added 4 new info fields for authentication errors and commands denied access
-  for keys, channels and commands (#11288)
-* INFO SERVER includes a list of listeners (#9320)
-
-
-Module API changes
-==================
-
-* Make it possible for module commands to be part of ACL categories (#11708)
-* Add K flag to RM_Call to allow running blocking commands and set a callback to get the response (#11568)
-* Add RM_AddPostNotificationJob to allow writes after keyspace notification hooks (#11199)
-* RedisModule_Event_Key to notify about keys being unlinked together with reason and value (#9406)
-* Add RM_BlockClient[Set|Get]PrivateData to associate a module data with the blocked client (#11568)
-* APIs to allow modules to participate / handle AUTH validation (#11659)
-* RM_GetContextFlags supports a new flag: REDISMODULE_CTX_FLAGS_SERVER_STARTUP (#9320)
-* Add REDISMODULE_OPTIONS_ALLOW_NESTED_KEYSPACE_NOTIFICATIONS and RedisModule_GetModuleOptionsAll (#11199)
-* RM_BlockClientOnKeysWithFlags allows module to request being unblocked when the key is deleted (#11310)
-* Introduce aux_save2 makes it possible to skip saving that field in the RDB and
-  enable loading the file in the absence of the module (#11374)
-* Add a dry run flag to RM_Call to do validations before actual execution (#11158)
-* Add RM_Microseconds and RM_CachedMicroseconds (#11016)
-* Add RM_ACLAddLogEntryByUserName API to be used without a user object (#11659)
-* Make it possible to keep the RM_Call reply for longer than the context lifetime in case
-  auto memory was not used (#11568)
-
-Potentially Breaking Changes in Module API
-------------------------------------------
-
-* RM_Call only enforces OOM on scripts if 'M' flag is set (#11425)
-* Block some specific characters in module command names (#11434)
-* Fix replication inconsistency on modules that uses keyspace notifications (#10969)
-* Prevent command, configs, data types registration after the onload handler (#11708)
-
-Bug Fixes
-=========
-
-* Introduce socket shutdown to properly disconnect a client while a fork is active (#11376)
-* CLIENT RESET clears the CLIENT NO-EVICT flag (#11483)
-* Reduce memory usage on strings loaded by a module from an RDB file (#11050)
-* Fix a bug where nodes in a cluster may not replicate or handle internal events for
-  keys deleted when another node in the cluster claimed a slot (#11084)
-* Fix HINCRBYFLOAT not to create a key if the new value is invalid (#11149)
-* Make cluster config file saving atomic and fsync acl file saving (#10924)
-* WAIT command would not block if used in RM_Call (#11713)
-* Minor fixes to command metadata in COMMAND command (#11201, #10273)
-
-
-Thanks to all the users and developers who made this release possible.
-We'll follow up with more RC releases, until the code looks production ready
-and we don't get reports of serious issues for a while.
+* Cluster: Fix an issue where cluster nodes running on Redis versions earlier
+  than 7.0 would be unable to communicate with nodes running on Valkey 7.2. This
+  change also introduces a slight delay when hostnames are not displayed when a
+  node is first added to the cluster. (#52)
 
 A special thank you for the amount of work put into this release by:
 
-- Meir Shpilraien
-- Guy Benoish
 - Viktor Söderqvist
-- Zhu Binbin
-- Oran Agra
-- sundb
-- Ran Shidlansik
-- Zhenwei Pi
-- Jason Elbaum
-- Karthik Subbarao
 - Madelyn Olson
-- Huang Zhw
-- Ping Xie
-- Ozan Tezcan
-- Chen Tianjie
-- Deng Ju
 - Wen Hui
-- Brennan Cathcart
-- Itamar Haber
-- Shaya Potter
-- Roshan Khatri
-- Slava Koyfman
-- Zhu Tian
-- Moti Cohen
-- Arad Zilberstein
-- Basel Naamna
-- Mingyi Kang
-- Uri Yagelnik
-- Filipe Oliveira
+- Ping Xie
+- Parth Patel
+- Roshan Katri
+- Zhu Binbin
 - Zhao Zhao
-- Valentino Geron
-- Yaacov Hazan
-- Adi Pinsky
-- David Carlier
-- Li Changjun
-
+- Bany
+- Harkrishn Patro
+- Vitah Lin
+- Ziyang Zeng (For creating the logo!)
+- The many other community members who provided their support!

@@ -634,7 +634,7 @@ void loadServerConfigFromString(char *config) {
 
 loaderr:
     if (argv) sdsfreesplitres(argv,argc);
-    fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR (Version %s) ***\n", SERVER_VERSION);
+    fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR (Version %s) ***\n", VALKEY_VERSION);
     if (i < totlines) {
         fprintf(stderr, "Reading the configuration file, at line %d\n", linenum);
         fprintf(stderr, ">>> '%s'\n", lines[i]);
@@ -934,8 +934,8 @@ void configSetCommand(client *c) {
         goto err;
     }
 
-    RedisModuleConfigChangeV1 cc = {.num_changes = config_count, .config_names = config_names};
-    moduleFireServerEvent(REDISMODULE_EVENT_CONFIG, REDISMODULE_SUBEVENT_CONFIG_CHANGE, &cc);
+    ValkeyModuleConfigChangeV1 cc = {.num_changes = config_count, .config_names = config_names};
+    moduleFireServerEvent(VALKEYMODULE_EVENT_CONFIG, VALKEYMODULE_SUBEVENT_CONFIG_CHANGE, &cc);
     addReply(c,shared.ok);
     goto end;
 
@@ -1588,7 +1588,7 @@ void rewriteConfigLoadmoduleOption(struct rewriteConfigState *state) {
     dictIterator *di = dictGetIterator(modules);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
-        struct RedisModule *module = dictGetVal(de);
+        struct ValkeyModule *module = dictGetVal(de);
         line = sdsnew("loadmodule ");
         line = sdscatsds(line, module->loadmod->path);
         for (int i = 0; i < module->loadmod->argc; i++) {
@@ -1919,7 +1919,7 @@ static int sdsConfigSet(standardConfig *config, sds *argv, int argc, const char 
     /* if prev and new configuration are not equal, set the new one */
     if (new != prev && (new == NULL || prev == NULL || sdscmp(prev, new))) {
         /* If MODULE_CONFIG flag is set, then free temporary prev getModuleStringConfig returned.
-         * Otherwise, free the actual previous config value Redis held (Same action, different reasons) */
+         * Otherwise, free the actual previous config value the server held (Same action, different reasons) */
         sdsfree(prev);
 
         if (config->flags & MODULE_CONFIG) {
@@ -2585,7 +2585,7 @@ int updateRequirePass(const char **err) {
     /* The old "requirepass" directive just translates to setting
      * a password to the default user. The only thing we do
      * additionally is to remember the cleartext password in this
-     * case, for backward compatibility with Redis <= 5. */
+     * case, for backward compatibility. */
     ACLUpdateDefaultUserPassword(server.requirepass);
     return 1;
 }

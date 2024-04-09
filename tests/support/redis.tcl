@@ -1,4 +1,4 @@
-# Tcl client library - used by the Redis test
+# Tcl client library - used by the server test
 # Copyright (C) 2009-2014 Salvatore Sanfilippo
 # Released under the BSD license like Redis itself
 #

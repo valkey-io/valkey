@@ -1,4 +1,4 @@
-/* Redis benchmark utility.
+/* Server benchmark utility.
  *
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
@@ -1377,7 +1377,7 @@ static void updateClusterSlotsConfiguration(void) {
     pthread_mutex_unlock(&config.is_updating_slots_mutex);
 }
 
-/* Generate random data for redis benchmark. See #7196. */
+/* Generate random data for the benchmark. See #7196. */
 static void genBenchmarkRandomData(char *data, int count) {
     static uint32_t state = 1234;
     int i = 0;
@@ -1787,7 +1787,7 @@ int main(int argc, char **argv) {
             }
             exit(1);
         }
-        if (config.cluster_node_count <= 1) {
+        if (config.cluster_node_count == 0) {
             fprintf(stderr, "Invalid cluster: %d node(s).\n",
                     config.cluster_node_count);
             exit(1);

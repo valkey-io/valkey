@@ -1,4 +1,4 @@
-/* Redis CLI (command line interface)
+/* Server CLI (command line interface)
  *
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
@@ -425,10 +425,10 @@ static int helpEntriesLen = 0;
 
 /* For backwards compatibility with pre-7.0 servers.
  * cliLegacyInitHelp() sets up the helpEntries array with the command and group
- * names from the commands.c file. However the Redis instance we are connecting
+ * names from the commands.c file. However the server instance we are connecting
  * to may support more commands, so this function integrates the previous
  * entries with additional entries obtained using the COMMAND command
- * available in recent versions of Redis. */
+ * available in recent versions of the server. */
 static void cliLegacyIntegrateHelp(void) {
     if (cliConnect(CC_QUIET) == REDIS_ERR) return;
 
@@ -986,7 +986,7 @@ static void cliOutputHelp(int argc, char **argv) {
 
     if (helpEntries == NULL) {
         /* Initialize the help using the results of the COMMAND command.
-         * In case we are using redis-cli help XXX, we need to init it. */
+         * In case we are using valkey-cli help XXX, we need to init it. */
         cliInitHelp();
     }
 
@@ -1602,7 +1602,7 @@ static int cliSelect(void) {
     return result;
 }
 
-/* Select RESP3 mode if redis-cli was started with the -3 option.  */
+/* Select RESP3 mode if valkey-cli was started with the -3 option.  */
 static int cliSwitchProto(void) {
     redisReply *reply;
     if (!config.resp3 || config.resp2) return REDIS_OK;
@@ -1689,7 +1689,7 @@ static int cliConnect(int flags) {
         }
 
 
-        /* Set aggressive KEEP_ALIVE socket option in the Redis context socket
+        /* Set aggressive KEEP_ALIVE socket option in the server context socket
          * in order to prevent timeouts caused by the execution of long
          * commands. At the same time this improves the detection of real
          * errors. */
@@ -2315,7 +2315,7 @@ static int cliReadReply(int output_raw_strings) {
     return REDIS_OK;
 }
 
-/* Simultaneously wait for pubsub messages from redis and input on stdin. */
+/* Simultaneously wait for pubsub messages from the server and input on stdin. */
 static void cliWaitForMessagesOrStdin(void) {
     int show_info = config.output != OUTPUT_RAW && (isatty(STDOUT_FILENO) ||
                                                     getenv("FAKETTY"));
@@ -2337,7 +2337,7 @@ static void cliWaitForMessagesOrStdin(void) {
             }
         } while(reply);
 
-        /* Wait for input, either on the Redis socket or on stdin. */
+        /* Wait for input, either on the server socket or on stdin. */
         struct timeval tv;
         fd_set readfds;
         FD_ZERO(&readfds);
@@ -2366,7 +2366,7 @@ static void cliWaitForMessagesOrStdin(void) {
             }
             break;
         } else if (FD_ISSET(context->fd, &readfds)) {
-            /* Message from Redis */
+            /* Message from the server */
             if (cliReadReply(0) != REDIS_OK) {
                 cliPrintContextError();
                 exit(1);
@@ -2409,7 +2409,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
                        !strcasecmp(argv[1],"graph")) ||
         (argc == 2 && !strcasecmp(command,"latency") &&
                        !strcasecmp(argv[1],"doctor")) ||
-        /* Format PROXY INFO command for Redis Cluster Proxy:
+        /* Format PROXY INFO command for Cluster Proxy:
          * https://github.com/artix75/redis-cluster-proxy */
         (argc >= 2 && !strcasecmp(command,"proxy") &&
                        !strcasecmp(argv[1],"info")))
@@ -2760,7 +2760,7 @@ static int parseOptions(int argc, char **argv) {
             config.bigkeys = 1;
         } else if (!strcmp(argv[i],"--memkeys")) {
             config.memkeys = 1;
-            config.memkeys_samples = 0; /* use redis default */
+            config.memkeys_samples = 0; /* use the server default */
         } else if (!strcmp(argv[i],"--memkeys-samples") && !lastarg) {
             config.memkeys = 1;
             config.memkeys_samples = atoi(argv[++i]);
@@ -3167,10 +3167,10 @@ static int confirmWithYes(char *msg, int ignore_force) {
 }
 
 static int issueCommandRepeat(int argc, char **argv, long repeat) {
-    /* In Lua debugging mode, we want to pass the "help" to Redis to get
+    /* In Lua debugging mode, we want to pass the "help" to the server to get
      * it's own HELP message, rather than handle it by the CLI, see ldbRepl.
      *
-     * For the normal Redis HELP, we can process it without a connection. */
+     * For the normal server HELP, we can process it without a connection. */
     if (!config.eval_ldb &&
         (!strcasecmp(argv[0],"help") || !strcasecmp(argv[0],"?")))
     {
@@ -3363,9 +3363,9 @@ static void repl(void) {
     int argc;
     sds *argv;
 
-    /* There is no need to initialize redis HELP when we are in lua debugger mode.
+    /* There is no need to initialize HELP when we are in lua debugger mode.
      * It has its own HELP and commands (COMMAND or COMMAND DOCS will fail and got nothing).
-     * We will initialize the redis HELP after the Lua debugging session ended.*/
+     * We will initialize the HELP after the Lua debugging session ended.*/
     if ((!config.eval_ldb) && isatty(fileno(stdin))) {
         /* Initialize the help using the results of the COMMAND command. */
         cliInitHelp();
@@ -4109,7 +4109,7 @@ static int clusterManagerNodeConnect(clusterManagerNode *node) {
         node->context = NULL;
         return 0;
     }
-    /* Set aggressive KEEP_ALIVE socket option in the Redis context socket
+    /* Set aggressive KEEP_ALIVE socket option in the server context socket
      * in order to prevent timeouts caused by the execution of long
      * commands. At the same time this improves the detection of real
      * errors. */
@@ -4193,7 +4193,7 @@ static void clusterManagerNodeResetSlots(clusterManagerNode *node) {
     node->slots_count = 0;
 }
 
-/* Call "INFO" redis command on the specified node and return the reply. */
+/* Call "INFO" command on the specified node and return the reply. */
 static redisReply *clusterManagerGetNodeRedisInfo(clusterManagerNode *node,
                                                   char **err)
 {
@@ -4882,7 +4882,7 @@ static int clusterManagerSetSlotOwner(clusterManagerNode *owner,
 }
 
 /* Get the hash for the values of the specified keys in *keys_reply for the
- * specified nodes *n1 and *n2, by calling DEBUG DIGEST-VALUE redis command
+ * specified nodes *n1 and *n2, by calling DEBUG DIGEST-VALUE command
  * on both nodes. Every key with same name on both nodes but having different
  * values will be added to the *diffs list. Return 0 in case of reply
  * error. */
@@ -6873,7 +6873,7 @@ static void clusterManagerPrintNotClusterNodeError(clusterManagerNode *node,
     clusterManagerLogErr("[ERR] Node %s:%d %s\n", node->ip, node->port, msg);
 }
 
-/* Execute redis-cli in Cluster Manager mode */
+/* Execute valkey-cli in Cluster Manager mode */
 static void clusterManagerMode(clusterManagerCommandProc *proc) {
     int argc = config.cluster_manager_command.argc;
     char **argv = config.cluster_manager_command.argv;
@@ -8828,7 +8828,7 @@ static void pipeMode(void) {
                         /* The ECHO sequence starts with a "\r\n" so that if there
                          * is garbage in the protocol we read from stdin, the ECHO
                          * will likely still be properly formatted.
-                         * CRLF is ignored by Redis, so it has no effects. */
+                         * CRLF is ignored by the server, so it has no effects. */
                         char echo[] =
                         "\r\n*2\r\n$4\r\nECHO\r\n$20\r\n01234567890123456789\r\n";
                         int j;

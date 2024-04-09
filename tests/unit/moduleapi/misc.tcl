@@ -21,7 +21,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
     }
 
     test {test redis version} {
-        assert_equal [s server_version] [r test.redisversion]
+        assert_equal [s valkey_version] [r test.serverversion]
     }
 
     test {test long double conversions} {
@@ -549,7 +549,7 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
     test {test RM_Call with large arg for SET command} {
         # set a big value to trigger increasing the query buf
         r set foo [string repeat A 100000]
-        # set a smaller value but > PROTO_MBULK_BIG_ARG (32*1024) Redis will try to save the query buf itself on the DB.
+        # set a smaller value but > PROTO_MBULK_BIG_ARG (32*1024) the server will try to save the query buf itself on the DB.
         r test.call_generic set bar [string repeat A 33000]
         # asset the value was trimmed
         assert {[r memory usage bar] < 42000}; # 42K to count for Jemalloc's additional memory overhead.

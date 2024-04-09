@@ -210,7 +210,7 @@ tags {"aof external:skip"} {
 
     start_server {overrides {appendonly {yes} appendfsync always}} {
         test {AOF fsync always barrier issue} {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             # Set a sleep when aof is flushed, so that we have a chance to look
             # at the aof size and detect if the response of an incr command
             # arrives before the data was written (and hopefully fsynced)
@@ -374,7 +374,7 @@ tags {"aof external:skip"} {
         }
     }
 
-    # redis could load AOF which has timestamp annotations inside
+    # The server could load AOF which has timestamp annotations inside
     create_aof $aof_dirpath $aof_file {
         append_to_aof "#TS:1628217470\r\n"
         append_to_aof [formatCommand set foo1 bar1]
@@ -438,7 +438,7 @@ tags {"aof external:skip"} {
                 append_to_aof [formatCommand select 9]
                 append_to_aof [formatCommand eval {redis.call('set',KEYS[1],'y'); for i=1,1500000 do redis.call('ping') end return 'ok'} 1 x]
             }
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             $rd debug loadaof
             $rd flush
             wait_for_condition 100 10 {

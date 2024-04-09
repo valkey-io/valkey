@@ -406,7 +406,7 @@ void printBits(unsigned char *p, unsigned long count) {
 
 /* This helper function used by GETBIT / SETBIT parses the bit offset argument
  * making sure an error is returned if it is negative or if it overflows
- * Redis 512 MB limit for the string value or more (server.proto_max_bulk_len).
+ * the server's 512 MB limit for the string value or more (server.proto_max_bulk_len).
  *
  * If the 'hash' argument is true, and 'bits is positive, then the command
  * will also parse bit offsets prefixed by "#". In such a case the offset
@@ -443,7 +443,7 @@ int getBitOffsetFromArgument(client *c, robj *o, uint64_t *offset, int hash, int
 /* This helper function for BITFIELD parses a bitfield type in the form
  * <sign><bits> where sign is 'u' or 'i' for unsigned and signed, and
  * the bits is a value between 1 and 64. However 64 bits unsigned integers
- * are reported as an error because of current limitations of Redis protocol
+ * are reported as an error because of current limitations of RESP
  * to return unsigned integer values greater than INT64_MAX.
  *
  * On error C_ERR is returned and an error is sent to the client. */

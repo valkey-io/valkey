@@ -80,11 +80,11 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "rax.h"     /* Radix tree */
 #include "connection.h" /* Connection abstraction */
 
-#define REDISMODULE_CORE 1
+#define VALKEYMODULE_CORE 1
 typedef struct serverObject robj;
-#include "redismodule.h"    /* Redis modules API defines. */
+#include "valkeymodule.h"    /* Modules API defines. */
 
-/* Following includes allow test functions to be called from Redis main() */
+/* Following includes allow test functions to be called from main() */
 #include "zipmap.h"
 #include "ziplist.h" /* Compact list data structure */
 #include "sha1.h"
@@ -225,7 +225,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CMD_NO_MANDATORY_KEYS (1ULL<<19)
 #define CMD_PROTECTED (1ULL<<20)
 #define CMD_MODULE_GETKEYS (1ULL<<21)  /* Use the modules getkeys interface. */
-#define CMD_MODULE_NO_CLUSTER (1ULL<<22) /* Deny on Redis Cluster. */
+#define CMD_MODULE_NO_CLUSTER (1ULL<<22) /* Deny on Cluster. */
 #define CMD_NO_ASYNC_LOADING (1ULL<<23)
 #define CMD_NO_MULTI (1ULL<<24)
 #define CMD_MOVABLE_KEYS (1ULL<<25) /* The legacy range spec doesn't cover all keys.
@@ -560,7 +560,7 @@ typedef enum {
 #define OOM_SCORE_RELATIVE 1
 #define OOM_SCORE_ADJ_ABSOLUTE 2
 
-/* Redis maxmemory strategies. Instead of using just incremental number
+/* Server maxmemory strategies. Instead of using just incremental number
  * for this defines, we use a set of flags so that testing for certain
  * properties common to multiple policies is faster. */
 #define MAXMEMORY_FLAG_LRU (1<<0)
@@ -699,9 +699,9 @@ typedef enum {
  * Data types
  *----------------------------------------------------------------------------*/
 
-/* A redis object, that is a type able to hold a string / list / set */
+/* An Object, that is a type able to hold a string / list / set */
 
-/* The actual Redis Object */
+/* The actual Object */
 #define OBJ_STRING 0    /* String object. */
 #define OBJ_LIST 1      /* List object. */
 #define OBJ_SET 2       /* Set object. */
@@ -709,9 +709,9 @@ typedef enum {
 #define OBJ_HASH 4      /* Hash object. */
 
 /* The "module" object type is a special one that signals that the object
- * is one directly managed by a Redis module. In this case the value points
+ * is one directly managed by a module. In this case the value points
  * to a moduleValue struct, which contains the object value (which is only
- * handled by the module itself) and the RedisModuleType struct which lists
+ * handled by the module itself) and the ValkeyModuleType struct which lists
  * function pointers in order to serialize, deserialize, AOF-rewrite and
  * free the object.
  *
@@ -724,53 +724,53 @@ typedef enum {
 #define OBJ_TYPE_MAX 7  /* Maximum number of object types */
 
 /* Extract encver / signature from a module type ID. */
-#define REDISMODULE_TYPE_ENCVER_BITS 10
-#define REDISMODULE_TYPE_ENCVER_MASK ((1<<REDISMODULE_TYPE_ENCVER_BITS)-1)
-#define REDISMODULE_TYPE_ENCVER(id) ((id) & REDISMODULE_TYPE_ENCVER_MASK)
-#define REDISMODULE_TYPE_SIGN(id) (((id) & ~((uint64_t)REDISMODULE_TYPE_ENCVER_MASK)) >>REDISMODULE_TYPE_ENCVER_BITS)
+#define VALKEYMODULE_TYPE_ENCVER_BITS 10
+#define VALKEYMODULE_TYPE_ENCVER_MASK ((1<<VALKEYMODULE_TYPE_ENCVER_BITS)-1)
+#define VALKEYMODULE_TYPE_ENCVER(id) ((id) & VALKEYMODULE_TYPE_ENCVER_MASK)
+#define VALKEYMODULE_TYPE_SIGN(id) (((id) & ~((uint64_t)VALKEYMODULE_TYPE_ENCVER_MASK)) >>VALKEYMODULE_TYPE_ENCVER_BITS)
 
 /* Bit flags for moduleTypeAuxSaveFunc */
-#define REDISMODULE_AUX_BEFORE_RDB (1<<0)
-#define REDISMODULE_AUX_AFTER_RDB (1<<1)
+#define VALKEYMODULE_AUX_BEFORE_RDB (1<<0)
+#define VALKEYMODULE_AUX_AFTER_RDB (1<<1)
 
-struct RedisModule;
-struct RedisModuleIO;
-struct RedisModuleDigest;
-struct RedisModuleCtx;
+struct ValkeyModule;
+struct ValkeyModuleIO;
+struct ValkeyModuleDigest;
+struct ValkeyModuleCtx;
 struct moduleLoadQueueEntry;
-struct RedisModuleKeyOptCtx;
-struct RedisModuleCommand;
+struct ValkeyModuleKeyOptCtx;
+struct ValkeyModuleCommand;
 struct clusterState;
 
 /* Each module type implementation should export a set of methods in order
  * to serialize and deserialize the value in the RDB file, rewrite the AOF
  * log, create the digest for "DEBUG DIGEST", and free the value when a key
  * is deleted. */
-typedef void *(*moduleTypeLoadFunc)(struct RedisModuleIO *io, int encver);
-typedef void (*moduleTypeSaveFunc)(struct RedisModuleIO *io, void *value);
-typedef int (*moduleTypeAuxLoadFunc)(struct RedisModuleIO *rdb, int encver, int when);
-typedef void (*moduleTypeAuxSaveFunc)(struct RedisModuleIO *rdb, int when);
-typedef void (*moduleTypeRewriteFunc)(struct RedisModuleIO *io, struct serverObject *key, void *value);
-typedef void (*moduleTypeDigestFunc)(struct RedisModuleDigest *digest, void *value);
+typedef void *(*moduleTypeLoadFunc)(struct ValkeyModuleIO *io, int encver);
+typedef void (*moduleTypeSaveFunc)(struct ValkeyModuleIO *io, void *value);
+typedef int (*moduleTypeAuxLoadFunc)(struct ValkeyModuleIO *rdb, int encver, int when);
+typedef void (*moduleTypeAuxSaveFunc)(struct ValkeyModuleIO *rdb, int when);
+typedef void (*moduleTypeRewriteFunc)(struct ValkeyModuleIO *io, struct serverObject *key, void *value);
+typedef void (*moduleTypeDigestFunc)(struct ValkeyModuleDigest *digest, void *value);
 typedef size_t (*moduleTypeMemUsageFunc)(const void *value);
 typedef void (*moduleTypeFreeFunc)(void *value);
 typedef size_t (*moduleTypeFreeEffortFunc)(struct serverObject *key, const void *value);
 typedef void (*moduleTypeUnlinkFunc)(struct serverObject *key, void *value);
 typedef void *(*moduleTypeCopyFunc)(struct serverObject *fromkey, struct serverObject *tokey, const void *value);
-typedef int (*moduleTypeDefragFunc)(struct RedisModuleDefragCtx *ctx, struct serverObject *key, void **value);
-typedef size_t (*moduleTypeMemUsageFunc2)(struct RedisModuleKeyOptCtx *ctx, const void *value, size_t sample_size);
-typedef void (*moduleTypeFreeFunc2)(struct RedisModuleKeyOptCtx *ctx, void *value);
-typedef size_t (*moduleTypeFreeEffortFunc2)(struct RedisModuleKeyOptCtx *ctx, const void *value);
-typedef void (*moduleTypeUnlinkFunc2)(struct RedisModuleKeyOptCtx *ctx, void *value);
-typedef void *(*moduleTypeCopyFunc2)(struct RedisModuleKeyOptCtx *ctx, const void *value);
-typedef int (*moduleTypeAuthCallback)(struct RedisModuleCtx *ctx, void *username, void *password, const char **err);
+typedef int (*moduleTypeDefragFunc)(struct ValkeyModuleDefragCtx *ctx, struct serverObject *key, void **value);
+typedef size_t (*moduleTypeMemUsageFunc2)(struct ValkeyModuleKeyOptCtx *ctx, const void *value, size_t sample_size);
+typedef void (*moduleTypeFreeFunc2)(struct ValkeyModuleKeyOptCtx *ctx, void *value);
+typedef size_t (*moduleTypeFreeEffortFunc2)(struct ValkeyModuleKeyOptCtx *ctx, const void *value);
+typedef void (*moduleTypeUnlinkFunc2)(struct ValkeyModuleKeyOptCtx *ctx, void *value);
+typedef void *(*moduleTypeCopyFunc2)(struct ValkeyModuleKeyOptCtx *ctx, const void *value);
+typedef int (*moduleTypeAuthCallback)(struct ValkeyModuleCtx *ctx, void *username, void *password, const char **err);
 
 
 /* The module type, which is referenced in each value of a given type, defines
  * the methods and links to the module exporting the type. */
-typedef struct RedisModuleType {
+typedef struct ValkeyModuleType {
     uint64_t id; /* Higher 54 bits of type ID + 10 lower bits of encoding ver. */
-    struct RedisModule *module;
+    struct ValkeyModule *module;
     moduleTypeLoadFunc rdb_load;
     moduleTypeSaveFunc rdb_save;
     moduleTypeRewriteFunc aof_rewrite;
@@ -792,7 +792,7 @@ typedef struct RedisModuleType {
     char name[10]; /* 9 bytes name + null term. Charset: A-Z a-z 0-9 _- */
 } moduleType;
 
-/* In Redis objects 'robj' structures of type OBJ_MODULE, the value pointer
+/* In Object 'robj' structures of type OBJ_MODULE, the value pointer
  * is set to the following structure, referencing the moduleType structure
  * in order to work with the value, and at the same time providing a raw
  * pointer to the value, as created by the module commands operating with
@@ -813,7 +813,7 @@ typedef struct moduleValue {
 } moduleValue;
 
 /* This structure represents a module inside the system. */
-struct RedisModule {
+struct ValkeyModule {
     void *handle;   /* Module dlopen() handle. */
     char *name;     /* Module name. */
     int ver;        /* Module version. We use just progressive integers. */
@@ -827,25 +827,25 @@ struct RedisModule {
     int in_call;    /* RM_Call() nesting level */
     int in_hook;    /* Hooks callback nesting level for this module (0 or 1). */
     int options;    /* Module options and capabilities. */
-    int blocked_clients;         /* Count of RedisModuleBlockedClient in this module. */
-    RedisModuleInfoFunc info_cb; /* Callback for module to add INFO fields. */
-    RedisModuleDefragFunc defrag_cb;    /* Callback for global data defrag. */
+    int blocked_clients;         /* Count of ValkeyModuleBlockedClient in this module. */
+    ValkeyModuleInfoFunc info_cb; /* Callback for module to add INFO fields. */
+    ValkeyModuleDefragFunc defrag_cb;    /* Callback for global data defrag. */
     struct moduleLoadQueueEntry *loadmod; /* Module load arguments for config rewrite. */
     int num_commands_with_acl_categories; /* Number of commands in this module included in acl categories */
     int onload;     /* Flag to identify if the call is being made from Onload (0 or 1) */
     size_t num_acl_categories_added; /* Number of acl categories added by this module. */
 };
-typedef struct RedisModule RedisModule;
+typedef struct ValkeyModule ValkeyModule;
 
-/* This is a wrapper for the 'rio' streams used inside rdb.c in Redis, so that
+/* This is a wrapper for the 'rio' streams used inside rdb.c in the server, so that
  * the user does not have to take the total count of the written bytes nor
  * to care about error conditions. */
-struct RedisModuleIO {
+struct ValkeyModuleIO {
     size_t bytes;       /* Bytes read / written so far. */
     rio *rio;           /* Rio stream. */
     moduleType *type;   /* Module type doing the operation. */
     int error;          /* True if error condition happened. */
-    struct RedisModuleCtx *ctx; /* Optional context, see RM_GetContextFromIO()*/
+    struct ValkeyModuleCtx *ctx; /* Optional context, see RM_GetContextFromIO()*/
     struct serverObject *key;    /* Optional name of key processed */
     int dbid;            /* The dbid of the key being processed, -1 when unknown. */
     sds pre_flush_buffer; /* A buffer that should be flushed before next write operation
@@ -865,12 +865,12 @@ struct RedisModuleIO {
     iovar.pre_flush_buffer = NULL; \
 } while(0)
 
-/* This is a structure used to export DEBUG DIGEST capabilities to Redis
+/* This is a structure used to export DEBUG DIGEST capabilities to
  * modules. We want to capture both the ordered and unordered elements of
  * a data structure, so that a digest can be created in a way that correctly
  * reflects the values. See the DEBUG DIGEST command implementation for more
  * background. */
-struct RedisModuleDigest {
+struct ValkeyModuleDigest {
     unsigned char o[20];    /* Ordered elements. */
     unsigned char x[20];    /* Xored elements. */
     struct serverObject *key; /* Optional name of key processed */
@@ -924,7 +924,7 @@ struct serverObject {
  * and Module types have their registered name returned. */
 char *getObjectTypeName(robj*);
 
-/* Macro used to initialize a Redis object allocated on the stack.
+/* Macro used to initialize an Object allocated on the stack.
  * Note that this macro is taken near the structure definition to make sure
  * we'll update it when the structure is changed, to avoid bugs like
  * bug #85 introduced exactly in this way. */
@@ -971,7 +971,7 @@ typedef struct replBufBlock {
     char buf[];
 } replBufBlock;
 
-/* Redis database representation. There are multiple databases identified
+/* Database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
 typedef struct serverDb {
@@ -1041,11 +1041,11 @@ typedef struct blockingState {
     long long reploffset;   /* Replication offset to reach. */
 
     /* BLOCKED_MODULE */
-    void *module_blocked_handle; /* RedisModuleBlockedClient structure.
+    void *module_blocked_handle; /* ValkeyModuleBlockedClient structure.
                                     which is opaque for the Redis core, only
                                     handled in module.c. */
 
-    void *async_rm_call_handle; /* RedisModuleAsyncRMCallPromise structure.
+    void *async_rm_call_handle; /* ValkeyModuleAsyncRMCallPromise structure.
                                    which is opaque for the Redis core, only
                                    handled in module.c. */
 } blockingState;
@@ -1058,7 +1058,7 @@ typedef struct blockingState {
  * After the execution of every command or script, we iterate over this list to check
  * if as a result we should serve data to clients blocked, unblocking them.
  * Note that server.ready_keys will not have duplicates as there dictionary
- * also called ready_keys in every structure representing a Redis database,
+ * also called ready_keys in every structure representing a database,
  * where we make sure to remember if a given key was already added in the
  * server.ready_keys list. */
 typedef struct readyList {
@@ -1066,7 +1066,7 @@ typedef struct readyList {
     robj *key;
 } readyList;
 
-/* This structure represents a Redis user. This is useful for ACLs, the
+/* This structure represents a user. This is useful for ACLs, the
  * user is associated to the connection after the connection is authenticated.
  * If there is no associated user, the connection uses the default user. */
 #define USER_COMMAND_BITS_COUNT 1024    /* The total number of command bits
@@ -1232,21 +1232,21 @@ typedef struct client {
     listNode *client_list_node; /* list node in client list */
     listNode *postponed_list_node; /* list node within the postponed list */
     listNode *pending_read_list_node; /* list node in clients pending read list */
-    void *module_blocked_client; /* Pointer to the RedisModuleBlockedClient associated with this
+    void *module_blocked_client; /* Pointer to the ValkeyModuleBlockedClient associated with this
                                   * client. This is set in case of module authentication before the
                                   * unblocked client is reprocessed to handle reply callbacks. */
     void *module_auth_ctx; /* Ongoing / attempted module based auth callback's ctx.
                             * This is only tracked within the context of the command attempting
                             * authentication. If not NULL, it means module auth is in progress. */
-    RedisModuleUserChangedFunc auth_callback; /* Module callback to execute
+    ValkeyModuleUserChangedFunc auth_callback; /* Module callback to execute
                                                * when the authenticated user
                                                * changes. */
     void *auth_callback_privdata; /* Private data that is passed when the auth
                                    * changed callback is executed. Opaque for
-                                   * Redis Core. */
+                                   * the Server Core. */
     void *auth_module;      /* The module that owns the callback, which is used
                              * to disconnect the client if the module is
-                             * unloaded for cleanup. Opaque for Redis Core.*/
+                             * unloaded for cleanup. Opaque for the Server Core.*/
 
     /* If this client is in tracking mode and this field is non zero,
      * invalidation messages for keys fetched by this client will be sent to
@@ -1371,7 +1371,7 @@ typedef struct clientBufferLimitsConfig {
 
 extern clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT];
 
-/* The serverOp structure defines a Redis Operation, that is an instance of
+/* The serverOp structure defines an Operation, that is an instance of
  * a command with an argument vector, database ID, propagation target
  * (PROPAGATE_*), and command pointer.
  *
@@ -1382,7 +1382,7 @@ typedef struct serverOp {
     int argc, dbid, target;
 } serverOp;
 
-/* Defines an array of Redis operations. There is an API to add to this
+/* Defines an array of Operations. There is an API to add to this
  * structure in an easy way.
  *
  * int serverOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int target);
@@ -1526,7 +1526,7 @@ typedef struct {
  *----------------------------------------------------------------------------*/
 
 /* AIX defines hz to __hz, we don't use this define and in order to allow
- * Redis build on AIX we need to undef it. */
+ * the server build on AIX we need to undef it. */
 #ifdef _AIX
 #undef hz
 #endif
@@ -2011,10 +2011,10 @@ struct valkeyServer {
     int cluster_announce_port;     /* base port to announce on cluster bus. */
     int cluster_announce_tls_port; /* TLS port to announce on cluster bus. */
     int cluster_announce_bus_port; /* bus port to announce on cluster bus. */
-    int cluster_module_flags;      /* Set of flags that Redis modules are able
+    int cluster_module_flags;      /* Set of flags that modules are able
                                       to set in order to suppress certain
                                       native Redis Cluster features. Check the
-                                      REDISMODULE_CLUSTER_FLAG_*. */
+                                      VALKEYMODULE_CLUSTER_FLAG_*. */
     int cluster_allow_reads_when_down; /* Are reads allowed when the cluster
                                         is down? */
     int cluster_config_file_lock_fd;   /* cluster config fd, will be flocked. */
@@ -2052,7 +2052,7 @@ struct valkeyServer {
     int tls_auth_clients;
     serverTLSContextConfig tls_ctx_config;
     /* cpu affinity */
-    char *server_cpulist; /* cpu affinity list of redis server main/io thread. */
+    char *server_cpulist; /* cpu affinity list of server main/io thread. */
     char *bio_cpulist; /* cpu affinity list of bio thread. */
     char *aof_rewrite_cpulist; /* cpu affinity list of aof rewrite process. */
     char *bgsave_cpulist; /* cpu affinity list of bgsave process. */
@@ -2113,7 +2113,7 @@ typedef struct {
  * 2. keynum: there's an arg that contains the number of key args somewhere before the keys themselves
  */
 
-/* WARNING! Must be synced with generate-command-code.py and RedisModuleKeySpecBeginSearchType */
+/* WARNING! Must be synced with generate-command-code.py and ValkeyModuleKeySpecBeginSearchType */
 typedef enum {
     KSPEC_BS_INVALID = 0, /* Must be 0 */
     KSPEC_BS_UNKNOWN,
@@ -2121,7 +2121,7 @@ typedef enum {
     KSPEC_BS_KEYWORD
 } kspec_bs_type;
 
-/* WARNING! Must be synced with generate-command-code.py and RedisModuleKeySpecFindKeysType */
+/* WARNING! Must be synced with generate-command-code.py and ValkeyModuleKeySpecFindKeysType */
 typedef enum {
     KSPEC_FK_INVALID = 0, /* Must be 0 */
     KSPEC_FK_UNKNOWN,
@@ -2129,7 +2129,7 @@ typedef enum {
     KSPEC_FK_KEYNUM
 } kspec_fk_type;
 
-/* WARNING! This struct must match RedisModuleCommandKeySpec */
+/* WARNING! This struct must match ValkeyModuleCommandKeySpec */
 typedef struct {
     /* Declarative data */
     const char *notes;
@@ -2209,7 +2209,7 @@ typedef struct jsonObject {
 
 #endif
 
-/* WARNING! This struct must match RedisModuleCommandHistoryEntry */
+/* WARNING! This struct must match ValkeyModuleCommandHistoryEntry */
 typedef struct {
     const char *since;
     const char *changes;
@@ -2240,7 +2240,7 @@ typedef enum {
 typedef void serverCommandProc(client *c);
 typedef int serverGetKeysProc(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 
-/* Redis command structure.
+/* Command structure.
  *
  * Note that the command table is in commands.c and it is auto-generated.
  *
@@ -2355,7 +2355,7 @@ struct serverCommand {
     keySpec *key_specs;
     int key_specs_num;
     /* Use a function to determine keys arguments in a command line.
-     * Used for Redis Cluster redirect (may be NULL) */
+     * Used for Cluster redirect (may be NULL) */
     serverGetKeysProc *getkeys_proc;
     int num_args; /* Length of args array. */
     /* Array of subcommands (may be NULL) */
@@ -2383,7 +2383,7 @@ struct serverCommand {
     dict *subcommands_dict; /* A dictionary that holds the subcommands, the key is the subcommand sds name
                              * (not the fullname), and the value is the serverCommand structure pointer. */
     struct serverCommand *parent;
-    struct RedisModuleCommand *module_cmd; /* A pointer to the module command data (NULL if native command) */
+    struct ValkeyModuleCommand *module_cmd; /* A pointer to the module command data (NULL if native command) */
 };
 
 struct serverError {
@@ -2505,7 +2505,7 @@ moduleType *moduleTypeLookupModuleByNameIgnoreCase(const char *name);
 void moduleTypeNameByID(char *name, uint64_t moduleid);
 const char *moduleTypeModuleName(moduleType *mt);
 const char *moduleNameFromCommand(struct serverCommand *cmd);
-void moduleFreeContext(struct RedisModuleCtx *ctx);
+void moduleFreeContext(struct ValkeyModuleCtx *ctx);
 void moduleCallCommandUnblockedHandler(client *c);
 int isModuleClientUnblocked(client *c);
 void unblockClientFromModule(client *c);
@@ -2752,7 +2752,7 @@ void discardTransaction(client *c);
 void flagTransaction(client *c);
 void execCommandAbort(client *c, sds error);
 
-/* Redis object implementation */
+/* Object implementation */
 void decrRefCount(robj *o);
 void decrRefCountVoid(void *o);
 void incrRefCount(robj *o);
@@ -3377,7 +3377,7 @@ void sentinelInfoCommand(client *c);
 void sentinelPublishCommand(client *c);
 void sentinelRoleCommand(client *c);
 
-/* redis-check-rdb & aof */
+/* valkey-check-rdb & aof */
 int redis_check_rdb(char *rdbfilename, FILE *fp);
 int redis_check_rdb_main(int argc, char **argv, FILE *fp);
 int redis_check_aof_main(int argc, char **argv);

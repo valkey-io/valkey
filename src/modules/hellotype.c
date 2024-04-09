@@ -35,7 +35,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "../redismodule.h"
+#include "../valkeymodule.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -105,22 +105,22 @@ int HelloTypeInsert_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, 
 
     if (argc != 3) return RedisModule_WrongArity(ctx);
     RedisModuleKey *key = RedisModule_OpenKey(ctx,argv[1],
-        REDISMODULE_READ|REDISMODULE_WRITE);
+        VALKEYMODULE_READ|VALKEYMODULE_WRITE);
     int type = RedisModule_KeyType(key);
-    if (type != REDISMODULE_KEYTYPE_EMPTY &&
+    if (type != VALKEYMODULE_KEYTYPE_EMPTY &&
         RedisModule_ModuleTypeGetType(key) != HelloType)
     {
-        return RedisModule_ReplyWithError(ctx,REDISMODULE_ERRORMSG_WRONGTYPE);
+        return RedisModule_ReplyWithError(ctx,VALKEYMODULE_ERRORMSG_WRONGTYPE);
     }
 
     long long value;
-    if ((RedisModule_StringToLongLong(argv[2],&value) != REDISMODULE_OK)) {
+    if ((RedisModule_StringToLongLong(argv[2],&value) != VALKEYMODULE_OK)) {
         return RedisModule_ReplyWithError(ctx,"ERR invalid value: must be a signed 64 bit integer");
     }
 
     /* Create an empty value object if the key is currently empty. */
     struct HelloTypeObject *hto;
-    if (type == REDISMODULE_KEYTYPE_EMPTY) {
+    if (type == VALKEYMODULE_KEYTYPE_EMPTY) {
         hto = createHelloTypeObject();
         RedisModule_ModuleTypeSetValue(key,HelloType,hto);
     } else {
@@ -133,7 +133,7 @@ int HelloTypeInsert_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, 
 
     RedisModule_ReplyWithLongLong(ctx,hto->len);
     RedisModule_ReplicateVerbatim(ctx);
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
 /* HELLOTYPE.RANGE key first count */
@@ -142,17 +142,17 @@ int HelloTypeRange_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, i
 
     if (argc != 4) return RedisModule_WrongArity(ctx);
     RedisModuleKey *key = RedisModule_OpenKey(ctx,argv[1],
-        REDISMODULE_READ|REDISMODULE_WRITE);
+        VALKEYMODULE_READ|VALKEYMODULE_WRITE);
     int type = RedisModule_KeyType(key);
-    if (type != REDISMODULE_KEYTYPE_EMPTY &&
+    if (type != VALKEYMODULE_KEYTYPE_EMPTY &&
         RedisModule_ModuleTypeGetType(key) != HelloType)
     {
-        return RedisModule_ReplyWithError(ctx,REDISMODULE_ERRORMSG_WRONGTYPE);
+        return RedisModule_ReplyWithError(ctx,VALKEYMODULE_ERRORMSG_WRONGTYPE);
     }
 
     long long first, count;
-    if (RedisModule_StringToLongLong(argv[2],&first) != REDISMODULE_OK ||
-        RedisModule_StringToLongLong(argv[3],&count) != REDISMODULE_OK ||
+    if (RedisModule_StringToLongLong(argv[2],&first) != VALKEYMODULE_OK ||
+        RedisModule_StringToLongLong(argv[3],&count) != VALKEYMODULE_OK ||
         first < 0 || count < 0)
     {
         return RedisModule_ReplyWithError(ctx,
@@ -161,7 +161,7 @@ int HelloTypeRange_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, i
 
     struct HelloTypeObject *hto = RedisModule_ModuleTypeGetValue(key);
     struct HelloTypeNode *node = hto ? hto->head : NULL;
-    RedisModule_ReplyWithArray(ctx,REDISMODULE_POSTPONED_LEN);
+    RedisModule_ReplyWithArray(ctx,VALKEYMODULE_POSTPONED_LEN);
     long long arraylen = 0;
     while(node && count--) {
         RedisModule_ReplyWithLongLong(ctx,node->value);
@@ -169,7 +169,7 @@ int HelloTypeRange_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, i
         node = node->next;
     }
     RedisModule_ReplySetArrayLength(ctx,arraylen);
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
 /* HELLOTYPE.LEN key */
@@ -178,17 +178,17 @@ int HelloTypeLen_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int
 
     if (argc != 2) return RedisModule_WrongArity(ctx);
     RedisModuleKey *key = RedisModule_OpenKey(ctx,argv[1],
-        REDISMODULE_READ|REDISMODULE_WRITE);
+        VALKEYMODULE_READ|VALKEYMODULE_WRITE);
     int type = RedisModule_KeyType(key);
-    if (type != REDISMODULE_KEYTYPE_EMPTY &&
+    if (type != VALKEYMODULE_KEYTYPE_EMPTY &&
         RedisModule_ModuleTypeGetType(key) != HelloType)
     {
-        return RedisModule_ReplyWithError(ctx,REDISMODULE_ERRORMSG_WRONGTYPE);
+        return RedisModule_ReplyWithError(ctx,VALKEYMODULE_ERRORMSG_WRONGTYPE);
     }
 
     struct HelloTypeObject *hto = RedisModule_ModuleTypeGetValue(key);
     RedisModule_ReplyWithLongLong(ctx,hto ? hto->len : 0);
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
 /* ====================== Example of a blocking command ==================== */
@@ -197,17 +197,17 @@ int HelloTypeLen_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int
  * called when the key we blocked for is ready: we need to check if we
  * can really serve the client, and reply OK or ERR accordingly. */
 int HelloBlock_Reply(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
     RedisModuleString *keyname = RedisModule_GetBlockedClientReadyKey(ctx);
-    RedisModuleKey *key = RedisModule_OpenKey(ctx,keyname,REDISMODULE_READ);
+    RedisModuleKey *key = RedisModule_OpenKey(ctx,keyname,VALKEYMODULE_READ);
     int type = RedisModule_KeyType(key);
-    if (type != REDISMODULE_KEYTYPE_MODULE ||
+    if (type != VALKEYMODULE_KEYTYPE_MODULE ||
         RedisModule_ModuleTypeGetType(key) != HelloType)
     {
         RedisModule_CloseKey(key);
-        return REDISMODULE_ERR;
+        return VALKEYMODULE_ERR;
     }
 
     /* In case the key is able to serve our blocked client, let's directly
@@ -218,14 +218,14 @@ int HelloBlock_Reply(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 
 /* Timeout callback for blocking command HELLOTYPE.BRANGE */
 int HelloBlock_Timeout(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
     return RedisModule_ReplyWithSimpleString(ctx,"Request timedout");
 }
 
 /* Private data freeing callback for HELLOTYPE.BRANGE command. */
 void HelloBlock_FreeData(RedisModuleCtx *ctx, void *privdata) {
-    REDISMODULE_NOT_USED(ctx);
+    VALKEYMODULE_NOT_USED(ctx);
     RedisModule_Free(privdata);
 }
 
@@ -236,31 +236,31 @@ int HelloTypeBRange_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, 
     if (argc != 5) return RedisModule_WrongArity(ctx);
     RedisModule_AutoMemory(ctx); /* Use automatic memory management. */
     RedisModuleKey *key = RedisModule_OpenKey(ctx,argv[1],
-        REDISMODULE_READ|REDISMODULE_WRITE);
+        VALKEYMODULE_READ|VALKEYMODULE_WRITE);
     int type = RedisModule_KeyType(key);
-    if (type != REDISMODULE_KEYTYPE_EMPTY &&
+    if (type != VALKEYMODULE_KEYTYPE_EMPTY &&
         RedisModule_ModuleTypeGetType(key) != HelloType)
     {
-        return RedisModule_ReplyWithError(ctx,REDISMODULE_ERRORMSG_WRONGTYPE);
+        return RedisModule_ReplyWithError(ctx,VALKEYMODULE_ERRORMSG_WRONGTYPE);
     }
 
     /* Parse the timeout before even trying to serve the client synchronously,
      * so that we always fail ASAP on syntax errors. */
     long long timeout;
-    if (RedisModule_StringToLongLong(argv[4],&timeout) != REDISMODULE_OK) {
+    if (RedisModule_StringToLongLong(argv[4],&timeout) != VALKEYMODULE_OK) {
         return RedisModule_ReplyWithError(ctx,
             "ERR invalid timeout parameter");
     }
 
     /* Can we serve the reply synchronously? */
-    if (type != REDISMODULE_KEYTYPE_EMPTY) {
+    if (type != VALKEYMODULE_KEYTYPE_EMPTY) {
         return HelloTypeRange_RedisCommand(ctx,argv,argc-1);
     }
 
     /* Otherwise let's block on the key. */
     void *privdata = RedisModule_Alloc(100);
     RedisModule_BlockClientOnKeys(ctx,HelloBlock_Reply,HelloBlock_Timeout,HelloBlock_FreeData,timeout,argv+1,1,privdata);
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
 /* ========================== "hellotype" type methods ======================= */
@@ -320,17 +320,17 @@ void HelloTypeDigest(RedisModuleDigest *md, void *value) {
     RedisModule_DigestEndSequence(md);
 }
 
-/* This function must be present on each Redis module. It is used in order to
- * register the commands into the Redis server. */
+/* This function must be present on each module. It is used in order to
+ * register the commands into the server. */
 int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
-    if (RedisModule_Init(ctx,"hellotype",1,REDISMODULE_APIVER_1)
-        == REDISMODULE_ERR) return REDISMODULE_ERR;
+    if (RedisModule_Init(ctx,"hellotype",1,VALKEYMODULE_APIVER_1)
+        == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
     RedisModuleTypeMethods tm = {
-        .version = REDISMODULE_TYPE_METHOD_VERSION,
+        .version = VALKEYMODULE_TYPE_METHOD_VERSION,
         .rdb_load = HelloTypeRdbLoad,
         .rdb_save = HelloTypeRdbSave,
         .aof_rewrite = HelloTypeAofRewrite,
@@ -340,23 +340,23 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
     };
 
     HelloType = RedisModule_CreateDataType(ctx,"hellotype",0,&tm);
-    if (HelloType == NULL) return REDISMODULE_ERR;
+    if (HelloType == NULL) return VALKEYMODULE_ERR;
 
     if (RedisModule_CreateCommand(ctx,"hellotype.insert",
-        HelloTypeInsert_RedisCommand,"write deny-oom",1,1,1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+        HelloTypeInsert_RedisCommand,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
     if (RedisModule_CreateCommand(ctx,"hellotype.range",
-        HelloTypeRange_RedisCommand,"readonly",1,1,1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+        HelloTypeRange_RedisCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
     if (RedisModule_CreateCommand(ctx,"hellotype.len",
-        HelloTypeLen_RedisCommand,"readonly",1,1,1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+        HelloTypeLen_RedisCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
     if (RedisModule_CreateCommand(ctx,"hellotype.brange",
-        HelloTypeBRange_RedisCommand,"readonly",1,1,1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+        HelloTypeBRange_RedisCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }

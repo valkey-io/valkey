@@ -75,9 +75,9 @@
 #define REDIS_CLI_KEEPALIVE_INTERVAL 15 /* seconds */
 #define REDIS_CLI_DEFAULT_PIPE_TIMEOUT 30 /* seconds */
 #define REDIS_CLI_HISTFILE_ENV "REDISCLI_HISTFILE"
-#define REDIS_CLI_HISTFILE_DEFAULT ".valkeycli_history"
+#define CLI_HISTFILE_DEFAULT ".valkeycli_history"
 #define REDIS_CLI_RCFILE_ENV "REDISCLI_RCFILE"
-#define REDIS_CLI_RCFILE_DEFAULT ".valkeyclirc"
+#define CLI_RCFILE_DEFAULT ".valkeyclirc"
 #define REDIS_CLI_AUTH_ENV "REDISCLI_AUTH"
 #define REDIS_CLI_CLUSTER_YES_ENV "REDISCLI_CLUSTER_YES"
 
@@ -3091,17 +3091,17 @@ version,tls_usage);
 "                     Use filename of \"-\" to write to stdout.\n"
 "  --functions-rdb <filename> Like --rdb but only get the functions (not the keys)\n"
 "                     when getting the RDB dump file.\n"
-"  --pipe             Transfer raw Valkey protocol from stdin to server.\n"
+"  --pipe             Transfer raw RESP protocol from stdin to server.\n"
 "  --pipe-timeout <n> In --pipe mode, abort with error if after sending all data.\n"
 "                     no reply is received within <n> seconds.\n"
 "                     Default timeout: %d. Use 0 to wait forever.\n",
     REDIS_CLI_DEFAULT_PIPE_TIMEOUT);
     fprintf(target,
-"  --bigkeys          Sample Valkey keys looking for keys with many elements (complexity).\n"
-"  --memkeys          Sample Valkey keys looking for keys consuming a lot of memory.\n"
-"  --memkeys-samples <n> Sample Valkey keys looking for keys consuming a lot of memory.\n"
+"  --bigkeys          Sample keys looking for keys with many elements (complexity).\n"
+"  --memkeys          Sample keys looking for keys consuming a lot of memory.\n"
+"  --memkeys-samples <n> Sample keys looking for keys consuming a lot of memory.\n"
 "                     And define number of key elements to sample\n"
-"  --hotkeys          Sample Valkey keys looking for hot keys.\n"
+"  --hotkeys          Sample keys looking for hot keys.\n"
 "                     only works when maxmemory-policy is *lfu.\n"
 "  --scan             List all keys using the SCAN command.\n"
 "  --pattern <pat>    Keys pattern when using the --scan, --bigkeys or --hotkeys\n"
@@ -3258,7 +3258,7 @@ void cliSetPreferences(char **argv, int argc, int interactive) {
 
 /* Load the ~/.valkeyclirc file if any. */
 void cliLoadPreferences(void) {
-    sds rcfile = getDotfilePath(REDIS_CLI_RCFILE_ENV,REDIS_CLI_RCFILE_DEFAULT);
+    sds rcfile = getDotfilePath(REDIS_CLI_RCFILE_ENV,CLI_RCFILE_DEFAULT);
     if (rcfile == NULL) return;
     FILE *fp = fopen(rcfile,"r");
     char buf[1024];
@@ -3379,7 +3379,7 @@ static void repl(void) {
 
     /* Only use history and load the rc file when stdin is a tty. */
     if (isatty(fileno(stdin))) {
-        historyfile = getDotfilePath(REDIS_CLI_HISTFILE_ENV,REDIS_CLI_HISTFILE_DEFAULT);
+        historyfile = getDotfilePath(REDIS_CLI_HISTFILE_ENV,CLI_HISTFILE_DEFAULT);
         //keep in-memory history always regardless if history file can be determined
         history = 1;
         if (historyfile != NULL) {

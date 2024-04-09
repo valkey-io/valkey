@@ -2245,8 +2245,8 @@ int setOOMScoreAdj(int process_class) {
     char buf[64];
 
     if (server.oom_score_adj != OOM_SCORE_ADJ_NO) {
-        if (!oom_score_adjusted_by_redis) {
-            oom_score_adjusted_by_redis = 1;
+        if (!oom_score_adjusted_by_valkey) {
+            oom_score_adjusted_by_valkey = 1;
             /* Backup base value before enabling the server control over oom score */
             fd = open("/proc/self/oom_score_adj", O_RDONLY);
             if (fd < 0 || read(fd, buf, sizeof(buf)) < 0) {

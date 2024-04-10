@@ -160,8 +160,8 @@ start_multiple_servers 3 [list overrides $base_conf] {
 # Test that functions are propagated on add-node
 start_multiple_servers 5 [list overrides $base_conf] {
 
-    set node4_rd [redis_client -3]
-    set node5_rd [redis_client -4]
+    set node4_rd [valkey_client -3]
+    set node5_rd [valkey_client -4]
 
     test {Functions are added to new node on valkey-cli cluster add-node} {
         exec src/valkey-cli --cluster-yes --cluster create \
@@ -261,7 +261,7 @@ test {Migrate the last slot away from a node using valkey-cli} {
             fail "Cluster doesn't stabilize"
         }
 
-        set newnode_r [redis_client -3]
+        set newnode_r [valkey_client -3]
         set newnode_id [$newnode_r CLUSTER MYID]
 
         # Find out which node has the key "foo" by asking the new node for a

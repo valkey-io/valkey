@@ -14,7 +14,7 @@ start_server {tags {"tracking network logreqres:skip"}} {
 
     # Client to be used for SET and GET commands
     # We don't read this client's buffer
-    set rd_sg [redis_client] 
+    set rd_sg [valkey_client] 
 
     proc clean_all {} {
         uplevel {
@@ -396,7 +396,7 @@ start_server {tags {"tracking network logreqres:skip"}} {
     }
 
     test {BCAST with prefix collisions throw errors} {
-        set r [redis_client] 
+        set r [valkey_client] 
         catch {$r CLIENT TRACKING ON BCAST PREFIX FOOBAR PREFIX FOO} output
         assert_match {ERR Prefix 'FOOBAR'*'FOO'*} $output
 

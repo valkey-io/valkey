@@ -424,7 +424,7 @@ start_server {tags {"info" "external:skip"}} {
         }
 
         test {clients: watching clients} {
-            set r2 [redis_client]
+            set r2 [valkey_client]
             assert_equal [s watching_clients] 0
             assert_equal [s total_watched_keys] 0
             assert_match {*watch=0*} [r client info]

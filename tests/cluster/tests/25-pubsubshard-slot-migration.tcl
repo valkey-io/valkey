@@ -147,7 +147,7 @@ test "Move a replica to another primary, verify client receives sunsubscribe on 
     set replica_addr [get_addr_replica_serving_slot $slot]
     set replica_host [lindex $replica_addr 0]
     set replica_port [lindex $replica_addr 1]
-    set replica_client [redis_client_by_addr $replica_host $replica_port]
+    set replica_client [valkey_client_by_addr $replica_host $replica_port]
     set subscribeclient [valkey_deferring_client_by_addr $replica_host $replica_port]
 
     $subscribeclient deferred 1

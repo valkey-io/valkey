@@ -729,14 +729,14 @@ proc valkey_deferring_client_by_addr {host port} {
     return $client
 }
 
-proc redis_client {type id} {
+proc valkey_client {type id} {
     set port [get_instance_attrib $type $id port]
     set host [get_instance_attrib $type $id host]
     set client [redis $host $port 0 $::tls]
     return $client
 }
 
-proc redis_client_by_addr {host port} {
+proc valkey_client_by_addr {host port} {
     set client [redis $host $port 0 $::tls]
     return $client
 }

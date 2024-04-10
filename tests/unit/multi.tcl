@@ -1,5 +1,5 @@
 proc wait_for_dbsize {size} {
-    set r2 [redis_client]
+    set r2 [valkey_client]
     wait_for_condition 50 100 {
         [$r2 dbsize] == $size
     } else {
@@ -540,7 +540,7 @@ start_server {tags {"multi"}} {
         # check that if MULTI arrives during timeout, it is either refused, or
         # allowed to pass, and we don't end up executing half of the transaction
         set rd1 [valkey_deferring_client]
-        set r2 [redis_client]
+        set r2 [valkey_client]
         r config set lua-time-limit 10
         r set xx 1
         $rd1 eval {while true do end} 0
@@ -565,7 +565,7 @@ start_server {tags {"multi"}} {
         # check that if EXEC arrives during timeout, we don't end up executing
         # half of the transaction, and also that we exit the multi state
         set rd1 [valkey_deferring_client]
-        set r2 [redis_client]
+        set r2 [valkey_client]
         r config set lua-time-limit 10
         r set xx 1
         catch { $r2 multi; } e
@@ -590,7 +590,7 @@ start_server {tags {"multi"}} {
         # check that we don't run an incomplete transaction due to some commands
         # arriving during busy script
         set rd1 [valkey_deferring_client]
-        set r2 [redis_client]
+        set r2 [valkey_client]
         r config set lua-time-limit 10
         r set xx 1
         catch { $r2 multi; } e
@@ -615,7 +615,7 @@ start_server {tags {"multi"}} {
         # check that if EXEC arrives during timeout, we don't end up executing
         # actual commands during busy script, and also that we exit the multi state
         set rd1 [valkey_deferring_client]
-        set r2 [redis_client]
+        set r2 [valkey_client]
         r config set lua-time-limit 10
         r set xx 1
         catch { $r2 multi; } e
@@ -637,7 +637,7 @@ start_server {tags {"multi"}} {
 
     test {exec with write commands and state change} {
         # check that exec that contains write commands fails if server state changed since they were queued
-        set r1 [redis_client]
+        set r1 [valkey_client]
         r set xx 1
         r multi
         r incr xx
@@ -654,7 +654,7 @@ start_server {tags {"multi"}} {
     test {exec with read commands and stale replica state change} {
         # check that exec that contains read commands fails if server state changed since they were queued
         r config set replica-serve-stale-data no
-        set r1 [redis_client]
+        set r1 [valkey_client]
         r set xx 1
 
         # check that GET and PING are disallowed on stale replica, even if the replica becomes stale only after queuing.
@@ -685,7 +685,7 @@ start_server {tags {"multi"}} {
     } {0} {needs:repl cluster:skip}
 
     test {EXEC with only read commands should not be rejected when OOM} {
-        set r2 [redis_client]
+        set r2 [valkey_client]
 
         r set x value
         r multi
@@ -704,7 +704,7 @@ start_server {tags {"multi"}} {
     } {0} {needs:config-maxmemory}
 
     test {EXEC with at least one use-memory command should fail} {
-        set r2 [redis_client]
+        set r2 [valkey_client]
 
         r multi
         r set x 1

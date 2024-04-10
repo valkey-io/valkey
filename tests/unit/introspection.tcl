@@ -667,7 +667,7 @@ start_server {tags {"introspection"}} {
         }
 
         # Make sure we can still communicate with the server (on the original port)
-        set r1 [redis_client]
+        set r1 [valkey_client]
         assert_equal [$r1 ping] "PONG"
         $r1 close
     }

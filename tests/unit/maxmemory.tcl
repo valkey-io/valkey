@@ -114,7 +114,7 @@ start_server {tags {"maxmemory" "external:skip"}} {
             init_test $client_eviction
 
             for {set j 0} {$j < 20} {incr j} {
-                set rr [redis_client]
+                set rr [valkey_client]
                 lappend clients $rr
             }
 

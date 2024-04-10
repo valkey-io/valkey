@@ -278,7 +278,7 @@ proc valkey_deferring_client {args} {
     return $client
 }
 
-proc redis_client {args} {
+proc valkey_client {args} {
     set level 0
     if {[llength $args] > 0 && [string is integer [lindex $args 0]]} {
         set level [lindex $args 0]

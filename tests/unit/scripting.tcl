@@ -1242,7 +1242,7 @@ start_server {tags {"scripting"}} {
         # create clients, and set one to block waiting for key 'x'
         set rd [valkey_deferring_client]
         set rd2 [valkey_deferring_client]
-        set r3 [redis_client]
+        set r3 [valkey_client]
         $rd2 blpop x 0
         wait_for_blocked_clients_count 1
 
@@ -2058,8 +2058,8 @@ start_server {tags {"scripting"}} {
             # temporarily set the server to master, so it doesn't block the queuing
             # and we can test the evaluation of the flags on exec
             r replicaof no one
-            set rr [redis_client]
-            set rr2 [redis_client]
+            set rr [valkey_client]
+            set rr2 [valkey_client]
             $rr multi
             $rr2 multi
 

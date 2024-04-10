@@ -15,7 +15,7 @@ test "Cluster is up" {
 }
 
 test "Each master should have two replicas attached" {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         if {$id < 5} {
             wait_for_condition 1000 50 {
                 [llength [lindex [R $id role] 2]] == 2
@@ -34,7 +34,7 @@ test "Killing all the slaves of master #0 and #1" {
     after 4000
 }
 
-foreach_redis_id id {
+foreach_valkey_id id {
     if {$id < 5} {
         test "Master #$id should have at least one replica" {
             wait_for_condition 1000 50 {

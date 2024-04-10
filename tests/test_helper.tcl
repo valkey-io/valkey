@@ -877,7 +877,7 @@ proc read_from_replication_stream {s} {
     set res {}
     for {set j 0} {$j < $count} {incr j} {
         read $s 1
-        set arg [::redis::redis_bulk_read $s]
+        set arg [::redis::valkey_bulk_read $s]
         if {$j == 0} {set arg [string tolower $arg]}
         lappend res $arg
     }

@@ -25,7 +25,7 @@ set ::dont_clean 0
 set ::simulate_error 0
 set ::failed 0
 set ::sentinel_instances {}
-set ::redis_instances {}
+set ::valkey_instances {}
 set ::global_config {}
 set ::sentinel_base_port 20000
 set ::redis_base_port 30000
@@ -345,7 +345,7 @@ proc pause_on_error {} {
         } elseif {$cmd eq {show-redis-logs}} {
             set count 10
             if {[lindex $argv 1] ne {}} {set count [lindex $argv 1]}
-            foreach_redis_id id {
+            foreach_valkey_id id {
                 puts "=== REDIS $id ===="
                 puts [exec tail -$count redis_$id/log.txt]
                 puts "---------------------\n"
@@ -359,7 +359,7 @@ proc pause_on_error {} {
                 puts "---------------------\n"
             }
         } elseif {$cmd eq {ls}} {
-            foreach_redis_id id {
+            foreach_valkey_id id {
                 puts -nonewline "Redis $id"
                 set errcode [catch {
                     set str {}
@@ -530,7 +530,7 @@ proc S {n args} {
 # Example:
 #     [Rn 0] info
 proc Rn {n} {
-    return [dict get [lindex $::redis_instances $n] link]
+    return [dict get [lindex $::valkey_instances $n] link]
 }
 
 # Like R but to chat with server instances.
@@ -588,8 +588,8 @@ proc foreach_sentinel_id {idvar code} {
     return -code $errcode $result
 }
 
-proc foreach_redis_id {idvar code} {
-    set errcode [catch {uplevel 1 [list foreach_instance_id $::redis_instances $idvar $code]} result]
+proc foreach_valkey_id {idvar code} {
+    set errcode [catch {uplevel 1 [list foreach_instance_id $::valkey_instances $idvar $code]} result]
     return -code $errcode $result
 }
 
@@ -608,8 +608,8 @@ proc set_instance_attrib {type id attrib newval} {
 # Create a master-slave cluster of the given number of total instances.
 # The first instance "0" is the master, all others are configured as
 # slaves.
-proc create_redis_master_slave_cluster n {
-    foreach_redis_id id {
+proc create_valkey_master_slave_cluster n {
+    foreach_valkey_id id {
         if {$id == 0} {
             # Our master.
             R $id slaveof no one

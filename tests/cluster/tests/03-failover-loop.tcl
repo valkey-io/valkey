@@ -25,7 +25,7 @@ while {[incr iterations -1]} {
     if {$role eq {master}} {
         set slave {}
         set myid [dict get [get_myself $tokill] id]
-        foreach_redis_id id {
+        foreach_valkey_id id {
             if {$id == $tokill} continue
             if {[dict get [get_myself $id] slaveof] eq $myid} {
                 set slave $id
@@ -111,7 +111,7 @@ while {[incr iterations -1]} {
 }
 
 test "Post condition: current_epoch >= my_epoch everywhere" {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         assert {[CI $id cluster_current_epoch] >= [CI $id cluster_my_epoch]}
     }
 }

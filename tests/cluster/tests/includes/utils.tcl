@@ -1,7 +1,7 @@
 source "../../../tests/support/cli.tcl"
 
 proc config_set_all_nodes {keyword value} {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         R $id config set $keyword $value
     }
 }

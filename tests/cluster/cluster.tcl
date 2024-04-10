@@ -86,7 +86,7 @@ proc cluster_allocate_slots {n} {
 
 # Check that cluster nodes agree about "state", or raise an error.
 proc assert_cluster_state {state} {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         if {[instance_is_killed redis $id]} continue
         wait_for_condition 1000 50 {
             [CI $id cluster_state] eq $state
@@ -99,7 +99,7 @@ proc assert_cluster_state {state} {
 # Search the first node starting from ID $first that is not
 # already configured as a slave.
 proc cluster_find_available_slave {first} {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         if {$id < $first} continue
         if {[instance_is_killed redis $id]} continue
         set me [get_myself $id]
@@ -161,7 +161,7 @@ proc cluster_create_with_continuous_slots {masters slaves} {
 
 # Set the cluster node-timeout to all the reachalbe nodes.
 proc set_cluster_node_timeout {to} {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         catch {R $id CONFIG SET cluster-node-timeout $to}
     }
 }

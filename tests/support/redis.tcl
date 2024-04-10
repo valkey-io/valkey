@@ -265,7 +265,7 @@ proc ::redis::redis_readnl {fd len} {
     return $buf
 }
 
-proc ::redis::redis_bulk_read {fd} {
+proc ::redis::valkey_bulk_read {fd} {
     set count [redis_read_line $fd]
     if {$count == -1} return {}
     set buf [redis_readnl $fd $count]
@@ -335,7 +335,7 @@ proc ::redis::redis_read_double {id fd} {
 }
 
 proc ::redis::redis_read_verbatim_str fd {
-    set v [redis_bulk_read $fd]
+    set v [valkey_bulk_read $fd]
     # strip the first 4 chars ("txt:")
     return [string range $v 4 end]
 }
@@ -356,7 +356,7 @@ proc ::redis::redis_read_reply_logic {id fd} {
             # {return [redis_read_bool $fd]}
             = {return [redis_read_verbatim_str $fd]}
             - {return -code error [redis_read_line $fd]}
-            $ {return [redis_bulk_read $fd]}
+            $ {return [valkey_bulk_read $fd]}
             > -
             ~ -
             * {return [redis_multi_bulk_read $id $fd]}

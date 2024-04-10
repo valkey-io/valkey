@@ -15,7 +15,7 @@ test "Cluster is writable" {
 
 proc find_non_empty_master {} {
     set master_id_no {}
-    foreach_redis_id id {
+    foreach_valkey_id id {
         if {[RI $id role] eq {master} && [R $id dbsize] > 0} {
             set master_id_no $id
             break

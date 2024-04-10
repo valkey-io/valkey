@@ -32,7 +32,7 @@ test "Instance #5 synced with the master" {
 test "The nofailover flag is propagated" {
     set slave5_id [dict get [get_myself 5] id]
 
-    foreach_redis_id id {
+    foreach_valkey_id id {
         wait_for_condition 1000 50 {
             [has_flag [get_node_by_id $id $slave5_id] nofailover]
         } else {

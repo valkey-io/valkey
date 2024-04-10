@@ -18,7 +18,7 @@ test "Cluster is up" {
 }
 
 test "Each master should have at least two replicas attached" {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         if {$id < 5} {
             wait_for_condition 1000 50 {
                 [llength [lindex [R $id role] 2]] >= 2
@@ -30,7 +30,7 @@ test "Each master should have at least two replicas attached" {
 }
 
 test "Set allow-replica-migration yes" {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         R $id CONFIG SET cluster-allow-replica-migration yes
     }
 }

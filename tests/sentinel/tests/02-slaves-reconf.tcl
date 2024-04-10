@@ -11,7 +11,7 @@ proc 02_test_slaves_replication {} {
     uplevel 1 {
         test "Check that slaves replicate from current master" {
             set master_port [RPort $master_id]
-            foreach_redis_id id {
+            foreach_valkey_id id {
                 if {$id == $master_id} continue
                 if {[instance_is_killed redis $id]} continue
                 wait_for_condition 1000 50 {
@@ -58,7 +58,7 @@ foreach_sentinel_id id {
 02_test_slaves_replication
 
 test "Kill a slave instance" {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         if {$id == $master_id} continue
         set killed_slave_id $id
         kill_instance redis $id

@@ -45,8 +45,8 @@
 extern char **environ;
 
 #if USE_OPENSSL == 1 /* BUILD_YES */
-extern SSL_CTX *server_tls_ctx;
-extern SSL_CTX *server_tls_client_ctx;
+extern SSL_CTX *valkey_tls_ctx;
+extern SSL_CTX *valkey_tls_client_ctx;
 #endif
 
 #define REDIS_SENTINEL_PORT 26379
@@ -2377,8 +2377,8 @@ void sentinelSetClientName(sentinelRedisInstance *ri, redisAsyncContext *c, char
 
 static int instanceLinkNegotiateTLS(redisAsyncContext *context) {
 #if USE_OPENSSL == 1 /* BUILD_YES */
-    if (!server_tls_ctx) return C_ERR;
-    SSL *ssl = SSL_new(server_tls_client_ctx ? server_tls_client_ctx : server_tls_ctx);
+    if (!valkey_tls_ctx) return C_ERR;
+    SSL *ssl = SSL_new(valkey_tls_client_ctx ? valkey_tls_client_ctx : valkey_tls_ctx);
     if (!ssl) return C_ERR;
 
     if (redisInitiateSSL(&context->c, ssl) == REDIS_ERR) {

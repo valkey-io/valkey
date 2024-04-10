@@ -58,8 +58,8 @@
 #define REDIS_TLS_PROTO_DEFAULT     (REDIS_TLS_PROTO_TLSv1_2)
 #endif
 
-SSL_CTX *server_tls_ctx = NULL;
-SSL_CTX *server_tls_client_ctx = NULL;
+SSL_CTX *valkey_tls_ctx = NULL;
+SSL_CTX *valkey_tls_client_ctx = NULL;
 
 static int parseProtocolsConfig(const char *str) {
     int i, count = 0;
@@ -170,13 +170,13 @@ static void tlsInit(void) {
 }
 
 static void tlsCleanup(void) {
-    if (server_tls_ctx) {
-        SSL_CTX_free(server_tls_ctx);
-        server_tls_ctx = NULL;
+    if (valkey_tls_ctx) {
+        SSL_CTX_free(valkey_tls_ctx);
+        valkey_tls_ctx = NULL;
     }
-    if (server_tls_client_ctx) {
-        SSL_CTX_free(server_tls_client_ctx);
-        server_tls_client_ctx = NULL;
+    if (valkey_tls_client_ctx) {
+        SSL_CTX_free(valkey_tls_client_ctx);
+        valkey_tls_client_ctx = NULL;
     }
 
     #if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(LIBRESSL_VERSION_NUMBER)
@@ -284,7 +284,7 @@ error:
  * leave the SSL_CTX unchanged if fails.
  * @priv: config of serverTLSContextConfig.
  * @reconfigure: if true, ignore the previous configure; if false, only
- *               configure from @ctx_config if server_tls_ctx is NULL.
+ *               configure from @ctx_config if valkey_tls_ctx is NULL.
  */
 static int tlsConfigure(void *priv, int reconfigure) {
     serverTLSContextConfig *ctx_config = (serverTLSContextConfig *)priv;
@@ -292,7 +292,7 @@ static int tlsConfigure(void *priv, int reconfigure) {
     SSL_CTX *ctx = NULL;
     SSL_CTX *client_ctx = NULL;
 
-    if (!reconfigure && server_tls_ctx) {
+    if (!reconfigure && valkey_tls_ctx) {
         return C_OK;
     }
 
@@ -402,10 +402,10 @@ static int tlsConfigure(void *priv, int reconfigure) {
         if (!client_ctx) goto error;
     }
 
-    SSL_CTX_free(server_tls_ctx);
-    SSL_CTX_free(server_tls_client_ctx);
-    server_tls_ctx = ctx;
-    server_tls_client_ctx = client_ctx;
+    SSL_CTX_free(valkey_tls_ctx);
+    SSL_CTX_free(valkey_tls_client_ctx);
+    valkey_tls_ctx = ctx;
+    valkey_tls_client_ctx = client_ctx;
 
     return C_OK;
 
@@ -457,9 +457,9 @@ typedef struct tls_connection {
 } tls_connection;
 
 static connection *createTLSConnection(int client_side) {
-    SSL_CTX *ctx = server_tls_ctx;
-    if (client_side && server_tls_client_ctx)
-        ctx = server_tls_client_ctx;
+    SSL_CTX *ctx = valkey_tls_ctx;
+    if (client_side && valkey_tls_client_ctx)
+        ctx = valkey_tls_client_ctx;
     tls_connection *conn = zcalloc(sizeof(tls_connection));
     conn->c.type = &CT_TLS;
     conn->c.fd = -1;

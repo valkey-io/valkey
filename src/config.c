@@ -1997,7 +1997,7 @@ static int enumConfigSet(standardConfig *config, sds *argv, int argc, const char
         }
         sdsrange(enumerr,0,-3); /* Remove final ", ". */
 
-        redis_strlcpy(loadbuf, enumerr, LOADBUF_SIZE);
+        valkey_strlcpy(loadbuf, enumerr, LOADBUF_SIZE);
 
         sdsfree(enumerr);
         *err = loadbuf;

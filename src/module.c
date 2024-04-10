@@ -9056,7 +9056,7 @@ int VM_GetClusterNodeInfo(ValkeyModuleCtx *ctx, const char *id, char *ip, char *
         return VALKEYMODULE_ERR;
     }
 
-    if (ip) redis_strlcpy(ip, clusterNodeIp(node),NET_IP_STR_LEN);
+    if (ip) valkey_strlcpy(ip, clusterNodeIp(node),NET_IP_STR_LEN);
 
     if (master_id) {
         /* If the information is not available, the function will set the
@@ -12627,7 +12627,7 @@ int moduleVerifyResourceName(const char *name) {
 static char configerr[CONFIG_ERR_SIZE];
 static void propagateErrorString(ValkeyModuleString *err_in, const char **err) {
     if (err_in) {
-        redis_strlcpy(configerr, err_in->ptr, CONFIG_ERR_SIZE);
+        valkey_strlcpy(configerr, err_in->ptr, CONFIG_ERR_SIZE);
         decrRefCount(err_in);
         *err = configerr;
     }

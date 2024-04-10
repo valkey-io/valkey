@@ -72,14 +72,14 @@
 #define OUTPUT_CSV 2
 #define OUTPUT_JSON 3
 #define OUTPUT_QUOTED_JSON 4
-#define REDIS_CLI_KEEPALIVE_INTERVAL 15 /* seconds */
-#define REDIS_CLI_DEFAULT_PIPE_TIMEOUT 30 /* seconds */
-#define REDIS_CLI_HISTFILE_ENV "REDISCLI_HISTFILE"
+#define CLI_KEEPALIVE_INTERVAL 15 /* seconds */
+#define CLI_DEFAULT_PIPE_TIMEOUT 30 /* seconds */
+#define CLI_HISTFILE_ENV "REDISCLI_HISTFILE"
 #define CLI_HISTFILE_DEFAULT ".valkeycli_history"
-#define REDIS_CLI_RCFILE_ENV "REDISCLI_RCFILE"
+#define CLI_RCFILE_ENV "REDISCLI_RCFILE"
 #define CLI_RCFILE_DEFAULT ".valkeyclirc"
-#define REDIS_CLI_AUTH_ENV "REDISCLI_AUTH"
-#define REDIS_CLI_CLUSTER_YES_ENV "REDISCLI_CLUSTER_YES"
+#define CLI_AUTH_ENV "REDISCLI_AUTH"
+#define CLI_CLUSTER_YES_ENV "REDISCLI_CLUSTER_YES"
 
 #define CLUSTER_MANAGER_SLOTS               16384
 #define CLUSTER_MANAGER_PORT_INCR           10000 /* same as CLUSTER_PORT_INCR */
@@ -296,7 +296,7 @@ static long getLongInfoField(char *info, char *field);
 /*------------------------------------------------------------------------------
  * Utility functions
  *--------------------------------------------------------------------------- */
-size_t redis_strlcpy(char *dst, const char *src, size_t dsize);
+size_t valkey_strlcpy(char *dst, const char *src, size_t dsize);
 
 static void cliPushHandler(void *, void *);
 
@@ -1693,7 +1693,7 @@ static int cliConnect(int flags) {
          * in order to prevent timeouts caused by the execution of long
          * commands. At the same time this improves the detection of real
          * errors. */
-        anetKeepAlive(NULL, context->fd, REDIS_CLI_KEEPALIVE_INTERVAL);
+        anetKeepAlive(NULL, context->fd, CLI_KEEPALIVE_INTERVAL);
 
         /* State of the current connection. */
         config.current_resp3 = 0;
@@ -2985,12 +2985,12 @@ static int parseOptions(int argc, char **argv) {
 
 static void parseEnv(void) {
     /* Set auth from env, but do not overwrite CLI arguments if passed */
-    char *auth = getenv(REDIS_CLI_AUTH_ENV);
+    char *auth = getenv(CLI_AUTH_ENV);
     if (auth != NULL && config.conn_info.auth == NULL) {
         config.conn_info.auth = auth;
     }
 
-    char *cluster_yes = getenv(REDIS_CLI_CLUSTER_YES_ENV);
+    char *cluster_yes = getenv(CLI_CLUSTER_YES_ENV);
     if (cluster_yes != NULL && !strcmp(cluster_yes, "1")) {
         config.cluster_manager_command.flags |= CLUSTER_MANAGER_CMD_FLAG_YES;
     }
@@ -3032,13 +3032,13 @@ static void usage(int err) {
 "                     Default timeout is 0, meaning no limit, depending on the OS.\n"
 "  -s <socket>        Server socket (overrides hostname and port).\n"
 "  -a <password>      Password to use when connecting to the server.\n"
-"                     You can also use the " REDIS_CLI_AUTH_ENV " environment\n"
+"                     You can also use the " CLI_AUTH_ENV " environment\n"
 "                     variable to pass this password more safely\n"
 "                     (if both are used, this argument takes precedence).\n"
 "  --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.\n"
 "  --pass <password>  Alias of -a for consistency with the new --user option.\n"
 "  --askpass          Force user to input password with mask from STDIN.\n"
-"                     If this argument is used, '-a' and " REDIS_CLI_AUTH_ENV "\n"
+"                     If this argument is used, '-a' and " CLI_AUTH_ENV "\n"
 "                     environment variable will be ignored.\n"
 "  -u <uri>           Server URI on format redis://user:password@host:port/dbnum\n"
 "                     User, password and dbnum are optional. For authentication\n"
@@ -3095,7 +3095,7 @@ version,tls_usage);
 "  --pipe-timeout <n> In --pipe mode, abort with error if after sending all data.\n"
 "                     no reply is received within <n> seconds.\n"
 "                     Default timeout: %d. Use 0 to wait forever.\n",
-    REDIS_CLI_DEFAULT_PIPE_TIMEOUT);
+    CLI_DEFAULT_PIPE_TIMEOUT);
     fprintf(target,
 "  --bigkeys          Sample keys looking for keys with many elements (complexity).\n"
 "  --memkeys          Sample keys looking for keys consuming a lot of memory.\n"
@@ -3258,7 +3258,7 @@ void cliSetPreferences(char **argv, int argc, int interactive) {
 
 /* Load the ~/.valkeyclirc file if any. */
 void cliLoadPreferences(void) {
-    sds rcfile = getDotfilePath(REDIS_CLI_RCFILE_ENV,CLI_RCFILE_DEFAULT);
+    sds rcfile = getDotfilePath(CLI_RCFILE_ENV,CLI_RCFILE_DEFAULT);
     if (rcfile == NULL) return;
     FILE *fp = fopen(rcfile,"r");
     char buf[1024];
@@ -3379,7 +3379,7 @@ static void repl(void) {
 
     /* Only use history and load the rc file when stdin is a tty. */
     if (isatty(fileno(stdin))) {
-        historyfile = getDotfilePath(REDIS_CLI_HISTFILE_ENV,CLI_HISTFILE_DEFAULT);
+        historyfile = getDotfilePath(CLI_HISTFILE_ENV,CLI_HISTFILE_DEFAULT);
         //keep in-memory history always regardless if history file can be determined
         history = 1;
         if (historyfile != NULL) {
@@ -4043,7 +4043,7 @@ static int clusterManagerCheckRedisReply(clusterManagerNode *n,
         if (is_err) {
             if (err != NULL) {
                 *err = zmalloc((r->len + 1) * sizeof(char));
-                redis_strlcpy(*err, r->str,(r->len + 1));
+                valkey_strlcpy(*err, r->str,(r->len + 1));
             } else CLUSTER_MANAGER_PRINT_REPLY_ERROR(n, r->str);
         }
         return 0;
@@ -4113,7 +4113,7 @@ static int clusterManagerNodeConnect(clusterManagerNode *node) {
      * in order to prevent timeouts caused by the execution of long
      * commands. At the same time this improves the detection of real
      * errors. */
-    anetKeepAlive(NULL, node->context->fd, REDIS_CLI_KEEPALIVE_INTERVAL);
+    anetKeepAlive(NULL, node->context->fd, CLI_KEEPALIVE_INTERVAL);
     if (config.conn_info.auth) {
         redisReply *reply;
         if (config.conn_info.user == NULL)
@@ -4203,7 +4203,7 @@ static redisReply *clusterManagerGetNodeRedisInfo(clusterManagerNode *node,
     if (info->type == REDIS_REPLY_ERROR) {
         if (err != NULL) {
             *err = zmalloc((info->len + 1) * sizeof(char));
-            redis_strlcpy(*err, info->str,(info->len + 1));
+            valkey_strlcpy(*err, info->str,(info->len + 1));
         }
         freeReplyObject(info);
         return  NULL;
@@ -4780,7 +4780,7 @@ static int clusterManagerSetSlot(clusterManagerNode *node1,
         success = 0;
         if (err != NULL) {
             *err = zmalloc((reply->len + 1) * sizeof(char));
-            redis_strlcpy(*err, reply->str,(reply->len + 1));
+            valkey_strlcpy(*err, reply->str,(reply->len + 1));
         } else CLUSTER_MANAGER_PRINT_REPLY_ERROR(node1, reply->str);
         goto cleanup;
     }
@@ -5054,7 +5054,7 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
             success = 0;
             if (err != NULL) {
                 *err = zmalloc((reply->len + 1) * sizeof(char));
-                redis_strlcpy(*err, reply->str,(reply->len + 1));
+                valkey_strlcpy(*err, reply->str,(reply->len + 1));
                 CLUSTER_MANAGER_PRINT_REPLY_ERROR(source, *err);
             }
             goto next;
@@ -5166,7 +5166,7 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
                 if (migrate_reply != NULL) {
                     if (err) {
                         *err = zmalloc((migrate_reply->len + 1) * sizeof(char));
-                        redis_strlcpy(*err, migrate_reply->str, (migrate_reply->len + 1));
+                        valkey_strlcpy(*err, migrate_reply->str, (migrate_reply->len + 1));
                     }
                     printf("\n");
                     CLUSTER_MANAGER_PRINT_REPLY_ERROR(source,
@@ -5283,7 +5283,7 @@ static int clusterManagerFlushNodeConfig(clusterManagerNode *node, char **err) {
         if (reply == NULL || (is_err = (reply->type == REDIS_REPLY_ERROR))) {
             if (is_err && err != NULL) {
                 *err = zmalloc((reply->len + 1) * sizeof(char));
-                redis_strlcpy(*err, reply->str, (reply->len + 1));
+                valkey_strlcpy(*err, reply->str, (reply->len + 1));
             }
             success = 0;
             /* If the cluster did not already joined it is possible that
@@ -9881,7 +9881,7 @@ int main(int argc, char **argv) {
     config.pattern = NULL;
     config.rdb_filename = NULL;
     config.pipe_mode = 0;
-    config.pipe_timeout = REDIS_CLI_DEFAULT_PIPE_TIMEOUT;
+    config.pipe_timeout = CLI_DEFAULT_PIPE_TIMEOUT;
     config.bigkeys = 0;
     config.memkeys = 0;
     config.hotkeys = 0;

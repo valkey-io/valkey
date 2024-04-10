@@ -883,7 +883,7 @@ void clusterUpdateMyselfIp(void) {
             * duplicating the string. This way later we can check if
             * the address really changed. */
             prev_ip = zstrdup(prev_ip);
-            redis_strlcpy(myself->ip,server.cluster_announce_ip,NET_IP_STR_LEN);
+            valkey_strlcpy(myself->ip,server.cluster_announce_ip,NET_IP_STR_LEN);
         } else {
             myself->ip[0] = '\0'; /* Force autodetection. */
         }
@@ -3526,7 +3526,7 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen) {
      * first byte is zero, they'll do auto discovery. */
     memset(hdr->myip,0,NET_IP_STR_LEN);
     if (server.cluster_announce_ip) {
-        redis_strlcpy(hdr->myip,server.cluster_announce_ip,NET_IP_STR_LEN);
+        valkey_strlcpy(hdr->myip,server.cluster_announce_ip,NET_IP_STR_LEN);
     }
 
     /* Handle cluster-announce-[tls-|bus-]port. */

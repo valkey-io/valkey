@@ -1614,7 +1614,7 @@ void rdbRemoveTempFile(pid_t childpid, int from_signal) {
 
     /* Generate temp rdb file name using async-signal safe functions. */
     ll2string(pid, sizeof(pid), childpid);
-    redis_strlcpy(tmpfile, "temp-", sizeof(tmpfile));
+    valkey_strlcpy(tmpfile, "temp-", sizeof(tmpfile));
     redis_strlcat(tmpfile, pid, sizeof(tmpfile));
     redis_strlcat(tmpfile, ".rdb", sizeof(tmpfile));
 

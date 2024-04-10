@@ -1385,53 +1385,53 @@ static void test_string2ll(void) {
     long long v;
 
     /* May not start with +. */
-    redis_strlcpy(buf,"+1",sizeof(buf));
+    valkey_strlcpy(buf,"+1",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 0);
 
     /* Leading space. */
-    redis_strlcpy(buf," 1",sizeof(buf));
+    valkey_strlcpy(buf," 1",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 0);
 
     /* Trailing space. */
-    redis_strlcpy(buf,"1 ",sizeof(buf));
+    valkey_strlcpy(buf,"1 ",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 0);
 
     /* May not start with 0. */
-    redis_strlcpy(buf,"01",sizeof(buf));
+    valkey_strlcpy(buf,"01",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 0);
 
-    redis_strlcpy(buf,"-1",sizeof(buf));
+    valkey_strlcpy(buf,"-1",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 1);
     assert(v == -1);
 
-    redis_strlcpy(buf,"0",sizeof(buf));
+    valkey_strlcpy(buf,"0",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 1);
     assert(v == 0);
 
-    redis_strlcpy(buf,"1",sizeof(buf));
+    valkey_strlcpy(buf,"1",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 1);
     assert(v == 1);
 
-    redis_strlcpy(buf,"99",sizeof(buf));
+    valkey_strlcpy(buf,"99",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 1);
     assert(v == 99);
 
-    redis_strlcpy(buf,"-99",sizeof(buf));
+    valkey_strlcpy(buf,"-99",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 1);
     assert(v == -99);
 
-    redis_strlcpy(buf,"-9223372036854775808",sizeof(buf));
+    valkey_strlcpy(buf,"-9223372036854775808",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 1);
     assert(v == LLONG_MIN);
 
-    redis_strlcpy(buf,"-9223372036854775809",sizeof(buf)); /* overflow */
+    valkey_strlcpy(buf,"-9223372036854775809",sizeof(buf)); /* overflow */
     assert(string2ll(buf,strlen(buf),&v) == 0);
 
-    redis_strlcpy(buf,"9223372036854775807",sizeof(buf));
+    valkey_strlcpy(buf,"9223372036854775807",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 1);
     assert(v == LLONG_MAX);
 
-    redis_strlcpy(buf,"9223372036854775808",sizeof(buf)); /* overflow */
+    valkey_strlcpy(buf,"9223372036854775808",sizeof(buf)); /* overflow */
     assert(string2ll(buf,strlen(buf),&v) == 0);
 }
 
@@ -1440,46 +1440,46 @@ static void test_string2l(void) {
     long v;
 
     /* May not start with +. */
-    redis_strlcpy(buf,"+1",sizeof(buf));
+    valkey_strlcpy(buf,"+1",sizeof(buf));
     assert(string2l(buf,strlen(buf),&v) == 0);
 
     /* May not start with 0. */
-    redis_strlcpy(buf,"01",sizeof(buf));
+    valkey_strlcpy(buf,"01",sizeof(buf));
     assert(string2l(buf,strlen(buf),&v) == 0);
 
-    redis_strlcpy(buf,"-1",sizeof(buf));
+    valkey_strlcpy(buf,"-1",sizeof(buf));
     assert(string2l(buf,strlen(buf),&v) == 1);
     assert(v == -1);
 
-    redis_strlcpy(buf,"0",sizeof(buf));
+    valkey_strlcpy(buf,"0",sizeof(buf));
     assert(string2l(buf,strlen(buf),&v) == 1);
     assert(v == 0);
 
-    redis_strlcpy(buf,"1",sizeof(buf));
+    valkey_strlcpy(buf,"1",sizeof(buf));
     assert(string2l(buf,strlen(buf),&v) == 1);
     assert(v == 1);
 
-    redis_strlcpy(buf,"99",sizeof(buf));
+    valkey_strlcpy(buf,"99",sizeof(buf));
     assert(string2l(buf,strlen(buf),&v) == 1);
     assert(v == 99);
 
-    redis_strlcpy(buf,"-99",sizeof(buf));
+    valkey_strlcpy(buf,"-99",sizeof(buf));
     assert(string2l(buf,strlen(buf),&v) == 1);
     assert(v == -99);
 
 #if LONG_MAX != LLONG_MAX
-    redis_strlcpy(buf,"-2147483648",sizeof(buf));
+    valkey_strlcpy(buf,"-2147483648",sizeof(buf));
     assert(string2l(buf,strlen(buf),&v) == 1);
     assert(v == LONG_MIN);
 
-    redis_strlcpy(buf,"-2147483649",sizeof(buf)); /* overflow */
+    valkey_strlcpy(buf,"-2147483649",sizeof(buf)); /* overflow */
     assert(string2l(buf,strlen(buf),&v) == 0);
 
-    redis_strlcpy(buf,"2147483647",sizeof(buf));
+    valkey_strlcpy(buf,"2147483647",sizeof(buf));
     assert(string2l(buf,strlen(buf),&v) == 1);
     assert(v == LONG_MAX);
 
-    redis_strlcpy(buf,"2147483648",sizeof(buf)); /* overflow */
+    valkey_strlcpy(buf,"2147483648",sizeof(buf)); /* overflow */
     assert(string2l(buf,strlen(buf),&v) == 0);
 #endif
 }

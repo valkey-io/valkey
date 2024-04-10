@@ -5,7 +5,7 @@
 package require Tcl 8.5
 
 set tcl_precision 17
-source tests/support/redis.tcl
+source tests/support/valkey.tcl
 source tests/support/aofmanifest.tcl
 source tests/support/server.tcl
 source tests/support/cluster_util.tcl
@@ -424,7 +424,7 @@ proc kill_clients {} {
 
 proc force_kill_all_servers {} {
     foreach p $::active_servers {
-        puts "Killing still running Redis server $p"
+        puts "Killing still running Valkey server $p"
         catch {exec kill -9 $p}
     }
 }
@@ -560,7 +560,7 @@ proc print_help_screen {} {
         "--wait-server      Wait after server is started (so that you can attach a debugger)."
         "--dump-logs        Dump server log on test failure."
         "--tls              Run tests in TLS mode."
-        "--tls-module       Run tests in TLS mode with Redis module."
+        "--tls-module       Run tests in TLS mode with Valkey module."
         "--host <addr>      Run tests against an external host."
         "--port <port>      TCP port to use against external host."
         "--baseport <port>  Initial port number for spawned valkey servers."

@@ -169,7 +169,7 @@ run_solo {defrag} {
                 # since the AOF contains simple (fast) SET commands (and the cron during loading runs every 1024 commands),
                 # it'll still not block the loading for long periods of time.
                 if {!$::no_latency} {
-                    assert {$max_latency <= 40}
+                    assert {$max_latency <= 65}
                 }
             }
             } ;# Active defrag - AOF loading

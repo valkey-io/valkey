@@ -28,12 +28,12 @@
  */
 
 /*
- * This file initializes the global LUA object and registers functions to call Valkey API from within the LUA language.
+ * This file initializes the global LUA object and registers functions to call Valkey API from within the LUA language. 
  * It heavily invokes LUA's C API documented at https://www.lua.org/pil/24.html. There are 2 entrypoint functions in
  * this file:
- * 1. evalCommand() - Gets invoked every time a user runs LUA script via eval command on Valkey.
- * 2. scriptingInit() - initServer() function from server.c invokes this to initialize LUA at startup.
- *                      It is also invoked between 2 eval invocations to reset Lua.
+ * 1. evalCommand() - Gets invoked every time a user runs LUA script via eval command on Valkey. 
+ * 2. scriptingInit() - initServer() function from server.c invokes this to initialize LUA at startup. 
+ *                      It is also invoked between 2 eval invocations to reset Lua. 
  */
 #include "server.h"
 #include "sha1.h"
@@ -208,7 +208,8 @@ void scriptingInit(int setup) {
 
     luaRegisterServerAPI(lua);
 
-    /* register debug commands. we only need to add it under 'server' as 'redis' is effectively aliased to 'server' table at this point. */
+    /* register debug commands. we only need to add it under 'server' as 'redis' is effectively aliased to 'server'
+     * table at this point. */
     lua_getglobal(lua,"server");
 
     /* server.breakpoint */
@@ -233,24 +234,27 @@ void scriptingInit(int setup) {
      * information about the caller, that's what makes sense from the point
      * of view of the user debugging a script. */
     {
-        char *errh_func = "local dbg = debug\n"
-                          "debug = nil\n"
-                          "function __redis__err__handler(err)\n"
-                          "  local i = dbg.getinfo(2,'nSl')\n"
-                          "  if i and i.what == 'C' then\n"
-                          "    i = dbg.getinfo(3,'nSl')\n"
-                          "  end\n"
-                          "  if type(err) ~= 'table' then\n"
-                          "    err = {err='ERR ' .. tostring(err)}"
-                          "  end"
-                          "  if i then\n"
-                          "    err['source'] = i.source\n"
-                          "    err['line'] = i.currentline\n"
-                          "  end"
-                          "  return err\n"
-                          "end\n";
-        luaL_loadbuffer(lua, errh_func, strlen(errh_func), "@err_handler_def");
-        lua_pcall(lua, 0, 0, 0);
+        char *errh_func =       "local dbg = debug\n"
+                                "debug = nil\n"
+                                "function __server__err__handler(err)\n"
+                                "  local i = dbg.getinfo(2,'nSl')\n"
+                                "  if i and i.what == 'C' then\n"
+                                "    i = dbg.getinfo(3,'nSl')\n"
+                                "  end\n"
+                                "  if type(err) ~= 'table' then\n"
+                                "    err = {err='ERR ' .. tostring(err)}"
+                                "  end"
+                                "  if i then\n"
+                                "    err['source'] = i.source\n"
+                                "    err['line'] = i.currentline\n"
+                                "  end"
+                                "  return err\n"
+                                "end\n";
+        luaL_loadbuffer(lua,errh_func,strlen(errh_func),"@err_handler_def");
+        lua_pcall(lua,0,0,0);
+        /* Duplicate the function with __redis__err_handler name for backwards compatibility */
+        lua_getglobal(lua,"__server__err__handler");
+        lua_setglobal(lua,"__redis__err__handler");
     }
 
     /* Create the (non connected) client that we use to execute server commands

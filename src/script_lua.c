@@ -1435,17 +1435,19 @@ void luaRegisterLogFunction(lua_State* lua) {
 }
 
 /*
- * Adds server.* functions/fields to lua such as server.call etc. 
- * This function only handles fields common between Functions and LUA scripting. 
- * scriptingInit() and functionsInit() may add additional fields specific to each.   
+ * Adds server.* functions/fields to lua such as server.call etc.  
+ * This function only handles fields common between Functions and LUA scripting.  
+ * scriptingInit() and functionsInit() may add additional fields specific to each.    
  */
 void luaRegisterServerAPI(lua_State* lua) {
-    /* In addition to registering server.call/pcall API, we will throw a customer message when a script accesses undefined global variable. 
-     * LUA stored global variables in the global table, accessible to us on stack at virtual index = LUA_GLOBALSINDEX. 
-     * We will set __index handler in global table's metatable to a custom C function to achieve this - handled by luaSetAllowListProtection.  
-     * Refer to https://www.lua.org/pil/13.4.1.html for documentation on __index and https://www.lua.org/pil/contents.html#13 for documentation on metatables.  
-     * We need to pass global table to lua invocations as parameters. To achieve this, lua_pushvalue invocation brings global variable table to the top of 
-     * the stack by pushing value from global index onto the stack. And lua_pop invocation after luaSetAllowListProtection removes it - resetting the stack to its original state. */ 
+    /* In addition to registering server.call/pcall API, we will throw a customer message when a script accesses
+     * undefined global variable. LUA stores global variables in the global table, accessible to us on stack at virtual
+     * index = LUA_GLOBALSINDEX. We will set __index handler in global table's metatable to a custom C function to
+     * achieve this - handled by luaSetAllowListProtection. Refer to https://www.lua.org/pil/13.4.1.html for
+     * documentation on __index and https://www.lua.org/pil/contents.html#13 for documentation on metatables. We need to
+     * pass global table to lua invocations as parameters. To achieve this, lua_pushvalue invocation brings global
+     * variable table to the top of the stack by pushing value from global index onto the stack. And lua_pop invocation
+     * after luaSetAllowListProtection removes it - resetting the stack to its original state. */
     lua_pushvalue(lua, LUA_GLOBALSINDEX);
     luaSetAllowListProtection(lua);
     lua_pop(lua, 1);
@@ -1453,13 +1455,14 @@ void luaRegisterServerAPI(lua_State* lua) {
     /* Add default C functions provided in deps/lua codebase to handle basic data types such as table, string etc. */
     luaLoadLibraries(lua);
 
-    /* Before Valkey 7, LUA used to return error messages as strings from pcall function. With Valkey 7, LUA now returns error messages as tables. 
-     * To keep backwards compatibility, we wrap the LUA pcall function with our own implementation of C function that converts table to string. */
+    /* Before Redis OSS 7, Lua used to return error messages as strings from pcall function. With Valkey (or Redis OSS 7), Lua now returns
+     * error messages as tables. To keep backwards compatibility, we wrap the Lua pcall function with our own 
+     * implementation of C function that converts table to string. */
     lua_pushcfunction(lua, luaRedisPcall);
     lua_setglobal(lua, "pcall");
 
-    /* Create a top level table object on the stack to temporarily hold fields for 'server' table. 
-     * We will name it as 'server' and send it to LUA at the very end. Also add 'call' and 'pcall' functions to the table. */
+    /* Create a top level table object on the stack to temporarily hold fields for 'server' table. We will name it as
+     * 'server' and send it to LUA at the very end. Also add 'call' and 'pcall' functions to the table. */
     lua_newtable(lua);
     lua_pushstring(lua, "call");
     lua_pushcfunction(lua, luaRedisCallCommand);
@@ -1474,10 +1477,11 @@ void luaRegisterServerAPI(lua_State* lua) {
     /* Add SERVER_VERSION_NUM, SERVER_VERSION and SERVER_NAME fields with appropriate values. */
     luaRegisterVersion(lua);
 
-    /* Add server.setresp function to allow LUA scripts to change the RESP version for server.call and server.pcall invocations. */
-    lua_pushstring(lua, "setresp");
-    lua_pushcfunction(lua, luaSetResp);
-    lua_settable(lua, -3);
+    /* Add server.setresp function to allow LUA scripts to change the RESP version for server.call and server.pcall
+     * invocations. */
+    lua_pushstring(lua,"setresp");
+    lua_pushcfunction(lua,luaSetResp);
+    lua_settable(lua,-3);
 
     /* Add server.sha1hex function.  */
     lua_pushstring(lua, "sha1hex");
@@ -1532,16 +1536,15 @@ void luaRegisterServerAPI(lua_State* lua) {
     lua_setglobal(lua, REDIS_API_NAME);
     
     /* Replace math.random and math.randomseed with custom implementations. */
-    lua_getglobal(lua, "math");
-    /* Add random and randomseed functions. */
-    lua_pushstring(lua, "random");
-    lua_pushcfunction(lua, server_math_random);
+    lua_getglobal(lua,"math");
+    lua_pushstring(lua,"random");
+    lua_pushcfunction(lua,server_math_random);
     lua_settable(lua,-3);
     lua_pushstring(lua, "randomseed");
     lua_pushcfunction(lua, server_math_randomseed);
     lua_settable(lua,-3);
     /* overwrite value of global variable 'math' with this modified math table present on top of stack. */
-    lua_setglobal(lua, "math");
+    lua_setglobal(lua,"math");
 }
 
 /* Set an array of String Objects as a Lua array (table) stored into a
@@ -1569,10 +1572,10 @@ static void luaCreateArray(lua_State *lua, robj **elev, int elec) {
 static int server_math_random(lua_State *L) {
   /* the `%' avoids the (rare) case of r==1, and is needed also because on
      some systems (SunOS!) `rand()' may return a value larger than RAND_MAX */
-  lua_Number r = (lua_Number)(serverLrand48()%REDIS_LRAND48_MAX) /
-                                (lua_Number)REDIS_LRAND48_MAX;
-  switch (lua_gettop(L)) {   /* check number of arguments */
-    case 0: {                /* no arguments */
+  lua_Number r = (lua_Number)(serverLrand48()%SERVER_LRAND48_MAX) /
+                                (lua_Number)SERVER_LRAND48_MAX;
+  switch (lua_gettop(L)) {  /* check number of arguments */
+    case 0: {  /* no arguments */
       lua_pushnumber(L, r);  /* Number between 0 and 1 */
       break;
     }

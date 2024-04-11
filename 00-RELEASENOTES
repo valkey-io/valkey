@@ -11,6 +11,25 @@ CRITICAL: There is a critical bug affecting MOST USERS. Upgrade ASAP.
 SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
+================================================================================
+Valkey 7.2.5 RC1  -  Released Fri 12 Apr 2024
+================================================================================
+
+Upgrade urgency LOW: Second release candidate for Valkey with API compatibility
+for OSS Redis 7.2.4. Moving to a release candidate on 7.2.5, to make it clearer
+this is a patch iteration as opposed to an exact copy of OSS Redis. Also includes
+minor bug fixes present in 7.2.4.RC1 and more compatibility changes.
+
+Changes to support Valkey branding
+=========
+* Update README to remove Redis references.
+* Update valkey-server and valkey-cli help info to show only valkey (#222)
+* Add compatibility for lua debugger to user server instead of redis. (#303)
+
+Bug fixes
+=========
+* Fix module event name to maintain Redis compatibility. (#289)
+* Fix issue where redis symlinks were created with the wrong name. (#282)
 
 ================================================================================
 Valkey 7.2.4 RC1  -  Released Tue 09 Apr 2024

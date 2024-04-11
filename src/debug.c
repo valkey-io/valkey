@@ -1157,8 +1157,9 @@ void _serverPanic(const char *file, int line, const char *msg, ...) {
 int bugReportStart(void) {
     pthread_mutex_lock(&bug_report_start_mutex);
     if (bug_report_start == 0) {
-        serverLogRaw(LL_WARNING|LL_RAW,
-        "\n\n=== REDIS BUG REPORT START: Cut & paste starting from here ===\n");
+        serverLog(LL_WARNING|LL_RAW,
+                  "\n\n=== %s BUG REPORT START: Cut & paste starting from here ===\n",
+                  server.extended_redis_compat ? "REDIS" : "VALKEY");
         bug_report_start = 1;
         pthread_mutex_unlock(&bug_report_start_mutex);
         return 1;
@@ -2379,14 +2380,14 @@ void printCrashReport(void) {
 void bugReportEnd(int killViaSignal, int sig) {
     struct sigaction act;
 
-    serverLogRawFromHandler(LL_WARNING|LL_RAW,
-"\n=== REDIS BUG REPORT END. Make sure to include from START to END. ===\n\n"
-"       Please report the crash by opening an issue on github:\n\n"
-"           http://github.com/valkey-io/valkey/issues\n\n"
-"  If a module was involved, please open in the module's repo instead.\n\n"
-"  Suspect RAM error? Use valkey-server --test-memory to verify it.\n\n"
-"  Some other issues could be detected by valkey-server --check-system\n"
-);
+    serverLogFromHandler(LL_WARNING|LL_RAW,
+                         "\n=== %s BUG REPORT END. Make sure to include from START to END. ===\n\n"
+                         "       Please report the crash by opening an issue on github:\n\n"
+                         "           https://github.com/valkey-io/valkey/issues\n\n"
+                         "  If a module was involved, please open in the module's repo instead.\n\n"
+                         "  Suspect RAM error? Use valkey-server --test-memory to verify it.\n\n"
+                         "  Some other issues could be detected by valkey-server --check-system\n",
+                         server.extended_redis_compat ? "REDIS" : "VALKEY");
 
     /* free(messages); Don't call free() with possibly corrupted memory. */
     if (server.daemonize && server.supervised == 0 && server.pidfile) unlink(server.pidfile);

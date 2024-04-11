@@ -173,7 +173,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
 }
 
 proc log_crashes {} {
-    set start_pattern {*REDIS BUG REPORT START*}
+    set start_pattern {*BUG REPORT START*}
     set logs [glob */log.txt]
     foreach log $logs {
         set fd [open $log]

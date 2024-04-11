@@ -37,7 +37,7 @@ proc crashlog_from_file {filename} {
     set logall 0
     set result {}
     foreach line $lines {
-        if {[string match {*REDIS BUG REPORT START*} $line]} {
+        if {[string match {*BUG REPORT START*} $line]} {
             set logall 1
         }
         if {[regexp {^\[\d+\]\s+\d+\s+\w+\s+\d{2}:\d{2}:\d{2} \#} $line]} {

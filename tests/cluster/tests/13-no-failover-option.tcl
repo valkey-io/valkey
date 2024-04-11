@@ -44,7 +44,7 @@ test "The nofailover flag is propagated" {
 set current_epoch [CI 1 cluster_current_epoch]
 
 test "Killing one master node" {
-    kill_instance redis 0
+    kill_instance valkey 0
 }
 
 test "Cluster should be still down after some time" {
@@ -57,5 +57,5 @@ test "Instance #5 is still a slave" {
 }
 
 test "Restarting the previously killed master node" {
-    restart_instance redis 0
+    restart_instance valkey 0
 }

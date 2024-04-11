@@ -942,7 +942,7 @@ proc read_from_aof {fp} {
     set res {}
     for {set j 0} {$j < $count} {incr j} {
         read $fp 1
-        set arg [::redis::valkey_bulk_read $fp]
+        set arg [::valkey::valkey_bulk_read $fp]
         if {$j == 0} {set arg [string tolower $arg]}
         lappend res $arg
     }
@@ -1009,7 +1009,7 @@ proc get_nonloopback_addr {} {
 }
 
 proc get_nonloopback_client {} {
-    return [redis [get_nonloopback_addr] [srv 0 "port"] 0 $::tls]
+    return [valkey [get_nonloopback_addr] [srv 0 "port"] 0 $::tls]
 }
 
 # The following functions and variables are used only when running large-memory

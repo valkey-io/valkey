@@ -28,8 +28,8 @@ set ::sentinel_instances {}
 set ::valkey_instances {}
 set ::global_config {}
 set ::sentinel_base_port 20000
-set ::redis_base_port 30000
-set ::redis_port_count 1024
+set ::valkey_base_port 30000
+set ::valkey_port_count 1024
 set ::host "127.0.0.1"
 set ::leaked_fds_file [file normalize "tmp/leaked_fds.txt"]
 set ::pids {} ; # We kill everything at exit
@@ -47,7 +47,7 @@ if {[catch {cd tmp}]} {
 # Execute the specified instance of the server specified by 'type', using
 # the provided configuration file. Returns the PID of the process.
 proc exec_instance {type dirname cfgfile} {
-    if {$type eq "redis"} {
+    if {$type eq "valkey"} {
         set prgname valkey-server
     } elseif {$type eq "sentinel"} {
         set prgname valkey-sentinel
@@ -67,7 +67,7 @@ proc exec_instance {type dirname cfgfile} {
 # Spawn a server or sentinel instance, depending on 'type'.
 proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
     for {set j 0} {$j < $count} {incr j} {
-        set port [find_available_port $base_port $::redis_port_count]
+        set port [find_available_port $base_port $::valkey_port_count]
         # plaintext port (only used for TLS cluster)
         set pport 0
         # Create a directory for this instance.
@@ -94,7 +94,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
             puts $cfg "tls-replication yes"
             puts $cfg "tls-cluster yes"
             # plaintext port, only used by plaintext clients in a TLS cluster
-            set pport [find_available_port $base_port $::redis_port_count]
+            set pport [find_available_port $base_port $::valkey_port_count]
             puts $cfg "port $pport"
             puts $cfg [format "tls-cert-file %s/../../tls/server.crt" [pwd]]
             puts $cfg [format "tls-key-file %s/../../tls/server.key" [pwd]]
@@ -135,11 +135,11 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
             if {[server_is_up 127.0.0.1 $port 100] == 0} {
                 puts "Starting $type #$j at port $port failed, try another"
                 incr retry -1
-                set port [find_available_port $base_port $::redis_port_count]
+                set port [find_available_port $base_port $::valkey_port_count]
                 set cfg [open $cfgfile a+]
                 if {$::tls} {
                     puts $cfg "tls-port $port"
-                    set pport [find_available_port $base_port $::redis_port_count]
+                    set pport [find_available_port $base_port $::valkey_port_count]
                     puts $cfg "port $pport"
                 } else {
                     puts $cfg "port $port"
@@ -160,7 +160,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
         }
 
         # Push the instance into the right list
-        set link [redis $::host $port 0 $::tls]
+        set link [valkey $::host $port 0 $::tls]
         $link reconnect 1
         lappend ::${type}_instances [list \
             pid $pid \
@@ -489,7 +489,7 @@ while 1 {
                 gets stdin
             }
         }
-        check_leaks {redis sentinel}
+        check_leaks {valkey sentinel}
 
         # Check if a leaked fds file was created and abort the test.
         if {$::leaked_fds_file != "" && [file exists $::leaked_fds_file]} {
@@ -615,8 +615,8 @@ proc create_valkey_master_slave_cluster n {
             R $id slaveof no one
             R $id flushall
         } elseif {$id < $n} {
-            R $id slaveof [get_instance_attrib redis 0 host] \
-                          [get_instance_attrib redis 0 port]
+            R $id slaveof [get_instance_attrib valkey 0 host] \
+                          [get_instance_attrib valkey 0 port]
         } else {
             # Instances not part of the cluster.
             R $id slaveof no one
@@ -700,7 +700,7 @@ proc restart_instance {type id} {
     }
 
     # Connect with it with a fresh link
-    set link [redis 127.0.0.1 $port 0 $::tls]
+    set link [valkey 127.0.0.1 $port 0 $::tls]
     $link reconnect 1
     set_instance_attrib $type $id link $link
 
@@ -720,23 +720,23 @@ proc restart_instance {type id} {
 proc valkey_deferring_client {type id} {
     set port [get_instance_attrib $type $id port]
     set host [get_instance_attrib $type $id host]
-    set client [redis $host $port 1 $::tls]
+    set client [valkey $host $port 1 $::tls]
     return $client
 }
 
 proc valkey_deferring_client_by_addr {host port} {
-    set client [redis $host $port 1 $::tls]
+    set client [valkey $host $port 1 $::tls]
     return $client
 }
 
 proc valkey_client {type id} {
     set port [get_instance_attrib $type $id port]
     set host [get_instance_attrib $type $id host]
-    set client [redis $host $port 0 $::tls]
+    set client [valkey $host $port 0 $::tls]
     return $client
 }
 
 proc valkey_client_by_addr {host port} {
-    set client [redis $host $port 0 $::tls]
+    set client [valkey $host $port 0 $::tls]
     return $client
 }

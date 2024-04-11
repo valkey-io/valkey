@@ -54,11 +54,11 @@ proc process_is_running {pid} {
 
 set numkeys 50000
 set numops 200000
-set start_node_port [get_instance_attrib redis 0 port]
+set start_node_port [get_instance_attrib valkey 0 port]
 set cluster [redis_cluster 127.0.0.1:$start_node_port]
 if {$::tls} {
     # setup a non-TLS cluster client to the TLS cluster
-    set plaintext_port [get_instance_attrib redis 0 plaintext-port]
+    set plaintext_port [get_instance_attrib valkey 0 plaintext-port]
     set cluster_plaintext [redis_cluster 127.0.0.1:$plaintext_port 0]
     puts "Testing TLS cluster on start node 127.0.0.1:$start_node_port, plaintext port $plaintext_port"
 } else {
@@ -85,7 +85,7 @@ test "Cluster consistency during live resharding" {
             set target [dict get [get_myself [randomInt 5]] id]
             set tribpid [lindex [exec \
                 ../../../src/valkey-cli --cluster reshard \
-                127.0.0.1:[get_instance_attrib redis 0 port] \
+                127.0.0.1:[get_instance_attrib valkey 0 port] \
                 --cluster-from all \
                 --cluster-to $target \
                 --cluster-slots 100 \
@@ -141,8 +141,8 @@ test "Terminate and restart all the instances" {
     foreach_valkey_id id {
         # Stop AOF so that an initial AOFRW won't prevent the instance from terminating
         R $id config set appendonly no
-        kill_instance redis $id
-        restart_instance redis $id
+        kill_instance valkey $id
+        restart_instance valkey $id
     }
 }
 
@@ -171,7 +171,7 @@ test "Verify slaves consistency" {
         set role [R $id role]
         lassign $role myrole myoffset slaves
         if {$myrole eq {slave}} continue
-        set masterport [get_instance_attrib redis $id port]
+        set masterport [get_instance_attrib valkey $id port]
         set masterdigest [R $id debug digest]
         foreach_valkey_id sid {
             set srole [R $sid role]

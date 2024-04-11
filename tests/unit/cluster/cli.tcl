@@ -269,7 +269,7 @@ test {Migrate the last slot away from a node using valkey-cli} {
         catch { $newnode_r get foo } e
         assert_match "MOVED $slot *" $e
         lassign [split [lindex $e 2] :] owner_host owner_port
-        set owner_r [redis $owner_host $owner_port 0 $::tls]
+        set owner_r [valkey $owner_host $owner_port 0 $::tls]
         set owner_id [$owner_r CLUSTER MYID]
 
         # Move slot to new node using plain commands

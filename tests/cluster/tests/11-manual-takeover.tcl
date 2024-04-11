@@ -23,9 +23,9 @@ foreach id $replica_ids {
 }
 
 test "Killing majority of master nodes" {
-    kill_instance redis 0
-    kill_instance redis 1
-    kill_instance redis 2
+    kill_instance valkey 0
+    kill_instance valkey 1
+    kill_instance valkey 2
 }
 
 foreach id $replica_ids {
@@ -57,9 +57,9 @@ test "Instance #5, #6, #7 are now masters" {
 }
 
 test "Restarting the previously killed master nodes" {
-    restart_instance redis 0
-    restart_instance redis 1
-    restart_instance redis 2
+    restart_instance valkey 0
+    restart_instance valkey 1
+    restart_instance valkey 2
 }
 
 test "Instance #0, #1, #2 gets converted into a slaves" {

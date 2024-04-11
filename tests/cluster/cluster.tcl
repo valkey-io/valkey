@@ -87,7 +87,7 @@ proc cluster_allocate_slots {n} {
 # Check that cluster nodes agree about "state", or raise an error.
 proc assert_cluster_state {state} {
     foreach_valkey_id id {
-        if {[instance_is_killed redis $id]} continue
+        if {[instance_is_killed valkey $id]} continue
         wait_for_condition 1000 50 {
             [CI $id cluster_state] eq $state
         } else {
@@ -101,7 +101,7 @@ proc assert_cluster_state {state} {
 proc cluster_find_available_slave {first} {
     foreach_valkey_id id {
         if {$id < $first} continue
-        if {[instance_is_killed redis $id]} continue
+        if {[instance_is_killed valkey $id]} continue
         set me [get_myself $id]
         if {[dict get $me slaveof] eq {-}} {return $id}
     }
@@ -170,7 +170,7 @@ proc set_cluster_node_timeout {to} {
 # as a starting point to talk with the cluster.
 proc cluster_write_test {id} {
     set prefix [randstring 20 20 alpha]
-    set port [get_instance_attrib redis $id port]
+    set port [get_instance_attrib valkey $id port]
     set cluster [redis_cluster 127.0.0.1:$port]
     for {set j 0} {$j < 100} {incr j} {
         $cluster set key.$j $prefix.$j

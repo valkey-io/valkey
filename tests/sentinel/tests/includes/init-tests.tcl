@@ -22,8 +22,8 @@ test "(init) Sentinels can start monitoring a master" {
     set quorum [expr {$sentinels/2+1}]
     foreach_sentinel_id id {
         S $id SENTINEL MONITOR mymaster \
-              [get_instance_attrib redis $master_id host] \
-              [get_instance_attrib redis $master_id port] $quorum
+              [get_instance_attrib valkey $master_id host] \
+              [get_instance_attrib valkey $master_id port] $quorum
     }
     foreach_sentinel_id id {
         assert {[S $id sentinel master mymaster] ne {}}

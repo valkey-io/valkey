@@ -6,7 +6,7 @@ test "Create a 3 nodes cluster" {
     cluster_create_with_continuous_slots 3 3
 }
 
-set cluster [redis_cluster 127.0.0.1:[get_instance_attrib redis 0 port]]
+set cluster [redis_cluster 127.0.0.1:[get_instance_attrib valkey 0 port]]
 test "Pub/Sub shard basics" {
 
     set slot [$cluster cluster keyslot "channel.0"]

@@ -20,7 +20,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         assert { [string match "*cmdstat_module*" $info] }
     }
 
-    test {test redis version} {
+    test {test valkey version} {
         assert_equal [s valkey_version] [r test.serverversion]
     }
 

@@ -51,7 +51,7 @@ proc 10_set_replica_announced {master_id announced n_replicas} {
         set i 0
         foreach_valkey_id id {
             if {$id == $master_id} continue
-            #puts "set replica-announce=$announced on redis #$id"
+            #puts "set replica-announce=$announced on valkey #$id"
             R $id CONFIG SET replica-announced "$announced"
             incr i
             if { $n_replicas!="all" && $i >= $n_replicas } { break }

@@ -34,7 +34,7 @@ test "CLUSTER SLAVES and CLUSTER REPLICAS output is consistent" {
 }
 
 test {Slaves of #0 are instance #5 and #10 as expected} {
-    set port0 [get_instance_attrib redis 0 port]
+    set port0 [get_instance_attrib valkey 0 port]
     assert {[lindex [R 5 role] 2] == $port0}
     assert {[lindex [R 10 role] 2] == $port0}
 }
@@ -48,7 +48,7 @@ test "Instance #5 and #10 synced with the master" {
     }
 }
 
-set cluster [redis_cluster 127.0.0.1:[get_instance_attrib redis 0 port]]
+set cluster [redis_cluster 127.0.0.1:[get_instance_attrib valkey 0 port]]
 
 test "Slaves are both able to receive and acknowledge writes" {
     for {set j 0} {$j < 100} {incr j} {
@@ -80,7 +80,7 @@ test "Write data while slave #10 is paused and can't receive it" {
     assert {[R 10 read] eq {OK OK}}
 
     # Kill the master so that a reconnection will not be possible.
-    kill_instance redis 0
+    kill_instance valkey 0
 }
 
 test "Wait for instance #5 (and not #10) to turn into a master" {
@@ -100,7 +100,7 @@ test "Cluster should eventually be up again" {
 }
 
 test "Node #10 should eventually replicate node #5" {
-    set port5 [get_instance_attrib redis 5 port]
+    set port5 [get_instance_attrib valkey 5 port]
     wait_for_condition 1000 50 {
         ([lindex [R 10 role] 2] == $port5) &&
         ([lindex [R 10 role] 3] eq {connected})
@@ -130,7 +130,7 @@ test "The first master has actually 5 slaves" {
 }
 
 test {Slaves of #0 are instance #3, #6, #9, #12 and #15 as expected} {
-    set port0 [get_instance_attrib redis 0 port]
+    set port0 [get_instance_attrib valkey 0 port]
     assert {[lindex [R 3 role] 2] == $port0}
     assert {[lindex [R 6 role] 2] == $port0}
     assert {[lindex [R 9 role] 2] == $port0}
@@ -179,7 +179,7 @@ test "New Master down consecutively" {
 
         set instances [dict remove $instances $master_id]
 
-        kill_instance redis $master_id
+        kill_instance valkey $master_id
         wait_for_condition 1000 50 {
             [master_detected $instances]
         } else {

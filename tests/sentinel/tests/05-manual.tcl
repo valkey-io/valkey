@@ -35,7 +35,7 @@ test "Manual failover works" {
         }
     }
     set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
-    set master_id [get_instance_id_by_port redis [lindex $addr 1]]
+    set master_id [get_instance_id_by_port valkey [lindex $addr 1]]
 }
 
 test "New master [join $addr {:}] role matches" {

@@ -1,7 +1,7 @@
 # Initialization tests -- most units will start including this.
 
 test "(init) Restart killed instances" {
-    foreach type {redis} {
+    foreach type {valkey} {
         foreach_${type}_id id {
             if {[get_instance_attrib $type $id pid] == -1} {
                 puts -nonewline "$type/$id "
@@ -59,7 +59,7 @@ proc join_nodes_in_cluster {} {
     for {set j 0} {$j < [expr [llength $ids]-1]} {incr j} {
         set a [lindex $ids $j]
         set b [lindex $ids [expr $j+1]]
-        set b_port [get_instance_attrib redis $b port]
+        set b_port [get_instance_attrib valkey $b port]
         R $a cluster meet 127.0.0.1 $b_port
     }
 

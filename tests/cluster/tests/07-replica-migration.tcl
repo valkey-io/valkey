@@ -27,10 +27,10 @@ test "Each master should have two replicas attached" {
 }
 
 test "Killing all the slaves of master #0 and #1" {
-    kill_instance redis 5
-    kill_instance redis 10
-    kill_instance redis 6
-    kill_instance redis 11
+    kill_instance valkey 5
+    kill_instance valkey 10
+    kill_instance valkey 6
+    kill_instance valkey 11
     after 4000
 }
 
@@ -62,13 +62,13 @@ test "Cluster is up" {
 }
 
 test "Kill slave #7 of master #2. Only slave left is #12 now" {
-    kill_instance redis 7
+    kill_instance valkey 7
 }
 
 set current_epoch [CI 1 cluster_current_epoch]
 
 test "Killing master node #2, #12 should failover" {
-    kill_instance redis 2
+    kill_instance valkey 2
 }
 
 test "Wait for failover" {

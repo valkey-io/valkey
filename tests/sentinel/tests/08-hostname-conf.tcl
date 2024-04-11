@@ -17,7 +17,7 @@ proc set_all_instances_hostname {hostname} {
         set_instance_attrib sentinel $id host $hostname
     }
     foreach_valkey_id id {
-        set_instance_attrib redis $id host $hostname
+        set_instance_attrib valkey $id host $hostname
     }
 }
 

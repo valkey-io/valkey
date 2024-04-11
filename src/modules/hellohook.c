@@ -30,7 +30,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "../redismodule.h"
+#include "../valkeymodule.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -39,23 +39,23 @@
 /* Client state change callback. */
 void clientChangeCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
 {
-    REDISMODULE_NOT_USED(ctx);
-    REDISMODULE_NOT_USED(e);
+    VALKEYMODULE_NOT_USED(ctx);
+    VALKEYMODULE_NOT_USED(e);
 
     RedisModuleClientInfo *ci = data;
     printf("Client %s event for client #%llu %s:%d\n",
-        (sub == REDISMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED) ?
+        (sub == VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED) ?
             "connection" : "disconnection",
         (unsigned long long)ci->id,ci->addr,ci->port);
 }
 
 void flushdbCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
 {
-    REDISMODULE_NOT_USED(ctx);
-    REDISMODULE_NOT_USED(e);
+    VALKEYMODULE_NOT_USED(ctx);
+    VALKEYMODULE_NOT_USED(e);
 
     RedisModuleFlushInfo *fi = data;
-    if (sub == REDISMODULE_SUBEVENT_FLUSHDB_START) {
+    if (sub == VALKEYMODULE_SUBEVENT_FLUSHDB_START) {
         if (fi->dbnum != -1) {
             RedisModuleCallReply *reply;
             reply = RedisModule_Call(ctx,"DBSIZE","");
@@ -75,18 +75,18 @@ void flushdbCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void
     }
 }
 
-/* This function must be present on each Redis module. It is used in order to
- * register the commands into the Redis server. */
+/* This function must be present on each module. It is used in order to
+ * register the commands into the server. */
 int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
-    if (RedisModule_Init(ctx,"hellohook",1,REDISMODULE_APIVER_1)
-        == REDISMODULE_ERR) return REDISMODULE_ERR;
+    if (RedisModule_Init(ctx,"hellohook",1,VALKEYMODULE_APIVER_1)
+        == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
     RedisModule_SubscribeToServerEvent(ctx,
         RedisModuleEvent_ClientChange, clientChangeCallback);
     RedisModule_SubscribeToServerEvent(ctx,
         RedisModuleEvent_FlushDB, flushdbCallback);
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }

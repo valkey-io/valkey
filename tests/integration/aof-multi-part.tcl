@@ -19,9 +19,9 @@ tags {"external:skip"} {
 
     # Test Part 1
 
-    # In order to test the loading logic of redis under different combinations of manifest and AOF.
-    # We will manually construct the manifest file and AOF, and then start redis to verify whether
-    # the redis behavior is as expected.
+    # In order to test the loading logic of the server under different combinations of manifest and AOF.
+    # We will manually construct the manifest file and AOF, and then start the server to verify whether
+    # the server behavior is as expected.
 
     test {Multi Part AOF can't load data when some file missing} {
         create_aof $aof_dirpath $aof_base1_file {
@@ -748,8 +748,8 @@ tags {"external:skip"} {
 
     # Test Part 2
     #
-    # To test whether the AOFRW behaves as expected during the redis run.
-    # We will start redis first, then perform pressure writing, enable and disable AOF, and manually
+    # To test whether the AOFRW behaves as expected during the server run.
+    # We will start the server first, then perform pressure writing, enable and disable AOF, and manually
     # and automatically run bgrewrite and other actions, to test whether the correct AOF file is created,
     # whether the correct manifest is generated, whether the data can be reload correctly under continuous
     # writing pressure, etc.

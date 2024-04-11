@@ -32,7 +32,7 @@ proc streamRandomID {min_id max_id} {
     return $ms-$seq
 }
 
-# Tcl-side implementation of XRANGE to perform fuzz testing in the Redis
+# Tcl-side implementation of XRANGE to perform fuzz testing in the server
 # XRANGE implementation.
 proc streamSimulateXRANGE {items start end} {
     set res {}
@@ -337,7 +337,7 @@ start_server {
 
     test {Blocking XREAD waiting new data} {
         r XADD s2{t} * old abcd1234
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd XREAD BLOCK 20000 STREAMS s1{t} s2{t} s3{t} $ $ $
         wait_for_blocked_client
         r XADD s2{t} * new abcd1234
@@ -348,7 +348,7 @@ start_server {
     }
 
     test {Blocking XREAD waiting old data} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd XREAD BLOCK 20000 STREAMS s1{t} s2{t} s3{t} $ 0-0 $
         r XADD s2{t} * foo abcd1234
         set res [$rd read]
@@ -362,7 +362,7 @@ start_server {
         r XADD s1 666 f v
         r XADD s1 667 f2 v2
         r XDEL s1 667
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd XREAD BLOCK 10 STREAMS s1 666
         after 20
         assert {[$rd read] == {}} ;# before the fix, client didn't even block, but was served synchronously with {s1 {}}
@@ -370,7 +370,7 @@ start_server {
     }
 
     test "Blocking XREAD for stream that ran dry (issue #5299)" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         # Add a entry then delete it, now stream's last_id is 666.
         r DEL mystream
@@ -444,7 +444,7 @@ start_server {
         r DEL lestream
 
         # read last entry from stream, blocking
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd XREAD BLOCK 20000 STREAMS lestream +
         wait_for_blocked_client
 
@@ -511,7 +511,7 @@ start_server {
     }
 
     test "XREAD: XADD + DEL should not awake client" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r del s1
         $rd XREAD BLOCK 20000 STREAMS s1 $
         wait_for_blocked_clients_count 1
@@ -527,7 +527,7 @@ start_server {
     }
 
     test "XREAD: XADD + DEL + LPUSH should not awake client" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r del s1
         $rd XREAD BLOCK 20000 STREAMS s1 $
         wait_for_blocked_clients_count 1
@@ -546,7 +546,7 @@ start_server {
 
     test {XREAD with same stream name multiple times should work} {
         r XADD s2 * old abcd1234
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd XREAD BLOCK 20000 STREAMS s2 s2 s2 $ $ $
         wait_for_blocked_clients_count 1
         r XADD s2 * new abcd1234
@@ -558,7 +558,7 @@ start_server {
 
     test {XREAD + multiple XADD inside transaction} {
         r XADD s2 * old abcd1234
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd XREAD BLOCK 20000 STREAMS s2 s2 s2 $ $ $
         wait_for_blocked_clients_count 1
         r MULTI
@@ -682,7 +682,7 @@ start_server {
 
     test {XREAD streamID edge (blocking)} {
         r del x
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd XREAD BLOCK 0 STREAMS x 1-18446744073709551615
         wait_for_blocked_clients_count 1
         r XADD x 1-1 f v

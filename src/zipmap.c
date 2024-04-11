@@ -3,11 +3,11 @@
  * implementing an O(n) lookup data structure designed to be very memory
  * efficient.
  *
- * The Redis Hash type uses this data structure for hashes composed of a small
+ * The Hash type uses this data structure for hashes composed of a small
  * number of elements, to switch to a hash table once a given number of
  * elements is reached.
  *
- * Given that many times Redis Hashes are used to represent objects composed
+ * Given that many times Hashes are used to represent objects composed
  * of few fields, this is a very big win in terms of used memory.
  *
  * --------------------------------------------------------------------------

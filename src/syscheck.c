@@ -63,7 +63,7 @@ static sds read_sysfs_line(char *path) {
 }
 
 /* Verify our clocksource implementation doesn't go through a system call (uses vdso).
- * Going through a system call to check the time degrades Redis performance. */
+ * Going through a system call to check the time degrades server performance. */
 static int checkClocksource(sds *error_msg) {
     unsigned long test_time_us, system_hz;
     struct timespec ts;
@@ -117,7 +117,7 @@ static int checkClocksource(sds *error_msg) {
 }
 
 /* Verify we're not using the `xen` clocksource. The xen hypervisor's default clocksource is slow and affects
- * Redis's performance. This has been measured on ec2 xen based instances. ec2 recommends using the non-default
+ * the server's performance. This has been measured on ec2 xen based instances. ec2 recommends using the non-default
  * tsc clock source for these instances. */
 int checkXenClocksource(sds *error_msg) {
     sds curr = read_sysfs_line("/sys/devices/system/clocksource/clocksource0/current_clocksource");

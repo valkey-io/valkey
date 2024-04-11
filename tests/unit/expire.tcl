@@ -187,7 +187,7 @@ start_server {tags {"expire"}} {
         r psetex key2 500 a
         r psetex key3 500 a
         assert_equal 3 [r dbsize]
-        # Redis expires random keys ten times every second so we are
+        # The server expires random keys ten times every second so we are
         # fairly sure that all the three keys should be evicted after
         # two seconds.
         wait_for_condition 20 100 {
@@ -204,7 +204,7 @@ start_server {tags {"expire"}} {
         r psetex key2{t} 500 a
         r psetex key3{t} 500 a
         set size1 [r dbsize]
-        # Redis expires random keys ten times every second so we are
+        # The server expires random keys ten times every second so we are
         # fairly sure that all the three keys should be evicted after
         # one second.
         after 1000

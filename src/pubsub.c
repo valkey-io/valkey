@@ -100,7 +100,7 @@ pubsubtype pubSubShardType = {
  *----------------------------------------------------------------------------*/
 
 /* Send a pubsub message of type "message" to the client.
- * Normally 'msg' is a Redis object containing the string to send as
+ * Normally 'msg' is an Object containing the string to send as
  * message. However if the caller sets 'msg' as NULL, it will be able
  * to send a special message (for instance an Array type) by using the
  * addReply*() API family. */
@@ -315,7 +315,7 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify, pubsubtype ty
         if (dictSize(clients) == 0) {
             /* Free the dict and associated hash entry at all if this was
              * the latest client, so that it will be possible to abuse
-             * Redis PUBSUB creating millions of channels. */
+             * PUBSUB creating millions of channels. */
             kvstoreDictDelete(*type.serverPubSubChannels, slot, channel);
         }
     }

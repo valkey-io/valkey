@@ -404,7 +404,7 @@ done:
 /* Register an engine, should be called once by the engine on startup and give the following:
  *
  * - engine_name - name of the engine to register
- * - engine_ctx - the engine ctx that should be used by Redis to interact with the engine */
+ * - engine_ctx - the engine ctx that should be used by the server to interact with the engine */
 int functionsRegisterEngine(const char *engine_name, engine *engine) {
     sds engine_name_sds = sdsnew(engine_name);
     if (dictFetchValue(engines, engine_name_sds)) {

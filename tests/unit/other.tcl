@@ -308,7 +308,7 @@ start_server {tags {"other"}} {
     } {} {needs:reset}
 
     test {RESET clears MONITOR state} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd monitor
         assert_equal [$rd read] "OK"
 

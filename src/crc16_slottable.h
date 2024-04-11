@@ -1,11 +1,11 @@
 #ifndef _CRC16_TABLE_H__
 #define _CRC16_TABLE_H__
 
-/* A table of the shortest possible alphanumeric string that is mapped by redis' crc16
- * to any given redis cluster slot. 
+/* A table of the shortest possible alphanumeric string that is mapped by crc16
+ * to any given cluster slot.
  * 
  * The array indexes are slot numbers, so that given a desired slot, this string is guaranteed
- * to make redis cluster route a request to the shard holding this slot 
+ * to make the cluster route a request to the shard holding this slot
  */
 typedef char crc16_alphastring[4];
 

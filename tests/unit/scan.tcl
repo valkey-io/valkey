@@ -109,7 +109,7 @@ proc test_scan {type} {
 
         after 2
 
-        # TODO: remove this in redis 8.0
+        # TODO: remove this in server version 8.0
         set cur 0
         set keys {}
         while 1 {
@@ -124,7 +124,7 @@ proc test_scan {type} {
         # make sure that expired key have been removed by scan command
         assert_equal 1000 [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
 
-        # TODO: uncomment in redis 8.0
+        # TODO: uncomment in server version 8.0
         #assert_error "*unknown type name*" {r scan 0 type "string1"}
         # expired key will be no touched by scan command
         #assert_equal 1001 [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
@@ -193,7 +193,7 @@ proc test_scan {type} {
 
         # make sure that expired key have been removed by scan command
         assert_equal 1000 [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
-        # TODO: uncomment in redis 8.0
+        # TODO: uncomment in server version 8.0
         # make sure that only the expired key in the type match will been removed by scan command
         #assert_equal 1001 [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
 

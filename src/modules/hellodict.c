@@ -1,7 +1,7 @@
 /* Hellodict -- An example of modules dictionary API
  *
  * This module implements a volatile key-value store on top of the
- * dictionary exported by the Redis modules API.
+ * dictionary exported by the modules API.
  *
  * -----------------------------------------------------------------------------
  *
@@ -33,7 +33,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "../redismodule.h"
+#include "../valkeymodule.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -76,7 +76,7 @@ int cmd_KEYRANGE(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 
     /* Parse the count argument. */
     long long count;
-    if (RedisModule_StringToLongLong(argv[3],&count) != REDISMODULE_OK) {
+    if (RedisModule_StringToLongLong(argv[3],&count) != VALKEYMODULE_OK) {
         return RedisModule_ReplyWithError(ctx,"ERR invalid count");
     }
 
@@ -88,10 +88,10 @@ int cmd_KEYRANGE(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     char *key;
     size_t keylen;
     long long replylen = 0; /* Keep track of the emitted array len. */
-    RedisModule_ReplyWithArray(ctx,REDISMODULE_POSTPONED_LEN);
+    RedisModule_ReplyWithArray(ctx,VALKEYMODULE_POSTPONED_LEN);
     while((key = RedisModule_DictNextC(iter,&keylen,NULL)) != NULL) {
         if (replylen >= count) break;
-        if (RedisModule_DictCompare(iter,"<=",argv[2]) == REDISMODULE_ERR)
+        if (RedisModule_DictCompare(iter,"<=",argv[2]) == VALKEYMODULE_ERR)
             break;
         RedisModule_ReplyWithStringBuffer(ctx,key,keylen);
         replylen++;
@@ -100,32 +100,32 @@ int cmd_KEYRANGE(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 
     /* Cleanup. */
     RedisModule_DictIteratorStop(iter);
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-/* This function must be present on each Redis module. It is used in order to
- * register the commands into the Redis server. */
+/* This function must be present on each module. It is used in order to
+ * register the commands into the server. */
 int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
-    if (RedisModule_Init(ctx,"hellodict",1,REDISMODULE_APIVER_1)
-        == REDISMODULE_ERR) return REDISMODULE_ERR;
+    if (RedisModule_Init(ctx,"hellodict",1,VALKEYMODULE_APIVER_1)
+        == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
     if (RedisModule_CreateCommand(ctx,"hellodict.set",
-        cmd_SET,"write deny-oom",1,1,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+        cmd_SET,"write deny-oom",1,1,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
     if (RedisModule_CreateCommand(ctx,"hellodict.get",
-        cmd_GET,"readonly",1,1,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+        cmd_GET,"readonly",1,1,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
     if (RedisModule_CreateCommand(ctx,"hellodict.keyrange",
-        cmd_KEYRANGE,"readonly",1,1,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+        cmd_KEYRANGE,"readonly",1,1,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
     /* Create our global dictionary. Here we'll set our keys and values. */
     Keyspace = RedisModule_CreateDict(NULL);
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }

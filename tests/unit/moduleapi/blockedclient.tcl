@@ -114,7 +114,7 @@ foreach call_type {nested normal} {
         set busy_time_limit 50
         set old_time_limit [lindex [r config get busy-reply-threshold] 1]
         r config set busy-reply-threshold $busy_time_limit
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         # run command that blocks until released
         set start [clock clicks -milliseconds]
@@ -151,7 +151,7 @@ foreach call_type {nested normal} {
             $rd slow_fg_command 200000
         }
         $rd flush
-        after 10 ;# try to make sure redis started running the command before we proceed
+        after 10 ;# try to make sure the server started running the command before we proceed
 
         # make sure we didn't get BUSY error, it simply blocked till the command was done
         r ping
@@ -171,7 +171,7 @@ foreach call_type {nested normal} {
         # trigger slow operation
         r set_slow_bg_operation 1
         r hset hash foo bar
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         set start [clock clicks -milliseconds]
         $rd do_bg_rm_call hgetall hash
 
@@ -284,7 +284,7 @@ foreach call_type {nested normal} {
 
     test {block time is shorter than timer period} {
         # This command does not have the reply.
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd unblock_by_timer 100 10
         # Wait for the client to unlock.
         after 120

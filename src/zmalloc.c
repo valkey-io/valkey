@@ -50,7 +50,6 @@ void zlibc_free(void *ptr) {
 }
 
 #include <string.h>
-#include <pthread.h>
 #include "zmalloc.h"
 #include "atomicvar.h"
 
@@ -91,7 +90,7 @@ void zlibc_free(void *ptr) {
 #define update_zmalloc_stat_alloc(__n) atomicIncr(used_memory,(__n))
 #define update_zmalloc_stat_free(__n) atomicDecr(used_memory,(__n))
 
-static redisAtomic size_t used_memory = 0;
+static serverAtomic size_t used_memory = 0;
 
 static void zmalloc_default_oom(size_t size) {
     fprintf(stderr, "zmalloc: Out of memory trying to allocate %zu bytes\n",
@@ -447,7 +446,7 @@ void zmadvise_dontneed(void *ptr) {
 /* Get the RSS information in an OS-specific way.
  *
  * WARNING: the function zmalloc_get_rss() is not designed to be fast
- * and may not be called in the busy loops where Redis tries to release
+ * and may not be called in the busy loops where the server tries to release
  * memory expiring or swapping out objects.
  *
  * For this kind of "fast RSS reporting" usages use instead the
@@ -629,7 +628,7 @@ size_t zmalloc_get_rss(void) {
 
 #if defined(USE_JEMALLOC)
 
-#include "redisassert.h"
+#include "serverassert.h"
 
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)
@@ -757,11 +756,20 @@ int jemalloc_purge(void) {
 
 #endif
 
+/* This function provides us access to the libc malloc_trim(). */
+void zlibc_trim(void) {
+#if defined(__GLIBC__) && !defined(USE_LIBC)
+    malloc_trim(0);
+#else
+    return;
+#endif
+}
+
 #if defined(__APPLE__)
 /* For proc_pidinfo() used later in zmalloc_get_smap_bytes_by_field().
  * Note that this file cannot be included in zmalloc.h because it includes
  * a Darwin queue.h file where there is a "LIST_HEAD" macro (!) defined
- * conficting with Redis user code. */
+ * conficting with user code. */
 #include <libproc.h>
 #endif
 
@@ -900,9 +908,9 @@ size_t zmalloc_get_memory_size(void) {
 #endif
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include "testhelp.h"
-#include "redisassert.h"
+#include "serverassert.h"
 
 #define TEST(name) printf("test — %s\n", name);
 

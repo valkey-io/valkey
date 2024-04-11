@@ -1,6 +1,6 @@
 {
     "FREQ": {
-        "summary": "Returns the logarithmic access frequency counter of a Redis object.",
+        "summary": "Returns the logarithmic access frequency counter of an object.",
         "complexity": "O(1)",
         "group": "generic",
         "since": "4.0.0",
@@ -43,7 +43,7 @@
             }
         ],
         "reply_schema": {
-            "description": "the counter's value",
+            "description": "The counter's value.",
             "type": "integer"
         }
     }

@@ -208,7 +208,7 @@ void SHA1Final(unsigned char digest[20], SHA1_CTX* context)
 }
 /* ================ end of sha1.c ================ */
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #define BUFSIZE 4096
 
 #define UNUSED(x) (void)(x)

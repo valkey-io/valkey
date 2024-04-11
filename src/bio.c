@@ -1,4 +1,4 @@
-/* Background I/O service for Redis.
+/* Background I/O service for the server.
  *
  * This file implements operations that we need to perform in the background.
  * Currently there is only a single operation, that is a background close(2)
@@ -8,7 +8,7 @@
  *
  * In the future we'll either continue implementing new things we need or
  * we'll switch to libeio. However there are probably long term uses for this
- * file as we may want to put here Redis specific background tasks (for instance
+ * file as we may want to put here server specific background tasks (for instance
  * it is not impossible that we'll need a non blocking FLUSHDB/FLUSHALL
  * implementation).
  *
@@ -212,7 +212,7 @@ void *bioProcessBackgroundJobs(void *arg) {
 
     redis_set_thread_title(bio_worker_title[worker]);
 
-    redisSetCpuAffinity(server.bio_cpulist);
+    serverSetCpuAffinity(server.bio_cpulist);
 
     makeThreadKillable();
 
@@ -323,7 +323,7 @@ void bioDrainWorker(int job_type) {
 
 /* Kill the running bio threads in an unclean way. This function should be
  * used only when it's critical to stop the threads for some reason.
- * Currently Redis does this only on crash (for instance on SIGSEGV) in order
+ * Currently the server does this only on crash (for instance on SIGSEGV) in order
  * to perform a fast memory check without other threads messing with memory. */
 void bioKillThreads(void) {
     int err;

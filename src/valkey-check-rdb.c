@@ -396,8 +396,8 @@ err:
     return 1;
 }
 
-/* RDB check main: called form server.c when Redis is executed with the
- * redis-check-rdb alias, on during RDB loading errors.
+/* RDB check main: called form server.c when the server is executed with the
+ * valkey-check-rdb alias, on during RDB loading errors.
  *
  * The function works in two ways: can be called with argc/argv as a
  * standalone executable, or called with a non NULL 'fp' argument if we
@@ -416,7 +416,7 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
         exit(1);
     } else if (!strcmp(argv[1],"-v") || !strcmp(argv[1], "--version")) {
         sds version = getVersion();
-        printf("redis-check-rdb %s\n", version);
+        printf("valkey-check-rdb %s\n", version);
         sdsfree(version);
         exit(0);
     }
@@ -426,7 +426,7 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
 
     /* In order to call the loading functions we need to create the shared
      * integer objects, however since this function may be called from
-     * an already initialized Redis instance, check if we really need to. */
+     * an already initialized server instance, check if we really need to. */
     if (shared.integers[0] == NULL)
         createSharedObjects();
     server.loading_process_events_interval_bytes = 0;

@@ -1,6 +1,6 @@
 {
     "ENCODING": {
-        "summary": "Returns the internal encoding of a Redis object.",
+        "summary": "Returns the internal encoding of an object.",
         "complexity": "O(1)",
         "group": "generic",
         "since": "2.2.3",
@@ -45,11 +45,11 @@
         "reply_schema": {
             "oneOf": [
                 {
-                    "description": "key doesn't exist",
+                    "description": "Key doesn't exist.",
                     "type": "null"
                 },
                 {
-                    "description": "encoding of the object",
+                    "description": "Encoding of the object.",
                     "type": "string"
                 }
             ]

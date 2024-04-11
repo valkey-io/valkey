@@ -164,6 +164,7 @@ typedef struct {
 #define dictIsRehashing(d) ((d)->rehashidx != -1)
 #define dictPauseRehashing(d) ((d)->pauserehash++)
 #define dictResumeRehashing(d) ((d)->pauserehash--)
+#define dictIsRehashingPaused(d) ((d)->pauserehash > 0)
 #define dictPauseAutoResize(d) ((d)->pauseAutoResize++)
 #define dictResumeAutoResize(d) ((d)->pauseAutoResize--)
 
@@ -248,7 +249,7 @@ dictStats* dictGetStatsHt(dict *d, int htidx, int full);
 void dictCombineStats(dictStats *from, dictStats *into);
 void dictFreeStats(dictStats *stats);
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 int dictTest(int argc, char *argv[], int flags);
 #endif
 

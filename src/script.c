@@ -319,7 +319,7 @@ void scriptKill(client *c, int is_eval) {
     addReply(c, shared.ok);
 }
 
-static int scriptVerifyCommandArity(struct redisCommand *cmd, int argc, sds *err) {
+static int scriptVerifyCommandArity(struct serverCommand *cmd, int argc, sds *err) {
     if (!cmd || ((cmd->arity > 0 && cmd->arity != argc) || (argc < -cmd->arity))) {
         if (cmd)
             *err = sdsnew("Wrong number of args calling Redis command from script");
@@ -424,7 +424,7 @@ static int scriptVerifyClusterState(scriptRunCtx *run_ctx, client *c, client *or
     if (!server.cluster_enabled || mustObeyClient(original_c)) {
         return C_OK;
     }
-    /* If this is a Redis Cluster node, we need to make sure the script is not
+    /* If this is a Cluster node, we need to make sure the script is not
      * trying to access non-local keys, with the exception of commands
      * received from our master or when loading the AOF back in memory. */
     int error_code;
@@ -527,7 +527,7 @@ static int scriptVerifyAllowStale(client *c, sds *err) {
     return C_ERR;
 }
 
-/* Call a Redis command.
+/* Call a server command.
  * The reply is written to the run_ctx client and it is
  * up to the engine to take and parse.
  * The err out variable is set only if error occurs and describe the error.
@@ -541,7 +541,7 @@ void scriptCall(scriptRunCtx *run_ctx, sds *err) {
     /* Process module hooks */
     moduleCallCommandFilters(c);
 
-    struct redisCommand *cmd = lookupCommand(c->argv, c->argc);
+    struct serverCommand *cmd = lookupCommand(c->argv, c->argc);
     c->cmd = c->lastcmd = c->realcmd = cmd;
     if (scriptVerifyCommandArity(cmd, c->argc, err) != C_OK) {
         goto error;

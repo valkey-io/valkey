@@ -385,7 +385,7 @@ void _addReplyProtoToList(client *c, list *reply_list, const char *s, size_t len
 /* The subscribe / unsubscribe command family has a push as a reply,
  * or in other words, it responds with a push (or several of them
  * depending on how many arguments it got), and has no reply. */
-int cmdHasPushAsReply(struct redisCommand *cmd) {
+int cmdHasPushAsReply(struct serverCommand *cmd) {
     if (!cmd) return 0;
     return cmd->proc == subscribeCommand  || cmd->proc == unsubscribeCommand ||
            cmd->proc == psubscribeCommand || cmd->proc == punsubscribeCommand ||
@@ -466,7 +466,7 @@ void addReplySds(client *c, sds s) {
  * client buffer, trying the static buffer initially, and using the string
  * of objects if not possible.
  *
- * It is efficient because does not create an SDS object nor an Redis object
+ * It is efficient because does not create an SDS object nor an Object
  * if not needed. The object will only be created by calling
  * _addReplyProtoToList() if we fail to extend the existing tail object
  * in the list of objects. */
@@ -476,7 +476,7 @@ void addReplyProto(client *c, const char *s, size_t len) {
 }
 
 /* Low level function called by the addReplyError...() functions.
- * It emits the protocol for a Redis error, in the form:
+ * It emits the protocol for an error reply, in the form:
  *
  * -ERRORCODE Error Message<CR><LF>
  *
@@ -543,7 +543,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
      *
      * Where the master must propagate the first change even if the second
      * will produce an error. However it is useful to log such events since
-     * they are rare and may hint at errors in a script or a bug in Redis. */
+     * they are rare and may hint at errors in a script or a bug in the server. */
     int ctype = getClientType(c);
     if (ctype == CLIENT_TYPE_MASTER || ctype == CLIENT_TYPE_SLAVE || c->id == CLIENT_ID_AOF) {
         char *to, *from;
@@ -1042,7 +1042,7 @@ void addReplyBulkLen(client *c, robj *obj) {
     addReplyLongLongWithPrefix(c,len,'$');
 }
 
-/* Add a Redis Object as a bulk reply */
+/* Add an Object as a bulk reply */
 void addReplyBulk(client *c, robj *obj) {
     addReplyBulkLen(c,obj);
     addReply(c,obj);
@@ -1121,7 +1121,7 @@ void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext) {
 /* This function is similar to the addReplyHelp function but adds the
  * ability to pass in two arrays of strings. Some commands have
  * some additional subcommands based on the specific feature implementation
- * Redis is compiled with (currently just clustering). This function allows
+ * the server is compiled with (currently just clustering). This function allows
  * to pass is the common subcommands in `help` and any implementation
  * specific subcommands in `extended_help`.
  */
@@ -1309,8 +1309,8 @@ void clientAcceptHandler(connection *conn) {
     }
 
     server.stat_numconnections++;
-    moduleFireServerEvent(REDISMODULE_EVENT_CLIENT_CHANGE,
-                          REDISMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE,
+                          VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED,
                           c);
 }
 
@@ -1574,8 +1574,8 @@ void freeClient(client *c) {
 
     /* For connected clients, call the disconnection event of modules hooks. */
     if (c->conn) {
-        moduleFireServerEvent(REDISMODULE_EVENT_CLIENT_CHANGE,
-                              REDISMODULE_SUBEVENT_CLIENT_CHANGE_DISCONNECTED,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE,
+                              VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_DISCONNECTED,
                               c);
     }
 
@@ -1695,8 +1695,8 @@ void freeClient(client *c) {
         refreshGoodSlavesCount();
         /* Fire the replica change modules event. */
         if (c->replstate == SLAVE_STATE_ONLINE)
-            moduleFireServerEvent(REDISMODULE_EVENT_REPLICA_CHANGE,
-                                  REDISMODULE_SUBEVENT_REPLICA_CHANGE_OFFLINE,
+            moduleFireServerEvent(VALKEYMODULE_EVENT_REPLICA_CHANGE,
+                                  VALKEYMODULE_SUBEVENT_REPLICA_CHANGE_OFFLINE,
                                   NULL);
     }
 
@@ -1729,7 +1729,7 @@ void freeClient(client *c) {
 void freeClientAsync(client *c) {
     /* We need to handle concurrent access to the server.clients_to_close list
      * only in the freeClientAsync() function, since it's the only function that
-     * may access the list while Redis uses I/O threads. All the other accesses
+     * may access the list while the server uses I/O threads. All the other accesses
      * are in the context of the main thread while the other threads are
      * idle. */
     if (c->flags & CLIENT_CLOSE_ASAP || c->flags & CLIENT_SCRIPT) return;
@@ -2075,7 +2075,7 @@ int handleClientsWithPendingWrites(void) {
 
 /* resetClient prepare the client to process the next command */
 void resetClient(client *c) {
-    redisCommandProc *prevcmd = c->cmd ? c->cmd->proc : NULL;
+    serverCommandProc *prevcmd = c->cmd ? c->cmd->proc : NULL;
 
     freeClientArgv(c);
     c->cur_script = NULL;
@@ -2195,7 +2195,7 @@ int processInlineBuffer(client *c) {
         c->repl_ack_time = server.unixtime;
 
     /* Masters should never send us inline protocol to run actual
-     * commands. If this happens, it is likely due to a bug in Redis where
+     * commands. If this happens, it is likely due to a bug in the server where
      * we got some desynchronization in the protocol, for example
      * because of a PSYNC gone bad.
      *
@@ -2219,7 +2219,7 @@ int processInlineBuffer(client *c) {
         c->argv_len_sum = 0;
     }
 
-    /* Create redis objects for all arguments. */
+    /* Create an Object for all arguments. */
     for (c->argc = 0, j = 0; j < argc; j++) {
         c->argv[c->argc] = createObject(OBJ_STRING,argv[j]);
         c->argc++;
@@ -2654,7 +2654,7 @@ void readQueryFromClient(connection *conn) {
      * buffer contains exactly the SDS string representing the object, even
      * at the risk of requiring more read(2) calls. This way the function
      * processMultiBulkBuffer() can avoid copying buffers to create the
-     * Redis Object representing the argument. */
+     * robj representing the argument. */
     if (c->reqtype == PROTO_REQ_MULTIBULK && c->multibulklen && c->bulklen != -1
         && c->bulklen >= PROTO_MBULK_BIG_ARG)
     {
@@ -2747,7 +2747,7 @@ done:
     beforeNextClient(c);
 }
 
-/* A Redis "Address String" is a colon separated ip:port pair.
+/* An "Address String" is a colon separated ip:port pair.
  * For IPv4 it's in the form x.y.z.k:port, example: "127.0.0.1:1234".
  * For IPv6 addresses we use [] around the IP part, like in "[::1]:1234".
  * For Unix sockets we use path:0, like in "/tmp/redis:0".
@@ -3650,7 +3650,7 @@ void helloCommand(client *c) {
     addReplyBulkCString(c,"redis");
 
     addReplyBulkCString(c,"version");
-    addReplyBulkCString(c,REDIS_VERSION);
+    addReplyBulkCString(c,VALKEY_VERSION);
 
     addReplyBulkCString(c,"proto");
     addReplyLongLong(c,c->resp);
@@ -3674,11 +3674,11 @@ void helloCommand(client *c) {
 
 /* This callback is bound to POST and "Host:" command names. Those are not
  * really commands, but are used in security attacks in order to talk to
- * Redis instances via HTTP, with a technique called "cross protocol scripting"
- * which exploits the fact that services like Redis will discard invalid
+ * instances via HTTP, with a technique called "cross protocol scripting"
+ * which exploits the fact that services like this server will discard invalid
  * HTTP headers and will process what follows.
  *
- * As a protection against this attack, Redis will terminate the connection
+ * As a protection against this attack, the server will terminate the connection
  * when a POST or "Host:" header is seen, and will log the event from
  * time to time (to avoid creating a DOS as a result of too many logs). */
 void securityWarningCommand(client *c) {
@@ -3800,7 +3800,7 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
     }
 }
 
-/* This function returns the number of bytes that Redis is
+/* This function returns the number of bytes that the server is
  * using to store the reply still not read by the client.
  *
  * Note: this function is very fast so can be called as many time as
@@ -4083,7 +4083,7 @@ static void pauseClientsByClient(mstime_t endTime, int isPauseClientAll) {
  * so that a failover without data loss to occur. Replicas will continue to receive
  * traffic to facilitate this functionality.
  * 
- * This function is also internally used by Redis Cluster for the manual
+ * This function is also internally used by Cluster for the manual
  * failover procedure implemented by CLUSTER FAILOVER.
  *
  * The function always succeed, even if there is already a pause in progress.
@@ -4127,7 +4127,7 @@ uint32_t isPausedActionsWithUpdate(uint32_t actions_bitmask) {
     return (server.paused_actions & actions_bitmask);
 }
 
-/* This function is called by Redis in order to process a few events from
+/* This function is called by the server in order to process a few events from
  * time to time while blocked into some not interruptible operation.
  * This allows to reply to clients with the -LOADING error while loading the
  * data set at startup or after a full resynchronization with the master
@@ -4195,7 +4195,7 @@ void processEventsWhileBlocked(void) {
 #endif
 
 typedef struct __attribute__((aligned(CACHE_LINE_SIZE))) threads_pending {
-    redisAtomic unsigned long value;
+    serverAtomic unsigned long value;
 } threads_pending;
 
 pthread_t io_threads[IO_THREADS_MAX_NUM];
@@ -4226,7 +4226,7 @@ void *IOThreadMain(void *myid) {
 
     snprintf(thdname, sizeof(thdname), "io_thd_%ld", id);
     redis_set_thread_title(thdname);
-    redisSetCpuAffinity(server.server_cpulist);
+    serverSetCpuAffinity(server.server_cpulist);
     makeThreadKillable();
 
     while(1) {

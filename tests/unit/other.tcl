@@ -308,7 +308,7 @@ start_server {tags {"other"}} {
     } {} {needs:reset}
 
     test {RESET clears MONITOR state} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd monitor
         assert_equal [$rd read] "OK"
 
@@ -356,7 +356,7 @@ start_server {tags {"other"}} {
 }
 
 start_server {tags {"other external:skip"}} {
-    test {Don't rehash if redis has child process} {
+    test {Don't rehash if server has child process} {
         r config set save ""
         r config set rdb-key-save-delay 1000000
 
@@ -403,7 +403,7 @@ start_server {tags {"other external:skip"}} {
             set cmdline [read_proc_title [srv 0 pid]]
 
             assert_equal "TEST" [lindex $cmdline 0]
-            assert_match "*/redis-server" [lindex $cmdline 1]
+            assert_match "*/valkey-server" [lindex $cmdline 1]
             
             if {$::tls} {
                 set expect_port [srv 0 pport]
@@ -419,7 +419,7 @@ start_server {tags {"other external:skip"}} {
             assert_equal $expect_port [lindex $cmdline 3]
             assert_equal $expect_tls_port [lindex $cmdline 4]
             assert_match "*/tests/tmp/server.*/socket" [lindex $cmdline 5]
-            assert_match "*/tests/tmp/redis.conf.*" [lindex $cmdline 6]
+            assert_match "*/tests/tmp/valkey.conf.*" [lindex $cmdline 6]
 
             # Try setting a bad template
             catch {r config set "proc-title-template" "{invalid-var}"} err
@@ -489,19 +489,6 @@ start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
     } {} {needs:debug}
 }
 
-proc get_overhead_hashtable_main {} {
-    set main 0
-    set stats [r memory stats]
-    set list_stats [split $stats " "]
-    for {set j 0} {$j < [llength $list_stats]} {incr j} {
-        if {[string equal -nocase "\{overhead.hashtable.main" [lindex $list_stats $j]]} {
-            set main [lindex $list_stats [expr $j+1]]
-            break
-        }
-    }
-    return $main
-}
-
 start_server {tags {"other external:skip"}} {
     test "Redis can resize empty dict" {
         # Write and then delete 128 keys, creating an empty dict
@@ -512,12 +499,10 @@ start_server {tags {"other external:skip"}} {
         for {set j 1} {$j <= 128} {incr j} {
             r del $j{b}
         }
-        # Set a key to enable overhead display of db 0
-        r set a b
         # The dict containing 128 keys must have expanded,
         # its hash table itself takes a lot more than 400 bytes
         wait_for_condition 100 50 {
-            [get_overhead_hashtable_main] < 400
+            [dict get [r memory stats] db.9 overhead.hashtable.main] < 400
         } else {
             fail "dict did not resize in time"
         }   

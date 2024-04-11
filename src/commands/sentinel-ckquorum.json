@@ -1,6 +1,6 @@
 {
     "CKQUORUM": {
-        "summary": "Checks for a Redis Sentinel quorum.",
+        "summary": "Checks for a Sentinel quorum.",
         "group": "sentinel",
         "since": "2.8.4",
         "arity": 3,

@@ -100,7 +100,7 @@ pubsubtype pubSubShardType = {
  *----------------------------------------------------------------------------*/
 
 /* Send a pubsub message of type "message" to the client.
- * Normally 'msg' is a Redis object containing the string to send as
+ * Normally 'msg' is an Object containing the string to send as
  * message. However if the caller sets 'msg' as NULL, it will be able
  * to send a special message (for instance an Array type) by using the
  * addReply*() API family. */
@@ -263,9 +263,9 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
     unsigned int slot = 0;
 
     /* Add the channel to the client -> channels hash table */
-    if (dictAdd(type.clientPubSubChannels(c),channel,NULL) == DICT_OK) {
+    void *position = dictFindPositionForInsert(type.clientPubSubChannels(c),channel,NULL);
+    if (position) { /* Not yet subscribed to this channel */
         retval = 1;
-        incrRefCount(channel);
         /* Add the client to the channel -> list of clients hash table */
         if (server.cluster_enabled && type.shard) {
             slot = getKeySlot(channel->ptr);
@@ -275,6 +275,7 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
 
         if (existing) {
             clients = dictGetVal(existing);
+            channel = dictGetKey(existing);
         } else {
             clients = dictCreate(&clientDictType);
             kvstoreDictSetVal(*type.serverPubSubChannels, slot, de, clients);
@@ -282,6 +283,8 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
         }
 
         serverAssert(dictAdd(clients, c, NULL) != DICT_ERR);
+        serverAssert(dictInsertAtPosition(type.clientPubSubChannels(c), channel, position));
+        incrRefCount(channel);
     }
     /* Notify the client */
     addReplyPubsubSubscribed(c,channel,type);
@@ -312,7 +315,7 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify, pubsubtype ty
         if (dictSize(clients) == 0) {
             /* Free the dict and associated hash entry at all if this was
              * the latest client, so that it will be possible to abuse
-             * Redis PUBSUB creating millions of channels. */
+             * PUBSUB creating millions of channels. */
             kvstoreDictDelete(*type.serverPubSubChannels, slot, channel);
         }
     }

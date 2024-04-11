@@ -36,9 +36,9 @@
  * in order to get O(log(N)) INSERT and REMOVE operations into a sorted
  * data structure.
  *
- * The elements are added to a hash table mapping Redis objects to scores.
+ * The elements are added to a hash table mapping Objects to scores.
  * At the same time the elements are added to a skip list mapping scores
- * to Redis objects (so objects are sorted by scores in this "view").
+ * to Objects (so objects are sorted by scores in this "view").
  *
  * Note that the SDS string representing the element is the same in both
  * the hash table and skiplist in order to save memory. What we do in order
@@ -598,7 +598,7 @@ static int zslParseRange(robj *min, robj *max, zrangespec *spec) {
   * - means the min string possible
   * + means the max string possible
   *
-  * If the string is valid the *dest pointer is set to the redis object
+  * If the string is valid the *dest pointer is set to the Object
   * that will be used for the comparison, and ex will be set to 0 or 1
   * respectively if the item is exclusive or inclusive. C_OK will be
   * returned.
@@ -1234,7 +1234,8 @@ unsigned long zsetLength(const robj *zobj) {
  * and the value len hint indicates the approximate individual size of the added elements,
  * they are used to determine the initial representation.
  *
- * If the hints are not known, and underestimation or 0 is suitable. */
+ * If the hints are not known, and underestimation or 0 is suitable. 
+ * We should never pass a negative value because it will convert to a very large unsigned number. */
 robj *zsetTypeCreate(size_t size_hint, size_t val_len_hint) {
     if (size_hint <= server.zset_max_listpack_entries &&
         val_len_hint <= server.zset_max_listpack_value)
@@ -2024,10 +2025,11 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
             break;
         }
         dictResumeAutoResize(zs->dict);
-        dictShrinkIfNeeded(zs->dict);
         if (dictSize(zs->dict) == 0) {
             dbDelete(c->db,key);
             keyremoved = 1;
+        } else {
+            dictShrinkIfNeeded(zs->dict);
         }
     } else {
         serverPanic("Unknown sorted set encoding");
@@ -3072,7 +3074,7 @@ static void zrangeResultFinalizeClient(zrange_result_handler *handler,
 /* Result handler methods for storing the ZRANGESTORE to a zset. */
 static void zrangeResultBeginStore(zrange_result_handler *handler, long length)
 {
-    handler->dstobj = zsetTypeCreate(length, 0);
+    handler->dstobj = zsetTypeCreate(length >= 0 ? length : 0, 0);
 }
 
 static void zrangeResultEmitCBufferForStore(zrange_result_handler *handler,

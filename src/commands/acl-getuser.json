@@ -33,7 +33,7 @@
         "reply_schema": {
             "oneOf": [
                 {
-                    "description": "a set of ACL rule definitions for the user",
+                    "description": "A set of ACL rule definitions for the user.",
                     "type": "object",
                     "additionalProperties": false,
                     "properties": {
@@ -50,15 +50,15 @@
                             }
                         },
                         "commands": {
-                            "description": "root selector's commands",
+                            "description": "Root selector's commands.",
                             "type": "string"
                         },
                         "keys": {
-                            "description": "root selector's keys",
+                            "description": "Root selector's keys.",
                             "type": "string"
                         },
                         "channels": {
-                            "description": "root selector's channels",
+                            "description": "Root selector's channels.",
                             "type": "string"
                         },
                         "selectors": {

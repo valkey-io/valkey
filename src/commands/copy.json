@@ -78,11 +78,11 @@
         "reply_schema": {
             "oneOf": [
                 {
-                    "description": "source was copied",
+                    "description": "Source was copied.",
                     "const": 1
                 },
                 {
-                    "description": "source was not copied",
+                    "description": "Source was not copied.",
                     "const": 0
                 }
             ]

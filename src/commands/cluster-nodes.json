@@ -14,7 +14,7 @@
             "NONDETERMINISTIC_OUTPUT"
         ],
         "reply_schema": {
-            "description": "the serialized cluster configuration",
+            "description": "The serialized cluster configuration.",
             "type": "string"
         }
     }

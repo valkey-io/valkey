@@ -372,7 +372,7 @@ int anetResolve(char *err, char *host, char *ipbuf, size_t ipbuf_len,
 
 static int anetSetReuseAddr(char *err, int fd) {
     int yes = 1;
-    /* Make sure connection-intensive things like the redis benchmark
+    /* Make sure connection-intensive things like the benchmark tool
      * will be able to close/open sockets a zillion of times */
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
         anetSetError(err, "setsockopt SO_REUSEADDR: %s", strerror(errno));
@@ -621,7 +621,7 @@ int anetUnixServer(char *err, char *path, mode_t perm, int backlog)
 
     memset(&sa,0,sizeof(sa));
     sa.sun_family = AF_LOCAL;
-    redis_strlcpy(sa.sun_path,path,sizeof(sa.sun_path));
+    valkey_strlcpy(sa.sun_path,path,sizeof(sa.sun_path));
     if (anetListen(err,s,(struct sockaddr*)&sa,sizeof(sa),backlog,perm) == ANET_ERR)
         return ANET_ERR;
     return s;

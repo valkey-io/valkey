@@ -2,7 +2,7 @@
 #define __CLUSTER_H
 
 /*-----------------------------------------------------------------------------
- * Redis cluster exported API.
+ * Cluster exported API.
  *----------------------------------------------------------------------------*/
 
 #define CLUSTER_SLOT_MASK_BITS 14 /* Number of bits used for slot id. */
@@ -25,9 +25,9 @@
 typedef struct _clusterNode clusterNode;
 struct clusterState;
 
-/* Flags that a module can set in order to prevent certain Redis Cluster
+/* Flags that a module can set in order to prevent certain Cluster
  * features to be enabled. Useful when implementing a different distributed
- * system on top of Redis Cluster message bus, using modules. */
+ * system on top of Cluster message bus, using modules. */
 #define CLUSTER_MODULE_FLAG_NONE 0
 #define CLUSTER_MODULE_FLAG_NO_FAILOVER (1<<1)
 #define CLUSTER_MODULE_FLAG_NO_REDIRECTION (1<<2)
@@ -105,7 +105,7 @@ long long clusterNodeReplOffset(clusterNode *node);
 clusterNode *clusterLookupNode(const char *name, int length);
 
 /* functions with shared implementations */
-clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, int argc, int *hashslot, int *ask);
+clusterNode *getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int *hashslot, int *ask);
 int clusterRedirectBlockedClientIfNeeded(client *c);
 void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_code);
 void migrateCloseTimedoutSockets(void);

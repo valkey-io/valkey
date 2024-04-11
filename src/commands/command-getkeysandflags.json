@@ -16,7 +16,7 @@
             "CONNECTION"
         ],
         "reply_schema": {
-            "description": "List of keys from the given Redis command and their usage flags.",
+            "description": "List of keys from the given command and their usage flags.",
             "type": "array",
             "uniqueItems": true,
             "items": {

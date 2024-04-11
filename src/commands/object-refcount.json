@@ -43,7 +43,7 @@
             }
         ],
         "reply_schema": {
-            "description": "the number of references",
+            "description": "The number of references.",
             "type": "integer"
         }
     }

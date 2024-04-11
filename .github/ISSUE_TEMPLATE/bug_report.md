@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Help us improve Redis by reporting a bug
+about: Help us improve by reporting a bug
 title: '[BUG]'
 labels: ''
 assignees: ''

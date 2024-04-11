@@ -114,7 +114,7 @@ start_server {tags {"bitops"}} {
             }
             set max [expr {$min+$range-1}]
 
-            # Compare Tcl vs Redis
+            # Compare Tcl vs the server
             set range2 [expr {$range*2}]
             set value [expr {($min*2)+[randomInt $range2]}]
             set increment [expr {($min*2)+[randomInt $range2]}]
@@ -166,7 +166,7 @@ start_server {tags {"bitops"}} {
             }
             set max [expr {$min+$range-1}]
 
-            # Compare Tcl vs Redis
+            # Compare Tcl vs the server
             set range2 [expr {$range*2}]
             set value [expr {($min*2)+[randomInt $range2]}]
             set increment [expr {($min*2)+[randomInt $range2]}]

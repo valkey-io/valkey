@@ -4,8 +4,8 @@ start_server {tags {"modules"}} {
     r module load $testmodule
 
     test {PUBLISH and SPUBLISH via a module} {
-        set rd1 [redis_deferring_client]
-        set rd2 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
 
         assert_equal {1} [ssubscribe $rd1 {chan1}]
         assert_equal {1} [subscribe $rd2 {chan1}]

@@ -60,7 +60,7 @@ start_server {tags {"info" "external:skip"}} {
             r config resetstat
             r CONFIG SET latency-tracking yes
             r CONFIG SET latency-tracking-info-percentiles "50.0 99.0 99.9"
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             r del list1{t}
 
             $rd blpop list1{t} 0
@@ -259,7 +259,7 @@ start_server {tags {"info" "external:skip"}} {
 
         test {errorstats: blocking commands} {
             r config resetstat
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             $rd client id
             set rd_id [$rd read]
             r del list1{t}
@@ -272,6 +272,27 @@ start_server {tags {"info" "external:skip"}} {
             assert_match {*calls=1,*,rejected_calls=0,failed_calls=1} [cmdstat blpop]
             assert_equal [s total_error_replies] 1
             $rd close
+        }
+
+        test {errorstats: limit errors will not increase indefinitely} {
+            r config resetstat
+            for {set j 1} {$j <= 1100} {incr j} {
+                assert_error "$j my error message" {
+                    r eval {return redis.error_reply(string.format('%s my error message', ARGV[1]))} 0 $j
+                }
+            }
+
+            assert_equal [count_log_message 0 "Errorstats stopped adding new errors"] 1
+            assert_equal [count_log_message 0 "Current errors code list"] 1
+            assert_equal "count=1" [errorstat ERRORSTATS_DISABLED]
+
+            # Since we currently have no metrics exposed for server.errors, we use lazyfree
+            # to verify that we only have 128 errors.
+            wait_for_condition 50 100 {
+                [s lazyfreed_objects] eq 128
+            } else {
+                fail "errorstats resetstat lazyfree error"
+            }
         }
 
         test {stats: eventloop metrics} {
@@ -373,8 +394,8 @@ start_server {tags {"info" "external:skip"}} {
         test {clients: pubsub clients} {
             set info [r info clients]
             assert_equal [getInfoProperty $info pubsub_clients] {0}
-            set rd1 [redis_deferring_client]
-            set rd2 [redis_deferring_client]
+            set rd1 [valkey_deferring_client]
+            set rd2 [valkey_deferring_client]
             # basic count
             assert_equal {1} [ssubscribe $rd1 {chan1}]
             assert_equal {1} [subscribe $rd2 {chan2}]
@@ -403,7 +424,7 @@ start_server {tags {"info" "external:skip"}} {
         }
 
         test {clients: watching clients} {
-            set r2 [redis_client]
+            set r2 [valkey_client]
             assert_equal [s watching_clients] 0
             assert_equal [s total_watched_keys] 0
             assert_match {*watch=0*} [r client info]
@@ -463,5 +484,41 @@ start_server {tags {"info" "external:skip"}} {
             $r2 close
             wait_for_watched_clients_count 0
         }
+    }
+}
+
+start_server {tags {"info" "external:skip"}} {
+    test {memory: database and pubsub overhead and rehashing dict count} {
+        r flushall
+        set info_mem [r info memory]
+        set mem_stats [r memory stats]
+        assert_equal [getInfoProperty $info_mem mem_overhead_db_hashtable_rehashing] {0}
+        assert_equal [dict get $mem_stats overhead.db.hashtable.lut] {0}
+        assert_equal [dict get $mem_stats overhead.db.hashtable.rehashing] {0}
+        assert_equal [dict get $mem_stats db.dict.rehashing.count] {0}
+        # Initial dict expand is not rehashing
+        r set a b
+        set info_mem [r info memory]
+        set mem_stats [r memory stats]
+        assert_equal [getInfoProperty $info_mem mem_overhead_db_hashtable_rehashing] {0}
+        assert_range [dict get $mem_stats overhead.db.hashtable.lut] 1 64
+        assert_equal [dict get $mem_stats overhead.db.hashtable.rehashing] {0}
+        assert_equal [dict get $mem_stats db.dict.rehashing.count] {0}
+        # set 4 more keys to trigger rehashing
+        # get the info within a transaction to make sure the rehashing is not completed
+        r multi 
+        r set b c
+        r set c d
+        r set d e
+        r set e f
+        r info memory
+        r memory stats
+        set res [r exec]
+        set info_mem [lindex $res 4]
+        set mem_stats [lindex $res 5]
+        assert_range [getInfoProperty $info_mem mem_overhead_db_hashtable_rehashing] 1 64
+        assert_range [dict get $mem_stats overhead.db.hashtable.lut] 1 192
+        assert_range [dict get $mem_stats overhead.db.hashtable.rehashing] 1 64
+        assert_equal [dict get $mem_stats db.dict.rehashing.count] {1}
     }
 }

@@ -69,7 +69,7 @@ static struct evictionPoolEntry *EvictionPoolLRU;
 
 /* Return the LRU clock, based on the clock resolution. This is a time
  * in a reduced-bits format that can be used to set and check the
- * object->lru field of redisObject structures. */
+ * object->lru field of serverObject structures. */
 unsigned int getLRUClock(void) {
     return (mstime()/LRU_CLOCK_RESOLUTION) & LRU_CLOCK_MAX;
 }
@@ -102,7 +102,7 @@ unsigned long long estimateObjectIdleTime(robj *o) {
 
 /* LRU approximation algorithm
  *
- * Redis uses an approximation of the LRU algorithm that runs in constant
+ * The server uses an approximation of the LRU algorithm that runs in constant
  * memory. Every time there is a key to expire, we sample N keys (with
  * N very small, usually in around 5) to populate a pool of best keys to
  * evict of M keys (the pool size is defined by EVPOOL_SIZE).
@@ -143,7 +143,7 @@ void evictionPoolAlloc(void) {
  * We insert keys on place in ascending order, so keys with the smaller
  * idle time are on the left, and keys with the higher idle time on the
  * right. */
-int evictionPoolPopulate(redisDb *db, kvstore *samplekvs, struct evictionPoolEntry *pool) {
+int evictionPoolPopulate(serverDb *db, kvstore *samplekvs, struct evictionPoolEntry *pool) {
     int j, k, count;
     dictEntry *samples[server.maxmemory_samples];
 
@@ -436,7 +436,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
 }
 
 /* Return 1 if used memory is more than maxmemory after allocating more memory,
- * return 0 if not. Redis may reject user's requests or evict some keys if used
+ * return 0 if not. The server may reject user's requests or evict some keys if used
  * memory exceeds maxmemory, especially, when we allocate huge memory at once. */
 int overMaxmemoryAfterAlloc(size_t moremem) {
     if (!server.maxmemory) return  0; /* No limit. */
@@ -517,10 +517,10 @@ static unsigned long evictionTimeLimitUs(void) {
 /* Check that memory usage is within the current "maxmemory" limit.  If over
  * "maxmemory", attempt to free memory by evicting data (if it's safe to do so).
  *
- * It's possible for Redis to suddenly be significantly over the "maxmemory"
+ * It's possible for the server to suddenly be significantly over the "maxmemory"
  * setting.  This can happen if there is a large allocation (like a hash table
  * resize) or even if the "maxmemory" setting is manually adjusted.  Because of
- * this, it's important to evict for a managed period of time - otherwise Redis
+ * this, it's important to evict for a managed period of time - otherwise the server
  * would become unresponsive while evicting.
  *
  * The goal of this function is to improve the memory situation - not to
@@ -579,7 +579,7 @@ int performEvictions(void) {
         static unsigned int next_db = 0;
         sds bestkey = NULL;
         int bestdbid;
-        redisDb *db;
+        serverDb *db;
         dictEntry *de;
 
         if (server.maxmemory_policy & (MAXMEMORY_FLAG_LRU|MAXMEMORY_FLAG_LFU) ||

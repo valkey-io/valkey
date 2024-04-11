@@ -5,7 +5,7 @@ start_server {tags {"modules"}} {
 
     test "modules allocated memory can be reclaimed in the background" {
         set orig_mem [s used_memory]
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         # LAZYFREE_THRESHOLD is 64
         for {set i 0} {$i < 10000} {incr i} {

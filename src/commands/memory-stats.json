@@ -13,7 +13,7 @@
             "RESPONSE_POLICY:SPECIAL"
         ],
         "reply_schema": {
-            "description": "memory usage details",
+            "description": "Memory usage details.",
             "type": "object",
             "additionalProperties": false,
             "properties": {
@@ -47,7 +47,16 @@
                 "functions.caches": {
                     "type": "integer"
                 },
+                "overhead.db.hashtable.lut": {
+                    "type": "integer"
+                },
+                "overhead.db.hashtable.rehashing": {
+                    "type": "integer"
+                },
                 "overhead.total": {
+                    "type": "integer"
+                },
+                "db.dict.rehashing.count": {
                     "type": "integer"
                 },
                 "keys.count": {
@@ -103,7 +112,7 @@
                 }
             },
             "patternProperties": {
-                "^db.": {
+                "^db\\.\\d+$": {
                     "type": "object",
                     "properties": {
                         "overhead.hashtable.main": {

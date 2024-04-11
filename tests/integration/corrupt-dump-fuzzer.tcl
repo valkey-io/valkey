@@ -5,7 +5,7 @@
 tags {"dump" "corruption" "external:skip" "logreqres:skip"} {
 
 # catch sigterm so that in case one of the random command hangs the test,
-# usually due to redis not putting a response in the output buffers,
+# usually due to the server not putting a response in the output buffers,
 # we'll know which command it was
 if { ! [ catch {
     package require Tclx
@@ -14,7 +14,7 @@ if { ! [ catch {
 }
 
 proc generate_collections {suffix elements} {
-    set rd [redis_deferring_client]
+    set rd [valkey_deferring_client]
     for {set j 0} {$j < $elements} {incr j} {
         # add both string values and integers
         if {$j % 2 == 0} {set val $j} else {set val "_$j"}

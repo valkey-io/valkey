@@ -96,7 +96,9 @@
 #endif
 
 /* Test for accept4() */
-#ifdef __linux__
+#if defined(__linux__) || defined(OpenBSD5_7) || \
+    (__FreeBSD__ >= 10 || __FreeBSD_version >= 1000000) || \
+    (defined(NetBSD8_0) || __NetBSD_Version__ >= 800000000)
 #define HAVE_ACCEPT4 1
 #endif
 
@@ -223,7 +225,7 @@ void setproctitle(const char *fmt, ...);
 
 /* Sometimes after including an OS-specific header that defines the
  * endianness we end with __BYTE_ORDER but not with BYTE_ORDER that is what
- * the Redis code uses. In this case let's define everything without the
+ * the server code uses. In this case let's define everything without the
  * underscores. */
 #ifndef BYTE_ORDER
 #ifdef __BYTE_ORDER

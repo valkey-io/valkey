@@ -1,7 +1,7 @@
 start_server {tags {"pause network"}} {
     test "Test read commands are not blocked by client pause" {
         r client PAUSE 100000 WRITE
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd GET FOO
         $rd PING
         $rd INFO
@@ -24,7 +24,7 @@ start_server {tags {"pause network"}} {
         #   paused only WRITE. This is because the first 'PAUSE ALL' command is
         #   more restrictive than the second 'PAUSE WRITE' and pause-client feature
         #   preserve most restrictive configuration among multiple settings.
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd SET FOO BAR
 
         set test_start_time [clock milliseconds]
@@ -40,7 +40,7 @@ start_server {tags {"pause network"}} {
         r client PAUSE 60000 WRITE
         r client PAUSE 10 WRITE
         after 100
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd SET FOO BAR
         wait_for_blocked_clients_count 1 100 10
 
@@ -52,7 +52,7 @@ start_server {tags {"pause network"}} {
     test "Test write commands are paused by RO" {
         r client PAUSE 60000 WRITE
 
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd SET FOO BAR
         wait_for_blocked_clients_count 1 50 100
 
@@ -66,13 +66,13 @@ start_server {tags {"pause network"}} {
         r client PAUSE 100000 WRITE
 
         # Test that pfcount, which can replicate, is also blocked
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd PFCOUNT pause-hll
         wait_for_blocked_clients_count 1 50 100
 
         # Test that publish, which adds the message to the replication
         # stream is blocked.
-        set rd2 [redis_deferring_client]
+        set rd2 [valkey_deferring_client]
         $rd2 publish foo bar
         wait_for_blocked_clients_count 2 50 100
 
@@ -86,7 +86,7 @@ start_server {tags {"pause network"}} {
     test "Test read/admin multi-execs are not blocked by pause RO" {
         r SET FOO BAR
         r client PAUSE 100000 WRITE
-        set rr [redis_client]
+        set rr [valkey_client]
         assert_equal [$rr MULTI] "OK"
         assert_equal [$rr PING] "QUEUED"
         assert_equal [$rr GET FOO] "QUEUED"
@@ -97,7 +97,7 @@ start_server {tags {"pause network"}} {
     }
 
     test "Test write multi-execs are blocked by pause RO" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd MULTI
         assert_equal [$rd read] "OK"
         $rd SET FOO BAR
@@ -112,8 +112,8 @@ start_server {tags {"pause network"}} {
 
     test "Test scripts are blocked by pause RO" {
         r client PAUSE 60000 WRITE
-        set rd [redis_deferring_client]
-        set rd2 [redis_deferring_client]
+        set rd [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
         $rd EVAL "return 1" 0
 
         # test a script with a shebang and no flags for coverage
@@ -141,7 +141,7 @@ start_server {tags {"pause network"}} {
         }
 
         r client PAUSE 6000000 WRITE
-        set rr [redis_client]
+        set rr [valkey_client]
 
         # test an eval that's for sure not in the script cache
         assert_equal [$rr EVAL {#!lua flags=no-writes
@@ -177,7 +177,7 @@ start_server {tags {"pause network"}} {
     test "Test read-only scripts in multi-exec are not blocked by pause RO" {
         r SET FOO BAR
         r client PAUSE 100000 WRITE
-        set rr [redis_client]
+        set rr [valkey_client]
         assert_equal [$rr MULTI] "OK"
         assert_equal [$rr EVAL {#!lua flags=no-writes
                 return 12
@@ -194,8 +194,8 @@ start_server {tags {"pause network"}} {
     }
 
     test "Test write scripts in multi-exec are blocked by pause RO" {
-        set rd [redis_deferring_client]
-        set rd2 [redis_deferring_client]
+        set rd [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
 
         # one with a shebang
         $rd MULTI
@@ -240,7 +240,7 @@ start_server {tags {"pause network"}} {
 
     test "Test multiple clients can be queued up and unblocked" {
         r client PAUSE 60000 WRITE
-        set clients [list [redis_deferring_client] [redis_deferring_client] [redis_deferring_client]]
+        set clients [list [valkey_deferring_client] [valkey_deferring_client] [valkey_deferring_client]]
         foreach client $clients {
             $client SET FOO BAR
         }
@@ -294,7 +294,7 @@ start_server {tags {"pause network"}} {
         r SET FOO2{t} BAR
         r exec
 
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd SET FOO3{t} BAR
 
         wait_for_blocked_clients_count 1 50 100

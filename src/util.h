@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __REDIS_UTIL_H
-#define __REDIS_UTIL_H
+#ifndef VALKEY_UTIL_H
+#define VALKEY_UTIL_H
 
 #include <stdint.h>
 #include "sds.h"
@@ -97,10 +97,10 @@ int snprintf_async_signal_safe(char *to, size_t n, const char *fmt, ...)
 #else
 int snprintf_async_signal_safe(char *to, size_t n, const char *fmt, ...);
 #endif
-size_t redis_strlcpy(char *dst, const char *src, size_t dsize);
+size_t valkey_strlcpy(char *dst, const char *src, size_t dsize);
 size_t redis_strlcat(char *dst, const char *src, size_t dsize);
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 int utilTest(int argc, char **argv, int flags);
 #endif
 

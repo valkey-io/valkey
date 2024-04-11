@@ -71,6 +71,7 @@
  */
 #ifndef ZMALLOC_LIB
 #define ZMALLOC_LIB "libc"
+#define USE_LIBC 1
 
 #if !defined(NO_MALLOC_USABLE_SIZE) && \
     (defined(__GLIBC__) || defined(__FreeBSD__) || \
@@ -93,8 +94,13 @@
 #endif
 #endif
 
-/* We can enable the Redis defrag capabilities only if we are using Jemalloc
- * and the version used is our special version modified for Redis having
+/* Includes for malloc_trim(), see zlibc_trim(). */
+#if defined(__GLIBC__) && !defined(USE_LIBC)
+#include <malloc.h>
+#endif
+
+/* We can enable the server defrag capabilities only if we are using Jemalloc
+ * and the version used is our special version modified for the server having
  * the ability to return per-allocation fragmentation hints. */
 #if defined(USE_JEMALLOC) && defined(JEMALLOC_FRAG_HINT)
 #define HAVE_DEFRAG
@@ -130,6 +136,7 @@ size_t zmalloc_get_private_dirty(long pid);
 size_t zmalloc_get_smap_bytes_by_field(char *field, long pid);
 size_t zmalloc_get_memory_size(void);
 void zlibc_free(void *ptr);
+void zlibc_trim(void);
 void zmadvise_dontneed(void *ptr);
 
 #ifdef HAVE_DEFRAG
@@ -161,7 +168,7 @@ __attribute__((alloc_size(2),noinline)) void *extend_to_usable(void *ptr, size_t
 
 int get_proc_stat_ll(int i, long long *res);
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 int zmalloc_test(int argc, char **argv, int flags);
 #endif
 

@@ -292,7 +292,7 @@ void disconnectAllBlockedClients(void) {
     }
 }
 
-/* This function should be called by Redis every time a single command,
+/* This function should be called by the server every time a single command,
  * a MULTI/EXEC block, or a Lua script, terminated its execution after
  * being called by a client. It handles serving clients blocked in all scenarios
  * where a specific key access requires to block until that key is available.
@@ -310,7 +310,7 @@ void disconnectAllBlockedClients(void) {
  * do client side, indeed!). Because mismatching clients (blocking for
  * a different type compared to the current key type) are moved in the
  * other side of the linked list. However as long as the key starts to
- * be used only for a single type, like virtually any Redis application will
+ * be used only for a single type, like virtually any application will
  * do, the function is already fair. */
 void handleClientsBlockedOnKeys(void) {
 
@@ -453,7 +453,7 @@ static blocking_type getBlockedTypeByType(int type) {
  * made by a script or in the context of MULTI/EXEC.
  *
  * The list will be finally processed by handleClientsBlockedOnKeys() */
-static void signalKeyAsReadyLogic(redisDb *db, robj *key, int type, int deleted) {
+static void signalKeyAsReadyLogic(serverDb *db, robj *key, int type, int deleted) {
     readyList *rl;
 
     /* Quick returns. */
@@ -548,11 +548,11 @@ static void releaseBlockedEntry(client *c, dictEntry *de, int remove_key) {
         dictDelete(c->bstate.keys, key);
 }
 
-void signalKeyAsReady(redisDb *db, robj *key, int type) {
+void signalKeyAsReady(serverDb *db, robj *key, int type) {
     signalKeyAsReadyLogic(db, key, type, 0);
 }
 
-void signalDeletedKeyAsReady(redisDb *db, robj *key, int type) {
+void signalDeletedKeyAsReady(serverDb *db, robj *key, int type) {
     signalKeyAsReadyLogic(db, key, type, 1);
 }
 

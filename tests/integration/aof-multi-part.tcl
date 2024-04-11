@@ -19,9 +19,9 @@ tags {"external:skip"} {
 
     # Test Part 1
 
-    # In order to test the loading logic of redis under different combinations of manifest and AOF.
-    # We will manually construct the manifest file and AOF, and then start redis to verify whether
-    # the redis behavior is as expected.
+    # In order to test the loading logic of the server under different combinations of manifest and AOF.
+    # We will manually construct the manifest file and AOF, and then start the server to verify whether
+    # the server behavior is as expected.
 
     test {Multi Part AOF can't load data when some file missing} {
         create_aof $aof_dirpath $aof_base1_file {
@@ -590,7 +590,7 @@ tags {"external:skip"} {
         clean_aof_persistence $aof_dirpath
     }
 
-    test {Multi Part AOF can upgrade when when two redis share the same server dir} {
+    test {Multi Part AOF can upgrade when when two servers share the same server dir} {
         create_aof $server_path $aof_old_name_old_path {
             append_to_aof [formatCommand set k1 v1]
             append_to_aof [formatCommand set k2 v2]
@@ -609,7 +609,7 @@ tags {"external:skip"} {
             start_server [list overrides [list dir $server_path appendonly yes appendfilename appendonly.aof2]] {
                 set redis2 [redis [srv host] [srv port] 0 $::tls]
 
-                test "Multi Part AOF can upgrade when when two redis share the same server dir (redis1)" {
+                test "Multi Part AOF can upgrade when when two servers share the same server dir (server1)" {
                     wait_done_loading $redis1
                     assert_equal v1 [$redis1 get k1]
                     assert_equal v2 [$redis1 get k2]
@@ -640,7 +640,7 @@ tags {"external:skip"} {
                     assert {$d1 eq $d2}
                 }
 
-                test "Multi Part AOF can upgrade when when two redis share the same server dir (redis2)" {
+                test "Multi Part AOF can upgrade when when two servers share the same server dir (server2)" {
                     wait_done_loading $redis2
 
                     assert_equal 0 [$redis2 exists k1]
@@ -700,7 +700,7 @@ tags {"external:skip"} {
         clean_aof_persistence $aof_dirpath
     }
 
-    test {Multi Part AOF can create BASE (RDB format) when redis starts from empty} {
+    test {Multi Part AOF can create BASE (RDB format) when server starts from empty} {
         start_server_aof [list dir $server_path] {
             set client [redis [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
@@ -723,7 +723,7 @@ tags {"external:skip"} {
         clean_aof_persistence $aof_dirpath
     }
 
-    test {Multi Part AOF can create BASE (AOF format) when redis starts from empty} {
+    test {Multi Part AOF can create BASE (AOF format) when server starts from empty} {
         start_server_aof [list dir $server_path aof-use-rdb-preamble no] {
             set client [redis [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
@@ -748,8 +748,8 @@ tags {"external:skip"} {
 
     # Test Part 2
     #
-    # To test whether the AOFRW behaves as expected during the redis run.
-    # We will start redis first, then perform pressure writing, enable and disable AOF, and manually
+    # To test whether the AOFRW behaves as expected during the server run.
+    # We will start the server first, then perform pressure writing, enable and disable AOF, and manually
     # and automatically run bgrewrite and other actions, to test whether the correct AOF file is created,
     # whether the correct manifest is generated, whether the data can be reload correctly under continuous
     # writing pressure, etc.

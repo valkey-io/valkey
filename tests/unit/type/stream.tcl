@@ -32,7 +32,7 @@ proc streamRandomID {min_id max_id} {
     return $ms-$seq
 }
 
-# Tcl-side implementation of XRANGE to perform fuzz testing in the Redis
+# Tcl-side implementation of XRANGE to perform fuzz testing in the server
 # XRANGE implementation.
 proc streamSimulateXRANGE {items start end} {
     set res {}
@@ -337,7 +337,7 @@ start_server {
 
     test {Blocking XREAD waiting new data} {
         r XADD s2{t} * old abcd1234
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd XREAD BLOCK 20000 STREAMS s1{t} s2{t} s3{t} $ $ $
         wait_for_blocked_client
         r XADD s2{t} * new abcd1234
@@ -348,7 +348,7 @@ start_server {
     }
 
     test {Blocking XREAD waiting old data} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd XREAD BLOCK 20000 STREAMS s1{t} s2{t} s3{t} $ 0-0 $
         r XADD s2{t} * foo abcd1234
         set res [$rd read]
@@ -362,7 +362,7 @@ start_server {
         r XADD s1 666 f v
         r XADD s1 667 f2 v2
         r XDEL s1 667
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd XREAD BLOCK 10 STREAMS s1 666
         after 20
         assert {[$rd read] == {}} ;# before the fix, client didn't even block, but was served synchronously with {s1 {}}
@@ -370,7 +370,7 @@ start_server {
     }
 
     test "Blocking XREAD for stream that ran dry (issue #5299)" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         # Add a entry then delete it, now stream's last_id is 666.
         r DEL mystream
@@ -394,8 +394,124 @@ start_server {
         $rd close
     }
 
+    test {XREAD last element from non-empty stream} {
+        # should return last entry
+
+        # add 3 entries to a stream
+        r DEL lestream
+        r XADD lestream 1-0 k1 v1
+        r XADD lestream 2-0 k2 v2
+        r XADD lestream 3-0 k3 v3
+
+        # read the last entry
+        set res [r XREAD STREAMS lestream +]
+
+        # verify it's the last entry
+        assert_equal $res {{lestream {{3-0 {k3 v3}}}}}
+
+        # two more entries, with MAX_UINT64 for sequence number for the last one
+        r XADD lestream 3-18446744073709551614 k4 v4
+        r XADD lestream 3-18446744073709551615 k5 v5
+
+        # read the new last entry
+        set res [r XREAD STREAMS lestream +]
+
+        # verify it's the last entry
+        assert_equal $res {{lestream {{3-18446744073709551615 {k5 v5}}}}}
+    }
+
+    test {XREAD last element from empty stream} {
+        # should return nil
+
+        # make sure the stream is empty
+        r DEL lestream
+
+        # read last entry and verify nil is received
+        assert_equal [r XREAD STREAMS lestream +] {}
+
+        # add an element to the stream, than delete it
+        r XADD lestream 1-0 k1 v1
+        r XDEL lestream 1-0
+
+        # verify nil is still received when reading last entry
+        assert_equal [r XREAD STREAMS lestream +] {}
+    }
+
+    test {XREAD last element blocking from empty stream} {
+        # should block until a new entry is available
+
+        # make sure there is no stream
+        r DEL lestream
+
+        # read last entry from stream, blocking
+        set rd [valkey_deferring_client]
+        $rd XREAD BLOCK 20000 STREAMS lestream +
+        wait_for_blocked_client
+
+        # add an entry to the stream
+        r XADD lestream 1-0 k1 v1
+
+        # read and verify result
+        set res [$rd read]
+        assert_equal $res {{lestream {{1-0 {k1 v1}}}}}
+        $rd close
+    }
+
+    test {XREAD last element blocking from non-empty stream} {
+        # should return last element immediately, w/o blocking
+
+        # add 3 entries to a stream
+        r DEL lestream
+        r XADD lestream 1-0 k1 v1
+        r XADD lestream 2-0 k2 v2
+        r XADD lestream 3-0 k3 v3
+
+        # read the last entry
+        set res [r XREAD BLOCK 1000000 STREAMS lestream +]
+
+        # verify it's the last entry
+        assert_equal $res {{lestream {{3-0 {k3 v3}}}}}
+    }
+
+    test {XREAD last element from multiple streams} {
+        # should return last element only from non-empty streams
+
+        # add 3 entries to one stream
+        r DEL "\{lestream\}1"
+        r XADD "\{lestream\}1" 1-0 k1 v1
+        r XADD "\{lestream\}1" 2-0 k2 v2
+        r XADD "\{lestream\}1" 3-0 k3 v3
+
+        # add 3 entries to another stream
+        r DEL "\{lestream\}2"
+        r XADD "\{lestream\}2" 1-0 k1 v4
+        r XADD "\{lestream\}2" 2-0 k2 v5
+        r XADD "\{lestream\}2" 3-0 k3 v6
+
+        # read last element from 3 streams (2 with enetries, 1 non-existent)
+        # verify the last element from the two existing streams were returned
+        set res [r XREAD STREAMS "\{lestream\}1" "\{lestream\}2" "\{lestream\}3" + + +]
+        assert_equal $res {{{{lestream}1} {{3-0 {k3 v3}}}} {{{lestream}2} {{3-0 {k3 v6}}}}}
+    }
+
+    test {XREAD last element with count > 1} {
+        # Should return only the last element - count has no affect here
+
+        # add 3 entries to a stream
+        r DEL lestream
+        r XADD lestream 1-0 k1 v1
+        r XADD lestream 2-0 k2 v2
+        r XADD lestream 3-0 k3 v3
+
+        # read the last entry
+        set res [r XREAD COUNT 3 STREAMS lestream +]
+
+        # verify only last entry was read, even though COUNT > 1
+        assert_equal $res {{lestream {{3-0 {k3 v3}}}}}
+    }
+
     test "XREAD: XADD + DEL should not awake client" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r del s1
         $rd XREAD BLOCK 20000 STREAMS s1 $
         wait_for_blocked_clients_count 1
@@ -411,7 +527,7 @@ start_server {
     }
 
     test "XREAD: XADD + DEL + LPUSH should not awake client" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r del s1
         $rd XREAD BLOCK 20000 STREAMS s1 $
         wait_for_blocked_clients_count 1
@@ -430,7 +546,7 @@ start_server {
 
     test {XREAD with same stream name multiple times should work} {
         r XADD s2 * old abcd1234
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd XREAD BLOCK 20000 STREAMS s2 s2 s2 $ $ $
         wait_for_blocked_clients_count 1
         r XADD s2 * new abcd1234
@@ -442,7 +558,7 @@ start_server {
 
     test {XREAD + multiple XADD inside transaction} {
         r XADD s2 * old abcd1234
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd XREAD BLOCK 20000 STREAMS s2 s2 s2 $ $ $
         wait_for_blocked_clients_count 1
         r MULTI
@@ -566,7 +682,7 @@ start_server {
 
     test {XREAD streamID edge (blocking)} {
         r del x
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd XREAD BLOCK 0 STREAMS x 1-18446744073709551615
         wait_for_blocked_clients_count 1
         r XADD x 1-1 f v

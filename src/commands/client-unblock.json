@@ -21,11 +21,11 @@
             "oneOf": [
                 {
                     "const": 0,
-                    "description": "if the client was unblocked successfully"
+                    "description": "If the client was unblocked successfully."
                 },
                 {
                     "const": 1,
-                    "description": "if the client wasn't unblocked"
+                    "description": "If the client wasn't unblocked."
                 }
             ]
         },

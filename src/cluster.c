@@ -30,7 +30,7 @@
 /*
  * cluster.c contains the common parts of a clustering
  * implementation, the parts that are shared between
- * any implementation of Redis clustering.
+ * any implementation of clustering.
  */
 
 #include "server.h"
@@ -142,7 +142,7 @@ void createDumpPayload(rio *payload, robj *o, robj *key, int dbid) {
     payload->io.buffer.ptr = sdscatlen(payload->io.buffer.ptr,&crc,8);
 }
 
-/* Verify that the RDB version of the dump payload matches the one of this Redis
+/* Verify that the RDB version of the dump payload matches the one of this
  * instance and that the checksum is ok.
  * If the DUMP payload looks valid C_OK is returned, otherwise C_ERR
  * is returned. If rdbver_ptr is not NULL, its populated with the value read
@@ -173,7 +173,7 @@ int verifyDumpPayload(unsigned char *p, size_t len, uint16_t *rdbver_ptr) {
 }
 
 /* DUMP keyname
- * DUMP is actually not used by Redis Cluster but it is the obvious
+ * DUMP is actually not used by Cluster but it is the obvious
  * complement of RESTORE and can be useful for different applications. */
 void dumpCommand(client *c) {
     robj *o;
@@ -687,7 +687,7 @@ void migrateCommand(client *c) {
     if (!copy) {
         /* Translate MIGRATE as DEL for replication/AOF. Note that we do
          * this only for the keys for which we received an acknowledgement
-         * from the receiving Redis server, by using the del_idx index. */
+         * from the receiving server, by using the del_idx index. */
         if (del_idx > 1) {
             newargv[0] = createStringObject("DEL",3);
             /* Note that the following call takes ownership of newargv. */
@@ -990,7 +990,7 @@ void clusterCommand(client *c) {
  *
  * CLUSTER_REDIR_DOWN_STATE and CLUSTER_REDIR_DOWN_RO_STATE if the cluster is
  * down but the user attempts to execute a command that addresses one or more keys. */
-clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, int argc, int *hashslot, int *error_code) {
+clusterNode *getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int *hashslot, int *error_code) {
     clusterNode *myself = getMyClusterNode();
     clusterNode *n = NULL;
     robj *firstkey = NULL;
@@ -1007,7 +1007,7 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
     /* Set error code optimistically for the base case. */
     if (error_code) *error_code = CLUSTER_REDIR_NONE;
 
-    /* Modules can turn off Redis Cluster redirection: this is useful
+    /* Modules can turn off Cluster redirection: this is useful
      * when writing a module that implements a completely different
      * distributed system. */
 
@@ -1030,14 +1030,16 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
         mc.cmd = cmd;
     }
 
-    int is_pubsubshard = cmd->proc == ssubscribeCommand ||
-                         cmd->proc == sunsubscribeCommand ||
-                         cmd->proc == spublishCommand;
+    uint64_t cmd_flags = getCommandFlags(c);
+    
+    /* Only valid for sharded pubsub as regular pubsub can operate on any node and bypasses this layer. */
+    int pubsubshard_included = (cmd_flags & CMD_PUBSUB) ||
+                           (c->cmd->proc == execCommand && (c->mstate.cmd_flags & CMD_PUBSUB));
 
     /* Check that all the keys are in the same hash slot, and obtain this
      * slot and the node associated. */
     for (i = 0; i < ms->count; i++) {
-        struct redisCommand *mcmd;
+        struct serverCommand *mcmd;
         robj **margv;
         int margc, numkeys, j;
         keyReference *keyindex;
@@ -1109,7 +1111,7 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
              * node until the migration completes with CLUSTER SETSLOT <slot>
              * NODE <node-id>. */
             int flags = LOOKUP_NOTOUCH | LOOKUP_NOSTATS | LOOKUP_NONOTIFY | LOOKUP_NOEXPIRE;
-            if ((migrating_slot || importing_slot) && !is_pubsubshard)
+            if ((migrating_slot || importing_slot) && !pubsubshard_included)
             {
                 if (lookupKeyReadWithFlags(&server.db[0], thiskey, flags) == NULL) missing_keys++;
                 else existing_keys++;
@@ -1122,11 +1124,10 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
      * without redirections or errors in all the cases. */
     if (n == NULL) return myself;
 
-    uint64_t cmd_flags = getCommandFlags(c);
     /* Cluster is globally down but we got keys? We only serve the request
      * if it is a read command and when allow_reads_when_down is enabled. */
     if (!isClusterHealthy()) {
-        if (is_pubsubshard) {
+        if (pubsubshard_included) {
             if (!server.cluster_allow_pubsubshard_when_down) {
                 if (error_code) *error_code = CLUSTER_REDIR_DOWN_STATE;
                 return NULL;
@@ -1189,7 +1190,7 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
      * is serving, we can reply without redirection. */
     int is_write_command = (cmd_flags & CMD_WRITE) ||
                            (c->cmd->proc == execCommand && (c->mstate.cmd_flags & CMD_WRITE));
-    if (((c->flags & CLIENT_READONLY) || is_pubsubshard) &&
+    if (((c->flags & CLIENT_READONLY) || pubsubshard_included) &&
         !is_write_command &&
         clusterNodeIsSlave(myself) &&
         clusterNodeGetSlaveof(myself) == n)
@@ -1445,7 +1446,7 @@ void clusterCommandSlots(client * c) {
 
 /* The ASKING command is required after a -ASK redirection.
  * The client should issue ASKING before to actually send the command to
- * the target instance. See the Redis Cluster specification for more
+ * the target instance. See the Cluster specification for more
  * information. */
 void askingCommand(client *c) {
     if (server.cluster_enabled == 0) {

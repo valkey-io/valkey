@@ -1,6 +1,6 @@
 {
     "IDLETIME": {
-        "summary": "Returns the time since the last access to a Redis object.",
+        "summary": "Returns the time since the last access to an object.",
         "complexity": "O(1)",
         "group": "generic",
         "since": "2.2.3",
@@ -43,7 +43,7 @@
             }
         ],
         "reply_schema": {
-            "description": "the idle time in seconds",
+            "description": "The idle time in seconds.",
             "type": "integer"
         }
     }

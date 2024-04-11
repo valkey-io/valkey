@@ -28,15 +28,15 @@
                     "additionalProperties": false,
                     "properties": {
                         "summary": {
-                            "description": "short command description",
+                            "description": "Short command description.",
                             "type": "string"
                         },
                         "since": {
-                            "description": "the Redis version that added the command (or for module commands, the module version).",
+                            "description": "The server version that added the command (or for module commands, the module version).",
                             "type": "string"
                         },
                         "group": {
-                            "description": "the functional group to which the command belongs",
+                            "description": "The functional group to which the command belongs.",
                             "oneOf": [
                                 {
                                     "const": "bitmap"
@@ -95,38 +95,38 @@
                             ]
                         },
                         "complexity": {
-                            "description": "a short explanation about the command's time complexity.",
+                            "description": "A short explanation about the command's time complexity.",
                             "type": "string"
                         },
                         "module": {
                             "type": "string"
                         },
                         "doc_flags": {
-                            "description": "an array of documentation flags",
+                            "description": "An array of documentation flags.",
                             "type": "array",
                             "items": {
                                 "oneOf": [
                                     {
-                                        "description": "the command is deprecated.",
+                                        "description": "The command is deprecated.",
                                         "const": "deprecated"
                                     },
                                     {
-                                        "description": "a system command that isn't meant to be called by users.",
+                                        "description": "A system command that isn't meant to be called by users.",
                                         "const": "syscmd"
                                     }
                                 ]
                             }
                         },
                         "deprecated_since": {
-                            "description": "the Redis version that deprecated the command (or for module commands, the module version)",
+                            "description": "The server version that deprecated the command (or for module commands, the module version).",
                             "type": "string"
                         },
                         "replaced_by": {
-                            "description": "the alternative for a deprecated command.",
+                            "description": "The alternative for a deprecated command.",
                             "type": "string"
                         },
                         "history": {
-                            "description": "an array of historical notes describing changes to the command's behavior or arguments.",
+                            "description": "An array of historical notes describing changes to the command's behavior or arguments.",
                             "type": "array",
                             "items": {
                                 "type": "array",
@@ -135,7 +135,7 @@
                                 "items": [
                                     {
                                         "type": "string",
-                                        "description": "The Redis version that the entry applies to."
+                                        "description": "The server version that the entry applies to."
                                     },
                                     {
                                         "type": "string",
@@ -145,7 +145,7 @@
                             }
                         },
                         "arguments": {
-                            "description": "an array of maps that describe the command's arguments.",
+                            "description": "An array of maps that describe the command's arguments.",
                             "type": "array",
                             "items": {
                                 "type": "object",
@@ -188,11 +188,11 @@
                             }
                         },
                         "reply_schema": {
-                            "description": "command reply schema",
+                            "description": "Command reply schema.",
                             "type": "object"
                         },
                         "subcommands": {
-                            "description": "A map where each key is a subcommand, and each value is the documentary information",
+                            "description": "A map where each key is a subcommand, and each value is the documentary information.",
                             "$ref": "#"
                         }
                     }

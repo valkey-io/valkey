@@ -31,7 +31,7 @@
 #define __FUNCTIONS_H_
 
 /*
- * functions.c unit provides the Redis Functions API:
+ * functions.c unit provides the Functions API:
  * * FUNCTION LOAD
  * * FUNCTION LIST
  * * FUNCTION CALL (FCALL and FCALL_RO)
@@ -50,7 +50,7 @@
 
 #include "server.h"
 #include "script.h"
-#include "redismodule.h"
+#include "valkeymodule.h"
 
 typedef struct functionLibInfo functionLibInfo;
 
@@ -68,7 +68,7 @@ typedef struct engine {
     int (*create)(void *engine_ctx, functionLibInfo *li, sds code, size_t timeout, sds *err);
 
     /* Invoking a function, r_ctx is an opaque object (from engine POV).
-     * The r_ctx should be used by the engine to interaction with Redis,
+     * The r_ctx should be used by the engine to interaction with the server,
      * such interaction could be running commands, set resp, or set
      * replication mode
      */

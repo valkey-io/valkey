@@ -142,7 +142,7 @@ void mixStringObjectDigest(unsigned char *digest, robj *o) {
  * Note that this function does not reset the initial 'digest' passed, it
  * will continue mixing this object digest to anything that was already
  * present. */
-void xorObjectDigest(redisDb *db, robj *keyobj, unsigned char *digest, robj *o) {
+void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o) {
     uint32_t aux = htonl(o->type);
     mixDigest(digest,&aux,sizeof(aux));
     long long expiretime = getExpire(db,keyobj);
@@ -258,7 +258,7 @@ void xorObjectDigest(redisDb *db, robj *keyobj, unsigned char *digest, robj *o) 
         }
         streamIteratorStop(&si);
     } else if (o->type == OBJ_MODULE) {
-        RedisModuleDigest md = {{0},{0},keyobj,db->id};
+        ValkeyModuleDigest md = {{0},{0},keyobj,db->id};
         moduleValue *mv = o->ptr;
         moduleType *mt = mv->type;
         moduleInitDigestContext(md);
@@ -288,7 +288,7 @@ void computeDatasetDigest(unsigned char *final) {
     memset(final,0,20); /* Start with a clean result */
 
     for (j = 0; j < server.dbnum; j++) {
-        redisDb *db = server.db+j;
+        serverDb *db = server.db+j;
         if (kvstoreSize(db->keys) == 0)
             continue;
         kvstoreIterator *kvs_it = kvstoreIteratorInit(db->keys);
@@ -410,14 +410,14 @@ void debugCommand(client *c) {
 "DIGEST-VALUE <key> [<key> ...]",
 "    Output a hex signature of the values of all the specified keys.",
 "ERROR <string>",
-"    Return a Redis protocol error with <string> as message. Useful for clients",
-"    unit tests to simulate Redis errors.",
+"    Return a RESP protocol error with <string> as message. Useful for clients",
+"    unit tests to simulate error replies.",
 "LEAK <string>",
 "    Create a memory leak of the input string.",
 "LOG <message>",
 "    Write <message> to the server log.",
 "HTSTATS <dbid> [full]",
-"    Return hash table statistics of the specified Redis database.",
+"    Return hash table statistics of the specified database.",
 "HTSTATS-KEY <key> [full]",
 "    Like HTSTATS but for the hash table stored at <key>'s value.",
 "LOADAOF",
@@ -468,7 +468,7 @@ void debugCommand(client *c) {
 "    Crash the server with sigsegv.",
 "SET-ACTIVE-EXPIRE <0|1>",
 "    Setting it to 0 disables expiring keys in background when they are not",
-"    accessed (otherwise the Redis behavior). Setting it to 1 reenables back the",
+"    accessed (otherwise the behavior). Setting it to 1 reenables back the",
 "    default.",
 "QUICKLIST-PACKED-THRESHOLD <size>",
 "    Sets the threshold for elements to be inserted as plain vs packed nodes",
@@ -480,7 +480,7 @@ void debugCommand(client *c) {
 "STRINGMATCH-TEST",
 "    Run a fuzz tester against the stringmatchlen() function.",
 "STRUCTSIZE",
-"    Return the size of different Redis core C structures.",
+"    Return the size of different core C structures.",
 "LISTPACK <key>",
 "    Show low level info about the listpack encoding of <key>.",
 "QUICKLIST <key> [<0|1>]",
@@ -1789,9 +1789,9 @@ void logRegisters(ucontext_t *uc) {
 
 #endif /* HAVE_BACKTRACE */
 
-/* Return a file descriptor to write directly to the Redis log with the
+/* Return a file descriptor to write directly to the server log with the
  * write(2) syscall, that can be used in critical sections of the code
- * where the rest of Redis can't be trusted (for example during the memory
+ * where the rest of server can't be trusted (for example during the memory
  * test) or when an API call requires a raw fd.
  *
  * Close it with closeDirectLogFiledes(). */
@@ -2023,7 +2023,7 @@ void logModulesInfo(void) {
 }
 
 /* Log information about the "current" client, that is, the client that is
- * currently being served by Redis. May be NULL if Redis is not serving a
+ * currently being served by the server. May be NULL if the server is not serving a
  * client right now. */
 void logCurrentClient(client *cc, const char *title) {
     if (cc == NULL) return;
@@ -2149,7 +2149,7 @@ static void killMainThread(void) {
 
 /* Kill the running threads (other than current) in an unclean way. This function
  * should be used only when it's critical to stop the threads for some reason.
- * Currently Redis does this only on crash (for instance on SIGSEGV) in order
+ * Currently the server does this only on crash (for instance on SIGSEGV) in order
  * to perform a fast memory check without other threads messing with memory. */
 void killThreads(void) {
     killMainThread();
@@ -2252,7 +2252,7 @@ static void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
 
     bugReportStart();
     serverLog(LL_WARNING,
-        "Redis %s crashed by signal: %d, si_code: %d", REDIS_VERSION, sig, info->si_code);
+        SERVER_NAME " %s crashed by signal: %d, si_code: %d", VALKEY_VERSION, sig, info->si_code);
     if (sig == SIGSEGV || sig == SIGBUS) {
         serverLog(LL_WARNING,
         "Accessing address: %p", (void*)info->si_addr);
@@ -2382,10 +2382,10 @@ void bugReportEnd(int killViaSignal, int sig) {
     serverLogRawFromHandler(LL_WARNING|LL_RAW,
 "\n=== REDIS BUG REPORT END. Make sure to include from START to END. ===\n\n"
 "       Please report the crash by opening an issue on github:\n\n"
-"           http://github.com/redis/redis/issues\n\n"
-"  If a Redis module was involved, please open in the module's repo instead.\n\n"
-"  Suspect RAM error? Use redis-server --test-memory to verify it.\n\n"
-"  Some other issues could be detected by redis-server --check-system\n"
+"           http://github.com/valkey-io/valkey/issues\n\n"
+"  If a module was involved, please open in the module's repo instead.\n\n"
+"  Suspect RAM error? Use valkey-server --test-memory to verify it.\n\n"
+"  Some other issues could be detected by valkey-server --check-system\n"
 );
 
     /* free(messages); Don't call free() with possibly corrupted memory. */

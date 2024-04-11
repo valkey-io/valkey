@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Simple Redis init.d script conceived to work on Linux systems
+# Simple server init.d script conceived to work on Linux systems
 # as it does use of the /proc filesystem.
 
 ### BEGIN INIT INFO

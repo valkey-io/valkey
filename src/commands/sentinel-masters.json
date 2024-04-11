@@ -1,6 +1,6 @@
 {
     "MASTERS": {
-        "summary": "Returns a list of monitored Redis masters.",
+        "summary": "Returns a list of monitored masters.",
         "complexity": "O(N) where N is the number of masters",
         "group": "sentinel",
         "since": "2.8.4",
@@ -14,7 +14,7 @@
         ],
         "reply_schema": {
             "type": "array",
-            "description": "List of monitored Redis masters, and their state.",
+            "description": "List of monitored masters, and their state.",
             "items": {
                 "type": "object",
                 "additionalProperties": {

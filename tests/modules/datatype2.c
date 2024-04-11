@@ -45,7 +45,7 @@
  *                               dict
  * 
  * 
- * Keys in redis database:
+ * Keys in server database:
  * 
  *                                ┌───────┐
  *                                │ size  │
@@ -64,7 +64,7 @@
  *     │ k3  │  ───┼─┐                             │ k2  │  ───┼─┐
  *     │     │     │ │                             │     │     │ │
  *     └─────┴─────┘ │            ┌───────┐        └─────┴─────┘ │            ┌───────┐
- *      redis db[0]  │            │ size  │          redis db[1] │            │ size  │
+ *     server db[0]  │            │ size  │         server db[1] │            │ size  │
  *                   └───────────►│ used  │                      └───────────►│ used  │
  *                                │ mask  │                                   │ mask  │
  *                                └───────┘                                   └───────┘

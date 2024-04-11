@@ -45,12 +45,12 @@
 
 #include "dict.h"
 #include "zmalloc.h"
-#include "redisassert.h"
+#include "serverassert.h"
 #include "monotonic.h"
 
 /* Using dictSetResizeEnabled() we make possible to disable
  * resizing and rehashing of the hash table as needed. This is very important
- * for Redis, as we use copy-on-write and don't want to move too much memory
+ * for us, as we use copy-on-write and don't want to move too much memory
  * around when there is a child performing saving operations.
  *
  * Note that even when dict_can_resize is set to DICT_RESIZE_AVOID, not all
@@ -706,6 +706,10 @@ int _dictClear(dict *d, int htidx, void(callback)(dict*)) {
 /* Clear & Release the hash table */
 void dictRelease(dict *d)
 {
+    /* Someone may be monitoring a dict that started rehashing, before
+     * destroying the dict fake completion. */
+    if (dictIsRehashing(d) && d->type->rehashingCompleted)
+        d->type->rehashingCompleted(d);
     _dictClear(d,0,NULL);
     _dictClear(d,1,NULL);
     zfree(d);
@@ -1588,6 +1592,10 @@ void *dictFindPositionForInsert(dict *d, const void *key, dictEntry **existing) 
 }
 
 void dictEmpty(dict *d, void(callback)(dict*)) {
+    /* Someone may be monitoring a dict that started rehashing, before
+     * destroying the dict fake completion. */
+    if (dictIsRehashing(d) && d->type->rehashingCompleted)
+        d->type->rehashingCompleted(d);
     _dictClear(d,0,callback);
     _dictClear(d,1,callback);
     d->rehashidx = -1;
@@ -1747,7 +1755,7 @@ void dictGetStats(char *buf, size_t bufsize, dict *d, int full) {
 
 /* ------------------------------- Benchmark ---------------------------------*/
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include "testhelp.h"
 
 #define UNUSED(V) ((void) V)

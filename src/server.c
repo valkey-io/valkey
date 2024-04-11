@@ -6698,7 +6698,7 @@ void loadDataFromDisk(void) {
 void serverOutOfMemoryHandler(size_t allocation_size) {
     serverLog(LL_WARNING,"Out Of Memory allocating %zu bytes!",
         allocation_size);
-    serverPanic("Redis aborting for OUT OF MEMORY. Allocating %zu bytes!",
+    serverPanic("Valkey aborting for OUT OF MEMORY. Allocating %zu bytes!",
         allocation_size);
 }
 
@@ -6811,10 +6811,10 @@ static int serverSupervisedUpstart(void) {
 static int serverSupervisedSystemd(void) {
 #ifndef HAVE_LIBSYSTEMD
     serverLog(LL_WARNING,
-            "systemd supervision requested or auto-detected, but Redis is compiled without libsystemd support!");
+            "systemd supervision requested or auto-detected, but Valkey is compiled without libsystemd support!");
     return 0;
 #else
-    if (serverCommunicateSystemd("STATUS=Redis is loading...\n") <= 0)
+    if (serverCommunicateSystemd("STATUS=Valkey is loading...\n") <= 0)
         return 0;
     serverLog(LL_NOTICE,
         "Supervised by systemd. Please make sure you set appropriate values for TimeoutStartSec and TimeoutStopSec in your service unit.");
@@ -7151,7 +7151,7 @@ int main(int argc, char **argv) {
             serverLog(LL_WARNING, "Failed to test the kernel for a bug that could lead to data corruption during background save. "
                                   "Your system could be affected, please report this error.");
         if (!checkIgnoreWarning("ARM64-COW-BUG")) {
-            serverLog(LL_WARNING,"Redis will now exit to prevent data corruption. "
+            serverLog(LL_WARNING,"Valkey will now exit to prevent data corruption. "
                                  "Note that it is possible to suppress this warning by setting the following config: ignore-warnings ARM64-COW-BUG");
             exit(1);
         }

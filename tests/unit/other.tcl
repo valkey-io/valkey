@@ -377,10 +377,16 @@ start_server {tags {"other"}} {
             set hello [r hello 3]
             assert_equal "redis" [dict get $hello server]
             assert_match "7.2.*" [dict get $hello version]
+            set info [r info server]
+            assert_match "*redis_mode:*" $info
+            assert_no_match "*server_mode:*" $info
             r config set extended-redis-compatibility no
             set hello [r hello 3]
             assert_equal "valkey" [dict get $hello server]
             assert_equal $version [dict get $hello version]
+            set info [r info server]
+            assert_no_match "*redis_mode:*" $info
+            assert_match "*server_mode:*" $info
         }
     }
 }

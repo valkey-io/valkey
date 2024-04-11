@@ -422,7 +422,7 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
     RedisModule_SubscribeToServerEvent(ctx,
         RedisModuleEvent_ReplicaChange, replicationChangeCallback);
     RedisModule_SubscribeToServerEvent(ctx,
-        RedisModuleEvent_PrimaryLinkChange, rasterLinkChangeCallback);
+        RedisModuleEvent_MasterLinkChange, rasterLinkChangeCallback);
 
     /* persistence related hooks */
     RedisModule_SubscribeToServerEvent(ctx,

@@ -1547,6 +1547,19 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         reconnect
         assert_equal [r ping] {PONG}
     }
+    
+    test {Test scripting debug lua server invocations} {
+        r script debug sync
+        r eval {return 'hello'} 0 
+        set cmd "*2\r\n\$6\r\nserver\r\n\$4\r\nping\r\n"
+        r write $cmd
+        r flush
+        set ret [r read]
+        puts $ret
+        assert_match {*PONG*} $ret
+        reconnect 
+        assert_equal [r ping] {PONG}
+    }
 }
 
 start_server {tags {"scripting external:skip"}} {

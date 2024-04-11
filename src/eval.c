@@ -1677,7 +1677,7 @@ ldbLog(sdsnew("                     next line of code."));
             luaPushError(lua, "script aborted for user request");
             luaError(lua);
         } else if (argc > 1 &&
-                   (!strcasecmp(argv[0],"r") || !strcasecmp(argv[0],"redis"))) {
+                   (!strcasecmp(argv[0],"r") || !strcasecmp(argv[0],REDIS_API_NAME) || !strcasecmp(argv[0],SERVER_API_NAME))) {
             ldbRedis(lua,argv,argc);
             ldbSendLogs();
         } else if ((!strcasecmp(argv[0],"p") || !strcasecmp(argv[0],"print"))) {

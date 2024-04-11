@@ -421,7 +421,7 @@ static int anetCreateSocket(char *err, int domain, int type, int protocol, int f
         return ANET_ERR;
     }
 
-    /* Make sure connection-intensive things like the redis benchmark
+    /* Make sure connection-intensive things like the benchmark tool
      * will be able to close/open sockets a zillion of times */
     if (flags & ANET_SOCKET_REUSEADDR && anetSetReuseAddr(err,s) == ANET_ERR) {
         close(s);

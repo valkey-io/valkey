@@ -518,8 +518,8 @@ check: test
 lcov:
 	$(MAKE) gcov
 	@(set -e; cd ..; ./runtest --clients 1)
-	@geninfo -o redis.info .
-	@genhtml --legend -o lcov-html redis.info
+	@geninfo -o valkey.info .
+	@genhtml --legend -o lcov-html valkey.info
 
 .PHONY: lcov
 

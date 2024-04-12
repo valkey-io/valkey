@@ -1789,9 +1789,9 @@ void logRegisters(ucontext_t *uc) {
 
 #endif /* HAVE_BACKTRACE */
 
-/* Return a file descriptor to write directly to the Redis log with the
+/* Return a file descriptor to write directly to the server log with the
  * write(2) syscall, that can be used in critical sections of the code
- * where the rest of Redis can't be trusted (for example during the memory
+ * where the rest of server can't be trusted (for example during the memory
  * test) or when an API call requires a raw fd.
  *
  * Close it with closeDirectLogFiledes(). */
@@ -2023,7 +2023,7 @@ void logModulesInfo(void) {
 }
 
 /* Log information about the "current" client, that is, the client that is
- * currently being served by Redis. May be NULL if Redis is not serving a
+ * currently being served by the server. May be NULL if the server is not serving a
  * client right now. */
 void logCurrentClient(client *cc, const char *title) {
     if (cc == NULL) return;
@@ -2149,7 +2149,7 @@ static void killMainThread(void) {
 
 /* Kill the running threads (other than current) in an unclean way. This function
  * should be used only when it's critical to stop the threads for some reason.
- * Currently Redis does this only on crash (for instance on SIGSEGV) in order
+ * Currently the server does this only on crash (for instance on SIGSEGV) in order
  * to perform a fast memory check without other threads messing with memory. */
 void killThreads(void) {
     killMainThread();
@@ -2382,10 +2382,10 @@ void bugReportEnd(int killViaSignal, int sig) {
     serverLogRawFromHandler(LL_WARNING|LL_RAW,
 "\n=== REDIS BUG REPORT END. Make sure to include from START to END. ===\n\n"
 "       Please report the crash by opening an issue on github:\n\n"
-"           http://github.com/redis/redis/issues\n\n"
-"  If a Redis module was involved, please open in the module's repo instead.\n\n"
-"  Suspect RAM error? Use redis-server --test-memory to verify it.\n\n"
-"  Some other issues could be detected by redis-server --check-system\n"
+"           http://github.com/valkey-io/valkey/issues\n\n"
+"  If a module was involved, please open in the module's repo instead.\n\n"
+"  Suspect RAM error? Use valkey-server --test-memory to verify it.\n\n"
+"  Some other issues could be detected by valkey-server --check-system\n"
 );
 
     /* free(messages); Don't call free() with possibly corrupted memory. */

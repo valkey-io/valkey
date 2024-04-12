@@ -29,7 +29,7 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
         .tips = "nondeterministic_output",
         .history = (RedisModuleCommandHistoryEntry[]){
             /* NOTE: All versions specified should be the module's versions, not
-             * Redis'! We use Redis versions in this example for the purpose of
+             * the server's! We use server versions in this example for the purpose of
              * testing (comparing the output with the output of the vanilla
              * XADD). */
             {"6.2.0", "Added the `NOMKSTREAM` option, `MINID` trimming strategy and the `LIMIT` option."},

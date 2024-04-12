@@ -1,4 +1,4 @@
-/* Module designed to test the Redis modules subsystem.
+/* Module designed to test the modules subsystem.
  *
  * -----------------------------------------------------------------------------
  *

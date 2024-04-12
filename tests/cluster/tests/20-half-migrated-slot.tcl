@@ -6,7 +6,7 @@
 # 5. migration is half finished on "importing" node
 
 # TODO: Test is currently disabled until it is stabilized (fixing the test
-# itself or real issues in Redis).
+# itself or real issues in the server).
 
 if {false} {
 source "../tests/includes/init-tests.tcl"

@@ -542,7 +542,7 @@ proc find_valgrind_errors {stderr on_termination} {
         return ""
     }
 
-    # Look for the absence of a leak free summary (happens when redis isn't terminated properly).
+    # Look for the absence of a leak free summary (happens when the server isn't terminated properly).
     if {(![regexp -- {definitely lost: 0 bytes} $buf] &&
          ![regexp -- {no leaks are possible} $buf])} {
         return $buf
@@ -552,7 +552,7 @@ proc find_valgrind_errors {stderr on_termination} {
 }
 
 # Execute a background process writing random data for the specified number
-# of seconds to the specified Redis instance.
+# of seconds to the specified the server instance.
 proc start_write_load {host port seconds} {
     set tclsh [info nameofexecutable]
     exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds $::tls &
@@ -588,7 +588,7 @@ proc lshuffle {list} {
 }
 
 # Execute a background process writing complex data for the specified number
-# of ops to the specified Redis instance.
+# of ops to the specified server instance.
 proc start_bg_complex_data {host port db ops} {
     set tclsh [info nameofexecutable]
     exec $tclsh tests/helpers/bg_complex_data.tcl $host $port $db $ops $::tls &
@@ -601,7 +601,7 @@ proc stop_bg_complex_data {handle} {
 
 # Write num keys with the given key prefix and value size (in bytes). If idx is
 # given, it's the index (AKA level) used with the srv procedure and it specifies
-# to which Redis instance to write the keys.
+# to which server instance to write the keys.
 proc populate {num {prefix key:} {size 3} {idx 0} {prints false} {expires 0}} {
     r $idx deferred 1
     if {$num > 16} {set pipeline 16} else {set pipeline $num}
@@ -705,11 +705,11 @@ proc generate_fuzzy_traffic_on_key {key duration} {
         # find a random command for our key type
         set cmd_idx [expr {int(rand()*[llength $cmds])}]
         set cmd [lindex $cmds $cmd_idx]
-        # get the command details from redis
+        # get the command details from the server
         if { [ catch {
             set cmd_info [lindex [r command info $cmd] 0]
         } err ] } {
-            # if we failed, it means redis crashed after the previous command
+            # if we failed, it means the server crashed after the previous command
             return $sent
         }
         # try to build a valid command argument
@@ -1022,7 +1022,7 @@ proc init_large_mem_vars {} {
     }
 }
 
-# Utility function to write big argument into redis client connection
+# Utility function to write big argument into a server client connection
 proc write_big_bulk {size {prefix ""} {skip_read no}} {
     init_large_mem_vars
 

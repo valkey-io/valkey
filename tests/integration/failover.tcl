@@ -256,7 +256,7 @@ start_server {overrides {save {}}} {
         # We pause the target long enough to send a write command
         # during the pause. This write will not be interrupted.
         pause_process [srv -1 pid]
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd SET FOO BAR
         $node_0 failover to $node_1_host $node_1_port
         resume_process [srv -1 pid]

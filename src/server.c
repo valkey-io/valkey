@@ -105,7 +105,7 @@ const char *replstateToString(int replstate);
     ((server.current_client && server.current_client->id == CLIENT_ID_AOF) ? 1 : 0)
 
 /* We use a private localtime implementation which is fork-safe. The logging
- * function of Redis may be called from other threads. */
+ * function of the server may be called from other threads. */
 void nolocks_localtime(struct tm *tmp, time_t t, time_t tz, int dst);
 
 /* Low level logging. To use only for very big messages, otherwise
@@ -201,7 +201,7 @@ err:
  * with LL_RAW flag only the msg is printed (with no new line at the end)
  *
  * We actually use this only for signals that are not fatal from the point
- * of view of Redis. Signals that are going to kill the server anyway and
+ * of view of the server. Signals that are going to kill the server anyway and
  * where we need printf-alike features are served by serverLog(). */
 void serverLogFromHandler(int level, const char *fmt, ...) {
     va_list ap;
@@ -267,7 +267,7 @@ void exitFromChild(int retcode) {
 /*====================== Hash table type implementation  ==================== */
 
 /* This is a hash table type that uses the SDS dynamic strings library as
- * keys and redis objects as values (objects can hold SDS strings,
+ * keys and Objects as values (Objects can hold SDS strings,
  * lists, sets). */
 
 void dictVanillaFree(dict *d, void *val)
@@ -423,10 +423,10 @@ uint64_t dictEncObjHash(const void *key) {
 }
 
 /* Return 1 if currently we allow dict to expand. Dict may allocate huge
- * memory to contain hash buckets when dict expands, that may lead redis
- * rejects user's requests or evicts some keys, we can stop dict to expand
+ * memory to contain hash buckets when dict expands, that may lead the server to
+ * reject user's requests or evict some keys, we can stop dict to expand
  * provisionally if used memory will be over maxmemory after dict expands,
- * but to guarantee the performance of redis, we still allow dict to expand
+ * but to guarantee the performance of the server, we still allow dict to expand
  * if dict load factor exceeds HASHTABLE_MAX_LOAD_FACTOR. */
 int dictResizeAllowed(size_t moreMem, double usedRatio) {
     /* for debug purposes: dict is not allowed to be resized. */
@@ -439,7 +439,7 @@ int dictResizeAllowed(size_t moreMem, double usedRatio) {
     }
 }
 
-/* Generic hash table type where keys are Redis Objects, Values
+/* Generic hash table type where keys are Objects, Values
  * dummy pointers. */
 dictType objectKeyPointerValueDictType = {
     dictEncObjHash,            /* hash function */
@@ -487,7 +487,7 @@ dictType zsetDictType = {
     NULL,                      /* allow to expand */
 };
 
-/* Db->dict, keys are sds strings, vals are Redis objects. */
+/* Db->dict, keys are sds strings, vals are Objects. */
 dictType dbDictType = {
     dictSdsHash,                /* hash function */
     NULL,                       /* key dup */
@@ -542,7 +542,7 @@ dictType sdsReplyDictType = {
     NULL                        /* allow to expand */
 };
 
-/* Keylist hash table type has unencoded redis objects as keys and
+/* Keylist hash table type has unencoded Objects as keys and
  * lists as values. It's used for blocking operations (BLPOP) and to
  * map swapped keys to a list of clients waiting for this keys to be loaded. */
 dictType keylistDictType = {
@@ -555,7 +555,7 @@ dictType keylistDictType = {
     NULL                        /* allow to expand */
 };
 
-/* KeyDict hash table type has unencoded redis objects as keys and
+/* KeyDict hash table type has unencoded Objects as keys and
  * dicts as values. It's used for PUBSUB command to track clients subscribing the channels. */
 dictType objToDictDictType = {
     dictObjHash,                /* hash function */
@@ -979,7 +979,7 @@ void getExpansiveClientsInfo(size_t *in_usage, size_t *out_usage) {
  * commands.
  *
  * It is very important for this function, and the functions it calls, to be
- * very fast: sometimes Redis has tens of hundreds of connected clients, and the
+ * very fast: sometimes the server has tens of hundreds of connected clients, and the
  * default server.hz value is 10, so sometimes here we need to process thousands
  * of clients per second, turning this function into a source of latency.
  */
@@ -1050,7 +1050,7 @@ void clientsCron(void) {
 }
 
 /* This function handles 'background' operations we are required to do
- * incrementally in Redis databases, such as active key expiring, resizing,
+ * incrementally in the databases, such as active key expiring, resizing,
  * rehashing. */
 void databasesCron(void) {
     /* Expire keys by random sampling. Not required for slaves
@@ -1326,7 +1326,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      *
      * Note that even if the counter wraps it's not a big problem,
      * everything will still work but some object will appear younger
-     * to Redis. However for this to happen a given object should never be
+     * to the server. However for this to happen a given object should never be
      * touched for all the time needed to the counter to wrap, which is
      * not likely.
      *
@@ -1383,7 +1383,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* We need to do a few operations on clients asynchronously. */
     clientsCron();
 
-    /* Handle background operations on Redis databases. */
+    /* Handle background operations on databases. */
     databasesCron();
 
     /* Start a scheduled AOF rewrite if this was requested by the user while
@@ -1470,7 +1470,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* Replication cron function -- used to reconnect to master,
      * detect transfer failures, start background RDB transfers and so forth. 
      * 
-     * If Redis is trying to failover then run the replication cron faster so
+     * If the server is trying to failover then run the replication cron faster so
      * progress on the handshake happens more quickly. */
     if (server.failover_state != NO_FAILOVER) {
         run_with_period(100) replicationCron();
@@ -1478,7 +1478,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         run_with_period(1000) replicationCron();
     }
 
-    /* Run the Redis Cluster cron. */
+    /* Run the Cluster cron. */
     run_with_period(100) {
         if (server.cluster_enabled) clusterCron();
     }
@@ -1617,7 +1617,7 @@ static void sendGetackToReplicas(void) {
 
 extern int ProcessingEventsWhileBlocked;
 
-/* This function gets called every time Redis is entering the
+/* This function gets called every time the server is entering the
  * main loop of the event driven library, that is, before to sleep
  * for ready file descriptors.
  *
@@ -1664,8 +1664,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* If any connection type(typical TLS) still has pending unread data don't sleep at all. */
     int dont_sleep = connTypeHasPendingData();
 
-    /* Call the Redis Cluster before sleep function. Note that this function
-     * may change the state of Redis Cluster (from ok to fail or vice versa),
+    /* Call the Cluster before sleep function. Note that this function
+     * may change the state of Cluster (from ok to fail or vice versa),
      * so it's a good idea to call it before serving the unblocked clients
      * later in this function, must be done before blockedBeforeSleep. */
     if (server.cluster_enabled) clusterBeforeSleep();
@@ -1791,7 +1791,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     aeSetDontWait(server.el, dont_sleep);
 
     /* Before we are going to sleep, let the threads access the dataset by
-     * releasing the GIL. Redis main thread will not touch anything at this
+     * releasing the GIL. The server main thread will not touch anything at this
      * time. */
     if (moduleCount()) moduleReleaseGIL();
     /********************* WARNING ********************
@@ -1800,7 +1800,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 }
 
 /* This function is called immediately after the event loop multiplexing
- * API returned, and the control is going to soon return to Redis by invoking
+ * API returned, and the control is going to soon return to the server by invoking
  * the different events callbacks. */
 void afterSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
@@ -2198,7 +2198,7 @@ int restartServer(int flags, mstime_t delay) {
     }
 
     /* Close all file descriptors, with the exception of stdin, stdout, stderr
-     * which are useful if we restart a Redis server which is not daemonized. */
+     * which are useful if we restart a server which is not daemonized. */
     for (j = 3; j < (int)server.maxclients + 1024; j++) {
         /* Test the descriptor validity before closing it, otherwise
          * Valgrind issues a warning on close(). */
@@ -2231,7 +2231,7 @@ int setOOMScoreAdj(int process_class) {
     serverAssert(process_class >= 0 && process_class < CONFIG_OOM_COUNT);
 
 #ifdef HAVE_PROC_OOM_SCORE_ADJ
-    /* The following statics are used to indicate Redis has changed the process's oom score.
+    /* The following statics are used to indicate the server has changed the process's oom score.
      * And to save the original score so we can restore it later if needed.
      * We need this so when we disabled oom-score-adj (also during configuration rollback
      * when another configuration parameter was invalid and causes a rollback after
@@ -2247,7 +2247,7 @@ int setOOMScoreAdj(int process_class) {
     if (server.oom_score_adj != OOM_SCORE_ADJ_NO) {
         if (!oom_score_adjusted_by_redis) {
             oom_score_adjusted_by_redis = 1;
-            /* Backup base value before enabling Redis control over oom score */
+            /* Backup base value before enabling the server control over oom score */
             fd = open("/proc/self/oom_score_adj", O_RDONLY);
             if (fd < 0 || read(fd, buf, sizeof(buf)) < 0) {
                 serverLog(LL_WARNING, "Unable to read oom_score_adj: %s", strerror(errno));
@@ -2449,7 +2449,7 @@ int createSocketAcceptHandler(connListener *sfd, aeFileProc *accept_handler) {
 }
 
 /* Initialize a set of file descriptors to listen to the specified 'port'
- * binding the addresses specified in the Redis server configuration.
+ * binding the addresses specified in the server configuration.
  *
  * The listening file descriptors are stored in the integer array 'fds'
  * and their number is set in '*count'. Actually @sfd should be 'listener',
@@ -2657,7 +2657,7 @@ void initServer(void) {
     }
     server.db = zmalloc(sizeof(server)*server.dbnum);
 
-    /* Create the Redis databases, and initialize other internal state. */
+    /* Create the databases, and initialize other internal state. */
     int slot_count_bits = 0;
     int flags = KVSTORE_ALLOCATE_DICTS_ON_DEMAND;
     if (server.cluster_enabled) {
@@ -2768,7 +2768,7 @@ void initServer(void) {
     /* 32 bit instances are limited to 4GB of address space, so if there is
      * no explicit limit in the user provided configuration we set a limit
      * at 3 GB using maxmemory with 'noeviction' policy'. This avoids
-     * useless crashes of the Redis instance for out of memory. */
+     * useless crashes of the instance for out of memory. */
     if (server.arch_bits == 32 && server.maxmemory == 0) {
         serverLog(LL_WARNING,"Warning: 32 bit instance detected but no memory limit set. Setting 3 GB maxmemory limit with 'noeviction' policy now.");
         server.maxmemory = 3072LL*(1024*1024); /* 3 GB */
@@ -2893,7 +2893,7 @@ void InitServerLast(void) {
  * 3. The order of the range specs must be ascending (i.e.
  *    lastkey of spec[i] == firstkey-1 of spec[i+1]).
  *
- * This function will succeed on all native Redis commands and may
+ * This function will succeed on all native commands and may
  * fail on module commands, even if it only has "range" specs that
  * could actually be "glued", in the following cases:
  * 1. The order of "range" specs is not ascending (e.g. the spec for
@@ -2910,7 +2910,7 @@ void populateCommandLegacyRangeSpec(struct serverCommand *c) {
     memset(&c->legacy_range_key_spec, 0, sizeof(c->legacy_range_key_spec));
 
     /* Set the movablekeys flag if we have a GETKEYS flag for modules.
-     * Note that for native redis commands, we always have keyspecs,
+     * Note that for native commands, we always have keyspecs,
      * with enough information to rely on for movablekeys. */
     if (c->flags & CMD_MODULE_GETKEYS)
         c->flags |= CMD_MOVABLE_KEYS;
@@ -3062,7 +3062,7 @@ int populateCommandStructure(struct serverCommand *c) {
 
 extern struct serverCommand serverCommandTable[];
 
-/* Populates the Redis Command Table dict from the static table in commands.c
+/* Populates the Command Table dict from the static table in commands.c
  * which is auto generated from the json files in the commands folder. */
 void populateCommandTable(void) {
     int j;
@@ -3115,7 +3115,7 @@ void resetErrorTableStats(void) {
     server.errors_enabled = 1;
 }
 
-/* ========================== Redis OP Array API ============================ */
+/* ========================== OP Array API ============================ */
 
 int serverOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int target) {
     serverOp *op;
@@ -3303,8 +3303,8 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
  * after the current command is propagated to AOF / Replication.
  *
  * dbid is the database ID the command should be propagated into.
- * Arguments of the command to propagate are passed as an array of redis
- * objects pointers of len 'argc', using the 'argv' vector.
+ * Arguments of the command to propagate are passed as an array of
+ * Objects pointers of len 'argc', using the 'argv' vector.
  *
  * The function does not take a reference to the passed 'argv' vector,
  * so it is up to the caller to release the passed argv (but it is usually
@@ -3326,7 +3326,7 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target) {
 }
 
 /* It is possible to call the function forceCommandPropagation() inside a
- * Redis command implementation in order to to force the propagation of a
+ * command implementation in order to to force the propagation of a
  * specific command execution into AOF / Replication. */
 void forceCommandPropagation(client *c, int flags) {
     serverAssert(c->cmd->flags & (CMD_WRITE | CMD_MAY_REPLICATE));
@@ -3424,7 +3424,7 @@ static void propagatePendingCommands(void) {
 
 /* Performs operations that should be performed after an execution unit ends.
  * Execution unit is a code that should be done atomically.
- * Execution units can be nested and are not necessarily starts with Redis command.
+ * Execution units can be nested and do not necessarily start with a server command.
  *
  * For example the following is a logical unit:
  *   active expire ->
@@ -3478,7 +3478,7 @@ int incrCommandStatsOnError(struct serverCommand *cmd, int flags) {
     return res;
 }
 
-/* Call() is the core of Redis execution of a command.
+/* Call() is the core of the server's execution of a command.
  *
  * The following flags can be passed:
  * CMD_CALL_NONE        No flags.
@@ -3534,7 +3534,7 @@ void call(client *c, int flags) {
      * demand, and initialize the array for additional commands propagation. */
     c->flags &= ~(CLIENT_FORCE_AOF|CLIENT_FORCE_REPL|CLIENT_PREVENT_PROP);
 
-    /* Redis core is in charge of propagation when the first entry point
+    /* The server core is in charge of propagation when the first entry point
      * of call() is processCommand().
      * The only other option to get to call() without having processCommand
      * as an entry point is if a module triggers RM_Call outside of call()
@@ -4432,7 +4432,7 @@ int finishShutdown(void) {
          * doing it's cleanup, but in this case this code will not be reached,
          * so we need to call rdbRemoveTempFile which will close fd(in order
          * to unlink file actually) in background thread.
-         * The temp rdb file fd may won't be closed when redis exits quickly,
+         * The temp rdb file fd may won't be closed when the server exits quickly,
          * but OS will close this fd when process exits. */
         rdbRemoveTempFile(server.child_pid, 0);
     }
@@ -4484,7 +4484,7 @@ int finishShutdown(void) {
         if (rdbSave(SLAVE_REQ_NONE,server.rdb_filename,rsiptr,RDBFLAGS_KEEP_CACHE) != C_OK) {
             /* Ooops.. error saving! The best we can do is to continue
              * operating. Note that if there was a background saving process,
-             * in the next cron() Redis will be notified that the background
+             * in the next cron() the server will be notified that the background
              * saving aborted, handling special stuff like slaves pending for
              * synchronization... */
             if (force) {
@@ -4537,8 +4537,8 @@ error:
 
 /*================================== Commands =============================== */
 
-/* Sometimes Redis cannot accept write commands because there is a persistence
- * error with the RDB or AOF file, and Redis is configured in order to stop
+/* Sometimes the server cannot accept write commands because there is a persistence
+ * error with the RDB or AOF file, and the server is configured in order to stop
  * accepting writes in such situation. This function returns if such a
  * condition is active, and the type of the condition.
  *
@@ -4952,7 +4952,7 @@ void addReplyCommandSubCommands(client *c, struct serverCommand *cmd, void (*rep
     dictReleaseIterator(di);
 }
 
-/* Output the representation of a Redis command. Used by the COMMAND command and COMMAND INFO. */
+/* Output the representation of a server command. Used by the COMMAND command and COMMAND INFO. */
 void addReplyCommandInfo(client *c, struct serverCommand *cmd) {
     if (!cmd) {
         addReplyNull(c);
@@ -4980,7 +4980,7 @@ void addReplyCommandInfo(client *c, struct serverCommand *cmd) {
     }
 }
 
-/* Output the representation of a Redis command. Used by the COMMAND DOCS. */
+/* Output the representation of a server command. Used by the COMMAND DOCS. */
 void addReplyCommandDocs(client *c, struct serverCommand *cmd) {
     /* Count our reply len so we don't have to use deferred reply. */
     long maplen = 1;
@@ -6253,7 +6253,7 @@ void daemonize(void) {
     if (fork() != 0) exit(0); /* parent exits */
     setsid(); /* create a new session */
 
-    /* Every output goes to /dev/null. If Redis is daemonized but
+    /* Every output goes to /dev/null. If the server is daemonized but
      * the 'logfile' is set to 'stdout' in the configuration file
      * it will not log at all. */
     if ((fd = open("/dev/null", O_RDWR, 0)) != -1) {
@@ -6698,7 +6698,7 @@ void loadDataFromDisk(void) {
 void serverOutOfMemoryHandler(size_t allocation_size) {
     serverLog(LL_WARNING,"Out Of Memory allocating %zu bytes!",
         allocation_size);
-    serverPanic("Redis aborting for OUT OF MEMORY. Allocating %zu bytes!",
+    serverPanic("Valkey aborting for OUT OF MEMORY. Allocating %zu bytes!",
         allocation_size);
 }
 
@@ -6811,10 +6811,10 @@ static int serverSupervisedUpstart(void) {
 static int serverSupervisedSystemd(void) {
 #ifndef HAVE_LIBSYSTEMD
     serverLog(LL_WARNING,
-            "systemd supervision requested or auto-detected, but Redis is compiled without libsystemd support!");
+            "systemd supervision requested or auto-detected, but Valkey is compiled without libsystemd support!");
     return 0;
 #else
-    if (serverCommunicateSystemd("STATUS=Redis is loading...\n") <= 0)
+    if (serverCommunicateSystemd("STATUS=Valkey is loading...\n") <= 0)
         return 0;
     serverLog(LL_NOTICE,
         "Supervised by systemd. Please make sure you set appropriate values for TimeoutStartSec and TimeoutStopSec in your service unit.");
@@ -6994,8 +6994,8 @@ int main(int argc, char **argv) {
         initSentinel();
     }
 
-    /* Check if we need to start in redis-check-rdb/aof mode. We just execute
-     * the program main. However the program is part of the Redis executable
+    /* Check if we need to start in valkey-check-rdb/aof mode. We just execute
+     * the program main. However the program is part of the server executable
      * so that we can easily execute an RDB check on loading errors. */
     if (strstr(exec_name,"valkey-check-rdb") != NULL)
         redis_check_rdb_main(argc,argv,NULL);
@@ -7151,7 +7151,7 @@ int main(int argc, char **argv) {
             serverLog(LL_WARNING, "Failed to test the kernel for a bug that could lead to data corruption during background save. "
                                   "Your system could be affected, please report this error.");
         if (!checkIgnoreWarning("ARM64-COW-BUG")) {
-            serverLog(LL_WARNING,"Redis will now exit to prevent data corruption. "
+            serverLog(LL_WARNING,"Valkey will now exit to prevent data corruption. "
                                  "Note that it is possible to suppress this warning by setting the following config: ignore-warnings ARM64-COW-BUG");
             exit(1);
         }

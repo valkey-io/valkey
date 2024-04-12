@@ -525,7 +525,7 @@ list *callReplyDeferredErrorList(CallReply *rep) {
  * callReplyGetPrivateData().
  *
  * NOTE: The parser used for parsing the reply and producing CallReply is
- * designed to handle valid replies created by Redis itself. IT IS NOT
+ * designed to handle valid replies created by the server itself. IT IS NOT
  * DESIGNED TO HANDLE USER INPUT and using it to parse invalid replies is
  * unsafe.
  */

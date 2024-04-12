@@ -16,7 +16,7 @@ static volatile int g_slow_bg_operation = 0;
 static volatile int g_is_in_slow_bg_operation = 0;
 
 void *sub_worker(void *arg) {
-    // Get Redis module context
+    // Get module context
     RedisModuleCtx *ctx = (RedisModuleCtx *)arg;
 
     // Try acquiring GIL
@@ -32,7 +32,7 @@ void *worker(void *arg) {
     // Retrieve blocked client
     RedisModuleBlockedClient *bc = (RedisModuleBlockedClient *)arg;
 
-    // Get Redis module context
+    // Get module context
     RedisModuleCtx *ctx = RedisModule_GetThreadSafeContext(bc);
 
     // Acquire GIL
@@ -55,7 +55,7 @@ void *worker(void *arg) {
     // Unblock client
     RedisModule_UnblockClient(bc, NULL);
 
-    // Free the Redis module context
+    // Free the module context
     RedisModule_FreeThreadSafeContext(ctx);
 
     return NULL;
@@ -104,7 +104,7 @@ void *bg_call_worker(void *arg) {
     bg_call_data *bg = arg;
     RedisModuleBlockedClient *bc = bg->bc;
 
-    // Get Redis module context
+    // Get module context
     RedisModuleCtx *ctx = RedisModule_GetThreadSafeContext(bg->bc);
 
     // Acquire GIL
@@ -156,7 +156,7 @@ void *bg_call_worker(void *arg) {
     // Unblock client
     RedisModule_UnblockClient(bc, NULL);
 
-    // Free the Redis module context
+    // Free the module context
     RedisModule_FreeThreadSafeContext(ctx);
 
     return NULL;
@@ -616,7 +616,7 @@ static void timer_callback(RedisModuleCtx *ctx, void *data)
 
     RedisModuleBlockedClient *bc = data;
 
-    // Get Redis module context
+    // Get module context
     RedisModuleCtx *reply_ctx = RedisModule_GetThreadSafeContext(bc);
 
     // Reply to client
@@ -625,7 +625,7 @@ static void timer_callback(RedisModuleCtx *ctx, void *data)
     // Unblock client
     RedisModule_UnblockClient(bc, NULL);
 
-    // Free the Redis module context
+    // Free the module context
     RedisModule_FreeThreadSafeContext(reply_ctx);
 }
 

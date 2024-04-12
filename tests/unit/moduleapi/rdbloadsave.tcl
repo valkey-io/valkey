@@ -32,12 +32,12 @@ start_server {tags {"modules"}} {
         assert_equal [r dbsize] 0
 
         # Send commands with pipeline. First command will call RM_RdbLoad() in
-        # the command callback. While loading RDB, Redis can go to networking to
+        # the command callback. While loading RDB, the server can go to networking to
         # reply -LOADING. By sending commands in pipeline, we verify it doesn't
         # cause a problem.
-        # e.g. Redis won't try to process next message of the current client
+        # e.g. the server won't try to process next message of the current client
         # while it is in the command callback for that client   .
-        set rd1 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
         $rd1 test.rdbload blabla.rdb
 
         wait_for_condition 50 100 {

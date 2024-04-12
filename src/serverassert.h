@@ -1,8 +1,8 @@
 /* serverassert.h -- Drop in replacements assert.h that prints the stack trace
- *                  in the Redis logs.
+ *                  in the server logs.
  *
  * This file should be included instead of "assert.h" inside libraries used by
- * Redis that are using assertions, so instead of Redis disappearing with
+ * the server that are using assertions, so instead of the server disappearing with
  * SIGABORT, we get the details and stack trace inside the log file.
  *
  * ----------------------------------------------------------------------------

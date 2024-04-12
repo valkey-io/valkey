@@ -109,7 +109,7 @@ start_server {config "minimal.conf" tags {"external:skip"}} {
         assert_equal "" [lindex [r CONFIG GET bind] 1]
 
         # No additional clients can connect
-        catch {redis_client} err
+        catch {valkey_client} err
         assert_match {*connection refused*} $err
 
         # CONFIG REWRITE handles empty bindaddr

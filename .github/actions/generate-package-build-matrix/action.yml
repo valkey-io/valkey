@@ -1,0 +1,55 @@
+name: Composite action to generate the matrix of targets to build packages for.
+description: Remove any duplication of this information so we only have to update in one place.
+
+inputs:
+  ref:
+    description: The commit, tag or branch of Valkey to checkout for building we then use to determine version for.
+    required: true
+outputs:
+  x86_64-build-matrix:
+    description: The x86_64 build matrix.
+    value: ${{ steps.set-matrix.outputs.x86matrix }}
+  arm64-build-matrix:
+    description: The arm64 build matrix.
+    value: ${{ steps.set-matrix.outputs.armmatrix }}
+  macos-build-matrix:
+        description: The macos build matrix.
+        value: ${{ steps.set-matrix.outputs.macosmatrix }}
+
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout code for version check
+      uses: actions/checkout@v3
+      with:
+        ref: ${{ inputs.ref }}
+        path: version-check
+
+    - name: Get targets
+      run: |
+       x86_arch=$(jq -c '[.linux_targets[] | select(.arch=="x86_64")]' utils/releasetools/build-config.json)
+       x86_matrix=$(echo "{ \"distro\" : $x86_arch }" | jq -c .)
+       echo "X86_MATRIX=$x86_matrix" >> $GITHUB_ENV
+
+       arm_arch=$(jq -c '[.linux_targets[] | select(.arch=="arm64")]' utils/releasetools/build-config.json)
+       arm_matrix=$(echo "{ \"distro\" : $arm_arch }" | jq -c .)
+       echo "ARM_MATRIX=$arm_matrix" >> $GITHUB_ENV
+
+       macos_arch=$(jq -c '[.macos_targets[] | select(.arch=="x86_64")]' utils/releasetools/build-config.json)
+       macos_matrix=$(echo "{ \"distro\" : $macos_arch }" | jq -c .)
+       echo "MACOS_MATRIX=$macos_matrix" >> $GITHUB_ENV
+      shell: bash
+
+    - id: set-matrix
+      run: |
+        echo $X86_MATRIX
+        echo $X86_MATRIX| jq .
+        echo "x86matrix=$X86_MATRIX" >> $GITHUB_OUTPUT
+        echo $ARM_MATRIX
+        echo $ARM_MATRIX| jq .
+        echo "armmatrix=$ARM_MATRIX" >> $GITHUB_OUTPUT
+        echo $MACOS_MATRIX
+        echo $MACOS_MATRIX| jq .
+        echo "macosmatrix=$MACOS_MATRIX" >> $GITHUB_OUTPUT
+      shell: bash

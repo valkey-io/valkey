@@ -198,10 +198,12 @@ proc cluster_config_consistent {} {
         }
 
         if {$j == 0} {
-            set base_cfg [R $j cluster slots]
+            set base_slots_cfg [R $j cluster slots]
+            set base_shards_cfg [R $j CLUSTER SHARDS TOPOLOGY]
         } else {
-            set cfg [R $j cluster slots]
-            if {$cfg != $base_cfg} {
+            set slots_cfg [R $j cluster slots]
+            set shards_cfg [R $j CLUSTER SHARDS TOPOLOGY]
+            if {$slots_cfg != $base_slots_cfg || $shards_cfg != $base_shards_cfg} {
                 return 0
             }
         }

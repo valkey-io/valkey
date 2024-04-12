@@ -849,10 +849,20 @@ void clusterCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "slots") && c->argc == 2) {
         /* CLUSTER SLOTS */
         clusterCommandSlots(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "shards") && c->argc == 2) {
-        /* CLUSTER SHARDS */
-        clusterCommandShards(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "info") && c->argc == 2) {
+    } else if (!strcasecmp(c->argv[1]->ptr,"shards") &&
+                (c->argc == 2 || c->argc == 3))
+    {
+        /* CLUSTER SHARDS [TOPOLOGY] */
+        int topology = 1;
+        if (c->argc == 3 && (strcasecmp(c->argv[2]->ptr,"topology"))) {
+            addReplyErrorObject(c,shared.syntaxerr);
+            return;
+        } else if (c->argc == 2) {
+            topology = 0;
+        }
+
+        clusterCommandShards(c, topology);
+    } else if (!strcasecmp(c->argv[1]->ptr,"info") && c->argc == 2) {
         /* CLUSTER INFO */
 
         sds info = genClusterInfoString();

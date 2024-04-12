@@ -4,15 +4,20 @@
         "complexity": "O(N) where N is the total number of cluster nodes",
         "group": "cluster",
         "since": "7.0.0",
-        "arity": 2,
+        "arity": -2,
         "container": "CLUSTER",
         "function": "clusterCommand",
         "command_flags": [
             "LOADING",
             "STALE"
         ],
-        "command_tips": [
-            "NONDETERMINISTIC_OUTPUT"
+        "arguments":[
+            {
+                "name": "topology",
+                "type": "pure-token",
+                "token": "TOPOLOGY",
+                "optional": true
+            }
         ],
         "reply_schema": {
             "description": "A nested list of a map of hash ranges and shard nodes describing individual shards.",
@@ -64,7 +69,8 @@
                                     ]
                                 },
                                 "replication-offset": {
-                                    "type": "integer"
+                                    "type": "integer",
+                                    "optional": true
                                 },
                                 "health": {
                                     "oneOf": [
@@ -77,7 +83,8 @@
                                         {
                                             "const": "online"
                                         }
-                                    ]
+                                    ],
+                                    "optional": true
                                 }
                             }
                         }

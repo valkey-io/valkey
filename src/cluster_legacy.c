@@ -308,8 +308,8 @@ typedef struct {
 } clusterMsgSendBlock;
 
 /* Special values for server.cluster->moved_slot_since_sleep */
-#define CLUSTER_MOVED_SLOT_NONE     -1
-#define CLUSTER_MOVED_SLOT_MULTIPLE -2
+#define CLUSTER_MOVED_SLOT_NONE     -2
+#define CLUSTER_MOVED_SLOT_MULTIPLE -3
 
 /* -----------------------------------------------------------------------------
  * Initialization

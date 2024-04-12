@@ -6,6 +6,9 @@ on:
   schedule:
     - cron: '0 0 * * *'
 
+permissions:
+  contents: read
+
 jobs:
   test-external-standalone:
     runs-on: ubuntu-latest
@@ -29,7 +32,7 @@ jobs:
       if: ${{ failure() }}
       uses: actions/upload-artifact@v3
       with:
-        name: test-external-server-log
+        name: test-external-standalone-log
         path: external-server.log
 
   test-external-cluster:
@@ -81,5 +84,5 @@ jobs:
         if: ${{ failure() }}
         uses: actions/upload-artifact@v3
         with:
-          name: test-external-server-log
+          name: test-external-nodebug-log
           path: external-server.log

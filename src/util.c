@@ -501,7 +501,7 @@ int string2ll(const char *s, size_t slen, long long *value) {
 
 /* Helper function to convert a string to an unsigned long long value.
  * The function attempts to use the faster string2ll() function inside
- * Redis: if it fails, strtoull() is used instead. The function returns
+ * Valkey: if it fails, strtoull() is used instead. The function returns
  * 1 if the conversion happened successfully or 0 if the number is
  * invalid or out of range. */
 int string2ull(const char *s, unsigned long long *value) {

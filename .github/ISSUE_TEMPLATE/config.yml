@@ -1,0 +1,14 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions?
+    url: https://github.com/valkey-io/valkey/discussions
+    about: Please ask and answer questions here.
+  - name: Chat with us?
+    url: https://discord.gg/zbcPa5umUB
+    about: Welcome to our Discord!
+  - name: Documentation issue?
+    url: https://github.com/valkey-io/valkey-doc/issues
+    about: Report it on the valkey-doc repo.
+  - name: Report a vulnerability
+    url: https://github.com/valkey-io/valkey/blob/unstable/SECURITY.md
+    about: See SECURITY.md

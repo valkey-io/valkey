@@ -9,6 +9,3 @@ contact_links:
   - name: Documentation issue?
     url: https://github.com/valkey-io/valkey-doc/issues
     about: Report it on the valkey-doc repo.
-  - name: Report a vulnerability
-    url: https://github.com/valkey-io/valkey/blob/unstable/SECURITY.md
-    about: See SECURITY.md

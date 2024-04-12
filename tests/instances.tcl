@@ -1,6 +1,6 @@
 # Multi-instance test framework.
-# This is used in order to test Sentinel and Redis Cluster, and provides
-# basic capabilities for spawning and handling N parallel Redis / Sentinel
+# This is used in order to test Sentinel and Cluster, and provides
+# basic capabilities for spawning and handling N parallel Server / Sentinel
 # instances.
 #
 # Copyright (C) 2014 Salvatore Sanfilippo antirez@gmail.com
@@ -64,7 +64,7 @@ proc exec_instance {type dirname cfgfile} {
     return $pid
 }
 
-# Spawn a redis or sentinel instance, depending on 'type'.
+# Spawn a server or sentinel instance, depending on 'type'.
 proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
     for {set j 0} {$j < $count} {incr j} {
         set port [find_available_port $base_port $::redis_port_count]
@@ -87,7 +87,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
 
         if {$::tls} {
             if {$::tls_module} {
-                puts $cfg [format "loadmodule %s/../../../src/redis-tls.so" [pwd]]
+                puts $cfg [format "loadmodule %s/../../../src/valkey-tls.so" [pwd]]
             }
 
             puts $cfg "tls-port $port"
@@ -100,7 +100,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
             puts $cfg [format "tls-key-file %s/../../tls/server.key" [pwd]]
             puts $cfg [format "tls-client-cert-file %s/../../tls/client.crt" [pwd]]
             puts $cfg [format "tls-client-key-file %s/../../tls/client.key" [pwd]]
-            puts $cfg [format "tls-dh-params-file %s/../../tls/redis.dh" [pwd]]
+            puts $cfg [format "tls-dh-params-file %s/../../tls/valkey.dh" [pwd]]
             puts $cfg [format "tls-ca-cert-file %s/../../tls/ca.crt" [pwd]]
         } else {
             puts $cfg "port $port"
@@ -526,14 +526,14 @@ proc S {n args} {
     [dict get $s link] {*}$args
 }
 
-# Returns a Redis instance by index.
+# Returns a server instance by index.
 # Example:
 #     [Rn 0] info
 proc Rn {n} {
     return [dict get [lindex $::redis_instances $n] link]
 }
 
-# Like R but to chat with Redis instances.
+# Like R but to chat with server instances.
 proc R {n args} {
     [Rn $n] {*}$args
 }
@@ -566,7 +566,7 @@ proc RPort {n} {
     }
 }
 
-# Iterate over IDs of sentinel or redis instances.
+# Iterate over IDs of sentinel or server instances.
 proc foreach_instance_id {instances idvar code} {
     upvar 1 $idvar id
     for {set id 0} {$id < [llength $instances]} {incr id} {
@@ -717,26 +717,26 @@ proc restart_instance {type id} {
     }
 }
 
-proc redis_deferring_client {type id} {
+proc valkey_deferring_client {type id} {
     set port [get_instance_attrib $type $id port]
     set host [get_instance_attrib $type $id host]
     set client [redis $host $port 1 $::tls]
     return $client
 }
 
-proc redis_deferring_client_by_addr {host port} {
+proc valkey_deferring_client_by_addr {host port} {
     set client [redis $host $port 1 $::tls]
     return $client
 }
 
-proc redis_client {type id} {
+proc valkey_client {type id} {
     set port [get_instance_attrib $type $id port]
     set host [get_instance_attrib $type $id host]
     set client [redis $host $port 0 $::tls]
     return $client
 }
 
-proc redis_client_by_addr {host port} {
+proc valkey_client_by_addr {host port} {
     set client [redis $host $port 0 $::tls]
     return $client
 }

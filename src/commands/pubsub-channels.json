@@ -20,7 +20,7 @@
             }
         ],
         "reply_schema": {
-            "description": "a list of active channels, optionally matching the specified pattern",
+            "description": "A list of active channels, optionally matching the specified pattern.",
             "type": "array",
             "uniqueItems": true,
             "items": {

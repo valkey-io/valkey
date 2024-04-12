@@ -28,8 +28,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __REDIS_CONNHELPERS_H
-#define __REDIS_CONNHELPERS_H
+#ifndef VALKEY_CONNHELPERS_H
+#define VALKEY_CONNHELPERS_H
 
 #include "connection.h"
 
@@ -85,4 +85,4 @@ static inline int callHandler(connection *conn, ConnectionCallbackFunc handler) 
     return 1;
 }
 
-#endif  /* __REDIS_CONNHELPERS_H */
+#endif  /* VALKEY_CONNHELPERS_H */

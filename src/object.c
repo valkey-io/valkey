@@ -1,4 +1,4 @@
-/* Redis Object implementation.
+/* Object implementation.
  *
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
@@ -173,7 +173,7 @@ robj *createStringObjectFromLongLong(long long value) {
 
 /* The function avoids returning a shared integer when LFU/LRU info
  * are needed, that is, when the object is used as a value in the key
- * space(for instance when the INCR command is used), and Redis is
+ * space(for instance when the INCR command is used), and the server is
  * configured to evict based on LFU/LRU, so we want LFU/LRU values
  * specific for each key. */
 robj *createStringObjectFromLongLongForValue(long long value) {
@@ -649,7 +649,7 @@ robj *tryObjectEncodingEx(robj *o, int try_trim) {
     if (!sdsEncodedObject(o)) return o;
 
     /* It's not safe to encode shared objects: shared objects can be shared
-     * everywhere in the "object space" of Redis and may end in places where
+     * everywhere in the "object space" of the server and may end in places where
      * they are not handled. We handle them only as values in the keyspace. */
      if (o->refcount > 1) return o;
 
@@ -1161,20 +1161,20 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
 }
 
 /* Release data obtained with getMemoryOverheadData(). */
-void freeMemoryOverheadData(struct redisMemOverhead *mh) {
+void freeMemoryOverheadData(struct serverMemOverhead *mh) {
     zfree(mh->db);
     zfree(mh);
 }
 
-/* Return a struct redisMemOverhead filled with memory overhead
+/* Return a struct serverMemOverhead filled with memory overhead
  * information used for the MEMORY OVERHEAD and INFO command. The returned
  * structure pointer should be freed calling freeMemoryOverheadData(). */
-struct redisMemOverhead *getMemoryOverheadData(void) {
+struct serverMemOverhead *getMemoryOverheadData(void) {
     int j;
     size_t mem_total = 0;
     size_t mem = 0;
     size_t zmalloc_used = zmalloc_used_memory();
-    struct redisMemOverhead *mh = zcalloc(sizeof(*mh));
+    struct serverMemOverhead *mh = zcalloc(sizeof(*mh));
 
     mh->total_allocated = zmalloc_used;
     mh->startup_allocated = server.initial_memory_usage;
@@ -1245,7 +1245,7 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
     mem_total+=mh->functions_caches;
 
     for (j = 0; j < server.dbnum; j++) {
-        redisDb *db = server.db+j;
+        serverDb *db = server.db+j;
         if (!kvstoreNumAllocatedDicts(db->keys)) continue;
 
         unsigned long long keyscount = kvstoreSize(db->keys);
@@ -1296,7 +1296,7 @@ void inputCatSds(void *result, const char *str) {
     *info = sdscat(*info, str);
 }
 
-/* This implements MEMORY DOCTOR. An human readable analysis of the Redis
+/* This implements MEMORY DOCTOR. An human readable analysis of the server
  * memory condition. */
 sds getMemoryDoctorReport(void) {
     int empty = 0;          /* Instance is empty or almost empty. */
@@ -1309,7 +1309,7 @@ sds getMemoryDoctorReport(void) {
     int big_client_buf = 0; /* Client buffers are too big. */
     int many_scripts = 0;   /* Script cache has too many scripts. */
     int num_reports = 0;
-    struct redisMemOverhead *mh = getMemoryOverheadData();
+    struct serverMemOverhead *mh = getMemoryOverheadData();
 
     if (mh->total_allocated < (1024*1024*5)) {
         empty = 1;
@@ -1425,7 +1425,7 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
         }
     } else if (lru_idle >= 0) {
         /* Provided LRU idle time is in seconds. Scale
-         * according to the LRU clock resolution this Redis
+         * according to the LRU clock resolution this
          * instance was compiled with (normally 1000 ms, so the
          * below statement will expand to lru_idle*1000/1000. */
         lru_idle = lru_idle*lru_multiplier/LRU_CLOCK_RESOLUTION;
@@ -1457,7 +1457,7 @@ robj *objectCommandLookupOrReply(client *c, robj *key, robj *reply) {
     return o;
 }
 
-/* Object command allows to inspect the internals of a Redis Object.
+/* Object command allows to inspect the internals of an Object.
  * Usage: OBJECT <refcount|encoding|idletime|freq> <key> */
 void objectCommand(client *c) {
     robj *o;
@@ -1513,7 +1513,7 @@ NULL
 }
 
 /* The memory command will eventually be a complete interface for the
- * memory introspection capabilities of Redis.
+ * memory introspection capabilities of the server.
  *
  * Usage: MEMORY usage <key> */
 void memoryCommand(client *c) {
@@ -1562,7 +1562,7 @@ NULL
         usage += dictEntryMemUsage();
         addReplyLongLong(c,usage);
     } else if (!strcasecmp(c->argv[1]->ptr,"stats") && c->argc == 2) {
-        struct redisMemOverhead *mh = getMemoryOverheadData();
+        struct serverMemOverhead *mh = getMemoryOverheadData();
 
         addReplyMapLen(c,31+mh->num_dbs);
 

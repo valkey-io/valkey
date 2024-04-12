@@ -45,12 +45,12 @@
 
 #include "dict.h"
 #include "zmalloc.h"
-#include "redisassert.h"
+#include "serverassert.h"
 #include "monotonic.h"
 
 /* Using dictSetResizeEnabled() we make possible to disable
  * resizing and rehashing of the hash table as needed. This is very important
- * for Redis, as we use copy-on-write and don't want to move too much memory
+ * for us, as we use copy-on-write and don't want to move too much memory
  * around when there is a child performing saving operations.
  *
  * Note that even when dict_can_resize is set to DICT_RESIZE_AVOID, not all
@@ -1755,7 +1755,7 @@ void dictGetStats(char *buf, size_t bufsize, dict *d, int full) {
 
 /* ------------------------------- Benchmark ---------------------------------*/
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include "testhelp.h"
 
 #define UNUSED(V) ((void) V)

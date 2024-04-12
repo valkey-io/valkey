@@ -1,4 +1,4 @@
-/* Redis benchmark utility.
+/* Server benchmark utility.
  *
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
@@ -76,7 +76,7 @@
 
 struct benchmarkThread;
 struct clusterNode;
-struct redisConfig;
+struct serverConfig;
 
 static struct config {
     aeEventLoop *el;
@@ -85,11 +85,11 @@ static struct config {
     int tls;
     struct cliSSLconfig sslconfig;
     int numclients;
-    redisAtomic int liveclients;
+    serverAtomic int liveclients;
     int requests;
-    redisAtomic int requests_issued;
-    redisAtomic int requests_finished;
-    redisAtomic int previous_requests_finished;
+    serverAtomic int requests_issued;
+    serverAtomic int requests_finished;
+    serverAtomic int previous_requests_finished;
     int last_printed_bytes;
     long long previous_tick;
     int keysize;
@@ -115,12 +115,12 @@ static struct config {
     int cluster_mode;
     int cluster_node_count;
     struct clusterNode **cluster_nodes;
-    struct redisConfig *redis_config;
+    struct serverConfig *redis_config;
     struct hdr_histogram* latency_histogram;
     struct hdr_histogram* current_sec_latency_histogram;
-    redisAtomic int is_fetching_slots;
-    redisAtomic int is_updating_slots;
-    redisAtomic int slots_last_update;
+    serverAtomic int is_fetching_slots;
+    serverAtomic int is_updating_slots;
+    serverAtomic int slots_last_update;
     int enable_tracking;
     pthread_mutex_t liveclients_mutex;
     pthread_mutex_t is_updating_slots_mutex;
@@ -175,13 +175,13 @@ typedef struct clusterNode {
                      * strings are the source node IDs. */
     int migrating_count; /* Length of the migrating array (migrating slots*2) */
     int importing_count; /* Length of the importing array (importing slots*2) */
-    struct redisConfig *redis_config;
+    struct serverConfig *redis_config;
 } clusterNode;
 
-typedef struct redisConfig {
+typedef struct serverConfig {
     sds save;
     sds appendonly;
-} redisConfig;
+} serverConfig;
 
 /* Prototypes */
 static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask);
@@ -191,11 +191,11 @@ static void freeBenchmarkThread(benchmarkThread *thread);
 static void freeBenchmarkThreads(void);
 static void *execBenchmarkThread(void *ptr);
 static clusterNode *createClusterNode(char *ip, int port);
-static redisConfig *getRedisConfig(const char *ip, int port,
+static serverConfig *getServerConfig(const char *ip, int port,
                                    const char *hostsocket);
 static redisContext *getRedisContext(const char *ip, int port,
                                      const char *hostsocket);
-static void freeRedisConfig(redisConfig *cfg);
+static void freeServerConfig(serverConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
 int showThroughput(struct aeEventLoop *eventLoop, long long id,
@@ -292,16 +292,16 @@ cleanup:
 
 
 
-static redisConfig *getRedisConfig(const char *ip, int port,
+static serverConfig *getServerConfig(const char *ip, int port,
                                    const char *hostsocket)
 {
-    redisConfig *cfg = zcalloc(sizeof(*cfg));
+    serverConfig *cfg = zcalloc(sizeof(*cfg));
     if (!cfg) return NULL;
     redisContext *c = NULL;
     redisReply *reply = NULL, *sub_reply = NULL;
     c = getRedisContext(ip, port, hostsocket);
     if (c == NULL) {
-        freeRedisConfig(cfg);
+        freeServerConfig(cfg);
         exit(1);
     }
     redisAppendCommand(c, "CONFIG GET %s", "save");
@@ -340,11 +340,11 @@ fail:
     }
     freeReplyObject(reply);
     redisFree(c);
-    freeRedisConfig(cfg);
+    freeServerConfig(cfg);
     if (abort_test) exit(1);
     return NULL;
 }
-static void freeRedisConfig(redisConfig *cfg) {
+static void freeServerConfig(serverConfig *cfg) {
     if (cfg->save) sdsfree(cfg->save);
     if (cfg->appendonly) sdsfree(cfg->appendonly);
     zfree(cfg);
@@ -870,7 +870,7 @@ static void showLatencyReport(void) {
             int m ;
             for (m = 0; m < config.cluster_node_count; m++) {
                 clusterNode *node =  config.cluster_nodes[m];
-                redisConfig *cfg = node->redis_config;
+                serverConfig *cfg = node->redis_config;
                 if (cfg == NULL) continue;
                 printf("  node [%d] configuration:\n",m );
                 printf("    save: %s\n",
@@ -1071,7 +1071,7 @@ static void freeClusterNode(clusterNode *node) {
      * config.conn_info.hostip and config.conn_info.hostport, then the node ip has been
      * allocated by fetchClusterConfiguration, so it must be freed. */
     if (node->ip && strcmp(node->ip, config.conn_info.hostip) != 0) sdsfree(node->ip);
-    if (node->redis_config != NULL) freeRedisConfig(node->redis_config);
+    if (node->redis_config != NULL) freeServerConfig(node->redis_config);
     zfree(node->slots);
     zfree(node);
 }
@@ -1377,7 +1377,7 @@ static void updateClusterSlotsConfiguration(void) {
     pthread_mutex_unlock(&config.is_updating_slots_mutex);
 }
 
-/* Generate random data for redis benchmark. See #7196. */
+/* Generate random data for the benchmark. See #7196. */
 static void genBenchmarkRandomData(char *data, int count) {
     static uint32_t state = 1234;
     int i = 0;
@@ -1403,7 +1403,7 @@ int parseOptions(int argc, char **argv) {
             config.numclients = atoi(argv[++i]);
         } else if (!strcmp(argv[i],"-v") || !strcmp(argv[i], "--version")) {
             sds version = cliVersion();
-            printf("redis-benchmark %s\n", version);
+            printf("valkey-benchmark %s\n", version);
             sdsfree(version);
             exit(0);
         } else if (!strcmp(argv[i],"-n")) {
@@ -1585,12 +1585,12 @@ usage:
 
     printf(
 "%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
-"Usage: redis-benchmark [OPTIONS] [COMMAND ARGS...]\n\n"
+"Usage: valkey-benchmark [OPTIONS] [COMMAND ARGS...]\n\n"
 "Options:\n"
 " -h <hostname>      Server hostname (default 127.0.0.1)\n"
 " -p <port>          Server port (default 6379)\n"
 " -s <socket>        Server socket (overrides host and port)\n"
-" -a <password>      Password for Redis Auth\n"
+" -a <password>      Password for Valkey Auth\n"
 " --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.\n"
 " -u <uri>           Server URI on format redis://user:password@host:port/dbnum\n"
 "                    User, password and dbnum are optional. For authentication\n"
@@ -1637,17 +1637,17 @@ tls_usage,
 " --version          Output version and exit.\n\n"
 "Examples:\n\n"
 " Run the benchmark with the default configuration against 127.0.0.1:6379:\n"
-"   $ redis-benchmark\n\n"
+"   $ valkey-benchmark\n\n"
 " Use 20 parallel clients, for a total of 100k requests, against 192.168.1.1:\n"
-"   $ redis-benchmark -h 192.168.1.1 -p 6379 -n 100000 -c 20\n\n"
+"   $ valkey-benchmark -h 192.168.1.1 -p 6379 -n 100000 -c 20\n\n"
 " Fill 127.0.0.1:6379 with about 1 million keys only using the SET test:\n"
-"   $ redis-benchmark -t set -n 1000000 -r 100000000\n\n"
+"   $ valkey-benchmark -t set -n 1000000 -r 100000000\n\n"
 " Benchmark 127.0.0.1:6379 for a few commands producing CSV output:\n"
-"   $ redis-benchmark -t ping,set,get -n 100000 --csv\n\n"
+"   $ valkey-benchmark -t ping,set,get -n 100000 --csv\n\n"
 " Benchmark a specific command line:\n"
-"   $ redis-benchmark -r 10000 -n 10000 eval 'return redis.call(\"ping\")' 0\n\n"
+"   $ valkey-benchmark -r 10000 -n 10000 eval 'return redis.call(\"ping\")' 0\n\n"
 " Fill a list with 10000 random elements:\n"
-"   $ redis-benchmark -r 10000 -n 10000 lpush mylist __rand_int__\n\n"
+"   $ valkey-benchmark -r 10000 -n 10000 lpush mylist __rand_int__\n\n"
 " On user specified command lines __rand_int__ is replaced with a random integer\n"
 " with a range of values selected by the -r option.\n"
     );
@@ -1787,7 +1787,7 @@ int main(int argc, char **argv) {
             }
             exit(1);
         }
-        if (config.cluster_node_count <= 1) {
+        if (config.cluster_node_count == 0) {
             fprintf(stderr, "Invalid cluster: %d node(s).\n",
                     config.cluster_node_count);
             exit(1);
@@ -1803,7 +1803,7 @@ int main(int argc, char **argv) {
             printf("Master %d: ", i);
             if (node->name) printf("%s ", node->name);
             printf("%s:%d\n", node->ip, node->port);
-            node->redis_config = getRedisConfig(node->ip, node->port, NULL);
+            node->redis_config = getServerConfig(node->ip, node->port, NULL);
             if (node->redis_config == NULL) {
                 fprintf(stderr, "WARNING: Could not fetch node CONFIG %s:%d\n",
                         node->ip, node->port);
@@ -1816,7 +1816,7 @@ int main(int argc, char **argv) {
             config.num_threads = config.cluster_node_count;
     } else {
         config.redis_config =
-            getRedisConfig(config.conn_info.hostip, config.conn_info.hostport, config.hostsocket);
+            getServerConfig(config.conn_info.hostip, config.conn_info.hostport, config.hostsocket);
         if (config.redis_config == NULL) {
             fprintf(stderr, "WARNING: Could not fetch server CONFIG\n");
         }
@@ -1884,7 +1884,7 @@ int main(int argc, char **argv) {
         sdsfreesplitres(sds_args, argc);
 
         sdsfree(title);
-        if (config.redis_config != NULL) freeRedisConfig(config.redis_config);
+        if (config.redis_config != NULL) freeServerConfig(config.redis_config);
         zfree(argvlen);
         return 0;
     }
@@ -2041,7 +2041,7 @@ int main(int argc, char **argv) {
 
     zfree(data);
     freeCliConnInfo(config.conn_info);
-    if (config.redis_config != NULL) freeRedisConfig(config.redis_config);
+    if (config.redis_config != NULL) freeServerConfig(config.redis_config);
 
     return 0;
 }

@@ -576,9 +576,9 @@ with open("%s/%s.def" % (srcdir, commands_filename), "w") as f:
 """
 /* We have fabulous commands from
  * the fantastic
- * Redis Command Table! */
+ * Command Table! */
 
-/* Must match redisCommandGroup */
+/* Must match serverCommandGroup */
 const char *COMMAND_GROUP_STR[] = {
     "generic",
     "string",
@@ -611,7 +611,7 @@ const char *commandGroupStr(int index) {
         command.write_internal_structs(f)
 
     f.write("/* Main command table */\n")
-    f.write("struct COMMAND_STRUCT redisCommandTable[] = {\n")
+    f.write("struct COMMAND_STRUCT serverCommandTable[] = {\n")
     curr_group = None
     for command in command_list:
         if curr_group != command.group:

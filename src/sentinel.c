@@ -1,4 +1,4 @@
-/* Redis Sentinel implementation
+/* Sentinel implementation
  *
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
@@ -45,8 +45,8 @@
 extern char **environ;
 
 #if USE_OPENSSL == 1 /* BUILD_YES */
-extern SSL_CTX *redis_tls_ctx;
-extern SSL_CTX *redis_tls_client_ctx;
+extern SSL_CTX *valkey_tls_ctx;
+extern SSL_CTX *valkey_tls_client_ctx;
 #endif
 
 #define REDIS_SENTINEL_PORT 26379
@@ -60,7 +60,7 @@ typedef struct sentinelAddr {
     int port;
 } sentinelAddr;
 
-/* A Sentinel Redis Instance object is monitoring. */
+/* A Sentinel Instance object is monitoring. */
 #define SRI_MASTER  (1<<0)
 #define SRI_SLAVE   (1<<1)
 #define SRI_SENTINEL (1<<2)
@@ -477,7 +477,7 @@ const char *preMonitorCfgName[] = {
     "announce-hostnames"
 };
 
-/* This function overwrites a few normal Redis config default with Sentinel
+/* This function overwrites a few normal server config default with Sentinel
  * specific defaults. */
 void initSentinelConfig(void) {
     server.port = REDIS_SENTINEL_PORT;
@@ -617,7 +617,7 @@ int sentinelAddrEqualsHostname(sentinelAddr *a, char *hostname) {
                     sentinel.resolve_hostnames ? ANET_NONE : ANET_IP_ONLY) == ANET_ERR) {
 
         /* If failed resolve then compare based on hostnames. That is our best effort as
-         * long as the server is unavailable for some reason. It is fine since Redis 
+         * long as the server is unavailable for some reason. It is fine since an
          * instance cannot have multiple hostnames for a given setup */
         return !strcasecmp(sentinel.resolve_hostnames ? a->hostname : a->ip, hostname);
     }
@@ -649,7 +649,7 @@ sds announceSentinelAddrAndPort(const sentinelAddr *a) {
  *
  * 'type' is the message type, also used as a pub/sub channel name.
  *
- * 'ri', is the redis instance target of this event if applicable, and is
+ * 'ri', is the server instance target of this event if applicable, and is
  * used to obtain the path of the notification script to execute.
  *
  * The remaining arguments are printf-alike.
@@ -1260,7 +1260,7 @@ void sentinelDisconnectCallback(const redisAsyncContext *c, int status) {
 
 /* ========================== sentinelRedisInstance ========================= */
 
-/* Create a redis instance, the following fields must be populated by the
+/* Create an instance of the server, the following fields must be populated by the
  * caller if needed:
  * runid: set to NULL but will be populated once INFO output is received.
  * info_refresh: is set to 0 to mean that we never received INFO so far.
@@ -1406,7 +1406,7 @@ void releaseSentinelRedisInstance(sentinelRedisInstance *ri) {
     zfree(ri);
 }
 
-/* Lookup a slave in a master Redis instance, by ip and port. */
+/* Lookup a slave in a master instance, by ip and port. */
 sentinelRedisInstance *sentinelRedisInstanceLookupSlave(
                 sentinelRedisInstance *ri, char *slave_addr, int port)
 {
@@ -1696,7 +1696,7 @@ void sentinelPropagateDownAfterPeriod(sentinelRedisInstance *master) {
     }
 }
 
-/* This function is used in order to send commands to Redis instances: the
+/* This function is used in order to send commands to server instances: the
  * commands we send from Sentinel may be renamed, a common case is a master
  * with CONFIG and SLAVEOF commands renamed for security concerns. In that
  * case we check the ri->renamed_command table (or if the instance is a slave,
@@ -1846,8 +1846,7 @@ void loadSentinelConfigFromQueue(void) {
     return;
 
 loaderr:
-    fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR (Redis %s) ***\n",
-        REDIS_VERSION);
+    fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR (Version %s) ***\n", VALKEY_VERSION);
     fprintf(stderr, "Reading the configuration file, at line %d\n", linenum);
     fprintf(stderr, ">>> '%s'\n", line);
     fprintf(stderr, "%s\n", err);
@@ -2275,10 +2274,10 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
     rewriteConfigMarkAsProcessed(state,"sentinel master-reboot-down-after-period");
 }
 
-/* This function uses the config rewriting Redis engine in order to persist
+/* This function uses the config rewriting in order to persist
  * the state of the Sentinel in the current configuration file.
  *
- * On failure the function logs a warning on the Redis log. */
+ * On failure the function logs a warning on the server log. */
 int sentinelFlushConfig(void) {
     int saved_hz = server.hz;
     int rewrite_status;
@@ -2357,12 +2356,12 @@ void sentinelSendAuthIfNeeded(sentinelRedisInstance *ri, redisAsyncContext *c) {
     }
 }
 
-/* Use CLIENT SETNAME to name the connection in the Redis instance as
+/* Use CLIENT SETNAME to name the connection in the instance as
  * sentinel-<first_8_chars_of_runid>-<connection_type>
  * The connection type is "cmd" or "pubsub" as specified by 'type'.
  *
  * This makes it possible to list all the sentinel instances connected
- * to a Redis server with CLIENT LIST, grepping for a specific name format. */
+ * to a server with CLIENT LIST, grepping for a specific name format. */
 void sentinelSetClientName(sentinelRedisInstance *ri, redisAsyncContext *c, char *type) {
     char name[64];
 
@@ -2378,8 +2377,8 @@ void sentinelSetClientName(sentinelRedisInstance *ri, redisAsyncContext *c, char
 
 static int instanceLinkNegotiateTLS(redisAsyncContext *context) {
 #if USE_OPENSSL == 1 /* BUILD_YES */
-    if (!redis_tls_ctx) return C_ERR;
-    SSL *ssl = SSL_new(redis_tls_client_ctx ? redis_tls_client_ctx : redis_tls_ctx);
+    if (!valkey_tls_ctx) return C_ERR;
+    SSL *ssl = SSL_new(valkey_tls_client_ctx ? valkey_tls_client_ctx : valkey_tls_ctx);
     if (!ssl) return C_ERR;
 
     if (redisInitiateSSL(&context->c, ssl) == REDIS_ERR) {
@@ -2492,7 +2491,7 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
         link->disconnected = 0;
 }
 
-/* ======================== Redis instances pinging  ======================== */
+/* ======================== Server instances pinging  ======================== */
 
 /* Return true if master looks "sane", that is:
  * 1) It is actually a master in the current configuration.
@@ -3003,7 +3002,7 @@ void sentinelReceiveHelloMessages(redisAsyncContext *c, void *reply, void *privd
     sentinelProcessHelloMessage(r->element[2]->str, r->element[2]->len);
 }
 
-/* Send a "Hello" message via Pub/Sub to the specified 'ri' Redis
+/* Send a "Hello" message via Pub/Sub to the specified 'ri' server
  * instance in order to broadcast the current configuration for this
  * master, and to advertise the existence of this Sentinel at the same time.
  *
@@ -3072,7 +3071,7 @@ void sentinelForceHelloUpdateDictOfRedisInstances(dict *instances) {
 }
 
 /* This function forces the delivery of a "Hello" message (see
- * sentinelSendHello() top comment for further information) to all the Redis
+ * sentinelSendHello() top comment for further information) to all the server
  * and Sentinel instances related to the specified 'master'.
  *
  * It is technically not needed since we send an update to every instance
@@ -3396,7 +3395,7 @@ const char *sentinelFailoverStateStr(int state) {
     }
 }
 
-/* Redis instance to Redis protocol representation. */
+/* Server instance to RESP representation. */
 void addReplySentinelRedisInstance(client *c, sentinelRedisInstance *ri) {
     char *flags = sdsempty();
     void *mbl;
@@ -3801,7 +3800,7 @@ void addReplySentinelDebugInfo(client *c) {
 }
 
 /* Output a number of instances contained inside a dictionary as
- * Redis protocol. */
+ * RESP. */
 void addReplyDictOfRedisInstances(client *c, dict *instances) {
     dictIterator *di;
     dictEntry *de;
@@ -4869,7 +4868,7 @@ char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
 
 /* Send SLAVEOF to the specified instance, always followed by a
  * CONFIG REWRITE command in order to store the new configuration on disk
- * when possible (that is, if the Redis instance is recent enough to support
+ * when possible (that is, if the instance is recent enough to support
  * config rewriting, and if the server was started with a configuration file).
  *
  * If Host is NULL the function sends "SLAVEOF NO ONE".
@@ -4921,9 +4920,9 @@ int sentinelSendSlaveOf(sentinelRedisInstance *ri, const sentinelAddr *addr) {
     if (retval == C_ERR) return retval;
     ri->link->pending_commands++;
 
-    /* CLIENT KILL TYPE <type> is only supported starting from Redis 2.8.12,
+    /* CLIENT KILL TYPE <type> is only supported starting from Redis OSS 2.8.12,
      * however sending it to an instance not understanding this command is not
-     * an issue because CLIENT is variadic command, so Redis will not
+     * an issue because CLIENT is variadic command, so the server will not
      * recognized as a syntax error, and the transaction will not fail (but
      * only the unsupported command will fail). */
     for (int type = 0; type < 2; type++) {
@@ -5049,7 +5048,7 @@ int compareSlavesForPromotion(const void *a, const void *b) {
 
     /* If the replication offset is the same select the slave with that has
      * the lexicographically smaller runid. Note that we try to handle runid
-     * == NULL as there are old Redis versions that don't publish runid in
+     * == NULL as there are old Redis OSS versions that don't publish runid in
      * INFO. A NULL runid is considered bigger than any other runid. */
     sa_runid = (*sa)->runid;
     sb_runid = (*sb)->runid;
@@ -5375,7 +5374,7 @@ void sentinelAbortFailover(sentinelRedisInstance *ri) {
  * in design.
  * -------------------------------------------------------------------------- */
 
-/* Perform scheduled operations for the specified Redis instance. */
+/* Perform scheduled operations for the specified instance. */
 void sentinelHandleRedisInstance(sentinelRedisInstance *ri) {
     /* ========== MONITORING HALF ============ */
     /* Every kind of instance */
@@ -5474,7 +5473,7 @@ void sentinelTimer(void) {
     sentinelCollectTerminatedScripts();
     sentinelKillTimedoutScripts();
 
-    /* We continuously change the frequency of the Redis "timer interrupt"
+    /* We continuously change the frequency of the server "timer interrupt"
      * in order to desynchronize every Sentinel from every other.
      * This non-determinism avoids that Sentinels started at the same time
      * exactly continue to stay synchronized asking to be voted at the

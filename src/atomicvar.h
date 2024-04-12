@@ -32,7 +32,7 @@
  * (if the flag was 0 -> set to 1, if it's already 1 -> do nothing, but the final result is that the flag is set), 
  * and also it has a full barrier (__sync_lock_test_and_set has acquire barrier).
  * 
- * NOTE2: Unlike other atomic type, which aren't guaranteed to be lock free, c11 atmoic_flag does.
+ * NOTE2: Unlike other atomic type, which aren't guaranteed to be lock free, c11 atomic_flag does.
  * To check whether a type is lock free, atomic_is_lock_free() can be used. 
  * It can be considered to limit the flag type to atomic_flag to improve performance.
  * 
@@ -80,16 +80,16 @@
 #ifndef __ATOMIC_VAR_H
 #define __ATOMIC_VAR_H
 
-/* Define redisAtomic for atomic variable. */
-#define redisAtomic
+/* Define serverAtomic for atomic variable. */
+#define serverAtomic
 
-/* To test Redis with Helgrind (a Valgrind tool) it is useful to define
+/* To test the server with Helgrind (a Valgrind tool) it is useful to define
  * the following macro, so that __sync macros are used: those can be detected
  * by Helgrind (even if they are less efficient) so that no false positive
  * is reported. */
 // #define __ATOMIC_VAR_FORCE_SYNC_MACROS
 
-/* There will be many false positives if we test Redis with Helgrind, since
+/* There will be many false positives if we test the server with Helgrind, since
  * Helgrind can't understand we have imposed ordering on the program, so
  * we use macros in helgrind.h to tell Helgrind inter-thread happens-before
  * relationship explicitly for avoiding false positives.
@@ -109,8 +109,8 @@
 #if !defined(__ATOMIC_VAR_FORCE_SYNC_MACROS) && defined(__STDC_VERSION__) && \
     (__STDC_VERSION__ >= 201112L) && !defined(__STDC_NO_ATOMICS__)
 /* Use '_Atomic' keyword if the compiler supports. */
-#undef  redisAtomic
-#define redisAtomic _Atomic
+#undef  serverAtomic
+#define serverAtomic _Atomic
 /* Implementation using _Atomic in C11. */
 
 #include <stdatomic.h>

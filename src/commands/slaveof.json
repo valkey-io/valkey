@@ -56,7 +56,7 @@
             }
         ],
         "reply_schema": {
-            "description": "slaveOf status",
+            "description": "SlaveOf status.",
             "type": "string",
             "pattern": "OK*"
         }

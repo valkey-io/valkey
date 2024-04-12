@@ -36,12 +36,12 @@
  *
  * * Execute Lua code, assuming that the code is located on
  *   the top of the Lua stack. In addition, parsing the execution
- *   result and convert it to the resp and reply ot the client.
+ *   result and convert it to the resp and reply to the client.
  *
- * * Run Redis commands from within the Lua code (Including
+ * * Run server commands from within the Lua code (Including
  *   parsing the reply and create a Lua object out of it).
  *
- * * Register Redis API to the Lua interpreter. Only shared
+ * * Register the server API to the Lua interpreter. Only shared
  *   API are registered (API that is only relevant on eval.c
  *   (like debugging) are registered on eval.c).
  *
@@ -57,6 +57,7 @@
 #define REGISTRY_RUN_CTX_NAME "__RUN_CTX__"
 #define REGISTRY_SET_GLOBALS_PROTECTION_NAME "__GLOBAL_PROTECTION__"
 #define REDIS_API_NAME "redis"
+#define SERVER_API_NAME "server"
 
 typedef struct errorInfo {
     sds msg;

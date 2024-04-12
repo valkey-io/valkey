@@ -59,11 +59,11 @@ void aof_background_fsync_and_close(int fd);
  *
  * Append-only files consist of three types:
  *
- * BASE: Represents a Redis snapshot from the time of last AOF rewrite. The manifest
+ * BASE: Represents a server snapshot from the time of last AOF rewrite. The manifest
  * file contains at most a single BASE file, which will always be the first file in the
  * list.
  *
- * INCR: Represents all write commands executed by Redis following the last successful
+ * INCR: Represents all write commands executed by the server following the last successful
  * AOF rewrite. In some cases it is possible to have several ordered INCR files. For
  * example:
  *   - During an on-going AOF rewrite
@@ -119,7 +119,7 @@ aofInfo *aofInfoDup(aofInfo *orig) {
 
 /* Format aofInfo as a string and it will be a line in the manifest.
  *
- * When update this format, make sure to update redis-check-aof as well. */
+ * When update this format, make sure to update valkey-check-aof as well. */
 sds aofInfoFormat(sds buf, aofInfo *ai) {
     sds filename_repr = NULL;
 
@@ -222,10 +222,10 @@ sds getAofManifestAsString(aofManifest *am) {
 }
 
 /* Load the manifest information from the disk to `server.aof_manifest`
- * when the Redis server start.
+ * when the server starts.
  *
  * During loading, this function does strict error checking and will abort
- * the entire Redis server process on error (I/O error, invalid format, etc.)
+ * the entire server process on error (I/O error, invalid format, etc.)
  *
  * If the AOF directory or manifest file do not exist, this will be ignored
  * in order to support seamless upgrades from previous versions which did not
@@ -253,7 +253,7 @@ void aofLoadManifestFromDisk(void) {
     sdsfree(am_filepath);
 }
 
-/* Generic manifest loading function, used in `aofLoadManifestFromDisk` and redis-check-aof tool. */
+/* Generic manifest loading function, used in `aofLoadManifestFromDisk` and valkey-check-aof tool. */
 #define MANIFEST_MAX_LINE 1024
 aofManifest *aofLoadManifestFromFile(sds am_filepath) {
     const char *err = NULL;
@@ -609,7 +609,7 @@ int persistAofManifest(aofManifest *am) {
     return ret;
 }
 
-/* Called in `loadAppendOnlyFiles` when we upgrade from a old version redis.
+/* Called in `loadAppendOnlyFiles` when we upgrade from a old version of the server.
  *
  * 1) Create AOF directory use 'server.aof_dirname' as the name.
  * 2) Use 'server.aof_filename' to construct a BASE type aofInfo and add it to
@@ -617,7 +617,7 @@ int persistAofManifest(aofManifest *am) {
  * 3) Move the old AOF file (server.aof_filename) to AOF directory.
  *
  * If any of the above steps fails or crash occurs, this will not cause any
- * problems, and redis will retry the upgrade process when it restarts.
+ * problems, and the server will retry the upgrade process when it restarts.
  */
 void aofUpgradePrepare(aofManifest *am) {
     serverAssert(!aofFileExist(server.aof_filename));
@@ -704,13 +704,13 @@ void aofDelTempIncrAofFile(void) {
     return;
 }
 
-/* Called after `loadDataFromDisk` when redis start. If `server.aof_state` is
+/* Called after `loadDataFromDisk` when the server starts. If `server.aof_state` is
  * 'AOF_ON', It will do three things:
- * 1. Force create a BASE file when redis starts with an empty dataset
+ * 1. Force create a BASE file when the server starts with an empty dataset
  * 2. Open the last opened INCR type AOF for writing, If not, create a new one
  * 3. Synchronously update the manifest file to the disk
  *
- * If any of the above steps fails, the redis process will exit.
+ * If any of the above steps fails, the server process will exit.
  */
 void aofOpenIfNeededOnServerStart(void) {
     if (server.aof_state != AOF_ON) {
@@ -856,7 +856,7 @@ cleanup:
 
 /* Whether to limit the execution of Background AOF rewrite.
  *
- * At present, if AOFRW fails, redis will automatically retry. If it continues
+ * At present, if AOFRW fails, the server will automatically retry. If it continues
  * to fail, we may get a lot of very small INCR files. so we need an AOFRW
  * limiting measure.
  *
@@ -1371,7 +1371,7 @@ void feedAppendOnlyFile(int dictid, robj **argv, int argc) {
  * AOF loading
  * ------------------------------------------------------------------------- */
 
-/* In Redis commands are always executed in the context of a client, so in
+/* Commands are always executed in the context of a client, so in
  * order to load the append only file we need to create a fake client. */
 struct client *createAOFClient(void) {
     struct client *c = createClient(NULL);
@@ -1390,7 +1390,7 @@ struct client *createAOFClient(void) {
     c->flags = CLIENT_DENY_BLOCKING;
 
     /* We set the fake client as a slave waiting for the synchronization
-     * so that Redis will not try to send replies to this client. */
+     * so that the server will not try to send replies to this client. */
     c->replstate = SLAVE_STATE_WAIT_BGSAVE_START;
     return c;
 }
@@ -1481,7 +1481,7 @@ int loadSingleAppendOnlyFile(char *filename) {
         robj **argv;
         char buf[AOF_ANNOTATION_LINE_MAX_LEN];
         sds argsds;
-        struct redisCommand *cmd;
+        struct serverCommand *cmd;
 
         /* Serve the clients from time to time */
         if (!(loops++ % 1024)) {
@@ -1664,7 +1664,7 @@ int loadAppendOnlyFiles(aofManifest *am) {
     int total_num, aof_num = 0, last_file;
 
     /* If the 'server.aof_filename' file exists in dir, we may be starting
-     * from an old redis version. We will use enter upgrade mode in three situations.
+     * from an old server version. We will use enter upgrade mode in three situations.
      *
      * 1. If the 'server.aof_dirname' directory not exist
      * 2. If the 'server.aof_dirname' directory exists but the manifest file is missing
@@ -1954,7 +1954,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
 }
 
 /* Write either the key or the value of the currently selected item of a hash.
- * The 'hi' argument passes a valid Redis hash iterator.
+ * The 'hi' argument passes a valid hash iterator.
  * The 'what' filed specifies if to write a key or a value and can be
  * either OBJ_HASH_KEY or OBJ_HASH_VALUE.
  *
@@ -2208,10 +2208,10 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
 }
 
 /* Call the module type callback in order to rewrite a data type
- * that is exported by a module and is not handled by Redis itself.
+ * that is exported by a module and is not handled by the server itself.
  * The function returns 0 on error, 1 on success. */
 int rewriteModuleObject(rio *r, robj *key, robj *o, int dbid) {
-    RedisModuleIO io;
+    ValkeyModuleIO io;
     moduleValue *mv = o->ptr;
     moduleType *mt = mv->type;
     moduleInitIOContext(io,mt,r,key,dbid);
@@ -2260,7 +2260,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
 
     for (j = 0; j < server.dbnum; j++) {
         char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
-        redisDb *db = server.db + j;
+        serverDb *db = server.db + j;
         if (kvstoreSize(db->keys) == 0) continue;
 
         /* SELECT the new DB */
@@ -2347,7 +2347,7 @@ werr:
  * "filename". Used both by REWRITEAOF and BGREWRITEAOF.
  *
  * In order to minimize the number of commands needed in the rewritten
- * log Redis uses variadic commands when possible, such as RPUSH, SADD
+ * log, the server uses variadic commands when possible, such as RPUSH, SADD
  * and ZADD. However at max AOF_REWRITE_ITEMS_PER_CMD items per time
  * are inserted using a single command. */
 int rewriteAppendOnlyFile(char *filename) {
@@ -2419,7 +2419,7 @@ werr:
 /* This is how rewriting of the append only file in background works:
  *
  * 1) The user calls BGREWRITEAOF
- * 2) Redis calls this function, that forks():
+ * 2) The server calls this function, that forks():
  *    2a) the child rewrite the append only file in a temp file.
  *    2b) the parent open a new INCR AOF file to continue writing.
  * 3) When the child finished '2a' exists.
@@ -2467,12 +2467,12 @@ int rewriteAppendOnlyFileBackground(void) {
 
     server.stat_aof_rewrites++;
 
-    if ((childpid = redisFork(CHILD_TYPE_AOF)) == 0) {
+    if ((childpid = serverFork(CHILD_TYPE_AOF)) == 0) {
         char tmpfile[256];
 
         /* Child */
-        redisSetProcTitle("redis-aof-rewrite");
-        redisSetCpuAffinity(server.aof_rewrite_cpulist);
+        serverSetProcTitle("redis-aof-rewrite");
+        serverSetCpuAffinity(server.aof_rewrite_cpulist);
         snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) getpid());
         if (rewriteAppendOnlyFile(tmpfile) == C_OK) {
             serverLog(LL_NOTICE,

@@ -109,7 +109,7 @@ start_server {config "minimal.conf" tags {"external:skip"}} {
         assert_equal "" [lindex [r CONFIG GET bind] 1]
 
         # No additional clients can connect
-        catch {redis_client} err
+        catch {valkey_client} err
         assert_match {*connection refused*} $err
 
         # CONFIG REWRITE handles empty bindaddr
@@ -121,18 +121,18 @@ start_server {config "minimal.conf" tags {"external:skip"}} {
 
         # Make sure bind parameter is as expected and server handles binding
         # accordingly.
-        # (it seems that rediscli_exec behaves differently in RESP3, possibly
-        # because CONFIG GET returns a dict instead of a list so redis-cli emits
+        # (it seems that valkeycli_exec behaves differently in RESP3, possibly
+        # because CONFIG GET returns a dict instead of a list so valkey-cli emits
         # it in a single line)
         if {$::force_resp3} {
-            assert_equal {{bind }} [rediscli_exec 0 config get bind]
+            assert_equal {{bind }} [valkeycli_exec 0 config get bind]
         } else {
-            assert_equal {bind {}} [rediscli_exec 0 config get bind]
+            assert_equal {bind {}} [valkeycli_exec 0 config get bind]
         }
         catch {reconnect 0} err
         assert_match {*connection refused*} $err
 
-        assert_equal {OK} [rediscli_exec 0 config set bind *]
+        assert_equal {OK} [valkeycli_exec 0 config set bind *]
         reconnect 0
         r ping
     } {PONG}

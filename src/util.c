@@ -696,7 +696,7 @@ int d2string(char *buf, size_t len, double value) {
  * We convert the double to long and multiply it  by 10 ^ <fractional_digits> to shift
  * the decimal places.
  * Note that multiply it of input value by 10 ^ <fractional_digits> can overflow but on the scenario
- * that we currently use within redis this that is not possible.
+ * that we currently use within the server this that is not possible.
  * After we get the long representation we use the logic from ull2string function on this file
  * which is based on the following article:
  * https://www.facebook.com/notes/facebook-engineering/three-optimization-tips-for-c/10151361643253920
@@ -959,8 +959,8 @@ void getRandomBytes(unsigned char *p, size_t len) {
     }
 }
 
-/* Generate the Redis "Run ID", a SHA1-sized random number that identifies a
- * given execution of Redis, so that if you are talking with an instance
+/* Generate the server "Run ID", a SHA1-sized random number that identifies a
+ * given execution of the server, so that if you are talking with an instance
  * having run_id == A, and you reconnect and it has run_id == B, you can be
  * sure that it is either a different instance or it was restarted. */
 void getRandomHexChars(char *p, size_t len) {
@@ -1042,7 +1042,7 @@ long getTimeZone(void) {
 /* Return true if the specified path is just a file basename without any
  * relative or absolute path. This function just checks that no / or \
  * character exists inside the specified path, that's enough in the
- * environments where Redis runs. */
+ * environments where the server runs. */
 int pathIsBaseName(char *path) {
     return strchr(path,'/') == NULL && strchr(path,'\\') == NULL;
 }
@@ -1375,7 +1375,7 @@ int snprintf_async_signal_safe(char *to, size_t n, const char *fmt, ...) {
     return result;
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include <assert.h>
 #include <sys/mman.h>
 #include "testhelp.h"
@@ -1385,53 +1385,53 @@ static void test_string2ll(void) {
     long long v;
 
     /* May not start with +. */
-    redis_strlcpy(buf,"+1",sizeof(buf));
+    valkey_strlcpy(buf,"+1",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 0);
 
     /* Leading space. */
-    redis_strlcpy(buf," 1",sizeof(buf));
+    valkey_strlcpy(buf," 1",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 0);
 
     /* Trailing space. */
-    redis_strlcpy(buf,"1 ",sizeof(buf));
+    valkey_strlcpy(buf,"1 ",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 0);
 
     /* May not start with 0. */
-    redis_strlcpy(buf,"01",sizeof(buf));
+    valkey_strlcpy(buf,"01",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 0);
 
-    redis_strlcpy(buf,"-1",sizeof(buf));
+    valkey_strlcpy(buf,"-1",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 1);
     assert(v == -1);
 
-    redis_strlcpy(buf,"0",sizeof(buf));
+    valkey_strlcpy(buf,"0",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 1);
     assert(v == 0);
 
-    redis_strlcpy(buf,"1",sizeof(buf));
+    valkey_strlcpy(buf,"1",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 1);
     assert(v == 1);
 
-    redis_strlcpy(buf,"99",sizeof(buf));
+    valkey_strlcpy(buf,"99",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 1);
     assert(v == 99);
 
-    redis_strlcpy(buf,"-99",sizeof(buf));
+    valkey_strlcpy(buf,"-99",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 1);
     assert(v == -99);
 
-    redis_strlcpy(buf,"-9223372036854775808",sizeof(buf));
+    valkey_strlcpy(buf,"-9223372036854775808",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 1);
     assert(v == LLONG_MIN);
 
-    redis_strlcpy(buf,"-9223372036854775809",sizeof(buf)); /* overflow */
+    valkey_strlcpy(buf,"-9223372036854775809",sizeof(buf)); /* overflow */
     assert(string2ll(buf,strlen(buf),&v) == 0);
 
-    redis_strlcpy(buf,"9223372036854775807",sizeof(buf));
+    valkey_strlcpy(buf,"9223372036854775807",sizeof(buf));
     assert(string2ll(buf,strlen(buf),&v) == 1);
     assert(v == LLONG_MAX);
 
-    redis_strlcpy(buf,"9223372036854775808",sizeof(buf)); /* overflow */
+    valkey_strlcpy(buf,"9223372036854775808",sizeof(buf)); /* overflow */
     assert(string2ll(buf,strlen(buf),&v) == 0);
 }
 
@@ -1440,46 +1440,46 @@ static void test_string2l(void) {
     long v;
 
     /* May not start with +. */
-    redis_strlcpy(buf,"+1",sizeof(buf));
+    valkey_strlcpy(buf,"+1",sizeof(buf));
     assert(string2l(buf,strlen(buf),&v) == 0);
 
     /* May not start with 0. */
-    redis_strlcpy(buf,"01",sizeof(buf));
+    valkey_strlcpy(buf,"01",sizeof(buf));
     assert(string2l(buf,strlen(buf),&v) == 0);
 
-    redis_strlcpy(buf,"-1",sizeof(buf));
+    valkey_strlcpy(buf,"-1",sizeof(buf));
     assert(string2l(buf,strlen(buf),&v) == 1);
     assert(v == -1);
 
-    redis_strlcpy(buf,"0",sizeof(buf));
+    valkey_strlcpy(buf,"0",sizeof(buf));
     assert(string2l(buf,strlen(buf),&v) == 1);
     assert(v == 0);
 
-    redis_strlcpy(buf,"1",sizeof(buf));
+    valkey_strlcpy(buf,"1",sizeof(buf));
     assert(string2l(buf,strlen(buf),&v) == 1);
     assert(v == 1);
 
-    redis_strlcpy(buf,"99",sizeof(buf));
+    valkey_strlcpy(buf,"99",sizeof(buf));
     assert(string2l(buf,strlen(buf),&v) == 1);
     assert(v == 99);
 
-    redis_strlcpy(buf,"-99",sizeof(buf));
+    valkey_strlcpy(buf,"-99",sizeof(buf));
     assert(string2l(buf,strlen(buf),&v) == 1);
     assert(v == -99);
 
 #if LONG_MAX != LLONG_MAX
-    redis_strlcpy(buf,"-2147483648",sizeof(buf));
+    valkey_strlcpy(buf,"-2147483648",sizeof(buf));
     assert(string2l(buf,strlen(buf),&v) == 1);
     assert(v == LONG_MIN);
 
-    redis_strlcpy(buf,"-2147483649",sizeof(buf)); /* overflow */
+    valkey_strlcpy(buf,"-2147483649",sizeof(buf)); /* overflow */
     assert(string2l(buf,strlen(buf),&v) == 0);
 
-    redis_strlcpy(buf,"2147483647",sizeof(buf));
+    valkey_strlcpy(buf,"2147483647",sizeof(buf));
     assert(string2l(buf,strlen(buf),&v) == 1);
     assert(v == LONG_MAX);
 
-    redis_strlcpy(buf,"2147483648",sizeof(buf)); /* overflow */
+    valkey_strlcpy(buf,"2147483648",sizeof(buf)); /* overflow */
     assert(string2l(buf,strlen(buf),&v) == 0);
 #endif
 }
@@ -1631,7 +1631,7 @@ static void test_reclaimFilePageCache(void) {
     assert(!cache_exist(fd));
 
     unlink(tmpfile);
-    printf("reclaimFilePageCach test is ok\n");
+    printf("reclaimFilePageCache test is ok\n");
 }
 #endif
 

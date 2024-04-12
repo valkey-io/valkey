@@ -23,8 +23,7 @@ release.h
 src/transfer.sh
 src/configs
 redis.ds
-src/redis.conf
-src/nodes.conf
+src/*.conf
 deps/lua/src/lua
 deps/lua/src/luac
 deps/lua/src/liblua.a
@@ -41,3 +40,4 @@ Makefile.dep
 .ccls-cache/*
 compile_commands.json
 redis.code-workspace
+.cache

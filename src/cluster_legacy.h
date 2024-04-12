@@ -51,6 +51,7 @@ typedef struct clusterLink {
 #define CLUSTER_NODE_MEET 128     /* Send a MEET message to this node */
 #define CLUSTER_NODE_MIGRATE_TO 256 /* Master eligible for replica migration. */
 #define CLUSTER_NODE_NOFAILOVER 512 /* Slave will not try to failover. */
+#define CLUSTER_NODE_EXTENSIONS_SUPPORTED 1024 /* This node supports extensions. */
 #define CLUSTER_NODE_NULL_NAME "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000"
 
 #define nodeIsSlave(n) ((n)->flags & CLUSTER_NODE_SLAVE)
@@ -59,6 +60,7 @@ typedef struct clusterLink {
 #define nodeTimedOut(n) ((n)->flags & CLUSTER_NODE_PFAIL)
 #define nodeFailed(n) ((n)->flags & CLUSTER_NODE_FAIL)
 #define nodeCantFailover(n) ((n)->flags & CLUSTER_NODE_NOFAILOVER)
+#define nodeSupportsExtensions(n) ((n)->flags & CLUSTER_NODE_EXTENSIONS_SUPPORTED)
 
 /* This structure represent elements of node->fail_reports. */
 typedef struct clusterNodeFailReport {
@@ -66,7 +68,7 @@ typedef struct clusterNodeFailReport {
     mstime_t time;             /* Time of the last report from this node. */
 } clusterNodeFailReport;
 
-/* Redis cluster messages header */
+/* Cluster messages header */
 
 /* Message types.
  *
@@ -159,7 +161,7 @@ typedef struct {
 
 typedef struct {
     uint32_t length; /* Total length of this extension message (including this header) */
-    uint16_t type; /* Type of this extension message (see clusterMsgPingExtTypes) */
+    uint16_t type; /* Type of this extension message (see clusterMsgPingtypes) */
     uint16_t unused; /* 16 bits of padding to make this structure 8 byte aligned. */
     union {
         clusterMsgPingExtHostname hostname;
@@ -204,9 +206,9 @@ union clusterMsgData {
 #define CLUSTER_PROTO_VER 1 /* Cluster bus protocol version. */
 
 typedef struct {
-    char sig[4];        /* Signature "RCmb" (Redis Cluster message bus). */
+    char sig[4];        /* Signature "RCmb" (Cluster message bus). */
     uint32_t totlen;    /* Total length of this message */
-    uint16_t ver;       /* Protocol version, currently set to 1. */
+    uint16_t ver;       /* Protocol version, currently set to CLUSTER_PROTO_VER. */
     uint16_t port;      /* Primary port number (TCP or TLS). */
     uint16_t type;      /* Message type */
     uint16_t count;     /* Only used for some kind of messages. */
@@ -231,8 +233,8 @@ typedef struct {
     union clusterMsgData data;
 } clusterMsg;
 
-/* clusterMsg defines the gossip wire protocol exchanged among Redis cluster
- * members, which can be running different versions of redis-server bits,
+/* clusterMsg defines the gossip wire protocol exchanged among cluster
+ * members, which can be running different versions of server bits,
  * especially during cluster rolling upgrades.
  *
  * Therefore, fields in this struct should remain at the same offset from

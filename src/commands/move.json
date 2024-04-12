@@ -48,11 +48,11 @@
         "reply_schema": {
             "oneOf": [
                 {
-                    "description": "key was moved",
+                    "description": "Key was moved.",
                     "const": 1
                 },
                 {
-                    "description": "key wasn't moved",
+                    "description": "Key wasn't moved.",
                     "const": 0
                 }
             ]

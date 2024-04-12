@@ -31,7 +31,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "../redismodule.h"
+#include "../valkeymodule.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
@@ -39,22 +39,22 @@
 
 /* Reply callback for blocking command HELLO.BLOCK */
 int HelloBlock_Reply(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
     int *myint = RedisModule_GetBlockedClientPrivateData(ctx);
     return RedisModule_ReplyWithLongLong(ctx,*myint);
 }
 
 /* Timeout callback for blocking command HELLO.BLOCK */
 int HelloBlock_Timeout(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
     return RedisModule_ReplyWithSimpleString(ctx,"Request timedout");
 }
 
 /* Private data freeing callback for HELLO.BLOCK command. */
 void HelloBlock_FreeData(RedisModuleCtx *ctx, void *privdata) {
-    REDISMODULE_NOT_USED(ctx);
+    VALKEYMODULE_NOT_USED(ctx);
     RedisModule_Free(privdata);
 }
 
@@ -98,11 +98,11 @@ int HelloBlock_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int a
     long long delay;
     long long timeout;
 
-    if (RedisModule_StringToLongLong(argv[1],&delay) != REDISMODULE_OK) {
+    if (RedisModule_StringToLongLong(argv[1],&delay) != VALKEYMODULE_OK) {
         return RedisModule_ReplyWithError(ctx,"ERR invalid count");
     }
 
-    if (RedisModule_StringToLongLong(argv[2],&timeout) != REDISMODULE_OK) {
+    if (RedisModule_StringToLongLong(argv[2],&timeout) != VALKEYMODULE_OK) {
         return RedisModule_ReplyWithError(ctx,"ERR invalid count");
     }
 
@@ -125,7 +125,7 @@ int HelloBlock_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int a
         RedisModule_AbortBlock(bc);
         return RedisModule_ReplyWithError(ctx,"-ERR Can't start thread");
     }
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
 /* The thread entry point that actually executes the blocking part
@@ -141,7 +141,7 @@ void *HelloKeys_ThreadMain(void *arg) {
     long long cursor = 0;
     size_t replylen = 0;
 
-    RedisModule_ReplyWithArray(ctx,REDISMODULE_POSTPONED_LEN);
+    RedisModule_ReplyWithArray(ctx,VALKEYMODULE_POSTPONED_LEN);
     do {
         RedisModule_ThreadSafeContextLock(ctx);
         RedisModuleCallReply *reply = RedisModule_Call(ctx,
@@ -178,7 +178,7 @@ void *HelloKeys_ThreadMain(void *arg) {
  * that were in the database from the start to the end are guaranteed to be
  * there. */
 int HelloKeys_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argv);
     if (argc != 1) return RedisModule_WrongArity(ctx);
 
     pthread_t tid;
@@ -195,24 +195,24 @@ int HelloKeys_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int ar
         RedisModule_AbortBlock(bc);
         return RedisModule_ReplyWithError(ctx,"-ERR Can't start thread");
     }
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-/* This function must be present on each Redis module. It is used in order to
- * register the commands into the Redis server. */
+/* This function must be present on each module. It is used in order to
+ * register the commands into the server. */
 int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
-    if (RedisModule_Init(ctx,"helloblock",1,REDISMODULE_APIVER_1)
-        == REDISMODULE_ERR) return REDISMODULE_ERR;
+    if (RedisModule_Init(ctx,"helloblock",1,VALKEYMODULE_APIVER_1)
+        == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
     if (RedisModule_CreateCommand(ctx,"hello.block",
-        HelloBlock_RedisCommand,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+        HelloBlock_RedisCommand,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
     if (RedisModule_CreateCommand(ctx,"hello.keys",
-        HelloKeys_RedisCommand,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+        HelloKeys_RedisCommand,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }

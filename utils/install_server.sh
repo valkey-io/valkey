@@ -25,7 +25,7 @@
 #
 ################################################################################
 #
-# Service installer for redis server, runs interactively by default.
+# Service installer for the server, runs interactively by default.
 #
 # To run this script non-interactively (for automation/provisioning purposes),
 # feed the variables into the script. Any missing variables will be prompted!
@@ -37,9 +37,9 @@
 # 		 REDIS_CONFIG_FILE=/etc/redis/1234.conf \
 # 		 REDIS_LOG_FILE=/var/log/redis_1234.log \
 # 		 REDIS_DATA_DIR=/var/lib/redis/1234 \
-# 		 REDIS_EXECUTABLE=`command -v redis-server` ./utils/install_server.sh
+# 		 REDIS_EXECUTABLE=`command -v valkey-server` ./utils/install_server.sh
 #
-# This generates a redis config file and an /etc/init.d script, and installs them.
+# This generates a server config file and an /etc/init.d script, and installs them.
 #
 # /!\ This script should be run as root
 #
@@ -85,7 +85,7 @@ unset _pid_1_exe
 
 if ! echo $REDIS_PORT | egrep -q '^[0-9]+$' ; then
 	_MANUAL_EXECUTION=true
-	#Read the redis port
+	#Read the server port
 	read  -p "Please select the redis port for this instance: [$_REDIS_PORT] " REDIS_PORT
 	if ! echo $REDIS_PORT | egrep -q '^[0-9]+$' ; then
 		echo "Selecting default: $_REDIS_PORT"
@@ -95,7 +95,7 @@ fi
 
 if [ -z "$REDIS_CONFIG_FILE" ] ; then
 	_MANUAL_EXECUTION=true
-	#read the redis config file
+	#read the server config file
 	_REDIS_CONFIG_FILE="/etc/redis/$REDIS_PORT.conf"
 	read -p "Please select the redis config file name [$_REDIS_CONFIG_FILE] " REDIS_CONFIG_FILE
 	if [ -z "$REDIS_CONFIG_FILE" ] ; then
@@ -106,7 +106,7 @@ fi
 
 if [ -z "$REDIS_LOG_FILE" ] ; then
 	_MANUAL_EXECUTION=true
-	#read the redis log file path
+	#read the server log file path
 	_REDIS_LOG_FILE="/var/log/redis_$REDIS_PORT.log"
 	read -p "Please select the redis log file name [$_REDIS_LOG_FILE] " REDIS_LOG_FILE
 	if [ -z "$REDIS_LOG_FILE" ] ; then
@@ -117,7 +117,7 @@ fi
 
 if [ -z "$REDIS_DATA_DIR" ] ; then
 	_MANUAL_EXECUTION=true
-	#get the redis data directory
+	#get the server data directory
 	_REDIS_DATA_DIR="/var/lib/redis/$REDIS_PORT"
 	read -p "Please select the data directory for this instance [$_REDIS_DATA_DIR] " REDIS_DATA_DIR
 	if [ -z "$REDIS_DATA_DIR" ] ; then
@@ -128,7 +128,7 @@ fi
 
 if [ ! -x "$REDIS_EXECUTABLE" ] ; then
 	_MANUAL_EXECUTION=true
-	#get the redis executable path
+	#get the server executable path
 	_REDIS_EXECUTABLE=`command -v redis-server`
 	read -p "Please select the redis executable path [$_REDIS_EXECUTABLE] " REDIS_EXECUTABLE
 	if [ ! -x "$REDIS_EXECUTABLE" ] ; then
@@ -141,7 +141,7 @@ if [ ! -x "$REDIS_EXECUTABLE" ] ; then
 	fi
 fi
 
-#check the default for redis cli
+#check the default for valkey cli
 CLI_EXEC=`command -v redis-cli`
 if [ -z "$CLI_EXEC" ] ; then
 	CLI_EXEC=`dirname $REDIS_EXECUTABLE`"/redis-cli"
@@ -166,7 +166,7 @@ mkdir -p "$REDIS_DATA_DIR" || die "Could not create redis data directory"
 
 #render the templates
 TMP_FILE="/tmp/${REDIS_PORT}.conf"
-DEFAULT_CONFIG="${SCRIPTPATH}/../redis.conf"
+DEFAULT_CONFIG="${SCRIPTPATH}/../valkey.conf"
 INIT_TPL_FILE="${SCRIPTPATH}/redis_init_script.tpl"
 INIT_SCRIPT_DEST="/etc/init.d/redis_${REDIS_PORT}"
 PIDFILE="/var/run/redis_${REDIS_PORT}.pid"

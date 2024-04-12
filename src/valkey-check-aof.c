@@ -129,7 +129,7 @@ int readArgc(FILE *fp, long *target) {
 }
 
 /* Used to decode a RESP record in the AOF file to obtain the original 
- * redis command, and also check whether the command is MULTI/EXEC. If the 
+ * server command, and also check whether the command is MULTI/EXEC. If the 
  * command is MULTI, the parameter out_multi will be incremented by one, and 
  * if the command is EXEC, the parameter out_multi will be decremented 
  * by one. The parameter out_multi will be used by the upper caller to determine 
@@ -200,7 +200,7 @@ int processAnnotations(FILE *fp, char *filename, int last_file) {
             printf("Failed to truncate AOF %s to timestamp %ld to offset %ld because it is not the last file.\n",
                 filename, to_timestamp, (long int)epos);
             printf("If you insist, please delete all files after this file according to the manifest "
-                "file and delete the corresponding records in manifest file manually. Then re-run redis-check-aof.\n");
+                "file and delete the corresponding records in manifest file manually. Then re-run valkey-check-aof.\n");
             exit(1);
         }
         /* Truncate remaining AOF if exceeding 'to_timestamp' */
@@ -426,7 +426,7 @@ int fileIsManifest(char *filepath) {
  * AOF_RDB_PREAMBLE: Old-style RDB-preamble AOF
  * AOF_MULTI_PART: manifest in Multi Part AOF 
  * 
- * redis-check-aof tool will automatically perform different 
+ * valkey-check-aof tool will automatically perform different 
  * verification logic according to different file formats.
  * */
 input_file_type getInputFileType(char *filepath) {
@@ -454,7 +454,7 @@ void printAofStyle(int ret, char *aofFileName, char *aofType) {
 
 /* Check if Multi Part AOF is valid. It will check the BASE file and INCR files 
  * at once according to the manifest instructions (this is somewhat similar to 
- * redis' AOF loading).
+ * the server's AOF loading).
  * 
  * When the verification is successful, we can guarantee:
  * 1. The manifest file format is valid
@@ -526,7 +526,7 @@ int redis_check_aof_main(int argc, char **argv) {
     } else if (argc == 2) {
         if (!strcmp(argv[1], "-v") || !strcmp(argv[1], "--version")) {
             sds version = getVersion();
-            printf("redis-check-aof %s\n", version);
+            printf("valkey-check-aof %s\n", version);
             sdsfree(version);
             exit(0);
         }

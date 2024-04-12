@@ -104,7 +104,7 @@ tags {"aof external:skip"} {
         }
     }
 
-    ## Test that redis-check-aof indeed sees this AOF is not valid
+    ## Test that valkey-check-aof indeed sees this AOF is not valid
     test "Short read: Utility should confirm the AOF is not valid" {
         catch {
             exec src/valkey-check-aof $aof_manifest_file
@@ -210,7 +210,7 @@ tags {"aof external:skip"} {
 
     start_server {overrides {appendonly {yes} appendfsync always}} {
         test {AOF fsync always barrier issue} {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             # Set a sleep when aof is flushed, so that we have a chance to look
             # at the aof size and detect if the response of an incr command
             # arrives before the data was written (and hopefully fsynced)
@@ -374,7 +374,7 @@ tags {"aof external:skip"} {
         }
     }
 
-    # redis could load AOF which has timestamp annotations inside
+    # The server could load AOF which has timestamp annotations inside
     create_aof $aof_dirpath $aof_file {
         append_to_aof "#TS:1628217470\r\n"
         append_to_aof [formatCommand set foo1 bar1]
@@ -438,7 +438,7 @@ tags {"aof external:skip"} {
                 append_to_aof [formatCommand select 9]
                 append_to_aof [formatCommand eval {redis.call('set',KEYS[1],'y'); for i=1,1500000 do redis.call('ping') end return 'ok'} 1 x]
             }
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             $rd debug loadaof
             $rd flush
             wait_for_condition 100 10 {
@@ -469,7 +469,7 @@ tags {"aof external:skip"} {
         }
     }
 
-    test {Test redis-check-aof for old style resp AOF} {
+    test {Test valkey-check-aof for old style resp AOF} {
         create_aof $aof_dirpath $aof_file {
             append_to_aof [formatCommand set foo hello]
             append_to_aof [formatCommand set bar world]
@@ -481,7 +481,7 @@ tags {"aof external:skip"} {
         assert_match "*Start checking Old-Style AOF*is valid*" $result
     }
 
-    test {Test redis-check-aof for old style resp AOF - has data in the same format as manifest} {
+    test {Test valkey-check-aof for old style resp AOF - has data in the same format as manifest} {
         create_aof $aof_dirpath $aof_file {
             append_to_aof [formatCommand set file file]
             append_to_aof [formatCommand set "file appendonly.aof.2.base.rdb seq 2 type b" "file appendonly.aof.2.base.rdb seq 2 type b"]
@@ -493,14 +493,14 @@ tags {"aof external:skip"} {
         assert_match "*Start checking Old-Style AOF*is valid*" $result
     }
 
-    test {Test redis-check-aof for old style rdb-preamble AOF} {
+    test {Test valkey-check-aof for old style rdb-preamble AOF} {
         catch {
             exec src/valkey-check-aof tests/assets/rdb-preamble.aof
         } result
         assert_match "*Start checking Old-Style AOF*RDB preamble is OK, proceeding with AOF tail*is valid*" $result
     }
 
-    test {Test redis-check-aof for Multi Part AOF with resp AOF base} {
+    test {Test valkey-check-aof for Multi Part AOF with resp AOF base} {
         create_aof $aof_dirpath $aof_base_file {
             append_to_aof [formatCommand set foo hello]
             append_to_aof [formatCommand set bar world]
@@ -522,7 +522,7 @@ tags {"aof external:skip"} {
         assert_match "*Start checking Multi Part AOF*Start to check BASE AOF (RESP format)*BASE AOF*is valid*Start to check INCR files*INCR AOF*is valid*All AOF files and manifest are valid*" $result
     }
 
-    test {Test redis-check-aof for Multi Part AOF with rdb-preamble AOF base} {
+    test {Test valkey-check-aof for Multi Part AOF with rdb-preamble AOF base} {
         exec cp tests/assets/rdb-preamble.aof $aof_base_file
 
         create_aof $aof_dirpath $aof_file {
@@ -541,7 +541,7 @@ tags {"aof external:skip"} {
         assert_match "*Start checking Multi Part AOF*Start to check BASE AOF (RDB format)*DB preamble is OK, proceeding with AOF tail*BASE AOF*is valid*Start to check INCR files*INCR AOF*is valid*All AOF files and manifest are valid*" $result
     }
 
-    test {Test redis-check-aof for Multi Part AOF contains a format error} {
+    test {Test valkey-check-aof for Multi Part AOF contains a format error} {
         create_aof_manifest $aof_dirpath $aof_manifest_file {
             append_to_manifest "file appendonly.aof.1.base.aof seq 1 type b\n"
             append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
@@ -554,7 +554,7 @@ tags {"aof external:skip"} {
         assert_match "*Invalid AOF manifest file format*" $result
     }
 
-    test {Test redis-check-aof only truncates the last file for Multi Part AOF in fix mode} {
+    test {Test valkey-check-aof only truncates the last file for Multi Part AOF in fix mode} {
         create_aof $aof_dirpath $aof_base_file {
             append_to_aof [formatCommand set foo hello]
             append_to_aof [formatCommand multi]
@@ -582,7 +582,7 @@ tags {"aof external:skip"} {
         assert_match "*Failed to truncate AOF*because it is not the last file*" $result
     }
 
-    test {Test redis-check-aof only truncates the last file for Multi Part AOF in truncate-to-timestamp mode} {
+    test {Test valkey-check-aof only truncates the last file for Multi Part AOF in truncate-to-timestamp mode} {
         create_aof $aof_dirpath $aof_base_file {
             append_to_aof "#TS:1628217470\r\n"
             append_to_aof [formatCommand set foo1 bar1]

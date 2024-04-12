@@ -90,7 +90,7 @@ test "Cluster consistency during live resharding" {
                 --cluster-to $target \
                 --cluster-slots 100 \
                 --cluster-yes \
-                {*}[rediscli_tls_config "../../../tests"] \
+                {*}[valkeycli_tls_config "../../../tests"] \
                 | [info nameofexecutable] \
                 ../tests/helpers/onlydots.tcl \
                 &] 0]
@@ -101,7 +101,7 @@ test "Cluster consistency during live resharding" {
         set key "key:$listid"
         incr ele
         # We write both with Lua scripts and with plain commands.
-        # This way we are able to stress Lua -> Redis command invocation
+        # This way we are able to stress Lua -> server command invocation
         # as well, that has tests to prevent Lua to write into wrong
         # hash slots.
         # We also use both TLS and plaintext connections.
@@ -129,7 +129,7 @@ test "Cluster consistency during live resharding" {
 }
 
 test "Verify $numkeys keys for consistency with logical content" {
-    # Check that the Redis Cluster content matches our logical content.
+    # Check that the Cluster content matches our logical content.
     foreach {key value} [array get content] {
         if {[$cluster lrange $key 0 -1] ne $value} {
             fail "Key $key expected to hold '$value' but actual content is [$cluster lrange $key 0 -1]"
@@ -151,7 +151,7 @@ test "Cluster should eventually be up again" {
 }
 
 test "Verify $numkeys keys after the restart" {
-    # Check that the Redis Cluster content matches our logical content.
+    # Check that the Cluster content matches our logical content.
     foreach {key value} [array get content] {
         if {[$cluster lrange $key 0 -1] ne $value} {
             fail "Key $key expected to hold '$value' but actual content is [$cluster lrange $key 0 -1]"

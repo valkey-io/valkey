@@ -24,7 +24,7 @@ test "Check acceptable replica-priority values" {
             fail "Able to set replica-announced with something else than yes or no (a3b2c1) whereas it should not be possible"
         }
 
-        # test only the first redis replica, no need to double test
+        # test only the first replica, no need to double test
         break
     }
 }

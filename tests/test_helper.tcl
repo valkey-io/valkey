@@ -1,4 +1,4 @@
-# Redis test suite. Copyright (C) 2009 Salvatore Sanfilippo antirez@gmail.com
+# Server test suite. Copyright (C) 2009 Salvatore Sanfilippo antirez@gmail.com
 # This software is released under the BSD License. See the COPYING file for
 # more information.
 
@@ -64,8 +64,8 @@ set ::all_tests {
     integration/psync2-pingoff
     integration/psync2-master-restart
     integration/failover
-    integration/redis-cli
-    integration/redis-benchmark
+    integration/valkey-cli
+    integration/valkey-benchmark
     integration/dismiss-mem
     unit/pubsub
     unit/pubsubshard
@@ -105,13 +105,14 @@ set ::all_tests {
     unit/cluster/links
     unit/cluster/cluster-response-tls
     unit/cluster/failure-marking
+    unit/cluster/sharded-pubsub
 }
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0
 
 set ::host 127.0.0.1
 set ::port 6379; # port for external server
-set ::baseport 21111; # initial port for spawned redis servers
+set ::baseport 21111; # initial port for spawned servers
 set ::portcount 8000; # we don't wanna use more than 10000 to avoid collision with cluster bus ports
 set ::traceleaks 0
 set ::valgrind 0
@@ -137,7 +138,7 @@ set ::accurate 0; # If true runs fuzz tests with more iterations
 set ::force_failure 0
 set ::timeout 1200; # 20 minutes without progresses will quit the test.
 set ::last_progress [clock seconds]
-set ::active_servers {} ; # Pids of active Redis instances.
+set ::active_servers {} ; # Pids of active server instances.
 set ::dont_clean 0
 set ::dont_pre_clean 0
 set ::wait_server 0
@@ -153,7 +154,7 @@ set ::large_memory 0
 set ::log_req_res 0
 set ::force_resp3 0
 
-# Set to 1 when we are running in client mode. The Redis test uses a
+# Set to 1 when we are running in client mode. The server test uses a
 # server-client model to run tests simultaneously. The server instance
 # runs the specified number of client instances that will actually run tests.
 # The server is responsible of showing the result to the user, and exit with
@@ -217,7 +218,7 @@ proc r {args} {
     [srv $level "client"] {*}$args
 }
 
-# Returns a Redis instance by index.
+# Returns a server instance by index.
 proc Rn {n} {
     set level [expr -1*$n]
     return [srv $level "client"]
@@ -255,7 +256,7 @@ proc reconnect {args} {
     lset ::servers end+$level $srv
 }
 
-proc redis_deferring_client {args} {
+proc valkey_deferring_client {args} {
     set level 0
     if {[llength $args] > 0 && [string is integer [lindex $args 0]]} {
         set level [lindex $args 0]
@@ -277,7 +278,7 @@ proc redis_deferring_client {args} {
     return $client
 }
 
-proc redis_client {args} {
+proc valkey_client {args} {
     set level 0
     if {[llength $args] > 0 && [string is integer [lindex $args 0]]} {
         set level [lindex $args 0]
@@ -327,7 +328,7 @@ proc run_solo {name code} {
 proc cleanup {} {
     if {!$::quiet} {puts -nonewline "Cleanup: may take some time... "}
     flush stdout
-    catch {exec rm -rf {*}[glob tests/tmp/redis.conf.*]}
+    catch {exec rm -rf {*}[glob tests/tmp/valkey.conf.*]}
     catch {exec rm -rf {*}[glob tests/tmp/server*.*]}
     catch {exec rm -rf {*}[glob tests/tmp/*.acl.*]}
     if {!$::quiet} {puts "OK"}
@@ -908,7 +909,7 @@ proc close_replication_stream {s} {
     return
 }
 
-# With the parallel test running multiple Redis instances at the same time
+# With the parallel test running multiple server instances at the same time
 # we need a fast enough computer, otherwise a lot of tests may generate
 # false positives.
 # If the computer is too slow we revert the sequential test without any

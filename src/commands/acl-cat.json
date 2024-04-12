@@ -24,7 +24,7 @@
                 },
                 {
                     "type": "array",
-                    "description": "In case `category` was given, list of commands that fall under the provided ACL category",
+                    "description": "In case `category` was given, list of commands that fall under the provided ACL category.",
                     "items": {
                         "type": "string"
                     }

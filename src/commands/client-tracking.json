@@ -73,7 +73,7 @@
             }
         ],
         "reply_schema": {
-            "description": "if the client was successfully put into or taken out of tracking mode",
+            "description": "If the client was successfully put into or taken out of tracking mode.",
             "const": "OK"
         }
     }

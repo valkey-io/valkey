@@ -28,8 +28,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __REDIS_CONNECTION_H
-#define __REDIS_CONNECTION_H
+#ifndef VALKEY_CONNECTION_H
+#define VALKEY_CONNECTION_H
 
 #include <errno.h>
 #include <stdio.h>
@@ -290,7 +290,7 @@ static inline int connAddr(connection *conn, char *ip, size_t ip_len, int *port,
 
 /* Format an IP,port pair into something easy to parse. If IP is IPv6
  * (matches for ":"), the ip is surrounded by []. IP and port are just
- * separated by colons. This the standard to display addresses within Redis. */
+ * separated by colons. This the standard to display addresses within the server. */
 static inline int formatAddr(char *buf, size_t buf_len, char *ip, int port) {
     return snprintf(buf, buf_len, strchr(ip,':') ?
            "[%s]:%d" : "%s:%d", ip, port);
@@ -378,10 +378,10 @@ static inline sds connGetPeerCert(connection *conn) {
     return NULL;
 }
 
-/* Initialize the redis connection framework */
+/* Initialize the connection framework */
 int connTypeInitialize(void);
 
-/* Register a connection type into redis connection framework */
+/* Register a connection type into the connection framework */
 int connTypeRegister(ConnectionType *ct);
 
 /* Lookup a connection type by type name */

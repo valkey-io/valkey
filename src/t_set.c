@@ -516,7 +516,7 @@ int setTypeConvertAndExpand(robj *setobj, int enc, unsigned long cap, int panic)
             return C_ERR;
         }
 
-        /* To add the elements we extract integers and create redis objects */
+        /* To add the elements we extract integers and create Objects */
         si = setTypeInitIterator(setobj);
         while ((element = setTypeNextObject(si)) != NULL) {
             serverAssert(dictAdd(d,element,NULL) == DICT_OK);

@@ -32,7 +32,7 @@
 
 #include "ae.h"
 #include "anet.h"
-#include "redisassert.h"
+#include "serverassert.h"
 
 #include <stdio.h>
 #include <sys/time.h>
@@ -258,7 +258,7 @@ int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id)
  * If there are no timers, -1 is returned.
  *
  * Note that's O(N) since time events are unsorted.
- * Possible optimizations (not needed by Redis so far, but...):
+ * Possible optimizations (not needed so far, but...):
  * 1) Insert the event in order, so that the nearest is just the head.
  *    Much better but still insertion or deletion of timers is O(N).
  * 2) Use a skiplist to have this operation as O(1) and insertion as O(log(N)).

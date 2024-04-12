@@ -27,7 +27,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#define REDISMODULE_CORE_MODULE /* A module that's part of the redis core, uses server.h too. */
+#define VALKEYMODULE_CORE_MODULE /* A module that's part of the server core, uses server.h too. */
 
 #include "server.h"
 #include "connhelpers.h"
@@ -58,8 +58,8 @@
 #define REDIS_TLS_PROTO_DEFAULT     (REDIS_TLS_PROTO_TLSv1_2)
 #endif
 
-SSL_CTX *redis_tls_ctx = NULL;
-SSL_CTX *redis_tls_client_ctx = NULL;
+SSL_CTX *valkey_tls_ctx = NULL;
+SSL_CTX *valkey_tls_client_ctx = NULL;
 
 static int parseProtocolsConfig(const char *str) {
     int i, count = 0;
@@ -170,13 +170,13 @@ static void tlsInit(void) {
 }
 
 static void tlsCleanup(void) {
-    if (redis_tls_ctx) {
-        SSL_CTX_free(redis_tls_ctx);
-        redis_tls_ctx = NULL;
+    if (valkey_tls_ctx) {
+        SSL_CTX_free(valkey_tls_ctx);
+        valkey_tls_ctx = NULL;
     }
-    if (redis_tls_client_ctx) {
-        SSL_CTX_free(redis_tls_client_ctx);
-        redis_tls_client_ctx = NULL;
+    if (valkey_tls_client_ctx) {
+        SSL_CTX_free(valkey_tls_client_ctx);
+        valkey_tls_client_ctx = NULL;
     }
 
     #if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(LIBRESSL_VERSION_NUMBER)
@@ -203,7 +203,7 @@ static int tlsPasswordCallback(char *buf, int size, int rwflag, void *u) {
 /* Create a *base* SSL_CTX using the SSL configuration provided. The base context
  * includes everything that's common for both client-side and server-side connections.
  */
-static SSL_CTX *createSSLContext(redisTLSContextConfig *ctx_config, int protocols, int client) {
+static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protocols, int client) {
     const char *cert_file = client ? ctx_config->client_cert_file : ctx_config->cert_file;
     const char *key_file = client ? ctx_config->client_key_file : ctx_config->key_file;
     const char *key_file_pass = client ? ctx_config->client_key_file_pass : ctx_config->key_file_pass;
@@ -282,17 +282,17 @@ error:
 
 /* Attempt to configure/reconfigure TLS. This operation is atomic and will
  * leave the SSL_CTX unchanged if fails.
- * @priv: config of redisTLSContextConfig.
+ * @priv: config of serverTLSContextConfig.
  * @reconfigure: if true, ignore the previous configure; if false, only
- *               configure from @ctx_config if redis_tls_ctx is NULL.
+ *               configure from @ctx_config if valkey_tls_ctx is NULL.
  */
 static int tlsConfigure(void *priv, int reconfigure) {
-    redisTLSContextConfig *ctx_config = (redisTLSContextConfig *)priv;
+    serverTLSContextConfig *ctx_config = (serverTLSContextConfig *)priv;
     char errbuf[256];
     SSL_CTX *ctx = NULL;
     SSL_CTX *client_ctx = NULL;
 
-    if (!reconfigure && redis_tls_ctx) {
+    if (!reconfigure && valkey_tls_ctx) {
         return C_OK;
     }
 
@@ -402,10 +402,10 @@ static int tlsConfigure(void *priv, int reconfigure) {
         if (!client_ctx) goto error;
     }
 
-    SSL_CTX_free(redis_tls_ctx);
-    SSL_CTX_free(redis_tls_client_ctx);
-    redis_tls_ctx = ctx;
-    redis_tls_client_ctx = client_ctx;
+    SSL_CTX_free(valkey_tls_ctx);
+    SSL_CTX_free(valkey_tls_client_ctx);
+    valkey_tls_ctx = ctx;
+    valkey_tls_client_ctx = client_ctx;
 
     return C_OK;
 
@@ -457,9 +457,9 @@ typedef struct tls_connection {
 } tls_connection;
 
 static connection *createTLSConnection(int client_side) {
-    SSL_CTX *ctx = redis_tls_ctx;
-    if (client_side && redis_tls_client_ctx)
-        ctx = redis_tls_client_ctx;
+    SSL_CTX *ctx = valkey_tls_ctx;
+    if (client_side && valkey_tls_client_ctx)
+        ctx = valkey_tls_client_ctx;
     tls_connection *conn = zcalloc(sizeof(tls_connection));
     conn->c.type = &CT_TLS;
     conn->c.fd = -1;
@@ -1171,36 +1171,36 @@ int RedisRegisterConnectionTypeTLS(void) {
 
 #include "release.h"
 
-int RedisModule_OnLoad(void *ctx, RedisModuleString **argv, int argc) {
+int ValkeyModule_OnLoad(void *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argv);
     UNUSED(argc);
 
-    /* Connection modules must be part of the same build as redis. */
-    if (strcmp(REDIS_BUILD_ID_RAW, redisBuildIdRaw())) {
+    /* Connection modules must be part of the same build as the server. */
+    if (strcmp(REDIS_BUILD_ID_RAW, serverBuildIdRaw())) {
         serverLog(LL_NOTICE, "Connection type %s was not built together with the redis-server used.", CONN_TYPE_TLS);
-        return REDISMODULE_ERR;
+        return VALKEYMODULE_ERR;
     }
 
-    if (RedisModule_Init(ctx,"tls",1,REDISMODULE_APIVER_1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_Init(ctx,"tls",1,VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
     /* Connection modules is available only bootup. */
-    if ((RedisModule_GetContextFlags(ctx) & REDISMODULE_CTX_FLAGS_SERVER_STARTUP) == 0) {
+    if ((ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_SERVER_STARTUP) == 0) {
         serverLog(LL_NOTICE, "Connection type %s can be loaded only during bootup", CONN_TYPE_TLS);
-        return REDISMODULE_ERR;
+        return VALKEYMODULE_ERR;
     }
 
-    RedisModule_SetModuleOptions(ctx, REDISMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD);
+    ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD);
 
     if(connTypeRegister(&CT_TLS) != C_OK)
-        return REDISMODULE_ERR;
+        return VALKEYMODULE_ERR;
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int RedisModule_OnUnload(void *arg) {
+int ValkeyModule_OnUnload(void *arg) {
     UNUSED(arg);
     serverLog(LL_NOTICE, "Connection type %s can not be unloaded", CONN_TYPE_TLS);
-    return REDISMODULE_ERR;
+    return VALKEYMODULE_ERR;
 }
 #endif

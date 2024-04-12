@@ -37,61 +37,61 @@
             "items": {
                 "oneOf": [
                     {
-                        "description": "command does not exist",
+                        "description": "Command does not exist.",
                         "type": "null"
                     },
                     {
-                        "description": "command info array output",
+                        "description": "Command info array output.",
                         "type": "array",
                         "minItems": 10,
                         "maxItems": 10,
                         "items": [
                             {
-                                "description": "command name",
+                                "description": "Command name.",
                                 "type": "string"
                             },
                             {
-                                "description": "command arity",
+                                "description": "Command arity.",
                                 "type": "integer"
                             },
                             {
-                                "description": "command flags",
+                                "description": "Command flags.",
                                 "type": "array",
                                 "items": {
-                                    "description": "command flag",
+                                    "description": "Command flag.",
                                     "type": "string"
                                 }
                             },
                             {
-                                "description": "command first key index",
+                                "description": "Command first key index.",
                                 "type": "integer"
                             },
                             {
-                                "description": "command last key index",
+                                "description": "Command last key index.",
                                 "type": "integer"
                             },
                             {
-                                "description": "command key step index",
+                                "description": "Command key step index.",
                                 "type": "integer"
                             },
                             {
-                                "description": "command categories",
+                                "description": "Command categories.",
                                 "type": "array",
                                 "items": {
-                                    "description": "command category",
+                                    "description": "Command category.",
                                     "type": "string"
                                 }
                             },
                             {
-                                "description": "command tips",
+                                "description": "Command tips.",
                                 "type": "array",
                                 "items": {
-                                    "description": "command tip",
+                                    "description": "Command tip.",
                                     "type": "string"
                                 }
                             },
                             {
-                                "description": "command key specs",
+                                "description": "Command key specs.",
                                 "type": "array",
                                 "items": {
                                     "type": "object",
@@ -116,12 +116,12 @@
                                                 "spec": {
                                                     "anyOf": [
                                                         {
-                                                            "description": "unknown type, empty map",
+                                                            "description": "Unknown type, empty map.",
                                                             "type": "object",
                                                             "additionalProperties": false
                                                         },
                                                         {
-                                                            "description": "index type",
+                                                            "description": "Index type.",
                                                             "type": "object",
                                                             "additionalProperties": false,
                                                             "properties": {
@@ -131,7 +131,7 @@
                                                             }
                                                         },
                                                         {
-                                                            "description": "keyword type",
+                                                            "description": "Keyword type.",
                                                             "type": "object",
                                                             "additionalProperties": false,
                                                             "properties": {
@@ -157,12 +157,12 @@
                                                 "spec": {
                                                     "anyOf": [
                                                         {
-                                                            "description": "unknown type",
+                                                            "description": "Unknown type.",
                                                             "type": "object",
                                                             "additionalProperties": false
                                                         },
                                                         {
-                                                            "description": "range type",
+                                                            "description": "Range type.",
                                                             "type": "object",
                                                             "additionalProperties": false,
                                                             "properties": {
@@ -178,7 +178,7 @@
                                                             }
                                                         },
                                                         {
-                                                            "description": "keynum type",
+                                                            "description": "Keynum type.",
                                                             "type": "object",
                                                             "additionalProperties": false,
                                                             "properties": {
@@ -202,7 +202,7 @@
                             },
                             {
                                 "type": "array",
-                                "description": "subcommands"
+                                "description": "Subcommands."
                             }
                         ]
                     }

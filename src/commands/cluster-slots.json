@@ -30,7 +30,7 @@
             "NONDETERMINISTIC_OUTPUT"
         ],
         "reply_schema": {
-            "description": "nested list of slot ranges with networking information",
+            "description": "Nested list of slot ranges with networking information.",
             "type": "array",
             "items": {
                 "type": "array",
@@ -38,42 +38,42 @@
                 "maxItems": 4294967295,
                 "items": [
                     {
-                        "description": "start slot number",
+                        "description": "Start slot number.",
                         "type": "integer"
                     },
                     {
-                        "description": "end slot number",
+                        "description": "End slot number.",
                         "type": "integer"
                     },
                     {
                         "type": "array",
-                        "description": "Master node for the slot range",
+                        "description": "Master node for the slot range.",
                         "minItems": 4,
                         "maxItems": 4,
                         "items": [
                             {
-                                "description": "endpoint description",
+                                "description": "Endpoint description.",
                                 "oneOf": [
                                     {
-                                        "description": "hostname or ip",
+                                        "description": "Hostname or ip.",
                                         "type": "string"
                                     },
                                     {
-                                        "description": "unknown type",
+                                        "description": "Unknown type.",
                                         "type": "null"
                                     }
                                 ]
                             },
                             {
-                                "description": "port",
+                                "description": "Port.",
                                 "type": "integer"
                             },
                             {
-                                "description": "node name",
+                                "description": "Node name.",
                                 "type": "string"
                             },
                             {
-                                "description": "array of node descriptions",
+                                "description": "Array of node descriptions.",
                                 "type": "object",
                                 "additionalProperties": false,
                                 "properties": {
@@ -90,33 +90,33 @@
                 ],
                 "additionalItems": {
                     "type": "array",
-                    "description": "Replica node for the slot range",
+                    "description": "Replica node for the slot range.",
                     "minItems": 4,
                     "maxItems": 4,
                     "items": [
                         {
-                            "description": "endpoint description",
+                            "description": "Endpoint description.",
                             "oneOf": [
                                 {
-                                    "description": "hostname or ip",
+                                    "description": "Hostname or ip.",
                                     "type": "string"
                                 },
                                 {
-                                    "description": "unknown type",
+                                    "description": "Unknown type.",
                                     "type": "null"
                                 }
                             ]
                         },
                         {
-                            "description": "port",
+                            "description": "Port.",
                             "type": "integer"
                         },
                         {
-                            "description": "node name",
+                            "description": "Node name.",
                             "type": "string"
                         },
                         {
-                            "description": "array of node descriptions",
+                            "description": "Array of node descriptions.",
                             "type": "object",
                             "additionalProperties": false,
                             "properties": {

@@ -1,4 +1,4 @@
-/* Redis CLI (command line interface)
+/* Server CLI (command line interface)
  *
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
@@ -72,14 +72,14 @@
 #define OUTPUT_CSV 2
 #define OUTPUT_JSON 3
 #define OUTPUT_QUOTED_JSON 4
-#define REDIS_CLI_KEEPALIVE_INTERVAL 15 /* seconds */
-#define REDIS_CLI_DEFAULT_PIPE_TIMEOUT 30 /* seconds */
-#define REDIS_CLI_HISTFILE_ENV "REDISCLI_HISTFILE"
-#define REDIS_CLI_HISTFILE_DEFAULT ".rediscli_history"
-#define REDIS_CLI_RCFILE_ENV "REDISCLI_RCFILE"
-#define REDIS_CLI_RCFILE_DEFAULT ".redisclirc"
-#define REDIS_CLI_AUTH_ENV "REDISCLI_AUTH"
-#define REDIS_CLI_CLUSTER_YES_ENV "REDISCLI_CLUSTER_YES"
+#define CLI_KEEPALIVE_INTERVAL 15 /* seconds */
+#define CLI_DEFAULT_PIPE_TIMEOUT 30 /* seconds */
+#define CLI_HISTFILE_ENV "REDISCLI_HISTFILE"
+#define CLI_HISTFILE_DEFAULT ".valkeycli_history"
+#define CLI_RCFILE_ENV "REDISCLI_RCFILE"
+#define CLI_RCFILE_DEFAULT ".valkeyclirc"
+#define CLI_AUTH_ENV "REDISCLI_AUTH"
+#define CLI_CLUSTER_YES_ENV "REDISCLI_CLUSTER_YES"
 
 #define CLUSTER_MANAGER_SLOTS               16384
 #define CLUSTER_MANAGER_PORT_INCR           10000 /* same as CLUSTER_PORT_INCR */
@@ -296,7 +296,7 @@ static long getLongInfoField(char *info, char *field);
 /*------------------------------------------------------------------------------
  * Utility functions
  *--------------------------------------------------------------------------- */
-size_t redis_strlcpy(char *dst, const char *src, size_t dsize);
+size_t valkey_strlcpy(char *dst, const char *src, size_t dsize);
 
 static void cliPushHandler(void *, void *);
 
@@ -321,7 +321,7 @@ static void cliRefreshPrompt(void) {
 
     sds prompt = sdsempty();
     if (config.hostsocket != NULL) {
-        prompt = sdscatfmt(prompt,"redis %s",config.hostsocket);
+        prompt = sdscatfmt(prompt,"valkey %s",config.hostsocket);
     } else {
         char addr[256];
         formatAddr(addr, sizeof(addr), config.conn_info.hostip, config.conn_info.hostport);
@@ -425,10 +425,10 @@ static int helpEntriesLen = 0;
 
 /* For backwards compatibility with pre-7.0 servers.
  * cliLegacyInitHelp() sets up the helpEntries array with the command and group
- * names from the commands.c file. However the Redis instance we are connecting
+ * names from the commands.c file. However the server instance we are connecting
  * to may support more commands, so this function integrates the previous
  * entries with additional entries obtained using the COMMAND command
- * available in recent versions of Redis. */
+ * available in recent versions of the server. */
 static void cliLegacyIntegrateHelp(void) {
     if (cliConnect(CC_QUIET) == REDIS_ERR) return;
 
@@ -840,7 +840,7 @@ static size_t cliLegacyCountCommands(struct commandDocs *commands, sds version) 
  * Stores the result in config.server_version.
  * When not connected, or not possible, returns NULL. */
 static sds cliGetServerVersion(void) {
-    static const char *key = "\nredis_version:";
+    static const char *key = "\nvalkey_version:";
     redisReply *serverInfo = NULL;
     char *pos;
 
@@ -858,7 +858,7 @@ static sds cliGetServerVersion(void) {
     assert(serverInfo->type == REDIS_REPLY_STRING || serverInfo->type == REDIS_REPLY_VERB);
     sds info = serverInfo->str;
 
-    /* Finds the first appearance of "redis_version" in the INFO SERVER reply. */
+    /* Finds the first appearance of "valkey_version" in the INFO SERVER reply. */
     pos = strstr(info, key);
     if (pos) {
         pos += strlen(key);
@@ -878,10 +878,10 @@ static void cliLegacyInitHelp(dict *groups) {
     sds serverVersion = cliGetServerVersion();
     
     /* Scan the commandDocs array and fill in the entries */
-    helpEntriesLen = cliLegacyCountCommands(redisCommandTable, serverVersion);
+    helpEntriesLen = cliLegacyCountCommands(serverCommandTable, serverVersion);
     helpEntries = zmalloc(sizeof(helpEntry)*helpEntriesLen);
 
-    helpEntriesLen = cliLegacyInitCommandHelpEntries(redisCommandTable, groups, serverVersion);
+    helpEntriesLen = cliLegacyInitCommandHelpEntries(serverCommandTable, groups, serverVersion);
     cliInitGroupHelpEntries(groups);
 
     qsort(helpEntries, helpEntriesLen, sizeof(helpEntry), helpEntryCompare);
@@ -954,17 +954,17 @@ static void cliOutputCommandHelp(struct commandDocs *help, int group) {
 static void cliOutputGenericHelp(void) {
     sds version = cliVersion();
     printf(
-        "redis-cli %s\n"
-        "To get help about Redis commands type:\n"
+        "valkey-cli %s\n"
+        "To get help about Valkey commands type:\n"
         "      \"help @<group>\" to get a list of commands in <group>\n"
         "      \"help <command>\" for help on <command>\n"
         "      \"help <tab>\" to get a list of possible help topics\n"
         "      \"quit\" to exit\n"
         "\n"
-        "To set redis-cli preferences:\n"
+        "To set valkey-cli preferences:\n"
         "      \":set hints\" enable online hints\n"
         "      \":set nohints\" disable online hints\n"
-        "Set your preferences in ~/.redisclirc\n",
+        "Set your preferences in ~/.valkeyclirc\n",
         version
     );
     sdsfree(version);
@@ -986,7 +986,7 @@ static void cliOutputHelp(int argc, char **argv) {
 
     if (helpEntries == NULL) {
         /* Initialize the help using the results of the COMMAND command.
-         * In case we are using redis-cli help XXX, we need to init it. */
+         * In case we are using valkey-cli help XXX, we need to init it. */
         cliInitHelp();
     }
 
@@ -1602,7 +1602,7 @@ static int cliSelect(void) {
     return result;
 }
 
-/* Select RESP3 mode if redis-cli was started with the -3 option.  */
+/* Select RESP3 mode if valkey-cli was started with the -3 option.  */
 static int cliSwitchProto(void) {
     redisReply *reply;
     if (!config.resp3 || config.resp2) return REDIS_OK;
@@ -1672,7 +1672,7 @@ static int cliConnect(int flags) {
 
         if (context->err) {
             if (!(flags & CC_QUIET)) {
-                fprintf(stderr,"Could not connect to Redis at ");
+                fprintf(stderr,"Could not connect to Valkey at ");
                 if (config.hostsocket == NULL ||
                     (config.cluster_mode && config.cluster_reissue_command))
                 {
@@ -1689,11 +1689,11 @@ static int cliConnect(int flags) {
         }
 
 
-        /* Set aggressive KEEP_ALIVE socket option in the Redis context socket
+        /* Set aggressive KEEP_ALIVE socket option in the server context socket
          * in order to prevent timeouts caused by the execution of long
          * commands. At the same time this improves the detection of real
          * errors. */
-        anetKeepAlive(NULL, context->fd, REDIS_CLI_KEEPALIVE_INTERVAL);
+        anetKeepAlive(NULL, context->fd, CLI_KEEPALIVE_INTERVAL);
 
         /* State of the current connection. */
         config.current_resp3 = 0;
@@ -2315,7 +2315,7 @@ static int cliReadReply(int output_raw_strings) {
     return REDIS_OK;
 }
 
-/* Simultaneously wait for pubsub messages from redis and input on stdin. */
+/* Simultaneously wait for pubsub messages from the server and input on stdin. */
 static void cliWaitForMessagesOrStdin(void) {
     int show_info = config.output != OUTPUT_RAW && (isatty(STDOUT_FILENO) ||
                                                     getenv("FAKETTY"));
@@ -2337,7 +2337,7 @@ static void cliWaitForMessagesOrStdin(void) {
             }
         } while(reply);
 
-        /* Wait for input, either on the Redis socket or on stdin. */
+        /* Wait for input, either on the server socket or on stdin. */
         struct timeval tv;
         fd_set readfds;
         FD_ZERO(&readfds);
@@ -2366,7 +2366,7 @@ static void cliWaitForMessagesOrStdin(void) {
             }
             break;
         } else if (FD_ISSET(context->fd, &readfds)) {
-            /* Message from Redis */
+            /* Message from the server */
             if (cliReadReply(0) != REDIS_OK) {
                 cliPrintContextError();
                 exit(1);
@@ -2409,7 +2409,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
                        !strcasecmp(argv[1],"graph")) ||
         (argc == 2 && !strcasecmp(command,"latency") &&
                        !strcasecmp(argv[1],"doctor")) ||
-        /* Format PROXY INFO command for Redis Cluster Proxy:
+        /* Format PROXY INFO command for Cluster Proxy:
          * https://github.com/artix75/redis-cluster-proxy */
         (argc >= 2 && !strcasecmp(command,"proxy") &&
                        !strcasecmp(argv[1],"info")))
@@ -2685,7 +2685,7 @@ static int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i],"--user") && !lastarg) {
             config.conn_info.user = sdsnew(argv[++i]);
         } else if (!strcmp(argv[i],"-u") && !lastarg) {
-            parseRedisUri(argv[++i],"redis-cli",&config.conn_info,&config.tls);
+            parseRedisUri(argv[++i],"valkey-cli",&config.conn_info,&config.tls);
             if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
                 fprintf(stderr, "Invalid server port.\n");
                 exit(1);
@@ -2760,7 +2760,7 @@ static int parseOptions(int argc, char **argv) {
             config.bigkeys = 1;
         } else if (!strcmp(argv[i],"--memkeys")) {
             config.memkeys = 1;
-            config.memkeys_samples = 0; /* use redis default */
+            config.memkeys_samples = 0; /* use the server default */
         } else if (!strcmp(argv[i],"--memkeys-samples") && !lastarg) {
             config.memkeys = 1;
             config.memkeys_samples = atoi(argv[++i]);
@@ -2904,7 +2904,7 @@ static int parseOptions(int argc, char **argv) {
 #endif
         } else if (!strcmp(argv[i],"-v") || !strcmp(argv[i], "--version")) {
             sds version = cliVersion();
-            printf("redis-cli %s\n", version);
+            printf("valkey-cli %s\n", version);
             sdsfree(version);
             exit(0);
         } else if (!strcmp(argv[i],"-2")) {
@@ -2985,12 +2985,12 @@ static int parseOptions(int argc, char **argv) {
 
 static void parseEnv(void) {
     /* Set auth from env, but do not overwrite CLI arguments if passed */
-    char *auth = getenv(REDIS_CLI_AUTH_ENV);
+    char *auth = getenv(CLI_AUTH_ENV);
     if (auth != NULL && config.conn_info.auth == NULL) {
         config.conn_info.auth = auth;
     }
 
-    char *cluster_yes = getenv(REDIS_CLI_CLUSTER_YES_ENV);
+    char *cluster_yes = getenv(CLI_CLUSTER_YES_ENV);
     if (cluster_yes != NULL && !strcmp(cluster_yes, "1")) {
         config.cluster_manager_command.flags |= CLUSTER_MANAGER_CMD_FLAG_YES;
     }
@@ -3023,22 +3023,22 @@ static void usage(int err) {
 "";
 
     fprintf(target,
-"redis-cli %s\n"
+"valkey-cli %s\n"
 "\n"
-"Usage: redis-cli [OPTIONS] [cmd [arg [arg ...]]]\n"
+"Usage: valkey-cli [OPTIONS] [cmd [arg [arg ...]]]\n"
 "  -h <hostname>      Server hostname (default: 127.0.0.1).\n"
 "  -p <port>          Server port (default: 6379).\n"
 "  -t <timeout>       Server connection timeout in seconds (decimals allowed).\n"
 "                     Default timeout is 0, meaning no limit, depending on the OS.\n"
 "  -s <socket>        Server socket (overrides hostname and port).\n"
 "  -a <password>      Password to use when connecting to the server.\n"
-"                     You can also use the " REDIS_CLI_AUTH_ENV " environment\n"
+"                     You can also use the " CLI_AUTH_ENV " environment\n"
 "                     variable to pass this password more safely\n"
 "                     (if both are used, this argument takes precedence).\n"
 "  --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.\n"
 "  --pass <password>  Alias of -a for consistency with the new --user option.\n"
 "  --askpass          Force user to input password with mask from STDIN.\n"
-"                     If this argument is used, '-a' and " REDIS_CLI_AUTH_ENV "\n"
+"                     If this argument is used, '-a' and " CLI_AUTH_ENV "\n"
 "                     environment variable will be ignored.\n"
 "  -u <uri>           Server URI on format redis://user:password@host:port/dbnum\n"
 "                     User, password and dbnum are optional. For authentication\n"
@@ -3091,17 +3091,17 @@ version,tls_usage);
 "                     Use filename of \"-\" to write to stdout.\n"
 "  --functions-rdb <filename> Like --rdb but only get the functions (not the keys)\n"
 "                     when getting the RDB dump file.\n"
-"  --pipe             Transfer raw Redis protocol from stdin to server.\n"
+"  --pipe             Transfer raw RESP protocol from stdin to server.\n"
 "  --pipe-timeout <n> In --pipe mode, abort with error if after sending all data.\n"
 "                     no reply is received within <n> seconds.\n"
 "                     Default timeout: %d. Use 0 to wait forever.\n",
-    REDIS_CLI_DEFAULT_PIPE_TIMEOUT);
+    CLI_DEFAULT_PIPE_TIMEOUT);
     fprintf(target,
-"  --bigkeys          Sample Redis keys looking for keys with many elements (complexity).\n"
-"  --memkeys          Sample Redis keys looking for keys consuming a lot of memory.\n"
-"  --memkeys-samples <n> Sample Redis keys looking for keys consuming a lot of memory.\n"
+"  --bigkeys          Sample keys looking for keys with many elements (complexity).\n"
+"  --memkeys          Sample keys looking for keys consuming a lot of memory.\n"
+"  --memkeys-samples <n> Sample keys looking for keys consuming a lot of memory.\n"
 "                     And define number of key elements to sample\n"
-"  --hotkeys          Sample Redis keys looking for hot keys.\n"
+"  --hotkeys          Sample keys looking for hot keys.\n"
 "                     only works when maxmemory-policy is *lfu.\n"
 "  --scan             List all keys using the SCAN command.\n"
 "  --pattern <pat>    Keys pattern when using the --scan, --bigkeys or --hotkeys\n"
@@ -3112,7 +3112,7 @@ version,tls_usage);
 "  --intrinsic-latency <sec> Run a test to measure intrinsic system latency.\n"
 "                     The test will run for the specified amount of seconds.\n"
 "  --eval <file>      Send an EVAL command using the Lua script at <file>.\n"
-"  --ldb              Used with --eval enable the Redis Lua debugger.\n"
+"  --ldb              Used with --eval enable the Server Lua debugger.\n"
 "  --ldb-sync-mode    Like --ldb but uses the synchronous Lua debugger, in\n"
 "                     this mode the server is blocked and script changes are\n"
 "                     not rolled back from the server memory.\n"
@@ -3130,19 +3130,19 @@ version,tls_usage);
 "  Use --cluster help to list all available cluster manager commands.\n"
 "\n"
 "Examples:\n"
-"  redis-cli -u redis://default:PASSWORD@localhost:6379/0\n"
-"  cat /etc/passwd | redis-cli -x set mypasswd\n"
-"  redis-cli -D \"\" --raw dump key > key.dump && redis-cli -X dump_tag restore key2 0 dump_tag replace < key.dump\n"
-"  redis-cli -r 100 lpush mylist x\n"
-"  redis-cli -r 100 -i 1 info | grep used_memory_human:\n"
-"  redis-cli --quoted-input set '\"null-\\x00-separated\"' value\n"
-"  redis-cli --eval myscript.lua key1 key2 , arg1 arg2 arg3\n"
-"  redis-cli --scan --pattern '*:12345*'\n"
-"  redis-cli --scan --pattern '*:12345*' --count 100\n"
+"  valkey-cli -u redis://default:PASSWORD@localhost:6379/0\n"
+"  cat /etc/passwd | valkey-cli -x set mypasswd\n"
+"  valkey-cli -D \"\" --raw dump key > key.dump && valkey-cli -X dump_tag restore key2 0 dump_tag replace < key.dump\n"
+"  valkey-cli -r 100 lpush mylist x\n"
+"  valkey-cli -r 100 -i 1 info | grep used_memory_human:\n"
+"  valkey-cli --quoted-input set '\"null-\\x00-separated\"' value\n"
+"  valkey-cli --eval myscript.lua key1 key2 , arg1 arg2 arg3\n"
+"  valkey-cli --scan --pattern '*:12345*'\n"
+"  valkey-cli --scan --pattern '*:12345*' --count 100\n"
 "\n"
 "  (Note: when using --eval the comma separates KEYS[] from ARGV[] items)\n"
 "\n"
-"When no command is given, redis-cli starts in interactive mode.\n"
+"When no command is given, valkey-cli starts in interactive mode.\n"
 "Type \"help\" in interactive mode for information on available commands\n"
 "and settings.\n"
 "\n");
@@ -3167,10 +3167,10 @@ static int confirmWithYes(char *msg, int ignore_force) {
 }
 
 static int issueCommandRepeat(int argc, char **argv, long repeat) {
-    /* In Lua debugging mode, we want to pass the "help" to Redis to get
+    /* In Lua debugging mode, we want to pass the "help" to the server to get
      * it's own HELP message, rather than handle it by the CLI, see ldbRepl.
      *
-     * For the normal Redis HELP, we can process it without a connection. */
+     * For the normal server HELP, we can process it without a connection. */
     if (!config.eval_ldb &&
         (!strcasecmp(argv[0],"help") || !strcasecmp(argv[0],"?")))
     {
@@ -3238,27 +3238,27 @@ static sds *cliSplitArgs(char *line, int *argc) {
 }
 
 /* Set the CLI preferences. This function is invoked when an interactive
- * ":command" is called, or when reading ~/.redisclirc file, in order to
+ * ":command" is called, or when reading ~/.valkeyclirc file, in order to
  * set user preferences. */
 void cliSetPreferences(char **argv, int argc, int interactive) {
     if (!strcasecmp(argv[0],":set") && argc >= 2) {
         if (!strcasecmp(argv[1],"hints")) pref.hints = 1;
         else if (!strcasecmp(argv[1],"nohints")) pref.hints = 0;
         else {
-            printf("%sunknown redis-cli preference '%s'\n",
-                interactive ? "" : ".redisclirc: ",
+            printf("%sunknown valkey-cli preference '%s'\n",
+                interactive ? "" : ".valkeyclirc: ",
                 argv[1]);
         }
     } else {
-        printf("%sunknown redis-cli internal command '%s'\n",
-            interactive ? "" : ".redisclirc: ",
+        printf("%sunknown valkey-cli internal command '%s'\n",
+            interactive ? "" : ".valkeyclirc: ",
             argv[0]);
     }
 }
 
-/* Load the ~/.redisclirc file if any. */
+/* Load the ~/.valkeyclirc file if any. */
 void cliLoadPreferences(void) {
-    sds rcfile = getDotfilePath(REDIS_CLI_RCFILE_ENV,REDIS_CLI_RCFILE_DEFAULT);
+    sds rcfile = getDotfilePath(CLI_RCFILE_ENV,CLI_RCFILE_DEFAULT);
     if (rcfile == NULL) return;
     FILE *fp = fopen(rcfile,"r");
     char buf[1024];
@@ -3363,9 +3363,9 @@ static void repl(void) {
     int argc;
     sds *argv;
 
-    /* There is no need to initialize redis HELP when we are in lua debugger mode.
+    /* There is no need to initialize HELP when we are in lua debugger mode.
      * It has its own HELP and commands (COMMAND or COMMAND DOCS will fail and got nothing).
-     * We will initialize the redis HELP after the Lua debugging session ended.*/
+     * We will initialize the HELP after the Lua debugging session ended.*/
     if ((!config.eval_ldb) && isatty(fileno(stdin))) {
         /* Initialize the help using the results of the COMMAND command. */
         cliInitHelp();
@@ -3379,7 +3379,7 @@ static void repl(void) {
 
     /* Only use history and load the rc file when stdin is a tty. */
     if (isatty(fileno(stdin))) {
-        historyfile = getDotfilePath(REDIS_CLI_HISTFILE_ENV,REDIS_CLI_HISTFILE_DEFAULT);
+        historyfile = getDotfilePath(CLI_HISTFILE_ENV,CLI_HISTFILE_DEFAULT);
         //keep in-memory history always regardless if history file can be determined
         history = 1;
         if (historyfile != NULL) {
@@ -3424,7 +3424,7 @@ static void repl(void) {
             repeat = strtol(argv[0], &endptr, 10);
             if (argc > 1 && *endptr == '\0') {
                 if (errno == ERANGE || errno == EINVAL || repeat <= 0) {
-                    fputs("Invalid redis-cli repeat command option value.\n", stdout);
+                    fputs("Invalid valkey-cli repeat command option value.\n", stdout);
                     sdsfreesplitres(argv, argc);
                     linenoiseFree(line);
                     continue;
@@ -4026,7 +4026,7 @@ static sds clusterManagerGetNodeRDBFilename(clusterManagerNode *node) {
     sds filename = sdsnew(config.cluster_manager_command.backup_dir);
     if (filename[sdslen(filename) - 1] != '/')
         filename = sdscat(filename, "/");
-    filename = sdscatprintf(filename, "redis-node-%s-%d-%s.rdb", node->ip,
+    filename = sdscatprintf(filename, "valkey-node-%s-%d-%s.rdb", node->ip,
                             node->port, node->name);
     return filename;
 }
@@ -4043,7 +4043,7 @@ static int clusterManagerCheckRedisReply(clusterManagerNode *n,
         if (is_err) {
             if (err != NULL) {
                 *err = zmalloc((r->len + 1) * sizeof(char));
-                redis_strlcpy(*err, r->str,(r->len + 1));
+                valkey_strlcpy(*err, r->str,(r->len + 1));
             } else CLUSTER_MANAGER_PRINT_REPLY_ERROR(n, r->str);
         }
         return 0;
@@ -4102,18 +4102,18 @@ static int clusterManagerNodeConnect(clusterManagerNode *node) {
         }
     }
     if (node->context->err) {
-        fprintf(stderr,"Could not connect to Redis at ");
+        fprintf(stderr,"Could not connect to Valkey at ");
         fprintf(stderr,"%s:%d: %s\n", node->ip, node->port,
                 node->context->errstr);
         redisFree(node->context);
         node->context = NULL;
         return 0;
     }
-    /* Set aggressive KEEP_ALIVE socket option in the Redis context socket
+    /* Set aggressive KEEP_ALIVE socket option in the server context socket
      * in order to prevent timeouts caused by the execution of long
      * commands. At the same time this improves the detection of real
      * errors. */
-    anetKeepAlive(NULL, node->context->fd, REDIS_CLI_KEEPALIVE_INTERVAL);
+    anetKeepAlive(NULL, node->context->fd, CLI_KEEPALIVE_INTERVAL);
     if (config.conn_info.auth) {
         redisReply *reply;
         if (config.conn_info.user == NULL)
@@ -4193,7 +4193,7 @@ static void clusterManagerNodeResetSlots(clusterManagerNode *node) {
     node->slots_count = 0;
 }
 
-/* Call "INFO" redis command on the specified node and return the reply. */
+/* Call "INFO" command on the specified node and return the reply. */
 static redisReply *clusterManagerGetNodeRedisInfo(clusterManagerNode *node,
                                                   char **err)
 {
@@ -4203,7 +4203,7 @@ static redisReply *clusterManagerGetNodeRedisInfo(clusterManagerNode *node,
     if (info->type == REDIS_REPLY_ERROR) {
         if (err != NULL) {
             *err = zmalloc((info->len + 1) * sizeof(char));
-            redis_strlcpy(*err, info->str,(info->len + 1));
+            valkey_strlcpy(*err, info->str,(info->len + 1));
         }
         freeReplyObject(info);
         return  NULL;
@@ -4780,7 +4780,7 @@ static int clusterManagerSetSlot(clusterManagerNode *node1,
         success = 0;
         if (err != NULL) {
             *err = zmalloc((reply->len + 1) * sizeof(char));
-            redis_strlcpy(*err, reply->str,(reply->len + 1));
+            valkey_strlcpy(*err, reply->str,(reply->len + 1));
         } else CLUSTER_MANAGER_PRINT_REPLY_ERROR(node1, reply->str);
         goto cleanup;
     }
@@ -4882,7 +4882,7 @@ static int clusterManagerSetSlotOwner(clusterManagerNode *owner,
 }
 
 /* Get the hash for the values of the specified keys in *keys_reply for the
- * specified nodes *n1 and *n2, by calling DEBUG DIGEST-VALUE redis command
+ * specified nodes *n1 and *n2, by calling DEBUG DIGEST-VALUE command
  * on both nodes. Every key with same name on both nodes but having different
  * values will be added to the *diffs list. Return 0 in case of reply
  * error. */
@@ -5054,7 +5054,7 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
             success = 0;
             if (err != NULL) {
                 *err = zmalloc((reply->len + 1) * sizeof(char));
-                redis_strlcpy(*err, reply->str,(reply->len + 1));
+                valkey_strlcpy(*err, reply->str,(reply->len + 1));
                 CLUSTER_MANAGER_PRINT_REPLY_ERROR(source, *err);
             }
             goto next;
@@ -5166,7 +5166,7 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
                 if (migrate_reply != NULL) {
                     if (err) {
                         *err = zmalloc((migrate_reply->len + 1) * sizeof(char));
-                        redis_strlcpy(*err, migrate_reply->str, (migrate_reply->len + 1));
+                        valkey_strlcpy(*err, migrate_reply->str, (migrate_reply->len + 1));
                     }
                     printf("\n");
                     CLUSTER_MANAGER_PRINT_REPLY_ERROR(source,
@@ -5283,7 +5283,7 @@ static int clusterManagerFlushNodeConfig(clusterManagerNode *node, char **err) {
         if (reply == NULL || (is_err = (reply->type == REDIS_REPLY_ERROR))) {
             if (is_err && err != NULL) {
                 *err = zmalloc((reply->len + 1) * sizeof(char));
-                redis_strlcpy(*err, reply->str, (reply->len + 1));
+                valkey_strlcpy(*err, reply->str, (reply->len + 1));
             }
             success = 0;
             /* If the cluster did not already joined it is possible that
@@ -5974,7 +5974,7 @@ static int clusterManagerFixSlotsCoverage(char *all_slots) {
                     CLUSTER_MANAGER_CMD_FLAG_FIX_WITH_UNREACHABLE_MASTERS;
 
     if (cluster_manager.unreachable_masters > 0 && !force_fix) {
-        clusterManagerLogWarn("*** Fixing slots coverage with %d unreachable masters is dangerous: redis-cli will assume that slots about masters that are not reachable are not covered, and will try to reassign them to the reachable nodes. This can cause data loss and is rarely what you want to do. If you really want to proceed use the --cluster-fix-with-unreachable-masters option.\n", cluster_manager.unreachable_masters);
+        clusterManagerLogWarn("*** Fixing slots coverage with %d unreachable masters is dangerous: valkey-cli will assume that slots about masters that are not reachable are not covered, and will try to reassign them to the reachable nodes. This can cause data loss and is rarely what you want to do. If you really want to proceed use the --cluster-fix-with-unreachable-masters option.\n", cluster_manager.unreachable_masters);
         exit(1);
     }
 
@@ -6176,7 +6176,7 @@ static int clusterManagerFixOpenSlot(int slot) {
                     CLUSTER_MANAGER_CMD_FLAG_FIX_WITH_UNREACHABLE_MASTERS;
 
     if (cluster_manager.unreachable_masters > 0 && !force_fix) {
-        clusterManagerLogWarn("*** Fixing open slots with %d unreachable masters is dangerous: redis-cli will assume that slots about masters that are not reachable are not covered, and will try to reassign them to the reachable nodes. This can cause data loss and is rarely what you want to do. If you really want to proceed use the --cluster-fix-with-unreachable-masters option.\n", cluster_manager.unreachable_masters);
+        clusterManagerLogWarn("*** Fixing open slots with %d unreachable masters is dangerous: valkey-cli will assume that slots about masters that are not reachable are not covered, and will try to reassign them to the reachable nodes. This can cause data loss and is rarely what you want to do. If you really want to proceed use the --cluster-fix-with-unreachable-masters option.\n", cluster_manager.unreachable_masters);
         exit(1);
     }
 
@@ -6487,7 +6487,7 @@ static int clusterManagerFixOpenSlot(int slot) {
         } else {
 unhandled_case:
             success = 0;
-            clusterManagerLogErr("[ERR] Sorry, redis-cli can't fix this slot "
+            clusterManagerLogErr("[ERR] Sorry, valkey-cli can't fix this slot "
                                  "yet (work in progress). Slot is set as "
                                  "migrating in %s, as importing in %s, "
                                  "owner is %s:%d\n", migrating_str,
@@ -6873,7 +6873,7 @@ static void clusterManagerPrintNotClusterNodeError(clusterManagerNode *node,
     clusterManagerLogErr("[ERR] Node %s:%d %s\n", node->ip, node->port, msg);
 }
 
-/* Execute redis-cli in Cluster Manager mode */
+/* Execute valkey-cli in Cluster Manager mode */
 static void clusterManagerMode(clusterManagerCommandProc *proc) {
     int argc = config.cluster_manager_command.argc;
     char **argv = config.cluster_manager_command.argv;
@@ -6942,7 +6942,7 @@ static int clusterManagerCommandCreate(int argc, char **argv) {
     if (masters_count < 3) {
         clusterManagerLogErr(
             "*** ERROR: Invalid configuration for cluster creation.\n"
-            "*** Redis Cluster requires at least 3 master nodes.\n"
+            "*** Valkey Cluster requires at least 3 master nodes.\n"
             "*** This is not possible with %d nodes and %d replicas per node.",
             node_len, replicas);
         clusterManagerLogErr("\n*** At least %d nodes are required.\n",
@@ -7265,7 +7265,7 @@ static int clusterManagerCommandAddNode(int argc, char **argv) {
         reply = CLUSTER_MANAGER_COMMAND(refnode, "FUNCTION DUMP");
         if (!clusterManagerCheckRedisReply(refnode, reply, &err)) {
             clusterManagerLogInfo(">>> Failed retrieving Functions from the cluster, "
-                    "skip this step as Redis version do not support function command (error = '%s')\n", err? err : "NULL reply");
+                    "skip this step as Valkey version do not support function command (error = '%s')\n", err? err : "NULL reply");
             if (err) zfree(err);
         } else {
             assert(reply->type == REDIS_REPLY_STRING);
@@ -7919,7 +7919,7 @@ static int clusterManagerCommandImport(int argc, char **argv) {
     redisContext *src_ctx = redisConnectWrapper(src_ip, src_port, config.connect_timeout);
     if (src_ctx->err) {
         success = 0;
-        fprintf(stderr,"Could not connect to Redis at %s:%d: %s.\n", src_ip,
+        fprintf(stderr,"Could not connect to Valkey at %s:%d: %s.\n", src_ip,
                 src_port, src_ctx->errstr);
         goto cleanup;
     }
@@ -8828,7 +8828,7 @@ static void pipeMode(void) {
                         /* The ECHO sequence starts with a "\r\n" so that if there
                          * is garbage in the protocol we read from stdin, the ECHO
                          * will likely still be properly formatted.
-                         * CRLF is ignored by Redis, so it has no effects. */
+                         * CRLF is ignored by the server, so it has no effects. */
                         char echo[] =
                         "\r\n*2\r\n$4\r\nECHO\r\n$20\r\n01234567890123456789\r\n";
                         int j;
@@ -9881,7 +9881,7 @@ int main(int argc, char **argv) {
     config.pattern = NULL;
     config.rdb_filename = NULL;
     config.pipe_mode = 0;
-    config.pipe_timeout = REDIS_CLI_DEFAULT_PIPE_TIMEOUT;
+    config.pipe_timeout = CLI_DEFAULT_PIPE_TIMEOUT;
     config.bigkeys = 0;
     config.memkeys = 0;
     config.hotkeys = 0;

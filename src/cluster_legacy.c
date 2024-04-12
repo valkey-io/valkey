@@ -3233,6 +3233,13 @@ int clusterProcessPacket(clusterLink *link) {
                 if (master && sender->slaveof != master) {
                     if (sender->slaveof)
                         clusterNodeRemoveSlave(sender->slaveof,sender);
+                    serverLog(LL_NOTICE,
+                              "Node %.40s (%s) is now a replica of node %.40s (%s) in shard %.40s",
+                              sender->name,
+                              sender->human_nodename,
+                              master->name,
+                              master->human_nodename,
+                              sender->shard_id);
                     clusterNodeAddSlave(master,sender);
                     sender->slaveof = master;
 
@@ -3267,7 +3274,7 @@ int clusterProcessPacket(clusterLink *link) {
                 /* Force dirty when sender is primary and owns no slots so that
                  * we have a chance to examine and repair slot migrating/importing
                  * states that involve empty shards. */
-               dirty_slots |= nodeIsMaster(sender) && sender_master->numslots == 0;
+                dirty_slots |= nodeIsMaster(sender) && sender_master->numslots == 0;
             }
         }
 

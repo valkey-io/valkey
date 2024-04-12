@@ -44,9 +44,9 @@ start_server {tags {"introspection"}} {
         # 3 retries of increasing sleep_time, i.e. start with 2s, then go 4s, 8s.
         set sleep_time 2
         for {set i 0} {$i < 3} {incr i} {
-            set rd1 [redis_deferring_client]
+            set rd1 [valkey_deferring_client]
             r debug sleep $sleep_time
-            set rd2 [redis_deferring_client]
+            set rd2 [valkey_deferring_client]
             r acl setuser dummy on nopass +ping
             $rd1 auth dummy ""
             $rd1 read
@@ -80,16 +80,16 @@ start_server {tags {"introspection"}} {
 
     test {CLIENT KILL SKIPME YES/NO will kill all clients} {
         # Kill all clients except `me`
-        set rd1 [redis_deferring_client]
-        set rd2 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
         set connected_clients [s connected_clients]
         assert {$connected_clients >= 3}
         set res [r client kill skipme yes]
         assert {$res == $connected_clients - 1}
 
         # Kill all clients, including `me`
-        set rd3 [redis_deferring_client]
-        set rd4 [redis_deferring_client]
+        set rd3 [valkey_deferring_client]
+        set rd4 [valkey_deferring_client]
         set connected_clients [s connected_clients]
         assert {$connected_clients == 3}
         set res [r client kill skipme no]
@@ -162,7 +162,7 @@ start_server {tags {"introspection"}} {
     } {} {needs:save}
 
     test "CLIENT REPLY OFF/ON: disable all commands reply" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         # These replies were silenced.
         $rd client reply off
@@ -178,7 +178,7 @@ start_server {tags {"introspection"}} {
     }
 
     test "CLIENT REPLY SKIP: skip the next command reply" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         # The first pong reply was silenced.
         $rd client reply skip
@@ -191,7 +191,7 @@ start_server {tags {"introspection"}} {
     }
 
     test "CLIENT REPLY ON: unset SKIP flag" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         $rd client reply skip
         $rd client reply on
@@ -204,7 +204,7 @@ start_server {tags {"introspection"}} {
     }
 
     test {MONITOR can log executed commands} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd monitor
         assert_match {*OK*} [$rd read]
         r set foo bar
@@ -215,7 +215,7 @@ start_server {tags {"introspection"}} {
     } {*"set" "foo"*"get" "foo"*}
 
     test {MONITOR can log commands issued by the scripting engine} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd monitor
         $rd read ;# Discard the OK
         r eval {redis.call('set',KEYS[1],ARGV[1])} 1 foo bar
@@ -228,7 +228,7 @@ start_server {tags {"introspection"}} {
         r function load replace {#!lua name=test
             redis.register_function('test', function() return redis.call('set', 'foo', 'bar') end)
         }
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd monitor
         $rd read ;# Discard the OK
         r fcall test 0
@@ -238,7 +238,7 @@ start_server {tags {"introspection"}} {
     }
 
     test {MONITOR supports redacting command arguments} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd monitor
         $rd read ; # Discard the OK
 
@@ -267,7 +267,7 @@ start_server {tags {"introspection"}} {
     } {0} {needs:repl}
 
     test {MONITOR correctly handles multi-exec cases} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd monitor
         $rd read ; # Discard the OK
 
@@ -296,8 +296,8 @@ start_server {tags {"introspection"}} {
         # need to reconnect in order to reset the clients state
         reconnect
         
-        set rd [redis_deferring_client]
-        set bc [redis_deferring_client]
+        set rd [valkey_deferring_client]
+        set bc [valkey_deferring_client]
         r del mylist
         
         $rd monitor
@@ -363,7 +363,7 @@ start_server {tags {"introspection"}} {
     } {*name=someothername*}
 
     test {After CLIENT SETNAME, connection can still be closed} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd client setname foobar
         assert_equal [$rd read] "OK"
         assert_match {*foobar*} [r client list]
@@ -612,7 +612,7 @@ start_server {tags {"introspection"}} {
     }
 
     test {CONFIG SET rollback on apply error} {
-        # This test tries to configure a used port number in redis. This is expected
+        # This test tries to configure a used port number in the server. This is expected
         # to pass the `CONFIG SET` validity checking implementation but fail on 
         # actual "apply" of the setting. This will validate that after an "apply"
         # failure we rollback to the previous values.
@@ -645,7 +645,7 @@ start_server {tags {"introspection"}} {
         set used_port [find_available_port $::baseport $::portcount]
         dict set some_configs port $used_port
 
-        # Run a dummy server on used_port so we know we can't configure redis to 
+        # Run a dummy server on used_port so we know we can't configure the server to
         # use it. It's ok for this to fail because that means used_port is invalid 
         # anyway
         catch {socket -server dummy_accept -myaddr 127.0.0.1 $used_port} e
@@ -667,7 +667,7 @@ start_server {tags {"introspection"}} {
         }
 
         # Make sure we can still communicate with the server (on the original port)
-        set r1 [redis_client]
+        set r1 [valkey_client]
         assert_equal [$r1 ping] "PONG"
         $r1 close
     }
@@ -706,7 +706,7 @@ start_server {tags {"introspection"}} {
         assert {[dict exists $res bind]}  
     }
 
-    test {redis-server command line arguments - error cases} {
+    test {valkey-server command line arguments - error cases} {
         # Take '--invalid' as the option.
         catch {exec src/valkey-server --invalid} err
         assert_match {*Bad directive or wrong number of arguments*} $err
@@ -749,14 +749,14 @@ start_server {tags {"introspection"}} {
         assert_match {*'replicaof "--127.0.0.1"'*wrong number of arguments*} $err
     } {} {external:skip}
 
-    test {redis-server command line arguments - allow passing option name and option value in the same arg} {
+    test {valkey-server command line arguments - allow passing option name and option value in the same arg} {
         start_server {config "default.conf" args {"--maxmemory 700mb" "--maxmemory-policy volatile-lru"}} {
             assert_match [r config get maxmemory] {maxmemory 734003200}
             assert_match [r config get maxmemory-policy] {maxmemory-policy volatile-lru}
         }
     } {} {external:skip}
 
-    test {redis-server command line arguments - wrong usage that we support anyway} {
+    test {valkey-server command line arguments - wrong usage that we support anyway} {
         start_server {config "default.conf" args {loglevel verbose "--maxmemory '700mb'" "--maxmemory-policy 'volatile-lru'"}} {
             assert_match [r config get loglevel] {loglevel verbose}
             assert_match [r config get maxmemory] {maxmemory 734003200}
@@ -764,21 +764,21 @@ start_server {tags {"introspection"}} {
         }
     } {} {external:skip}
 
-    test {redis-server command line arguments - allow option value to use the `--` prefix} {
+    test {valkey-server command line arguments - allow option value to use the `--` prefix} {
         start_server {config "default.conf" args {--proc-title-template --my--title--template --loglevel verbose}} {
             assert_match [r config get proc-title-template] {proc-title-template --my--title--template}
             assert_match [r config get loglevel] {loglevel verbose}
         }
     } {} {external:skip}
 
-    test {redis-server command line arguments - option name and option value in the same arg and `--` prefix} {
+    test {valkey-server command line arguments - option name and option value in the same arg and `--` prefix} {
         start_server {config "default.conf" args {"--proc-title-template --my--title--template" "--loglevel verbose"}} {
             assert_match [r config get proc-title-template] {proc-title-template --my--title--template}
             assert_match [r config get loglevel] {loglevel verbose}
         }
     } {} {external:skip}
 
-    test {redis-server command line arguments - save with empty input} {
+    test {valkey-server command line arguments - save with empty input} {
         start_server {config "default.conf" args {--save --loglevel verbose}} {
             assert_match [r config get save] {save {}}
             assert_match [r config get loglevel] {loglevel verbose}
@@ -807,7 +807,7 @@ start_server {tags {"introspection"}} {
 
     } {} {external:skip}
 
-    test {redis-server command line arguments - take one bulk string with spaces for MULTI_ARG configs parsing} {
+    test {valkey-server command line arguments - take one bulk string with spaces for MULTI_ARG configs parsing} {
         start_server {config "default.conf" args {--shutdown-on-sigint nosave force now --shutdown-on-sigterm "nosave force"}} {
             assert_match [r config get shutdown-on-sigint] {shutdown-on-sigint {nosave now force}}
             assert_match [r config get shutdown-on-sigterm] {shutdown-on-sigterm {nosave force}}

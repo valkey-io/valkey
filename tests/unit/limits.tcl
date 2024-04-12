@@ -9,7 +9,7 @@ start_server {tags {"limits network external:skip"} overrides {maxclients 10}} {
         catch {
             while {$c < 50} {
                 incr c
-                set rd [redis_deferring_client]
+                set rd [valkey_deferring_client]
                 $rd ping
                 $rd read
                 after 100

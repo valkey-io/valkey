@@ -285,7 +285,7 @@ start_server {tags {"dump"}} {
             assert {[$first exists key] == 1}
             assert {[$second exists key] == 0}
 
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             $rd debug sleep 1.0 ; # Make second server unable to reply.
             set e {}
             catch {r -1 migrate $second_host $second_port key 9 500} e

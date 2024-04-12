@@ -12,7 +12,7 @@ start_server {tags {"cli"}} {
             set opts "-n $::dbnum"
         }
         set ::env(TERM) dumb
-        set cmdline [rediscli [srv host] [srv port] $opts]
+        set cmdline [valkeycli [srv host] [srv port] $opts]
         if {$infile ne ""} {
             set cmdline "$cmdline < $infile"
             set mode "r"
@@ -92,7 +92,7 @@ start_server {tags {"cli"}} {
     }
 
     proc _run_cli {host port db opts args} {
-        set cmd [rediscli $host $port [list -n $db {*}$args]]
+        set cmd [valkeycli $host $port [list -n $db {*}$args]]
         foreach {key value} $opts {
             if {$key eq "pipe"} {
                 set cmd "sh -c \"$value | $cmd\""
@@ -360,7 +360,7 @@ start_server {tags {"cli"}} {
 
 if {!$::tls} { ;# fake_redis_node doesn't support TLS
     test_nontty_cli "ASK redirect test" {
-        # Set up two fake Redis nodes.
+        # Set up two fake nodes.
         set tclsh [info nameofexecutable]
         set script "tests/helpers/fake_redis_node.tcl"
         set port1 [find_available_port $::baseport $::portcount]
@@ -580,7 +580,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
     }
 
     test "DUMP RESTORE with -x option" {
-        set cmdline [rediscli [srv host] [srv port]]
+        set cmdline [valkeycli [srv host] [srv port]]
 
         exec {*}$cmdline DEL set new_set
         exec {*}$cmdline SADD set 1 2 3 4 5 6
@@ -594,7 +594,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
     }
 
     test "DUMP RESTORE with -X option" {
-        set cmdline [rediscli [srv host] [srv port]]
+        set cmdline [valkeycli [srv host] [srv port]]
 
         exec {*}$cmdline DEL zset new_zset
         exec {*}$cmdline ZADD zset 1 a 2 b 3 c

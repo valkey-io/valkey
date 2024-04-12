@@ -226,7 +226,7 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
     if (argc > 1) return RedisModule_WrongArity(ctx);
     
     /* When that flag is passed, we try to create too many categories,
-     * and the test expects this to fail. In this case redis returns REDISMODULE_ERR
+     * and the test expects this to fail. In this case the server returns REDISMODULE_ERR
      * and set errno to ENOMEM*/
     if (argc == 1) {
         long long fail_flag = 0;
@@ -289,14 +289,14 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
             return REDISMODULE_ERR;
 
     /* This validates that, when module tries to add a category with invalid characters,
-     * redis returns REDISMODULE_ERR and set errno to `EINVAL` */
+     * the server returns REDISMODULE_ERR and set errno to `EINVAL` */
     if (RedisModule_AddACLCategory(ctx,"!nval!dch@r@cter$") == REDISMODULE_ERR)
         RedisModule_Assert(errno == EINVAL);
     else 
         return REDISMODULE_ERR;
     
     /* This validates that, when module tries to add a category that already exists,
-     * redis returns REDISMODULE_ERR and set errno to `EBUSY` */
+     * the server returns REDISMODULE_ERR and set errno to `EBUSY` */
     if (RedisModule_AddACLCategory(ctx,"write") == REDISMODULE_ERR)
         RedisModule_Assert(errno == EBUSY);
     else 

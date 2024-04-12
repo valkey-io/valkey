@@ -46,7 +46,7 @@ static double avg_ttl_factor[16] = {0.98, 0.9604, 0.941192, 0.922368, 0.903921, 
 
 /* Helper function for the activeExpireCycle() function.
  * This function will try to expire the key that is stored in the hash table
- * entry 'de' of the 'expires' hash table of a Redis database.
+ * entry 'de' of the 'expires' hash table of a database.
  *
  * If the key is found to be expired, it is removed from the database and
  * 1 is returned. Otherwise no operation is performed and 0 is returned.
@@ -259,7 +259,7 @@ void activeExpireCycle(int type) {
         /* Continue to expire if at the end of the cycle there are still
          * a big percentage of keys to expire, compared to the number of keys
          * we scanned. The percentage, stored in config_cycle_acceptable_stale
-         * is not fixed, but depends on the Redis configured "expire effort". */
+         * is not fixed, but depends on the configured "expire effort". */
         do {
             unsigned long num;
             iteration++;

@@ -1,8 +1,21 @@
 # Cluster helper functions
 
 # Check if cluster configuration is consistent.
+# All the nodes in the cluster should show same slots configuration and have health
+# state "online" to be considered as consistent.
 proc cluster_config_consistent {} {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
+        # Check if all the nodes are online
+        set shards_cfg [R $j CLUSTER SHARDS]
+        foreach shard_cfg $shards_cfg {
+            set nodes [dict get $shard_cfg nodes]
+            foreach node $nodes {
+                if {[dict get $node health] ne "online"} {
+                    return 0
+                }
+            }
+        }
+
         if {$j == 0} {
             set base_cfg [R $j cluster slots]
         } else {
@@ -27,7 +40,7 @@ proc cluster_size_consistent {cluster_size} {
 
 # Wait for cluster configuration to propagate and be consistent across nodes.
 proc wait_for_cluster_propagation {} {
-    wait_for_condition 50 100 {
+    wait_for_condition 1000 50 {
         [cluster_config_consistent] eq 1
     } else {
         fail "cluster config did not reach a consistent state"

@@ -8,7 +8,7 @@
         },
         {
           "arch": "x86_64",
-          "target": "ubuntu22.04",
+          "target": "ubuntu20.04",
           "type": "deb",
           "platform": "focal"
         },

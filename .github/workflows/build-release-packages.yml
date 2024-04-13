@@ -32,8 +32,7 @@ jobs:
         run: |
             VERSION="${INPUT_VERSION}"
             if [ -z "${VERSION}" ]; then
-              echo "Defaulting to master"
-              VERSION=master
+              exit 1
             fi
             echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
         shell: bash

@@ -791,7 +791,7 @@ int clusterLockConfig(char *filename) {
         if (errno == EWOULDBLOCK) {
             serverLog(LL_WARNING,
                  "Sorry, the cluster configuration file %s is already used "
-                 "by a different Redis Cluster node. Please make sure that "
+                 "by a different Cluster node. Please make sure that "
                  "different nodes use different cluster configuration "
                  "files.", filename);
         } else {
@@ -1011,10 +1011,10 @@ void clusterInit(void) {
      * us from trying to use a too-high cluster port number. */
     int port = defaultClientPort();
     if (!server.cluster_port && port > (65535-CLUSTER_PORT_INCR)) {
-        serverLog(LL_WARNING, "Redis port number too high. "
+        serverLog(LL_WARNING, "%s port number too high. "
                    "Cluster communication port is 10,000 port "
-                   "numbers higher than your Redis port. "
-                   "Your Redis port number must be 55535 or less.");
+                   "numbers higher than your %s port. "
+                   "Your %s port number must be 55535 or less.", SERVER_TITLE, SERVER_TITLE);
         exit(1);
     }
     if (!server.bindaddr_count) {
@@ -1055,7 +1055,7 @@ void clusterInitLast(void) {
     }
     
     if (createSocketAcceptHandler(&server.clistener, clusterAcceptHandler) != C_OK) {
-        serverPanic("Unrecoverable error creating Redis Cluster socket accept handler.");
+        serverPanic("Unrecoverable error creating Cluster socket accept handler.");
     }
 }
 

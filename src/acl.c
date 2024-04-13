@@ -2572,11 +2572,11 @@ cleanup:
 void ACLLoadUsersAtStartup(void) {
     if (server.acl_filename[0] != '\0' && listLength(UsersToLoad) != 0) {
         serverLog(LL_WARNING,
-            "Configuring Valkey with users defined in valkey.conf and at "
+            "Configuring %s with users defined in valkey.conf and at "
             "the same setting an ACL file path is invalid. This setup "
             "is very likely to lead to configuration errors and security "
             "holes, please define either an ACL file or declare users "
-            "directly in your valkey.conf, but not both.");
+            "directly in your valkey.conf, but not both.", SERVER_TITLE);
         exit(1);
     }
 
@@ -2590,7 +2590,7 @@ void ACLLoadUsersAtStartup(void) {
         sds errors = ACLLoadFromFile(server.acl_filename);
         if (errors) {
             serverLog(LL_WARNING,
-                "Aborting Valkey startup because of ACL errors: %s", errors);
+                "Aborting %s startup because of ACL errors: %s", SERVER_TITLE, errors);
             sdsfree(errors);
             exit(1);
         }

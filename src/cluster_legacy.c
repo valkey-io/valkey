@@ -1014,7 +1014,7 @@ void clusterInit(void) {
         serverLog(LL_WARNING, "%s port number too high. "
                    "Cluster communication port is 10,000 port "
                    "numbers higher than your %s port. "
-                   "Your %s port number must be 55535 or less.", SERVER_TITLE, SERVER_TITLE);
+                   "Your %s port number must be 55535 or less.", SERVER_TITLE, SERVER_TITLE, SERVER_TITLE);
         exit(1);
     }
     if (!server.bindaddr_count) {

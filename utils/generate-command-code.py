@@ -576,7 +576,7 @@ with open("%s/%s.def" % (srcdir, commands_filename), "w") as f:
 """
 /* We have fabulous commands from
  * the fantastic
- * Redis Command Table! */
+ * Command Table! */
 
 /* Must match serverCommandGroup */
 const char *COMMAND_GROUP_STR[] = {

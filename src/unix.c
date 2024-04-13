@@ -56,7 +56,7 @@ static int connUnixListen(connListener *listener) {
     if (listener->bindaddr_count == 0)
         return C_OK;
 
-    /* currently listener->bindaddr_count is always 1, we still use a loop here in case Redis supports multi Unix socket in the future */
+    /* currently listener->bindaddr_count is always 1, we still use a loop here in case the server supports multi Unix socket in the future */
     for (int j = 0; j < listener->bindaddr_count; j++) {
         char *addr = listener->bindaddr[j];
 

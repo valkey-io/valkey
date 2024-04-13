@@ -34,7 +34,7 @@
 #include "pqsort.h"
 
 /* Things exported from t_zset.c only for geo.c, since it is the only other
- * part of Redis that requires close zset introspection. */
+ * part of the server that requires close zset introspection. */
 unsigned char *zzlFirstInRange(unsigned char *zl, zrangespec *range);
 int zslValueLteMax(double value, zrangespec *spec);
 
@@ -246,7 +246,7 @@ int geoWithinShape(GeoShape *shape, double score, double *xy, double *distance) 
     return C_OK;
 }
 
-/* Query a Redis sorted set to extract all the elements between 'min' and
+/* Query a sorted set to extract all the elements between 'min' and
  * 'max', appending them into the array of geoPoint structures 'geoArray'.
  * The command returns the number of elements added to the array.
  *

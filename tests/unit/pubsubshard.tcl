@@ -1,6 +1,6 @@
 start_server {tags {"pubsubshard external:skip"}} {
     test "SPUBLISH/SSUBSCRIBE basics" {
-        set rd1 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
 
         # subscribe to two channels
         assert_equal {1} [ssubscribe $rd1 {chan1}]
@@ -26,8 +26,8 @@ start_server {tags {"pubsubshard external:skip"}} {
     }
 
     test "SPUBLISH/SSUBSCRIBE with two clients" {
-        set rd1 [redis_deferring_client]
-        set rd2 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
 
         assert_equal {1} [ssubscribe $rd1 {chan1}]
         assert_equal {1} [ssubscribe $rd2 {chan1}]
@@ -41,7 +41,7 @@ start_server {tags {"pubsubshard external:skip"}} {
     }
 
     test "SPUBLISH/SSUBSCRIBE after UNSUBSCRIBE without arguments" {
-        set rd1 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
         assert_equal {1} [ssubscribe $rd1 {chan1}]
         assert_equal {2} [ssubscribe $rd1 {chan2}]
         assert_equal {3} [ssubscribe $rd1 {chan3}]
@@ -55,7 +55,7 @@ start_server {tags {"pubsubshard external:skip"}} {
     }
 
     test "SSUBSCRIBE to one channel more than once" {
-        set rd1 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
         assert_equal {1 1 1} [ssubscribe $rd1 {chan1 chan1 chan1}]
         assert_equal 1 [r SPUBLISH chan1 hello]
         assert_equal {smessage chan1 hello} [$rd1 read]
@@ -65,7 +65,7 @@ start_server {tags {"pubsubshard external:skip"}} {
     }
 
     test "SUNSUBSCRIBE from non-subscribed channels" {
-        set rd1 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
         assert_equal {0} [sunsubscribe $rd1 {foo}]
         assert_equal {0} [sunsubscribe $rd1 {bar}]
         assert_equal {0} [sunsubscribe $rd1 {quux}]
@@ -79,8 +79,8 @@ start_server {tags {"pubsubshard external:skip"}} {
     } {abc 0 def 0}
 
     test "SPUBLISH/SSUBSCRIBE with two clients" {
-        set rd1 [redis_deferring_client]
-        set rd2 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
 
         assert_equal {1} [ssubscribe $rd1 {chan1}]
         assert_equal {1} [ssubscribe $rd2 {chan1}]
@@ -94,8 +94,8 @@ start_server {tags {"pubsubshard external:skip"}} {
     }
 
     test "SPUBLISH/SSUBSCRIBE with PUBLISH/SUBSCRIBE" {
-        set rd1 [redis_deferring_client]
-        set rd2 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
 
         assert_equal {1} [ssubscribe $rd1 {chan1}]
         assert_equal {1} [subscribe $rd2 {chan1}]
@@ -111,7 +111,7 @@ start_server {tags {"pubsubshard external:skip"}} {
     }
 
     test "PubSubShard with CLIENT REPLY OFF" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd hello 3
         $rd read ;# Discard the hello reply
 
@@ -151,8 +151,8 @@ start_server {tags {"pubsubshard external:skip"}} {
     }
 
     test {publish message to master and receive on replica} {
-        set rd0 [redis_deferring_client node_0_host node_0_port]
-        set rd1 [redis_deferring_client node_1_host node_1_port]
+        set rd0 [valkey_deferring_client node_0_host node_0_port]
+        set rd1 [valkey_deferring_client node_1_host node_1_port]
 
         assert_equal {1} [ssubscribe $rd1 {chan1}]
         $rd0 SPUBLISH chan1 hello

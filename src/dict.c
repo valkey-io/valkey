@@ -50,7 +50,7 @@
 
 /* Using dictSetResizeEnabled() we make possible to disable
  * resizing and rehashing of the hash table as needed. This is very important
- * for Redis, as we use copy-on-write and don't want to move too much memory
+ * for us, as we use copy-on-write and don't want to move too much memory
  * around when there is a child performing saving operations.
  *
  * Note that even when dict_can_resize is set to DICT_RESIZE_AVOID, not all

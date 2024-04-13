@@ -21,7 +21,7 @@ start_server {tags {"modules"}} {
         assert_equal [r auth.changecount] 0
         r auth.createmoduleuser
 
-        # Catch the I/O exception that was thrown when Redis
+        # Catch the I/O exception that was thrown when the server
         # disconnected with us. 
         catch { [r ping] } e
         assert_match {*I/O*} $e

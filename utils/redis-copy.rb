@@ -1,7 +1,7 @@
 # redis-copy.rb - Copyright (C) 2009-2010 Salvatore Sanfilippo
 # BSD license, See the COPYING file for more information.
 #
-# Copy the whole dataset from one Redis instance to another one
+# Copy the whole dataset from one server instance to another one
 #
 # WARNING: this utility is deprecated and serves as a legacy adapter
 #          for the more-robust redis-copy gem.

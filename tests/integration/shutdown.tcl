@@ -56,7 +56,7 @@ foreach how {sigterm shutdown} {
                         exec kill -SIGTERM $master_pid
                     }
                     shutdown {
-                        set rd [redis_deferring_client -1]
+                        set rd [valkey_deferring_client -1]
                         $rd shutdown
                     }
                 }
@@ -152,8 +152,8 @@ test "Shutting down master waits for replica then fails" {
             $master incr k
 
             # Two clients call blocking SHUTDOWN in parallel.
-            set rd1 [redis_deferring_client -1]
-            set rd2 [redis_deferring_client -1]
+            set rd1 [valkey_deferring_client -1]
+            set rd2 [valkey_deferring_client -1]
             $rd1 shutdown
             $rd2 shutdown
             set info_clients [$master info clients]
@@ -205,8 +205,8 @@ test "Shutting down master waits for replica then aborted" {
             $master incr k
 
             # Two clients call blocking SHUTDOWN in parallel.
-            set rd1 [redis_deferring_client -1]
-            set rd2 [redis_deferring_client -1]
+            set rd1 [valkey_deferring_client -1]
+            set rd2 [valkey_deferring_client -1]
             $rd1 shutdown
             $rd2 shutdown
             set info_clients [$master info clients]

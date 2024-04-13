@@ -73,55 +73,55 @@ static void callReplySetSharedData(CallReply *rep, int type, const char *proto, 
 
 static void callReplyNull(void *ctx, const char *proto, size_t proto_len) {
     CallReply *rep = ctx;
-    callReplySetSharedData(rep, REDISMODULE_REPLY_NULL, proto, proto_len, REPLY_FLAG_RESP3);
+    callReplySetSharedData(rep, VALKEYMODULE_REPLY_NULL, proto, proto_len, REPLY_FLAG_RESP3);
 }
 
 static void callReplyNullBulkString(void *ctx, const char *proto, size_t proto_len) {
     CallReply *rep = ctx;
-    callReplySetSharedData(rep, REDISMODULE_REPLY_NULL, proto, proto_len, 0);
+    callReplySetSharedData(rep, VALKEYMODULE_REPLY_NULL, proto, proto_len, 0);
 }
 
 static void callReplyNullArray(void *ctx, const char *proto, size_t proto_len) {
     CallReply *rep = ctx;
-    callReplySetSharedData(rep, REDISMODULE_REPLY_NULL, proto, proto_len, 0);
+    callReplySetSharedData(rep, VALKEYMODULE_REPLY_NULL, proto, proto_len, 0);
 }
 
 static void callReplyBulkString(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
     CallReply *rep = ctx;
-    callReplySetSharedData(rep, REDISMODULE_REPLY_STRING, proto, proto_len, 0);
+    callReplySetSharedData(rep, VALKEYMODULE_REPLY_STRING, proto, proto_len, 0);
     rep->len = len;
     rep->val.str = str;
 }
 
 static void callReplyError(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
     CallReply *rep = ctx;
-    callReplySetSharedData(rep, REDISMODULE_REPLY_ERROR, proto, proto_len, 0);
+    callReplySetSharedData(rep, VALKEYMODULE_REPLY_ERROR, proto, proto_len, 0);
     rep->len = len;
     rep->val.str = str;
 }
 
 static void callReplySimpleStr(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
     CallReply *rep = ctx;
-    callReplySetSharedData(rep, REDISMODULE_REPLY_STRING, proto, proto_len, 0);
+    callReplySetSharedData(rep, VALKEYMODULE_REPLY_STRING, proto, proto_len, 0);
     rep->len = len;
     rep->val.str = str;
 }
 
 static void callReplyLong(void *ctx, long long val, const char *proto, size_t proto_len) {
     CallReply *rep = ctx;
-    callReplySetSharedData(rep, REDISMODULE_REPLY_INTEGER, proto, proto_len, 0);
+    callReplySetSharedData(rep, VALKEYMODULE_REPLY_INTEGER, proto, proto_len, 0);
     rep->val.ll = val;
 }
 
 static void callReplyDouble(void *ctx, double val, const char *proto, size_t proto_len) {
     CallReply *rep = ctx;
-    callReplySetSharedData(rep, REDISMODULE_REPLY_DOUBLE, proto, proto_len, REPLY_FLAG_RESP3);
+    callReplySetSharedData(rep, VALKEYMODULE_REPLY_DOUBLE, proto, proto_len, REPLY_FLAG_RESP3);
     rep->val.d = val;
 }
 
 static void callReplyVerbatimString(void *ctx, const char *format, const char *str, size_t len, const char *proto, size_t proto_len) {
     CallReply *rep = ctx;
-    callReplySetSharedData(rep, REDISMODULE_REPLY_VERBATIM_STRING, proto, proto_len, REPLY_FLAG_RESP3);
+    callReplySetSharedData(rep, VALKEYMODULE_REPLY_VERBATIM_STRING, proto, proto_len, REPLY_FLAG_RESP3);
     rep->len = len;
     rep->val.verbatim_str.str = str;
     rep->val.verbatim_str.format = format;
@@ -129,14 +129,14 @@ static void callReplyVerbatimString(void *ctx, const char *format, const char *s
 
 static void callReplyBigNumber(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
     CallReply *rep = ctx;
-    callReplySetSharedData(rep, REDISMODULE_REPLY_BIG_NUMBER, proto, proto_len, REPLY_FLAG_RESP3);
+    callReplySetSharedData(rep, VALKEYMODULE_REPLY_BIG_NUMBER, proto, proto_len, REPLY_FLAG_RESP3);
     rep->len = len;
     rep->val.str = str;
 }
 
 static void callReplyBool(void *ctx, int val, const char *proto, size_t proto_len) {
     CallReply *rep = ctx;
-    callReplySetSharedData(rep, REDISMODULE_REPLY_BOOL, proto, proto_len, REPLY_FLAG_RESP3);
+    callReplySetSharedData(rep, VALKEYMODULE_REPLY_BOOL, proto, proto_len, REPLY_FLAG_RESP3);
     rep->val.ll = val;
 }
 
@@ -164,7 +164,7 @@ static void callReplyAttribute(ReplyParser *parser, void *ctx, size_t len, const
 
     /* Continue parsing the attribute reply */
     rep->attribute->len = len;
-    rep->attribute->type = REDISMODULE_REPLY_ATTRIBUTE;
+    rep->attribute->type = VALKEYMODULE_REPLY_ATTRIBUTE;
     callReplyParseCollection(parser, rep->attribute, len, proto, 2);
     rep->attribute->flags |= REPLY_FLAG_PARSED | REPLY_FLAG_RESP3;
     rep->attribute->private_data = rep->private_data;
@@ -180,39 +180,39 @@ static void callReplyAttribute(ReplyParser *parser, void *ctx, size_t len, const
 
 static void callReplyArray(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
     CallReply *rep = ctx;
-    rep->type = REDISMODULE_REPLY_ARRAY;
+    rep->type = VALKEYMODULE_REPLY_ARRAY;
     callReplyParseCollection(parser, rep, len, proto, 1);
 }
 
 static void callReplySet(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
     CallReply *rep = ctx;
-    rep->type = REDISMODULE_REPLY_SET;
+    rep->type = VALKEYMODULE_REPLY_SET;
     callReplyParseCollection(parser, rep, len, proto, 1);
     rep->flags |= REPLY_FLAG_RESP3;
 }
 
 static void callReplyMap(ReplyParser *parser, void *ctx, size_t len, const char *proto) {
     CallReply *rep = ctx;
-    rep->type = REDISMODULE_REPLY_MAP;
+    rep->type = VALKEYMODULE_REPLY_MAP;
     callReplyParseCollection(parser, rep, len, proto, 2);
     rep->flags |= REPLY_FLAG_RESP3;
 }
 
 static void callReplyParseError(void *ctx) {
     CallReply *rep = ctx;
-    rep->type = REDISMODULE_REPLY_UNKNOWN;
+    rep->type = VALKEYMODULE_REPLY_UNKNOWN;
 }
 
 /* Recursively free the current call reply and its sub-replies. */
 static void freeCallReplyInternal(CallReply *rep) {
-    if (rep->type == REDISMODULE_REPLY_ARRAY || rep->type == REDISMODULE_REPLY_SET) {
+    if (rep->type == VALKEYMODULE_REPLY_ARRAY || rep->type == VALKEYMODULE_REPLY_SET) {
         for (size_t i = 0 ; i < rep->len ; ++i) {
             freeCallReplyInternal(rep->val.array + i);
         }
         zfree(rep->val.array);
     }
 
-    if (rep->type == REDISMODULE_REPLY_MAP || rep->type == REDISMODULE_REPLY_ATTRIBUTE) {
+    if (rep->type == VALKEYMODULE_REPLY_MAP || rep->type == VALKEYMODULE_REPLY_ATTRIBUTE) {
         for (size_t i = 0 ; i < rep->len ; ++i) {
             freeCallReplyInternal(rep->val.array + i * 2);
             freeCallReplyInternal(rep->val.array + i * 2 + 1);
@@ -234,7 +234,7 @@ void freeCallReply(CallReply *rep) {
         return;
     }
     if (rep->flags & REPLY_FLAG_PARSED) {
-        if (rep->type == REDISMODULE_REPLY_PROMISE) {
+        if (rep->type == VALKEYMODULE_REPLY_PROMISE) {
             zfree(rep);
             return;
         }
@@ -248,7 +248,7 @@ void freeCallReply(CallReply *rep) {
 
 CallReply *callReplyCreatePromise(void *private_data) {
     CallReply *res = zmalloc(sizeof(*res));
-    res->type = REDISMODULE_REPLY_PROMISE;
+    res->type = VALKEYMODULE_REPLY_PROMISE;
     /* Mark the reply as parsed so there will be not attempt to parse
      * it when calling reply API such as freeCallReply.
      * Also mark the reply as root so freeCallReply will not ignore it. */
@@ -289,16 +289,16 @@ static void callReplyParse(CallReply *rep) {
     rep->flags |= REPLY_FLAG_PARSED;
 }
 
-/* Return the call reply type (REDISMODULE_REPLY_...). */
+/* Return the call reply type (VALKEYMODULE_REPLY_...). */
 int callReplyType(CallReply *rep) {
-    if (!rep) return REDISMODULE_REPLY_UNKNOWN;
+    if (!rep) return VALKEYMODULE_REPLY_UNKNOWN;
     callReplyParse(rep);
     return rep->type;
 }
 
 /* Return reply string as buffer and len. Applicable to:
- * - REDISMODULE_REPLY_STRING
- * - REDISMODULE_REPLY_ERROR
+ * - VALKEYMODULE_REPLY_STRING
+ * - VALKEYMODULE_REPLY_ERROR
  *
  * The return value is borrowed from CallReply, so it must not be freed
  * explicitly or used after CallReply itself is freed.
@@ -308,56 +308,56 @@ int callReplyType(CallReply *rep) {
  */
 const char *callReplyGetString(CallReply *rep, size_t *len) {
     callReplyParse(rep);
-    if (rep->type != REDISMODULE_REPLY_STRING &&
-        rep->type != REDISMODULE_REPLY_ERROR) return NULL;
+    if (rep->type != VALKEYMODULE_REPLY_STRING &&
+        rep->type != VALKEYMODULE_REPLY_ERROR) return NULL;
     if (len) *len = rep->len;
     return rep->val.str;
 }
 
 /* Return a long long reply value. Applicable to:
- * - REDISMODULE_REPLY_INTEGER
+ * - VALKEYMODULE_REPLY_INTEGER
  */
 long long callReplyGetLongLong(CallReply *rep) {
     callReplyParse(rep);
-    if (rep->type != REDISMODULE_REPLY_INTEGER) return LLONG_MIN;
+    if (rep->type != VALKEYMODULE_REPLY_INTEGER) return LLONG_MIN;
     return rep->val.ll;
 }
 
 /* Return a double reply value. Applicable to:
- * - REDISMODULE_REPLY_DOUBLE
+ * - VALKEYMODULE_REPLY_DOUBLE
  */
 double callReplyGetDouble(CallReply *rep) {
     callReplyParse(rep);
-    if (rep->type != REDISMODULE_REPLY_DOUBLE) return LLONG_MIN;
+    if (rep->type != VALKEYMODULE_REPLY_DOUBLE) return LLONG_MIN;
     return rep->val.d;
 }
 
 /* Return a reply Boolean value. Applicable to:
- * - REDISMODULE_REPLY_BOOL
+ * - VALKEYMODULE_REPLY_BOOL
  */
 int callReplyGetBool(CallReply *rep) {
     callReplyParse(rep);
-    if (rep->type != REDISMODULE_REPLY_BOOL) return INT_MIN;
+    if (rep->type != VALKEYMODULE_REPLY_BOOL) return INT_MIN;
     return rep->val.ll;
 }
 
 /* Return reply length. Applicable to:
- * - REDISMODULE_REPLY_STRING
- * - REDISMODULE_REPLY_ERROR
- * - REDISMODULE_REPLY_ARRAY
- * - REDISMODULE_REPLY_SET
- * - REDISMODULE_REPLY_MAP
- * - REDISMODULE_REPLY_ATTRIBUTE
+ * - VALKEYMODULE_REPLY_STRING
+ * - VALKEYMODULE_REPLY_ERROR
+ * - VALKEYMODULE_REPLY_ARRAY
+ * - VALKEYMODULE_REPLY_SET
+ * - VALKEYMODULE_REPLY_MAP
+ * - VALKEYMODULE_REPLY_ATTRIBUTE
  */
 size_t callReplyGetLen(CallReply *rep) {
     callReplyParse(rep);
     switch(rep->type) {
-        case REDISMODULE_REPLY_STRING:
-        case REDISMODULE_REPLY_ERROR:
-        case REDISMODULE_REPLY_ARRAY:
-        case REDISMODULE_REPLY_SET:
-        case REDISMODULE_REPLY_MAP:
-        case REDISMODULE_REPLY_ATTRIBUTE:
+        case VALKEYMODULE_REPLY_STRING:
+        case VALKEYMODULE_REPLY_ERROR:
+        case VALKEYMODULE_REPLY_ARRAY:
+        case VALKEYMODULE_REPLY_SET:
+        case VALKEYMODULE_REPLY_MAP:
+        case VALKEYMODULE_REPLY_ATTRIBUTE:
             return rep->len;
         default:
             return 0;
@@ -370,26 +370,26 @@ static CallReply *callReplyGetCollectionElement(CallReply *rep, size_t idx, int 
 }
 
 /* Return a reply array element at a given index. Applicable to:
- * - REDISMODULE_REPLY_ARRAY
+ * - VALKEYMODULE_REPLY_ARRAY
  *
  * The return value is borrowed from CallReply, so it must not be freed
  * explicitly or used after CallReply itself is freed.
  */
 CallReply *callReplyGetArrayElement(CallReply *rep, size_t idx) {
     callReplyParse(rep);
-    if (rep->type != REDISMODULE_REPLY_ARRAY) return NULL;
+    if (rep->type != VALKEYMODULE_REPLY_ARRAY) return NULL;
     return callReplyGetCollectionElement(rep, idx, 1);
 }
 
 /* Return a reply set element at a given index. Applicable to:
- * - REDISMODULE_REPLY_SET
+ * - VALKEYMODULE_REPLY_SET
  *
  * The return value is borrowed from CallReply, so it must not be freed
  * explicitly or used after CallReply itself is freed.
  */
 CallReply *callReplyGetSetElement(CallReply *rep, size_t idx) {
     callReplyParse(rep);
-    if (rep->type != REDISMODULE_REPLY_SET) return NULL;
+    if (rep->type != VALKEYMODULE_REPLY_SET) return NULL;
     return callReplyGetCollectionElement(rep, idx, 1);
 }
 
@@ -403,7 +403,7 @@ static int callReplyGetMapElementInternal(CallReply *rep, size_t idx, CallReply 
 }
 
 /* Retrieve a map reply key and value at a given index. Applicable to:
- * - REDISMODULE_REPLY_MAP
+ * - VALKEYMODULE_REPLY_MAP
  *
  * The key and value are returned by reference through key and val,
  * which may also be NULL if not needed.
@@ -415,7 +415,7 @@ static int callReplyGetMapElementInternal(CallReply *rep, size_t idx, CallReply 
  * explicitly or used after CallReply itself is freed.
  */
 int callReplyGetMapElement(CallReply *rep, size_t idx, CallReply **key, CallReply **val) {
-    return callReplyGetMapElementInternal(rep, idx, key, val, REDISMODULE_REPLY_MAP);
+    return callReplyGetMapElementInternal(rep, idx, key, val, VALKEYMODULE_REPLY_MAP);
 }
 
 /* Return reply attribute, or NULL if it does not exist. Applicable to all replies.
@@ -428,7 +428,7 @@ CallReply *callReplyGetAttribute(CallReply *rep) {
 }
 
 /* Retrieve attribute reply key and value at a given index. Applicable to:
- * - REDISMODULE_REPLY_ATTRIBUTE
+ * - VALKEYMODULE_REPLY_ATTRIBUTE
  *
  * The key and value are returned by reference through key and val,
  * which may also be NULL if not needed.
@@ -440,11 +440,11 @@ CallReply *callReplyGetAttribute(CallReply *rep) {
  * explicitly or used after CallReply itself is freed.
  */
 int callReplyGetAttributeElement(CallReply *rep, size_t idx, CallReply **key, CallReply **val) {
-    return callReplyGetMapElementInternal(rep, idx, key, val, REDISMODULE_REPLY_MAP);
+    return callReplyGetMapElementInternal(rep, idx, key, val, VALKEYMODULE_REPLY_MAP);
 }
 
 /* Return a big number reply value. Applicable to:
- * - REDISMODULE_REPLY_BIG_NUMBER
+ * - VALKEYMODULE_REPLY_BIG_NUMBER
  *
  * The returned values are borrowed from CallReply, so they must not be freed
  * explicitly or used after CallReply itself is freed.
@@ -457,13 +457,13 @@ int callReplyGetAttributeElement(CallReply *rep, size_t idx, CallReply **key, Ca
  */
 const char *callReplyGetBigNumber(CallReply *rep, size_t *len) {
     callReplyParse(rep);
-    if (rep->type != REDISMODULE_REPLY_BIG_NUMBER) return NULL;
+    if (rep->type != VALKEYMODULE_REPLY_BIG_NUMBER) return NULL;
     *len = rep->len;
     return rep->val.str;
 }
 
 /* Return a verbatim string reply value. Applicable to:
- * - REDISMODULE_REPLY_VERBATIM_STRING
+ * - VALKEYMODULE_REPLY_VERBATIM_STRING
  *
  * If format is non-NULL, the verbatim reply format is also returned by value.
  *
@@ -478,7 +478,7 @@ const char *callReplyGetBigNumber(CallReply *rep, size_t *len) {
  */
 const char *callReplyGetVerbatim(CallReply *rep, size_t *len, const char **format){
     callReplyParse(rep);
-    if (rep->type != REDISMODULE_REPLY_VERBATIM_STRING) return NULL;
+    if (rep->type != VALKEYMODULE_REPLY_VERBATIM_STRING) return NULL;
     *len = rep->len;
     if (format) *format = rep->val.verbatim_str.format;
     return rep->val.verbatim_str.str;
@@ -525,7 +525,7 @@ list *callReplyDeferredErrorList(CallReply *rep) {
  * callReplyGetPrivateData().
  *
  * NOTE: The parser used for parsing the reply and producing CallReply is
- * designed to handle valid replies created by Redis itself. IT IS NOT
+ * designed to handle valid replies created by the server itself. IT IS NOT
  * DESIGNED TO HANDLE USER INPUT and using it to parse invalid replies is
  * unsafe.
  */

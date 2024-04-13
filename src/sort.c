@@ -185,7 +185,7 @@ int sortCompare(const void *s1, const void *s2) {
     return server.sort_desc ? -cmp : cmp;
 }
 
-/* The SORT command is the most complex command in Redis. Warning: this code
+/* The SORT command is the most complex command in Valkey. Warning: this code
  * is optimized for speed and a bit less for readability */
 void sortCommandGeneric(client *c, int readonly) {
     list *operations;

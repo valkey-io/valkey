@@ -167,7 +167,7 @@ start_server {tags {"hll"}} {
             }
 
             # Use the hyperloglog to check if it crashes
-            # Redis in some way.
+            # the server in some way.
             catch {
                 r pfcount hll
             }

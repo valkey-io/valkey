@@ -1,4 +1,4 @@
-# Test suite for redis-cli command-line hinting mechanism.
+# Test suite for valkey-cli command-line hinting mechanism.
 # Each test case consists of two strings: a (partial) input command line, and the expected hint string.
 
 # Command with one arg: GET key

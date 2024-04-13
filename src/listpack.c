@@ -165,7 +165,7 @@ int lpSafeToAdd(unsigned char* lp, size_t add) {
  *
  * -----------------------------------------------------------------------------
  *
- * Credits: this function was adapted from the Redis source code, file
+ * Credits: this function was adapted from the Redis OSS source code, file
  * "utils.c", function string2ll(), and is copyright:
  *
  * Copyright(C) 2011, Pieter Noordhuis

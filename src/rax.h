@@ -159,7 +159,7 @@ typedef struct raxStack {
  * This callback is used to perform very low level analysis of the radix tree
  * structure, scanning each possible node (but the root node), or in order to
  * reallocate the nodes to reduce the allocation fragmentation (this is the
- * Redis application for this callback).
+ * server's application for this callback).
  *
  * This is currently only supported in forward iterations (raxNext) */
 typedef int (*raxNodeCallback)(raxNode **noderef);

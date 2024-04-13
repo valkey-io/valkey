@@ -1143,7 +1143,7 @@ void lmoveGenericCommand(client *c, int wherefrom, int whereto) {
 
     if (listTypeLength(sobj) == 0) {
         /* This may only happen after loading very old RDB files. Recent
-         * versions of Redis delete keys of empty lists. */
+         * versions of the server delete keys of empty lists. */
         addReplyNull(c);
     } else {
         robj *dobj = lookupKeyWrite(c->db,c->argv[2]);

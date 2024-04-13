@@ -247,8 +247,8 @@ start_server {tags {"modules"}} {
     test {module auth during blocking module auth} {
         r config resetstat
         r acl setuser foo >pwd on ~* &* +@all
-        set rd [redis_deferring_client]
-        set rd_two [redis_deferring_client]
+        set rd [valkey_deferring_client]
+        set rd_two [valkey_deferring_client]
 
         # Attempt blocking module auth. While this ongoing, attempt non blocking module auth from
         # moduleone/moduletwo and start another blocking module auth from another deferring client.
@@ -289,9 +289,9 @@ start_server {tags {"modules"}} {
     test {Disabling Redis User during blocking module auth} {
         r config resetstat
         r acl setuser foo >pwd on ~* &* +@all
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
-        # Attempt blocking module auth and disable the Redis user while module auth is in progress.
+        # Attempt blocking module auth and disable the user while module auth is in progress.
         $rd AUTH foo pwd
         wait_for_blocked_clients_count 1
         r acl setuser foo >pwd off ~* &* +@all
@@ -306,7 +306,7 @@ start_server {tags {"modules"}} {
     test {Killing a client in the middle of blocking module auth} {
         r config resetstat
         r acl setuser foo >pwd on ~* &* +@all
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd client id
         set cid [$rd read]
 
@@ -337,10 +337,10 @@ start_server {tags {"modules"}} {
     test {test RM_RegisterAuthCallback Module API during blocking module auth} {
         r config resetstat
         r acl setuser foo >defaultpwd on ~* &* +@all
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
-        # Start the module auth attempt with the standard Redis auth password for the user. This
-        # will result in all module auth cbs attempted and then standard Redis auth will be tried.
+        # Start the module auth attempt with the standard auth password for the user. This
+        # will result in all module auth cbs attempted and then standard auth will be tried.
         $rd AUTH foo defaultpwd
         wait_for_blocked_clients_count 1
 
@@ -365,7 +365,7 @@ start_server {tags {"modules"}} {
     test {Module unload during blocking module auth} {
         r config resetstat
         r module load $miscmodule
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r acl setuser foo >pwd on ~* &* +@all
 
         # Start a blocking module auth attempt.

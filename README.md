@@ -1,3 +1,5 @@
+[![codecov](https://codecov.io/gh/vitahlin/valkey/graph/badge.svg?token=AWQXLQXTXV)](https://codecov.io/gh/vitahlin/valkey)
+
 This README is under construction as we work to build a new community driven high performance key-value store.
 
 This project was forked from the open source Redis project right before the transition to their new source available licenses.

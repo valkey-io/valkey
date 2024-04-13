@@ -66,6 +66,10 @@ user.name and user.email are set in your git configs, you can use `git commit` w
 or `--signoff` to add the `Signed-off-by` line to the end of the commit message. We also
 require revert commits to include a DCO.
 
+If you're contributing code to the Valkey project in any other form, including
+sending a code fragment or patch via private email or public discussion groups,
+you need to spell out that the contribution is in accordance with the DCO.
+
 # How to provide a patch or a new feature
 
 1. If it is a major feature or a semantical change, please don't start coding

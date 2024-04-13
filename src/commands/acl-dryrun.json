@@ -7,7 +7,6 @@
         "arity": -4,
         "container": "ACL",
         "function": "aclCommand",
-        "history": [],
         "command_flags": [
             "ADMIN",
             "NOSCRIPT",

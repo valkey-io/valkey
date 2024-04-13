@@ -7,7 +7,6 @@
         "arity": 2,
         "container": "CLUSTER",
         "function": "clusterCommand",
-        "history": [],
         "command_flags": [
             "LOADING",
             "STALE"

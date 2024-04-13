@@ -6,7 +6,6 @@
         "since": "1.0.0",
         "arity": 3,
         "function": "renameCommand",
-        "history": [],
         "command_flags": [
             "WRITE"
         ],

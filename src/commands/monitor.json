@@ -5,7 +5,6 @@
         "since": "1.0.0",
         "arity": 1,
         "function": "monitorCommand",
-        "history": [],
         "command_flags": [
             "ADMIN",
             "NOSCRIPT",

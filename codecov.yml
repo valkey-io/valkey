@@ -1,0 +1,22 @@
+coverage:
+  status:
+    patch:
+      default:
+        target: 85%
+        informational: true
+    project:
+      default:
+        target: 65%
+        threshold: 1%
+        informational: true
+
+comment:
+  require_changes: false
+  require_head: false
+  require_base: false
+  layout: "condensed_header, diff, files"
+  hide_project_coverage: false
+  behavior: default
+
+github_checks:
+  annotations: false

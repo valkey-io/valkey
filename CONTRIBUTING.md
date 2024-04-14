@@ -8,6 +8,7 @@ Welcome and thank you for wanting to contribute!
 * Have a question? Ask it on
   [GitHub Discussions](https://github.com/valkey-io/valkey/discussions)
   or [Valkey's Discord](https://discord.gg/zbcPa5umUB)
+  or [Valkey's Matrix](https://matrix.to/#/#valkey:matrix.org)
 * Found a bug? [Report it here](https://github.com/valkey-io/valkey/issues/new?template=bug_report.md&title=%5BBUG%5D)
 * Valkey crashed? [Submit a crash report here](https://github.com/valkey-io/valkey/issues/new?template=crash_report.md&title=%5BCRASH%5D+%3Cshort+description%3E)
 * Suggest a new feature? [Post your detailed feature request here](https://github.com/valkey-io/valkey/issues/new?template=feature_request.md&title=%5BNEW%5D)
@@ -68,7 +69,7 @@ require revert commits to include a DCO.
 
 If you're contributing code to the Valkey project in any other form, including
 sending a code fragment or patch via private email or public discussion groups,
-you need to spell out that the contribution is in accordance with the DCO.
+you need to ensure that the contribution is in accordance with the DCO.
 
 # How to provide a patch or a new feature
 

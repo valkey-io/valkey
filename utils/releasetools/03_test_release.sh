@@ -7,7 +7,7 @@ then
 fi
 
 TAG=$1
-TARNAME="redis-${TAG}.tar.gz"
+TARNAME="valkey-${TAG}.tar.gz"
 DOWNLOADURL="http://download.redis.io/releases/${TARNAME}"
 
 echo "Doing sanity test on the actual tarball"
@@ -17,10 +17,10 @@ rm -rf test_release_tmp_dir
 mkdir test_release_tmp_dir
 cd test_release_tmp_dir
 rm -f $TARNAME
-rm -rf redis-${TAG}
+rm -rf valkey-${TAG}
 wget $DOWNLOADURL
 tar xvzf $TARNAME
-cd redis-${TAG}
+cd valkey-${TAG}
 make
 ./runtest
 ./runtest-sentinel

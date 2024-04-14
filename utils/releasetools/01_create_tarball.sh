@@ -6,9 +6,9 @@ then
 fi
 
 TAG=$1
-TARNAME="redis-${TAG}.tar"
+TARNAME="valkey-${TAG}.tar"
 echo "Generating /tmp/${TARNAME}"
-git archive $TAG --prefix redis-${TAG}/ > /tmp/$TARNAME || exit 1
+git archive $TAG --prefix valkey-${TAG}/ > /tmp/$TARNAME || exit 1
 echo "Gizipping the archive"
 rm -f /tmp/$TARNAME.gz
 gzip -9 /tmp/$TARNAME

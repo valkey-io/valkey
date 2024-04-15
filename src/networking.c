@@ -64,7 +64,7 @@ size_t getStringObjectSdsUsedMemory(robj *o) {
 }
 
 /* Return the length of a string object.
- * This does NOT includes internal fragmentation or sds unused space. */
+ * This does NOT include internal fragmentation or sds unused space. */
 size_t getStringObjectLen(robj *o) {
     serverAssertWithInfo(NULL,o,o->type == OBJ_STRING);
     switch(o->encoding) {

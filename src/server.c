@@ -6698,7 +6698,7 @@ void loadDataFromDisk(void) {
 void serverOutOfMemoryHandler(size_t allocation_size) {
     serverLog(LL_WARNING,"Out Of Memory allocating %zu bytes!",
         allocation_size);
-    serverPanic("Valkey aborting for OUT OF MEMORY. Allocating %zu bytes!",
+    serverPanic("Redis aborting for OUT OF MEMORY. Allocating %zu bytes!",
         allocation_size);
 }
 
@@ -7033,7 +7033,7 @@ int main(int argc, char **argv) {
                 exit(0);
             } else {
                 fprintf(stderr,"Please specify the amount of memory to test in megabytes.\n");
-                fprintf(stderr,"Example: ./valkey-server --test-memory 4096\n\n");
+                fprintf(stderr,"Example: ./redis-server --test-memory 4096\n\n");
                 exit(1);
             }
         } if (strcmp(argv[1], "--check-system") == 0) {

@@ -2340,7 +2340,7 @@ static int isValidActiveDefrag(int val, const char **err) {
     if (val) {
         *err = "Active defragmentation cannot be enabled: it "
                "requires a server compiled with a modified Jemalloc "
-               "like the one shipped by default with the Valkey source "
+               "like the one shipped by default with the source "
                "distribution";
         return 0;
     }

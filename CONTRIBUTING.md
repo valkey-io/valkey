@@ -1,29 +1,19 @@
-Note: by contributing code to the Valkey project in any form, including sending
-a pull request via GitHub, a code fragment or patch via private email or
-public discussion groups, you agree to release your code under the terms
-of the Valkey license that you can find in the COPYING file included in the Valkey
-source distribution.
+Contributing to Valkey
+======================
 
-# IMPORTANT: HOW TO USE VALKEY GITHUB ISSUES
+Welcome and thank you for wanting to contribute!
 
-GitHub issues SHOULD ONLY BE USED to report bugs and for DETAILED feature
-requests. Everything else should be asked on Discord:
+## Get started
 
-    https://discord.gg/zbcPa5umUB
-
-PLEASE DO NOT POST GENERAL QUESTIONS that are not about bugs or suspected
-bugs in the GitHub issues system. We'll be delighted to help you and provide
-all the support on Discord.
-
-There is also an active community of Redis users at Stack Overflow:
-
-    https://stackoverflow.com/questions/tagged/redis
-
-Issues and pull requests for documentation belong on the valkey-doc repo:
-
-    https://github.com/valkey-io/valkey-doc
-
-If you are reporting a security bug or vulnerability, see [SECURITY.md](SECURITY.md).
+* Have a question? Ask it on
+  [GitHub Discussions](https://github.com/valkey-io/valkey/discussions)
+  or [Valkey's Discord](https://discord.gg/zbcPa5umUB)
+  or [Valkey's Matrix](https://matrix.to/#/#valkey:matrix.org)
+* Found a bug? [Report it here](https://github.com/valkey-io/valkey/issues/new?template=bug_report.md&title=%5BBUG%5D)
+* Valkey crashed? [Submit a crash report here](https://github.com/valkey-io/valkey/issues/new?template=crash_report.md&title=%5BCRASH%5D+%3Cshort+description%3E)
+* Suggest a new feature? [Post your detailed feature request here](https://github.com/valkey-io/valkey/issues/new?template=feature_request.md&title=%5BNEW%5D)
+* Want to help with documentation? [Move on to valkey-doc](https://github.com/valkey-io/valkey-doc)
+* Report a vulnerability? See [SECURITY.md](SECURITY.md)
 
 ## Developer Certificate of Origin
 
@@ -77,7 +67,11 @@ user.name and user.email are set in your git configs, you can use `git commit` w
 or `--signoff` to add the `Signed-off-by` line to the end of the commit message. We also
 require revert commits to include a DCO.
 
-# How to provide a patch for a new feature
+If you're contributing code to the Valkey project in any other form, including
+sending a code fragment or patch via private email or public discussion groups,
+you need to ensure that the contribution is in accordance with the DCO.
+
+# How to provide a patch or a new feature
 
 1. If it is a major feature or a semantical change, please don't start coding
 straight away: if your feature is not a conceptual fit you'll lose a lot of
@@ -88,11 +82,11 @@ Here you can see if there is consensus about your idea.
 
 2. If in step 1 you get an acknowledgment from the project leaders, use the following
 procedure to submit a patch:
-    1. Fork Valkey on GitHub ( https://docs.github.com/en/github/getting-started-with-github/fork-a-repo )
-    1. Create a topic branch (git checkout -b my_branch)
-    1. Make the needed changes and commit with a DCO. (git commit -s)
-    1. Push to your branch (git push origin my_branch)
-    1. Initiate a pull request on GitHub ( https://docs.github.com/en/github/collaborating-with-issues-and-pull-requests/creating-a-pull-request )
+    1. Fork Valkey on GitHub ([HOWTO](https://docs.github.com/en/github/getting-started-with-github/fork-a-repo))
+    1. Create a topic branch (`git checkout -b my_branch`)
+    1. Make the needed changes and commit with a DCO. (`git commit -s`)
+    1. Push to your branch (`git push origin my_branch`)
+    1. Initiate a pull request on GitHub ([HOWTO](https://docs.github.com/en/github/collaborating-with-issues-and-pull-requests/creating-a-pull-request))
     1. Done :)
 
 3. Keep in mind that we are very overloaded, so issues and PRs sometimes wait
@@ -102,7 +96,7 @@ certain issues/PRs over others. If you think your issue/PR is very important
 try to popularize it, have other users commenting and sharing their point of
 view, and so forth. This helps.
 
-4. For minor fixes - open a pull request on GitHub.
+4. For minor fixes, open a pull request on GitHub.
 
 To link a pull request to an existing issue, please write "Fixes #xyz" somewhere
 in the pull request description, where xyz is the issue number.

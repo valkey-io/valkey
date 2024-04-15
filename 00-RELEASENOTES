@@ -12,6 +12,17 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
+Valkey 7.2.5 GA  -  Released Tue 16 Apr 2024
+================================================================================
+
+Upgrade urgency LOW: This is the first stable release of Valkey 7.2.5.
+
+Changes to support Valkey branding
+=========
+* Update template config files to remove references of redis.io and replace them
+  with valkey.io. (#320)
+
+================================================================================
 Valkey 7.2.5 RC1  -  Released Fri 12 Apr 2024
 ================================================================================
 

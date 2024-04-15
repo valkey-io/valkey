@@ -517,7 +517,7 @@ check: test
 
 lcov:
 	$(MAKE) gcov
-	@(set -e; cd ..; ./runtest --clients 1)
+	@(set -e; cd ..; ./runtest)
 	@geninfo -o valkey.info .
 	@genhtml --legend -o lcov-html valkey.info
 

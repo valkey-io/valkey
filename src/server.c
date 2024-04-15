@@ -6698,7 +6698,7 @@ void loadDataFromDisk(void) {
 void serverOutOfMemoryHandler(size_t allocation_size) {
     serverLog(LL_WARNING,"Out Of Memory allocating %zu bytes!",
         allocation_size);
-    serverPanic("Redis aborting for OUT OF MEMORY. Allocating %zu bytes!",
+    serverPanic("Valkey aborting for OUT OF MEMORY. Allocating %zu bytes!",
         allocation_size);
 }
 

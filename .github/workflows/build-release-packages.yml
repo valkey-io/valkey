@@ -1,9 +1,8 @@
 name: Build Release Packages
 
 on:
-  push:
-    tags:
-      - '*'
+  release:
+    types: [published]
   
   workflow_dispatch:
     inputs:

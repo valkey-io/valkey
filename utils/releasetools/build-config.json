@@ -24,13 +24,5 @@
           "type": "deb",
           "platform": "focal"
         }
-      ],
-    "macos_targets": [
-        {
-          "arch": "x86_64",
-          "target": "catalina",
-          "type": "zip",
-          "platform": "catalina"
-        }
       ]
 }

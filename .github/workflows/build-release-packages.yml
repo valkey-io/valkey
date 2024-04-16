@@ -46,7 +46,6 @@ jobs:
       outputs:
         x86_64-build-matrix: ${{ steps.set-matrix.outputs.x86_64-build-matrix }}
         arm64-build-matrix: ${{ steps.set-matrix.outputs.arm64-build-matrix }}
-        macos-build-matrix: ${{ steps.set-matrix.outputs.macos-build-matrix }}
       steps:
         - name: Checkout repository
           uses: actions/checkout@v4
@@ -85,18 +84,3 @@ jobs:
       bucket: ${{ secrets.AWS_S3_BUCKET }}
       access_key_id: ${{ secrets.AWS_S3_ACCESS_KEY_ID }}
       secret_access_key: ${{ secrets.AWS_S3_ACCESS_KEY }}
-  
-  # release-build-linux-macos-packages:
-  #   needs:
-  #     - release-build-get-meta
-  #     - generate-build-matrix
-  #   uses: ./.github/workflows/call-build-macos-packages.yml
-  #   with:
-  #     version: ${{ needs.release-build-get-meta.outputs.version }}
-  #     ref: ${{ inputs.version || github.ref_name }}
-  #     build_matrix: ${{ needs.generate-build-matrix.outputs.macos-build-matrix }}
-  #   secrets:
-  #     token: ${{ secrets.GITHUB_TOKEN }}
-  #     bucket: ${{ secrets.AWS_S3_BUCKET }}
-  #     access_key_id: ${{ secrets.AWS_S3_ACCESS_KEY_ID }}
-  #     secret_access_key: ${{ secrets.AWS_S3_ACCESS_KEY }}

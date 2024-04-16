@@ -12,9 +12,6 @@ outputs:
   arm64-build-matrix:
     description: The arm64 build matrix.
     value: ${{ steps.set-matrix.outputs.armmatrix }}
-  macos-build-matrix:
-        description: The macos build matrix.
-        value: ${{ steps.set-matrix.outputs.macosmatrix }}
 
 
 runs:
@@ -35,10 +32,6 @@ runs:
        arm_arch=$(jq -c '[.linux_targets[] | select(.arch=="arm64")]' utils/releasetools/build-config.json)
        arm_matrix=$(echo "{ \"distro\" : $arm_arch }" | jq -c .)
        echo "ARM_MATRIX=$arm_matrix" >> $GITHUB_ENV
-
-       macos_arch=$(jq -c '[.macos_targets[] | select(.arch=="x86_64")]' utils/releasetools/build-config.json)
-       macos_matrix=$(echo "{ \"distro\" : $macos_arch }" | jq -c .)
-       echo "MACOS_MATRIX=$macos_matrix" >> $GITHUB_ENV
       shell: bash
 
     - id: set-matrix
@@ -49,7 +42,4 @@ runs:
         echo $ARM_MATRIX
         echo $ARM_MATRIX| jq .
         echo "armmatrix=$ARM_MATRIX" >> $GITHUB_OUTPUT
-        echo $MACOS_MATRIX
-        echo $MACOS_MATRIX| jq .
-        echo "macosmatrix=$MACOS_MATRIX" >> $GITHUB_OUTPUT
       shell: bash

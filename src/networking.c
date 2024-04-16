@@ -214,6 +214,9 @@ client *createClient(connection *conn) {
     c->mem_usage_bucket_node = NULL;
     if (conn) linkClient(c);
     initClientMultiState(c);
+    c->net_input_bytes = 0;
+    c->net_output_bytes = 0;
+    c->commands_processed = 0;
     return c;
 }
 
@@ -1989,6 +1992,7 @@ int writeToClient(client *c, int handler_installed) {
     if (getClientType(c) == CLIENT_TYPE_SLAVE) {
         atomicIncr(server.stat_net_repl_output_bytes, totwritten);
     } else {
+        c->net_output_bytes += totwritten;
         atomicIncr(server.stat_net_output_bytes, totwritten);
     }
 
@@ -2716,6 +2720,7 @@ void readQueryFromClient(connection *conn) {
         c->read_reploff += nread;
         atomicIncr(server.stat_net_repl_input_bytes, nread);
     } else {
+        c->net_input_bytes += nread;
         atomicIncr(server.stat_net_input_bytes, nread);
     }
 
@@ -2874,7 +2879,10 @@ sds catClientInfoString(sds s, client *client) {
         " redir=%I", (client->flags & CLIENT_TRACKING) ? (long long) client->client_tracking_redirection : -1,
         " resp=%i", client->resp,
         " lib-name=%s", client->lib_name ? (char*)client->lib_name->ptr : "",
-        " lib-ver=%s", client->lib_ver ? (char*)client->lib_ver->ptr : ""));
+        " lib-ver=%s", client->lib_ver ? (char*)client->lib_ver->ptr : "",
+        " tot-input=%U", client->net_input_bytes,
+        " tot-output=%U", client->net_output_bytes,
+        " tot-cmds=%U", client->commands_processed));
     return ret;
 }
 

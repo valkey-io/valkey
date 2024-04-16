@@ -50,8 +50,8 @@ jobs:
         with:
           arch: aarch64
           distro: ${{matrix.distro.target}}
-          install: apt-get update && apt-get install -y build-essential libssl-dev
-          run: make -C src all BUILD_TLS=yes MALLOC=libc
+          install: apt-get update && apt-get install -y build-essential libssl-dev libjemalloc-dev
+          run: make -C src all BUILD_TLS=yes
       
       - name: Create Tarball and SHA256sums
         run: |

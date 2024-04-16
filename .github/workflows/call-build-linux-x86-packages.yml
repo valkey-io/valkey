@@ -20,7 +20,7 @@ on:
         description: The Github token or similar to authenticate with.
         required: true
       bucket:
-        description: The name of the S3 (US-East) bucket to push packages into.
+        description: The name of the S3 bucket to push packages into.
         required: false
       access_key_id:
         description: The S3 access key id for the bucket.

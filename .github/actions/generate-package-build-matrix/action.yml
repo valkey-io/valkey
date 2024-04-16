@@ -17,7 +17,7 @@ runs:
   using: "composite"
   steps:
     - name: Checkout code for version check
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         ref: ${{ inputs.ref }}
         path: version-check

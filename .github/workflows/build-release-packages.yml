@@ -10,6 +10,9 @@ on:
         description: Version of Valkey to build
         required: true
 
+permissions:
+  contents: read
+
 jobs:
   # This job provides the version metadata from the tag for the other jobs to use.
   release-build-get-meta:

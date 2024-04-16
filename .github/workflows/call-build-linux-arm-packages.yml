@@ -29,13 +29,14 @@ on:
         description: The S3 secret access key for the bucket.
         required: false
 
+permissions:
+  contents: read
+
 jobs:
   build-valkey:
     # Capture source tarball and generate checksum for it
     name: Build package ${{ matrix.distro.target }} ${{ matrix.distro.arch }}
     runs-on: 'ubuntu-latest'
-    permissions:
-      contents: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(inputs.build_matrix) }}

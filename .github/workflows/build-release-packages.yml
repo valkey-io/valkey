@@ -29,11 +29,11 @@ jobs:
       - name: Get the version
         id: get_version
         run: |
-            VERSION="${INPUT_VERSION}"
-            if [ -z "${VERSION}" ]; then
-              exit 1
-            fi
-            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          VERSION="${INPUT_VERSION}"
+          if [ -z "${VERSION}" ]; then
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
         shell: bash
         env:
           # Use the dispatch variable in preference, if empty use the context ref_name which should

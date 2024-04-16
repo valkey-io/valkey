@@ -1,4 +1,4 @@
-name: Reusable workflow to build binary packages into S3 bucket
+name: Builds Linux X86 binary packages into S3 bucket.
 
 on:
   workflow_call:
@@ -32,7 +32,7 @@ on:
 jobs:
   build-valkey:
     # Capture source tarball and generate checksum for it
-    name: Build  package ${{ matrix.distro.target }} ${{ matrix.distro.arch }}
+    name: Build package ${{ matrix.distro.target }} ${{ matrix.distro.arch }}
     runs-on: 'ubuntu-latest'
     permissions:
       contents: read
@@ -46,11 +46,8 @@ jobs:
           ref: ${{ inputs.version }}
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential libssl-dev jq wget
-      
-      - name: Set JEMALLOC Flags
-        run: JEMALLOC_CONFIGURE_OPTS="--with-lg-page=16"
-      
+        run: sudo apt-get update && sudo apt-get install -y build-essential libssl-dev jq wget awscli
+
       - name: Make Valkey
         run: make -C src all BUILD_TLS=yes
       
@@ -64,14 +61,10 @@ jobs:
           sha256sum $TAR_FILE_NAME.tar.gz > $TAR_FILE_NAME.tar.gz.sha256
           mkdir -p packages-files
           cp -rfv $TAR_FILE_NAME.tar* packages-files/
-      
-      - name: Install AWS cli.
-        run: |
-          sudo apt-get install -y awscli
 
       - name: Configure AWS credentials
         run: |
-          aws configure set region us-east-1
+          aws configure set region us-west-2
           aws configure set aws_access_key_id ${{ secrets.access_key_id }}
           aws configure set aws_secret_access_key ${{ secrets.secret_access_key }}
 

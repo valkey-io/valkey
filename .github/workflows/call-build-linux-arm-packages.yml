@@ -1,4 +1,4 @@
-name: Reusable workflow to build binary packages into S3 bucket
+name: Builds Linux arm binary packages into S3 bucket.
 
 on:
   workflow_call:
@@ -32,7 +32,7 @@ on:
 jobs:
   build-valkey:
     # Capture source tarball and generate checksum for it
-    name: Build  package ${{ matrix.distro.target }} ${{ matrix.distro.arch }}
+    name: Build package ${{ matrix.distro.target }} ${{ matrix.distro.arch }}
     runs-on: 'ubuntu-latest'
     permissions:
       contents: read
@@ -50,7 +50,7 @@ jobs:
         with:
           arch: aarch64
           distro: ${{matrix.distro.target}}
-          install: apt-get update && apt-get install -y build-essential libssl-dev libjemalloc-dev
+          install: apt-get update && apt-get install -y build-essential libssl-dev
           run: make -C src all BUILD_TLS=yes
       
       - name: Create Tarball and SHA256sums
@@ -70,7 +70,7 @@ jobs:
 
       - name: Configure AWS credentials
         run: |
-          aws configure set region us-east-1
+          aws configure set region us-west-2
           aws configure set aws_access_key_id ${{ secrets.access_key_id }}
           aws configure set aws_secret_access_key ${{ secrets.secret_access_key }}
 

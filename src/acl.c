@@ -2999,7 +2999,7 @@ void aclCommand(client *c) {
     } else if (server.acl_filename[0] == '\0' &&
                (!strcasecmp(sub,"load") || !strcasecmp(sub,"save")))
     {
-        addReplyError(c,"This Redis instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (assuming you have a Redis configuration file set) in order to store users in the Redis configuration.");
+        addReplyError(c,"This instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (assuming you have a configuration file set) in order to store users in the configuration.");
         return;
     } else if (!strcasecmp(sub,"load") && c->argc == 2) {
         sds errors = ACLLoadFromFile(server.acl_filename);

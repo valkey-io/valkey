@@ -322,9 +322,9 @@ void scriptKill(client *c, int is_eval) {
 static int scriptVerifyCommandArity(struct serverCommand *cmd, int argc, sds *err) {
     if (!cmd || ((cmd->arity > 0 && cmd->arity != argc) || (argc < -cmd->arity))) {
         if (cmd)
-            *err = sdsnew("Wrong number of args calling Redis command from script");
+            *err = sdsnew("Wrong number of args calling command from script");
         else
-            *err = sdsnew("Unknown Redis command called from script");
+            *err = sdsnew("Unknown command called from script");
         return C_ERR;
     }
     return C_OK;

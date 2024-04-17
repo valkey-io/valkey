@@ -318,8 +318,8 @@ void parseRedisUri(const char *uri, const char* tool_name, cliConnInfo *connInfo
     UNUSED(tls_flag);
 #endif
 
-    const char *scheme = "valkey://";
-    const char *tlsscheme = "valkeys://";
+    const char *scheme = "redis://";
+    const char *tlsscheme = "rediss://";
     const char *curr = uri;
     const char *end = uri + strlen(uri);
     const char *userinfo, *username, *port, *host, *path;
@@ -330,7 +330,7 @@ void parseRedisUri(const char *uri, const char* tool_name, cliConnInfo *connInfo
         *tls_flag = 1;
         curr += strlen(tlsscheme);
 #else
-        fprintf(stderr,"valkeys:// is only supported when %s is compiled with OpenSSL\n", tool_name);
+        fprintf(stderr,"rediss:// is only supported when %s is compiled with OpenSSL\n", tool_name);
         exit(1);
 #endif
     } else if (!strncasecmp(scheme, curr, strlen(scheme))) {

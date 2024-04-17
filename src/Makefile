@@ -16,6 +16,13 @@ release_hdr := $(shell sh -c './mkreleasehdr.sh')
 uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')
 uname_M := $(shell sh -c 'uname -m 2>/dev/null || echo not')
 CLANG := $(findstring clang,$(shell sh -c '$(CC) --version | head -1'))
+lcov_Version := $(shell sh -c 'lcov --version 2>/dev/null || echo not')
+
+ifeq ($(lcov_Version),not)
+	define ERROR_IF_LCOV_NOT_INSTALLED
+		$(error "You need to install lcov")
+    endef
+endif
 
 # Optimization flags. To override, the OPTIMIZATION variable can be passed, but
 # some automatic defaults are added to it. To specify optimization flags
@@ -516,6 +523,7 @@ test-cluster: $(SERVER_NAME) $(ENGINE_CLI_NAME)
 check: test
 
 lcov:
+	$(call ERROR_IF_LCOV_NOT_INSTALLED)
 	$(MAKE) gcov
 	@(set -e; cd ..; ./runtest)
 	@geninfo -o valkey.info .

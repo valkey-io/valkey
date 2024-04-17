@@ -19,8 +19,8 @@ CLANG := $(findstring clang,$(shell sh -c '$(CC) --version | head -1'))
 lcov_Version := $(shell sh -c 'lcov --version 2>/dev/null || echo not')
 
 ifeq ($(lcov_Version),not)
-	define ERROR_IF_LCOV_NOT_INSTALLED
-		$(error "You need to install lcov")
+    define ERROR_IF_LCOV_NOT_INSTALLED
+        $(error "You need to install lcov")
     endef
 endif
 

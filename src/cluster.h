@@ -108,6 +108,7 @@ clusterNode *clusterLookupNode(const char *name, int length);
 clusterNode *getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int *hashslot, int *ask);
 int clusterRedirectBlockedClientIfNeeded(client *c);
 void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_code);
+sds clusterFormatRedirect(const char *verb, int slot, clusterNode *n, int use_tls_port);
 void migrateCloseTimedoutSockets(void);
 unsigned int keyHashSlot(char *key, int keylen);
 int patternHashSlot(char *pattern, int length);

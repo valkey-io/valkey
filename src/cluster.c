@@ -1204,6 +1204,13 @@ clusterNode *getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, i
     return n;
 }
 
+/* For redirects, verb must start with a dash, e.g. "-ASK" or "-MOVED". */
+sds clusterFormatRedirect(const char *verb, int slot, clusterNode *n, int use_tls_port) {
+    const char *endpoint = clusterNodePreferredEndpoint(n);
+    int port = clusterNodeClientPort(n, use_tls_port);
+    return sdscatprintf(sdsempty(), "%s %d %s:%d", verb, slot, endpoint, port);
+}
+
 /* Send the client the right redirection code, according to error_code
  * that should be set to one of CLUSTER_REDIR_* macros.
  *
@@ -1229,11 +1236,8 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
                error_code == CLUSTER_REDIR_ASK)
     {
         /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client. */
-        int port = clusterNodeClientPort(n, shouldReturnTlsInfo());
-        addReplyErrorSds(c,sdscatprintf(sdsempty(),
-                                        "-%s %d %s:%d",
-                                        (error_code == CLUSTER_REDIR_ASK) ? "ASK" : "MOVED",
-                                        hashslot, clusterNodePreferredEndpoint(n), port));
+        char *verb = (error_code == CLUSTER_REDIR_ASK) ? "-ASK" : "-MOVED";
+        addReplyErrorSds(c, clusterFormatRedirect(verb, hashslot, n, shouldReturnTlsInfo()));
     } else {
         serverPanic("getNodeByQuery() unknown error.");
     }

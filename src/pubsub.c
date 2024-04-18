@@ -468,6 +468,14 @@ int pubsubUnsubscribeAllPatterns(client *c, int notify) {
     return count;
 }
 
+/* Returns a list of clients subscribed to the given channel or NULL if the
+ * channel has no subscribers. The channel is non-sharded. Pattern subscriptions
+ * are not included. This is used for special channels for notifications.*/
+list *pubsubGetSubscribers(robj *channel) {
+    dictEntry *de = kvstoreDictFind(*pubSubType.serverPubSubChannels, 0, channel);
+    return de ? dictGetVal(de) : NULL;
+}
+
 /*
  * Publish a message to all the subscribers.
  */

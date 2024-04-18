@@ -1992,9 +1992,9 @@ int writeToClient(client *c, int handler_installed) {
     if (getClientType(c) == CLIENT_TYPE_SLAVE) {
         atomicIncr(server.stat_net_repl_output_bytes, totwritten);
     } else {
-        c->net_output_bytes += totwritten;
         atomicIncr(server.stat_net_output_bytes, totwritten);
     }
+    c->net_output_bytes += totwritten;
 
     if (nwritten == -1) {
         if (connGetState(c->conn) != CONN_STATE_CONNECTED) {
@@ -2720,9 +2720,9 @@ void readQueryFromClient(connection *conn) {
         c->read_reploff += nread;
         atomicIncr(server.stat_net_repl_input_bytes, nread);
     } else {
-        c->net_input_bytes += nread;
         atomicIncr(server.stat_net_input_bytes, nread);
     }
+    c->net_input_bytes += nread;
 
     if (!(c->flags & CLIENT_MASTER) &&
         /* The commands cached in the MULTI/EXEC queue have not been executed yet,

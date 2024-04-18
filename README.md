@@ -1,4 +1,5 @@
-[![codecov](https://codecov.io/gh/vitahlin/valkey/graph/badge.svg?token=AWQXLQXTXV)](https://codecov.io/gh/vitahlin/valkey)
+[[![codecov](https://codecov.io/gh/valkey-io/valkey/graph/badge.svg)](https://codecov.io/gh/valkey-io/valkey)
+](https://codecov.io/gh/valkey-io/valkey/graph/badge.svg?token=KYYSJAYC5F)
 
 This README is under construction as we work to build a new community driven high performance key-value store.
 

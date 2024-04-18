@@ -2339,8 +2339,8 @@ static int isValidActiveDefrag(int val, const char **err) {
 #ifndef HAVE_DEFRAG
     if (val) {
         *err = "Active defragmentation cannot be enabled: it "
-               "requires a Redis server compiled with a modified Jemalloc "
-               "like the one shipped by default with the Redis source "
+               "requires a server compiled with a modified Jemalloc "
+               "like the one shipped by default with the source "
                "distribution";
         return 0;
     }
@@ -2564,7 +2564,7 @@ static int updateMaxclients(const char **err) {
         if (aeResizeSetSize(server.el,
             server.maxclients + CONFIG_FDSET_INCR) == AE_ERR)
         {
-            *err = "The event loop API used by Redis is not able to handle the specified number of clients";
+            *err = "The event loop API is not able to handle the specified number of clients";
             return 0;
         }
     }

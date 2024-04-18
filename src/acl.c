@@ -2572,11 +2572,11 @@ cleanup:
 void ACLLoadUsersAtStartup(void) {
     if (server.acl_filename[0] != '\0' && listLength(UsersToLoad) != 0) {
         serverLog(LL_WARNING,
-            "Configuring Redis with users defined in redis.conf and at "
+            "Configuring %s with users defined in valkey.conf and at "
             "the same setting an ACL file path is invalid. This setup "
             "is very likely to lead to configuration errors and security "
             "holes, please define either an ACL file or declare users "
-            "directly in your redis.conf, but not both.");
+            "directly in your valkey.conf, but not both.", SERVER_TITLE);
         exit(1);
     }
 
@@ -2590,7 +2590,7 @@ void ACLLoadUsersAtStartup(void) {
         sds errors = ACLLoadFromFile(server.acl_filename);
         if (errors) {
             serverLog(LL_WARNING,
-                "Aborting Redis startup because of ACL errors: %s", errors);
+                "Aborting %s startup because of ACL errors: %s", SERVER_TITLE, errors);
             sdsfree(errors);
             exit(1);
         }
@@ -2999,7 +2999,7 @@ void aclCommand(client *c) {
     } else if (server.acl_filename[0] == '\0' &&
                (!strcasecmp(sub,"load") || !strcasecmp(sub,"save")))
     {
-        addReplyError(c,"This Redis instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (assuming you have a Redis configuration file set) in order to store users in the Redis configuration.");
+        addReplyError(c,"This instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (assuming you have a configuration file set) in order to store users in the configuration.");
         return;
     } else if (!strcasecmp(sub,"load") && c->argc == 2) {
         sds errors = ACLLoadFromFile(server.acl_filename);

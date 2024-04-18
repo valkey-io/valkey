@@ -10,7 +10,7 @@ test "We can failover with Sentinel 1 crashed" {
     # Crash Sentinel 1
     kill_instance sentinel 1
 
-    kill_instance redis $master_id
+    kill_instance valkey $master_id
     foreach_sentinel_id id {
         if {$id != 1} {
             wait_for_condition 1000 50 {
@@ -20,9 +20,9 @@ test "We can failover with Sentinel 1 crashed" {
             }
         }
     }
-    restart_instance redis $master_id
+    restart_instance valkey $master_id
     set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
-    set master_id [get_instance_id_by_port redis [lindex $addr 1]]
+    set master_id [get_instance_id_by_port valkey [lindex $addr 1]]
 }
 
 test "After Sentinel 1 is restarted, its config gets updated" {

@@ -69,7 +69,7 @@ proc ::redis_cluster::__method__refresh_nodes_map {id} {
         set tls $::redis_cluster::tls($id)
         if {[catch {
             set r {}
-            set r [redis $start_host $start_port 0 $tls]
+            set r [valkey $start_host $start_port 0 $tls]
             set nodes_descr [$r cluster nodes]
             $r close
         } e]} {
@@ -115,7 +115,7 @@ proc ::redis_cluster::__method__refresh_nodes_map {id} {
         # Connect to the node
         set link {}
         set tls $::redis_cluster::tls($id)
-        catch {set link [redis $host $port 0 $tls]}
+        catch {set link [valkey $host $port 0 $tls]}
 
         # Build this node description as an hash.
         set node [dict create \

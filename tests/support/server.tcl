@@ -347,7 +347,7 @@ proc run_external_server_test {code overrides} {
     set srv {}
     dict set srv "host" $::host
     dict set srv "port" $::port
-    set client [redis $::host $::port 0 $::tls]
+    set client [valkey $::host $::port 0 $::tls]
     dict set srv "client" $client
     if {!$::singledb} {
         $client select 9

@@ -90,7 +90,7 @@ set ::transformer_funcs {
 }
 
 proc ::response_transformers::transform_response_if_needed {id argv response} {
-    if {![::redis::should_transform_to_resp2 $id] || $::redis::readraw($id)} {
+    if {![::valkey::should_transform_to_resp2 $id] || $::valkey::readraw($id)} {
         return $response
     }
 

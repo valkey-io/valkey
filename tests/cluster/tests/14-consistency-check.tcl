@@ -15,7 +15,7 @@ test "Cluster is writable" {
 
 proc find_non_empty_master {} {
     set master_id_no {}
-    foreach_redis_id id {
+    foreach_valkey_id id {
         if {[RI $id role] eq {master} && [R $id dbsize] > 0} {
             set master_id_no $id
             break
@@ -31,13 +31,13 @@ proc get_one_of_my_replica {id} {
         fail "replicas didn't connect"
     }
     set replica_port [lindex [lindex [lindex [R $id role] 2] 0] 1]
-    set replica_id_num [get_instance_id_by_port redis $replica_port]
+    set replica_id_num [get_instance_id_by_port valkey $replica_port]
     return $replica_id_num
 }
 
 proc cluster_write_keys_with_expire {id ttl} {
     set prefix [randstring 20 20 alpha]
-    set port [get_instance_attrib redis $id port]
+    set port [get_instance_attrib valkey $id port]
     set cluster [redis_cluster 127.0.0.1:$port]
     for {set j 100} {$j < 200} {incr j} {
         $cluster setex key_expire.$j $ttl $prefix.$j
@@ -93,7 +93,7 @@ proc test_slave_load_expired_keys {aof} {
         }
 
         # kill the replica (would stay down until re-started)
-        kill_instance redis $replica_id
+        kill_instance valkey $replica_id
 
         # Make sure the master doesn't do active expire (sending DELs to the replica)
         R $master_id DEBUG SET-ACTIVE-EXPIRE 0
@@ -102,7 +102,7 @@ proc test_slave_load_expired_keys {aof} {
         after [expr $data_ttl*1000]
 
         # start the replica again (loading an RDB or AOF file)
-        restart_instance redis $replica_id
+        restart_instance valkey $replica_id
 
         # make sure the keys are still there
         set replica_dbsize_3 [R $replica_id dbsize]

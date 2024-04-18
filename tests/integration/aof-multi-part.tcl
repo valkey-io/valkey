@@ -294,7 +294,7 @@ tags {"external:skip"} {
         start_server_aof [list dir $server_path] {
             assert_equal 1 [is_alive [srv pid]]
 
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
 
             assert_equal OK [$client set k1 v1]
             assert_equal v1 [$client get k1]
@@ -332,7 +332,7 @@ tags {"external:skip"} {
 
         start_server_aof [list dir $server_path] {
             assert_equal 1 [is_alive [srv pid]]
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
 
             assert_equal v1 [$client get k1]
@@ -364,7 +364,7 @@ tags {"external:skip"} {
 
         start_server_aof [list dir $server_path] {
             assert_equal 1 [is_alive [srv pid]]
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
 
             assert_equal v1 [$client get k1]
@@ -395,7 +395,7 @@ tags {"external:skip"} {
 
         start_server_aof [list dir $server_path] {
             assert_equal 1 [is_alive [srv pid]]
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
 
             assert_equal v1 [$client get k1]
@@ -406,7 +406,7 @@ tags {"external:skip"} {
         clean_aof_persistence $aof_dirpath
     }
 
-    test {Multi Part AOF can load data from old version redis (rdb preamble no)} {
+    test {Multi Part AOF can load data from old version valkey (rdb preamble no)} {
         create_aof $server_path $aof_old_name_old_path {
             append_to_aof [formatCommand set k1 v1]
             append_to_aof [formatCommand set k2 v2]
@@ -416,7 +416,7 @@ tags {"external:skip"} {
         start_server_aof [list dir $server_path] {
             assert_equal 1 [is_alive [srv pid]]
 
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
 
             assert_equal v1 [$client get k1]
@@ -452,12 +452,12 @@ tags {"external:skip"} {
         clean_aof_persistence $aof_dirpath
     }
 
-    test {Multi Part AOF can load data from old version redis (rdb preamble yes)} {
+    test {Multi Part AOF can load data from old version valkey (rdb preamble yes)} {
         exec cp tests/assets/rdb-preamble.aof $aof_old_name_old_path
         start_server_aof [list dir $server_path] {
             assert_equal 1 [is_alive [srv pid]]
 
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
 
             # k1 k2 in rdb header and k3 in AOF tail
@@ -509,7 +509,7 @@ tags {"external:skip"} {
         start_server_aof [list dir $server_path] {
             assert_equal 1 [is_alive [srv pid]]
 
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
 
             assert_equal v1 [$client get k1]
@@ -548,7 +548,7 @@ tags {"external:skip"} {
         start_server_aof [list dir $server_path] {
             assert_equal 1 [is_alive [srv pid]]
 
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
 
             assert_equal 0 [$client exists k1]
@@ -604,10 +604,10 @@ tags {"external:skip"} {
         }
 
         start_server_aof [list dir $server_path] {
-            set redis1 [redis [srv host] [srv port] 0 $::tls]
+            set redis1 [valkey [srv host] [srv port] 0 $::tls]
 
             start_server [list overrides [list dir $server_path appendonly yes appendfilename appendonly.aof2]] {
-                set redis2 [redis [srv host] [srv port] 0 $::tls]
+                set redis2 [valkey [srv host] [srv port] 0 $::tls]
 
                 test "Multi Part AOF can upgrade when when two servers share the same server dir (server1)" {
                     wait_done_loading $redis1
@@ -679,21 +679,21 @@ tags {"external:skip"} {
         start_server [list overrides [list appendonly yes appendfilename "\" file seq \\n\\n.aof \""]] {
             set dir [get_redis_dir]
             set aof_manifest_name [format "%s/%s/%s%s" $dir "appendonlydir" " file seq \n\n.aof " $::manifest_suffix]
-            set redis [redis [srv host] [srv port] 0 $::tls]
+            set valkey [valkey [srv host] [srv port] 0 $::tls]
 
-            assert_equal OK [$redis set k1 v1]
+            assert_equal OK [$valkey set k1 v1]
 
-            $redis bgrewriteaof
-            waitForBgrewriteaof $redis
+            $valkey bgrewriteaof
+            waitForBgrewriteaof $valkey
 
             assert_aof_manifest_content $aof_manifest_name {
                 {file " file seq \n\n.aof .2.base.rdb" seq 2 type b}
                 {file " file seq \n\n.aof .2.incr.aof" seq 2 type i}
             }
 
-            set d1 [$redis debug digest]
-            $redis debug loadaof
-            set d2 [$redis debug digest]
+            set d1 [$valkey debug digest]
+            $valkey debug loadaof
+            set d2 [$valkey debug digest]
             assert {$d1 eq $d2}
         }
 
@@ -702,7 +702,7 @@ tags {"external:skip"} {
 
     test {Multi Part AOF can create BASE (RDB format) when server starts from empty} {
         start_server_aof [list dir $server_path] {
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
 
             assert_equal 1 [check_file_exist $aof_dirpath "${aof_basename}.1${::base_aof_sufix}${::rdb_format_suffix}"]
@@ -725,7 +725,7 @@ tags {"external:skip"} {
 
     test {Multi Part AOF can create BASE (AOF format) when server starts from empty} {
         start_server_aof [list dir $server_path aof-use-rdb-preamble no] {
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
 
             assert_equal 1 [check_file_exist $aof_dirpath "${aof_basename}.1${::base_aof_sufix}${::aof_format_suffix}"]

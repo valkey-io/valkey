@@ -79,7 +79,7 @@ test "Basic failover works if the master is down" {
     set old_port [RPort $master_id]
     set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
     assert {[lindex $addr 1] == $old_port}
-    kill_instance redis $master_id
+    kill_instance valkey $master_id
     foreach_sentinel_id id {
         S $id sentinel debug ping-period 500
         S $id sentinel debug ask-period 500  
@@ -89,9 +89,9 @@ test "Basic failover works if the master is down" {
             fail "At least one Sentinel did not receive failover info"
         }
     }
-    restart_instance redis $master_id
+    restart_instance valkey $master_id
     set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
-    set master_id [get_instance_id_by_port redis [lindex $addr 1]]
+    set master_id [get_instance_id_by_port valkey [lindex $addr 1]]
 }
 
 test "New master [join $addr {:}] role matches" {
@@ -99,7 +99,7 @@ test "New master [join $addr {:}] role matches" {
 }
 
 test "All the other slaves now point to the new master" {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         if {$id != $master_id && $id != 0} {
             wait_for_condition 1000 50 {
                 [RI $id master_port] == [lindex $addr 1]
@@ -125,12 +125,12 @@ test "ODOWN is not possible without N (quorum) Sentinels reports" {
     set old_port [RPort $master_id]
     set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
     assert {[lindex $addr 1] == $old_port}
-    kill_instance redis $master_id
+    kill_instance valkey $master_id
 
     # Make sure failover did not happened.
     set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
     assert {[lindex $addr 1] == $old_port}
-    restart_instance redis $master_id
+    restart_instance valkey $master_id
 }
 
 test "Failover is not possible without majority agreement" {
@@ -144,12 +144,12 @@ test "Failover is not possible without majority agreement" {
     }
 
     # Kill the current master
-    kill_instance redis $master_id
+    kill_instance valkey $master_id
 
     # Make sure failover did not happened.
     set addr [S $quorum SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
     assert {[lindex $addr 1] == $old_port}
-    restart_instance redis $master_id
+    restart_instance valkey $master_id
 
     # Cleanup: restart Sentinels to monitor the master.
     for {set id 0} {$id < $quorum} {incr id} {
@@ -171,7 +171,7 @@ test "Failover works if we configure for absolute agreement" {
         }
     }
 
-    kill_instance redis $master_id
+    kill_instance valkey $master_id
 
     foreach_sentinel_id id {
         wait_for_condition 1000 100 {
@@ -180,9 +180,9 @@ test "Failover works if we configure for absolute agreement" {
             fail "At least one Sentinel did not receive failover info"
         }
     }
-    restart_instance redis $master_id
+    restart_instance valkey $master_id
     set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
-    set master_id [get_instance_id_by_port redis [lindex $addr 1]]
+    set master_id [get_instance_id_by_port valkey [lindex $addr 1]]
 
     # Set the min ODOWN agreement back to strict majority.
     foreach_sentinel_id id {

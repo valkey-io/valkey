@@ -1,7 +1,7 @@
 foreach is_eval {0 1} {
 foreach script_compatibility_api {server redis} {
 
-# We run the tests using both the server APIs, e.g. server.call(), and redis APIs, e.g. redis.call(),
+# We run the tests using both the server APIs, e.g. server.call(), and valkey APIs, e.g. redis.call(),
 # in order to ensure compatibility.
 if {$script_compatibility_api eq "server"} {
     proc replace_script_redis_api_with_server {args} {
@@ -1055,7 +1055,7 @@ start_server {tags {"scripting"}} {
     test "Try trick global protection 3" {
         catch {
             run_script {
-                redis = function() return 1 end
+                valkey = function() return 1 end
             } 0
         } e
         set _ $e

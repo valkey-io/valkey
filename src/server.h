@@ -1282,9 +1282,9 @@ typedef struct client {
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
-    unsigned long long net_input_bytes;
-    unsigned long long net_output_bytes;
-    unsigned long long commands_processed;
+    unsigned long long net_input_bytes;    /* Total network input bytes read from this client. */
+    unsigned long long net_output_bytes;   /* Total network output bytes sent to this client. */
+    unsigned long long commands_processed; /* Total count of commands this client executed. */
 } client;
 
 /* ACL information */

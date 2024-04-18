@@ -2880,8 +2880,8 @@ sds catClientInfoString(sds s, client *client) {
         " resp=%i", client->resp,
         " lib-name=%s", client->lib_name ? (char*)client->lib_name->ptr : "",
         " lib-ver=%s", client->lib_ver ? (char*)client->lib_ver->ptr : "",
-        " tot-input=%U", client->net_input_bytes,
-        " tot-output=%U", client->net_output_bytes,
+        " tot-net-in=%U", client->net_input_bytes,
+        " tot-net-out=%U", client->net_output_bytes,
         " tot-cmds=%U", client->commands_processed));
     return ret;
 }

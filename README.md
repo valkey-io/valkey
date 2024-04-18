@@ -1,5 +1,4 @@
-[[![codecov](https://codecov.io/gh/valkey-io/valkey/graph/badge.svg)](https://codecov.io/gh/valkey-io/valkey)
-](https://codecov.io/gh/valkey-io/valkey/graph/badge.svg?token=KYYSJAYC5F)
+[![codecov](https://codecov.io/gh/valkey-io/valkey/graph/badge.svg?token=KYYSJAYC5F)](https://codecov.io/gh/valkey-io/valkey)
 
 This README is under construction as we work to build a new community driven high performance key-value store.
 

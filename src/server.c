@@ -6928,9 +6928,9 @@ int main(int argc, char **argv) {
         int flags = 0;
         for (j = 3; j < argc; j++) {
             char *arg = argv[j];
-            if (!strcasecmp(arg, "--accurate")) flags |= REDIS_TEST_ACCURATE;
-            else if (!strcasecmp(arg, "--large-memory")) flags |= REDIS_TEST_LARGE_MEMORY;
-            else if (!strcasecmp(arg, "--valgrind")) flags |= REDIS_TEST_VALGRIND;
+            if (!strcasecmp(arg, "--accurate")) flags |= TEST_ACCURATE;
+            else if (!strcasecmp(arg, "--large-memory")) flags |= TEST_LARGE_MEMORY;
+            else if (!strcasecmp(arg, "--valgrind")) flags |= TEST_VALGRIND;
         }
 
         if (!strcasecmp(argv[2], "all")) {

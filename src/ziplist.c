@@ -1847,7 +1847,7 @@ static size_t strEntryBytesLarge(size_t slen) {
 
 /* ./redis-server test ziplist <randomseed> */
 int ziplistTest(int argc, char **argv, int flags) {
-    int accurate = (flags & REDIS_TEST_ACCURATE);
+    int accurate = (flags & TEST_ACCURATE);
     unsigned char *zl, *p;
     unsigned char *entry;
     unsigned int elen;

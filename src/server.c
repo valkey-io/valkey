@@ -1841,6 +1841,32 @@ void afterSleep(struct aeEventLoop *eventLoop) {
 
 /* =========================== Server initialization ======================== */
 
+/* These shared strings depend on the extended-redis-compatibility config and is
+ * called when the config changes. When the config is phased out, these
+ * initializations can be moved back inside createSharedObjects() below. */
+void createSharedObjectsWithCompat(void) {
+    const char *name = server.extended_redis_compat ? "Redis" : SERVER_TITLE;
+    if (shared.loadingerr) decrRefCount(shared.loadingerr);
+    shared.loadingerr = createObject(OBJ_STRING, sdscatfmt(sdsempty(),
+        "-LOADING %s is loading the dataset in memory\r\n", name));
+    if (shared.slowevalerr) decrRefCount(shared.slowevalerr);
+    shared.slowevalerr = createObject(OBJ_STRING, sdscatfmt(sdsempty(),
+        "-BUSY %s is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.\r\n", name));
+    if (shared.slowscripterr) decrRefCount(shared.slowscripterr);
+    shared.slowscripterr = createObject(OBJ_STRING, sdscatfmt(sdsempty(),
+        "-BUSY %s is busy running a script. You can only call FUNCTION KILL or SHUTDOWN NOSAVE.\r\n", name));
+    if (shared.slowmoduleerr) decrRefCount(shared.slowmoduleerr);
+    shared.slowmoduleerr = createObject(OBJ_STRING, sdscatfmt(sdsempty(),
+        "-BUSY %s is busy running a module command.\r\n", name));
+    if (shared.bgsaveerr) decrRefCount(shared.bgsaveerr);
+    shared.bgsaveerr = createObject(OBJ_STRING, sdscatfmt(sdsempty(),
+        "-MISCONF %s is configured to save RDB snapshots, but it's currently"
+        " unable to persist to disk. Commands that may modify the data set are"
+        " disabled, because this instance is configured to report errors during"
+        " writes if RDB snapshotting fails (stop-writes-on-bgsave-error option)."
+        " Please check the %s logs for details about the RDB error.\r\n", name, name));
+}
+
 void createSharedObjects(void) {
     int j;
 
@@ -1870,18 +1896,9 @@ void createSharedObjects(void) {
         "-ERR index out of range\r\n"));
     shared.noscripterr = createObject(OBJ_STRING,sdsnew(
         "-NOSCRIPT No matching script. Please use EVAL.\r\n"));
-    shared.loadingerr = createObject(OBJ_STRING,sdsnew(
-        "-LOADING Redis is loading the dataset in memory\r\n"));
-    shared.slowevalerr = createObject(OBJ_STRING,sdsnew(
-        "-BUSY Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.\r\n"));
-    shared.slowscripterr = createObject(OBJ_STRING,sdsnew(
-        "-BUSY Redis is busy running a script. You can only call FUNCTION KILL or SHUTDOWN NOSAVE.\r\n"));
-    shared.slowmoduleerr = createObject(OBJ_STRING,sdsnew(
-        "-BUSY Redis is busy running a module command.\r\n"));
+    createSharedObjectsWithCompat();
     shared.masterdownerr = createObject(OBJ_STRING,sdsnew(
         "-MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.\r\n"));
-    shared.bgsaveerr = createObject(OBJ_STRING,sdsnew(
-        "-MISCONF Redis is configured to save RDB snapshots, but it's currently unable to persist to disk. Commands that may modify the data set are disabled, because this instance is configured to report errors during writes if RDB snapshotting fails (stop-writes-on-bgsave-error option). Please check the Redis logs for details about the RDB error.\r\n"));
     shared.roslaveerr = createObject(OBJ_STRING,sdsnew(
         "-READONLY You can't write against a read only replica.\r\n"));
     shared.noautherr = createObject(OBJ_STRING,sdsnew(
@@ -2084,6 +2101,7 @@ void initServerConfig(void) {
     server.migrate_cached_sockets = dictCreate(&migrateCacheDictType);
     server.next_client_id = 1; /* Client IDs, start from 1 .*/
     server.page_size = sysconf(_SC_PAGESIZE);
+    server.extended_redis_compat = 0;
     server.pause_cron = 0;
     server.dict_resizing = 1;
 
@@ -5590,7 +5608,8 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "redis_git_sha1:%s\r\n", serverGitSHA1(),
             "redis_git_dirty:%i\r\n", strtol(serverGitDirty(),NULL,10) > 0,
             "redis_build_id:%s\r\n", serverBuildIdString(),
-            "redis_mode:%s\r\n", mode,
+            "%s_mode:", (server.extended_redis_compat ? "redis" : "server"),
+            "%s\r\n", mode,
             "os:%s", name.sysname,
             " %s", name.release,
             " %s\r\n", name.machine,

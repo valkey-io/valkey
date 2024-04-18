@@ -2540,6 +2540,12 @@ static int updateAofAutoGCEnabled(const char **err) {
     return 1;
 }
 
+static int updateExtendedRedisCompat(const char **err) {
+    UNUSED(err);
+    createSharedObjectsWithCompat();
+    return 1;
+}
+
 static int updateSighandlerEnabled(const char **err) {
     UNUSED(err);
     if (server.crashlog_enabled)
@@ -3110,6 +3116,7 @@ standardConfig static_configs[] = {
     createBoolConfig("latency-tracking", NULL, MODIFIABLE_CONFIG, server.latency_tracking_enabled, 1, NULL, NULL),
     createBoolConfig("aof-disable-auto-gc", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, server.aof_disable_auto_gc, 0, NULL, updateAofAutoGCEnabled),
     createBoolConfig("replica-ignore-disk-write-errors", NULL, MODIFIABLE_CONFIG, server.repl_ignore_disk_write_error, 0, NULL, NULL),
+    createBoolConfig("extended-redis-compatibility", NULL, MODIFIABLE_CONFIG, server.extended_redis_compat, 0, NULL, updateExtendedRedisCompat),
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.acl_filename, "", NULL, NULL),

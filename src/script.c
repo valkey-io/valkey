@@ -164,14 +164,17 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx, client *engine_client, client *ca
             int deny_write_type = writeCommandsDeniedByDiskError();
             if (deny_write_type != DISK_ERROR_TYPE_NONE && !obey_client) {
                 if (deny_write_type == DISK_ERROR_TYPE_RDB)
-                    addReplyError(caller, "-MISCONF Redis is configured to save RDB snapshots, "
+                    addReplyErrorFormat(caller, "-MISCONF %s is configured to save RDB snapshots, "
                                      "but it's currently unable to persist to disk. "
-                                     "Writable scripts are blocked. Use 'no-writes' flag for read only scripts.");
+                                     "Writable scripts are blocked. Use 'no-writes' flag for read only scripts.",
+                                     server.extended_redis_compat ? "Redis" : SERVER_TITLE);
                 else
-                    addReplyErrorFormat(caller, "-MISCONF Redis is configured to persist data to AOF, "
+                    addReplyErrorFormat(caller, "-MISCONF %s is configured to persist data to AOF, "
                                            "but it's currently unable to persist to disk. "
                                            "Writable scripts are blocked. Use 'no-writes' flag for read only scripts. "
-                                           "AOF error: %s", strerror(server.aof_last_write_errno));
+                                           "AOF error: %s",
+                                        server.extended_redis_compat ? "Redis" : SERVER_TITLE,
+                                        strerror(server.aof_last_write_errno));
                 return C_ERR;
             }
 

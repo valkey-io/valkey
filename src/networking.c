@@ -3646,10 +3646,10 @@ void helloCommand(client *c) {
     addReplyMapLen(c,6 + !server.sentinel_mode);
 
     addReplyBulkCString(c,"server");
-    addReplyBulkCString(c,"redis");
+    addReplyBulkCString(c, server.extended_redis_compat ? "redis" : SERVER_NAME);
 
     addReplyBulkCString(c,"version");
-    addReplyBulkCString(c,VALKEY_VERSION);
+    addReplyBulkCString(c, server.extended_redis_compat ? REDIS_VERSION : VALKEY_VERSION);
 
     addReplyBulkCString(c,"proto");
     addReplyLongLong(c,c->resp);

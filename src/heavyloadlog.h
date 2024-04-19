@@ -35,12 +35,12 @@
 #define SLOWLOG_ENTRY_MAX_ARGC 32
 #define SLOWLOG_ENTRY_MAX_STRING 128
 
-/* This structure defines an entry inside the slow log list */
+/* This structure defines an entry inside the slow/fat log list */
 typedef struct heavyLoadLogEntry {
     robj **argv;
     int argc;
     long long id;       /* Unique entry identifier. */
-    long long cost;     /* Time spent by the query, in microseconds, or memmory used by respons packet, in bytes. */
+    long long cost;     /* Time spent by the query, in microseconds, or memory used by response packet, in bytes. */
     time_t time;        /* Unix time at which the query was executed. */
     sds cname;          /* Client name. */
     sds peerid;         /* Client network address. */

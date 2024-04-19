@@ -61,7 +61,7 @@
  */
 
 #include "server.h"
-#include "slowlog.h"
+#include "heavyloadlog.h"
 #include "latency.h"
 #include "monotonic.h"
 

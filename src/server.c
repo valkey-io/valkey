@@ -30,7 +30,7 @@
 #include "server.h"
 #include "monotonic.h"
 #include "cluster.h"
-#include "slowlog.h"
+#include "heavyloadlog.h"
 #include "bio.h"
 #include "latency.h"
 #include "mt19937-64.h"

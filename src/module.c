@@ -53,7 +53,7 @@
 
 #include "server.h"
 #include "cluster.h"
-#include "slowlog.h"
+#include "heavyloadlog.h"
 #include "rdb.h"
 #include "monotonic.h"
 #include "script.h"

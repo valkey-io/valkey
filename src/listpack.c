@@ -1817,7 +1817,7 @@ int listpackTest(int argc, char *argv[], int flags) {
     unsigned char *lp, *p, *vstr;
     int64_t vlen;
     unsigned char intbuf[LP_INTBUF_SIZE];
-    int accurate = (flags & REDIS_TEST_ACCURATE);
+    int accurate = (flags & TEST_ACCURATE);
 
     TEST("Create int list") {
         lp = createIntList();

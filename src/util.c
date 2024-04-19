@@ -1646,7 +1646,7 @@ int utilTest(int argc, char **argv, int flags) {
     test_ld2string();
     test_fixedpoint_d2string();
 #if defined(__linux__)
-    if (!(flags & REDIS_TEST_VALGRIND)) {
+    if (!(flags & TEST_VALGRIND)) {
         test_reclaimFilePageCache();
     }
 #endif

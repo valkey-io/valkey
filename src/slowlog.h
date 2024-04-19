@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __SLOWLOG_H__
-#define __SLOWLOG_H__
+#ifndef __HEAVY_LOAD_LOG_H__
+#define __HEAVY_LOAD_LOG_H__
 
 #include "server.h"
 
@@ -36,18 +36,19 @@
 #define SLOWLOG_ENTRY_MAX_STRING 128
 
 /* This structure defines an entry inside the slow log list */
-typedef struct slowlogEntry {
+typedef struct heavyLoadLogEntry {
     robj **argv;
     int argc;
     long long id;       /* Unique entry identifier. */
-    long long duration; /* Time spent by the query, in microseconds. */
+    long long cost;     /* Time spent by the query, in microseconds, or memmory used by respons packet, in bytes. */
     time_t time;        /* Unix time at which the query was executed. */
     sds cname;          /* Client name. */
     sds peerid;         /* Client network address. */
-} slowlogEntry;
+} heavyLoadLogEntry;
 
 /* Exported API */
-void slowlogInit(void);
+void heavyLoadLogInit(void);
 void slowlogPushEntryIfNeeded(client *c, robj **argv, int argc, long long duration);
+void fatlogPushEntryIfNeeded(client *c, robj **argv, int argc, long long cost);
 
-#endif /* __SLOWLOG_H__ */
+#endif /* __HEAVY_LOAD_LOG_H__ */

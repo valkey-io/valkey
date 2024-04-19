@@ -5,8 +5,15 @@
  * using the 'slowlog-log-slower-than' config directive, that is also
  * readable and writable using the CONFIG SET/GET command.
  *
- * The slow queries log is actually not "logged" in the server log file
- * but is accessible thanks to the SLOWLOG command.
+ * Similarly, fatlog remembers the latest N queries that has a response
+ * larger than K bytes.
+ *
+ * The size of the response to reach to be logged in the fat lof is set
+ * using the 'fatlog-log-bigger-than' config directive, that is also
+ * readable and writable using the CONFIG SET/GET command.
+ *
+ * Both logs are actually not "logged" in the Redis log file but are
+ * accessible thanks to the SLOWLOG/FATLOG command.
  *
  * ----------------------------------------------------------------------------
  *
@@ -43,11 +50,11 @@
 /* Create a new slowlog entry.
  * Incrementing the ref count of all the objects retained is up to
  * this function. */
-slowlogEntry *slowlogCreateEntry(client *c, robj **argv, int argc, long long duration) {
-    slowlogEntry *se = zmalloc(sizeof(*se));
+heavyLoadLogEntry *heavyLoadLogCreateEntry(client *c, robj **argv, int argc, long long cost, long long id) {
+    heavyLoadLogEntry *se = zmalloc(sizeof(*se));
     int j, slargc = argc;
 
-    if (slargc > SLOWLOG_ENTRY_MAX_ARGC) slargc = SLOWLOG_ENTRY_MAX_ARGC;
+    if (slargc > HEAVYLOAD_LOG_ENTRY_MAX_ARGC) slargc = HEAVYLOAD_LOG_ENTRY_MAX_ARGC;
     se->argc = slargc;
     se->argv = zmalloc(sizeof(robj *) * slargc);
     for (j = 0; j < slargc; j++) {
@@ -80,8 +87,8 @@ slowlogEntry *slowlogCreateEntry(client *c, robj **argv, int argc, long long dur
         }
     }
     se->time = time(NULL);
-    se->duration = duration;
-    se->id = server.slowlog_entry_id++;
+    se->cost = cost;
+    se->id = id;
     se->peerid = sdsnew(getClientPeerId(c));
     se->cname = c->name ? sdsnew(c->name->ptr) : sdsempty();
     return se;
@@ -91,8 +98,8 @@ slowlogEntry *slowlogCreateEntry(client *c, robj **argv, int argc, long long dur
  * function matches the one of the 'free' method of adlist.c.
  *
  * This function will take care to release all the retained object. */
-void slowlogFreeEntry(void *septr) {
-    slowlogEntry *se = septr;
+void heavyLoadLogFreeEntry(void *septr) {
+    heavyLoadLogEntry *se = septr;
     int j;
 
     for (j = 0; j < se->argc; j++) decrRefCount(se->argv[j]);
@@ -104,10 +111,13 @@ void slowlogFreeEntry(void *septr) {
 
 /* Initialize the slow log. This function should be called a single time
  * at server startup. */
-void slowlogInit(void) {
+void heavyLoadLogInit(void) {
     server.slowlog = listCreate();
     server.slowlog_entry_id = 0;
-    listSetFreeMethod(server.slowlog, slowlogFreeEntry);
+    listSetFreeMethod(server.slowlog, heavyLoadLogFreeEntry);
+    server.fatlog = listCreate();
+    server.fatlog_entry_id = 0;
+    listSetFreeMethod(server.fatlog, heavyLoadLogFreeEntry);
 }
 
 /* Push a new entry into the slow log.
@@ -116,23 +126,38 @@ void slowlogInit(void) {
 void slowlogPushEntryIfNeeded(client *c, robj **argv, int argc, long long duration) {
     if (server.slowlog_log_slower_than < 0 || server.slowlog_max_len == 0) return; /* Slowlog disabled */
     if (duration >= server.slowlog_log_slower_than)
-        listAddNodeHead(server.slowlog, slowlogCreateEntry(c, argv, argc, duration));
+        listAddNodeHead(server.slowlog,
+                        heavyLoadLogCreateEntry(c, argv, argc, duration, server.slowlog_entry_id++));
 
     /* Remove old entries if needed. */
     while (listLength(server.slowlog) > server.slowlog_max_len) listDelNode(server.slowlog, listLast(server.slowlog));
 }
 
-/* Remove all the entries from the current slow log. */
-void slowlogReset(void) {
-    while (listLength(server.slowlog) > 0) listDelNode(server.slowlog, listLast(server.slowlog));
+/* Push a new entry into the fat log.
+ * This function will make sure to trim the fat log accordingly to the
+ * configured max length. */
+void fatlogPushEntryIfNeeded(client *c, robj **argv, int argc, long long cost) {
+    if (server.fatlog_log_bigger_than < 0 || server.fatlog_max_len == 0) return; /* Fatlog disabled */
+    if (cost >= server.fatlog_log_bigger_than)
+        listAddNodeHead(server.fatlog,
+                        heavyLoadLogCreateEntry(c, argv, argc, cost, server.fatlog_entry_id++));
+    /* Remove old entries if needed. */
+    while (listLength(server.fatlog) > server.fatlog_max_len)
+        listDelNode(server.fatlog,listLast(server.fatlog));
 }
 
-/* The SLOWLOG command. Implements all the subcommands needed to handle the
- * slow log. */
-void slowlogCommand(client *c) {
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
-        /* clang-format off */
-        const char *help[] = {
+/* Remove all the entries from the current slow/fat log. */
+void heavyLoadLogReset(list *log_list) {
+    while (listLength(log_list) > 0)
+        listDelNode(log_list, listLast(log_list));
+}
+
+/* The SLOWLOG/FATLOG command. Implements all the subcommands needed to handle the
+ * slow/fat log. */
+void heavyLoadLogCommand(client *c) {
+    const char **help;
+    list *log_list;
+    const char *slowlog_help[] = {
 "GET [<count>]",
 "    Return top <count> entries from the slowlog (default: 10, -1 mean all).",
 "    Entries are made of:",
@@ -144,18 +169,41 @@ void slowlogCommand(client *c) {
 "    Reset the slowlog.",
 NULL
         };
-        /* clang-format on */
+    const char *fatlog_help[] = {
+"GET [<count>]",
+"    Return top <count> entries from the fatlog (default: 10, -1 mean all).",
+"    Entries are made of:",
+"    id, timestamp, size in bytes, arguments array, client IP and port,",
+"    client name",
+"LEN",
+"    Return the length of the fatlog.",
+"RESET",
+"    Reset the fatlog.",
+NULL
+        };
+
+    if (!strcasecmp(c->argv[0]->ptr,"slowlog")){
+        help = slowlog_help;
+        log_list = server.slowlog;
+    } else {
+        help = fatlog_help;
+        log_list = server.fatlog;
+    }
+
+    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {      
         addReplyHelp(c, help);
-    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "reset")) {
-        slowlogReset();
-        addReply(c, shared.ok);
-    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "len")) {
-        addReplyLongLong(c, listLength(server.slowlog));
-    } else if ((c->argc == 2 || c->argc == 3) && !strcasecmp(c->argv[1]->ptr, "get")) {
+    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"reset")) {
+        heavyLoadLogReset(log_list);
+        addReply(c,shared.ok);
+    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"len")) {
+        addReplyLongLong(c,listLength(log_list));
+    } else if ((c->argc == 2 || c->argc == 3) &&
+               !strcasecmp(c->argv[1]->ptr,"get"))
+    {
         long count = 10;
         listIter li;
         listNode *ln;
-        slowlogEntry *se;
+        heavyLoadLogEntry *se;
 
         if (c->argc == 3) {
             /* Consume count arg. */
@@ -165,29 +213,30 @@ NULL
 
             if (count == -1) {
                 /* We treat -1 as a special value, which means to get all slow logs.
-                 * Simply set count to the length of server.slowlog.*/
-                count = listLength(server.slowlog);
+                 * Simply set count to the length of log_list.*/
+                count = listLength(log_list);
             }
         }
 
-        if (count > (long)listLength(server.slowlog)) {
-            count = listLength(server.slowlog);
+        if (count > (long)listLength(log_list)) {
+            count = listLength(log_list);
         }
         addReplyArrayLen(c, count);
-        listRewind(server.slowlog, &li);
+        listRewind(log_list, &li);
         while (count--) {
             int j;
 
             ln = listNext(&li);
             se = ln->value;
-            addReplyArrayLen(c, 6);
-            addReplyLongLong(c, se->id);
-            addReplyLongLong(c, se->time);
-            addReplyLongLong(c, se->duration);
-            addReplyArrayLen(c, se->argc);
-            for (j = 0; j < se->argc; j++) addReplyBulk(c, se->argv[j]);
-            addReplyBulkCBuffer(c, se->peerid, sdslen(se->peerid));
-            addReplyBulkCBuffer(c, se->cname, sdslen(se->cname));
+            addReplyArrayLen(c,6);
+            addReplyLongLong(c,se->id);
+            addReplyLongLong(c,se->time);
+            addReplyLongLong(c,se->cost);
+            addReplyArrayLen(c,se->argc);
+            for (j = 0; j < se->argc; j++)
+                addReplyBulk(c,se->argv[j]);
+            addReplyBulkCBuffer(c,se->peerid,sdslen(se->peerid));
+            addReplyBulkCBuffer(c,se->cname,sdslen(se->cname));
         }
     } else {
         addReplySubcommandSyntaxError(c);

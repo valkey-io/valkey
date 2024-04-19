@@ -186,6 +186,7 @@ client *createClient(connection *conn) {
     c->reply = listCreate();
     c->deferred_reply_errors = NULL;
     c->reply_bytes = 0;
+    c->cmd_reply_length = 0;
     c->obuf_soft_limit_reached_time = 0;
     listSetFreeMethod(c->reply, freeClientReplyValue);
     listSetDupMethod(c->reply, dupClientReplyValue);
@@ -441,6 +442,9 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
     /* We call it here because this function may affect the reply
      * buffer offset (see function comment) */
     reqresSaveClientReplyOffset(c);
+
+    /* Record reply length. */
+    c->cmd_reply_length += len;
 
     /* If we're processing a push message into the current client (i.e. executing PUBLISH
      * to a channel which we are subscribed to, then we wanna postpone that message to be added
@@ -793,6 +797,9 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
      * we return NULL in addReplyDeferredLen() */
     if (node == NULL) return;
     serverAssert(!listNodeValue(ln));
+
+    /* Record reply length. */
+    c->cmd_reply_length += length;
 
     /* Normally we fill this dummy NULL node, added by addReplyDeferredLen(),
      * with a new buffer structure containing the protocol needed to specify

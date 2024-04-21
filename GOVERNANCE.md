@@ -32,6 +32,7 @@ Examples of major decisions:
     * Adding a new data structure or API
     * Changes that affect backward compatibility
     * New user visible fields that need to be maintained
+    * Modifications to the TSC or other governance documents
 
 The TSC Chair will call a vote with reasonable notice to the TSC, setting out a discussion period and a separate voting period.
 Any discussion may be conducted in person or electronically by text, voice, or video.

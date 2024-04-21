@@ -355,6 +355,7 @@ else
 endif
 
 SERVER_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
+SERVER_AR=$(QUIET_AR)$(AR)
 SERVER_LD=$(QUIET_LINK)$(CC) $(FINAL_LDFLAGS)
 ENGINE_INSTALL=$(QUIET_INSTALL)$(INSTALL)
 
@@ -390,6 +391,10 @@ ENGINE_BENCHMARK_NAME=$(ENGINE_NAME)-benchmark$(PROG_SUFFIX)
 ENGINE_BENCHMARK_OBJ=ae.o anet.o valkey-benchmark.o adlist.o dict.o zmalloc.o serverassert.o release.o crcspeed.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o
 ENGINE_CHECK_RDB_NAME=$(ENGINE_NAME)-check-rdb$(PROG_SUFFIX)
 ENGINE_CHECK_AOF_NAME=$(ENGINE_NAME)-check-aof$(PROG_SUFFIX)
+ENGINE_LIB_NAME=lib$(ENGINE_NAME).a
+ENGINE_TEST_FILES:=$(wildcard unit/*.c)
+ENGINE_TEST_OBJ:=$(sort $(patsubst unit/%.c,unit/%.o,$(ENGINE_TEST_FILES)))
+ENGINE_UNIT_TESTS:=$(ENGINE_NAME)-unit-tests$(PROG_SUFFIX)
 ALL_SOURCES=$(sort $(patsubst %.o,%.c,$(ENGINE_SERVER_OBJ) $(ENGINE_CLI_OBJ) $(ENGINE_BENCHMARK_OBJ)))
 
 all: $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(TLS_MODULE)
@@ -438,7 +443,18 @@ endif
 
 # valkey-server
 $(SERVER_NAME): $(ENGINE_SERVER_OBJ)
+	rm -f $@
 	$(SERVER_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
+
+# Valkey static library, used to compile against for unit testing
+$(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
+	rm -f $@
+	$(SERVER_AR) rcs $@ $^
+
+# valkey-unit-tests
+$(ENGINE_UNIT_TESTS): $(ENGINE_LIB_NAME) $(ENGINE_TEST_OBJ)
+	rm -f $@
+	$(SERVER_LD) -o $@ $^ ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
 
 # valkey-sentinel
 $(ENGINE_SENTINEL_NAME): $(SERVER_NAME)
@@ -473,6 +489,9 @@ DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_
 %.o: %.c .make-prerequisites
 	$(SERVER_CC) -MMD -o $@ -c $<
 
+unit/%.o: unit/%.c .make-prerequisites
+	$(SERVER_CC) -MMD -o $@ -c $<
+
 # The following files are checked in and don't normally need to be rebuilt. They
 # are built only if python is available and their prereqs are modified.
 ifneq (,$(PYTHON))
@@ -483,12 +502,17 @@ fmtargs.h: ../utils/generate-fmtargs.py
 	$(QUITE_GEN)sed '/Everything below this line/,$$d' $@ > $@.tmp
 	$(QUITE_GEN)$(PYTHON) ../utils/generate-fmtargs.py >> $@.tmp
 	$(QUITE_GEN)mv $@.tmp $@
+
+unit/test_files.h: unit/*.c ../utils/generate-unit-test-header.py
+	$(QUIET_GEN)$(PYTHON) ../utils/generate-unit-test-header.py
+
+unit/test_main.o: unit/test_files.h
 endif
 
 commands.c: $(COMMANDS_DEF_FILENAME).def
 
 clean:
-	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
+	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) unit/*.o unit/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
 	rm -f $(DEP)
 
 .PHONY: clean
@@ -503,6 +527,9 @@ distclean: clean
 
 test: $(SERVER_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME)
 	@(cd ..; ./runtest)
+
+test-unit: $(ENGINE_UNIT_TESTS)
+	./$(ENGINE_UNIT_TESTS all)
 
 test-modules: $(SERVER_NAME)
 	@(cd ..; ./runtest-moduleapi)

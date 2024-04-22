@@ -8,7 +8,7 @@ See [GOVERNANCE.md](GOVERNANCE.md) that explains the function of this file.
 | Maintainer          | GitHub ID                                       | Affiliation |
 | ------------------- | ----------------------------------------------- | ----------- |
 | Madelyn Olson       | [madolson](https://github.com/madolson)         | Amazon      |
-| Viktor Zuiderkwast  | [zuiderkwast](https://github.com/zuiderkwast)   | Erricson    |
+| Viktor Zuiderkwast  | [zuiderkwast](https://github.com/zuiderkwast)   | Ericsson    |
 | Zhu Binbin          | [enjoy-binbin](https://github.com/enjoy-binbin) | Tencent     |
 | Wen Hui             | [hwware](https://github.com/hwware)             | Huawei      |
 | Zhao Zhao           | [soloestoy](https://github.com/soloestoy)       | Alibaba     |

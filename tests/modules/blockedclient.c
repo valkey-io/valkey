@@ -123,18 +123,18 @@ void *bg_call_worker(void *arg) {
     // Call the command
     const char *module_cmd = ValkeyModule_StringPtrLen(bg->argv[0], NULL);
     int cmd_pos = 1;
-    ValkeyModuleString *format_redis_str = ValkeyModule_CreateString(NULL, "v", 1);
+    ValkeyModuleString *format_valkey_str = ValkeyModule_CreateString(NULL, "v", 1);
     if (!strcasecmp(module_cmd, "do_bg_rm_call_format")) {
         cmd_pos = 2;
         size_t format_len;
         const char *format = ValkeyModule_StringPtrLen(bg->argv[1], &format_len);
-        ValkeyModule_StringAppendBuffer(NULL, format_redis_str, format, format_len);
-        ValkeyModule_StringAppendBuffer(NULL, format_redis_str, "E", 1);
+        ValkeyModule_StringAppendBuffer(NULL, format_valkey_str, format, format_len);
+        ValkeyModule_StringAppendBuffer(NULL, format_valkey_str, "E", 1);
     }
-    const char *format = ValkeyModule_StringPtrLen(format_redis_str, NULL);
+    const char *format = ValkeyModule_StringPtrLen(format_valkey_str, NULL);
     const char *cmd = ValkeyModule_StringPtrLen(bg->argv[cmd_pos], NULL);
     ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, cmd, format, bg->argv + cmd_pos + 1, bg->argc - cmd_pos - 1);
-    ValkeyModule_FreeString(NULL, format_redis_str);
+    ValkeyModule_FreeString(NULL, format_valkey_str);
 
     /* Free the arguments within GIL to prevent simultaneous freeing in main thread. */
     for (int i=0; i<bg->argc; i++)

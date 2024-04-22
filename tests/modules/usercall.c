@@ -128,14 +128,14 @@ void *bg_call_worker(void *arg) {
 
     // Call the command
     size_t format_len;
-    ValkeyModuleString *format_redis_str = ValkeyModule_CreateString(NULL, "v", 1);
+    ValkeyModuleString *format_valkey_str = ValkeyModule_CreateString(NULL, "v", 1);
     const char *format = ValkeyModule_StringPtrLen(bg->argv[1], &format_len);
-    ValkeyModule_StringAppendBuffer(NULL, format_redis_str, format, format_len);
-    ValkeyModule_StringAppendBuffer(NULL, format_redis_str, "E", 1);
-    format = ValkeyModule_StringPtrLen(format_redis_str, NULL);
+    ValkeyModule_StringAppendBuffer(NULL, format_valkey_str, format, format_len);
+    ValkeyModule_StringAppendBuffer(NULL, format_valkey_str, "E", 1);
+    format = ValkeyModule_StringPtrLen(format_valkey_str, NULL);
     const char *cmd = ValkeyModule_StringPtrLen(bg->argv[2], NULL);
     ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, cmd, format, bg->argv + 3, bg->argc - 3);
-    ValkeyModule_FreeString(NULL, format_redis_str);
+    ValkeyModule_FreeString(NULL, format_valkey_str);
 
     /* Free the arguments within GIL to prevent simultaneous freeing in main thread. */
     for (int i=0; i<bg->argc; i++)

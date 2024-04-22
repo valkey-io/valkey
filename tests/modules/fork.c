@@ -30,7 +30,7 @@ int fork_create(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
     }
 
     if(!RMAPI_FUNC_SUPPORTED(ValkeyModule_Fork)){
-        ValkeyModule_ReplyWithError(ctx, "Fork api is not supported in the current redis version");
+        ValkeyModule_ReplyWithError(ctx, "Fork api is not supported in the current valkey version");
         return VALKEYMODULE_OK;
     }
 

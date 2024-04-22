@@ -4771,7 +4771,7 @@ static void clusterManagerSetSlotNodeReplicaOnly(clusterManagerNode *node1,
      * ownership finalization on HA clusters. We make a best-effort attempt below
      * to utilize this enhanced reliability. Regardless of the result, we continue
      * with finalizing slot ownership on the primary nodes. Note that this command
-     * is not essential. Redis 8.0+ will attempt to recover from failed slot
+     * is not essential. Valkey 8.0 will attempt to recover from failed slot
      * ownership finalizations if they occur, although there may be a brief period
      * where slots caught in this transition stage are unavailable. Including this
      * additional step ensures no downtime for these slots if any failures arise. */

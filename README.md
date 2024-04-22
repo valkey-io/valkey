@@ -54,6 +54,10 @@ installed):
     % ./utils/gen-test-certs.sh
     % ./runtest --tls
 
+To build and test crc 64 performance improvements:
+
+    % make distclean && make SEVER_TEST=yes
+    % src/valkey-server test crc64 --crc 10000000
 
 Fixing build problems with dependencies or cached build options
 ---------

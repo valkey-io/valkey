@@ -181,7 +181,7 @@ start_server {tags {"expire"}} {
         assert_equal [r pexpiretime x] $abs_expire
     }
 
-    test {Redis should actively expire keys incrementally} {
+    test {Server should actively expire keys incrementally} {
         r flushdb
         r psetex key1 500 a
         r psetex key2 500 a
@@ -197,7 +197,7 @@ start_server {tags {"expire"}} {
         }
     }
 
-    test {Redis should lazy expire keys} {
+    test {Server should lazy expire keys} {
         r flushdb
         r debug set-active-expire 0
         r psetex key1{t} 500 a
@@ -768,7 +768,7 @@ start_server {tags {"expire"}} {
         assert_equal [r EXPIRE none 100 LT] 0
     } {}
 
-    test {Redis should not propagate the read command on lazy expire} {
+    test {Server should not propagate the read command on lazy expire} {
         r debug set-active-expire 0
         r flushall ; # Clean up keyspace to avoid interference by keys from other tests
         r set foo bar PX 1

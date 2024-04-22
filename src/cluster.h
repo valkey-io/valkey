@@ -103,6 +103,8 @@ char *clusterNodeHostname(clusterNode *node);
 const char *clusterNodePreferredEndpoint(clusterNode *n);
 long long clusterNodeReplOffset(clusterNode *node);
 clusterNode *clusterLookupNode(const char *name, int length);
+unsigned int countKeysInSlot(unsigned int hashslot);
+int getSlotOrReply(client *c, robj *o);
 
 /* functions with shared implementations */
 clusterNode *getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int *hashslot, int *ask);

@@ -4766,7 +4766,7 @@ static void clusterManagerSetSlotNodeReplicaOnly(clusterManagerNode *node1,
                                                  clusterManagerNode *node2,
                                                  int slot) {
     /* A new CLUSTER SETSLOT variant that finalizes slot ownership on replicas
-     * only (CLUSTER SETSLOT s NODE n REPLICAONLY) is introduced in Redis 8.0+
+     * only (CLUSTER SETSLOT s NODE n REPLICAONLY) is introduced in Valkey 8.0
      * to help mitigate the single-point-of-failure issue related to the slot
      * ownership finalization on HA clusters. We make a best-effort attempt below
      * to utilize this enhanced reliability. Regardless of the result, we continue

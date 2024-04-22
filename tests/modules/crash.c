@@ -1,17 +1,17 @@
-#include "redismodule.h"
+#include "valkeymodule.h"
 
 #include <strings.h>
 #include <sys/mman.h>
 
 #define UNUSED(V) ((void) V)
 
-void assertCrash(RedisModuleInfoCtx *ctx, int for_crash_report) {
+void assertCrash(ValkeyModuleInfoCtx *ctx, int for_crash_report) {
     UNUSED(ctx);
     UNUSED(for_crash_report);
-    RedisModule_Assert(0);
+    ValkeyModule_Assert(0);
 }
 
-void segfaultCrash(RedisModuleInfoCtx *ctx, int for_crash_report) {
+void segfaultCrash(ValkeyModuleInfoCtx *ctx, int for_crash_report) {
     UNUSED(ctx);
     UNUSED(for_crash_report);
     /* Compiler gives warnings about writing to a random address
@@ -21,19 +21,19 @@ void segfaultCrash(RedisModuleInfoCtx *ctx, int for_crash_report) {
     *p = 'x';
 }
 
-int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
-    if (RedisModule_Init(ctx,"infocrash",1,REDISMODULE_APIVER_1)
-            == REDISMODULE_ERR) return REDISMODULE_ERR;
-    RedisModule_Assert(argc == 1);
-    if (!strcasecmp(RedisModule_StringPtrLen(argv[0], NULL), "segfault")) {
-        if (RedisModule_RegisterInfoFunc(ctx, segfaultCrash) == REDISMODULE_ERR) return REDISMODULE_ERR;
-    } else if(!strcasecmp(RedisModule_StringPtrLen(argv[0], NULL), "assert")) {
-        if (RedisModule_RegisterInfoFunc(ctx, assertCrash) == REDISMODULE_ERR) return REDISMODULE_ERR;
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    if (ValkeyModule_Init(ctx,"infocrash",1,VALKEYMODULE_APIVER_1)
+            == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
+    ValkeyModule_Assert(argc == 1);
+    if (!strcasecmp(ValkeyModule_StringPtrLen(argv[0], NULL), "segfault")) {
+        if (ValkeyModule_RegisterInfoFunc(ctx, segfaultCrash) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
+    } else if(!strcasecmp(ValkeyModule_StringPtrLen(argv[0], NULL), "assert")) {
+        if (ValkeyModule_RegisterInfoFunc(ctx, assertCrash) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
     } else {
-        return REDISMODULE_ERR;
+        return VALKEYMODULE_ERR;
     }
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }

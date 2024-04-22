@@ -31,6 +31,16 @@ start_server {tags {"introspection"}} {
         return ""
     }
 
+    proc get_field_in_client_list {id client_list filed} {
+        set list [split $client_list "\r\n"]
+        foreach info $list {
+            if {[string match "id=$id *" $info] } {
+                return [get_field_in_client_info $info $filed]
+            }
+        }
+        return ""
+    }
+
     test {client input output and command process statistics} {
         set info1 [r client info]
         set input1 [get_field_in_client_info $info1 "tot-net-in"]
@@ -43,6 +53,32 @@ start_server {tags {"introspection"}} {
         assert_equal [expr $input1+26] $input2
         assert {[expr $output1+300] < $output2}
         assert_equal [expr $cmd1+1] $cmd2
+        # test blocking command
+        r del mylist
+        set rd [valkey_deferring_client]
+        $rd client id
+        set rd_id [$rd read]
+        set info_list [r client list]
+        set input3 [get_field_in_client_list $rd_id $info_list "tot-net-in"]
+        set output3 [get_field_in_client_list $rd_id $info_list "tot-net-out"]
+        set cmd3 [get_field_in_client_list $rd_id $info_list "tot-cmds"]
+        $rd blpop mylist 0
+        set info_list [r client list]
+        set input4 [get_field_in_client_list $rd_id $info_list "tot-net-in"]
+        set output4 [get_field_in_client_list $rd_id $info_list "tot-net-out"]
+        set cmd4 [get_field_in_client_list $rd_id $info_list "tot-cmds"]
+        assert_equal [expr $input3+34] $input4
+        assert_equal $output3 $output4
+        assert_equal $cmd3 $cmd4
+        r lpush mylist a
+        set info_list [r client list]
+        set input5 [get_field_in_client_list $rd_id $info_list "tot-net-in"]
+        set output5 [get_field_in_client_list $rd_id $info_list "tot-net-out"]
+        set cmd5 [get_field_in_client_list $rd_id $info_list "tot-cmds"]
+        assert_equal $input4 $input5
+        assert_equal [expr $output4+23] $output5
+        assert_equal [expr $cmd4+1] $cmd5
+        $rd close
     }
 
     test {CLIENT KILL with illegal arguments} {

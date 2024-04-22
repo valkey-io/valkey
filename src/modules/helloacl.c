@@ -41,7 +41,7 @@ static uint64_t global_auth_client_id = 0;
 
 /* HELLOACL.REVOKE 
  * Synchronously revoke access from a user. */
-int RevokeCommand_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int RevokeCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
@@ -55,7 +55,7 @@ int RevokeCommand_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, 
 
 /* HELLOACL.RESET 
  * Synchronously delete and re-create a module user. */
-int ResetCommand_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int ResetCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
@@ -78,7 +78,7 @@ void HelloACL_UserChanged(uint64_t client_id, void *privdata) {
 
 /* HELLOACL.AUTHGLOBAL 
  * Synchronously assigns a module user to the current context. */
-int AuthGlobalCommand_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int AuthGlobalCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
@@ -135,7 +135,7 @@ void *HelloACL_ThreadMain(void *args) {
 
 /* HELLOACL.AUTHASYNC 
  * Asynchronously assigns an ACL user to the current context. */
-int AuthAsyncCommand_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int AuthAsyncCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) return ValkeyModule_WrongArity(ctx);
 
     pthread_t tid;
@@ -164,19 +164,19 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"helloacl.reset",
-        ResetCommand_RedisCommand,"",0,0,0) == VALKEYMODULE_ERR)
+        ResetCommand_ValkeyCommand,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"helloacl.revoke",
-        RevokeCommand_RedisCommand,"",0,0,0) == VALKEYMODULE_ERR)
+        RevokeCommand_ValkeyCommand,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"helloacl.authglobal",
-        AuthGlobalCommand_RedisCommand,"no-auth",0,0,0) == VALKEYMODULE_ERR)
+        AuthGlobalCommand_ValkeyCommand,"no-auth",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"helloacl.authasync",
-        AuthAsyncCommand_RedisCommand,"no-auth",0,0,0) == VALKEYMODULE_ERR)
+        AuthAsyncCommand_ValkeyCommand,"no-auth",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     global = ValkeyModule_CreateModuleUser("global");

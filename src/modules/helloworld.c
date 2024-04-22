@@ -45,7 +45,7 @@
  * missing in the server. The command uses two important API calls: one to
  * fetch the currently selected DB, the other in order to send the client
  * an integer reply as response. */
-int HelloSimple_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloSimple_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
     ValkeyModule_ReplyWithLongLong(ctx,ValkeyModule_GetSelectedDb(ctx));
@@ -58,7 +58,7 @@ int HelloSimple_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, in
  *
  * You'll find this command to be roughly as fast as the actual RPUSH
  * command. */
-int HelloPushNative_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
+int HelloPushNative_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     if (argc != 3) return ValkeyModule_WrongArity(ctx);
 
@@ -77,7 +77,7 @@ int HelloPushNative_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv
  * approach is useful when you need to call commands that are not
  * available as low level APIs, or when you don't need the maximum speed
  * possible but instead prefer implementation simplicity. */
-int HelloPushCall_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
+int HelloPushCall_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     if (argc != 3) return ValkeyModule_WrongArity(ctx);
 
@@ -93,7 +93,7 @@ int HelloPushCall_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, 
 /* HELLO.PUSH.CALL2
  * This is exactly as HELLO.PUSH.CALL, but shows how we can reply to the
  * client using directly a reply object that Call() returned. */
-int HelloPushCall2_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
+int HelloPushCall2_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     if (argc != 3) return ValkeyModule_WrongArity(ctx);
 
@@ -108,7 +108,7 @@ int HelloPushCall2_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 /* HELLO.LIST.SUM.LEN returns the total length of all the items inside
  * a list, by using the high level Call() API.
  * This command is an example of the array reply access. */
-int HelloListSumLen_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
+int HelloListSumLen_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     if (argc != 2) return ValkeyModule_WrongArity(ctx);
 
@@ -131,7 +131,7 @@ int HelloListSumLen_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv
  * Moves 'count' elements from the tail of 'srclist' to the head of
  * 'dstlist'. If less than count elements are available, it moves as much
  * elements as possible. */
-int HelloListSplice_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloListSplice_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 4) return ValkeyModule_WrongArity(ctx);
 
     ValkeyModuleKey *srckey = ValkeyModule_OpenKey(ctx,argv[1],
@@ -176,7 +176,7 @@ int HelloListSplice_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv
 
 /* Like the HELLO.LIST.SPLICE above, but uses automatic memory management
  * in order to avoid freeing stuff. */
-int HelloListSpliceAuto_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloListSpliceAuto_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 4) return ValkeyModule_WrongArity(ctx);
 
     ValkeyModule_AutoMemory(ctx);
@@ -218,7 +218,7 @@ int HelloListSpliceAuto_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **
 /* HELLO.RAND.ARRAY <count>
  * Shows how to generate arrays as commands replies.
  * It just outputs <count> random numbers. */
-int HelloRandArray_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloRandArray_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) return ValkeyModule_WrongArity(ctx);
     long long count;
     if (ValkeyModule_StringToLongLong(argv[1],&count) != VALKEYMODULE_OK ||
@@ -237,7 +237,7 @@ int HelloRandArray_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
  * in the ValkeyModule_Call() call, the two INCRs get replicated.
  * Also note how the ECHO is replicated in an unexpected position (check
  * comments the function implementation). */
-int HelloRepl1_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
+int HelloRepl1_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -275,7 +275,7 @@ int HelloRepl1_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int
  * as reply.
  *
  * Usage: HELLO.REPL2 <list-key> */
-int HelloRepl2_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloRepl2_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) return ValkeyModule_WrongArity(ctx);
 
     ValkeyModule_AutoMemory(ctx); /* Use automatic memory management. */
@@ -311,7 +311,7 @@ int HelloRepl2_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int
  * of variety).
  *
  * HELLO.TOGGLE.CASE key */
-int HelloToggleCase_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloToggleCase_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) return ValkeyModule_WrongArity(ctx);
 
     ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx,argv[1],
@@ -347,7 +347,7 @@ int HelloToggleCase_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv
  *
  * If the key has already an associated TTL, extends it by "milliseconds"
  * milliseconds. Otherwise no operation is performed. */
-int HelloMoreExpire_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloMoreExpire_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     ValkeyModule_AutoMemory(ctx); /* Use automatic memory management. */
     if (argc != 3) return ValkeyModule_WrongArity(ctx);
 
@@ -372,7 +372,7 @@ int HelloMoreExpire_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv
  * The computation is performed two times, one time from start to end and
  * another time backward. The two scores, returned as a two element array,
  * should match.*/
-int HelloZsumRange_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloZsumRange_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     double score_start, score_end;
     if (argc != 4) return ValkeyModule_WrongArity(ctx);
 
@@ -427,7 +427,7 @@ int HelloZsumRange_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
  * The command will return all the sorted set items that are lexicographically
  * between the specified range (using the same format as ZRANGEBYLEX)
  * and having an age between min_age and max_age. */
-int HelloLexRange_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloLexRange_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     ValkeyModule_AutoMemory(ctx); /* Use automatic memory management. */
 
     if (argc != 6) return ValkeyModule_WrongArity(ctx);
@@ -465,7 +465,7 @@ int HelloLexRange_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, 
  *
  * The command returns 1 if the copy is performed (srcfield exists) otherwise
  * 0 is returned. */
-int HelloHCopy_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloHCopy_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     ValkeyModule_AutoMemory(ctx); /* Use automatic memory management. */
 
     if (argc != 4) return ValkeyModule_WrongArity(ctx);
@@ -506,7 +506,7 @@ int HelloHCopy_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int
  *
  * Note that PoolAlloc() does not necessarily require AutoMemory to be
  * active. */
-int HelloLeftPad_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloLeftPad_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     ValkeyModule_AutoMemory(ctx); /* Use automatic memory management. */
     long long padlen;
 
@@ -553,68 +553,68 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     }
 
     if (ValkeyModule_CreateCommand(ctx,"hello.simple",
-        HelloSimple_RedisCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
+        HelloSimple_ValkeyCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hello.push.native",
-        HelloPushNative_RedisCommand,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
+        HelloPushNative_ValkeyCommand,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hello.push.call",
-        HelloPushCall_RedisCommand,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
+        HelloPushCall_ValkeyCommand,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hello.push.call2",
-        HelloPushCall2_RedisCommand,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
+        HelloPushCall2_ValkeyCommand,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hello.list.sum.len",
-        HelloListSumLen_RedisCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
+        HelloListSumLen_ValkeyCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hello.list.splice",
-        HelloListSplice_RedisCommand,"write deny-oom",1,2,1) == VALKEYMODULE_ERR)
+        HelloListSplice_ValkeyCommand,"write deny-oom",1,2,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hello.list.splice.auto",
-        HelloListSpliceAuto_RedisCommand,
+        HelloListSpliceAuto_ValkeyCommand,
         "write deny-oom",1,2,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hello.rand.array",
-        HelloRandArray_RedisCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
+        HelloRandArray_ValkeyCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hello.repl1",
-        HelloRepl1_RedisCommand,"write",0,0,0) == VALKEYMODULE_ERR)
+        HelloRepl1_ValkeyCommand,"write",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hello.repl2",
-        HelloRepl2_RedisCommand,"write",1,1,1) == VALKEYMODULE_ERR)
+        HelloRepl2_ValkeyCommand,"write",1,1,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hello.toggle.case",
-        HelloToggleCase_RedisCommand,"write",1,1,1) == VALKEYMODULE_ERR)
+        HelloToggleCase_ValkeyCommand,"write",1,1,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hello.more.expire",
-        HelloMoreExpire_RedisCommand,"write",1,1,1) == VALKEYMODULE_ERR)
+        HelloMoreExpire_ValkeyCommand,"write",1,1,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hello.zsumrange",
-        HelloZsumRange_RedisCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
+        HelloZsumRange_ValkeyCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hello.lexrange",
-        HelloLexRange_RedisCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
+        HelloLexRange_ValkeyCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hello.hcopy",
-        HelloHCopy_RedisCommand,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
+        HelloHCopy_ValkeyCommand,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hello.leftpad",
-        HelloLeftPad_RedisCommand,"",1,1,1) == VALKEYMODULE_ERR)
+        HelloLeftPad_ValkeyCommand,"",1,1,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

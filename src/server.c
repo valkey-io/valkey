@@ -4010,12 +4010,12 @@ int processCommand(client *c) {
     }
 
     if (!server.cluster_enabled &&
+        server.repl_replica_enable_redirect &&
         server.masterhost &&
         !mustObeyClient(c) &&
-        server.repl_replica_enable_redirect &&
         (is_write_command ||
          (is_read_command && !(c->flags & CLIENT_READONLY)))) {
-        addReplyErrorSds(c,sdscatprintf(sdsempty(), "-MOVED -1 %s:%d",
+        addReplyErrorSds(c,sdscatprintf(sdsempty(), "-REDIRECT %s:%d",
                                                     server.masterhost, server.masterport));
         return C_OK;
     }

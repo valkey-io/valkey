@@ -20,8 +20,8 @@ start_server {tags {needs:repl external:skip}} {
 
         test {replica redirect read and write command when enable replica-enable-redirect} {
             r config set replica-enable-redirect yes
-            assert_error "MOVED -1 $master_host:$master_port" {r set foo bar}
-            assert_error "MOVED -1 $master_host:$master_port" {r get foo}
+            assert_error "REDIRECT $master_host:$master_port" {r set foo bar}
+            assert_error "REDIRECT $master_host:$master_port" {r get foo}
         }
 
         test {non-data access commands are not redirected} {

@@ -24,6 +24,7 @@ proc wait_for_role {srv_idx role} {
     set node_timeout [lindex [R 0 config get cluster-node-timeout] 1]
     # wait for a gossip cycle for states to be propagated throughout the cluster
     after $node_timeout
+    wait_for_cluster_propagation
     wait_for_condition 100 100 {
         [lindex [split [R $srv_idx role] " "] 0] eq $role
     } else {
@@ -40,7 +41,30 @@ proc wait_for_slot_state {srv_idx pattern} {
     wait_for_condition 100 100 {
         [get_open_slots $srv_idx] eq $pattern
     } else {
-        fail "incorrect slot state on R $srv_idx"
+        fail "incorrect slot state on R $srv_idx: expected $pattern; got [get_open_slots $srv_idx]"
+    }
+}
+
+# Check if the server responds with "PONG"
+proc check_server_response {server_id} {
+    # Send a PING command and check if the response is "PONG"
+    return [expr {[catch {R $server_id PING} result] == 0 && $result eq "PONG"}]
+}
+
+# restart a server and wait for it to come back online
+proc restart_server_and_wait {server_id} {
+    set node_timeout [lindex [R 0 config get cluster-node-timeout] 1]
+    set result [catch {R $server_id debug restart [expr 3*$node_timeout]} err]
+
+    # Check if the error is the expected "I/O error reading reply"
+    if {$result != 0 && $err ne "I/O error reading reply"} {
+        fail "Unexpected error restarting server $server_id: $err"
+    }
+
+    wait_for_condition 100 100 {
+        [check_server_response $server_id] eq 1
+    } else {
+        fail "Server $server_id didn't come back online in time"
     }
 }
 
@@ -76,12 +100,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
     test "Migration target is auto-updated after failover in target shard" {
         # Restart R1 to trigger an auto-failover to R4
-        # Make sure wait for twice the node timeout time
-        # to ensure the failover does occur
-        catch {R 1 debug restart [expr 2*$node_timeout]} e
-        catch {I/O error reading reply} $e
-        # Wait for R1 to come back
-        after [expr 3*$node_timeout]
+        restart_server_and_wait 1
         # Wait for R1 to become a replica
         wait_for_role 1 slave
         # Validate final states
@@ -101,12 +120,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
     test "Migration source is auto-updated after failover in source shard" {
         # Restart R0 to trigger an auto-failover to R3
-        # Make sure wait for twice the node timeout time
-        # to ensure the failover does occur
-        catch {R 0 debug restart [expr 2*$node_timeout]} e
-        catch {I/O error reading reply} $e
-        # Wait for R0 to come back
-        after [expr 3*$node_timeout]
+        restart_server_and_wait 0
         # Wait for R0 to become a replica
         wait_for_role 0 slave
         # Validate final states
@@ -142,7 +156,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_not_equal [get_open_slots 3] "\[609->-$R1_id\]"
         # Add R3 back as a replica of R0
         assert_equal {OK} [R 3 cluster meet [srv 0 "host"] [srv 0 "port"]]
-        after $node_timeout
+        wait_for_role 0 master
         assert_equal {OK} [R 3 cluster replicate $R0_id]
         wait_for_role 3 slave
         # Validate that R3 now sees slot 609 open
@@ -156,7 +170,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_not_equal [get_open_slots 4] "\[609-<-$R0_id\]"
         # Add R4 back as a replica of R1
         assert_equal {OK} [R 4 cluster meet [srv -1 "host"] [srv -1 "port"]]
-        after $node_timeout
+        wait_for_role 1 master
         assert_equal {OK} [R 4 cluster replicate $R1_id]
         wait_for_role 4 slave
         # Validate that R4 now sees slot 609 open
@@ -170,7 +184,7 @@ proc create_empty_shard {p r} {
     assert_equal {OK} [R $r cluster reset]
     assert_equal {OK} [R $p cluster meet [srv 0 "host"] [srv 0 "port"]]
     assert_equal {OK} [R $r cluster meet [srv 0 "host"] [srv 0 "port"]]
-    after $node_timeout
+    wait_for_role $p master
     assert_equal {OK} [R $r cluster replicate [R $p cluster myid]]
     wait_for_role $r slave
     wait_for_role $p master
@@ -213,10 +227,7 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
     test "Empty-shard migration target is auto-updated after faiover in target shard" {
         wait_for_role 6 master
         # Restart R6 to trigger an auto-failover to R7
-        catch {R 6 debug restart [expr 3*$node_timeout]} e
-        catch {I/O error reading reply} $e
-        # Wait for R6 to come back
-        after [expr 3*$node_timeout]
+        restart_server_and_wait 6
         # Wait for R6 to become a replica
         wait_for_role 6 slave
         # Validate final states
@@ -234,14 +245,11 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
         wait_for_slot_state 7 "\[609-<-$R0_id\]"
     }
 
-    test "Empty-shard migration source is auto-updated after source faiover in source shard" {
+    test "Empty-shard migration source is auto-updated after faiover in source shard" {
         wait_for_role 0 master
         # Restart R0 to trigger an auto-failover to R3
-        catch {R 0 debug restart [expr 2*$node_timeout]} e
-        catch {I/O error reading reply} $e
-        # Wait for R0 to come back
-        after [expr 3*$node_timeout]
-        # Wait for R7 to become a replica
+        restart_server_and_wait 0
+        # Wait for R0 to become a replica
         wait_for_role 0 slave
         # Validate final states
         wait_for_slot_state 0 "\[609->-$R6_id\]"
@@ -292,7 +300,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_equal {OK} [R 3 cluster reset]
         # Add R3 back as a replica of R0
         assert_equal {OK} [R 3 cluster meet [srv 0 "host"] [srv 0 "port"]]
-        after $node_timeout
+        wait_for_role 0 master
         assert_equal {OK} [R 3 cluster replicate $R0_id]
         wait_for_role 3 slave
         # Validate final states
@@ -323,6 +331,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     test "Slot migration without expected target replicas fails" {
         migrate_slot 0 1 100
         # Move the target replica away
+        wait_for_role 0 master
         assert_equal {OK} [R 4 cluster replicate $R0_id]
         after $node_timeout
         # Slot finalization should fail

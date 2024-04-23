@@ -885,7 +885,7 @@ unsigned char *lpInsert(unsigned char *lp, unsigned char *elestr, unsigned char 
         } else if (elestr) {
             lpEncodeString(dst,elestr,size);
         } else {
-            redis_unreachable();
+            valkey_unreachable();
         }
         dst += enclen;
         memcpy(dst,backlen,backlen_size);

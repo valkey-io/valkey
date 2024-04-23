@@ -499,7 +499,7 @@ int quicklistNodeExceedsLimit(int fill, size_t new_sz, unsigned int new_count) {
         return new_count > count_limit;
     }
 
-    redis_unreachable();
+    valkey_unreachable();
 }
 
 /* Determines whether a given size qualifies as a large element based on a threshold

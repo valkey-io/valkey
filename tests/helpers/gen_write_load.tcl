@@ -4,7 +4,7 @@ set ::tlsdir "tests/tls"
 
 proc gen_write_load {host port seconds tls} {
     set start_time [clock seconds]
-    set r [redis $host $port 1 $tls]
+    set r [valkey $host $port 1 $tls]
     $r client setname LOAD_HANDLER
     $r select 9
     while 1 {

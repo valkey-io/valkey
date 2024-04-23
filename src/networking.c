@@ -64,7 +64,7 @@ size_t getStringObjectSdsUsedMemory(robj *o) {
 }
 
 /* Return the length of a string object.
- * This does NOT includes internal fragmentation or sds unused space. */
+ * This does NOT include internal fragmentation or sds unused space. */
 size_t getStringObjectLen(robj *o) {
     serverAssertWithInfo(NULL,o,o->type == OBJ_STRING);
     switch(o->encoding) {
@@ -98,8 +98,7 @@ void linkClient(client *c) {
     raxInsert(server.clients_index,(unsigned char*)&id,sizeof(id),c,NULL);
 }
 
-/* Initialize client authentication state.
- */
+/* Initialize client authentication state. */
 static void clientSetDefaultAuth(client *c) {
     /* If the default user does not require authentication, the user is
      * directly authenticated. */
@@ -3647,10 +3646,10 @@ void helloCommand(client *c) {
     addReplyMapLen(c,6 + !server.sentinel_mode);
 
     addReplyBulkCString(c,"server");
-    addReplyBulkCString(c,"redis");
+    addReplyBulkCString(c, server.extended_redis_compat ? "redis" : SERVER_NAME);
 
     addReplyBulkCString(c,"version");
-    addReplyBulkCString(c,VALKEY_VERSION);
+    addReplyBulkCString(c, server.extended_redis_compat ? REDIS_VERSION : VALKEY_VERSION);
 
     addReplyBulkCString(c,"proto");
     addReplyLongLong(c,c->resp);

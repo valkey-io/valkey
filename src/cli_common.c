@@ -306,7 +306,7 @@ static sds percentDecode(const char *pe, size_t len) {
 /* Parse a URI and extract the server connection information.
  * URI scheme is based on the provisional specification[1] excluding support
  * for query parameters. Valid URIs are:
- *   scheme:    "redis://"
+ *   scheme:    "valkey://"
  *   authority: [[<username> ":"] <password> "@"] [<hostname> [":" <port>]]
  *   path:      ["/" [<db>]]
  *
@@ -318,8 +318,11 @@ void parseRedisUri(const char *uri, const char* tool_name, cliConnInfo *connInfo
     UNUSED(tls_flag);
 #endif
 
-    const char *scheme = "redis://";
-    const char *tlsscheme = "rediss://";
+    const char *scheme = "valkey://";
+    const char *tlsscheme = "valkeys://";
+    /* We need to support redis:// and rediss:// too for compatibility. */
+    const char *redisScheme = "redis://";
+    const char *redisTlsscheme = "rediss://";
     const char *curr = uri;
     const char *end = uri + strlen(uri);
     const char *userinfo, *username, *port, *host, *path;
@@ -330,11 +333,21 @@ void parseRedisUri(const char *uri, const char* tool_name, cliConnInfo *connInfo
         *tls_flag = 1;
         curr += strlen(tlsscheme);
 #else
-        fprintf(stderr,"rediss:// is only supported when %s is compiled with OpenSSL\n", tool_name);
+        fprintf(stderr,"valkeys:// and rediss:// are only supported when %s is compiled with OpenSSL\n", tool_name);
+        exit(1);
+#endif
+    } else if (!strncasecmp(redisTlsscheme, curr, strlen(redisTlsscheme))) {
+#ifdef USE_OPENSSL
+        *tls_flag = 1;
+        curr += strlen(redisTlsscheme);
+#else
+        fprintf(stderr,"valkeys:// and rediss:// are only supported when %s is compiled with OpenSSL\n", tool_name);
         exit(1);
 #endif
     } else if (!strncasecmp(scheme, curr, strlen(scheme))) {
         curr += strlen(scheme);
+    } else if (!strncasecmp(redisScheme, curr, strlen(redisScheme))) {
+        curr += strlen(redisScheme);
     } else {
         fprintf(stderr,"Invalid URI scheme\n");
         exit(1);

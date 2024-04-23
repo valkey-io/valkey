@@ -11,7 +11,7 @@ if {$::simulate_error} {
 test "Different nodes have different IDs" {
     set ids {}
     set numnodes 0
-    foreach_redis_id id {
+    foreach_valkey_id id {
         incr numnodes
         # Every node should just know itself.
         set nodeid [dict get [get_myself $id] id]
@@ -31,7 +31,7 @@ test "After the join, every node gets a different config epoch" {
     while {[incr trynum -1] != 0} {
         # We check that this condition is true for *all* the nodes.
         set ok 1 ; # Will be set to 0 every time a node is not ok.
-        foreach_redis_id id {
+        foreach_valkey_id id {
             set epochs {}
             foreach n [get_cluster_nodes $id] {
                 lappend epochs [dict get $n config_epoch]

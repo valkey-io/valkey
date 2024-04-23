@@ -11,9 +11,9 @@ proc 02_test_slaves_replication {} {
     uplevel 1 {
         test "Check that slaves replicate from current master" {
             set master_port [RPort $master_id]
-            foreach_redis_id id {
+            foreach_valkey_id id {
                 if {$id == $master_id} continue
-                if {[instance_is_killed redis $id]} continue
+                if {[instance_is_killed valkey $id]} continue
                 wait_for_condition 1000 50 {
                     ([RI $id master_port] == $master_port) &&
                     ([RI $id master_link_status] eq {up})
@@ -31,7 +31,7 @@ proc 02_crash_and_failover {} {
             set old_port [RPort $master_id]
             set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
             assert {[lindex $addr 1] == $old_port}
-            kill_instance redis $master_id
+            kill_instance valkey $master_id
             foreach_sentinel_id id {
                 wait_for_condition 1000 50 {
                     [lindex [S $id SENTINEL GET-MASTER-ADDR-BY-NAME mymaster] 1] != $old_port
@@ -39,9 +39,9 @@ proc 02_crash_and_failover {} {
                     fail "At least one Sentinel did not receive failover info"
                 }
             }
-            restart_instance redis $master_id
+            restart_instance valkey $master_id
             set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
-            set master_id [get_instance_id_by_port redis [lindex $addr 1]]
+            set master_id [get_instance_id_by_port valkey [lindex $addr 1]]
         }
     }
 }
@@ -58,10 +58,10 @@ foreach_sentinel_id id {
 02_test_slaves_replication
 
 test "Kill a slave instance" {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         if {$id == $master_id} continue
         set killed_slave_id $id
-        kill_instance redis $id
+        kill_instance valkey $id
         break
     }
 }
@@ -83,7 +83,7 @@ test "Wait for failover to end" {
 }
 
 test "Restart killed slave and test replication of slaves again..." {
-    restart_instance redis $killed_slave_id
+    restart_instance valkey $killed_slave_id
 }
 
 # Now we check if the slave rejoining the partition is reconfigured even

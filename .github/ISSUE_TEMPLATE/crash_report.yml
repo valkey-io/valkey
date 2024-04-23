@@ -1,0 +1,34 @@
+name: Crash report
+description: Submit a crash report
+title: '[CRASH] <short description>'
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to post your crash report!
+
+        Please notice:
+        - If a module was involved, please open an issue in the module's repo instead!
+        - If you're using docker on Apple M1, please make sure the image you're using was compiled for ARM!
+  - type: textarea
+    id: crash-report
+    attributes:
+      label: Crash report
+      description: Paste the complete crash log. Please include a few lines from the log preceding the crash report to provide some context.
+      render: shell
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: |
+        Please provide the following additional information below:
+        - OS distribution and version
+        - Steps to reproduce (if any)
+  - type: textarea
+    id: additional-information
+    attributes:
+      label: Additional information
+      description: OS version, steps to reproduce and other useful info.
+      render: shell
+    validations:
+      required: false

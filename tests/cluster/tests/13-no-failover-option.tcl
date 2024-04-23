@@ -32,7 +32,7 @@ test "Instance #5 synced with the master" {
 test "The nofailover flag is propagated" {
     set slave5_id [dict get [get_myself 5] id]
 
-    foreach_redis_id id {
+    foreach_valkey_id id {
         wait_for_condition 1000 50 {
             [has_flag [get_node_by_id $id $slave5_id] nofailover]
         } else {
@@ -44,7 +44,7 @@ test "The nofailover flag is propagated" {
 set current_epoch [CI 1 cluster_current_epoch]
 
 test "Killing one master node" {
-    kill_instance redis 0
+    kill_instance valkey 0
 }
 
 test "Cluster should be still down after some time" {
@@ -57,5 +57,5 @@ test "Instance #5 is still a slave" {
 }
 
 test "Restarting the previously killed master node" {
-    restart_instance redis 0
+    restart_instance valkey 0
 }

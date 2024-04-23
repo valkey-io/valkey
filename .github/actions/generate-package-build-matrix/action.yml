@@ -1,0 +1,44 @@
+name: Generate target matrix.
+description: Matrix creation for building Valkey for different architectures and platforms.
+
+inputs:
+  ref:
+    description: The commit, tag or branch of Valkey to checkout to determine what version to use.
+    required: true
+outputs:
+  x86_64-build-matrix:
+    description: The x86_64 build matrix.
+    value: ${{ steps.set-matrix.outputs.x86matrix }}
+  arm64-build-matrix:
+    description: The arm64 build matrix.
+    value: ${{ steps.set-matrix.outputs.armmatrix }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout code for version check
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.ref }}
+        path: version-check
+
+    - name: Get targets
+      run: |
+        x86_arch=$(jq -c '[.linux_targets[] | select(.arch=="x86_64")]' utils/releasetools/build-config.json)
+        x86_matrix=$(echo "{ \"distro\" : $x86_arch }" | jq -c .)
+        echo "X86_MATRIX=$x86_matrix" >> $GITHUB_ENV
+
+        arm_arch=$(jq -c '[.linux_targets[] | select(.arch=="arm64")]' utils/releasetools/build-config.json)
+        arm_matrix=$(echo "{ \"distro\" : $arm_arch }" | jq -c .)
+        echo "ARM_MATRIX=$arm_matrix" >> $GITHUB_ENV
+      shell: bash
+
+    - id: set-matrix
+      run: |
+        echo $X86_MATRIX
+        echo $X86_MATRIX| jq .
+        echo "x86matrix=$X86_MATRIX" >> $GITHUB_OUTPUT
+        echo $ARM_MATRIX
+        echo $ARM_MATRIX| jq .
+        echo "armmatrix=$ARM_MATRIX" >> $GITHUB_OUTPUT
+      shell: bash

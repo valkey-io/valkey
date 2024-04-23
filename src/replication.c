@@ -3540,7 +3540,7 @@ void waitCommand(client *c) {
     long long offset = c->woff;
 
     if (server.masterhost) {
-        addReplyError(c,"WAIT cannot be used with replica instances. Please also note that since Redis 4.0 if a replica is configured to be writable (which is not the default) writes to replicas are just local and are not propagated.");
+        addReplyError(c,"WAIT cannot be used with replica instances. Please also note that if a replica is configured to be writable (which is not the default) writes to replicas are just local and are not propagated.");
         return;
     }
 

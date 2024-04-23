@@ -905,7 +905,7 @@ start_server {tags {"acl external:skip"}} {
     test {ACL load non-existing configured ACL file} {
        catch {r ACL load} err
        set err
-    } {*Redis instance is not configured to use an ACL file*}
+    } {*instance is not configured to use an ACL file*}
 
     # If there is an AUTH failure the metric increases
     test {ACL-Metrics user AUTH failure} {

@@ -37,7 +37,7 @@ proc crashlog_from_file {filename} {
     set logall 0
     set result {}
     foreach line $lines {
-        if {[string match {*REDIS BUG REPORT START*} $line]} {
+        if {[string match {*BUG REPORT START*} $line]} {
             set logall 1
         }
         if {[regexp {^\[\d+\]\s+\d+\s+\w+\s+\d{2}:\d{2}:\d{2} \#} $line]} {
@@ -942,7 +942,7 @@ proc read_from_aof {fp} {
     set res {}
     for {set j 0} {$j < $count} {incr j} {
         read $fp 1
-        set arg [::redis::redis_bulk_read $fp]
+        set arg [::valkey::valkey_bulk_read $fp]
         if {$j == 0} {set arg [string tolower $arg]}
         lappend res $arg
     }
@@ -1009,7 +1009,7 @@ proc get_nonloopback_addr {} {
 }
 
 proc get_nonloopback_client {} {
-    return [redis [get_nonloopback_addr] [srv 0 "port"] 0 $::tls]
+    return [valkey [get_nonloopback_addr] [srv 0 "port"] 0 $::tls]
 }
 
 # The following functions and variables are used only when running large-memory
@@ -1149,4 +1149,11 @@ proc system_backtrace_supported {} {
         }
     }
     return 0
+}
+
+proc generate_largevalue_test_array {} {
+    array set largevalue {}
+    set largevalue(listpack) "hello"
+    set largevalue(quicklist) [string repeat "x" 8192]
+    return [array get largevalue]
 }

@@ -403,7 +403,7 @@ sds createLatencyReport(void) {
             "  1) Lower the system load.\n"
             "  2) Use a computer / VM just for Redis if you are running other software in the same system.\n"
             "  3) Check if you have a \"noisy neighbour\" problem.\n"
-            "  4) Check with 'valkey-cli --intrinsic-latency 100' what is the intrinsic latency in your system.\n"
+            "  4) Check with 'redis-cli --intrinsic-latency 100' what is the intrinsic latency in your system.\n"
             "  5) Check if the problem is allocator-related by recompiling Redis with MALLOC=libc, if you are using Jemalloc. However this may create fragmentation problems.\n");
         }
 

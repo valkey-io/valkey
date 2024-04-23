@@ -1440,7 +1440,7 @@ start_server {tags {"scripting repl external:skip"}} {
             set e
         } {*Invalid*flags*}
 
-        test "Test selective replication of certain Redis commands from Lua" {
+        test "Test selective replication of certain commands from Lua" {
             r del a b c d
             run_script {
                 redis.call('set','a','1');

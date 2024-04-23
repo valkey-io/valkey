@@ -1,8 +1,8 @@
-Redis Test Suite
-================
+Valkey Test Suite
+=================
 
 The normal execution mode of the test suite involves starting and manipulating
-local `redis-server` instances, inspecting process state, log files, etc.
+local `valkey-server` instances, inspecting process state, log files, etc.
 
 The test suite also supports execution against an external server, which is
 enabled using the `--host` and `--port` parameters. When executing against an

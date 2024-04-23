@@ -202,7 +202,7 @@ tags {"aof external:skip"} {
     }
 
     start_server {overrides {appendonly {yes}}} {
-        test {Redis should not try to convert DEL into EXPIREAT for EXPIRE -1} {
+        test {Server should not try to convert DEL into EXPIREAT for EXPIRE -1} {
             r set x 10
             r expire x -1
         }

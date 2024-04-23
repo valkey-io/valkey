@@ -146,7 +146,7 @@ start_server {tags {"hll"}} {
         set e
     } {*WRONGTYPE*}
 
-    test {Fuzzing dense/sparse encoding: Redis should always detect errors} {
+    test {Fuzzing dense/sparse encoding: Server should always detect errors} {
         for {set j 0} {$j < 1000} {incr j} {
             r del hll
             set items {}

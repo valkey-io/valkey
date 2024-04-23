@@ -93,7 +93,7 @@ void HelloBlock_Disconnected(ValkeyModuleCtx *ctx, ValkeyModuleBlockedClient *bc
 /* HELLO.BLOCK <delay> <timeout> -- Block for <count> seconds, then reply with
  * a random number. Timeout is the command timeout, so that you can test
  * what happens when the delay is greater than the timeout. */
-int HelloBlock_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloBlock_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 3) return ValkeyModule_WrongArity(ctx);
     long long delay;
     long long timeout;
@@ -177,7 +177,7 @@ void *HelloKeys_ThreadMain(void *arg) {
  * the server. The keys do not represent a point-in-time state so only the keys
  * that were in the database from the start to the end are guaranteed to be
  * there. */
-int HelloKeys_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloKeys_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     if (argc != 1) return ValkeyModule_WrongArity(ctx);
 
@@ -208,10 +208,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hello.block",
-        HelloBlock_RedisCommand,"",0,0,0) == VALKEYMODULE_ERR)
+        HelloBlock_ValkeyCommand,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx,"hello.keys",
-        HelloKeys_RedisCommand,"",0,0,0) == VALKEYMODULE_ERR)
+        HelloKeys_ValkeyCommand,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

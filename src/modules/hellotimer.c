@@ -44,7 +44,7 @@ void timerHandler(ValkeyModuleCtx *ctx, void *data) {
 }
 
 /* HELLOTIMER.TIMER*/
-int TimerCommand_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int TimerCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
@@ -68,7 +68,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hellotimer.timer",
-        TimerCommand_RedisCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
+        TimerCommand_ValkeyCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

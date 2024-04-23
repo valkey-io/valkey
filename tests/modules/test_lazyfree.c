@@ -1,14 +1,14 @@
 /* This module emulates a linked list for lazyfree testing of modules, which
  is a simplified version of 'hellotype.c'
  */
-#include "redismodule.h"
+#include "valkeymodule.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
 #include <stdint.h>
 
-static RedisModuleType *LazyFreeLinkType;
+static ValkeyModuleType *LazyFreeLinkType;
 
 struct LazyFreeLinkNode {
     int64_t value;
@@ -22,7 +22,7 @@ struct LazyFreeLinkObject {
 
 struct LazyFreeLinkObject *createLazyFreeLinkObject(void) {
     struct LazyFreeLinkObject *o;
-    o = RedisModule_Alloc(sizeof(*o));
+    o = ValkeyModule_Alloc(sizeof(*o));
     o->head = NULL;
     o->len = 0;
     return o;
@@ -35,7 +35,7 @@ void LazyFreeLinkInsert(struct LazyFreeLinkObject *o, int64_t ele) {
         prev = next;
         next = next->next;
     }
-    newnode = RedisModule_Alloc(sizeof(*newnode));
+    newnode = ValkeyModule_Alloc(sizeof(*newnode));
     newnode->value = ele;
     newnode->next = next;
     if (prev) {
@@ -51,94 +51,94 @@ void LazyFreeLinkReleaseObject(struct LazyFreeLinkObject *o) {
     cur = o->head;
     while(cur) {
         next = cur->next;
-        RedisModule_Free(cur);
+        ValkeyModule_Free(cur);
         cur = next;
     }
-    RedisModule_Free(o);
+    ValkeyModule_Free(o);
 }
 
 /* LAZYFREELINK.INSERT key value */
-int LazyFreeLinkInsert_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    RedisModule_AutoMemory(ctx); /* Use automatic memory management. */
+int LazyFreeLinkInsert_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    ValkeyModule_AutoMemory(ctx); /* Use automatic memory management. */
 
-    if (argc != 3) return RedisModule_WrongArity(ctx);
-    RedisModuleKey *key = RedisModule_OpenKey(ctx,argv[1],
-        REDISMODULE_READ|REDISMODULE_WRITE);
-    int type = RedisModule_KeyType(key);
-    if (type != REDISMODULE_KEYTYPE_EMPTY &&
-        RedisModule_ModuleTypeGetType(key) != LazyFreeLinkType)
+    if (argc != 3) return ValkeyModule_WrongArity(ctx);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx,argv[1],
+        VALKEYMODULE_READ|VALKEYMODULE_WRITE);
+    int type = ValkeyModule_KeyType(key);
+    if (type != VALKEYMODULE_KEYTYPE_EMPTY &&
+        ValkeyModule_ModuleTypeGetType(key) != LazyFreeLinkType)
     {
-        return RedisModule_ReplyWithError(ctx,REDISMODULE_ERRORMSG_WRONGTYPE);
+        return ValkeyModule_ReplyWithError(ctx,VALKEYMODULE_ERRORMSG_WRONGTYPE);
     }
 
     long long value;
-    if ((RedisModule_StringToLongLong(argv[2],&value) != REDISMODULE_OK)) {
-        return RedisModule_ReplyWithError(ctx,"ERR invalid value: must be a signed 64 bit integer");
+    if ((ValkeyModule_StringToLongLong(argv[2],&value) != VALKEYMODULE_OK)) {
+        return ValkeyModule_ReplyWithError(ctx,"ERR invalid value: must be a signed 64 bit integer");
     }
 
     struct LazyFreeLinkObject *hto;
-    if (type == REDISMODULE_KEYTYPE_EMPTY) {
+    if (type == VALKEYMODULE_KEYTYPE_EMPTY) {
         hto = createLazyFreeLinkObject();
-        RedisModule_ModuleTypeSetValue(key,LazyFreeLinkType,hto);
+        ValkeyModule_ModuleTypeSetValue(key,LazyFreeLinkType,hto);
     } else {
-        hto = RedisModule_ModuleTypeGetValue(key);
+        hto = ValkeyModule_ModuleTypeGetValue(key);
     }
 
     LazyFreeLinkInsert(hto,value);
-    RedisModule_SignalKeyAsReady(ctx,argv[1]);
+    ValkeyModule_SignalKeyAsReady(ctx,argv[1]);
 
-    RedisModule_ReplyWithLongLong(ctx,hto->len);
-    RedisModule_ReplicateVerbatim(ctx);
-    return REDISMODULE_OK;
+    ValkeyModule_ReplyWithLongLong(ctx,hto->len);
+    ValkeyModule_ReplicateVerbatim(ctx);
+    return VALKEYMODULE_OK;
 }
 
 /* LAZYFREELINK.LEN key */
-int LazyFreeLinkLen_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    RedisModule_AutoMemory(ctx); /* Use automatic memory management. */
+int LazyFreeLinkLen_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    ValkeyModule_AutoMemory(ctx); /* Use automatic memory management. */
 
-    if (argc != 2) return RedisModule_WrongArity(ctx);
-    RedisModuleKey *key = RedisModule_OpenKey(ctx,argv[1],
-                                              REDISMODULE_READ);
-    int type = RedisModule_KeyType(key);
-    if (type != REDISMODULE_KEYTYPE_EMPTY &&
-        RedisModule_ModuleTypeGetType(key) != LazyFreeLinkType)
+    if (argc != 2) return ValkeyModule_WrongArity(ctx);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx,argv[1],
+                                              VALKEYMODULE_READ);
+    int type = ValkeyModule_KeyType(key);
+    if (type != VALKEYMODULE_KEYTYPE_EMPTY &&
+        ValkeyModule_ModuleTypeGetType(key) != LazyFreeLinkType)
     {
-        return RedisModule_ReplyWithError(ctx,REDISMODULE_ERRORMSG_WRONGTYPE);
+        return ValkeyModule_ReplyWithError(ctx,VALKEYMODULE_ERRORMSG_WRONGTYPE);
     }
 
-    struct LazyFreeLinkObject *hto = RedisModule_ModuleTypeGetValue(key);
-    RedisModule_ReplyWithLongLong(ctx,hto ? hto->len : 0);
-    return REDISMODULE_OK;
+    struct LazyFreeLinkObject *hto = ValkeyModule_ModuleTypeGetValue(key);
+    ValkeyModule_ReplyWithLongLong(ctx,hto ? hto->len : 0);
+    return VALKEYMODULE_OK;
 }
 
-void *LazyFreeLinkRdbLoad(RedisModuleIO *rdb, int encver) {
+void *LazyFreeLinkRdbLoad(ValkeyModuleIO *rdb, int encver) {
     if (encver != 0) {
         return NULL;
     }
-    uint64_t elements = RedisModule_LoadUnsigned(rdb);
+    uint64_t elements = ValkeyModule_LoadUnsigned(rdb);
     struct LazyFreeLinkObject *hto = createLazyFreeLinkObject();
     while(elements--) {
-        int64_t ele = RedisModule_LoadSigned(rdb);
+        int64_t ele = ValkeyModule_LoadSigned(rdb);
         LazyFreeLinkInsert(hto,ele);
     }
     return hto;
 }
 
-void LazyFreeLinkRdbSave(RedisModuleIO *rdb, void *value) {
+void LazyFreeLinkRdbSave(ValkeyModuleIO *rdb, void *value) {
     struct LazyFreeLinkObject *hto = value;
     struct LazyFreeLinkNode *node = hto->head;
-    RedisModule_SaveUnsigned(rdb,hto->len);
+    ValkeyModule_SaveUnsigned(rdb,hto->len);
     while(node) {
-        RedisModule_SaveSigned(rdb,node->value);
+        ValkeyModule_SaveSigned(rdb,node->value);
         node = node->next;
     }
 }
 
-void LazyFreeLinkAofRewrite(RedisModuleIO *aof, RedisModuleString *key, void *value) {
+void LazyFreeLinkAofRewrite(ValkeyModuleIO *aof, ValkeyModuleString *key, void *value) {
     struct LazyFreeLinkObject *hto = value;
     struct LazyFreeLinkNode *node = hto->head;
     while(node) {
-        RedisModule_EmitAOF(aof,"LAZYFREELINK.INSERT","sl",key,node->value);
+        ValkeyModule_EmitAOF(aof,"LAZYFREELINK.INSERT","sl",key,node->value);
         node = node->next;
     }
 }
@@ -147,32 +147,32 @@ void LazyFreeLinkFree(void *value) {
     LazyFreeLinkReleaseObject(value);
 }
 
-size_t LazyFreeLinkFreeEffort(RedisModuleString *key, const void *value) {
-    REDISMODULE_NOT_USED(key);
+size_t LazyFreeLinkFreeEffort(ValkeyModuleString *key, const void *value) {
+    VALKEYMODULE_NOT_USED(key);
     const struct LazyFreeLinkObject *hto = value;
     return hto->len;
 }
 
-void LazyFreeLinkUnlink(RedisModuleString *key, const void *value) {
-    REDISMODULE_NOT_USED(key);
-    REDISMODULE_NOT_USED(value);
+void LazyFreeLinkUnlink(ValkeyModuleString *key, const void *value) {
+    VALKEYMODULE_NOT_USED(key);
+    VALKEYMODULE_NOT_USED(value);
     /* Here you can know which key and value is about to be freed. */
 }
 
-int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
-    if (RedisModule_Init(ctx,"lazyfreetest",1,REDISMODULE_APIVER_1)
-        == REDISMODULE_ERR) return REDISMODULE_ERR;
+    if (ValkeyModule_Init(ctx,"lazyfreetest",1,VALKEYMODULE_APIVER_1)
+        == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
     /* We only allow our module to be loaded when the core version is greater than the version of my module */
-    if (RedisModule_GetTypeMethodVersion() < REDISMODULE_TYPE_METHOD_VERSION) {
-        return REDISMODULE_ERR;
+    if (ValkeyModule_GetTypeMethodVersion() < VALKEYMODULE_TYPE_METHOD_VERSION) {
+        return VALKEYMODULE_ERR;
     }
 
-    RedisModuleTypeMethods tm = {
-        .version = REDISMODULE_TYPE_METHOD_VERSION,
+    ValkeyModuleTypeMethods tm = {
+        .version = VALKEYMODULE_TYPE_METHOD_VERSION,
         .rdb_load = LazyFreeLinkRdbLoad,
         .rdb_save = LazyFreeLinkRdbSave,
         .aof_rewrite = LazyFreeLinkAofRewrite,
@@ -181,16 +181,16 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
         .unlink = LazyFreeLinkUnlink,
     };
 
-    LazyFreeLinkType = RedisModule_CreateDataType(ctx,"test_lazy",0,&tm);
-    if (LazyFreeLinkType == NULL) return REDISMODULE_ERR;
+    LazyFreeLinkType = ValkeyModule_CreateDataType(ctx,"test_lazy",0,&tm);
+    if (LazyFreeLinkType == NULL) return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"lazyfreelink.insert",
-        LazyFreeLinkInsert_RedisCommand,"write deny-oom",1,1,1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"lazyfreelink.insert",
+        LazyFreeLinkInsert_RedisCommand,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"lazyfreelink.len",
-        LazyFreeLinkLen_RedisCommand,"readonly",1,1,1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"lazyfreelink.len",
+        LazyFreeLinkLen_RedisCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }

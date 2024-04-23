@@ -100,7 +100,7 @@ void HelloTypeReleaseObject(struct HelloTypeObject *o) {
 /* ========================= "hellotype" type commands ======================= */
 
 /* HELLOTYPE.INSERT key value */
-int HelloTypeInsert_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloTypeInsert_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     ValkeyModule_AutoMemory(ctx); /* Use automatic memory management. */
 
     if (argc != 3) return ValkeyModule_WrongArity(ctx);
@@ -137,7 +137,7 @@ int HelloTypeInsert_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv
 }
 
 /* HELLOTYPE.RANGE key first count */
-int HelloTypeRange_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloTypeRange_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     ValkeyModule_AutoMemory(ctx); /* Use automatic memory management. */
 
     if (argc != 4) return ValkeyModule_WrongArity(ctx);
@@ -173,7 +173,7 @@ int HelloTypeRange_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 }
 
 /* HELLOTYPE.LEN key */
-int HelloTypeLen_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloTypeLen_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     ValkeyModule_AutoMemory(ctx); /* Use automatic memory management. */
 
     if (argc != 2) return ValkeyModule_WrongArity(ctx);
@@ -213,7 +213,7 @@ int HelloBlock_Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) 
     /* In case the key is able to serve our blocked client, let's directly
      * use our original command implementation to make this example simpler. */
     ValkeyModule_CloseKey(key);
-    return HelloTypeRange_RedisCommand(ctx,argv,argc-1);
+    return HelloTypeRange_ValkeyCommand(ctx,argv,argc-1);
 }
 
 /* Timeout callback for blocking command HELLOTYPE.BRANGE */
@@ -232,7 +232,7 @@ void HelloBlock_FreeData(ValkeyModuleCtx *ctx, void *privdata) {
 /* HELLOTYPE.BRANGE key first count timeout -- This is a blocking version of
  * the RANGE operation, in order to show how to use the API
  * ValkeyModule_BlockClientOnKeys(). */
-int HelloTypeBRange_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloTypeBRange_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 5) return ValkeyModule_WrongArity(ctx);
     ValkeyModule_AutoMemory(ctx); /* Use automatic memory management. */
     ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx,argv[1],
@@ -254,7 +254,7 @@ int HelloTypeBRange_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv
 
     /* Can we serve the reply synchronously? */
     if (type != VALKEYMODULE_KEYTYPE_EMPTY) {
-        return HelloTypeRange_RedisCommand(ctx,argv,argc-1);
+        return HelloTypeRange_ValkeyCommand(ctx,argv,argc-1);
     }
 
     /* Otherwise let's block on the key. */
@@ -343,19 +343,19 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (HelloType == NULL) return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hellotype.insert",
-        HelloTypeInsert_RedisCommand,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
+        HelloTypeInsert_ValkeyCommand,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hellotype.range",
-        HelloTypeRange_RedisCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
+        HelloTypeRange_ValkeyCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hellotype.len",
-        HelloTypeLen_RedisCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
+        HelloTypeLen_ValkeyCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hellotype.brange",
-        HelloTypeBRange_RedisCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
+        HelloTypeBRange_ValkeyCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

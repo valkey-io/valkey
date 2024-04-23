@@ -3,7 +3,7 @@
 #define _BSD_SOURCE
 #define _DEFAULT_SOURCE
 
-#include "redismodule.h"
+#include "valkeymodule.h"
 #include <string.h>
 #include <assert.h>
 #include <unistd.h>
@@ -20,77 +20,77 @@ void done_handler(int exitcode, int bysignal, void *user_data) {
     UNUSED(bysignal);
 }
 
-int fork_create(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int fork_create(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     long long code_to_exit_with;
     long long usleep_us;
     if (argc != 3) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
 
-    if(!RMAPI_FUNC_SUPPORTED(RedisModule_Fork)){
-        RedisModule_ReplyWithError(ctx, "Fork api is not supported in the current redis version");
-        return REDISMODULE_OK;
+    if(!RMAPI_FUNC_SUPPORTED(ValkeyModule_Fork)){
+        ValkeyModule_ReplyWithError(ctx, "Fork api is not supported in the current valkey version");
+        return VALKEYMODULE_OK;
     }
 
-    RedisModule_StringToLongLong(argv[1], &code_to_exit_with);
-    RedisModule_StringToLongLong(argv[2], &usleep_us);
+    ValkeyModule_StringToLongLong(argv[1], &code_to_exit_with);
+    ValkeyModule_StringToLongLong(argv[2], &usleep_us);
     exited_with_code = -1;
-    int fork_child_pid = RedisModule_Fork(done_handler, (void*)0xdeadbeef);
+    int fork_child_pid = ValkeyModule_Fork(done_handler, (void*)0xdeadbeef);
     if (fork_child_pid < 0) {
-        RedisModule_ReplyWithError(ctx, "Fork failed");
-        return REDISMODULE_OK;
+        ValkeyModule_ReplyWithError(ctx, "Fork failed");
+        return VALKEYMODULE_OK;
     } else if (fork_child_pid > 0) {
         /* parent */
         child_pid = fork_child_pid;
-        RedisModule_ReplyWithLongLong(ctx, child_pid);
-        return REDISMODULE_OK;
+        ValkeyModule_ReplyWithLongLong(ctx, child_pid);
+        return VALKEYMODULE_OK;
     }
 
     /* child */
-    RedisModule_Log(ctx, "notice", "fork child started");
+    ValkeyModule_Log(ctx, "notice", "fork child started");
     usleep(usleep_us);
-    RedisModule_Log(ctx, "notice", "fork child exiting");
-    RedisModule_ExitFromChild(code_to_exit_with);
+    ValkeyModule_Log(ctx, "notice", "fork child exiting");
+    ValkeyModule_ExitFromChild(code_to_exit_with);
     /* unreachable */
     return 0;
 }
 
-int fork_exitcode(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int fork_exitcode(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     UNUSED(argv);
     UNUSED(argc);
-    RedisModule_ReplyWithLongLong(ctx, exited_with_code);
-    return REDISMODULE_OK;
+    ValkeyModule_ReplyWithLongLong(ctx, exited_with_code);
+    return VALKEYMODULE_OK;
 }
 
-int fork_kill(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int fork_kill(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     UNUSED(argv);
     UNUSED(argc);
-    if (RedisModule_KillForkChild(child_pid) != REDISMODULE_OK)
-        RedisModule_ReplyWithError(ctx, "KillForkChild failed");
+    if (ValkeyModule_KillForkChild(child_pid) != VALKEYMODULE_OK)
+        ValkeyModule_ReplyWithError(ctx, "KillForkChild failed");
     else
-        RedisModule_ReplyWithLongLong(ctx, 1);
+        ValkeyModule_ReplyWithLongLong(ctx, 1);
     child_pid = -1;
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argv);
     UNUSED(argc);
-    if (RedisModule_Init(ctx,"fork",1,REDISMODULE_APIVER_1)== REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_Init(ctx,"fork",1,VALKEYMODULE_APIVER_1)== VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"fork.create", fork_create,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"fork.create", fork_create,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"fork.exitcode", fork_exitcode,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"fork.exitcode", fork_exitcode,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"fork.kill", fork_kill,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"fork.kill", fork_kill,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }

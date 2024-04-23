@@ -40,7 +40,7 @@
 #define MSGTYPE_PONG 2
 
 /* HELLOCLUSTER.PINGALL */
-int PingallCommand_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int PingallCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
@@ -49,7 +49,7 @@ int PingallCommand_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 }
 
 /* HELLOCLUSTER.LIST */
-int ListCommand_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int ListCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
@@ -96,11 +96,11 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hellocluster.pingall",
-        PingallCommand_RedisCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
+        PingallCommand_ValkeyCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"hellocluster.list",
-        ListCommand_RedisCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
+        ListCommand_ValkeyCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     /* Disable Cluster sharding and redirections. This way every node

@@ -19,14 +19,14 @@ proc valkeybenchmark {host port {opts {}}} {
 }
 
 proc valkeybenchmarkuri {host port {opts {}}} {
-    set cmd [list src/valkey-benchmark -u redis://$host:$port]
+    set cmd [list src/valkey-benchmark -u valkey://$host:$port]
     lappend cmd {*}[valkeybenchmark_tls_config "tests"]
     lappend cmd {*}$opts
     return $cmd
 }
 
 proc valkeybenchmarkuriuserpass {host port user pass {opts {}}} {
-    set cmd [list src/valkey-benchmark -u redis://$user:$pass@$host:$port]
+    set cmd [list src/valkey-benchmark -u valkey://$user:$pass@$host:$port]
     lappend cmd {*}[valkeybenchmark_tls_config "tests"]
     lappend cmd {*}$opts
     return $cmd

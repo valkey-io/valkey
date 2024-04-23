@@ -1,5 +1,5 @@
 Valkey Test Suite
-================
+=================
 
 The normal execution mode of the test suite involves starting and manipulating
 local `valkey-server` instances, inspecting process state, log files, etc.

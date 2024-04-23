@@ -334,7 +334,7 @@ int clusterLoadConfig(char *filename) {
         }
     }
 
-    if (redis_fstat(fileno(fp),&sb) == -1) {
+    if (valkey_fstat(fileno(fp), &sb) == -1) {
         serverLog(LL_WARNING,
             "Unable to obtain the cluster node config file stat %s: %s",
             filename, strerror(errno));
@@ -727,7 +727,7 @@ int clusterSaveConfig(int do_fsync) {
 
     if (do_fsync) {
         server.cluster->todo_before_sleep &= ~CLUSTER_TODO_FSYNC_CONFIG;
-        if (redis_fsync(fd) == -1) {
+        if (valkey_fsync(fd) == -1) {
             serverLog(LL_WARNING,"Could not sync tmp cluster config file: %s",strerror(errno));
             goto cleanup;
         }
@@ -3772,7 +3772,7 @@ void clusterBroadcastPong(int target) {
  * As all the struct is used as a buffer, when more than 8 bytes are copied into
  * the 'bulk_data', sanitizer generates an out-of-bounds error which is a false
  * positive in this context. */
-REDIS_NO_SANITIZE("bounds")
+VALKEY_NO_SANITIZE("bounds")
 clusterMsgSendBlock *clusterCreatePublishMsgBlock(robj *channel, robj *message, uint16_t type) {
 
     uint32_t channel_len, message_len;

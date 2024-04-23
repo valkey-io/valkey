@@ -1118,8 +1118,8 @@ struct rewriteConfigState *rewriteConfigReadOldFile(char *path) {
     FILE *fp = fopen(path,"r");
     if (fp == NULL && errno != ENOENT) return NULL;
 
-    struct redis_stat sb;
-    if (fp && redis_fstat(fileno(fp),&sb) == -1) {
+    struct valkey_stat sb;
+    if (fp && valkey_fstat(fileno(fp), &sb) == -1) {
         fclose(fp);
         return NULL;
     }

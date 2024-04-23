@@ -606,4 +606,26 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         assert_equal 3 [exec {*}$cmdline ZCARD new_zset]
         assert_equal "a\n1\nb\n2\nc\n3" [exec {*}$cmdline ZRANGE new_zset 0 -1 WITHSCORES]
     }
+
+    test "Valid Connection Scheme: redis://" {
+        set cmdline [valkeycliuri "redis://" [srv host] [srv port]]
+        assert_equal {PONG} [exec {*}$cmdline PING]
+    }
+
+    test "Valid Connection Scheme: valkey://" {
+        set cmdline [valkeycliuri "valkey://" [srv host] [srv port]]
+        assert_equal {PONG} [exec {*}$cmdline PING]
+    }
+
+    if {$::tls} {
+        test "Valid Connection Scheme: rediss://" {
+            set cmdline [valkeycliuri "rediss://" [srv host] [srv port]]
+            assert_equal {PONG} [exec {*}$cmdline PING]
+        }
+
+        test "Valid Connection Scheme: valkeys://" {
+            set cmdline [valkeycliuri "valkeys://" [srv host] [srv port]]
+            assert_equal {PONG} [exec {*}$cmdline PING]
+        }
+    }
 }

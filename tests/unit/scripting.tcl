@@ -1055,7 +1055,7 @@ start_server {tags {"scripting"}} {
     test "Try trick global protection 3" {
         catch {
             run_script {
-                valkey = function() return 1 end
+                redis = function() return 1 end
             } 0
         } e
         set _ $e

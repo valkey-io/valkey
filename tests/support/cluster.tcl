@@ -201,7 +201,7 @@ proc ::valkey_cluster::__dispatch__ {id method args} {
         # Get the keys from the command.
         set keys [::valkey_cluster::get_keys_from_command $method $args]
         if {$keys eq {}} {
-            error "Redis command '$method' is not supported by valkey_cluster."
+            error "Valkey command '$method' is not supported by valkey_cluster."
         }
 
         # Resolve the keys in the corresponding hash slot they hash to.
@@ -250,7 +250,7 @@ proc ::valkey_cluster::__dispatch__ {id method args} {
                 return $e
             }
         }
-        error "Too many redirections or failures contacting Redis Cluster."
+        error "Too many redirections or failures contacting Valkey Cluster."
     } else {
         uplevel 1 [list ::valkey_cluster::__method__$method $id] $args
     }

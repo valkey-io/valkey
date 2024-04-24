@@ -455,7 +455,7 @@ start_server {tags {"expire"}} {
         #    to replication lag.
         # 2) We want to unify the way TTLs are replicated in both RDB and replication
         #    stream, which is as absolute timestamps.
-        # See: https://github.com/redis/redis/issues/8433
+        # See Redis OSS issue: https://github.com/redis/redis/issues/8433
 
         r flushall ; # Clean up keyspace to avoid interference by keys from other tests
         set repl [attach_to_replication_stream]

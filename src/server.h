@@ -1639,7 +1639,6 @@ struct valkeyServer {
     int io_threads_num;         /* Maximum number of IO threads to use. */
     int io_threads_do_reads;    /* Read and parse from IO threads? */
     int io_threads_active_num; /* Number of active IO threads to use. */
-    int io_threads_active;      /* Is IO threads currently active? */
     long long events_processed_while_blocked; /* processEventsWhileBlocked() */
     int enable_protected_configs;    /* Enable the modification of protected configs, see PROTECTED_ACTION_ALLOWED_* */
     int enable_debug_cmd;            /* Enable DEBUG commands, see PROTECTED_ACTION_ALLOWED_* */

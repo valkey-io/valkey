@@ -36,9 +36,6 @@ NODEPS:=clean distclean
 
 # Default settings
 STD=-pedantic -DSERVER_STATIC=''
-ifeq ($(SERVER_TEST),yes)
-	STD +=-DSERVER_TEST=1
-endif
 
 # Use -Wno-c11-extensions on clang, either where explicitly used or on
 # platforms we can assume it's being used.
@@ -134,6 +131,9 @@ ifdef REDIS_LDFLAGS
 endif
 
 FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(SERVER_CFLAGS)
+ifeq ($(SERVER_TEST),yes)
+	FINAL_CFLAGS +=-DSERVER_TEST=1
+endif
 FINAL_LDFLAGS=$(LDFLAGS) $(OPT) $(SERVER_LDFLAGS) $(DEBUG)
 FINAL_LIBS=-lm
 DEBUG=-g -ggdb

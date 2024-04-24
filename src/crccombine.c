@@ -5,12 +5,16 @@
 #include "crccombine.h"
 
 /* Copyright (C) 2013 Mark Adler
- * Copyright (C) 2019-2023 Josiah Carlson
+ * Copyright (C) 2019-2024 Josiah Carlson
  * Portions originally from: crc64.c Version 1.4  16 Dec 2013  Mark Adler
  * Modifications by Josiah Carlson <josiah.carlson@gmail.com>
  *   - Added implementation variations with sample timings for gf_matrix_times*()
  *   - Most folks would be best using gf2_matrix_times_vec or
  *	   gf2_matrix_times_vec2, unless some processor does AVX2 fast.
+ *   - This is the implementation of the MERGE_CRC macro defined in
+ *     crcspeed.c (which calls crc_combine()), and is a specialization of the
+ *     generic crc_combine() (and related from the 2013 edition of Mark Adler's
+ *     crc64.c)) for the sake of clarity and performance.
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the author be held liable for any damages
@@ -39,15 +43,6 @@
 	from repeating the same information over and over.
 */
 
-/* this table allows us to eliminate conditions during gf2_matrix_times_vec2() */
-#define MASKS_2() \
-	static v2uq masks2[4] = { \
-		{0,0}, \
-		{-1,0}, \
-		{0,-1}, \
-		{-1,-1}, \
-	}
-
 uint64_t gf2_matrix_times_vec2(uint64_t *mat, uint64_t vec) {
 	/*
 	 * Uses xmm registers on x86, works basically everywhere fast, doing
@@ -58,7 +53,13 @@ uint64_t gf2_matrix_times_vec2(uint64_t *mat, uint64_t vec) {
 	 */
 	v2uq sum = {0, 0},
 		*mv2 = (v2uq*)mat;
-	MASKS_2();
+    /* this table allows us to eliminate conditions during gf2_matrix_times_vec2() */
+	static v2uq masks2[4] = {
+		{0,0},
+		{-1,0},
+		{0,-1},
+		{-1,-1},
+	};
 
 	/* Almost as beautiful as gf2_matrix_times_vec, but only half as many
 	 * bits per step, so we need 2 per chunk4 operation. Faster in my tests. */
@@ -87,7 +88,6 @@ uint64_t gf2_matrix_times_vec2(uint64_t *mat, uint64_t vec) {
 
 #undef DO_CHUNK16
 #undef DO_CHUNK4
-#undef MASKS_2
 
 
 static void gf2_matrix_square(uint64_t *square, uint64_t *mat, uint8_t dim) {
@@ -106,7 +106,8 @@ static uint64_t combine_cache[64][64];
  * okay to spend the 32k of memory here, leaving the algorithm unchanged from
  * as it was a decade ago, and be happy that it costs <200 microseconds to
  * init, and that subsequent calls to the combine function take under 100
- * nanoseconds.
+ * nanoseconds. We also note that the crcany/crc.c code applies to any CRC, and
+ * we are currently targeting one: Jones CRC64.
  */
 
 void init_combine_cache(uint64_t poly, uint8_t dim) {

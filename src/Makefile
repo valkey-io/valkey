@@ -98,6 +98,10 @@ ifeq ($(USE_JEMALLOC),no)
 	MALLOC=libc
 endif
 
+ifeq ($(USE_MIMALLOC),yes)
+	MALLOC=mimalloc
+endif
+
 ifdef SANITIZER
 ifeq ($(SANITIZER),address)
 	MALLOC=libc
@@ -284,6 +288,15 @@ ifeq ($(MALLOC),jemalloc)
 	FINAL_CFLAGS+= -DUSE_JEMALLOC -I../deps/jemalloc/include
 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
 endif
+
+ifeq ($(MALLOC),mimalloc)
+	DEPENDENCY_TARGETS+= mimalloc
+	MIMALLOC_DIR= ../deps/mimalloc
+	MIMALLOC_LIB= $(MIMALLOC_DIR)/out/release/libmimalloc.a
+    FINAL_CFLAGS+= -DUSE_MIMALLOC -I$(MIMALLOC_DIR)/include
+    FINAL_LIBS := $(MIMALLOC_LIB) $(FINAL_LIBS)
+endif
+
 
 # LIBSSL & LIBCRYPTO
 LIBSSL_LIBS=

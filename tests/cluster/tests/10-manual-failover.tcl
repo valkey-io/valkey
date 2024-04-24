@@ -30,7 +30,7 @@ set current_epoch [CI 1 cluster_current_epoch]
 
 set numkeys 50000
 set numops 10000
-set cluster [redis_cluster 127.0.0.1:[get_instance_attrib valkey 0 port]]
+set cluster [valkey_cluster 127.0.0.1:[get_instance_attrib valkey 0 port]]
 catch {unset content}
 array set content {}
 

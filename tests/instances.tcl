@@ -10,7 +10,7 @@
 package require Tcl 8.5
 
 set tcl_precision 17
-source ../support/redis.tcl
+source ../support/valkey.tcl
 source ../support/util.tcl
 source ../support/aofmanifest.tcl
 source ../support/server.tcl

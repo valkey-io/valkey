@@ -6,7 +6,7 @@
 # 5. migration is half finished on "importing" node
 
 # TODO: Test is currently disabled until it is stabilized (fixing the test
-# itself or real issues in Redis).
+# itself or real issues in the server).
 
 if {false} {
 source "../tests/includes/init-tests.tcl"
@@ -21,7 +21,7 @@ test "Cluster is up" {
     assert_cluster_state ok
 }
 
-set cluster [redis_cluster 127.0.0.1:[get_instance_attrib redis 0 port]]
+set cluster [redis_cluster 127.0.0.1:[get_instance_attrib valkey 0 port]]
 catch {unset nodefrom}
 catch {unset nodeto}
 

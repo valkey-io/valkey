@@ -1,9 +1,9 @@
-#include "redismodule.h"
+#include "valkeymodule.h"
 
 #include <string.h>
 #include <strings.h>
 
-static RedisModuleString *log_key_name;
+static ValkeyModuleString *log_key_name;
 
 static const char log_command_name[] = "commandfilter.log";
 static const char ping_command_name[] = "commandfilter.ping";
@@ -14,117 +14,117 @@ static int in_log_command = 0;
 
 unsigned long long unfiltered_clientid = 0;
 
-static RedisModuleCommandFilter *filter, *filter1;
-static RedisModuleString *retained;
+static ValkeyModuleCommandFilter *filter, *filter1;
+static ValkeyModuleString *retained;
 
-int CommandFilter_UnregisterCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int CommandFilter_UnregisterCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     (void) argc;
     (void) argv;
 
-    RedisModule_ReplyWithLongLong(ctx,
-            RedisModule_UnregisterCommandFilter(ctx, filter));
+    ValkeyModule_ReplyWithLongLong(ctx,
+            ValkeyModule_UnregisterCommandFilter(ctx, filter));
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int CommandFilter_PingCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int CommandFilter_PingCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     (void) argc;
     (void) argv;
 
-    RedisModuleCallReply *reply = RedisModule_Call(ctx, "ping", "c", "@log");
+    ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, "ping", "c", "@log");
     if (reply) {
-        RedisModule_ReplyWithCallReply(ctx, reply);
-        RedisModule_FreeCallReply(reply);
+        ValkeyModule_ReplyWithCallReply(ctx, reply);
+        ValkeyModule_FreeCallReply(reply);
     } else {
-        RedisModule_ReplyWithSimpleString(ctx, "Unknown command or invalid arguments");
+        ValkeyModule_ReplyWithSimpleString(ctx, "Unknown command or invalid arguments");
     }
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int CommandFilter_Retained(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int CommandFilter_Retained(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     (void) argc;
     (void) argv;
 
     if (retained) {
-        RedisModule_ReplyWithString(ctx, retained);
+        ValkeyModule_ReplyWithString(ctx, retained);
     } else {
-        RedisModule_ReplyWithNull(ctx);
+        ValkeyModule_ReplyWithNull(ctx);
     }
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int CommandFilter_LogCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int CommandFilter_LogCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
-    RedisModuleString *s = RedisModule_CreateString(ctx, "", 0);
+    ValkeyModuleString *s = ValkeyModule_CreateString(ctx, "", 0);
 
     int i;
     for (i = 1; i < argc; i++) {
         size_t arglen;
-        const char *arg = RedisModule_StringPtrLen(argv[i], &arglen);
+        const char *arg = ValkeyModule_StringPtrLen(argv[i], &arglen);
 
-        if (i > 1) RedisModule_StringAppendBuffer(ctx, s, " ", 1);
-        RedisModule_StringAppendBuffer(ctx, s, arg, arglen);
+        if (i > 1) ValkeyModule_StringAppendBuffer(ctx, s, " ", 1);
+        ValkeyModule_StringAppendBuffer(ctx, s, arg, arglen);
     }
 
-    RedisModuleKey *log = RedisModule_OpenKey(ctx, log_key_name, REDISMODULE_WRITE|REDISMODULE_READ);
-    RedisModule_ListPush(log, REDISMODULE_LIST_HEAD, s);
-    RedisModule_CloseKey(log);
-    RedisModule_FreeString(ctx, s);
+    ValkeyModuleKey *log = ValkeyModule_OpenKey(ctx, log_key_name, VALKEYMODULE_WRITE|VALKEYMODULE_READ);
+    ValkeyModule_ListPush(log, VALKEYMODULE_LIST_HEAD, s);
+    ValkeyModule_CloseKey(log);
+    ValkeyModule_FreeString(ctx, s);
 
     in_log_command = 1;
 
     size_t cmdlen;
-    const char *cmdname = RedisModule_StringPtrLen(argv[1], &cmdlen);
-    RedisModuleCallReply *reply = RedisModule_Call(ctx, cmdname, "v", &argv[2], argc - 2);
+    const char *cmdname = ValkeyModule_StringPtrLen(argv[1], &cmdlen);
+    ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, cmdname, "v", &argv[2], argc - 2);
     if (reply) {
-        RedisModule_ReplyWithCallReply(ctx, reply);
-        RedisModule_FreeCallReply(reply);
+        ValkeyModule_ReplyWithCallReply(ctx, reply);
+        ValkeyModule_FreeCallReply(reply);
     } else {
-        RedisModule_ReplyWithSimpleString(ctx, "Unknown command or invalid arguments");
+        ValkeyModule_ReplyWithSimpleString(ctx, "Unknown command or invalid arguments");
     }
 
     in_log_command = 0;
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int CommandFilter_UnfilteredClientId(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int CommandFilter_UnfilteredClientId(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     if (argc < 2)
-        return RedisModule_WrongArity(ctx);
+        return ValkeyModule_WrongArity(ctx);
 
     long long id;
-    if (RedisModule_StringToLongLong(argv[1], &id) != REDISMODULE_OK) {
-        RedisModule_ReplyWithError(ctx, "invalid client id");
-        return REDISMODULE_OK;
+    if (ValkeyModule_StringToLongLong(argv[1], &id) != VALKEYMODULE_OK) {
+        ValkeyModule_ReplyWithError(ctx, "invalid client id");
+        return VALKEYMODULE_OK;
     }
     if (id < 0) {
-        RedisModule_ReplyWithError(ctx, "invalid client id");
-        return REDISMODULE_OK;
+        ValkeyModule_ReplyWithError(ctx, "invalid client id");
+        return VALKEYMODULE_OK;
     }
 
     unfiltered_clientid = id;
-    RedisModule_ReplyWithSimpleString(ctx, "OK");
-    return REDISMODULE_OK;
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
 }
 
 /* Filter to protect against Bug #11894 reappearing
  *
  * ensures that the filter is only run the first time through, and not on reprocessing
  */
-void CommandFilter_BlmoveSwap(RedisModuleCommandFilterCtx *filter)
+void CommandFilter_BlmoveSwap(ValkeyModuleCommandFilterCtx *filter)
 {
-    if (RedisModule_CommandFilterArgsCount(filter) != 6)
+    if (ValkeyModule_CommandFilterArgsCount(filter) != 6)
         return;
 
-    RedisModuleString *arg = RedisModule_CommandFilterArgGet(filter, 0);
+    ValkeyModuleString *arg = ValkeyModule_CommandFilterArgGet(filter, 0);
     size_t arg_len;
-    const char *arg_str = RedisModule_StringPtrLen(arg, &arg_len);
+    const char *arg_str = ValkeyModule_StringPtrLen(arg, &arg_len);
 
     if (arg_len != 6 || strncmp(arg_str, "blmove", 6))
         return;
@@ -133,15 +133,15 @@ void CommandFilter_BlmoveSwap(RedisModuleCommandFilterCtx *filter)
      * Swapping directional args (right/left) from source and destination.
      * need to hold here, can't push into the ArgReplace func, as it will cause other to freed -> use after free
      */
-    RedisModuleString *dir1 = RedisModule_HoldString(NULL, RedisModule_CommandFilterArgGet(filter, 3));
-    RedisModuleString *dir2 = RedisModule_HoldString(NULL, RedisModule_CommandFilterArgGet(filter, 4));
-    RedisModule_CommandFilterArgReplace(filter, 3, dir2);
-    RedisModule_CommandFilterArgReplace(filter, 4, dir1);
+    ValkeyModuleString *dir1 = ValkeyModule_HoldString(NULL, ValkeyModule_CommandFilterArgGet(filter, 3));
+    ValkeyModuleString *dir2 = ValkeyModule_HoldString(NULL, ValkeyModule_CommandFilterArgGet(filter, 4));
+    ValkeyModule_CommandFilterArgReplace(filter, 3, dir2);
+    ValkeyModule_CommandFilterArgReplace(filter, 4, dir1);
 }
 
-void CommandFilter_CommandFilter(RedisModuleCommandFilterCtx *filter)
+void CommandFilter_CommandFilter(ValkeyModuleCommandFilterCtx *filter)
 {
-    unsigned long long id = RedisModule_CommandFilterGetClientId(filter);
+    unsigned long long id = ValkeyModule_CommandFilterGetClientId(filter);
     if (id == unfiltered_clientid) return;
 
     if (in_log_command) return;  /* don't process our own RM_Call() from CommandFilter_LogCommand() */
@@ -154,30 +154,30 @@ void CommandFilter_CommandFilter(RedisModuleCommandFilterCtx *filter)
      */
     int log = 0;
     int pos = 0;
-    while (pos < RedisModule_CommandFilterArgsCount(filter)) {
-        const RedisModuleString *arg = RedisModule_CommandFilterArgGet(filter, pos);
+    while (pos < ValkeyModule_CommandFilterArgsCount(filter)) {
+        const ValkeyModuleString *arg = ValkeyModule_CommandFilterArgGet(filter, pos);
         size_t arg_len;
-        const char *arg_str = RedisModule_StringPtrLen(arg, &arg_len);
+        const char *arg_str = ValkeyModule_StringPtrLen(arg, &arg_len);
 
         if (arg_len == 6 && !memcmp(arg_str, "@delme", 6)) {
-            RedisModule_CommandFilterArgDelete(filter, pos);
+            ValkeyModule_CommandFilterArgDelete(filter, pos);
             continue;
         } 
         if (arg_len == 10 && !memcmp(arg_str, "@replaceme", 10)) {
-            RedisModule_CommandFilterArgReplace(filter, pos,
-                    RedisModule_CreateString(NULL, "--replaced--", 12));
+            ValkeyModule_CommandFilterArgReplace(filter, pos,
+                    ValkeyModule_CreateString(NULL, "--replaced--", 12));
         } else if (arg_len == 13 && !memcmp(arg_str, "@insertbefore", 13)) {
-            RedisModule_CommandFilterArgInsert(filter, pos,
-                    RedisModule_CreateString(NULL, "--inserted-before--", 19));
+            ValkeyModule_CommandFilterArgInsert(filter, pos,
+                    ValkeyModule_CreateString(NULL, "--inserted-before--", 19));
             pos++;
         } else if (arg_len == 12 && !memcmp(arg_str, "@insertafter", 12)) {
-            RedisModule_CommandFilterArgInsert(filter, pos + 1,
-                    RedisModule_CreateString(NULL, "--inserted-after--", 18));
+            ValkeyModule_CommandFilterArgInsert(filter, pos + 1,
+                    ValkeyModule_CreateString(NULL, "--inserted-after--", 18));
             pos++;
         } else if (arg_len == 7 && !memcmp(arg_str, "@retain", 7)) {
-            if (retained) RedisModule_FreeString(NULL, retained);
-            retained = RedisModule_CommandFilterArgGet(filter, pos + 1);
-            RedisModule_RetainString(NULL, retained);
+            if (retained) ValkeyModule_FreeString(NULL, retained);
+            retained = ValkeyModule_CommandFilterArgGet(filter, pos + 1);
+            ValkeyModule_RetainString(NULL, retained);
             pos++;
         } else if (arg_len == 4 && !memcmp(arg_str, "@log", 4)) {
             log = 1;
@@ -185,67 +185,67 @@ void CommandFilter_CommandFilter(RedisModuleCommandFilterCtx *filter)
         pos++;
     }
 
-    if (log) RedisModule_CommandFilterArgInsert(filter, 0,
-            RedisModule_CreateString(NULL, log_command_name, sizeof(log_command_name)-1));
+    if (log) ValkeyModule_CommandFilterArgInsert(filter, 0,
+            ValkeyModule_CreateString(NULL, log_command_name, sizeof(log_command_name)-1));
 }
 
-int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    if (RedisModule_Init(ctx,"commandfilter",1,REDISMODULE_APIVER_1)
-            == REDISMODULE_ERR) return REDISMODULE_ERR;
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (ValkeyModule_Init(ctx,"commandfilter",1,VALKEYMODULE_APIVER_1)
+            == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
     if (argc != 2 && argc != 3) {
-        RedisModule_Log(ctx, "warning", "Log key name not specified");
-        return REDISMODULE_ERR;
+        ValkeyModule_Log(ctx, "warning", "Log key name not specified");
+        return VALKEYMODULE_ERR;
     }
 
     long long noself = 0;
-    log_key_name = RedisModule_CreateStringFromString(ctx, argv[0]);
-    RedisModule_StringToLongLong(argv[1], &noself);
+    log_key_name = ValkeyModule_CreateStringFromString(ctx, argv[0]);
+    ValkeyModule_StringToLongLong(argv[1], &noself);
     retained = NULL;
 
-    if (RedisModule_CreateCommand(ctx,log_command_name,
-                CommandFilter_LogCommand,"write deny-oom",1,1,1) == REDISMODULE_ERR)
-            return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,log_command_name,
+                CommandFilter_LogCommand,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
+            return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,ping_command_name,
-                CommandFilter_PingCommand,"deny-oom",1,1,1) == REDISMODULE_ERR)
-            return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,ping_command_name,
+                CommandFilter_PingCommand,"deny-oom",1,1,1) == VALKEYMODULE_ERR)
+            return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,retained_command_name,
-                CommandFilter_Retained,"readonly",1,1,1) == REDISMODULE_ERR)
-            return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,retained_command_name,
+                CommandFilter_Retained,"readonly",1,1,1) == VALKEYMODULE_ERR)
+            return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,unregister_command_name,
-                CommandFilter_UnregisterCommand,"write deny-oom",1,1,1) == REDISMODULE_ERR)
-            return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,unregister_command_name,
+                CommandFilter_UnregisterCommand,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
+            return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx, unfiltered_clientid_name,
-                CommandFilter_UnfilteredClientId, "admin", 1,1,1) == REDISMODULE_ERR)
-            return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, unfiltered_clientid_name,
+                CommandFilter_UnfilteredClientId, "admin", 1,1,1) == VALKEYMODULE_ERR)
+            return VALKEYMODULE_ERR;
 
-    if ((filter = RedisModule_RegisterCommandFilter(ctx, CommandFilter_CommandFilter, 
-                    noself ? REDISMODULE_CMDFILTER_NOSELF : 0))
-            == NULL) return REDISMODULE_ERR;
+    if ((filter = ValkeyModule_RegisterCommandFilter(ctx, CommandFilter_CommandFilter, 
+                    noself ? VALKEYMODULE_CMDFILTER_NOSELF : 0))
+            == NULL) return VALKEYMODULE_ERR;
 
-    if ((filter1 = RedisModule_RegisterCommandFilter(ctx, CommandFilter_BlmoveSwap, 0)) == NULL)
-        return REDISMODULE_ERR;
+    if ((filter1 = ValkeyModule_RegisterCommandFilter(ctx, CommandFilter_BlmoveSwap, 0)) == NULL)
+        return VALKEYMODULE_ERR;
 
     if (argc == 3) {
-        const char *ptr = RedisModule_StringPtrLen(argv[2], NULL);
+        const char *ptr = ValkeyModule_StringPtrLen(argv[2], NULL);
         if (!strcasecmp(ptr, "noload")) {
             /* This is a hint that we return ERR at the last moment of OnLoad. */
-            RedisModule_FreeString(ctx, log_key_name);
-            if (retained) RedisModule_FreeString(NULL, retained);
-            return REDISMODULE_ERR;
+            ValkeyModule_FreeString(ctx, log_key_name);
+            if (retained) ValkeyModule_FreeString(NULL, retained);
+            return VALKEYMODULE_ERR;
         }
     }
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int RedisModule_OnUnload(RedisModuleCtx *ctx) {
-    RedisModule_FreeString(ctx, log_key_name);
-    if (retained) RedisModule_FreeString(NULL, retained);
+int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
+    ValkeyModule_FreeString(ctx, log_key_name);
+    if (retained) ValkeyModule_FreeString(NULL, retained);
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }

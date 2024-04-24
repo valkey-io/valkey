@@ -22,7 +22,7 @@ test "The first master has actually one slave" {
 }
 
 test {Slaves of #0 is instance #5 as expected} {
-    set port0 [get_instance_attrib redis 0 port]
+    set port0 [get_instance_attrib valkey 0 port]
     assert {[lindex [R 5 role] 2] == $port0}
 }
 
@@ -60,7 +60,7 @@ test "Break master-slave link and prevent further reconnections" {
     assert {[R 5 read] eq {OK OK}}
 
     # Kill the master so that a reconnection will not be possible.
-    kill_instance redis 0
+    kill_instance valkey 0
 }
 
 test "Slave #5 is reachable and alive" {

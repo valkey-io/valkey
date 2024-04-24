@@ -146,7 +146,7 @@ start_server {tags {"hll"}} {
         set e
     } {*WRONGTYPE*}
 
-    test {Fuzzing dense/sparse encoding: Redis should always detect errors} {
+    test {Fuzzing dense/sparse encoding: Server should always detect errors} {
         for {set j 0} {$j < 1000} {incr j} {
             r del hll
             set items {}
@@ -167,7 +167,7 @@ start_server {tags {"hll"}} {
             }
 
             # Use the hyperloglog to check if it crashes
-            # Redis in some way.
+            # the server in some way.
             catch {
                 r pfcount hll
             }

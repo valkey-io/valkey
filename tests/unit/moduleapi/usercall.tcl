@@ -12,7 +12,7 @@ start_server {tags {"modules usercall"}} {
     r module load $testmodule
 
     # baseline test that module isn't doing anything weird
-    test {test module check regular redis command without user/acl} {
+    test {test module check regular valkey command without user/acl} {
         assert_equal [r usercall.reset_user] OK
         assert_equal [r usercall.add_to_acl "~* &* +@all -set"] OK
         assert_equal [r usercall.call_without_user set x 5] OK
@@ -20,7 +20,7 @@ start_server {tags {"modules usercall"}} {
     }
 
     # call with user with acl set on it, but without testing the acl
-    test {test module check regular redis command with user} {
+    test {test module check regular valkey command with user} {
         assert_equal [r set x 5] OK
 
         assert_equal [r usercall.reset_user] OK
@@ -36,7 +36,7 @@ start_server {tags {"modules usercall"}} {
     }
 
     # call with user with acl set on it, but with testing the acl in rm_call (for cmd itself)
-    test {test module check regular redis command with user and acl} {
+    test {test module check regular valkey command with user and acl} {
         assert_equal [r set x 5] OK
 
         r ACL LOG RESET
@@ -62,7 +62,7 @@ start_server {tags {"modules usercall"}} {
     }
 
     # call with user with acl set on it, but with testing the acl in rm_call (for cmd itself)
-    test {test module check regular redis command with user and acl from blocked background thread} {
+    test {test module check regular valkey command with user and acl from blocked background thread} {
         assert_equal [r set x 5] OK
 
         r ACL LOG RESET

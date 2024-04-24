@@ -1,4 +1,4 @@
-/* Redis benchmark utility.
+/* Server benchmark utility.
  *
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
@@ -1377,7 +1377,7 @@ static void updateClusterSlotsConfiguration(void) {
     pthread_mutex_unlock(&config.is_updating_slots_mutex);
 }
 
-/* Generate random data for redis benchmark. See #7196. */
+/* Generate random data for the benchmark. See #7196. */
 static void genBenchmarkRandomData(char *data, int count) {
     static uint32_t state = 1234;
     int i = 0;
@@ -1592,10 +1592,10 @@ usage:
 " -s <socket>        Server socket (overrides host and port)\n"
 " -a <password>      Password for Valkey Auth\n"
 " --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.\n"
-" -u <uri>           Server URI on format redis://user:password@host:port/dbnum\n"
+" -u <uri>           Server URI on format valkey://user:password@host:port/dbnum\n"
 "                    User, password and dbnum are optional. For authentication\n"
 "                    without a username, use username 'default'. For TLS, use\n"
-"                    the scheme 'rediss'.\n"
+"                    the scheme 'valkeys'.\n"
 " -c <clients>       Number of parallel connections (default 50).\n"
 "                    Note: If --cluster is used then number of clients has to be\n"
 "                    the same or higher than the number of nodes.\n"
@@ -1787,7 +1787,7 @@ int main(int argc, char **argv) {
             }
             exit(1);
         }
-        if (config.cluster_node_count <= 1) {
+        if (config.cluster_node_count == 0) {
             fprintf(stderr, "Invalid cluster: %d node(s).\n",
                     config.cluster_node_count);
             exit(1);

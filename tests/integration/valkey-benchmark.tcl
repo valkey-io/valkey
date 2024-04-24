@@ -5,14 +5,14 @@ proc cmdstat {cmd} {
     return [cmdrstat $cmd r]
 }
 
-# common code to reset stats, flush the db and run redis-benchmark
+# common code to reset stats, flush the db and run valkey-benchmark
 proc common_bench_setup {cmd} {
     r config resetstat
     r flushall
     if {[catch { exec {*}$cmd } error]} {
         set first_line [lindex [split $error "\n"] 0]
-        puts [colorstr red "redis-benchmark non zero code. first line: $first_line"]
-        fail "redis-benchmark non zero code. first line: $first_line"
+        puts [colorstr red "valkey-benchmark non zero code. first line: $first_line"]
+        fail "valkey-benchmark non zero code. first line: $first_line"
     }
 }
 
@@ -32,26 +32,26 @@ tags {"benchmark network external:skip logreqres:skip"} {
         r select 0
 
         test {benchmark: set,get} {
-            set cmd [redisbenchmark $master_host $master_port "-c 5 -n 10 -t set,get"]
+            set cmd [valkeybenchmark $master_host $master_port "-c 5 -n 10 -t set,get"]
             common_bench_setup $cmd
             default_set_get_checks
         }
 
         test {benchmark: connecting using URI set,get} {
-            set cmd [redisbenchmarkuri $master_host $master_port "-c 5 -n 10 -t set,get"]
+            set cmd [valkeybenchmarkuri $master_host $master_port "-c 5 -n 10 -t set,get"]
             common_bench_setup $cmd
             default_set_get_checks
         }
 
         test {benchmark: connecting using URI with authentication set,get} {
             r config set masterauth pass
-            set cmd [redisbenchmarkuriuserpass $master_host $master_port "default" pass "-c 5 -n 10 -t set,get"]
+            set cmd [valkeybenchmarkuriuserpass $master_host $master_port "default" pass "-c 5 -n 10 -t set,get"]
             common_bench_setup $cmd
             default_set_get_checks
         }
 
         test {benchmark: full test suite} {
-            set cmd [redisbenchmark $master_host $master_port "-c 10 -n 100"]
+            set cmd [valkeybenchmark $master_host $master_port "-c 10 -n 100"]
             common_bench_setup $cmd
 
             # ping total calls are 2*issued commands per test due to PING_INLINE and PING_MBULK
@@ -76,7 +76,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
         }
 
         test {benchmark: multi-thread set,get} {
-            set cmd [redisbenchmark $master_host $master_port "--threads 10 -c 5 -n 10 -t set,get"]
+            set cmd [valkeybenchmark $master_host $master_port "--threads 10 -c 5 -n 10 -t set,get"]
             common_bench_setup $cmd
             default_set_get_checks
 
@@ -85,7 +85,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
         }
 
         test {benchmark: pipelined full set,get} {
-            set cmd [redisbenchmark $master_host $master_port "-P 5 -c 10 -n 10010 -t set,get"]
+            set cmd [valkeybenchmark $master_host $master_port "-P 5 -c 10 -n 10010 -t set,get"]
             common_bench_setup $cmd
             assert_match  {*calls=10010,*} [cmdstat set]
             assert_match  {*calls=10010,*} [cmdstat get]
@@ -97,7 +97,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
         }
 
         test {benchmark: arbitrary command} {
-            set cmd [redisbenchmark $master_host $master_port "-c 5 -n 150 INCRBYFLOAT mykey 10.0"]
+            set cmd [valkeybenchmark $master_host $master_port "-c 5 -n 150 INCRBYFLOAT mykey 10.0"]
             common_bench_setup $cmd
             assert_match  {*calls=150,*} [cmdstat incrbyfloat]
             # assert one of the non benchmarked commands is not present
@@ -108,7 +108,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
         }
 
         test {benchmark: keyspace length} {
-            set cmd [redisbenchmark $master_host $master_port "-r 50 -t set -n 1000"]
+            set cmd [valkeybenchmark $master_host $master_port "-r 50 -t set -n 1000"]
             common_bench_setup $cmd
             assert_match  {*calls=1000,*} [cmdstat set]
             # assert one of the non benchmarked commands is not present
@@ -119,7 +119,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
         }
         
         test {benchmark: clients idle mode should return error when reached maxclients limit} {
-            set cmd [redisbenchmark $master_host $master_port "-c 10 -I"]
+            set cmd [valkeybenchmark $master_host $master_port "-c 10 -I"]
             set original_maxclients [lindex [r config get maxclients] 1]
             r config set maxclients 5
             catch { exec {*}$cmd } error
@@ -128,7 +128,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
         }
 
         test {benchmark: read last argument from stdin} {
-            set base_cmd [redisbenchmark $master_host $master_port "-x -n 10 set key"]
+            set base_cmd [valkeybenchmark $master_host $master_port "-x -n 10 set key"]
             set cmd "printf arg | $base_cmd"
             common_bench_setup $cmd
             r get key
@@ -137,7 +137,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
         # tls specific tests
         if {$::tls} {
             test {benchmark: specific tls-ciphers} {
-                set cmd [redisbenchmark $master_host $master_port "-r 50 -t set -n 1000 --tls-ciphers \"DEFAULT:-AES128-SHA256\""]
+                set cmd [valkeybenchmark $master_host $master_port "-r 50 -t set -n 1000 --tls-ciphers \"DEFAULT:-AES128-SHA256\""]
                 common_bench_setup $cmd
                 assert_match  {*calls=1000,*} [cmdstat set]
                 # assert one of the non benchmarked commands is not present
@@ -146,7 +146,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
 
             test {benchmark: tls connecting using URI with authentication set,get} {
                 r config set masterauth pass
-                set cmd [redisbenchmarkuriuserpass $master_host $master_port "default" pass "-c 5 -n 10 -t set,get"]
+                set cmd [valkeybenchmarkuriuserpass $master_host $master_port "default" pass "-c 5 -n 10 -t set,get"]
                 common_bench_setup $cmd
                 default_set_get_checks
             }
@@ -155,7 +155,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
                 r flushall
                 r config resetstat
                 set ciphersuites_supported 1
-                set cmd [redisbenchmark $master_host $master_port "-r 50 -t set -n 1000 --tls-ciphersuites \"TLS_AES_128_GCM_SHA256\""]
+                set cmd [valkeybenchmark $master_host $master_port "-r 50 -t set -n 1000 --tls-ciphersuites \"TLS_AES_128_GCM_SHA256\""]
                 if {[catch { exec {*}$cmd } error]} {
                     set first_line [lindex [split $error "\n"] 0]
                     if {[string match "*Invalid option*" $first_line]} {
@@ -164,8 +164,8 @@ tags {"benchmark network external:skip logreqres:skip"} {
                             puts "Skipping test, TLSv1.3 not supported."
                         }
                     } else {
-                        puts [colorstr red "redis-benchmark non zero code. first line: $first_line"]
-                        fail "redis-benchmark non zero code. first line: $first_line"
+                        puts [colorstr red "valkey-benchmark non zero code. first line: $first_line"]
+                        fail "valkey-benchmark non zero code. first line: $first_line"
                     }
                 }
                 if {$ciphersuites_supported} {

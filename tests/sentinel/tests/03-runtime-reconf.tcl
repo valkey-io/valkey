@@ -6,7 +6,7 @@ set ::user "testuser"
 set ::password "secret"
 
 proc server_set_password {} {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         assert_equal {OK} [R $id CONFIG SET requirepass $::password]
         assert_equal {OK} [R $id AUTH $::password]
         assert_equal {OK} [R $id CONFIG SET masterauth $::password]
@@ -14,7 +14,7 @@ proc server_set_password {} {
 }
 
 proc server_reset_password {} {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         assert_equal {OK} [R $id CONFIG SET requirepass ""]
         assert_equal {OK} [R $id CONFIG SET masterauth ""]
     }
@@ -116,7 +116,7 @@ test "Sentinels (re)connection following master ACL change" {
     assert_equal {OK} [S $sent2up SENTINEL SET mymaster auth-user $::user]
     assert_equal {OK} [S $sent2up SENTINEL SET mymaster auth-pass $::password]
 
-    foreach_redis_id id {
+    foreach_valkey_id id {
         server_set_acl $id
     }
 
@@ -153,7 +153,7 @@ test "Sentinels (re)connection following master ACL change" {
     wait_for_sentinels_connect_servers
 
     # remove requirepass and verify sentinels manage to connect servers
-    foreach_redis_id id {
+    foreach_valkey_id id {
         server_reset_acl $id
     }
 

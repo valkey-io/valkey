@@ -28,6 +28,8 @@ on:
         description: 'git branch or sha to use'
         default: 'unstable'
 
+permissions:
+  contents: read
 
 jobs:
 

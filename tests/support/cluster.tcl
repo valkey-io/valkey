@@ -1,4 +1,4 @@
-# Tcl redis cluster client as a wrapper of redis.rb.
+# Tcl cluster client as a wrapper of redis.rb.
 # Copyright (C) 2014 Salvatore Sanfilippo
 # Released under the BSD license like Redis itself
 #
@@ -57,7 +57,7 @@ proc redis_cluster {nodes {tls -1}} {
 # maps ::redis_cluster::slots($id) with an hash mapping slot numbers
 # to node IDs.
 #
-# This function is called when a new Redis Cluster client is initialized
+# This function is called when a new Cluster client is initialized
 # and every time we get a -MOVED redirection error.
 proc ::redis_cluster::__method__refresh_nodes_map {id} {
     # Contact the first responding startup node.
@@ -69,7 +69,7 @@ proc ::redis_cluster::__method__refresh_nodes_map {id} {
         set tls $::redis_cluster::tls($id)
         if {[catch {
             set r {}
-            set r [redis $start_host $start_port 0 $tls]
+            set r [valkey $start_host $start_port 0 $tls]
             set nodes_descr [$r cluster nodes]
             $r close
         } e]} {
@@ -115,7 +115,7 @@ proc ::redis_cluster::__method__refresh_nodes_map {id} {
         # Connect to the node
         set link {}
         set tls $::redis_cluster::tls($id)
-        catch {set link [redis $host $port 0 $tls]}
+        catch {set link [valkey $host $port 0 $tls]}
 
         # Build this node description as an hash.
         set node [dict create \
@@ -258,7 +258,7 @@ proc ::redis_cluster::__dispatch__ {id method args} {
 
 proc ::redis_cluster::get_keys_from_command {cmd argv} {
     set cmd [string tolower $cmd]
-    # Most Redis commands get just one key as first argument.
+    # Most commands get just one key as first argument.
     if {[lsearch -exact $::redis_cluster::plain_commands $cmd] != -1} {
         return [list [lindex $argv 0]]
     }
@@ -276,7 +276,7 @@ proc ::redis_cluster::get_keys_from_command {cmd argv} {
 }
 
 # Returns the CRC16 of the specified string.
-# The CRC parameters are described in the Redis Cluster specification.
+# The CRC parameters are described in the Cluster specification.
 set ::redis_cluster::XMODEMCRC16Lookup {
     0x0000 0x1021 0x2042 0x3063 0x4084 0x50a5 0x60c6 0x70e7
     0x8108 0x9129 0xa14a 0xb16b 0xc18c 0xd1ad 0xe1ce 0xf1ef
@@ -323,7 +323,7 @@ proc ::redis_cluster::crc16 {s} {
 }
 
 # Hash a single key returning the slot it belongs to, Implemented hash
-# tags as described in the Redis Cluster specification.
+# tags as described in the Cluster specification.
 proc ::redis_cluster::hash {key} {
     set keylen [string length $key]
     set s {}
@@ -352,7 +352,7 @@ proc ::redis_cluster::hash {key} {
 
 # Return the slot the specified keys hash to.
 # If the keys hash to multiple slots, an empty string is returned to
-# signal that the command can't be run in Redis Cluster.
+# signal that the command can't be run in Cluster.
 proc ::redis_cluster::get_slot_from_keys {keys} {
     set slot {}
     foreach k $keys {

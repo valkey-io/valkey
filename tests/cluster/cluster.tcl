@@ -86,8 +86,8 @@ proc cluster_allocate_slots {n} {
 
 # Check that cluster nodes agree about "state", or raise an error.
 proc assert_cluster_state {state} {
-    foreach_redis_id id {
-        if {[instance_is_killed redis $id]} continue
+    foreach_valkey_id id {
+        if {[instance_is_killed valkey $id]} continue
         wait_for_condition 1000 50 {
             [CI $id cluster_state] eq $state
         } else {
@@ -99,9 +99,9 @@ proc assert_cluster_state {state} {
 # Search the first node starting from ID $first that is not
 # already configured as a slave.
 proc cluster_find_available_slave {first} {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         if {$id < $first} continue
-        if {[instance_is_killed redis $id]} continue
+        if {[instance_is_killed valkey $id]} continue
         set me [get_myself $id]
         if {[dict get $me slaveof] eq {-}} {return $id}
     }
@@ -161,7 +161,7 @@ proc cluster_create_with_continuous_slots {masters slaves} {
 
 # Set the cluster node-timeout to all the reachalbe nodes.
 proc set_cluster_node_timeout {to} {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         catch {R $id CONFIG SET cluster-node-timeout $to}
     }
 }
@@ -170,7 +170,7 @@ proc set_cluster_node_timeout {to} {
 # as a starting point to talk with the cluster.
 proc cluster_write_test {id} {
     set prefix [randstring 20 20 alpha]
-    set port [get_instance_attrib redis $id port]
+    set port [get_instance_attrib valkey $id port]
     set cluster [redis_cluster 127.0.0.1:$port]
     for {set j 0} {$j < 100} {incr j} {
         $cluster set key.$j $prefix.$j
@@ -182,8 +182,21 @@ proc cluster_write_test {id} {
 }
 
 # Check if cluster configuration is consistent.
+# All the nodes in the cluster should show same slots configuration and have health
+# state "online" to be considered as consistent.
 proc cluster_config_consistent {} {
     for {set j 0} {$j < $::cluster_master_nodes + $::cluster_replica_nodes} {incr j} {
+        # Check if all the nodes are online
+        set shards_cfg [R $j CLUSTER SHARDS]
+        foreach shard_cfg $shards_cfg {
+            set nodes [dict get $shard_cfg nodes]
+            foreach node $nodes {
+                if {[dict get $node health] ne "online"} {
+                    return 0
+                }
+            }
+        }
+
         if {$j == 0} {
             set base_cfg [R $j cluster slots]
         } else {
@@ -199,7 +212,7 @@ proc cluster_config_consistent {} {
 
 # Wait for cluster configuration to propagate and be consistent across nodes.
 proc wait_for_cluster_propagation {} {
-    wait_for_condition 50 100 {
+    wait_for_condition 1000 50 {
         [cluster_config_consistent] eq 1
     } else {
         fail "cluster config did not reach a consistent state"

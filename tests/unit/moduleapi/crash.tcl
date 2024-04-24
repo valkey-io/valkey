@@ -9,7 +9,7 @@ if {!$::valgrind} {
         r module load $testmodule assert
         test {Test module crash when info crashes with an assertion } {
             catch {r 0 info infocrash}
-            set res [wait_for_log_messages 0 {"*=== REDIS BUG REPORT START: Cut & paste starting from here ===*"} 0 10 1000]
+            set res [wait_for_log_messages 0 {"*=== * BUG REPORT START: Cut & paste starting from here ===*"} 0 10 1000]
             set loglines [lindex $res 1]
 
             set res [wait_for_log_messages 0 {"*ASSERTION FAILED*"} $loglines 10 1000]
@@ -18,8 +18,8 @@ if {!$::valgrind} {
             set res [wait_for_log_messages 0 {"*RECURSIVE ASSERTION FAILED*"} $loglines 10 1000]
             set loglines [lindex $res 1]
 
-            wait_for_log_messages 0 {"*=== REDIS BUG REPORT END. Make sure to include from START to END. ===*"} $loglines 10 1000
-            assert_equal 1 [count_log_message 0 "=== REDIS BUG REPORT END. Make sure to include from START to END. ==="]
+            wait_for_log_messages 0 {"*=== * REPORT END. Make sure to include from START to END. ===*"} $loglines 10 1000
+            assert_equal 1 [count_log_message 0 "=== .* BUG REPORT END. Make sure to include from START to END. ==="]
             assert_equal 2 [count_log_message 0 "ASSERTION FAILED"]
             if {$backtrace_supported} {
                 # Make sure the crash trace is printed twice. There will be 3 instances of,
@@ -27,7 +27,7 @@ if {!$::valgrind} {
                 assert_equal 3 [count_log_message 0 "assertCrash"]
             }
             assert_equal 1 [count_log_message 0 "RECURSIVE ASSERTION FAILED"]
-            assert_equal 1 [count_log_message 0 "=== REDIS BUG REPORT START: Cut & paste starting from here ==="]
+            assert_equal 1 [count_log_message 0 "=== .* BUG REPORT START: Cut & paste starting from here ==="]
         }
     }
 
@@ -35,7 +35,7 @@ if {!$::valgrind} {
         r module load $testmodule segfault
         test {Test module crash when info crashes with a segfault} {
             catch {r 0 info infocrash}
-            set res [wait_for_log_messages 0 {"*=== REDIS BUG REPORT START: Cut & paste starting from here ===*"} 0 10 1000]
+            set res [wait_for_log_messages 0 {"*=== * BUG REPORT START: Cut & paste starting from here ===*"} 0 10 1000]
             set loglines [lindex $res 1]
 
             if {$backtrace_supported} {
@@ -48,8 +48,8 @@ if {!$::valgrind} {
                 set loglines [lindex $res 1]
             }
 
-            wait_for_log_messages 0 {"*=== REDIS BUG REPORT END. Make sure to include from START to END. ===*"} $loglines 10 1000
-            assert_equal 1 [count_log_message 0 "=== REDIS BUG REPORT END. Make sure to include from START to END. ==="]
+            wait_for_log_messages 0 {"*=== * BUG REPORT END. Make sure to include from START to END. ===*"} $loglines 10 1000
+            assert_equal 1 [count_log_message 0 "=== .* BUG REPORT END. Make sure to include from START to END. ==="]
             assert_equal 1 [count_log_message 0 "Crashed running signal handler. Providing reduced version of recursive crash report"]
             if {$backtrace_supported} {
                 assert_equal 2 [count_log_message 0 "Crashed running the instruction at"]
@@ -57,7 +57,7 @@ if {!$::valgrind} {
                 # modulesCollectInfo, 1 in the first stack trace and 2 in the second.
                 assert_equal 3 [count_log_message 0 "modulesCollectInfo"]
             }
-            assert_equal 1 [count_log_message 0 "=== REDIS BUG REPORT START: Cut & paste starting from here ==="]
+            assert_equal 1 [count_log_message 0 "=== .* BUG REPORT START: Cut & paste starting from here ==="]
         }
     }
 }

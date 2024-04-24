@@ -58,7 +58,7 @@ test "MULTI-EXEC with write operations is MOVED" {
 }
 
 test "read-only blocking operations from replica" {
-    set rd [redis_deferring_client redis 1]
+    set rd [valkey_deferring_client valkey 1]
     $rd readonly
     $rd read
     $rd XREAD BLOCK 0 STREAMS k 0

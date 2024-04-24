@@ -149,7 +149,7 @@ static size_t rioFileWrite(rio *r, const void *buf, size_t len) {
                     return 0;
             }
 #else
-            if (redis_fsync(fileno(r->io.file.fp)) == -1) return 0;
+            if (valkey_fsync(fileno(r->io.file.fp)) == -1) return 0;
 #endif
             if (r->io.file.reclaim_cache) {
                 /* In Linux sync_file_range just issue a writeback request to
@@ -476,7 +476,7 @@ uint8_t rioCheckType(rio *r) {
 /* --------------------------- Higher level interface --------------------------
  *
  * The following higher level functions use lower level rio.c functions to help
- * generating the Redis protocol for the Append Only File. */
+ * generating the RESP for the Append Only File. */
 
 /* Write multi bulk count in the format: "*<count>\r\n". */
 size_t rioWriteBulkCount(rio *r, char prefix, long count) {

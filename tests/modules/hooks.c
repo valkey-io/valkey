@@ -30,7 +30,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "redismodule.h"
+#include "valkeymodule.h"
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -39,478 +39,478 @@
 /* We need to store events to be able to test and see what we got, and we can't
  * store them in the key-space since that would mess up rdb loading (duplicates)
  * and be lost of flushdb. */
-RedisModuleDict *event_log = NULL;
+ValkeyModuleDict *event_log = NULL;
 /* stores all the keys on which we got 'removed' event */
-RedisModuleDict *removed_event_log = NULL;
+ValkeyModuleDict *removed_event_log = NULL;
 /* stores all the subevent on which we got 'removed' event */
-RedisModuleDict *removed_subevent_type = NULL;
+ValkeyModuleDict *removed_subevent_type = NULL;
 /* stores all the keys on which we got 'removed' event with expiry information */
-RedisModuleDict *removed_expiry_log = NULL;
+ValkeyModuleDict *removed_expiry_log = NULL;
 
 typedef struct EventElement {
     long count;
-    RedisModuleString *last_val_string;
+    ValkeyModuleString *last_val_string;
     long last_val_int;
 } EventElement;
 
-void LogStringEvent(RedisModuleCtx *ctx, const char* keyname, const char* data) {
-    EventElement *event = RedisModule_DictGetC(event_log, (void*)keyname, strlen(keyname), NULL);
+void LogStringEvent(ValkeyModuleCtx *ctx, const char* keyname, const char* data) {
+    EventElement *event = ValkeyModule_DictGetC(event_log, (void*)keyname, strlen(keyname), NULL);
     if (!event) {
-        event = RedisModule_Alloc(sizeof(EventElement));
+        event = ValkeyModule_Alloc(sizeof(EventElement));
         memset(event, 0, sizeof(EventElement));
-        RedisModule_DictSetC(event_log, (void*)keyname, strlen(keyname), event);
+        ValkeyModule_DictSetC(event_log, (void*)keyname, strlen(keyname), event);
     }
-    if (event->last_val_string) RedisModule_FreeString(ctx, event->last_val_string);
-    event->last_val_string = RedisModule_CreateString(ctx, data, strlen(data));
+    if (event->last_val_string) ValkeyModule_FreeString(ctx, event->last_val_string);
+    event->last_val_string = ValkeyModule_CreateString(ctx, data, strlen(data));
     event->count++;
 }
 
-void LogNumericEvent(RedisModuleCtx *ctx, const char* keyname, long data) {
-    REDISMODULE_NOT_USED(ctx);
-    EventElement *event = RedisModule_DictGetC(event_log, (void*)keyname, strlen(keyname), NULL);
+void LogNumericEvent(ValkeyModuleCtx *ctx, const char* keyname, long data) {
+    VALKEYMODULE_NOT_USED(ctx);
+    EventElement *event = ValkeyModule_DictGetC(event_log, (void*)keyname, strlen(keyname), NULL);
     if (!event) {
-        event = RedisModule_Alloc(sizeof(EventElement));
+        event = ValkeyModule_Alloc(sizeof(EventElement));
         memset(event, 0, sizeof(EventElement));
-        RedisModule_DictSetC(event_log, (void*)keyname, strlen(keyname), event);
+        ValkeyModule_DictSetC(event_log, (void*)keyname, strlen(keyname), event);
     }
     event->last_val_int = data;
     event->count++;
 }
 
-void FreeEvent(RedisModuleCtx *ctx, EventElement *event) {
+void FreeEvent(ValkeyModuleCtx *ctx, EventElement *event) {
     if (event->last_val_string)
-        RedisModule_FreeString(ctx, event->last_val_string);
-    RedisModule_Free(event);
+        ValkeyModule_FreeString(ctx, event->last_val_string);
+    ValkeyModule_Free(event);
 }
 
-int cmdEventCount(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int cmdEventCount(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     if (argc != 2){
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
 
-    EventElement *event = RedisModule_DictGet(event_log, argv[1], NULL);
-    RedisModule_ReplyWithLongLong(ctx, event? event->count: 0);
-    return REDISMODULE_OK;
+    EventElement *event = ValkeyModule_DictGet(event_log, argv[1], NULL);
+    ValkeyModule_ReplyWithLongLong(ctx, event? event->count: 0);
+    return VALKEYMODULE_OK;
 }
 
-int cmdEventLast(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int cmdEventLast(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     if (argc != 2){
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
 
-    EventElement *event = RedisModule_DictGet(event_log, argv[1], NULL);
+    EventElement *event = ValkeyModule_DictGet(event_log, argv[1], NULL);
     if (event && event->last_val_string)
-        RedisModule_ReplyWithString(ctx, event->last_val_string);
+        ValkeyModule_ReplyWithString(ctx, event->last_val_string);
     else if (event)
-        RedisModule_ReplyWithLongLong(ctx, event->last_val_int);
+        ValkeyModule_ReplyWithLongLong(ctx, event->last_val_int);
     else
-        RedisModule_ReplyWithNull(ctx);
-    return REDISMODULE_OK;
+        ValkeyModule_ReplyWithNull(ctx);
+    return VALKEYMODULE_OK;
 }
 
-void clearEvents(RedisModuleCtx *ctx)
+void clearEvents(ValkeyModuleCtx *ctx)
 {
-    RedisModuleString *key;
+    ValkeyModuleString *key;
     EventElement *event;
-    RedisModuleDictIter *iter = RedisModule_DictIteratorStart(event_log, "^", NULL);
-    while((key = RedisModule_DictNext(ctx, iter, (void**)&event)) != NULL) {
+    ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStart(event_log, "^", NULL);
+    while((key = ValkeyModule_DictNext(ctx, iter, (void**)&event)) != NULL) {
         event->count = 0;
         event->last_val_int = 0;
-        if (event->last_val_string) RedisModule_FreeString(ctx, event->last_val_string);
+        if (event->last_val_string) ValkeyModule_FreeString(ctx, event->last_val_string);
         event->last_val_string = NULL;
-        RedisModule_DictDel(event_log, key, NULL);
-        RedisModule_Free(event);
+        ValkeyModule_DictDel(event_log, key, NULL);
+        ValkeyModule_Free(event);
     }
-    RedisModule_DictIteratorStop(iter);
+    ValkeyModule_DictIteratorStop(iter);
 }
 
-int cmdEventsClear(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int cmdEventsClear(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
-    REDISMODULE_NOT_USED(argc);
-    REDISMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    VALKEYMODULE_NOT_USED(argv);
     clearEvents(ctx);
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
 /* Client state change callback. */
-void clientChangeCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
+void clientChangeCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
 {
-    REDISMODULE_NOT_USED(e);
+    VALKEYMODULE_NOT_USED(e);
 
-    RedisModuleClientInfo *ci = data;
-    char *keyname = (sub == REDISMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED) ?
+    ValkeyModuleClientInfo *ci = data;
+    char *keyname = (sub == VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED) ?
         "client-connected" : "client-disconnected";
     LogNumericEvent(ctx, keyname, ci->id);
 }
 
-void flushdbCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
+void flushdbCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
 {
-    REDISMODULE_NOT_USED(e);
+    VALKEYMODULE_NOT_USED(e);
 
-    RedisModuleFlushInfo *fi = data;
-    char *keyname = (sub == REDISMODULE_SUBEVENT_FLUSHDB_START) ?
+    ValkeyModuleFlushInfo *fi = data;
+    char *keyname = (sub == VALKEYMODULE_SUBEVENT_FLUSHDB_START) ?
         "flush-start" : "flush-end";
     LogNumericEvent(ctx, keyname, fi->dbnum);
 }
 
-void roleChangeCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
+void roleChangeCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
 {
-    REDISMODULE_NOT_USED(e);
-    REDISMODULE_NOT_USED(data);
+    VALKEYMODULE_NOT_USED(e);
+    VALKEYMODULE_NOT_USED(data);
 
-    RedisModuleReplicationInfo *ri = data;
-    char *keyname = (sub == REDISMODULE_EVENT_REPLROLECHANGED_NOW_MASTER) ?
+    ValkeyModuleReplicationInfo *ri = data;
+    char *keyname = (sub == VALKEYMODULE_EVENT_REPLROLECHANGED_NOW_PRIMARY) ?
         "role-master" : "role-replica";
     LogStringEvent(ctx, keyname, ri->masterhost);
 }
 
-void replicationChangeCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
+void replicationChangeCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
 {
-    REDISMODULE_NOT_USED(e);
-    REDISMODULE_NOT_USED(data);
+    VALKEYMODULE_NOT_USED(e);
+    VALKEYMODULE_NOT_USED(data);
 
-    char *keyname = (sub == REDISMODULE_SUBEVENT_REPLICA_CHANGE_ONLINE) ?
+    char *keyname = (sub == VALKEYMODULE_SUBEVENT_REPLICA_CHANGE_ONLINE) ?
         "replica-online" : "replica-offline";
     LogNumericEvent(ctx, keyname, 0);
 }
 
-void rasterLinkChangeCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
+void rasterLinkChangeCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
 {
-    REDISMODULE_NOT_USED(e);
-    REDISMODULE_NOT_USED(data);
+    VALKEYMODULE_NOT_USED(e);
+    VALKEYMODULE_NOT_USED(data);
 
-    char *keyname = (sub == REDISMODULE_SUBEVENT_MASTER_LINK_UP) ?
+    char *keyname = (sub == VALKEYMODULE_SUBEVENT_PRIMARY_LINK_UP) ?
         "masterlink-up" : "masterlink-down";
     LogNumericEvent(ctx, keyname, 0);
 }
 
-void persistenceCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
+void persistenceCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
 {
-    REDISMODULE_NOT_USED(e);
-    REDISMODULE_NOT_USED(data);
+    VALKEYMODULE_NOT_USED(e);
+    VALKEYMODULE_NOT_USED(data);
 
     char *keyname = NULL;
     switch (sub) {
-        case REDISMODULE_SUBEVENT_PERSISTENCE_RDB_START: keyname = "persistence-rdb-start"; break;
-        case REDISMODULE_SUBEVENT_PERSISTENCE_AOF_START: keyname = "persistence-aof-start"; break;
-        case REDISMODULE_SUBEVENT_PERSISTENCE_SYNC_AOF_START: keyname = "persistence-syncaof-start"; break;
-        case REDISMODULE_SUBEVENT_PERSISTENCE_SYNC_RDB_START: keyname = "persistence-syncrdb-start"; break;
-        case REDISMODULE_SUBEVENT_PERSISTENCE_ENDED: keyname = "persistence-end"; break;
-        case REDISMODULE_SUBEVENT_PERSISTENCE_FAILED: keyname = "persistence-failed"; break;
+        case VALKEYMODULE_SUBEVENT_PERSISTENCE_RDB_START: keyname = "persistence-rdb-start"; break;
+        case VALKEYMODULE_SUBEVENT_PERSISTENCE_AOF_START: keyname = "persistence-aof-start"; break;
+        case VALKEYMODULE_SUBEVENT_PERSISTENCE_SYNC_AOF_START: keyname = "persistence-syncaof-start"; break;
+        case VALKEYMODULE_SUBEVENT_PERSISTENCE_SYNC_RDB_START: keyname = "persistence-syncrdb-start"; break;
+        case VALKEYMODULE_SUBEVENT_PERSISTENCE_ENDED: keyname = "persistence-end"; break;
+        case VALKEYMODULE_SUBEVENT_PERSISTENCE_FAILED: keyname = "persistence-failed"; break;
     }
     /* modifying the keyspace from the fork child is not an option, using log instead */
-    RedisModule_Log(ctx, "warning", "module-event-%s", keyname);
-    if (sub == REDISMODULE_SUBEVENT_PERSISTENCE_SYNC_RDB_START ||
-        sub == REDISMODULE_SUBEVENT_PERSISTENCE_SYNC_AOF_START) 
+    ValkeyModule_Log(ctx, "warning", "module-event-%s", keyname);
+    if (sub == VALKEYMODULE_SUBEVENT_PERSISTENCE_SYNC_RDB_START ||
+        sub == VALKEYMODULE_SUBEVENT_PERSISTENCE_SYNC_AOF_START) 
     {
         LogNumericEvent(ctx, keyname, 0);
     }
 }
 
-void loadingCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
+void loadingCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
 {
-    REDISMODULE_NOT_USED(e);
-    REDISMODULE_NOT_USED(data);
+    VALKEYMODULE_NOT_USED(e);
+    VALKEYMODULE_NOT_USED(data);
 
     char *keyname = NULL;
     switch (sub) {
-        case REDISMODULE_SUBEVENT_LOADING_RDB_START: keyname = "loading-rdb-start"; break;
-        case REDISMODULE_SUBEVENT_LOADING_AOF_START: keyname = "loading-aof-start"; break;
-        case REDISMODULE_SUBEVENT_LOADING_REPL_START: keyname = "loading-repl-start"; break;
-        case REDISMODULE_SUBEVENT_LOADING_ENDED: keyname = "loading-end"; break;
-        case REDISMODULE_SUBEVENT_LOADING_FAILED: keyname = "loading-failed"; break;
+        case VALKEYMODULE_SUBEVENT_LOADING_RDB_START: keyname = "loading-rdb-start"; break;
+        case VALKEYMODULE_SUBEVENT_LOADING_AOF_START: keyname = "loading-aof-start"; break;
+        case VALKEYMODULE_SUBEVENT_LOADING_REPL_START: keyname = "loading-repl-start"; break;
+        case VALKEYMODULE_SUBEVENT_LOADING_ENDED: keyname = "loading-end"; break;
+        case VALKEYMODULE_SUBEVENT_LOADING_FAILED: keyname = "loading-failed"; break;
     }
     LogNumericEvent(ctx, keyname, 0);
 }
 
-void loadingProgressCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
+void loadingProgressCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
 {
-    REDISMODULE_NOT_USED(e);
+    VALKEYMODULE_NOT_USED(e);
 
-    RedisModuleLoadingProgress *ei = data;
-    char *keyname = (sub == REDISMODULE_SUBEVENT_LOADING_PROGRESS_RDB) ?
+    ValkeyModuleLoadingProgress *ei = data;
+    char *keyname = (sub == VALKEYMODULE_SUBEVENT_LOADING_PROGRESS_RDB) ?
         "loading-progress-rdb" : "loading-progress-aof";
     LogNumericEvent(ctx, keyname, ei->progress);
 }
 
-void shutdownCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
+void shutdownCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
 {
-    REDISMODULE_NOT_USED(e);
-    REDISMODULE_NOT_USED(data);
-    REDISMODULE_NOT_USED(sub);
+    VALKEYMODULE_NOT_USED(e);
+    VALKEYMODULE_NOT_USED(data);
+    VALKEYMODULE_NOT_USED(sub);
 
-    RedisModule_Log(ctx, "warning", "module-event-%s", "shutdown");
+    ValkeyModule_Log(ctx, "warning", "module-event-%s", "shutdown");
 }
 
-void cronLoopCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
+void cronLoopCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
 {
-    REDISMODULE_NOT_USED(e);
-    REDISMODULE_NOT_USED(sub);
+    VALKEYMODULE_NOT_USED(e);
+    VALKEYMODULE_NOT_USED(sub);
 
-    RedisModuleCronLoop *ei = data;
+    ValkeyModuleCronLoop *ei = data;
     LogNumericEvent(ctx, "cron-loop", ei->hz);
 }
 
-void moduleChangeCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
+void moduleChangeCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
 {
-    REDISMODULE_NOT_USED(e);
+    VALKEYMODULE_NOT_USED(e);
 
-    RedisModuleModuleChange *ei = data;
-    char *keyname = (sub == REDISMODULE_SUBEVENT_MODULE_LOADED) ?
+    ValkeyModuleModuleChange *ei = data;
+    char *keyname = (sub == VALKEYMODULE_SUBEVENT_MODULE_LOADED) ?
         "module-loaded" : "module-unloaded";
     LogStringEvent(ctx, keyname, ei->module_name);
 }
 
-void swapDbCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
+void swapDbCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
 {
-    REDISMODULE_NOT_USED(e);
-    REDISMODULE_NOT_USED(sub);
+    VALKEYMODULE_NOT_USED(e);
+    VALKEYMODULE_NOT_USED(sub);
 
-    RedisModuleSwapDbInfo *ei = data;
+    ValkeyModuleSwapDbInfo *ei = data;
     LogNumericEvent(ctx, "swapdb-first", ei->dbnum_first);
     LogNumericEvent(ctx, "swapdb-second", ei->dbnum_second);
 }
 
-void configChangeCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
+void configChangeCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
 {
-    REDISMODULE_NOT_USED(e);
-    if (sub != REDISMODULE_SUBEVENT_CONFIG_CHANGE) {
+    VALKEYMODULE_NOT_USED(e);
+    if (sub != VALKEYMODULE_SUBEVENT_CONFIG_CHANGE) {
         return;
     }
 
-    RedisModuleConfigChangeV1 *ei = data;
+    ValkeyModuleConfigChangeV1 *ei = data;
     LogNumericEvent(ctx, "config-change-count", ei->num_changes);
     LogStringEvent(ctx, "config-change-first", ei->config_names[0]);
 }
 
-void keyInfoCallback(RedisModuleCtx *ctx, RedisModuleEvent e, uint64_t sub, void *data)
+void keyInfoCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
 {
-    REDISMODULE_NOT_USED(e);
+    VALKEYMODULE_NOT_USED(e);
 
-    RedisModuleKeyInfoV1 *ei = data;
-    RedisModuleKey *kp = ei->key;
-    RedisModuleString *key = (RedisModuleString *) RedisModule_GetKeyNameFromModuleKey(kp);
-    const char *keyname = RedisModule_StringPtrLen(key, NULL);
-    RedisModuleString *event_keyname = RedisModule_CreateStringPrintf(ctx, "key-info-%s", keyname);
-    LogStringEvent(ctx, RedisModule_StringPtrLen(event_keyname, NULL), keyname);
-    RedisModule_FreeString(ctx, event_keyname);
+    ValkeyModuleKeyInfoV1 *ei = data;
+    ValkeyModuleKey *kp = ei->key;
+    ValkeyModuleString *key = (ValkeyModuleString *) ValkeyModule_GetKeyNameFromModuleKey(kp);
+    const char *keyname = ValkeyModule_StringPtrLen(key, NULL);
+    ValkeyModuleString *event_keyname = ValkeyModule_CreateStringPrintf(ctx, "key-info-%s", keyname);
+    LogStringEvent(ctx, ValkeyModule_StringPtrLen(event_keyname, NULL), keyname);
+    ValkeyModule_FreeString(ctx, event_keyname);
 
     /* Despite getting a key object from the callback, we also try to re-open it
      * to make sure the callback is called before it is actually removed from the keyspace. */
-    RedisModuleKey *kp_open = RedisModule_OpenKey(ctx, key, REDISMODULE_READ);
-    assert(RedisModule_ValueLength(kp) == RedisModule_ValueLength(kp_open));
-    RedisModule_CloseKey(kp_open);
+    ValkeyModuleKey *kp_open = ValkeyModule_OpenKey(ctx, key, VALKEYMODULE_READ);
+    assert(ValkeyModule_ValueLength(kp) == ValkeyModule_ValueLength(kp_open));
+    ValkeyModule_CloseKey(kp_open);
 
     /* We also try to RM_Call a command that accesses that key, also to make sure it's still in the keyspace. */
     char *size_command = NULL;
-    int key_type = RedisModule_KeyType(kp);
-    if (key_type == REDISMODULE_KEYTYPE_STRING) {
+    int key_type = ValkeyModule_KeyType(kp);
+    if (key_type == VALKEYMODULE_KEYTYPE_STRING) {
         size_command = "STRLEN";
-    } else if (key_type == REDISMODULE_KEYTYPE_LIST) {
+    } else if (key_type == VALKEYMODULE_KEYTYPE_LIST) {
         size_command = "LLEN";
-    } else if (key_type == REDISMODULE_KEYTYPE_HASH) {
+    } else if (key_type == VALKEYMODULE_KEYTYPE_HASH) {
         size_command = "HLEN";
-    } else if (key_type == REDISMODULE_KEYTYPE_SET) {
+    } else if (key_type == VALKEYMODULE_KEYTYPE_SET) {
         size_command = "SCARD";
-    } else if (key_type == REDISMODULE_KEYTYPE_ZSET) {
+    } else if (key_type == VALKEYMODULE_KEYTYPE_ZSET) {
         size_command = "ZCARD";
-    } else if (key_type == REDISMODULE_KEYTYPE_STREAM) {
+    } else if (key_type == VALKEYMODULE_KEYTYPE_STREAM) {
         size_command = "XLEN";
     }
     if (size_command != NULL) {
-        RedisModuleCallReply *reply = RedisModule_Call(ctx, size_command, "s", key);
+        ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, size_command, "s", key);
         assert(reply != NULL);
-        assert(RedisModule_ValueLength(kp) == (size_t) RedisModule_CallReplyInteger(reply));
-        RedisModule_FreeCallReply(reply);
+        assert(ValkeyModule_ValueLength(kp) == (size_t) ValkeyModule_CallReplyInteger(reply));
+        ValkeyModule_FreeCallReply(reply);
     }
 
     /* Now use the key object we got from the callback for various validations. */
-    RedisModuleString *prev = RedisModule_DictGetC(removed_event_log, (void*)keyname, strlen(keyname), NULL);
+    ValkeyModuleString *prev = ValkeyModule_DictGetC(removed_event_log, (void*)keyname, strlen(keyname), NULL);
     /* We keep object length */
-    RedisModuleString *v = RedisModule_CreateStringPrintf(ctx, "%zd", RedisModule_ValueLength(kp));
+    ValkeyModuleString *v = ValkeyModule_CreateStringPrintf(ctx, "%zd", ValkeyModule_ValueLength(kp));
     /* For string type, we keep value instead of length */
-    if (RedisModule_KeyType(kp) == REDISMODULE_KEYTYPE_STRING) {
-        RedisModule_FreeString(ctx, v);
+    if (ValkeyModule_KeyType(kp) == VALKEYMODULE_KEYTYPE_STRING) {
+        ValkeyModule_FreeString(ctx, v);
         size_t len;
-        /* We need to access the string value with RedisModule_StringDMA.
-         * RedisModule_StringDMA may call dbUnshareStringValue to free the origin object,
+        /* We need to access the string value with ValkeyModule_StringDMA.
+         * ValkeyModule_StringDMA may call dbUnshareStringValue to free the origin object,
          * so we also can test it. */
-        char *s = RedisModule_StringDMA(kp, &len, REDISMODULE_READ);
-        v = RedisModule_CreateString(ctx, s, len);
+        char *s = ValkeyModule_StringDMA(kp, &len, VALKEYMODULE_READ);
+        v = ValkeyModule_CreateString(ctx, s, len);
     }
-    RedisModule_DictReplaceC(removed_event_log, (void*)keyname, strlen(keyname), v);
+    ValkeyModule_DictReplaceC(removed_event_log, (void*)keyname, strlen(keyname), v);
     if (prev != NULL) {
-        RedisModule_FreeString(ctx, prev);
+        ValkeyModule_FreeString(ctx, prev);
     }
 
     const char *subevent = "deleted";
-    if (sub == REDISMODULE_SUBEVENT_KEY_EXPIRED) {
+    if (sub == VALKEYMODULE_SUBEVENT_KEY_EXPIRED) {
         subevent = "expired";
-    } else if (sub == REDISMODULE_SUBEVENT_KEY_EVICTED) {
+    } else if (sub == VALKEYMODULE_SUBEVENT_KEY_EVICTED) {
         subevent = "evicted";
-    } else if (sub == REDISMODULE_SUBEVENT_KEY_OVERWRITTEN) {
+    } else if (sub == VALKEYMODULE_SUBEVENT_KEY_OVERWRITTEN) {
         subevent = "overwritten";
     }
-    RedisModule_DictReplaceC(removed_subevent_type, (void*)keyname, strlen(keyname), (void *)subevent);
+    ValkeyModule_DictReplaceC(removed_subevent_type, (void*)keyname, strlen(keyname), (void *)subevent);
 
-    RedisModuleString *prevexpire = RedisModule_DictGetC(removed_expiry_log, (void*)keyname, strlen(keyname), NULL);
-    RedisModuleString *expire = RedisModule_CreateStringPrintf(ctx, "%lld", RedisModule_GetAbsExpire(kp));
-    RedisModule_DictReplaceC(removed_expiry_log, (void*)keyname, strlen(keyname), (void *)expire);
+    ValkeyModuleString *prevexpire = ValkeyModule_DictGetC(removed_expiry_log, (void*)keyname, strlen(keyname), NULL);
+    ValkeyModuleString *expire = ValkeyModule_CreateStringPrintf(ctx, "%lld", ValkeyModule_GetAbsExpire(kp));
+    ValkeyModule_DictReplaceC(removed_expiry_log, (void*)keyname, strlen(keyname), (void *)expire);
     if (prevexpire != NULL) {
-        RedisModule_FreeString(ctx, prevexpire);
+        ValkeyModule_FreeString(ctx, prevexpire);
     }
 }
 
-static int cmdIsKeyRemoved(RedisModuleCtx *ctx, RedisModuleString **argv, int argc){
+static int cmdIsKeyRemoved(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc){
     if(argc != 2){
-        return RedisModule_WrongArity(ctx);
+        return ValkeyModule_WrongArity(ctx);
     }
 
-    const char *key  = RedisModule_StringPtrLen(argv[1], NULL);
+    const char *key  = ValkeyModule_StringPtrLen(argv[1], NULL);
 
-    RedisModuleString *value = RedisModule_DictGetC(removed_event_log, (void*)key, strlen(key), NULL);
+    ValkeyModuleString *value = ValkeyModule_DictGetC(removed_event_log, (void*)key, strlen(key), NULL);
 
     if (value == NULL) {
-        return RedisModule_ReplyWithError(ctx, "ERR Key was not removed");
+        return ValkeyModule_ReplyWithError(ctx, "ERR Key was not removed");
     }
 
-    const char *subevent = RedisModule_DictGetC(removed_subevent_type, (void*)key, strlen(key), NULL);
-    RedisModule_ReplyWithArray(ctx, 2);
-    RedisModule_ReplyWithString(ctx, value);
-    RedisModule_ReplyWithSimpleString(ctx, subevent);
+    const char *subevent = ValkeyModule_DictGetC(removed_subevent_type, (void*)key, strlen(key), NULL);
+    ValkeyModule_ReplyWithArray(ctx, 2);
+    ValkeyModule_ReplyWithString(ctx, value);
+    ValkeyModule_ReplyWithSimpleString(ctx, subevent);
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-static int cmdKeyExpiry(RedisModuleCtx *ctx, RedisModuleString **argv, int argc){
+static int cmdKeyExpiry(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc){
     if(argc != 2){
-        return RedisModule_WrongArity(ctx);
+        return ValkeyModule_WrongArity(ctx);
     }
 
-    const char* key  = RedisModule_StringPtrLen(argv[1], NULL);
-    RedisModuleString *expire = RedisModule_DictGetC(removed_expiry_log, (void*)key, strlen(key), NULL);
+    const char* key  = ValkeyModule_StringPtrLen(argv[1], NULL);
+    ValkeyModuleString *expire = ValkeyModule_DictGetC(removed_expiry_log, (void*)key, strlen(key), NULL);
     if (expire == NULL) {
-        return RedisModule_ReplyWithError(ctx, "ERR Key was not removed");
+        return ValkeyModule_ReplyWithError(ctx, "ERR Key was not removed");
     }
-    RedisModule_ReplyWithString(ctx, expire);
-    return REDISMODULE_OK;
+    ValkeyModule_ReplyWithString(ctx, expire);
+    return VALKEYMODULE_OK;
 }
 
-/* This function must be present on each Redis module. It is used in order to
- * register the commands into the Redis server. */
-int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+/* This function must be present on each module. It is used in order to
+ * register the commands into the server. */
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 #define VerifySubEventSupported(e, s) \
-    if (!RedisModule_IsSubEventSupported(e, s)) { \
-        return REDISMODULE_ERR; \
+    if (!ValkeyModule_IsSubEventSupported(e, s)) { \
+        return VALKEYMODULE_ERR; \
     }
 
-    if (RedisModule_Init(ctx,"testhook",1,REDISMODULE_APIVER_1)
-        == REDISMODULE_ERR) return REDISMODULE_ERR;
+    if (ValkeyModule_Init(ctx,"testhook",1,VALKEYMODULE_APIVER_1)
+        == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
     /* Example on how to check if a server sub event is supported */
-    if (!RedisModule_IsSubEventSupported(RedisModuleEvent_ReplicationRoleChanged, REDISMODULE_EVENT_REPLROLECHANGED_NOW_MASTER)) {
-        return REDISMODULE_ERR;
+    if (!ValkeyModule_IsSubEventSupported(ValkeyModuleEvent_ReplicationRoleChanged, VALKEYMODULE_EVENT_REPLROLECHANGED_NOW_PRIMARY)) {
+        return VALKEYMODULE_ERR;
     }
 
     /* replication related hooks */
-    RedisModule_SubscribeToServerEvent(ctx,
-        RedisModuleEvent_ReplicationRoleChanged, roleChangeCallback);
-    RedisModule_SubscribeToServerEvent(ctx,
-        RedisModuleEvent_ReplicaChange, replicationChangeCallback);
-    RedisModule_SubscribeToServerEvent(ctx,
-        RedisModuleEvent_MasterLinkChange, rasterLinkChangeCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_ReplicationRoleChanged, roleChangeCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_ReplicaChange, replicationChangeCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_PrimaryLinkChange, rasterLinkChangeCallback);
 
     /* persistence related hooks */
-    RedisModule_SubscribeToServerEvent(ctx,
-        RedisModuleEvent_Persistence, persistenceCallback);
-    RedisModule_SubscribeToServerEvent(ctx,
-        RedisModuleEvent_Loading, loadingCallback);
-    RedisModule_SubscribeToServerEvent(ctx,
-        RedisModuleEvent_LoadingProgress, loadingProgressCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_Persistence, persistenceCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_Loading, loadingCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_LoadingProgress, loadingProgressCallback);
 
     /* other hooks */
-    RedisModule_SubscribeToServerEvent(ctx,
-        RedisModuleEvent_ClientChange, clientChangeCallback);
-    RedisModule_SubscribeToServerEvent(ctx,
-        RedisModuleEvent_FlushDB, flushdbCallback);
-    RedisModule_SubscribeToServerEvent(ctx,
-        RedisModuleEvent_Shutdown, shutdownCallback);
-    RedisModule_SubscribeToServerEvent(ctx,
-        RedisModuleEvent_CronLoop, cronLoopCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_ClientChange, clientChangeCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_FlushDB, flushdbCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_Shutdown, shutdownCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_CronLoop, cronLoopCallback);
 
-    RedisModule_SubscribeToServerEvent(ctx,
-        RedisModuleEvent_ModuleChange, moduleChangeCallback);
-    RedisModule_SubscribeToServerEvent(ctx,
-        RedisModuleEvent_SwapDB, swapDbCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_ModuleChange, moduleChangeCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_SwapDB, swapDbCallback);
 
-    RedisModule_SubscribeToServerEvent(ctx,
-        RedisModuleEvent_Config, configChangeCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_Config, configChangeCallback);
 
-    RedisModule_SubscribeToServerEvent(ctx,
-        RedisModuleEvent_Key, keyInfoCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_Key, keyInfoCallback);
 
-    event_log = RedisModule_CreateDict(ctx);
-    removed_event_log = RedisModule_CreateDict(ctx);
-    removed_subevent_type = RedisModule_CreateDict(ctx);
-    removed_expiry_log = RedisModule_CreateDict(ctx);
+    event_log = ValkeyModule_CreateDict(ctx);
+    removed_event_log = ValkeyModule_CreateDict(ctx);
+    removed_subevent_type = ValkeyModule_CreateDict(ctx);
+    removed_expiry_log = ValkeyModule_CreateDict(ctx);
 
-    if (RedisModule_CreateCommand(ctx,"hooks.event_count", cmdEventCount,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"hooks.event_last", cmdEventLast,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"hooks.clear", cmdEventsClear,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"hooks.is_key_removed", cmdIsKeyRemoved,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"hooks.pexpireat", cmdKeyExpiry,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"hooks.event_count", cmdEventCount,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"hooks.event_last", cmdEventLast,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"hooks.clear", cmdEventsClear,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"hooks.is_key_removed", cmdIsKeyRemoved,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"hooks.pexpireat", cmdKeyExpiry,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
     if (argc == 1) {
-        const char *ptr = RedisModule_StringPtrLen(argv[0], NULL);
+        const char *ptr = ValkeyModule_StringPtrLen(argv[0], NULL);
         if (!strcasecmp(ptr, "noload")) {
             /* This is a hint that we return ERR at the last moment of OnLoad. */
-            RedisModule_FreeDict(ctx, event_log);
-            RedisModule_FreeDict(ctx, removed_event_log);
-            RedisModule_FreeDict(ctx, removed_subevent_type);
-            RedisModule_FreeDict(ctx, removed_expiry_log);
-            return REDISMODULE_ERR;
+            ValkeyModule_FreeDict(ctx, event_log);
+            ValkeyModule_FreeDict(ctx, removed_event_log);
+            ValkeyModule_FreeDict(ctx, removed_subevent_type);
+            ValkeyModule_FreeDict(ctx, removed_expiry_log);
+            return VALKEYMODULE_ERR;
         }
     }
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int RedisModule_OnUnload(RedisModuleCtx *ctx) {
+int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
     clearEvents(ctx);
-    RedisModule_FreeDict(ctx, event_log);
+    ValkeyModule_FreeDict(ctx, event_log);
     event_log = NULL;
 
-    RedisModuleDictIter *iter = RedisModule_DictIteratorStartC(removed_event_log, "^", NULL, 0);
+    ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStartC(removed_event_log, "^", NULL, 0);
     char* key;
     size_t keyLen;
-    RedisModuleString* val;
-    while((key = RedisModule_DictNextC(iter, &keyLen, (void**)&val))){
-        RedisModule_FreeString(ctx, val);
+    ValkeyModuleString* val;
+    while((key = ValkeyModule_DictNextC(iter, &keyLen, (void**)&val))){
+        ValkeyModule_FreeString(ctx, val);
     }
-    RedisModule_FreeDict(ctx, removed_event_log);
-    RedisModule_DictIteratorStop(iter);
+    ValkeyModule_FreeDict(ctx, removed_event_log);
+    ValkeyModule_DictIteratorStop(iter);
     removed_event_log = NULL;
 
-    RedisModule_FreeDict(ctx, removed_subevent_type);
+    ValkeyModule_FreeDict(ctx, removed_subevent_type);
     removed_subevent_type = NULL;
 
-    iter = RedisModule_DictIteratorStartC(removed_expiry_log, "^", NULL, 0);
-    while((key = RedisModule_DictNextC(iter, &keyLen, (void**)&val))){
-        RedisModule_FreeString(ctx, val);
+    iter = ValkeyModule_DictIteratorStartC(removed_expiry_log, "^", NULL, 0);
+    while((key = ValkeyModule_DictNextC(iter, &keyLen, (void**)&val))){
+        ValkeyModule_FreeString(ctx, val);
     }
-    RedisModule_FreeDict(ctx, removed_expiry_log);
-    RedisModule_DictIteratorStop(iter);
+    ValkeyModule_FreeDict(ctx, removed_expiry_log);
+    ValkeyModule_DictIteratorStop(iter);
     removed_expiry_log = NULL;
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 

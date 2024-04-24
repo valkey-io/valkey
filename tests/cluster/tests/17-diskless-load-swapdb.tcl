@@ -42,7 +42,7 @@ test "Main db not affected when fail to diskless load" {
 
     # Save an RDB and kill the replica
     $replica save
-    kill_instance redis $replica_id
+    kill_instance valkey $replica_id
 
     # Delete the key from master
     $master del $slot0_key
@@ -51,7 +51,7 @@ test "Main db not affected when fail to diskless load" {
     # backlog size is very small, and dumping rdb will cost several seconds.
     set num 10000
     set value [string repeat A 1024]
-    set rd [redis_deferring_client redis $master_id]
+    set rd [valkey_deferring_client valkey $master_id]
     for {set j 0} {$j < $num} {incr j} {
         $rd set $j $value
     }
@@ -60,7 +60,7 @@ test "Main db not affected when fail to diskless load" {
     }
 
     # Start the replica again
-    restart_instance redis $replica_id
+    restart_instance valkey $replica_id
     $replica READONLY
 
     # Start full sync, wait till after db started loading in background
@@ -71,7 +71,7 @@ test "Main db not affected when fail to diskless load" {
     }
 
     # Kill master, abort full sync
-    kill_instance redis $master_id
+    kill_instance valkey $master_id
 
     # Start full sync, wait till the replica detects the disconnection
     wait_for_condition 500 10 {

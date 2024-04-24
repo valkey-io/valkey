@@ -44,13 +44,13 @@ test "client do not break when cluster slot" {
 }
 
 test "client can handle keys with hash tag" {
-    set cluster [redis_cluster 127.0.0.1:[get_instance_attrib redis 0 port]]
+    set cluster [redis_cluster 127.0.0.1:[get_instance_attrib valkey 0 port]]
     $cluster set foo{tag} bar
     $cluster close
 }
 
 test "slot migration is valid from primary to another primary" {
-    set cluster [redis_cluster 127.0.0.1:[get_instance_attrib redis 0 port]]
+    set cluster [redis_cluster 127.0.0.1:[get_instance_attrib valkey 0 port]]
     set key order1
     set slot [$cluster cluster keyslot $key]
     array set nodefrom [$cluster masternode_for_slot $slot]
@@ -61,7 +61,7 @@ test "slot migration is valid from primary to another primary" {
 }
 
 test "slot migration is invalid from primary to replica" {
-    set cluster [redis_cluster 127.0.0.1:[get_instance_attrib redis 0 port]]
+    set cluster [redis_cluster 127.0.0.1:[get_instance_attrib valkey 0 port]]
     set key order1
     set slot [$cluster cluster keyslot $key]
     array set nodefrom [$cluster masternode_for_slot $slot]
@@ -117,9 +117,9 @@ proc count_bound_slots {n} {
 if {$::tls} {
     test {CLUSTER SLOTS from non-TLS client in TLS cluster} {
         set slots_tls [R 0 cluster slots]
-        set host [get_instance_attrib redis 0 host]
-        set plaintext_port [get_instance_attrib redis 0 plaintext-port]
-        set client_plain [redis $host $plaintext_port 0 0]
+        set host [get_instance_attrib valkey 0 host]
+        set plaintext_port [get_instance_attrib valkey 0 plaintext-port]
+        set client_plain [valkey $host $plaintext_port 0 0]
         set slots_plain [$client_plain cluster slots]
         $client_plain close
         # Compare the ports in the first row

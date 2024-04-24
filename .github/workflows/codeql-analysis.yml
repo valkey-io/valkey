@@ -6,11 +6,16 @@ on:
     # run weekly new vulnerability was added to the database
     - cron: '0 0 * * 0'
 
+permissions:
+  contents: read
+
 jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
     if: github.event_name != 'schedule' || github.repository == 'valkey-io/valkey'
+    permissions:
+      security-events: write
 
     strategy:
       fail-fast: false

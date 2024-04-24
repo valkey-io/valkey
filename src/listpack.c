@@ -165,7 +165,7 @@ int lpSafeToAdd(unsigned char* lp, size_t add) {
  *
  * -----------------------------------------------------------------------------
  *
- * Credits: this function was adapted from the Redis source code, file
+ * Credits: this function was adapted from the Redis OSS source code, file
  * "utils.c", function string2ll(), and is copyright:
  *
  * Copyright(C) 2011, Pieter Noordhuis
@@ -885,7 +885,7 @@ unsigned char *lpInsert(unsigned char *lp, unsigned char *elestr, unsigned char 
         } else if (elestr) {
             lpEncodeString(dst,elestr,size);
         } else {
-            redis_unreachable();
+            valkey_unreachable();
         }
         dst += enclen;
         memcpy(dst,backlen,backlen_size);
@@ -1817,7 +1817,7 @@ int listpackTest(int argc, char *argv[], int flags) {
     unsigned char *lp, *p, *vstr;
     int64_t vlen;
     unsigned char intbuf[LP_INTBUF_SIZE];
-    int accurate = (flags & REDIS_TEST_ACCURATE);
+    int accurate = (flags & TEST_ACCURATE);
 
     TEST("Create int list") {
         lp = createIntList();

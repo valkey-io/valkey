@@ -46,9 +46,9 @@ test "Crash the majority of Sentinels to prevent failovers for this unit" {
 test "SDOWN is triggered by non-responding but not crashed instance" {
     ensure_master_up
     set master_addr [S $::alive_sentinel SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
-    set master_id [get_instance_id_by_port redis [lindex $master_addr 1]]
+    set master_id [get_instance_id_by_port valkey [lindex $master_addr 1]]
 
-    set pid [get_instance_attrib redis $master_id pid]
+    set pid [get_instance_attrib valkey $master_id pid]
     pause_process $pid
     ensure_master_down
     resume_process $pid
@@ -58,9 +58,9 @@ test "SDOWN is triggered by non-responding but not crashed instance" {
 test "SDOWN is triggered by crashed instance" {
     lassign [S $::alive_sentinel SENTINEL GET-MASTER-ADDR-BY-NAME mymaster] host port
     ensure_master_up
-    kill_instance redis 0
+    kill_instance valkey 0
     ensure_master_down
-    restart_instance redis 0
+    restart_instance valkey 0
     ensure_master_up
 }
 

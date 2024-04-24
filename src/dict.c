@@ -50,7 +50,7 @@
 
 /* Using dictSetResizeEnabled() we make possible to disable
  * resizing and rehashing of the hash table as needed. This is very important
- * for Redis, as we use copy-on-write and don't want to move too much memory
+ * for us, as we use copy-on-write and don't want to move too much memory
  * around when there is a child performing saving operations.
  *
  * Note that even when dict_can_resize is set to DICT_RESIZE_AVOID, not all
@@ -1817,7 +1817,7 @@ int dictTest(int argc, char **argv, int flags) {
     dict *dict = dictCreate(&BenchmarkDictType);
     long count = 0;
     unsigned long new_dict_size, current_dict_used, remain_keys;
-    int accurate = (flags & REDIS_TEST_ACCURATE);
+    int accurate = (flags & TEST_ACCURATE);
 
     if (argc == 4) {
         if (accurate) {

@@ -6,17 +6,17 @@ test "Create a 3 nodes cluster" {
     cluster_create_with_continuous_slots 3 3
 }
 
-set cluster [redis_cluster 127.0.0.1:[get_instance_attrib redis 0 port]]
+set cluster [redis_cluster 127.0.0.1:[get_instance_attrib valkey 0 port]]
 test "Pub/Sub shard basics" {
 
     set slot [$cluster cluster keyslot "channel.0"]
     array set publishnode [$cluster masternode_for_slot $slot]
     array set notshardnode [$cluster masternode_notfor_slot $slot]
 
-    set publishclient [redis_client_by_addr $publishnode(host) $publishnode(port)]
-    set subscribeclient [redis_deferring_client_by_addr $publishnode(host) $publishnode(port)]
-    set subscribeclient2 [redis_deferring_client_by_addr $publishnode(host) $publishnode(port)]
-    set anotherclient [redis_deferring_client_by_addr $notshardnode(host) $notshardnode(port)]
+    set publishclient [valkey_client_by_addr $publishnode(host) $publishnode(port)]
+    set subscribeclient [valkey_deferring_client_by_addr $publishnode(host) $publishnode(port)]
+    set subscribeclient2 [valkey_deferring_client_by_addr $publishnode(host) $publishnode(port)]
+    set anotherclient [valkey_deferring_client_by_addr $notshardnode(host) $notshardnode(port)]
 
     $subscribeclient ssubscribe channel.0
     $subscribeclient read
@@ -57,8 +57,8 @@ test "client can subscribe to multiple shard channels across different slots in 
 }
 
 test "sunsubscribe without specifying any channel would unsubscribe all shard channels subscribed" {
-    set publishclient [redis_client_by_addr $publishnode(host) $publishnode(port)]
-    set subscribeclient [redis_deferring_client_by_addr $publishnode(host) $publishnode(port)]
+    set publishclient [valkey_client_by_addr $publishnode(host) $publishnode(port)]
+    set subscribeclient [valkey_deferring_client_by_addr $publishnode(host) $publishnode(port)]
 
     set sub_res [ssubscribe $subscribeclient [list "\{channel.0\}1" "\{channel.0\}2" "\{channel.0\}3"]]
     assert_equal [list 1 2 3] $sub_res
@@ -77,10 +77,10 @@ test "Verify Pub/Sub and Pub/Sub shard no overlap" {
     array set publishnode [$cluster masternode_for_slot $slot]
     array set notshardnode [$cluster masternode_notfor_slot $slot]
 
-    set publishshardclient [redis_client_by_addr $publishnode(host) $publishnode(port)]
-    set publishclient [redis_deferring_client_by_addr $publishnode(host) $publishnode(port)]
-    set subscribeshardclient [redis_deferring_client_by_addr $publishnode(host) $publishnode(port)]
-    set subscribeclient [redis_deferring_client_by_addr $publishnode(host) $publishnode(port)]
+    set publishshardclient [valkey_client_by_addr $publishnode(host) $publishnode(port)]
+    set publishclient [valkey_deferring_client_by_addr $publishnode(host) $publishnode(port)]
+    set subscribeshardclient [valkey_deferring_client_by_addr $publishnode(host) $publishnode(port)]
+    set subscribeclient [valkey_deferring_client_by_addr $publishnode(host) $publishnode(port)]
 
     $subscribeshardclient deferred 1
     $subscribeshardclient ssubscribe channel.0
@@ -109,10 +109,10 @@ test "Verify Pub/Sub and Pub/Sub shard no overlap" {
 }
 
 test "PUBSUB channels/shardchannels" {
-    set subscribeclient [redis_deferring_client_by_addr $publishnode(host) $publishnode(port)]
-    set subscribeclient2 [redis_deferring_client_by_addr $publishnode(host) $publishnode(port)]
-    set subscribeclient3 [redis_deferring_client_by_addr $publishnode(host) $publishnode(port)]
-    set publishclient [redis_client_by_addr  $publishnode(host) $publishnode(port)]
+    set subscribeclient [valkey_deferring_client_by_addr $publishnode(host) $publishnode(port)]
+    set subscribeclient2 [valkey_deferring_client_by_addr $publishnode(host) $publishnode(port)]
+    set subscribeclient3 [valkey_deferring_client_by_addr $publishnode(host) $publishnode(port)]
+    set publishclient [valkey_client_by_addr  $publishnode(host) $publishnode(port)]
 
     ssubscribe $subscribeclient [list "\{channel.0\}1"]
     ssubscribe $subscribeclient2 [list "\{channel.0\}2"]

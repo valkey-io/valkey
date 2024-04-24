@@ -38,7 +38,7 @@ test "Instance #5 synced with the master" {
 set current_epoch [CI 1 cluster_current_epoch]
 
 test "Killing one master node" {
-    kill_instance redis 0
+    kill_instance valkey 0
 }
 
 test "Wait for failover" {
@@ -62,7 +62,7 @@ test "Instance #5 is now a master" {
 }
 
 test "Killing the new master #5" {
-    kill_instance redis 5
+    kill_instance valkey 5
 }
 
 test "Cluster should be down now" {
@@ -70,7 +70,7 @@ test "Cluster should be down now" {
 }
 
 test "Restarting the old master node" {
-    restart_instance redis 0
+    restart_instance valkey 0
 }
 
 test "Instance #0 gets converted into a slave" {
@@ -82,7 +82,7 @@ test "Instance #0 gets converted into a slave" {
 }
 
 test "Restarting the new master node" {
-    restart_instance redis 5
+    restart_instance valkey 5
 }
 
 test "Cluster is up again" {

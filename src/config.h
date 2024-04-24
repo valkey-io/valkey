@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __CONFIG_H
-#define __CONFIG_H
+#ifndef CONFIG_H
+#define CONFIG_H
 
 #ifdef __APPLE__
 #include <fcntl.h> // for fcntl(fd, F_FULLFSYNC)
@@ -44,13 +44,13 @@
 #define MAC_OS_10_6_DETECTED
 #endif
 
-/* Define redis_fstat to fstat or fstat64() */
+/* Define valkey_fstat to fstat or fstat64() */
 #if defined(__APPLE__) && !defined(MAC_OS_10_6_DETECTED)
-#define redis_fstat fstat64
-#define redis_stat stat64
+#define valkey_fstat fstat64
+#define valkey_stat stat64
 #else
-#define redis_fstat fstat
-#define redis_stat stat
+#define valkey_fstat fstat
+#define valkey_stat stat
 #endif
 
 /* Test for proc filesystem */
@@ -114,13 +114,13 @@
 #endif
 #endif
 
-/* Define redis_fsync to fdatasync() in Linux and fsync() for all the rest */
+/* Define valkey_fsync to fdatasync() in Linux and fsync() for all the rest */
 #if defined(__linux__)
-#define redis_fsync(fd) fdatasync(fd)
+#define valkey_fsync(fd) fdatasync(fd)
 #elif defined(__APPLE__)
-#define redis_fsync(fd) fcntl(fd, F_FULLFSYNC)
+#define valkey_fsync(fd) fcntl(fd, F_FULLFSYNC)
 #else
-#define redis_fsync(fd) fsync(fd)
+#define valkey_fsync(fd) fsync(fd)
 #endif
 
 #if defined(__FreeBSD__)
@@ -138,9 +138,9 @@
 #endif
 
 #if __GNUC__ >= 5 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 5)
-#define redis_unreachable __builtin_unreachable
+#define valkey_unreachable __builtin_unreachable
 #else
-#define redis_unreachable abort
+#define valkey_unreachable abort
 #endif
 
 #if __GNUC__ >= 3
@@ -153,11 +153,11 @@
 
 #if defined(__has_attribute)
 #if __has_attribute(no_sanitize)
-#define REDIS_NO_SANITIZE(sanitizer) __attribute__((no_sanitize(sanitizer)))
+#define VALKEY_NO_SANITIZE(sanitizer) __attribute__((no_sanitize(sanitizer)))
 #endif
 #endif
-#if !defined(REDIS_NO_SANITIZE)
-#define REDIS_NO_SANITIZE(sanitizer)
+#if !defined(VALKEY_NO_SANITIZE)
+#define VALKEY_NO_SANITIZE(sanitizer)
 #endif
 
 /* Define rdb_fsync_range to sync_file_range() on Linux, otherwise we use
@@ -225,7 +225,7 @@ void setproctitle(const char *fmt, ...);
 
 /* Sometimes after including an OS-specific header that defines the
  * endianness we end with __BYTE_ORDER but not with BYTE_ORDER that is what
- * the Redis code uses. In this case let's define everything without the
+ * the server code uses. In this case let's define everything without the
  * underscores. */
 #ifndef BYTE_ORDER
 #ifdef __BYTE_ORDER
@@ -285,26 +285,26 @@ void setproctitle(const char *fmt, ...);
 #define USE_ALIGNED_ACCESS
 #endif
 
-/* Define for redis_set_thread_title */
+/* Define for valkey_set_thread_title */
 #ifdef __linux__
-#define redis_set_thread_title(name) pthread_setname_np(pthread_self(), name)
+#define valkey_set_thread_title(name) pthread_setname_np(pthread_self(), name)
 #else
 #if (defined __FreeBSD__ || defined __OpenBSD__)
 #include <pthread_np.h>
-#define redis_set_thread_title(name) pthread_set_name_np(pthread_self(), name)
+#define valkey_set_thread_title(name) pthread_set_name_np(pthread_self(), name)
 #elif defined __NetBSD__
 #include <pthread.h>
-#define redis_set_thread_title(name) pthread_setname_np(pthread_self(), "%s", name)
+#define valkey_set_thread_title(name) pthread_setname_np(pthread_self(), "%s", name)
 #elif defined __HAIKU__
 #include <kernel/OS.h>
-#define redis_set_thread_title(name) rename_thread(find_thread(0), name)
+#define valkey_set_thread_title(name) rename_thread(find_thread(0), name)
 #else
 #if (defined __APPLE__ && defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 1070)
 int pthread_setname_np(const char *name);
 #include <pthread.h>
-#define redis_set_thread_title(name) pthread_setname_np(name)
+#define valkey_set_thread_title(name) pthread_setname_np(name)
 #else
-#define redis_set_thread_title(name)
+#define valkey_set_thread_title(name)
 #endif
 #endif
 #endif

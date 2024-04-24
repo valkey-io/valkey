@@ -1,5 +1,5 @@
 /* The latency monitor allows to easily observe the sources of latency
- * in a Redis instance using the LATENCY command. Different latency
+ * in an instance using the LATENCY command. Different latency
  * sources are monitored, like disk I/O, execution of commands, fork
  * system call, and so forth.
  *
@@ -198,7 +198,7 @@ void analyzeLatencyForEvent(char *event, struct latencyStats *ls) {
     if (ls->samples) ls->mad = sum / ls->samples;
 }
 
-/* Create a human readable report of latency events for this Redis instance. */
+/* Create a human readable report of latency events for this instance. */
 sds createLatencyReport(void) {
     sds report = sdsempty();
     int advise_better_vm = 0;       /* Better virtual machines. */

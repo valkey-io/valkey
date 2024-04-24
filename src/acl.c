@@ -168,7 +168,7 @@ typedef struct {
      * execute this command.
      *
      * If the bit for a given command is NOT set and the command has
-     * allowed first-args, Redis will also check allowed_firstargs in order to
+     * allowed first-args, the server will also check allowed_firstargs in order to
      * understand if the command can be executed. */
     uint64_t allowed_commands[USER_COMMAND_BITS_COUNT/64];
     /* allowed_firstargs is used by ACL rules to block access to a command unless a
@@ -502,7 +502,7 @@ void ACLFreeUserAndKillClients(user *u) {
         if (c->user == u) {
             /* We'll free the connection asynchronously, so
              * in theory to set a different user is not needed.
-             * However if there are bugs in Redis, soon or later
+             * However if there are bugs in the server, soon or later
              * this may result in some security hole: it's much
              * more defensive to set the default user and put
              * it in non authenticated mode. */
@@ -1023,7 +1023,7 @@ cleanup:
  * +@<category> Allow the execution of all the commands in such category
  *              with valid categories are like @admin, @set, @sortedset, ...
  *              and so forth, see the full list in the server.c file where
- *              the Redis command table is described and defined.
+ *              the command table is described and defined.
  *              The special category @all means all the commands, but currently
  *              present in the server, and that will be loaded in the future
  *              via modules.
@@ -2535,7 +2535,7 @@ int ACLSaveToFile(const char *filename) {
         }
         offset += written_bytes;
     }
-    if (redis_fsync(fd) == -1) {
+    if (valkey_fsync(fd) == -1) {
         serverLog(LL_WARNING,"Syncing ACL file for ACL SAVE: %s",
             strerror(errno));
         goto cleanup;
@@ -2572,11 +2572,11 @@ cleanup:
 void ACLLoadUsersAtStartup(void) {
     if (server.acl_filename[0] != '\0' && listLength(UsersToLoad) != 0) {
         serverLog(LL_WARNING,
-            "Configuring Redis with users defined in redis.conf and at "
+            "Configuring %s with users defined in valkey.conf and at "
             "the same setting an ACL file path is invalid. This setup "
             "is very likely to lead to configuration errors and security "
             "holes, please define either an ACL file or declare users "
-            "directly in your redis.conf, but not both.");
+            "directly in your valkey.conf, but not both.", SERVER_TITLE);
         exit(1);
     }
 
@@ -2590,7 +2590,7 @@ void ACLLoadUsersAtStartup(void) {
         sds errors = ACLLoadFromFile(server.acl_filename);
         if (errors) {
             serverLog(LL_WARNING,
-                "Aborting Redis startup because of ACL errors: %s", errors);
+                "Aborting %s startup because of ACL errors: %s", SERVER_TITLE, errors);
             sdsfree(errors);
             exit(1);
         }
@@ -2999,7 +2999,7 @@ void aclCommand(client *c) {
     } else if (server.acl_filename[0] == '\0' &&
                (!strcasecmp(sub,"load") || !strcasecmp(sub,"save")))
     {
-        addReplyError(c,"This Redis instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (assuming you have a Redis configuration file set) in order to store users in the Redis configuration.");
+        addReplyError(c,"This instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (assuming you have a configuration file set) in order to store users in the configuration.");
         return;
     } else if (!strcasecmp(sub,"load") && c->argc == 2) {
         sds errors = ACLLoadFromFile(server.acl_filename);
@@ -3204,7 +3204,7 @@ void addReplyCommandCategories(client *c, struct serverCommand *cmd) {
 }
 
 /* AUTH <password>
- * AUTH <username> <password> (Redis >= 6.0 form)
+ * AUTH <username> <password> (Redis OSS >= 6.0 form)
  *
  * When the user is omitted it means that we are trying to authenticate
  * against the default user. */

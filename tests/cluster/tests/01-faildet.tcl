@@ -11,8 +11,8 @@ test "Cluster should start ok" {
 }
 
 test "Killing two slave nodes" {
-    kill_instance redis 5
-    kill_instance redis 6
+    kill_instance valkey 5
+    kill_instance valkey 6
 }
 
 test "Cluster should be still up" {
@@ -20,7 +20,7 @@ test "Cluster should be still up" {
 }
 
 test "Killing one master node" {
-    kill_instance redis 0
+    kill_instance valkey 0
 }
 
 # Note: the only slave of instance 0 is already down so no
@@ -30,7 +30,7 @@ test "Cluster should be down now" {
 }
 
 test "Restarting master node" {
-    restart_instance redis 0
+    restart_instance valkey 0
 }
 
 test "Cluster should be up again" {

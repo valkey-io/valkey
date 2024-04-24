@@ -1,6 +1,6 @@
 proc test_memory_efficiency {range} {
     r flushall
-    set rd [redis_deferring_client]
+    set rd [valkey_deferring_client]
     set base_mem [s used_memory]
     set written 0
     for {set j 0} {$j < 10000} {incr j} {
@@ -193,7 +193,7 @@ run_solo {defrag} {
 
             # Populate memory with interleaving script-key pattern of same size
             set dummy_script "--[string repeat x 400]\nreturn "
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             for {set j 0} {$j < $n} {incr j} {
                 set val "$dummy_script[format "%06d" $j]"
                 $rd script load $val
@@ -286,7 +286,7 @@ run_solo {defrag} {
             r xreadgroup GROUP mygroup Alice COUNT 1 STREAMS stream >
 
             # create big keys with 10k items
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             for {set j 0} {$j < 10000} {incr j} {
                 $rd hset bighash $j [concat "asdfasdfasdf" $j]
                 $rd lpush biglist [concat "asdfasdfasdf" $j]
@@ -418,8 +418,8 @@ run_solo {defrag} {
             # Populate memory with interleaving pubsub-key pattern of same size
             set n 50000
             set dummy_channel "[string repeat x 400]"
-            set rd [redis_deferring_client]
-            set rd_pubsub [redis_deferring_client]
+            set rd [valkey_deferring_client]
+            set rd_pubsub [valkey_deferring_client]
             for {set j 0} {$j < $n} {incr j} {
                 set channel_name "$dummy_channel[format "%06d" $j]"
                 $rd_pubsub subscribe $channel_name
@@ -518,7 +518,7 @@ run_solo {defrag} {
             r config set list-max-ziplist-size 5 ;# list of 500k items will have 100k quicklist nodes
 
             # create big keys with 10k items
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
 
             set expected_frag 1.7
             # add a mass of list nodes to two lists (allocations are interlaced)
@@ -637,7 +637,7 @@ run_solo {defrag} {
                 }
 
                 # add a mass of keys with 600 bytes values, fill the bin of 640 bytes which has 32 regs per slab.
-                set rd [redis_deferring_client]
+                set rd [valkey_deferring_client]
                 set keys 640000
                 for {set j 0} {$j < $keys} {incr j} {
                     $rd setrange $j 600 x

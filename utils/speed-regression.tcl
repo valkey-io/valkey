@@ -26,7 +26,7 @@ proc run-tests branches {
             continue
         }
 
-        # Start the Redis server
+        # Start the server
         puts "  starting the server... [exec ./redis-server -v]"
         set pids [exec echo "port $::port\nloglevel warning\n" | ./redis-server - > /dev/null 2> /dev/null &]
         puts "  pids: $pids"
@@ -83,7 +83,7 @@ proc combine-results {results} {
 }
 
 proc main {} {
-    # Note: the first branch is only used in order to get the redis-benchmark
+    # Note: the first branch is only used in order to get the valkey-benchmark
     # executable. Tests are performed starting from the second branch.
     set branches {
         slowset 2.2.0 2.4.0 unstable slowset

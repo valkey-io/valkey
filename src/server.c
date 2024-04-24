@@ -1492,7 +1492,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* Adjust the I/O threads according to the realtime workloads. */
-    adjustThreadedIOIfNeeded();
+    stopThreadedIOIfNeeded();
 
     /* Resize tracking keys table if needed. This is also done at every
      * command execution, but we want to be sure that if the last command

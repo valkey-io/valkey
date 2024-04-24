@@ -4266,7 +4266,7 @@ void *IOThreadMain(void *myid) {
 
 /* Initialize the data structures needed for threaded I/O. */
 void initThreadedIO(void) {
-     /* We start from main thread, no additional io-threads created yet. */
+    /* We start from the main thread, no additional io-threads created yet. */
     server.io_threads_active_num = 1;
 
     /* Indicate that io-threads are currently idle */
@@ -4318,28 +4318,7 @@ void killIOThreads(void) {
     }
 }
 
-/* This function will active additional num I/O threads. */
-static inline void activateThreadedIO(int num) {
-    serverAssert(num > 0);
-    serverAssert(server.io_threads_active_num + num <= server.io_threads_num);
-    for (int i = 0; i < num; i++)
-        pthread_mutex_unlock(&io_threads_mutex[server.io_threads_active_num + i]);
-    server.io_threads_active_num += num;
-}
-
-/* This function will inactive additional num I/O threads. */
-static inline void deactivateThreadedIO(int num) {
-    serverAssert(num > 0);
-    serverAssert(server.io_threads_active_num - num >= 1);
-    /* We may have still clients with pending reads when this function
-     * is called: handle them before stopping the threads. */
-    handleClientsWithPendingReadsUsingThreads();
-    for (int i = 0; i < num; i++)
-        pthread_mutex_lock(&io_threads_mutex[server.io_threads_active_num -1 - i]);
-    server.io_threads_active_num -= num;
-}
-
-/* This function will dynamically adjust the I/O threads number according to
+/* This function dynamically adjusts the I/O thread number according to
  * real workloads in runtime, currently we track the latest x rounds of
  * pending writes as a measure of clients we need to handle in parallel,
  * however the I/O threading is disabled globally for reads as well if
@@ -4349,39 +4328,37 @@ static inline void deactivateThreadedIO(int num) {
  * are enough active threads, otherwise 1 is returned and the I/O threads
  * could be possibly stopped (if already active) as a side effect. */
 #define IO_THREAD_BATCH_NUM 2
-int adjustThreadedIOIfNeeded(void) {
+#define SMOOTH_FACTOR 0.8
+int stopThreadedIOIfNeeded(void) {
     /* Return ASAP if I/O threads are disabled (single threaded mode). */
     if (server.io_threads_num == 1) return 1;
 
-    int pending = listLength(server.clients_pending_write);
-    server.clients_pending_write_avg_num = (int)(server.clients_pending_write_avg_num * 0.8 +
-        pending * 0.2);
+    server.clients_pending_write_avg_num = (int)(
+        server.clients_pending_write_avg_num * SMOOTH_FACTOR +
+        listLength(server.clients_pending_write) * (1 - SMOOTH_FACTOR));
 
-    /* I/O threads number except the main thread. */
-    int ioThreadsNow = server.io_threads_active_num - 1;
-    int ioThreadsReq = server.clients_pending_write_avg_num / IO_THREAD_BATCH_NUM;
-    int ioThreadsCap = server.io_threads_num - server.io_threads_active_num;
+    /* Target io-thread number should be in range of [1, io_threads_num]. */
+    int targetNum = min(server.io_threads_num,
+        max(1, server.clients_pending_write_avg_num / IO_THREAD_BATCH_NUM));
 
-    if (ioThreadsReq < ioThreadsNow) {
-        /* The requested I/O threads is less than existing active I/O threads,
-         * we need to deactivate some I/O threads to make CPU more efficiency. */
-        if (server.io_threads_active_num > 1) {
-            if (ioThreadsNow > ioThreadsReq) {
-                int stopIOThreadsNum = ioThreadsNow - ioThreadsReq;
-                deactivateThreadedIO(stopIOThreadsNum);
-            }
-            if (server.io_threads_active_num == 1) return 1;
-        }
-    } else if (ioThreadsReq > ioThreadsNow) {
-        /* We need more I/O threads to increase the parallelism. */
-        if (server.io_threads_active_num < server.io_threads_num) {
-            int startIOThreadsNum = min(ioThreadsReq - ioThreadsNow, ioThreadsCap);
-            activateThreadedIO(startIOThreadsNum);
+    if (server.io_threads_active_num < targetNum) {
+        /* Increasing active threads. */
+        for (int i = server.io_threads_active_num; i < targetNum; ++i) {
+            pthread_mutex_unlock(&io_threads_mutex[i]);
+            server.io_threads_active_num++;
         }
     } else {
-        if (server.io_threads_active_num == 1) return 1;
+        /* We may have still clients with pending reads when this function
+         * is called: handle them before stopping the threads. */
+        handleClientsWithPendingReadsUsingThreads();
+        /* Decreasing active threads. */
+        for (int i = server.io_threads_active_num; i > targetNum; --i) {
+            pthread_mutex_lock(&io_threads_mutex[i - 1]);
+            server.io_threads_active_num--;
+        }
     }
-    return 0;
+
+    return server.io_threads_active_num == 1;
 }
 
 /* This function achieves thread safety using a fan-out -> fan-in paradigm:
@@ -4396,7 +4373,7 @@ int handleClientsWithPendingWritesUsingThreads(void) {
 
     /* If I/O threads are disabled or we have few clients to serve, don't
      * use I/O threads, but the boring synchronous code. */
-    if (server.io_threads_num == 1 || adjustThreadedIOIfNeeded()) {
+    if (server.io_threads_num == 1 || stopThreadedIOIfNeeded()) {
         return handleClientsWithPendingWrites();
     }
 

@@ -21,7 +21,7 @@ test "Cluster is up" {
     assert_cluster_state ok
 }
 
-set cluster [redis_cluster 127.0.0.1:[get_instance_attrib valkey 0 port]]
+set cluster [valkey_cluster 127.0.0.1:[get_instance_attrib valkey 0 port]]
 catch {unset nodefrom}
 catch {unset nodeto}
 

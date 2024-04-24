@@ -444,7 +444,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         r acl deluser clitest
     }
     
-    proc test_redis_cli_rdb_dump {functions_only} {
+    proc test_valkey_cli_rdb_dump {functions_only} {
         r flushdb
         r function flush
 
@@ -480,12 +480,12 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
     test "Dumping an RDB - functions only: $functions_only" {
         # Disk-based master
         assert_match "OK" [r config set repl-diskless-sync no]
-        test_redis_cli_rdb_dump $functions_only
+        test_valkey_cli_rdb_dump $functions_only
 
         # Disk-less master
         assert_match "OK" [r config set repl-diskless-sync yes]
         assert_match "OK" [r config set repl-diskless-sync-delay 0]
-        test_redis_cli_rdb_dump $functions_only
+        test_valkey_cli_rdb_dump $functions_only
     } {} {needs:repl needs:debug}
 
     } ;# foreach functions_only
@@ -504,12 +504,12 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         assert_equal {key:2} [run_cli --scan --quoted-pattern {"*:\x32"}]
     }
 
-    proc test_redis_cli_repl {} {
+    proc test_valkey_cli_repl {} {
         set fd [open_cli "--replica"]
         wait_for_condition 500 100 {
             [string match {*slave0:*state=online*} [r info]]
         } else {
-            fail "redis-cli --replica did not connect"
+            fail "valkey-cli --replica did not connect"
         }
 
         for {set i 0} {$i < 100} {incr i} {
@@ -519,7 +519,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         wait_for_condition 500 100 {
             [string match {*test-value-99*} [read_cli $fd]]
         } else {
-            fail "redis-cli --replica didn't read commands"
+            fail "valkey-cli --replica didn't read commands"
         }
 
         fconfigure $fd -blocking true
@@ -531,12 +531,12 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
     test "Connecting as a replica" {
         # Disk-based master
         assert_match "OK" [r config set repl-diskless-sync no]
-        test_redis_cli_repl
+        test_valkey_cli_repl
 
         # Disk-less master
         assert_match "OK" [r config set repl-diskless-sync yes]
         assert_match "OK" [r config set repl-diskless-sync-delay 0]
-        test_redis_cli_repl
+        test_valkey_cli_repl
     } {} {needs:repl}
 
     test "Piping raw protocol" {

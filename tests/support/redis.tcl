@@ -72,13 +72,13 @@ proc valkey {{server 127.0.0.1} {port 6379} {defer 0} {tls 0} {tlsoptions {}} {r
     set ::valkey::curr_argv($id) 0
     set ::valkey::testing_resp3($id) 0
     set ::valkey::tls($id) $tls
-    ::valkey::redis_reset_state $id
-    interp alias {} ::valkey::redisHandle$id {} ::valkey::__dispatch__ $id
+    ::valkey::valkey_reset_state $id
+    interp alias {} ::valkey::valkeyHandle$id {} ::valkey::__dispatch__ $id
 }
 
 # On recent versions of tcl-tls/OpenSSL, reading from a dropped connection
 # results with an error we need to catch and mimic the old behavior.
-proc ::valkey::redis_safe_read {fd len} {
+proc ::valkey::valkey_safe_read {fd len} {
     if {$len == -1} {
         set err [catch {set val [read $fd]} msg]
     } else {
@@ -93,7 +93,7 @@ proc ::valkey::redis_safe_read {fd len} {
     error $msg
 }
 
-proc ::valkey::redis_safe_gets {fd} {
+proc ::valkey::valkey_safe_gets {fd} {
     if {[catch {set val [gets $fd]} msg]} {
         if {[string match "*connection abort*" $msg]} {
             return {}
@@ -162,7 +162,7 @@ proc ::valkey::__dispatch__raw__ {id method argv} {
         foreach a $argv {
             append cmd "$[string length $a]\r\n$a\r\n"
         }
-        ::valkey::redis_write $fd $cmd
+        ::valkey::valkey_write $fd $cmd
         if {[catch {flush $fd}]} {
             catch {close $fd}
             set ::valkey::fd($id) {}
@@ -172,13 +172,13 @@ proc ::valkey::__dispatch__raw__ {id method argv} {
         set ::valkey::curr_argv($id) [concat $method $argv]
         if {!$deferred} {
             if {$blocking} {
-                ::valkey::redis_read_reply $id $fd
+                ::valkey::valkey_read_reply $id $fd
             } else {
                 # Every well formed reply read will pop an element from this
                 # list and use it as a callback. So pipelining is supported
                 # in non blocking mode.
                 lappend ::valkey::callback($id) $callback
-                fileevent $fd readable [list ::valkey::redis_readable $fd $id]
+                fileevent $fd readable [list ::valkey::valkey_readable $fd $id]
             }
         }
     } else {
@@ -196,15 +196,15 @@ proc ::valkey::__method__reconnect {id fd val} {
 }
 
 proc ::valkey::__method__read {id fd} {
-    ::valkey::redis_read_reply $id $fd
+    ::valkey::valkey_read_reply $id $fd
 }
 
 proc ::valkey::__method__rawread {id fd {len -1}} {
-    return [redis_safe_read $fd $len]
+    return [valkey_safe_read $fd $len]
 }
 
 proc ::valkey::__method__write {id fd buf} {
-    ::valkey::redis_write $fd $buf
+    ::valkey::valkey_write $fd $buf
 }
 
 proc ::valkey::__method__flush {id fd} {
@@ -226,7 +226,7 @@ proc ::valkey::__method__close {id fd} {
     catch {unset ::valkey::callback($id)}
     catch {unset ::valkey::curr_argv($id)}
     catch {unset ::valkey::testing_resp3($id)}
-    catch {interp alias {} ::valkey::redisHandle$id {}}
+    catch {interp alias {} ::valkey::valkeyHandle$id {}}
 }
 
 proc ::valkey::__method__channel {id fd} {
@@ -249,37 +249,37 @@ proc ::valkey::__method__attributes {id fd} {
     set _ $::valkey::attributes($id)
 }
 
-proc ::valkey::redis_write {fd buf} {
+proc ::valkey::valkey_write {fd buf} {
     puts -nonewline $fd $buf
 }
 
-proc ::valkey::redis_writenl {fd buf} {
-    redis_write $fd $buf
-    redis_write $fd "\r\n"
+proc ::valkey::valkey_writenl {fd buf} {
+    valkey_write $fd $buf
+    valkey_write $fd "\r\n"
     flush $fd
 }
 
-proc ::valkey::redis_readnl {fd len} {
-    set buf [redis_safe_read $fd $len]
-    redis_safe_read $fd 2 ; # discard CR LF
+proc ::valkey::valkey_readnl {fd len} {
+    set buf [valkey_safe_read $fd $len]
+    valkey_safe_read $fd 2 ; # discard CR LF
     return $buf
 }
 
 proc ::valkey::valkey_bulk_read {fd} {
-    set count [redis_read_line $fd]
+    set count [valkey_read_line $fd]
     if {$count == -1} return {}
-    set buf [redis_readnl $fd $count]
+    set buf [valkey_readnl $fd $count]
     return $buf
 }
 
 proc ::valkey::redis_multi_bulk_read {id fd} {
-    set count [redis_read_line $fd]
+    set count [valkey_read_line $fd]
     if {$count == -1} return {}
     set l {}
     set err {}
     for {set i 0} {$i < $count} {incr i} {
         if {[catch {
-            lappend l [redis_read_reply_logic $id $fd]
+            lappend l [valkey_read_reply_logic $id $fd]
         } e] && $err eq {}} {
             set err $e
         }
@@ -288,15 +288,15 @@ proc ::valkey::redis_multi_bulk_read {id fd} {
     return $l
 }
 
-proc ::valkey::redis_read_map {id fd} {
-    set count [redis_read_line $fd]
+proc ::valkey::valkey_read_map {id fd} {
+    set count [valkey_read_line $fd]
     if {$count == -1} return {}
     set d {}
     set err {}
     for {set i 0} {$i < $count} {incr i} {
         if {[catch {
-            set k [redis_read_reply_logic $id $fd] ; # key
-            set v [redis_read_reply_logic $id $fd] ; # value
+            set k [valkey_read_reply_logic $id $fd] ; # key
+            set v [valkey_read_reply_logic $id $fd] ; # value
             dict set d $k $v
         } e] && $err eq {}} {
             set err $e
@@ -306,24 +306,24 @@ proc ::valkey::redis_read_map {id fd} {
     return $d
 }
 
-proc ::valkey::redis_read_line fd {
-    string trim [redis_safe_gets $fd]
+proc ::valkey::valkey_read_line fd {
+    string trim [valkey_safe_gets $fd]
 }
 
-proc ::valkey::redis_read_null fd {
-    redis_safe_gets $fd
+proc ::valkey::valkey_read_null fd {
+    valkey_safe_gets $fd
     return {}
 }
 
-proc ::valkey::redis_read_bool fd {
-    set v [redis_read_line $fd]
+proc ::valkey::valkey_read_bool fd {
+    set v [valkey_read_line $fd]
     if {$v == "t"} {return 1}
     if {$v == "f"} {return 0}
     return -code error "Bad protocol, '$v' as bool type"
 }
 
-proc ::valkey::redis_read_double {id fd} {
-    set v [redis_read_line $fd]
+proc ::valkey::valkey_read_double {id fd} {
+    set v [valkey_read_line $fd]
     # unlike many other DTs, there is a textual difference between double and a string with the same value,
     # so we need to transform to double if we are testing RESP3 (i.e. some tests check that a
     # double reply is "1.0" and not "1")
@@ -334,35 +334,35 @@ proc ::valkey::redis_read_double {id fd} {
     }
 }
 
-proc ::valkey::redis_read_verbatim_str fd {
+proc ::valkey::valkey_read_verbatim_str fd {
     set v [valkey_bulk_read $fd]
     # strip the first 4 chars ("txt:")
     return [string range $v 4 end]
 }
 
-proc ::valkey::redis_read_reply_logic {id fd} {
+proc ::valkey::valkey_read_reply_logic {id fd} {
     if {$::valkey::readraw($id)} {
-        return [redis_read_line $fd]
+        return [valkey_read_line $fd]
     }
 
     while {1} {
-        set type [redis_safe_read $fd 1]
+        set type [valkey_safe_read $fd 1]
         switch -exact -- $type {
-            _ {return [redis_read_null $fd]}
+            _ {return [valkey_read_null $fd]}
             : -
             ( -
-            + {return [redis_read_line $fd]}
-            , {return [redis_read_double $id $fd]}
-            # {return [redis_read_bool $fd]}
-            = {return [redis_read_verbatim_str $fd]}
-            - {return -code error [redis_read_line $fd]}
+            + {return [valkey_read_line $fd]}
+            , {return [valkey_read_double $id $fd]}
+            # {return [valkey_read_bool $fd]}
+            = {return [valkey_read_verbatim_str $fd]}
+            - {return -code error [valkey_read_line $fd]}
             $ {return [valkey_bulk_read $fd]}
             > -
             ~ -
             * {return [redis_multi_bulk_read $id $fd]}
-            % {return [redis_read_map $id $fd]}
+            % {return [valkey_read_map $id $fd]}
             | {
-                set attrib [redis_read_map $id $fd]
+                set attrib [valkey_read_map $id $fd]
                 set ::valkey::attributes($id) $attrib
                 continue
             }
@@ -378,27 +378,27 @@ proc ::valkey::redis_read_reply_logic {id fd} {
     }
 }
 
-proc ::valkey::redis_read_reply {id fd} {
-    set response [redis_read_reply_logic $id $fd]
+proc ::valkey::valkey_read_reply {id fd} {
+    set response [valkey_read_reply_logic $id $fd]
     ::response_transformers::transform_response_if_needed $id $::valkey::curr_argv($id) $response
 }
 
-proc ::valkey::redis_reset_state id {
+proc ::valkey::valkey_reset_state id {
     set ::valkey::state($id) [dict create buf {} mbulk -1 bulk -1 reply {}]
     set ::valkey::statestack($id) {}
 }
 
-proc ::valkey::redis_call_callback {id type reply} {
+proc ::valkey::valkey_call_callback {id type reply} {
     set cb [lindex $::valkey::callback($id) 0]
     set ::valkey::callback($id) [lrange $::valkey::callback($id) 1 end]
-    uplevel #0 $cb [list ::valkey::redisHandle$id $type $reply]
-    ::valkey::redis_reset_state $id
+    uplevel #0 $cb [list ::valkey::valkeyHandle$id $type $reply]
+    ::valkey::valkey_reset_state $id
 }
 
 # Read a reply in non-blocking mode.
-proc ::valkey::redis_readable {fd id} {
+proc ::valkey::valkey_readable {fd id} {
     if {[eof $fd]} {
-        redis_call_callback $id eof {}
+        valkey_call_callback $id eof {}
         ::valkey::__method__close $id $fd
         return
     }
@@ -407,9 +407,9 @@ proc ::valkey::redis_readable {fd id} {
         if {$line eq {}} return ;# No complete line available, return
         switch -exact -- [string index $line 0] {
             : -
-            + {redis_call_callback $id reply [string range $line 1 end-1]}
-            - {redis_call_callback $id err [string range $line 1 end-1]}
-            ( {redis_call_callback $id reply [string range $line 1 end-1]}
+            + {valkey_call_callback $id reply [string range $line 1 end-1]}
+            - {valkey_call_callback $id err [string range $line 1 end-1]}
+            ( {valkey_call_callback $id reply [string range $line 1 end-1]}
             $ {
                 dict set ::valkey::state($id) bulk \
                     [expr [string range $line 1 end-1]+2]
@@ -417,18 +417,18 @@ proc ::valkey::redis_readable {fd id} {
                     # We got a $-1, hack the state to play well with this.
                     dict set ::valkey::state($id) bulk 2
                     dict set ::valkey::state($id) buf "\r\n"
-                    ::valkey::redis_readable $fd $id
+                    ::valkey::valkey_readable $fd $id
                 }
             }
             * {
                 dict set ::valkey::state($id) mbulk [string range $line 1 end-1]
                 # Handle *-1
                 if {[dict get $::valkey::state($id) mbulk] == -1} {
-                    redis_call_callback $id reply {}
+                    valkey_call_callback $id reply {}
                 }
             }
             default {
-                redis_call_callback $id err \
+                valkey_call_callback $id err \
                     "Bad protocol, $type as reply type byte"
             }
         }
@@ -443,7 +443,7 @@ proc ::valkey::redis_readable {fd id} {
         if {[string length [dict get $::valkey::state($id) buf]] ==
             [dict get $::valkey::state($id) bulk]} {
             if {[dict get $::valkey::state($id) mbulk] == -1} {
-                redis_call_callback $id reply \
+                valkey_call_callback $id reply \
                     [string range [dict get $::valkey::state($id) buf] 0 end-2]
             } else {
                 dict with ::valkey::state($id) {
@@ -452,7 +452,7 @@ proc ::valkey::redis_readable {fd id} {
                     set bulk -1
                 }
                 if {[dict get $::valkey::state($id) mbulk] == 0} {
-                    redis_call_callback $id reply \
+                    valkey_call_callback $id reply \
                         [dict get $::valkey::state($id) reply]
                 }
             }

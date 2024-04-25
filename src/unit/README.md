@@ -30,4 +30,4 @@ make unit-test
 ./valkey-unit-tests <file-name | test-name | file-name:test-name> --flags
 ```
 
-If no arguments are specificied, by default all tests are executed.
+If no arguments are specified, by default all tests are executed.

@@ -371,7 +371,7 @@ QUIET_CC = @printf '    %b %b\n' $(CCCOLOR)CC$(ENDCOLOR) $(SRCCOLOR)$@$(ENDCOLOR
 QUIET_GEN = @printf '    %b %b\n' $(CCCOLOR)GEN$(ENDCOLOR) $(SRCCOLOR)$@$(ENDCOLOR) 1>&2;
 QUIET_LINK = @printf '    %b %b\n' $(LINKCOLOR)LINK$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR) 1>&2;
 QUIET_INSTALL = @printf '    %b %b\n' $(LINKCOLOR)INSTALL$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR) 1>&2;
-QUIET_AR = @printf '    %b %b\n' $(CCCOLOR)ARHIVE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR) 1>&2;
+QUIET_AR = @printf '    %b %b\n' $(CCCOLOR)ARCHIVE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR) 1>&2;
 endif
 
 ifneq (, $(findstring LOG_REQ_RES, $(SERVER_CFLAGS)))

@@ -527,7 +527,7 @@ test: $(SERVER_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHM
 	@(cd ..; ./runtest)
 
 test-unit: $(ENGINE_UNIT_TESTS)
-	./$(ENGINE_UNIT_TESTS all)
+	./$(ENGINE_UNIT_TESTS)
 
 test-modules: $(SERVER_NAME)
 	@(cd ..; ./runtest-moduleapi)

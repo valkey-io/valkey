@@ -50,14 +50,6 @@
 
 #define UNUSED(V) ((void) V)
 
-/* Scheme specific constants. */
-#define SCHEME_PREFIX_DELIM "://"
-#define SCHEME_VALKEY "valkey://"
-#define TLS_SCHEME_VALKEY "valkeys://"
-/* We need to support redis:// and rediss:// too for backward compatibility. */
-#define SCHEME_PRE_VALKEY "redis://"
-#define TLS_SCHEME_PRE_VALKEY "rediss://"
-
 char *serverGitSHA1(void);
 char *serverGitDirty(void);
 
@@ -326,26 +318,33 @@ void parseRedisUri(const char *uri, const char* tool_name, cliConnInfo *connInfo
     UNUSED(tls_flag);
 #endif
 
+    const char *scheme = "valkey://";
+    const char *tlsscheme = "valkeys://";
+    /* We need to support redis:// and rediss:// too for compatibility. */
+    const char *redisScheme = "redis://";
+    const char *redisTlsscheme = "rediss://";
     const char *curr = uri;
     const char *end = uri + strlen(uri);
     const char *userinfo, *username, *port, *host, *path;
 
     /* URI must start with a valid scheme. */
-    if (!strncasecmp(TLS_SCHEME_VALKEY, curr, strlen(TLS_SCHEME_VALKEY)) ||
-        !strncasecmp(TLS_SCHEME_PRE_VALKEY, curr, strlen(TLS_SCHEME_PRE_VALKEY))) {
+    if (!strncasecmp(tlsscheme, curr, strlen(tlsscheme)) ||
+        !strncasecmp(redisTlsscheme, curr, strlen(redisTlsscheme))) {
 #ifdef USE_OPENSSL
         *tls_flag = 1;
-        char *del = strstr(curr, SCHEME_PREFIX_DELIM);
-        curr += (del - curr) + strlen(SCHEME_PREFIX_DELIM);
+        char *del = strstr(curr, "://");
+        curr += (del - curr) + 3;
 #else
-        char *curr_scheme = strtok(curr, SCHEME_PREFIX_DELIM);
+        char *copy = strdup(curr);
+        char *curr_scheme = strtok(copy, "://");
         fprintf(stderr,"%s:// is only supported when %s is compiled with OpenSSL\n", curr_scheme, tool_name);
+        free(copy);
         exit(1);
 #endif
-    } else if (!strncasecmp(SCHEME_VALKEY, curr, strlen(SCHEME_VALKEY)) ||
-               !strncasecmp(SCHEME_PRE_VALKEY, curr, strlen(SCHEME_PRE_VALKEY))) {
-        char *del = strstr(curr, SCHEME_PREFIX_DELIM);
-        curr += (del - curr) + strlen(SCHEME_PREFIX_DELIM);
+    } else if (!strncasecmp(scheme, curr, strlen(scheme)) ||
+               !strncasecmp(redisScheme, curr, strlen(redisScheme))) {
+        char *del = strstr(curr, "://");
+        curr += (del - curr) + 3;
     } else {
         fprintf(stderr,"Invalid URI scheme\n");
         exit(1);

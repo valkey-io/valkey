@@ -1,23 +1,21 @@
+/*
+ * Copyright Valkey contributors.
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ */
+
 #include <strings.h>
 #include <stdio.h>
 #include "test_files.h"
 #include "test_help.h"
 
-int __failed_tests = 0;
-int __test_num = 0;
-
-struct unitTest *getTestByName(const char *name) {
-    int numtests = sizeof(unitTestSuite)/sizeof(struct unitTest);
-    for (int j = 0; j < numtests; j++) {
-        for (int i = 0; unitTestSuite[j].tests[i].name != NULL; i++) {
-            if (!strcasecmp(name,unitTestSuite[j].tests[i].name)) {
-                return &unitTestSuite[j].tests[i];
-            }
-        }
-    }
-    return NULL;
+/* We override the default assertion mechanism, so that it prints out info. */
+void _serverAssert(const char *estr, const char *file, int line) {
+    printf("[" KRED "serverAssert - %s:%d" KRESET "] - %s\n", file, line, estr);
+    exit(1);
 }
 
+/* Run the tests defined by the test suite. */
 int runTestSuite(struct unitTestSuite *test, int argc, char **argv, int flags) {
     int test_num = 0;
     int failed_tests = 0;
@@ -59,11 +57,4 @@ int main(int argc, char **argv) {
             numtests-failed_num, failed_num);
 
     return failed_num == 0 ? 0 : 1;
-}
-
-void _serverAssert(const char *estr, const char *file, int line) {
-    printf("Hi");
-    UNUSED(estr);
-    UNUSED(file);
-    UNUSED(line);
 }

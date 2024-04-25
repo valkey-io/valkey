@@ -27,6 +27,10 @@ jobs:
         make commands.def
         dirty=$(git diff)
         if [[ ! -z  $dirty ]]; then echo $dirty; exit 1; fi
+    - name: unit tests
+      run: |
+        make valkey-unit-tests
+        ./src/valkey-unit-tests
 
   test-sanitizer-address:
     runs-on: ubuntu-latest

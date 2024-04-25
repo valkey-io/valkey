@@ -36,8 +36,9 @@ typedef struct unitTest {
         # Write the headers for the functions
         for file, test_suit in test_suites.items():
             for test in test_suit:
-                output.write('extern {};\n'.format(test[1]))
-
+                output.write('{};\n'.format(test[1]))
+        output.write("\n")
+        
         # Create test suite lists
         for file, test_suit in test_suites.items():
             output.write('unitTest __{}[] = {{'.format(file.replace('.c', '_c')))

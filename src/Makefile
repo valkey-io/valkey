@@ -371,6 +371,7 @@ QUIET_CC = @printf '    %b %b\n' $(CCCOLOR)CC$(ENDCOLOR) $(SRCCOLOR)$@$(ENDCOLOR
 QUIET_GEN = @printf '    %b %b\n' $(CCCOLOR)GEN$(ENDCOLOR) $(SRCCOLOR)$@$(ENDCOLOR) 1>&2;
 QUIET_LINK = @printf '    %b %b\n' $(LINKCOLOR)LINK$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR) 1>&2;
 QUIET_INSTALL = @printf '    %b %b\n' $(LINKCOLOR)INSTALL$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR) 1>&2;
+QUIET_AR = @printf '    %b %b\n' $(CCCOLOR)ARHIVE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR) 1>&2;
 endif
 
 ifneq (, $(findstring LOG_REQ_RES, $(SERVER_CFLAGS)))
@@ -443,17 +444,14 @@ endif
 
 # valkey-server
 $(SERVER_NAME): $(ENGINE_SERVER_OBJ)
-	rm -f $@
 	$(SERVER_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
 
 # Valkey static library, used to compile against for unit testing
 $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
-	rm -f $@
 	$(SERVER_AR) rcs $@ $^
 
 # valkey-unit-tests
 $(ENGINE_UNIT_TESTS): $(ENGINE_LIB_NAME) $(ENGINE_TEST_OBJ)
-	rm -f $@
 	$(SERVER_LD) -o $@ $^ ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
 
 # valkey-sentinel

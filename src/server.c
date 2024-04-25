@@ -6894,12 +6894,10 @@ struct serverTest {
 } serverTests[] = {
     {"ziplist", ziplistTest},
     {"quicklist", quicklistTest},
-    {"intset", intsetTest},
     {"zipmap", zipmapTest},
     {"sha1test", sha1Test},
     {"util", utilTest},
     {"endianconv", endianconvTest},
-    {"crc64", crc64Test},
     {"zmalloc", zmalloc_test},
     {"sds", sdsTest},
     {"dict", dictTest},

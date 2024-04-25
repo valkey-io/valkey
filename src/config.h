@@ -99,9 +99,9 @@
 
 /* Test for accept4() */
 #if defined(__linux__) || \
+    defined(__FreeBSD__) || \
     defined(OpenBSD5_7) || \
     (defined(__DragonFly__) && __DragonFly_version >= 400305) || \
-    (defined(__FreeBSD__) && (__FreeBSD__ >= 10 || __FreeBSD_version >= 1000000)) || \
     (defined(__NetBSD__) && (defined(NetBSD8_0) || __NetBSD_Version__ >= 800000000))
 #define HAVE_ACCEPT4 1
 #endif
@@ -320,7 +320,7 @@ void setcpuaffinity(const char *cpulist);
 #endif
 
 /* Test for posix_fadvise() */
-#if defined(__linux__) || __FreeBSD__ >= 10
+#if defined(__linux__) || defined(__FreeBSD__)
 #define HAVE_FADVISE
 #endif
 

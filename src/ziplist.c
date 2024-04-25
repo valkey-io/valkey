@@ -1845,7 +1845,7 @@ static size_t strEntryBytesLarge(size_t slen) {
     return slen + zipStorePrevEntryLength(NULL, ZIP_BIG_PREVLEN) + zipStoreEntryEncoding(NULL, 0, slen);
 }
 
-/* ./redis-server test ziplist <randomseed> */
+/* ./valkey-server test ziplist <randomseed> */
 int ziplistTest(int argc, char **argv, int flags) {
     int accurate = (flags & TEST_ACCURATE);
     unsigned char *zl, *p;

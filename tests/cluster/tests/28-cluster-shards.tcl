@@ -204,7 +204,7 @@ test "Regression test for a crash when calling SHARDS during handshake" {
     set id [R 19 CLUSTER MYID]
     R 19 CLUSTER RESET HARD
     for {set i 0} {$i < 19} {incr i} {
-    	# If node has not already beeen forgotten, forget it
+    	# If node has not already been forgotten, forget it
         if { [string length [get_node_by_id $i $id]] > 0 } {
             R $i CLUSTER FORGET $id
     	}

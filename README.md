@@ -54,15 +54,6 @@ installed):
     % ./utils/gen-test-certs.sh
     % ./runtest --tls
 
-To build and and run internal server tests (otherwise Valkey will complain
-about missing "test" configuration):
-
-    % make distclean && make SEVER_TEST=yes
-    % src/valkey-server test [all|crc64|dict|...]
-
-Which is also required to test a range of CRC64 cutoffs for your CPU:
-    % src/valkey-server test crc64 --crc 10000000 
-
 
 Fixing build problems with dependencies or cached build options
 ---------

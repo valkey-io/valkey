@@ -204,7 +204,10 @@ test "Regression test for a crash when calling SHARDS during handshake" {
     set id [R 19 CLUSTER MYID]
     R 19 CLUSTER RESET HARD
     for {set i 0} {$i < 19} {incr i} {
-        R $i CLUSTER FORGET $id
+    	# If node has not already beeen forgotten, forget it
+        if { [string length [get_node_by_id $i $id]] > 0 } {
+            R $i CLUSTER FORGET $id
+    	}
     }
     R 19 cluster meet 127.0.0.1 [get_instance_attrib valkey 0 port]
     # This should line would previously crash, since all the outbound

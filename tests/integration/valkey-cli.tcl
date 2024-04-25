@@ -375,7 +375,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
             [catch {close [socket "127.0.0.1" $port1]}] == 0 && \
             [catch {close [socket "127.0.0.1" $port2]}] == 0
         } else {
-            fail "Failed to start fake Redis nodes"
+            fail "Failed to start fake Valkey nodes"
         }
         # Run the cli
         assert_equal "OK" [run_cli_host_port_db "127.0.0.1" $port1 0 -c SET foo bar]

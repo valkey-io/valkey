@@ -28,6 +28,7 @@
 
 #include "crc64.h"
 #include "crcspeed.h"
+#include "serverassert.h"
 static uint64_t crc64_table[8][256] = {{0}};
 
 #define POLY UINT64_C(0xad93d23594c935a9)
@@ -75,7 +76,7 @@ static inline uint_fast64_t crc_reflect(uint_fast64_t data, size_t data_len) {
      * 16-30x 64-bit operations, no comparisons (16 for native byteswap, 30 for pure C)
      */
 
-    ASSERT(data_len <= 64);
+    assert(data_len <= 64);
     /* swap odd and even bits */
     data = ((data >> 1) & 0x5555555555555555ULL) | ((data & 0x5555555555555555ULL) << 1);
     /* swap consecutive pairs */

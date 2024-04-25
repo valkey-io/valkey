@@ -19,7 +19,7 @@
 #     }
 # }
 #
-# set r [redis]
+# set r [valkey]
 # $r blocking 0
 # $r get fo [list handlePong]
 #

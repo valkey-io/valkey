@@ -18,7 +18,7 @@ proc 02_test_slaves_replication {} {
                     ([RI $id master_port] == $master_port) &&
                     ([RI $id master_link_status] eq {up})
                 } else {
-                    fail "Redis slave $id is replicating from wrong master"
+                    fail "Valkey slave $id is replicating from wrong master"
                 }
             }
         }

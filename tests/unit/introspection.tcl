@@ -1,8 +1,8 @@
 start_server {tags {"introspection"}} {
     test "PING" {
         assert_equal {PONG} [r ping]
-        assert_equal {redis} [r ping redis]
-        assert_error {*wrong number of arguments for 'ping' command} {r ping hello redis}
+        assert_equal {valkey} [r ping valkey]
+        assert_error {*wrong number of arguments for 'ping' command} {r ping hello valkey}
     }
 
     test {CLIENT LIST} {
@@ -739,7 +739,7 @@ start_server {tags {"introspection"}} {
         catch {exec src/valkey-server --shutdown-on-sigint "now force" --shutdown-on-sigterm} err
         assert_match {*'shutdown-on-sigterm'*argument(s) must be one of the following*} $err
 
-        # Something like `redis-server --some-config --config-value1 --config-value2 --loglevel debug` would break,
+        # Something like `valkey-server --some-config --config-value1 --config-value2 --loglevel debug` would break,
         # because if you want to pass a value to a config starting with `--`, it can only be a single value.
         catch {exec src/valkey-server --replicaof 127.0.0.1 abc} err
         assert_match {*'replicaof "127.0.0.1" "abc"'*Invalid master port*} $err

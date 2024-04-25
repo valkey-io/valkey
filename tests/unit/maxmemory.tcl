@@ -225,7 +225,7 @@ start_server {tags {"maxmemory external:skip"}} {
             }
             # If we add the same number of keys already added again and
             # the policy is allkeys-* we should still be under the limit.
-            # Otherwise we should see an error reported by Redis.
+            # Otherwise we should see an error reported by Server.
             set err 0
             for {set j 0} {$j < $numkeys} {incr j} {
                 if {[catch {r set [randomKey] x} e]} {

@@ -381,17 +381,17 @@ static int anetSetReuseAddr(char *err, int fd) {
     return ANET_OK;
 }
 
+/* In general, SOCK_CLOEXEC won't have noticeable effect
+ * except for cases which really need this flag.
+ * Otherwise, it is just a flag that is nice to have.
+ * Its absence shouldn't affect a common socket's functionality.
+ */
 #define ANET_SOCKET_CLOEXEC 1
 #define ANET_SOCKET_NONBLOCK 2
 #define ANET_SOCKET_REUSEADDR 4
 static int anetCreateSocket(char *err, int domain, int type, int protocol, int flags) {
     int s;
 
-    /* In general, SOCK_CLOEXEC won't have noticeable effect
-     * except for cases which really need this flag.
-     * Otherwise, it is just a flag that is nice to have.
-     * Its absence shouldn't affect a common socket's functionality.
-     */
 #ifdef SOCK_CLOEXEC
     if (flags & ANET_SOCKET_CLOEXEC) {
       type |= SOCK_CLOEXEC;
@@ -421,8 +421,6 @@ static int anetCreateSocket(char *err, int domain, int type, int protocol, int f
         return ANET_ERR;
     }
 
-    /* Make sure connection-intensive things like the benchmark tool
-     * will be able to close/open sockets a zillion of times */
     if (flags & ANET_SOCKET_REUSEADDR && anetSetReuseAddr(err,s) == ANET_ERR) {
         close(s);
         return ANET_ERR;
@@ -453,7 +451,11 @@ static int anetTcpGenericConnect(char *err, const char *addr, int port,
     for (p = servinfo; p != NULL; p = p->ai_next) {
         /* Try to create the socket and to connect it.
          * If we fail in the socket() call, or on connect(), we retry with
-         * the next entry in servinfo. */
+         * the next entry in servinfo.
+         *
+         * Make sure connection-intensive things like the benchmark tool
+         * will be able to close/open sockets a zillion of times.
+         */
         int sockflags = ANET_SOCKET_CLOEXEC | ANET_SOCKET_REUSEADDR;
         if (flags & ANET_CONNECT_NONBLOCK) sockflags |= ANET_SOCKET_NONBLOCK;
         if ((s = anetCreateSocket(err,p->ai_family,p->ai_socktype,p->ai_protocol,sockflags)) == ANET_ERR)

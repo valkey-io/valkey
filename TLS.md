@@ -37,12 +37,14 @@ To manually run a Valkey server with TLS mode (assuming `gen-test-certs.sh` was
 invoked so sample certificates/keys are available):
 
 For TLS built-in mode:
+
     ./src/valkey-server --tls-port 6379 --port 0 \
         --tls-cert-file ./tests/tls/valkey.crt \
         --tls-key-file ./tests/tls/valkey.key \
         --tls-ca-cert-file ./tests/tls/ca.crt
 
 For TLS module mode:
+
     ./src/valkey-server --tls-port 6379 --port 0 \
         --tls-cert-file ./tests/tls/valkey.crt \
         --tls-key-file ./tests/tls/valkey.key \

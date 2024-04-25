@@ -12,7 +12,7 @@ See [GOVERNANCE.md](GOVERNANCE.md) that explains the function of this file.
 | Madelyn Olson       | [madolson](https://github.com/madolson)         | Amazon      |
 | Ping Xie            | [pingxie](https://github.com/pingxie)           | Google      |
 | Zhao Zhao           | [soloestoy](https://github.com/soloestoy)       | Alibaba     |
-| Viktor Zuiderkwast  | [zuiderkwast](https://github.com/zuiderkwast)   | Ericsson    |
+| Viktor Söderqvist  | [zuiderkwast](https://github.com/zuiderkwast)   | Ericsson    |
 
 
 ### Former Maintainers

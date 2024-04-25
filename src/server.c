@@ -7146,15 +7146,13 @@ int main(int argc, char **argv) {
     else if (strstr(exec_name,"valkey-check-aof") != NULL)
         redis_check_aof_main(argc,argv);
     
-    /* If enable USE_REDIS_SYMLINKS, valkey may install symlinks like 
+    /* valkey may install symlinks like
      * redis-server -> valkey-server, redis-check-rdb -> valkey-check-rdb,
      * redis-check-aof -> valkey-check-aof, etc. */
-#ifdef USE_REDIS_SYMLINKS
     if (strstr(exec_name,"redis-check-rdb") != NULL)
         redis_check_rdb_main(argc, argv, NULL);
     else if (strstr(exec_name,"redis-check-aof") != NULL)
         redis_check_aof_main(argc,argv);
-#endif
 
     if (argc >= 2) {
         j = 1; /* First option to parse in argv[] */

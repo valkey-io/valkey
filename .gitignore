@@ -1,5 +1,6 @@
 .*.swp
 *.o
+*.a
 *.xo
 *.so
 *.d
@@ -12,6 +13,7 @@ dump.rdb
 *-cli
 *-sentinel
 *-server
+*-unit-tests
 doc-tools
 release
 misc/*
@@ -40,3 +42,8 @@ Makefile.dep
 .ccls-cache/*
 compile_commands.json
 redis.code-workspace
+.cache
+.cscope*
+.swp
+nodes.conf
+tests/cluster/tmp/*

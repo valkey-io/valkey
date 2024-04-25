@@ -328,26 +328,23 @@ void parseRedisUri(const char *uri, const char* tool_name, cliConnInfo *connInfo
     const char *userinfo, *username, *port, *host, *path;
 
     /* URI must start with a valid scheme. */
-    if (!strncasecmp(tlsscheme, curr, strlen(tlsscheme))) {
+    if (!strncasecmp(tlsscheme, curr, strlen(tlsscheme)) ||
+        !strncasecmp(redisTlsscheme, curr, strlen(redisTlsscheme))) {
 #ifdef USE_OPENSSL
         *tls_flag = 1;
-        curr += strlen(tlsscheme);
+        char *del = strstr(curr, "://");
+        curr += (del - curr) + 3;
 #else
-        fprintf(stderr,"valkeys:// and rediss:// are only supported when %s is compiled with OpenSSL\n", tool_name);
+        char *copy = strdup(curr);
+        char *curr_scheme = strtok(copy, "://");
+        fprintf(stderr,"%s:// is only supported when %s is compiled with OpenSSL\n", curr_scheme, tool_name);
+        free(copy);
         exit(1);
 #endif
-    } else if (!strncasecmp(redisTlsscheme, curr, strlen(redisTlsscheme))) {
-#ifdef USE_OPENSSL
-        *tls_flag = 1;
-        curr += strlen(redisTlsscheme);
-#else
-        fprintf(stderr,"valkeys:// and rediss:// are only supported when %s is compiled with OpenSSL\n", tool_name);
-        exit(1);
-#endif
-    } else if (!strncasecmp(scheme, curr, strlen(scheme))) {
-        curr += strlen(scheme);
-    } else if (!strncasecmp(redisScheme, curr, strlen(redisScheme))) {
-        curr += strlen(redisScheme);
+    } else if (!strncasecmp(scheme, curr, strlen(scheme)) ||
+               !strncasecmp(redisScheme, curr, strlen(redisScheme))) {
+        char *del = strstr(curr, "://");
+        curr += (del - curr) + 3;
     } else {
         fprintf(stderr,"Invalid URI scheme\n");
         exit(1);

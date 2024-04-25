@@ -466,7 +466,7 @@ start_server {tags {"other external:skip"}} {
 
 start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
     r config set dynamic-hz no hz 500
-    test "Redis can trigger resizing" {
+    test "Server can trigger resizing" {
         r flushall
         # hashslot(foo) is 12182
         for {set j 1} {$j <= 128} {incr j} {
@@ -496,7 +496,7 @@ start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
         }
     } {} {needs:debug}
 
-    test "Redis can rewind and trigger smaller slot resizing" {
+    test "Server can rewind and trigger smaller slot resizing" {
         # hashslot(foo) is 12182
         # hashslot(alice) is 749, smaller than hashslot(foo),
         # attempt to trigger a resize on it, see details in #12802.
@@ -526,7 +526,7 @@ start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
 }
 
 start_server {tags {"other external:skip"}} {
-    test "Redis can resize empty dict" {
+    test "Server can resize empty dict" {
         # Write and then delete 128 keys, creating an empty dict
         r flushall
         for {set j 1} {$j <= 128} {incr j} {

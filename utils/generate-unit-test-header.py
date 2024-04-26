@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import re
 
@@ -11,21 +12,19 @@ if __name__ == '__main__':
         test_suites = []
         for root, dirs, files in os.walk(UNIT_DIR):
             for file in files:
-                print(file)
                 file_path = UNIT_DIR + '/' + file
                 if not file.endswith('.c') or file == 'test_main.c':
                     continue
                 tests = []
                 with open(file_path, 'r') as f:
                     for line in f:
-                        print(line)
                         match = re.match(TEST_PROTOTYPE, line)
                         if match:
                             function = match.group(1)
                             test_name = match.group(2)
                             tests.append((test_name, function))
                     test_suites.append({'file': file, 'tests': tests})
-        test_suites.sort(key=lambda test_suite: test_suite['file']) 
+        test_suites.sort(key=lambda test_suite: test_suite['file'])
         output.write("""typedef int unitTestProc(int argc, char **argv, int flags);
 
 typedef struct unitTest {

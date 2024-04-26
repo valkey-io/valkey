@@ -1,7 +1,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <strings.h>
+#if !_ARM_
 #include <immintrin.h>
+#endif
 #include "crccombine.h"
 
 /* Copyright (C) 2013 Mark Adler
@@ -37,6 +39,81 @@
 */
 
 #define STATIC_ASSERT(VVV) do {int test = 1 / (VVV);test++;} while (0)
+
+#if _ARM_
+
+/* This cuts 40% of the time vs bit-by-bit,  */
+
+uint64_t gf2_matrix_times_switch(uint64_t *mat, uint64_t vec) {
+	/*
+	 * Without using any vector math, this handles 4 bits at a time,
+	 * and saves 40+% of the time compared to the bit-by-bit version. Use if you
+	 * have no vector compile option available to you. With cache, we see:
+	 * E5-2670 ~1-2us to extend ~1 meg 64 bit hash
+	 */
+	uint64_t sum;
+
+	sum = 0;
+	while (vec) {
+		/* reversing the case order is ~10% slower on Xeon E5-2670 */
+		switch (vec & 15) {
+		case 15:
+			sum ^= *mat ^ *(mat+1) ^ *(mat+2) ^ *(mat+3);
+			break;
+		case 14:
+			sum ^= *(mat+1) ^ *(mat+2) ^ *(mat+3);
+			break;
+		case 13:
+			sum ^= *mat ^ *(mat+2) ^ *(mat+3);
+			break;
+		case 12:
+			sum ^= *(mat+2) ^ *(mat+3);
+			break;
+		case 11:
+			sum ^= *mat ^ *(mat+1) ^ *(mat+3);
+			break;
+		case 10:
+			sum ^= *(mat+1) ^ *(mat+3);
+			break;
+		case 9:
+			sum ^= *mat ^ *(mat+3);
+			break;
+		case 8:
+			sum ^= *(mat+3);
+			break;
+		case 7:
+			sum ^= *mat ^ *(mat+1) ^ *(mat+2);
+			break;
+		case 6:
+			sum ^= *(mat+1) ^ *(mat+2);
+			break;
+		case 5:
+			sum ^= *mat ^ *(mat+2);
+			break;
+		case 4:
+			sum ^= *(mat+2);
+			break;
+		case 3:
+			sum ^= *mat ^ *(mat+1);
+			break;
+		case 2:
+			sum ^= *(mat+1);
+			break;
+		case 1:
+			sum ^= *mat;
+			break;
+		default:
+			break;
+		}
+		vec >>= 4;
+		mat += 4;
+	}
+	return sum;
+}
+
+#define CRC_MULTIPLY gf2_matrix_times_switch
+
+#else
 
 /*
 	Warning: here there be dragons involving vector math, and macros to save us
@@ -89,12 +166,14 @@ uint64_t gf2_matrix_times_vec2(uint64_t *mat, uint64_t vec) {
 #undef DO_CHUNK16
 #undef DO_CHUNK4
 
+#define CRC_MULTIPLY gf2_matrix_times_vec2
+#endif
 
 static void gf2_matrix_square(uint64_t *square, uint64_t *mat, uint8_t dim) {
 	unsigned n;
 
 	for (n = 0; n < dim; n++)
-		square[n] = gf2_matrix_times_vec2(mat, mat[n]);
+		square[n] = CRC_MULTIPLY(mat, mat[n]);
 }
 
 /* Turns out our Redis / Jones CRC cycles at this point, so we can support
@@ -160,7 +239,7 @@ uint64_t crc64_combine(uint64_t crc1, uint64_t crc2, uintmax_t len2, uint64_t po
 	{
 		/* apply zeros operator for this bit of len2 */
 		if (len2 & 1)
-			crc1 = gf2_matrix_times_vec2(combine_cache[cache_num], crc1);
+			crc1 = CRC_MULTIPLY(combine_cache[cache_num], crc1);
 		len2 >>= 1;
 		cache_num = (cache_num + 1) & 63;
 		/* if no more bits set, then done */
@@ -170,3 +249,5 @@ uint64_t crc64_combine(uint64_t crc1, uint64_t crc2, uintmax_t len2, uint64_t po
 	crc1 ^= crc2;
 	return crc1;
 }
+
+#undef CRC_MULTIPLY

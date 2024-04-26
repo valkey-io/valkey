@@ -12,10 +12,6 @@ BINCOLOR="\033[37;1m"
 MAKECOLOR="\033[32;1m"
 ENDCOLOR="\033[0m"
 
-MIMALLOC_DIR := mimalloc
-MIMALLOC_BUILD_DIR := $(MIMALLOC_DIR)/out/release
-MIMALLOC_LIB := $(MIMALLOC_BUILD_DIR)/libmimalloc.a
-
 default:
 	@echo "Explicit target required"
 
@@ -46,7 +42,6 @@ distclean:
 	-(cd jemalloc && [ -f Makefile ] && $(MAKE) distclean) > /dev/null || true
 	-(cd hdr_histogram && $(MAKE) clean) > /dev/null || true
 	-(cd fpconv && $(MAKE) clean) > /dev/null || true
-	-rm -rf $(MIMALLOC_BUILD_DIR)
 	-(rm -f .make-*)
 
 .PHONY: distclean
@@ -121,11 +116,3 @@ jemalloc: .make-prerequisites
 	cd jemalloc && $(MAKE) lib/libjemalloc.a
 
 .PHONY: jemalloc
-
-.PHONY: mimalloc
-
-mimalloc: .make-prerequisites
-	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
-	@[ -d $(MIMALLOC_BUILD_DIR) ] || mkdir -p $(MIMALLOC_BUILD_DIR)
-	cd $(MIMALLOC_BUILD_DIR) && cmake ../.. -DCMAKE_BUILD_TYPE=Release
-	$(MAKE) -C $(MIMALLOC_BUILD_DIR)

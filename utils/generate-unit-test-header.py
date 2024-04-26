@@ -11,12 +11,14 @@ if __name__ == '__main__':
         test_suites = {}
         for root, dirs, files in os.walk(UNIT_DIR):
             for file in files:
+                print(file)
                 file_path = UNIT_DIR + '/' + file
                 if not file.endswith('.c') or file == 'test_main.c':
                     continue
                 test_suites[file] = []
                 with open(file_path, 'r') as f:
                     for line in f:
+                        print(line)
                         match = re.match(TEST_PROTOTYPE, line)
                         if match:
                             function = match.group(1)

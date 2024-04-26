@@ -4488,9 +4488,7 @@ int postponeClientRead(client *c) {
  * it can safely perform post-processing and return to normal synchronous
  * work. */
 int handleClientsWithPendingReadsUsingThreads(void) {
-    if (!server.io_threads_do_reads) return 0;
-    int io_threads_active_num = adjustIOThreadCount();
-    if (io_threads_active_num == 1) return 0;
+    if (server.io_threads_active_num == 1 || !server.io_threads_do_reads) return 0;
     int processed = listLength(server.clients_pending_read);
     if (processed == 0) return 0;
 
@@ -4501,7 +4499,7 @@ int handleClientsWithPendingReadsUsingThreads(void) {
     int item_id = 0;
     while((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
-        int target_id = item_id % io_threads_active_num;
+        int target_id = item_id % server.io_threads_active_num;
         listAddNodeTail(io_threads_list[target_id],c);
         item_id++;
     }
@@ -4509,7 +4507,7 @@ int handleClientsWithPendingReadsUsingThreads(void) {
     /* Give the start condition to the waiting threads, by setting the
      * start condition atomic var. */
     io_threads_op = IO_THREADS_OP_READ;
-    for (int j = 1; j < io_threads_active_num; j++) {
+    for (int j = 1; j < server.io_threads_active_num; j++) {
         int count = listLength(io_threads_list[j]);
         setIOPendingCount(j, count);
     }
@@ -4525,7 +4523,7 @@ int handleClientsWithPendingReadsUsingThreads(void) {
     /* Wait for all the other threads to end their work. */
     while(1) {
         unsigned long pending = 0;
-        for (int j = 1; j < io_threads_active_num; j++)
+        for (int j = 1; j < server.io_threads_active_num; j++)
             pending += getIOPendingCount(j);
         if (pending == 0) break;
     }

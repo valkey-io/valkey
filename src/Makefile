@@ -451,8 +451,9 @@ $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
 	$(SERVER_AR) rcs $@ $^
 
 # valkey-unit-tests
-# The "--alow-multiple-definition" flag will grab the first instance of function,
-# so make sure any overwritten behavior is included before the default behavior in the order below.
+# Some unit tests compile files a second time to get access to static functions, the "--alow-multiple-definition" flag
+# allows us to do that without an error, by using the first instance of function. This behavior can also be used
+# to tweak behavior of code just for unit tests. 
 $(ENGINE_UNIT_TESTS): $(ENGINE_TEST_OBJ) $(ENGINE_LIB_NAME)
 	$(SERVER_LD) -Wl,--allow-multiple-definition -o $@ $^ ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
 

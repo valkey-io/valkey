@@ -733,11 +733,11 @@ robj *getDecodedObject(robj *o) {
  * use ll2string() to get a string representation of the numbers on the stack
  * and compare the strings, it's much faster than calling getDecodedObject().
  *
- * Important note: when VALKEY_COMPARE_BINARY is used a binary-safe comparison
+ * Important note: when STRING_COMPARE_BINARY is used a binary-safe comparison
  * is used. */
 
-#define VALKEY_COMPARE_BINARY (1<<0)
-#define VALKEY_COMPARE_COLL (1<<1)
+#define STRING_COMPARE_BINARY (1<<0)
+#define STRING_COMPARE_COLL (1<<1)
 
 int compareStringObjectsWithFlags(const robj *a, const robj *b, int flags) {
     serverAssertWithInfo(NULL,a,a->type == OBJ_STRING && b->type == OBJ_STRING);
@@ -759,7 +759,7 @@ int compareStringObjectsWithFlags(const robj *a, const robj *b, int flags) {
         blen = ll2string(bufb,sizeof(bufb),(long) b->ptr);
         bstr = bufb;
     }
-    if (flags & VALKEY_COMPARE_COLL) {
+    if (flags & STRING_COMPARE_COLL) {
         return strcoll(astr,bstr);
     } else {
         int cmp;
@@ -773,12 +773,12 @@ int compareStringObjectsWithFlags(const robj *a, const robj *b, int flags) {
 
 /* Wrapper for compareStringObjectsWithFlags() using binary comparison. */
 int compareStringObjects(const robj *a, const robj *b) {
-    return compareStringObjectsWithFlags(a,b,VALKEY_COMPARE_BINARY);
+    return compareStringObjectsWithFlags(a,b,STRING_COMPARE_BINARY);
 }
 
 /* Wrapper for compareStringObjectsWithFlags() using collation. */
 int collateStringObjects(const robj *a, const robj *b) {
-    return compareStringObjectsWithFlags(a,b,VALKEY_COMPARE_COLL);
+    return compareStringObjectsWithFlags(a,b,STRING_COMPARE_COLL);
 }
 
 /* Equal string objects return 1 if the two objects are the same from the

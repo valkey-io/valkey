@@ -1026,6 +1026,15 @@ NULL
     } else if (!strcasecmp(c->argv[1]->ptr, "dict-resizing") && c->argc == 3) {
         server.dict_resizing = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "io-threads")) {
+        if (server.io_threads_num == 1) {
+            addReplyError(c, "Server doesn't enable io-threads.");
+        } else {
+            addReplyStatusFormat(c,
+                "io-threads-maximum-number:%d, "
+                "io-threads-active-number:%d",
+                server.io_threads_num, server.io_threads_active_num);
+        }
     } else if(!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;

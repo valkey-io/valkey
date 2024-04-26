@@ -2,7 +2,7 @@
 
 This README is under construction as we work to build a new community driven high performance key-value store.
 
-This project was forked from the open source Redis project right before the transition to their new source available licenses.
+This project was forked from the open source Valkey project right before the transition to their new source available licenses.
 
 This README is just a fast *quick start* document. We are currently working on a more permanent documentation page.
 
@@ -185,7 +185,7 @@ In order to install Valkey binaries into /usr/local/bin, just use:
 You can use `make PREFIX=/some/other/directory install` if you wish to use a
 different destination.
 
-_Note_: For compatibility with Redis, we create symlinks from the Redis names (`redis-server`, `redis-cli`, etc.) to the Valkey binaries installed by `make install`.
+_Note_: For compatibility with Valkey, we create symlinks from the Valkey names (`redis-server`, `redis-cli`, etc.) to the Valkey binaries installed by `make install`.
 The symlinks are created in same directory as the Valkey binaries.
 The symlinks are removed when using `make uninstall`.
 The creation of the symlinks can be skipped by setting the makefile variable `USE_REDIS_SYMLINKS=no`.

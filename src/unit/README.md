@@ -28,7 +28,7 @@ This macro will also print out the function the code was executed from in additi
 ## Example test
 
 ```
-int test_example(int test_crc64(int argc, char *argv[], int flags) {
+int test_example(int argc, char *argv[], int flags) {
     TEST_ASSERT(5 == 5);
     TEST_ASSERT_MESSAGE("This should pass", 6 == 6);
     return 0;

@@ -4330,9 +4330,10 @@ int adjustIOThreadCount(void) {
     /* Return ASAP if I/O threads are disabled (single threaded mode). */
     if (server.io_threads_num == 1) return 1;
 
-    server.clients_pending_write_avg_num = (int)(
+    int pending = listLength(server.clients_pending_write);
+    server.clients_pending_write_avg_num = (int)max(
         server.clients_pending_write_avg_num * SMOOTH_FACTOR +
-        listLength(server.clients_pending_write) * (1 - SMOOTH_FACTOR));
+        pending * (1 - SMOOTH_FACTOR), pending);
 
     /* Target io-thread number should be in range of [1, io_threads_num]. */
     int target_num = min(server.io_threads_num,

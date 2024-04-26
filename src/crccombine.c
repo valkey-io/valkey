@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <strings.h>
-#if !_ARM_
+#if defined(__i386__) || defined(__X86_64__)
 #include <immintrin.h>
 #endif
 #include "crccombine.h"
@@ -40,9 +40,9 @@
 
 #define STATIC_ASSERT(VVV) do {int test = 1 / (VVV);test++;} while (0)
 
-#if _ARM_
+#if !((defined(__i386__) || defined(__X86_64__)))
 
-/* This cuts 40% of the time vs bit-by-bit,  */
+/* This cuts 40% of the time vs bit-by-bit. */
 
 uint64_t gf2_matrix_times_switch(uint64_t *mat, uint64_t vec) {
 	/*

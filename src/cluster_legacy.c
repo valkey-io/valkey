@@ -808,7 +808,7 @@ int clusterLockConfig(char *filename) {
      * we need save `fd` to `cluster_config_file_lock_fd`, so that in serverFork(),
      * it will be closed in the child process.
      * If it is not closed, when the main process is killed -9, but the child process
-     * (redis-aof-rewrite) is still alive, the fd(lock) will still be held by the
+     * (valkey-aof-rewrite) is still alive, the fd(lock) will still be held by the
      * child process, and the main process will fail to get lock, means fail to start. */
     server.cluster_config_file_lock_fd = fd;
 #else

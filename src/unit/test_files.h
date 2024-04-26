@@ -1,4 +1,3 @@
-
 typedef int unitTestProc(int argc, char **argv, int flags);
 
 typedef struct unitTest {
@@ -23,6 +22,6 @@ struct unitTestSuite {
     char *filename;
     unitTest *tests;
 } unitTestSuite[] = {
-    {"test_intset_c", __test_intset_c},
-    {"test_crc64_c", __test_crc64_c},
+    {"test_intset.c", __test_intset_c},
+    {"test_crc64.c", __test_crc64_c},
 };

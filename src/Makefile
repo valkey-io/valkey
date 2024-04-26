@@ -412,6 +412,9 @@ endif
 
 .PHONY: all
 
+all-with-unit-tests: all $(ENGINE_UNIT_TESTS)
+.PHONY: all
+
 persist-settings: distclean
 	echo STD=$(STD) >> .make-settings
 	echo WARN=$(WARN) >> .make-settings
@@ -451,7 +454,7 @@ $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
 	$(SERVER_AR) rcs $@ $^
 
 # valkey-unit-tests
-# Some unit tests compile files a second time to get access to static functions, the "--alow-multiple-definition" flag
+# Some unit tests compile files a second time to get access to static functions, the "--allow-multiple-definition" flag
 # allows us to do that without an error, by using the first instance of function. This behavior can also be used
 # to tweak behavior of code just for unit tests. 
 $(ENGINE_UNIT_TESTS): $(ENGINE_TEST_OBJ) $(ENGINE_LIB_NAME)
@@ -559,7 +562,7 @@ bench: $(ENGINE_BENCHMARK_NAME)
 	@echo ""
 	@echo "WARNING: if it fails under Linux you probably need to install libc6-dev-i386"
 	@echo ""
-	$(MAKE) CFLAGS="-m32" LDFLAGS="-m32"
+	$(MAKE) all-with-unit-tests CFLAGS="-m32" LDFLAGS="-m32"
 
 gcov:
 	$(MAKE) SERVER_CFLAGS="-fprofile-arcs -ftest-coverage -DCOVERAGE_TEST" SERVER_LDFLAGS="-fprofile-arcs -ftest-coverage"

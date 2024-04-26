@@ -15,7 +15,6 @@ if __name__ == '__main__':
                 if not file.endswith('.c') or file == 'test_main.c':
                     continue
                 test_suites[file] = []
-                # Read contents of file
                 with open(file_path, 'r') as f:
                     for line in f:
                         match = re.match(TEST_PROTOTYPE, line)
@@ -23,8 +22,7 @@ if __name__ == '__main__':
                             function = match.group(1)
                             test_name = match.group(2)
                             test_suites[file].append((test_name, function))
-        output.write("""
-typedef int unitTestProc(int argc, char **argv, int flags);
+        output.write("""typedef int unitTestProc(int argc, char **argv, int flags);
 
 typedef struct unitTest {
     char *name;
@@ -53,5 +51,5 @@ struct unitTestSuite {
 } unitTestSuite[] = {
 """)
         for file, test_suit in test_suites.items():
-            output.write('    {{"{0}", __{0}}},\n'.format(file.replace('.c', '_c')))
+            output.write('    {{"{0}", __{1}}},\n'.format(file, file.replace('.c', '_c')))
         output.write('};\n')

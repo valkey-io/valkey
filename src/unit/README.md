@@ -1,16 +1,18 @@
 ## Introduction
 Valkey uses a very simple C testing framework, built up over time but now based loosely off of [Unity](https://www.throwtheswitch.org/unity).
 
-All test files being test_, and must contain a list of tests that take the form `int test_<test_name>(int test_crc64(int argc, char *argv[], int flags) {`, where test_name is the name of the test.
+All test files being test_ in the unit directory.
+A single test file can have multiple individual tests, and they must be of the form `int test_<test_name>(int test_crc64(int argc, char *argv[], int flags) {`, where test_name is the name of the test.
 The test name must be globally unique.
-A test will be marked as failed if returns 1, and will be marked successful in all other cases.
+A test will be marked as successful if returns 0, and will be marked failed in all other cases.
 
-Tests are allowed to be passed in additional arbitrary argv/argc, which they can access from the argc and argv arguments of the test.
 The test framework also parses several flags passed in, and sets them based on the arguments to the tests.
 
 Tests flags:
 * UNIT_TEST_ACCURATE: Corresponds to the --accurate flag. This flag indicates the test should use extra computation to more accurately validate the tests.
-* UNIT_TEST_LARGE_MEMORY: Corresponds to the --large-memory flag. this flag indicates the test should use large memory allocations where possible.
+* UNIT_TEST_LARGE_MEMORY: Corresponds to the --large-memory flag. This flag indicates whether or not tests should use more than 100mb of memory.
+
+Tests are allowed to be passed in additional arbitrary argv/argc, which they can access from the argc and argv arguments of the test.
 
 ## Assertions
 
@@ -43,4 +45,9 @@ make unit-test
 ./valkey-unit-tests [--flags] argv1 argv2
 ```
 
-Currently, all tests always run by default.
+Running a single unit test file
+```
+./valkey-unit-tests --single crc64.c
+```
+
+Will just run the crc64.c file.

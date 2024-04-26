@@ -290,16 +290,9 @@ ifeq ($(MALLOC),jemalloc)
 endif
 
 ifeq ($(MALLOC),mimalloc)
-ifeq ($(USE_SYSTEM_MIMALLOC),yes)
-	FINAL_CFLAGS+= -DUSE_JEMALLOC $(shell $(PKG_CONFIG) --cflags mimalloc)
-	FINAL_LIBS := $(shell $(PKG_CONFIG) --libs mimalloc) $(FINAL_LIBS)
-else
-	DEPENDENCY_TARGETS+= mimalloc
-	MIMALLOC_DIR= ../deps/mimalloc
-	MIMALLOC_LIB= $(MIMALLOC_DIR)/out/release/libmimalloc.a
-    FINAL_CFLAGS+= -DUSE_MIMALLOC -I$(MIMALLOC_DIR)/include
-    FINAL_LIBS := $(MIMALLOC_LIB) $(FINAL_LIBS)
-endif
+	FINAL_CFLAGS+= -DUSE_MIMALLOC -I/usr/local/include
+	FINAL_LDFLAGS+= -L/usr/local/lib
+	FINAL_LIBS := -lmimalloc $(FINAL_LIBS)
 endif
 
 

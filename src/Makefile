@@ -98,6 +98,15 @@ ifeq ($(USE_JEMALLOC),no)
 	MALLOC=libc
 endif
 
+# Some unit tests compile files a second time to get access to static functions, the "--allow-multiple-definition" flag
+# allows us to do that without an error, by using the first instance of function. This behavior can also be used
+# to tweak behavior of code just for unit tests. The version of ld on MacOS apparently always does this.
+ifneq ($(uname_S),Darwin)
+	ALLOW_DUPLICATE_FLAG=-Wl,--allow-multiple-definition
+else
+	ALLOW_DUPLICATE_FLAG=
+endif
+
 ifdef SANITIZER
 ifeq ($(SANITIZER),address)
 	MALLOC=libc
@@ -454,11 +463,8 @@ $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
 	$(SERVER_AR) rcs $@ $^
 
 # valkey-unit-tests
-# Some unit tests compile files a second time to get access to static functions, the "--allow-multiple-definition" flag
-# allows us to do that without an error, by using the first instance of function. This behavior can also be used
-# to tweak behavior of code just for unit tests. 
 $(ENGINE_UNIT_TESTS): $(ENGINE_TEST_OBJ) $(ENGINE_LIB_NAME)
-	$(SERVER_LD) -Wl,--allow-multiple-definition -o $@ $^ ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
+	$(SERVER_LD) $(ALLOW_DUPLICATE_FLAG) -o $@ $^ ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
 
 # valkey-sentinel
 $(ENGINE_SENTINEL_NAME): $(SERVER_NAME)

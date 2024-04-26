@@ -25,6 +25,7 @@ if __name__ == '__main__':
                             test_name = match.group(2)
                             tests.append((test_name, function))
                     test_suites.append({'file': file, 'tests': tests})
+        test_suites.sort(key=lambda test_suite: test_suite['file']) 
         output.write("""typedef int unitTestProc(int argc, char **argv, int flags);
 
 typedef struct unitTest {
@@ -43,7 +44,7 @@ typedef struct unitTest {
         # Create test suite lists
         for test_suite in test_suites:
             output.write('unitTest __{}[] = {{'.format(test_suite['file'].replace('.c', '_c')))
-            for test in test_suite:
+            for test in test_suite['tests']:
                 output.write('{{"{}", {}}}, '.format(test[0], test[0]))
             output.write('{NULL, NULL}};\n')
 
@@ -53,6 +54,6 @@ struct unitTestSuite {
     unitTest *tests;
 } unitTestSuite[] = {
 """)
-        for test_suit in test_suites:
+        for test_suite in test_suites:
             output.write('    {{"{0}", __{1}}},\n'.format(test_suite['file'], test_suite['file'].replace('.c', '_c')))
         output.write('};\n')

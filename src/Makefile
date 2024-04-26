@@ -23,9 +23,9 @@ CLANG := $(findstring clang,$(shell sh -c '$(CC) --version | head -1'))
 OPTIMIZATION?=-O3
 ifeq ($(OPTIMIZATION),-O3)
 	ifeq (clang,$(CLANG))
-		OPTIMIZATION+=-flto
+		OPTIMIZATION+=
 	else
-		OPTIMIZATION+=-flto=auto
+		OPTIMIZATION+=
 	endif
 endif
 ifneq ($(OPTIMIZATION),-O0)
@@ -451,8 +451,10 @@ $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
 	$(SERVER_AR) rcs $@ $^
 
 # valkey-unit-tests
-$(ENGINE_UNIT_TESTS): $(ENGINE_LIB_NAME) $(ENGINE_TEST_OBJ)
-	$(SERVER_LD) -o $@ $^ ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
+# The "--alow-multiple-definition" flag will grab the first instance of function,
+# so make sure any overwritten behavior is included before the default behavior in import order.
+$(ENGINE_UNIT_TESTS): $(ENGINE_TEST_OBJ) $(ENGINE_LIB_NAME)
+	$(SERVER_LD) -Wl,--allow-multiple-definition -o $@ $^ ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
 
 # valkey-sentinel
 $(ENGINE_SENTINEL_NAME): $(SERVER_NAME)

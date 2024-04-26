@@ -85,6 +85,12 @@ void zlibc_free(void *ptr) {
 #define free(ptr) je_free(ptr)
 #define mallocx(size,flags) je_mallocx(size,flags)
 #define dallocx(ptr,flags) je_dallocx(ptr,flags)
+/* Explicitly override malloc/free etc when using mimalloc. */
+#elif defined(USE_MIMALLOC)
+#define malloc(size) mi_malloc(size)
+#define calloc(count,size) mi_calloc(count,size)
+#define realloc(ptr,size) mi_realloc(ptr,size)
+#define free(ptr) mi_free(ptr)
 #endif
 
 #define update_zmalloc_stat_alloc(__n) atomicIncr(used_memory,(__n))

@@ -4318,17 +4318,15 @@ void killIOThreads(void) {
 }
 
 /* This function dynamically adjusts the I/O thread number according to
- * real workloads in runtime, currently we track the latest x rounds of
- * pending writes as a measure of clients we need to handle in parallel,
- * however the I/O threading is disabled globally for reads as well if
+ * real workloads at runtime. Currently we track the latest x rounds of
+ * pending writes as a measure of clients we need to handle in parallel.
+ * However the I/O threading is disabled globally for reads as well if
  * we have too little pending clients.
  *
- * The function returns 0 if the I/O threading should be used because there
- * are enough active threads, otherwise 1 is returned and the I/O threads
- * could be possibly stopped (if already active) as a side effect. */
+ * The function returns the active IO worker thread count. */
 #define IO_THREAD_BATCH_NUM 2
 #define SMOOTH_FACTOR 0.8
-int stopThreadedIOIfNeeded(void) {
+int adjustIOThreadCount(void) {
     /* Return ASAP if I/O threads are disabled (single threaded mode). */
     if (server.io_threads_num == 1) return 1;
 
@@ -4337,27 +4335,26 @@ int stopThreadedIOIfNeeded(void) {
         listLength(server.clients_pending_write) * (1 - SMOOTH_FACTOR));
 
     /* Target io-thread number should be in range of [1, io_threads_num]. */
-    int targetNum = min(server.io_threads_num,
+    int target_num = min(server.io_threads_num,
         max(1, server.clients_pending_write_avg_num / IO_THREAD_BATCH_NUM));
 
-    if (server.io_threads_active_num < targetNum) {
+    if (server.io_threads_active_num < target_num) {
         /* Increasing active threads. */
-        for (int i = server.io_threads_active_num; i < targetNum; ++i) {
+        for (int i = server.io_threads_active_num; i < target_num; ++i) {
             pthread_mutex_unlock(&io_threads_mutex[i]);
-            server.io_threads_active_num++;
         }
     } else {
         /* We may have still clients with pending reads when this function
          * is called: handle them before stopping the threads. */
         handleClientsWithPendingReadsUsingThreads();
         /* Decreasing active threads. */
-        for (int i = server.io_threads_active_num; i > targetNum; --i) {
+        for (int i = server.io_threads_active_num; i > target_num; --i) {
             pthread_mutex_lock(&io_threads_mutex[i - 1]);
-            server.io_threads_active_num--;
         }
     }
+    server.io_threads_active_num = target_num;
 
-    return server.io_threads_active_num == 1;
+    return server.io_threads_active_num;
 }
 
 /* This function achieves thread safety using a fan-out -> fan-in paradigm:
@@ -4372,7 +4369,8 @@ int handleClientsWithPendingWritesUsingThreads(void) {
 
     /* If I/O threads are disabled or we have few clients to serve, don't
      * use I/O threads, but the boring synchronous code. */
-    if (server.io_threads_num == 1 || stopThreadedIOIfNeeded()) {
+    int io_threads_active_num = adjustIOThreadCount();
+    if (io_threads_active_num == 1) {
         return handleClientsWithPendingWrites();
     }
 
@@ -4401,7 +4399,7 @@ int handleClientsWithPendingWritesUsingThreads(void) {
             continue;
         }
 
-        int target_id = item_id % server.io_threads_active_num;
+        int target_id = item_id % io_threads_active_num;
         listAddNodeTail(io_threads_list[target_id],c);
         item_id++;
     }
@@ -4409,7 +4407,7 @@ int handleClientsWithPendingWritesUsingThreads(void) {
     /* Give the start condition to the waiting threads, by setting the
      * start condition atomic var. */
     io_threads_op = IO_THREADS_OP_WRITE;
-    for (int j = 1; j < server.io_threads_active_num; j++) {
+    for (int j = 1; j < io_threads_active_num; j++) {
         int count = listLength(io_threads_list[j]);
         setIOPendingCount(j, count);
     }
@@ -4425,7 +4423,7 @@ int handleClientsWithPendingWritesUsingThreads(void) {
     /* Wait for all the other threads to end their work. */
     while(1) {
         unsigned long pending = 0;
-        for (int j = 1; j < server.io_threads_active_num; j++)
+        for (int j = 1; j < io_threads_active_num; j++)
             pending += getIOPendingCount(j);
         if (pending == 0) break;
     }
@@ -4489,7 +4487,9 @@ int postponeClientRead(client *c) {
  * it can safely perform post-processing and return to normal synchronous
  * work. */
 int handleClientsWithPendingReadsUsingThreads(void) {
-    if (server.io_threads_active_num == 1 || !server.io_threads_do_reads) return 0;
+    if (!server.io_threads_do_reads) return 0;
+    int io_threads_active_num = adjustIOThreadCount();
+    if (io_threads_active_num == 1) return 0;
     int processed = listLength(server.clients_pending_read);
     if (processed == 0) return 0;
 
@@ -4500,7 +4500,7 @@ int handleClientsWithPendingReadsUsingThreads(void) {
     int item_id = 0;
     while((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
-        int target_id = item_id % server.io_threads_active_num;
+        int target_id = item_id % io_threads_active_num;
         listAddNodeTail(io_threads_list[target_id],c);
         item_id++;
     }
@@ -4508,7 +4508,7 @@ int handleClientsWithPendingReadsUsingThreads(void) {
     /* Give the start condition to the waiting threads, by setting the
      * start condition atomic var. */
     io_threads_op = IO_THREADS_OP_READ;
-    for (int j = 1; j < server.io_threads_active_num; j++) {
+    for (int j = 1; j < io_threads_active_num; j++) {
         int count = listLength(io_threads_list[j]);
         setIOPendingCount(j, count);
     }
@@ -4524,7 +4524,7 @@ int handleClientsWithPendingReadsUsingThreads(void) {
     /* Wait for all the other threads to end their work. */
     while(1) {
         unsigned long pending = 0;
-        for (int j = 1; j < server.io_threads_active_num; j++)
+        for (int j = 1; j < io_threads_active_num; j++)
             pending += getIOPendingCount(j);
         if (pending == 0) break;
     }

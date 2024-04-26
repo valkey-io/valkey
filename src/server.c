@@ -1492,7 +1492,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* Adjust the I/O threads according to the realtime workloads. */
-    stopThreadedIOIfNeeded();
+    adjustIOThreadCount();
 
     /* Resize tracking keys table if needed. This is also done at every
      * command execution, but we want to be sure that if the last command
@@ -5631,8 +5631,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "lru_clock:%u\r\n", server.lruclock,
             "executable:%s\r\n", server.executable ? server.executable : "",
             "config_file:%s\r\n", server.configfile ? server.configfile : "",
-            "io_threads_maximum_num:%i\r\n", server.io_threads_num,
-            "io_threads_active_num:%i\r\n", server.io_threads_active_num));
+            "io_threads_active:%i\r\n", server.io_threads_active_num > 1));
 
         /* Conditional properties */
         if (isShutdownInitiated()) {

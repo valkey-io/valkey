@@ -171,7 +171,6 @@ void set_crc64_cutoffs(size_t dual_cutoff, size_t tri_cutoff) {
     CRC64_TRI_CUTOFF = tri_cutoff;
 }
 
-
 /* Calculate a non-inverted CRC multiple bytes at a time on a little-endian
  * architecture. If you need inverted CRC, invert *before* calling and invert
  * *after* calling.

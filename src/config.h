@@ -144,6 +144,7 @@
 #if __GNUC__ >= 5 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 5)
 #define valkey_unreachable __builtin_unreachable
 #else
+#include <stdlib.h>
 #define valkey_unreachable abort
 #endif
 

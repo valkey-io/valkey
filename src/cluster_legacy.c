@@ -46,6 +46,7 @@
 #include <sys/stat.h>
 #include <math.h>
 #include <sys/file.h>
+#include <stdbool.h>
 
 /* A global reference to myself is handy to make code more clear.
  * Myself always points to server.cluster->myself, that is, the clusterNode
@@ -2865,7 +2866,7 @@ static clusterNode *getNodeFromLinkAndMsg(clusterLink *link, clusterMsg *hdr) {
     return sender;
 }
 
-bool clusterValidatePacket(clusterLink *link) {
+bool clusterIsValidPacket(clusterLink *link) {
     clusterMsg *hdr = (clusterMsg*) link->rcvbuf;
     uint32_t totlen = ntohl(hdr->totlen);
     uint16_t type = ntohs(hdr->type);
@@ -2970,7 +2971,7 @@ bool clusterValidatePacket(clusterLink *link) {
 int clusterProcessPacket(clusterLink *link) {
 
     /* Validate that the packet is well-formed */
-    if (!clusterValidatePacket(link)) return 1;
+    if (!clusterIsValidPacket(link)) return 1;
 
     clusterMsg *hdr = (clusterMsg*) link->rcvbuf;
     uint16_t type = ntohs(hdr->type);
@@ -3177,7 +3178,7 @@ int clusterProcessPacket(clusterLink *link) {
 
         /* Check for role switch: slave -> master or master -> slave. */
         if (sender) {
-            serverLog(LL_VERBOSE,
+            serverLog(LL_DEBUG,
                       "node %.40s (%s) announces that it is a %s in shard %.40s",
                       sender->name,
                       sender->human_nodename,

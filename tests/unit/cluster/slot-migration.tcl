@@ -34,6 +34,7 @@ proc wait_for_role {srv_idx role} {
     } else {
         fail "R $srv_idx didn't assume the cluster $role in time"
     }
+    wait_for_cluster_propagation
 }
 
 proc wait_for_slot_state {srv_idx pattern} {

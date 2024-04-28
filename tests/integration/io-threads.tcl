@@ -57,7 +57,7 @@ tags {"io-threads external:skip"} {
             set client [valkey [srv host] [srv port] 0 $::tls]
             # When the server has just started, no requests from client.
             # The active threads number should be 1.
-            assert {[get_io_threads_active_num $client] == 1}
+            assert_equal {1} [get_io_threads_active_num $client]
 
             # Scale up io_threads_active_num by sending large number requests to server.
             set bench_pid [start_benchmark 10 50]
@@ -66,16 +66,16 @@ tags {"io-threads external:skip"} {
             } else {
                 fail "Benchmark failed to write data to server."
             }
-            assert {[get_io_threads_active_num $client] == 4}
+            assert_equal {4} [get_io_threads_active_num $client]
             exec kill -9 $bench_pid
 
             # Send flushdb request to server, the server.clients_pending_write should be 1.
             # But dut to the exponential moving average, the clients_pending_write_avg_num
             # didn't change too much.
             # Server still keep 4 io-threads to handle the requests.
-            $client FLUSHDB
-            assert {[$client DBSIZE] == 0}
-            assert {[get_io_threads_active_num $client] == 4}
+            assert_equal {OK} [$client FLUSHDB SYNC]
+            assert_equal {0} [$client DBSIZE]
+            assert_equal {4} [get_io_threads_active_num $client]
 
             # Scale down io_threads_active_num by sending small number requests to server.
             set bench_pid [start_benchmark 1 1]
@@ -84,7 +84,7 @@ tags {"io-threads external:skip"} {
             } else {
                 fail "Benchmark failed to write data to server."
             }
-            assert {[get_io_threads_active_num $client] == 1}
+            assert_equal {1} [get_io_threads_active_num $client]
             exec kill -9 $bench_pid
         }
     }

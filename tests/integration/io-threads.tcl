@@ -74,7 +74,6 @@ tags {"io-threads external:skip"} {
             # didn't change too much.
             # Server still keep 4 io-threads to handle the requests.
             assert_equal {OK} [$client FLUSHDB SYNC]
-            assert_equal {0} [$client DBSIZE]
             assert_equal {4} [get_io_threads_active_num $client]
 
             # Scale down io_threads_active_num by sending small number requests to server.

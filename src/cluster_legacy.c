@@ -2865,49 +2865,38 @@ static clusterNode *getNodeFromLinkAndMsg(clusterLink *link, clusterMsg *hdr) {
     return sender;
 }
 
-/* When this function is called, there is a packet to process starting
- * at link->rcvbuf. Releasing the buffer is up to the caller, so this
- * function should just handle the higher level stuff of processing the
- * packet, modifying the cluster state if needed.
- *
- * The function returns 1 if the link is still valid after the packet
- * was processed, otherwise 0 if the link was freed since the packet
- * processing lead to some inconsistency error (for instance a PONG
- * received from the wrong sender ID). */
-int clusterProcessPacket(clusterLink *link) {
+bool clusterValidatePacket(clusterLink *link) {
     clusterMsg *hdr = (clusterMsg*) link->rcvbuf;
     uint32_t totlen = ntohl(hdr->totlen);
     uint16_t type = ntohs(hdr->type);
-    mstime_t now = mstime();
 
-    if (type < CLUSTERMSG_TYPE_COUNT)
-        server.cluster->stats_bus_messages_received[type]++;
-    serverLog(LL_DEBUG,"--- Processing packet of type %s, %lu bytes",
-        clusterGetMessageTypeString(type), (unsigned long) totlen);
+    if (type < CLUSTERMSG_TYPE_COUNT) server.cluster->stats_bus_messages_received[type]++;
+
+    serverLog(LL_DEBUG,
+              "--- Processing packet of type %s, %lu bytes",
+              clusterGetMessageTypeString(type),
+              (unsigned long) totlen);
 
     /* Perform sanity checks */
-    if (totlen < 16) return 1; /* At least signature, version, totlen, count. */
-    if (totlen > link->rcvbuf_len) return 1;
+    if (totlen < 16) return false; /* At least signature, version, totlen, count. */
+    if (totlen > link->rcvbuf_len) return false;
 
     if (ntohs(hdr->ver) != CLUSTER_PROTO_VER) {
         /* Can't handle messages of different versions. */
-        return 1;
+        return false;
     }
 
     if (type == server.cluster_drop_packet_filter) {
         serverLog(LL_WARNING, "Dropping packet that matches debug drop filter");
-        return 1;
+        return false;
     }
 
-    uint16_t flags = ntohs(hdr->flags);
-    uint16_t extensions = ntohs(hdr->extensions);
-    uint64_t senderCurrentEpoch = 0, senderConfigEpoch = 0;
     uint32_t explen; /* expected length of this packet */
-    clusterNode *sender;
 
     if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_PONG ||
         type == CLUSTERMSG_TYPE_MEET)
     {
+        uint16_t extensions = ntohs(hdr->extensions);
         uint16_t count = ntohs(hdr->count);
 
         explen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
@@ -2922,13 +2911,13 @@ int clusterProcessPacket(clusterLink *link) {
                 if (extlen % 8 != 0) {
                     serverLog(LL_WARNING, "Received a %s packet without proper padding (%d bytes)",
                         clusterGetMessageTypeString(type), (int) extlen);
-                    return 1;
+                    return false;
                 }
                 if ((totlen - explen) < extlen) {
                     serverLog(LL_WARNING, "Received invalid %s packet with extension data that exceeds "
                         "total packet length (%lld)", clusterGetMessageTypeString(type),
                         (unsigned long long) totlen);
-                    return 1;
+                    return false;
                 }
                 explen += extlen;
                 ext = getNextPingExt(ext);
@@ -2963,10 +2952,33 @@ int clusterProcessPacket(clusterLink *link) {
     if (totlen != explen) {
         serverLog(LL_WARNING, "Received invalid %s packet of length %lld but expected length %lld",
             clusterGetMessageTypeString(type), (unsigned long long) totlen, (unsigned long long) explen);
-        return 1;
+        return false;
     }
 
-    sender = getNodeFromLinkAndMsg(link, hdr);
+    return true;
+}
+
+/* When this function is called, there is a packet to process starting
+ * at link->rcvbuf. Releasing the buffer is up to the caller, so this
+ * function should just handle the higher level stuff of processing the
+ * packet, modifying the cluster state if needed.
+ *
+ * The function returns 1 if the link is still valid after the packet
+ * was processed, otherwise 0 if the link was freed since the packet
+ * processing lead to some inconsistency error (for instance a PONG
+ * received from the wrong sender ID). */
+int clusterProcessPacket(clusterLink *link) {
+
+    /* Validate that the packet is well-formed */
+    if (!clusterValidatePacket(link)) return 1;
+
+    clusterMsg *hdr = (clusterMsg*) link->rcvbuf;
+    uint16_t type = ntohs(hdr->type);
+    mstime_t now = mstime();
+
+    uint16_t flags = ntohs(hdr->flags);
+    uint64_t senderCurrentEpoch = 0, senderConfigEpoch = 0;
+    clusterNode *sender = getNodeFromLinkAndMsg(link, hdr);
 
     if (sender && (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA)) {
         sender->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
@@ -2985,7 +2997,7 @@ int clusterProcessPacket(clusterLink *link) {
         if (senderCurrentEpoch > server.cluster->currentEpoch)
             server.cluster->currentEpoch = senderCurrentEpoch;
         /* Update the sender configEpoch if it is a primary publishing a newer one. */
-        if (!memcpy(hdr->slaveof, CLUSTER_NODE_NULL_NAME, sizeof(hdr->slaveof)) &&
+        if (!memcmp(hdr->slaveof, CLUSTER_NODE_NULL_NAME, sizeof(hdr->slaveof)) &&
             senderConfigEpoch > sender->configEpoch) {
             sender->configEpoch = senderConfigEpoch;
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG|
@@ -3165,6 +3177,12 @@ int clusterProcessPacket(clusterLink *link) {
 
         /* Check for role switch: slave -> master or master -> slave. */
         if (sender) {
+            serverLog(LL_VERBOSE,
+                      "node %.40s (%s) announces that it is a %s in shard %.40s",
+                      sender->name,
+                      sender->human_nodename,
+                      !memcmp(hdr->slaveof, CLUSTER_NODE_NULL_NAME, sizeof(hdr->slaveof)) ? "master" : "slave",
+                      sender->shard_id);
             if (!memcmp(hdr->slaveof, CLUSTER_NODE_NULL_NAME, sizeof(hdr->slaveof))) {
                 /* Node is a master. */
                 clusterSetNodeAsMaster(sender);

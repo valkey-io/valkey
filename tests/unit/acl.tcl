@@ -188,13 +188,22 @@ start_server {tags {"acl external:skip"}} {
 
         assert_equal {0} [r PUBLISH foo bar]
         catch {r PUBLISH bar game} e
-
-        # Falling back to psuser for the below tests
-        r AUTH psuser pspass
-        r ACL deluser hpuser
         set e
     } {*NOPERM*channel*}
 
+    test {client list users} {
+        set rd [valkey_deferring_client]
+        $rd AUTH psuser pspass
+        $rd read
+        r AUTH hpuser pass
+        $rd client list
+        assert {[llength [$rd read]] >= 2}
+        $rd client list user psuser
+        assert {[llength [$rd read]] >= 1}
+        assert_equal 1 [r client count hpuser]
+        r AUTH psuser pspass
+        r ACL deluser hpuser
+    }
     test {In transaction queue publish/subscribe/psubscribe to unauthorized channel will fail} {
         r ACL setuser psuser +multi +discard
         r MULTI

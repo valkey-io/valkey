@@ -1102,6 +1102,7 @@ typedef struct {
                         against. This list will always contain at least
                         one selector for backwards compatibility. */
     robj *acl_string; /* cached string represent of ACLs */
+    list *clients;  /* A list of clients associated with this user. */
 } user;
 
 /* With multiplexing we need to take per-client state.
@@ -1230,6 +1231,7 @@ typedef struct client {
     sds peerid;             /* Cached peer ID. */
     sds sockname;           /* Cached connection target address. */
     listNode *client_list_node; /* list node in client list */
+    listNode *user_client_node; /* list node in user->client list */
     listNode *postponed_list_node; /* list node within the postponed list */
     listNode *pending_read_list_node; /* list node in clients pending read list */
     void *module_blocked_client; /* Pointer to the ValkeyModuleBlockedClient associated with this

@@ -198,6 +198,7 @@ client *createClient(connection *conn) {
     c->peerid = NULL;
     c->sockname = NULL;
     c->client_list_node = NULL;
+    c->user_client_node = NULL;
     c->postponed_list_node = NULL;
     c->pending_read_list_node = NULL;
     c->client_tracking_redirection = 0;
@@ -1541,6 +1542,10 @@ void clearClientConnectionState(client *c) {
 #else
     c->resp = 2;
 #endif
+    if(c->user && c->user != DefaultUser && c->user_client_node){
+        listDelNode(c->user->clients,c->user_client_node);
+        c->user_client_node = NULL;
+    }
 
     clientSetDefaultAuth(c);
     moduleNotifyUserChanged(c);
@@ -3020,6 +3025,21 @@ void quitCommand(client *c) {
     c->flags |= CLIENT_CLOSE_AFTER_REPLY;
 }
 
+sds getUserClientsInfoString(user *user) {
+    listNode *ln;
+    listIter li;
+    client *client;
+    sds o = sdsnewlen(SDS_NOINIT, 200 * listLength(server.clients));
+    sdsclear(o);
+    listRewind(user->clients, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        client = listNodeValue(ln);
+        o = catClientInfoString(o, client);
+        o = sdscatlen(o, "\n", 1);
+    }
+    return o;
+}
+
 void clientCommand(client *c) {
     listNode *ln;
     listIter li;
@@ -3058,6 +3078,10 @@ void clientCommand(client *c) {
 "    Return information about client connections. Options:",
 "    * TYPE (NORMAL|MASTER|REPLICA|PUBSUB)",
 "      Return clients of specified type.",
+"    * USER <username>",
+"      Return clients of specified user.",
+"COUNT <username>",
+"    Return the count of clients connected with the specified username.",
 "UNPAUSE",
 "    Stop the current client pause, resuming traffic.",
 "PAUSE <timeout> [WRITE|ALL]",
@@ -3097,6 +3121,7 @@ NULL
         /* CLIENT LIST */
         int type = -1;
         sds o = NULL;
+        user *user = NULL;
         if (c->argc == 4 && !strcasecmp(c->argv[2]->ptr,"type")) {
             type = getClientTypeByName(c->argv[3]->ptr);
             if (type == -1) {
@@ -3120,6 +3145,16 @@ NULL
                     o = sdscatlen(o, "\n", 1);
                 }
             }
+        } else if(c->argc == 4 && !strcasecmp(c->argv[2]->ptr, "user")) {
+            o = sdsempty();
+            user = ACLGetUserByName(c->argv[3]->ptr, sdslen(c->argv[3]->ptr));
+            if (user == NULL) {
+                addReplyErrorFormat(c, "No such user '%s'",
+                                    (char *) c->argv[3]->ptr);
+                sdsfree(o);
+                return;
+            }
+            o = getUserClientsInfoString(user);
         } else if (c->argc != 2) {
             addReplyErrorObject(c,shared.syntaxerr);
             return;
@@ -3272,6 +3307,23 @@ NULL
         /* If this client has to be closed, flag it as CLOSE_AFTER_REPLY
          * only after we queued the reply to its output buffers. */
         if (close_this_client) c->flags |= CLIENT_CLOSE_AFTER_REPLY;
+    } else if (!strcasecmp(c->argv[1]->ptr, "count")) {
+        user *user = NULL;
+        if (c->argc == 3) {
+            user = ACLGetUserByName(c->argv[2]->ptr,
+                                    sdslen(c->argv[2]->ptr));
+            if (user == NULL) {
+                addReplyErrorFormat(c, "No such user '%s'",
+                                    (char *) c->argv[2]->ptr);
+                return;
+            }
+            sds o = sdscatprintf(sdsempty(), "%lu", listLength(user->clients));
+            addReplyVerbatim(c, o, sdslen(o), "txt");
+            sdsfree(o);
+        } else {
+            addReplyErrorObject(c, shared.syntaxerr);
+            return;
+        }
     } else if (!strcasecmp(c->argv[1]->ptr,"unblock") && (c->argc == 3 ||
                                                           c->argc == 4))
     {

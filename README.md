@@ -2,7 +2,7 @@
 
 This README is under construction as we work to build a new community driven high performance key-value store.
 
-This project was forked from the open source Valkey project right before the transition to their new source available licenses.
+This project was forked from the open source Redis project right before the transition to their new source available licenses.
 
 This README is just a fast *quick start* document. We are currently working on a more permanent documentation page.
 

@@ -33,8 +33,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __DICT_H
-#define __DICT_H
+#ifndef DICT_H
+#define DICT_H
 
 #include "mt19937-64.h"
 #include <limits.h>
@@ -210,7 +210,6 @@ void dictSetDoubleVal(dictEntry *de, double val);
 int64_t dictIncrSignedIntegerVal(dictEntry *de, int64_t val);
 uint64_t dictIncrUnsignedIntegerVal(dictEntry *de, uint64_t val);
 double dictIncrDoubleVal(dictEntry *de, double val);
-void *dictEntryMetadata(dictEntry *de);
 void *dictGetKey(const dictEntry *de);
 void *dictGetVal(const dictEntry *de);
 int64_t dictGetSignedIntegerVal(const dictEntry *de);
@@ -253,4 +252,4 @@ void dictFreeStats(dictStats *stats);
 int dictTest(int argc, char *argv[], int flags);
 #endif
 
-#endif /* __DICT_H */
+#endif /* DICT_H */

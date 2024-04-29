@@ -307,37 +307,18 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         wait_for_slot_state 3 "\[7->-$R1_id\] \[13->-$R1_id\] \[17->-$R1_id\]"
     }
 
-    test "Slot finalization succeeds on replicas" {
-        # Trigger slot finalization on replicas
-        assert_equal {OK} [R 1 cluster setslot 7 node $R1_id replicaonly]
-        assert_equal {1} [R 1 wait 1 1000]
-        wait_for_slot_state 1 "\[7-<-$R0_id\] \[13-<-$R0_id\] \[17-<-$R0_id\]"
+    test "Slot finalization succeeds on both primary and replicas" {
+        assert_equal {OK} [R 1 cluster setslot 7 node $R1_id]
+        wait_for_slot_state 1 "\[13-<-$R0_id\] \[17-<-$R0_id\]"
         wait_for_slot_state 4 "\[13-<-$R0_id\] \[17-<-$R0_id\]"
-        assert_equal {OK} [R 1 cluster setslot 13 node $R1_id replicaonly]
-        assert_equal {1} [R 1 wait 1 1000]
-        wait_for_slot_state 1 "\[7-<-$R0_id\] \[13-<-$R0_id\] \[17-<-$R0_id\]"
+        assert_equal {OK} [R 1 cluster setslot 13 node $R1_id]
+        wait_for_slot_state 1 "\[17-<-$R0_id\]"
         wait_for_slot_state 4 "\[17-<-$R0_id\]"
-        assert_equal {OK} [R 1 cluster setslot 17 node $R1_id replicaonly]
-        assert_equal {1} [R 1 wait 1 1000]
-        wait_for_slot_state 1 "\[7-<-$R0_id\] \[13-<-$R0_id\] \[17-<-$R0_id\]"
+        assert_equal {OK} [R 1 cluster setslot 17 node $R1_id]
+        wait_for_slot_state 1 ""
         wait_for_slot_state 4 ""
     }
 
-    test "Finalizing incorrect slot fails" {
-        catch {R 1 cluster setslot 123 node $R1_id replicaonly} e
-        assert_equal {ERR Slot is not open for importing} $e
-    }
-
-    test "Slot migration without expected target replicas fails" {
-        migrate_slot 0 1 100
-        # Move the target replica away
-        wait_for_role 0 master
-        assert_equal {OK} [R 4 cluster replicate $R0_id]
-        after $node_timeout
-        # Slot finalization should fail
-        catch {R 1 cluster setslot 100 node $R1_id replicaonly} e
-        assert_equal {ERR Target node has no replicas} $e
-    }
 }
 
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {

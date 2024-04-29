@@ -3640,6 +3640,7 @@ void processClientsWaitingReplicas(void) {
 
         client *c = ln->value;
         int is_wait_aof = c->bstate.btype == BLOCKED_WAITAOF;
+        int is_wait_prerepl = c->bstate.btype == BLOCKED_WAIT_PREREPL;
 
         if (is_wait_aof && c->bstate.numlocal && !server.aof_enabled) {
             addReplyError(c, "WAITAOF cannot be used when numlocal is set but appendonly is disabled.");
@@ -3689,6 +3690,8 @@ void processClientsWaitingReplicas(void) {
             addReplyArrayLen(c, 2);
             addReplyLongLong(c, numlocal);
             addReplyLongLong(c, numreplicas);
+        } else if (is_wait_prerepl) {
+            c->flags |= CLIENT_INTERNAL_PREREPL_DONE;
         } else {
             addReplyLongLong(c, numreplicas);
         }

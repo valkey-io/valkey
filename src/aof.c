@@ -1183,7 +1183,7 @@ void flushAppendOnlyFile(int force) {
             if (ftruncate(server.aof_fd, server.aof_last_incr_size) == -1) {
                 if (can_log) {
                     serverLog(LL_WARNING, "Could not remove short write "
-                             "from the append-only file.  Server may refuse "
+                             "from the append-only file. The server may refuse "
                              "to load the AOF the next time it starts.  "
                              "ftruncate: %s", strerror(errno));
                 }
@@ -1224,7 +1224,7 @@ void flushAppendOnlyFile(int force) {
          * OK state and log the event. */
         if (server.aof_last_write_status == C_ERR) {
             serverLog(LL_NOTICE,
-                "AOF write error looks solved, Server can write again.");
+                "AOF write error looks solved, The server can write again.");
             server.aof_last_write_status = C_OK;
         }
     }

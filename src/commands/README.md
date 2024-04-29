@@ -7,7 +7,7 @@ Each JSON file contains all the information about the command itself. It is the
 "single source of truth" (SSOT) for the command's metadata.
 
 These JSON files were originally not intended to be used directly, since they
-contain internals and some fiels like "acl_categories" that are not the final
+contain internals and some fields like "acl_categories" that are not the final
 ACL categories. (Valkey will apply some implicit rules to compute the final ACL
 categories.) However, people see JSON files and use them directly anyway.
 
@@ -126,7 +126,7 @@ following keys. To be safe, assume all of them are optional.
   * `"arguments"`: A list with the same structure as its parent. Present if type is "block" or "oneof"
   * `"display"`: ("entries-read", "key" or "pattern")
   * `"key_spec_index"`: An index into the `key_specs` array. Only if `type` is `key`.
-  * `"multiple":`  true if the argument can be repeated multiple times. Ommitted means false.
+  * `"multiple":`  true if the argument can be repeated multiple times. Omitted means false.
   * `"multiple_token"`: Unclear meaning. Maybe meaningless.
   * `"optional":` True if the argument is optional. Omitted means false.
   * `"since"`: Version (string) when the argument was introduced.
@@ -180,7 +180,7 @@ Each element in this array is an object with the following keys:
   * `{"keyword": KEYWORD, "startfrom": N}`: The first key is found by searching
     for an argument with the exact value KEYWORD starting from index N in the
     command line. The first key is the argument after the keyword.
-  * `{"unknown": null}`: Finding the keys of this command is too complicted to
+  * `{"unknown": null}`: Finding the keys of this command is too complicated to
     explain.
 * `"find_keys"`: How to find the remainnig keys of this key spec. It's an object
   on one of these forms:

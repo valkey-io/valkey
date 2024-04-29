@@ -89,6 +89,10 @@
 #define ZMALLOC_LIB "libc"
 #define USE_LIBC 1
 
+#ifndef defrag_supported
+#define defrag_supported "no"
+#endif
+
 #if !defined(NO_MALLOC_USABLE_SIZE) && \
     (defined(__GLIBC__) || defined(__FreeBSD__) || \
      defined(__DragonFly__) || defined(__HAIKU__) || \

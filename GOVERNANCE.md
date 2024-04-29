@@ -2,7 +2,7 @@
 
 The Valkey project is managed by a Technical Steering Committee (TSC) composed of the maintainers of Valkey repository.
 The Valkey project includes all of the current and future repositories under the Valkey-io organization.
-Maintainers are defined as individuals with full commit access to the Valkey repository as well as additional members defined in the MAINTAINERS.md file in a given projects repository.
+Maintainers are defined as individuals with full commit access to a repository, which should be in sync with the MAINTAINERS.md file in a given projects repository.
 Maintainers of other repositories within the Valkey project are not members of the TSC unless explicitly added.
 
 ## Technical Steering Committee
@@ -35,6 +35,8 @@ Examples of major decisions:
     * Modifications to the TSC or other governance documents
     * Adding members to other roles within the Valkey project
     * Delegation of maintainership for projects to other groups or individuals
+    * Adding or removing a new external library such as a client
+    or module to the project.
 
 Any member of the TSC can call a vote with reasonable notice to the TSC, setting out a discussion period and a separate voting period.
 Any discussion may be conducted in person or electronically by text, voice, or video.

@@ -34,9 +34,7 @@
 /* Double expansion needed for stringification of macro values. */
 #define __xstr(s) __str(s)
 #define __str(s) #s
-#define MI_VERSION_MAJOR 1
-#define MI_VERSION_MINOR 8
-#define MI_VERSION_PATCH 5
+#define __str_version(s)    __xstr(s)
 
 #if defined(USE_TCMALLOC)
 #define ZMALLOC_LIB ("tcmalloc-" __xstr(TC_VERSION_MAJOR) "." __xstr(TC_VERSION_MINOR))
@@ -59,9 +57,12 @@
 #endif
 
 #elif defined(USE_MIMALLOC)
-#define ZMALLOC_LIB ("mimalloc-" __xstr(MI_VERSION_MAJOR) "." __xstr(MI_VERSION_MINOR) "." __xstr(MI_VERSION_PATCH))
 #include <mimalloc.h>
-#if (MI_VERSION_MAJOR == 1 && MI_VERSION_MINOR >= 8) || (MI_VERSION_MAJOR > 1)
+#define ZMALLOC_LIB ("mimalloc-" __xstr(MI_MALLOC_VERSION))
+#define MI_VERSION_MAJOR (MI_MALLOC_VERSION / 100)
+#define MI_VERSION_MINOR ((MI_MALLOC_VERSION / 10) % 10)
+#define MI_VERSION_PATCH (MI_MALLOC_VERSION % 10)
+#if (MI_VERSION_MAJOR == 1 && MI_VERSION_MINOR >= 8) || (MI_VERSION_PATCH > 1)
 #define HAVE_MALLOC_SIZE 1
 #define zmalloc_size(p) mi_usable_size(p)
 #else

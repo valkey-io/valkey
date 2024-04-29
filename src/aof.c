@@ -996,7 +996,7 @@ int startAppendOnly(void) {
 
         if (rewriteAppendOnlyFileBackground() == C_ERR) {
             server.aof_state = AOF_OFF;
-            serverLog(LL_WARNING,"Server needs to enable the AOF but can't trigger a background AOF rewrite operation. Check the above logs for more info about the error.");
+            serverLog(LL_WARNING,"The server needs to enable the AOF but can't trigger a background AOF rewrite operation. Check the above logs for more info about the error.");
             return C_ERR;
         }
     }

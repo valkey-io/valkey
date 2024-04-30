@@ -388,6 +388,31 @@ start_server {tags {"other"}} {
             assert_no_match "*redis_mode:*" $info
             assert_match "*server_mode:*" $info
         }
+
+        # When the extended redis compatibility is enabled, syslog-ident default should be "redis" by default
+        start_server {config "minimal.conf" overrides {extended-redis-compatibility {yes}}} {
+            assert_equal "redis"  [lindex [r config get syslog-ident] 1]
+        }
+
+        # Default for the config syslog-ident should be "valkey", where extended-redis-compatibility is disabled by default
+        assert_equal "valkey" [lindex [r config get syslog-ident] 1]
+    }
+
+    test "Custom syslog-ident config" {
+        # Any user configured syslog-ident is not affected
+        start_server {config "minimal.conf" overrides {syslog-ident {"redis"}}} {
+            assert_equal "redis" [lindex [r config get syslog-ident] 1]
+        }
+
+        # Any user configured syslog-ident is not affected even when the extended-redis-compatibility is enabled
+        start_server {config "minimal.conf" overrides {syslog-ident {"abcd"} extended-redis-compatibility yes}} {
+            assert_equal "abcd" [lindex [r config get syslog-ident] 1]
+        }
+
+        # Any user configured syslog-ident is not affected even when it is an empty string
+        start_server {config "minimal.conf" overrides {syslog-ident {""}}} {
+            assert_equal "" [lindex [r config get syslog-ident] 1]
+        }
     }
 }
 

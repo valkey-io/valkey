@@ -38,6 +38,7 @@
 #ifndef VALKEY_ASSERT_H
 #define VALKEY_ASSERT_H
 
+#include <stdlib.h>
 #include "config.h"
 
 #define assert(_e) (likely((_e))?(void)0 : (_serverAssert(#_e,__FILE__,__LINE__),valkey_unreachable()))

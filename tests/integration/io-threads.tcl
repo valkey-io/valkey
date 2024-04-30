@@ -1,8 +1,6 @@
 proc get_io_threads_active_num {client} {
     set server_info [$client info server]
-    regexp {io_threads_active_num:([0-9]+)} $server_info ->\
-        io_threads_active_num
-    return $io_threads_active_num
+    return [get_info_field $server_info io_threads_active_num]
 }
 
 proc start_benchmark {thread_num client_num} {
@@ -20,9 +18,11 @@ tags {"io-threads external:skip"} {
             set master_pid [srv 0 pid]
             set pstree_out [exec ps -T -p $master_pid]
             assert_no_match "*io_thd_*" $pstree_out
-            assert_match "*io_threads_active:0*" [r info server]
-            assert_match "*io_threads_maximum_num:1*" [r info server]
-            assert_match "*io_threads_active_num:1*" [r info server]
+            set server_info [r info server]
+
+            assert_equal {0} [get_info_field $server_info io_threads_active]
+            assert_equal {1} [get_info_field $server_info io_threads_maximum_num]
+            assert_equal {1} [get_info_field $server_info io_threads_active_num]
 
             assert_equal {OK} [r set k v]
             assert_equal {1} [r DBSIZE]
@@ -37,15 +37,10 @@ tags {"io-threads external:skip"} {
             assert_match "*io_thd_2*" $pstree_out
             assert_match "*io_thd_3*" $pstree_out
             set server_info [r info server]
-            regexp {io_threads_active:([0-9]+)} $server_info -> \
-                io_threads_active
-            regexp {io_threads_maximum_num:([0-9]+)} $server_info -> \
-                io_threads_maximum_num
-            regexp {io_threads_active_num:([0-9]+)} $server_info -> \
-                io_threads_active_num
-            assert {$io_threads_active == 0}
-            assert {$io_threads_maximum_num == 4}
-            assert {$io_threads_active_num == 1}
+
+            assert_equal {0} [get_info_field $server_info io_threads_active]
+            assert_equal {4} [get_info_field $server_info io_threads_maximum_num]
+            assert_equal {1} [get_info_field $server_info io_threads_active_num]
 
             assert_equal {OK} [r set k v]
             assert_equal {1} [r DBSIZE]

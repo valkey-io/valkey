@@ -1491,7 +1491,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         migrateCloseTimedoutSockets();
     }
 
-    /* Adjust the I/O threads according to the realtime workloads. */
+    /* Adjust the I/O threads to match the real-time workloads. */
     adjustIOThreadCount();
 
     /* Resize tracking keys table if needed. This is also done at every

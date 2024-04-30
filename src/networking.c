@@ -4317,11 +4317,10 @@ void killIOThreads(void) {
     }
 }
 
-/* This function dynamically adjusts the I/O thread number according to
- * real workloads at runtime. Currently we track the latest x rounds of
- * pending writes as a measure of clients we need to handle in parallel.
- * However the I/O threading is disabled globally for reads as well if
- * we have too little pending clients.
+/* This function dynamically adjusts the I/O thread number to match real-time
+ * workloads. It tracks the latest 'x' rounds of pending writes as a measure of
+ * clients needing parallel handling. If there are too few pending clients, I/O
+ * threading is disabled globally, for both reads and writes.
  *
  * The function returns the active IO worker thread count. */
 #define IO_THREAD_BATCH_NUM 2
@@ -4335,7 +4334,7 @@ int adjustIOThreadCount(void) {
         server.clients_pending_write_avg_num * SMOOTH_FACTOR +
         pending * (1 - SMOOTH_FACTOR), pending);
 
-    /* Target io-thread number should be in range of [1, io_threads_num]. */
+    /* The target io-thread number should be within the range of [1, io_threads_num]. */
     int target_num = min(server.io_threads_num,
         max(1, server.clients_pending_write_avg_num / IO_THREAD_BATCH_NUM));
 
@@ -4345,8 +4344,8 @@ int adjustIOThreadCount(void) {
             pthread_mutex_unlock(&io_threads_mutex[i]);
         }
     } else {
-        /* We may have still clients with pending reads when this function
-         * is called: handle them before stopping the threads. */
+        /* We may still have clients with pending reads when this function
+         * is called: Handle them before stopping the threads. */
         handleClientsWithPendingReadsUsingThreads();
         /* Decreasing active threads. */
         for (int i = server.io_threads_active_num; i > target_num; --i) {

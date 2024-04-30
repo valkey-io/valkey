@@ -538,18 +538,6 @@ proc R {n args} {
     [Rn $n] {*}$args
 }
 
-proc get_info_field {info field} {
-    set fl [string length $field]
-    append field :
-    foreach line [split $info "\n"] {
-        set line [string trim $line "\r\n "]
-        if {[string range $line 0 $fl] eq $field} {
-            return [string range $line [expr {$fl+1}] end]
-        }
-    }
-    return {}
-}
-
 proc SI {n field} {
     get_info_field [S $n info] $field
 }

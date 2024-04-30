@@ -96,6 +96,9 @@ struct hdr_histogram;
 /* helpers */
 #define numElements(x) (sizeof(x)/sizeof((x)[0]))
 
+#define VALKEY_NOT_SYMLINKED 0  /* To detemine Valkey started using symlink */
+#define VALKEY_SYMLINKED     1  /* To detemine Valkey started using symlink */
+
 /* min/max */
 #undef min
 #undef max
@@ -2073,7 +2076,7 @@ struct valkeyServer {
     int reply_buffer_resizing_enabled; /* Is reply buffer resizing enabled (1 by default) */
     /* Local environment */
     char *locale_collate;
-    bool server_symlink;
+    int server_symlink;
 };
 
 #define MAX_KEYS_BUFFER 256

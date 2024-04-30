@@ -5757,8 +5757,8 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "mem_overhead_db_hashtable_rehashing:%zu\r\n", mh->overhead_db_hashtable_rehashing,
             "active_defrag_running:%d\r\n", server.active_defrag_running,
             "lazyfree_pending_objects:%zu\r\n", lazyfreeGetPendingObjectsCount(),
-#ifdef USE_JEMALLOC
-            "defrag_supported: %s\r\n", "yes",
+#if defined(USE_JEMALLOC)
+            "defrag_supported: %s\r\n", "yes", 
 #else
             "defrag_supported: %s\r\n", "no",
 #endif

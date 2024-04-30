@@ -3717,7 +3717,11 @@ void call(client *c, int flags) {
     }
 
     if (!(c->flags & CLIENT_BLOCKED)) {
-        server.current_client->commands_processed++;
+        /* Modules may call commands in cron, in which case server.current_client
+         * is not set. */
+        if (server.current_client) {
+            server.current_client->commands_processed++;
+        }
         server.stat_numcommands++;
     }
 

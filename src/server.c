@@ -5682,7 +5682,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
         long long memory_lua = evalMemory();
         long long memory_functions = functionsMemory();
         struct serverMemOverhead *mh = getMemoryOverheadData();
-        char mem_allocator[64] = ZMALLOC_LIB;
+        unsigned char mem_allocator[64] = ZMALLOC_LIB;
 
         /* Peak memory is updated from time to time by serverCron() so it
          * may happen that the instantaneous value is slightly bigger than

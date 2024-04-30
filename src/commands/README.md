@@ -24,7 +24,7 @@ in uppercase, e.g. "HSCAN" (hscan.json). The value is a JSON object with the
 following keys. To be safe, assume all of them are optional.
 
 * `"summary"`: a string with a short description of the command. One sentence.
-* `"complexity`: a string like `"O(1)"` or longer, like `"O(1) for every call. O(N) for a complete iteration, including enough command calls for the cursor to return back to 0. N is the number of elements inside the collection."`.
+* `"complexity"`: a string like `"O(1)"` or longer, like `"O(1) for every call. O(N) for a complete iteration, including enough command calls for the cursor to return back to 0. N is the number of elements inside the collection."`.
 * `"group"`: a string used for categorization in documentation. One of these:
   * `"bitmap"`
   * `"cluster"`
@@ -52,7 +52,7 @@ following keys. To be safe, assume all of them are optional.
   on the form `[VERSION, DESCRIPTION]`.
 * `"function"`: The name of the C function in Valkey's source code implementing
   the command. (Don't use it for anything else.)
-* `command_flags`: An array of flags represented as strings. Command flags:
+* `"command_flags"`: An array of flags represented as strings. Command flags:
   * `"ADMIN"`
   * `"ALLOW_BUSY"`
   * `"ASKING"`
@@ -123,10 +123,10 @@ following keys. To be safe, assume all of them are optional.
     * `"pure-token"`: A fixed string. The string is in the key `"token"`.
     * `"string"`: A string.
     * `"unix-time"`: An integer representing a unix time in either seconds or milliseconds.
-  * `"arguments"`: A list with the same structure as its parent. Present if type is "block" or "oneof"
+  * `"arguments"`: A list with the same structure as its parent. Present if type is "block" or "oneof".
   * `"display"`: ("entries-read", "key" or "pattern")
-  * `"key_spec_index"`: An index into the `key_specs` array. Only if `type` is `key`.
-  * `"multiple":`  true if the argument can be repeated multiple times. Omitted means false.
+  * `"key_spec_index"`: An index into the `"key_specs"` array. Only if `"type"` is `"key"`.
+  * `"multiple":` true if the argument can be repeated multiple times. Omitted means false.
   * `"multiple_token"`: Unclear meaning. Maybe meaningless.
   * `"optional":` True if the argument is optional. Omitted means false.
   * `"since"`: Version (string) when the argument was introduced.
@@ -137,7 +137,7 @@ following keys. To be safe, assume all of them are optional.
 Implicit ACL categories
 -----------------------
 
-The ACL categories specified as `acl_categories` are not the ones actually used.
+The ACL categories specified as `"acl_categories"` are not the ones actually used.
 The effective ACL categories are affected also by command flags.
 
 The logic for this can be found in the function `setImplicitACLCategories()` in
@@ -174,7 +174,7 @@ Each element in this array is an object with the following keys:
   * `"VARIABLE_FLAGS"`
 * `"begin_search"`: How to find the first key used by this key spec. It's an
   object with only one key. The key determines the method for finding the first
-  key. Here are the possible forms of the `begin_search` object:
+  key. Here are the possible forms of the `"begin_search"` object:
   * `{"index": {"pos": N}}`: The first key is at position N in the command line,
     where 0 is the command name.
   * `{"keyword": KEYWORD, "startfrom": N}`: The first key is found by searching

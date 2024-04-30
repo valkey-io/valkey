@@ -2471,7 +2471,11 @@ int rewriteAppendOnlyFileBackground(void) {
         char tmpfile[256];
 
         /* Child */
-        serverSetProcTitle("valkey-aof-rewrite");
+        if (server.server_symlink) {
+            serverSetProcTitle("redis-aof-rewrite");
+        } else {
+            serverSetProcTitle("valkey-aof-rewrite");
+        }
         serverSetCpuAffinity(server.aof_rewrite_cpulist);
         snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) getpid());
         if (rewriteAppendOnlyFile(tmpfile) == C_OK) {

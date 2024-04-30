@@ -6992,6 +6992,12 @@ int main(int argc, char **argv) {
     char *exec_name = strrchr(argv[0], '/');
     if (exec_name == NULL) exec_name = argv[0];
     server.sentinel_mode = checkForSentinelMode(argc,argv, exec_name);
+    if (strstr(exec_name,"redis-server") != NULL) {
+        server.server_symlink = true;
+    } else {
+        server.server_symlink = false;
+    }
+
     initServerConfig();
     ACLInit(); /* The ACL subsystem must be initialized ASAP because the
                   basic networking code and client creation depends on it. */

@@ -457,7 +457,6 @@ void loadServerConfigFromString(char *config) {
     sds *lines;
     sds *argv = NULL;
     int argc;
-    int syslog_ident_use_default = 1; /* Flag to decide whether or not use default for the syslog-ident config. */
 
     reading_config_file = 1;
     lines = sdssplitlen(config,strlen(config),"\n",1,&totlines);
@@ -511,11 +510,6 @@ void loadServerConfigFromString(char *config) {
                 if (!config->interface.set(config, &argv[1], argc-1, &err)) {
                     goto loaderr;
                 }
-            }
-
-            /* Check whether user provided custom config for the syslog-ident */
-            if (!strcasecmp(argv[0],"syslog-ident")) {
-                syslog_ident_use_default = 0;
             }
 
             sdsfreesplitres(argv,argc);
@@ -633,12 +627,6 @@ void loadServerConfigFromString(char *config) {
     /* To ensure backward compatibility and work while hz is out of range */
     if (server.config_hz < CONFIG_MIN_HZ) server.config_hz = CONFIG_MIN_HZ;
     if (server.config_hz > CONFIG_MAX_HZ) server.config_hz = CONFIG_MAX_HZ;
-
-    /* For backward compatibility with the Redis OSS */
-    if (syslog_ident_use_default) {
-        zfree(server.syslog_ident);
-        server.syslog_ident = server.extended_redis_compat ? "redis" : SERVER_NAME;
-    }
 
     sdsfreesplitres(lines,totlines);
     reading_config_file = 0;

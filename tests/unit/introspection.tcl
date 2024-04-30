@@ -79,6 +79,13 @@ start_server {tags {"introspection"}} {
         assert_equal [expr $output4+23] $output5
         assert_equal [expr $cmd4+1] $cmd5
         $rd close
+        # test recursive command
+        set info [r client info]
+        set cmd6 [get_field_in_client_info $info "tot-cmds"]
+        r eval "server.call('ping')" 0
+        set info [r client info]
+        set cmd7 [get_field_in_client_info $info "tot-cmds"]
+        assert_equal [expr $cmd6+3] $cmd7
     }
 
     test {CLIENT KILL with illegal arguments} {

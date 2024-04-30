@@ -3717,7 +3717,7 @@ void call(client *c, int flags) {
     }
 
     if (!(c->flags & CLIENT_BLOCKED)) {
-        c->commands_processed++;
+        server.current_client->commands_processed++;
         server.stat_numcommands++;
     }
 

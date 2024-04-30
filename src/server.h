@@ -96,8 +96,8 @@ struct hdr_histogram;
 /* helpers */
 #define numElements(x) (sizeof(x)/sizeof((x)[0]))
 
-#define VALKEY_NOT_SYMLINKED 0  /* To detemine Valkey started using symlink */
-#define VALKEY_SYMLINKED     1  /* To detemine Valkey started using symlink */
+#define VALKEY_NOT_SYMLINKED 0  /* To determine Valkey started using symlink */
+#define VALKEY_SYMLINKED     1  /* To determine Valkey started using symlink */
 
 /* min/max */
 #undef min

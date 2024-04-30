@@ -38,10 +38,7 @@
 #ifndef VALKEY_ASSERT_H
 #define VALKEY_ASSERT_H
 
-/* This is a drop-in replacement of assert. We use it even in code copied from
- * other sources. To make these files usable outside of Valkey, it should be
- * enough to replace this include with <assert.h>. Therefore, this file
- * shouldn't have any dependencies to any other valkey code. */
+/* This file shouldn't have any dependencies to any other Valkey code. */
 
 #if __GNUC__ >= 5 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 5)
 #define valkey_unreachable __builtin_unreachable

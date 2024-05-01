@@ -203,7 +203,7 @@ start_server {} {
         set redirected_c [valkey_client]
         $redirected_c client setname redirected_client
         set redir_id [$redirected_c client id]
-        $redirected_c SUBSCRIBE __redis__:invalidate
+        $redirected_c SUBSCRIBE __valkey__:invalidate
         $rr client tracking on redirect $redir_id bcast
         # Use a big key name to fill the redirected tracking client's buffer quickly
         set key_length [expr 1024*200]

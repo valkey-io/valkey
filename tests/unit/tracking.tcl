@@ -5,7 +5,7 @@ start_server {tags {"tracking network logreqres:skip"}} {
     set rd_redirection [valkey_deferring_client]
     $rd_redirection client id
     set redir_id [$rd_redirection read]
-    $rd_redirection subscribe __redis__:invalidate
+    $rd_redirection subscribe __valkey__:invalidate
     $rd_redirection read ; # Consume the SUBSCRIBE reply.
 
     # Create another client that's not used as a redirection client
@@ -28,7 +28,7 @@ start_server {tags {"tracking network logreqres:skip"}} {
             set rd_redirection [valkey_deferring_client]
             $rd_redirection client id
             set redir_id [$rd_redirection read]
-            $rd_redirection subscribe __redis__:invalidate
+            $rd_redirection subscribe __valkey__:invalidate
             $rd_redirection read ; # Consume the SUBSCRIBE reply.
             r FLUSHALL
             r HELLO 2
@@ -272,7 +272,7 @@ start_server {tags {"tracking network logreqres:skip"}} {
         set rd_redirection [valkey_deferring_client]
         $rd_redirection CLIENT ID
         set redir_id [$rd_redirection read]
-        $rd_redirection SUBSCRIBE __redis__:invalidate
+        $rd_redirection SUBSCRIBE __valkey__:invalidate
         $rd_redirection read ; # Consume the SUBSCRIBE reply
     }
 
@@ -360,15 +360,15 @@ start_server {tags {"tracking network logreqres:skip"}} {
     }
 
     test {Able to redirect to a RESP3 client} {
-        $rd_redirection UNSUBSCRIBE __redis__:invalidate ; # Need to unsub first before we can do HELLO 3
+        $rd_redirection UNSUBSCRIBE __valkey__:invalidate ; # Need to unsub first before we can do HELLO 3
         set res [$rd_redirection read] ; # Consume the UNSUBSCRIBE reply
-        assert_equal {__redis__:invalidate} [lindex $res 1]
+        assert_equal {__valkey__:invalidate} [lindex $res 1]
         $rd_redirection HELLO 3
         set res [$rd_redirection read] ; # Consume the HELLO reply
         assert_equal [dict get $reply proto] 3
-        $rd_redirection SUBSCRIBE __redis__:invalidate
+        $rd_redirection SUBSCRIBE __valkey__:invalidate
         set res [$rd_redirection read] ; # Consume the SUBSCRIBE reply
-        assert_equal {__redis__:invalidate} [lindex $res 1]
+        assert_equal {__valkey__:invalidate} [lindex $res 1]
         r CLIENT TRACKING on REDIRECT $redir_id
         $rd_sg SET key1 1
         r GET key1

@@ -130,7 +130,7 @@ uint64_t gf2_matrix_times_vec2(uint64_t *mat, uint64_t vec) {
 	 */
 	v2uq sum = {0, 0},
 		*mv2 = (v2uq*)mat;
-    /* this table allows us to eliminate conditions during gf2_matrix_times_vec2() */
+	/* this table allows us to eliminate conditions during gf2_matrix_times_vec2() */
 	static v2uq masks2[4] = {
 		{0,0},
 		{-1,0},

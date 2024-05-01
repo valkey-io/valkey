@@ -5,8 +5,8 @@ typedef struct unitTest {
     unitTestProc *proc;
 } unitTest;
 
-int test_crc64(int argc, char *argv[], int flags);
-int test_crc64combine(int argc, char *argv[], int flags);
+int test_crc64(int argc, char **argv, int flags);
+int test_crc64combine(int argc, char **argv, int flags);
 int test_intsetValueEncodings(int argc, char **argv, int flags);
 int test_intsetBasicAdding(int argc, char **argv, int flags);
 int test_intsetLargeNumberRandomAdd(int argc, char **argv, int flags);

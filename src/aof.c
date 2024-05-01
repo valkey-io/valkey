@@ -1224,7 +1224,7 @@ void flushAppendOnlyFile(int force) {
          * OK state and log the event. */
         if (server.aof_last_write_status == C_ERR) {
             serverLog(LL_NOTICE,
-                "AOF write error looks solved, The server can write again.");
+                "AOF write error looks solved. The server can write again.");
             server.aof_last_write_status = C_OK;
         }
     }
@@ -2471,7 +2471,7 @@ int rewriteAppendOnlyFileBackground(void) {
         char tmpfile[256];
 
         /* Child */
-        if (server.server_symlink) {
+        if (strstr(server.exec_argv[0],"redis-server") != NULL) {
             serverSetProcTitle("redis-aof-rewrite");
         } else {
             serverSetProcTitle("valkey-aof-rewrite");

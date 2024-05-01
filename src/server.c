@@ -6992,15 +6992,6 @@ int main(int argc, char **argv) {
     char *exec_name = strrchr(argv[0], '/');
     if (exec_name == NULL) exec_name = argv[0];
     server.sentinel_mode = checkForSentinelMode(argc,argv, exec_name);
-
-    /* Determine Valkey is started by using symlinks, server.server_symlink can be used 
-     * to set actual process name later. */
-    if (strstr(exec_name,"redis-server") != NULL) {
-        server.server_symlink = VALKEY_SYMLINKED;
-    } else {
-        server.server_symlink = VALKEY_NOT_SYMLINKED;
-    }
-
     initServerConfig();
     ACLInit(); /* The ACL subsystem must be initialized ASAP because the
                   basic networking code and client creation depends on it. */

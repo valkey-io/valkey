@@ -211,7 +211,7 @@ typedef struct {
     uint16_t ver;       /* Protocol version, currently set to CLUSTER_PROTO_VER. */
     uint16_t port;      /* Primary port number (TCP or TLS). */
     uint16_t type;      /* Message type */
-    uint16_t count;     /* Only used for some kind of messages. */
+    uint16_t count;     /* Number of gossip sections. */
     uint64_t currentEpoch;  /* The epoch accordingly to the sending node. */
     uint64_t configEpoch;   /* The config epoch if it's a master, or the last
                                epoch advertised by its master if it is a

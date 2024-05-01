@@ -33,8 +33,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef DICT_H
-#define DICT_H
+#ifndef __DICT_H
+#define __DICT_H
 
 #include "mt19937-64.h"
 #include <limits.h>
@@ -252,4 +252,4 @@ void dictFreeStats(dictStats *stats);
 int dictTest(int argc, char *argv[], int flags);
 #endif
 
-#endif /* DICT_H */
+#endif /* __DICT_H */

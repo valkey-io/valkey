@@ -1,229 +1,229 @@
-#include "redismodule.h"
+#include "valkeymodule.h"
 #include <pthread.h>
 #include <assert.h>
 
 #define UNUSED(V) ((void) V)
 
-RedisModuleUser *user = NULL;
+ValkeyModuleUser *user = NULL;
 
-int call_without_user(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int call_without_user(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc < 2) {
-        return RedisModule_WrongArity(ctx);
+        return ValkeyModule_WrongArity(ctx);
     }
 
-    const char *cmd = RedisModule_StringPtrLen(argv[1], NULL);
+    const char *cmd = ValkeyModule_StringPtrLen(argv[1], NULL);
 
-    RedisModuleCallReply *rep = RedisModule_Call(ctx, cmd, "Ev", argv + 2, argc - 2);
+    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, cmd, "Ev", argv + 2, argc - 2);
     if (!rep) {
-        RedisModule_ReplyWithError(ctx, "NULL reply returned");
+        ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
     } else {
-        RedisModule_ReplyWithCallReply(ctx, rep);
-        RedisModule_FreeCallReply(rep);
+        ValkeyModule_ReplyWithCallReply(ctx, rep);
+        ValkeyModule_FreeCallReply(rep);
     }
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int call_with_user_flag(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int call_with_user_flag(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc < 3) {
-        return RedisModule_WrongArity(ctx);
+        return ValkeyModule_WrongArity(ctx);
     }
 
-    RedisModule_SetContextUser(ctx, user);
+    ValkeyModule_SetContextUser(ctx, user);
 
     /* Append Ev to the provided flags. */
-    RedisModuleString *flags = RedisModule_CreateStringFromString(ctx, argv[1]);
-    RedisModule_StringAppendBuffer(ctx, flags, "Ev", 2);
+    ValkeyModuleString *flags = ValkeyModule_CreateStringFromString(ctx, argv[1]);
+    ValkeyModule_StringAppendBuffer(ctx, flags, "Ev", 2);
 
-    const char* flg = RedisModule_StringPtrLen(flags, NULL);
-    const char* cmd = RedisModule_StringPtrLen(argv[2], NULL);
+    const char* flg = ValkeyModule_StringPtrLen(flags, NULL);
+    const char* cmd = ValkeyModule_StringPtrLen(argv[2], NULL);
 
-    RedisModuleCallReply* rep = RedisModule_Call(ctx, cmd, flg, argv + 3, argc - 3);
+    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, flg, argv + 3, argc - 3);
     if (!rep) {
-        RedisModule_ReplyWithError(ctx, "NULL reply returned");
+        ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
     } else {
-        RedisModule_ReplyWithCallReply(ctx, rep);
-        RedisModule_FreeCallReply(rep);
+        ValkeyModule_ReplyWithCallReply(ctx, rep);
+        ValkeyModule_FreeCallReply(rep);
     }
-    RedisModule_FreeString(ctx, flags);
+    ValkeyModule_FreeString(ctx, flags);
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int add_to_acl(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int add_to_acl(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) {
-        return RedisModule_WrongArity(ctx);
+        return ValkeyModule_WrongArity(ctx);
     }
 
     size_t acl_len;
-    const char *acl = RedisModule_StringPtrLen(argv[1], &acl_len);
+    const char *acl = ValkeyModule_StringPtrLen(argv[1], &acl_len);
 
-    RedisModuleString *error;
-    int ret = RedisModule_SetModuleUserACLString(ctx, user, acl, &error);
+    ValkeyModuleString *error;
+    int ret = ValkeyModule_SetModuleUserACLString(ctx, user, acl, &error);
     if (ret) {
         size_t len;
-        const char * e = RedisModule_StringPtrLen(error, &len);
-        RedisModule_ReplyWithError(ctx, e);
-        return REDISMODULE_OK;
+        const char * e = ValkeyModule_StringPtrLen(error, &len);
+        ValkeyModule_ReplyWithError(ctx, e);
+        return VALKEYMODULE_OK;
     }
 
-    RedisModule_ReplyWithSimpleString(ctx, "OK");
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int get_acl(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
+int get_acl(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
 
     if (argc != 1) {
-        return RedisModule_WrongArity(ctx);
+        return ValkeyModule_WrongArity(ctx);
     }
 
-    RedisModule_Assert(user != NULL);
+    ValkeyModule_Assert(user != NULL);
 
-    RedisModuleString *acl = RedisModule_GetModuleUserACLString(user);
+    ValkeyModuleString *acl = ValkeyModule_GetModuleUserACLString(user);
 
-    RedisModule_ReplyWithString(ctx, acl);
+    ValkeyModule_ReplyWithString(ctx, acl);
 
-    RedisModule_FreeString(NULL, acl);
+    ValkeyModule_FreeString(NULL, acl);
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int reset_user(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
+int reset_user(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
 
     if (argc != 1) {
-        return RedisModule_WrongArity(ctx);
+        return ValkeyModule_WrongArity(ctx);
     }
 
     if (user != NULL) {
-        RedisModule_FreeModuleUser(user);
+        ValkeyModule_FreeModuleUser(user);
     }
 
-    user = RedisModule_CreateModuleUser("module_user");
+    user = ValkeyModule_CreateModuleUser("module_user");
 
-    RedisModule_ReplyWithSimpleString(ctx, "OK");
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
 typedef struct {
-    RedisModuleString **argv;
+    ValkeyModuleString **argv;
     int argc;
-    RedisModuleBlockedClient *bc;
+    ValkeyModuleBlockedClient *bc;
 } bg_call_data;
 
 void *bg_call_worker(void *arg) {
     bg_call_data *bg = arg;
-    RedisModuleBlockedClient *bc = bg->bc;
+    ValkeyModuleBlockedClient *bc = bg->bc;
 
     // Get module context
-    RedisModuleCtx *ctx = RedisModule_GetThreadSafeContext(bg->bc);
+    ValkeyModuleCtx *ctx = ValkeyModule_GetThreadSafeContext(bg->bc);
 
     // Acquire GIL
-    RedisModule_ThreadSafeContextLock(ctx);
+    ValkeyModule_ThreadSafeContextLock(ctx);
 
     // Set user
-    RedisModule_SetContextUser(ctx, user);
+    ValkeyModule_SetContextUser(ctx, user);
 
     // Call the command
     size_t format_len;
-    RedisModuleString *format_redis_str = RedisModule_CreateString(NULL, "v", 1);
-    const char *format = RedisModule_StringPtrLen(bg->argv[1], &format_len);
-    RedisModule_StringAppendBuffer(NULL, format_redis_str, format, format_len);
-    RedisModule_StringAppendBuffer(NULL, format_redis_str, "E", 1);
-    format = RedisModule_StringPtrLen(format_redis_str, NULL);
-    const char *cmd = RedisModule_StringPtrLen(bg->argv[2], NULL);
-    RedisModuleCallReply *rep = RedisModule_Call(ctx, cmd, format, bg->argv + 3, bg->argc - 3);
-    RedisModule_FreeString(NULL, format_redis_str);
+    ValkeyModuleString *format_valkey_str = ValkeyModule_CreateString(NULL, "v", 1);
+    const char *format = ValkeyModule_StringPtrLen(bg->argv[1], &format_len);
+    ValkeyModule_StringAppendBuffer(NULL, format_valkey_str, format, format_len);
+    ValkeyModule_StringAppendBuffer(NULL, format_valkey_str, "E", 1);
+    format = ValkeyModule_StringPtrLen(format_valkey_str, NULL);
+    const char *cmd = ValkeyModule_StringPtrLen(bg->argv[2], NULL);
+    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, cmd, format, bg->argv + 3, bg->argc - 3);
+    ValkeyModule_FreeString(NULL, format_valkey_str);
 
     /* Free the arguments within GIL to prevent simultaneous freeing in main thread. */
     for (int i=0; i<bg->argc; i++)
-        RedisModule_FreeString(ctx, bg->argv[i]);
-    RedisModule_Free(bg->argv);
-    RedisModule_Free(bg);
+        ValkeyModule_FreeString(ctx, bg->argv[i]);
+    ValkeyModule_Free(bg->argv);
+    ValkeyModule_Free(bg);
 
     // Release GIL
-    RedisModule_ThreadSafeContextUnlock(ctx);
+    ValkeyModule_ThreadSafeContextUnlock(ctx);
 
     // Reply to client
     if (!rep) {
-        RedisModule_ReplyWithError(ctx, "NULL reply returned");
+        ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
     } else {
-        RedisModule_ReplyWithCallReply(ctx, rep);
-        RedisModule_FreeCallReply(rep);
+        ValkeyModule_ReplyWithCallReply(ctx, rep);
+        ValkeyModule_FreeCallReply(rep);
     }
 
     // Unblock client
-    RedisModule_UnblockClient(bc, NULL);
+    ValkeyModule_UnblockClient(bc, NULL);
 
     // Free the module context
-    RedisModule_FreeThreadSafeContext(ctx);
+    ValkeyModule_FreeThreadSafeContext(ctx);
 
     return NULL;
 }
 
-int call_with_user_bg(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int call_with_user_bg(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     UNUSED(argv);
     UNUSED(argc);
 
     /* Make sure we're not trying to block a client when we shouldn't */
-    int flags = RedisModule_GetContextFlags(ctx);
-    int allFlags = RedisModule_GetContextFlagsAll();
-    if ((allFlags & REDISMODULE_CTX_FLAGS_MULTI) &&
-        (flags & REDISMODULE_CTX_FLAGS_MULTI)) {
-        RedisModule_ReplyWithSimpleString(ctx, "Blocked client is not supported inside multi");
-        return REDISMODULE_OK;
+    int flags = ValkeyModule_GetContextFlags(ctx);
+    int allFlags = ValkeyModule_GetContextFlagsAll();
+    if ((allFlags & VALKEYMODULE_CTX_FLAGS_MULTI) &&
+        (flags & VALKEYMODULE_CTX_FLAGS_MULTI)) {
+        ValkeyModule_ReplyWithSimpleString(ctx, "Blocked client is not supported inside multi");
+        return VALKEYMODULE_OK;
     }
-    if ((allFlags & REDISMODULE_CTX_FLAGS_DENY_BLOCKING) &&
-        (flags & REDISMODULE_CTX_FLAGS_DENY_BLOCKING)) {
-        RedisModule_ReplyWithSimpleString(ctx, "Blocked client is not allowed");
-        return REDISMODULE_OK;
+    if ((allFlags & VALKEYMODULE_CTX_FLAGS_DENY_BLOCKING) &&
+        (flags & VALKEYMODULE_CTX_FLAGS_DENY_BLOCKING)) {
+        ValkeyModule_ReplyWithSimpleString(ctx, "Blocked client is not allowed");
+        return VALKEYMODULE_OK;
     }
 
     /* Make a copy of the arguments and pass them to the thread. */
-    bg_call_data *bg = RedisModule_Alloc(sizeof(bg_call_data));
-    bg->argv = RedisModule_Alloc(sizeof(RedisModuleString*)*argc);
+    bg_call_data *bg = ValkeyModule_Alloc(sizeof(bg_call_data));
+    bg->argv = ValkeyModule_Alloc(sizeof(ValkeyModuleString*)*argc);
     bg->argc = argc;
     for (int i=0; i<argc; i++)
-        bg->argv[i] = RedisModule_HoldString(ctx, argv[i]);
+        bg->argv[i] = ValkeyModule_HoldString(ctx, argv[i]);
 
     /* Block the client */
-    bg->bc = RedisModule_BlockClient(ctx, NULL, NULL, NULL, 0);
+    bg->bc = ValkeyModule_BlockClient(ctx, NULL, NULL, NULL, 0);
 
     /* Start a thread to handle the request */
     pthread_t tid;
     int res = pthread_create(&tid, NULL, bg_call_worker, bg);
     assert(res == 0);
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
-    if (RedisModule_Init(ctx,"usercall",1,REDISMODULE_APIVER_1)== REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_Init(ctx,"usercall",1,VALKEYMODULE_APIVER_1)== VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"usercall.call_without_user", call_without_user,"write",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"usercall.call_without_user", call_without_user,"write",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"usercall.call_with_user_flag", call_with_user_flag,"write",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"usercall.call_with_user_flag", call_with_user_flag,"write",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx, "usercall.call_with_user_bg", call_with_user_bg, "write", 0, 0, 0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "usercall.call_with_user_bg", call_with_user_bg, "write", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx, "usercall.add_to_acl", add_to_acl, "write",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "usercall.add_to_acl", add_to_acl, "write",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"usercall.reset_user", reset_user,"write",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"usercall.reset_user", reset_user,"write",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"usercall.get_acl", get_acl,"write",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"usercall.get_acl", get_acl,"write",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }

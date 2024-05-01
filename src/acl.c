@@ -2535,7 +2535,7 @@ int ACLSaveToFile(const char *filename) {
         }
         offset += written_bytes;
     }
-    if (redis_fsync(fd) == -1) {
+    if (valkey_fsync(fd) == -1) {
         serverLog(LL_WARNING,"Syncing ACL file for ACL SAVE: %s",
             strerror(errno));
         goto cleanup;

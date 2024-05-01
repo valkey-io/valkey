@@ -350,7 +350,7 @@ static inline unsigned int zipIntSize(unsigned char encoding) {
     if (encoding >= ZIP_INT_IMM_MIN && encoding <= ZIP_INT_IMM_MAX)
         return 0; /* 4 bit immediate */
     /* bad encoding, covered by a previous call to ZIP_ASSERT_ENCODING */
-    redis_unreachable();
+    valkey_unreachable();
     return 0;
 }
 
@@ -1845,7 +1845,7 @@ static size_t strEntryBytesLarge(size_t slen) {
     return slen + zipStorePrevEntryLength(NULL, ZIP_BIG_PREVLEN) + zipStoreEntryEncoding(NULL, 0, slen);
 }
 
-/* ./redis-server test ziplist <randomseed> */
+/* ./valkey-server test ziplist <randomseed> */
 int ziplistTest(int argc, char **argv, int flags) {
     int accurate = (flags & TEST_ACCURATE);
     unsigned char *zl, *p;

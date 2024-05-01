@@ -45,7 +45,10 @@ int main(int argc, char **argv) {
         char *arg = argv[j];
         if (!strcasecmp(arg, "--accurate")) flags |= UNIT_TEST_ACCURATE;
         else if (!strcasecmp(arg, "--large-memory")) flags |= UNIT_TEST_LARGE_MEMORY;
-        else if (!strcasecmp(arg, "--single") && (j + 1 < argc)) file = argv[j + 1];
+        else if (!strcasecmp(arg, "--single") && (j + 1 < argc)) {
+            flags |= UNIT_TEST_SINGLE;
+            file = argv[j + 1];
+        }
     }
 
     int numtests = sizeof(unitTestSuite)/sizeof(struct unitTest);

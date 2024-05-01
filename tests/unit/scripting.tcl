@@ -1055,7 +1055,7 @@ start_server {tags {"scripting"}} {
     test "Try trick global protection 3" {
         catch {
             run_script {
-                valkey = function() return 1 end
+                redis = function() return 1 end
             } 0
         } e
         set _ $e
@@ -1440,7 +1440,7 @@ start_server {tags {"scripting repl external:skip"}} {
             set e
         } {*Invalid*flags*}
 
-        test "Test selective replication of certain Redis commands from Lua" {
+        test "Test selective replication of certain commands from Lua" {
             r del a b c d
             run_script {
                 redis.call('set','a','1');

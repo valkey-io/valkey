@@ -483,7 +483,7 @@ start_server {tags {"pubsub network"}} {
         r hello 3
 
         # Note: SUBSCRIBE and UNSUBSCRIBE with multiple channels in the same command,
-        # breaks the multi response, see https://github.com/redis/redis/issues/12207
+        # breaks the multi response, see Redis OSS issue: https://github.com/redis/redis/issues/12207
         # this is just a temporary sanity test to detect unintended breakage.
 
         # subscribe for 3 channels actually emits 3 "responses"

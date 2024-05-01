@@ -28,4 +28,3 @@ int test_crc64(int argc, char *argv[], int flags) {
     TEST_ASSERT_MESSAGE("[calcula]: CRC64 TEXT", (uint64_t)crc64(0, li, sizeof(li)) == 14373597793578550195ull);
     return 0;
 }
-

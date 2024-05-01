@@ -19,6 +19,13 @@ proc valkeycli {host port {opts {}}} {
     return $cmd
 }
 
+proc valkeycliuri {scheme host port {opts {}}} {
+    set cmd [list src/valkey-cli -u $scheme$host:$port]
+    lappend cmd {*}[valkeycli_tls_config "tests"]
+    lappend cmd {*}$opts
+    return $cmd
+}
+
 # Returns command line for executing valkey-cli with a unix socket address
 proc valkeycli_unixsocket {unixsocket {opts {}}} {
     return [list src/valkey-cli -s $unixsocket {*}$opts]

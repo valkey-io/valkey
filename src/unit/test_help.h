@@ -17,9 +17,11 @@
 
 /* The flags are the following:
 * --accurate:     Runs tests with more iterations.
-* --large-memory: Enables tests that consume more than 100mb. */
+* --large-memory: Enables tests that consume more than 100mb.
+* --single:       A flag to indicate a specific test file was executed. */
 #define UNIT_TEST_ACCURATE     (1<<0)
 #define UNIT_TEST_LARGE_MEMORY (1<<1)
+#define UNIT_TEST_SINGLE (1<<2)
 
 #define KRED  "\33[31m"
 #define KGRN  "\33[32m"
@@ -30,7 +32,7 @@
     printf("[" KRED "%s - %s:%d" KRESET "] %s\n",  __func__, __FILE__, __LINE__, descr)
 
 #define TEST_PRINT_INFO(descr, ...) \
-    printf("[" KBLUE "%s - %s:%d" KRESET "] " #descr "\n",  __func__, __FILE__, __LINE__, __VA_ARGS__)
+    printf("[" KBLUE "%s - %s:%d" KRESET "] " descr "\n",  __func__, __FILE__, __LINE__, __VA_ARGS__)
 
 #define TEST_ASSERT_MESSAGE(descr, _c) do { \
     if (!(_c)) { \

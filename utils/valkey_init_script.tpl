@@ -5,7 +5,7 @@ case "$1" in
         then
             echo "$PIDFILE exists, process is already running or crashed"
         else
-            echo "Starting Redis server..."
+            echo "Starting Valkey server..."
             $EXEC $CONF
         fi
         ;;
@@ -16,22 +16,22 @@ case "$1" in
         else
             PID=$(cat $PIDFILE)
             echo "Stopping ..."
-            $CLIEXEC -p $REDISPORT shutdown
+            $CLIEXEC -p $VALKEYPORT shutdown
             while [ -x /proc/${PID} ]
             do
-                echo "Waiting for Redis to shutdown ..."
+                echo "Waiting for Valkey to shutdown ..."
                 sleep 1
             done
-            echo "Redis stopped"
+            echo "Valkey stopped"
         fi
         ;;
     status)
         PID=$(cat $PIDFILE)
         if [ ! -x /proc/${PID} ]
         then
-            echo 'Redis is not running'
+            echo 'Valkey is not running'
         else
-            echo "Redis is running ($PID)"
+            echo "Valkey is running ($PID)"
         fi
         ;;
     restart)

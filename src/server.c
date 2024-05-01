@@ -4484,7 +4484,7 @@ int finishShutdown(void) {
         /* Append only file: flush buffers and fsync() the AOF at exit */
         serverLog(LL_NOTICE,"Calling fsync() on the AOF file.");
         flushAppendOnlyFile(1);
-        if (redis_fsync(server.aof_fd) == -1) {
+        if (valkey_fsync(server.aof_fd) == -1) {
             serverLog(LL_WARNING,"Fail to fsync the AOF file: %s.",
                                  strerror(errno));
         }
@@ -7019,15 +7019,13 @@ int main(int argc, char **argv) {
     else if (strstr(exec_name,"valkey-check-aof") != NULL)
         redis_check_aof_main(argc,argv);
     
-    /* If enable USE_REDIS_SYMLINKS, valkey may install symlinks like 
+    /* valkey may install symlinks like
      * redis-server -> valkey-server, redis-check-rdb -> valkey-check-rdb,
      * redis-check-aof -> valkey-check-aof, etc. */
-#ifdef USE_REDIS_SYMLINKS
     if (strstr(exec_name,"redis-check-rdb") != NULL)
         redis_check_rdb_main(argc, argv, NULL);
     else if (strstr(exec_name,"redis-check-aof") != NULL)
         redis_check_aof_main(argc,argv);
-#endif
 
     if (argc >= 2) {
         j = 1; /* First option to parse in argv[] */
@@ -7050,7 +7048,7 @@ int main(int argc, char **argv) {
                 exit(0);
             } else {
                 fprintf(stderr,"Please specify the amount of memory to test in megabytes.\n");
-                fprintf(stderr,"Example: ./redis-server --test-memory 4096\n\n");
+                fprintf(stderr,"Example: ./valkey-server --test-memory 4096\n\n");
                 exit(1);
             }
         } if (strcmp(argv[1], "--check-system") == 0) {

@@ -334,7 +334,7 @@ int clusterLoadConfig(char *filename) {
         }
     }
 
-    if (redis_fstat(fileno(fp),&sb) == -1) {
+    if (valkey_fstat(fileno(fp), &sb) == -1) {
         serverLog(LL_WARNING,
             "Unable to obtain the cluster node config file stat %s: %s",
             filename, strerror(errno));
@@ -727,7 +727,7 @@ int clusterSaveConfig(int do_fsync) {
 
     if (do_fsync) {
         server.cluster->todo_before_sleep &= ~CLUSTER_TODO_FSYNC_CONFIG;
-        if (redis_fsync(fd) == -1) {
+        if (valkey_fsync(fd) == -1) {
             serverLog(LL_WARNING,"Could not sync tmp cluster config file: %s",strerror(errno));
             goto cleanup;
         }
@@ -808,7 +808,7 @@ int clusterLockConfig(char *filename) {
      * we need save `fd` to `cluster_config_file_lock_fd`, so that in serverFork(),
      * it will be closed in the child process.
      * If it is not closed, when the main process is killed -9, but the child process
-     * (redis-aof-rewrite) is still alive, the fd(lock) will still be held by the
+     * (valkey-aof-rewrite) is still alive, the fd(lock) will still be held by the
      * child process, and the main process will fail to get lock, means fail to start. */
     server.cluster_config_file_lock_fd = fd;
 #else
@@ -3772,7 +3772,7 @@ void clusterBroadcastPong(int target) {
  * As all the struct is used as a buffer, when more than 8 bytes are copied into
  * the 'bulk_data', sanitizer generates an out-of-bounds error which is a false
  * positive in this context. */
-REDIS_NO_SANITIZE("bounds")
+VALKEY_NO_SANITIZE("bounds")
 clusterMsgSendBlock *clusterCreatePublishMsgBlock(robj *channel, robj *message, uint16_t type) {
 
     uint32_t channel_len, message_len;

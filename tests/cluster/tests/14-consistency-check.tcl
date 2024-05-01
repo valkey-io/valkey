@@ -38,7 +38,7 @@ proc get_one_of_my_replica {id} {
 proc cluster_write_keys_with_expire {id ttl} {
     set prefix [randstring 20 20 alpha]
     set port [get_instance_attrib valkey $id port]
-    set cluster [redis_cluster 127.0.0.1:$port]
+    set cluster [valkey_cluster 127.0.0.1:$port]
     for {set j 100} {$j < 200} {incr j} {
         $cluster setex key_expire.$j $ttl $prefix.$j
     }

@@ -37,38 +37,38 @@
 #include <string.h>
 
 /* Timer callback. */
-void timerHandler(RedisModuleCtx *ctx, void *data) {
+void timerHandler(ValkeyModuleCtx *ctx, void *data) {
     VALKEYMODULE_NOT_USED(ctx);
     printf("Fired %s!\n", (char *)data);
-    RedisModule_Free(data);
+    ValkeyModule_Free(data);
 }
 
 /* HELLOTIMER.TIMER*/
-int TimerCommand_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int TimerCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
     for (int j = 0; j < 10; j++) {
         int delay = rand() % 5000;
-        char *buf = RedisModule_Alloc(256);
+        char *buf = ValkeyModule_Alloc(256);
         snprintf(buf,256,"After %d", delay);
-        RedisModuleTimerID tid = RedisModule_CreateTimer(ctx,delay,timerHandler,buf);
+        ValkeyModuleTimerID tid = ValkeyModule_CreateTimer(ctx,delay,timerHandler,buf);
         VALKEYMODULE_NOT_USED(tid);
     }
-    return RedisModule_ReplyWithSimpleString(ctx, "OK");
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
 /* This function must be present on each module. It is used in order to
  * register the commands into the server. */
-int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
-    if (RedisModule_Init(ctx,"hellotimer",1,VALKEYMODULE_APIVER_1)
+    if (ValkeyModule_Init(ctx,"hellotimer",1,VALKEYMODULE_APIVER_1)
         == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"hellotimer.timer",
-        TimerCommand_RedisCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx,"hellotimer.timer",
+        TimerCommand_ValkeyCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

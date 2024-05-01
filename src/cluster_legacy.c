@@ -6898,22 +6898,17 @@ void clusterReplicateOpenSlots(void)
     int argc = 5;
     robj **argv = zmalloc(sizeof(robj*)*argc);
 
-    robj *cmd_obj = createObject(OBJ_STRING, sdsnew("CLUSTER"));
-    robj *subcmd_obj = createObject(OBJ_STRING, sdsnew("SETSLOT"));
-    robj *imp_obj = createObject(OBJ_STRING, sdsnew("IMPORTING"));
-    robj *mig_obj = createObject(OBJ_STRING, sdsnew("MIGRATING"));
-
-    argv[0] = cmd_obj;
-    argv[1] = subcmd_obj;
+    argv[0] =shared.cluster;
+    argv[1] = shared.setslot;
 
     for (int i = 0; i < 2; i++) {
         clusterNode **nodes_ptr = NULL;
         if (i == 0) {
             nodes_ptr = server.cluster->importing_slots_from;
-            argv[3] = imp_obj;
+            argv[3] = shared.importing;
         } else {
             nodes_ptr = server.cluster->migrating_slots_to;
-            argv[3] = mig_obj;
+            argv[3] = shared.migrating;
         }
 
         for (int j = 0; j < CLUSTER_SLOTS; j++) {
@@ -6930,9 +6925,5 @@ void clusterReplicateOpenSlots(void)
         }
     }
 
-    decrRefCount(mig_obj);
-    decrRefCount(imp_obj);
-    decrRefCount(subcmd_obj);
-    decrRefCount(cmd_obj);
     zfree(argv);
 }

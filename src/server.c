@@ -1999,6 +1999,10 @@ void createSharedObjects(void) {
     shared.special_asterick = createStringObject("*",1);
     shared.special_equals = createStringObject("=",1);
     shared.redacted = makeObjectShared(createStringObject("(redacted)",10));
+    shared.cluster = createStringObject("CLUSTER", 7);
+    shared.setslot = createStringObject("SETSLOT", 7);
+    shared.importing = createStringObject("IMPORTING", 9);
+    shared.migrating = createStringObject("MIGRATING", 9);
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] =

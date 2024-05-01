@@ -5,7 +5,7 @@
 
 extern uint64_t _crc64(uint_fast64_t crc, const void *in_data, const uint64_t len);
 
-int test_crc64(int argc, char *argv[], int flags) {
+int test_crc64(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);

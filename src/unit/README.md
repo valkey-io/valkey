@@ -2,7 +2,7 @@
 Valkey uses a very simple C testing framework, built up over time but now based loosely off of [Unity](https://www.throwtheswitch.org/unity).
 
 All test files being test_ in the unit directory.
-A single test file can have multiple individual tests, and they must be of the form `int test_<test_name>(int test_crc64(int argc, char *argv[], int flags) {`, where test_name is the name of the test.
+A single test file can have multiple individual tests, and they must be of the form `int test_<test_name>(int argc, char *argv[], int flags) {`, where test_name is the name of the test.
 The test name must be globally unique.
 A test will be marked as successful if returns 0, and will be marked failed in all other cases.
 
@@ -11,6 +11,7 @@ The test framework also parses several flags passed in, and sets them based on t
 Tests flags:
 * UNIT_TEST_ACCURATE: Corresponds to the --accurate flag. This flag indicates the test should use extra computation to more accurately validate the tests.
 * UNIT_TEST_LARGE_MEMORY: Corresponds to the --large-memory flag. This flag indicates whether or not tests should use more than 100mb of memory.
+* UNIT_TEST_SINGLE: Corresponds to the --single flag. This flag indicates that a single test is being executed.
 
 Tests are allowed to be passed in additional arbitrary argv/argc, which they can access from the argc and argv arguments of the test.
 

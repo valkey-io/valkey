@@ -72,10 +72,10 @@ static void genBenchmarkRandomData(char *data, int count) {
     }
 }
 
-/* This is a special unit test useful for benchmark crc64combine performance. The
+/* This is a special unit test useful for benchmarking crc64combine performance. The
  * benchmarking is only done when the tests are invoked with a single test target,
  * like 'valkey-unit-tests --single test_crc64combine.c --crc 16384'. */
-int test_crc64combine(int argc, char *argv[], int flags) {
+int test_crc64combine(int argc, char **argv, int flags) {
     if (!(flags & UNIT_TEST_SINGLE)) {
         return 0;
     }

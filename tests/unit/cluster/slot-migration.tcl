@@ -1,5 +1,5 @@
 proc get_open_slots {srv_idx} {
-    foreach line [split [R $srv_idx cluster nodes] "\n"] {
+    foreach line [split [R $srv_idx CLUSTER NODES] "\n"] {
         set line [string trim $line]
         if {$line eq {}} continue
         if {[regexp {myself} $line] == 0} continue
@@ -10,7 +10,7 @@ proc get_open_slots {srv_idx} {
 }
 
 proc get_cluster_role {srv_idx} {
-    foreach line [split [R $srv_idx cluster nodes] "\n"] {
+    foreach line [split [R $srv_idx CLUSTER NODES] "\n"] {
         set line [string trim $line]
         if {$line eq {}} continue
         if {[regexp {myself} $line] == 0} continue
@@ -21,11 +21,11 @@ proc get_cluster_role {srv_idx} {
 }
 
 proc wait_for_role {srv_idx role} {
-    set node_timeout [lindex [R 0 config get cluster-node-timeout] 1]
+    set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
     # wait for a gossip cycle for states to be propagated throughout the cluster
     after $node_timeout
     wait_for_condition 100 100 {
-        [lindex [split [R $srv_idx role] " "] 0] eq $role
+        [lindex [split [R $srv_idx ROLE] " "] 0] eq $role
     } else {
         fail "R $srv_idx didn't assume the replication $role in time"
     }
@@ -53,8 +53,8 @@ proc check_server_response {server_id} {
 
 # restart a server and wait for it to come back online
 proc restart_server_and_wait {server_id} {
-    set node_timeout [lindex [R 0 config get cluster-node-timeout] 1]
-    set result [catch {R $server_id debug restart [expr 3*$node_timeout]} err]
+    set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
+    set result [catch {R $server_id DEBUG RESTART [expr 3*$node_timeout]} err]
 
     # Check if the error is the expected "I/O error reading reply"
     if {$result != 0 && $err ne "I/O error reading reply"} {
@@ -70,13 +70,13 @@ proc restart_server_and_wait {server_id} {
 
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
-    set node_timeout [lindex [R 0 config get cluster-node-timeout] 1]
-    set R0_id [R 0 cluster myid]
-    set R1_id [R 1 cluster myid]
-    set R2_id [R 2 cluster myid]
-    set R3_id [R 3 cluster myid]
-    set R4_id [R 4 cluster myid]
-    set R5_id [R 5 cluster myid]
+    set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
+    set R0_id [R 0 CLUSTER MYID]
+    set R1_id [R 1 CLUSTER MYID]
+    set R2_id [R 2 CLUSTER MYID]
+    set R3_id [R 3 CLUSTER MYID]
+    set R4_id [R 4 CLUSTER MYID]
+    set R5_id [R 5 CLUSTER MYID]
 
     test "Slot migration states are replicated" {
         # Validate initial states
@@ -85,8 +85,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_not_equal [get_open_slots 3] "\[609->-$R1_id\]"
         assert_not_equal [get_open_slots 4] "\[609-<-$R0_id\]"
         # Kick off the migration of slot 609 from R0 to R1
-        assert_equal {OK} [R 0 cluster setslot 609 migrating $R1_id]
-        assert_equal {OK} [R 1 cluster setslot 609 importing $R0_id]
+        assert_equal {OK} [R 0 CLUSTER SETSLOT 609 MIGRATING $R1_id]
+        assert_equal {OK} [R 1 CLUSTER SETSLOT 609 IMPORTING $R0_id]
         # Validate that R0 is migrating slot 609 to R1
         assert_equal [get_open_slots 0] "\[609->-$R1_id\]"
         # Validate that R1 is importing slot 609 from R0 
@@ -152,12 +152,12 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     test "New replica inherits migrating slot" {
         # Reset R3 to turn it into an empty node
         assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
-        assert_equal {OK} [R 3 cluster reset]
+        assert_equal {OK} [R 3 CLUSTER RESET]
         assert_not_equal [get_open_slots 3] "\[609->-$R1_id\]"
         # Add R3 back as a replica of R0
-        assert_equal {OK} [R 3 cluster meet [srv 0 "host"] [srv 0 "port"]]
+        assert_equal {OK} [R 3 CLUSTER MEET [srv 0 "host"] [srv 0 "port"]]
         wait_for_role 0 master
-        assert_equal {OK} [R 3 cluster replicate $R0_id]
+        assert_equal {OK} [R 3 CLUSTER REPLICATE $R0_id]
         wait_for_role 3 slave
         # Validate that R3 now sees slot 609 open
         assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
@@ -166,12 +166,12 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     test "New replica inherits importing slot" {
         # Reset R4 to turn it into an empty node
         assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
-        assert_equal {OK} [R 4 cluster reset]
+        assert_equal {OK} [R 4 CLUSTER RESET]
         assert_not_equal [get_open_slots 4] "\[609-<-$R0_id\]"
         # Add R4 back as a replica of R1
-        assert_equal {OK} [R 4 cluster meet [srv -1 "host"] [srv -1 "port"]]
+        assert_equal {OK} [R 4 CLUSTER MEET [srv -1 "host"] [srv -1 "port"]]
         wait_for_role 1 master
-        assert_equal {OK} [R 4 cluster replicate $R1_id]
+        assert_equal {OK} [R 4 CLUSTER REPLICATE $R1_id]
         wait_for_role 4 slave
         # Validate that R4 now sees slot 609 open
         assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
@@ -179,30 +179,30 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 }
 
 proc create_empty_shard {p r} {
-    set node_timeout [lindex [R 0 config get cluster-node-timeout] 1]
-    assert_equal {OK} [R $p cluster reset]
-    assert_equal {OK} [R $r cluster reset]
-    assert_equal {OK} [R $p cluster meet [srv 0 "host"] [srv 0 "port"]]
-    assert_equal {OK} [R $r cluster meet [srv 0 "host"] [srv 0 "port"]]
+    set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
+    assert_equal {OK} [R $p CLUSTER RESET]
+    assert_equal {OK} [R $r CLUSTER RESET]
+    assert_equal {OK} [R $p CLUSTER MEET [srv 0 "host"] [srv 0 "port"]]
+    assert_equal {OK} [R $r CLUSTER MEET [srv 0 "host"] [srv 0 "port"]]
     wait_for_role $p master
-    assert_equal {OK} [R $r cluster replicate [R $p cluster myid]]
+    assert_equal {OK} [R $r CLUSTER REPLICATE [R $p CLUSTER MYID]]
     wait_for_role $r slave
     wait_for_role $p master
 }
 
 start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
-    set node_timeout [lindex [R 0 config get cluster-node-timeout] 1]
-    set R0_id [R 0 cluster myid]
-    set R1_id [R 1 cluster myid]
-    set R2_id [R 2 cluster myid]
-    set R3_id [R 3 cluster myid]
-    set R4_id [R 4 cluster myid]
-    set R5_id [R 5 cluster myid]
+    set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
+    set R0_id [R 0 CLUSTER MYID]
+    set R1_id [R 1 CLUSTER MYID]
+    set R2_id [R 2 CLUSTER MYID]
+    set R3_id [R 3 CLUSTER MYID]
+    set R4_id [R 4 CLUSTER MYID]
+    set R5_id [R 5 CLUSTER MYID]
 
     create_empty_shard 6 7
-    set R6_id [R 6 cluster myid]
-    set R7_id [R 7 cluster myid]
+    set R6_id [R 6 CLUSTER MYID]
+    set R7_id [R 7 CLUSTER MYID]
 
     test "Empty-shard migration replicates slot importing states" {
         # Validate initial states
@@ -211,8 +211,8 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_not_equal [get_open_slots 3] "\[609->-$R6_id\]"
         assert_not_equal [get_open_slots 7] "\[609-<-$R0_id\]"
         # Kick off the migration of slot 609 from R0 to R6
-        assert_equal {OK} [R 0 cluster setslot 609 migrating $R6_id]
-        assert_equal {OK} [R 6 cluster setslot 609 importing $R0_id]
+        assert_equal {OK} [R 0 CLUSTER SETSLOT 609 MIGRATING $R6_id]
+        assert_equal {OK} [R 6 CLUSTER SETSLOT 609 IMPORTING $R0_id]
         # Validate that R0 is migrating slot 609 to R6
         assert_equal [get_open_slots 0] "\[609->-$R6_id\]"
         # Validate that R6 is importing slot 609 from R0 
@@ -268,21 +268,21 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
 }
 
 proc migrate_slot {from to slot} {
-    set from_id [R $from cluster myid]
-    set to_id [R $to cluster myid]
-    assert_equal {OK} [R $from cluster setslot $slot migrating $to_id]
-    assert_equal {OK} [R $to cluster setslot $slot importing $from_id]
+    set from_id [R $from CLUSTER MYID]
+    set to_id [R $to CLUSTER MYID]
+    assert_equal {OK} [R $from CLUSTER SETSLOT $slot MIGRATING $to_id]
+    assert_equal {OK} [R $to CLUSTER SETSLOT $slot IMPORTING $from_id]
 }
 
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
-    set node_timeout [lindex [R 0 config get cluster-node-timeout] 1]
-    set R0_id [R 0 cluster myid]
-    set R1_id [R 1 cluster myid]
-    set R2_id [R 2 cluster myid]
-    set R3_id [R 3 cluster myid]
-    set R4_id [R 4 cluster myid]
-    set R5_id [R 5 cluster myid]
+    set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
+    set R0_id [R 0 CLUSTER MYID]
+    set R1_id [R 1 CLUSTER MYID]
+    set R2_id [R 2 CLUSTER MYID]
+    set R3_id [R 3 CLUSTER MYID]
+    set R4_id [R 4 CLUSTER MYID]
+    set R5_id [R 5 CLUSTER MYID]
 
     test "Multiple slot migration states are replicated" {
         migrate_slot 0 1 13
@@ -297,24 +297,24 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
     test "New replica inherits multiple migrating slots" {
         # Reset R3 to turn it into an empty node
-        assert_equal {OK} [R 3 cluster reset]
+        assert_equal {OK} [R 3 CLUSTER RESET]
         # Add R3 back as a replica of R0
-        assert_equal {OK} [R 3 cluster meet [srv 0 "host"] [srv 0 "port"]]
+        assert_equal {OK} [R 3 CLUSTER MEET [srv 0 "host"] [srv 0 "port"]]
         wait_for_role 0 master
-        assert_equal {OK} [R 3 cluster replicate $R0_id]
+        assert_equal {OK} [R 3 CLUSTER REPLICATE $R0_id]
         wait_for_role 3 slave
         # Validate final states
         wait_for_slot_state 3 "\[7->-$R1_id\] \[13->-$R1_id\] \[17->-$R1_id\]"
     }
 
     test "Slot finalization succeeds on both primary and replicas" {
-        assert_equal {OK} [R 1 cluster setslot 7 node $R1_id]
+        assert_equal {OK} [R 1 CLUSTER SETSLOT 7 NODE $R1_id]
         wait_for_slot_state 1 "\[13-<-$R0_id\] \[17-<-$R0_id\]"
         wait_for_slot_state 4 "\[13-<-$R0_id\] \[17-<-$R0_id\]"
-        assert_equal {OK} [R 1 cluster setslot 13 node $R1_id]
+        assert_equal {OK} [R 1 CLUSTER SETSLOT 13 NODE $R1_id]
         wait_for_slot_state 1 "\[17-<-$R0_id\]"
         wait_for_slot_state 4 "\[17-<-$R0_id\]"
-        assert_equal {OK} [R 1 cluster setslot 17 node $R1_id]
+        assert_equal {OK} [R 1 CLUSTER SETSLOT 17 NODE $R1_id]
         wait_for_slot_state 1 ""
         wait_for_slot_state 4 ""
     }
@@ -323,9 +323,9 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
-    set node_timeout [lindex [R 0 config get cluster-node-timeout] 1]
-    set R0_id [R 0 cluster myid]
-    set R1_id [R 1 cluster myid]
+    set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
+    set R0_id [R 0 CLUSTER MYID]
+    set R1_id [R 1 CLUSTER MYID]
 
     test "Slot is auto-claimed by target after source relinquishes ownership" {
         migrate_slot 0 1 609
@@ -333,10 +333,31 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         catch {[R 1 get aga]} e
         assert_equal {MOVED} [lindex [split $e] 0]
         #Finalize the slot on the source first
-        assert_equal {OK} [R 0 cluster setslot 609 node $R1_id]
+        assert_equal {OK} [R 0 CLUSTER SETSLOT 609 NODE $R1_id]
         after $node_timeout
         #R1 should claim slot 609 since it is still importing slot 609
         #from R0 but R0 no longer owns this slot
         assert_equal {OK} [R 1 set aga foo]
+    }
+}
+
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+    set R1_id [R 1 CLUSTER MYID]
+
+    test "CLUSTER SETSLOT with an explicit timeout" {
+        # Simulate a replica crash
+        catch {R 3 DEBUG RESTART} e
+
+        # Setslot with an explicit 1ms timeoout
+        set startTime [clock milliseconds]
+        catch {R 0 CLUSTER SETSLOT 609 MIGRATING $R1_id TIMEOUT 1} e
+        set endTime [clock milliseconds]
+        set duration [expr {$endTime - $startTime}]
+
+        # Assert that the execution time is much less than the default 2s timeout
+        assert {$duration < 50}
+
+        # Setslot should fail with not enough good replicas to write after the timeout
+        assert_equal {NOREPLICAS Not enough good replicas to write.} $e
     }
 }

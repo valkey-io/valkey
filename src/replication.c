@@ -3622,8 +3622,8 @@ void unblockClientWaitingReplicas(client *c) {
     updateStatsOnUnblock(c, 0, 0, 0);
 }
 
-/* Check if there are clients blocked in WAIT or WAITAOF that can be unblocked
- * since we received enough ACKs from slaves. */
+/* Check if there are clients blocked in WAIT, WAITAOF, or WAIT_PREREPL 
+ * that can be unblocked since we received enough ACKs from replicas. */
 void processClientsWaitingReplicas(void) {
     long long last_offset = 0;
     long long last_aof_offset = 0;
@@ -3691,7 +3691,7 @@ void processClientsWaitingReplicas(void) {
             addReplyLongLong(c, numlocal);
             addReplyLongLong(c, numreplicas);
         } else if (is_wait_prerepl) {
-            c->flags |= CLIENT_INTERNAL_PREREPL_DONE;
+            c->flags |= CLIENT_PREREPL_DONE;
         } else {
             addReplyLongLong(c, numreplicas);
         }

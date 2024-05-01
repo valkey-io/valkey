@@ -195,7 +195,7 @@ void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **pr
     if (TrackingTable == NULL) {
         TrackingTable = raxNew();
         PrefixTable = raxNew();
-        TrackingChannelName = createStringObject("__redis__:invalidate",20);
+        TrackingChannelName = createStringObject("__valkey__:invalidate",20);
     }
 
     /* For broadcasting, set the list of prefixes in the client. */
@@ -303,7 +303,7 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
     /* Only send such info for clients in RESP version 3 or more. However
      * if redirection is active, and the connection we redirect to is
      * in Pub/Sub mode, we can support the feature with RESP 2 as well,
-     * by sending Pub/Sub messages in the __redis__:invalidate channel. */
+     * by sending Pub/Sub messages in the __valkey__:invalidate channel. */
     if (c->resp > 2) {
         addReplyPushLen(c,2);
         addReplyBulkCBuffer(c,"invalidate",10);

@@ -6244,7 +6244,7 @@ bool clusterParseSetSlotCommand(client *c, int *slot, clusterNode **node, int *t
                t = (int)strtol(c->argv[i+1]->ptr, NULL, 10);
                decrRefCount(c->argv[i]);
                decrRefCount(c->argv[i+1]);
-               memmove(c->argv[i], c->argv[i+2], c->argc-i-2);
+               memmove(&c->argv[i], &c->argv[i+2], c->argc-i-2);
                c->argc -= 2;
                continue;
            }

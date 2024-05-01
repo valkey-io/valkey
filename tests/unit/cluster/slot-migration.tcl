@@ -346,16 +346,16 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
     test "CLUSTER SETSLOT with an explicit timeout" {
         # Simulate a replica crash
-        catch {R 3 DEBUG RESTART} e
+        catch {R 3 DEBUG SEGFAULT} e
 
         # Setslot with an explicit 1ms timeoout
         set startTime [clock milliseconds]
-        catch {R 0 CLUSTER SETSLOT 609 MIGRATING $R1_id TIMEOUT 1} e
+        catch {R 0 CLUSTER SETSLOT 609 MIGRATING $R1_id TIMEOUT 3000} e
         set endTime [clock milliseconds]
         set duration [expr {$endTime - $startTime}]
 
-        # Assert that the execution time is much less than the default 2s timeout
-        assert {$duration < 50}
+        # Assert that the execution time is greater than the default 2s timeout
+        assert {$duration > 2000}
 
         # Setslot should fail with not enough good replicas to write after the timeout
         assert_equal {NOREPLICAS Not enough good replicas to write.} $e

@@ -3622,7 +3622,7 @@ void unblockClientWaitingReplicas(client *c) {
     updateStatsOnUnblock(c, 0, 0, 0);
 }
 
-/* Check if there are clients blocked in WAIT, WAITAOF, or WAIT_PREREPL 
+/* Check if there are clients blocked in WAIT, WAITAOF, or WAIT_PREREPL
  * that can be unblocked since we received enough ACKs from replicas. */
 void processClientsWaitingReplicas(void) {
     long long last_offset = 0;

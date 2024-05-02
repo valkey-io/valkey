@@ -55,7 +55,11 @@
             },
             {
                 "name": "timeout",
-                "type": "integer"
+                "display": "timeout",
+                "type": "integer",
+                "token": "TIMEOUT",
+                "optional": true,
+                "since": "8.0.0"
             }
         ],
         "reply_schema": {

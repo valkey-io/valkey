@@ -49,7 +49,7 @@ following keys. To be safe, assume all of them are optional.
   negative number means "at least", e.g. -3 means at least 3.
 * `"container"`: Only present for subcommands. See below.
 * `"history"`: An array of changes, each change represented by a 2-element array
-  on the form `[VERSION, DESCRIPTION]`.
+  on the form `[VERSION, DESCRIPTION]`. Omit if empty. Don't add an empty array.
 * `"function"`: The name of the C function in Valkey's source code implementing
   the command. (Don't use it for anything else.)
 * `"command_flags"`: An array of flags represented as strings. Command flags:
@@ -152,6 +152,9 @@ documentation was written):
 * Command flag FAST implies ACL category FAST.
 * Command flag BLOCKING implies ACL category BLOCKING.
 * Not ACL category FAST implies ACL category SLOW. "If it's not fast, it's slow."
+
+There's an issue about explicitly listing all categories, removing this
+discrepancy: https://github.com/valkey-io/valkey/issues/417
 
 Key specs
 ---------

@@ -224,7 +224,7 @@ sds createLatencyReport(void) {
     if (dictSize(server.latency_events) == 0 &&
         server.latency_monitor_threshold == 0)
     {
-        report = sdscat(report,"I'm sorry, Dave, I can't do that. Latency monitoring is disabled in this Redis instance. You may use \"CONFIG SET latency-monitor-threshold <milliseconds>.\" in order to enable it. If we weren't in a deep space mission I'd suggest to take a look at https://redis.io/topics/latency-monitor.\n");
+        report = sdscat(report,"Latency monitoring is disabled in this Valkey instance. You may use \"CONFIG SET latency-monitor-threshold <milliseconds>.\" in order to enable it.\n");
         return report;
     }
 
@@ -243,7 +243,7 @@ sds createLatencyReport(void) {
         if (ts == NULL) continue;
         eventnum++;
         if (eventnum == 1) {
-            report = sdscat(report,"Dave, I have observed latency spikes in this Redis instance. You don't mind talking about it, do you Dave?\n\n");
+            report = sdscat(report,"Latency spikes are observed in this Valkey instance.\n\n");
         }
         analyzeLatencyForEvent(event,&ls);
 
@@ -372,21 +372,21 @@ sds createLatencyReport(void) {
     }
 
     if (eventnum == 0 && advices == 0) {
-        report = sdscat(report,"Dave, no latency spike was observed during the lifetime of this Redis instance, not in the slightest bit. I honestly think you ought to sit down calmly, take a stress pill, and think things over.\n");
+        report = sdscat(report,"No latency spike was observed during the lifetime of this Valkey instance, not in the slightest bit.\n");
     } else if (eventnum > 0 && advices == 0) {
-        report = sdscat(report,"\nWhile there are latency events logged, I'm not able to suggest any easy fix. Please use the Redis community to get some help, providing this report in your help request.\n");
+        report = sdscat(report,"\nThere are latency events logged, they are not easy fix. Please get some help from Valkey community, providing this report in your help request.\n");
     } else {
         /* Add all the suggestions accumulated so far. */
 
         /* Better VM. */
-        report = sdscat(report,"\nI have a few advices for you:\n\n");
+        report = sdscat(report,"\nHere are a few advices for you:\n\n");
         if (advise_better_vm) {
             report = sdscat(report,"- If you are using a virtual machine, consider upgrading it with a faster one using a hypervisior that provides less latency during fork() calls. Xen is known to have poor fork() performance. Even in the context of the same VM provider, certain kinds of instances can execute fork faster than others.\n");
         }
 
         /* Slow log. */
         if (advise_slowlog_enabled) {
-            report = sdscatprintf(report,"- There are latency issues with potentially slow commands you are using. Try to enable the Slow Log Redis feature using the command 'CONFIG SET slowlog-log-slower-than %llu'. If the Slow log is disabled Redis is not able to log slow commands execution for you.\n", (unsigned long long)server.latency_monitor_threshold*1000);
+            report = sdscatprintf(report,"- There are latency issues with potentially slow commands you are using. Try to enable the Slow Log Valkey feature using the command 'CONFIG SET slowlog-log-slower-than %llu'. If the Slow log is disabled Valkey is not able to log slow commands execution for you.\n", (unsigned long long)server.latency_monitor_threshold*1000);
         }
 
         if (advise_slowlog_tuning) {
@@ -394,17 +394,17 @@ sds createLatencyReport(void) {
         }
 
         if (advise_slowlog_inspect) {
-            report = sdscat(report,"- Check your Slow Log to understand what are the commands you are running which are too slow to execute. Please check https://redis.io/commands/slowlog for more information.\n");
+            report = sdscat(report,"- Check your Slow Log to understand what are the commands you are running which are too slow to execute. Please check https://valkey.io/commands/slowlog/ for more information.\n");
         }
 
         /* Intrinsic latency. */
         if (advise_scheduler) {
-            report = sdscat(report,"- The system is slow to execute Redis code paths not containing system calls. This usually means the system does not provide Redis CPU time to run for long periods. You should try to:\n"
+            report = sdscat(report,"- The system is slow to execute Valkey code paths not containing system calls. This usually means the system does not provide Valkey CPU time to run for long periods. You should try to:\n"
             "  1) Lower the system load.\n"
-            "  2) Use a computer / VM just for Redis if you are running other software in the same system.\n"
+            "  2) Use a computer / VM just for Valkey if you are running other software in the same system.\n"
             "  3) Check if you have a \"noisy neighbour\" problem.\n"
-            "  4) Check with 'redis-cli --intrinsic-latency 100' what is the intrinsic latency in your system.\n"
-            "  5) Check if the problem is allocator-related by recompiling Redis with MALLOC=libc, if you are using Jemalloc. However this may create fragmentation problems.\n");
+            "  4) Check with 'valkey-cli --intrinsic-latency 100' what is the intrinsic latency in your system.\n"
+            "  5) Check if the problem is allocator-related by recompiling Valkey with MALLOC=libc, if you are using Jemalloc. However this may create fragmentation problems.\n");
         }
 
         /* AOF / Disk latency. */
@@ -413,15 +413,15 @@ sds createLatencyReport(void) {
         }
 
         if (advise_ssd) {
-            report = sdscat(report,"- SSD disks are able to reduce fsync latency, and total time needed for snapshotting and AOF log rewriting (resulting in smaller memory usage). With extremely high write load SSD disks can be a good option. However Redis should perform reasonably with high load using normal disks. Use this advice as a last resort.\n");
+            report = sdscat(report,"- SSD disks are able to reduce fsync latency, and total time needed for snapshotting and AOF log rewriting (resulting in smaller memory usage). With extremely high write load SSD disks can be a good option. However Valkey should perform reasonably with high load using normal disks. Use this advice as a last resort.\n");
         }
 
         if (advise_data_writeback) {
-            report = sdscat(report,"- Mounting ext3/4 filesystems with data=writeback can provide a performance boost compared to data=ordered, however this mode of operation provides less guarantees, and sometimes it can happen that after a hard crash the AOF file will have a half-written command at the end and will require to be repaired before Redis restarts.\n");
+            report = sdscat(report,"- Mounting ext3/4 filesystems with data=writeback can provide a performance boost compared to data=ordered, however this mode of operation provides less guarantees, and sometimes it can happen that after a hard crash the AOF file will have a half-written command at the end and will require to be repaired before Valkey restarts.\n");
         }
 
         if (advise_disk_contention) {
-            report = sdscat(report,"- Try to lower the disk contention. This is often caused by other disk intensive processes running in the same computer (including other Redis instances).\n");
+            report = sdscat(report,"- Try to lower the disk contention. This is often caused by other disk intensive processes running in the same computer (including other Valkey instances).\n");
         }
 
         if (advise_no_appendfsync) {
@@ -437,7 +437,7 @@ sds createLatencyReport(void) {
         }
 
         if (advise_hz && server.hz < 100) {
-            report = sdscat(report,"- In order to make the Redis keys expiring process more incremental, try to set the 'hz' configuration parameter to 100 using 'CONFIG SET hz 100'.\n");
+            report = sdscat(report,"- In order to make the Valkey keys expiring process more incremental, try to set the 'hz' configuration parameter to 100 using 'CONFIG SET hz 100'.\n");
         }
 
         if (advise_large_objects) {
@@ -445,11 +445,11 @@ sds createLatencyReport(void) {
         }
 
         if (advise_mass_eviction) {
-            report = sdscat(report,"- Sudden changes to the 'maxmemory' setting via 'CONFIG SET', or allocation of large objects via sets or sorted sets intersections, STORE option of SORT, Redis Cluster large keys migrations (RESTORE command), may create sudden memory pressure forcing the server to block trying to evict keys. \n");
+            report = sdscat(report,"- Sudden changes to the 'maxmemory' setting via 'CONFIG SET', or allocation of large objects via sets or sorted sets intersections, STORE option of SORT, Valkey Cluster large keys migrations (RESTORE command), may create sudden memory pressure forcing the server to block trying to evict keys. \n");
         }
 
         if (advise_disable_thp) {
-            report = sdscat(report,"- I detected a non zero amount of anonymous huge pages used by your process. This creates very serious latency events in different conditions, especially when Redis is persisting on disk. To disable THP support use the command 'echo never > /sys/kernel/mm/transparent_hugepage/enabled', make sure to also add it into /etc/rc.local so that the command will be executed again after a reboot. Note that even if you have already disabled THP, you still need to restart the Redis process to get rid of the huge pages already created.\n");
+            report = sdscat(report,"- I detected a non zero amount of anonymous huge pages used by your process. This creates very serious latency events in different conditions, especially when Valkey is persisting on disk. To disable THP support use the command 'echo never > /sys/kernel/mm/transparent_hugepage/enabled', make sure to also add it into /etc/rc.local so that the command will be executed again after a reboot. Note that even if you have already disabled THP, you still need to restart the Valkey process to get rid of the huge pages already created.\n");
         }
     }
 

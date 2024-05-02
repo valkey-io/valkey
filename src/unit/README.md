@@ -42,8 +42,8 @@ int test_example(int argc, char *argv[], int flags) {
 Tests can be run by executing:
 
 ```
-make unit-test
-./valkey-unit-tests [--flags] argv1 argv2
+make valkey-unit-tests
+./valkey-unit-tests
 ```
 
 Running a single unit test file

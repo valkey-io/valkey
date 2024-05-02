@@ -30,6 +30,13 @@ start_server {tags {"other"}} {
         }
     }
 
+    test {INFO MEMORY: defrag_supported} {
+        if {[string match {*jemalloc*} [s mem_allocator]]} {
+            set info_mem [r info memory]
+            assert_equal [getInfoProperty $info_mem defrag_supported] { yes}
+        }
+    }
+
     test {SAVE - make sure there are all the types as values} {
         # Wait for a background saving in progress to terminate
         waitForBgsave r

@@ -68,7 +68,7 @@ typedef struct quicklistLZF {
     char compressed[];
 } quicklistLZF;
 
-/* Bookmarks are padded with realloc at the end of of the quicklist struct.
+/* Bookmarks are padded with realloc at the end of the quicklist struct.
  * They should only be used for very big lists if thousands of nodes were the
  * excess memory usage is negligible, and there's a real need to iterate on them
  * in portions.

@@ -349,10 +349,10 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         catch {R 3 DEBUG SEGFAULT} e
 
         # Setslot with an explicit 1ms timeoout
-        set startTime [clock milliseconds]
+        set start_time [clock milliseconds]
         catch {R 0 CLUSTER SETSLOT 609 MIGRATING $R1_id TIMEOUT 3000} e
-        set endTime [clock milliseconds]
-        set duration [expr {$endTime - $startTime}]
+        set end_time [clock milliseconds]
+        set duration [expr {$end_time - $start_time}]
 
         # Assert that the execution time is greater than the default 2s timeout
         assert {$duration > 2000}

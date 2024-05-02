@@ -47,7 +47,6 @@
 #include <sys/stat.h>
 #include <math.h>
 #include <sys/file.h>
-#include <stdbool.h>
 
 /* A global reference to myself is handy to make code more clear.
  * Myself always points to server.cluster->myself, that is, the clusterNode
@@ -1959,7 +1958,7 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
     }
 }
 
-/* Return true if we already have a node in HANDSHAKE state matching the
+/* Return 1 if we already have a node in HANDSHAKE state matching the
  * specified ip address and port number. This function is used in order to
  * avoid adding a new handshake node for the same address multiple times. */
 int clusterHandshakeInProgress(char *ip, int port, int cport) {
@@ -2448,7 +2447,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                          * of deliberate operator actions. We should clear the importing
                          * state to conform to the operator's will. */
                         serverLog(LL_NOTICE,
-                            "Slot %d is not longer being imported from node %.40s (%s) in shard %.40s.",
+                            "Slot %d is no longer being imported from node %.40s (%s) in shard %.40s.",
                             j,
                             server.cluster->importing_slots_from[j]->name,
                             server.cluster->importing_slots_from[j]->human_nodename,
@@ -2870,7 +2869,7 @@ static clusterNode *getNodeFromLinkAndMsg(clusterLink *link, clusterMsg *hdr) {
     return sender;
 }
 
-bool clusterIsValidPacket(clusterLink *link) {
+int clusterIsValidPacket(clusterLink *link) {
     clusterMsg *hdr = (clusterMsg*) link->rcvbuf;
     uint32_t totlen = ntohl(hdr->totlen);
     uint16_t type = ntohs(hdr->type);
@@ -2883,17 +2882,17 @@ bool clusterIsValidPacket(clusterLink *link) {
               (unsigned long) totlen);
 
     /* Perform sanity checks */
-    if (totlen < 16) return false; /* At least signature, version, totlen, count. */
-    if (totlen > link->rcvbuf_len) return false;
+    if (totlen < 16) return 0; /* At least signature, version, totlen, count. */
+    if (totlen > link->rcvbuf_len) return 0;
 
     if (ntohs(hdr->ver) != CLUSTER_PROTO_VER) {
         /* Can't handle messages of different versions. */
-        return false;
+        return 0;
     }
 
     if (type == server.cluster_drop_packet_filter) {
         serverLog(LL_WARNING, "Dropping packet that matches debug drop filter");
-        return false;
+        return 0;
     }
 
     uint32_t explen; /* expected length of this packet */
@@ -2916,13 +2915,13 @@ bool clusterIsValidPacket(clusterLink *link) {
                 if (extlen % 8 != 0) {
                     serverLog(LL_WARNING, "Received a %s packet without proper padding (%d bytes)",
                         clusterGetMessageTypeString(type), (int) extlen);
-                    return false;
+                    return 0;
                 }
                 if ((totlen - explen) < extlen) {
                     serverLog(LL_WARNING, "Received invalid %s packet with extension data that exceeds "
                         "total packet length (%lld)", clusterGetMessageTypeString(type),
                         (unsigned long long) totlen);
-                    return false;
+                    return 0;
                 }
                 explen += extlen;
                 ext = getNextPingExt(ext);
@@ -2957,10 +2956,10 @@ bool clusterIsValidPacket(clusterLink *link) {
     if (totlen != explen) {
         serverLog(LL_WARNING, "Received invalid %s packet of length %lld but expected length %lld",
             clusterGetMessageTypeString(type), (unsigned long long) totlen, (unsigned long long) explen);
-        return false;
+        return 0;
     }
 
-    return true;
+    return 1;
 }
 
 /* When this function is called, there is a packet to process starting
@@ -6226,7 +6225,7 @@ char *clusterNodeGetShardId(clusterNode *node) {
     return node->shard_id;
 }
 
-bool clusterParseSetSlotCommand(client *c, int *slot, clusterNode **node, int *timeout_ms) {
+int clusterParseSetSlotCommand(client *c, int *slot, clusterNode **node, int *timeout_ms) {
     int s = -1;
     clusterNode *n = NULL;
     int t = 0;
@@ -6234,7 +6233,7 @@ bool clusterParseSetSlotCommand(client *c, int *slot, clusterNode **node, int *t
     /* Allow primaries to replicate "CLUSTER SETSLOT" */
     if (!(c->flags & CLIENT_MASTER) && nodeIsSlave(myself)) {
         addReplyError(c,"Please use SETSLOT only with masters.");
-        return false;
+        return 0;
     }
 
     /* Process optional arguments */
@@ -6249,41 +6248,41 @@ bool clusterParseSetSlotCommand(client *c, int *slot, clusterNode **node, int *t
                continue;
            }
            addReplyError(c, "Missing timeout value.");
-           return false;
+           return 0;
        }
        i++;
     }
 
-    if ((s = getSlotOrReply(c, c->argv[2])) == -1) return false;
+    if ((s = getSlotOrReply(c, c->argv[2])) == -1) return 0;
 
     if (!strcasecmp(c->argv[3]->ptr,"migrating") && c->argc >= 5) {
         /* Scope the check to primaries only */
         if (nodeIsMaster(myself) && server.cluster->slots[s] != myself) {
             addReplyErrorFormat(c,"I'm not the owner of hash slot %u", s);
-            return false;
+            return 0;
         }
         n = clusterLookupNode(c->argv[4]->ptr, sdslen(c->argv[4]->ptr));
         if (n == NULL) {
             addReplyErrorFormat(c,"I don't know about node %s", (char*)c->argv[4]->ptr);
-            return false;
+            return 0;
         }
         if (nodeIsSlave(n)) {
             addReplyError(c,"Target node is not a master");
-            return false;
+            return 0;
         }
     } else if (!strcasecmp(c->argv[3]->ptr,"importing") && c->argc >= 5) {
         if (server.cluster->slots[s] == myself) {
             addReplyErrorFormat(c, "I'm already the owner of hash slot %u", s);
-            return false;
+            return 0;
         }
         n = clusterLookupNode(c->argv[4]->ptr, sdslen(c->argv[4]->ptr));
         if (n == NULL) {
             addReplyErrorFormat(c,"I don't know about node %s", (char*)c->argv[4]->ptr);
-            return false;
+            return 0;
         }
         if (nodeIsSlave(n)) {
             addReplyError(c,"Target node is not a master");
-            return false;
+            return 0;
         }
     } else if (!strcasecmp(c->argv[3]->ptr,"stable") && c->argc >= 4) {
         /* Do nothing */
@@ -6292,11 +6291,11 @@ bool clusterParseSetSlotCommand(client *c, int *slot, clusterNode **node, int *t
         n = clusterLookupNode(c->argv[4]->ptr, sdslen(c->argv[4]->ptr));
         if (!n) {
             addReplyErrorFormat(c,"Unknown node %s", (char*)c->argv[4]->ptr);
-            return false;
+            return 0;
         }
         if (nodeIsSlave(n)) {
             addReplyError(c,"Target node is not a master");
-            return false;
+            return 0;
         }
         /* If this hash slot was served by 'myself' before to switch
          * make sure there are no longer local keys for this hash slot. */
@@ -6305,19 +6304,19 @@ bool clusterParseSetSlotCommand(client *c, int *slot, clusterNode **node, int *t
                 addReplyErrorFormat(c,
                     "Can't assign hashslot %d to a different node "
                     "while I still hold keys for this hash slot.", s);
-                return false;
+                return 0;
             }
         }
     } else {
         addReplyError(c,
             "Invalid CLUSTER SETSLOT action or number of arguments. Try CLUSTER HELP");
-        return false;
+        return 0;
     }
 
     *slot = s;
     *node = n;
     *timeout_ms = t;
-    return true;
+    return 1;
 }
 
 void clusterSetSlotCommand(client *c) {
@@ -6898,7 +6897,7 @@ void clusterReplicateOpenSlots(void)
     int argc = 5;
     robj **argv = zmalloc(sizeof(robj*)*argc);
 
-    argv[0] =shared.cluster;
+    argv[0] = shared.cluster;
     argv[1] = shared.setslot;
 
     for (int i = 0; i < 2; i++) {

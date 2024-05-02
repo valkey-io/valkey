@@ -210,7 +210,6 @@ void dictSetDoubleVal(dictEntry *de, double val);
 int64_t dictIncrSignedIntegerVal(dictEntry *de, int64_t val);
 uint64_t dictIncrUnsignedIntegerVal(dictEntry *de, uint64_t val);
 double dictIncrDoubleVal(dictEntry *de, double val);
-void *dictEntryMetadata(dictEntry *de);
 void *dictGetKey(const dictEntry *de);
 void *dictGetVal(const dictEntry *de);
 int64_t dictGetSignedIntegerVal(const dictEntry *de);

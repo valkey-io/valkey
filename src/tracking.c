@@ -195,7 +195,7 @@ void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **pr
     if (TrackingTable == NULL) {
         TrackingTable = raxNew();
         PrefixTable = raxNew();
-        TrackingChannelName = createStringObject("__valkey__:invalidate",20);
+        TrackingChannelName = createStringObject("__valkey__:invalidate",21);
     }
 
     /* For broadcasting, set the list of prefixes in the client. */

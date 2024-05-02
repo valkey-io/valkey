@@ -55,6 +55,19 @@
 #error "Newer version of jemalloc required"
 #endif
 
+#elif defined(USE_MIMALLOC)
+#include <mimalloc.h>
+#define ZMALLOC_LIB ("mimalloc-" __xstr(MI_MALLOC_VERSION))
+#define MI_VERSION_MAJOR (MI_MALLOC_VERSION / 100)
+#define MI_VERSION_MINOR ((MI_MALLOC_VERSION / 10) % 10)
+#define MI_VERSION_PATCH (MI_MALLOC_VERSION % 10)
+#if (MI_VERSION_MAJOR == 1 && MI_VERSION_MINOR >= 8) || (MI_VERSION_PATCH > 1)
+#define HAVE_MALLOC_SIZE 1
+#define zmalloc_size(p) mi_usable_size(p)
+#else
+#error "Newer version of mimalloc required"
+#endif
+
 #elif defined(__APPLE__)
 #include <malloc/malloc.h>
 #define HAVE_MALLOC_SIZE 1

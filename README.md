@@ -126,6 +126,25 @@ If you want to see a more verbose output, use the following:
 
     % make V=1
 
+Using mimalloc with Valkey
+-------------
+
+[mimalloc](https://github.com/microsoft/mimalloc) is an advanced memory allocator that can improve the performance of applications. You can optionally build Valkey using mimalloc by following these steps:
+
+Before building Valkey with mimalloc, you need to install mimalloc on your system.
+
+    % git clone https://github.com/microsoft/mimalloc.git
+    % mkdir -p mimalloc/out/release
+    % cd mimalloc/out/release
+    % cmake ../.. -DMI_INSTALL_TOPLEVEL=ON
+    % sudo make install
+
+This will install mimalloc libraries and headers in /usr/local/lib and /usr/local/include.
+
+Build Valkey with mimalloc:
+
+    % make MALLOC=mimalloc
+
 Running Valkey
 -------------
 

@@ -5682,7 +5682,11 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
         long long memory_lua = evalMemory();
         long long memory_functions = functionsMemory();
         struct serverMemOverhead *mh = getMemoryOverheadData();
-
+#if defined(USE_JEMALLOC)
+        char defrag_supported[] = "yes";
+#else 
+        char defrag_supported[] = "no";
+#endif
         /* Peak memory is updated from time to time by serverCron() so it
          * may happen that the instantaneous value is slightly bigger than
          * the peak value. This may confuse users, so we update the peak
@@ -5757,7 +5761,8 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "mem_overhead_db_hashtable_rehashing:%zu\r\n", mh->overhead_db_hashtable_rehashing,
             "active_defrag_running:%d\r\n", server.active_defrag_running,
             "lazyfree_pending_objects:%zu\r\n", lazyfreeGetPendingObjectsCount(),
-            "lazyfreed_objects:%zu\r\n", lazyfreeGetFreedObjectsCount()));
+            "lazyfreed_objects:%zu\r\n", lazyfreeGetFreedObjectsCount(),
+            "defrag_supported: %s\r\n", defrag_supported));
         freeMemoryOverheadData(mh);
     }
 

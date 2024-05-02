@@ -2072,7 +2072,9 @@ int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int s
                 if (cmd->flags & CMD_MODULE || cmd->arity < 0) {
                     continue;
                 } else {
-                    serverPanic("Redis built-in command declared keys positions not matching the arity requirements.");
+                    serverPanic("%s built-in command declared keys positions"
+                        " not matching the arity requirements.",
+                        server.extended_redis_compat ? "Redis" : "Valkey");
                 }
             }
             keys[result->numkeys].pos = i;
@@ -2265,7 +2267,9 @@ int getKeysUsingLegacyRangeSpec(struct serverCommand *cmd, robj **argv, int argc
                 result->numkeys = 0;
                 return 0;
             } else {
-                serverPanic("Redis built-in command declared keys positions not matching the arity requirements.");
+                serverPanic("%s built-in command declared keys positions"
+                    " not matching the arity requirements.",
+                    server.extended_redis_compat ? "Redis" : "Valkey");
             }
         }
         keys[i].pos = j;

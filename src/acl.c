@@ -44,7 +44,7 @@ user *DefaultUser;  /* Global reference to the default user.
                        different user. */
 
 list *UsersToLoad;  /* This is a list of users found in the configuration file
-                       that we'll need to load in the final stage of Redis
+                       that we'll need to load in the final stage of the server
                        initialization, after all the modules are already
                        loaded. Every list element is a NULL terminated
                        array of SDS pointers: the first is the user name,

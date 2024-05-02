@@ -61,7 +61,7 @@ cd deps/jemalloc
 Hiredis
 ---
 
-Hiredis is used by Sentinel, `valkey-cli` and `redis-benchmark`. Like Valkey, uses the SDS string library, but not necessarily the same version. In order to avoid conflicts, this version has all SDS identifiers prefixed by `hi`.
+Hiredis is used by Sentinel, `valkey-cli` and `valkey-benchmark`. Like Valkey, uses the SDS string library, but not necessarily the same version. In order to avoid conflicts, this version has all SDS identifiers prefixed by `hi`.
 
 1. `git subtree pull --prefix deps/hiredis https://github.com/redis/hiredis.git <version-tag> --squash`<br>
 This should hopefully merge the local changes into the new version.

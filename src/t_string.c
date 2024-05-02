@@ -738,7 +738,7 @@ void lcsCommand(client *c) {
     uint32_t i, j;
     long long minmatchlen = 0;
     sds a = NULL, b = NULL;
-    int getlen = 0, getidx = 0, withmatchlen = 0;
+    int getlen = 0, getidx = 0, withmatchlen = 0, minmatchlenflag = 0;
     robj *obja = NULL, *objb = NULL;
 
     obja = lookupKeyRead(c->db,c->argv[1]);
@@ -773,6 +773,7 @@ void lcsCommand(client *c) {
             if (getLongLongFromObjectOrReply(c,c->argv[j+1],&minmatchlen,NULL)
                 != C_OK) goto cleanup;
             if (minmatchlen < 0) minmatchlen = 0;
+            minmatchlenflag = 1;
             j++;
         } else {
             addReplyErrorObject(c,shared.syntaxerr);
@@ -784,6 +785,12 @@ void lcsCommand(client *c) {
     if (getlen && getidx) {
         addReplyError(c,
             "If you want both the length and indexes, please just use IDX.");
+        goto cleanup;
+    }
+
+    /* Complain if user passed WITHMATCHLEN or MINMATCHLEN without IDX */
+    if ((withmatchlen || minmatchlenflag) && !getidx) {
+        addReplyError(c, "WITHMATCHLEN and MINMATCHLEN can only be used with IDX.");
         goto cleanup;
     }
 

@@ -25,7 +25,8 @@ if __name__ == '__main__':
                             tests.append((test_name, function))
                     test_suites.append({'file': file, 'tests': tests})
         test_suites.sort(key=lambda test_suite: test_suite['file'])
-        output.write("""typedef int unitTestProc(int argc, char **argv, int flags);
+        output.write(""" /* Do not modify this file, it's automatically generated from utils/generate-unit-test-header.py */
+typedef int unitTestProc(int argc, char **argv, int flags);
 
 typedef struct unitTest {
     char *name;

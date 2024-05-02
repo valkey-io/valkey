@@ -1,4 +1,4 @@
- /* Do not modify this file, it's automatically generated from utils/gerate-unit-test-header.py */
+/* Do not modify this file, it's automatically generated from utils/generate-unit-test-header.py */
 typedef int unitTestProc(int argc, char **argv, int flags);
 
 typedef struct unitTest {

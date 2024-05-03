@@ -216,7 +216,7 @@ Please see the [CONTRIBUTING.md][2]. For security bugs and vulnerabilities, plea
 [2]: https://github.com/valkey-io/valkey/blob/unstable/CONTRIBUTING.md
 [3]: https://github.com/valkey-io/valkey/blob/unstable/SECURITY.md
 
-Valkey is a Linux Foundation project
+Valkey is an open community project under LF Projects
 -----------------
 Valkey a Series of LF Projects, LLC
 2810 N Church St, PMB 57274

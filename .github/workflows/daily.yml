@@ -49,7 +49,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -93,7 +93,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -139,7 +139,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -176,7 +176,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -213,7 +213,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -260,7 +260,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -304,7 +304,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -348,7 +348,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -380,7 +380,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -458,7 +458,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -488,7 +488,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -523,7 +523,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -553,7 +553,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -593,7 +593,7 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
           repository: ${{ env.GITHUB_REPOSITORY }}
           ref: ${{ env.GITHUB_HEAD_REF }}
@@ -645,7 +645,7 @@ jobs:
           echo "skiptests: ${{github.event.inputs.skiptests}}"
           echo "test_args: ${{github.event.inputs.test_args}}"
           echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
           repository: ${{ env.GITHUB_REPOSITORY }}
           ref: ${{ env.GITHUB_HEAD_REF }}
@@ -691,7 +691,9 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v3
+    # On centos7 actions/checkout@v4 does not work, so we use v3
+    # ref. https://github.com/actions/checkout/issues/1487
+    - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -731,7 +733,9 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v3
+    # On centos7 actions/checkout@v4 does not work, so we use v3
+    # ref. https://github.com/actions/checkout/issues/1487
+    - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -778,7 +782,9 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v3
+    # On centos7 actions/checkout@v4 does not work, so we use v3
+    # ref. https://github.com/actions/checkout/issues/1487
+    - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -824,7 +830,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -853,7 +859,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -879,7 +885,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -899,7 +905,7 @@ jobs:
       !contains(github.event.inputs.skipjobs, 'macos')
     timeout-minutes: 14400
     steps:
-    - uses: maxim-lobanov/setup-xcode@v1
+    - uses: maxim-lobanov/setup-xcode@60606e260d2fc5762a71e64e74b2174e8ea3c8bd # v1.6.0
       with:
         xcode-version: latest
     - name: prep
@@ -911,7 +917,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -930,12 +936,12 @@ jobs:
       run: |
         echo "GITHUB_REPOSITORY=${{github.event.inputs.use_repo}}" >> $GITHUB_ENV
         echo "GITHUB_HEAD_REF=${{github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
     - name: test
-      uses: cross-platform-actions/action@v0.22.0
+      uses: cross-platform-actions/action@5800fa0060a22edf69992a779adac3d2bb3a6f8a # v0.22.0
       with:
         operating_system: freebsd
         environment_variables: MAKE
@@ -962,7 +968,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -1001,7 +1007,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -1040,7 +1046,7 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
@@ -1061,7 +1067,7 @@ jobs:
       if: true && !contains(github.event.inputs.skiptests, 'cluster')
       run: ./runtest-cluster --log-req-res --dont-clean --force-resp3 ${{github.event.inputs.cluster_test_args}}
     - name: Install Python dependencies
-      uses: py-actions/py-dependency-install@v4
+      uses: py-actions/py-dependency-install@30aa0023464ed4b5b116bd9fbdab87acf01a484e # v4.1.0
       with:
         path: "./utils/req-res-validator/requirements.txt"
     - name: validator

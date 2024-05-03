@@ -6225,10 +6225,10 @@ char *clusterNodeGetShardId(clusterNode *node) {
     return node->shard_id;
 }
 
-int clusterParseSetSlotCommand(client *c, int *slot, clusterNode **node, int *timeout_ms) {
-    int s = -1;
+int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out, int *timeout_out) {
+    int slot = -1;
     clusterNode *n = NULL;
-    int t = 0;
+    int timeout = 0;
 
     /* Allow primaries to replicate "CLUSTER SETSLOT" */
     if (!(c->flags & CLIENT_MASTER) && nodeIsSlave(myself)) {
@@ -6240,7 +6240,7 @@ int clusterParseSetSlotCommand(client *c, int *slot, clusterNode **node, int *ti
     for (int i = 0; i < c->argc;) {
        if (!strcasecmp(c->argv[i]->ptr, "timeout")) {
            if(i+1 < c->argc) {
-               t = (int)strtol(c->argv[i+1]->ptr, NULL, 10);
+               timeout = (int)strtol(c->argv[i+1]->ptr, NULL, 10);
                decrRefCount(c->argv[i]);
                decrRefCount(c->argv[i+1]);
                memmove(&c->argv[i], &c->argv[i+2], c->argc-i-2);
@@ -6253,12 +6253,12 @@ int clusterParseSetSlotCommand(client *c, int *slot, clusterNode **node, int *ti
        i++;
     }
 
-    if ((s = getSlotOrReply(c, c->argv[2])) == -1) return 0;
+    if ((slot = getSlotOrReply(c, c->argv[2])) == -1) return 0;
 
     if (!strcasecmp(c->argv[3]->ptr,"migrating") && c->argc >= 5) {
         /* Scope the check to primaries only */
-        if (nodeIsMaster(myself) && server.cluster->slots[s] != myself) {
-            addReplyErrorFormat(c,"I'm not the owner of hash slot %u", s);
+        if (nodeIsMaster(myself) && server.cluster->slots[slot] != myself) {
+            addReplyErrorFormat(c,"I'm not the owner of hash slot %u", slot);
             return 0;
         }
         n = clusterLookupNode(c->argv[4]->ptr, sdslen(c->argv[4]->ptr));
@@ -6271,8 +6271,8 @@ int clusterParseSetSlotCommand(client *c, int *slot, clusterNode **node, int *ti
             return 0;
         }
     } else if (!strcasecmp(c->argv[3]->ptr,"importing") && c->argc >= 5) {
-        if (server.cluster->slots[s] == myself) {
-            addReplyErrorFormat(c, "I'm already the owner of hash slot %u", s);
+        if (server.cluster->slots[slot] == myself) {
+            addReplyErrorFormat(c, "I'm already the owner of hash slot %u", slot);
             return 0;
         }
         n = clusterLookupNode(c->argv[4]->ptr, sdslen(c->argv[4]->ptr));
@@ -6299,11 +6299,11 @@ int clusterParseSetSlotCommand(client *c, int *slot, clusterNode **node, int *ti
         }
         /* If this hash slot was served by 'myself' before to switch
          * make sure there are no longer local keys for this hash slot. */
-        if (server.cluster->slots[s] == myself && n != myself) {
-            if (countKeysInSlot(s) != 0) {
+        if (server.cluster->slots[slot] == myself && n != myself) {
+            if (countKeysInSlot(slot) != 0) {
                 addReplyErrorFormat(c,
                     "Can't assign hashslot %d to a different node "
-                    "while I still hold keys for this hash slot.", s);
+                    "while I still hold keys for this hash slot.", slot);
                 return 0;
             }
         }
@@ -6313,9 +6313,9 @@ int clusterParseSetSlotCommand(client *c, int *slot, clusterNode **node, int *ti
         return 0;
     }
 
-    *slot = s;
-    *node = n;
-    *timeout_ms = t;
+    *slot_out = slot;
+    *node_out = n;
+    *timeout_out = timeout;
     return 1;
 }
 

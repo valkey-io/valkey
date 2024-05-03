@@ -160,7 +160,7 @@ src.each_with_index do |line,i|
 end
 
 # Populate the 'since' map (name => version) if we're in a git repo.
-require File.dirname(__FILE__) ++ '/module-api-since.rb'
+require "./" ++ File.dirname(__FILE__) ++ '/module-api-since.rb'
 git_dir = File.dirname(__FILE__) ++ "/../.git"
 if File.directory?(git_dir) && `which git` != ""
     `git --git-dir="#{git_dir}" tag --sort=v:refname`.each_line do |version|

@@ -1,29 +1,21 @@
 proc get_open_slots {srv_idx} {
-    foreach line [split [R $srv_idx CLUSTER NODES] "\n"] {
-        set line [string trim $line]
-        if {$line eq {}} continue
-        if {[regexp {myself} $line] == 0} continue
-        set slots {}
-        regexp {\[.*} $line slots
+    set slots [dict get [cluster_get_myself $srv_idx] slots]
+    if {[regexp {\[.*} $slots slots]} {
+        set slots [regsub -all {[{}]} $slots ""]
         return $slots
+    } else {
+        return {}
     }
 }
 
 proc get_cluster_role {srv_idx} {
-    foreach line [split [R $srv_idx CLUSTER NODES] "\n"] {
-        set line [string trim $line]
-        if {$line eq {}} continue
-        if {[regexp {myself} $line] == 0} continue
-        set role {}
-        regexp {myself,(\w+)} $line -> role
-        return $role
-    }
+    set flags [dict get [cluster_get_myself $srv_idx] flags]
+    set role [lindex $flags 1]
+    return $role
 }
 
 proc wait_for_role {srv_idx role} {
-    set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
-    # wait for a gossip cycle for states to be propagated throughout the cluster
-    after $node_timeout
+    cluster_config_consistent
     wait_for_condition 100 100 {
         [lindex [split [R $srv_idx ROLE] " "] 0] eq $role
     } else {

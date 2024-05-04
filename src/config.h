@@ -217,12 +217,13 @@ void setproctitle(const char *fmt, ...);
 
 #if defined(sel) || defined(pyr) || defined(mc68000) || defined(sparc) || \
     defined(is68k) || defined(tahoe) || defined(ibm032) || defined(ibm370) || \
-    defined(MIPSEB) || defined(_MIPSEB) || defined(_IBMR2) || defined(DGUX) ||\
+    defined(MIPSEB) || defined(_MIPSEB) || defined(_IBMR2) || defined(DGUX) || \
     defined(apollo) || defined(__convex__) || defined(_CRAY) || \
     defined(__hppa) || defined(__hp9000) || \
     defined(__hp9000s300) || defined(__hp9000s700) || \
-    defined (BIT_ZERO_ON_LEFT) || defined(m68k) || defined(__sparc)
-#define BYTE_ORDER	BIG_ENDIAN
+    defined (BIT_ZERO_ON_LEFT) || defined(m68k) || defined(__sparc) || \
+    (defined(__APPLE__) && defined(__POWERPC__))
+#define BYTE_ORDER    BIG_ENDIAN
 #endif
 #endif /* linux */
 #endif /* BSD */

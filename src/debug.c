@@ -1192,6 +1192,7 @@ static void* getAndSetMcontextEip(ucontext_t *uc, void *eip) {
     #elif defined(__i386__)
     GET_SET_RETURN(uc->uc_mcontext->__ss.__eip, eip);
     #else
+    /* OSX PowerPC */
     GET_SET_RETURN(uc->uc_mcontext->__ss.__srr0, eip);
     #endif
 #elif defined(__APPLE__) && defined(MAC_OS_10_6_DETECTED)
@@ -1200,6 +1201,8 @@ static void* getAndSetMcontextEip(ucontext_t *uc, void *eip) {
     GET_SET_RETURN(uc->uc_mcontext->__ss.__rip, eip);
     #elif defined(__i386__)
     GET_SET_RETURN(uc->uc_mcontext->__ss.__eip, eip);
+    #elif defined(__ppc__)
+    GET_SET_RETURN(uc->uc_mcontext->__ss.__srr0, eip);
     #else
     /* OSX ARM64 */
     void *old_val = (void*)arm_thread_state64_get_pc(uc->uc_mcontext->__ss);
@@ -1344,7 +1347,7 @@ void logRegisters(ucontext_t *uc) {
         (unsigned long) uc->uc_mcontext->__ss.__gs
     );
     logStackContent((void**)uc->uc_mcontext->__ss.__esp);
-    #else
+    #elif defined(__arm64__)
     /* OSX ARM64 */
     serverLog(LL_WARNING,
     "\n"
@@ -1393,6 +1396,9 @@ void logRegisters(ucontext_t *uc) {
         (unsigned long) uc->uc_mcontext->__ss.__cpsr
     );
     logStackContent((void**) arm_thread_state64_get_sp(uc->uc_mcontext->__ss));
+    #else
+    /* At the moment we do not implement this for PowerPC */
+    NOT_SUPPORTED();
     #endif
 /* Linux */
 #elif defined(__linux__)

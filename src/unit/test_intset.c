@@ -3,6 +3,14 @@
 
 #include "../intset.c"
 #include "test_help.h"
+#if defined(__GNUC__) && __GNUC__ >= 7
+/* Several functions in this file get inlined in such a way that fortify warns there might
+ * be an out of bounds memory access depending on the intset encoding, but they aren't actually
+ * reachable because we check the encoding. There are other strategies to fix this, but they
+ * all require other hacks to prevent the inlining. So for now, just omit the check. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#endif
 
 static long long usec(void) {
     struct timeval tv;
@@ -135,7 +143,6 @@ int test_intsetUpgradeFromint16Toint64(int argc, char **argv, int flags) {
     UNUSED(flags);
 
     intset *is = intsetNew();
-    is = intsetNew();
     is = intsetAdd(is,32,NULL);
     TEST_ASSERT(intrev32ifbe(is->encoding) == INTSET_ENC_INT16);
     is = intsetAdd(is,4294967295,NULL);
@@ -227,3 +234,7 @@ int test_intsetStressAddDelete(int argc, char **argv, int flags) {
 
     return 0;
 }
+
+#if defined(__GNUC__) && __GNUC__ >= 12
+#pragma GCC diagnostic pop
+#endif

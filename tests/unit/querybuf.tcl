@@ -36,8 +36,9 @@ start_server {tags {"querybuf slow"}} {
         $rd flush
         after 100
         # send the rest of the command
-        $rd write "a\r\n"
+        $rd write "a\r\n\$1\r\nb\r\n"
         $rd flush
+        assert_equal {OK} [$rd read]
 
         set orig_test_client_qbuf [client_query_buffer test_client]
         # Make sure query buff has less than the peak resize threshold (PROTO_RESIZE_THRESHOLD) 32k

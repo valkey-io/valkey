@@ -2128,7 +2128,7 @@ void initSharedQueryBuf(void) {
  * If the client is using the shared query buffer, the remaining data is copied
  * to a new private buffer. If the client is using a private buffer, the buffer
  * is trimmed to the current position. */
-void resetClientQueryBuffer(client *c) {
+void trimClientQueryBuffer(client *c) {
     if (c->querybuf == NULL) {
         return;
     }
@@ -2639,7 +2639,7 @@ int processInputBuffer(client *c) {
             if (c->querybuf == shared_qb) {
                 /* Before processing the command, reset the shared query buffer to its default state. 
                  * This avoids unintentionally modifying the shared qb during processCommand */
-                resetClientQueryBuffer(c);
+                trimClientQueryBuffer(c);
             }
 
             /* We are finally ready to execute the command. */
@@ -2671,7 +2671,7 @@ int processInputBuffer(client *c) {
             c->repl_applied = 0;
         }
     } else {
-        resetClientQueryBuffer(c);
+        trimClientQueryBuffer(c);
     }
 
     /* Update client memory usage after processing the query buffer, this is

@@ -361,22 +361,33 @@ size_t zmalloc_usable_size(void *ptr) {
 }
 #endif
 
+/* Frees the memory buffer pointed by ptr and updates statistics.
+ * ptr must already point to the start of the buffer. On systems where we store
+ * an additional header, the caller must do the necessary adjustments.
+ * ptr must not be NULL. With jemalloc this function uses the fast track by
+ * specifying the buffer size */
+void zfree_with_size(void *ptr, size_t size) {
+    update_zmalloc_stat_free(size);
+
+#ifdef USE_JEMALLOC
+    je_sdallocx(ptr, size, 0);
+#else
+    free(ptr);
+#endif
+}
+
 void zfree(void *ptr) {
-#ifndef HAVE_MALLOC_SIZE
-    void *realptr;
-    size_t oldsize;
+    if (ptr == NULL) return;
+
+#ifdef HAVE_MALLOC_SIZE
+    size_t size = zmalloc_size(ptr);
+#else
+    ptr = (char *)ptr - PREFIX_SIZE;
+    size_t data_size = *((size_t *)ptr);
+    size_t size = data_size + PREFIX_SIZE;
 #endif
 
-    if (ptr == NULL) return;
-#ifdef HAVE_MALLOC_SIZE
-    update_zmalloc_stat_free(zmalloc_size(ptr));
-    free(ptr);
-#else
-    realptr = (char *)ptr - PREFIX_SIZE;
-    oldsize = *((size_t *)realptr);
-    update_zmalloc_stat_free(oldsize + PREFIX_SIZE);
-    free(realptr);
-#endif
+    zfree_with_size(ptr, size);
 }
 
 char *zstrdup(const char *s) {

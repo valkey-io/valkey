@@ -195,7 +195,13 @@ sds sdsdup(const sds s) {
 /* Free an sds string. No operation is performed if 's' is NULL. */
 void sdsfree(sds s) {
     if (s == NULL) return;
-    s_free((char *)s - sdsHdrSize(s[-1]));
+
+    /* SDS_TYPE_5 header doesn't contain the size of the allocation */
+    if ((s[-1] & SDS_TYPE_MASK) == SDS_TYPE_5) {
+        s_free(sdsAllocPtr(s));
+    } else {
+        s_free_with_size(sdsAllocPtr(s), sdsAllocSize(s));
+    }
 }
 
 /* Set the sds string length to the length as obtained with strlen(), so

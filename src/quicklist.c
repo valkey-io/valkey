@@ -212,9 +212,6 @@ void quicklistRelease(quicklist *quicklist) {
  * Returns 1 if listpack compressed successfully.
  * Returns 0 if compression failed or if listpack too small to compress. */
 REDIS_STATIC int __quicklistCompressNode(quicklistNode *node) {
-#ifdef SERVER_TEST
-    node->attempted_compress = 1;
-#endif
     if (node->dont_compress) return 0;
 
     /* validate that the node is neither
@@ -254,9 +251,6 @@ REDIS_STATIC int __quicklistCompressNode(quicklistNode *node) {
 /* Uncompress the listpack in 'node' and update encoding details.
  * Returns 1 on successful decode, 0 on failure to decode. */
 REDIS_STATIC int __quicklistDecompressNode(quicklistNode *node) {
-#ifdef SERVER_TEST
-    node->attempted_compress = 0;
-#endif
     node->recompress = 0;
 
     void *decompressed = zmalloc(node->sz);

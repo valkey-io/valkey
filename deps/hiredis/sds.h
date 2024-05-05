@@ -273,8 +273,4 @@ void *hi_sds_malloc(size_t size);
 void *hi_sds_realloc(void *ptr, size_t size);
 void hi_sds_free(void *ptr);
 
-#ifdef SERVER_TEST
-int hi_sdsTest(int argc, char *argv[]);
-#endif
-
 #endif /* HIREDIS_SDS_H */

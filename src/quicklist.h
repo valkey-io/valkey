@@ -204,10 +204,6 @@ quicklistNode *quicklistBookmarkFind(quicklist *ql, const char *name);
 void quicklistBookmarksClear(quicklist *ql);
 int quicklistSetPackedThreshold(size_t sz);
 
-#ifdef SERVER_TEST
-int quicklistTest(int argc, char *argv[], int flags);
-#endif
-
 /* Directions for iterators */
 #define AL_START_HEAD 0
 #define AL_START_TAIL 1

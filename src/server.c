@@ -6876,91 +6876,10 @@ int iAmMaster(void) {
             (server.cluster_enabled && clusterNodeIsMaster(getMyClusterNode())));
 }
 
-#ifdef SERVER_TEST
-#include "testhelp.h"
-#include "intset.h"  /* Compact integer set structure */
-
-int __failed_tests = 0;
-int __test_num = 0;
-
-/* The flags are the following:
-* --accurate:     Runs tests with more iterations.
-* --large-memory: Enables tests that consume more than 100mb. */
-typedef int serverTestProc(int argc, char **argv, int flags);
-struct serverTest {
-    char *name;
-    serverTestProc *proc;
-    int failed;
-} serverTests[] = {
-    {"ziplist", ziplistTest},
-    {"quicklist", quicklistTest},
-    {"zipmap", zipmapTest},
-    {"sha1test", sha1Test},
-    {"util", utilTest},
-    {"endianconv", endianconvTest},
-    {"zmalloc", zmalloc_test},
-    {"sds", sdsTest},
-    {"dict", dictTest},
-    {"listpack", listpackTest},
-    {"kvstore", kvstoreTest},
-};
-serverTestProc *getTestProcByName(const char *name) {
-    int numtests = sizeof(serverTests)/sizeof(struct serverTest);
-    for (int j = 0; j < numtests; j++) {
-        if (!strcasecmp(name,serverTests[j].name)) {
-            return serverTests[j].proc;
-        }
-    }
-    return NULL;
-}
-#endif
-
 int main(int argc, char **argv) {
     struct timeval tv;
     int j;
     char config_from_stdin = 0;
-
-#ifdef SERVER_TEST
-    monotonicInit(); /* Required for dict tests, that are relying on monotime during dict rehashing. */
-    if (argc >= 3 && !strcasecmp(argv[1], "test")) {
-        int flags = 0;
-        for (j = 3; j < argc; j++) {
-            char *arg = argv[j];
-            if (!strcasecmp(arg, "--accurate")) flags |= TEST_ACCURATE;
-            else if (!strcasecmp(arg, "--large-memory")) flags |= TEST_LARGE_MEMORY;
-            else if (!strcasecmp(arg, "--valgrind")) flags |= TEST_VALGRIND;
-        }
-
-        if (!strcasecmp(argv[2], "all")) {
-            int numtests = sizeof(serverTests)/sizeof(struct serverTest);
-            for (j = 0; j < numtests; j++) {
-                serverTests[j].failed = (serverTests[j].proc(argc,argv,flags) != 0);
-            }
-
-            /* Report tests result */
-            int failed_num = 0;
-            for (j = 0; j < numtests; j++) {
-                if (serverTests[j].failed) {
-                    failed_num++;
-                    printf("[failed] Test - %s\n", serverTests[j].name);
-                } else {
-                    printf("[ok] Test - %s\n", serverTests[j].name);
-                }
-            }
-
-            printf("%d tests, %d passed, %d failed\n", numtests,
-                   numtests-failed_num, failed_num);
-
-            return failed_num == 0 ? 0 : 1;
-        } else {
-            serverTestProc *proc = getTestProcByName(argv[2]);
-            if (!proc) return -1; /* test not found */
-            return proc(argc,argv,flags);
-        }
-
-        return 0;
-    }
-#endif
 
     /* We need to initialize our libraries, and the server configuration. */
 #ifdef INIT_SETPROCTITLE_REPLACEMENT

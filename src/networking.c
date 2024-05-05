@@ -1617,7 +1617,7 @@ void freeClient(client *c) {
     }
 
     /* Free the query buffer */
-    sdsfree(c->querybuf);
+    if (c->querybuf != shared_qb) sdsfree(c->querybuf);
     c->querybuf = NULL;
 
     /* Deallocate structures used to block on blocking ops. */

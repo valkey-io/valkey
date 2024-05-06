@@ -616,10 +616,6 @@ void trimStringObjectIfNeeded(robj *o, int trim_small_values) {
     }
 }
 
-int canUseSharedObject(void) {
-    return server.maxmemory == 0 || !(server.maxmemory_policy & MAXMEMORY_FLAG_NO_SHARED_INTEGERS);
-}
-
 /* Try to encode a string object in order to save space */
 robj *tryObjectEncodingEx(robj *o, int try_trim) {
     long value;

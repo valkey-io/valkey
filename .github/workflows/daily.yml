@@ -899,6 +899,16 @@ jobs:
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
         run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --clients 1 --no-latency --dump-logs ${{github.event.inputs.test_args}}
+      - name: make distclean
+        run: make distclean
+      - name: make with kqueue batch
+        run: make SERVER_CFLAGS='-Werror -DUSE_KQUEUE_BATCH'
+      - name: test with kqueue batch
+        if: true && !contains(github.event.inputs.skiptests, 'valkey')
+        run: ./runtest --accurate --verbose --clients 1 --no-latency --dump-logs ${{github.event.inputs.test_args}}
+      - name: module api test with kqueue batch
+        if: true && !contains(github.event.inputs.skiptests, 'modules')
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --clients 1 --no-latency --dump-logs ${{github.event.inputs.test_args}}
 
   test-macos-latest-sentinel:
     runs-on: macos-latest
@@ -925,6 +935,13 @@ jobs:
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
         run: ./runtest-sentinel ${{github.event.inputs.cluster_test_args}}
+      - name: make distclean
+        run: make distclean
+      - name: make with kqueue batch
+        run: make SERVER_CFLAGS='-Werror -DUSE_KQUEUE_BATCH'
+      - name: sentinel tests with kqueue batch
+        if: true && !contains(github.event.inputs.skiptests, 'sentinel')
+        run: ./runtest-sentinel ${{github.event.inputs.cluster_test_args}}
 
   test-macos-latest-cluster:
     runs-on: macos-latest
@@ -949,6 +966,13 @@ jobs:
       - name: make
         run: make SERVER_CFLAGS='-Werror'
       - name: cluster tests
+        if: true && !contains(github.event.inputs.skiptests, 'cluster')
+        run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
+      - name: make distclean
+        run: make distclean
+      - name: make with kqueue batch
+        run: make SERVER_CFLAGS='-Werror -DUSE_KQUEUE_BATCH'
+      - name: cluster tests with kqueue batch
         if: true && !contains(github.event.inputs.skiptests, 'cluster')
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
 
@@ -980,6 +1004,10 @@ jobs:
           ref: ${{ env.GITHUB_HEAD_REF }}
       - name: make
         run: make SERVER_CFLAGS='-Werror -DSERVER_TEST'
+      - name: make distclean
+        run: make distclean
+      - name: make with kqueue batch
+        run: make SERVER_CFLAGS='-Werror -DSERVER_TEST -DUSE_KQUEUE_BATCH'
 
   test-freebsd:
     runs-on: macos-12

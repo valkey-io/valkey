@@ -31,7 +31,7 @@ libssl-dev on Debian/Ubuntu) and run:
 
     % make BUILD_TLS=yes
 
-To build with systemd support, you'll need systemd development libraries (such 
+To build with systemd support, you'll need systemd development libraries (such
 as libsystemd-dev on Debian/Ubuntu or systemd-devel on CentOS) and run:
 
     % make USE_SYSTEMD=yes
@@ -111,7 +111,7 @@ Monotonic clock
 
 By default, Valkey will build using the POSIX clock_gettime function as the
 monotonic clock source.  On most modern systems, the internal processor clock
-can be used to improve performance.  Cautions can be found here: 
+can be used to improve performance.  Cautions can be found here:
     http://oliveryang.net/2015/09/pitfalls-of-TSC-usage/
 
 To build with support for the processor's internal instruction clock, use:
@@ -125,6 +125,24 @@ Valkey will build with a user-friendly colorized output by default.
 If you want to see a more verbose output, use the following:
 
     % make V=1
+
+Kqueue optimization
+-------------
+
+To build Valkey with the kqueue optimization where we buffer events and
+register them at once along with retrieving pending events via `kevent()`
+instead of registering events to kqueue one by one. This should conserve
+plenty of system calls to `kevent` in some scenarios.
+
+Note that this optimization will change the current semantics of registering and
+deregistering events via `kevent` by buffering events and deferring the operations.
+When some unexpected errors occur, it could panic the process. So, enable this
+optimization with caution.
+Visit [#449](https://github.com/valkey-io/valkey/pull/449) for more contexts.
+
+To enable this optimization, use:
+
+    % make SERVER_CFLAGS='-DUSE_KQUEUE_BATCH'
 
 Running Valkey
 -------------

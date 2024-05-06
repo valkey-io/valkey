@@ -6,6 +6,12 @@
         "since": "2.8.0",
         "arity": -3,
         "function": "zscanCommand",
+        "history": [
+            [
+                "7.2.5",
+                "Added noscores option."
+            ]
+        ],
         "command_flags": [
             "READONLY"
         ],

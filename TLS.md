@@ -58,7 +58,7 @@ To connect to this Valkey server with `valkey-cli`:
         --key ./tests/tls/valkey.key \
         --cacert ./tests/tls/ca.crt
 
-This will disable TCP and enable TLS on port 6379. It's also possible to have
+Specifying `port 0` will disable TCP. It's also possible to have
 both TCP and TLS available, but you'll need to assign different ports.
 
 To make a Replica connect to the master using TLS, use `--tls-replication yes`,

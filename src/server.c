@@ -3734,8 +3734,14 @@ void call(client *c, int flags) {
         }
     }
 
-    if (!(c->flags & CLIENT_BLOCKED))
+    if (!(c->flags & CLIENT_BLOCKED)) {
+        /* Modules may call commands in cron, in which case server.current_client
+         * is not set. */
+        if (server.current_client) {
+            server.current_client->commands_processed++;
+        }
         server.stat_numcommands++;
+    }
 
     /* Record peak memory after each command and before the eviction that runs
      * before the next command. */
@@ -6894,12 +6900,10 @@ struct serverTest {
 } serverTests[] = {
     {"ziplist", ziplistTest},
     {"quicklist", quicklistTest},
-    {"intset", intsetTest},
     {"zipmap", zipmapTest},
     {"sha1test", sha1Test},
     {"util", utilTest},
     {"endianconv", endianconvTest},
-    {"crc64", crc64Test},
     {"zmalloc", zmalloc_test},
     {"sds", sdsTest},
     {"dict", dictTest},

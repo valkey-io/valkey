@@ -1,11 +1,11 @@
 set testmodule [file normalize tests/modules/usercall.so]
 
 set test_script_set "#!lua
-redis.call('set','x',1)
+server.call('set','x',1)
 return 1"
 
 set test_script_get "#!lua
-redis.call('get','x')
+server.call('get','x')
 return 1"
 
 start_server {tags {"modules usercall"}} {

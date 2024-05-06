@@ -4,16 +4,16 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         # Test that scripts with shebang block cross slot operations
         assert_error "ERR Script attempted to access keys that do not hash to the same slot*" {
             r 0 eval {#!lua
-                redis.call('set', 'foo', 'bar')
-                redis.call('set', 'bar', 'foo')
+                server.call('set', 'foo', 'bar')
+                server.call('set', 'bar', 'foo')
                 return 'OK'
             } 0}
 
         # Test the functions by default block cross slot operations
         r 0 function load REPLACE {#!lua name=crossslot
             local function test_cross_slot(keys, args)
-                redis.call('set', 'foo', 'bar')
-                redis.call('set', 'bar', 'foo')
+                server.call('set', 'foo', 'bar')
+                server.call('set', 'bar', 'foo')
                 return 'OK'
             end
 
@@ -23,11 +23,11 @@ start_cluster 1 0 {tags {external:skip cluster}} {
 
     test {Cross slot commands are allowed by default for eval scripts and with allow-cross-slot-keys flag} {
         # Old style lua scripts are allowed to access cross slot operations
-        r 0 eval "redis.call('set', 'foo', 'bar'); redis.call('set', 'bar', 'foo')" 0
+        r 0 eval "server.call('set', 'foo', 'bar'); server.call('set', 'bar', 'foo')" 0
 
         # scripts with allow-cross-slot-keys flag are allowed
         r 0 eval {#!lua flags=allow-cross-slot-keys
-            redis.call('set', 'foo', 'bar'); redis.call('set', 'bar', 'foo')
+            server.call('set', 'foo', 'bar'); server.call('set', 'bar', 'foo')
         } 0
 
         # Retrieve data from different slot to verify data has been stored in the correct dictionary in cluster-enabled setup
@@ -40,8 +40,8 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         # Functions with allow-cross-slot-keys flag are allowed
         r 0 function load REPLACE {#!lua name=crossslot
             local function test_cross_slot(keys, args)
-                redis.call('set', 'foo', 'bar')
-                redis.call('set', 'bar', 'foo')
+                server.call('set', 'foo', 'bar')
+                server.call('set', 'bar', 'foo')
                 return 'OK'
             end
 
@@ -57,14 +57,14 @@ start_cluster 1 0 {tags {external:skip cluster}} {
     test {Cross slot commands are also blocked if they disagree with pre-declared keys} {
         assert_error "ERR Script attempted to access keys that do not hash to the same slot*" {
             r 0 eval {#!lua
-                redis.call('set', 'foo', 'bar')
+                server.call('set', 'foo', 'bar')
                 return 'OK'
             } 1 bar}
     }
 
     test {Cross slot commands are allowed by default if they disagree with pre-declared keys} {
         r 0 flushall
-        r 0 eval "redis.call('set', 'foo', 'bar')" 1 bar
+        r 0 eval "server.call('set', 'foo', 'bar')" 1 bar
 
         # Make sure the script writes to the right slot
         assert_equal 1 [r 0 cluster COUNTKEYSINSLOT 12182] ;# foo slot

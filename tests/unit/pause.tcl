@@ -157,7 +157,7 @@ start_server {tags {"pause network"}} {
 
         # test EVAL_RO on a unique script that's for sure not in the cache
         assert_equal [$rr EVAL_RO {
-            return redis.call('GeT', 'x')..' unique script'
+            return server.call('GeT', 'x')..' unique script'
             } 1 x
         ] "y unique script"
 
@@ -227,15 +227,15 @@ start_server {tags {"pause network"}} {
     test "Test may-replicate commands are rejected in RO scripts" {
         # that's specifically important for CLIENT PAUSE WRITE
         assert_error {ERR Write commands are not allowed from read-only scripts. script:*} {
-            r EVAL_RO "return redis.call('publish','ch','msg')" 0
+            r EVAL_RO "return server.call('publish','ch','msg')" 0
         }
         assert_error {ERR Write commands are not allowed from read-only scripts. script:*} {
             r EVAL {#!lua flags=no-writes
-                return redis.call('publish','ch','msg')
+                return server.call('publish','ch','msg')
             } 0
         }
         # make sure that publish isn't blocked from a non-RO script
-        assert_equal [r EVAL "return redis.call('publish','ch','msg')" 0] 0
+        assert_equal [r EVAL "return server.call('publish','ch','msg')" 0] 0
     }
 
     test "Test multiple clients can be queued up and unblocked" {

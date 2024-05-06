@@ -754,7 +754,7 @@ start_server {tags {"multi"}} {
 
         # make sure that SCRIPT LOAD inside MULTI isn't propagated
         r multi
-        r script load {redis.call('set', KEYS[1], 'foo')}
+        r script load {server.call('set', KEYS[1], 'foo')}
         r set foo bar
         set res [r exec]
         set sha [lindex $res 0]
@@ -771,7 +771,7 @@ start_server {tags {"multi"}} {
 
         # make sure that EVAL inside MULTI is propagated in a transaction in effects
         r multi
-        r eval {redis.call('set', KEYS[1], 'bar')} 1 bar
+        r eval {server.call('set', KEYS[1], 'bar')} 1 bar
         r exec
 
         assert_replication_stream $repl {

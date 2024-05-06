@@ -774,7 +774,7 @@ start_server {tags {"acl external:skip"}} {
 
     test {ACL can log errors in the context of Lua scripting} {
         r AUTH antirez foo
-        catch {r EVAL {redis.call('incr','foo')} 0}
+        catch {r EVAL {server.call('incr','foo')} 0}
         r AUTH default ""
         set entry [lindex [r ACL LOG] 0]
         assert {[dict get $entry context] eq {lua}}

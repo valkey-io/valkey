@@ -465,10 +465,10 @@ start_server {tags {"pubsub network"}} {
         r hello 3
         r subscribe foo
         set res [r eval {
-                redis.call("ping","abc")
-                redis.call("publish","foo","bar")
-                redis.call("publish","foo","vaz")
-                redis.call("ping","def")
+                server.call("ping","abc")
+                server.call("publish","foo","bar")
+                server.call("publish","foo","vaz")
+                server.call("ping","def")
                 return "bla"} 0]
         assert_equal $res {bla}
         assert_equal [r read] {message foo bar}

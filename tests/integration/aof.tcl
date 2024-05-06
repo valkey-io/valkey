@@ -436,7 +436,7 @@ tags {"aof external:skip"} {
             # make sure that the script times out during loading
             create_aof $aof_dirpath $aof_file {
                 append_to_aof [formatCommand select 9]
-                append_to_aof [formatCommand eval {redis.call('set',KEYS[1],'y'); for i=1,1500000 do redis.call('ping') end return 'ok'} 1 x]
+                append_to_aof [formatCommand eval {server.call('set',KEYS[1],'y'); for i=1,1500000 do server.call('ping') end return 'ok'} 1 x]
             }
             set rd [valkey_deferring_client]
             $rd debug loadaof
@@ -460,9 +460,9 @@ tags {"aof external:skip"} {
         }
         create_aof $aof_dirpath $aof_file {
             append_to_aof [formatCommand select 9]
-            append_to_aof [formatCommand eval {redis.call("set",KEYS[1],"100")} 1 foo]
-            append_to_aof [formatCommand eval {redis.call("incr",KEYS[1])} 1 foo]
-            append_to_aof [formatCommand eval {redis.call("incr",KEYS[1])} 1 foo]
+            append_to_aof [formatCommand eval {server.call("set",KEYS[1],"100")} 1 foo]
+            append_to_aof [formatCommand eval {server.call("incr",KEYS[1])} 1 foo]
+            append_to_aof [formatCommand eval {server.call("incr",KEYS[1])} 1 foo]
         }
         start_server [list overrides [list dir $server_path appendonly yes replica-read-only yes replicaof "127.0.0.1 0"]] {
             assert_equal [r get foo] 102

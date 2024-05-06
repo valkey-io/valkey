@@ -254,12 +254,12 @@ start_server {tags {"repl external:skip"}} {
             # DB is empty.
             r -1 flushdb
             r -1 flushdb
-            r -1 eval {redis.call("flushdb")} 0
+            r -1 eval {server.call("flushdb")} 0
 
             # DBs are empty.
             r -1 flushall
             r -1 flushall
-            r -1 eval {redis.call("flushall")} 0
+            r -1 eval {server.call("flushall")} 0
 
             # add another command to check nothing else was propagated after the above
             r -1 incr x

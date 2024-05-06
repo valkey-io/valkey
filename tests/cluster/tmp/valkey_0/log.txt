@@ -1,0 +1,987 @@
+15669:C 06 May 2024 19:13:44.621 # WARNING: Changing databases number from 16 to 1 since we are in cluster mode
+15669:C 06 May 2024 19:13:44.621 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+15669:C 06 May 2024 19:13:44.621 * oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo
+15669:C 06 May 2024 19:13:44.621 * Valkey version=255.255.255, bits=64, commit=93f8a19b, modified=0, pid=15669, just started
+15669:C 06 May 2024 19:13:44.621 * Configuration loaded
+15669:M 06 May 2024 19:13:44.622 * monotonic clock: POSIX clock_gettime
+15669:M 06 May 2024 19:13:44.623 * Running mode=cluster, port=30000.
+15669:M 06 May 2024 19:13:44.624 * No cluster configuration found, I'm ab3826d9896e2e16c77ee772f001ab7368256193
+15669:M 06 May 2024 19:13:44.646 * Server initialized
+15669:M 06 May 2024 19:13:44.648 * Creating AOF base file appendonly.aof.1.base.rdb on server start
+15669:M 06 May 2024 19:13:44.651 * Creating AOF incr file appendonly.aof.1.incr.aof on server start
+15669:M 06 May 2024 19:13:44.651 * Ready to accept connections tcp
+15669:M 06 May 2024 19:13:45.558 * configEpoch set to 0 via CLUSTER RESET HARD
+15669:M 06 May 2024 19:13:45.558 * Node hard reset, now I'm 2388117ef90620b8498aa23de0d4b2da027757d9
+15669:M 06 May 2024 19:13:45.558 * configEpoch set to 1 via CLUSTER SET-CONFIG-EPOCH
+15669:M 06 May 2024 19:13:45.563 * CONFIG REWRITE executed with success.
+15669:M 06 May 2024 19:13:45.682 # Missing implement of connection type tls
+15669:M 06 May 2024 19:13:45.828 * IP address for this node updated to 127.0.0.1
+15669:M 06 May 2024 19:13:52.316 * Cluster state changed: ok
+15669:M 06 May 2024 19:13:52.760 # Cluster state changed: fail
+15669:M 06 May 2024 19:13:52.776 * configEpoch set to 0 via CLUSTER RESET HARD
+15669:M 06 May 2024 19:13:52.776 * Node hard reset, now I'm 125263e49707331bd8e7a9d6681fe581aca463f2
+15669:M 06 May 2024 19:13:52.776 * configEpoch set to 1 via CLUSTER SET-CONFIG-EPOCH
+15669:M 06 May 2024 19:13:52.780 * CONFIG REWRITE executed with success.
+15669:M 06 May 2024 19:13:56.904 * Replica 127.0.0.1:30005 asks for synchronization
+15669:M 06 May 2024 19:13:56.904 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'caa8fb1213c82777376aafeb04c086a93df09432', my replication IDs are '1bed0af3fa88e080decccb87b0ee27e4d67e2cc3' and '0000000000000000000000000000000000000000')
+15669:M 06 May 2024 19:13:56.904 * Replication backlog created, my new replication IDs are 'db1149724e100be74f9a41307e155dd07433ad86' and '0000000000000000000000000000000000000000'
+15669:M 06 May 2024 19:13:56.904 * Starting BGSAVE for SYNC with target: replicas sockets
+15669:M 06 May 2024 19:13:56.905 * Background RDB transfer started by pid 15851
+15851:C 06 May 2024 19:13:56.906 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+15669:M 06 May 2024 19:13:56.906 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+15669:M 06 May 2024 19:13:56.909 * Background RDB transfer terminated with success
+15669:M 06 May 2024 19:13:56.909 * Streamed RDB transfer with replica 127.0.0.1:30005 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+15669:M 06 May 2024 19:13:56.909 * Synchronization with replica 127.0.0.1:30005 succeeded
+15669:M 06 May 2024 19:13:57.505 * Node 44cbffb6ea4e9f1a9f3f6fea0c4ba7b57dcf0555 () is no longer master of shard 93a2a8fbb3ebee1719ea78e416af4f62a280e72f; removed all 0 slot(s) it used to own
+15669:M 06 May 2024 19:13:57.505 * Node 44cbffb6ea4e9f1a9f3f6fea0c4ba7b57dcf0555 () is now part of shard 0a3baa510e8cc3ec6c1dc6c6aff3c8c121a171ee
+15669:M 06 May 2024 19:13:57.506 * Node 14870674fd1761a0b545ac9b6860bd07cc3c82a1 () is no longer master of shard 2aaea61241128999e7bf4d990a5d6bae89096d2d; removed all 0 slot(s) it used to own
+15669:M 06 May 2024 19:13:57.506 * Node 14870674fd1761a0b545ac9b6860bd07cc3c82a1 () is now part of shard 9009f53e5fcc48bb5a0b06d0bc06b2a661c7165d
+15669:M 06 May 2024 19:13:57.566 * Node 1e5c8c4a07f43bf52fd4450600942b910335d228 () is no longer master of shard 67426f1e38c225d7050cb5d4244d7014ede80e1a; removed all 0 slot(s) it used to own
+15669:M 06 May 2024 19:13:57.566 * Node 1e5c8c4a07f43bf52fd4450600942b910335d228 () is now part of shard a2427455940b828a38a3ffb09c2b4cdfd4ccf6f5
+15669:M 06 May 2024 19:13:57.568 * Node 9e2f09d33ea8e59e7726a43c9e211c32f945654f () is no longer master of shard 45a425a508f35dfb3598266dbd995af0daf15e78; removed all 0 slot(s) it used to own
+15669:M 06 May 2024 19:13:57.569 * Node 9e2f09d33ea8e59e7726a43c9e211c32f945654f () is now part of shard e89af52affaeadfe3f4c492254ae30531e68445a
+15669:M 06 May 2024 19:13:58.571 * Node 2b30694b8e24a7702a1229fcee665e160d412a34 () is no longer master of shard 8d23c540c28858cc5ee10f86f93cd31765bd7b8b; removed all 0 slot(s) it used to own
+15669:M 06 May 2024 19:13:58.571 * Node 2b30694b8e24a7702a1229fcee665e160d412a34 () is now part of shard 5f75c91ff19b41d8200527f5fc06215514a6c230
+15669:M 06 May 2024 19:13:59.684 * Cluster state changed: ok
+15669:M 06 May 2024 19:14:00.231 * Connection with replica 127.0.0.1:30005 lost.
+15669:signal-handler (1715022840) Received SIGTERM scheduling shutdown...
+15669:M 06 May 2024 19:14:00.390 * User requested shutdown...
+15669:M 06 May 2024 19:14:00.390 * Calling fsync() on the AOF file.
+15669:M 06 May 2024 19:14:00.390 # Valkey is now ready to exit, bye bye...
+15913:C 06 May 2024 19:14:04.569 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+15913:C 06 May 2024 19:14:04.569 * oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo
+15913:C 06 May 2024 19:14:04.569 * Valkey version=255.255.255, bits=64, commit=93f8a19b, modified=0, pid=15913, just started
+15913:C 06 May 2024 19:14:04.569 * Configuration loaded
+15913:M 06 May 2024 19:14:04.570 * monotonic clock: POSIX clock_gettime
+15913:M 06 May 2024 19:14:04.572 * Running mode=cluster, port=30000.
+15913:M 06 May 2024 19:14:04.578 * Node configuration loaded, I'm 125263e49707331bd8e7a9d6681fe581aca463f2
+15913:M 06 May 2024 19:14:04.579 * Server initialized
+15913:M 06 May 2024 19:14:04.579 * Reading RDB base file on AOF loading...
+15913:M 06 May 2024 19:14:04.579 * Loading RDB produced by valkey version 255.255.255
+15913:M 06 May 2024 19:14:04.579 * RDB age 20 seconds
+15913:M 06 May 2024 19:14:04.579 * RDB memory usage when created 2.13 Mb
+15913:M 06 May 2024 19:14:04.579 * RDB is base AOF
+15913:M 06 May 2024 19:14:04.579 * Done loading RDB, keys loaded: 0, keys expired: 0.
+15913:M 06 May 2024 19:14:04.579 * DB loaded from base file appendonly.aof.1.base.rdb: 0.000 seconds
+15913:M 06 May 2024 19:14:04.580 * DB loaded from incr file appendonly.aof.1.incr.aof: 0.001 seconds
+15913:M 06 May 2024 19:14:04.580 * DB loaded from append only file: 0.001 seconds
+15913:M 06 May 2024 19:14:04.580 * Opening AOF incr file appendonly.aof.1.incr.aof on server start
+15913:M 06 May 2024 19:14:04.580 * Ready to accept connections tcp
+15913:M 06 May 2024 19:14:06.607 * Cluster state changed: ok
+15913:M 06 May 2024 19:14:08.830 * Marking node 1e5c8c4a07f43bf52fd4450600942b910335d228 () as failing (quorum reached).
+15913:M 06 May 2024 19:14:10.639 * Marking node 44cbffb6ea4e9f1a9f3f6fea0c4ba7b57dcf0555 () as failing (quorum reached).
+15913:M 06 May 2024 19:14:12.656 * Clear FAIL state for node 44cbffb6ea4e9f1a9f3f6fea0c4ba7b57dcf0555 ():replica is reachable again.
+15913:M 06 May 2024 19:14:12.658 * Replica 127.0.0.1:30005 asks for synchronization
+15913:M 06 May 2024 19:14:12.658 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'c64b2b8c141fd2dce46a3dc147e95c01ada24a9b', my replication IDs are '57987502d791c66212016bd8950f4961599007e2' and '0000000000000000000000000000000000000000')
+15913:M 06 May 2024 19:14:12.658 * Replication backlog created, my new replication IDs are '30c6a2d86a0eec577bf64bd257ad9347167b4e10' and '0000000000000000000000000000000000000000'
+15913:M 06 May 2024 19:14:12.658 * Starting BGSAVE for SYNC with target: replicas sockets
+15913:M 06 May 2024 19:14:12.659 * Background RDB transfer started by pid 15948
+15948:C 06 May 2024 19:14:12.660 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+15913:M 06 May 2024 19:14:12.661 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+15913:M 06 May 2024 19:14:12.665 * Background RDB transfer terminated with success
+15913:M 06 May 2024 19:14:12.665 * Streamed RDB transfer with replica 127.0.0.1:30005 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+15913:M 06 May 2024 19:14:12.665 * Synchronization with replica 127.0.0.1:30005 succeeded
+15913:M 06 May 2024 19:14:12.763 * Clear FAIL state for node 1e5c8c4a07f43bf52fd4450600942b910335d228 ():replica is reachable again.
+15913:M 06 May 2024 19:14:12.889 * configEpoch set to 0 via CLUSTER RESET HARD
+15913:M 06 May 2024 19:14:12.889 * Node hard reset, now I'm 4ac21db3dc729d28334184ee1a8bd51324f5ca54
+15913:M 06 May 2024 19:14:12.890 * configEpoch set to 1 via CLUSTER SET-CONFIG-EPOCH
+15913:M 06 May 2024 19:14:12.890 # Cluster state changed: fail
+15913:M 06 May 2024 19:14:14.025 * CONFIG REWRITE executed with success.
+15913:M 06 May 2024 19:14:18.475 * Connection with replica 127.0.0.1:30005 lost.
+15913:M 06 May 2024 19:14:18.754 # Missing implement of connection type tls
+15913:M 06 May 2024 19:14:21.889 * Replica 127.0.0.1:30005 asks for synchronization
+15913:M 06 May 2024 19:14:21.889 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'f4d56b50770d7be18551a67c438eb8b372c7c244', my replication IDs are '30c6a2d86a0eec577bf64bd257ad9347167b4e10' and '0000000000000000000000000000000000000000')
+15913:M 06 May 2024 19:14:21.889 * Starting BGSAVE for SYNC with target: replicas sockets
+15913:M 06 May 2024 19:14:21.890 * Background RDB transfer started by pid 15999
+15999:C 06 May 2024 19:14:21.892 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+15913:M 06 May 2024 19:14:21.892 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+15913:M 06 May 2024 19:14:21.894 * Background RDB transfer terminated with success
+15913:M 06 May 2024 19:14:21.894 * Streamed RDB transfer with replica 127.0.0.1:30005 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+15913:M 06 May 2024 19:14:21.894 * Synchronization with replica 127.0.0.1:30005 succeeded
+15913:M 06 May 2024 19:14:22.593 * Node 4565dcea920547db24497a9ea7da3f8ba2d82492 () is no longer master of shard f4049c4ab89f7706b4043fb6168626bdb0c6d5fc; removed all 0 slot(s) it used to own
+15913:M 06 May 2024 19:14:22.593 * Node 4565dcea920547db24497a9ea7da3f8ba2d82492 () is now part of shard 1109f6e41ce862f21e8f082deeae031962ef83ac
+15913:M 06 May 2024 19:14:23.062 * Node 24553aed57a0fc014e31d20913d6ddb67daf993b () is no longer master of shard afe0861af93a47ac71d717dd7dd1f03d3dbe6564; removed all 0 slot(s) it used to own
+15913:M 06 May 2024 19:14:23.062 * Node 24553aed57a0fc014e31d20913d6ddb67daf993b () is now part of shard 6bb248ce1980dda8969ac6f65c18efe9f1d758d2
+15913:M 06 May 2024 19:14:23.167 * Node c5edb8319b761b2e5b47473a36be688c7f503b2f () is no longer master of shard f07b8fb6b6cbfb692ab1b87f30279a0b975efbbe; removed all 0 slot(s) it used to own
+15913:M 06 May 2024 19:14:23.167 * Node c5edb8319b761b2e5b47473a36be688c7f503b2f () is now part of shard a3bfec7d6b49cc6990a2b3560914e0bb1a7bda0c
+15913:M 06 May 2024 19:14:23.520 * Node ed209190989ecd1b2fc83edcb92a31a33e7f40c0 () is no longer master of shard a1ec0cec552145a6ed1b39a5162d032008e3e8fd; removed all 0 slot(s) it used to own
+15913:M 06 May 2024 19:14:23.521 * Node ed209190989ecd1b2fc83edcb92a31a33e7f40c0 () is now part of shard 5ed49dbd94affeba17a99f22ab305f897e30146f
+15913:M 06 May 2024 19:14:23.555 * Node a47fca07157b154ce1988d97b2afcdaa40ce66b2 () is no longer master of shard 10c2f585fc5fd868287fafbf5212b6227ab7017d; removed all 0 slot(s) it used to own
+15913:M 06 May 2024 19:14:23.555 * Node a47fca07157b154ce1988d97b2afcdaa40ce66b2 () is now part of shard bccca0c1e0e1dccd3b58d5709156154f9f4c9957
+15913:M 06 May 2024 19:14:24.711 * Cluster state changed: ok
+15913:signal-handler (1715022865) Received SIGTERM scheduling shutdown...
+15913:M 06 May 2024 19:14:25.819 * User requested shutdown...
+15913:M 06 May 2024 19:14:25.819 * Waiting for replicas before shutting down.
+15913:M 06 May 2024 19:14:26.222 * 1 of 1 replicas are in sync when shutting down.
+15913:M 06 May 2024 19:14:26.222 * Calling fsync() on the AOF file.
+15913:M 06 May 2024 19:14:26.224 # Valkey is now ready to exit, bye bye...
+16072:C 06 May 2024 19:14:31.193 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+16072:C 06 May 2024 19:14:31.193 * oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo
+16072:C 06 May 2024 19:14:31.193 * Valkey version=255.255.255, bits=64, commit=93f8a19b, modified=0, pid=16072, just started
+16072:C 06 May 2024 19:14:31.193 * Configuration loaded
+16072:M 06 May 2024 19:14:31.194 * monotonic clock: POSIX clock_gettime
+16072:M 06 May 2024 19:14:31.195 * Running mode=cluster, port=30000.
+16072:M 06 May 2024 19:14:31.201 * Node configuration loaded, I'm 4ac21db3dc729d28334184ee1a8bd51324f5ca54
+16072:M 06 May 2024 19:14:31.201 * Server initialized
+16072:M 06 May 2024 19:14:31.201 * Reading RDB base file on AOF loading...
+16072:M 06 May 2024 19:14:31.201 * Loading RDB produced by valkey version 255.255.255
+16072:M 06 May 2024 19:14:31.202 * RDB age 47 seconds
+16072:M 06 May 2024 19:14:31.202 * RDB memory usage when created 2.13 Mb
+16072:M 06 May 2024 19:14:31.202 * RDB is base AOF
+16072:M 06 May 2024 19:14:31.202 * Done loading RDB, keys loaded: 0, keys expired: 0.
+16072:M 06 May 2024 19:14:31.202 * DB loaded from base file appendonly.aof.1.base.rdb: 0.000 seconds
+16072:M 06 May 2024 19:14:31.203 * DB loaded from incr file appendonly.aof.1.incr.aof: 0.001 seconds
+16072:M 06 May 2024 19:14:31.203 * DB loaded from append only file: 0.001 seconds
+16072:M 06 May 2024 19:14:31.203 * Opening AOF incr file appendonly.aof.1.incr.aof on server start
+16072:M 06 May 2024 19:14:31.203 * Ready to accept connections tcp
+16072:M 06 May 2024 19:14:31.206 * Configuration change detected. Reconfiguring myself as a replica of a47fca07157b154ce1988d97b2afcdaa40ce66b2 ()
+16072:S 06 May 2024 19:14:31.206 * Before turning into a replica, using my own master parameters to synthesize a cached master: I may be able to synchronize with the new master with just a partial transfer.
+16072:S 06 May 2024 19:14:31.206 * Connecting to MASTER 127.0.0.1:30005
+16072:S 06 May 2024 19:14:31.206 * MASTER <-> REPLICA sync started
+16072:S 06 May 2024 19:14:31.206 * Cluster state changed: ok
+16072:S 06 May 2024 19:14:31.209 * Non blocking connect for SYNC fired the event.
+16072:S 06 May 2024 19:14:31.212 * Master replied to PING, replication can continue...
+16072:S 06 May 2024 19:14:31.213 * Trying a partial resynchronization (request a885299edcf176196fe3d900bfa95fdbf2c19909:1).
+16072:S 06 May 2024 19:14:31.218 * Full resync from master: ab8bc90c5604dae91fa7c221a1a9a247776d0d30:2774
+16072:S 06 May 2024 19:14:31.220 * MASTER <-> REPLICA sync: receiving streamed RDB from master with EOF to disk
+16072:S 06 May 2024 19:14:31.220 * Discarding previously cached master state.
+16072:S 06 May 2024 19:14:31.220 * MASTER <-> REPLICA sync: Flushing old data
+16072:S 06 May 2024 19:14:31.221 * MASTER <-> REPLICA sync: Loading DB in memory
+16072:S 06 May 2024 19:14:31.222 * Loading RDB produced by valkey version 255.255.255
+16072:S 06 May 2024 19:14:31.222 * RDB age 0 seconds
+16072:S 06 May 2024 19:14:31.222 * RDB memory usage when created 2.73 Mb
+16072:S 06 May 2024 19:14:31.222 * Done loading RDB, keys loaded: 24, keys expired: 0.
+16072:S 06 May 2024 19:14:31.222 * MASTER <-> REPLICA sync: Finished with success
+16072:S 06 May 2024 19:14:31.222 * Creating AOF incr file temp-appendonly.aof.incr on background rewrite
+16072:S 06 May 2024 19:14:31.223 * Background append only file rewriting started by pid 16078
+16078:C 06 May 2024 19:14:31.226 * Successfully created the temporary AOF base file temp-rewriteaof-bg-16078.aof
+16078:C 06 May 2024 19:14:31.227 * Fork CoW for AOF rewrite: current 1 MB, peak 1 MB, average 0 MB
+16072:M 06 May 2024 19:14:31.261 * Connection with master lost.
+16072:M 06 May 2024 19:14:31.261 * Caching the disconnected master state.
+16072:M 06 May 2024 19:14:31.261 * Discarding previously cached master state.
+16072:M 06 May 2024 19:14:31.261 * Setting secondary replication ID to ab8bc90c5604dae91fa7c221a1a9a247776d0d30, valid up to offset: 2775. New replication ID is 091861482ceb045f831c49702e90317b1a85f90f
+16072:M 06 May 2024 19:14:31.263 * configEpoch set to 0 via CLUSTER RESET HARD
+16072:M 06 May 2024 19:14:31.263 * Node hard reset, now I'm ffdb16089f859482065bad0e5c9a094d823a1410
+16072:M 06 May 2024 19:14:31.263 * configEpoch set to 1 via CLUSTER SET-CONFIG-EPOCH
+16072:M 06 May 2024 19:14:31.263 # Cluster state changed: fail
+16072:M 06 May 2024 19:14:31.268 * CONFIG REWRITE executed with success.
+16072:M 06 May 2024 19:14:31.305 * Background AOF rewrite terminated with success
+16072:M 06 May 2024 19:14:31.305 * Successfully renamed the temporary AOF base file temp-rewriteaof-bg-16078.aof into appendonly.aof.2.base.rdb
+16072:M 06 May 2024 19:14:31.305 * Successfully renamed the temporary AOF incr file temp-appendonly.aof.incr into appendonly.aof.2.incr.aof
+16072:M 06 May 2024 19:14:31.306 * Removing the history file appendonly.aof.1.incr.aof in the background
+16072:M 06 May 2024 19:14:31.306 * Removing the history file appendonly.aof.1.base.rdb in the background
+16072:M 06 May 2024 19:14:31.308 * Background AOF rewrite finished successfully
+16072:M 06 May 2024 19:14:31.445 # Missing implement of connection type tls
+16072:M 06 May 2024 19:14:34.819 * Replica 127.0.0.1:30005 asks for synchronization
+16072:M 06 May 2024 19:14:34.819 * Partial resynchronization not accepted: Requested offset for second ID was 2816, but I can reply up to 2775
+16072:M 06 May 2024 19:14:34.819 * Starting BGSAVE for SYNC with target: replicas sockets
+16072:M 06 May 2024 19:14:34.820 * Background RDB transfer started by pid 16108
+16108:C 06 May 2024 19:14:34.821 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+16072:M 06 May 2024 19:14:34.821 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+16072:M 06 May 2024 19:14:34.827 * Background RDB transfer terminated with success
+16072:M 06 May 2024 19:14:34.827 * Streamed RDB transfer with replica 127.0.0.1:30005 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+16072:M 06 May 2024 19:14:34.827 * Synchronization with replica 127.0.0.1:30005 succeeded
+16072:M 06 May 2024 19:14:35.010 * Node 9dad64de16025f02b271510ee2d51a6ca079dc7b () is no longer master of shard f88e4fd9e9180c926982aaac2f65e8d0105c55fe; removed all 0 slot(s) it used to own
+16072:M 06 May 2024 19:14:35.010 * Node 9dad64de16025f02b271510ee2d51a6ca079dc7b () is now part of shard 1c2b75be0f3bbf57778cad018055649104140ab5
+16072:M 06 May 2024 19:14:35.151 * Node 671088db4acca8792f424ee7ea50b8153c7529a0 () is no longer master of shard 76f000c5383c5d2746bf6c7b9d86a92aed4820c2; removed all 0 slot(s) it used to own
+16072:M 06 May 2024 19:14:35.151 * Node 671088db4acca8792f424ee7ea50b8153c7529a0 () is now part of shard 45bde1a3488556534c5594a0f6ace0dba22be32b
+16072:M 06 May 2024 19:14:35.566 * Node de3054474d708953456bc221c893ce4305ba5136 () is no longer master of shard 77b4d2bf3a14a66eb7635d415bbf20a86e150b57; removed all 0 slot(s) it used to own
+16072:M 06 May 2024 19:14:35.567 * Node de3054474d708953456bc221c893ce4305ba5136 () is now part of shard 236cc077a81351c19b896662f24236e227403702
+16072:M 06 May 2024 19:14:36.058 * Node d612f4e24864679d4cb0b4d862c48e2df4373065 () is no longer master of shard a577fdbb713c832cf9850e989f6b72796108c745; removed all 0 slot(s) it used to own
+16072:M 06 May 2024 19:14:36.058 * Node d612f4e24864679d4cb0b4d862c48e2df4373065 () is now part of shard e2220f97589610879561e699a57b8481b7124689
+16072:M 06 May 2024 19:14:36.561 * Node 29597550bd8f898394ae88db5a0ba45f1868fd3f () is no longer master of shard 98ec8d4aaf47b8dc3863b2d7c51af4e948cd12a6; removed all 0 slot(s) it used to own
+16072:M 06 May 2024 19:14:36.561 * Node 29597550bd8f898394ae88db5a0ba45f1868fd3f () is now part of shard 04e24d93f8b27f67291965144dd39f0ab3b35d25
+16072:M 06 May 2024 19:14:37.574 * Cluster state changed: ok
+16072:M 06 May 2024 19:14:42.676 * Marking node c6b3e5df3a36095ff5d9df268d3186ade1ef31ff () as failing (quorum reached).
+16072:M 06 May 2024 19:14:42.676 # Cluster state changed: fail
+16072:M 06 May 2024 19:14:43.853 * Failover auth granted to 671088db4acca8792f424ee7ea50b8153c7529a0 () for epoch 21
+16072:M 06 May 2024 19:14:43.895 * Cluster state changed: ok
+16072:M 06 May 2024 19:14:44.108 * Clear FAIL state for node c6b3e5df3a36095ff5d9df268d3186ade1ef31ff ():master without slots is reachable again.
+16072:M 06 May 2024 19:14:44.108 * A failover occurred in shard 45bde1a3488556534c5594a0f6ace0dba22be32b; node c6b3e5df3a36095ff5d9df268d3186ade1ef31ff () lost 0 slot(s) to node 671088db4acca8792f424ee7ea50b8153c7529a0 () with a config epoch of 21
+16072:M 06 May 2024 19:14:44.523 * Connection with replica 127.0.0.1:30005 lost.
+16072:M 06 May 2024 19:14:44.593 * Replica 127.0.0.1:30005 asks for synchronization
+16072:M 06 May 2024 19:14:44.593 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '1f5271f26ced03f73c5b28b4dea8fc2556fe54ab', my replication IDs are '091861482ceb045f831c49702e90317b1a85f90f' and 'ab8bc90c5604dae91fa7c221a1a9a247776d0d30')
+16072:M 06 May 2024 19:14:44.593 * Starting BGSAVE for SYNC with target: replicas sockets
+16072:M 06 May 2024 19:14:44.594 * Background RDB transfer started by pid 16193
+16193:C 06 May 2024 19:14:44.596 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+16072:M 06 May 2024 19:14:44.596 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+16072:M 06 May 2024 19:14:44.599 * Background RDB transfer terminated with success
+16072:M 06 May 2024 19:14:44.599 * Streamed RDB transfer with replica 127.0.0.1:30005 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+16072:M 06 May 2024 19:14:44.599 * Synchronization with replica 127.0.0.1:30005 succeeded
+16072:M 06 May 2024 19:14:49.727 * FAIL message received from 9dad64de16025f02b271510ee2d51a6ca079dc7b () about d979b3705974c02442b170e8dacc0ba5e04d56bb ()
+16072:M 06 May 2024 19:14:49.727 # Cluster state changed: fail
+16072:M 06 May 2024 19:14:50.825 * Failover auth granted to 9dad64de16025f02b271510ee2d51a6ca079dc7b () for epoch 22
+16072:M 06 May 2024 19:14:50.844 * Cluster state changed: ok
+16072:M 06 May 2024 19:14:51.065 * Clear FAIL state for node d979b3705974c02442b170e8dacc0ba5e04d56bb ():master without slots is reachable again.
+16072:M 06 May 2024 19:14:51.065 * A failover occurred in shard 1c2b75be0f3bbf57778cad018055649104140ab5; node d979b3705974c02442b170e8dacc0ba5e04d56bb () lost 0 slot(s) to node 9dad64de16025f02b271510ee2d51a6ca079dc7b () with a config epoch of 22
+16072:M 06 May 2024 19:14:55.628 * FAIL message received from 84a39200cacde99de881c75065e278d774a677f8 () about c26ea12fd513a731ced8b60c63390b5dbe84235d ()
+16072:M 06 May 2024 19:14:55.628 # Cluster state changed: fail
+16072:M 06 May 2024 19:14:56.724 * Failover auth granted to d612f4e24864679d4cb0b4d862c48e2df4373065 () for epoch 23
+16072:M 06 May 2024 19:14:57.024 * Cluster state changed: ok
+16072:M 06 May 2024 19:14:57.344 * Clear FAIL state for node c26ea12fd513a731ced8b60c63390b5dbe84235d ():master without slots is reachable again.
+16072:M 06 May 2024 19:14:57.345 * A failover occurred in shard e2220f97589610879561e699a57b8481b7124689; node c26ea12fd513a731ced8b60c63390b5dbe84235d () lost 0 slot(s) to node d612f4e24864679d4cb0b4d862c48e2df4373065 () with a config epoch of 23
+16072:M 06 May 2024 19:15:04.032 * FAIL message received from 84a39200cacde99de881c75065e278d774a677f8 () about d612f4e24864679d4cb0b4d862c48e2df4373065 ()
+16072:M 06 May 2024 19:15:04.033 # Cluster state changed: fail
+16072:M 06 May 2024 19:15:04.841 * Failover auth granted to c26ea12fd513a731ced8b60c63390b5dbe84235d () for epoch 24
+16072:M 06 May 2024 19:15:04.883 * Cluster state changed: ok
+16072:M 06 May 2024 19:15:05.045 * Clear FAIL state for node d612f4e24864679d4cb0b4d862c48e2df4373065 ():master without slots is reachable again.
+16072:M 06 May 2024 19:15:05.045 * A failover occurred in shard e2220f97589610879561e699a57b8481b7124689; node d612f4e24864679d4cb0b4d862c48e2df4373065 () lost 0 slot(s) to node c26ea12fd513a731ced8b60c63390b5dbe84235d () with a config epoch of 24
+16072:M 06 May 2024 19:15:10.096 * FAIL message received from b741288807d59266e5b075e999bfd7863cf32021 () about c26ea12fd513a731ced8b60c63390b5dbe84235d ()
+16072:M 06 May 2024 19:15:10.096 # Cluster state changed: fail
+16072:M 06 May 2024 19:15:10.914 * Failover auth granted to d612f4e24864679d4cb0b4d862c48e2df4373065 () for epoch 25
+16072:M 06 May 2024 19:15:10.964 * Cluster state changed: ok
+16072:M 06 May 2024 19:15:11.115 * Clear FAIL state for node c26ea12fd513a731ced8b60c63390b5dbe84235d ():master without slots is reachable again.
+16072:M 06 May 2024 19:15:11.115 * A failover occurred in shard e2220f97589610879561e699a57b8481b7124689; node c26ea12fd513a731ced8b60c63390b5dbe84235d () lost 0 slot(s) to node d612f4e24864679d4cb0b4d862c48e2df4373065 () with a config epoch of 25
+16072:M 06 May 2024 19:15:15.640 * FAIL message received from b741288807d59266e5b075e999bfd7863cf32021 () about 9dad64de16025f02b271510ee2d51a6ca079dc7b ()
+16072:M 06 May 2024 19:15:15.640 # Cluster state changed: fail
+16072:M 06 May 2024 19:15:16.548 * Failover auth granted to d979b3705974c02442b170e8dacc0ba5e04d56bb () for epoch 26
+16072:M 06 May 2024 19:15:16.595 * Cluster state changed: ok
+16072:M 06 May 2024 19:15:16.847 * Clear FAIL state for node 9dad64de16025f02b271510ee2d51a6ca079dc7b ():master without slots is reachable again.
+16072:M 06 May 2024 19:15:16.847 * A failover occurred in shard 1c2b75be0f3bbf57778cad018055649104140ab5; node 9dad64de16025f02b271510ee2d51a6ca079dc7b () lost 0 slot(s) to node d979b3705974c02442b170e8dacc0ba5e04d56bb () with a config epoch of 26
+16072:M 06 May 2024 19:15:21.822 * FAIL message received from 9dad64de16025f02b271510ee2d51a6ca079dc7b () about d979b3705974c02442b170e8dacc0ba5e04d56bb ()
+16072:M 06 May 2024 19:15:21.822 # Cluster state changed: fail
+16072:M 06 May 2024 19:15:22.734 * Failover auth granted to 9dad64de16025f02b271510ee2d51a6ca079dc7b () for epoch 27
+16072:M 06 May 2024 19:15:22.743 * Cluster state changed: ok
+16072:M 06 May 2024 19:15:22.997 * Clear FAIL state for node d979b3705974c02442b170e8dacc0ba5e04d56bb ():master without slots is reachable again.
+16072:M 06 May 2024 19:15:22.997 * A failover occurred in shard 1c2b75be0f3bbf57778cad018055649104140ab5; node d979b3705974c02442b170e8dacc0ba5e04d56bb () lost 0 slot(s) to node 9dad64de16025f02b271510ee2d51a6ca079dc7b () with a config epoch of 27
+16072:M 06 May 2024 19:15:23.093 * Connection with replica 127.0.0.1:30005 lost.
+16072:M 06 May 2024 19:15:23.214 * Replica 127.0.0.1:30005 asks for synchronization
+16072:M 06 May 2024 19:15:23.215 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '35e9d859b82f5c39b0f53877a239ac5eb5caf59d', my replication IDs are '091861482ceb045f831c49702e90317b1a85f90f' and 'ab8bc90c5604dae91fa7c221a1a9a247776d0d30')
+16072:M 06 May 2024 19:15:23.215 * Starting BGSAVE for SYNC with target: replicas sockets
+16072:M 06 May 2024 19:15:23.215 * Background RDB transfer started by pid 16707
+16707:C 06 May 2024 19:15:23.229 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+16072:M 06 May 2024 19:15:23.229 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+16072:M 06 May 2024 19:15:23.233 * Background RDB transfer terminated with success
+16072:M 06 May 2024 19:15:23.233 * Streamed RDB transfer with replica 127.0.0.1:30005 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+16072:M 06 May 2024 19:15:23.233 * Synchronization with replica 127.0.0.1:30005 succeeded
+16072:M 06 May 2024 19:15:27.758 * FAIL message received from 29597550bd8f898394ae88db5a0ba45f1868fd3f () about 9dad64de16025f02b271510ee2d51a6ca079dc7b ()
+16072:M 06 May 2024 19:15:27.758 # Cluster state changed: fail
+16072:M 06 May 2024 19:15:28.688 * Failover auth granted to d979b3705974c02442b170e8dacc0ba5e04d56bb () for epoch 28
+16072:M 06 May 2024 19:15:28.727 * Cluster state changed: ok
+16072:M 06 May 2024 19:15:28.946 * Clear FAIL state for node 9dad64de16025f02b271510ee2d51a6ca079dc7b ():master without slots is reachable again.
+16072:M 06 May 2024 19:15:28.947 * A failover occurred in shard 1c2b75be0f3bbf57778cad018055649104140ab5; node 9dad64de16025f02b271510ee2d51a6ca079dc7b () lost 0 slot(s) to node d979b3705974c02442b170e8dacc0ba5e04d56bb () with a config epoch of 28
+16072:M 06 May 2024 19:15:33.575 * FAIL message received from 671088db4acca8792f424ee7ea50b8153c7529a0 () about d979b3705974c02442b170e8dacc0ba5e04d56bb ()
+16072:M 06 May 2024 19:15:33.576 # Cluster state changed: fail
+16072:M 06 May 2024 19:15:34.324 * Failover auth granted to 9dad64de16025f02b271510ee2d51a6ca079dc7b () for epoch 29
+16072:M 06 May 2024 19:15:34.370 * Cluster state changed: ok
+16072:M 06 May 2024 19:15:34.589 * Clear FAIL state for node d979b3705974c02442b170e8dacc0ba5e04d56bb ():master without slots is reachable again.
+16072:M 06 May 2024 19:15:34.589 * A failover occurred in shard 1c2b75be0f3bbf57778cad018055649104140ab5; node d979b3705974c02442b170e8dacc0ba5e04d56bb () lost 0 slot(s) to node 9dad64de16025f02b271510ee2d51a6ca079dc7b () with a config epoch of 29
+16072:M 06 May 2024 19:15:34.852 * configEpoch set to 0 via CLUSTER RESET HARD
+16072:M 06 May 2024 19:15:34.852 * Node hard reset, now I'm b8c31b2ae8086307fe67ec79c4ae04da56daad32
+16072:M 06 May 2024 19:15:34.852 * configEpoch set to 1 via CLUSTER SET-CONFIG-EPOCH
+16072:M 06 May 2024 19:15:34.852 # Cluster state changed: fail
+16072:M 06 May 2024 19:15:34.857 * CONFIG REWRITE executed with success.
+16072:M 06 May 2024 19:15:34.916 * Connection with replica 127.0.0.1:30005 lost.
+16072:M 06 May 2024 19:15:39.093 * Node f618c2d793fec3c1be72eac543ed42af49103087 () is no longer master of shard c39f6f20eed586245932eadb49d37ef3444eeba3; removed all 0 slot(s) it used to own
+16072:M 06 May 2024 19:15:39.093 * Node f618c2d793fec3c1be72eac543ed42af49103087 () is now part of shard 3a32b81103a1e70ff832bacb10b5a5a912e9e2dc
+16072:M 06 May 2024 19:15:40.552 * Replica 127.0.0.1:30005 asks for synchronization
+16072:M 06 May 2024 19:15:40.552 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '0d896a9ec5ff02ba2b19e9d8c5db64b7f07f62c5', my replication IDs are '091861482ceb045f831c49702e90317b1a85f90f' and 'ab8bc90c5604dae91fa7c221a1a9a247776d0d30')
+16072:M 06 May 2024 19:15:40.552 * Starting BGSAVE for SYNC with target: replicas sockets
+16072:M 06 May 2024 19:15:40.553 * Background RDB transfer started by pid 16866
+16866:C 06 May 2024 19:15:40.554 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+16072:M 06 May 2024 19:15:40.554 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+16072:M 06 May 2024 19:15:40.893 * Background RDB transfer terminated with success
+16072:M 06 May 2024 19:15:40.897 * Streamed RDB transfer with replica 127.0.0.1:30005 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+16072:M 06 May 2024 19:15:40.897 * Synchronization with replica 127.0.0.1:30005 succeeded
+16072:M 06 May 2024 19:15:41.085 * Node 5269a12afdf4274ccd7df7a3ac397f3fcc91a41b () is no longer master of shard f65a03c57d7accc16ebbe0644b4f594992bf8dce; removed all 0 slot(s) it used to own
+16072:M 06 May 2024 19:15:41.085 * Node 5269a12afdf4274ccd7df7a3ac397f3fcc91a41b () is now part of shard 897f6391c215d2fd35c543f86aae669878fdc874
+16072:M 06 May 2024 19:15:41.704 * Cluster state changed: ok
+16072:M 06 May 2024 19:15:42.408 * Node 6a35a86928be660bf08d53b5985287118d92066b () is no longer master of shard 17431b2ec492ed011920dbf31b9d73f688b42f6f; removed all 0 slot(s) it used to own
+16072:M 06 May 2024 19:15:42.408 * Node 6a35a86928be660bf08d53b5985287118d92066b () is now part of shard 78600edd67e7ea47e3a029230067904131c90109
+16072:M 06 May 2024 19:15:42.412 * Node fbfcf26d16f4bc8614e1fa7be3bc2e62ddd94665 () is no longer master of shard 3af8d21a8c53a9b6624c360029651d1f88745f55; removed all 0 slot(s) it used to own
+16072:M 06 May 2024 19:15:42.412 * Node fbfcf26d16f4bc8614e1fa7be3bc2e62ddd94665 () is now part of shard 6b4d9b2c1f3548ebff40277e67444291a3fa23f5
+16072:M 06 May 2024 19:15:42.417 * Node a0009d5f604d884e784a3056b063090422c8ce55 () is no longer master of shard e64780e5c850ee71f0b1b08d3ba6db17ccf4bce2; removed all 0 slot(s) it used to own
+16072:M 06 May 2024 19:15:42.417 * Node a0009d5f604d884e784a3056b063090422c8ce55 () is now part of shard d3a218f528452be7c9ae6dfd00c32dfc82e7170d
+16072:M 06 May 2024 19:16:28.732 * New configEpoch set to 23
+16072:M 06 May 2024 19:16:28.732 * configEpoch updated after importing slot 27
+16072:signal-handler (1715023038) Received SIGTERM scheduling shutdown...
+16072:M 06 May 2024 19:17:18.945 * User requested shutdown...
+16072:M 06 May 2024 19:17:18.945 * 1 of 1 replicas are in sync when shutting down.
+16072:M 06 May 2024 19:17:18.945 # Valkey is now ready to exit, bye bye...
+17197:C 06 May 2024 19:17:18.969 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+17197:C 06 May 2024 19:17:18.969 * oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo
+17197:C 06 May 2024 19:17:18.969 * Valkey version=255.255.255, bits=64, commit=93f8a19b, modified=0, pid=17197, just started
+17197:C 06 May 2024 19:17:18.969 * Configuration loaded
+17197:M 06 May 2024 19:17:18.970 * monotonic clock: POSIX clock_gettime
+17197:M 06 May 2024 19:17:18.971 * Running mode=cluster, port=30000.
+17197:M 06 May 2024 19:17:18.977 * Node configuration loaded, I'm b8c31b2ae8086307fe67ec79c4ae04da56daad32
+17197:M 06 May 2024 19:17:18.977 * Server initialized
+17197:M 06 May 2024 19:17:18.977 * Reading RDB base file on AOF loading...
+17197:M 06 May 2024 19:17:18.977 * Loading RDB produced by valkey version 255.255.255
+17197:M 06 May 2024 19:17:18.977 * RDB age 167 seconds
+17197:M 06 May 2024 19:17:18.977 * RDB memory usage when created 2.23 Mb
+17197:M 06 May 2024 19:17:18.977 * RDB is base AOF
+17197:M 06 May 2024 19:17:18.978 * Done loading RDB, keys loaded: 24, keys expired: 0.
+17197:M 06 May 2024 19:17:18.978 * DB loaded from base file appendonly.aof.2.base.rdb: 0.001 seconds
+17197:M 06 May 2024 19:17:19.078 * DB loaded from incr file appendonly.aof.2.incr.aof: 0.100 seconds
+17197:M 06 May 2024 19:17:19.078 * DB loaded from append only file: 0.101 seconds
+17197:M 06 May 2024 19:17:19.078 * Opening AOF incr file appendonly.aof.2.incr.aof on server start
+17197:M 06 May 2024 19:17:19.079 * Ready to accept connections tcp
+17197:M 06 May 2024 19:17:19.193 * Replica 127.0.0.1:30005 asks for synchronization
+17197:M 06 May 2024 19:17:19.193 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '091861482ceb045f831c49702e90317b1a85f90f', my replication IDs are '8fda1ab438bf5972a8ce393e49cf38fd3f48897f' and '0000000000000000000000000000000000000000')
+17197:M 06 May 2024 19:17:19.193 * Replication backlog created, my new replication IDs are 'd15c200a350b478216a6c7c144a8299560016a04' and '0000000000000000000000000000000000000000'
+17197:M 06 May 2024 19:17:19.193 * Starting BGSAVE for SYNC with target: replicas sockets
+17197:M 06 May 2024 19:17:19.194 * Background RDB transfer started by pid 17207
+17207:C 06 May 2024 19:17:19.226 * Fork CoW for RDB: current 1 MB, peak 1 MB, average 0 MB
+17197:M 06 May 2024 19:17:19.227 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17197:M 06 May 2024 19:17:19.249 * Background RDB transfer terminated with success
+17197:M 06 May 2024 19:17:19.249 * Streamed RDB transfer with replica 127.0.0.1:30005 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17197:M 06 May 2024 19:17:19.249 * Synchronization with replica 127.0.0.1:30005 succeeded
+17197:M 06 May 2024 19:17:20.209 * Connection with replica 127.0.0.1:30005 lost.
+17197:M 06 May 2024 19:17:20.281 * Replica 127.0.0.1:30005 asks for synchronization
+17197:M 06 May 2024 19:17:20.281 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '75929e2ea3ddca232e4a8020154f67af1b69971a', my replication IDs are 'd15c200a350b478216a6c7c144a8299560016a04' and '0000000000000000000000000000000000000000')
+17197:M 06 May 2024 19:17:20.281 * Starting BGSAVE for SYNC with target: replicas sockets
+17197:M 06 May 2024 19:17:20.282 * Background RDB transfer started by pid 17271
+17271:C 06 May 2024 19:17:20.307 * Fork CoW for RDB: current 1 MB, peak 1 MB, average 1 MB
+17197:M 06 May 2024 19:17:20.307 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17197:M 06 May 2024 19:17:20.326 * Background RDB transfer terminated with success
+17197:M 06 May 2024 19:17:20.326 * Streamed RDB transfer with replica 127.0.0.1:30005 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17197:M 06 May 2024 19:17:20.326 * Synchronization with replica 127.0.0.1:30005 succeeded
+17197:M 06 May 2024 19:17:21.097 * Cluster state changed: ok
+17197:M 06 May 2024 19:17:24.862 # Missing implement of connection type tls
+17197:M 06 May 2024 19:17:34.699 * configEpoch set to 0 via CLUSTER RESET HARD
+17197:M 06 May 2024 19:17:34.699 * Node hard reset, now I'm c6e768b2f8702ccd365a393b642c8ac83ff22379
+17197:M 06 May 2024 19:17:34.699 * configEpoch set to 1 via CLUSTER SET-CONFIG-EPOCH
+17197:M 06 May 2024 19:17:34.699 # Cluster state changed: fail
+17197:M 06 May 2024 19:17:34.706 * CONFIG REWRITE executed with success.
+17197:M 06 May 2024 19:17:34.770 * Connection with replica 127.0.0.1:30005 lost.
+17197:M 06 May 2024 19:17:41.909 * Cluster state changed: ok
+17197:M 06 May 2024 19:17:42.616 * Replica 127.0.0.1:30005 asks for synchronization
+17197:M 06 May 2024 19:17:42.616 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '5cd533faaf50e6af239ba19a8805907891b55801', my replication IDs are 'd15c200a350b478216a6c7c144a8299560016a04' and '0000000000000000000000000000000000000000')
+17197:M 06 May 2024 19:17:42.616 * Starting BGSAVE for SYNC with target: replicas sockets
+17197:M 06 May 2024 19:17:42.617 * Background RDB transfer started by pid 17526
+17526:C 06 May 2024 19:17:42.619 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17197:M 06 May 2024 19:17:42.619 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17197:M 06 May 2024 19:17:42.622 * Background RDB transfer terminated with success
+17197:M 06 May 2024 19:17:42.622 * Streamed RDB transfer with replica 127.0.0.1:30005 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17197:M 06 May 2024 19:17:42.622 * Synchronization with replica 127.0.0.1:30005 succeeded
+17197:M 06 May 2024 19:17:43.908 * Node 59cb584e870b5276318f48cc46a9edfb0371113f () is no longer master of shard 5000b06b9aff419dd88e8f75370c3da32551a1cb; removed all 0 slot(s) it used to own
+17197:M 06 May 2024 19:17:43.908 * Node 59cb584e870b5276318f48cc46a9edfb0371113f () is now part of shard 069b0453b631c5c0be393a42d2b474a6b5af3bc3
+17197:M 06 May 2024 19:17:44.004 * Replica 127.0.0.1:30010 asks for synchronization
+17197:M 06 May 2024 19:17:44.004 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '7ff74344abd805ec6f0599434cb62585625d202a', my replication IDs are 'd15c200a350b478216a6c7c144a8299560016a04' and '0000000000000000000000000000000000000000')
+17197:M 06 May 2024 19:17:44.004 * Starting BGSAVE for SYNC with target: replicas sockets
+17197:M 06 May 2024 19:17:44.004 * Background RDB transfer started by pid 17531
+17531:C 06 May 2024 19:17:44.006 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17197:M 06 May 2024 19:17:44.006 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17197:M 06 May 2024 19:17:44.028 * Background RDB transfer terminated with success
+17197:M 06 May 2024 19:17:44.028 * Streamed RDB transfer with replica 127.0.0.1:30010 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17197:M 06 May 2024 19:17:44.028 * Synchronization with replica 127.0.0.1:30010 succeeded
+17197:M 06 May 2024 19:17:44.089 * Node 078932a058b3293ad41a7bf812f0c25bcb0049d7 () is no longer master of shard f7d317600bff619f321470e98d7e3c9c27a4af6a; removed all 0 slot(s) it used to own
+17197:M 06 May 2024 19:17:44.089 * Node 078932a058b3293ad41a7bf812f0c25bcb0049d7 () is now part of shard 71756dc6ec85961b10f92d7936ea08ecbd62d2cc
+17197:M 06 May 2024 19:17:44.093 * Node e1039ccb24f58e1d87d2782b61596d09ff577abb () is no longer master of shard 5acc99edc411149fcdb27d6533feac7207649ef7; removed all 0 slot(s) it used to own
+17197:M 06 May 2024 19:17:44.093 * Node e1039ccb24f58e1d87d2782b61596d09ff577abb () is now part of shard 1050559ab1955a6332e03bbdccee0d3b12d80d4e
+17197:M 06 May 2024 19:17:44.149 * Node 4f657f5e5c0b9e1d22cbfd768445a3a17a128dce () is no longer master of shard 33c4d632371303bcb565e5c7aba0936e2a76b03a; removed all 0 slot(s) it used to own
+17197:M 06 May 2024 19:17:44.149 * Node 4f657f5e5c0b9e1d22cbfd768445a3a17a128dce () is now part of shard 65d3f576730fc68ea1d1bef428c17b8f492f5ab4
+17197:M 06 May 2024 19:17:44.151 * Node 970366324b8c390c737a72bc0527db1e0be88d05 () is no longer master of shard 6c2b56a67af1fb0be8ff8b1b4eefe129c23debb0; removed all 0 slot(s) it used to own
+17197:M 06 May 2024 19:17:44.151 * Node 970366324b8c390c737a72bc0527db1e0be88d05 () is now part of shard 069b0453b631c5c0be393a42d2b474a6b5af3bc3
+17197:M 06 May 2024 19:17:44.152 * Node 8d75f2d6f057fa546d38d9b15adacee5fdc6a60d () is no longer master of shard 1e88f30dc751b7903da19b3c4c8bc3173a3efb8b; removed all 0 slot(s) it used to own
+17197:M 06 May 2024 19:17:44.152 * Node 8d75f2d6f057fa546d38d9b15adacee5fdc6a60d () is now part of shard 50e3f96a8fee19ff4889bc9e3adeceeaaa1dbc24
+17197:M 06 May 2024 19:17:44.205 * Node e84e73c5fbab2e444548d2b4b8c70f6592b04067 () is no longer master of shard 873ddfcf8e44ed993d28f2c2cc6dee5b6aa4f588; removed all 0 slot(s) it used to own
+17197:M 06 May 2024 19:17:44.205 * Node e84e73c5fbab2e444548d2b4b8c70f6592b04067 () is now part of shard 1050559ab1955a6332e03bbdccee0d3b12d80d4e
+17197:M 06 May 2024 19:17:44.505 * Node a64f8ad23dbc7e19bceb3d6de42d635121321462 () is no longer master of shard 0855cdcd88c49b00e8d3cb7a4549759c3b4ffc32; removed all 0 slot(s) it used to own
+17197:M 06 May 2024 19:17:44.505 * Node a64f8ad23dbc7e19bceb3d6de42d635121321462 () is now part of shard 65d3f576730fc68ea1d1bef428c17b8f492f5ab4
+17197:M 06 May 2024 19:17:44.550 * Node 26801f367db02d74aeeeb4c5ec2877a5f31569d9 () is no longer master of shard 1a16ede24c20c880468822e63f78780773a34e47; removed all 0 slot(s) it used to own
+17197:M 06 May 2024 19:17:44.550 * Node 26801f367db02d74aeeeb4c5ec2877a5f31569d9 () is now part of shard 71756dc6ec85961b10f92d7936ea08ecbd62d2cc
+17197:M 06 May 2024 19:17:44.596 * Node c82ade1d42699c8d38b49704a4d508edf28962ad () is no longer master of shard 54bf45e726f98496ec4871cc44f69eed009b4194; removed all 0 slot(s) it used to own
+17197:M 06 May 2024 19:17:44.596 * Node c82ade1d42699c8d38b49704a4d508edf28962ad () is now part of shard 50e3f96a8fee19ff4889bc9e3adeceeaaa1dbc24
+17197:M 06 May 2024 19:17:49.043 * FAIL message received from 8638bb3919fb522af84a8fe3990ded8caa70968c () about 26801f367db02d74aeeeb4c5ec2877a5f31569d9 ()
+17197:M 06 May 2024 19:17:54.678 * Connection with replica client id #12 lost.
+17197:signal-handler (1715023074) Received SIGTERM scheduling shutdown...
+17197:M 06 May 2024 19:17:54.689 * Clear FAIL state for node 26801f367db02d74aeeeb4c5ec2877a5f31569d9 ():replica is reachable again.
+17197:M 06 May 2024 19:17:54.759 * User requested shutdown...
+17197:M 06 May 2024 19:17:54.759 * 1 of 1 replicas are in sync when shutting down.
+17197:M 06 May 2024 19:17:54.759 # Valkey is now ready to exit, bye bye...
+17595:C 06 May 2024 19:17:59.782 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+17595:C 06 May 2024 19:17:59.783 * oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo
+17595:C 06 May 2024 19:17:59.783 * Valkey version=255.255.255, bits=64, commit=93f8a19b, modified=0, pid=17595, just started
+17595:C 06 May 2024 19:17:59.783 * Configuration loaded
+17595:M 06 May 2024 19:17:59.783 * monotonic clock: POSIX clock_gettime
+17595:M 06 May 2024 19:17:59.784 * Running mode=cluster, port=30000.
+17595:M 06 May 2024 19:17:59.791 * Node configuration loaded, I'm c6e768b2f8702ccd365a393b642c8ac83ff22379
+17595:M 06 May 2024 19:17:59.792 * Server initialized
+17595:M 06 May 2024 19:17:59.792 * Loading RDB produced by valkey version 255.255.255
+17595:M 06 May 2024 19:17:59.792 * RDB age 208 seconds
+17595:M 06 May 2024 19:17:59.792 * RDB memory usage when created 2.73 Mb
+17595:M 06 May 2024 19:17:59.792 * Done loading RDB, keys loaded: 24, keys expired: 0.
+17595:M 06 May 2024 19:17:59.792 * DB loaded from disk: 0.001 seconds
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 701, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 817, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 949, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 1429, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 1603, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 2827, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 3239, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 4294, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 6954, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 8626, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 9685, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 11361, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 11493, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 12083, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 12319, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 13133, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 13270, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 13566, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.792 * I have keys for slot 13682, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.793 * I have keys for slot 14944, but the slot is assigned to another node. Setting it to importing state.
+17595:M 06 May 2024 19:17:59.796 * Ready to accept connections tcp
+17595:M 06 May 2024 19:17:59.798 * Configuration change detected. Reconfiguring myself as a replica of 078932a058b3293ad41a7bf812f0c25bcb0049d7 ()
+17595:S 06 May 2024 19:17:59.798 * Before turning into a replica, using my own master parameters to synthesize a cached master: I may be able to synchronize with the new master with just a partial transfer.
+17595:S 06 May 2024 19:17:59.798 * Connecting to MASTER 127.0.0.1:30005
+17595:S 06 May 2024 19:17:59.799 * MASTER <-> REPLICA sync started
+17595:S 06 May 2024 19:17:59.799 * Cluster state changed: ok
+17595:S 06 May 2024 19:17:59.802 * Non blocking connect for SYNC fired the event.
+17595:S 06 May 2024 19:17:59.806 * Master replied to PING, replication can continue...
+17595:S 06 May 2024 19:17:59.807 * Trying a partial resynchronization (request aae9d25481cb6002c313a9721fe18a0646fad75f:2775).
+17595:S 06 May 2024 19:17:59.811 * Full resync from master: 5e899519bec2e2cdd4a7b61ea586bd98560e7bac:1150
+17595:S 06 May 2024 19:17:59.816 * MASTER <-> REPLICA sync: receiving streamed RDB from master with EOF to disk
+17595:S 06 May 2024 19:17:59.816 * Discarding previously cached master state.
+17595:S 06 May 2024 19:17:59.816 * MASTER <-> REPLICA sync: Flushing old data
+17595:S 06 May 2024 19:17:59.817 * MASTER <-> REPLICA sync: Loading DB in memory
+17595:S 06 May 2024 19:17:59.818 * Loading RDB produced by valkey version 255.255.255
+17595:S 06 May 2024 19:17:59.818 * RDB age 0 seconds
+17595:S 06 May 2024 19:17:59.818 * RDB memory usage when created 2.80 Mb
+17595:S 06 May 2024 19:17:59.818 * Done loading RDB, keys loaded: 18, keys expired: 0.
+17595:S 06 May 2024 19:17:59.818 * MASTER <-> REPLICA sync: Finished with success
+17595:M 06 May 2024 19:17:59.846 * Connection with master lost.
+17595:M 06 May 2024 19:17:59.846 * Caching the disconnected master state.
+17595:M 06 May 2024 19:17:59.846 * Discarding previously cached master state.
+17595:M 06 May 2024 19:17:59.846 * Setting secondary replication ID to 5e899519bec2e2cdd4a7b61ea586bd98560e7bac, valid up to offset: 1151. New replication ID is 8fa9911ae05d0a1fbbaa8d27c7cfba10046179f9
+17595:M 06 May 2024 19:17:59.847 * configEpoch set to 0 via CLUSTER RESET HARD
+17595:M 06 May 2024 19:17:59.848 * Node hard reset, now I'm 450684f318abb9002cec036680f3cb52f5f919b0
+17595:M 06 May 2024 19:17:59.848 * configEpoch set to 1 via CLUSTER SET-CONFIG-EPOCH
+17595:M 06 May 2024 19:17:59.848 # Cluster state changed: fail
+17595:M 06 May 2024 19:17:59.852 * CONFIG REWRITE executed with success.
+17595:M 06 May 2024 19:17:59.998 # Missing implement of connection type tls
+17595:M 06 May 2024 19:18:02.756 * Replica 127.0.0.1:30003 asks for synchronization
+17595:M 06 May 2024 19:18:02.756 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '33a630f4d7b48a71055db691f9f38204265bc88e', my replication IDs are '8fa9911ae05d0a1fbbaa8d27c7cfba10046179f9' and '5e899519bec2e2cdd4a7b61ea586bd98560e7bac')
+17595:M 06 May 2024 19:18:02.756 * Starting BGSAVE for SYNC with target: replicas sockets
+17595:M 06 May 2024 19:18:02.757 * Background RDB transfer started by pid 17614
+17614:C 06 May 2024 19:18:02.758 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17595:M 06 May 2024 19:18:02.758 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17595:M 06 May 2024 19:18:02.761 * Background RDB transfer terminated with success
+17595:M 06 May 2024 19:18:02.761 * Streamed RDB transfer with replica 127.0.0.1:30003 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17595:M 06 May 2024 19:18:02.761 * Synchronization with replica 127.0.0.1:30003 succeeded
+17595:M 06 May 2024 19:18:02.773 * Replica 127.0.0.1:30006 asks for synchronization
+17595:M 06 May 2024 19:18:02.773 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '7def704c3091fcfddcd52695acae65e41389de64', my replication IDs are '8fa9911ae05d0a1fbbaa8d27c7cfba10046179f9' and '5e899519bec2e2cdd4a7b61ea586bd98560e7bac')
+17595:M 06 May 2024 19:18:02.773 * Starting BGSAVE for SYNC with target: replicas sockets
+17595:M 06 May 2024 19:18:02.774 * Background RDB transfer started by pid 17619
+17619:C 06 May 2024 19:18:02.775 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17595:M 06 May 2024 19:18:02.775 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17595:M 06 May 2024 19:18:02.776 * Background RDB transfer terminated with success
+17595:M 06 May 2024 19:18:02.776 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17595:M 06 May 2024 19:18:02.776 * Synchronization with replica 127.0.0.1:30006 succeeded
+17595:M 06 May 2024 19:18:02.798 * Replica 127.0.0.1:30009 asks for synchronization
+17595:M 06 May 2024 19:18:02.798 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'a768d8f3ef6ee2e35fc20f55ca111d136e39e698', my replication IDs are '8fa9911ae05d0a1fbbaa8d27c7cfba10046179f9' and '5e899519bec2e2cdd4a7b61ea586bd98560e7bac')
+17595:M 06 May 2024 19:18:02.798 * Starting BGSAVE for SYNC with target: replicas sockets
+17595:M 06 May 2024 19:18:02.799 * Background RDB transfer started by pid 17622
+17622:C 06 May 2024 19:18:02.800 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17595:M 06 May 2024 19:18:02.801 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17595:M 06 May 2024 19:18:02.802 * Background RDB transfer terminated with success
+17595:M 06 May 2024 19:18:02.802 * Streamed RDB transfer with replica 127.0.0.1:30009 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17595:M 06 May 2024 19:18:02.802 * Synchronization with replica 127.0.0.1:30009 succeeded
+17595:M 06 May 2024 19:18:02.823 * Replica 127.0.0.1:30012 asks for synchronization
+17595:M 06 May 2024 19:18:02.823 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'c807065e8097e40d615a7706d4f7676dbc55302b', my replication IDs are '8fa9911ae05d0a1fbbaa8d27c7cfba10046179f9' and '5e899519bec2e2cdd4a7b61ea586bd98560e7bac')
+17595:M 06 May 2024 19:18:02.823 * Starting BGSAVE for SYNC with target: replicas sockets
+17595:M 06 May 2024 19:18:02.824 * Background RDB transfer started by pid 17625
+17625:C 06 May 2024 19:18:02.825 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17595:M 06 May 2024 19:18:02.825 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17595:M 06 May 2024 19:18:02.827 * Background RDB transfer terminated with success
+17595:M 06 May 2024 19:18:02.827 * Streamed RDB transfer with replica 127.0.0.1:30012 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17595:M 06 May 2024 19:18:02.827 * Synchronization with replica 127.0.0.1:30012 succeeded
+17595:M 06 May 2024 19:18:02.854 * Replica 127.0.0.1:30015 asks for synchronization
+17595:M 06 May 2024 19:18:02.854 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '7f792b050aa43d923d1d833f2505dc3001c1555d', my replication IDs are '8fa9911ae05d0a1fbbaa8d27c7cfba10046179f9' and '5e899519bec2e2cdd4a7b61ea586bd98560e7bac')
+17595:M 06 May 2024 19:18:02.854 * Starting BGSAVE for SYNC with target: replicas sockets
+17595:M 06 May 2024 19:18:02.855 * Background RDB transfer started by pid 17628
+17628:C 06 May 2024 19:18:02.856 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17595:M 06 May 2024 19:18:02.856 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17595:M 06 May 2024 19:18:02.859 * Background RDB transfer terminated with success
+17595:M 06 May 2024 19:18:02.859 * Streamed RDB transfer with replica 127.0.0.1:30015 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17595:M 06 May 2024 19:18:02.859 * Synchronization with replica 127.0.0.1:30015 succeeded
+17595:M 06 May 2024 19:18:03.536 * Node 3a8410fdf29d80b74cbb245767c5e44636bc3277 () is no longer master of shard 7d57fa4efb72d70389b55e5fb06b1ed20ee0b8c3; removed all 0 slot(s) it used to own
+17595:M 06 May 2024 19:18:03.536 * Node 3a8410fdf29d80b74cbb245767c5e44636bc3277 () is now part of shard af57b2c095a58c35952f5be607254c877d1c65e6
+17595:M 06 May 2024 19:18:03.538 * Node ee4e8801b63592ad76065cf689613b8590e8adbd () is no longer master of shard 07caa91caff12c6fc179408189c0b2325234614a; removed all 0 slot(s) it used to own
+17595:M 06 May 2024 19:18:03.538 * Node ee4e8801b63592ad76065cf689613b8590e8adbd () is now part of shard b1941e40ca7c82b122690b81cfbab0265cfd6255
+17595:M 06 May 2024 19:18:03.539 * Node 05434d3c3db7978583050249cc56e331c3083c27 () is no longer master of shard 30c8fb7d5fcde244056aac469ab0a18d2dfa4e6a; removed all 0 slot(s) it used to own
+17595:M 06 May 2024 19:18:03.539 * Node 05434d3c3db7978583050249cc56e331c3083c27 () is now part of shard af57b2c095a58c35952f5be607254c877d1c65e6
+17595:M 06 May 2024 19:18:03.545 * Node 204fe20f285eb3c7bcdd744c0500d6789f98b722 () is no longer master of shard ab9f767e76ee34d7511533a455ad90ed1b50d27b; removed all 0 slot(s) it used to own
+17595:M 06 May 2024 19:18:03.546 * Node 204fe20f285eb3c7bcdd744c0500d6789f98b722 () is now part of shard e57e3844f79664a605c7f2e2b61ad0702feaf18d
+17595:M 06 May 2024 19:18:03.583 * Node f01b0161e695176f83ca792891b1e43f77a88883 () is no longer master of shard 66a60939691fd1e6ee1492ac1dbc0dece4a724e9; removed all 0 slot(s) it used to own
+17595:M 06 May 2024 19:18:03.583 * Node f01b0161e695176f83ca792891b1e43f77a88883 () is now part of shard e57e3844f79664a605c7f2e2b61ad0702feaf18d
+17595:M 06 May 2024 19:18:03.586 * Node b4c96fe54bd211d5373161c89d6e0f09e6bae07a () is no longer master of shard 1f9cf276999006c5e2fcd79b4eb3d5840c05a58b; removed all 0 slot(s) it used to own
+17595:M 06 May 2024 19:18:03.586 * Node b4c96fe54bd211d5373161c89d6e0f09e6bae07a () is now part of shard b1941e40ca7c82b122690b81cfbab0265cfd6255
+17595:M 06 May 2024 19:18:03.638 * Node f0648fda209089feb04595850ff99f51f0fb2ba5 () is no longer master of shard 71ddfeaa46e5002962c1f850ecca2bc4f0152083; removed all 0 slot(s) it used to own
+17595:M 06 May 2024 19:18:03.638 * Node f0648fda209089feb04595850ff99f51f0fb2ba5 () is now part of shard e57e3844f79664a605c7f2e2b61ad0702feaf18d
+17595:M 06 May 2024 19:18:03.739 * Node 9e37c267ff4ecec857b256ac46b5e11b3201d2bf () is no longer master of shard 4a54cdb367579758a4e3f891240c194e22265b3d; removed all 0 slot(s) it used to own
+17595:M 06 May 2024 19:18:03.739 * Node 9e37c267ff4ecec857b256ac46b5e11b3201d2bf () is now part of shard af57b2c095a58c35952f5be607254c877d1c65e6
+17595:M 06 May 2024 19:18:03.798 * Node 1e008697fe34fc59625174f184ad2adc37042797 () is no longer master of shard 1bf2cd731a3dbe35a6cec5639318bdb95d99061d; removed all 0 slot(s) it used to own
+17595:M 06 May 2024 19:18:03.798 * Node 1e008697fe34fc59625174f184ad2adc37042797 () is now part of shard b1941e40ca7c82b122690b81cfbab0265cfd6255
+17595:M 06 May 2024 19:18:04.041 * Node 918741e37ed669f9cb19eed7a95073e1eae2a8f1 () is no longer master of shard fe0f6b7f23d33e5bedb35ba3947a32d59a5d868f; removed all 0 slot(s) it used to own
+17595:M 06 May 2024 19:18:04.041 * Node 918741e37ed669f9cb19eed7a95073e1eae2a8f1 () is now part of shard af57b2c095a58c35952f5be607254c877d1c65e6
+17595:M 06 May 2024 19:18:04.043 * Node 26996c81b1b4b014258b798c0b9cab6593139f89 () is no longer master of shard 75182d21b15b8439f1522e589f314577961349dd; removed all 0 slot(s) it used to own
+17595:M 06 May 2024 19:18:04.043 * Node 26996c81b1b4b014258b798c0b9cab6593139f89 () is now part of shard e57e3844f79664a605c7f2e2b61ad0702feaf18d
+17595:M 06 May 2024 19:18:04.043 * Node 9f07e3ca03ad9d75250fe84b63f941d8609c07fd () is no longer master of shard cb9315006ffe129274468e5ed2feb38a7f33269f; removed all 0 slot(s) it used to own
+17595:M 06 May 2024 19:18:04.043 * Node 9f07e3ca03ad9d75250fe84b63f941d8609c07fd () is now part of shard b1941e40ca7c82b122690b81cfbab0265cfd6255
+17595:M 06 May 2024 19:18:04.043 * Node 9e51f1caf8c08f552dc747bebbfbb287ce3d5b74 () is no longer master of shard dae9d79e83baa0dbce3720b336c773fde1c02492; removed all 0 slot(s) it used to own
+17595:M 06 May 2024 19:18:04.043 * Node 9e51f1caf8c08f552dc747bebbfbb287ce3d5b74 () is now part of shard b1941e40ca7c82b122690b81cfbab0265cfd6255
+17595:M 06 May 2024 19:18:04.048 * Node e53ff829cf90e7caea1e3e82bd279765e0d896ce () is no longer master of shard dfcb8ddc797b36f3027193f68a243825e66ecb76; removed all 0 slot(s) it used to own
+17595:M 06 May 2024 19:18:04.048 * Node e53ff829cf90e7caea1e3e82bd279765e0d896ce () is now part of shard e57e3844f79664a605c7f2e2b61ad0702feaf18d
+17595:M 06 May 2024 19:18:04.540 * Node 9735b7886a7f7567bec72eec88999171c7b1481d () is no longer master of shard d0d012e1f78210fb0613fb1538f24f7814fe81bd; removed all 0 slot(s) it used to own
+17595:M 06 May 2024 19:18:04.540 * Node 9735b7886a7f7567bec72eec88999171c7b1481d () is now part of shard af57b2c095a58c35952f5be607254c877d1c65e6
+17595:M 06 May 2024 19:18:05.757 * Cluster state changed: ok
+17595:signal-handler (1715023087) Received SIGTERM scheduling shutdown...
+17595:M 06 May 2024 19:18:07.065 * User requested shutdown...
+17595:M 06 May 2024 19:18:07.065 * 5 of 5 replicas are in sync when shutting down.
+17595:M 06 May 2024 19:18:07.065 # Valkey is now ready to exit, bye bye...
+17803:C 06 May 2024 19:18:42.209 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+17803:C 06 May 2024 19:18:42.210 * oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo
+17803:C 06 May 2024 19:18:42.210 * Valkey version=255.255.255, bits=64, commit=93f8a19b, modified=0, pid=17803, just started
+17803:C 06 May 2024 19:18:42.210 * Configuration loaded
+17803:M 06 May 2024 19:18:42.210 * monotonic clock: POSIX clock_gettime
+17803:M 06 May 2024 19:18:42.212 * Running mode=cluster, port=30000.
+17803:M 06 May 2024 19:18:42.217 * Node configuration loaded, I'm 450684f318abb9002cec036680f3cb52f5f919b0
+17803:M 06 May 2024 19:18:42.218 * Server initialized
+17803:M 06 May 2024 19:18:42.219 * Loading RDB produced by valkey version 255.255.255
+17803:M 06 May 2024 19:18:42.219 * RDB age 43 seconds
+17803:M 06 May 2024 19:18:42.219 * RDB memory usage when created 2.80 Mb
+17803:M 06 May 2024 19:18:42.219 * Done loading RDB, keys loaded: 18, keys expired: 0.
+17803:M 06 May 2024 19:18:42.219 * DB loaded from disk: 0.001 seconds
+17803:M 06 May 2024 19:18:42.219 * I have keys for slot 115, but the slot is assigned to another node. Setting it to importing state.
+17803:M 06 May 2024 19:18:42.219 * I have keys for slot 511, but the slot is assigned to another node. Setting it to importing state.
+17803:M 06 May 2024 19:18:42.219 * I have keys for slot 3255, but the slot is assigned to another node. Setting it to importing state.
+17803:M 06 May 2024 19:18:42.219 * I have keys for slot 6701, but the slot is assigned to another node. Setting it to importing state.
+17803:M 06 May 2024 19:18:42.219 * I have keys for slot 7450, but the slot is assigned to another node. Setting it to importing state.
+17803:M 06 May 2024 19:18:42.219 * I have keys for slot 10648, but the slot is assigned to another node. Setting it to importing state.
+17803:M 06 May 2024 19:18:42.219 * I have keys for slot 10954, but the slot is assigned to another node. Setting it to importing state.
+17803:M 06 May 2024 19:18:42.219 * I have keys for slot 15092, but the slot is assigned to another node. Setting it to importing state.
+17803:M 06 May 2024 19:18:42.219 * I have keys for slot 15224, but the slot is assigned to another node. Setting it to importing state.
+17803:M 06 May 2024 19:18:42.219 * I have keys for slot 16262, but the slot is assigned to another node. Setting it to importing state.
+17803:M 06 May 2024 19:18:42.223 * Ready to accept connections tcp
+17803:M 06 May 2024 19:18:42.226 * Configuration change detected. Reconfiguring myself as a replica of 1e008697fe34fc59625174f184ad2adc37042797 ()
+17803:S 06 May 2024 19:18:42.226 * Before turning into a replica, using my own master parameters to synthesize a cached master: I may be able to synchronize with the new master with just a partial transfer.
+17803:S 06 May 2024 19:18:42.226 * Connecting to MASTER 127.0.0.1:30006
+17803:S 06 May 2024 19:18:42.226 * MASTER <-> REPLICA sync started
+17803:S 06 May 2024 19:18:42.226 * Cluster state changed: ok
+17803:S 06 May 2024 19:18:42.230 * Non blocking connect for SYNC fired the event.
+17803:S 06 May 2024 19:18:42.233 * Master replied to PING, replication can continue...
+17803:S 06 May 2024 19:18:42.233 * Trying a partial resynchronization (request 03cd5940b2b29b34b5603d4a44abf064e3a4fdd2:1151).
+17803:S 06 May 2024 19:18:42.233 * Full resync from master: cb3a9996647dc0fdc72ce3f0f0ddcbdde140ec4e:1298
+17803:S 06 May 2024 19:18:42.236 * MASTER <-> REPLICA sync: receiving streamed RDB from master with EOF to disk
+17803:S 06 May 2024 19:18:42.236 * Discarding previously cached master state.
+17803:S 06 May 2024 19:18:42.236 * MASTER <-> REPLICA sync: Flushing old data
+17803:S 06 May 2024 19:18:42.236 * MASTER <-> REPLICA sync: Loading DB in memory
+17803:S 06 May 2024 19:18:42.238 * Loading RDB produced by valkey version 255.255.255
+17803:S 06 May 2024 19:18:42.238 * RDB age 0 seconds
+17803:S 06 May 2024 19:18:42.238 * RDB memory usage when created 2.73 Mb
+17803:S 06 May 2024 19:18:42.238 * Done loading RDB, keys loaded: 0, keys expired: 0.
+17803:S 06 May 2024 19:18:42.238 * MASTER <-> REPLICA sync: Finished with success
+17803:S 06 May 2024 19:18:42.326 * A failover occurred in shard b1941e40ca7c82b122690b81cfbab0265cfd6255; node b4c96fe54bd211d5373161c89d6e0f09e6bae07a () lost 0 slot(s) to node 1e008697fe34fc59625174f184ad2adc37042797 () with a config epoch of 28
+17803:S 06 May 2024 19:18:42.426 * A failover occurred in shard b1941e40ca7c82b122690b81cfbab0265cfd6255; node ee4e8801b63592ad76065cf689613b8590e8adbd () lost 0 slot(s) to node 1e008697fe34fc59625174f184ad2adc37042797 () with a config epoch of 28
+17803:S 06 May 2024 19:18:42.435 * A failover occurred in shard b1941e40ca7c82b122690b81cfbab0265cfd6255; node 9f07e3ca03ad9d75250fe84b63f941d8609c07fd () lost 0 slot(s) to node 1e008697fe34fc59625174f184ad2adc37042797 () with a config epoch of 28
+17803:S 06 May 2024 19:18:42.527 * A failover occurred in shard b1941e40ca7c82b122690b81cfbab0265cfd6255; node 9e51f1caf8c08f552dc747bebbfbb287ce3d5b74 () lost 0 slot(s) to node 1e008697fe34fc59625174f184ad2adc37042797 () with a config epoch of 28
+17803:M 06 May 2024 19:18:42.549 * Connection with master lost.
+17803:M 06 May 2024 19:18:42.549 * Caching the disconnected master state.
+17803:M 06 May 2024 19:18:42.549 * Discarding previously cached master state.
+17803:M 06 May 2024 19:18:42.549 * Setting secondary replication ID to cb3a9996647dc0fdc72ce3f0f0ddcbdde140ec4e, valid up to offset: 1299. New replication ID is 5f260c7433fd3c141e3e8291b44b8f032f4fec14
+17803:M 06 May 2024 19:18:42.550 * configEpoch set to 0 via CLUSTER RESET HARD
+17803:M 06 May 2024 19:18:42.550 * Node hard reset, now I'm 03a61a2c512c0aab55d8de4c03711ba741fddb86
+17803:M 06 May 2024 19:18:42.550 * configEpoch set to 1 via CLUSTER SET-CONFIG-EPOCH
+17803:M 06 May 2024 19:18:42.550 # Cluster state changed: fail
+17803:M 06 May 2024 19:18:42.558 * CONFIG REWRITE executed with success.
+17803:M 06 May 2024 19:18:42.766 # Missing implement of connection type tls
+17803:M 06 May 2024 19:18:45.310 * Replica 127.0.0.1:30005 asks for synchronization
+17803:M 06 May 2024 19:18:45.310 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'b1d3798a48160c62cff577878e172f39b729996d', my replication IDs are '5f260c7433fd3c141e3e8291b44b8f032f4fec14' and 'cb3a9996647dc0fdc72ce3f0f0ddcbdde140ec4e')
+17803:M 06 May 2024 19:18:45.310 * Starting BGSAVE for SYNC with target: replicas sockets
+17803:M 06 May 2024 19:18:45.311 * Background RDB transfer started by pid 17850
+17850:C 06 May 2024 19:18:45.317 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17803:M 06 May 2024 19:18:45.317 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17803:M 06 May 2024 19:18:45.376 * Background RDB transfer terminated with success
+17803:M 06 May 2024 19:18:45.377 * Streamed RDB transfer with replica 127.0.0.1:30005 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17803:M 06 May 2024 19:18:45.377 * Synchronization with replica 127.0.0.1:30005 succeeded
+17803:M 06 May 2024 19:18:45.503 * Node 0e7185e5d8d3d3003e3f961ad0a21384374239b2 () is no longer master of shard 7eb196d163c5bf7eb03371da41c37de6ab3a27c7; removed all 0 slot(s) it used to own
+17803:M 06 May 2024 19:18:45.503 * Node 0e7185e5d8d3d3003e3f961ad0a21384374239b2 () is now part of shard d05b2d9c8fad619a6a58ab01b0e5ade057de5ca1
+17803:M 06 May 2024 19:18:45.594 * Node 73160c92fac075f0525b46dc984b9d0fc00a7319 () is no longer master of shard 8dd948e148227a2c888397f600e5d52a2509a683; removed all 0 slot(s) it used to own
+17803:M 06 May 2024 19:18:45.594 * Node 73160c92fac075f0525b46dc984b9d0fc00a7319 () is now part of shard 769aeb08b175de4efdfee71d709927c7f9afc5bf
+17803:M 06 May 2024 19:18:45.594 * Node bcfc65dd66e5ac03397a54470d6555c63eea6616 () is no longer master of shard 841113874b49ed5f9d1e126879f92ea4392dcdab; removed all 0 slot(s) it used to own
+17803:M 06 May 2024 19:18:45.594 * Node bcfc65dd66e5ac03397a54470d6555c63eea6616 () is now part of shard 215dc02bf2afb70a46c0e0788801a0f308924862
+17803:M 06 May 2024 19:18:46.304 * Node 0f2a180bc3dd1ca08cf7a4547df0ff1a25981a88 () is no longer master of shard 35470f3f7014665726088479ee7b0dd699dc35de; removed all 0 slot(s) it used to own
+17803:M 06 May 2024 19:18:46.304 * Node 0f2a180bc3dd1ca08cf7a4547df0ff1a25981a88 () is now part of shard 482cb579f47fb8ccd86d73983fba9c22f7197882
+17803:M 06 May 2024 19:18:46.582 * Node 4ef320c993d1f723c6e799fc4d9d0d0db57e09d9 () is no longer master of shard 91245c2cd07d4494975195dd1dfe064ec2d4cbfe; removed all 0 slot(s) it used to own
+17803:M 06 May 2024 19:18:46.582 * Node 4ef320c993d1f723c6e799fc4d9d0d0db57e09d9 () is now part of shard 5c56bf8f5102b508a2405dedd16899f245264a91
+17803:M 06 May 2024 19:18:48.123 * Cluster state changed: ok
+17803:M 06 May 2024 19:18:48.646 * Connection with replica 127.0.0.1:30005 lost.
+17803:M 06 May 2024 19:18:52.514 * FAIL message received from 6e0ef4878fe1c8835271b94d91093f69119e2c5f () about 4ef320c993d1f723c6e799fc4d9d0d0db57e09d9 ()
+17803:signal-handler (1715023148) Received SIGTERM scheduling shutdown...
+17803:M 06 May 2024 19:19:08.681 * Clear FAIL state for node 4ef320c993d1f723c6e799fc4d9d0d0db57e09d9 ():replica is reachable again.
+17803:M 06 May 2024 19:19:08.747 * User requested shutdown...
+17803:M 06 May 2024 19:19:08.747 # Valkey is now ready to exit, bye bye...
+17963:C 06 May 2024 19:19:18.800 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+17963:C 06 May 2024 19:19:18.800 * oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo
+17963:C 06 May 2024 19:19:18.800 * Valkey version=255.255.255, bits=64, commit=93f8a19b, modified=0, pid=17963, just started
+17963:C 06 May 2024 19:19:18.800 * Configuration loaded
+17963:M 06 May 2024 19:19:18.800 * monotonic clock: POSIX clock_gettime
+17963:M 06 May 2024 19:19:18.801 * Running mode=cluster, port=30000.
+17963:M 06 May 2024 19:19:18.808 * Node configuration loaded, I'm 03a61a2c512c0aab55d8de4c03711ba741fddb86
+17963:M 06 May 2024 19:19:18.809 * Server initialized
+17963:M 06 May 2024 19:19:18.864 * Loading RDB produced by valkey version 255.255.255
+17963:M 06 May 2024 19:19:18.864 * RDB age 36 seconds
+17963:M 06 May 2024 19:19:18.864 * RDB memory usage when created 2.73 Mb
+17963:M 06 May 2024 19:19:18.864 * Done loading RDB, keys loaded: 0, keys expired: 0.
+17963:M 06 May 2024 19:19:18.864 * DB loaded from disk: 0.055 seconds
+17963:M 06 May 2024 19:19:18.864 * Ready to accept connections tcp
+17963:M 06 May 2024 19:19:18.888 * configEpoch set to 0 via CLUSTER RESET HARD
+17963:M 06 May 2024 19:19:18.888 * Node hard reset, now I'm 43d342695b2be171fe42d4b24f7f98ee415c3435
+17963:M 06 May 2024 19:19:18.888 * configEpoch set to 1 via CLUSTER SET-CONFIG-EPOCH
+17963:M 06 May 2024 19:19:18.918 * CONFIG REWRITE executed with success.
+17963:M 06 May 2024 19:19:19.070 # Missing implement of connection type tls
+17963:M 06 May 2024 19:19:21.907 * Replica 127.0.0.1:30005 asks for synchronization
+17963:M 06 May 2024 19:19:21.907 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '272cc800834217625d6ca615c2b465caac3352c7', my replication IDs are '79b6738feadf1eb2596309e6b619ae2da5678456' and 'cb3a9996647dc0fdc72ce3f0f0ddcbdde140ec4e')
+17963:M 06 May 2024 19:19:21.907 * Starting BGSAVE for SYNC with target: replicas sockets
+17963:M 06 May 2024 19:19:21.909 * Background RDB transfer started by pid 17987
+17987:C 06 May 2024 19:19:21.910 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17963:M 06 May 2024 19:19:21.911 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17963:M 06 May 2024 19:19:21.915 * Background RDB transfer terminated with success
+17963:M 06 May 2024 19:19:21.915 * Streamed RDB transfer with replica 127.0.0.1:30005 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17963:M 06 May 2024 19:19:21.915 * Synchronization with replica 127.0.0.1:30005 succeeded
+17963:M 06 May 2024 19:19:21.945 * Replica 127.0.0.1:30010 asks for synchronization
+17963:M 06 May 2024 19:19:21.945 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '42b5e23529834290c09c511a60ee767d73225992', my replication IDs are '79b6738feadf1eb2596309e6b619ae2da5678456' and 'cb3a9996647dc0fdc72ce3f0f0ddcbdde140ec4e')
+17963:M 06 May 2024 19:19:21.945 * Starting BGSAVE for SYNC with target: replicas sockets
+17963:M 06 May 2024 19:19:21.947 * Background RDB transfer started by pid 17992
+17992:C 06 May 2024 19:19:21.949 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17963:M 06 May 2024 19:19:21.949 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17963:M 06 May 2024 19:19:21.950 * Background RDB transfer terminated with success
+17963:M 06 May 2024 19:19:21.950 * Streamed RDB transfer with replica 127.0.0.1:30010 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17963:M 06 May 2024 19:19:21.950 * Synchronization with replica 127.0.0.1:30010 succeeded
+17963:M 06 May 2024 19:19:22.557 * Node 6a162c47ba07cc9853a11bf0ed7c45443e6e18d8 () is no longer master of shard 5d8efc15227cc965bd521169b3cd81eb9295ec19; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:22.558 * Node 6a162c47ba07cc9853a11bf0ed7c45443e6e18d8 () is now part of shard 9f9dea19e17027f3d40367b3d13d624654fd82d8
+17963:M 06 May 2024 19:19:22.560 * Node a62662d22e020ab95e9e5259a64ee8b40ba0a365 () is no longer master of shard 614a1b42f4baa25c7f6d5a11b30ac1fdea247594; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:22.560 * Node a62662d22e020ab95e9e5259a64ee8b40ba0a365 () is now part of shard ad3b8637be272f5e4b5bea22fac4efd021dc27f8
+17963:M 06 May 2024 19:19:22.605 * Node 169ce63f84ab73647e330599b7668e357009f9c7 () is no longer master of shard 3e228277d31da320b8d2c0ab0d21aa067371dad3; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:22.608 * Node 169ce63f84ab73647e330599b7668e357009f9c7 () is now part of shard f4d0734f796edaeddf2c5d09cbe7bf8e0ddb8692
+17963:M 06 May 2024 19:19:22.608 * Node 6691bd2bc72c367620d9f464e8e3094b802ad6fd () is no longer master of shard b3f6dd9ab5620f4d8bda693091f3d8d36ad0e7d3; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:22.608 * Node 6691bd2bc72c367620d9f464e8e3094b802ad6fd () is now part of shard 64f4303b3e226ea46acf2328b8cbffb940c502e2
+17963:M 06 May 2024 19:19:23.052 * Node 91aab1feff1314a17b72183eb4e8308f320601b3 () is no longer master of shard d8860f9f28d646383a01d2f3aba63d0f3a3e4faf; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:23.052 * Node 91aab1feff1314a17b72183eb4e8308f320601b3 () is now part of shard ad3b8637be272f5e4b5bea22fac4efd021dc27f8
+17963:M 06 May 2024 19:19:23.155 * Node f483107001db7f57a8bd7a64ac4a49a80b9c200d () is no longer master of shard aae63656731167d9c699175203047b6e26efb4be; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:23.156 * Node f483107001db7f57a8bd7a64ac4a49a80b9c200d () is now part of shard da4f83fcced31239e8986679bcae57566a875c12
+17963:M 06 May 2024 19:19:23.511 * Node d61b725f6dd02d855fdc907190bd06a397b457f8 () is no longer master of shard ab8e805388a16f08bc5fa7bfd304cf9b2f43c122; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:23.511 * Node d61b725f6dd02d855fdc907190bd06a397b457f8 () is now part of shard 64f4303b3e226ea46acf2328b8cbffb940c502e2
+17963:M 06 May 2024 19:19:23.511 * Node 9e613cb2c4712a0062c1b26d3da1ea7442fbf737 () is no longer master of shard 7c13d5b404a532519713ecb0009d48d7b7148c0e; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:23.511 * Node 9e613cb2c4712a0062c1b26d3da1ea7442fbf737 () is now part of shard 9f9dea19e17027f3d40367b3d13d624654fd82d8
+17963:M 06 May 2024 19:19:23.548 * Node dfea84e0be1bcd49482af5c67f555de10fdf29b3 () is no longer master of shard 01f47c3a12aa4f053a807eeb5eb545c5e07db794; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:23.548 * Node dfea84e0be1bcd49482af5c67f555de10fdf29b3 () is now part of shard f4d0734f796edaeddf2c5d09cbe7bf8e0ddb8692
+17963:M 06 May 2024 19:19:23.555 * Node c05d247c09a02616a6098580fdea8f4ce435b8bc () is no longer master of shard 1c166555732b739d6e4c1ab4dd8d165e832b3954; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:23.555 * Node c05d247c09a02616a6098580fdea8f4ce435b8bc () is now part of shard da4f83fcced31239e8986679bcae57566a875c12
+17963:M 06 May 2024 19:19:24.667 * Cluster state changed: ok
+17963:M 06 May 2024 19:19:25.425 * Connection with replica 127.0.0.1:30005 lost.
+17963:M 06 May 2024 19:19:25.560 * Connection with replica 127.0.0.1:30010 lost.
+17963:M 06 May 2024 19:19:29.019 * FAIL message received from 3d1a6ede1fb4785f3437ca2ee7d37934e6eb5120 () about dfea84e0be1bcd49482af5c67f555de10fdf29b3 ()
+17963:M 06 May 2024 19:19:29.351 * FAIL message received from 5a72c35e8f819673e4c536c527b3bc7968d5372b () about 169ce63f84ab73647e330599b7668e357009f9c7 ()
+17963:M 06 May 2024 19:19:29.541 * FAIL message received from 067f10da6671d30499813707fa18067ea3206b17 () about 6a162c47ba07cc9853a11bf0ed7c45443e6e18d8 ()
+17963:M 06 May 2024 19:19:29.606 * Marking node 9e613cb2c4712a0062c1b26d3da1ea7442fbf737 () as failing (quorum reached).
+17963:M 06 May 2024 19:19:34.490 * Replica 127.0.0.1:30013 asks for synchronization
+17963:M 06 May 2024 19:19:34.490 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '48a0417ba031b40d7bac9faa1f725139214092e5', my replication IDs are '79b6738feadf1eb2596309e6b619ae2da5678456' and 'cb3a9996647dc0fdc72ce3f0f0ddcbdde140ec4e')
+17963:M 06 May 2024 19:19:34.490 * Starting BGSAVE for SYNC with target: replicas sockets
+17963:M 06 May 2024 19:19:34.490 * Background RDB transfer started by pid 18060
+18060:C 06 May 2024 19:19:34.492 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17963:M 06 May 2024 19:19:34.492 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17963:M 06 May 2024 19:19:34.494 * Background RDB transfer terminated with success
+17963:M 06 May 2024 19:19:34.494 * Streamed RDB transfer with replica 127.0.0.1:30013 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17963:M 06 May 2024 19:19:34.495 * Synchronization with replica 127.0.0.1:30013 succeeded
+17963:M 06 May 2024 19:19:35.220 * Replica 127.0.0.1:30005 asks for synchronization
+17963:M 06 May 2024 19:19:35.220 * Partial resynchronization request from 127.0.0.1:30005 accepted. Sending 0 bytes of backlog starting from offset 1340.
+17963:M 06 May 2024 19:19:35.264 * Clear FAIL state for node 169ce63f84ab73647e330599b7668e357009f9c7 ():replica is reachable again.
+17963:M 06 May 2024 19:19:35.370 * Clear FAIL state for node 9e613cb2c4712a0062c1b26d3da1ea7442fbf737 ():replica is reachable again.
+17963:M 06 May 2024 19:19:35.375 * Replica 127.0.0.1:30010 asks for synchronization
+17963:M 06 May 2024 19:19:35.375 * Partial resynchronization request from 127.0.0.1:30010 accepted. Sending 0 bytes of backlog starting from offset 1340.
+17963:M 06 May 2024 19:19:35.377 * Clear FAIL state for node dfea84e0be1bcd49482af5c67f555de10fdf29b3 ():replica is reachable again.
+17963:M 06 May 2024 19:19:35.472 * Clear FAIL state for node 6a162c47ba07cc9853a11bf0ed7c45443e6e18d8 ():replica is reachable again.
+17963:M 06 May 2024 19:19:35.482 * configEpoch set to 0 via CLUSTER RESET HARD
+17963:M 06 May 2024 19:19:35.482 * Node hard reset, now I'm 6d985b206ded1bb4832b71e705da990729b72e99
+17963:M 06 May 2024 19:19:35.482 * configEpoch set to 1 via CLUSTER SET-CONFIG-EPOCH
+17963:M 06 May 2024 19:19:35.482 # Cluster state changed: fail
+17963:M 06 May 2024 19:19:35.487 * CONFIG REWRITE executed with success.
+17963:M 06 May 2024 19:19:35.526 * Connection with replica 127.0.0.1:30005 lost.
+17963:M 06 May 2024 19:19:35.585 * Connection with replica 127.0.0.1:30010 lost.
+17963:M 06 May 2024 19:19:35.617 * Connection with replica 127.0.0.1:30013 lost.
+17963:M 06 May 2024 19:19:41.451 * Replica 127.0.0.1:30005 asks for synchronization
+17963:M 06 May 2024 19:19:41.451 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '961e232fa61297979e494c98a031662af4e17d5c', my replication IDs are '79b6738feadf1eb2596309e6b619ae2da5678456' and 'cb3a9996647dc0fdc72ce3f0f0ddcbdde140ec4e')
+17963:M 06 May 2024 19:19:41.452 * Starting BGSAVE for SYNC with target: replicas sockets
+17963:M 06 May 2024 19:19:41.452 * Background RDB transfer started by pid 18116
+18116:C 06 May 2024 19:19:41.453 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17963:M 06 May 2024 19:19:41.454 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17963:M 06 May 2024 19:19:41.469 * Background RDB transfer terminated with success
+17963:M 06 May 2024 19:19:41.469 * Streamed RDB transfer with replica 127.0.0.1:30005 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17963:M 06 May 2024 19:19:41.469 * Synchronization with replica 127.0.0.1:30005 succeeded
+17963:M 06 May 2024 19:19:41.491 * Replica 127.0.0.1:30010 asks for synchronization
+17963:M 06 May 2024 19:19:41.491 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'b684ffa09a1ef5f11357f250ec28e06e245a6245', my replication IDs are '79b6738feadf1eb2596309e6b619ae2da5678456' and 'cb3a9996647dc0fdc72ce3f0f0ddcbdde140ec4e')
+17963:M 06 May 2024 19:19:41.491 * Starting BGSAVE for SYNC with target: replicas sockets
+17963:M 06 May 2024 19:19:41.492 * Background RDB transfer started by pid 18121
+18121:C 06 May 2024 19:19:41.493 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17963:M 06 May 2024 19:19:41.493 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17963:M 06 May 2024 19:19:41.494 * Background RDB transfer terminated with success
+17963:M 06 May 2024 19:19:41.494 * Streamed RDB transfer with replica 127.0.0.1:30010 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17963:M 06 May 2024 19:19:41.494 * Synchronization with replica 127.0.0.1:30010 succeeded
+17963:M 06 May 2024 19:19:41.669 * Node 47c7f0d7e3094aae7d589ff660cee63f462cf92c () is no longer master of shard 5a93a431ee3c1974750eaeb45212552089e1d70f; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:41.669 * Node 47c7f0d7e3094aae7d589ff660cee63f462cf92c () is now part of shard a1b26e71b34081a514fd6e0b60f6df57b5624ab6
+17963:M 06 May 2024 19:19:42.691 * Node 3c93b8fad484f01b1a2d5e7e5c55a29a75a8d9df () is no longer master of shard be264f012de4ca3b640590c83301730d9edc2c7c; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:42.691 * Node 3c93b8fad484f01b1a2d5e7e5c55a29a75a8d9df () is now part of shard a77eea2c5e3a654920895d37c1cbd2dbc750a2fe
+17963:M 06 May 2024 19:19:42.691 * Node 80ff208fc4ecb27a6794991c3774578fada90ceb () is no longer master of shard b24cc857a20e418c76000cf7bb7c2121d56535c8; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:42.696 * Node 80ff208fc4ecb27a6794991c3774578fada90ceb () is now part of shard 5d62c1956a9584bbd08a7a4e543b407d4b8313e1
+17963:M 06 May 2024 19:19:42.707 * Node 208cc47c85e2f37e4bf67550a7534f2dac3c588d () is no longer master of shard a85808b5f3b195646b5e9c75d437940e5910c539; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:42.707 * Node 208cc47c85e2f37e4bf67550a7534f2dac3c588d () is now part of shard e7d3efbc6079822fdca6c15be9f28019ee3f5618
+17963:M 06 May 2024 19:19:42.707 * Node b6d1f331303ea88d453961a6bc247c12cf3f1746 () is no longer master of shard 2cb31efff9b31077914e5d8eee67fad987f900ec; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:42.707 * Node b6d1f331303ea88d453961a6bc247c12cf3f1746 () is now part of shard a1b26e71b34081a514fd6e0b60f6df57b5624ab6
+17963:M 06 May 2024 19:19:42.707 * Node adccbec24d60f54090e36a0e6a0703bacb3c890e () is no longer master of shard 1faef2c01b90ce80c9287617b3462fcd0eb7c5f5; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:42.707 * Node adccbec24d60f54090e36a0e6a0703bacb3c890e () is now part of shard a77eea2c5e3a654920895d37c1cbd2dbc750a2fe
+17963:M 06 May 2024 19:19:42.707 * Node 801403f53dd98a8a4d2f3d43e78a2214c99c863e () is no longer master of shard c249ff0fc7be1576faf8724b7784974260ba49cf; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:42.709 * Node 801403f53dd98a8a4d2f3d43e78a2214c99c863e () is now part of shard e7d3efbc6079822fdca6c15be9f28019ee3f5618
+17963:M 06 May 2024 19:19:42.710 * Node 794c5f0e6a1ac7ff0525a9b6f4e492eac0fbed21 () is no longer master of shard 63920ee806c2e289c54a7d03a407de389e09cdfa; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:42.710 * Node 794c5f0e6a1ac7ff0525a9b6f4e492eac0fbed21 () is now part of shard a102d983c1fa32aabf51cc8c6703313fd3153eb5
+17963:M 06 May 2024 19:19:42.710 * Node fca9dbeac23069ec15538914520ce7ba33fb43c5 () is no longer master of shard 5a313ed6e1afc160d88e2ec76f16f8322d6a6195; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:42.710 * Node fca9dbeac23069ec15538914520ce7ba33fb43c5 () is now part of shard a102d983c1fa32aabf51cc8c6703313fd3153eb5
+17963:M 06 May 2024 19:19:44.210 * Cluster state changed: ok
+17963:M 06 May 2024 19:19:44.301 * Node 0b8db5c36a489b4933345bc1515de904fb6a786f () is no longer master of shard c707b138b75efd32e96dd0d45165ae682cc6e5bb; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:44.301 * Node 0b8db5c36a489b4933345bc1515de904fb6a786f () is now part of shard 5d62c1956a9584bbd08a7a4e543b407d4b8313e1
+17963:M 06 May 2024 19:19:49.144 * FAIL message received from 9f1e4387e843af5d17bd76f660aaeba8f408efe3 () about 2abfa8eefbebcdd70c094869ef85501903c7d0c4 ()
+17963:M 06 May 2024 19:19:49.145 # Cluster state changed: fail
+17963:M 06 May 2024 19:19:49.189 * FAIL message received from 9f1e4387e843af5d17bd76f660aaeba8f408efe3 () about b6d1f331303ea88d453961a6bc247c12cf3f1746 ()
+17963:M 06 May 2024 19:19:50.239 * Failover auth granted to 47c7f0d7e3094aae7d589ff660cee63f462cf92c () for epoch 21
+17963:M 06 May 2024 19:19:50.283 * Cluster state changed: ok
+17963:M 06 May 2024 19:19:55.506 * Clear FAIL state for node 2abfa8eefbebcdd70c094869ef85501903c7d0c4 ():master without slots is reachable again.
+17963:M 06 May 2024 19:19:55.507 * A failover occurred in shard a1b26e71b34081a514fd6e0b60f6df57b5624ab6; node 2abfa8eefbebcdd70c094869ef85501903c7d0c4 () lost 0 slot(s) to node 47c7f0d7e3094aae7d589ff660cee63f462cf92c () with a config epoch of 21
+17963:M 06 May 2024 19:19:55.511 * Clear FAIL state for node b6d1f331303ea88d453961a6bc247c12cf3f1746 ():replica is reachable again.
+17963:M 06 May 2024 19:19:55.564 * configEpoch set to 0 via CLUSTER RESET HARD
+17963:M 06 May 2024 19:19:55.564 * Node hard reset, now I'm 87c9e3fe2e97200a971dc5aee1822009f9498072
+17963:M 06 May 2024 19:19:55.564 * configEpoch set to 1 via CLUSTER SET-CONFIG-EPOCH
+17963:M 06 May 2024 19:19:55.564 # Cluster state changed: fail
+17963:M 06 May 2024 19:19:55.575 * CONFIG REWRITE executed with success.
+17963:M 06 May 2024 19:19:55.622 * Connection with replica 127.0.0.1:30005 lost.
+17963:M 06 May 2024 19:19:55.657 * Connection with replica 127.0.0.1:30010 lost.
+17963:M 06 May 2024 19:19:58.948 * Replica 127.0.0.1:30005 asks for synchronization
+17963:M 06 May 2024 19:19:58.949 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'f91e3c1fd947ee54538c2d1116825b3f19ce5055', my replication IDs are '79b6738feadf1eb2596309e6b619ae2da5678456' and 'cb3a9996647dc0fdc72ce3f0f0ddcbdde140ec4e')
+17963:M 06 May 2024 19:19:58.949 * Starting BGSAVE for SYNC with target: replicas sockets
+17963:M 06 May 2024 19:19:58.950 * Background RDB transfer started by pid 18201
+18201:C 06 May 2024 19:19:58.951 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17963:M 06 May 2024 19:19:58.951 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17963:M 06 May 2024 19:19:58.954 * Background RDB transfer terminated with success
+17963:M 06 May 2024 19:19:58.954 * Streamed RDB transfer with replica 127.0.0.1:30005 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17963:M 06 May 2024 19:19:58.954 * Synchronization with replica 127.0.0.1:30005 succeeded
+17963:M 06 May 2024 19:19:59.515 * Node ecbcb5be44c9e81ac340cc03f4e84abaa8d98e19 () is no longer master of shard 5679c354a9e2cf8cb62b26598f6d9e6a0f79b90d; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:59.515 * Node ecbcb5be44c9e81ac340cc03f4e84abaa8d98e19 () is now part of shard 5a15e11d32c6794f2f89faac54fc339efde5e362
+17963:M 06 May 2024 19:19:59.546 * Node 334beb692e0626a4ea1257acac41aaf9962330a7 () is no longer master of shard 5bedd120fdbe94c16f2c067685528596a15fe6e3; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:59.546 * Node 334beb692e0626a4ea1257acac41aaf9962330a7 () is now part of shard e44c3a3bb3cc89ed450e11c453728db45301a89d
+17963:M 06 May 2024 19:19:59.548 * Node caf83072d9c11f919729af96326335b051c7af49 () is no longer master of shard 6dd4af3291b64805920b88cdb4d7d83d44852f08; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:59.548 * Node caf83072d9c11f919729af96326335b051c7af49 () is now part of shard ada3b4025b51be85bbb1fa1df0e1b44871badaa9
+17963:M 06 May 2024 19:19:59.551 * Node a62a8167d5508534ea9bf51fc947454349f1d3bb () is no longer master of shard 78683b2cc868ee4a3e989125c612bea0bc5c90c0; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:59.551 * Node a62a8167d5508534ea9bf51fc947454349f1d3bb () is now part of shard b30cbe386d5d2fec228eb45db97ba04991f5020e
+17963:M 06 May 2024 19:19:59.602 * Node 163d3de19db2cb163010c38f385297acaacd0fe6 () is no longer master of shard 8980e70c0b02f85ca396ef3dc659e0dfe2f2edd4; removed all 0 slot(s) it used to own
+17963:M 06 May 2024 19:19:59.602 * Node 163d3de19db2cb163010c38f385297acaacd0fe6 () is now part of shard 463631d5c660f73be6acc894f4e68e2bc6bf1f04
+17963:M 06 May 2024 19:20:01.772 * Cluster state changed: ok
+17963:signal-handler (1715023202) Received SIGTERM scheduling shutdown...
+17963:M 06 May 2024 19:20:02.984 * User requested shutdown...
+17963:M 06 May 2024 19:20:02.984 * Waiting for replicas before shutting down.
+17963:M 06 May 2024 19:20:03.085 * 1 of 1 replicas are in sync when shutting down.
+17963:M 06 May 2024 19:20:03.085 # Valkey is now ready to exit, bye bye...
+18257:C 06 May 2024 19:20:12.123 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+18257:C 06 May 2024 19:20:12.124 * oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo
+18257:C 06 May 2024 19:20:12.124 * Valkey version=255.255.255, bits=64, commit=93f8a19b, modified=0, pid=18257, just started
+18257:C 06 May 2024 19:20:12.124 * Configuration loaded
+18257:M 06 May 2024 19:20:12.124 * monotonic clock: POSIX clock_gettime
+18257:M 06 May 2024 19:20:12.126 * Running mode=cluster, port=30000.
+18257:M 06 May 2024 19:20:12.132 * Node configuration loaded, I'm 87c9e3fe2e97200a971dc5aee1822009f9498072
+18257:M 06 May 2024 19:20:12.132 * Server initialized
+18257:M 06 May 2024 19:20:12.156 * Loading RDB produced by valkey version 255.255.255
+18257:M 06 May 2024 19:20:12.156 * RDB age 90 seconds
+18257:M 06 May 2024 19:20:12.156 * RDB memory usage when created 2.73 Mb
+18257:M 06 May 2024 19:20:12.156 * Done loading RDB, keys loaded: 0, keys expired: 0.
+18257:M 06 May 2024 19:20:12.156 * DB loaded from disk: 0.023 seconds
+18257:M 06 May 2024 19:20:12.156 * Ready to accept connections tcp
+18257:M 06 May 2024 19:20:12.160 * Configuration change detected. Reconfiguring myself as a replica of ecbcb5be44c9e81ac340cc03f4e84abaa8d98e19 ()
+18257:S 06 May 2024 19:20:12.160 * Before turning into a replica, using my own master parameters to synthesize a cached master: I may be able to synchronize with the new master with just a partial transfer.
+18257:S 06 May 2024 19:20:12.160 * Connecting to MASTER 127.0.0.1:30005
+18257:S 06 May 2024 19:20:12.160 * MASTER <-> REPLICA sync started
+18257:S 06 May 2024 19:20:12.160 * Cluster state changed: ok
+18257:S 06 May 2024 19:20:12.163 # Error condition on socket for SYNC: Connection refused
+18257:S 06 May 2024 19:20:13.163 * Connecting to MASTER 127.0.0.1:30005
+18257:S 06 May 2024 19:20:13.164 * MASTER <-> REPLICA sync started
+18257:S 06 May 2024 19:20:13.164 * Non blocking connect for SYNC fired the event.
+18257:S 06 May 2024 19:20:13.164 * Master replied to PING, replication can continue...
+18257:S 06 May 2024 19:20:13.164 * Trying a partial resynchronization (request ea6871f4695f2adbea0015ce4dd56d8ed66c669f:1299).
+18257:S 06 May 2024 19:20:13.165 * Full resync from master: abc59aafd2034796a4762391f517a891a259367b:2311
+18257:S 06 May 2024 19:20:13.167 * MASTER <-> REPLICA sync: receiving streamed RDB from master with EOF to disk
+18257:S 06 May 2024 19:20:13.167 * Discarding previously cached master state.
+18257:S 06 May 2024 19:20:13.167 * MASTER <-> REPLICA sync: Flushing old data
+18257:S 06 May 2024 19:20:13.167 * MASTER <-> REPLICA sync: Loading DB in memory
+18257:S 06 May 2024 19:20:13.169 * Loading RDB produced by valkey version 255.255.255
+18257:S 06 May 2024 19:20:13.170 * RDB age 0 seconds
+18257:S 06 May 2024 19:20:13.170 * RDB memory usage when created 2.33 Mb
+18257:S 06 May 2024 19:20:13.170 * Done loading RDB, keys loaded: 0, keys expired: 0.
+18257:S 06 May 2024 19:20:13.170 * MASTER <-> REPLICA sync: Finished with success
+18257:M 06 May 2024 19:20:19.206 * Connection with master lost.
+18257:M 06 May 2024 19:20:19.206 * Caching the disconnected master state.
+18257:M 06 May 2024 19:20:19.206 * Discarding previously cached master state.
+18257:M 06 May 2024 19:20:19.206 * Setting secondary replication ID to abc59aafd2034796a4762391f517a891a259367b, valid up to offset: 2312. New replication ID is 143323aa95c107e33c9dcc07aa7f0bdb0caaacbf
+18257:M 06 May 2024 19:20:19.207 * configEpoch set to 0 via CLUSTER RESET HARD
+18257:M 06 May 2024 19:20:19.207 * Node hard reset, now I'm eedeb4af67d30638705bc7489103bf03b802a3fa
+18257:M 06 May 2024 19:20:19.208 * configEpoch set to 1 via CLUSTER SET-CONFIG-EPOCH
+18257:M 06 May 2024 19:20:19.208 # Cluster state changed: fail
+18257:M 06 May 2024 19:20:20.594 * CONFIG REWRITE executed with success.
+18257:M 06 May 2024 19:20:21.702 # Missing implement of connection type tls
+18257:M 06 May 2024 19:20:24.987 * Replica 127.0.0.1:30005 asks for synchronization
+18257:M 06 May 2024 19:20:24.987 * Partial resynchronization not accepted: Requested offset for second ID was 2353, but I can reply up to 2312
+18257:M 06 May 2024 19:20:24.987 * Starting BGSAVE for SYNC with target: replicas sockets
+18257:M 06 May 2024 19:20:24.988 * Background RDB transfer started by pid 18296
+18296:C 06 May 2024 19:20:24.989 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+18257:M 06 May 2024 19:20:24.989 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+18257:M 06 May 2024 19:20:24.992 * Background RDB transfer terminated with success
+18257:M 06 May 2024 19:20:24.992 * Streamed RDB transfer with replica 127.0.0.1:30005 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+18257:M 06 May 2024 19:20:24.992 * Synchronization with replica 127.0.0.1:30005 succeeded
+18257:M 06 May 2024 19:20:25.141 * Node f2264c981ff99322862f3de220948842b1f6ba1f () is no longer master of shard d22c30d988eed1903566ab8b5147735674e58aca; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:20:25.141 * Node f2264c981ff99322862f3de220948842b1f6ba1f () is now part of shard 3671e746eaf2973108e1ea8bdd09970af685d6ad
+18257:M 06 May 2024 19:20:25.542 * Node 568aac2645b6f747cc54704b8839b3eba6ea8563 () is no longer master of shard ad7c5024c1a4d2a21dcf6f4a1d9b1f45ff1ead2d; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:20:25.553 * Node 568aac2645b6f747cc54704b8839b3eba6ea8563 () is now part of shard 67e314dae915c111e42745e09df1e650a83178cf
+18257:M 06 May 2024 19:20:25.557 * Node 4c26a1fcc6d2fe9debc60d491053b0cf6618a4ed () is no longer master of shard e8e4bf95f861f348154c047f60ca28434502f73e; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:20:25.557 * Node 4c26a1fcc6d2fe9debc60d491053b0cf6618a4ed () is now part of shard a0b63e81b62eaf4c5711335c6f1846909bf7fd69
+18257:M 06 May 2024 19:20:25.571 * Node 4c6bf93f4560c44206e9ae153747809786d36116 () is no longer master of shard 5736e9db4e80aceb59df82a4860201928e6e2dfe; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:20:25.571 * Node 4c6bf93f4560c44206e9ae153747809786d36116 () is now part of shard 19776fe3f0224c8eb88fdc51c9073d888852d019
+18257:M 06 May 2024 19:20:26.021 * Node 7d23a031d90aa6bc6893630f40ee5cf640088fe7 () is no longer master of shard c5c35fe41b55a11da192d43a8da61be171aa83e6; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:20:26.021 * Node 7d23a031d90aa6bc6893630f40ee5cf640088fe7 () is now part of shard e04c9009be37f9eec889c59340dc040d0fa0aeb8
+18257:M 06 May 2024 19:20:27.757 * Cluster state changed: ok
+18257:M 06 May 2024 19:20:28.600 * configEpoch set to 0 via CLUSTER RESET HARD
+18257:M 06 May 2024 19:20:28.600 * Node hard reset, now I'm 0e59ecb0630140741e54370064819bde1c9ca23d
+18257:M 06 May 2024 19:20:28.600 * configEpoch set to 1 via CLUSTER SET-CONFIG-EPOCH
+18257:M 06 May 2024 19:20:28.600 # Cluster state changed: fail
+18257:M 06 May 2024 19:20:28.607 * CONFIG REWRITE executed with success.
+18257:M 06 May 2024 19:20:28.655 * Connection with replica 127.0.0.1:30005 lost.
+18257:M 06 May 2024 19:20:31.992 * Replica 127.0.0.1:30005 asks for synchronization
+18257:M 06 May 2024 19:20:31.992 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'fdd81661eb90a9c8e86d04291905cd379521f671', my replication IDs are '143323aa95c107e33c9dcc07aa7f0bdb0caaacbf' and 'abc59aafd2034796a4762391f517a891a259367b')
+18257:M 06 May 2024 19:20:31.992 * Starting BGSAVE for SYNC with target: replicas sockets
+18257:M 06 May 2024 19:20:31.993 * Background RDB transfer started by pid 18326
+18326:C 06 May 2024 19:20:31.996 * Fork CoW for RDB: current 1 MB, peak 1 MB, average 1 MB
+18257:M 06 May 2024 19:20:31.997 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+18257:M 06 May 2024 19:20:32.003 * Background RDB transfer terminated with success
+18257:M 06 May 2024 19:20:32.003 * Streamed RDB transfer with replica 127.0.0.1:30005 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+18257:M 06 May 2024 19:20:32.003 * Synchronization with replica 127.0.0.1:30005 succeeded
+18257:M 06 May 2024 19:20:32.003 * Node 50f8af8bddb3cb25a8322a76a04954c53eeb77b9 () is no longer master of shard 10725e1ebc3e8158a7f12329adb9ba56ee854bc1; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:20:32.003 * Node 50f8af8bddb3cb25a8322a76a04954c53eeb77b9 () is now part of shard bbfd84d9a82d8e08bb771735fe383b7ddafd08ba
+18257:M 06 May 2024 19:20:32.193 * Node 8f5c6ef31ffc0d64c65cd285f1e1d3dfd9744bc8 () is no longer master of shard 5c7f555424b6dd7244521040fed352e8a690f783; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:20:32.193 * Node 8f5c6ef31ffc0d64c65cd285f1e1d3dfd9744bc8 () is now part of shard 82ad93ba4e7c80d6359231435757456cc87347ed
+18257:M 06 May 2024 19:20:32.508 * Node 3500eeb0c27fbcd680bc59f0bd19aca81ac51372 () is no longer master of shard 7ac3ac70c33592cdd414687cbff2db517d34143f; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:20:32.508 * Node 3500eeb0c27fbcd680bc59f0bd19aca81ac51372 () is now part of shard aa921447f701c6e1037283664b481acd5dcc18fa
+18257:M 06 May 2024 19:20:32.515 * Node 7af9ba57b6fbc0d8a7f97e8a5c86bb8b04b48199 () is no longer master of shard c0ff426f83007655b38a9ba2767c988c6843ca09; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:20:32.515 * Node 7af9ba57b6fbc0d8a7f97e8a5c86bb8b04b48199 () is now part of shard c149d2cb057be6b4c53e6cda4f8361117987c75b
+18257:M 06 May 2024 19:20:33.011 * Node 825390a470534406b83be059e6fecaf93dbe83a3 () is no longer master of shard b2b496b97d756568bb9cc80df81baa9597a2a1e0; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:20:33.011 * Node 825390a470534406b83be059e6fecaf93dbe83a3 () is now part of shard 9628b03c98fa51a28e8367ab2c3e2abc75d63330
+18257:M 06 May 2024 19:20:34.825 * Cluster state changed: ok
+18257:M 06 May 2024 19:20:37.000 * Manual failover requested by replica 50f8af8bddb3cb25a8322a76a04954c53eeb77b9 ().
+18257:M 06 May 2024 19:20:37.007 * Connection with replica 127.0.0.1:30005 lost.
+18257:M 06 May 2024 19:20:37.041 * Configuration change detected. Reconfiguring myself as a replica of 50f8af8bddb3cb25a8322a76a04954c53eeb77b9 ()
+18257:S 06 May 2024 19:20:37.041 * Before turning into a replica, using my own master parameters to synthesize a cached master: I may be able to synchronize with the new master with just a partial transfer.
+18257:S 06 May 2024 19:20:37.041 * Connecting to MASTER 127.0.0.1:30005
+18257:S 06 May 2024 19:20:37.042 * MASTER <-> REPLICA sync started
+18257:S 06 May 2024 19:20:37.047 * Non blocking connect for SYNC fired the event.
+18257:S 06 May 2024 19:20:37.048 * Master replied to PING, replication can continue...
+18257:S 06 May 2024 19:20:37.048 * Trying a partial resynchronization (request 143323aa95c107e33c9dcc07aa7f0bdb0caaacbf:72399).
+18257:S 06 May 2024 19:20:37.048 * Successful partial resynchronization with master.
+18257:S 06 May 2024 19:20:37.048 * Master replication ID changed to 75d5db7019b3a404c97e423b3c184ae5fbd8182b
+18257:S 06 May 2024 19:20:37.048 * MASTER <-> REPLICA sync: Master accepted a Partial Resynchronization.
+18257:M 06 May 2024 19:20:40.445 * Connection with master lost.
+18257:M 06 May 2024 19:20:40.445 * Caching the disconnected master state.
+18257:M 06 May 2024 19:20:40.445 * Discarding previously cached master state.
+18257:M 06 May 2024 19:20:40.445 * Setting secondary replication ID to 75d5db7019b3a404c97e423b3c184ae5fbd8182b, valid up to offset: 149457. New replication ID is 15b0ad990a9f466395f7a3ab758b9dce8caee40c
+18257:M 06 May 2024 19:20:40.448 * configEpoch set to 0 via CLUSTER RESET HARD
+18257:M 06 May 2024 19:20:40.448 * Node hard reset, now I'm 51d1f09230533baaac63ae94738bf70b5db09342
+18257:M 06 May 2024 19:20:40.448 * configEpoch set to 1 via CLUSTER SET-CONFIG-EPOCH
+18257:M 06 May 2024 19:20:40.448 # Cluster state changed: fail
+18257:M 06 May 2024 19:20:40.453 * CONFIG REWRITE executed with success.
+18257:M 06 May 2024 19:20:44.988 * Replica 127.0.0.1:30005 asks for synchronization
+18257:M 06 May 2024 19:20:44.988 * Partial resynchronization not accepted: Requested offset for second ID was 149475, but I can reply up to 149457
+18257:M 06 May 2024 19:20:44.988 * Starting BGSAVE for SYNC with target: replicas sockets
+18257:M 06 May 2024 19:20:44.989 * Background RDB transfer started by pid 18355
+18355:C 06 May 2024 19:20:44.991 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+18257:M 06 May 2024 19:20:44.991 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+18257:M 06 May 2024 19:20:44.992 * Background RDB transfer terminated with success
+18257:M 06 May 2024 19:20:44.992 * Streamed RDB transfer with replica 127.0.0.1:30005 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+18257:M 06 May 2024 19:20:44.993 * Synchronization with replica 127.0.0.1:30005 succeeded
+18257:M 06 May 2024 19:20:45.404 * Node e0fb6aab67e48702bb3257b35176c6bec33ac399 () is no longer master of shard 5894da5030fb6ea0d4890f9fcaefbcb689467382; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:20:45.404 * Node e0fb6aab67e48702bb3257b35176c6bec33ac399 () is now part of shard 942404fb5086368ee22ef226fc325d99eead816a
+18257:M 06 May 2024 19:20:45.565 * Node 8053da283ed5221065f944f98f73e25c61a010dd () is no longer master of shard 065f0cbdfb7ce180a059fcb58c1396f6f36e7c7e; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:20:45.565 * Node 8053da283ed5221065f944f98f73e25c61a010dd () is now part of shard d13e21ba301f8eb2ca5630faf519e74520eb0320
+18257:M 06 May 2024 19:20:45.579 * Node 968e407a2757f6786a27813986652641dfa8c53e () is no longer master of shard c23ee8d4ddce6cd592f3f5d11f12e6f0e7d8357b; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:20:45.579 * Node 968e407a2757f6786a27813986652641dfa8c53e () is now part of shard 3dd139d2458ce1ba40162b75a210452f2564f13f
+18257:M 06 May 2024 19:20:45.616 * Node 03f7c6a10e67bff0c5fac874576c356de6d20fb3 () is no longer master of shard f9fc60420f4df6321dff2cb65cfd5443410eaf16; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:20:45.616 * Node 03f7c6a10e67bff0c5fac874576c356de6d20fb3 () is now part of shard 2f2e8949560f25624e4d18237b260e2412773d08
+18257:M 06 May 2024 19:20:46.525 * Node 8162a5e33aefd5da3d8e53c51436fb8e5f04157d () is no longer master of shard ac0a659a65ff86d0acb03beca99488cf675db0b9; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:20:46.525 * Node 8162a5e33aefd5da3d8e53c51436fb8e5f04157d () is now part of shard 79761404f49765dfc1452b3572ad1557043c4b29
+18257:M 06 May 2024 19:20:47.735 * Cluster state changed: ok
+18257:M 06 May 2024 19:20:58.456 * Manual failover requested by replica e0fb6aab67e48702bb3257b35176c6bec33ac399 ().
+18257:M 06 May 2024 19:20:58.458 * Connection with replica 127.0.0.1:30005 lost.
+18257:M 06 May 2024 19:20:58.459 * Failover auth granted to e0fb6aab67e48702bb3257b35176c6bec33ac399 () for epoch 21
+18257:M 06 May 2024 19:20:58.459 * Configuration change detected. Reconfiguring myself as a replica of e0fb6aab67e48702bb3257b35176c6bec33ac399 ()
+18257:S 06 May 2024 19:20:58.459 * Before turning into a replica, using my own master parameters to synthesize a cached master: I may be able to synchronize with the new master with just a partial transfer.
+18257:S 06 May 2024 19:20:58.459 * Connecting to MASTER 127.0.0.1:30005
+18257:S 06 May 2024 19:20:58.460 * MASTER <-> REPLICA sync started
+18257:S 06 May 2024 19:20:58.465 * Non blocking connect for SYNC fired the event.
+18257:S 06 May 2024 19:20:58.474 * Master replied to PING, replication can continue...
+18257:S 06 May 2024 19:20:58.475 * Trying a partial resynchronization (request 15b0ad990a9f466395f7a3ab758b9dce8caee40c:150466).
+18257:S 06 May 2024 19:20:58.475 * Successful partial resynchronization with master.
+18257:S 06 May 2024 19:20:58.475 * Master replication ID changed to f8d077f2b079888df830d22ea8c1d0f0908d1598
+18257:S 06 May 2024 19:20:58.475 * MASTER <-> REPLICA sync: Master accepted a Partial Resynchronization.
+18257:M 06 May 2024 19:20:58.482 * Connection with master lost.
+18257:M 06 May 2024 19:20:58.482 * Caching the disconnected master state.
+18257:M 06 May 2024 19:20:58.483 * Discarding previously cached master state.
+18257:M 06 May 2024 19:20:58.483 * Setting secondary replication ID to f8d077f2b079888df830d22ea8c1d0f0908d1598, valid up to offset: 150466. New replication ID is 26808aaf9be29dafcb94bfd1ac43b89f4e105947
+18257:M 06 May 2024 19:20:58.484 * configEpoch set to 0 via CLUSTER RESET HARD
+18257:M 06 May 2024 19:20:58.484 * Node hard reset, now I'm f1ab9aca89352244cecd21bb2bebff73910a1237
+18257:M 06 May 2024 19:20:58.484 * configEpoch set to 1 via CLUSTER SET-CONFIG-EPOCH
+18257:M 06 May 2024 19:20:58.484 # Cluster state changed: fail
+18257:M 06 May 2024 19:20:59.014 * CONFIG REWRITE executed with success.
+18257:M 06 May 2024 19:21:02.881 * Replica 127.0.0.1:30005 asks for synchronization
+18257:M 06 May 2024 19:21:02.881 * Partial resynchronization not accepted: Requested offset for second ID was 150507, but I can reply up to 150466
+18257:M 06 May 2024 19:21:02.881 * Starting BGSAVE for SYNC with target: replicas sockets
+18257:M 06 May 2024 19:21:02.882 * Background RDB transfer started by pid 18408
+18408:C 06 May 2024 19:21:02.884 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+18257:M 06 May 2024 19:21:02.884 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+18257:M 06 May 2024 19:21:02.886 * Background RDB transfer terminated with success
+18257:M 06 May 2024 19:21:02.886 * Streamed RDB transfer with replica 127.0.0.1:30005 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+18257:M 06 May 2024 19:21:02.886 * Synchronization with replica 127.0.0.1:30005 succeeded
+18257:M 06 May 2024 19:21:03.318 * Node ea188db865fa34fa05775d699ccded36d0a815f0 () is no longer master of shard c9cdbc7bf1fd6b9537f6151b0e7952ae57507332; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:21:03.318 * Node ea188db865fa34fa05775d699ccded36d0a815f0 () is now part of shard 1e32518e495bab53ce49d6b0b26890950d0e6932
+18257:M 06 May 2024 19:21:03.521 * Node 089e7fb433a0847f9e708db936533110ce0cbea5 () is no longer master of shard c9e0b1451dee8dfc4e893df748587b969a26f679; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:21:03.522 * Node 089e7fb433a0847f9e708db936533110ce0cbea5 () is now part of shard 75be0656223117757620482d8547e5fe2e896de1
+18257:M 06 May 2024 19:21:03.523 * Node c30b7ede25963c304ed3b564e73b8fe0144a0723 () is no longer master of shard 122cd1fcb92a7460821b86e1e2d20ae156aef07b; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:21:03.523 * Node c30b7ede25963c304ed3b564e73b8fe0144a0723 () is now part of shard 9c3ef340a0f3031400e88f148755f8e3a44c39cc
+18257:M 06 May 2024 19:21:03.562 * Node 9b69ab04795d6bc643cc24ff909006021bb42465 () is no longer master of shard 54e8a9afa1bd7f67c860e6b09192d24f3b4b5af0; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:21:03.562 * Node 9b69ab04795d6bc643cc24ff909006021bb42465 () is now part of shard fdf0c30757c93c36c4d6e2340444130d7ab6fd1c
+18257:M 06 May 2024 19:21:03.715 * Node 3213008a052e3d1f53d4bd09bc5dafcc1093df23 () is no longer master of shard 48c7ccc13115e6584257112f348f460ed6b3d90b; removed all 0 slot(s) it used to own
+18257:M 06 May 2024 19:21:03.715 * Node 3213008a052e3d1f53d4bd09bc5dafcc1093df23 () is now part of shard 4897fecbf064c3a5fe304e8cc5bfc121e96f4d0d
+18257:M 06 May 2024 19:21:05.680 * Cluster state changed: ok
+18257:signal-handler (1715023274) Received SIGINT scheduling shutdown...
+18257:M 06 May 2024 19:21:14.580 * User requested shutdown...
+18257:M 06 May 2024 19:21:14.580 * Waiting for replicas before shutting down.
+18257:M 06 May 2024 19:21:14.581 * Failover auth granted to 9b69ab04795d6bc643cc24ff909006021bb42465 () for epoch 21
+18257:M 06 May 2024 19:21:14.581 * Configuration change detected. Reconfiguring myself as a replica of 9b69ab04795d6bc643cc24ff909006021bb42465 ()
+18257:S 06 May 2024 19:21:14.581 * Before turning into a replica, using my own master parameters to synthesize a cached master: I may be able to synchronize with the new master with just a partial transfer.
+18257:S 06 May 2024 19:21:14.581 * Connecting to MASTER 127.0.0.1:30005
+18257:S 06 May 2024 19:21:14.581 * MASTER <-> REPLICA sync started
+18257:S 06 May 2024 19:21:14.582 * Connection with replica client id #21 lost.
+18257:S 06 May 2024 19:21:14.593 * Non blocking connect for SYNC fired the event.
+18257:S 06 May 2024 19:21:14.594 * Master replied to PING, replication can continue...
+18257:S 06 May 2024 19:21:14.602 * Trying a partial resynchronization (request 26808aaf9be29dafcb94bfd1ac43b89f4e105947:151795).
+18257:S 06 May 2024 19:21:14.602 * Full resync from master: 6395bbd6f616c7aba33f39a2a31d75227c29ab6d:151757
+18257:S 06 May 2024 19:21:14.606 * MASTER <-> REPLICA sync: receiving streamed RDB from master with EOF to disk
+18257:S 06 May 2024 19:21:14.606 * Discarding previously cached master state.
+18257:S 06 May 2024 19:21:14.606 * MASTER <-> REPLICA sync: Flushing old data
+18257:S 06 May 2024 19:21:14.606 * MASTER <-> REPLICA sync: Loading DB in memory
+18257:S 06 May 2024 19:21:14.608 * Loading RDB produced by valkey version 255.255.255
+18257:S 06 May 2024 19:21:14.608 * RDB age 0 seconds
+18257:S 06 May 2024 19:21:14.608 * RDB memory usage when created 2.88 Mb
+18257:S 06 May 2024 19:21:14.608 * Done loading RDB, keys loaded: 23, keys expired: 0.
+18257:S 06 May 2024 19:21:14.608 * MASTER <-> REPLICA sync: Finished with success
+18257:S 06 May 2024 19:21:14.658 * Connection with master lost.
+18257:S 06 May 2024 19:21:14.659 * Caching the disconnected master state.
+18257:S 06 May 2024 19:21:14.659 * Reconnecting to MASTER 127.0.0.1:30005
+18257:S 06 May 2024 19:21:14.659 * MASTER <-> REPLICA sync started
+18257:S 06 May 2024 19:21:14.659 # Error condition on socket for SYNC: Connection refused
+18257:S 06 May 2024 19:21:14.681 # Valkey is now ready to exit, bye bye...

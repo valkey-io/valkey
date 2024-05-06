@@ -140,7 +140,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         r MSET key1{t} 1 key2{t} 1
 
         # GET triggers tracking, SET does not
-        $rd_trk test.rm_call EVAL "redis.call('get', 'key1{t}')" 2 key1{t} key2{t}
+        $rd_trk test.rm_call EVAL "server.call('get', 'key1{t}')" 2 key1{t} key2{t}
         r MSET key1{t} 2 key2{t} 2
         assert_equal {invalidate key1{t}} [$rd_trk read]
         assert_equal "PONG" [$rd_trk ping]
@@ -247,7 +247,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         # use the M flag without allow-oom shebang flag
         assert_error {OOM *} {
             r test.rm_call_flags M eval {#!lua
-                redis.call('set','x',1)
+                server.call('set','x',1)
                 return 1
             } 1 x
         }
@@ -255,7 +255,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         # add the M flag with allow-oom shebang flag
         assert_equal {1} [
             r test.rm_call_flags M eval {#!lua flags=allow-oom
-                redis.call('set','x',1)
+                server.call('set','x',1)
                 return 1
             } 1 x
         ]
@@ -275,13 +275,13 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
 
     test {rm_call EVAL} {
         r test.rm_call eval {
-            redis.call('set','x',1)
+            server.call('set','x',1)
             return 1
         } 1 x
 
         assert_error {ERR Write commands are not allowed from read-only scripts.*} {
             r test.rm_call eval {#!lua flags=no-writes
-                redis.call('set','x',1)
+                server.call('set','x',1)
                 return 1
             } 1 x
         }
@@ -294,34 +294,34 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         # script without shebang, but uses SET, so fails
         assert_error {*OOM command not allowed when used memory > 'maxmemory'*} {
             r test.rm_call_flags M eval {
-                redis.call('set','x',1)
+                server.call('set','x',1)
                 return 1
             } 1 x
         }
 
         # script with an allow-oom flag, succeeds despite using SET
         r test.rm_call_flags M eval {#!lua flags=allow-oom
-            redis.call('set','x', 1)
+            server.call('set','x', 1)
             return 2
         } 1 x
 
         # script with no-writes flag, implies allow-oom, succeeds
         r test.rm_call_flags M eval {#!lua flags=no-writes
-            redis.call('get','x')
+            server.call('get','x')
             return 2
         } 1 x
 
         # script with shebang using default flags, so fails regardless of using only GET
         assert_error {*OOM command not allowed when used memory > 'maxmemory'*} {
             r test.rm_call_flags M eval {#!lua
-                redis.call('get','x')
+                server.call('get','x')
                 return 3
             } 1 x
         }
 
         # script without shebang, but uses GET, so succeeds
         r test.rm_call_flags M eval {
-            redis.call('get','x')
+            server.call('get','x')
             return 4
         } 1 x
 
@@ -334,19 +334,19 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
 
         # no shebang at all
         r test.rm_call eval {
-            redis.call('set','x',1)
+            server.call('set','x',1)
             return 6
         } 1 x
 
         # Shebang without flags
         r test.rm_call eval {#!lua
-            redis.call('set','x', 1)
+            server.call('set','x', 1)
             return 7
         } 1 x
 
         # with allow-oom flag
         r test.rm_call eval {#!lua flags=allow-oom
-            redis.call('set','x', 1)
+            server.call('set','x', 1)
             return 8
         } 1 x
 
@@ -362,25 +362,25 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
 
         assert_equal [
             r test.rm_call eval {#!lua flags=no-writes
-                return redis.call('get','x')
+                return server.call('get','x')
             } 1 x
         ] "some value"
 
         assert_equal [
             r test.rm_call eval {
-                return redis.call('get','x')
+                return server.call('get','x')
             } 1 x
         ] "some value"
 
         assert_error {NOREPLICAS *} {
             r test.rm_call eval {#!lua
-                return redis.call('get','x')
+                return server.call('get','x')
             } 1 x
         }
 
         assert_error {NOREPLICAS *} {
             r test.rm_call eval {
-                return redis.call('set','x', 1)
+                return server.call('set','x', 1)
             } 1 x
         }
 
@@ -395,25 +395,25 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
 
         assert_error {READONLY You can't write against a read only replica. script*} {
             r test.rm_call eval {
-                redis.call('set','x',1)
+                server.call('set','x',1)
                 return 1
             } 1 x
         }
 
         r test.rm_call eval {#!lua flags=no-writes
-            redis.call('get','x')
+            server.call('get','x')
             return 2
         } 1 x
 
         assert_error {READONLY Can not run script with write flag on readonly replica*} {
             r test.rm_call eval {#!lua
-                redis.call('get','x')
+                server.call('get','x')
                 return 3
             } 1 x
         }
 
         r test.rm_call eval {
-            redis.call('get','x')
+            server.call('get','x')
             return 4
         } 1 x
 
@@ -431,14 +431,14 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
 
         assert_error {MASTERDOWN *} {
             r test.rm_call eval {#!lua flags=no-writes
-                redis.call('get','x')
+                server.call('get','x')
                 return 2
             } 1 x
         }
 
         assert_error {MASTERDOWN *} {
             r test.rm_call eval {
-                redis.call('get','x')
+                server.call('get','x')
                 return 4
             } 1 x
         }
@@ -467,21 +467,21 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
 
         # repeat with script
         assert_error {MISCONF *} {r test.rm_call eval {
-            return redis.call('set','x',1)
+            return server.call('set','x',1)
             } 1 x
         }
         assert_equal {x} [r test.rm_call eval {
-            return redis.call('get','x')
+            return server.call('get','x')
             } 1 x
         ]
 
         # again with script using shebang
         assert_error {MISCONF *} {r test.rm_call eval {#!lua
-            return redis.call('set','x',1)
+            return server.call('set','x',1)
             } 1 x
         }
         assert_equal {x} [r test.rm_call eval {#!lua flags=no-writes
-            return redis.call('get','x')
+            return server.call('get','x')
             } 1 x
         ]
 

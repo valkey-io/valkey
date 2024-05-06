@@ -61,8 +61,8 @@ start_server {tags {"repl external:skip"}} {
 
         # Load some functions to be used later
         $master FUNCTION load replace {#!lua name=test
-            server.register_function{function_name='f_default_flags', callback=function(keys, args) return redis.call('get',keys[1]) end, flags={}}
-            server.register_function{function_name='f_no_writes', callback=function(keys, args) return redis.call('get',keys[1]) end, flags={'no-writes'}}
+            server.register_function{function_name='f_default_flags', callback=function(keys, args) return server.call('get',keys[1]) end, flags={}}
+            server.register_function{function_name='f_no_writes', callback=function(keys, args) return server.call('get',keys[1]) end, flags={'no-writes'}}
         }
 
         test {First server should have role slave after SLAVEOF} {
@@ -74,14 +74,14 @@ start_server {tags {"repl external:skip"}} {
             $master config set min-slaves-max-lag 3
             $master config set min-slaves-to-write 1
             assert_equal OK [$master set foo 123]
-            assert_equal OK [$master eval "return redis.call('set','foo',12345)" 0]
+            assert_equal OK [$master eval "return server.call('set','foo',12345)" 0]
         }
 
         test {With min-slaves-to-write (2,3): master should not be writable} {
             $master config set min-slaves-max-lag 3
             $master config set min-slaves-to-write 2
             assert_error "*NOREPLICAS*" {$master set foo bar}
-            assert_error "*NOREPLICAS*" {$master eval "redis.call('set','foo','bar')" 0}
+            assert_error "*NOREPLICAS*" {$master eval "server.call('set','foo','bar')" 0}
         }
 
         test {With min-slaves-to-write function without no-write flag} {
@@ -92,17 +92,17 @@ start_server {tags {"repl external:skip"}} {
         test {With not enough good slaves, read in Lua script is still accepted} {
             $master config set min-slaves-max-lag 3
             $master config set min-slaves-to-write 1
-            $master eval "redis.call('set','foo','bar')" 0
+            $master eval "server.call('set','foo','bar')" 0
 
             $master config set min-slaves-to-write 2
-            $master eval "return redis.call('get','foo')" 0
+            $master eval "return server.call('get','foo')" 0
         } {bar}
 
         test {With min-slaves-to-write: master not writable with lagged slave} {
             $master config set min-slaves-max-lag 2
             $master config set min-slaves-to-write 1
             assert_equal OK [$master set foo 123]
-            assert_equal OK [$master eval "return redis.call('set','foo',12345)" 0]
+            assert_equal OK [$master eval "return server.call('set','foo',12345)" 0]
             # Killing a slave to make it become a lagged slave.
             pause_process [srv 0 pid]
             # Waiting for slave kill.
@@ -112,7 +112,7 @@ start_server {tags {"repl external:skip"}} {
                 fail "Master didn't become readonly"
             }
             assert_error "*NOREPLICAS*" {$master set foo 123}
-            assert_error "*NOREPLICAS*" {$master eval "return redis.call('set','foo',12345)" 0}
+            assert_error "*NOREPLICAS*" {$master eval "return server.call('set','foo',12345)" 0}
             resume_process [srv 0 pid]
         }
     }

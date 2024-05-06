@@ -150,7 +150,7 @@ tags {"needs:debug"} {
         r eval {
             local i = 0
             while (i < tonumber(ARGV[1])) do
-                redis.call('sadd',KEYS[1],i)
+                server.call('sadd',KEYS[1],i)
                 i = i+1
              end
         } 1 mybigkey $count

@@ -1,0 +1,537 @@
+15753:C 06 May 2024 19:13:45.192 # WARNING: Changing databases number from 16 to 1 since we are in cluster mode
+15753:C 06 May 2024 19:13:45.192 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+15753:C 06 May 2024 19:13:45.193 * oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo
+15753:C 06 May 2024 19:13:45.193 * Valkey version=255.255.255, bits=64, commit=93f8a19b, modified=0, pid=15753, just started
+15753:C 06 May 2024 19:13:45.193 * Configuration loaded
+15753:M 06 May 2024 19:13:45.194 * monotonic clock: POSIX clock_gettime
+15753:M 06 May 2024 19:13:45.195 * Running mode=cluster, port=30014.
+15753:M 06 May 2024 19:13:45.195 * No cluster configuration found, I'm e7c51e16e273c3db9cdc34326fdfcd904137a7f9
+15753:M 06 May 2024 19:13:45.198 * Server initialized
+15753:M 06 May 2024 19:13:45.200 * Creating AOF base file appendonly.aof.1.base.rdb on server start
+15753:M 06 May 2024 19:13:45.203 * Creating AOF incr file appendonly.aof.1.incr.aof on server start
+15753:M 06 May 2024 19:13:45.203 * Ready to accept connections tcp
+15753:M 06 May 2024 19:13:45.646 * configEpoch set to 0 via CLUSTER RESET HARD
+15753:M 06 May 2024 19:13:45.647 * Node hard reset, now I'm 1a810f56abad12ab88071bd2dd92bfa622b1e3bf
+15753:M 06 May 2024 19:13:45.647 * configEpoch set to 15 via CLUSTER SET-CONFIG-EPOCH
+15753:M 06 May 2024 19:13:45.650 * CONFIG REWRITE executed with success.
+15753:M 06 May 2024 19:13:45.738 * IP address for this node updated to 127.0.0.1
+15753:M 06 May 2024 19:13:48.683 # Missing implement of connection type tls
+15753:M 06 May 2024 19:13:52.557 * Cluster state changed: ok
+15753:M 06 May 2024 19:13:52.875 * configEpoch set to 0 via CLUSTER RESET HARD
+15753:M 06 May 2024 19:13:52.875 * Node hard reset, now I'm 7ce15aada6af76e304df222f463282e865e22db0
+15753:M 06 May 2024 19:13:52.875 * configEpoch set to 15 via CLUSTER SET-CONFIG-EPOCH
+15753:M 06 May 2024 19:13:52.875 # Cluster state changed: fail
+15753:M 06 May 2024 19:13:52.879 * CONFIG REWRITE executed with success.
+15753:M 06 May 2024 19:13:57.037 * Node 1e5c8c4a07f43bf52fd4450600942b910335d228 () is no longer master of shard 67426f1e38c225d7050cb5d4244d7014ede80e1a; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:13:57.037 * Node 1e5c8c4a07f43bf52fd4450600942b910335d228 () is now part of shard a2427455940b828a38a3ffb09c2b4cdfd4ccf6f5
+15753:M 06 May 2024 19:13:57.102 * Node 44cbffb6ea4e9f1a9f3f6fea0c4ba7b57dcf0555 () is no longer master of shard 93a2a8fbb3ebee1719ea78e416af4f62a280e72f; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:13:57.102 * Node 44cbffb6ea4e9f1a9f3f6fea0c4ba7b57dcf0555 () is now part of shard 0a3baa510e8cc3ec6c1dc6c6aff3c8c121a171ee
+15753:M 06 May 2024 19:13:57.593 * Node 14870674fd1761a0b545ac9b6860bd07cc3c82a1 () is no longer master of shard 2aaea61241128999e7bf4d990a5d6bae89096d2d; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:13:57.593 * Node 14870674fd1761a0b545ac9b6860bd07cc3c82a1 () is now part of shard 9009f53e5fcc48bb5a0b06d0bc06b2a661c7165d
+15753:M 06 May 2024 19:13:58.097 * Node 2b30694b8e24a7702a1229fcee665e160d412a34 () is no longer master of shard 8d23c540c28858cc5ee10f86f93cd31765bd7b8b; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:13:58.097 * Node 2b30694b8e24a7702a1229fcee665e160d412a34 () is now part of shard 5f75c91ff19b41d8200527f5fc06215514a6c230
+15753:M 06 May 2024 19:13:58.571 * Node 9e2f09d33ea8e59e7726a43c9e211c32f945654f () is no longer master of shard 45a425a508f35dfb3598266dbd995af0daf15e78; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:13:58.571 * Node 9e2f09d33ea8e59e7726a43c9e211c32f945654f () is now part of shard e89af52affaeadfe3f4c492254ae30531e68445a
+15753:M 06 May 2024 19:13:59.810 * Cluster state changed: ok
+15753:M 06 May 2024 19:14:04.019 * FAIL message received from 9fcb85d514e112d10016edd497098e3fbe9e110e () about 1e5c8c4a07f43bf52fd4450600942b910335d228 ()
+15753:M 06 May 2024 19:14:04.022 * FAIL message received from 85ed6fd7ba097e6b2c80626b17e130cb93740a3c () about 44cbffb6ea4e9f1a9f3f6fea0c4ba7b57dcf0555 ()
+15753:M 06 May 2024 19:14:04.550 * Marking node 125263e49707331bd8e7a9d6681fe581aca463f2 () as failing (quorum reached).
+15753:M 06 May 2024 19:14:04.550 # Cluster state changed: fail
+15753:M 06 May 2024 19:14:10.699 * Clear FAIL state for node 125263e49707331bd8e7a9d6681fe581aca463f2 (): is reachable again and nobody is serving its slots after some time.
+15753:M 06 May 2024 19:14:10.699 * Cluster state changed: ok
+15753:M 06 May 2024 19:14:12.654 * Clear FAIL state for node 44cbffb6ea4e9f1a9f3f6fea0c4ba7b57dcf0555 ():replica is reachable again.
+15753:M 06 May 2024 19:14:12.763 * Clear FAIL state for node 1e5c8c4a07f43bf52fd4450600942b910335d228 ():replica is reachable again.
+15753:M 06 May 2024 19:14:18.673 * configEpoch set to 0 via CLUSTER RESET HARD
+15753:M 06 May 2024 19:14:18.673 * Node hard reset, now I'm 193724d86bb0f9843690437b862a0565ee1b8aec
+15753:M 06 May 2024 19:14:18.673 * configEpoch set to 15 via CLUSTER SET-CONFIG-EPOCH
+15753:M 06 May 2024 19:14:18.673 # Cluster state changed: fail
+15753:M 06 May 2024 19:14:18.677 * CONFIG REWRITE executed with success.
+15753:M 06 May 2024 19:14:22.080 * Node 4565dcea920547db24497a9ea7da3f8ba2d82492 () is no longer master of shard f4049c4ab89f7706b4043fb6168626bdb0c6d5fc; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:14:22.080 * Node 4565dcea920547db24497a9ea7da3f8ba2d82492 () is now part of shard 1109f6e41ce862f21e8f082deeae031962ef83ac
+15753:M 06 May 2024 19:14:22.180 * Node a47fca07157b154ce1988d97b2afcdaa40ce66b2 () is no longer master of shard 10c2f585fc5fd868287fafbf5212b6227ab7017d; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:14:22.180 * Node a47fca07157b154ce1988d97b2afcdaa40ce66b2 () is now part of shard bccca0c1e0e1dccd3b58d5709156154f9f4c9957
+15753:M 06 May 2024 19:14:22.182 * Node c5edb8319b761b2e5b47473a36be688c7f503b2f () is no longer master of shard f07b8fb6b6cbfb692ab1b87f30279a0b975efbbe; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:14:22.182 * Node c5edb8319b761b2e5b47473a36be688c7f503b2f () is now part of shard a3bfec7d6b49cc6990a2b3560914e0bb1a7bda0c
+15753:M 06 May 2024 19:14:22.281 * Node ed209190989ecd1b2fc83edcb92a31a33e7f40c0 () is no longer master of shard a1ec0cec552145a6ed1b39a5162d032008e3e8fd; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:14:22.281 * Node ed209190989ecd1b2fc83edcb92a31a33e7f40c0 () is now part of shard 5ed49dbd94affeba17a99f22ab305f897e30146f
+15753:M 06 May 2024 19:14:22.558 * Node 24553aed57a0fc014e31d20913d6ddb67daf993b () is no longer master of shard afe0861af93a47ac71d717dd7dd1f03d3dbe6564; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:14:22.558 * Node 24553aed57a0fc014e31d20913d6ddb67daf993b () is now part of shard 6bb248ce1980dda8969ac6f65c18efe9f1d758d2
+15753:M 06 May 2024 19:14:25.100 * Cluster state changed: ok
+15753:M 06 May 2024 19:14:30.035 * FAIL message received from 220970bd9ddf17fd39dbd121039031b6350dc7bd () about 4ac21db3dc729d28334184ee1a8bd51324f5ca54 ()
+15753:M 06 May 2024 19:14:30.035 # Cluster state changed: fail
+15753:M 06 May 2024 19:14:31.059 * Cluster state changed: ok
+15753:M 06 May 2024 19:14:31.245 * Clear FAIL state for node 4ac21db3dc729d28334184ee1a8bd51324f5ca54 ():master without slots is reachable again.
+15753:M 06 May 2024 19:14:31.245 * A failover occurred in shard bccca0c1e0e1dccd3b58d5709156154f9f4c9957; node 4ac21db3dc729d28334184ee1a8bd51324f5ca54 () lost 0 slot(s) to node a47fca07157b154ce1988d97b2afcdaa40ce66b2 () with a config epoch of 21
+15753:M 06 May 2024 19:14:31.388 * configEpoch set to 0 via CLUSTER RESET HARD
+15753:M 06 May 2024 19:14:31.388 * Node hard reset, now I'm 84a39200cacde99de881c75065e278d774a677f8
+15753:M 06 May 2024 19:14:31.388 * configEpoch set to 15 via CLUSTER SET-CONFIG-EPOCH
+15753:M 06 May 2024 19:14:31.388 # Cluster state changed: fail
+15753:M 06 May 2024 19:14:31.393 * CONFIG REWRITE executed with success.
+15753:M 06 May 2024 19:14:35.079 * Node 29597550bd8f898394ae88db5a0ba45f1868fd3f () is no longer master of shard 98ec8d4aaf47b8dc3863b2d7c51af4e948cd12a6; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:14:35.079 * Node 29597550bd8f898394ae88db5a0ba45f1868fd3f () is now part of shard 04e24d93f8b27f67291965144dd39f0ab3b35d25
+15753:M 06 May 2024 19:14:35.568 * Node de3054474d708953456bc221c893ce4305ba5136 () is no longer master of shard 77b4d2bf3a14a66eb7635d415bbf20a86e150b57; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:14:35.568 * Node de3054474d708953456bc221c893ce4305ba5136 () is now part of shard 236cc077a81351c19b896662f24236e227403702
+15753:M 06 May 2024 19:14:35.581 * Node 671088db4acca8792f424ee7ea50b8153c7529a0 () is no longer master of shard 76f000c5383c5d2746bf6c7b9d86a92aed4820c2; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:14:35.581 * Node 671088db4acca8792f424ee7ea50b8153c7529a0 () is now part of shard 45bde1a3488556534c5594a0f6ace0dba22be32b
+15753:M 06 May 2024 19:14:35.581 * Node d612f4e24864679d4cb0b4d862c48e2df4373065 () is no longer master of shard a577fdbb713c832cf9850e989f6b72796108c745; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:14:35.581 * Node d612f4e24864679d4cb0b4d862c48e2df4373065 () is now part of shard e2220f97589610879561e699a57b8481b7124689
+15753:M 06 May 2024 19:14:35.582 * Node 9dad64de16025f02b271510ee2d51a6ca079dc7b () is no longer master of shard f88e4fd9e9180c926982aaac2f65e8d0105c55fe; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:14:35.582 * Node 9dad64de16025f02b271510ee2d51a6ca079dc7b () is now part of shard 1c2b75be0f3bbf57778cad018055649104140ab5
+15753:M 06 May 2024 19:14:38.098 * Cluster state changed: ok
+15753:M 06 May 2024 19:14:42.797 * FAIL message received from ffdb16089f859482065bad0e5c9a094d823a1410 () about c6b3e5df3a36095ff5d9df268d3186ade1ef31ff ()
+15753:M 06 May 2024 19:14:42.797 # Cluster state changed: fail
+15753:M 06 May 2024 19:14:43.896 * Cluster state changed: ok
+15753:M 06 May 2024 19:14:44.139 * Clear FAIL state for node c6b3e5df3a36095ff5d9df268d3186ade1ef31ff ():master without slots is reachable again.
+15753:M 06 May 2024 19:14:44.139 * A failover occurred in shard 45bde1a3488556534c5594a0f6ace0dba22be32b; node c6b3e5df3a36095ff5d9df268d3186ade1ef31ff () lost 0 slot(s) to node 671088db4acca8792f424ee7ea50b8153c7529a0 () with a config epoch of 21
+15753:M 06 May 2024 19:14:49.730 * FAIL message received from 9dad64de16025f02b271510ee2d51a6ca079dc7b () about d979b3705974c02442b170e8dacc0ba5e04d56bb ()
+15753:M 06 May 2024 19:14:49.730 # Cluster state changed: fail
+15753:M 06 May 2024 19:14:50.867 * Cluster state changed: ok
+15753:M 06 May 2024 19:14:51.089 * Clear FAIL state for node d979b3705974c02442b170e8dacc0ba5e04d56bb ():master without slots is reachable again.
+15753:M 06 May 2024 19:14:51.089 * A failover occurred in shard 1c2b75be0f3bbf57778cad018055649104140ab5; node d979b3705974c02442b170e8dacc0ba5e04d56bb () lost 0 slot(s) to node 9dad64de16025f02b271510ee2d51a6ca079dc7b () with a config epoch of 22
+15753:M 06 May 2024 19:14:55.626 * Marking node c26ea12fd513a731ced8b60c63390b5dbe84235d () as failing (quorum reached).
+15753:M 06 May 2024 19:14:55.626 # Cluster state changed: fail
+15753:M 06 May 2024 19:14:57.024 * Cluster state changed: ok
+15753:M 06 May 2024 19:14:57.344 * Clear FAIL state for node c26ea12fd513a731ced8b60c63390b5dbe84235d ():master without slots is reachable again.
+15753:M 06 May 2024 19:14:57.345 * A failover occurred in shard e2220f97589610879561e699a57b8481b7124689; node c26ea12fd513a731ced8b60c63390b5dbe84235d () lost 0 slot(s) to node d612f4e24864679d4cb0b4d862c48e2df4373065 () with a config epoch of 23
+15753:M 06 May 2024 19:15:04.029 * Marking node d612f4e24864679d4cb0b4d862c48e2df4373065 () as failing (quorum reached).
+15753:M 06 May 2024 19:15:04.029 # Cluster state changed: fail
+15753:M 06 May 2024 19:15:04.893 * Cluster state changed: ok
+15753:M 06 May 2024 19:15:05.045 * Clear FAIL state for node d612f4e24864679d4cb0b4d862c48e2df4373065 ():master without slots is reachable again.
+15753:M 06 May 2024 19:15:05.045 * A failover occurred in shard e2220f97589610879561e699a57b8481b7124689; node d612f4e24864679d4cb0b4d862c48e2df4373065 () lost 0 slot(s) to node c26ea12fd513a731ced8b60c63390b5dbe84235d () with a config epoch of 24
+15753:M 06 May 2024 19:15:10.098 * FAIL message received from b741288807d59266e5b075e999bfd7863cf32021 () about c26ea12fd513a731ced8b60c63390b5dbe84235d ()
+15753:M 06 May 2024 19:15:10.098 # Cluster state changed: fail
+15753:M 06 May 2024 19:15:10.957 * Cluster state changed: ok
+15753:M 06 May 2024 19:15:11.114 * Clear FAIL state for node c26ea12fd513a731ced8b60c63390b5dbe84235d ():master without slots is reachable again.
+15753:M 06 May 2024 19:15:11.114 * A failover occurred in shard e2220f97589610879561e699a57b8481b7124689; node c26ea12fd513a731ced8b60c63390b5dbe84235d () lost 0 slot(s) to node d612f4e24864679d4cb0b4d862c48e2df4373065 () with a config epoch of 25
+15753:M 06 May 2024 19:15:15.639 * FAIL message received from b741288807d59266e5b075e999bfd7863cf32021 () about 9dad64de16025f02b271510ee2d51a6ca079dc7b ()
+15753:M 06 May 2024 19:15:15.639 # Cluster state changed: fail
+15753:M 06 May 2024 19:15:16.591 * Cluster state changed: ok
+15753:M 06 May 2024 19:15:16.844 * Clear FAIL state for node 9dad64de16025f02b271510ee2d51a6ca079dc7b ():master without slots is reachable again.
+15753:M 06 May 2024 19:15:16.844 * A failover occurred in shard 1c2b75be0f3bbf57778cad018055649104140ab5; node 9dad64de16025f02b271510ee2d51a6ca079dc7b () lost 0 slot(s) to node d979b3705974c02442b170e8dacc0ba5e04d56bb () with a config epoch of 26
+15753:M 06 May 2024 19:15:21.821 * FAIL message received from 9dad64de16025f02b271510ee2d51a6ca079dc7b () about d979b3705974c02442b170e8dacc0ba5e04d56bb ()
+15753:M 06 May 2024 19:15:21.821 # Cluster state changed: fail
+15753:M 06 May 2024 19:15:22.745 * Cluster state changed: ok
+15753:M 06 May 2024 19:15:22.987 * Clear FAIL state for node d979b3705974c02442b170e8dacc0ba5e04d56bb ():master without slots is reachable again.
+15753:M 06 May 2024 19:15:22.988 * A failover occurred in shard 1c2b75be0f3bbf57778cad018055649104140ab5; node d979b3705974c02442b170e8dacc0ba5e04d56bb () lost 0 slot(s) to node 9dad64de16025f02b271510ee2d51a6ca079dc7b () with a config epoch of 27
+15753:M 06 May 2024 19:15:27.755 * FAIL message received from 29597550bd8f898394ae88db5a0ba45f1868fd3f () about 9dad64de16025f02b271510ee2d51a6ca079dc7b ()
+15753:M 06 May 2024 19:15:27.755 # Cluster state changed: fail
+15753:M 06 May 2024 19:15:28.731 * Cluster state changed: ok
+15753:M 06 May 2024 19:15:28.940 * Clear FAIL state for node 9dad64de16025f02b271510ee2d51a6ca079dc7b ():master without slots is reachable again.
+15753:M 06 May 2024 19:15:28.940 * A failover occurred in shard 1c2b75be0f3bbf57778cad018055649104140ab5; node 9dad64de16025f02b271510ee2d51a6ca079dc7b () lost 0 slot(s) to node d979b3705974c02442b170e8dacc0ba5e04d56bb () with a config epoch of 28
+15753:M 06 May 2024 19:15:33.575 * FAIL message received from 671088db4acca8792f424ee7ea50b8153c7529a0 () about d979b3705974c02442b170e8dacc0ba5e04d56bb ()
+15753:M 06 May 2024 19:15:33.575 # Cluster state changed: fail
+15753:M 06 May 2024 19:15:34.369 * Cluster state changed: ok
+15753:M 06 May 2024 19:15:34.582 * Clear FAIL state for node d979b3705974c02442b170e8dacc0ba5e04d56bb ():master without slots is reachable again.
+15753:M 06 May 2024 19:15:34.582 * A failover occurred in shard 1c2b75be0f3bbf57778cad018055649104140ab5; node d979b3705974c02442b170e8dacc0ba5e04d56bb () lost 0 slot(s) to node 9dad64de16025f02b271510ee2d51a6ca079dc7b () with a config epoch of 29
+15753:M 06 May 2024 19:15:35.026 * configEpoch set to 0 via CLUSTER RESET HARD
+15753:M 06 May 2024 19:15:35.026 * Node hard reset, now I'm ac812a7a684b22b3ae8f84e5ae3ba6f52e36563e
+15753:M 06 May 2024 19:15:35.026 * configEpoch set to 15 via CLUSTER SET-CONFIG-EPOCH
+15753:M 06 May 2024 19:15:35.026 # Cluster state changed: fail
+15753:M 06 May 2024 19:15:35.031 * CONFIG REWRITE executed with success.
+15753:M 06 May 2024 19:15:40.902 * Node f618c2d793fec3c1be72eac543ed42af49103087 () is no longer master of shard c39f6f20eed586245932eadb49d37ef3444eeba3; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:15:40.902 * Node f618c2d793fec3c1be72eac543ed42af49103087 () is now part of shard 3a32b81103a1e70ff832bacb10b5a5a912e9e2dc
+15753:M 06 May 2024 19:15:41.781 * Cluster state changed: ok
+15753:M 06 May 2024 19:15:42.384 * Node fbfcf26d16f4bc8614e1fa7be3bc2e62ddd94665 () is no longer master of shard 3af8d21a8c53a9b6624c360029651d1f88745f55; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:15:42.384 * Node fbfcf26d16f4bc8614e1fa7be3bc2e62ddd94665 () is now part of shard 6b4d9b2c1f3548ebff40277e67444291a3fa23f5
+15753:M 06 May 2024 19:15:42.385 * Node a0009d5f604d884e784a3056b063090422c8ce55 () is no longer master of shard e64780e5c850ee71f0b1b08d3ba6db17ccf4bce2; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:15:42.385 * Node a0009d5f604d884e784a3056b063090422c8ce55 () is now part of shard d3a218f528452be7c9ae6dfd00c32dfc82e7170d
+15753:M 06 May 2024 19:15:42.386 * Node 5269a12afdf4274ccd7df7a3ac397f3fcc91a41b () is no longer master of shard f65a03c57d7accc16ebbe0644b4f594992bf8dce; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:15:42.386 * Node 5269a12afdf4274ccd7df7a3ac397f3fcc91a41b () is now part of shard 897f6391c215d2fd35c543f86aae669878fdc874
+15753:M 06 May 2024 19:15:42.485 * Node 6a35a86928be660bf08d53b5985287118d92066b () is no longer master of shard 17431b2ec492ed011920dbf31b9d73f688b42f6f; removed all 0 slot(s) it used to own
+15753:M 06 May 2024 19:15:42.485 * Node 6a35a86928be660bf08d53b5985287118d92066b () is now part of shard 78600edd67e7ea47e3a029230067904131c90109
+15753:signal-handler (1715023041) Received SIGTERM scheduling shutdown...
+15753:M 06 May 2024 19:17:22.012 * User requested shutdown...
+15753:M 06 May 2024 19:17:22.012 # Valkey is now ready to exit, bye bye...
+17391:C 06 May 2024 19:17:22.037 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+17391:C 06 May 2024 19:17:22.037 * oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo
+17391:C 06 May 2024 19:17:22.037 * Valkey version=255.255.255, bits=64, commit=93f8a19b, modified=0, pid=17391, just started
+17391:C 06 May 2024 19:17:22.037 * Configuration loaded
+17391:M 06 May 2024 19:17:22.038 * monotonic clock: POSIX clock_gettime
+17391:M 06 May 2024 19:17:22.039 * Running mode=cluster, port=30014.
+17391:M 06 May 2024 19:17:22.046 * Node configuration loaded, I'm ac812a7a684b22b3ae8f84e5ae3ba6f52e36563e
+17391:M 06 May 2024 19:17:22.046 * Server initialized
+17391:M 06 May 2024 19:17:22.046 * Reading RDB base file on AOF loading...
+17391:M 06 May 2024 19:17:22.047 * Loading RDB produced by valkey version 255.255.255
+17391:M 06 May 2024 19:17:22.047 * RDB age 217 seconds
+17391:M 06 May 2024 19:17:22.047 * RDB memory usage when created 2.13 Mb
+17391:M 06 May 2024 19:17:22.047 * RDB is base AOF
+17391:M 06 May 2024 19:17:22.047 * Done loading RDB, keys loaded: 0, keys expired: 0.
+17391:M 06 May 2024 19:17:22.047 * DB loaded from base file appendonly.aof.1.base.rdb: 0.000 seconds
+17391:M 06 May 2024 19:17:22.060 * DB loaded from incr file appendonly.aof.1.incr.aof: 0.013 seconds
+17391:M 06 May 2024 19:17:22.060 * DB loaded from append only file: 0.013 seconds
+17391:M 06 May 2024 19:17:22.060 * Opening AOF incr file appendonly.aof.1.incr.aof on server start
+17391:M 06 May 2024 19:17:22.060 * Ready to accept connections tcp
+17391:M 06 May 2024 19:17:24.076 * Cluster state changed: ok
+17391:M 06 May 2024 19:17:34.850 * configEpoch set to 0 via CLUSTER RESET HARD
+17391:M 06 May 2024 19:17:34.850 * Node hard reset, now I'm c82ade1d42699c8d38b49704a4d508edf28962ad
+17391:M 06 May 2024 19:17:34.850 * configEpoch set to 15 via CLUSTER SET-CONFIG-EPOCH
+17391:M 06 May 2024 19:17:34.850 # Cluster state changed: fail
+17391:M 06 May 2024 19:17:34.857 * CONFIG REWRITE executed with success.
+17391:M 06 May 2024 19:17:38.014 # Missing implement of connection type tls
+17391:M 06 May 2024 19:17:42.612 * Cluster state changed: ok
+17391:M 06 May 2024 19:17:42.732 * Node e1039ccb24f58e1d87d2782b61596d09ff577abb () is no longer master of shard 5acc99edc411149fcdb27d6533feac7207649ef7; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:17:42.732 * Node e1039ccb24f58e1d87d2782b61596d09ff577abb () is now part of shard 1050559ab1955a6332e03bbdccee0d3b12d80d4e
+17391:M 06 May 2024 19:17:43.908 * Node 59cb584e870b5276318f48cc46a9edfb0371113f () is no longer master of shard 5000b06b9aff419dd88e8f75370c3da32551a1cb; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:17:43.908 * Node 59cb584e870b5276318f48cc46a9edfb0371113f () is now part of shard 069b0453b631c5c0be393a42d2b474a6b5af3bc3
+17391:M 06 May 2024 19:17:44.150 * Node 26801f367db02d74aeeeb4c5ec2877a5f31569d9 () is no longer master of shard 1a16ede24c20c880468822e63f78780773a34e47; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:17:44.150 * Node 26801f367db02d74aeeeb4c5ec2877a5f31569d9 () is now part of shard 71756dc6ec85961b10f92d7936ea08ecbd62d2cc
+17391:M 06 May 2024 19:17:44.151 * Node 078932a058b3293ad41a7bf812f0c25bcb0049d7 () is no longer master of shard f7d317600bff619f321470e98d7e3c9c27a4af6a; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:17:44.151 * Node 078932a058b3293ad41a7bf812f0c25bcb0049d7 () is now part of shard 71756dc6ec85961b10f92d7936ea08ecbd62d2cc
+17391:M 06 May 2024 19:17:44.151 * Node 970366324b8c390c737a72bc0527db1e0be88d05 () is no longer master of shard 6c2b56a67af1fb0be8ff8b1b4eefe129c23debb0; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:17:44.151 * Node 970366324b8c390c737a72bc0527db1e0be88d05 () is now part of shard 069b0453b631c5c0be393a42d2b474a6b5af3bc3
+17391:M 06 May 2024 19:17:44.207 * Node e84e73c5fbab2e444548d2b4b8c70f6592b04067 () is no longer master of shard 873ddfcf8e44ed993d28f2c2cc6dee5b6aa4f588; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:17:44.207 * Node e84e73c5fbab2e444548d2b4b8c70f6592b04067 () is now part of shard 1050559ab1955a6332e03bbdccee0d3b12d80d4e
+17391:S 06 May 2024 19:17:44.215 * Before turning into a replica, using my own master parameters to synthesize a cached master: I may be able to synchronize with the new master with just a partial transfer.
+17391:S 06 May 2024 19:17:44.215 * Connecting to MASTER 127.0.0.1:30004
+17391:S 06 May 2024 19:17:44.215 * MASTER <-> REPLICA sync started
+17391:S 06 May 2024 19:17:44.217 * Non blocking connect for SYNC fired the event.
+17391:S 06 May 2024 19:17:44.217 * Master replied to PING, replication can continue...
+17391:S 06 May 2024 19:17:44.217 * Trying a partial resynchronization (request 0cd9a8d4cd03f110c4123dbbf561e4d101e687d6:1).
+17391:S 06 May 2024 19:17:44.217 * Full resync from master: 822d0ea1a4e4f7c85e90476b999e0b0f116cbba1:69
+17391:S 06 May 2024 19:17:44.219 * MASTER <-> REPLICA sync: receiving streamed RDB from master with EOF to disk
+17391:S 06 May 2024 19:17:44.220 * Discarding previously cached master state.
+17391:S 06 May 2024 19:17:44.220 * MASTER <-> REPLICA sync: Flushing old data
+17391:S 06 May 2024 19:17:44.220 * MASTER <-> REPLICA sync: Loading DB in memory
+17391:S 06 May 2024 19:17:44.222 * Loading RDB produced by valkey version 255.255.255
+17391:S 06 May 2024 19:17:44.222 * RDB age 0 seconds
+17391:S 06 May 2024 19:17:44.222 * RDB memory usage when created 2.75 Mb
+17391:S 06 May 2024 19:17:44.222 * Done loading RDB, keys loaded: 0, keys expired: 0.
+17391:S 06 May 2024 19:17:44.222 * MASTER <-> REPLICA sync: Finished with success
+17391:S 06 May 2024 19:17:44.505 * Node a64f8ad23dbc7e19bceb3d6de42d635121321462 () is no longer master of shard 0855cdcd88c49b00e8d3cb7a4549759c3b4ffc32; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:17:44.505 * Node a64f8ad23dbc7e19bceb3d6de42d635121321462 () is now part of shard 65d3f576730fc68ea1d1bef428c17b8f492f5ab4
+17391:S 06 May 2024 19:17:44.550 * Node 4f657f5e5c0b9e1d22cbfd768445a3a17a128dce () is no longer master of shard 33c4d632371303bcb565e5c7aba0936e2a76b03a; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:17:44.550 * Node 4f657f5e5c0b9e1d22cbfd768445a3a17a128dce () is now part of shard 65d3f576730fc68ea1d1bef428c17b8f492f5ab4
+17391:S 06 May 2024 19:17:45.561 * Node 8d75f2d6f057fa546d38d9b15adacee5fdc6a60d () is no longer master of shard 1e88f30dc751b7903da19b3c4c8bc3173a3efb8b; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:17:45.561 * Node 8d75f2d6f057fa546d38d9b15adacee5fdc6a60d () is now part of shard 50e3f96a8fee19ff4889bc9e3adeceeaaa1dbc24
+17391:S 06 May 2024 19:17:49.043 * FAIL message received from 8638bb3919fb522af84a8fe3990ded8caa70968c () about 26801f367db02d74aeeeb4c5ec2877a5f31569d9 ()
+17391:S 06 May 2024 19:17:54.687 * Clear FAIL state for node 26801f367db02d74aeeeb4c5ec2877a5f31569d9 ():replica is reachable again.
+17391:S 06 May 2024 19:17:58.844 * Marking node c6e768b2f8702ccd365a393b642c8ac83ff22379 () as failing (quorum reached).
+17391:S 06 May 2024 19:17:58.845 # Cluster state changed: fail
+17391:S 06 May 2024 19:17:59.751 * Cluster state changed: ok
+17391:M 06 May 2024 19:17:59.957 * Connection with master lost.
+17391:M 06 May 2024 19:17:59.958 * Caching the disconnected master state.
+17391:M 06 May 2024 19:17:59.958 * Discarding previously cached master state.
+17391:M 06 May 2024 19:17:59.958 * Setting secondary replication ID to 822d0ea1a4e4f7c85e90476b999e0b0f116cbba1, valid up to offset: 1049. New replication ID is 25684400fed480e8d1138888afeeaa45bebacd7e
+17391:M 06 May 2024 19:17:59.959 * configEpoch set to 0 via CLUSTER RESET HARD
+17391:M 06 May 2024 19:17:59.959 * Node hard reset, now I'm 918741e37ed669f9cb19eed7a95073e1eae2a8f1
+17391:M 06 May 2024 19:17:59.959 * configEpoch set to 15 via CLUSTER SET-CONFIG-EPOCH
+17391:M 06 May 2024 19:17:59.959 # Cluster state changed: fail
+17391:M 06 May 2024 19:17:59.963 * CONFIG REWRITE executed with success.
+17391:S 06 May 2024 19:18:02.841 * Before turning into a replica, using my own master parameters to synthesize a cached master: I may be able to synchronize with the new master with just a partial transfer.
+17391:S 06 May 2024 19:18:02.841 * Connecting to MASTER 127.0.0.1:30002
+17391:S 06 May 2024 19:18:02.842 * MASTER <-> REPLICA sync started
+17391:S 06 May 2024 19:18:02.842 * Non blocking connect for SYNC fired the event.
+17391:S 06 May 2024 19:18:02.842 * Master replied to PING, replication can continue...
+17391:S 06 May 2024 19:18:02.843 * Trying a partial resynchronization (request 25684400fed480e8d1138888afeeaa45bebacd7e:1049).
+17391:S 06 May 2024 19:18:02.843 * Full resync from master: e2b6958829f686f19f8f716ece21662ac44531c0:1460
+17391:S 06 May 2024 19:18:02.846 * MASTER <-> REPLICA sync: receiving streamed RDB from master with EOF to disk
+17391:S 06 May 2024 19:18:02.846 * Discarding previously cached master state.
+17391:S 06 May 2024 19:18:02.846 * MASTER <-> REPLICA sync: Flushing old data
+17391:S 06 May 2024 19:18:02.846 * MASTER <-> REPLICA sync: Loading DB in memory
+17391:S 06 May 2024 19:18:02.848 * Loading RDB produced by valkey version 255.255.255
+17391:S 06 May 2024 19:18:02.848 * RDB age 0 seconds
+17391:S 06 May 2024 19:18:02.848 * RDB memory usage when created 2.87 Mb
+17391:S 06 May 2024 19:18:02.848 * Done loading RDB, keys loaded: 0, keys expired: 0.
+17391:S 06 May 2024 19:18:02.848 * MASTER <-> REPLICA sync: Finished with success
+17391:S 06 May 2024 19:18:02.883 * Node 9f07e3ca03ad9d75250fe84b63f941d8609c07fd () is no longer master of shard cb9315006ffe129274468e5ed2feb38a7f33269f; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:18:02.883 * Node 9f07e3ca03ad9d75250fe84b63f941d8609c07fd () is now part of shard b1941e40ca7c82b122690b81cfbab0265cfd6255
+17391:S 06 May 2024 19:18:02.983 * Node e53ff829cf90e7caea1e3e82bd279765e0d896ce () is no longer master of shard dfcb8ddc797b36f3027193f68a243825e66ecb76; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:18:02.983 * Node e53ff829cf90e7caea1e3e82bd279765e0d896ce () is now part of shard e57e3844f79664a605c7f2e2b61ad0702feaf18d
+17391:S 06 May 2024 19:18:03.285 * Node f01b0161e695176f83ca792891b1e43f77a88883 () is no longer master of shard 66a60939691fd1e6ee1492ac1dbc0dece4a724e9; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:18:03.285 * Node f01b0161e695176f83ca792891b1e43f77a88883 () is now part of shard e57e3844f79664a605c7f2e2b61ad0702feaf18d
+17391:S 06 May 2024 19:18:03.548 * Node 9e51f1caf8c08f552dc747bebbfbb287ce3d5b74 () is no longer master of shard dae9d79e83baa0dbce3720b336c773fde1c02492; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:18:03.548 * Node 9e51f1caf8c08f552dc747bebbfbb287ce3d5b74 () is now part of shard b1941e40ca7c82b122690b81cfbab0265cfd6255
+17391:S 06 May 2024 19:18:03.588 * Node 9735b7886a7f7567bec72eec88999171c7b1481d () is no longer master of shard d0d012e1f78210fb0613fb1538f24f7814fe81bd; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:18:03.588 * Node 9735b7886a7f7567bec72eec88999171c7b1481d () is now part of shard af57b2c095a58c35952f5be607254c877d1c65e6
+17391:S 06 May 2024 19:18:03.588 * Node 26996c81b1b4b014258b798c0b9cab6593139f89 () is no longer master of shard 75182d21b15b8439f1522e589f314577961349dd; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:18:03.588 * Node 26996c81b1b4b014258b798c0b9cab6593139f89 () is now part of shard e57e3844f79664a605c7f2e2b61ad0702feaf18d
+17391:S 06 May 2024 19:18:03.589 * Node 05434d3c3db7978583050249cc56e331c3083c27 () is no longer master of shard 30c8fb7d5fcde244056aac469ab0a18d2dfa4e6a; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:18:03.589 * Node 05434d3c3db7978583050249cc56e331c3083c27 () is now part of shard af57b2c095a58c35952f5be607254c877d1c65e6
+17391:S 06 May 2024 19:18:03.589 * Node 1e008697fe34fc59625174f184ad2adc37042797 () is no longer master of shard 1bf2cd731a3dbe35a6cec5639318bdb95d99061d; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:18:03.589 * Node 1e008697fe34fc59625174f184ad2adc37042797 () is now part of shard b1941e40ca7c82b122690b81cfbab0265cfd6255
+17391:S 06 May 2024 19:18:03.589 * Node 9e37c267ff4ecec857b256ac46b5e11b3201d2bf () is no longer master of shard 4a54cdb367579758a4e3f891240c194e22265b3d; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:18:03.589 * Node 9e37c267ff4ecec857b256ac46b5e11b3201d2bf () is now part of shard af57b2c095a58c35952f5be607254c877d1c65e6
+17391:S 06 May 2024 19:18:03.607 * Node ee4e8801b63592ad76065cf689613b8590e8adbd () is no longer master of shard 07caa91caff12c6fc179408189c0b2325234614a; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:18:03.607 * Node ee4e8801b63592ad76065cf689613b8590e8adbd () is now part of shard b1941e40ca7c82b122690b81cfbab0265cfd6255
+17391:S 06 May 2024 19:18:03.608 * Node 204fe20f285eb3c7bcdd744c0500d6789f98b722 () is no longer master of shard ab9f767e76ee34d7511533a455ad90ed1b50d27b; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:18:03.608 * Node 204fe20f285eb3c7bcdd744c0500d6789f98b722 () is now part of shard e57e3844f79664a605c7f2e2b61ad0702feaf18d
+17391:S 06 May 2024 19:18:04.041 * Node 3a8410fdf29d80b74cbb245767c5e44636bc3277 () is no longer master of shard 7d57fa4efb72d70389b55e5fb06b1ed20ee0b8c3; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:18:04.041 * Node 3a8410fdf29d80b74cbb245767c5e44636bc3277 () is now part of shard af57b2c095a58c35952f5be607254c877d1c65e6
+17391:S 06 May 2024 19:18:04.065 * Cluster state changed: ok
+17391:S 06 May 2024 19:18:04.596 * Node f0648fda209089feb04595850ff99f51f0fb2ba5 () is no longer master of shard 71ddfeaa46e5002962c1f850ecca2bc4f0152083; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:18:04.596 * Node f0648fda209089feb04595850ff99f51f0fb2ba5 () is now part of shard e57e3844f79664a605c7f2e2b61ad0702feaf18d
+17391:S 06 May 2024 19:18:04.598 * Node b4c96fe54bd211d5373161c89d6e0f09e6bae07a () is no longer master of shard 1f9cf276999006c5e2fcd79b4eb3d5840c05a58b; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:18:04.598 * Node b4c96fe54bd211d5373161c89d6e0f09e6bae07a () is now part of shard b1941e40ca7c82b122690b81cfbab0265cfd6255
+17391:S 06 May 2024 19:18:11.037 * FAIL message received from 5097e3267f5590392864f4a471c331b04aff1382 () about 450684f318abb9002cec036680f3cb52f5f919b0 ()
+17391:S 06 May 2024 19:18:11.037 # Cluster state changed: fail
+17391:S 06 May 2024 19:18:11.772 * Cluster state changed: ok
+17391:S 06 May 2024 19:18:16.542 * FAIL message received from 3a8410fdf29d80b74cbb245767c5e44636bc3277 () about 9e51f1caf8c08f552dc747bebbfbb287ce3d5b74 ()
+17391:S 06 May 2024 19:18:16.542 # Cluster state changed: fail
+17391:S 06 May 2024 19:18:24.723 * Cluster state changed: ok
+17391:S 06 May 2024 19:18:30.543 * FAIL message received from d85a0c4eb3ba227c220265c8cb0c1be8004d558d () about b4c96fe54bd211d5373161c89d6e0f09e6bae07a ()
+17391:S 06 May 2024 19:18:30.543 # Cluster state changed: fail
+17391:S 06 May 2024 19:18:30.611 * Cluster state changed: ok
+17391:S 06 May 2024 19:18:35.524 * FAIL message received from d85a0c4eb3ba227c220265c8cb0c1be8004d558d () about 9f07e3ca03ad9d75250fe84b63f941d8609c07fd ()
+17391:S 06 May 2024 19:18:35.524 # Cluster state changed: fail
+17391:S 06 May 2024 19:18:37.663 * Cluster state changed: ok
+17391:S 06 May 2024 19:18:42.072 * FAIL message received from 5097e3267f5590392864f4a471c331b04aff1382 () about ee4e8801b63592ad76065cf689613b8590e8adbd ()
+17391:S 06 May 2024 19:18:42.072 # Cluster state changed: fail
+17391:S 06 May 2024 19:18:42.163 * Cluster state changed: ok
+17391:S 06 May 2024 19:18:42.279 * Clear FAIL state for node 450684f318abb9002cec036680f3cb52f5f919b0 ():master without slots is reachable again.
+17391:S 06 May 2024 19:18:42.279 * A failover occurred in shard b1941e40ca7c82b122690b81cfbab0265cfd6255; node 450684f318abb9002cec036680f3cb52f5f919b0 () lost 0 slot(s) to node 1e008697fe34fc59625174f184ad2adc37042797 () with a config epoch of 28
+17391:S 06 May 2024 19:18:42.380 * Clear FAIL state for node ee4e8801b63592ad76065cf689613b8590e8adbd ():master without slots is reachable again.
+17391:S 06 May 2024 19:18:42.380 * A failover occurred in shard b1941e40ca7c82b122690b81cfbab0265cfd6255; node ee4e8801b63592ad76065cf689613b8590e8adbd () lost 0 slot(s) to node 1e008697fe34fc59625174f184ad2adc37042797 () with a config epoch of 28
+17391:S 06 May 2024 19:18:42.382 * Clear FAIL state for node b4c96fe54bd211d5373161c89d6e0f09e6bae07a ():master without slots is reachable again.
+17391:S 06 May 2024 19:18:42.382 * A failover occurred in shard b1941e40ca7c82b122690b81cfbab0265cfd6255; node b4c96fe54bd211d5373161c89d6e0f09e6bae07a () lost 0 slot(s) to node 1e008697fe34fc59625174f184ad2adc37042797 () with a config epoch of 28
+17391:S 06 May 2024 19:18:42.481 * Clear FAIL state for node 9f07e3ca03ad9d75250fe84b63f941d8609c07fd ():master without slots is reachable again.
+17391:S 06 May 2024 19:18:42.481 * A failover occurred in shard b1941e40ca7c82b122690b81cfbab0265cfd6255; node 9f07e3ca03ad9d75250fe84b63f941d8609c07fd () lost 0 slot(s) to node 1e008697fe34fc59625174f184ad2adc37042797 () with a config epoch of 28
+17391:S 06 May 2024 19:18:42.582 * Clear FAIL state for node 9e51f1caf8c08f552dc747bebbfbb287ce3d5b74 ():master without slots is reachable again.
+17391:S 06 May 2024 19:18:42.583 * A failover occurred in shard b1941e40ca7c82b122690b81cfbab0265cfd6255; node 9e51f1caf8c08f552dc747bebbfbb287ce3d5b74 () lost 0 slot(s) to node 1e008697fe34fc59625174f184ad2adc37042797 () with a config epoch of 28
+17391:M 06 May 2024 19:18:42.720 * Connection with master lost.
+17391:M 06 May 2024 19:18:42.720 * Caching the disconnected master state.
+17391:M 06 May 2024 19:18:42.720 * Discarding previously cached master state.
+17391:M 06 May 2024 19:18:42.721 * Setting secondary replication ID to e2b6958829f686f19f8f716ece21662ac44531c0, valid up to offset: 1558. New replication ID is 91420db6917365b21f88c5a829a65fedbd1867d1
+17391:M 06 May 2024 19:18:42.722 * configEpoch set to 0 via CLUSTER RESET HARD
+17391:M 06 May 2024 19:18:42.722 * Node hard reset, now I'm 29fe177d201f260322f96fdcdc5d2b16b2ccc885
+17391:M 06 May 2024 19:18:42.722 * configEpoch set to 15 via CLUSTER SET-CONFIG-EPOCH
+17391:M 06 May 2024 19:18:42.722 # Cluster state changed: fail
+17391:M 06 May 2024 19:18:42.727 * CONFIG REWRITE executed with success.
+17391:M 06 May 2024 19:18:45.516 * Node 0f2a180bc3dd1ca08cf7a4547df0ff1a25981a88 () is no longer master of shard 35470f3f7014665726088479ee7b0dd699dc35de; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:18:45.516 * Node 0f2a180bc3dd1ca08cf7a4547df0ff1a25981a88 () is now part of shard 482cb579f47fb8ccd86d73983fba9c22f7197882
+17391:M 06 May 2024 19:18:45.517 * Node 73160c92fac075f0525b46dc984b9d0fc00a7319 () is no longer master of shard 8dd948e148227a2c888397f600e5d52a2509a683; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:18:45.517 * Node 73160c92fac075f0525b46dc984b9d0fc00a7319 () is now part of shard 769aeb08b175de4efdfee71d709927c7f9afc5bf
+17391:M 06 May 2024 19:18:45.546 * Node bcfc65dd66e5ac03397a54470d6555c63eea6616 () is no longer master of shard 841113874b49ed5f9d1e126879f92ea4392dcdab; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:18:45.546 * Node bcfc65dd66e5ac03397a54470d6555c63eea6616 () is now part of shard 215dc02bf2afb70a46c0e0788801a0f308924862
+17391:M 06 May 2024 19:18:45.618 * Node 4ef320c993d1f723c6e799fc4d9d0d0db57e09d9 () is no longer master of shard 91245c2cd07d4494975195dd1dfe064ec2d4cbfe; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:18:45.618 * Node 4ef320c993d1f723c6e799fc4d9d0d0db57e09d9 () is now part of shard 5c56bf8f5102b508a2405dedd16899f245264a91
+17391:M 06 May 2024 19:18:45.719 * Node 0e7185e5d8d3d3003e3f961ad0a21384374239b2 () is no longer master of shard 7eb196d163c5bf7eb03371da41c37de6ab3a27c7; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:18:45.719 * Node 0e7185e5d8d3d3003e3f961ad0a21384374239b2 () is now part of shard d05b2d9c8fad619a6a58ab01b0e5ade057de5ca1
+17391:M 06 May 2024 19:18:48.585 * Cluster state changed: ok
+17391:M 06 May 2024 19:18:52.516 * FAIL message received from 6e0ef4878fe1c8835271b94d91093f69119e2c5f () about 4ef320c993d1f723c6e799fc4d9d0d0db57e09d9 ()
+17391:M 06 May 2024 19:19:08.684 * Clear FAIL state for node 4ef320c993d1f723c6e799fc4d9d0d0db57e09d9 ():replica is reachable again.
+17391:M 06 May 2024 19:19:12.531 * FAIL message received from e4844e444bd7db045069d93fe2f71d3259852adf () about 03a61a2c512c0aab55d8de4c03711ba741fddb86 ()
+17391:M 06 May 2024 19:19:12.531 # Cluster state changed: fail
+17391:M 06 May 2024 19:19:18.881 * Clear FAIL state for node 03a61a2c512c0aab55d8de4c03711ba741fddb86 (): is reachable again and nobody is serving its slots after some time.
+17391:M 06 May 2024 19:19:18.882 * Cluster state changed: ok
+17391:M 06 May 2024 19:19:19.027 * configEpoch set to 0 via CLUSTER RESET HARD
+17391:M 06 May 2024 19:19:19.027 * Node hard reset, now I'm a62662d22e020ab95e9e5259a64ee8b40ba0a365
+17391:M 06 May 2024 19:19:19.027 * configEpoch set to 15 via CLUSTER SET-CONFIG-EPOCH
+17391:M 06 May 2024 19:19:19.027 # Cluster state changed: fail
+17391:M 06 May 2024 19:19:19.033 * CONFIG REWRITE executed with success.
+17391:M 06 May 2024 19:19:21.993 * Node 169ce63f84ab73647e330599b7668e357009f9c7 () is no longer master of shard 3e228277d31da320b8d2c0ab0d21aa067371dad3; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:19:21.993 * Node 169ce63f84ab73647e330599b7668e357009f9c7 () is now part of shard f4d0734f796edaeddf2c5d09cbe7bf8e0ddb8692
+17391:S 06 May 2024 19:19:21.998 * Before turning into a replica, using my own master parameters to synthesize a cached master: I may be able to synchronize with the new master with just a partial transfer.
+17391:S 06 May 2024 19:19:21.998 * Connecting to MASTER 127.0.0.1:30004
+17391:S 06 May 2024 19:19:21.998 * MASTER <-> REPLICA sync started
+17391:S 06 May 2024 19:19:21.998 * Non blocking connect for SYNC fired the event.
+17391:S 06 May 2024 19:19:21.999 * Master replied to PING, replication can continue...
+17391:S 06 May 2024 19:19:21.999 * Trying a partial resynchronization (request 91420db6917365b21f88c5a829a65fedbd1867d1:1599).
+17391:S 06 May 2024 19:19:21.999 * Full resync from master: d073cf9b323d6bce9c3e21330836b7574b5e4ed2:1720
+17391:S 06 May 2024 19:19:22.001 * MASTER <-> REPLICA sync: receiving streamed RDB from master with EOF to disk
+17391:S 06 May 2024 19:19:22.001 * Discarding previously cached master state.
+17391:S 06 May 2024 19:19:22.001 * MASTER <-> REPLICA sync: Flushing old data
+17391:S 06 May 2024 19:19:22.001 * MASTER <-> REPLICA sync: Loading DB in memory
+17391:S 06 May 2024 19:19:22.003 * Loading RDB produced by valkey version 255.255.255
+17391:S 06 May 2024 19:19:22.003 * RDB age 1 seconds
+17391:S 06 May 2024 19:19:22.003 * RDB memory usage when created 2.84 Mb
+17391:S 06 May 2024 19:19:22.003 * Done loading RDB, keys loaded: 0, keys expired: 0.
+17391:S 06 May 2024 19:19:22.003 * MASTER <-> REPLICA sync: Finished with success
+17391:S 06 May 2024 19:19:22.496 * Node 9e613cb2c4712a0062c1b26d3da1ea7442fbf737 () is no longer master of shard 7c13d5b404a532519713ecb0009d48d7b7148c0e; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:19:22.496 * Node 9e613cb2c4712a0062c1b26d3da1ea7442fbf737 () is now part of shard 9f9dea19e17027f3d40367b3d13d624654fd82d8
+17391:S 06 May 2024 19:19:22.511 * Node 6a162c47ba07cc9853a11bf0ed7c45443e6e18d8 () is no longer master of shard 5d8efc15227cc965bd521169b3cd81eb9295ec19; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:19:22.511 * Node 6a162c47ba07cc9853a11bf0ed7c45443e6e18d8 () is now part of shard 9f9dea19e17027f3d40367b3d13d624654fd82d8
+17391:S 06 May 2024 19:19:22.600 * Node 6691bd2bc72c367620d9f464e8e3094b802ad6fd () is no longer master of shard b3f6dd9ab5620f4d8bda693091f3d8d36ad0e7d3; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:19:22.600 * Node 6691bd2bc72c367620d9f464e8e3094b802ad6fd () is now part of shard 64f4303b3e226ea46acf2328b8cbffb940c502e2
+17391:S 06 May 2024 19:19:22.749 * Node c05d247c09a02616a6098580fdea8f4ce435b8bc () is no longer master of shard 1c166555732b739d6e4c1ab4dd8d165e832b3954; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:19:22.749 * Node c05d247c09a02616a6098580fdea8f4ce435b8bc () is now part of shard da4f83fcced31239e8986679bcae57566a875c12
+17391:S 06 May 2024 19:19:22.936 * Node f483107001db7f57a8bd7a64ac4a49a80b9c200d () is no longer master of shard aae63656731167d9c699175203047b6e26efb4be; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:19:22.937 * Node f483107001db7f57a8bd7a64ac4a49a80b9c200d () is now part of shard da4f83fcced31239e8986679bcae57566a875c12
+17391:S 06 May 2024 19:19:23.255 * Cluster state changed: ok
+17391:S 06 May 2024 19:19:23.507 * Node d61b725f6dd02d855fdc907190bd06a397b457f8 () is no longer master of shard ab8e805388a16f08bc5fa7bfd304cf9b2f43c122; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:19:23.507 * Node d61b725f6dd02d855fdc907190bd06a397b457f8 () is now part of shard 64f4303b3e226ea46acf2328b8cbffb940c502e2
+17391:S 06 May 2024 19:19:23.527 * Node dfea84e0be1bcd49482af5c67f555de10fdf29b3 () is no longer master of shard 01f47c3a12aa4f053a807eeb5eb545c5e07db794; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:19:23.527 * Node dfea84e0be1bcd49482af5c67f555de10fdf29b3 () is now part of shard f4d0734f796edaeddf2c5d09cbe7bf8e0ddb8692
+17391:S 06 May 2024 19:19:23.542 * Node 91aab1feff1314a17b72183eb4e8308f320601b3 () is no longer master of shard d8860f9f28d646383a01d2f3aba63d0f3a3e4faf; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:19:23.542 * Node 91aab1feff1314a17b72183eb4e8308f320601b3 () is now part of shard ad3b8637be272f5e4b5bea22fac4efd021dc27f8
+17391:S 06 May 2024 19:19:29.019 * FAIL message received from 3d1a6ede1fb4785f3437ca2ee7d37934e6eb5120 () about dfea84e0be1bcd49482af5c67f555de10fdf29b3 ()
+17391:S 06 May 2024 19:19:29.354 * FAIL message received from 5a72c35e8f819673e4c536c527b3bc7968d5372b () about 169ce63f84ab73647e330599b7668e357009f9c7 ()
+17391:S 06 May 2024 19:19:29.535 * FAIL message received from 067f10da6671d30499813707fa18067ea3206b17 () about 6a162c47ba07cc9853a11bf0ed7c45443e6e18d8 ()
+17391:S 06 May 2024 19:19:29.610 * FAIL message received from 43d342695b2be171fe42d4b24f7f98ee415c3435 () about 9e613cb2c4712a0062c1b26d3da1ea7442fbf737 ()
+17391:S 06 May 2024 19:19:35.216 * Clear FAIL state for node 169ce63f84ab73647e330599b7668e357009f9c7 ():replica is reachable again.
+17391:S 06 May 2024 19:19:35.311 * Clear FAIL state for node 9e613cb2c4712a0062c1b26d3da1ea7442fbf737 ():replica is reachable again.
+17391:S 06 May 2024 19:19:35.412 * Clear FAIL state for node dfea84e0be1bcd49482af5c67f555de10fdf29b3 ():replica is reachable again.
+17391:S 06 May 2024 19:19:35.515 * Clear FAIL state for node 6a162c47ba07cc9853a11bf0ed7c45443e6e18d8 ():replica is reachable again.
+17391:M 06 May 2024 19:19:35.623 * Connection with master lost.
+17391:M 06 May 2024 19:19:35.623 * Caching the disconnected master state.
+17391:M 06 May 2024 19:19:35.623 * Discarding previously cached master state.
+17391:M 06 May 2024 19:19:35.623 * Setting secondary replication ID to d073cf9b323d6bce9c3e21330836b7574b5e4ed2, valid up to offset: 1790. New replication ID is d7cc6ecaf9ba00ca152d755dccbc9227df64a924
+17391:M 06 May 2024 19:19:35.624 * configEpoch set to 0 via CLUSTER RESET HARD
+17391:M 06 May 2024 19:19:35.624 * Node hard reset, now I'm 0b8db5c36a489b4933345bc1515de904fb6a786f
+17391:M 06 May 2024 19:19:35.625 * configEpoch set to 15 via CLUSTER SET-CONFIG-EPOCH
+17391:M 06 May 2024 19:19:35.625 # Cluster state changed: fail
+17391:M 06 May 2024 19:19:35.628 * CONFIG REWRITE executed with success.
+17391:M 06 May 2024 19:19:42.695 * Node adccbec24d60f54090e36a0e6a0703bacb3c890e () is no longer master of shard 1faef2c01b90ce80c9287617b3462fcd0eb7c5f5; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:19:42.702 * Node adccbec24d60f54090e36a0e6a0703bacb3c890e () is now part of shard a77eea2c5e3a654920895d37c1cbd2dbc750a2fe
+17391:M 06 May 2024 19:19:42.702 * Node b6d1f331303ea88d453961a6bc247c12cf3f1746 () is no longer master of shard 2cb31efff9b31077914e5d8eee67fad987f900ec; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:19:42.709 * Node b6d1f331303ea88d453961a6bc247c12cf3f1746 () is now part of shard a1b26e71b34081a514fd6e0b60f6df57b5624ab6
+17391:M 06 May 2024 19:19:42.709 * Node 3c93b8fad484f01b1a2d5e7e5c55a29a75a8d9df () is no longer master of shard be264f012de4ca3b640590c83301730d9edc2c7c; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:19:42.709 * Node 3c93b8fad484f01b1a2d5e7e5c55a29a75a8d9df () is now part of shard a77eea2c5e3a654920895d37c1cbd2dbc750a2fe
+17391:M 06 May 2024 19:19:42.713 * Node 80ff208fc4ecb27a6794991c3774578fada90ceb () is no longer master of shard b24cc857a20e418c76000cf7bb7c2121d56535c8; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:19:42.713 * Node 80ff208fc4ecb27a6794991c3774578fada90ceb () is now part of shard 5d62c1956a9584bbd08a7a4e543b407d4b8313e1
+17391:M 06 May 2024 19:19:42.713 * Node 47c7f0d7e3094aae7d589ff660cee63f462cf92c () is no longer master of shard 5a93a431ee3c1974750eaeb45212552089e1d70f; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:19:42.713 * Node 47c7f0d7e3094aae7d589ff660cee63f462cf92c () is now part of shard a1b26e71b34081a514fd6e0b60f6df57b5624ab6
+17391:M 06 May 2024 19:19:42.713 * Node 208cc47c85e2f37e4bf67550a7534f2dac3c588d () is no longer master of shard a85808b5f3b195646b5e9c75d437940e5910c539; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:19:42.713 * Node 208cc47c85e2f37e4bf67550a7534f2dac3c588d () is now part of shard e7d3efbc6079822fdca6c15be9f28019ee3f5618
+17391:M 06 May 2024 19:19:42.716 * Node 794c5f0e6a1ac7ff0525a9b6f4e492eac0fbed21 () is no longer master of shard 63920ee806c2e289c54a7d03a407de389e09cdfa; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:19:42.717 * Node 794c5f0e6a1ac7ff0525a9b6f4e492eac0fbed21 () is now part of shard a102d983c1fa32aabf51cc8c6703313fd3153eb5
+17391:S 06 May 2024 19:19:42.717 * Before turning into a replica, using my own master parameters to synthesize a cached master: I may be able to synchronize with the new master with just a partial transfer.
+17391:S 06 May 2024 19:19:42.718 * Connecting to MASTER 127.0.0.1:30004
+17391:S 06 May 2024 19:19:42.718 * MASTER <-> REPLICA sync started
+17391:S 06 May 2024 19:19:42.718 * Cluster state changed: ok
+17391:S 06 May 2024 19:19:42.723 * Node fca9dbeac23069ec15538914520ce7ba33fb43c5 () is no longer master of shard 5a313ed6e1afc160d88e2ec76f16f8322d6a6195; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:19:42.723 * Node fca9dbeac23069ec15538914520ce7ba33fb43c5 () is now part of shard a102d983c1fa32aabf51cc8c6703313fd3153eb5
+17391:S 06 May 2024 19:19:42.723 * Non blocking connect for SYNC fired the event.
+17391:S 06 May 2024 19:19:42.723 * Node 801403f53dd98a8a4d2f3d43e78a2214c99c863e () is no longer master of shard c249ff0fc7be1576faf8724b7784974260ba49cf; removed all 0 slot(s) it used to own
+17391:S 06 May 2024 19:19:42.723 * Node 801403f53dd98a8a4d2f3d43e78a2214c99c863e () is now part of shard e7d3efbc6079822fdca6c15be9f28019ee3f5618
+17391:S 06 May 2024 19:19:42.724 * Master replied to PING, replication can continue...
+17391:S 06 May 2024 19:19:42.727 * Trying a partial resynchronization (request d7cc6ecaf9ba00ca152d755dccbc9227df64a924:1790).
+17391:S 06 May 2024 19:19:42.727 * Full resync from master: d073cf9b323d6bce9c3e21330836b7574b5e4ed2:1789
+17391:S 06 May 2024 19:19:42.728 * MASTER <-> REPLICA sync: receiving streamed RDB from master with EOF to disk
+17391:S 06 May 2024 19:19:42.729 * Discarding previously cached master state.
+17391:S 06 May 2024 19:19:42.729 * MASTER <-> REPLICA sync: Flushing old data
+17391:S 06 May 2024 19:19:42.729 * MASTER <-> REPLICA sync: Loading DB in memory
+17391:S 06 May 2024 19:19:42.730 * Loading RDB produced by valkey version 255.255.255
+17391:S 06 May 2024 19:19:42.730 * RDB age 0 seconds
+17391:S 06 May 2024 19:19:42.730 * RDB memory usage when created 2.82 Mb
+17391:S 06 May 2024 19:19:42.730 * Done loading RDB, keys loaded: 0, keys expired: 0.
+17391:S 06 May 2024 19:19:42.730 * MASTER <-> REPLICA sync: Finished with success
+17391:S 06 May 2024 19:19:49.143 * FAIL message received from 9f1e4387e843af5d17bd76f660aaeba8f408efe3 () about 2abfa8eefbebcdd70c094869ef85501903c7d0c4 ()
+17391:S 06 May 2024 19:19:49.143 # Cluster state changed: fail
+17391:S 06 May 2024 19:19:49.189 * FAIL message received from 9f1e4387e843af5d17bd76f660aaeba8f408efe3 () about b6d1f331303ea88d453961a6bc247c12cf3f1746 ()
+17391:S 06 May 2024 19:19:50.283 * Cluster state changed: ok
+17391:S 06 May 2024 19:19:55.375 * Migrating to orphaned master 47c7f0d7e3094aae7d589ff660cee63f462cf92c
+17391:M 06 May 2024 19:19:55.375 * Connection with master lost.
+17391:M 06 May 2024 19:19:55.375 * Caching the disconnected master state.
+17391:S 06 May 2024 19:19:55.375 * Connecting to MASTER 127.0.0.1:30012
+17391:S 06 May 2024 19:19:55.375 * MASTER <-> REPLICA sync started
+17391:S 06 May 2024 19:19:55.377 * Non blocking connect for SYNC fired the event.
+17391:S 06 May 2024 19:19:55.377 * Master replied to PING, replication can continue...
+17391:S 06 May 2024 19:19:55.377 * Trying a partial resynchronization (request d073cf9b323d6bce9c3e21330836b7574b5e4ed2:2980).
+17391:S 06 May 2024 19:19:55.377 * Full resync from master: 4fc223634d3c516efc09ba3c77cac8c37d9252cf:2773
+17391:S 06 May 2024 19:19:55.379 * MASTER <-> REPLICA sync: receiving streamed RDB from master with EOF to disk
+17391:S 06 May 2024 19:19:55.380 * Discarding previously cached master state.
+17391:S 06 May 2024 19:19:55.380 * MASTER <-> REPLICA sync: Flushing old data
+17391:S 06 May 2024 19:19:55.380 * MASTER <-> REPLICA sync: Loading DB in memory
+17391:S 06 May 2024 19:19:55.382 * Loading RDB produced by valkey version 255.255.255
+17391:S 06 May 2024 19:19:55.382 * RDB age 0 seconds
+17391:S 06 May 2024 19:19:55.382 * RDB memory usage when created 2.75 Mb
+17391:S 06 May 2024 19:19:55.382 * Done loading RDB, keys loaded: 19, keys expired: 0.
+17391:S 06 May 2024 19:19:55.382 * MASTER <-> REPLICA sync: Finished with success
+17391:S 06 May 2024 19:19:55.476 * Clear FAIL state for node 2abfa8eefbebcdd70c094869ef85501903c7d0c4 ():master without slots is reachable again.
+17391:S 06 May 2024 19:19:55.476 * A failover occurred in shard a1b26e71b34081a514fd6e0b60f6df57b5624ab6; node 2abfa8eefbebcdd70c094869ef85501903c7d0c4 () lost 0 slot(s) to node 47c7f0d7e3094aae7d589ff660cee63f462cf92c () with a config epoch of 21
+17391:S 06 May 2024 19:19:55.577 * Clear FAIL state for node b6d1f331303ea88d453961a6bc247c12cf3f1746 ():replica is reachable again.
+17391:M 06 May 2024 19:19:55.687 * Connection with master lost.
+17391:M 06 May 2024 19:19:55.687 * Caching the disconnected master state.
+17391:M 06 May 2024 19:19:55.687 * Discarding previously cached master state.
+17391:M 06 May 2024 19:19:55.687 * Setting secondary replication ID to 4fc223634d3c516efc09ba3c77cac8c37d9252cf, valid up to offset: 2815. New replication ID is bcaf60b2e044c111ee5942ac7f4ffa3e9b620bba
+17391:M 06 May 2024 19:19:55.688 * configEpoch set to 0 via CLUSTER RESET HARD
+17391:M 06 May 2024 19:19:55.688 * Node hard reset, now I'm 7b5665e3e981d359944d0480fd6bf1f0d5d1d0ad
+17391:M 06 May 2024 19:19:55.688 * configEpoch set to 15 via CLUSTER SET-CONFIG-EPOCH
+17391:M 06 May 2024 19:19:55.688 # Cluster state changed: fail
+17391:M 06 May 2024 19:19:55.693 * CONFIG REWRITE executed with success.
+17391:M 06 May 2024 19:19:59.536 * Node caf83072d9c11f919729af96326335b051c7af49 () is no longer master of shard 6dd4af3291b64805920b88cdb4d7d83d44852f08; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:19:59.536 * Node caf83072d9c11f919729af96326335b051c7af49 () is now part of shard ada3b4025b51be85bbb1fa1df0e1b44871badaa9
+17391:M 06 May 2024 19:20:00.003 * Node 163d3de19db2cb163010c38f385297acaacd0fe6 () is no longer master of shard 8980e70c0b02f85ca396ef3dc659e0dfe2f2edd4; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:00.004 * Node 163d3de19db2cb163010c38f385297acaacd0fe6 () is now part of shard 463631d5c660f73be6acc894f4e68e2bc6bf1f04
+17391:M 06 May 2024 19:20:00.015 * Node 334beb692e0626a4ea1257acac41aaf9962330a7 () is no longer master of shard 5bedd120fdbe94c16f2c067685528596a15fe6e3; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:00.015 * Node 334beb692e0626a4ea1257acac41aaf9962330a7 () is now part of shard e44c3a3bb3cc89ed450e11c453728db45301a89d
+17391:M 06 May 2024 19:20:00.046 * Node a62a8167d5508534ea9bf51fc947454349f1d3bb () is no longer master of shard 78683b2cc868ee4a3e989125c612bea0bc5c90c0; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:00.046 * Node a62a8167d5508534ea9bf51fc947454349f1d3bb () is now part of shard b30cbe386d5d2fec228eb45db97ba04991f5020e
+17391:M 06 May 2024 19:20:00.519 * Node ecbcb5be44c9e81ac340cc03f4e84abaa8d98e19 () is no longer master of shard 5679c354a9e2cf8cb62b26598f6d9e6a0f79b90d; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:00.519 * Node ecbcb5be44c9e81ac340cc03f4e84abaa8d98e19 () is now part of shard 5a15e11d32c6794f2f89faac54fc339efde5e362
+17391:M 06 May 2024 19:20:02.732 * Cluster state changed: ok
+17391:M 06 May 2024 19:20:07.038 * FAIL message received from ee4a5ef490389f31920942453b9bd1fe2357cbb2 () about 87c9e3fe2e97200a971dc5aee1822009f9498072 ()
+17391:M 06 May 2024 19:20:07.038 # Cluster state changed: fail
+17391:M 06 May 2024 19:20:07.919 * Cluster state changed: ok
+17391:M 06 May 2024 19:20:12.094 * FAIL message received from a470ecfb84686f1c17778838dfcbeb2ec78c9395 () about ecbcb5be44c9e81ac340cc03f4e84abaa8d98e19 ()
+17391:M 06 May 2024 19:20:12.094 # Cluster state changed: fail
+17391:M 06 May 2024 19:20:12.199 * Clear FAIL state for node 87c9e3fe2e97200a971dc5aee1822009f9498072 ():master without slots is reachable again.
+17391:M 06 May 2024 19:20:12.199 * A failover occurred in shard 5a15e11d32c6794f2f89faac54fc339efde5e362; node 87c9e3fe2e97200a971dc5aee1822009f9498072 () lost 0 slot(s) to node ecbcb5be44c9e81ac340cc03f4e84abaa8d98e19 () with a config epoch of 21
+17391:M 06 May 2024 19:20:18.341 * Clear FAIL state for node ecbcb5be44c9e81ac340cc03f4e84abaa8d98e19 (): is reachable again and nobody is serving its slots after some time.
+17391:M 06 May 2024 19:20:18.342 * Cluster state changed: ok
+17391:M 06 May 2024 19:20:21.648 * configEpoch set to 0 via CLUSTER RESET HARD
+17391:M 06 May 2024 19:20:21.648 * Node hard reset, now I'm fcb93714a75a5d341790252bf34ebe3966bc68e1
+17391:M 06 May 2024 19:20:21.648 * configEpoch set to 15 via CLUSTER SET-CONFIG-EPOCH
+17391:M 06 May 2024 19:20:21.648 # Cluster state changed: fail
+17391:M 06 May 2024 19:20:21.653 * CONFIG REWRITE executed with success.
+17391:M 06 May 2024 19:20:25.114 * Node 7d23a031d90aa6bc6893630f40ee5cf640088fe7 () is no longer master of shard c5c35fe41b55a11da192d43a8da61be171aa83e6; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:25.114 * Node 7d23a031d90aa6bc6893630f40ee5cf640088fe7 () is now part of shard e04c9009be37f9eec889c59340dc040d0fa0aeb8
+17391:M 06 May 2024 19:20:26.205 * Node f2264c981ff99322862f3de220948842b1f6ba1f () is no longer master of shard d22c30d988eed1903566ab8b5147735674e58aca; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:26.206 * Node f2264c981ff99322862f3de220948842b1f6ba1f () is now part of shard 3671e746eaf2973108e1ea8bdd09970af685d6ad
+17391:M 06 May 2024 19:20:26.508 * Node 568aac2645b6f747cc54704b8839b3eba6ea8563 () is no longer master of shard ad7c5024c1a4d2a21dcf6f4a1d9b1f45ff1ead2d; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:26.508 * Node 568aac2645b6f747cc54704b8839b3eba6ea8563 () is now part of shard 67e314dae915c111e42745e09df1e650a83178cf
+17391:M 06 May 2024 19:20:26.508 * Node 4c26a1fcc6d2fe9debc60d491053b0cf6618a4ed () is no longer master of shard e8e4bf95f861f348154c047f60ca28434502f73e; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:26.508 * Node 4c26a1fcc6d2fe9debc60d491053b0cf6618a4ed () is now part of shard a0b63e81b62eaf4c5711335c6f1846909bf7fd69
+17391:M 06 May 2024 19:20:26.509 * Node 4c6bf93f4560c44206e9ae153747809786d36116 () is no longer master of shard 5736e9db4e80aceb59df82a4860201928e6e2dfe; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:26.509 * Node 4c6bf93f4560c44206e9ae153747809786d36116 () is now part of shard 19776fe3f0224c8eb88fdc51c9073d888852d019
+17391:M 06 May 2024 19:20:28.419 * Cluster state changed: ok
+17391:M 06 May 2024 19:20:28.728 * configEpoch set to 0 via CLUSTER RESET HARD
+17391:M 06 May 2024 19:20:28.728 * Node hard reset, now I'm 74b64fdf95949998926f1819506657e4048f5f21
+17391:M 06 May 2024 19:20:28.728 * configEpoch set to 15 via CLUSTER SET-CONFIG-EPOCH
+17391:M 06 May 2024 19:20:28.728 # Cluster state changed: fail
+17391:M 06 May 2024 19:20:28.733 * CONFIG REWRITE executed with success.
+17391:M 06 May 2024 19:20:32.106 * Node 50f8af8bddb3cb25a8322a76a04954c53eeb77b9 () is no longer master of shard 10725e1ebc3e8158a7f12329adb9ba56ee854bc1; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:32.106 * Node 50f8af8bddb3cb25a8322a76a04954c53eeb77b9 () is now part of shard bbfd84d9a82d8e08bb771735fe383b7ddafd08ba
+17391:M 06 May 2024 19:20:32.509 * Node 825390a470534406b83be059e6fecaf93dbe83a3 () is no longer master of shard b2b496b97d756568bb9cc80df81baa9597a2a1e0; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:32.509 * Node 825390a470534406b83be059e6fecaf93dbe83a3 () is now part of shard 9628b03c98fa51a28e8367ab2c3e2abc75d63330
+17391:M 06 May 2024 19:20:32.512 * Node 3500eeb0c27fbcd680bc59f0bd19aca81ac51372 () is no longer master of shard 7ac3ac70c33592cdd414687cbff2db517d34143f; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:32.512 * Node 3500eeb0c27fbcd680bc59f0bd19aca81ac51372 () is now part of shard aa921447f701c6e1037283664b481acd5dcc18fa
+17391:M 06 May 2024 19:20:32.512 * Node 7af9ba57b6fbc0d8a7f97e8a5c86bb8b04b48199 () is no longer master of shard c0ff426f83007655b38a9ba2767c988c6843ca09; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:32.512 * Node 7af9ba57b6fbc0d8a7f97e8a5c86bb8b04b48199 () is now part of shard c149d2cb057be6b4c53e6cda4f8361117987c75b
+17391:M 06 May 2024 19:20:32.520 * Node 8f5c6ef31ffc0d64c65cd285f1e1d3dfd9744bc8 () is no longer master of shard 5c7f555424b6dd7244521040fed352e8a690f783; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:32.520 * Node 8f5c6ef31ffc0d64c65cd285f1e1d3dfd9744bc8 () is now part of shard 82ad93ba4e7c80d6359231435757456cc87347ed
+17391:M 06 May 2024 19:20:34.925 * Cluster state changed: ok
+17391:M 06 May 2024 19:20:37.544 * A failover occurred in shard bbfd84d9a82d8e08bb771735fe383b7ddafd08ba; node 0e59ecb0630140741e54370064819bde1c9ca23d () lost 0 slot(s) to node 50f8af8bddb3cb25a8322a76a04954c53eeb77b9 () with a config epoch of 21
+17391:M 06 May 2024 19:20:40.567 * configEpoch set to 0 via CLUSTER RESET HARD
+17391:M 06 May 2024 19:20:40.567 * Node hard reset, now I'm 61aa2236046f1a4300a77e9ff8f5dbc5a16cfe4f
+17391:M 06 May 2024 19:20:40.567 * configEpoch set to 15 via CLUSTER SET-CONFIG-EPOCH
+17391:M 06 May 2024 19:20:40.567 # Cluster state changed: fail
+17391:M 06 May 2024 19:20:40.572 * CONFIG REWRITE executed with success.
+17391:M 06 May 2024 19:20:45.041 * Node 8162a5e33aefd5da3d8e53c51436fb8e5f04157d () is no longer master of shard ac0a659a65ff86d0acb03beca99488cf675db0b9; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:45.041 * Node 8162a5e33aefd5da3d8e53c51436fb8e5f04157d () is now part of shard 79761404f49765dfc1452b3572ad1557043c4b29
+17391:M 06 May 2024 19:20:45.043 * Node 8053da283ed5221065f944f98f73e25c61a010dd () is no longer master of shard 065f0cbdfb7ce180a059fcb58c1396f6f36e7c7e; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:45.043 * Node 8053da283ed5221065f944f98f73e25c61a010dd () is now part of shard d13e21ba301f8eb2ca5630faf519e74520eb0320
+17391:M 06 May 2024 19:20:45.561 * Node 968e407a2757f6786a27813986652641dfa8c53e () is no longer master of shard c23ee8d4ddce6cd592f3f5d11f12e6f0e7d8357b; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:45.561 * Node 968e407a2757f6786a27813986652641dfa8c53e () is now part of shard 3dd139d2458ce1ba40162b75a210452f2564f13f
+17391:M 06 May 2024 19:20:46.064 * Node e0fb6aab67e48702bb3257b35176c6bec33ac399 () is no longer master of shard 5894da5030fb6ea0d4890f9fcaefbcb689467382; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:46.064 * Node e0fb6aab67e48702bb3257b35176c6bec33ac399 () is now part of shard 942404fb5086368ee22ef226fc325d99eead816a
+17391:M 06 May 2024 19:20:46.567 * Node 03f7c6a10e67bff0c5fac874576c356de6d20fb3 () is no longer master of shard f9fc60420f4df6321dff2cb65cfd5443410eaf16; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:20:46.567 * Node 03f7c6a10e67bff0c5fac874576c356de6d20fb3 () is now part of shard 2f2e8949560f25624e4d18237b260e2412773d08
+17391:M 06 May 2024 19:20:48.077 * Cluster state changed: ok
+17391:M 06 May 2024 19:20:51.740 * FAIL message received from cf6fdb89f625f08d607b33125f0227fce622927f () about 51d1f09230533baaac63ae94738bf70b5db09342 ()
+17391:M 06 May 2024 19:20:51.740 # Cluster state changed: fail
+17391:M 06 May 2024 19:20:52.698 * Cluster state changed: ok
+17391:M 06 May 2024 19:20:58.465 * Clear FAIL state for node 51d1f09230533baaac63ae94738bf70b5db09342 ():master without slots is reachable again.
+17391:M 06 May 2024 19:20:58.465 * A failover occurred in shard 942404fb5086368ee22ef226fc325d99eead816a; node 51d1f09230533baaac63ae94738bf70b5db09342 () lost 0 slot(s) to node e0fb6aab67e48702bb3257b35176c6bec33ac399 () with a config epoch of 21
+17391:M 06 May 2024 19:20:59.156 * configEpoch set to 0 via CLUSTER RESET HARD
+17391:M 06 May 2024 19:20:59.156 * Node hard reset, now I'm a97dc1fd366dd79224422d3079b1880f0a91a498
+17391:M 06 May 2024 19:20:59.156 * configEpoch set to 15 via CLUSTER SET-CONFIG-EPOCH
+17391:M 06 May 2024 19:20:59.156 # Cluster state changed: fail
+17391:M 06 May 2024 19:20:59.166 * CONFIG REWRITE executed with success.
+17391:M 06 May 2024 19:21:03.081 * Node 3213008a052e3d1f53d4bd09bc5dafcc1093df23 () is no longer master of shard 48c7ccc13115e6584257112f348f460ed6b3d90b; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:21:03.081 * Node 3213008a052e3d1f53d4bd09bc5dafcc1093df23 () is now part of shard 4897fecbf064c3a5fe304e8cc5bfc121e96f4d0d
+17391:M 06 May 2024 19:21:03.182 * Node 9b69ab04795d6bc643cc24ff909006021bb42465 () is no longer master of shard 54e8a9afa1bd7f67c860e6b09192d24f3b4b5af0; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:21:03.182 * Node 9b69ab04795d6bc643cc24ff909006021bb42465 () is now part of shard fdf0c30757c93c36c4d6e2340444130d7ab6fd1c
+17391:M 06 May 2024 19:21:03.520 * Node 089e7fb433a0847f9e708db936533110ce0cbea5 () is no longer master of shard c9e0b1451dee8dfc4e893df748587b969a26f679; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:21:03.520 * Node 089e7fb433a0847f9e708db936533110ce0cbea5 () is now part of shard 75be0656223117757620482d8547e5fe2e896de1
+17391:M 06 May 2024 19:21:03.521 * Node c30b7ede25963c304ed3b564e73b8fe0144a0723 () is no longer master of shard 122cd1fcb92a7460821b86e1e2d20ae156aef07b; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:21:03.522 * Node c30b7ede25963c304ed3b564e73b8fe0144a0723 () is now part of shard 9c3ef340a0f3031400e88f148755f8e3a44c39cc
+17391:M 06 May 2024 19:21:03.526 * Node ea188db865fa34fa05775d699ccded36d0a815f0 () is no longer master of shard c9cdbc7bf1fd6b9537f6151b0e7952ae57507332; removed all 0 slot(s) it used to own
+17391:M 06 May 2024 19:21:03.526 * Node ea188db865fa34fa05775d699ccded36d0a815f0 () is now part of shard 1e32518e495bab53ce49d6b0b26890950d0e6932
+17391:M 06 May 2024 19:21:06.507 * Cluster state changed: ok
+17391:M 06 May 2024 19:21:10.562 * FAIL message received from 4816b0fa4e909697f2f79ac7605b852ec0d22927 () about f1ab9aca89352244cecd21bb2bebff73910a1237 ()
+17391:signal-handler (1715023274) Received SIGINT scheduling shutdown...
+17391:M 06 May 2024 19:21:14.597 * Clear FAIL state for node f1ab9aca89352244cecd21bb2bebff73910a1237 ():master without slots is reachable again.
+17391:M 06 May 2024 19:21:14.597 * A failover occurred in shard fdf0c30757c93c36c4d6e2340444130d7ab6fd1c; node f1ab9aca89352244cecd21bb2bebff73910a1237 () lost 0 slot(s) to node 9b69ab04795d6bc643cc24ff909006021bb42465 () with a config epoch of 21
+17391:M 06 May 2024 19:21:14.658 * User requested shutdown...
+17391:M 06 May 2024 19:21:14.659 # Valkey is now ready to exit, bye bye...

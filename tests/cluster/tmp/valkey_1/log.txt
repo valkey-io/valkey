@@ -1,0 +1,1455 @@
+15675:C 06 May 2024 19:13:44.697 # WARNING: Changing databases number from 16 to 1 since we are in cluster mode
+15675:C 06 May 2024 19:13:44.698 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+15675:C 06 May 2024 19:13:44.698 * oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo
+15675:C 06 May 2024 19:13:44.698 * Valkey version=255.255.255, bits=64, commit=93f8a19b, modified=0, pid=15675, just started
+15675:C 06 May 2024 19:13:44.698 * Configuration loaded
+15675:M 06 May 2024 19:13:44.698 * monotonic clock: POSIX clock_gettime
+15675:M 06 May 2024 19:13:44.699 * Running mode=cluster, port=30001.
+15675:M 06 May 2024 19:13:44.700 * No cluster configuration found, I'm a9916657c4f86049e542a47178e870f8cac3ce57
+15675:M 06 May 2024 19:13:44.719 * Server initialized
+15675:M 06 May 2024 19:13:44.720 * Creating AOF base file appendonly.aof.1.base.rdb on server start
+15675:M 06 May 2024 19:13:44.722 * Creating AOF incr file appendonly.aof.1.incr.aof on server start
+15675:M 06 May 2024 19:13:44.722 * Ready to accept connections tcp
+15675:M 06 May 2024 19:13:45.564 * configEpoch set to 0 via CLUSTER RESET HARD
+15675:M 06 May 2024 19:13:45.564 * Node hard reset, now I'm c1936058e7f07995daaed4faca543565f0493bbb
+15675:M 06 May 2024 19:13:45.564 * configEpoch set to 2 via CLUSTER SET-CONFIG-EPOCH
+15675:M 06 May 2024 19:13:45.568 * CONFIG REWRITE executed with success.
+15675:M 06 May 2024 19:13:45.758 * IP address for this node updated to 127.0.0.1
+15675:M 06 May 2024 19:13:46.999 # Missing implement of connection type tls
+15675:M 06 May 2024 19:13:52.376 * Cluster state changed: ok
+15675:M 06 May 2024 19:13:52.764 # Cluster state changed: fail
+15675:M 06 May 2024 19:13:52.781 * configEpoch set to 0 via CLUSTER RESET HARD
+15675:M 06 May 2024 19:13:52.781 * Node hard reset, now I'm f5dc027083127c4642a68e8c833bc9445bea1f57
+15675:M 06 May 2024 19:13:52.781 * configEpoch set to 2 via CLUSTER SET-CONFIG-EPOCH
+15675:M 06 May 2024 19:13:52.785 * CONFIG REWRITE executed with success.
+15675:M 06 May 2024 19:13:56.910 * Replica 127.0.0.1:30006 asks for synchronization
+15675:M 06 May 2024 19:13:56.910 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '435e982492c0f30c945ecb83d24d77f1d5688d24', my replication IDs are 'd49388dc41e781c9ddf467e1553e8c9eccc6955b' and '0000000000000000000000000000000000000000')
+15675:M 06 May 2024 19:13:56.910 * Replication backlog created, my new replication IDs are '1645ad9c0a98c33db55b69c5a4804c02751709e5' and '0000000000000000000000000000000000000000'
+15675:M 06 May 2024 19:13:56.910 * Starting BGSAVE for SYNC with target: replicas sockets
+15675:M 06 May 2024 19:13:56.910 * Background RDB transfer started by pid 15854
+15854:C 06 May 2024 19:13:56.911 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+15675:M 06 May 2024 19:13:56.911 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+15675:M 06 May 2024 19:13:56.914 * Background RDB transfer terminated with success
+15675:M 06 May 2024 19:13:56.914 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+15675:M 06 May 2024 19:13:56.914 * Synchronization with replica 127.0.0.1:30006 succeeded
+15675:M 06 May 2024 19:13:57.002 * Node 14870674fd1761a0b545ac9b6860bd07cc3c82a1 () is no longer master of shard 2aaea61241128999e7bf4d990a5d6bae89096d2d; removed all 0 slot(s) it used to own
+15675:M 06 May 2024 19:13:57.002 * Node 14870674fd1761a0b545ac9b6860bd07cc3c82a1 () is now part of shard 9009f53e5fcc48bb5a0b06d0bc06b2a661c7165d
+15675:M 06 May 2024 19:13:57.504 * Node 44cbffb6ea4e9f1a9f3f6fea0c4ba7b57dcf0555 () is no longer master of shard 93a2a8fbb3ebee1719ea78e416af4f62a280e72f; removed all 0 slot(s) it used to own
+15675:M 06 May 2024 19:13:57.504 * Node 44cbffb6ea4e9f1a9f3f6fea0c4ba7b57dcf0555 () is now part of shard 0a3baa510e8cc3ec6c1dc6c6aff3c8c121a171ee
+15675:M 06 May 2024 19:13:57.530 * Node 2b30694b8e24a7702a1229fcee665e160d412a34 () is no longer master of shard 8d23c540c28858cc5ee10f86f93cd31765bd7b8b; removed all 0 slot(s) it used to own
+15675:M 06 May 2024 19:13:57.530 * Node 2b30694b8e24a7702a1229fcee665e160d412a34 () is now part of shard 5f75c91ff19b41d8200527f5fc06215514a6c230
+15675:M 06 May 2024 19:13:57.531 * Node 1e5c8c4a07f43bf52fd4450600942b910335d228 () is no longer master of shard 67426f1e38c225d7050cb5d4244d7014ede80e1a; removed all 0 slot(s) it used to own
+15675:M 06 May 2024 19:13:57.531 * Node 1e5c8c4a07f43bf52fd4450600942b910335d228 () is now part of shard a2427455940b828a38a3ffb09c2b4cdfd4ccf6f5
+15675:M 06 May 2024 19:13:58.536 * Node 9e2f09d33ea8e59e7726a43c9e211c32f945654f () is no longer master of shard 45a425a508f35dfb3598266dbd995af0daf15e78; removed all 0 slot(s) it used to own
+15675:M 06 May 2024 19:13:58.536 * Node 9e2f09d33ea8e59e7726a43c9e211c32f945654f () is now part of shard e89af52affaeadfe3f4c492254ae30531e68445a
+15675:M 06 May 2024 19:13:59.741 * Cluster state changed: ok
+15675:M 06 May 2024 19:14:00.261 * Connection with replica 127.0.0.1:30006 lost.
+15675:M 06 May 2024 19:14:04.018 * FAIL message received from 9fcb85d514e112d10016edd497098e3fbe9e110e () about 1e5c8c4a07f43bf52fd4450600942b910335d228 ()
+15675:M 06 May 2024 19:14:04.024 * FAIL message received from 85ed6fd7ba097e6b2c80626b17e130cb93740a3c () about 44cbffb6ea4e9f1a9f3f6fea0c4ba7b57dcf0555 ()
+15675:M 06 May 2024 19:14:04.553 * FAIL message received from 7ce15aada6af76e304df222f463282e865e22db0 () about 125263e49707331bd8e7a9d6681fe581aca463f2 ()
+15675:M 06 May 2024 19:14:04.553 # Cluster state changed: fail
+15675:M 06 May 2024 19:14:11.859 * Clear FAIL state for node 125263e49707331bd8e7a9d6681fe581aca463f2 (): is reachable again and nobody is serving its slots after some time.
+15675:M 06 May 2024 19:14:11.859 * Cluster state changed: ok
+15675:M 06 May 2024 19:14:12.670 * Clear FAIL state for node 44cbffb6ea4e9f1a9f3f6fea0c4ba7b57dcf0555 ():replica is reachable again.
+15675:M 06 May 2024 19:14:12.881 * Replica 127.0.0.1:30006 asks for synchronization
+15675:M 06 May 2024 19:14:12.881 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '78ecf04a83e9428acecbac33c98803cf54080170', my replication IDs are '1645ad9c0a98c33db55b69c5a4804c02751709e5' and '0000000000000000000000000000000000000000')
+15675:M 06 May 2024 19:14:12.881 * Starting BGSAVE for SYNC with target: replicas sockets
+15675:M 06 May 2024 19:14:12.881 * Background RDB transfer started by pid 15956
+15675:M 06 May 2024 19:14:12.882 * Clear FAIL state for node 1e5c8c4a07f43bf52fd4450600942b910335d228 ():replica is reachable again.
+15956:C 06 May 2024 19:14:12.886 * Fork CoW for RDB: current 1 MB, peak 1 MB, average 1 MB
+15675:M 06 May 2024 19:14:12.886 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+15675:M 06 May 2024 19:14:12.972 * Background RDB transfer terminated with success
+15675:M 06 May 2024 19:14:12.972 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+15675:M 06 May 2024 19:14:12.972 * Synchronization with replica 127.0.0.1:30006 succeeded
+15675:M 06 May 2024 19:14:14.094 * configEpoch set to 0 via CLUSTER RESET HARD
+15675:M 06 May 2024 19:14:14.094 * Node hard reset, now I'm fba591b2e0b4a6fb506c6c7c1abaebc0a001d446
+15675:M 06 May 2024 19:14:14.094 * configEpoch set to 2 via CLUSTER SET-CONFIG-EPOCH
+15675:M 06 May 2024 19:14:14.094 # Cluster state changed: fail
+15675:M 06 May 2024 19:14:14.099 * CONFIG REWRITE executed with success.
+15675:M 06 May 2024 19:14:18.480 * Connection with replica 127.0.0.1:30006 lost.
+15675:M 06 May 2024 19:14:21.895 * Replica 127.0.0.1:30006 asks for synchronization
+15675:M 06 May 2024 19:14:21.895 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '1d2dc7f8a184e79df8c9974fcfa0b70153c09c68', my replication IDs are '1645ad9c0a98c33db55b69c5a4804c02751709e5' and '0000000000000000000000000000000000000000')
+15675:M 06 May 2024 19:14:21.895 * Starting BGSAVE for SYNC with target: replicas sockets
+15675:M 06 May 2024 19:14:21.896 * Background RDB transfer started by pid 16001
+16001:C 06 May 2024 19:14:21.897 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+15675:M 06 May 2024 19:14:21.897 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+15675:M 06 May 2024 19:14:21.900 * Background RDB transfer terminated with success
+15675:M 06 May 2024 19:14:21.900 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+15675:M 06 May 2024 19:14:21.900 * Synchronization with replica 127.0.0.1:30006 succeeded
+15675:M 06 May 2024 19:14:21.952 * Node a47fca07157b154ce1988d97b2afcdaa40ce66b2 () is no longer master of shard 10c2f585fc5fd868287fafbf5212b6227ab7017d; removed all 0 slot(s) it used to own
+15675:M 06 May 2024 19:14:21.952 * Node a47fca07157b154ce1988d97b2afcdaa40ce66b2 () is now part of shard bccca0c1e0e1dccd3b58d5709156154f9f4c9957
+15675:M 06 May 2024 19:14:22.513 * Node ed209190989ecd1b2fc83edcb92a31a33e7f40c0 () is no longer master of shard a1ec0cec552145a6ed1b39a5162d032008e3e8fd; removed all 0 slot(s) it used to own
+15675:M 06 May 2024 19:14:22.513 * Node ed209190989ecd1b2fc83edcb92a31a33e7f40c0 () is now part of shard 5ed49dbd94affeba17a99f22ab305f897e30146f
+15675:M 06 May 2024 19:14:22.533 * Node 4565dcea920547db24497a9ea7da3f8ba2d82492 () is no longer master of shard f4049c4ab89f7706b4043fb6168626bdb0c6d5fc; removed all 0 slot(s) it used to own
+15675:M 06 May 2024 19:14:22.533 * Node 4565dcea920547db24497a9ea7da3f8ba2d82492 () is now part of shard 1109f6e41ce862f21e8f082deeae031962ef83ac
+15675:M 06 May 2024 19:14:22.557 * Node 24553aed57a0fc014e31d20913d6ddb67daf993b () is no longer master of shard afe0861af93a47ac71d717dd7dd1f03d3dbe6564; removed all 0 slot(s) it used to own
+15675:M 06 May 2024 19:14:22.557 * Node 24553aed57a0fc014e31d20913d6ddb67daf993b () is now part of shard 6bb248ce1980dda8969ac6f65c18efe9f1d758d2
+15675:M 06 May 2024 19:14:23.066 * Node c5edb8319b761b2e5b47473a36be688c7f503b2f () is no longer master of shard f07b8fb6b6cbfb692ab1b87f30279a0b975efbbe; removed all 0 slot(s) it used to own
+15675:M 06 May 2024 19:14:23.066 * Node c5edb8319b761b2e5b47473a36be688c7f503b2f () is now part of shard a3bfec7d6b49cc6990a2b3560914e0bb1a7bda0c
+15675:M 06 May 2024 19:14:24.667 * Cluster state changed: ok
+15675:M 06 May 2024 19:14:30.033 * FAIL message received from 220970bd9ddf17fd39dbd121039031b6350dc7bd () about 4ac21db3dc729d28334184ee1a8bd51324f5ca54 ()
+15675:M 06 May 2024 19:14:30.033 # Cluster state changed: fail
+15675:M 06 May 2024 19:14:31.017 * Failover auth granted to a47fca07157b154ce1988d97b2afcdaa40ce66b2 () for epoch 21
+15675:M 06 May 2024 19:14:31.060 * Cluster state changed: ok
+15675:M 06 May 2024 19:14:31.225 * Clear FAIL state for node 4ac21db3dc729d28334184ee1a8bd51324f5ca54 ():master without slots is reachable again.
+15675:M 06 May 2024 19:14:31.225 * A failover occurred in shard bccca0c1e0e1dccd3b58d5709156154f9f4c9957; node 4ac21db3dc729d28334184ee1a8bd51324f5ca54 () lost 0 slot(s) to node a47fca07157b154ce1988d97b2afcdaa40ce66b2 () with a config epoch of 21
+15675:M 06 May 2024 19:14:31.272 * configEpoch set to 0 via CLUSTER RESET HARD
+15675:M 06 May 2024 19:14:31.272 * Node hard reset, now I'm c26ea12fd513a731ced8b60c63390b5dbe84235d
+15675:M 06 May 2024 19:14:31.272 * configEpoch set to 2 via CLUSTER SET-CONFIG-EPOCH
+15675:M 06 May 2024 19:14:31.272 # Cluster state changed: fail
+15675:M 06 May 2024 19:14:31.277 * CONFIG REWRITE executed with success.
+15675:M 06 May 2024 19:14:31.319 * Connection with replica 127.0.0.1:30006 lost.
+15675:M 06 May 2024 19:14:34.828 * Replica 127.0.0.1:30006 asks for synchronization
+15675:M 06 May 2024 19:14:34.828 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '20152cf29ef46c8decbea11166932a181bb32344', my replication IDs are '1645ad9c0a98c33db55b69c5a4804c02751709e5' and '0000000000000000000000000000000000000000')
+15675:M 06 May 2024 19:14:34.828 * Starting BGSAVE for SYNC with target: replicas sockets
+15675:M 06 May 2024 19:14:34.829 * Background RDB transfer started by pid 16110
+16110:C 06 May 2024 19:14:34.829 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+15675:M 06 May 2024 19:14:34.830 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+15675:M 06 May 2024 19:14:34.832 * Background RDB transfer terminated with success
+15675:M 06 May 2024 19:14:34.832 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+15675:M 06 May 2024 19:14:34.832 * Synchronization with replica 127.0.0.1:30006 succeeded
+15675:M 06 May 2024 19:14:35.677 * Node 671088db4acca8792f424ee7ea50b8153c7529a0 () is no longer master of shard 76f000c5383c5d2746bf6c7b9d86a92aed4820c2; removed all 0 slot(s) it used to own
+15675:M 06 May 2024 19:14:35.677 * Node 671088db4acca8792f424ee7ea50b8153c7529a0 () is now part of shard 45bde1a3488556534c5594a0f6ace0dba22be32b
+15675:M 06 May 2024 19:14:35.876 * Node 9dad64de16025f02b271510ee2d51a6ca079dc7b () is no longer master of shard f88e4fd9e9180c926982aaac2f65e8d0105c55fe; removed all 0 slot(s) it used to own
+15675:M 06 May 2024 19:14:35.876 * Node 9dad64de16025f02b271510ee2d51a6ca079dc7b () is now part of shard 1c2b75be0f3bbf57778cad018055649104140ab5
+15675:M 06 May 2024 19:14:36.089 * Node d612f4e24864679d4cb0b4d862c48e2df4373065 () is no longer master of shard a577fdbb713c832cf9850e989f6b72796108c745; removed all 0 slot(s) it used to own
+15675:M 06 May 2024 19:14:36.089 * Node d612f4e24864679d4cb0b4d862c48e2df4373065 () is now part of shard e2220f97589610879561e699a57b8481b7124689
+15675:M 06 May 2024 19:14:36.577 * Node de3054474d708953456bc221c893ce4305ba5136 () is no longer master of shard 77b4d2bf3a14a66eb7635d415bbf20a86e150b57; removed all 0 slot(s) it used to own
+15675:M 06 May 2024 19:14:36.577 * Node de3054474d708953456bc221c893ce4305ba5136 () is now part of shard 236cc077a81351c19b896662f24236e227403702
+15675:M 06 May 2024 19:14:36.587 * Node 29597550bd8f898394ae88db5a0ba45f1868fd3f () is no longer master of shard 98ec8d4aaf47b8dc3863b2d7c51af4e948cd12a6; removed all 0 slot(s) it used to own
+15675:M 06 May 2024 19:14:36.587 * Node 29597550bd8f898394ae88db5a0ba45f1868fd3f () is now part of shard 04e24d93f8b27f67291965144dd39f0ab3b35d25
+15675:M 06 May 2024 19:14:37.690 * Cluster state changed: ok
+15675:M 06 May 2024 19:14:42.798 * FAIL message received from ffdb16089f859482065bad0e5c9a094d823a1410 () about c6b3e5df3a36095ff5d9df268d3186ade1ef31ff ()
+15675:M 06 May 2024 19:14:42.798 # Cluster state changed: fail
+15675:M 06 May 2024 19:14:43.853 * Failover auth granted to 671088db4acca8792f424ee7ea50b8153c7529a0 () for epoch 21
+15675:M 06 May 2024 19:14:43.897 * Cluster state changed: ok
+15675:M 06 May 2024 19:14:44.139 * Clear FAIL state for node c6b3e5df3a36095ff5d9df268d3186ade1ef31ff ():master without slots is reachable again.
+15675:M 06 May 2024 19:14:44.139 * A failover occurred in shard 45bde1a3488556534c5594a0f6ace0dba22be32b; node c6b3e5df3a36095ff5d9df268d3186ade1ef31ff () lost 0 slot(s) to node 671088db4acca8792f424ee7ea50b8153c7529a0 () with a config epoch of 21
+15675:M 06 May 2024 19:14:44.794 * Connection with replica 127.0.0.1:30006 lost.
+15675:M 06 May 2024 19:14:44.878 * Replica 127.0.0.1:30006 asks for synchronization
+15675:M 06 May 2024 19:14:44.878 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '3a730501fed39296d6050fe4f28f84fdfc162169', my replication IDs are '1645ad9c0a98c33db55b69c5a4804c02751709e5' and '0000000000000000000000000000000000000000')
+15675:M 06 May 2024 19:14:44.878 * Starting BGSAVE for SYNC with target: replicas sockets
+15675:M 06 May 2024 19:14:44.879 * Background RDB transfer started by pid 16209
+16209:C 06 May 2024 19:14:44.882 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+15675:M 06 May 2024 19:14:44.882 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+15675:M 06 May 2024 19:14:44.886 * Background RDB transfer terminated with success
+15675:M 06 May 2024 19:14:44.886 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+15675:M 06 May 2024 19:14:44.886 * Synchronization with replica 127.0.0.1:30006 succeeded
+15675:M 06 May 2024 19:14:49.727 * FAIL message received from 9dad64de16025f02b271510ee2d51a6ca079dc7b () about d979b3705974c02442b170e8dacc0ba5e04d56bb ()
+15675:M 06 May 2024 19:14:49.727 # Cluster state changed: fail
+15675:M 06 May 2024 19:14:50.825 * Failover auth granted to 9dad64de16025f02b271510ee2d51a6ca079dc7b () for epoch 22
+15675:M 06 May 2024 19:14:50.837 * Cluster state changed: ok
+15675:M 06 May 2024 19:14:51.093 * Clear FAIL state for node d979b3705974c02442b170e8dacc0ba5e04d56bb ():master without slots is reachable again.
+15675:M 06 May 2024 19:14:51.093 * A failover occurred in shard 1c2b75be0f3bbf57778cad018055649104140ab5; node d979b3705974c02442b170e8dacc0ba5e04d56bb () lost 0 slot(s) to node 9dad64de16025f02b271510ee2d51a6ca079dc7b () with a config epoch of 22
+15675:signal-handler (1715022891) Received SIGTERM scheduling shutdown...
+15675:M 06 May 2024 19:14:51.295 * User requested shutdown...
+15675:M 06 May 2024 19:14:51.295 * Waiting for replicas before shutting down.
+15675:M 06 May 2024 19:14:51.999 * 1 of 1 replicas are in sync when shutting down.
+15675:M 06 May 2024 19:14:51.999 # Valkey is now ready to exit, bye bye...
+16361:C 06 May 2024 19:14:57.236 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+16361:C 06 May 2024 19:14:57.236 * oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo
+16361:C 06 May 2024 19:14:57.236 * Valkey version=255.255.255, bits=64, commit=93f8a19b, modified=0, pid=16361, just started
+16361:C 06 May 2024 19:14:57.236 * Configuration loaded
+16361:M 06 May 2024 19:14:57.237 * monotonic clock: POSIX clock_gettime
+16361:M 06 May 2024 19:14:57.238 * Running mode=cluster, port=30001.
+16361:M 06 May 2024 19:14:57.245 * Node configuration loaded, I'm c26ea12fd513a731ced8b60c63390b5dbe84235d
+16361:M 06 May 2024 19:14:57.246 * Server initialized
+16361:M 06 May 2024 19:14:57.246 * Reading RDB base file on AOF loading...
+16361:M 06 May 2024 19:14:57.246 * Loading RDB produced by valkey version 255.255.255
+16361:M 06 May 2024 19:14:57.246 * RDB age 73 seconds
+16361:M 06 May 2024 19:14:57.246 * RDB memory usage when created 2.13 Mb
+16361:M 06 May 2024 19:14:57.246 * RDB is base AOF
+16361:M 06 May 2024 19:14:57.246 * Done loading RDB, keys loaded: 0, keys expired: 0.
+16361:M 06 May 2024 19:14:57.246 * DB loaded from base file appendonly.aof.1.base.rdb: 0.000 seconds
+16361:M 06 May 2024 19:14:57.248 * DB loaded from incr file appendonly.aof.1.incr.aof: 0.002 seconds
+16361:M 06 May 2024 19:14:57.248 * DB loaded from append only file: 0.002 seconds
+16361:M 06 May 2024 19:14:57.248 * Opening AOF incr file appendonly.aof.1.incr.aof on server start
+16361:M 06 May 2024 19:14:57.248 * Ready to accept connections tcp
+16361:M 06 May 2024 19:14:57.253 * Configuration change detected. Reconfiguring myself as a replica of d612f4e24864679d4cb0b4d862c48e2df4373065 ()
+16361:S 06 May 2024 19:14:57.253 * Before turning into a replica, using my own master parameters to synthesize a cached master: I may be able to synchronize with the new master with just a partial transfer.
+16361:S 06 May 2024 19:14:57.254 * Connecting to MASTER 127.0.0.1:30006
+16361:S 06 May 2024 19:14:57.254 * MASTER <-> REPLICA sync started
+16361:S 06 May 2024 19:14:57.254 * Cluster state changed: ok
+16361:S 06 May 2024 19:14:57.256 * Non blocking connect for SYNC fired the event.
+16361:S 06 May 2024 19:14:57.257 * Master replied to PING, replication can continue...
+16361:S 06 May 2024 19:14:57.257 * Trying a partial resynchronization (request 98fbcaf94d0332a17df44c35f53a78686009ee8c:1).
+16361:S 06 May 2024 19:14:57.257 * Full resync from master: 716eb3818a06cbfc7b11e0c0858338adb82a0f1d:23911
+16361:S 06 May 2024 19:14:57.261 * MASTER <-> REPLICA sync: receiving streamed RDB from master with EOF to disk
+16361:S 06 May 2024 19:14:57.261 * Discarding previously cached master state.
+16361:S 06 May 2024 19:14:57.261 * MASTER <-> REPLICA sync: Flushing old data
+16361:S 06 May 2024 19:14:57.261 * MASTER <-> REPLICA sync: Loading DB in memory
+16361:S 06 May 2024 19:14:57.262 * Loading RDB produced by valkey version 255.255.255
+16361:S 06 May 2024 19:14:57.262 * RDB age 0 seconds
+16361:S 06 May 2024 19:14:57.262 * RDB memory usage when created 2.56 Mb
+16361:S 06 May 2024 19:14:57.263 * Done loading RDB, keys loaded: 286, keys expired: 0.
+16361:S 06 May 2024 19:14:57.263 * MASTER <-> REPLICA sync: Finished with success
+16361:S 06 May 2024 19:14:57.263 * Creating AOF incr file temp-appendonly.aof.incr on background rewrite
+16361:S 06 May 2024 19:14:57.264 * Background append only file rewriting started by pid 16367
+16367:C 06 May 2024 19:14:57.268 * Successfully created the temporary AOF base file temp-rewriteaof-bg-16367.aof
+16367:C 06 May 2024 19:14:57.268 * Fork CoW for AOF rewrite: current 0 MB, peak 0 MB, average 0 MB
+16361:S 06 May 2024 19:14:57.350 * Background AOF rewrite terminated with success
+16361:S 06 May 2024 19:14:57.350 * Successfully renamed the temporary AOF base file temp-rewriteaof-bg-16367.aof into appendonly.aof.2.base.rdb
+16361:S 06 May 2024 19:14:57.351 * Successfully renamed the temporary AOF incr file temp-appendonly.aof.incr into appendonly.aof.2.incr.aof
+16361:S 06 May 2024 19:14:59.296 * Removing the history file appendonly.aof.1.incr.aof in the background
+16361:S 06 May 2024 19:14:59.296 * Removing the history file appendonly.aof.1.base.rdb in the background
+16361:S 06 May 2024 19:14:59.781 * Background AOF rewrite finished successfully
+16361:S 06 May 2024 19:14:59.782 # Missing implement of connection type tls
+16361:S 06 May 2024 19:15:00.751 * Connection with master lost.
+16361:S 06 May 2024 19:15:00.751 * Caching the disconnected master state.
+16361:S 06 May 2024 19:15:00.751 * Reconnecting to MASTER 127.0.0.1:30006
+16361:S 06 May 2024 19:15:00.751 * MASTER <-> REPLICA sync started
+16361:S 06 May 2024 19:15:00.751 # Error condition on socket for SYNC: Connection refused
+16361:S 06 May 2024 19:15:01.698 * Connecting to MASTER 127.0.0.1:30006
+16361:S 06 May 2024 19:15:01.698 * MASTER <-> REPLICA sync started
+16361:S 06 May 2024 19:15:01.699 # Error condition on socket for SYNC: Connection refused
+16361:S 06 May 2024 19:15:02.709 * Connecting to MASTER 127.0.0.1:30006
+16361:S 06 May 2024 19:15:02.709 * MASTER <-> REPLICA sync started
+16361:S 06 May 2024 19:15:02.709 # Error condition on socket for SYNC: Connection refused
+16361:S 06 May 2024 19:15:03.721 * Connecting to MASTER 127.0.0.1:30006
+16361:S 06 May 2024 19:15:03.721 * MASTER <-> REPLICA sync started
+16361:S 06 May 2024 19:15:03.721 # Error condition on socket for SYNC: Connection refused
+16361:S 06 May 2024 19:15:04.031 * FAIL message received from 84a39200cacde99de881c75065e278d774a677f8 () about d612f4e24864679d4cb0b4d862c48e2df4373065 ()
+16361:S 06 May 2024 19:15:04.032 # Cluster state changed: fail
+16361:S 06 May 2024 19:15:04.125 * Start of election delayed for 667 milliseconds (rank #0, offset 25277).
+16361:S 06 May 2024 19:15:04.732 * Connecting to MASTER 127.0.0.1:30006
+16361:S 06 May 2024 19:15:04.733 * MASTER <-> REPLICA sync started
+16361:S 06 May 2024 19:15:04.733 # Error condition on socket for SYNC: Connection refused
+16361:S 06 May 2024 19:15:04.835 * Starting a failover election for epoch 24.
+16361:S 06 May 2024 19:15:04.846 * Failover election won: I'm the new master.
+16361:S 06 May 2024 19:15:04.846 * configEpoch set to 24 after successful failover
+16361:M 06 May 2024 19:15:04.846 * Discarding previously cached master state.
+16361:M 06 May 2024 19:15:04.846 * Setting secondary replication ID to 716eb3818a06cbfc7b11e0c0858338adb82a0f1d, valid up to offset: 25278. New replication ID is 8be18021bebbac3035fe3a303b7ba318c38cdaa7
+16361:M 06 May 2024 19:15:04.847 * Cluster state changed: ok
+16361:M 06 May 2024 19:15:05.048 * Clear FAIL state for node d612f4e24864679d4cb0b4d862c48e2df4373065 ():master without slots is reachable again.
+16361:M 06 May 2024 19:15:05.049 * A failover occurred in shard e2220f97589610879561e699a57b8481b7124689; node d612f4e24864679d4cb0b4d862c48e2df4373065 () lost 0 slot(s) to node c26ea12fd513a731ced8b60c63390b5dbe84235d () with a config epoch of 24
+16361:M 06 May 2024 19:15:05.053 * Replica 127.0.0.1:30006 asks for synchronization
+16361:M 06 May 2024 19:15:05.054 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '7bb009dd0b0bcf058eadbb9d1abfc00a662ef8ba', my replication IDs are '8be18021bebbac3035fe3a303b7ba318c38cdaa7' and '716eb3818a06cbfc7b11e0c0858338adb82a0f1d')
+16361:M 06 May 2024 19:15:05.054 * Starting BGSAVE for SYNC with target: replicas sockets
+16361:M 06 May 2024 19:15:05.054 * Background RDB transfer started by pid 16438
+16438:C 06 May 2024 19:15:05.057 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+16361:M 06 May 2024 19:15:05.057 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+16361:M 06 May 2024 19:15:05.060 * Background RDB transfer terminated with success
+16361:M 06 May 2024 19:15:05.061 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+16361:M 06 May 2024 19:15:05.061 * Synchronization with replica 127.0.0.1:30006 succeeded
+16361:signal-handler (1715022905) Received SIGTERM scheduling shutdown...
+16361:M 06 May 2024 19:15:05.239 * User requested shutdown...
+16361:M 06 May 2024 19:15:05.239 * Waiting for replicas before shutting down.
+16361:M 06 May 2024 19:15:05.944 * 1 of 1 replicas are in sync when shutting down.
+16361:M 06 May 2024 19:15:05.944 # Valkey is now ready to exit, bye bye...
+16504:C 06 May 2024 19:15:11.067 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+16504:C 06 May 2024 19:15:11.067 * oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo
+16504:C 06 May 2024 19:15:11.067 * Valkey version=255.255.255, bits=64, commit=93f8a19b, modified=0, pid=16504, just started
+16504:C 06 May 2024 19:15:11.067 * Configuration loaded
+16504:M 06 May 2024 19:15:11.067 * monotonic clock: POSIX clock_gettime
+16504:M 06 May 2024 19:15:11.069 * Running mode=cluster, port=30001.
+16504:M 06 May 2024 19:15:11.075 * Node configuration loaded, I'm c26ea12fd513a731ced8b60c63390b5dbe84235d
+16504:M 06 May 2024 19:15:11.076 * Server initialized
+16504:M 06 May 2024 19:15:11.081 * Reading RDB base file on AOF loading...
+16504:M 06 May 2024 19:15:11.081 * Loading RDB produced by valkey version 255.255.255
+16504:M 06 May 2024 19:15:11.081 * RDB age 14 seconds
+16504:M 06 May 2024 19:15:11.081 * RDB memory usage when created 2.27 Mb
+16504:M 06 May 2024 19:15:11.081 * RDB is base AOF
+16504:M 06 May 2024 19:15:11.082 * Done loading RDB, keys loaded: 286, keys expired: 0.
+16504:M 06 May 2024 19:15:11.082 * DB loaded from base file appendonly.aof.2.base.rdb: 0.006 seconds
+16504:M 06 May 2024 19:15:11.082 * DB loaded from incr file appendonly.aof.2.incr.aof: 0.000 seconds
+16504:M 06 May 2024 19:15:11.082 * DB loaded from append only file: 0.006 seconds
+16504:M 06 May 2024 19:15:11.082 * Opening AOF incr file appendonly.aof.2.incr.aof on server start
+16504:M 06 May 2024 19:15:11.082 * Ready to accept connections tcp
+16504:M 06 May 2024 19:15:11.086 * Configuration change detected. Reconfiguring myself as a replica of d612f4e24864679d4cb0b4d862c48e2df4373065 ()
+16504:S 06 May 2024 19:15:11.086 * Before turning into a replica, using my own master parameters to synthesize a cached master: I may be able to synchronize with the new master with just a partial transfer.
+16504:S 06 May 2024 19:15:11.086 * Connecting to MASTER 127.0.0.1:30006
+16504:S 06 May 2024 19:15:11.086 * MASTER <-> REPLICA sync started
+16504:S 06 May 2024 19:15:11.086 * Cluster state changed: ok
+16504:S 06 May 2024 19:15:11.089 * Non blocking connect for SYNC fired the event.
+16504:S 06 May 2024 19:15:11.093 * Master replied to PING, replication can continue...
+16504:S 06 May 2024 19:15:11.093 * Trying a partial resynchronization (request 423f4d2b2e196f22c2058c15d86ff88d8017fa70:1).
+16504:S 06 May 2024 19:15:11.093 * Full resync from master: 3e66f59faea0174093573c9fd7bd62eb55ac9076:30077
+16504:S 06 May 2024 19:15:11.098 * MASTER <-> REPLICA sync: receiving streamed RDB from master with EOF to disk
+16504:S 06 May 2024 19:15:11.098 * Discarding previously cached master state.
+16504:S 06 May 2024 19:15:11.098 * MASTER <-> REPLICA sync: Flushing old data
+16504:S 06 May 2024 19:15:11.099 * MASTER <-> REPLICA sync: Loading DB in memory
+16504:S 06 May 2024 19:15:11.106 * Loading RDB produced by valkey version 255.255.255
+16504:S 06 May 2024 19:15:11.106 * RDB age 0 seconds
+16504:S 06 May 2024 19:15:11.106 * RDB memory usage when created 2.57 Mb
+16504:S 06 May 2024 19:15:11.107 * Done loading RDB, keys loaded: 366, keys expired: 0.
+16504:S 06 May 2024 19:15:11.107 * MASTER <-> REPLICA sync: Finished with success
+16504:S 06 May 2024 19:15:11.107 * Creating AOF incr file temp-appendonly.aof.incr on background rewrite
+16504:S 06 May 2024 19:15:11.108 * Background append only file rewriting started by pid 16511
+16511:C 06 May 2024 19:15:11.112 * Successfully created the temporary AOF base file temp-rewriteaof-bg-16511.aof
+16511:C 06 May 2024 19:15:11.113 * Fork CoW for AOF rewrite: current 0 MB, peak 0 MB, average 0 MB
+16504:S 06 May 2024 19:15:11.185 * Background AOF rewrite terminated with success
+16504:S 06 May 2024 19:15:11.185 * Successfully renamed the temporary AOF base file temp-rewriteaof-bg-16511.aof into appendonly.aof.3.base.rdb
+16504:S 06 May 2024 19:15:11.185 * Successfully renamed the temporary AOF incr file temp-appendonly.aof.incr into appendonly.aof.3.incr.aof
+16504:S 06 May 2024 19:15:11.187 * Removing the history file appendonly.aof.2.incr.aof in the background
+16504:S 06 May 2024 19:15:11.187 * Removing the history file appendonly.aof.2.base.rdb in the background
+16504:S 06 May 2024 19:15:11.188 * Background AOF rewrite finished successfully
+16504:S 06 May 2024 19:15:11.375 # Missing implement of connection type tls
+16504:S 06 May 2024 19:15:15.636 * Marking node 9dad64de16025f02b271510ee2d51a6ca079dc7b () as failing (quorum reached).
+16504:S 06 May 2024 19:15:15.637 # Cluster state changed: fail
+16504:S 06 May 2024 19:15:16.587 * Cluster state changed: ok
+16504:S 06 May 2024 19:15:16.831 * Clear FAIL state for node 9dad64de16025f02b271510ee2d51a6ca079dc7b ():master without slots is reachable again.
+16504:S 06 May 2024 19:15:16.832 * A failover occurred in shard 1c2b75be0f3bbf57778cad018055649104140ab5; node 9dad64de16025f02b271510ee2d51a6ca079dc7b () lost 0 slot(s) to node d979b3705974c02442b170e8dacc0ba5e04d56bb () with a config epoch of 26
+16504:signal-handler (1715022916) Received SIGTERM scheduling shutdown...
+16504:S 06 May 2024 19:15:16.932 * User requested shutdown...
+16504:S 06 May 2024 19:15:16.932 # Valkey is now ready to exit, bye bye...
+16596:C 06 May 2024 19:15:16.988 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+16596:C 06 May 2024 19:15:16.988 * oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo
+16596:C 06 May 2024 19:15:16.988 * Valkey version=255.255.255, bits=64, commit=93f8a19b, modified=0, pid=16596, just started
+16596:C 06 May 2024 19:15:16.988 * Configuration loaded
+16596:M 06 May 2024 19:15:16.989 * monotonic clock: POSIX clock_gettime
+16596:M 06 May 2024 19:15:16.990 * Running mode=cluster, port=30001.
+16596:M 06 May 2024 19:15:16.996 * Node configuration loaded, I'm c26ea12fd513a731ced8b60c63390b5dbe84235d
+16596:M 06 May 2024 19:15:16.997 * Server initialized
+16596:M 06 May 2024 19:15:16.997 * Reading RDB base file on AOF loading...
+16596:M 06 May 2024 19:15:16.997 * Loading RDB produced by valkey version 255.255.255
+16596:M 06 May 2024 19:15:16.997 * RDB age 5 seconds
+16596:M 06 May 2024 19:15:16.997 * RDB memory usage when created 2.29 Mb
+16596:M 06 May 2024 19:15:16.997 * RDB is base AOF
+16596:M 06 May 2024 19:15:16.998 * Done loading RDB, keys loaded: 366, keys expired: 0.
+16596:M 06 May 2024 19:15:16.998 * DB loaded from base file appendonly.aof.3.base.rdb: 0.002 seconds
+16596:M 06 May 2024 19:15:16.999 * DB loaded from incr file appendonly.aof.3.incr.aof: 0.000 seconds
+16596:M 06 May 2024 19:15:16.999 * DB loaded from append only file: 0.002 seconds
+16596:M 06 May 2024 19:15:16.999 * Opening AOF incr file appendonly.aof.3.incr.aof on server start
+16596:M 06 May 2024 19:15:16.999 * Ready to accept connections tcp
+16596:S 06 May 2024 19:15:17.000 * Before turning into a replica, using my own master parameters to synthesize a cached master: I may be able to synchronize with the new master with just a partial transfer.
+16596:S 06 May 2024 19:15:17.000 * Connecting to MASTER 127.0.0.1:30006
+16596:S 06 May 2024 19:15:17.000 * MASTER <-> REPLICA sync started
+16596:S 06 May 2024 19:15:17.000 * Cluster state changed: ok
+16596:S 06 May 2024 19:15:17.001 * Non blocking connect for SYNC fired the event.
+16596:S 06 May 2024 19:15:17.005 * Master replied to PING, replication can continue...
+16596:S 06 May 2024 19:15:17.005 * Trying a partial resynchronization (request 14cec3cd54e8197ca6e381c8caa5de9527968c68:1).
+16596:S 06 May 2024 19:15:17.005 * Full resync from master: 3e66f59faea0174093573c9fd7bd62eb55ac9076:38401
+16596:S 06 May 2024 19:15:17.009 * MASTER <-> REPLICA sync: receiving streamed RDB from master with EOF to disk
+16596:S 06 May 2024 19:15:17.010 * Discarding previously cached master state.
+16596:S 06 May 2024 19:15:17.010 * MASTER <-> REPLICA sync: Flushing old data
+16596:S 06 May 2024 19:15:17.010 * MASTER <-> REPLICA sync: Loading DB in memory
+16596:S 06 May 2024 19:15:17.011 * Loading RDB produced by valkey version 255.255.255
+16596:S 06 May 2024 19:15:17.011 * RDB age 0 seconds
+16596:S 06 May 2024 19:15:17.011 * RDB memory usage when created 2.62 Mb
+16596:S 06 May 2024 19:15:17.012 * Done loading RDB, keys loaded: 477, keys expired: 0.
+16596:S 06 May 2024 19:15:17.012 * MASTER <-> REPLICA sync: Finished with success
+16596:S 06 May 2024 19:15:17.012 * Creating AOF incr file temp-appendonly.aof.incr on background rewrite
+16596:S 06 May 2024 19:15:17.013 * Background append only file rewriting started by pid 16603
+16603:C 06 May 2024 19:15:17.019 * Successfully created the temporary AOF base file temp-rewriteaof-bg-16603.aof
+16603:C 06 May 2024 19:15:17.020 * Fork CoW for AOF rewrite: current 0 MB, peak 0 MB, average 0 MB
+16596:S 06 May 2024 19:15:17.101 * Background AOF rewrite terminated with success
+16596:S 06 May 2024 19:15:17.101 * Successfully renamed the temporary AOF base file temp-rewriteaof-bg-16603.aof into appendonly.aof.4.base.rdb
+16596:S 06 May 2024 19:15:17.101 * Successfully renamed the temporary AOF incr file temp-appendonly.aof.incr into appendonly.aof.4.incr.aof
+16596:S 06 May 2024 19:15:17.103 * Removing the history file appendonly.aof.3.incr.aof in the background
+16596:S 06 May 2024 19:15:17.103 * Removing the history file appendonly.aof.3.base.rdb in the background
+16596:S 06 May 2024 19:15:17.105 * Background AOF rewrite finished successfully
+16596:S 06 May 2024 19:15:17.362 # Missing implement of connection type tls
+16596:S 06 May 2024 19:15:21.822 * FAIL message received from 9dad64de16025f02b271510ee2d51a6ca079dc7b () about d979b3705974c02442b170e8dacc0ba5e04d56bb ()
+16596:S 06 May 2024 19:15:21.822 # Cluster state changed: fail
+16596:S 06 May 2024 19:15:22.744 * Cluster state changed: ok
+16596:S 06 May 2024 19:15:22.952 * Clear FAIL state for node d979b3705974c02442b170e8dacc0ba5e04d56bb ():master without slots is reachable again.
+16596:S 06 May 2024 19:15:22.952 * A failover occurred in shard 1c2b75be0f3bbf57778cad018055649104140ab5; node d979b3705974c02442b170e8dacc0ba5e04d56bb () lost 0 slot(s) to node 9dad64de16025f02b271510ee2d51a6ca079dc7b () with a config epoch of 27
+16596:S 06 May 2024 19:15:27.760 * FAIL message received from 29597550bd8f898394ae88db5a0ba45f1868fd3f () about 9dad64de16025f02b271510ee2d51a6ca079dc7b ()
+16596:S 06 May 2024 19:15:27.760 # Cluster state changed: fail
+16596:S 06 May 2024 19:15:28.731 * Cluster state changed: ok
+16596:S 06 May 2024 19:15:28.912 * Clear FAIL state for node 9dad64de16025f02b271510ee2d51a6ca079dc7b ():master without slots is reachable again.
+16596:S 06 May 2024 19:15:28.912 * A failover occurred in shard 1c2b75be0f3bbf57778cad018055649104140ab5; node 9dad64de16025f02b271510ee2d51a6ca079dc7b () lost 0 slot(s) to node d979b3705974c02442b170e8dacc0ba5e04d56bb () with a config epoch of 28
+16596:S 06 May 2024 19:15:33.576 * FAIL message received from 671088db4acca8792f424ee7ea50b8153c7529a0 () about d979b3705974c02442b170e8dacc0ba5e04d56bb ()
+16596:S 06 May 2024 19:15:33.576 # Cluster state changed: fail
+16596:S 06 May 2024 19:15:34.369 * Cluster state changed: ok
+16596:S 06 May 2024 19:15:34.560 * Clear FAIL state for node d979b3705974c02442b170e8dacc0ba5e04d56bb ():master without slots is reachable again.
+16596:S 06 May 2024 19:15:34.560 * A failover occurred in shard 1c2b75be0f3bbf57778cad018055649104140ab5; node d979b3705974c02442b170e8dacc0ba5e04d56bb () lost 0 slot(s) to node 9dad64de16025f02b271510ee2d51a6ca079dc7b () with a config epoch of 29
+16596:M 06 May 2024 19:15:34.858 * Connection with master lost.
+16596:M 06 May 2024 19:15:34.858 * Caching the disconnected master state.
+16596:M 06 May 2024 19:15:34.858 * Discarding previously cached master state.
+16596:M 06 May 2024 19:15:34.858 * Setting secondary replication ID to 3e66f59faea0174093573c9fd7bd62eb55ac9076, valid up to offset: 58391. New replication ID is ec93c8fb9a0d26217a16ede2b0c8826e1619ae1d
+16596:M 06 May 2024 19:15:34.860 * configEpoch set to 0 via CLUSTER RESET HARD
+16596:M 06 May 2024 19:15:34.860 * Node hard reset, now I'm 028d846d2384625b571d8ae1db88b2d472efe612
+16596:M 06 May 2024 19:15:34.860 * configEpoch set to 2 via CLUSTER SET-CONFIG-EPOCH
+16596:M 06 May 2024 19:15:34.860 # Cluster state changed: fail
+16596:M 06 May 2024 19:15:34.865 * CONFIG REWRITE executed with success.
+16596:M 06 May 2024 19:15:39.093 * Node f618c2d793fec3c1be72eac543ed42af49103087 () is no longer master of shard c39f6f20eed586245932eadb49d37ef3444eeba3; removed all 0 slot(s) it used to own
+16596:M 06 May 2024 19:15:39.093 * Node f618c2d793fec3c1be72eac543ed42af49103087 () is now part of shard 3a32b81103a1e70ff832bacb10b5a5a912e9e2dc
+16596:M 06 May 2024 19:15:40.919 * Replica 127.0.0.1:30006 asks for synchronization
+16596:M 06 May 2024 19:15:40.919 * Partial resynchronization not accepted: Requested offset for second ID was 58409, but I can reply up to 58391
+16596:M 06 May 2024 19:15:40.919 * Starting BGSAVE for SYNC with target: replicas sockets
+16596:M 06 May 2024 19:15:40.920 * Background RDB transfer started by pid 16868
+16868:C 06 May 2024 19:15:40.921 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+16596:M 06 May 2024 19:15:40.921 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+16596:M 06 May 2024 19:15:40.924 * Background RDB transfer terminated with success
+16596:M 06 May 2024 19:15:40.924 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+16596:M 06 May 2024 19:15:40.924 * Synchronization with replica 127.0.0.1:30006 succeeded
+16596:M 06 May 2024 19:15:41.695 * Cluster state changed: ok
+16596:M 06 May 2024 19:15:42.401 * Node a0009d5f604d884e784a3056b063090422c8ce55 () is no longer master of shard e64780e5c850ee71f0b1b08d3ba6db17ccf4bce2; removed all 0 slot(s) it used to own
+16596:M 06 May 2024 19:15:42.401 * Node a0009d5f604d884e784a3056b063090422c8ce55 () is now part of shard d3a218f528452be7c9ae6dfd00c32dfc82e7170d
+16596:M 06 May 2024 19:15:42.402 * Node 5269a12afdf4274ccd7df7a3ac397f3fcc91a41b () is no longer master of shard f65a03c57d7accc16ebbe0644b4f594992bf8dce; removed all 0 slot(s) it used to own
+16596:M 06 May 2024 19:15:42.403 * Node 5269a12afdf4274ccd7df7a3ac397f3fcc91a41b () is now part of shard 897f6391c215d2fd35c543f86aae669878fdc874
+16596:M 06 May 2024 19:15:42.403 * Node fbfcf26d16f4bc8614e1fa7be3bc2e62ddd94665 () is no longer master of shard 3af8d21a8c53a9b6624c360029651d1f88745f55; removed all 0 slot(s) it used to own
+16596:M 06 May 2024 19:15:42.403 * Node fbfcf26d16f4bc8614e1fa7be3bc2e62ddd94665 () is now part of shard 6b4d9b2c1f3548ebff40277e67444291a3fa23f5
+16596:M 06 May 2024 19:15:42.502 * Node 6a35a86928be660bf08d53b5985287118d92066b () is no longer master of shard 17431b2ec492ed011920dbf31b9d73f688b42f6f; removed all 0 slot(s) it used to own
+16596:M 06 May 2024 19:15:42.502 * Node 6a35a86928be660bf08d53b5985287118d92066b () is now part of shard 78600edd67e7ea47e3a029230067904131c90109
+16596:signal-handler (1715023039) Received SIGTERM scheduling shutdown...
+16596:M 06 May 2024 19:17:19.197 * User requested shutdown...
+16596:M 06 May 2024 19:17:19.197 * 1 of 1 replicas are in sync when shutting down.
+16596:M 06 May 2024 19:17:19.197 # Valkey is now ready to exit, bye bye...
+17209:C 06 May 2024 19:17:19.241 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+17209:C 06 May 2024 19:17:19.241 * oO0OoO0OoO0Oo Valkey is starting oO0OoO0OoO0Oo
+17209:C 06 May 2024 19:17:19.241 * Valkey version=255.255.255, bits=64, commit=93f8a19b, modified=0, pid=17209, just started
+17209:C 06 May 2024 19:17:19.241 * Configuration loaded
+17209:M 06 May 2024 19:17:19.242 * monotonic clock: POSIX clock_gettime
+17209:M 06 May 2024 19:17:19.243 * Running mode=cluster, port=30001.
+17209:M 06 May 2024 19:17:19.250 * Node configuration loaded, I'm 028d846d2384625b571d8ae1db88b2d472efe612
+17209:M 06 May 2024 19:17:19.250 * Server initialized
+17209:M 06 May 2024 19:17:19.265 * Reading RDB base file on AOF loading...
+17209:M 06 May 2024 19:17:19.265 * Loading RDB produced by valkey version 255.255.255
+17209:M 06 May 2024 19:17:19.265 * RDB age 122 seconds
+17209:M 06 May 2024 19:17:19.265 * RDB memory usage when created 2.31 Mb
+17209:M 06 May 2024 19:17:19.265 * RDB is base AOF
+17209:M 06 May 2024 19:17:19.278 * Done loading RDB, keys loaded: 477, keys expired: 0.
+17209:M 06 May 2024 19:17:19.278 * DB loaded from base file appendonly.aof.4.base.rdb: 0.028 seconds
+17209:M 06 May 2024 19:17:19.354 * DB loaded from incr file appendonly.aof.4.incr.aof: 0.076 seconds
+17209:M 06 May 2024 19:17:19.354 * DB loaded from append only file: 0.104 seconds
+17209:M 06 May 2024 19:17:19.354 * Opening AOF incr file appendonly.aof.4.incr.aof on server start
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 111, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 118, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 180, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 186, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 191, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 223, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 225, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 231, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 237, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 249, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 252, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 272, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 286, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 309, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 313, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 347, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 356, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 359, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 381, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 392, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 422, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 464, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 514, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 571, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 580, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 591, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 611, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 629, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 641, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 652, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 705, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 721, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 739, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 756, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 767, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 776, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 820, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 853, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 872, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 890, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 905, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 941, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 954, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 961, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 985, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1009, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1060, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1076, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1088, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1093, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1101, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1147, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1164, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1184, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1201, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1216, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1230, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1280, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1296, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1340, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1385, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1434, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1438, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1455, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1548, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1559, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1597, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1677, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1698, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1734, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1760, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1780, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1784, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1824, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1825, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1830, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1871, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1933, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1948, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1970, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 1971, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 2034, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 2048, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 2068, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 2085, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 2139, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 2148, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 2222, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 2228, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 2238, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 2257, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.355 * I have keys for slot 2263, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2272, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2303, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2348, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2375, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2383, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2396, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2472, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2477, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2510, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2541, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2577, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2626, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2632, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2706, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2732, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2768, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2773, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2795, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2820, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 2871, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3021, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3044, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3078, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3120, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3158, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3173, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3195, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3293, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3297, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3321, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3348, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3410, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3433, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3456, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3488, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3519, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3612, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3652, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3670, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3719, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3730, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3826, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3932, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 3942, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4001, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4081, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4085, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4107, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4118, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4182, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4206, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4255, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4283, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4307, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4375, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4468, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4478, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4504, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4505, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4562, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4673, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4686, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4708, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4756, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4779, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4830, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4880, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4917, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4952, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 4958, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5056, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5061, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5064, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5104, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5116, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5122, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5129, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5161, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5185, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5213, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5230, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5299, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5517, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5529, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5557, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5600, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5601, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5622, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5740, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5762, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5780, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5808, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.356 * I have keys for slot 5838, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 5841, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 5850, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 5932, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 5962, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6026, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6035, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6099, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6116, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6124, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6155, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6195, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6257, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6263, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6272, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6314, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6333, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6350, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6366, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6409, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6483, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6513, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6578, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6583, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6592, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6740, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6746, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6761, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6823, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6840, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6874, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6909, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6920, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6934, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6935, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6998, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 6999, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7027, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7055, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7091, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7160, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7171, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7207, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7264, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7281, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7313, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7314, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7339, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7390, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7447, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7467, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7507, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7562, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7565, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7571, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7573, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7588, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7666, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7669, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7681, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7710, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7711, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7717, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7738, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7758, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7787, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7822, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 7934, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8017, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8042, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8045, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8060, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8069, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8132, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8136, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8180, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8185, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8197, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8241, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8250, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8295, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8356, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8359, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8361, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8378, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8406, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8433, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.357 * I have keys for slot 8479, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8530, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8533, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8575, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8592, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8593, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8597, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8648, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8675, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8676, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8692, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8709, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8710, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8732, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8751, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8768, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8825, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8834, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8876, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8888, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8896, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8937, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 8966, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9010, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9017, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9034, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9069, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9152, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9156, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9178, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9213, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9237, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9268, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9298, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9318, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9319, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9346, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9366, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9408, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9410, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9422, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9590, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9598, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9617, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9633, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9688, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9707, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9708, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9789, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9796, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9801, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9804, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9913, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9950, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 9956, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10020, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10022, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10035, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10077, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10101, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10105, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10113, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10183, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10189, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10225, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10245, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10266, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10297, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10329, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10372, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10401, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10409, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10417, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10461, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10466, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10504, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10515, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10526, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10529, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10549, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10560, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10563, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10565, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10627, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10629, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10677, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10691, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10728, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10736, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10878, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10893, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10908, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10941, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.358 * I have keys for slot 10948, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 10976, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11001, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11026, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11028, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11061, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11120, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11144, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11167, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11184, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11208, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11213, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11247, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11258, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11263, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11278, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11285, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11293, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11301, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11356, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11363, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11380, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11388, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11392, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11395, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11464, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11472, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11475, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11504, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11567, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11627, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11631, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11649, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11745, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11759, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11772, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11773, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11791, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11832, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11847, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11886, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11904, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11940, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11970, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11973, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 11999, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12047, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12072, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12082, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12123, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12159, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12289, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12304, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12310, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12352, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12363, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12460, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12517, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12554, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12572, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12573, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12600, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12616, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12618, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12622, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12625, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12721, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12744, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12757, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12789, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12793, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12805, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12814, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12847, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12888, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12889, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12896, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12922, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12931, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12936, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12956, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 12959, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 13049, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 13095, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.359 * I have keys for slot 13096, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13129, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13192, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13199, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13200, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13211, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13246, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13290, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13331, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13479, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13502, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13524, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13553, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13563, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13660, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13756, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13758, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13771, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13787, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13807, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13833, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13929, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 13989, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14010, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14053, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14054, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14088, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14098, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14116, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14244, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14310, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14336, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14374, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14389, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14456, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14467, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14509, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14546, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14583, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14778, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14800, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14809, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14877, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14882, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14900, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14921, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14945, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14946, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14956, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14965, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 14985, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15049, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15064, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15131, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15153, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15178, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15204, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15207, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15233, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15278, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15289, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15331, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15336, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15342, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15356, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15395, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15436, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15500, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15504, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15528, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15601, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15626, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15652, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15669, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15704, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15733, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15764, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15774, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15776, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15781, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15793, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15840, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15872, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15896, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15918, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15971, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15990, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 15991, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 16018, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 16032, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 16035, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 16036, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 16071, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 16125, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.360 * I have keys for slot 16148, but the slot is assigned to another node. Setting it to importing state.
+17209:M 06 May 2024 19:17:19.364 * Ready to accept connections tcp
+17209:M 06 May 2024 19:17:19.799 * Replica 127.0.0.1:30006 asks for synchronization
+17209:M 06 May 2024 19:17:19.799 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'ec93c8fb9a0d26217a16ede2b0c8826e1619ae1d', my replication IDs are '4ae98a83c36b1cfe7ca267ec186b691c4f0cee96' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:17:19.799 * Replication backlog created, my new replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000'
+17209:M 06 May 2024 19:17:19.799 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:17:19.799 * Background RDB transfer started by pid 17235
+17235:C 06 May 2024 19:17:19.826 * Fork CoW for RDB: current 1 MB, peak 1 MB, average 0 MB
+17209:M 06 May 2024 19:17:19.826 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:17:19.853 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:17:19.853 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:17:19.853 * Synchronization with replica 127.0.0.1:30006 succeeded
+17209:M 06 May 2024 19:17:20.411 * Connection with replica 127.0.0.1:30006 lost.
+17209:M 06 May 2024 19:17:20.491 * Replica 127.0.0.1:30006 asks for synchronization
+17209:M 06 May 2024 19:17:20.491 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '3205d2fa86469555c3fec74ace312afcd41506bc', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:17:20.491 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:17:20.491 * Background RDB transfer started by pid 17288
+17288:C 06 May 2024 19:17:20.524 * Fork CoW for RDB: current 1 MB, peak 1 MB, average 0 MB
+17209:M 06 May 2024 19:17:20.525 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:17:20.541 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:17:20.541 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:17:20.541 * Synchronization with replica 127.0.0.1:30006 succeeded
+17209:M 06 May 2024 19:17:21.382 * Cluster state changed: ok
+17209:M 06 May 2024 19:17:34.713 * configEpoch set to 0 via CLUSTER RESET HARD
+17209:M 06 May 2024 19:17:34.713 * Node hard reset, now I'm d7e24ee846db8d6897bc493c6b1aa1a618aa4c7a
+17209:M 06 May 2024 19:17:34.713 * configEpoch set to 2 via CLUSTER SET-CONFIG-EPOCH
+17209:M 06 May 2024 19:17:34.713 # Cluster state changed: fail
+17209:M 06 May 2024 19:17:34.718 * CONFIG REWRITE executed with success.
+17209:M 06 May 2024 19:17:34.784 * Connection with replica 127.0.0.1:30006 lost.
+17209:M 06 May 2024 19:17:36.277 # Missing implement of connection type tls
+17209:M 06 May 2024 19:17:42.529 * Cluster state changed: ok
+17209:M 06 May 2024 19:17:42.616 * Node 078932a058b3293ad41a7bf812f0c25bcb0049d7 () is no longer master of shard f7d317600bff619f321470e98d7e3c9c27a4af6a; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:17:42.616 * Node 078932a058b3293ad41a7bf812f0c25bcb0049d7 () is now part of shard 71756dc6ec85961b10f92d7936ea08ecbd62d2cc
+17209:M 06 May 2024 19:17:42.633 * Replica 127.0.0.1:30006 asks for synchronization
+17209:M 06 May 2024 19:17:42.633 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'cefd5d91661fdd8fe05e01b6e4cab54595dc05f2', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:17:42.633 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:17:42.634 * Background RDB transfer started by pid 17527
+17527:C 06 May 2024 19:17:42.635 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17209:M 06 May 2024 19:17:42.635 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:17:42.644 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:17:42.644 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:17:42.644 * Synchronization with replica 127.0.0.1:30006 succeeded
+17209:M 06 May 2024 19:17:42.864 * Node e1039ccb24f58e1d87d2782b61596d09ff577abb () is no longer master of shard 5acc99edc411149fcdb27d6533feac7207649ef7; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:17:43.656 * Node e1039ccb24f58e1d87d2782b61596d09ff577abb () is now part of shard 1050559ab1955a6332e03bbdccee0d3b12d80d4e
+17209:M 06 May 2024 19:17:43.906 * Node 59cb584e870b5276318f48cc46a9edfb0371113f () is no longer master of shard 5000b06b9aff419dd88e8f75370c3da32551a1cb; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:17:43.906 * Node 59cb584e870b5276318f48cc46a9edfb0371113f () is now part of shard 069b0453b631c5c0be393a42d2b474a6b5af3bc3
+17209:M 06 May 2024 19:17:44.049 * Replica 127.0.0.1:30011 asks for synchronization
+17209:M 06 May 2024 19:17:44.049 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '699ca697d0b2370ec5b98949272203e71906dc83', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:17:44.049 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:17:44.049 * Background RDB transfer started by pid 17533
+17533:C 06 May 2024 19:17:44.051 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17209:M 06 May 2024 19:17:44.051 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:17:44.053 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:17:44.053 * Streamed RDB transfer with replica 127.0.0.1:30011 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:17:44.053 * Synchronization with replica 127.0.0.1:30011 succeeded
+17209:M 06 May 2024 19:17:44.148 * Node 4f657f5e5c0b9e1d22cbfd768445a3a17a128dce () is no longer master of shard 33c4d632371303bcb565e5c7aba0936e2a76b03a; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:17:44.148 * Node 4f657f5e5c0b9e1d22cbfd768445a3a17a128dce () is now part of shard 65d3f576730fc68ea1d1bef428c17b8f492f5ab4
+17209:M 06 May 2024 19:17:44.153 * Node 970366324b8c390c737a72bc0527db1e0be88d05 () is no longer master of shard 6c2b56a67af1fb0be8ff8b1b4eefe129c23debb0; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:17:44.153 * Node 970366324b8c390c737a72bc0527db1e0be88d05 () is now part of shard 069b0453b631c5c0be393a42d2b474a6b5af3bc3
+17209:M 06 May 2024 19:17:44.204 * Node a64f8ad23dbc7e19bceb3d6de42d635121321462 () is no longer master of shard 0855cdcd88c49b00e8d3cb7a4549759c3b4ffc32; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:17:44.204 * Node a64f8ad23dbc7e19bceb3d6de42d635121321462 () is now part of shard 65d3f576730fc68ea1d1bef428c17b8f492f5ab4
+17209:M 06 May 2024 19:17:44.206 * Node e84e73c5fbab2e444548d2b4b8c70f6592b04067 () is no longer master of shard 873ddfcf8e44ed993d28f2c2cc6dee5b6aa4f588; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:17:44.206 * Node e84e73c5fbab2e444548d2b4b8c70f6592b04067 () is now part of shard 1050559ab1955a6332e03bbdccee0d3b12d80d4e
+17209:M 06 May 2024 19:17:44.248 * Node 26801f367db02d74aeeeb4c5ec2877a5f31569d9 () is no longer master of shard 1a16ede24c20c880468822e63f78780773a34e47; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:17:44.248 * Node 26801f367db02d74aeeeb4c5ec2877a5f31569d9 () is now part of shard 71756dc6ec85961b10f92d7936ea08ecbd62d2cc
+17209:M 06 May 2024 19:17:44.305 * Node 8d75f2d6f057fa546d38d9b15adacee5fdc6a60d () is no longer master of shard 1e88f30dc751b7903da19b3c4c8bc3173a3efb8b; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:17:44.305 * Node 8d75f2d6f057fa546d38d9b15adacee5fdc6a60d () is now part of shard 50e3f96a8fee19ff4889bc9e3adeceeaaa1dbc24
+17209:M 06 May 2024 19:17:45.512 * Node c82ade1d42699c8d38b49704a4d508edf28962ad () is no longer master of shard 54bf45e726f98496ec4871cc44f69eed009b4194; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:17:45.512 * Node c82ade1d42699c8d38b49704a4d508edf28962ad () is now part of shard 50e3f96a8fee19ff4889bc9e3adeceeaaa1dbc24
+17209:M 06 May 2024 19:17:49.041 * FAIL message received from 8638bb3919fb522af84a8fe3990ded8caa70968c () about 26801f367db02d74aeeeb4c5ec2877a5f31569d9 ()
+17209:M 06 May 2024 19:17:54.687 * Clear FAIL state for node 26801f367db02d74aeeeb4c5ec2877a5f31569d9 ():replica is reachable again.
+17209:M 06 May 2024 19:17:58.851 * FAIL message received from c82ade1d42699c8d38b49704a4d508edf28962ad () about c6e768b2f8702ccd365a393b642c8ac83ff22379 ()
+17209:M 06 May 2024 19:17:58.851 # Cluster state changed: fail
+17209:M 06 May 2024 19:17:59.709 * Failover auth granted to 078932a058b3293ad41a7bf812f0c25bcb0049d7 () for epoch 21
+17209:M 06 May 2024 19:17:59.753 * Cluster state changed: ok
+17209:M 06 May 2024 19:17:59.822 * Clear FAIL state for node c6e768b2f8702ccd365a393b642c8ac83ff22379 ():master without slots is reachable again.
+17209:M 06 May 2024 19:17:59.822 * A failover occurred in shard 71756dc6ec85961b10f92d7936ea08ecbd62d2cc; node c6e768b2f8702ccd365a393b642c8ac83ff22379 () lost 0 slot(s) to node 078932a058b3293ad41a7bf812f0c25bcb0049d7 () with a config epoch of 21
+17209:M 06 May 2024 19:17:59.856 * configEpoch set to 0 via CLUSTER RESET HARD
+17209:M 06 May 2024 19:17:59.856 * Node hard reset, now I'm d85a0c4eb3ba227c220265c8cb0c1be8004d558d
+17209:M 06 May 2024 19:17:59.856 * configEpoch set to 2 via CLUSTER SET-CONFIG-EPOCH
+17209:M 06 May 2024 19:17:59.856 # Cluster state changed: fail
+17209:M 06 May 2024 19:17:59.861 * CONFIG REWRITE executed with success.
+17209:M 06 May 2024 19:17:59.891 * Connection with replica 127.0.0.1:30006 lost.
+17209:M 06 May 2024 19:17:59.930 * Connection with replica 127.0.0.1:30011 lost.
+17209:M 06 May 2024 19:18:02.761 * Replica 127.0.0.1:30004 asks for synchronization
+17209:M 06 May 2024 19:18:02.761 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '822d0ea1a4e4f7c85e90476b999e0b0f116cbba1', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:18:02.761 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:18:02.761 * Background RDB transfer started by pid 17616
+17616:C 06 May 2024 19:18:02.763 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17209:M 06 May 2024 19:18:02.763 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:18:02.765 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:18:02.765 * Streamed RDB transfer with replica 127.0.0.1:30004 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:18:02.765 * Synchronization with replica 127.0.0.1:30004 succeeded
+17209:M 06 May 2024 19:18:02.782 * Replica 127.0.0.1:30007 asks for synchronization
+17209:M 06 May 2024 19:18:02.782 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '9a06db568803a736d429996327190288e3f24973', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:18:02.782 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:18:02.782 * Background RDB transfer started by pid 17620
+17620:C 06 May 2024 19:18:02.784 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17209:M 06 May 2024 19:18:02.785 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:18:02.786 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:18:02.786 * Streamed RDB transfer with replica 127.0.0.1:30007 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:18:02.786 * Synchronization with replica 127.0.0.1:30007 succeeded
+17209:M 06 May 2024 19:18:02.806 * Replica 127.0.0.1:30010 asks for synchronization
+17209:M 06 May 2024 19:18:02.806 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '16efcfa42f3cb80517e4a539efea8dde83bd5e9c', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:18:02.806 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:18:02.807 * Background RDB transfer started by pid 17623
+17623:C 06 May 2024 19:18:02.808 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17209:M 06 May 2024 19:18:02.808 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:18:02.810 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:18:02.811 * Streamed RDB transfer with replica 127.0.0.1:30010 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:18:02.811 * Synchronization with replica 127.0.0.1:30010 succeeded
+17209:M 06 May 2024 19:18:02.832 * Replica 127.0.0.1:30013 asks for synchronization
+17209:M 06 May 2024 19:18:02.832 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'c006d3b733daae12efc213f7e88e7afebe41cfc9', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:18:02.832 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:18:02.833 * Background RDB transfer started by pid 17626
+17626:C 06 May 2024 19:18:02.834 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17209:M 06 May 2024 19:18:02.834 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:18:02.836 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:18:02.836 * Streamed RDB transfer with replica 127.0.0.1:30013 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:18:02.836 * Synchronization with replica 127.0.0.1:30013 succeeded
+17209:M 06 May 2024 19:18:02.866 * Replica 127.0.0.1:30016 asks for synchronization
+17209:M 06 May 2024 19:18:02.866 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '0f1dce36820b28a46b4fcd9580d2665d2fc3ddc0', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:18:02.866 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:18:02.867 * Background RDB transfer started by pid 17630
+17630:C 06 May 2024 19:18:02.868 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17209:M 06 May 2024 19:18:02.869 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:18:02.870 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:18:02.870 * Streamed RDB transfer with replica 127.0.0.1:30016 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:18:02.870 * Synchronization with replica 127.0.0.1:30016 succeeded
+17209:M 06 May 2024 19:18:02.950 * Node b4c96fe54bd211d5373161c89d6e0f09e6bae07a () is no longer master of shard 1f9cf276999006c5e2fcd79b4eb3d5840c05a58b; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:02.950 * Node b4c96fe54bd211d5373161c89d6e0f09e6bae07a () is now part of shard b1941e40ca7c82b122690b81cfbab0265cfd6255
+17209:M 06 May 2024 19:18:03.459 * Node 3a8410fdf29d80b74cbb245767c5e44636bc3277 () is no longer master of shard 7d57fa4efb72d70389b55e5fb06b1ed20ee0b8c3; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:03.459 * Node 3a8410fdf29d80b74cbb245767c5e44636bc3277 () is now part of shard af57b2c095a58c35952f5be607254c877d1c65e6
+17209:M 06 May 2024 19:18:03.540 * Node 9e37c267ff4ecec857b256ac46b5e11b3201d2bf () is no longer master of shard 4a54cdb367579758a4e3f891240c194e22265b3d; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:03.540 * Node 9e37c267ff4ecec857b256ac46b5e11b3201d2bf () is now part of shard af57b2c095a58c35952f5be607254c877d1c65e6
+17209:M 06 May 2024 19:18:03.542 * Node 204fe20f285eb3c7bcdd744c0500d6789f98b722 () is no longer master of shard ab9f767e76ee34d7511533a455ad90ed1b50d27b; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:03.542 * Node 204fe20f285eb3c7bcdd744c0500d6789f98b722 () is now part of shard e57e3844f79664a605c7f2e2b61ad0702feaf18d
+17209:M 06 May 2024 19:18:03.547 * Node e53ff829cf90e7caea1e3e82bd279765e0d896ce () is no longer master of shard dfcb8ddc797b36f3027193f68a243825e66ecb76; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:03.547 * Node e53ff829cf90e7caea1e3e82bd279765e0d896ce () is now part of shard e57e3844f79664a605c7f2e2b61ad0702feaf18d
+17209:M 06 May 2024 19:18:03.563 * Node f01b0161e695176f83ca792891b1e43f77a88883 () is no longer master of shard 66a60939691fd1e6ee1492ac1dbc0dece4a724e9; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:03.564 * Node f01b0161e695176f83ca792891b1e43f77a88883 () is now part of shard e57e3844f79664a605c7f2e2b61ad0702feaf18d
+17209:M 06 May 2024 19:18:03.564 * Node 26996c81b1b4b014258b798c0b9cab6593139f89 () is no longer master of shard 75182d21b15b8439f1522e589f314577961349dd; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:03.564 * Node 26996c81b1b4b014258b798c0b9cab6593139f89 () is now part of shard e57e3844f79664a605c7f2e2b61ad0702feaf18d
+17209:M 06 May 2024 19:18:03.564 * Node 1e008697fe34fc59625174f184ad2adc37042797 () is no longer master of shard 1bf2cd731a3dbe35a6cec5639318bdb95d99061d; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:03.564 * Node 1e008697fe34fc59625174f184ad2adc37042797 () is now part of shard b1941e40ca7c82b122690b81cfbab0265cfd6255
+17209:M 06 May 2024 19:18:03.564 * Node f0648fda209089feb04595850ff99f51f0fb2ba5 () is no longer master of shard 71ddfeaa46e5002962c1f850ecca2bc4f0152083; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:03.564 * Node f0648fda209089feb04595850ff99f51f0fb2ba5 () is now part of shard e57e3844f79664a605c7f2e2b61ad0702feaf18d
+17209:M 06 May 2024 19:18:03.564 * Node 9e51f1caf8c08f552dc747bebbfbb287ce3d5b74 () is no longer master of shard dae9d79e83baa0dbce3720b336c773fde1c02492; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:03.564 * Node 9e51f1caf8c08f552dc747bebbfbb287ce3d5b74 () is now part of shard b1941e40ca7c82b122690b81cfbab0265cfd6255
+17209:M 06 May 2024 19:18:03.564 * Node 05434d3c3db7978583050249cc56e331c3083c27 () is no longer master of shard 30c8fb7d5fcde244056aac469ab0a18d2dfa4e6a; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:03.564 * Node 05434d3c3db7978583050249cc56e331c3083c27 () is now part of shard af57b2c095a58c35952f5be607254c877d1c65e6
+17209:M 06 May 2024 19:18:03.684 * Node ee4e8801b63592ad76065cf689613b8590e8adbd () is no longer master of shard 07caa91caff12c6fc179408189c0b2325234614a; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:03.685 * Node ee4e8801b63592ad76065cf689613b8590e8adbd () is now part of shard b1941e40ca7c82b122690b81cfbab0265cfd6255
+17209:M 06 May 2024 19:18:04.065 * Node 918741e37ed669f9cb19eed7a95073e1eae2a8f1 () is no longer master of shard fe0f6b7f23d33e5bedb35ba3947a32d59a5d868f; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:04.065 * Node 918741e37ed669f9cb19eed7a95073e1eae2a8f1 () is now part of shard af57b2c095a58c35952f5be607254c877d1c65e6
+17209:M 06 May 2024 19:18:04.137 * Node 9735b7886a7f7567bec72eec88999171c7b1481d () is no longer master of shard d0d012e1f78210fb0613fb1538f24f7814fe81bd; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:04.137 * Node 9735b7886a7f7567bec72eec88999171c7b1481d () is now part of shard af57b2c095a58c35952f5be607254c877d1c65e6
+17209:M 06 May 2024 19:18:04.567 * Node 9f07e3ca03ad9d75250fe84b63f941d8609c07fd () is no longer master of shard cb9315006ffe129274468e5ed2feb38a7f33269f; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:04.567 * Node 9f07e3ca03ad9d75250fe84b63f941d8609c07fd () is now part of shard b1941e40ca7c82b122690b81cfbab0265cfd6255
+17209:M 06 May 2024 19:18:05.773 * Cluster state changed: ok
+17209:M 06 May 2024 19:18:11.044 * FAIL message received from 5097e3267f5590392864f4a471c331b04aff1382 () about 450684f318abb9002cec036680f3cb52f5f919b0 ()
+17209:M 06 May 2024 19:18:11.044 # Cluster state changed: fail
+17209:M 06 May 2024 19:18:11.729 * Failover auth granted to 9e51f1caf8c08f552dc747bebbfbb287ce3d5b74 () for epoch 21
+17209:M 06 May 2024 19:18:11.773 * Cluster state changed: ok
+17209:M 06 May 2024 19:18:16.542 * FAIL message received from 3a8410fdf29d80b74cbb245767c5e44636bc3277 () about 9e51f1caf8c08f552dc747bebbfbb287ce3d5b74 ()
+17209:M 06 May 2024 19:18:16.542 # Cluster state changed: fail
+17209:M 06 May 2024 19:18:16.599 * Failover auth granted to b4c96fe54bd211d5373161c89d6e0f09e6bae07a () for epoch 22
+17209:M 06 May 2024 19:18:16.603 # Failover auth denied to ee4e8801b63592ad76065cf689613b8590e8adbd (): already voted for epoch 22
+17209:M 06 May 2024 19:18:16.603 # Failover auth denied to 9f07e3ca03ad9d75250fe84b63f941d8609c07fd (): already voted for epoch 22
+17209:M 06 May 2024 19:18:16.615 # Failover auth denied to 1e008697fe34fc59625174f184ad2adc37042797 : can't vote about this master before 5984 milliseconds
+17209:M 06 May 2024 19:18:24.679 * Failover auth granted to b4c96fe54bd211d5373161c89d6e0f09e6bae07a () for epoch 24
+17209:M 06 May 2024 19:18:24.697 # Failover auth denied to 1e008697fe34fc59625174f184ad2adc37042797 : can't vote about this master before 5982 milliseconds
+17209:M 06 May 2024 19:18:24.723 * Cluster state changed: ok
+17209:M 06 May 2024 19:18:30.537 * Marking node b4c96fe54bd211d5373161c89d6e0f09e6bae07a () as failing (quorum reached).
+17209:M 06 May 2024 19:18:30.538 # Cluster state changed: fail
+17209:M 06 May 2024 19:18:30.567 * Failover auth granted to 9f07e3ca03ad9d75250fe84b63f941d8609c07fd () for epoch 26
+17209:M 06 May 2024 19:18:30.600 * Cluster state changed: ok
+17209:M 06 May 2024 19:18:35.522 * Marking node 9f07e3ca03ad9d75250fe84b63f941d8609c07fd () as failing (quorum reached).
+17209:M 06 May 2024 19:18:35.522 # Cluster state changed: fail
+17209:M 06 May 2024 19:18:37.620 * Failover auth granted to ee4e8801b63592ad76065cf689613b8590e8adbd () for epoch 27
+17209:M 06 May 2024 19:18:37.665 * Cluster state changed: ok
+17209:M 06 May 2024 19:18:42.074 * FAIL message received from 5097e3267f5590392864f4a471c331b04aff1382 () about ee4e8801b63592ad76065cf689613b8590e8adbd ()
+17209:M 06 May 2024 19:18:42.074 # Cluster state changed: fail
+17209:M 06 May 2024 19:18:42.122 * Failover auth granted to 1e008697fe34fc59625174f184ad2adc37042797 () for epoch 28
+17209:M 06 May 2024 19:18:42.165 * Cluster state changed: ok
+17209:M 06 May 2024 19:18:42.294 * Clear FAIL state for node 450684f318abb9002cec036680f3cb52f5f919b0 ():master without slots is reachable again.
+17209:M 06 May 2024 19:18:42.294 * A failover occurred in shard b1941e40ca7c82b122690b81cfbab0265cfd6255; node 450684f318abb9002cec036680f3cb52f5f919b0 () lost 0 slot(s) to node 1e008697fe34fc59625174f184ad2adc37042797 () with a config epoch of 28
+17209:M 06 May 2024 19:18:42.306 * Clear FAIL state for node b4c96fe54bd211d5373161c89d6e0f09e6bae07a ():master without slots is reachable again.
+17209:M 06 May 2024 19:18:42.306 * A failover occurred in shard b1941e40ca7c82b122690b81cfbab0265cfd6255; node b4c96fe54bd211d5373161c89d6e0f09e6bae07a () lost 0 slot(s) to node 1e008697fe34fc59625174f184ad2adc37042797 () with a config epoch of 28
+17209:M 06 May 2024 19:18:42.391 * Clear FAIL state for node ee4e8801b63592ad76065cf689613b8590e8adbd ():master without slots is reachable again.
+17209:M 06 May 2024 19:18:42.392 * A failover occurred in shard b1941e40ca7c82b122690b81cfbab0265cfd6255; node ee4e8801b63592ad76065cf689613b8590e8adbd () lost 0 slot(s) to node 1e008697fe34fc59625174f184ad2adc37042797 () with a config epoch of 28
+17209:M 06 May 2024 19:18:42.492 * Clear FAIL state for node 9f07e3ca03ad9d75250fe84b63f941d8609c07fd ():master without slots is reachable again.
+17209:M 06 May 2024 19:18:42.492 * A failover occurred in shard b1941e40ca7c82b122690b81cfbab0265cfd6255; node 9f07e3ca03ad9d75250fe84b63f941d8609c07fd () lost 0 slot(s) to node 1e008697fe34fc59625174f184ad2adc37042797 () with a config epoch of 28
+17209:M 06 May 2024 19:18:42.561 * configEpoch set to 0 via CLUSTER RESET HARD
+17209:M 06 May 2024 19:18:42.561 * Node hard reset, now I'm cd4cc57a1cdf0aa040558f8cde5529bcc11da351
+17209:M 06 May 2024 19:18:42.561 * configEpoch set to 2 via CLUSTER SET-CONFIG-EPOCH
+17209:M 06 May 2024 19:18:42.561 # Cluster state changed: fail
+17209:M 06 May 2024 19:18:42.566 * CONFIG REWRITE executed with success.
+17209:M 06 May 2024 19:18:42.590 * Connection with replica 127.0.0.1:30004 lost.
+17209:M 06 May 2024 19:18:42.635 * Connection with replica 127.0.0.1:30007 lost.
+17209:M 06 May 2024 19:18:42.668 * Connection with replica 127.0.0.1:30010 lost.
+17209:M 06 May 2024 19:18:42.713 * Connection with replica 127.0.0.1:30013 lost.
+17209:M 06 May 2024 19:18:42.734 * Connection with replica 127.0.0.1:30016 lost.
+17209:M 06 May 2024 19:18:45.314 * Replica 127.0.0.1:30006 asks for synchronization
+17209:M 06 May 2024 19:18:45.314 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'cb3a9996647dc0fdc72ce3f0f0ddcbdde140ec4e', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:18:45.314 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:18:45.315 * Background RDB transfer started by pid 17851
+17851:C 06 May 2024 19:18:45.316 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17209:M 06 May 2024 19:18:45.316 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:18:45.318 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:18:45.318 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:18:45.318 * Synchronization with replica 127.0.0.1:30006 succeeded
+17209:M 06 May 2024 19:18:45.504 * Node 0e7185e5d8d3d3003e3f961ad0a21384374239b2 () is no longer master of shard 72e6065854354810ffc1c4b27bd03d3aa98ee612; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:45.504 * Node 0e7185e5d8d3d3003e3f961ad0a21384374239b2 () is now part of shard 9b63feb91918ade883f573710b5135ce63cca1b7
+17209:M 06 May 2024 19:18:45.534 * Node 4ef320c993d1f723c6e799fc4d9d0d0db57e09d9 () is no longer master of shard 36580aafc4f990aba691d703d25271fe0b114f42; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:45.534 * Node 4ef320c993d1f723c6e799fc4d9d0d0db57e09d9 () is now part of shard 5c56bf8f5102b508a2405dedd16899f245264a91
+17209:M 06 May 2024 19:18:45.535 * Node 73160c92fac075f0525b46dc984b9d0fc00a7319 () is no longer master of shard 8dd948e148227a2c888397f600e5d52a2509a683; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:45.535 * Node 73160c92fac075f0525b46dc984b9d0fc00a7319 () is now part of shard 769aeb08b175de4efdfee71d709927c7f9afc5bf
+17209:M 06 May 2024 19:18:45.536 * Node 0f2a180bc3dd1ca08cf7a4547df0ff1a25981a88 () is no longer master of shard 63309947827e09f9aba7b46062215eeb12e6fa20; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:45.536 * Node 0f2a180bc3dd1ca08cf7a4547df0ff1a25981a88 () is now part of shard 482cb579f47fb8ccd86d73983fba9c22f7197882
+17209:M 06 May 2024 19:18:46.336 * Node bcfc65dd66e5ac03397a54470d6555c63eea6616 () is no longer master of shard 841113874b49ed5f9d1e126879f92ea4392dcdab; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:18:46.336 * Node bcfc65dd66e5ac03397a54470d6555c63eea6616 () is now part of shard 215dc02bf2afb70a46c0e0788801a0f308924862
+17209:M 06 May 2024 19:18:48.148 * Cluster state changed: ok
+17209:M 06 May 2024 19:18:52.513 * FAIL message received from 6e0ef4878fe1c8835271b94d91093f69119e2c5f () about 4ef320c993d1f723c6e799fc4d9d0d0db57e09d9 ()
+17209:M 06 May 2024 19:19:08.682 * Clear FAIL state for node 4ef320c993d1f723c6e799fc4d9d0d0db57e09d9 ():replica is reachable again.
+17209:M 06 May 2024 19:19:12.528 * FAIL message received from e4844e444bd7db045069d93fe2f71d3259852adf () about 03a61a2c512c0aab55d8de4c03711ba741fddb86 ()
+17209:M 06 May 2024 19:19:12.529 # Cluster state changed: fail
+17209:M 06 May 2024 19:19:18.874 * Clear FAIL state for node 03a61a2c512c0aab55d8de4c03711ba741fddb86 (): is reachable again and nobody is serving its slots after some time.
+17209:M 06 May 2024 19:19:18.875 * Cluster state changed: ok
+17209:M 06 May 2024 19:19:18.924 * configEpoch set to 0 via CLUSTER RESET HARD
+17209:M 06 May 2024 19:19:18.924 * Node hard reset, now I'm 3d1a6ede1fb4785f3437ca2ee7d37934e6eb5120
+17209:M 06 May 2024 19:19:18.924 * configEpoch set to 2 via CLUSTER SET-CONFIG-EPOCH
+17209:M 06 May 2024 19:19:18.924 # Cluster state changed: fail
+17209:M 06 May 2024 19:19:18.930 * CONFIG REWRITE executed with success.
+17209:M 06 May 2024 19:19:18.965 * Connection with replica 127.0.0.1:30006 lost.
+17209:M 06 May 2024 19:19:21.913 * Replica 127.0.0.1:30006 asks for synchronization
+17209:M 06 May 2024 19:19:21.913 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '3ef6aa0eec14563c4e12d52f96e3320211382188', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:19:21.913 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:19:21.913 * Background RDB transfer started by pid 17988
+17988:C 06 May 2024 19:19:21.915 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17209:M 06 May 2024 19:19:21.915 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:19:21.918 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:19:21.918 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:19:21.918 * Synchronization with replica 127.0.0.1:30006 succeeded
+17209:M 06 May 2024 19:19:21.956 * Replica 127.0.0.1:30011 asks for synchronization
+17209:M 06 May 2024 19:19:21.956 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '2e5081eb91990cf1314898d5ce5b7e01f35a2c15', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:19:21.956 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:19:21.957 * Background RDB transfer started by pid 17993
+17993:C 06 May 2024 19:19:21.958 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17209:M 06 May 2024 19:19:21.958 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:19:21.960 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:19:21.960 * Streamed RDB transfer with replica 127.0.0.1:30011 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:19:21.960 * Synchronization with replica 127.0.0.1:30011 succeeded
+17209:M 06 May 2024 19:19:22.068 * Node dfea84e0be1bcd49482af5c67f555de10fdf29b3 () is no longer master of shard 01f47c3a12aa4f053a807eeb5eb545c5e07db794; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:22.068 * Node dfea84e0be1bcd49482af5c67f555de10fdf29b3 () is now part of shard f4d0734f796edaeddf2c5d09cbe7bf8e0ddb8692
+17209:M 06 May 2024 19:19:22.195 * Node 6691bd2bc72c367620d9f464e8e3094b802ad6fd () is no longer master of shard b3f6dd9ab5620f4d8bda693091f3d8d36ad0e7d3; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:22.195 * Node 6691bd2bc72c367620d9f464e8e3094b802ad6fd () is now part of shard 64f4303b3e226ea46acf2328b8cbffb940c502e2
+17209:M 06 May 2024 19:19:22.572 * Node d61b725f6dd02d855fdc907190bd06a397b457f8 () is no longer master of shard ab8e805388a16f08bc5fa7bfd304cf9b2f43c122; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:22.572 * Node d61b725f6dd02d855fdc907190bd06a397b457f8 () is now part of shard 64f4303b3e226ea46acf2328b8cbffb940c502e2
+17209:M 06 May 2024 19:19:22.597 * Node 9e613cb2c4712a0062c1b26d3da1ea7442fbf737 () is no longer master of shard 7c13d5b404a532519713ecb0009d48d7b7148c0e; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:22.597 * Node 9e613cb2c4712a0062c1b26d3da1ea7442fbf737 () is now part of shard 9f9dea19e17027f3d40367b3d13d624654fd82d8
+17209:M 06 May 2024 19:19:22.602 * Node 169ce63f84ab73647e330599b7668e357009f9c7 () is no longer master of shard 3e228277d31da320b8d2c0ab0d21aa067371dad3; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:22.602 * Node 169ce63f84ab73647e330599b7668e357009f9c7 () is now part of shard f4d0734f796edaeddf2c5d09cbe7bf8e0ddb8692
+17209:M 06 May 2024 19:19:22.936 * Node 6a162c47ba07cc9853a11bf0ed7c45443e6e18d8 () is no longer master of shard 5d8efc15227cc965bd521169b3cd81eb9295ec19; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:22.936 * Node 6a162c47ba07cc9853a11bf0ed7c45443e6e18d8 () is now part of shard 9f9dea19e17027f3d40367b3d13d624654fd82d8
+17209:M 06 May 2024 19:19:23.048 * Node f483107001db7f57a8bd7a64ac4a49a80b9c200d () is no longer master of shard aae63656731167d9c699175203047b6e26efb4be; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:23.048 * Node f483107001db7f57a8bd7a64ac4a49a80b9c200d () is now part of shard da4f83fcced31239e8986679bcae57566a875c12
+17209:M 06 May 2024 19:19:23.057 * Node c05d247c09a02616a6098580fdea8f4ce435b8bc () is no longer master of shard 1c166555732b739d6e4c1ab4dd8d165e832b3954; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:23.057 * Node c05d247c09a02616a6098580fdea8f4ce435b8bc () is now part of shard da4f83fcced31239e8986679bcae57566a875c12
+17209:M 06 May 2024 19:19:23.077 * Node a62662d22e020ab95e9e5259a64ee8b40ba0a365 () is no longer master of shard 614a1b42f4baa25c7f6d5a11b30ac1fdea247594; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:23.077 * Node a62662d22e020ab95e9e5259a64ee8b40ba0a365 () is now part of shard ad3b8637be272f5e4b5bea22fac4efd021dc27f8
+17209:M 06 May 2024 19:19:23.079 * Node 91aab1feff1314a17b72183eb4e8308f320601b3 () is no longer master of shard d8860f9f28d646383a01d2f3aba63d0f3a3e4faf; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:23.079 * Node 91aab1feff1314a17b72183eb4e8308f320601b3 () is now part of shard ad3b8637be272f5e4b5bea22fac4efd021dc27f8
+17209:M 06 May 2024 19:19:24.786 * Cluster state changed: ok
+17209:M 06 May 2024 19:19:25.621 * Connection with replica 127.0.0.1:30006 lost.
+17209:M 06 May 2024 19:19:25.654 * Connection with replica 127.0.0.1:30011 lost.
+17209:M 06 May 2024 19:19:29.017 * Marking node dfea84e0be1bcd49482af5c67f555de10fdf29b3 () as failing (quorum reached).
+17209:M 06 May 2024 19:19:29.354 * FAIL message received from 5a72c35e8f819673e4c536c527b3bc7968d5372b () about 169ce63f84ab73647e330599b7668e357009f9c7 ()
+17209:M 06 May 2024 19:19:29.536 * FAIL message received from 067f10da6671d30499813707fa18067ea3206b17 () about 6a162c47ba07cc9853a11bf0ed7c45443e6e18d8 ()
+17209:M 06 May 2024 19:19:29.608 * FAIL message received from 43d342695b2be171fe42d4b24f7f98ee415c3435 () about 9e613cb2c4712a0062c1b26d3da1ea7442fbf737 ()
+17209:M 06 May 2024 19:19:35.138 * Replica 127.0.0.1:30009 asks for synchronization
+17209:M 06 May 2024 19:19:35.138 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'd073cf9b323d6bce9c3e21330836b7574b5e4ed2', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:19:35.138 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:19:35.139 * Background RDB transfer started by pid 18070
+18070:C 06 May 2024 19:19:35.140 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17209:M 06 May 2024 19:19:35.141 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:19:35.163 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:19:35.163 * Streamed RDB transfer with replica 127.0.0.1:30009 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:19:35.163 * Synchronization with replica 127.0.0.1:30009 succeeded
+17209:M 06 May 2024 19:19:35.272 * Clear FAIL state for node 169ce63f84ab73647e330599b7668e357009f9c7 ():replica is reachable again.
+17209:M 06 May 2024 19:19:35.291 * Replica 127.0.0.1:30006 asks for synchronization
+17209:M 06 May 2024 19:19:35.291 * Partial resynchronization request from 127.0.0.1:30006 accepted. Sending 14 bytes of backlog starting from offset 1735.
+17209:M 06 May 2024 19:19:35.373 * Clear FAIL state for node 9e613cb2c4712a0062c1b26d3da1ea7442fbf737 ():replica is reachable again.
+17209:M 06 May 2024 19:19:35.378 * Clear FAIL state for node dfea84e0be1bcd49482af5c67f555de10fdf29b3 ():replica is reachable again.
+17209:M 06 May 2024 19:19:35.430 * Replica 127.0.0.1:30011 asks for synchronization
+17209:M 06 May 2024 19:19:35.430 * Partial resynchronization request from 127.0.0.1:30011 accepted. Sending 14 bytes of backlog starting from offset 1735.
+17209:M 06 May 2024 19:19:35.474 * Clear FAIL state for node 6a162c47ba07cc9853a11bf0ed7c45443e6e18d8 ():replica is reachable again.
+17209:M 06 May 2024 19:19:35.491 * configEpoch set to 0 via CLUSTER RESET HARD
+17209:M 06 May 2024 19:19:35.491 * Node hard reset, now I'm a9bcbd3dcf447c72284211f987f72f7dec6eb269
+17209:M 06 May 2024 19:19:35.491 * configEpoch set to 2 via CLUSTER SET-CONFIG-EPOCH
+17209:M 06 May 2024 19:19:35.491 # Cluster state changed: fail
+17209:M 06 May 2024 19:19:35.497 * CONFIG REWRITE executed with success.
+17209:M 06 May 2024 19:19:35.533 * Connection with replica 127.0.0.1:30006 lost.
+17209:M 06 May 2024 19:19:35.576 * Connection with replica 127.0.0.1:30009 lost.
+17209:M 06 May 2024 19:19:35.592 * Connection with replica 127.0.0.1:30011 lost.
+17209:M 06 May 2024 19:19:41.456 * Replica 127.0.0.1:30006 asks for synchronization
+17209:M 06 May 2024 19:19:41.456 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'b6e30e7b7beb5d5fbb2078eafffed3169e6bcf31', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:19:41.456 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:19:41.456 * Background RDB transfer started by pid 18117
+18117:C 06 May 2024 19:19:41.457 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17209:M 06 May 2024 19:19:41.457 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:19:41.470 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:19:41.470 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:19:41.470 * Synchronization with replica 127.0.0.1:30006 succeeded
+17209:M 06 May 2024 19:19:41.497 * Replica 127.0.0.1:30011 asks for synchronization
+17209:M 06 May 2024 19:19:41.498 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'cea07c9d246624d5fcff6a6167f2622d7c53ddaf', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:19:41.498 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:19:41.498 * Background RDB transfer started by pid 18122
+18122:C 06 May 2024 19:19:41.499 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17209:M 06 May 2024 19:19:41.499 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:19:41.501 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:19:41.501 * Streamed RDB transfer with replica 127.0.0.1:30011 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:19:41.501 * Synchronization with replica 127.0.0.1:30011 succeeded
+17209:M 06 May 2024 19:19:41.568 * Node adccbec24d60f54090e36a0e6a0703bacb3c890e () is no longer master of shard 1faef2c01b90ce80c9287617b3462fcd0eb7c5f5; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:41.568 * Node adccbec24d60f54090e36a0e6a0703bacb3c890e () is now part of shard a77eea2c5e3a654920895d37c1cbd2dbc750a2fe
+17209:M 06 May 2024 19:19:42.681 * Node 47c7f0d7e3094aae7d589ff660cee63f462cf92c () is no longer master of shard 5a93a431ee3c1974750eaeb45212552089e1d70f; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:42.681 * Node 47c7f0d7e3094aae7d589ff660cee63f462cf92c () is now part of shard a1b26e71b34081a514fd6e0b60f6df57b5624ab6
+17209:M 06 May 2024 19:19:42.682 * Node fca9dbeac23069ec15538914520ce7ba33fb43c5 () is no longer master of shard 5a313ed6e1afc160d88e2ec76f16f8322d6a6195; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:42.682 * Node fca9dbeac23069ec15538914520ce7ba33fb43c5 () is now part of shard a102d983c1fa32aabf51cc8c6703313fd3153eb5
+17209:M 06 May 2024 19:19:42.682 * Node 208cc47c85e2f37e4bf67550a7534f2dac3c588d () is no longer master of shard a85808b5f3b195646b5e9c75d437940e5910c539; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:42.682 * Node 208cc47c85e2f37e4bf67550a7534f2dac3c588d () is now part of shard e7d3efbc6079822fdca6c15be9f28019ee3f5618
+17209:M 06 May 2024 19:19:42.696 * Node 3c93b8fad484f01b1a2d5e7e5c55a29a75a8d9df () is no longer master of shard be264f012de4ca3b640590c83301730d9edc2c7c; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:42.696 * Node 3c93b8fad484f01b1a2d5e7e5c55a29a75a8d9df () is now part of shard a77eea2c5e3a654920895d37c1cbd2dbc750a2fe
+17209:M 06 May 2024 19:19:42.696 * Node b6d1f331303ea88d453961a6bc247c12cf3f1746 () is no longer master of shard 2cb31efff9b31077914e5d8eee67fad987f900ec; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:42.696 * Node b6d1f331303ea88d453961a6bc247c12cf3f1746 () is now part of shard a1b26e71b34081a514fd6e0b60f6df57b5624ab6
+17209:M 06 May 2024 19:19:42.696 * Node 80ff208fc4ecb27a6794991c3774578fada90ceb () is no longer master of shard b24cc857a20e418c76000cf7bb7c2121d56535c8; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:42.696 * Node 80ff208fc4ecb27a6794991c3774578fada90ceb () is now part of shard 5d62c1956a9584bbd08a7a4e543b407d4b8313e1
+17209:M 06 May 2024 19:19:42.696 * Node 801403f53dd98a8a4d2f3d43e78a2214c99c863e () is no longer master of shard c249ff0fc7be1576faf8724b7784974260ba49cf; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:42.696 * Node 801403f53dd98a8a4d2f3d43e78a2214c99c863e () is now part of shard e7d3efbc6079822fdca6c15be9f28019ee3f5618
+17209:M 06 May 2024 19:19:42.697 * Node 794c5f0e6a1ac7ff0525a9b6f4e492eac0fbed21 () is no longer master of shard 63920ee806c2e289c54a7d03a407de389e09cdfa; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:42.697 * Node 794c5f0e6a1ac7ff0525a9b6f4e492eac0fbed21 () is now part of shard a102d983c1fa32aabf51cc8c6703313fd3153eb5
+17209:M 06 May 2024 19:19:44.193 * Node 0b8db5c36a489b4933345bc1515de904fb6a786f () is no longer master of shard c707b138b75efd32e96dd0d45165ae682cc6e5bb; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:44.193 * Node 0b8db5c36a489b4933345bc1515de904fb6a786f () is now part of shard 5d62c1956a9584bbd08a7a4e543b407d4b8313e1
+17209:M 06 May 2024 19:19:44.293 * Cluster state changed: ok
+17209:M 06 May 2024 19:19:49.144 * FAIL message received from 9f1e4387e843af5d17bd76f660aaeba8f408efe3 () about 2abfa8eefbebcdd70c094869ef85501903c7d0c4 ()
+17209:M 06 May 2024 19:19:49.144 # Cluster state changed: fail
+17209:M 06 May 2024 19:19:49.190 * FAIL message received from 9f1e4387e843af5d17bd76f660aaeba8f408efe3 () about b6d1f331303ea88d453961a6bc247c12cf3f1746 ()
+17209:M 06 May 2024 19:19:50.242 * Failover auth granted to 47c7f0d7e3094aae7d589ff660cee63f462cf92c () for epoch 21
+17209:M 06 May 2024 19:19:50.287 * Cluster state changed: ok
+17209:M 06 May 2024 19:19:55.488 * Clear FAIL state for node 2abfa8eefbebcdd70c094869ef85501903c7d0c4 ():master without slots is reachable again.
+17209:M 06 May 2024 19:19:55.488 * A failover occurred in shard a1b26e71b34081a514fd6e0b60f6df57b5624ab6; node 2abfa8eefbebcdd70c094869ef85501903c7d0c4 () lost 0 slot(s) to node 47c7f0d7e3094aae7d589ff660cee63f462cf92c () with a config epoch of 21
+17209:M 06 May 2024 19:19:55.577 * configEpoch set to 0 via CLUSTER RESET HARD
+17209:M 06 May 2024 19:19:55.577 * Node hard reset, now I'm df186e74ee495a775715dc46f82a29689356f87b
+17209:M 06 May 2024 19:19:55.578 * configEpoch set to 2 via CLUSTER SET-CONFIG-EPOCH
+17209:M 06 May 2024 19:19:55.578 # Cluster state changed: fail
+17209:M 06 May 2024 19:19:55.590 * CONFIG REWRITE executed with success.
+17209:M 06 May 2024 19:19:55.627 * Connection with replica 127.0.0.1:30006 lost.
+17209:M 06 May 2024 19:19:55.663 * Connection with replica 127.0.0.1:30011 lost.
+17209:M 06 May 2024 19:19:58.953 * Replica 127.0.0.1:30006 asks for synchronization
+17209:M 06 May 2024 19:19:58.954 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '8bd0e5bd12bc59db04c38dd3976f5c58885df8f0', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:19:58.954 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:19:58.954 * Background RDB transfer started by pid 18202
+18202:C 06 May 2024 19:19:58.955 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17209:M 06 May 2024 19:19:58.955 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:19:58.959 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:19:58.959 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:19:58.959 * Synchronization with replica 127.0.0.1:30006 succeeded
+17209:M 06 May 2024 19:19:59.515 * Node ecbcb5be44c9e81ac340cc03f4e84abaa8d98e19 () is no longer master of shard 5679c354a9e2cf8cb62b26598f6d9e6a0f79b90d; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:59.515 * Node ecbcb5be44c9e81ac340cc03f4e84abaa8d98e19 () is now part of shard 5a15e11d32c6794f2f89faac54fc339efde5e362
+17209:M 06 May 2024 19:19:59.602 * Node 163d3de19db2cb163010c38f385297acaacd0fe6 () is no longer master of shard 8980e70c0b02f85ca396ef3dc659e0dfe2f2edd4; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:59.602 * Node 163d3de19db2cb163010c38f385297acaacd0fe6 () is now part of shard 463631d5c660f73be6acc894f4e68e2bc6bf1f04
+17209:M 06 May 2024 19:19:59.843 * Node a62a8167d5508534ea9bf51fc947454349f1d3bb () is no longer master of shard 78683b2cc868ee4a3e989125c612bea0bc5c90c0; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:19:59.843 * Node a62a8167d5508534ea9bf51fc947454349f1d3bb () is now part of shard b30cbe386d5d2fec228eb45db97ba04991f5020e
+17209:M 06 May 2024 19:20:00.039 * Node caf83072d9c11f919729af96326335b051c7af49 () is no longer master of shard 6dd4af3291b64805920b88cdb4d7d83d44852f08; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:20:00.039 * Node caf83072d9c11f919729af96326335b051c7af49 () is now part of shard ada3b4025b51be85bbb1fa1df0e1b44871badaa9
+17209:M 06 May 2024 19:20:00.518 * Node 334beb692e0626a4ea1257acac41aaf9962330a7 () is no longer master of shard 5bedd120fdbe94c16f2c067685528596a15fe6e3; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:20:00.518 * Node 334beb692e0626a4ea1257acac41aaf9962330a7 () is now part of shard e44c3a3bb3cc89ed450e11c453728db45301a89d
+17209:M 06 May 2024 19:20:01.748 * Cluster state changed: ok
+17209:M 06 May 2024 19:20:07.036 * FAIL message received from b2794df9d2dedc8cc3d17b75bd5d3e5c8ca3f180 () about 87c9e3fe2e97200a971dc5aee1822009f9498072 ()
+17209:M 06 May 2024 19:20:07.036 # Cluster state changed: fail
+17209:M 06 May 2024 19:20:07.877 * Failover auth granted to ecbcb5be44c9e81ac340cc03f4e84abaa8d98e19 () for epoch 21
+17209:M 06 May 2024 19:20:07.925 * Cluster state changed: ok
+17209:M 06 May 2024 19:20:12.092 * FAIL message received from a470ecfb84686f1c17778838dfcbeb2ec78c9395 () about ecbcb5be44c9e81ac340cc03f4e84abaa8d98e19 ()
+17209:M 06 May 2024 19:20:12.096 # Cluster state changed: fail
+17209:M 06 May 2024 19:20:12.159 * Clear FAIL state for node 87c9e3fe2e97200a971dc5aee1822009f9498072 ():master without slots is reachable again.
+17209:M 06 May 2024 19:20:13.660 * A failover occurred in shard 5a15e11d32c6794f2f89faac54fc339efde5e362; node 87c9e3fe2e97200a971dc5aee1822009f9498072 () lost 0 slot(s) to node ecbcb5be44c9e81ac340cc03f4e84abaa8d98e19 () with a config epoch of 21
+17209:M 06 May 2024 19:20:18.309 * Clear FAIL state for node ecbcb5be44c9e81ac340cc03f4e84abaa8d98e19 (): is reachable again and nobody is serving its slots after some time.
+17209:M 06 May 2024 19:20:18.309 * Cluster state changed: ok
+17209:M 06 May 2024 19:20:20.598 * configEpoch set to 0 via CLUSTER RESET HARD
+17209:M 06 May 2024 19:20:20.598 * Node hard reset, now I'm a9907cac86c0b97ebd03526622da942e28afa7d8
+17209:M 06 May 2024 19:20:20.598 * configEpoch set to 2 via CLUSTER SET-CONFIG-EPOCH
+17209:M 06 May 2024 19:20:20.598 # Cluster state changed: fail
+17209:M 06 May 2024 19:20:20.603 * CONFIG REWRITE executed with success.
+17209:M 06 May 2024 19:20:20.633 * Connection with replica 127.0.0.1:30006 lost.
+17209:M 06 May 2024 19:20:24.993 * Replica 127.0.0.1:30006 asks for synchronization
+17209:M 06 May 2024 19:20:24.993 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '6cabb1c888198d7d1cef6f6d99a52e19458ba182', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:20:24.993 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:20:24.993 * Background RDB transfer started by pid 18297
+18297:C 06 May 2024 19:20:24.995 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17209:M 06 May 2024 19:20:24.995 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:20:24.997 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:20:24.997 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:20:24.997 * Synchronization with replica 127.0.0.1:30006 succeeded
+17209:M 06 May 2024 19:20:25.196 * Node 4c26a1fcc6d2fe9debc60d491053b0cf6618a4ed () is no longer master of shard e8e4bf95f861f348154c047f60ca28434502f73e; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:20:25.196 * Node 4c26a1fcc6d2fe9debc60d491053b0cf6618a4ed () is now part of shard a0b63e81b62eaf4c5711335c6f1846909bf7fd69
+17209:M 06 May 2024 19:20:25.555 * Node 568aac2645b6f747cc54704b8839b3eba6ea8563 () is no longer master of shard ad7c5024c1a4d2a21dcf6f4a1d9b1f45ff1ead2d; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:20:25.555 * Node 568aac2645b6f747cc54704b8839b3eba6ea8563 () is now part of shard 67e314dae915c111e42745e09df1e650a83178cf
+17209:M 06 May 2024 19:20:25.563 * Node f2264c981ff99322862f3de220948842b1f6ba1f () is no longer master of shard d22c30d988eed1903566ab8b5147735674e58aca; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:20:25.563 * Node f2264c981ff99322862f3de220948842b1f6ba1f () is now part of shard 3671e746eaf2973108e1ea8bdd09970af685d6ad
+17209:M 06 May 2024 19:20:25.564 * Node 4c6bf93f4560c44206e9ae153747809786d36116 () is no longer master of shard 5736e9db4e80aceb59df82a4860201928e6e2dfe; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:20:25.565 * Node 4c6bf93f4560c44206e9ae153747809786d36116 () is now part of shard 19776fe3f0224c8eb88fdc51c9073d888852d019
+17209:M 06 May 2024 19:20:25.566 * Node 7d23a031d90aa6bc6893630f40ee5cf640088fe7 () is no longer master of shard c5c35fe41b55a11da192d43a8da61be171aa83e6; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:20:25.566 * Node 7d23a031d90aa6bc6893630f40ee5cf640088fe7 () is now part of shard e04c9009be37f9eec889c59340dc040d0fa0aeb8
+17209:M 06 May 2024 19:20:27.775 * Cluster state changed: ok
+17209:M 06 May 2024 19:20:28.610 * configEpoch set to 0 via CLUSTER RESET HARD
+17209:M 06 May 2024 19:20:28.610 * Node hard reset, now I'm 4c7ab9f75638093f990c958e301a0bf1b0864bec
+17209:M 06 May 2024 19:20:28.610 * configEpoch set to 2 via CLUSTER SET-CONFIG-EPOCH
+17209:M 06 May 2024 19:20:28.610 # Cluster state changed: fail
+17209:M 06 May 2024 19:20:28.614 * CONFIG REWRITE executed with success.
+17209:M 06 May 2024 19:20:28.669 * Connection with replica 127.0.0.1:30006 lost.
+17209:M 06 May 2024 19:20:31.999 * Replica 127.0.0.1:30006 asks for synchronization
+17209:M 06 May 2024 19:20:31.999 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for '428180ebdd560d74fbcc6ebf7c50dafcaa3f19a7', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:20:31.999 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:20:32.000 * Background RDB transfer started by pid 18327
+18327:C 06 May 2024 19:20:32.002 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17209:M 06 May 2024 19:20:32.002 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:20:32.003 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:20:32.003 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:20:32.003 * Synchronization with replica 127.0.0.1:30006 succeeded
+17209:M 06 May 2024 19:20:32.147 * Node 3500eeb0c27fbcd680bc59f0bd19aca81ac51372 () is no longer master of shard 7ac3ac70c33592cdd414687cbff2db517d34143f; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:20:32.147 * Node 3500eeb0c27fbcd680bc59f0bd19aca81ac51372 () is now part of shard aa921447f701c6e1037283664b481acd5dcc18fa
+17209:M 06 May 2024 19:20:32.193 * Node 8f5c6ef31ffc0d64c65cd285f1e1d3dfd9744bc8 () is no longer master of shard 5c7f555424b6dd7244521040fed352e8a690f783; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:20:32.193 * Node 8f5c6ef31ffc0d64c65cd285f1e1d3dfd9744bc8 () is now part of shard 82ad93ba4e7c80d6359231435757456cc87347ed
+17209:M 06 May 2024 19:20:33.508 * Node 825390a470534406b83be059e6fecaf93dbe83a3 () is no longer master of shard b2b496b97d756568bb9cc80df81baa9597a2a1e0; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:20:33.508 * Node 825390a470534406b83be059e6fecaf93dbe83a3 () is now part of shard 9628b03c98fa51a28e8367ab2c3e2abc75d63330
+17209:M 06 May 2024 19:20:33.513 * Node 50f8af8bddb3cb25a8322a76a04954c53eeb77b9 () is no longer master of shard 10725e1ebc3e8158a7f12329adb9ba56ee854bc1; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:20:33.514 * Node 50f8af8bddb3cb25a8322a76a04954c53eeb77b9 () is now part of shard bbfd84d9a82d8e08bb771735fe383b7ddafd08ba
+17209:M 06 May 2024 19:20:33.521 * Node 7af9ba57b6fbc0d8a7f97e8a5c86bb8b04b48199 () is no longer master of shard c0ff426f83007655b38a9ba2767c988c6843ca09; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:20:33.521 * Node 7af9ba57b6fbc0d8a7f97e8a5c86bb8b04b48199 () is now part of shard c149d2cb057be6b4c53e6cda4f8361117987c75b
+17209:M 06 May 2024 19:20:34.826 * Cluster state changed: ok
+17209:M 06 May 2024 19:20:37.001 * Failover auth granted to 50f8af8bddb3cb25a8322a76a04954c53eeb77b9 () for epoch 21
+17209:M 06 May 2024 19:20:37.543 * A failover occurred in shard bbfd84d9a82d8e08bb771735fe383b7ddafd08ba; node 0e59ecb0630140741e54370064819bde1c9ca23d () lost 0 slot(s) to node 50f8af8bddb3cb25a8322a76a04954c53eeb77b9 () with a config epoch of 21
+17209:M 06 May 2024 19:20:40.458 * configEpoch set to 0 via CLUSTER RESET HARD
+17209:M 06 May 2024 19:20:40.458 * Node hard reset, now I'm 0c439cf0011f71fc08e70a55d4dcdb1fb613b855
+17209:M 06 May 2024 19:20:40.459 * configEpoch set to 2 via CLUSTER SET-CONFIG-EPOCH
+17209:M 06 May 2024 19:20:40.459 # Cluster state changed: fail
+17209:M 06 May 2024 19:20:40.464 * CONFIG REWRITE executed with success.
+17209:M 06 May 2024 19:20:40.501 * Connection with replica 127.0.0.1:30006 lost.
+17209:M 06 May 2024 19:20:44.993 * Replica 127.0.0.1:30006 asks for synchronization
+17209:M 06 May 2024 19:20:44.994 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'a3f3c71978e13cc8ce6e87373797dbc86cc75c16', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:20:44.994 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:20:44.994 * Background RDB transfer started by pid 18356
+18356:C 06 May 2024 19:20:44.996 * Fork CoW for RDB: current 1 MB, peak 1 MB, average 1 MB
+17209:M 06 May 2024 19:20:44.996 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:20:44.997 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:20:44.997 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:20:44.997 * Synchronization with replica 127.0.0.1:30006 succeeded
+17209:M 06 May 2024 19:20:45.098 * Node 03f7c6a10e67bff0c5fac874576c356de6d20fb3 () is no longer master of shard f9fc60420f4df6321dff2cb65cfd5443410eaf16; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:20:45.098 * Node 03f7c6a10e67bff0c5fac874576c356de6d20fb3 () is now part of shard 2f2e8949560f25624e4d18237b260e2412773d08
+17209:M 06 May 2024 19:20:45.099 * Node e0fb6aab67e48702bb3257b35176c6bec33ac399 () is no longer master of shard 5894da5030fb6ea0d4890f9fcaefbcb689467382; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:20:45.099 * Node e0fb6aab67e48702bb3257b35176c6bec33ac399 () is now part of shard 942404fb5086368ee22ef226fc325d99eead816a
+17209:M 06 May 2024 19:20:45.560 * Node 8053da283ed5221065f944f98f73e25c61a010dd () is no longer master of shard 065f0cbdfb7ce180a059fcb58c1396f6f36e7c7e; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:20:45.560 * Node 8053da283ed5221065f944f98f73e25c61a010dd () is now part of shard d13e21ba301f8eb2ca5630faf519e74520eb0320
+17209:M 06 May 2024 19:20:45.596 * Node 8162a5e33aefd5da3d8e53c51436fb8e5f04157d () is no longer master of shard ac0a659a65ff86d0acb03beca99488cf675db0b9; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:20:45.596 * Node 8162a5e33aefd5da3d8e53c51436fb8e5f04157d () is now part of shard 79761404f49765dfc1452b3572ad1557043c4b29
+17209:M 06 May 2024 19:20:45.606 * Node 968e407a2757f6786a27813986652641dfa8c53e () is no longer master of shard c23ee8d4ddce6cd592f3f5d11f12e6f0e7d8357b; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:20:45.606 * Node 968e407a2757f6786a27813986652641dfa8c53e () is now part of shard 3dd139d2458ce1ba40162b75a210452f2564f13f
+17209:M 06 May 2024 19:20:47.812 * Cluster state changed: ok
+17209:M 06 May 2024 19:20:51.737 * FAIL message received from cf6fdb89f625f08d607b33125f0227fce622927f () about 51d1f09230533baaac63ae94738bf70b5db09342 ()
+17209:M 06 May 2024 19:20:51.737 # Cluster state changed: fail
+17209:M 06 May 2024 19:20:51.750 * Failover auth granted to e0fb6aab67e48702bb3257b35176c6bec33ac399 () for epoch 21
+17209:M 06 May 2024 19:20:52.696 * Cluster state changed: ok
+17209:M 06 May 2024 19:20:58.467 * Clear FAIL state for node 51d1f09230533baaac63ae94738bf70b5db09342 ():master without slots is reachable again.
+17209:M 06 May 2024 19:20:58.468 * A failover occurred in shard 942404fb5086368ee22ef226fc325d99eead816a; node 51d1f09230533baaac63ae94738bf70b5db09342 () lost 0 slot(s) to node e0fb6aab67e48702bb3257b35176c6bec33ac399 () with a config epoch of 21
+17209:M 06 May 2024 19:20:59.018 * configEpoch set to 0 via CLUSTER RESET HARD
+17209:M 06 May 2024 19:20:59.018 * Node hard reset, now I'm 19ff2ee443f1ccd8725f2fa5df376d1ab4fd78cc
+17209:M 06 May 2024 19:20:59.018 * configEpoch set to 2 via CLUSTER SET-CONFIG-EPOCH
+17209:M 06 May 2024 19:20:59.018 # Cluster state changed: fail
+17209:M 06 May 2024 19:20:59.050 * CONFIG REWRITE executed with success.
+17209:M 06 May 2024 19:20:59.090 * Connection with replica 127.0.0.1:30006 lost.
+17209:M 06 May 2024 19:21:02.894 * Replica 127.0.0.1:30006 asks for synchronization
+17209:M 06 May 2024 19:21:02.894 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'e56ce2bd14f6e6c413abf0475b59304210c5b837', my replication IDs are '4c29d593488fe1b3f89d03c63c6585c7e5b12bd4' and '0000000000000000000000000000000000000000')
+17209:M 06 May 2024 19:21:02.894 * Starting BGSAVE for SYNC with target: replicas sockets
+17209:M 06 May 2024 19:21:02.894 * Background RDB transfer started by pid 18409
+18409:C 06 May 2024 19:21:02.896 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+17209:M 06 May 2024 19:21:02.896 * Diskless rdb transfer, done reading from pipe, 1 replicas still up.
+17209:M 06 May 2024 19:21:02.898 * Background RDB transfer terminated with success
+17209:M 06 May 2024 19:21:02.898 * Streamed RDB transfer with replica 127.0.0.1:30006 succeeded (socket). Waiting for REPLCONF ACK from replica to enable streaming
+17209:M 06 May 2024 19:21:02.898 * Synchronization with replica 127.0.0.1:30006 succeeded
+17209:M 06 May 2024 19:21:03.110 * Node ea188db865fa34fa05775d699ccded36d0a815f0 () is no longer master of shard c9cdbc7bf1fd6b9537f6151b0e7952ae57507332; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:21:03.110 * Node ea188db865fa34fa05775d699ccded36d0a815f0 () is now part of shard 1e32518e495bab53ce49d6b0b26890950d0e6932
+17209:M 06 May 2024 19:21:03.514 * Node c30b7ede25963c304ed3b564e73b8fe0144a0723 () is no longer master of shard 122cd1fcb92a7460821b86e1e2d20ae156aef07b; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:21:03.514 * Node c30b7ede25963c304ed3b564e73b8fe0144a0723 () is now part of shard 9c3ef340a0f3031400e88f148755f8e3a44c39cc
+17209:M 06 May 2024 19:21:03.519 * Node 089e7fb433a0847f9e708db936533110ce0cbea5 () is no longer master of shard c9e0b1451dee8dfc4e893df748587b969a26f679; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:21:03.519 * Node 089e7fb433a0847f9e708db936533110ce0cbea5 () is now part of shard 75be0656223117757620482d8547e5fe2e896de1
+17209:M 06 May 2024 19:21:04.018 * Node 3213008a052e3d1f53d4bd09bc5dafcc1093df23 () is no longer master of shard 48c7ccc13115e6584257112f348f460ed6b3d90b; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:21:04.018 * Node 3213008a052e3d1f53d4bd09bc5dafcc1093df23 () is now part of shard 4897fecbf064c3a5fe304e8cc5bfc121e96f4d0d
+17209:M 06 May 2024 19:21:04.323 * Node 9b69ab04795d6bc643cc24ff909006021bb42465 () is no longer master of shard 54e8a9afa1bd7f67c860e6b09192d24f3b4b5af0; removed all 0 slot(s) it used to own
+17209:M 06 May 2024 19:21:04.323 * Node 9b69ab04795d6bc643cc24ff909006021bb42465 () is now part of shard fdf0c30757c93c36c4d6e2340444130d7ab6fd1c
+17209:M 06 May 2024 19:21:05.729 * Cluster state changed: ok
+17209:M 06 May 2024 19:21:06.810 * Failover auth granted to 9b69ab04795d6bc643cc24ff909006021bb42465 () for epoch 21
+17209:M 06 May 2024 19:21:10.562 * FAIL message received from 4816b0fa4e909697f2f79ac7605b852ec0d22927 () about f1ab9aca89352244cecd21bb2bebff73910a1237 ()
+17209:signal-handler (1715023274) Received SIGINT scheduling shutdown...
+17209:M 06 May 2024 19:21:14.586 * User requested shutdown...
+17209:M 06 May 2024 19:21:14.586 * 1 of 1 replicas are in sync when shutting down.
+17209:M 06 May 2024 19:21:14.586 # Valkey is now ready to exit, bye bye...

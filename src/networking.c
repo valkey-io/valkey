@@ -2907,6 +2907,20 @@ sds getAllClientsInfoString(int type) {
     return o;
 }
 
+long long getAllClientsCount(int type){
+    listNode *ln;
+    listIter li;
+    client *client;
+    long long count = 0;
+    listRewind(server.clients, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        client = listNodeValue(ln);
+        if (type != -1 && getClientType(client) != type) continue;
+        count++;
+    }
+    return count;
+}
+
 /* Check validity of an attribute that's gonna be shown in CLIENT LIST. */
 int validateClientAttr(const char *val) {
     /* Check if the charset is ok. We need to do this otherwise
@@ -3080,8 +3094,14 @@ void clientCommand(client *c) {
 "      Return clients of specified type.",
 "    * USER <username>",
 "      Return clients of specified user.",
-"COUNT <username>",
-"    Return the count of clients connected with the specified username.",
+"COUNT [options ...]",
+"    Return the count of clients connections. Options:",
+"    * TYPE (NORMAL|MASTER|REPLICA|PUBSUB)",
+"      Return count of clients of specified type.",
+"    * USER <username>",
+"      Return count of clients of specified user.",
+"    * ID <client-id>",
+"      Return count of clients of specified client id.",
 "UNPAUSE",
 "    Stop the current client pause, resuming traffic.",
 "PAUSE <timeout> [WRITE|ALL]",
@@ -3308,8 +3328,20 @@ NULL
          * only after we queued the reply to its output buffers. */
         if (close_this_client) c->flags |= CLIENT_CLOSE_AFTER_REPLY;
     } else if (!strcasecmp(c->argv[1]->ptr, "count")) {
+        int type = -1;
         user *user = NULL;
-        if (c->argc == 3) {
+        long long count = 0;
+        if (c->argc == 4 && !strcasecmp(c->argv[2]->ptr,"type")) {
+            type = getClientTypeByName(c->argv[3]->ptr);
+            if (type == -1) {
+                addReplyErrorFormat(c, "Unknown client type '%s'",
+                                    (char *) c->argv[3]->ptr);
+                return;
+            }
+            count = getAllClientsCount(type);
+            addReplyLongLong(c,count);
+            return;
+        }else if (c->argc == 3) {
             user = ACLGetUserByName(c->argv[2]->ptr,
                                     sdslen(c->argv[2]->ptr));
             if (user == NULL) {
@@ -3317,9 +3349,24 @@ NULL
                                     (char *) c->argv[2]->ptr);
                 return;
             }
-            sds o = sdscatprintf(sdsempty(), "%lu", listLength(user->clients));
-            addReplyVerbatim(c, o, sdslen(o), "txt");
-            sdsfree(o);
+            count = listLength(user->clients);
+            addReplyLongLong(c, count);
+            return;
+        }else if (c->argc > 3 && !strcasecmp(c->argv[2]->ptr, "id")) {
+            int j;
+            int arrLen = c->argc - 3;
+            addReplyArrayLen(c,arrLen);
+            for (j = 0; j < arrLen; j++) {
+                long long cid;
+                if (getLongLongFromObjectOrReply(c, c->argv[j+3],&cid,NULL) != C_OK) return;
+                client *cl = lookupClientByID(cid);
+                if (cl) {
+                    count = listLength(cl->user->clients);
+                    addReplyLongLong(c, count);
+                } else {
+                    addReplyLongLong(c, 0);
+                }
+            }
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;

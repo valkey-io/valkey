@@ -2527,18 +2527,20 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                 server.cluster->importing_slots_from[j] = NULL;
                 /* Take over the slot ownership if I am not the owner yet*/
                 if (server.cluster->slots[j] != myself) {
-                    /* We intentionally avoid updating myself's configEpoch when
-                    * taking ownership of this slot. This approach is effective
-                    * in scenarios where my primary crashed during the slot
-                    * finalization process. I became the new primary without
-                    * inheriting the slot ownership, while the source shard
-                    * continued and relinquished the slot.
-                    *
-                    * By not increasing myself's configEpoch, we ensure that
-                    * if the slot is correctly migrated to another primary, I
-                    * will not mistakenly claim ownership. Instead, any ownership
-                    * conflicts will be resolved accurately based on configEpoch
-                    * values. */
+                    /* We intentionally avoid updating myself's configEpoch when taking ownership
+                     * of this slot. This approach is effective in cases where my primary crashed
+                     * during the slot finalization process, leading me to become the new primary
+                     * without inheriting the slot ownership, while the source shard continued and
+                     * relinquished the slot to its old primary. Under such circumstances, the node
+                     * would undergo an election and have its config epoch increased with consensus.
+                     * Nevertheless, there are scenarios where the source shard may have transferred
+                     * the slot to a different shard. In these cases, it is important not to increase
+                     * my config epoch without consensus, as this could mistakenly undo the actual intent.
+                     *
+                     * By maintaining the current configEpoch, we ensure accurate conflict resolution
+                     * based on configEpoch values if the slot is correctly migrated to another primary.
+                     * This approach differs from cases where we increment the config epoch without
+                     * consensus, where there exists an explicit intent to assume slot ownership. */
                     clusterDelSlot(j);
                     clusterAddSlot(myself,j);
                     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG|

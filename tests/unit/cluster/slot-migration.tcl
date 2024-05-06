@@ -15,7 +15,9 @@ proc get_cluster_role {srv_idx} {
 }
 
 proc wait_for_role {srv_idx role} {
-    cluster_config_consistent
+    set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
+    # wait for a gossip cycle for states to be propagated throughout the cluster
+    after $node_timeout
     wait_for_condition 100 100 {
         [lindex [split [R $srv_idx ROLE] " "] 0] eq $role
     } else {

@@ -2527,22 +2527,21 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                 server.cluster->importing_slots_from[j] = NULL;
                 /* Take over the slot ownership if I am not the owner yet*/
                 if (server.cluster->slots[j] != myself) {
-                    /* We intentionally avoid updating myself's configEpoch when taking ownership
-                     * of this slot. This approach is effective in cases where my primary crashed
-                     * during the slot finalization process, leading me to become the new primary
-                     * without inheriting the slot ownership, while the source shard continued and
-                     * relinquished the slot to its old primary. Under such circumstances, the node
-                     * would undergo an election and have its config epoch increased with consensus.
-                     * Nevertheless, there are scenarios where the source shard may have transferred
-                     * the slot to a different shard. In these cases, it is important not to increase
-                     * my config epoch without consensus, as this could mistakenly undo the actual intent.
-                     *
-                     * By maintaining the current configEpoch, we ensure accurate conflict resolution
-                     * based on configEpoch values if the slot is correctly migrated to another primary.
-                     * This approach differs from cases where we increment the config epoch without
-                     * consensus, where there exists an explicit intent to assume slot ownership. */
+                    /* A primary reason why we are here is likely due to my primary crashing during the
+                     * slot finalization process, leading me to become the new primary without
+                     * inheriting the slot ownership, while the source shard continued and relinquished
+                     * theslot to its old primary. Under such circumstances, the node would undergo
+                     * an election and have its config epoch increased with consensus. That said, we
+                     * will still explicitly bump the config epoch here to be consistent with the
+                     * existing practice.
+                     * Nevertheless, there are scenarios where the source shard may have transferred slot
+                     * to a different shard. In these cases, the bumping of the config epoch
+                     * could result in that slot assignment getting reverted. However, we consider
+                     * this as a very rare case and err on the side of being consistent with the current
+                     * practice. */
                     clusterDelSlot(j);
                     clusterAddSlot(myself,j);
+                    clusterBumpConfigEpochWithoutConsensus();
                     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG|
                                          CLUSTER_TODO_UPDATE_STATE|
                                          CLUSTER_TODO_FSYNC_CONFIG);

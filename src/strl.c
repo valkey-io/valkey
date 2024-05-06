@@ -53,7 +53,7 @@ valkey_strlcpy(char *dst, const char *src, size_t dsize)
  * If retval >= dsize, truncation occurred.
  */
 size_t
-redis_strlcat(char *dst, const char *src, size_t dsize)
+valkey_strlcat(char *dst, const char *src, size_t dsize)
 {
     const char *odst = dst;
     const char *osrc = src;

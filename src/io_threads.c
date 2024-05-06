@@ -193,6 +193,17 @@ void adjustIOThreadsByEventLoad(int numevents, int increase_only) {
     }
 }
 
+/* This function performs polling on the given event loop and updates the server's
+ * IO fired events count and poll state. */
+void IOThreadPoll(void *data) {
+    aeEventLoop *el = (aeEventLoop *)data;
+    struct timeval tvp = {0, 0};
+    int num_events = aePoll(el, &tvp);
+
+    server.io_ae_fired_events = num_events;
+    atomic_store_explicit(&server.io_poll_state, AE_IO_STATE_DONE, memory_order_release);
+}
+
 static void *IOThreadMain(void *myid) {
     /* The ID is the thread ID number (from 1 to server.io_threads_num-1). ID 0 is the main thread. */
     long id = (long)myid;
@@ -283,6 +294,8 @@ void killIOThreads(void) {
 /* Initialize the data structures needed for I/O threads. */
 void initIOThreads(void) {
     server.active_io_threads_num = 1; /* We start with threads not active. */
+    server.io_poll_state = AE_IO_STATE_NONE;
+    server.io_ae_fired_events = 0;
 
     /* Don't spawn any thread if the user selected a single thread:
      * we'll handle I/O directly from the main thread. */
@@ -484,4 +497,53 @@ int tryOffloadFreeObjToIOThreads(robj *obj) {
     IOJobQueue_push(jq, decrRefCountVoid, obj);
     server.stat_io_freed_objects++;
     return C_OK;
+}
+
+/* This function retrieves the results of the IO Thread poll.
+ * returns the number of fired events if the IO thread has finished processing poll events, 0 otherwise. */
+static int getIOThreadPollResults(aeEventLoop *eventLoop) {
+    int io_state;
+    io_state = atomic_load_explicit(&server.io_poll_state, memory_order_acquire);
+    if (io_state == AE_IO_STATE_POLL) {
+        /* IO thread is still processing poll events. */
+        return 0;
+    }
+
+    /* IO thread is done processing poll events. */
+    serverAssert(io_state == AE_IO_STATE_DONE);
+    server.stat_poll_processed_by_io_threads++;
+    server.io_poll_state = AE_IO_STATE_NONE;
+
+    /* Remove the custom poll proc. */
+    aeSetCustomPollProc(eventLoop, NULL);
+    aeSetPollProtect(eventLoop, 0);
+    return server.io_ae_fired_events;
+}
+
+void trySendPollJobToIOThreads(void) {
+    if (server.active_io_threads_num <= 1) {
+        return;
+    }
+
+    /* If there are no pending jobs, let the main thread do the poll-wait by itself. */
+    if (listLength(server.clients_pending_io_write) + listLength(server.clients_pending_io_read) == 0) {
+        return;
+    }
+
+    /* If the IO thread is already processing poll events, don't send another job. */
+    if (server.io_poll_state != AE_IO_STATE_NONE) {
+        return;
+    }
+
+    /* The poll is sent to the last thread. While a random thread could have been selected,
+     * the last thread has a slightly better chance of being less loaded compared to other threads,
+     * As we activate the lowest threads first. */
+    int tid = server.active_io_threads_num - 1;
+    IOJobQueue *jq = &io_jobs[tid];
+    if (IOJobQueue_isFull(jq)) return; /* The main thread will handle the poll itself. */
+
+    server.io_poll_state = AE_IO_STATE_POLL;
+    aeSetCustomPollProc(server.el, getIOThreadPollResults);
+    aeSetPollProtect(server.el, 1);
+    IOJobQueue_push(jq, IOThreadPoll, server.el);
 }

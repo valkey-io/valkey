@@ -639,6 +639,9 @@ typedef enum {
 #define BUSY_MODULE_YIELD_EVENTS (1 << 0)
 #define BUSY_MODULE_YIELD_CLIENTS (1 << 1)
 
+/* IO poll */
+typedef enum { AE_IO_STATE_NONE, AE_IO_STATE_POLL, AE_IO_STATE_DONE } AeIoState;
+
 /*-----------------------------------------------------------------------------
  * Data types
  *----------------------------------------------------------------------------*/
@@ -1597,6 +1600,8 @@ struct valkeyServer {
     dict *commands;      /* Command table */
     dict *orig_commands; /* Command table before command renaming. */
     aeEventLoop *el;
+    _Atomic AeIoState io_poll_state;     /* Indicates the state of the IO polling. */
+    int io_ae_fired_events;              /* Number of poll events received by the IO thread. */
     rax *errors;                         /* Errors table */
     int errors_enabled;                  /* If true, errorstats is enabled, and we will add new errors. */
     unsigned int lruclock;               /* Clock for LRU eviction */
@@ -1752,6 +1757,7 @@ struct valkeyServer {
     long long stat_io_reads_processed;                 /* Number of read events processed by IO threads */
     long long stat_io_writes_processed;                /* Number of write events processed by IO threads */
     long long stat_io_freed_objects;                   /* Number of objects freed by IO threads */
+    long long stat_poll_processed_by_io_threads;       /* Total number of poll jobs processed by IO */
     long long stat_total_reads_processed;              /* Total number of read events processed */
     long long stat_total_writes_processed;             /* Total number of write events processed */
     long long stat_client_qbuf_limit_disconnections;   /* Total number of clients reached query buf length limit */

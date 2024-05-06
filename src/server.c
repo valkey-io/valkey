@@ -1565,6 +1565,9 @@ extern int ProcessingEventsWhileBlocked;
 void beforeSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
 
+    /* When I/O threads are enabled and there are pending I/O jobs, the poll is offloaded to one of the I/O threads. */
+    trySendPollJobToIOThreads();
+
     size_t zmalloc_used = zmalloc_used_memory();
     if (zmalloc_used > server.stat_peak_memory) server.stat_peak_memory = zmalloc_used;
 
@@ -1596,10 +1599,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Handle pending data(typical TLS). (must be done before flushAppendOnlyFile) */
     connTypeProcessPendingData();
 
-    /* If any connection type(typical TLS) still has pending unread data or if there are clients
-     * with pending IO reads/writes, don't sleep at all. */
-    int dont_sleep = connTypeHasPendingData() || listLength(server.clients_pending_io_read) > 0 ||
-                     listLength(server.clients_pending_io_write) > 0;
+    /* If any connection type(typical TLS) still has pending unread data don't sleep at all. */
+    int dont_sleep = connTypeHasPendingData();
 
     /* Call the Cluster before sleep function. Note that this function
      * may change the state of Cluster (from ok to fail or vice versa),
@@ -2493,6 +2494,7 @@ void resetServerStats(void) {
     server.stat_total_reads_processed = 0;
     server.stat_io_writes_processed = 0;
     server.stat_io_freed_objects = 0;
+    server.stat_poll_processed_by_io_threads = 0;
     server.stat_total_writes_processed = 0;
     server.stat_client_qbuf_limit_disconnections = 0;
     server.stat_client_outbuf_limit_disconnections = 0;
@@ -5704,6 +5706,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "io_threaded_reads_processed:%lld\r\n", server.stat_io_reads_processed,
             "io_threaded_writes_processed:%lld\r\n", server.stat_io_writes_processed,
             "io_threaded_freed_objects:%lld\r\n", server.stat_io_freed_objects,
+            "io_threaded_poll_processed:%lld\r\n", server.stat_poll_processed_by_io_threads,
             "client_query_buffer_limit_disconnections:%lld\r\n", server.stat_client_qbuf_limit_disconnections,
             "client_output_buffer_limit_disconnections:%lld\r\n", server.stat_client_outbuf_limit_disconnections,
             "reply_buffer_shrinks:%lld\r\n", server.stat_reply_buffer_shrinks,

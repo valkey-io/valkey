@@ -8,7 +8,7 @@
         "function": "zscanCommand",
         "history": [
             [
-                "7.2.5",
+                "7.4",
                 "Added noscores option."
             ]
         ],

@@ -9058,7 +9058,7 @@ struct COMMAND_ARG ZREVRANK_Args[] = {
 #ifndef SKIP_CMD_HISTORY_TABLE
 /* ZSCAN history */
 commandHistory ZSCAN_History[] = {
-{"7.2.5","Added noscores option."},
+{"7.4","Added noscores option."},
 };
 #endif
 

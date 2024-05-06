@@ -5623,6 +5623,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             server.stat_last_eviction_exceeded_time ? (long long)elapsedUs(server.stat_last_eviction_exceeded_time) : 0;
         long long current_active_defrag_time =
             server.stat_last_active_defrag_time ? (long long)elapsedUs(server.stat_last_active_defrag_time) : 0;
+        long long average_prefetch_batch_size =
+            (server.stat_total_prefetch_batches
+                 ? server.stat_total_prefetch_entries / server.stat_total_prefetch_batches
+                 : 0);
 
         if (sections++) info = sdscat(info, "\r\n");
         /* clang-format off */
@@ -5678,6 +5682,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "io_threaded_writes_processed:%lld\r\n", server.stat_io_writes_processed,
             "io_threaded_freed_objects:%lld\r\n", server.stat_io_freed_objects,
             "io_threaded_poll_processed:%lld\r\n", server.stat_poll_processed_by_io_threads,
+            "io_threaded_average_prefetch_batch_size:%lld\r\n", average_prefetch_batch_size,
             "client_query_buffer_limit_disconnections:%lld\r\n", server.stat_client_qbuf_limit_disconnections,
             "client_output_buffer_limit_disconnections:%lld\r\n", server.stat_client_outbuf_limit_disconnections,
             "reply_buffer_shrinks:%lld\r\n", server.stat_reply_buffer_shrinks,

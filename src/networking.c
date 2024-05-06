@@ -45,6 +45,8 @@ static void setProtocolError(const char *errstr, client *c);
 static void pauseClientsByClient(mstime_t end, int isPauseClientAll);
 int postponeClientRead(client *c);
 char *getClientSockname(client *c);
+void removeClientFromPendingPrefetchBatch(client *c);
+
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
 __thread sds thread_shared_qb = NULL;
 
@@ -1504,6 +1506,7 @@ void unlinkClient(client *c) {
             listDelNode(server.clients, c->client_list_node);
             c->client_list_node = NULL;
         }
+        removeClientFromPendingPrefetchBatch(c);
 
         /* Check if this is a replica waiting for diskless replication (rdb pipe),
          * in which case it needs to be cleaned from that list */
@@ -4612,9 +4615,124 @@ int postponeClientRead(client *c) {
     return (trySendReadToIOThreads(c) == C_OK);
 }
 
+/* Prefetch multiple commands batch */
+typedef struct {
+    client *clients[DictMaxPrefetchSize];
+    size_t clients_count;
+    size_t keys_count;
+    void *keys[DictMaxPrefetchSize];
+    kvstore *keys_kvs[DictMaxPrefetchSize];
+    kvstore *expire_kvs[DictMaxPrefetchSize];
+    int slots[DictMaxPrefetchSize];
+    int client_closed_during_batch_execution;
+} BatchProcessData;
+
+static BatchProcessData batch = {0};
+
+static void *getValData(const void *val) {
+    robj *o = (robj *)val;
+    if (o->type == OBJ_STRING && o->encoding == OBJ_ENCODING_RAW) {
+        return o->ptr;
+    }
+    return NULL;
+}
+
+void processBatchClientsCommands(void) {
+    if (batch.clients_count == 0) return;
+    /* Prefetch argv's for all clients */
+    for (size_t i = 0; i < batch.clients_count; i++) {
+        client *c = batch.clients[i];
+        if (!c || c->argc <= 1) continue;
+        /* Skip prefetching first argv (cmd name) it was already looked up by the I/O thread. */
+        for (int j = 1; j < c->argc; j++) {
+            __builtin_prefetch(c->argv[j]);
+        }
+    }
+
+    /* prefetch the argv->ptr if required */
+    for (size_t i = 0; i < batch.clients_count; i++) {
+        client *c = batch.clients[i];
+        if (!c || c->argc <= 1) continue;
+        for (int j = 1; j < c->argc; j++) {
+            if (c->argv[j]->encoding == OBJ_ENCODING_RAW) {
+                __builtin_prefetch(c->argv[j]->ptr);
+            }
+        }
+    }
+
+    /* Get the keys ptrs - we do it here since we wanted to wait for the arg prefetch */
+    for (size_t i = 0; i < batch.keys_count; i++) {
+        batch.keys[i] = ((robj *)batch.keys[i])->ptr;
+    }
+
+    /* Prefetch keys for all commands */
+    if (batch.keys_count > 1) {
+        /* Keys */
+        kvstoreDictPrefetch(batch.keys_kvs, batch.slots, (const void **)batch.keys, batch.keys_count, getValData);
+        /* Expires - with expires no values prefetch are required. */
+        kvstoreDictPrefetch(batch.expire_kvs, batch.slots, (const void **)batch.keys, batch.keys_count, NULL);
+    }
+
+    /* Process clients' commands */
+    for (size_t i = 0; i < batch.clients_count; i++) {
+        client *c = batch.clients[i];
+        if (c) {
+            /* Set immediately the client to null - in order to not access it again when ProcessingEventsWhileBlocked */
+            batch.clients[i] = NULL;
+            if (processPendingCommandAndInputBuffer(c) != C_ERR) {
+                beforeNextClient(c);
+            }
+        }
+    }
+
+    batch.keys_count = 0;
+    batch.clients_count = 0;
+}
+
+void addCommandToBatchAndProcessIfFull(client *c) {
+    batch.clients[batch.clients_count++] = c;
+
+    /* Get command's keys.
+     * When ProcessingEventsWhileBlocked is set, we don't want to prefetch keys, as no commands will be executed. */
+    if (c->io_parsed_cmd && !ProcessingEventsWhileBlocked) {
+        getKeysResult result;
+        initGetKeysResult(&result);
+        int num_keys = getKeysFromCommand(c->io_parsed_cmd, c->argv, c->argc, &result);
+        for (int i = 0; i < num_keys && batch.keys_count < DictMaxPrefetchSize; i++) {
+            batch.keys[batch.keys_count] = c->argv[result.keys[i].pos];
+            batch.slots[batch.keys_count] = c->slot > 0 ? c->slot : 0;
+            batch.keys_kvs[batch.keys_count] = c->db->keys;
+            batch.expire_kvs[batch.keys_count] = c->db->expires;
+            batch.keys_count++;
+        }
+        getKeysFreeResult(&result);
+    }
+
+    /* If the batch is full, process it.
+     * We also check the client count to handle cases where
+     * no keys exist for the client's command. */
+    if (batch.clients_count == DictMaxPrefetchSize || batch.keys_count == DictMaxPrefetchSize) {
+        processBatchClientsCommands();
+    }
+}
+
+void removeClientFromPendingPrefetchBatch(client *c) {
+    if (batch.clients_count == 0) return;
+
+    batch.client_closed_during_batch_execution = 1;
+
+    for (size_t i = 0; i < batch.clients_count; i++) {
+        if (batch.clients[i] == c) {
+            batch.clients[i] = NULL;
+            return;
+        }
+    }
+}
+
 int processIOThreadsReadDone(void) {
-    if (listLength(server.clients_pending_io_read) == 0) return 0;
+    if (listLength(server.clients_pending_io_read) == 0 && batch.clients_count == 0) return 0;
     int processed = 0;
+    batch.client_closed_during_batch_execution = 0;
     listNode *ln;
 
     listNode *next = listFirst(server.clients_pending_io_read);
@@ -4667,15 +4785,17 @@ int processIOThreadsReadDone(void) {
             c->flag.pending_command = 1;
         }
 
-        size_t list_length_before_command_execute = listLength(server.clients_pending_io_read);
-        if (processPendingCommandAndInputBuffer(c) == C_OK) {
-            beforeNextClient(c);
-        }
-        if (list_length_before_command_execute != listLength(server.clients_pending_io_read)) {
-            /* A client was unlink from the list possibly making the next node invalid */
+        addCommandToBatchAndProcessIfFull(c);
+
+        /* There is a possibility that a client was closed during the latest batch processing.
+         * In this case the next node may be invalid */
+        if (batch.client_closed_during_batch_execution) {
             next = listFirst(server.clients_pending_io_read);
+            batch.client_closed_during_batch_execution = 0;
         }
     }
+
+    processBatchClientsCommands();
 
     return processed;
 }
@@ -4773,6 +4893,18 @@ void ioThreadReadQueryFromClient(void *data) {
         /* The command was found, but the arity is invalid.
          * In this case, we reset the parsed_cmd and will let the main thread handle it. */
         c->io_parsed_cmd = NULL;
+    }
+
+    /* Offload slot calculations to the I/O thread to reduce main-thread load. */
+    if (c->io_parsed_cmd && server.cluster_enabled) {
+        getKeysResult result;
+        initGetKeysResult(&result);
+        int numkeys = getKeysFromCommand(c->io_parsed_cmd, c->argv, c->argc, &result);
+        if (numkeys) {
+            robj *first_key = c->argv[result.keys[0].pos];
+            c->slot = calculateKeySlot(first_key->ptr);
+        }
+        getKeysFreeResult(&result);
     }
 
 done:

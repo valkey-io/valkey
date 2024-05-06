@@ -45,7 +45,8 @@
 #define DICT_ERR 1
 
 /* Hash table parameters */
-#define HASHTABLE_MIN_FILL 8 /* Minimal hash table fill 12.5%(100/8) */
+#define HASHTABLE_MIN_FILL 8   /* Minimal hash table fill 12.5%(100/8) */
+#define DictMaxPrefetchSize 16 /* Limit of maximum number of dict entries to prefetch */
 
 typedef struct dictEntry dictEntry; /* opaque */
 typedef struct dict dict;
@@ -247,6 +248,7 @@ unsigned long
 dictScanDefrag(dict *d, unsigned long v, dictScanFunction *fn, dictDefragFunctions *defragfns, void *privdata);
 uint64_t dictGetHash(dict *d, const void *key);
 void dictRehashingInfo(dict *d, unsigned long long *from_size, unsigned long long *to_size);
+void dictPrefetch(dict **keys_dicts, size_t num_keys, const void **keys, void *(*get_val_data_func)(const void *val));
 
 size_t dictGetStatsMsg(char *buf, size_t bufsize, dictStats *stats, int full);
 dictStats *dictGetStatsHt(dict *d, int htidx, int full);

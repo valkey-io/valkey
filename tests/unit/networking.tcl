@@ -170,3 +170,40 @@ start_server {config "minimal.conf" tags {"external:skip"}} {
         }
     }
 }
+
+start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-debug-command {yes}}} {
+    test {prefetch works as expected when killing a client from the middle of prefetch commands batch} {
+        # Create 17 (prefetch batch size) +1 clients
+        for {set i 0} {$i < 17} {incr i} {
+            set rd$i [valkey_deferring_client]
+        }
+
+        # Get the client ID of rd4
+        $rd4 client id
+        set rd4_id [$rd4 read]
+
+        # Create a batch of commands by making sure the server sleeps for a while
+        # before responding to the first command
+        $rd0 debug sleep 2
+        after 200  ; # wait a bit to make sure the server is sleeping.
+
+        # The first client will kill the fourth client
+        $rd1 client kill id $rd4_id
+
+        # Send set commands for all clients except the first
+        for {set i 1} {$i < 17} {incr i} {
+            [set rd$i] set a $i
+            [set rd$i] flush
+        }
+
+        # Read the results
+        assert_equal {1} [$rd1 read]
+        catch {$rd4 read} err
+        assert_match {I/O error reading reply} $err
+
+        # Verify the final state
+        $rd16 get a
+        assert_equal {OK} [$rd16 read]
+        assert_equal {16} [$rd16 read]
+    }
+}

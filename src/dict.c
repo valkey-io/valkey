@@ -1541,6 +1541,147 @@ dictScanDefrag(dict *d, unsigned long v, dictScanFunction *fn, dictDefragFunctio
     return v;
 }
 
+typedef enum { PrefetchStart, PrefetchBucket, PrefetchEntry, PrefetchValue, PrefetchDone } PrefetchState;
+
+typedef struct {
+    PrefetchState state;
+    int ht_idx;
+    uint64_t idx;
+    uint64_t key_hash;
+    dictEntry *current_entry;
+} PrefetchInfo;
+
+/* dictPrefetch - Prefetches dictionary data for an array of keys
+ *
+ * This function takes an array of dictionaries and keys, attempting to bring
+ * data closer to the L1 cache that might be needed for dictionary operations
+ * on those keys.
+ *
+ * dictFind Algorithm:
+ * 1. Evaluate the hash of the key
+ * 2. Access the index in the first table
+ * 3. Walk the linked list until the key is found
+ *    If the key hasn't been found and the dictionary is in the middle of rehashing,
+ *    access the index on the second table and repeat step 3
+ *
+ * dictPrefetch executes the same algorithm as dictFind, but one step at a time
+ * for each key. Instead of waiting for data to be read from memory, it prefetches
+ * the data and then moves on to execute the next prefetch for another key.
+ *
+ * dictPrefetch can be invoked with a callback function, get_val_data_func,
+ * to bring the key's value data closer to the L1 cache as well. */
+void dictPrefetch(dict **keys_dicts, size_t num_keys, const void **keys, void *(*get_val_data_func)(const void *val)) {
+    PrefetchInfo prefetchInfo[DictMaxPrefetchSize];
+    size_t done = 0;
+
+    assert(num_keys <= DictMaxPrefetchSize);
+
+    /* Initialize the prefetch info */
+    for (size_t i = 0; i < num_keys; i++) {
+        PrefetchInfo *info = &prefetchInfo[i];
+        if (!keys_dicts[i] || dictSize(keys_dicts[i]) == 0) {
+            info->state = PrefetchDone;
+            done++;
+            continue;
+        }
+        info->ht_idx = -1;
+        info->current_entry = NULL;
+        info->state = PrefetchStart;
+        info->key_hash = dictHashKey(keys_dicts[i], keys[i]);
+    }
+
+    for (size_t j = 0; done < num_keys; j++) {
+        size_t i = j % num_keys;
+        PrefetchInfo *info = &prefetchInfo[i];
+        switch (info->state) {
+        case PrefetchDone:
+            /* Skip already processed keys */
+            break;
+
+        case PrefetchStart:
+            /* Determine which hash table to use */
+            if (info->ht_idx == -1) {
+                info->ht_idx = 0;
+            } else if (info->ht_idx == 0 && dictIsRehashing(keys_dicts[i])) {
+                info->ht_idx = 1;
+            } else {
+                done++;
+                info->state = PrefetchDone;
+                break;
+            }
+
+            /* Prefetch the bucket */
+            info->idx = info->key_hash & DICTHT_SIZE_MASK(keys_dicts[i]->ht_size_exp[info->ht_idx]);
+            __builtin_prefetch(&keys_dicts[i]->ht_table[info->ht_idx][info->idx]);
+            info->state = PrefetchBucket;
+            break;
+
+        case PrefetchBucket:
+            /* Prefetch the first entry in the bucket */
+            info->current_entry = keys_dicts[i]->ht_table[info->ht_idx][info->idx];
+            if (info->current_entry) {
+                __builtin_prefetch(info->current_entry);
+                info->state = PrefetchEntry;
+            } else {
+                /* No entry found in the bucket - try the next table */
+                info->state = PrefetchStart;
+            }
+            break;
+
+        case PrefetchEntry: {
+            /* Prefetch the entry's value. */
+            void *value = get_val_data_func ? dictGetVal(info->current_entry) : NULL;
+
+            if (info->current_entry->next == NULL && !dictIsRehashing(keys_dicts[i])) {
+                /* If this is the last element we assume a hit and dont compare the keys */
+                if (value) {
+                    __builtin_prefetch(value);
+                    info->state = PrefetchValue;
+                } else {
+                    done++;
+                    info->state = PrefetchDone;
+                }
+                break;
+            }
+
+            if (value) {
+                void *current_entry_key = dictGetKey(info->current_entry);
+                if (keys[i] == current_entry_key || dictCompareKeys(keys_dicts[i], keys[i], current_entry_key)) {
+                    /* If the key is found, prefetch the value */
+                    __builtin_prefetch(value);
+                    info->state = PrefetchValue;
+                    break;
+                }
+            }
+
+            /* Move to next entry or start over */
+            info->current_entry = dictGetNext(info->current_entry);
+            if (info->current_entry) {
+                __builtin_prefetch(info->current_entry);
+                info->state = PrefetchEntry;
+            } else {
+                info->state = PrefetchStart;
+            }
+
+            break;
+        }
+
+        case PrefetchValue: {
+            /* Prefetch value data if available */
+            void *value_data = get_val_data_func(dictGetVal(info->current_entry));
+            if (value_data) {
+                __builtin_prefetch(value_data);
+            }
+            done++;
+            info->state = PrefetchDone;
+            break;
+        }
+
+        default: assert(0);
+        }
+    }
+}
+
 /* ------------------------- private functions ------------------------------ */
 
 /* Because we may need to allocate huge memory chunk at once when dict

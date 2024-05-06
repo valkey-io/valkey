@@ -36,6 +36,11 @@ int kvstoreNumNonEmptyDicts(kvstore *kvs);
 int kvstoreNumAllocatedDicts(kvstore *kvs);
 int kvstoreNumDicts(kvstore *kvs);
 uint64_t kvstoreGetHash(kvstore *kvs, const void *key);
+void kvstoreDictPrefetch(kvstore **kvs,
+                         int *slots,
+                         const void **keys,
+                         size_t keys_count,
+                         void *(*get_val_data_func)(const void *val));
 
 /* kvstore iterator specific functions */
 kvstoreIterator *kvstoreIteratorInit(kvstore *kvs);

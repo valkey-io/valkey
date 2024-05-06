@@ -828,3 +828,15 @@ int kvstoreDictDelete(kvstore *kvs, int didx, const void *key) {
     }
     return ret;
 }
+
+void kvstoreDictPrefetch(kvstore **kvs,
+                         int *slots,
+                         const void **keys,
+                         size_t keys_count,
+                         void *(*get_val_data_func)(const void *val)) {
+    dict *dicts[keys_count];
+    for (size_t i = 0; i < keys_count; i++) {
+        dicts[i] = kvstoreGetDict(kvs[i], slots[i]);
+    }
+    dictPrefetch(dicts, keys_count, keys, get_val_data_func);
+}

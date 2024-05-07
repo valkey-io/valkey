@@ -2086,7 +2086,7 @@ void resetClient(client *c) {
     c->multibulklen = 0;
     c->bulklen = -1;
     c->slot = -1;
-    c->flags &= ~CLIENT_EXECUTING_COMMAND;
+    c->flags &= ~(CLIENT_EXECUTING_COMMAND | CLIENT_PREREPL_DONE);
 
     /* Make sure the duration has been recorded to some command. */
     serverAssert(c->duration == 0);

@@ -616,7 +616,7 @@ int anetUnixServer(char *err, char *path, mode_t perm, int backlog)
     }
 
     int type = SOCK_STREAM;
-    int flags = ANET_SOCKET_CLOEXEC | ANET_SOCKET_NONBLOCK | ANET_SOCKET_REUSEADDR;
+    int flags = ANET_SOCKET_CLOEXEC | ANET_SOCKET_NONBLOCK;
     if ((s = anetCreateSocket(err,AF_LOCAL,type,0,flags)) == ANET_ERR)
         return ANET_ERR;
 

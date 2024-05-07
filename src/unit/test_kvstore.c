@@ -1,6 +1,6 @@
-#include <stdio.h>
 
 #include "../kvstore.c"
+#undef UNUSED
 #include "test_help.h"
 
 uint64_t hashTestCallback(const void *key) {
@@ -40,13 +40,9 @@ int test_kvstoreAdd16Keys(int argc, char **argv, int flags) {
     UNUSED(flags);
 
     int i;
-    void *key;
     dictEntry *de;
-    kvstoreIterator *kvs_it;
-    kvstoreDictIterator *kvs_di;
 
     int didx = 0;
-    int curr_slot = 0;
     kvstore *kvs1 = kvstoreCreate(&KvstoreDictTestType, 0, KVSTORE_ALLOCATE_DICTS_ON_DEMAND);
     kvstore *kvs2 = kvstoreCreate(&KvstoreDictTestType, 0, KVSTORE_ALLOCATE_DICTS_ON_DEMAND | KVSTORE_FREE_EMPTY_DICTS);
 
@@ -149,11 +145,9 @@ int test_kvstoreDictIteratorRemoveAllKeysNoDeleteEmptyDict(int argc, char **argv
     int i;
     void *key;
     dictEntry *de;
-    kvstoreIterator *kvs_it;
     kvstoreDictIterator *kvs_di;
 
     int didx = 0;
-    int curr_slot = 0;
     kvstore *kvs1 = kvstoreCreate(&KvstoreDictTestType, 0, KVSTORE_ALLOCATE_DICTS_ON_DEMAND);
 
     for (i = 0; i < 16; i++) {
@@ -185,11 +179,9 @@ int test_kvstoreDictIteratorRemoveAllKeysDeleteEmptyDict(int argc, char **argv, 
     int i;
     void *key;
     dictEntry *de;
-    kvstoreIterator *kvs_it;
     kvstoreDictIterator *kvs_di;
 
     int didx = 0;
-    int curr_slot = 0;
     kvstore *kvs2 = kvstoreCreate(&KvstoreDictTestType, 0, KVSTORE_ALLOCATE_DICTS_ON_DEMAND | KVSTORE_FREE_EMPTY_DICTS);
 
     for (i = 0; i < 16; i++) {

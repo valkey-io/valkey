@@ -1,7 +1,9 @@
-#include <assert.h>
 #include <sys/mman.h>
+#include <string.h>
+#include <unistd.h>
 
-#include "../util.c"
+#include "../config.h"
+#include "../util.h"
 #undef UNUSED
 #include "test_help.h"
 

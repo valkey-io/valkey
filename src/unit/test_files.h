@@ -18,12 +18,12 @@ int test_intsetStressLookups(int argc, char **argv, int flags);
 int test_intsetStressAddDelete(int argc, char **argv, int flags);
 int test_zmallocInitialUsedMemory(int argc, char **argv, int flags);
 int test_zmallocAllocReallocCallocAndFree(int argc, char **argv, int flags);
-int test_zmallocAllocZeroBytesandFree(int argc, char **argv, int flags);
+int test_zmallocAllocZeroBytesAndFree(int argc, char **argv, int flags);
 
 unitTest __test_crc64_c[] = {{"test_crc64", test_crc64}, {NULL, NULL}};
 unitTest __test_crc64combine_c[] = {{"test_crc64combine", test_crc64combine}, {NULL, NULL}};
 unitTest __test_intset_c[] = {{"test_intsetValueEncodings", test_intsetValueEncodings}, {"test_intsetBasicAdding", test_intsetBasicAdding}, {"test_intsetLargeNumberRandomAdd", test_intsetLargeNumberRandomAdd}, {"test_intsetUpgradeFromint16Toint32", test_intsetUpgradeFromint16Toint32}, {"test_intsetUpgradeFromint16Toint64", test_intsetUpgradeFromint16Toint64}, {"test_intsetUpgradeFromint32Toint64", test_intsetUpgradeFromint32Toint64}, {"test_intsetStressLookups", test_intsetStressLookups}, {"test_intsetStressAddDelete", test_intsetStressAddDelete}, {NULL, NULL}};
-unitTest __test_zmalloc_c[] = {{"test_zmallocInitialUsedMemory", test_zmallocInitialUsedMemory}, {"test_zmallocAllocReallocCallocAndFree", test_zmallocAllocReallocCallocAndFree}, {"test_zmallocAllocZeroBytesandFree", test_zmallocAllocZeroBytesandFree}, {NULL, NULL}};
+unitTest __test_zmalloc_c[] = {{"test_zmallocInitialUsedMemory", test_zmallocInitialUsedMemory}, {"test_zmallocAllocReallocCallocAndFree", test_zmallocAllocReallocCallocAndFree}, {"test_zmallocAllocZeroBytesAndFree", test_zmallocAllocZeroBytesAndFree}, {NULL, NULL}};
 
 struct unitTestSuite {
     char *filename;

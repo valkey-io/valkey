@@ -1,5 +1,6 @@
 .*.swp
 *.o
+*.a
 *.xo
 *.so
 *.d
@@ -12,6 +13,7 @@ dump.rdb
 *-cli
 *-sentinel
 *-server
+*-unit-tests
 doc-tools
 release
 misc/*

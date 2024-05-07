@@ -1001,7 +1001,7 @@ int moduleGetCommandChannelsViaAPI(struct serverCommand *cmd, robj **argv, int a
  *
  * These functions are used to implement custom commands.
  *
- * For examples, see https://redis.io/topics/modules-intro.
+ * For examples, see https://valkey.io/topics/modules-intro.
  * -------------------------------------------------------------------------- */
 
 /* Return non-zero if a module command, that was declared with the
@@ -1215,7 +1215,7 @@ ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module, sds d
  *                    from the same input arguments and key values.
  *                    Starting from Redis OSS 7.0 this flag has been deprecated.
  *                    Declaring a command as "random" can be done using
- *                    command tips, see https://redis.io/topics/command-tips.
+ *                    command tips, see https://valkey.io/topics/command-tips.
  * * **"allow-stale"**: The command is allowed to run on slaves that don't
  *                      serve stale data. Don't use if you don't know what
  *                      this means.
@@ -1605,7 +1605,7 @@ int VM_SetCommandACLCategories(ValkeyModuleCommand *command, const char *aclflag
  *     both strings set to NULL.
  *
  * - `tips`: A string of space-separated tips regarding this command, meant for
- *   clients and proxies. See https://redis.io/topics/command-tips.
+ *   clients and proxies. See https://valkey.io/topics/command-tips.
  *
  * - `arity`: Number of arguments, including the command name itself. A positive
  *   number specifies an exact number of arguments and a negative number
@@ -3205,7 +3205,7 @@ int VM_ReplyWithArray(ValkeyModuleCtx *ctx, long len) {
 }
 
 /* Reply with a RESP3 Map type of 'len' pairs.
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3.
+ * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
  * After starting a map reply, the module must make `len*2` calls to other
  * `ReplyWith*` style functions in order to emit the elements of the map.
@@ -3222,7 +3222,7 @@ int VM_ReplyWithMap(ValkeyModuleCtx *ctx, long len) {
 }
 
 /* Reply with a RESP3 Set type of 'len' elements.
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3.
+ * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
  * After starting a set reply, the module must make `len` calls to other
  * `ReplyWith*` style functions in order to emit the elements of the set.
@@ -3240,7 +3240,7 @@ int VM_ReplyWithSet(ValkeyModuleCtx *ctx, long len) {
 
 
 /* Add attributes (metadata) to the reply. Should be done before adding the
- * actual reply. see https://github.com/antirez/RESP3/blob/master/spec.md#attribute-type
+ * actual reply. see https://valkey.io/topics/protocol#attribute-type
  *
  * After starting an attribute's reply, the module must make `len*2` calls to other
  * `ReplyWith*` style functions in order to emit the elements of the attribute map.
@@ -3348,19 +3348,19 @@ void VM_ReplySetArrayLength(ValkeyModuleCtx *ctx, long len) {
 /* Very similar to ValkeyModule_ReplySetArrayLength except `len` should
  * exactly half of the number of `ReplyWith*` functions called in the
  * context of the map.
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3. */
+ * Visit https://valkey.io/topics/protocol for more info about RESP3. */
 void VM_ReplySetMapLength(ValkeyModuleCtx *ctx, long len) {
     moduleReplySetCollectionLength(ctx, len, COLLECTION_REPLY_MAP);
 }
 
 /* Very similar to ValkeyModule_ReplySetArrayLength
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3. */
+ * Visit https://valkey.io/topics/protocol for more info about RESP3. */
 void VM_ReplySetSetLength(ValkeyModuleCtx *ctx, long len) {
     moduleReplySetCollectionLength(ctx, len, COLLECTION_REPLY_SET);
 }
 
 /* Very similar to ValkeyModule_ReplySetMapLength
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3.
+ * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
  * Must not be called if VM_ReplyWithAttribute returned an error. */
 void VM_ReplySetAttributeLength(ValkeyModuleCtx *ctx, long len) {
@@ -3439,7 +3439,7 @@ int VM_ReplyWithNull(ValkeyModuleCtx *ctx) {
 }
 
 /* Reply with a RESP3 Boolean type.
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3.
+ * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
  * In RESP3, this is boolean type
  * In RESP2, it's a string response of "1" and "0" for true and false respectively.
@@ -3489,7 +3489,7 @@ int VM_ReplyWithCallReply(ValkeyModuleCtx *ctx, ValkeyModuleCallReply *reply) {
 }
 
 /* Reply with a RESP3 Double type.
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3.
+ * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
  * Send a string reply obtained converting the double 'd' into a bulk string.
  * This function is basically equivalent to converting a double into
@@ -3508,7 +3508,7 @@ int VM_ReplyWithDouble(ValkeyModuleCtx *ctx, double d) {
 }
 
 /* Reply with a RESP3 BigNumber type.
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3.
+ * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
  * In RESP3, this is a string of length `len` that is tagged as a BigNumber, 
  * however, it's up to the caller to ensure that it's a valid BigNumber.
@@ -5426,7 +5426,7 @@ int VM_HashGet(ValkeyModuleKey *key, int flags, ...) {
 /* --------------------------------------------------------------------------
  * ## Key API for Stream type
  *
- * For an introduction to streams, see https://redis.io/topics/streams-intro.
+ * For an introduction to streams, see https://valkey.io/topics/streams-intro.
  *
  * The type ValkeyModuleStreamID, which is used in stream functions, is a struct
  * with two 64-bit fields and is defined as
@@ -6299,7 +6299,7 @@ fmterr:
  *        // Do something with myval.
  *      }
  *
- * This API is documented here: https://redis.io/topics/modules-intro
+ * This API is documented here: https://valkey.io/topics/modules-intro
  */
 ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...) {
     client *c = NULL;
@@ -6808,7 +6808,7 @@ robj *moduleTypeDupOrReply(client *c, robj *fromkey, robj *tokey, int todb, robj
 
 /* Register a new data type exported by the module. The parameters are the
  * following. Please for in depth documentation check the modules API
- * documentation, especially https://redis.io/topics/modules-native-types.
+ * documentation, especially https://valkey.io/topics/modules-native-types.
  *
  * * **name**: A 9 characters data type name that MUST be unique in the
  *   Modules ecosystem. Be creative... and there will be no collisions. Use
@@ -7697,7 +7697,7 @@ void VM_LatencyAddSample(const char *event, mstime_t latency) {
  * ## Blocking clients from modules
  *
  * For a guide about blocking commands in modules, see
- * https://redis.io/topics/modules-blocking-ops.
+ * https://valkey.io/topics/modules-blocking-ops.
  * -------------------------------------------------------------------------- */
 
 /* Returns 1 if the client already in the moduleUnblocked list, 0 otherwise. */
@@ -8717,7 +8717,7 @@ void moduleReleaseGIL(void) {
  * runs is dangerous and discouraged. In order to react to key space events with
  * write actions, please refer to `VM_AddPostNotificationJob`.
  *
- * See https://redis.io/topics/notifications for more information.
+ * See https://valkey.io/topics/notifications for more information.
  */
 int VM_SubscribeToKeyspaceEvents(ValkeyModuleCtx *ctx, int types, ValkeyModuleNotificationFunc callback) {
     ValkeyModuleKeyspaceSubscriber *sub = zmalloc(sizeof(*sub));
@@ -9823,7 +9823,7 @@ int moduleGetACLLogEntryReason(ValkeyModuleACLLogEntryReason reason) {
 /* Adds a new entry in the ACL log.
  * Returns VALKEYMODULE_OK on success and VALKEYMODULE_ERR on error.
  *
- * For more information about ACL log, please refer to https://redis.io/commands/acl-log */
+ * For more information about ACL log, please refer to https://valkey.io/commands/acl-log */
 int VM_ACLAddLogEntry(ValkeyModuleCtx *ctx, ValkeyModuleUser *user, ValkeyModuleString *object, ValkeyModuleACLLogEntryReason reason) {
     int acl_reason = moduleGetACLLogEntryReason(reason);
     if (!acl_reason) return VALKEYMODULE_ERR;
@@ -9834,7 +9834,7 @@ int VM_ACLAddLogEntry(ValkeyModuleCtx *ctx, ValkeyModuleUser *user, ValkeyModule
 /* Adds a new entry in the ACL log with the `username` ValkeyModuleString provided.
  * Returns VALKEYMODULE_OK on success and VALKEYMODULE_ERR on error.
  *
- * For more information about ACL log, please refer to https://redis.io/commands/acl-log */
+ * For more information about ACL log, please refer to https://valkey.io/commands/acl-log */
 int VM_ACLAddLogEntryByUserName(ValkeyModuleCtx *ctx, ValkeyModuleString *username, ValkeyModuleString *object, ValkeyModuleACLLogEntryReason reason) {
     int acl_reason = moduleGetACLLogEntryReason(reason);
     if (!acl_reason) return VALKEYMODULE_ERR;

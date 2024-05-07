@@ -100,8 +100,4 @@ int snprintf_async_signal_safe(char *to, size_t n, const char *fmt, ...);
 size_t valkey_strlcpy(char *dst, const char *src, size_t dsize);
 size_t valkey_strlcat(char *dst, const char *src, size_t dsize);
 
-#ifdef SERVER_TEST
-int utilTest(int argc, char **argv, int flags);
-#endif
-
 #endif

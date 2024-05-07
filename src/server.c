@@ -6906,7 +6906,6 @@ struct serverTest {
     {"quicklist", quicklistTest},
     {"zipmap", zipmapTest},
     {"sha1test", sha1Test},
-    {"util", utilTest},
     {"endianconv", endianconvTest},
     {"sds", sdsTest},
     {"dict", dictTest},

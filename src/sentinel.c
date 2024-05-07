@@ -4265,7 +4265,7 @@ void sentinelInfoCommand(client *c) {
     }
     dictReleaseIterator(di);
 
-    /* Insert explicit all sections (don't pass these vars to genRedisInfoString) */
+    /* Insert explicit all sections (don't pass these vars to genValkeyInfoString) */
     if (sec_all || sec_everything) {
         releaseInfoSectionDict(sections_dict);
         /* We cache this dict as an optimization. */
@@ -4276,7 +4276,7 @@ void sentinelInfoCommand(client *c) {
         sections_dict = cached_all_info_sections;
     }
 
-    sds info = genRedisInfoString(sections_dict, 0, 0);
+    sds info = genValkeyInfoString(sections_dict, 0, 0);
     if (sec_all || (dictFind(sections_dict, "sentinel") != NULL)) {
         dictIterator *di;
         dictEntry *de;

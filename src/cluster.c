@@ -789,8 +789,8 @@ void clusterCommandMyId(client *c) {
     }
 }
 
-char* getMyClusterId(void) {
-    return clusterNodeGetName(getMyClusterNode());
+int clusterNodeIsMyself(clusterNode *n) {
+    return n == getMyClusterNode();
 }
 
 void clusterCommandMyShardId(client *c) {
@@ -1193,7 +1193,7 @@ clusterNode *getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, i
     if (((c->flags & CLIENT_READONLY) || pubsubshard_included) &&
         !is_write_command &&
         clusterNodeIsSlave(myself) &&
-        clusterNodeGetSlaveof(myself) == n)
+        clusterNodeGetMaster(myself) == n)
     {
         return myself;
     }
@@ -1286,7 +1286,7 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
              * replica can handle, allow it. */
             if ((c->flags & CLIENT_READONLY) &&
                 !(c->lastcmd->flags & CMD_WRITE) &&
-                clusterNodeIsSlave(myself) && clusterNodeGetSlaveof(myself) == node)
+                clusterNodeIsSlave(myself) && clusterNodeGetMaster(myself) == node)
             {
                 node = myself;
             }

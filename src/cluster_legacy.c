@@ -6090,10 +6090,6 @@ unsigned int countChannelsInSlot(unsigned int hashslot) {
     return kvstoreDictSize(server.pubsubshard_channels, hashslot);
 }
 
-int clusterNodeIsMyself(clusterNode *n) {
-    return n == server.cluster->myself;
-}
-
 clusterNode *getMyClusterNode(void) {
     return server.cluster->myself;
 }
@@ -6175,7 +6171,7 @@ int handleDebugClusterCommand(client *c) {
     return 1;
 }
 
-int clusterNodePending(clusterNode  *node) {
+int clusterNodePending(clusterNode *node) {
     return node->flags & (CLUSTER_NODE_NOADDR|CLUSTER_NODE_HANDSHAKE);
 }
 
@@ -6185,10 +6181,6 @@ char *clusterNodeIp(clusterNode *node) {
 
 int clusterNodeIsSlave(clusterNode *node) {
     return node->flags & CLUSTER_NODE_SLAVE;
-}
-
-clusterNode *clusterNodeGetSlaveof(clusterNode *node) {
-    return node->slaveof;
 }
 
 clusterNode *clusterNodeGetMaster(clusterNode *node) {

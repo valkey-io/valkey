@@ -1,6 +1,12 @@
 #include <stdio.h>
-#include "testhelp.h"
+#include <string.h>
+#include <assert.h>
 
+#include "../testhelp.h"
+#include "../kvstore.h"
+#include "../zmalloc.h"
+
+#define UNUSED(V) ((void) V)
 #define TEST(name) printf("test — %s\n", name);
 
 uint64_t hashTestCallback(const void *key) {

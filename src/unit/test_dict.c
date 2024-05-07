@@ -1,4 +1,12 @@
-#include "testhelp.h"
+// #include "testhelp.h"
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+#include <assert.h>
+
+#include "../dict.h"
+#include "../zmalloc.h"
+#include "../testhelp.h"
 
 #define UNUSED(V) ((void) V)
 #define TEST(name) printf("test — %s\n", name);

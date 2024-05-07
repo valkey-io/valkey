@@ -1,7 +1,15 @@
 #include <sys/time.h>
-#include "adlist.h"
-#include "sds.h"
-#include "testhelp.h"
+#include <stdio.h>
+#include <string.h>
+#include <stddef.h>
+#include <assert.h>
+#include <stdlib.h>
+
+#include "../adlist.h"
+#include "../sds.h"
+#include "../testhelp.h"
+#include "../ziplist.h"
+#include "../zmalloc.h"
 
 #define debug(f, ...) { if (DEBUG) printf(f, __VA_ARGS__); }
 

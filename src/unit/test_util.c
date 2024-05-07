@@ -1,7 +1,17 @@
 
 #include <assert.h>
 #include <sys/mman.h>
-#include "testhelp.h"
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+#include <limits.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
+#include "../testhelp.h"
+#include "../util.h"
+
+#define UNUSED(x) ((void)(x))
 
 static void test_string2ll(void) {
     char buf[32];

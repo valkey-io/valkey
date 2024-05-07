@@ -1,3 +1,9 @@
+#include <stdint.h>
+#include <stdio.h>
+
+#include "../testhelp.h"
+#include "../sha1.h"
+
 #define BUFSIZE 4096
 
 #define UNUSED(x) (void)(x)

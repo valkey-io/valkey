@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <limits.h>
-#include "testhelp.h"
+
+#include "../testhelp.h"
+#include "../sds.h"
 
 #define UNUSED(x) (void)(x)
 

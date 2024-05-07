@@ -1,7 +1,11 @@
 #include <stdint.h>
 #include <sys/time.h>
-#include "testhelp.h"
+#include <assert.h>
 #include <stdlib.h>
+
+#include "../testhelp.h"
+#include "../quicklist.h"
+#include "../zmalloc.h"
 
 #define yell(str, ...) printf("ERROR! " str "\n\n", __VA_ARGS__)
 

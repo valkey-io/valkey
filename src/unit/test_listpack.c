@@ -1,7 +1,13 @@
 #include <sys/time.h>
-#include "adlist.h"
-#include "sds.h"
-#include "testhelp.h"
+#include <string.h>
+#include <stdio.h>
+#include <assert.h>
+
+#include "../adlist.h"
+#include "../sds.h"
+#include "../kvstore.h"
+#include "../testhelp.h"
+#include "../listpack.h"
 
 #define UNUSED(x) (void)(x)
 #define TEST(name) printf("test — %s\n", name);

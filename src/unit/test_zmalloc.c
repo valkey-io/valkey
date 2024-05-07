@@ -1,6 +1,8 @@
-#include "testhelp.h"
-#include "serverassert.h"
+#include "../testhelp.h"
+#include "../serverassert.h"
+#include "../zmalloc.h"
 
+#define UNUSED(x) ((void)(x))
 #define TEST(name) printf("test — %s\n", name);
 
 int zmalloc_test(int argc, char **argv, int flags) {

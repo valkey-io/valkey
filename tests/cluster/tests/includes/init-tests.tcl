@@ -44,6 +44,7 @@ test "Cluster nodes hard reset" {
         R $id config set repl-diskless-load disabled
         R $id config set cluster-announce-hostname ""
         R $id DEBUG DROP-CLUSTER-PACKET-FILTER -1
+        R $id DEBUG CLOSE-CLUSTER-LINK-ON-PACKET-DROP 0
         R $id config rewrite
     }
 }
@@ -73,16 +74,18 @@ proc join_nodes_in_cluster {} {
     return 1
 }
 
-test "Cluster Join and auto-discovery test" {
-    # Use multiple attempts since sometimes nodes timeout
-    # while attempting to connect.
-    for {set attempts 3} {$attempts > 0} {incr attempts -1} {
-        if {[join_nodes_in_cluster] == 1} {
-            break
+if {![info exists do_not_join_cluster_nodes] || !$do_not_join_cluster_nodes} {
+    test "Cluster Join and auto-discovery test" {
+        # Use multiple attempts since sometimes nodes timeout
+        # while attempting to connect.
+        for {set attempts 3} {$attempts > 0} {incr attempts -1} {
+            if {[join_nodes_in_cluster] == 1} {
+                break
+            }
         }
-    }
-    if {$attempts == 0} {
-        fail "Cluster failed to form full mesh"
+        if {$attempts == 0} {
+            fail "Cluster failed to form full mesh"
+        }
     }
 }
 

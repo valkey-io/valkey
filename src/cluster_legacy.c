@@ -6320,7 +6320,7 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
     return 1;
 }
 
-void clusterSetSlotCommand(client *c) {
+void clusterCommandSetSlot(client *c) {
     int slot;
     int timeout_ms;
     clusterNode *n;
@@ -6575,7 +6575,7 @@ int clusterCommandSpecial(client *c) {
         /* SETSLOT 10 IMPORTING <node ID> */
         /* SETSLOT 10 STABLE */
         /* SETSLOT 10 NODE <node ID> */
-        clusterSetSlotCommand(c);
+        clusterCommandSetSlot(c);
     } else if (!strcasecmp(c->argv[1]->ptr,"bumpepoch") && c->argc == 2) {
         /* CLUSTER BUMPEPOCH */
         int retval = clusterBumpConfigEpochWithoutConsensus();

@@ -5239,13 +5239,30 @@ static int clusterManagerMoveSlot(clusterManagerNode *source,
         /* Inform the source node. If the source node has just lost its last
          * slot and the target node has already informed the source node, the
          * source node has turned itself into a replica. This is not an error in
-         * this scenario so we ignore it. See issue #9223. */
+         * this scenario so we ignore it. See issue #9223.
+         *
+         * Another acceptable error can arise now that the primary pre-replicates 
+         * `cluster setslot` commands to replicas while blocking the client on the
+         * primary. This change enhances the reliability of `cluster setslot` in
+         * the face of primary failures. However, while our client is blocked on
+         * the primary awaiting replication, the primary might become a replica
+         * for the same reason as mentioned above, resulting in the client being
+         * unblocked with the role change error. */
         success = clusterManagerSetSlot(source, target, slot, "node", err);
-        const char *acceptable = "ERR Please use SETSLOT only with masters.";
-        if (!success && err && !strncmp(*err, acceptable, strlen(acceptable))) {
-            zfree(*err);
-            *err = NULL;
-        } else if (!success && err) {
+        if (!success && err) {
+            const char *acceptable[] = {
+                "ERR Please use SETSLOT only with masters.",
+                "UNBLOCKED force unblock from blocking operation, instance state changed (master -> replica?)"};
+            for (size_t i = 0; i < sizeof(acceptable)/sizeof(acceptable[0]); i++) {
+                if (!strncmp(*err, acceptable[i], strlen(acceptable[i]))) {
+                    zfree(*err);
+                    *err = NULL;
+                    success = 1;
+                    break;
+                }
+            }
+        }
+        if (!success && err) {
             return 0;
         }
 

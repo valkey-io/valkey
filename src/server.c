@@ -1612,7 +1612,7 @@ static void sendGetackToReplicas(void) {
     argv[0] = shared.replconf;
     argv[1] = shared.getack;
     argv[2] = shared.special_asterick; /* Not used argument. */
-    replicationFeedSlaves(server.slaves, -1, argv, 3);
+    replicationFeedSlaves(-1, argv, 3);
 }
 
 extern int ProcessingEventsWhileBlocked;
@@ -1999,6 +1999,10 @@ void createSharedObjects(void) {
     shared.special_asterick = createStringObject("*",1);
     shared.special_equals = createStringObject("=",1);
     shared.redacted = makeObjectShared(createStringObject("(redacted)",10));
+    shared.cluster = createStringObject("CLUSTER", 7);
+    shared.setslot = createStringObject("SETSLOT", 7);
+    shared.importing = createStringObject("IMPORTING", 9);
+    shared.migrating = createStringObject("MIGRATING", 9);
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] =
@@ -3314,7 +3318,7 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
     if (server.aof_state != AOF_OFF && target & PROPAGATE_AOF)
         feedAppendOnlyFile(dbid,argv,argc);
     if (target & PROPAGATE_REPL)
-        replicationFeedSlaves(server.slaves,dbid,argv,argc);
+        replicationFeedSlaves(dbid,argv,argc);
 }
 
 /* Used inside commands to schedule the propagation of additional commands
@@ -3734,8 +3738,14 @@ void call(client *c, int flags) {
         }
     }
 
-    if (!(c->flags & CLIENT_BLOCKED))
+    if (!(c->flags & CLIENT_BLOCKED)) {
+        /* Modules may call commands in cron, in which case server.current_client
+         * is not set. */
+        if (server.current_client) {
+            server.current_client->commands_processed++;
+        }
         server.stat_numcommands++;
+    }
 
     /* Record peak memory after each command and before the eviction that runs
      * before the next command. */
@@ -6896,13 +6906,11 @@ struct serverTest {
     {"quicklist", quicklistTest},
     {"zipmap", zipmapTest},
     {"sha1test", sha1Test},
-    {"util", utilTest},
     {"endianconv", endianconvTest},
     {"zmalloc", zmalloc_test},
     {"sds", sdsTest},
     {"dict", dictTest},
     {"listpack", listpackTest},
-    {"kvstore", kvstoreTest},
 };
 serverTestProc *getTestProcByName(const char *name) {
     int numtests = sizeof(serverTests)/sizeof(struct serverTest);

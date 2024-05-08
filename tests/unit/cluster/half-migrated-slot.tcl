@@ -5,11 +5,8 @@
 # 4. migration is half finished on "migrating" node
 # 5. migration is half finished on "importing" node
 
-# TODO: Test is currently disabled until it is stabilized (fixing the test
-# itself or real issues in the server).
-source tests/support/cluster_util.tcl
-
-if {false} {
+source "../tests/includes/init-tests.tcl"
+source "../tests/includes/utils.tcl"
 
 start_cluster 2 0 {tags {external:skip cluster}} {
 
@@ -95,6 +92,3 @@ test "Half-finish importing" {
 config_set_all_nodes cluster-allow-replica-migration yes
 
 } ;# start_cluster
-
-}
-

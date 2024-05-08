@@ -1,9 +1,7 @@
 # Tests for many simultaneous migrations.
 
-# TODO: Test is currently disabled until it is stabilized (fixing the test
-# itself or real issues in the server).
-
-if {false} {
+source "../tests/includes/init-tests.tcl"
+source "../tests/includes/utils.tcl"
 
 # TODO: This test currently runs without replicas, as failovers (which may
 # happen on lower-end CI platforms) are still not handled properly by the
@@ -58,5 +56,3 @@ test "Keys are accessible" {
 config_set_all_nodes cluster-allow-replica-migration yes
 
 } ;# start_cluster
-
-}

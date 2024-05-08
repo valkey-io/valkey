@@ -101,7 +101,7 @@ jobs:
       run: |
         apt-get update && apt-get install -y make gcc-13
         update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
-        make CC=gcc SERVER_CFLAGS='-Werror -DSERVER_TEST -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3'
+        make all-with-unit-tests CC=gcc OPT=-O3 SERVER_CFLAGS='-Werror -DSERVER_TEST -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3'
     - name: testprep
       run: apt-get install -y tcl8.6 tclx procps
     - name: test
@@ -121,7 +121,7 @@ jobs:
       run: ./src/valkey-server test all --accurate
     - name: new unit tests
       if: true && !contains(github.event.inputs.skiptests, 'unittest')
-      run: make valkey-unit-tests && ./src/valkey-unit-tests --accurate
+      run: ./src/valkey-unit-tests --accurate
 
   test-ubuntu-libc-malloc:
     runs-on: ubuntu-latest
@@ -598,7 +598,7 @@ jobs:
           repository: ${{ env.GITHUB_REPOSITORY }}
           ref: ${{ env.GITHUB_HEAD_REF }}
       - name: make
-        run: make all-with-unit-tests SANITIZER=address SERVER_CFLAGS='-DSERVER_TEST -Werror -DDEBUG_ASSERTIONS'
+        run: make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-DSERVER_TEST -Werror -DDEBUG_ASSERTIONS'
       - name: testprep
         # Work around ASAN issue, see https://github.com/google/sanitizers/issues/1716
         run: |
@@ -650,7 +650,7 @@ jobs:
           repository: ${{ env.GITHUB_REPOSITORY }}
           ref: ${{ env.GITHUB_HEAD_REF }}
       - name: make
-        run: make all-with-unit-tests SANITIZER=undefined SERVER_CFLAGS='-DSERVER_TEST -Werror' LUA_DEBUG=yes # we (ab)use this flow to also check Lua C API violations
+        run: make all-with-unit-tests OPT=-O3 SANITIZER=undefined SERVER_CFLAGS='-DSERVER_TEST -Werror' LUA_DEBUG=yes # we (ab)use this flow to also check Lua C API violations
       - name: testprep
         run: |
           sudo apt-get update

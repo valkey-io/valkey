@@ -48,7 +48,7 @@ make valkey-unit-tests
 
 Running a single unit test file
 ```
-./valkey-unit-tests --single crc64.c
+./valkey-unit-tests --single test_crc64.c
 ```
 
-Will just run the crc64.c file.
+Will just run the test_crc64.c file.

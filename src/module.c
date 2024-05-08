@@ -239,7 +239,7 @@ typedef void (*ValkeyModuleDisconnectFunc) (ValkeyModuleCtx *ctx, struct ValkeyM
 struct ValkeyModuleCommand {
     struct ValkeyModule *module;
     ValkeyModuleCmdFunc func;
-    struct serverCommand *rediscmd;
+    struct serverCommand *serverCmd;
 };
 typedef struct ValkeyModuleCommand ValkeyModuleCommand;
 
@@ -653,7 +653,7 @@ client *moduleAllocTempClient(void) {
     return c;
 }
 
-static void freeRedisModuleAsyncRMCallPromise(ValkeyModuleAsyncRMCallPromise *promise) {
+static void freeValkeyModuleAsyncRMCallPromise(ValkeyModuleAsyncRMCallPromise *promise) {
     if (--promise->ref_count > 0) {
         return;
     }
@@ -680,7 +680,7 @@ void moduleReleaseTempClient(client *c) {
     if (c->bstate.async_rm_call_handle) {
         ValkeyModuleAsyncRMCallPromise *promise = c->bstate.async_rm_call_handle;
         promise->c = NULL; /* Remove the client from the promise so it will no longer be possible to abort it. */
-        freeRedisModuleAsyncRMCallPromise(promise);
+        freeValkeyModuleAsyncRMCallPromise(promise);
         c->bstate.async_rm_call_handle = NULL;
     }
     moduleTempClients[moduleTempClientCount++] = c;
@@ -1190,7 +1190,7 @@ ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module, sds d
  *
  * The command function type is the following:
  *
- *      int MyCommand_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc);
+ *      int MyCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc);
  *
  * And is supposed to always return VALKEYMODULE_OK.
  *
@@ -1286,11 +1286,11 @@ int VM_CreateCommand(ValkeyModuleCtx *ctx, const char *name, ValkeyModuleCmdFunc
 
     sds declared_name = sdsnew(name);
     ValkeyModuleCommand *cp = moduleCreateCommandProxy(ctx->module, declared_name, sdsdup(declared_name), cmdfunc, flags, firstkey, lastkey, keystep);
-    cp->rediscmd->arity = cmdfunc ? -1 : -2; /* Default value, can be changed later via dedicated API */
+    cp->serverCmd->arity = cmdfunc ? -1 : -2; /* Default value, can be changed later via dedicated API */
 
-    serverAssert(dictAdd(server.commands, sdsdup(declared_name), cp->rediscmd) == DICT_OK);
-    serverAssert(dictAdd(server.orig_commands, sdsdup(declared_name), cp->rediscmd) == DICT_OK);
-    cp->rediscmd->id = ACLGetCommandID(declared_name); /* ID used for ACL. */
+    serverAssert(dictAdd(server.commands, sdsdup(declared_name), cp->serverCmd) == DICT_OK);
+    serverAssert(dictAdd(server.orig_commands, sdsdup(declared_name), cp->serverCmd) == DICT_OK);
+    cp->serverCmd->id = ACLGetCommandID(declared_name); /* ID used for ACL. */
     return VALKEYMODULE_OK;
 }
 
@@ -1302,7 +1302,7 @@ int VM_CreateCommand(ValkeyModuleCtx *ctx, const char *name, ValkeyModuleCmdFunc
  * Function will take the ownership of both 'declared_name' and 'fullname' SDS.
  */
 ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module, sds declared_name, sds fullname, ValkeyModuleCmdFunc cmdfunc, int64_t flags, int firstkey, int lastkey, int keystep) {
-    struct serverCommand *rediscmd;
+    struct serverCommand *serverCmd;
     ValkeyModuleCommand *cp;
 
     /* Create a command "proxy", which is a structure that is referenced
@@ -1312,34 +1312,34 @@ ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module, sds d
     cp = zcalloc(sizeof(*cp));
     cp->module = module;
     cp->func = cmdfunc;
-    cp->rediscmd = zcalloc(sizeof(*rediscmd));
-    cp->rediscmd->declared_name = declared_name; /* SDS for module commands */
-    cp->rediscmd->fullname = fullname;
-    cp->rediscmd->group = COMMAND_GROUP_MODULE;
-    cp->rediscmd->proc = ValkeyModuleCommandDispatcher;
-    cp->rediscmd->flags = flags | CMD_MODULE;
-    cp->rediscmd->module_cmd = cp;
+    cp->serverCmd = zcalloc(sizeof(*serverCmd));
+    cp->serverCmd->declared_name = declared_name; /* SDS for module commands */
+    cp->serverCmd->fullname = fullname;
+    cp->serverCmd->group = COMMAND_GROUP_MODULE;
+    cp->serverCmd->proc = ValkeyModuleCommandDispatcher;
+    cp->serverCmd->flags = flags | CMD_MODULE;
+    cp->serverCmd->module_cmd = cp;
     if (firstkey != 0) {
-        cp->rediscmd->key_specs_num = 1;
-        cp->rediscmd->key_specs = zcalloc(sizeof(keySpec));
-        cp->rediscmd->key_specs[0].flags = CMD_KEY_FULL_ACCESS;
+        cp->serverCmd->key_specs_num = 1;
+        cp->serverCmd->key_specs = zcalloc(sizeof(keySpec));
+        cp->serverCmd->key_specs[0].flags = CMD_KEY_FULL_ACCESS;
         if (flags & CMD_MODULE_GETKEYS)
-            cp->rediscmd->key_specs[0].flags |= CMD_KEY_VARIABLE_FLAGS;
-        cp->rediscmd->key_specs[0].begin_search_type = KSPEC_BS_INDEX;
-        cp->rediscmd->key_specs[0].bs.index.pos = firstkey;
-        cp->rediscmd->key_specs[0].find_keys_type = KSPEC_FK_RANGE;
-        cp->rediscmd->key_specs[0].fk.range.lastkey = lastkey < 0 ? lastkey : (lastkey-firstkey);
-        cp->rediscmd->key_specs[0].fk.range.keystep = keystep;
-        cp->rediscmd->key_specs[0].fk.range.limit = 0;
+            cp->serverCmd->key_specs[0].flags |= CMD_KEY_VARIABLE_FLAGS;
+        cp->serverCmd->key_specs[0].begin_search_type = KSPEC_BS_INDEX;
+        cp->serverCmd->key_specs[0].bs.index.pos = firstkey;
+        cp->serverCmd->key_specs[0].find_keys_type = KSPEC_FK_RANGE;
+        cp->serverCmd->key_specs[0].fk.range.lastkey = lastkey < 0 ? lastkey : (lastkey-firstkey);
+        cp->serverCmd->key_specs[0].fk.range.keystep = keystep;
+        cp->serverCmd->key_specs[0].fk.range.limit = 0;
     } else {
-        cp->rediscmd->key_specs_num = 0;
-        cp->rediscmd->key_specs = NULL;
+        cp->serverCmd->key_specs_num = 0;
+        cp->serverCmd->key_specs = NULL;
     }
-    populateCommandLegacyRangeSpec(cp->rediscmd);
-    cp->rediscmd->microseconds = 0;
-    cp->rediscmd->calls = 0;
-    cp->rediscmd->rejected_calls = 0;
-    cp->rediscmd->failed_calls = 0;
+    populateCommandLegacyRangeSpec(cp->serverCmd);
+    cp->serverCmd->microseconds = 0;
+    cp->serverCmd->calls = 0;
+    cp->serverCmd->rejected_calls = 0;
+    cp->serverCmd->failed_calls = 0;
     return cp;
 }
 
@@ -1400,7 +1400,7 @@ int VM_CreateSubcommand(ValkeyModuleCommand *parent, const char *name, ValkeyMod
     if ((flags & CMD_MODULE_NO_CLUSTER) && server.cluster_enabled)
         return VALKEYMODULE_ERR;
 
-    struct serverCommand *parent_cmd = parent->rediscmd;
+    struct serverCommand *parent_cmd = parent->serverCmd;
 
     if (parent_cmd->parent)
         return VALKEYMODULE_ERR; /* We don't allow more than one level of subcommands */
@@ -1422,9 +1422,9 @@ int VM_CreateSubcommand(ValkeyModuleCommand *parent, const char *name, ValkeyMod
 
     sds fullname = catSubCommandFullname(parent_cmd->fullname, name);
     ValkeyModuleCommand *cp = moduleCreateCommandProxy(parent->module, declared_name, fullname, cmdfunc, flags, firstkey, lastkey, keystep);
-    cp->rediscmd->arity = -2;
+    cp->serverCmd->arity = -2;
 
-    commandAddSubcommand(parent_cmd, cp->rediscmd, name);
+    commandAddSubcommand(parent_cmd, cp->serverCmd, name);
     return VALKEYMODULE_OK;
 }
 
@@ -1554,7 +1554,7 @@ int VM_SetCommandACLCategories(ValkeyModuleCommand *command, const char *aclflag
     if (!command || !command->module || !command->module->onload) return VALKEYMODULE_ERR;
     int64_t categories_flags = aclflags ? categoryFlagsFromString((char*)aclflags) : 0;
     if (categories_flags == -1) return VALKEYMODULE_ERR;
-    struct serverCommand *rcmd = command->rediscmd;
+    struct serverCommand *rcmd = command->serverCmd;
     rcmd->acl_categories = categories_flags; /* ACL categories flags for module command */
     command->module->num_commands_with_acl_categories++;
     return VALKEYMODULE_OK;
@@ -1867,7 +1867,7 @@ int VM_SetCommandInfo(ValkeyModuleCommand *command, const ValkeyModuleCommandInf
         return VALKEYMODULE_ERR;
     }
 
-    struct serverCommand *cmd = command->rediscmd;
+    struct serverCommand *cmd = command->serverCmd;
 
     /* Check if any info has already been set. Overwriting info involves freeing
      * the old info, which is not implemented. */
@@ -2516,7 +2516,7 @@ int VM_SignalModifiedKey(ValkeyModuleCtx *ctx, ValkeyModuleString *keyname) {
  * that wants to use automatic memory.
  *
  * When enabled, automatic memory management tracks and automatically frees
- * keys, call replies and RedisModuleString objects once the command returns. In most
+ * keys, call replies and ValkeyModuleString objects once the command returns. In most
  * cases this eliminates the need of calling the following functions:
  *
  * 1. ValkeyModule_CloseKey()
@@ -5916,7 +5916,7 @@ void VM_FreeCallReply(ValkeyModuleCallReply *reply) {
     if(callReplyType(reply) == VALKEYMODULE_REPLY_PROMISE) {
         ValkeyModuleAsyncRMCallPromise *promise = callReplyGetPrivateData(reply);
         ctx = promise->ctx;
-        freeRedisModuleAsyncRMCallPromise(promise);
+        freeValkeyModuleAsyncRMCallPromise(promise);
     } else {
         ctx = callReplyGetPrivateData(reply);
     }
@@ -7110,7 +7110,7 @@ int VM_IsIOError(ValkeyModuleIO *io) {
     return io->error;
 }
 
-static int flushRedisModuleIOBuffer(ValkeyModuleIO *io) {
+static int flushValkeyModuleIOBuffer(ValkeyModuleIO *io) {
     if (!io->pre_flush_buffer) return 0;
 
     /* We have data that must be flushed before saving the current data.
@@ -7128,7 +7128,7 @@ static int flushRedisModuleIOBuffer(ValkeyModuleIO *io) {
  * data types. */
 void VM_SaveUnsigned(ValkeyModuleIO *io, uint64_t value) {
     if (io->error) return;
-    if (flushRedisModuleIOBuffer(io) == -1) goto saveerr;
+    if (flushValkeyModuleIOBuffer(io) == -1) goto saveerr;
     /* Save opcode. */
     int retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_UINT);
     if (retval == -1) goto saveerr;
@@ -7182,7 +7182,7 @@ int64_t VM_LoadSigned(ValkeyModuleIO *io) {
  * the RDB file. */
 void VM_SaveString(ValkeyModuleIO *io, ValkeyModuleString *s) {
     if (io->error) return;
-    if (flushRedisModuleIOBuffer(io) == -1) goto saveerr;
+    if (flushValkeyModuleIOBuffer(io) == -1) goto saveerr;
     /* Save opcode. */
     ssize_t retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_STRING);
     if (retval == -1) goto saveerr;
@@ -7201,7 +7201,7 @@ saveerr:
  * as input. */
 void VM_SaveStringBuffer(ValkeyModuleIO *io, const char *str, size_t len) {
     if (io->error) return;
-    if (flushRedisModuleIOBuffer(io) == -1) goto saveerr;
+    if (flushValkeyModuleIOBuffer(io) == -1) goto saveerr;
     /* Save opcode. */
     ssize_t retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_STRING);
     if (retval == -1) goto saveerr;
@@ -7260,7 +7260,7 @@ char *VM_LoadStringBuffer(ValkeyModuleIO *io, size_t *lenptr) {
  * It is possible to load back the value with ValkeyModule_LoadDouble(). */
 void VM_SaveDouble(ValkeyModuleIO *io, double value) {
     if (io->error) return;
-    if (flushRedisModuleIOBuffer(io) == -1) goto saveerr;
+    if (flushValkeyModuleIOBuffer(io) == -1) goto saveerr;
     /* Save opcode. */
     int retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_DOUBLE);
     if (retval == -1) goto saveerr;
@@ -7296,7 +7296,7 @@ loaderr:
  * It is possible to load back the value with ValkeyModule_LoadFloat(). */
 void VM_SaveFloat(ValkeyModuleIO *io, float value) {
     if (io->error) return;
-    if (flushRedisModuleIOBuffer(io) == -1) goto saveerr;
+    if (flushValkeyModuleIOBuffer(io) == -1) goto saveerr;
     /* Save opcode. */
     int retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_FLOAT);
     if (retval == -1) goto saveerr;

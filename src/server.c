@@ -6906,13 +6906,11 @@ struct serverTest {
     {"quicklist", quicklistTest},
     {"zipmap", zipmapTest},
     {"sha1test", sha1Test},
-    {"util", utilTest},
     {"endianconv", endianconvTest},
     {"zmalloc", zmalloc_test},
     {"sds", sdsTest},
     {"dict", dictTest},
     {"listpack", listpackTest},
-    {"kvstore", kvstoreTest},
 };
 serverTestProc *getTestProcByName(const char *name) {
     int numtests = sizeof(serverTests)/sizeof(struct serverTest);

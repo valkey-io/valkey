@@ -176,7 +176,7 @@ static void gf2_matrix_square(uint64_t *square, uint64_t *mat, uint8_t dim) {
 		square[n] = CRC_MULTIPLY(mat, mat[n]);
 }
 
-/* Turns out our Redis / Jones CRC cycles at this point, so we can support
+/* Turns out our Jones CRC cycles at this point, so we can support
  * more than 64 bits of extension if we want. Trivially. */
 static uint64_t combine_cache[64][64];
 
@@ -204,7 +204,7 @@ void init_combine_cache(uint64_t poly, uint8_t dim) {
 	gf2_matrix_square(combine_cache[1], combine_cache[0], dim);
 
 	/* do/while to overwrite the first two layers, they are not used, but are
-	 * re-generated in the last two layers for the Redis polynomial */
+	 * re-generated in the last two layers for the crc polynomial */
 	do {
 		gf2_matrix_square(combine_cache[cache_num], combine_cache[cache_num + prev], dim);
 		prev = -1;

@@ -3147,7 +3147,7 @@ version,tls_usage);
 "Type \"help\" in interactive mode for information on available commands\n"
 "and settings.\n"
 "\n");
-    /* clang-format off */
+    /* clang-format on */
     sdsfree(version);
     exit(err);
 }

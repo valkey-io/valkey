@@ -1270,7 +1270,7 @@ static char *i2string_async_signal_safe(int base, int64_t val, char *buf) {
             case 'e': *buf = '1'; break;
             case 'f': *buf = '0'; break;
             }
-            /* clang-format off */
+            /* clang-format on */
         }
     }
     return buf + 1;

@@ -1654,7 +1654,7 @@ tls_usage,
 " On user specified command lines __rand_int__ is replaced with a random integer\n"
 " with a range of values selected by the -r option.\n"
     );
-    /* clang-format off */
+    /* clang-format on */
     exit(exit_status);
 }
 

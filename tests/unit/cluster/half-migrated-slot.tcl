@@ -5,8 +5,7 @@
 # 4. migration is half finished on "migrating" node
 # 5. migration is half finished on "importing" node
 
-source "../tests/includes/init-tests.tcl"
-source "../tests/includes/utils.tcl"
+source tests/support/cluster_util.tcl
 
 start_cluster 2 0 {tags {external:skip cluster}} {
 

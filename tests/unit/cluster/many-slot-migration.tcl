@@ -1,7 +1,6 @@
 # Tests for many simultaneous migrations.
 
-source "../tests/includes/init-tests.tcl"
-source "../tests/includes/utils.tcl"
+source tests/support/cluster_util.tcl
 
 # TODO: This test currently runs without replicas, as failovers (which may
 # happen on lower-end CI platforms) are still not handled properly by the

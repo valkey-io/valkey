@@ -49,8 +49,4 @@ size_t zipmapBlobLen(unsigned char *zm);
 void zipmapRepr(unsigned char *p);
 int zipmapValidateIntegrity(unsigned char *zm, size_t size, int deep);
 
-#ifdef SERVER_TEST
-int zipmapTest(int argc, char *argv[], int flags);
-#endif
-
 #endif

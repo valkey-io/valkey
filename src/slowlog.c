@@ -38,8 +38,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
-#include "server.h"
 #include "slowlog.h"
 
 /* Create a new slowlog entry.

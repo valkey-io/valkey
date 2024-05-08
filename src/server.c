@@ -5432,7 +5432,7 @@ const char *getSafeInfoString(const char *s, size_t len, char **tmp) {
                        sizeof(unsafe_info_chars)-1);
 }
 
-sds genRedisInfoStringCommandStats(sds info, dict *commands) {
+sds genValkeyInfoStringCommandStats(sds info, dict *commands) {
     struct serverCommand *c;
     dictEntry *de;
     dictIterator *di;
@@ -5450,7 +5450,7 @@ sds genRedisInfoStringCommandStats(sds info, dict *commands) {
             if (tmpsafe != NULL) zfree(tmpsafe);
         }
         if (c->subcommands_dict) {
-            info = genRedisInfoStringCommandStats(info, c->subcommands_dict);
+            info = genValkeyInfoStringCommandStats(info, c->subcommands_dict);
         }
     }
     dictReleaseIterator(di);
@@ -5459,7 +5459,7 @@ sds genRedisInfoStringCommandStats(sds info, dict *commands) {
 }
 
 /* Writes the ACL metrics to the info */
-sds genRedisInfoStringACLStats(sds info) {
+sds genValkeyInfoStringACLStats(sds info) {
     info = sdscatprintf(info,
          "acl_access_denied_auth:%lld\r\n"
          "acl_access_denied_cmd:%lld\r\n"
@@ -5472,7 +5472,7 @@ sds genRedisInfoStringACLStats(sds info) {
     return info;
 }
 
-sds genRedisInfoStringLatencyStats(sds info, dict *commands) {
+sds genValkeyInfoStringLatencyStats(sds info, dict *commands) {
     struct serverCommand *c;
     dictEntry *de;
     dictIterator *di;
@@ -5487,7 +5487,7 @@ sds genRedisInfoStringLatencyStats(sds info, dict *commands) {
             if (tmpsafe != NULL) zfree(tmpsafe);
         }
         if (c->subcommands_dict) {
-            info = genRedisInfoStringLatencyStats(info, c->subcommands_dict);
+            info = genValkeyInfoStringLatencyStats(info, c->subcommands_dict);
         }
     }
     dictReleaseIterator(di);
@@ -5513,7 +5513,7 @@ void releaseInfoSectionDict(dict *sec) {
         dictRelease(sec);
 }
 
-/* Create a dictionary with unique section names to be used by genRedisInfoString.
+/* Create a dictionary with unique section names to be used by genValkeyInfoString.
  * 'argv' and 'argc' are list of arguments for INFO.
  * 'defaults' is an optional null terminated list of default sections.
  * 'out_all' and 'out_everything' are optional.
@@ -5577,7 +5577,7 @@ void totalNumberOfStatefulKeys(unsigned long *blocking_keys, unsigned long *bloc
 /* Create the string returned by the INFO command. This is decoupled
  * by the INFO command itself as we need to report the same information
  * on memory corruption problems. */
-sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
+sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     sds info = sdsempty();
     time_t uptime = server.unixtime-server.stat_starttime;
     int j;
@@ -5942,7 +5942,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "eventloop_duration_cmd_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CMD].sum,
             "instantaneous_eventloop_cycles_per_sec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_CYCLE),
             "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION)));
-        info = genRedisInfoStringACLStats(info);
+        info = genValkeyInfoStringACLStats(info);
     }
 
     /* Replication */
@@ -6092,7 +6092,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
     if (all_sections || (dictFind(section_dict,"commandstats") != NULL)) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, "# Commandstats\r\n");
-        info = genRedisInfoStringCommandStats(info, server.commands);
+        info = genValkeyInfoStringCommandStats(info, server.commands);
     }
 
     /* Error statistics */
@@ -6119,7 +6119,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, "# Latencystats\r\n");
         if (server.latency_tracking_enabled) {
-            info = genRedisInfoStringLatencyStats(info, server.commands);
+            info = genValkeyInfoStringLatencyStats(info, server.commands);
         }
     }
 
@@ -6185,7 +6185,7 @@ void infoCommand(client *c) {
     int all_sections = 0;
     int everything = 0;
     dict *sections_dict = genInfoSectionDict(c->argv+1, c->argc-1, NULL, &all_sections, &everything);
-    sds info = genRedisInfoString(sections_dict, all_sections, everything);
+    sds info = genValkeyInfoString(sections_dict, all_sections, everything);
     addReplyVerbatim(c,info,sdslen(info),"txt");
     sdsfree(info);
     releaseInfoSectionDict(sections_dict);

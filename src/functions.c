@@ -826,6 +826,7 @@ void functionFlushCommand(client *c) {
 
 /* FUNCTION HELP */
 void functionHelpCommand(client *c) {
+    /* clang-format off */
     const char *help[] = {
 "LOAD [REPLACE] <FUNCTION CODE>",
 "    Create a new library with the given library name and code.",
@@ -864,6 +865,7 @@ void functionHelpCommand(client *c) {
 "      libraries with the new libraries (notice that even on this option there is a chance of failure",
 "      in case of functions name collision with another library).",
 NULL };
+    /* clang-format on */
     addReplyHelp(c, help);
 }
 

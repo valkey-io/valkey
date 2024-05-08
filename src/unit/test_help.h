@@ -14,6 +14,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <assert.h>
 
 /* The flags are the following:
 * --accurate:     Runs tests with more iterations.

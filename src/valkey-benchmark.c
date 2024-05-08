@@ -1134,12 +1134,14 @@ static int fetchClusterConfiguration(void) {
             *p = '\0';
             char *token = line;
             line = p + 1;
+            /* clang-format off */
             switch(i++){
             case 0: name = token; break;
             case 1: addr = token; break;
             case 2: flags = token; break;
             case 3: master_id = token; break;
             }
+            /* clang-format on */
             if (i == 8) break; // Slots
         }
         if (!flags) {
@@ -1560,6 +1562,7 @@ invalid:
     printf("Invalid option \"%s\" or option argument missing\n\n",argv[i]);
 
 usage:
+    /* clang-format off */
     tls_usage =
 #ifdef USE_OPENSSL
 " --tls              Establish a secure TLS connection.\n"
@@ -1651,6 +1654,7 @@ tls_usage,
 " On user specified command lines __rand_int__ is replaced with a random integer\n"
 " with a range of values selected by the -r option.\n"
     );
+    /* clang-format on */
     exit(exit_status);
 }
 

@@ -1143,6 +1143,7 @@ int64_t commandFlagsFromString(char *s) {
     sds *tokens = sdssplitlen(s,strlen(s)," ",1,&count);
     for (j = 0; j < count; j++) {
         char *t = tokens[j];
+        /* clang-format off */
         if (!strcasecmp(t,"write")) flags |= CMD_WRITE;
         else if (!strcasecmp(t,"readonly")) flags |= CMD_READONLY;
         else if (!strcasecmp(t,"admin")) flags |= CMD_ADMIN;
@@ -1164,6 +1165,7 @@ int64_t commandFlagsFromString(char *s) {
         else if (!strcasecmp(t,"no-mandatory-keys")) flags |= CMD_NO_MANDATORY_KEYS;
         else if (!strcasecmp(t,"allow-busy")) flags |= CMD_ALLOW_BUSY;
         else break;
+        /* clang-format on */
     }
     sdsfreesplitres(tokens,count);
     if (j != count) return -1; /* Some token not processed correctly. */

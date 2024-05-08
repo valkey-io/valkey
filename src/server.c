@@ -651,13 +651,15 @@ void updateDictResizePolicy(void) {
 }
 
 const char *strChildType(int type) {
+    /* clang-format off */
     switch(type) {
-        case CHILD_TYPE_RDB: return "RDB";
-        case CHILD_TYPE_AOF: return "AOF";
-        case CHILD_TYPE_LDB: return "LDB";
-        case CHILD_TYPE_MODULE: return "MODULE";
-        default: return "Unknown";
+    case CHILD_TYPE_RDB: return "RDB";
+    case CHILD_TYPE_AOF: return "AOF";
+    case CHILD_TYPE_LDB: return "LDB";
+    case CHILD_TYPE_MODULE: return "MODULE";
+    default: return "Unknown";
     }
+    /* clang-format on */
 }
 
 /* Return true if there are active children processes doing RDB saving,
@@ -5329,6 +5331,7 @@ void commandGetKeysCommand(client *c) {
 
 /* COMMAND HELP */
 void commandHelpCommand(client *c) {
+    /* clang-format off */
     const char *help[] = {
 "(no subcommand)",
 "    Return details about all commands.",
@@ -5350,7 +5353,7 @@ void commandHelpCommand(client *c) {
 "    Return the keys and the access flags from a full command.",
 NULL
     };
-
+    /* clang-format on */
     addReplyHelp(c, help);
 }
 
@@ -5611,6 +5614,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             call_uname = 0;
         }
 
+        /* clang-format off */
         info = sdscatfmt(info, "# Server\r\n" FMTARGS(
             "redis_version:%s\r\n", REDIS_VERSION,
             "server_name:%s\r\n", SERVER_NAME,
@@ -5641,6 +5645,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "executable:%s\r\n", server.executable ? server.executable : "",
             "config_file:%s\r\n", server.configfile ? server.configfile : "",
             "io_threads_active:%i\r\n", server.io_threads_active));
+        /* clang-format on */
 
         /* Conditional properties */
         if (isShutdownInitiated()) {
@@ -5660,6 +5665,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         getExpansiveClientsInfo(&maxin,&maxout);
         totalNumberOfStatefulKeys(&blocking_keys, &blocking_keys_on_nokey, &watched_keys);
         if (sections++) info = sdscat(info,"\r\n");
+        /* clang-format off */
         info = sdscatprintf(info, "# Clients\r\n" FMTARGS(
             "connected_clients:%lu\r\n", listLength(server.clients) - listLength(server.slaves),
             "cluster_connections:%lu\r\n", getClusterConnectionsCount(),
@@ -5674,6 +5680,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "total_watched_keys:%lu\r\n", watched_keys,
             "total_blocking_keys:%lu\r\n", blocking_keys,
             "total_blocking_keys_on_nokey:%lu\r\n", blocking_keys_on_nokey));
+        /* clang-format on */
     }
 
     /* Memory */
@@ -5710,6 +5717,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         bytesToHuman(maxmemory_hmem,sizeof(maxmemory_hmem),server.maxmemory);
 
         if (sections++) info = sdscat(info,"\r\n");
+        /* clang-format off */
         info = sdscatprintf(info, "# Memory\r\n" FMTARGS(
             "used_memory:%zu\r\n", zmalloc_used,
             "used_memory_human:%s\r\n", hmem,
@@ -5768,6 +5776,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "active_defrag_running:%d\r\n", server.active_defrag_running,
             "lazyfree_pending_objects:%zu\r\n", lazyfreeGetPendingObjectsCount(),
             "lazyfreed_objects:%zu\r\n", lazyfreeGetFreedObjectsCount()));
+        /* clang-format on */
         freeMemoryOverheadData(mh);
     }
 
@@ -5783,6 +5792,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         int aof_bio_fsync_status;
         atomicGet(server.aof_bio_fsync_status,aof_bio_fsync_status);
 
+        /* clang-format off */
         info = sdscatprintf(info, "# Persistence\r\n" FMTARGS(
             "loading:%d\r\n", (int)(server.loading && !server.async_loading),
             "async_loading:%d\r\n", (int)server.async_loading,
@@ -5819,8 +5829,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "aof_last_cow_size:%zu\r\n", server.stat_aof_cow_bytes,
             "module_fork_in_progress:%d\r\n", server.child_type == CHILD_TYPE_MODULE,
             "module_fork_last_cow_size:%zu\r\n", server.stat_module_cow_bytes));
+        /* clang-format on */
 
         if (server.aof_enabled) {
+            /* clang-format off */
             info = sdscatprintf(info, FMTARGS(
                 "aof_current_size:%lld\r\n", (long long) server.aof_current_size,
                 "aof_base_size:%lld\r\n", (long long) server.aof_rewrite_base_size,
@@ -5828,6 +5840,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "aof_buffer_length:%zu\r\n", sdslen(server.aof_buf),
                 "aof_pending_bio_fsync:%lu\r\n", bioPendingJobsOfType(BIO_AOF_FSYNC),
                 "aof_delayed_fsync:%lu\r\n", server.aof_delayed_fsync));
+            /* clang-format on */
         }
 
         if (server.loading) {
@@ -5854,6 +5867,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 eta = (elapsed*remaining_bytes)/(server.loading_loaded_bytes+1);
             }
 
+            /* clang-format off */
             info = sdscatprintf(info, FMTARGS(
                 "loading_start_time:%jd\r\n", (intmax_t) server.loading_start_time,
                 "loading_total_bytes:%llu\r\n", (unsigned long long) server.loading_total_bytes,
@@ -5861,6 +5875,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "loading_loaded_bytes:%llu\r\n", (unsigned long long) server.loading_loaded_bytes,
                 "loading_loaded_perc:%.2f\r\n", perc,
                 "loading_eta_seconds:%jd\r\n", (intmax_t)eta));
+            /* clang-format on */
         }
     }
 
@@ -5883,6 +5898,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         atomicGet(server.stat_client_qbuf_limit_disconnections, stat_client_qbuf_limit_disconnections);
 
         if (sections++) info = sdscat(info,"\r\n");
+        /* clang-format off */
         info = sdscatprintf(info, "# Stats\r\n" FMTARGS(
             "total_connections_received:%lld\r\n", server.stat_numconnections,
             "total_commands_processed:%lld\r\n", server.stat_numcommands,
@@ -5943,6 +5959,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "instantaneous_eventloop_cycles_per_sec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_CYCLE),
             "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION)));
         info = genValkeyInfoStringACLStats(info);
+        /* clang-format on */
     }
 
     /* Replication */
@@ -5964,6 +5981,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 slave_read_repl_offset = server.cached_master->read_reploff;
             }
 
+            /* clang-format off */
             info = sdscatprintf(info, FMTARGS(
                 "master_host:%s\r\n", server.masterhost,
                 "master_port:%d\r\n", server.masterport,
@@ -5972,18 +5990,21 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "master_sync_in_progress:%d\r\n", server.repl_state == REPL_STATE_TRANSFER,
                 "slave_read_repl_offset:%lld\r\n", slave_read_repl_offset,
                 "slave_repl_offset:%lld\r\n", slave_repl_offset));
+            /* clang-format on */
 
             if (server.repl_state == REPL_STATE_TRANSFER) {
                 double perc = 0;
                 if (server.repl_transfer_size) {
                     perc = ((double)server.repl_transfer_read / server.repl_transfer_size) * 100;
                 }
+                /* clang-format off */
                 info = sdscatprintf(info, FMTARGS(
                     "master_sync_total_bytes:%lld\r\n", (long long) server.repl_transfer_size,
                     "master_sync_read_bytes:%lld\r\n", (long long) server.repl_transfer_read,
                     "master_sync_left_bytes:%lld\r\n", (long long) (server.repl_transfer_size - server.repl_transfer_read),
                     "master_sync_perc:%.2f\r\n", perc,
                     "master_sync_last_io_seconds_ago:%d\r\n", (int)(server.unixtime-server.repl_transfer_lastio)));
+                /* clang-format on */
             }
 
             if (server.repl_state != REPL_STATE_CONNECTED) {
@@ -5992,10 +6013,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     server.repl_down_since ?
                     (intmax_t)(server.unixtime-server.repl_down_since) : -1);
             }
+            /* clang-format off */
             info = sdscatprintf(info, FMTARGS(
                 "slave_priority:%d\r\n", server.slave_priority,
                 "slave_read_only:%d\r\n", server.repl_slave_ro,
                 "replica_announced:%d\r\n", server.replica_announced));
+            /* clang-format on */
         }
 
         info = sdscatprintf(info,
@@ -6041,6 +6064,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 slaveid++;
             }
         }
+        /* clang-format off */
         info = sdscatprintf(info, FMTARGS(
             "master_failover_state:%s\r\n", getFailoverStateString(),
             "master_replid:%s\r\n", server.replid,
@@ -6051,6 +6075,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "repl_backlog_size:%lld\r\n", server.repl_backlog_size,
             "repl_backlog_first_byte_offset:%lld\r\n", server.repl_backlog ? server.repl_backlog->offset : 0,
             "repl_backlog_histlen:%lld\r\n", server.repl_backlog ? server.repl_backlog->histlen : 0));
+        /* clang-format on */
     }
 
     /* CPU */
@@ -6166,11 +6191,13 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
 
     if (dictFind(section_dict, "debug") != NULL) {
         if (sections++) info = sdscat(info,"\r\n");
+        /* clang-format off */
         info = sdscatprintf(info, "# Debug\r\n" FMTARGS(
             "eventloop_duration_aof_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_AOF].sum,
             "eventloop_duration_cron_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CRON].sum,
             "eventloop_duration_max:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].max,
             "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max));
+        /* clang-format on */
     }
 
     return info;

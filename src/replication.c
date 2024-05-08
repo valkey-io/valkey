@@ -3253,6 +3253,7 @@ void roleCommand(client *c) {
         if (slaveIsInHandshakeState()) {
             slavestate = "handshake";
         } else {
+            /* clang-format off */
             switch(server.repl_state) {
             case REPL_STATE_NONE: slavestate = "none"; break;
             case REPL_STATE_CONNECT: slavestate = "connect"; break;
@@ -3261,6 +3262,7 @@ void roleCommand(client *c) {
             case REPL_STATE_CONNECTED: slavestate = "connected"; break;
             default: slavestate = "unknown"; break;
             }
+            /* clang-format on */
         }
         addReplyBulkCString(c,slavestate);
         addReplyLongLong(c,server.master ? server.master->reploff : -1);

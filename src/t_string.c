@@ -213,6 +213,7 @@ int parseExtendedStringArgumentsOrReply(client *c, int *flags, int *unit, robj *
         char *opt = c->argv[j]->ptr;
         robj *next = (j == c->argc-1) ? NULL : c->argv[j+1];
 
+        /* clang-format off */
         if ((opt[0] == 'n' || opt[0] == 'N') &&
             (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
             !(*flags & OBJ_SET_XX) && (command_type == COMMAND_SET))
@@ -286,6 +287,7 @@ int parseExtendedStringArgumentsOrReply(client *c, int *flags, int *unit, robj *
             addReplyErrorObject(c,shared.syntaxerr);
             return C_ERR;
         }
+        /* clang-format off */
     }
     return C_OK;
 }

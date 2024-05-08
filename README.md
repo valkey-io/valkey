@@ -1,4 +1,7 @@
 [![codecov](https://codecov.io/gh/valkey-io/valkey/graph/badge.svg?token=KYYSJAYC5F)](https://codecov.io/gh/valkey-io/valkey)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/valkey-io
+/valkey/badge)](https://securityscorecards.dev/viewer/?uri=github.com/valkey-io
+/valkey)
 
 This README is under construction as we work to build a new community driven high performance key-value store.
 

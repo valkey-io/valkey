@@ -391,6 +391,7 @@ void incrRefCount(robj *o) {
 
 void decrRefCount(robj *o) {
     if (o->refcount == 1) {
+        /* clang-format off */
         switch(o->type) {
         case OBJ_STRING: freeStringObject(o); break;
         case OBJ_LIST: freeListObject(o); break;
@@ -401,6 +402,7 @@ void decrRefCount(robj *o) {
         case OBJ_STREAM: freeStreamObject(o); break;
         default: serverPanic("Unknown object type"); break;
         }
+        /* clang-format on */
         zfree(o);
     } else {
         if (o->refcount <= 0) serverPanic("decrRefCount against refcount <= 0");
@@ -569,15 +571,17 @@ void dismissObject(robj *o, size_t size_hint) {
      * so we avoid these pointless loops when they're not going to do anything. */
 #if defined(USE_JEMALLOC) && defined(__linux__)
     if (o->refcount != 1) return;
+    /* clang-format off */
     switch(o->type) {
-        case OBJ_STRING: dismissStringObject(o); break;
-        case OBJ_LIST: dismissListObject(o, size_hint); break;
-        case OBJ_SET: dismissSetObject(o, size_hint); break;
-        case OBJ_ZSET: dismissZsetObject(o, size_hint); break;
-        case OBJ_HASH: dismissHashObject(o, size_hint); break;
-        case OBJ_STREAM: dismissStreamObject(o, size_hint); break;
-        default: break;
+    case OBJ_STRING: dismissStringObject(o); break;
+    case OBJ_LIST: dismissListObject(o, size_hint); break;
+    case OBJ_SET: dismissSetObject(o, size_hint); break;
+    case OBJ_ZSET: dismissZsetObject(o, size_hint); break;
+    case OBJ_HASH: dismissHashObject(o, size_hint); break;
+    case OBJ_STREAM: dismissStreamObject(o, size_hint); break;
+    default: break;
     }
+    /* clang-format on */
 #else
     UNUSED(o); UNUSED(size_hint);
 #endif
@@ -954,6 +958,7 @@ int getIntFromObjectOrReply(client *c, robj *o, int *target, const char *msg) {
 }
 
 char *strEncoding(int encoding) {
+    /* clang-format off */
     switch(encoding) {
     case OBJ_ENCODING_RAW: return "raw";
     case OBJ_ENCODING_INT: return "int";
@@ -966,6 +971,7 @@ char *strEncoding(int encoding) {
     case OBJ_ENCODING_STREAM: return "stream";
     default: return "unknown";
     }
+    /* clang-format on */
 }
 
 /* =========================== Memory introspection ========================= */
@@ -1518,6 +1524,7 @@ NULL
  * Usage: MEMORY usage <key> */
 void memoryCommand(client *c) {
     if (!strcasecmp(c->argv[1]->ptr,"help") && c->argc == 2) {
+        /* clang-format off */
         const char *help[] = {
 "DOCTOR",
 "    Return memory problems reports.",
@@ -1532,6 +1539,7 @@ void memoryCommand(client *c) {
 "    sampled up to <count> times (default: 5, 0 means sample all).",
 NULL
         };
+        /* clang-format on */
         addReplyHelp(c, help);
     } else if (!strcasecmp(c->argv[1]->ptr,"usage") && c->argc >= 3) {
         dictEntry *de;

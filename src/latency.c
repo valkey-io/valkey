@@ -696,6 +696,7 @@ void latencyCommand(client *c) {
             latencySpecificCommandsFillCDF(c);
         }
     } else if (!strcasecmp(c->argv[1]->ptr,"help") && c->argc == 2) {
+        /* clang-format off */
         const char *help[] = {
 "DOCTOR",
 "    Return a human readable latency analysis report.",
@@ -713,6 +714,7 @@ void latencyCommand(client *c) {
 "    If no commands are specified then all histograms are replied.",
 NULL
         };
+        /* clang-format on */
         addReplyHelp(c, help);
     } else {
         addReplySubcommandSyntaxError(c);

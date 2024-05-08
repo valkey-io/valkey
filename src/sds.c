@@ -965,6 +965,7 @@ int is_hex_digit(char c) {
 /* Helper function for sdssplitargs() that converts a hex digit into an
  * integer from 0 to 15 */
 int hex_digit_to_int(char c) {
+    /* clang-format off */
     switch(c) {
     case '0': return 0;
     case '1': return 1;
@@ -984,6 +985,7 @@ int hex_digit_to_int(char c) {
     case 'f': case 'F': return 15;
     default: return 0;
     }
+    /* clang-format on */
 }
 
 /* Split a line into arguments, where every argument can be in the

@@ -2657,6 +2657,7 @@ void xgroupCommand(client *c) {
 
     /* Dispatch the different subcommands. */
     if (c->argc == 2 && !strcasecmp(opt,"HELP")) {
+        /* clang-format off */
         const char *help[] = {
 "CREATE <key> <groupname> <id|$> [option]",
 "    Create a new consumer group. Options are:",
@@ -2674,6 +2675,7 @@ void xgroupCommand(client *c) {
 "    Set the current group ID and entries_read counter.",
 NULL
         };
+        /* clang-format on */
         addReplyHelp(c, help);
     } else if (!strcasecmp(opt,"CREATE") && (c->argc >= 5 && c->argc <= 8)) {
         streamID id;
@@ -3871,6 +3873,7 @@ void xinfoCommand(client *c) {
 
     /* HELP is special. Handle it ASAP. */
     if (!strcasecmp(c->argv[1]->ptr,"HELP")) {
+        /* clang-format off */
         const char *help[] = {
 "CONSUMERS <key> <groupname>",
 "    Show consumers of <groupname>.",
@@ -3880,6 +3883,7 @@ void xinfoCommand(client *c) {
 "    Show information about the stream.",
 NULL
         };
+        /* clang-format on */
         addReplyHelp(c, help);
         return;
     }

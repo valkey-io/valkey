@@ -1,0 +1,12 @@
+# Don't format files copied from other sources.
+lzf*
+crccombine.*
+crcspeed.*
+mt19937-64.*
+pqsort.*
+setcpuaffinity.c
+setproctitle.c
+sha1.*
+sha256.*
+siphash.c
+strl.c

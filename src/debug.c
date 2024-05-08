@@ -1997,7 +1997,7 @@ void logServerInfo(void) {
     robj *argv[1];
     argv[0] = createStringObject("all", strlen("all"));
     dict *section_dict = genInfoSectionDict(argv, 1, NULL, &all, &everything);
-    infostring = genRedisInfoString(section_dict, all, everything);
+    infostring = genValkeyInfoString(section_dict, all, everything);
     if (server.cluster_enabled){
         infostring = genClusterDebugString(infostring);
     }

@@ -45,6 +45,98 @@
 #define LP_AFTER 1
 #define LP_REPLACE 2
 
+#define LP_HDR_SIZE 6       /* 32 bit total len + 16 bit number of elements. */
+#define LP_HDR_NUMELE_UNKNOWN UINT16_MAX
+#define LP_MAX_INT_ENCODING_LEN 9
+#define LP_MAX_BACKLEN_SIZE 5
+#define LP_ENCODING_INT 0
+#define LP_ENCODING_STRING 1
+
+#define LP_ENCODING_7BIT_UINT 0
+#define LP_ENCODING_7BIT_UINT_MASK 0x80
+#define LP_ENCODING_IS_7BIT_UINT(byte) (((byte)&LP_ENCODING_7BIT_UINT_MASK)==LP_ENCODING_7BIT_UINT)
+#define LP_ENCODING_7BIT_UINT_ENTRY_SIZE 2
+
+#define LP_ENCODING_6BIT_STR 0x80
+#define LP_ENCODING_6BIT_STR_MASK 0xC0
+#define LP_ENCODING_IS_6BIT_STR(byte) (((byte)&LP_ENCODING_6BIT_STR_MASK)==LP_ENCODING_6BIT_STR)
+
+#define LP_ENCODING_13BIT_INT 0xC0
+#define LP_ENCODING_13BIT_INT_MASK 0xE0
+#define LP_ENCODING_IS_13BIT_INT(byte) (((byte)&LP_ENCODING_13BIT_INT_MASK)==LP_ENCODING_13BIT_INT)
+#define LP_ENCODING_13BIT_INT_ENTRY_SIZE 3
+
+#define LP_ENCODING_12BIT_STR 0xE0
+#define LP_ENCODING_12BIT_STR_MASK 0xF0
+#define LP_ENCODING_IS_12BIT_STR(byte) (((byte)&LP_ENCODING_12BIT_STR_MASK)==LP_ENCODING_12BIT_STR)
+
+#define LP_ENCODING_16BIT_INT 0xF1
+#define LP_ENCODING_16BIT_INT_MASK 0xFF
+#define LP_ENCODING_IS_16BIT_INT(byte) (((byte)&LP_ENCODING_16BIT_INT_MASK)==LP_ENCODING_16BIT_INT)
+#define LP_ENCODING_16BIT_INT_ENTRY_SIZE 4
+
+#define LP_ENCODING_24BIT_INT 0xF2
+#define LP_ENCODING_24BIT_INT_MASK 0xFF
+#define LP_ENCODING_IS_24BIT_INT(byte) (((byte)&LP_ENCODING_24BIT_INT_MASK)==LP_ENCODING_24BIT_INT)
+#define LP_ENCODING_24BIT_INT_ENTRY_SIZE 5
+
+#define LP_ENCODING_32BIT_INT 0xF3
+#define LP_ENCODING_32BIT_INT_MASK 0xFF
+#define LP_ENCODING_IS_32BIT_INT(byte) (((byte)&LP_ENCODING_32BIT_INT_MASK)==LP_ENCODING_32BIT_INT)
+#define LP_ENCODING_32BIT_INT_ENTRY_SIZE 6
+
+#define LP_ENCODING_64BIT_INT 0xF4
+#define LP_ENCODING_64BIT_INT_MASK 0xFF
+#define LP_ENCODING_IS_64BIT_INT(byte) (((byte)&LP_ENCODING_64BIT_INT_MASK)==LP_ENCODING_64BIT_INT)
+#define LP_ENCODING_64BIT_INT_ENTRY_SIZE 10
+
+#define LP_ENCODING_32BIT_STR 0xF0
+#define LP_ENCODING_32BIT_STR_MASK 0xFF
+#define LP_ENCODING_IS_32BIT_STR(byte) (((byte)&LP_ENCODING_32BIT_STR_MASK)==LP_ENCODING_32BIT_STR)
+
+#define LP_EOF 0xFF
+
+#define LP_ENCODING_6BIT_STR_LEN(p) ((p)[0] & 0x3F)
+#define LP_ENCODING_12BIT_STR_LEN(p) ((((p)[0] & 0xF) << 8) | (p)[1])
+#define LP_ENCODING_32BIT_STR_LEN(p) (((uint32_t)(p)[1]<<0) | \
+                                      ((uint32_t)(p)[2]<<8) | \
+                                      ((uint32_t)(p)[3]<<16) | \
+                                      ((uint32_t)(p)[4]<<24))
+
+#define lpGetTotalBytes(p)           (((uint32_t)(p)[0]<<0) | \
+                                      ((uint32_t)(p)[1]<<8) | \
+                                      ((uint32_t)(p)[2]<<16) | \
+                                      ((uint32_t)(p)[3]<<24))
+
+#define lpGetNumElements(p)          (((uint32_t)(p)[4]<<0) | \
+                                      ((uint32_t)(p)[5]<<8))
+#define lpSetTotalBytes(p,v) do { \
+    (p)[0] = (v)&0xff; \
+    (p)[1] = ((v)>>8)&0xff; \
+    (p)[2] = ((v)>>16)&0xff; \
+    (p)[3] = ((v)>>24)&0xff; \
+} while(0)
+
+#define lpSetNumElements(p,v) do { \
+    (p)[4] = (v)&0xff; \
+    (p)[5] = ((v)>>8)&0xff; \
+} while(0)
+
+/* Validates that 'p' is not outside the listpack.
+ * All function that return a pointer to an element in the listpack will assert
+ * that this element is valid, so it can be freely used.
+ * Generally functions such lpNext and lpDelete assume the input pointer is
+ * already validated (since it's the return value of another function). */
+#define ASSERT_INTEGRITY(lp, p) do { \
+    assert((p) >= (lp)+LP_HDR_SIZE && (p) < (lp)+lpGetTotalBytes((lp))); \
+} while (0)
+
+/* Similar to the above, but validates the entire element length rather than just
+ * it's pointer. */
+#define ASSERT_INTEGRITY_LEN(lp, p, len) do { \
+    assert((p) >= (lp)+LP_HDR_SIZE && (p)+(len) < (lp)+lpGetTotalBytes((lp))); \
+} while (0)
+
 /* Each entry in the listpack is either a string or an integer. */
 typedef struct {
     /* When string is used, it is provided with the length (slen). */
@@ -81,6 +173,7 @@ unsigned char *lpFirst(unsigned char *lp);
 unsigned char *lpLast(unsigned char *lp);
 unsigned char *lpNext(unsigned char *lp, unsigned char *p);
 unsigned char *lpPrev(unsigned char *lp, unsigned char *p);
+unsigned char *lpSkip(unsigned char *p);
 size_t lpBytes(unsigned char *lp);
 size_t lpEstimateBytesRepeatedInteger(long long lval, unsigned long rep);
 unsigned char *lpSeek(unsigned char *lp, long index);
@@ -98,9 +191,5 @@ unsigned char *lpNextRandom(unsigned char *lp, unsigned char *p, unsigned int *i
                             unsigned int remaining, int even_only);
 int lpSafeToAdd(unsigned char* lp, size_t add);
 void lpRepr(unsigned char *lp);
-
-#ifdef SERVER_TEST
-int listpackTest(int argc, char *argv[], int flags);
-#endif
 
 #endif

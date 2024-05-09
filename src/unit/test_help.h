@@ -28,6 +28,8 @@
 #define KBLUE  "\33[34m"
 #define KRESET "\33[0m"
 
+#define TEST(name) printf("test — %s\n", name);
+
 #define TEST_PRINT_ERROR(descr) \
     printf("[" KRED "%s - %s:%d" KRESET "] %s\n",  __func__, __FILE__, __LINE__, descr)
 

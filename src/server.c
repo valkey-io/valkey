@@ -6936,7 +6936,6 @@ struct serverTest {
     {"endianconv", endianconvTest},
     {"zmalloc", zmalloc_test},
     {"dict", dictTest},
-    {"listpack", listpackTest},
 };
 serverTestProc *getTestProcByName(const char *name) {
     int numtests = sizeof(serverTests)/sizeof(struct serverTest);

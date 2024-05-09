@@ -1,5 +1,4 @@
 #include "../kvstore.c"
-#undef UNUSED
 #include "test_help.h"
 
 uint64_t hashTestCallback(const void *key) {

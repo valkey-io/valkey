@@ -5,7 +5,7 @@
 package require Tcl 8.5
 
 set tcl_precision 17
-source tests/support/redis.tcl
+source tests/support/valkey.tcl
 source tests/support/aofmanifest.tcl
 source tests/support/server.tcl
 source tests/support/cluster_util.tcl
@@ -163,7 +163,7 @@ proc reconnect {args} {
     set host [dict get $srv "host"]
     set port [dict get $srv "port"]
     set config [dict get $srv "config"]
-    set client [redis $host $port 0 $::tls]
+    set client [valkey $host $port 0 $::tls]
     if {[dict exists $srv "client"]} {
         set old [dict get $srv "client"]
         $old close
@@ -187,7 +187,7 @@ proc valkey_deferring_client {args} {
     }
 
     # create client that defers reading reply
-    set client [redis [srv $level "host"] [srv $level "port"] 1 $::tls]
+    set client [valkey [srv $level "host"] [srv $level "port"] 1 $::tls]
 
     # select the right db and read the response (OK)
     if {!$::singledb} {
@@ -209,7 +209,7 @@ proc valkey_client {args} {
     }
 
     # create client that won't defers reading reply
-    set client [redis [srv $level "host"] [srv $level "port"] 0 $::tls]
+    set client [valkey [srv $level "host"] [srv $level "port"] 0 $::tls]
 
     # select the right db and read the response (OK), or at least ping
     # the server if we're in a singledb mode.
@@ -218,6 +218,16 @@ proc valkey_client {args} {
     } else {
         $client select 9
     }
+    return $client
+}
+
+proc valkey_deferring_client_by_addr {host port} {
+    set client [valkey $host $port 1 $::tls]
+    return $client
+}
+
+proc valkey_client_by_addr {host port} {
+    set client [valkey $host $port 0 $::tls]
     return $client
 }
 
@@ -424,7 +434,7 @@ proc kill_clients {} {
 
 proc force_kill_all_servers {} {
     foreach p $::active_servers {
-        puts "Killing still running Redis server $p"
+        puts "Killing still running Valkey server $p"
         catch {exec kill -9 $p}
     }
 }
@@ -551,8 +561,8 @@ proc print_help_screen {} {
         "--skipfile <file>  Name of a file containing test names or regexp patterns (if <test> starts with '/') that should be skipped (one per line). This option can be repeated."
         "--skiptest <test>  Test name or regexp pattern (if <test> starts with '/') to skip. This option can be repeated."
         "--tags <tags>      Run only tests having specified tags or not having '-' prefixed tags."
-        "--dont-clean       Don't delete redis log files after the run."
-        "--dont-pre-clean   Don't delete existing redis log files before the run."
+        "--dont-clean       Don't delete valkey log files after the run."
+        "--dont-pre-clean   Don't delete existing valkey log files before the run."
         "--no-latency       Skip latency measurements and validation by some tests."
         "--stop             Blocks once the first test fails."
         "--loop             Execute the specified set of tests forever."
@@ -560,11 +570,11 @@ proc print_help_screen {} {
         "--wait-server      Wait after server is started (so that you can attach a debugger)."
         "--dump-logs        Dump server log on test failure."
         "--tls              Run tests in TLS mode."
-        "--tls-module       Run tests in TLS mode with Redis module."
+        "--tls-module       Run tests in TLS mode with Valkey module."
         "--host <addr>      Run tests against an external host."
         "--port <port>      TCP port to use against external host."
-        "--baseport <port>  Initial port number for spawned redis servers."
-        "--portcount <num>  Port range for spawned redis servers."
+        "--baseport <port>  Initial port number for spawned valkey servers."
+        "--portcount <num>  Port range for spawned valkey servers."
         "--singledb         Use a single database, avoid SELECT."
         "--cluster-mode     Run tests in cluster protocol compatible mode."
         "--ignore-encoding  Don't validate object encoding."
@@ -800,7 +810,7 @@ proc read_from_replication_stream {s} {
     set res {}
     for {set j 0} {$j < $count} {incr j} {
         read $s 1
-        set arg [::redis::redis_bulk_read $s]
+        set arg [::valkey::valkey_bulk_read $s]
         if {$j == 0} {set arg [string tolower $arg]}
         lappend res $arg
     }

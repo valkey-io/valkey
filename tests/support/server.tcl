@@ -4,7 +4,7 @@ set ::valgrind_errors {}
 
 proc start_server_error {config_file error} {
     set err {}
-    append err "Can't start the Redis server\n"
+    append err "Can't start the Valkey server\n"
     append err "CONFIGURATION:\n"
     append err [exec cat $config_file]
     append err "\nERROR:\n"
@@ -347,7 +347,7 @@ proc run_external_server_test {code overrides} {
     set srv {}
     dict set srv "host" $::host
     dict set srv "port" $::port
-    set client [redis $::host $::port 0 $::tls]
+    set client [valkey $::host $::port 0 $::tls]
     dict set srv "client" $client
     if {!$::singledb} {
         $client select 9

@@ -3186,6 +3186,7 @@ static void populateDict(dict *options_dict, char **options) {
 }
 
 const char* getLogLevel(void) {
+    /* clang-format off */
    switch (server.verbosity) {
     case LL_DEBUG: return "debug";
     case LL_VERBOSE: return "verbose";
@@ -3193,6 +3194,7 @@ const char* getLogLevel(void) {
     case LL_WARNING: return "warning";
     case LL_NOTHING: return "nothing";
     }
+    /* clang-format on */
     return "unknown";
 }
 
@@ -3383,6 +3385,7 @@ void sentinelConfigGetCommand(client *c) {
 }
 
 const char *sentinelFailoverStateStr(int state) {
+    /* clang-format off */
     switch(state) {
     case SENTINEL_FAILOVER_STATE_NONE: return "none";
     case SENTINEL_FAILOVER_STATE_WAIT_START: return "wait_start";
@@ -3393,6 +3396,7 @@ const char *sentinelFailoverStateStr(int state) {
     case SENTINEL_FAILOVER_STATE_UPDATE_CONFIG: return "update_config";
     default: return "unknown";
     }
+    /* clang-format on */
 }
 
 /* Server instance to RESP representation. */
@@ -3420,6 +3424,7 @@ void addReplySentinelRedisInstance(client *c, sentinelRedisInstance *ri) {
     fields++;
 
     addReplyBulkCString(c,"flags");
+    /* clang-format off */
     if (ri->flags & SRI_S_DOWN) flags = sdscat(flags,"s_down,");
     if (ri->flags & SRI_O_DOWN) flags = sdscat(flags,"o_down,");
     if (ri->flags & SRI_MASTER) flags = sdscat(flags,"master,");
@@ -3427,8 +3432,7 @@ void addReplySentinelRedisInstance(client *c, sentinelRedisInstance *ri) {
     if (ri->flags & SRI_SENTINEL) flags = sdscat(flags,"sentinel,");
     if (ri->link->disconnected) flags = sdscat(flags,"disconnected,");
     if (ri->flags & SRI_MASTER_DOWN) flags = sdscat(flags,"master_down,");
-    if (ri->flags & SRI_FAILOVER_IN_PROGRESS)
-        flags = sdscat(flags,"failover_in_progress,");
+    if (ri->flags & SRI_FAILOVER_IN_PROGRESS) flags = sdscat(flags,"failover_in_progress,");
     if (ri->flags & SRI_PROMOTED) flags = sdscat(flags,"promoted,");
     if (ri->flags & SRI_RECONF_SENT) flags = sdscat(flags,"reconf_sent,");
     if (ri->flags & SRI_RECONF_INPROG) flags = sdscat(flags,"reconf_inprog,");
@@ -3436,6 +3440,7 @@ void addReplySentinelRedisInstance(client *c, sentinelRedisInstance *ri) {
     if (ri->flags & SRI_FORCE_FAILOVER) flags = sdscat(flags,"force_failover,");
     if (ri->flags & SRI_SCRIPT_KILL_SENT) flags = sdscat(flags,"script_kill_sent,");
     if (ri->flags & SRI_MASTER_REBOOT) flags = sdscat(flags,"master_reboot,");
+    /* clang-format on */
 
     if (sdslen(flags) != 0) sdsrange(flags,0,-2); /* remove last "," */
     addReplyBulkCString(c,flags);
@@ -3863,6 +3868,7 @@ int sentinelIsQuorumReachable(sentinelRedisInstance *master, int *usableptr) {
 
 void sentinelCommand(client *c) {
     if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
+        /* clang-format off */
         const char *help[] = {
 "CKQUORUM <master-name>",
 "    Check if the current Sentinel configuration is able to reach the quorum",
@@ -3912,6 +3918,7 @@ void sentinelCommand(client *c) {
 "    Simulate a Sentinel crash.",
 NULL
         };
+        /* clang-format on */
         addReplyHelp(c, help);
     } else if (!strcasecmp(c->argv[1]->ptr,"masters")) {
         /* SENTINEL MASTERS */
@@ -4265,7 +4272,7 @@ void sentinelInfoCommand(client *c) {
     }
     dictReleaseIterator(di);
 
-    /* Insert explicit all sections (don't pass these vars to genRedisInfoString) */
+    /* Insert explicit all sections (don't pass these vars to genValkeyInfoString) */
     if (sec_all || sec_everything) {
         releaseInfoSectionDict(sections_dict);
         /* We cache this dict as an optimization. */
@@ -4276,7 +4283,7 @@ void sentinelInfoCommand(client *c) {
         sections_dict = cached_all_info_sections;
     }
 
-    sds info = genRedisInfoString(sections_dict, 0, 0);
+    sds info = genValkeyInfoString(sections_dict, 0, 0);
     if (sec_all || (dictFind(sections_dict, "sentinel") != NULL)) {
         dictIterator *di;
         dictEntry *de;

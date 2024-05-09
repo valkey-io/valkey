@@ -10,7 +10,7 @@
 package require Tcl 8.5
 
 set tcl_precision 17
-source ../support/redis.tcl
+source ../support/valkey.tcl
 source ../support/util.tcl
 source ../support/aofmanifest.tcl
 source ../support/server.tcl
@@ -25,11 +25,11 @@ set ::dont_clean 0
 set ::simulate_error 0
 set ::failed 0
 set ::sentinel_instances {}
-set ::redis_instances {}
+set ::valkey_instances {}
 set ::global_config {}
 set ::sentinel_base_port 20000
-set ::redis_base_port 30000
-set ::redis_port_count 1024
+set ::valkey_base_port 30000
+set ::valkey_port_count 1024
 set ::host "127.0.0.1"
 set ::leaked_fds_file [file normalize "tmp/leaked_fds.txt"]
 set ::pids {} ; # We kill everything at exit
@@ -40,14 +40,14 @@ set ::loop 0
 
 if {[catch {cd tmp}]} {
     puts "tmp directory not found."
-    puts "Please run this test from the Redis source root."
+    puts "Please run this test from the Valkey source root."
     exit 1
 }
 
 # Execute the specified instance of the server specified by 'type', using
 # the provided configuration file. Returns the PID of the process.
 proc exec_instance {type dirname cfgfile} {
-    if {$type eq "redis"} {
+    if {$type eq "valkey"} {
         set prgname valkey-server
     } elseif {$type eq "sentinel"} {
         set prgname valkey-sentinel
@@ -67,7 +67,7 @@ proc exec_instance {type dirname cfgfile} {
 # Spawn a server or sentinel instance, depending on 'type'.
 proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
     for {set j 0} {$j < $count} {incr j} {
-        set port [find_available_port $base_port $::redis_port_count]
+        set port [find_available_port $base_port $::valkey_port_count]
         # plaintext port (only used for TLS cluster)
         set pport 0
         # Create a directory for this instance.
@@ -94,7 +94,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
             puts $cfg "tls-replication yes"
             puts $cfg "tls-cluster yes"
             # plaintext port, only used by plaintext clients in a TLS cluster
-            set pport [find_available_port $base_port $::redis_port_count]
+            set pport [find_available_port $base_port $::valkey_port_count]
             puts $cfg "port $pport"
             puts $cfg [format "tls-cert-file %s/../../tls/server.crt" [pwd]]
             puts $cfg [format "tls-key-file %s/../../tls/server.key" [pwd]]
@@ -135,11 +135,11 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
             if {[server_is_up 127.0.0.1 $port 100] == 0} {
                 puts "Starting $type #$j at port $port failed, try another"
                 incr retry -1
-                set port [find_available_port $base_port $::redis_port_count]
+                set port [find_available_port $base_port $::valkey_port_count]
                 set cfg [open $cfgfile a+]
                 if {$::tls} {
                     puts $cfg "tls-port $port"
-                    set pport [find_available_port $base_port $::redis_port_count]
+                    set pport [find_available_port $base_port $::valkey_port_count]
                     puts $cfg "port $pport"
                 } else {
                     puts $cfg "port $port"
@@ -160,7 +160,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
         }
 
         # Push the instance into the right list
-        set link [redis $::host $port 0 $::tls]
+        set link [valkey $::host $port 0 $::tls]
         $link reconnect 1
         lappend ::${type}_instances [list \
             pid $pid \
@@ -173,7 +173,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
 }
 
 proc log_crashes {} {
-    set start_pattern {*REDIS BUG REPORT START*}
+    set start_pattern {*BUG REPORT START*}
     set logs [glob */log.txt]
     foreach log $logs {
         set fd [open $log]
@@ -313,7 +313,7 @@ proc parse_options {} {
             puts "--fail                  Simulate a test failure."
             puts "--valgrind              Run with valgrind."
             puts "--tls                   Run tests in TLS mode."
-            puts "--tls-module            Run tests in TLS mode with Redis module."
+            puts "--tls-module            Run tests in TLS mode with Valkey module."
             puts "--host <host>           Use hostname instead of 127.0.0.1."
             puts "--config <k> <v>        Extra config argument(s)."
             puts "--stop                  Blocks once the first test fails."
@@ -342,12 +342,12 @@ proc pause_on_error {} {
         set cmd [lindex $argv 0]
         if {$cmd eq {continue}} {
             break
-        } elseif {$cmd eq {show-redis-logs}} {
+        } elseif {$cmd eq {show-valkey-logs}} {
             set count 10
             if {[lindex $argv 1] ne {}} {set count [lindex $argv 1]}
-            foreach_redis_id id {
-                puts "=== REDIS $id ===="
-                puts [exec tail -$count redis_$id/log.txt]
+            foreach_valkey_id id {
+                puts "=== VALKEY $id ===="
+                puts [exec tail -$count valkey_$id/log.txt]
                 puts "---------------------\n"
             }
         } elseif {$cmd eq {show-sentinel-logs}} {
@@ -359,8 +359,8 @@ proc pause_on_error {} {
                 puts "---------------------\n"
             }
         } elseif {$cmd eq {ls}} {
-            foreach_redis_id id {
-                puts -nonewline "Redis $id"
+            foreach_valkey_id id {
+                puts -nonewline "Valkey $id"
                 set errcode [catch {
                     set str {}
                     append str "@[RI $id tcp_port]: "
@@ -391,13 +391,13 @@ proc pause_on_error {} {
                 }
             }
         } elseif {$cmd eq {help}} {
-            puts "ls                     List Sentinel and Redis instances."
+            puts "ls                     List Sentinel and Valkey instances."
             puts "show-sentinel-logs \[N\] Show latest N lines of logs."
-            puts "show-redis-logs \[N\]    Show latest N lines of logs."
+            puts "show-valkey-logs \[N\]    Show latest N lines of logs."
             puts "S <id> cmd ... arg     Call command in Sentinel <id>."
-            puts "R <id> cmd ... arg     Call command in Redis <id>."
+            puts "R <id> cmd ... arg     Call command in Valkey <id>."
             puts "SI <id> <field>        Show Sentinel <id> INFO <field>."
-            puts "RI <id> <field>        Show Redis <id> INFO <field>."
+            puts "RI <id> <field>        Show Valkey <id> INFO <field>."
             puts "continue               Resume test."
         } else {
             set errcode [catch {eval $line} retval]
@@ -489,7 +489,7 @@ while 1 {
                 gets stdin
             }
         }
-        check_leaks {redis sentinel}
+        check_leaks {valkey sentinel}
 
         # Check if a leaked fds file was created and abort the test.
         if {$::leaked_fds_file != "" && [file exists $::leaked_fds_file]} {
@@ -530,7 +530,7 @@ proc S {n args} {
 # Example:
 #     [Rn 0] info
 proc Rn {n} {
-    return [dict get [lindex $::redis_instances $n] link]
+    return [dict get [lindex $::valkey_instances $n] link]
 }
 
 # Like R but to chat with server instances.
@@ -588,8 +588,8 @@ proc foreach_sentinel_id {idvar code} {
     return -code $errcode $result
 }
 
-proc foreach_redis_id {idvar code} {
-    set errcode [catch {uplevel 1 [list foreach_instance_id $::redis_instances $idvar $code]} result]
+proc foreach_valkey_id {idvar code} {
+    set errcode [catch {uplevel 1 [list foreach_instance_id $::valkey_instances $idvar $code]} result]
     return -code $errcode $result
 }
 
@@ -608,15 +608,15 @@ proc set_instance_attrib {type id attrib newval} {
 # Create a master-slave cluster of the given number of total instances.
 # The first instance "0" is the master, all others are configured as
 # slaves.
-proc create_redis_master_slave_cluster n {
-    foreach_redis_id id {
+proc create_valkey_master_slave_cluster n {
+    foreach_valkey_id id {
         if {$id == 0} {
             # Our master.
             R $id slaveof no one
             R $id flushall
         } elseif {$id < $n} {
-            R $id slaveof [get_instance_attrib redis 0 host] \
-                          [get_instance_attrib redis 0 port]
+            R $id slaveof [get_instance_attrib valkey 0 host] \
+                          [get_instance_attrib valkey 0 port]
         } else {
             # Instances not part of the cluster.
             R $id slaveof no one
@@ -700,7 +700,7 @@ proc restart_instance {type id} {
     }
 
     # Connect with it with a fresh link
-    set link [redis 127.0.0.1 $port 0 $::tls]
+    set link [valkey 127.0.0.1 $port 0 $::tls]
     $link reconnect 1
     set_instance_attrib $type $id link $link
 
@@ -720,23 +720,23 @@ proc restart_instance {type id} {
 proc valkey_deferring_client {type id} {
     set port [get_instance_attrib $type $id port]
     set host [get_instance_attrib $type $id host]
-    set client [redis $host $port 1 $::tls]
+    set client [valkey $host $port 1 $::tls]
     return $client
 }
 
 proc valkey_deferring_client_by_addr {host port} {
-    set client [redis $host $port 1 $::tls]
+    set client [valkey $host $port 1 $::tls]
     return $client
 }
 
 proc valkey_client {type id} {
     set port [get_instance_attrib $type $id port]
     set host [get_instance_attrib $type $id host]
-    set client [redis $host $port 0 $::tls]
+    set client [valkey $host $port 0 $::tls]
     return $client
 }
 
 proc valkey_client_by_addr {host port} {
-    set client [redis $host $port 0 $::tls]
+    set client [valkey $host $port 0 $::tls]
     return $client
 }

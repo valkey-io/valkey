@@ -12,7 +12,7 @@ proc join_path {dir1 dir2} {
     return [format "%s/%s" $dir1 $dir2]
 }
 
-proc get_redis_dir {} {
+proc get_valkey_dir {} {
     set config [srv config]
     set _ [dict get $config "dir"]
 }

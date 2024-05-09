@@ -27,8 +27,10 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __CONFIG_H
-#define __CONFIG_H
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#include <sys/param.h>
 
 #ifdef __APPLE__
 #include <fcntl.h> // for fcntl(fd, F_FULLFSYNC)
@@ -40,17 +42,17 @@
 #include <fcntl.h>
 #endif
 
-#if defined(__APPLE__) && defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 1060
+#if defined(__APPLE__) && defined(MAC_OS_X_VERSION_MAX_ALLOWED) && MAC_OS_X_VERSION_MAX_ALLOWED >= 1060
 #define MAC_OS_10_6_DETECTED
 #endif
 
-/* Define redis_fstat to fstat or fstat64() */
+/* Define valkey_fstat to fstat or fstat64() */
 #if defined(__APPLE__) && !defined(MAC_OS_10_6_DETECTED)
-#define redis_fstat fstat64
-#define redis_stat stat64
+#define valkey_fstat fstat64
+#define valkey_stat stat64
 #else
-#define redis_fstat fstat
-#define redis_stat stat
+#define valkey_fstat fstat
+#define valkey_stat stat
 #endif
 
 /* Test for proc filesystem */
@@ -96,9 +98,11 @@
 #endif
 
 /* Test for accept4() */
-#if defined(__linux__) || defined(OpenBSD5_7) || \
-    (__FreeBSD__ >= 10 || __FreeBSD_version >= 1000000) || \
-    (defined(NetBSD8_0) || __NetBSD_Version__ >= 800000000)
+#if defined(__linux__) || \
+    defined(__FreeBSD__) || \
+    defined(OpenBSD5_7) || \
+    (defined(__DragonFly__) && __DragonFly_version >= 400305) || \
+    (defined(__NetBSD__) && (defined(NetBSD8_0) || __NetBSD_Version__ >= 800000000))
 #define HAVE_ACCEPT4 1
 #endif
 
@@ -114,13 +118,13 @@
 #endif
 #endif
 
-/* Define redis_fsync to fdatasync() in Linux and fsync() for all the rest */
+/* Define valkey_fsync to fdatasync() in Linux and fsync() for all the rest */
 #if defined(__linux__)
-#define redis_fsync(fd) fdatasync(fd)
+#define valkey_fsync(fd) fdatasync(fd)
 #elif defined(__APPLE__)
-#define redis_fsync(fd) fcntl(fd, F_FULLFSYNC)
+#define valkey_fsync(fd) fcntl(fd, F_FULLFSYNC)
 #else
-#define redis_fsync(fd) fsync(fd)
+#define valkey_fsync(fd) fsync(fd)
 #endif
 
 #if defined(__FreeBSD__)
@@ -138,9 +142,10 @@
 #endif
 
 #if __GNUC__ >= 5 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 5)
-#define redis_unreachable __builtin_unreachable
+#define valkey_unreachable __builtin_unreachable
 #else
-#define redis_unreachable abort
+#include <stdlib.h>
+#define valkey_unreachable abort
 #endif
 
 #if __GNUC__ >= 3
@@ -153,11 +158,11 @@
 
 #if defined(__has_attribute)
 #if __has_attribute(no_sanitize)
-#define REDIS_NO_SANITIZE(sanitizer) __attribute__((no_sanitize(sanitizer)))
+#define VALKEY_NO_SANITIZE(sanitizer) __attribute__((no_sanitize(sanitizer)))
 #endif
 #endif
-#if !defined(REDIS_NO_SANITIZE)
-#define REDIS_NO_SANITIZE(sanitizer)
+#if !defined(VALKEY_NO_SANITIZE)
+#define VALKEY_NO_SANITIZE(sanitizer)
 #endif
 
 /* Define rdb_fsync_range to sync_file_range() on Linux, otherwise we use
@@ -212,12 +217,13 @@ void setproctitle(const char *fmt, ...);
 
 #if defined(sel) || defined(pyr) || defined(mc68000) || defined(sparc) || \
     defined(is68k) || defined(tahoe) || defined(ibm032) || defined(ibm370) || \
-    defined(MIPSEB) || defined(_MIPSEB) || defined(_IBMR2) || defined(DGUX) ||\
+    defined(MIPSEB) || defined(_MIPSEB) || defined(_IBMR2) || defined(DGUX) || \
     defined(apollo) || defined(__convex__) || defined(_CRAY) || \
     defined(__hppa) || defined(__hp9000) || \
     defined(__hp9000s300) || defined(__hp9000s700) || \
-    defined (BIT_ZERO_ON_LEFT) || defined(m68k) || defined(__sparc)
-#define BYTE_ORDER	BIG_ENDIAN
+    defined (BIT_ZERO_ON_LEFT) || defined(m68k) || defined(__sparc) || \
+    (defined(__APPLE__) && defined(__POWERPC__))
+#define BYTE_ORDER    BIG_ENDIAN
 #endif
 #endif /* linux */
 #endif /* BSD */
@@ -285,26 +291,26 @@ void setproctitle(const char *fmt, ...);
 #define USE_ALIGNED_ACCESS
 #endif
 
-/* Define for redis_set_thread_title */
+/* Define for valkey_set_thread_title */
 #ifdef __linux__
-#define redis_set_thread_title(name) pthread_setname_np(pthread_self(), name)
+#define valkey_set_thread_title(name) pthread_setname_np(pthread_self(), name)
 #else
 #if (defined __FreeBSD__ || defined __OpenBSD__)
 #include <pthread_np.h>
-#define redis_set_thread_title(name) pthread_set_name_np(pthread_self(), name)
+#define valkey_set_thread_title(name) pthread_set_name_np(pthread_self(), name)
 #elif defined __NetBSD__
 #include <pthread.h>
-#define redis_set_thread_title(name) pthread_setname_np(pthread_self(), "%s", name)
+#define valkey_set_thread_title(name) pthread_setname_np(pthread_self(), "%s", name)
 #elif defined __HAIKU__
 #include <kernel/OS.h>
-#define redis_set_thread_title(name) rename_thread(find_thread(0), name)
+#define valkey_set_thread_title(name) rename_thread(find_thread(0), name)
 #else
-#if (defined __APPLE__ && defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 1070)
+#if (defined __APPLE__ && defined(MAC_OS_X_VERSION_MAX_ALLOWED) && MAC_OS_X_VERSION_MAX_ALLOWED >= 1070)
 int pthread_setname_np(const char *name);
 #include <pthread.h>
-#define redis_set_thread_title(name) pthread_setname_np(name)
+#define valkey_set_thread_title(name) pthread_setname_np(name)
 #else
-#define redis_set_thread_title(name)
+#define valkey_set_thread_title(name)
 #endif
 #endif
 #endif
@@ -316,7 +322,7 @@ void setcpuaffinity(const char *cpulist);
 #endif
 
 /* Test for posix_fadvise() */
-#if defined(__linux__) || __FreeBSD__ >= 10
+#if defined(__linux__) || defined(__FreeBSD__)
 #define HAVE_FADVISE
 #endif
 

@@ -561,7 +561,7 @@ int writeAofManifestFile(sds buf) {
         buf += nwritten;
     }
 
-    if (redis_fsync(fd) == -1) {
+    if (valkey_fsync(fd) == -1) {
         serverLog(LL_WARNING, "Fail to fsync the temp AOF file %s: %s.",
             tmp_am_name, strerror(errno));
 
@@ -953,7 +953,7 @@ void killAppendOnlyChild(void) {
 void stopAppendOnly(void) {
     serverAssert(server.aof_state != AOF_OFF);
     flushAppendOnlyFile(1);
-    if (redis_fsync(server.aof_fd) == -1) {
+    if (valkey_fsync(server.aof_fd) == -1) {
         serverLog(LL_WARNING,"Fail to fsync the AOF file: %s",strerror(errno));
     } else {
         server.aof_last_fsync = server.mstime;
@@ -996,7 +996,7 @@ int startAppendOnly(void) {
 
         if (rewriteAppendOnlyFileBackground() == C_ERR) {
             server.aof_state = AOF_OFF;
-            serverLog(LL_WARNING,"Redis needs to enable the AOF but can't trigger a background AOF rewrite operation. Check the above logs for more info about the error.");
+            serverLog(LL_WARNING,"The server needs to enable the AOF but can't trigger a background AOF rewrite operation. Check the above logs for more info about the error.");
             return C_ERR;
         }
     }
@@ -1121,7 +1121,7 @@ void flushAppendOnlyFile(int force) {
             /* Otherwise fall through, and go write since we can't wait
              * over two seconds. */
             server.aof_delayed_fsync++;
-            serverLog(LL_NOTICE,"Asynchronous AOF fsync is taking too long (disk is busy?). Writing the AOF buffer without waiting for fsync to complete, this may slow down Redis.");
+            serverLog(LL_NOTICE,"Asynchronous AOF fsync is taking too long (disk is busy?). Writing the AOF buffer without waiting for fsync to complete, this may slow down the server.");
         }
     }
     /* We want to perform a single write. This should be guaranteed atomic
@@ -1183,7 +1183,7 @@ void flushAppendOnlyFile(int force) {
             if (ftruncate(server.aof_fd, server.aof_last_incr_size) == -1) {
                 if (can_log) {
                     serverLog(LL_WARNING, "Could not remove short write "
-                             "from the append-only file.  Redis may refuse "
+                             "from the append-only file. The server may refuse "
                              "to load the AOF the next time it starts.  "
                              "ftruncate: %s", strerror(errno));
                 }
@@ -1224,7 +1224,7 @@ void flushAppendOnlyFile(int force) {
          * OK state and log the event. */
         if (server.aof_last_write_status == C_ERR) {
             serverLog(LL_NOTICE,
-                "AOF write error looks solved, Redis can write again.");
+                "AOF write error looks solved. The server can write again.");
             server.aof_last_write_status = C_OK;
         }
     }
@@ -1248,13 +1248,13 @@ try_fsync:
 
     /* Perform the fsync if needed. */
     if (server.aof_fsync == AOF_FSYNC_ALWAYS) {
-        /* redis_fsync is defined as fdatasync() for Linux in order to avoid
+        /* valkey_fsync is defined as fdatasync() for Linux in order to avoid
          * flushing metadata. */
         latencyStartMonitor(latency);
         /* Let's try to get this data on the disk. To guarantee data safe when
          * the AOF fsync policy is 'always', we should exit if failed to fsync
          * AOF (see comment next to the exit(1) after write error above). */
-        if (redis_fsync(server.aof_fd) == -1) {
+        if (valkey_fsync(server.aof_fd) == -1) {
             serverLog(LL_WARNING,"Can't persist AOF for fsync error when the "
               "AOF fsync policy is 'always': %s. Exiting...", strerror(errno));
             exit(1);
@@ -1403,7 +1403,7 @@ struct client *createAOFClient(void) {
  * AOF_FAILED: Failed to load the AOF file. */
 int loadSingleAppendOnlyFile(char *filename) {
     struct client *fakeClient;
-    struct redis_stat sb;
+    struct valkey_stat sb;
     int old_aof_state = server.aof_state;
     long loops = 0;
     off_t valid_up_to = 0; /* Offset of latest well-formed command loaded. */
@@ -1415,7 +1415,7 @@ int loadSingleAppendOnlyFile(char *filename) {
     FILE *fp = fopen(aof_filepath, "r");
     if (fp == NULL) {
         int en = errno;
-        if (redis_stat(aof_filepath, &sb) == 0 || errno != ENOENT) {
+        if (valkey_stat(aof_filepath, &sb) == 0 || errno != ENOENT) {
             serverLog(LL_WARNING,"Fatal error: can't open the append log file %s for reading: %s", filename, strerror(en));
             sdsfree(aof_filepath);
             return AOF_OPEN_ERR;
@@ -1426,7 +1426,7 @@ int loadSingleAppendOnlyFile(char *filename) {
         }
     }
 
-    if (fp && redis_fstat(fileno(fp),&sb) != -1 && sb.st_size == 0) {
+    if (fp && valkey_fstat(fileno(fp), &sb) != -1 && sb.st_size == 0) {
         fclose(fp);
         sdsfree(aof_filepath);
         return AOF_EMPTY;
@@ -1634,14 +1634,14 @@ uxeof: /* Unexpected AOF end of file. */
         }
     }
     serverLog(LL_WARNING, "Unexpected end of file reading the append only file %s. You can: "
-        "1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename.manifest>. "
+        "1) Make a backup of your AOF file, then use ./valkey-check-aof --fix <filename.manifest>. "
         "2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server.", filename);
     ret = AOF_FAILED;
     goto cleanup;
 
 fmterr: /* Format error. */
     serverLog(LL_WARNING, "Bad file format reading the append only file %s: "
-        "make a backup of your AOF file, then use ./redis-check-aof --fix <filename.manifest>", filename);
+        "make a backup of your AOF file, then use ./valkey-check-aof --fix <filename.manifest>", filename);
     ret = AOF_FAILED;
     /* fall through to cleanup. */
 
@@ -2035,6 +2035,7 @@ int rioWriteStreamPendingEntry(rio *r, robj *key, const char *groupname, size_t 
                RETRYCOUNT <count> JUSTID FORCE. */
     streamID id;
     streamDecodeID(rawid,&id);
+    /* clang-format off */
     if (rioWriteBulkCount(r,'*',12) == 0) return 0;
     if (rioWriteBulkString(r,"XCLAIM",6) == 0) return 0;
     if (rioWriteBulkObject(r,key) == 0) return 0;
@@ -2048,6 +2049,7 @@ int rioWriteStreamPendingEntry(rio *r, robj *key, const char *groupname, size_t 
     if (rioWriteBulkLongLong(r,nack->delivery_count) == 0) return 0;
     if (rioWriteBulkString(r,"JUSTID",6) == 0) return 0;
     if (rioWriteBulkString(r,"FORCE",5) == 0) return 0;
+    /* clang-format on */
     return 1;
 }
 
@@ -2056,12 +2058,14 @@ int rioWriteStreamPendingEntry(rio *r, robj *key, const char *groupname, size_t 
  * All this in the context of the specified key and group. */
 int rioWriteStreamEmptyConsumer(rio *r, robj *key, const char *groupname, size_t groupname_len, streamConsumer *consumer) {
     /* XGROUP CREATECONSUMER <key> <group> <consumer> */
+    /* clang-format off */
     if (rioWriteBulkCount(r,'*',5) == 0) return 0;
     if (rioWriteBulkString(r,"XGROUP",6) == 0) return 0;
     if (rioWriteBulkString(r,"CREATECONSUMER",14) == 0) return 0;
     if (rioWriteBulkObject(r,key) == 0) return 0;
     if (rioWriteBulkString(r,groupname,groupname_len) == 0) return 0;
     if (rioWriteBulkString(r,consumer->name,sdslen(consumer->name)) == 0) return 0;
+    /* clang-format on */
     return 1;
 }
 
@@ -2471,7 +2475,11 @@ int rewriteAppendOnlyFileBackground(void) {
         char tmpfile[256];
 
         /* Child */
-        serverSetProcTitle("redis-aof-rewrite");
+        if (strstr(server.exec_argv[0],"redis-server") != NULL) {
+            serverSetProcTitle("redis-aof-rewrite");
+        } else {
+            serverSetProcTitle("valkey-aof-rewrite");
+        }
         serverSetCpuAffinity(server.aof_rewrite_cpulist);
         snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) getpid());
         if (rewriteAppendOnlyFile(tmpfile) == C_OK) {
@@ -2531,13 +2539,13 @@ void aofRemoveTempFile(pid_t childpid) {
  * The status argument is an optional output argument to be filled with
  * one of the AOF_ status values. */
 off_t getAppendOnlyFileSize(sds filename, int *status) {
-    struct redis_stat sb;
+    struct valkey_stat sb;
     off_t size;
     mstime_t latency;
 
     sds aof_filepath = makePath(server.aof_dirname, filename);
     latencyStartMonitor(latency);
-    if (redis_stat(aof_filepath, &sb) == -1) {
+    if (valkey_stat(aof_filepath, &sb) == -1) {
         if (status) *status = errno == ENOENT ? AOF_NOT_EXIST : AOF_OPEN_ERR;
         serverLog(LL_WARNING, "Unable to obtain the AOF file %s length. stat: %s",
             filename, strerror(errno));

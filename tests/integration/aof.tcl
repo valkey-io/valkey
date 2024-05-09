@@ -43,7 +43,7 @@ tags {"aof external:skip"} {
         }
 
         test "Truncated AOF loaded: we expect foo to be equal to 5" {
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
             assert {[$client get foo] eq "5"}
         }
@@ -60,7 +60,7 @@ tags {"aof external:skip"} {
         }
 
         test "Truncated AOF loaded: we expect foo to be equal to 6 now" {
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
             assert {[$client get foo] eq "6"}
         }
@@ -136,7 +136,7 @@ tags {"aof external:skip"} {
         }
 
         test "Fixed AOF: Keyspace should contain values that were parseable" {
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
             assert_equal "hello" [$client get foo]
             assert_equal "" [$client get bar]
@@ -156,7 +156,7 @@ tags {"aof external:skip"} {
         }
 
         test "AOF+SPOP: Set should have 1 member" {
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
             assert_equal 1 [$client scard set]
         }
@@ -176,7 +176,7 @@ tags {"aof external:skip"} {
         }
 
         test "AOF+SPOP: Set should have 1 member" {
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
             assert_equal 1 [$client scard set]
         }
@@ -195,14 +195,14 @@ tags {"aof external:skip"} {
         }
 
         test "AOF+EXPIRE: List should be empty" {
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
             assert_equal 0 [$client llen list]
         }
     }
 
     start_server {overrides {appendonly {yes}}} {
-        test {Redis should not try to convert DEL into EXPIREAT for EXPIRE -1} {
+        test {Server should not try to convert DEL into EXPIREAT for EXPIRE -1} {
             r set x 10
             r expire x -1
         }
@@ -272,8 +272,8 @@ tags {"aof external:skip"} {
 
     start_server_aof [list dir $server_path aof-load-truncated no] {
         test "AOF+LMPOP/BLMPOP: pop elements from the list" {
-            set client [redis [srv host] [srv port] 0 $::tls]
-            set client2 [redis [srv host] [srv port] 1 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            set client2 [valkey [srv host] [srv port] 1 $::tls]
             wait_done_loading $client
 
             # Pop all elements from mylist, should be blmpop delete mylist.
@@ -299,7 +299,7 @@ tags {"aof external:skip"} {
 
     start_server_aof [list dir $server_path aof-load-truncated no] {
         test "AOF+LMPOP/BLMPOP: after pop elements from the list" {
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
 
             # mylist and mylist2 no longer exist.
@@ -319,8 +319,8 @@ tags {"aof external:skip"} {
 
     start_server_aof [list dir $server_path aof-load-truncated no] {
         test "AOF+ZMPOP/BZMPOP: pop elements from the zset" {
-            set client [redis [srv host] [srv port] 0 $::tls]
-            set client2 [redis [srv host] [srv port] 1 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            set client2 [valkey [srv host] [srv port] 1 $::tls]
             wait_done_loading $client
 
             # Pop all elements from myzset, should be bzmpop delete myzset.
@@ -346,7 +346,7 @@ tags {"aof external:skip"} {
 
     start_server_aof [list dir $server_path aof-load-truncated no] {
         test "AOF+ZMPOP/BZMPOP: after pop elements from the zset" {
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
 
             # myzset and myzset2 no longer exist.
@@ -387,7 +387,7 @@ tags {"aof external:skip"} {
     }
     start_server_aof [list dir $server_path] {
         test {Successfully load AOF which has timestamp annotations inside} {
-            set c [redis [srv host] [srv port] 0 $::tls]
+            set c [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $c
             assert_equal "bar1" [$c get foo1]
             assert_equal "bar2" [$c get foo2]
@@ -399,7 +399,7 @@ tags {"aof external:skip"} {
         # truncate to timestamp 1628217473
         exec src/valkey-check-aof --truncate-to-timestamp 1628217473 $aof_manifest_file
         start_server_aof [list dir $server_path] {
-            set c [redis [srv host] [srv port] 0 $::tls]
+            set c [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $c
             assert_equal "bar1" [$c get foo1]
             assert_equal "bar2" [$c get foo2]
@@ -409,7 +409,7 @@ tags {"aof external:skip"} {
         # truncate to timestamp 1628217471
         exec src/valkey-check-aof --truncate-to-timestamp 1628217471 $aof_manifest_file
         start_server_aof [list dir $server_path] {
-            set c [redis [srv host] [srv port] 0 $::tls]
+            set c [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $c
             assert_equal "bar1" [$c get foo1]
             assert_equal "bar2" [$c get foo2]
@@ -419,7 +419,7 @@ tags {"aof external:skip"} {
         # truncate to timestamp 1628217470
         exec src/valkey-check-aof --truncate-to-timestamp 1628217470 $aof_manifest_file
         start_server_aof [list dir $server_path] {
-            set c [redis [srv host] [srv port] 0 $::tls]
+            set c [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $c
             assert_equal "bar1" [$c get foo1]
             assert_equal "" [$c get foo2]

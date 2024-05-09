@@ -853,7 +853,7 @@ typedef struct {
     long long type; /* the particular type when scan the db */
     sds pattern;  /* pattern string, NULL means no pattern */
     long sampled; /* cumulative number of keys sampled */
-    int no_values; /* set to 1 means to return keys only */
+    int only_keys; /* set to 1 means to return keys only */
 } scanData;
 
 /* Helper function to compare key type in scan commands */
@@ -905,18 +905,22 @@ void scanCallback(void *privdata, const dictEntry *de) {
         key = keysds;
     } else if (o->type == OBJ_HASH) {
         key = keysds;
-        val = dictGetVal(de);
+        if (!data->only_keys) {
+            val = dictGetVal(de);
+        }
     } else if (o->type == OBJ_ZSET) {
-        char buf[MAX_LONG_DOUBLE_CHARS];
-        int len = ld2string(buf, sizeof(buf), *(double *)dictGetVal(de), LD_STR_AUTO);
         key = sdsdup(keysds);
-        val = sdsnewlen(buf, len);
+        if (!data->only_keys) {
+            char buf[MAX_LONG_DOUBLE_CHARS];
+            int len = ld2string(buf, sizeof(buf), *(double *)dictGetVal(de), LD_STR_AUTO);
+            val = sdsnewlen(buf, len);
+        }
     } else {
         serverPanic("Type not handled in SCAN callback.");
     }
 
     listAddNodeTail(keys, key);
-    if (val && !data->no_values) listAddNodeTail(keys, val);
+    if (val) listAddNodeTail(keys, val);
 }
 
 /* Try to parse a SCAN cursor stored at object 'o':
@@ -989,7 +993,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     sds pat = NULL;
     sds typename = NULL;
     long long type = LLONG_MAX;
-    int patlen = 0, use_pattern = 0, no_values = 0;
+    int patlen = 0, use_pattern = 0, only_keys = 0;
     dict *ht;
 
     /* Object must be NULL (to iterate keys names), or the type of the object
@@ -1040,7 +1044,14 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
                 addReplyError(c, "NOVALUES option can only be used in HSCAN");
                 return;
             }
-            no_values = 1;
+            only_keys = 1;
+            i++;
+        } else if (!strcasecmp(c->argv[i]->ptr, "noscores")) {
+            if (!o || o->type != OBJ_ZSET) {
+                addReplyError(c, "NOSCORES option can only be used in ZSCAN");
+                return;
+            }
+            only_keys = 1;
             i++;
         } else {
             addReplyErrorObject(c,shared.syntaxerr);
@@ -1101,7 +1112,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
          * working on an empty dict, one with a lot of empty buckets, and
          * for the buckets are not empty, we need to limit the spampled number
          * to prevent a long hang time caused by filtering too many keys;
-         * 6. data.no_values: to control whether values will be returned or 
+         * 6. data.only_keys: to control whether values will be returned or 
          * only keys are returned. */
         scanData data = {
             .keys = keys,
@@ -1109,7 +1120,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             .type = type,
             .pattern = use_pattern ? pat : NULL,
             .sampled = 0,
-            .no_values = no_values,
+            .only_keys = only_keys,
         };
 
         /* A pattern may restrict all matching keys to one cluster slot. */
@@ -1164,7 +1175,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             /* add key object */
             listAddNodeTail(keys, sdsnewlen(str, len));
             /* add value object */
-            if (!no_values) {
+            if (!only_keys) {
                 str = lpGet(p, &len, intbuf);
                 listAddNodeTail(keys, sdsnewlen(str, len));
             }
@@ -2072,7 +2083,9 @@ int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int s
                 if (cmd->flags & CMD_MODULE || cmd->arity < 0) {
                     continue;
                 } else {
-                    serverPanic("Redis built-in command declared keys positions not matching the arity requirements.");
+                    serverPanic("%s built-in command declared keys positions"
+                        " not matching the arity requirements.",
+                        server.extended_redis_compat ? "Redis" : "Valkey");
                 }
             }
             keys[result->numkeys].pos = i;
@@ -2265,7 +2278,9 @@ int getKeysUsingLegacyRangeSpec(struct serverCommand *cmd, robj **argv, int argc
                 result->numkeys = 0;
                 return 0;
             } else {
-                serverPanic("Redis built-in command declared keys positions not matching the arity requirements.");
+                serverPanic("%s built-in command declared keys positions"
+                    " not matching the arity requirements.",
+                    server.extended_redis_compat ? "Redis" : "Valkey");
             }
         }
         keys[i].pos = j;

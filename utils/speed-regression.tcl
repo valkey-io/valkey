@@ -2,7 +2,7 @@
 # Copyright (C) 2011 Salvatore Sanfilippo
 # Released under the BSD license like Redis itself
 
-source ../tests/support/redis.tcl
+source ../tests/support/valkey.tcl
 set ::port 12123
 set ::tests {PING,SET,GET,INCR,LPUSH,LPOP,SADD,SPOP,LRANGE_100,LRANGE_600,MSET}
 set ::datasize 16
@@ -20,25 +20,25 @@ proc run-tests branches {
         exec -ignorestderr make 2> /dev/null
 
         if {$branch_id == 0} {
-            puts "  copy redis-benchmark from unstable to /tmp..."
-            exec -ignorestderr cp ./redis-benchmark /tmp
+            puts "  copy valkey-benchmark from unstable to /tmp..."
+            exec -ignorestderr cp ./valkey-benchmark /tmp
             incr branch_id
             continue
         }
 
         # Start the server
-        puts "  starting the server... [exec ./redis-server -v]"
-        set pids [exec echo "port $::port\nloglevel warning\n" | ./redis-server - > /dev/null 2> /dev/null &]
+        puts "  starting the server... [exec ./valkey-server -v]"
+        set pids [exec echo "port $::port\nloglevel warning\n" | ./valkey-server - > /dev/null 2> /dev/null &]
         puts "  pids: $pids"
         after 1000
         puts "  running the benchmark"
 
         set r [redis 127.0.0.1 $::port]
         set i [$r info]
-        puts "  redis INFO shows version: [lindex [split $i] 0]"
+        puts "  valkey INFO shows version: [lindex [split $i] 0]"
         $r close
 
-        set output [exec /tmp/redis-benchmark -n $::requests -t $::tests -d $::datasize --csv -p $::port]
+        set output [exec /tmp/valkey-benchmark -n $::requests -t $::tests -d $::datasize --csv -p $::port]
         lappend runs $b $output
         puts "  killing server..."
         catch {exec kill -9 [lindex $pids 0]}

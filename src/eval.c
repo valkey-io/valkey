@@ -675,6 +675,7 @@ void evalShaRoCommand(client *c) {
 
 void scriptCommand(client *c) {
     if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
+        /* clang-format off */
         const char *help[] = {
 "DEBUG (YES|SYNC|NO)",
 "    Set the debug mode for subsequent scripts executed.",
@@ -682,8 +683,8 @@ void scriptCommand(client *c) {
 "    Return information about the existence of the scripts in the script cache.",
 "FLUSH [ASYNC|SYNC]",
 "    Flush the Lua scripts cache. Very dangerous on replicas.",
-"    When called without the optional mode argument, the behavior is determined by the",
-"    lazyfree-lazy-user-flush configuration directive. Valid modes are:",
+"    When called without the optional mode argument, the behavior is determined",
+"     by the lazyfree-lazy-user-flush configuration directive. Valid modes are:",
 "    * ASYNC: Asynchronously flush the scripts cache.",
 "    * SYNC: Synchronously flush the scripts cache.",
 "KILL",
@@ -692,6 +693,7 @@ void scriptCommand(client *c) {
 "    Load a script into the scripts cache without executing it.",
 NULL
         };
+        /* clang-format on */
         addReplyHelp(c, help);
     } else if (c->argc >= 2 && !strcasecmp(c->argv[1]->ptr,"flush")) {
         int async = 0;
@@ -888,7 +890,7 @@ int ldbStartSession(client *c) {
             /* Log the creation of the child and close the listening
              * socket to make sure if the parent crashes a reset is sent
              * to the clients. */
-            serverLog(LL_NOTICE,"Redis forked for debugging eval");
+            serverLog(LL_NOTICE,"%s forked for debugging eval", SERVER_TITLE);
         } else {
             /* Parent */
             listAddNodeTail(ldb.children,(void*)(unsigned long)cp);
@@ -897,7 +899,7 @@ int ldbStartSession(client *c) {
         }
     } else {
         serverLog(LL_NOTICE,
-            "Redis synchronous debugging eval session started");
+            "%s synchronous debugging eval session started", SERVER_TITLE);
     }
 
     /* Setup our debugging session. */
@@ -934,7 +936,7 @@ void ldbEndSession(client *c) {
         exitFromChild(0);
     } else {
         serverLog(LL_NOTICE,
-            "Redis synchronous debugging eval session ended");
+            "%s synchronous debugging eval session ended", SERVER_TITLE);
     }
 
     /* Otherwise let's restore client's state. */
@@ -1251,6 +1253,7 @@ char *ldbRedisProtocolToHuman_Double(sds *o, char *reply);
  * char*) so that we can return a modified pointer, as for SDS semantics. */
 char *ldbRedisProtocolToHuman(sds *o, char *reply) {
     char *p = reply;
+    /* clang-format off */
     switch(*p) {
     case ':': p = ldbRedisProtocolToHuman_Int(o,reply); break;
     case '$': p = ldbRedisProtocolToHuman_Bulk(o,reply); break;
@@ -1263,6 +1266,7 @@ char *ldbRedisProtocolToHuman(sds *o, char *reply) {
     case '#': p = ldbRedisProtocolToHuman_Bool(o,reply); break;
     case ',': p = ldbRedisProtocolToHuman_Double(o,reply); break;
     }
+    /* clang-format on */
     return p;
 }
 

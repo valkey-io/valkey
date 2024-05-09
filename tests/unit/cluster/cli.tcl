@@ -269,7 +269,7 @@ test {Migrate the last slot away from a node using valkey-cli} {
         catch { $newnode_r get foo } e
         assert_match "MOVED $slot *" $e
         lassign [split [lindex $e 2] :] owner_host owner_port
-        set owner_r [redis $owner_host $owner_port 0 $::tls]
+        set owner_r [valkey $owner_host $owner_port 0 $::tls]
         set owner_id [$owner_r CLUSTER MYID]
 
         # Move slot to new node using plain commands
@@ -317,13 +317,10 @@ test {Migrate the last slot away from a node using valkey-cli} {
         catch { $newnode_r get foo } e
         assert_equal "MOVED $slot $owner_host:$owner_port" $e
 
-        # Check that the empty node has turned itself into a replica of the new
-        # owner and that the new owner knows that.
-        wait_for_condition 1000 50 {
-            [string match "*slave*" [$owner_r CLUSTER REPLICAS $owner_id]]
-        } else {
-            fail "Empty node didn't turn itself into a replica."
-        }
+        # Check that the now empty primary node doesn't turn itself into
+        # a replica of any other nodes
+        wait_for_cluster_propagation
+        assert_match *master* [$owner_r role]
     }
 }
 

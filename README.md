@@ -1,3 +1,5 @@
+[![codecov](https://codecov.io/gh/valkey-io/valkey/graph/badge.svg?token=KYYSJAYC5F)](https://codecov.io/gh/valkey-io/valkey)
+
 This README is under construction as we work to build a new community driven high performance key-value store.
 
 This project was forked from the open source Redis project right before the transition to their new source available licenses.
@@ -213,3 +215,9 @@ Please see the [CONTRIBUTING.md][2]. For security bugs and vulnerabilities, plea
 [1]: https://github.com/valkey-io/valkey/blob/unstable/COPYING
 [2]: https://github.com/valkey-io/valkey/blob/unstable/CONTRIBUTING.md
 [3]: https://github.com/valkey-io/valkey/blob/unstable/SECURITY.md
+
+Valkey is an open community project under LF Projects
+-----------------
+Valkey a Series of LF Projects, LLC
+2810 N Church St, PMB 57274
+Wilmington, Delaware 19802-4447

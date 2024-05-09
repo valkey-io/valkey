@@ -353,6 +353,42 @@ start_server {tags {"other"}} {
         assert_error {*unknown command*} {r CONFIG|GET GET_XX}
         assert_error {*unknown subcommand*} {r CONFIG GET_XX}
     }
+
+    test "Extended Redis Compatibility config" {
+        # This config is added in Valkey 8.0, shall be deprecated and have no
+        # effect in 9.x and be deleted in 10.0.
+        set hello [r hello 3]
+        set version [dict get $hello version]
+        if {[string match "10.*" $version]} {
+            # Check that the config doesn't exist anymore.
+            assert_error "ERR Unknown*" {r config set extended-redis-compatibility yes}
+            error "We shall also delete this test case"
+        } elseif {[string match "9.*" $version]} {
+            # This config is scheduled for removal. In 9.x it should still
+            # exists but have no effect.
+            r config set extended-redis-compatibility yes
+            set hello [r hello 3]
+            assert_equal valkey [dict get $hello server]
+            assert_equal $version [dict get $hello version]
+            r config set extended-redis-compatibility no
+        } elseif {[string match "8.*" $version] || ($version eq "255.255.255")} {
+            # In 8.x, the config shall work and affect HELLO server and version.
+            r config set extended-redis-compatibility yes
+            set hello [r hello 3]
+            assert_equal "redis" [dict get $hello server]
+            assert_match "7.2.*" [dict get $hello version]
+            set info [r info server]
+            assert_match "*redis_mode:*" $info
+            assert_no_match "*server_mode:*" $info
+            r config set extended-redis-compatibility no
+            set hello [r hello 3]
+            assert_equal "valkey" [dict get $hello server]
+            assert_equal $version [dict get $hello version]
+            set info [r info server]
+            assert_no_match "*redis_mode:*" $info
+            assert_match "*server_mode:*" $info
+        }
+    }
 }
 
 start_server {tags {"other external:skip"}} {
@@ -430,7 +466,7 @@ start_server {tags {"other external:skip"}} {
 
 start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
     r config set dynamic-hz no hz 500
-    test "Redis can trigger resizing" {
+    test "Server can trigger resizing" {
         r flushall
         # hashslot(foo) is 12182
         for {set j 1} {$j <= 128} {incr j} {
@@ -460,7 +496,7 @@ start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
         }
     } {} {needs:debug}
 
-    test "Redis can rewind and trigger smaller slot resizing" {
+    test "Server can rewind and trigger smaller slot resizing" {
         # hashslot(foo) is 12182
         # hashslot(alice) is 749, smaller than hashslot(foo),
         # attempt to trigger a resize on it, see details in #12802.
@@ -490,7 +526,7 @@ start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
 }
 
 start_server {tags {"other external:skip"}} {
-    test "Redis can resize empty dict" {
+    test "Server can resize empty dict" {
         # Write and then delete 128 keys, creating an empty dict
         r flushall
         for {set j 1} {$j <= 128} {incr j} {

@@ -2999,6 +2999,7 @@ static void parseEnv(void) {
 static void usage(int err) {
     sds version = cliVersion();
     FILE *target = err ? stderr: stdout;
+    /* clang-format off */
     const char *tls_usage =
 #ifdef USE_OPENSSL
 "  --tls              Establish a secure TLS connection.\n"
@@ -3040,10 +3041,10 @@ static void usage(int err) {
 "  --askpass          Force user to input password with mask from STDIN.\n"
 "                     If this argument is used, '-a' and " CLI_AUTH_ENV "\n"
 "                     environment variable will be ignored.\n"
-"  -u <uri>           Server URI on format redis://user:password@host:port/dbnum\n"
+"  -u <uri>           Server URI on format valkey://user:password@host:port/dbnum\n"
 "                     User, password and dbnum are optional. For authentication\n"
 "                     without a username, use username 'default'. For TLS, use\n"
-"                     the scheme 'rediss'.\n"
+"                     the scheme 'valkeys'.\n"
 "  -r <repeat>        Execute specified command N times.\n"
 "  -i <interval>      When -r is used, waits <interval> seconds per command.\n"
 "                     It is possible to specify sub-second times like -i 0.1.\n"
@@ -3130,7 +3131,7 @@ version,tls_usage);
 "  Use --cluster help to list all available cluster manager commands.\n"
 "\n"
 "Examples:\n"
-"  valkey-cli -u redis://default:PASSWORD@localhost:6379/0\n"
+"  valkey-cli -u valkey://default:PASSWORD@localhost:6379/0\n"
 "  cat /etc/passwd | valkey-cli -x set mypasswd\n"
 "  valkey-cli -D \"\" --raw dump key > key.dump && valkey-cli -X dump_tag restore key2 0 dump_tag replace < key.dump\n"
 "  valkey-cli -r 100 lpush mylist x\n"
@@ -3146,6 +3147,7 @@ version,tls_usage);
 "Type \"help\" in interactive mode for information on available commands\n"
 "and settings.\n"
 "\n");
+    /* clang-format on */
     sdsfree(version);
     exit(err);
 }
@@ -5388,6 +5390,7 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts,
             *p = '\0';
             char *token = line;
             line = p + 1;
+            /* clang-format off */
             switch(i++){
             case 0: name = token; break;
             case 1: addr = token; break;
@@ -5398,6 +5401,7 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts,
             case 6: config_epoch = token; break;
             case 7: link_status = token; break;
             }
+            /* clang-format on */
             if (i == 8) break; // Slots
         }
         if (!flags) {

@@ -1615,8 +1615,8 @@ void rdbRemoveTempFile(pid_t childpid, int from_signal) {
     /* Generate temp rdb file name using async-signal safe functions. */
     ll2string(pid, sizeof(pid), childpid);
     valkey_strlcpy(tmpfile, "temp-", sizeof(tmpfile));
-    redis_strlcat(tmpfile, pid, sizeof(tmpfile));
-    redis_strlcat(tmpfile, ".rdb", sizeof(tmpfile));
+    valkey_strlcat(tmpfile, pid, sizeof(tmpfile));
+    valkey_strlcat(tmpfile, ".rdb", sizeof(tmpfile));
 
     if (from_signal) {
         /* bg_unlink is not async-signal-safe, but in this case we don't really
@@ -3310,7 +3310,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 robj *argv[2];
                 argv[0] = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
                 argv[1] = &keyobj;
-                replicationFeedSlaves(server.slaves,dbid,argv,2);
+                replicationFeedSlaves(dbid,argv,2);
             }
             sdsfree(key);
             decrRefCount(val);

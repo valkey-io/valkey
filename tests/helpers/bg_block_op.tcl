@@ -1,4 +1,4 @@
-source tests/support/redis.tcl
+source tests/support/valkey.tcl
 source tests/support/util.tcl
 
 set ::tlsdir "tests/tls"
@@ -11,7 +11,7 @@ set ::tlsdir "tests/tls"
 # unlikely that lists and zsets just get more data without ever causing
 # blocking.
 proc bg_block_op {host port db ops tls} {
-    set r [redis $host $port 0 $tls]
+    set r [valkey $host $port 0 $tls]
     $r client setname LOAD_HANDLER
     $r select $db
 

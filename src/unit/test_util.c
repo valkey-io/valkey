@@ -4,7 +4,6 @@
 
 #include "../config.h"
 #include "../util.h"
-#undef UNUSED
 #include "test_help.h"
 
 int test_string2ll(int argc, char **argv, int flags) {

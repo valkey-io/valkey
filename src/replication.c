@@ -434,7 +434,7 @@ void feedReplicationBuffer(char *s, size_t len) {
  * received by our clients in order to create the replication stream.
  * Instead if the instance is a replica and has sub-replicas attached, we use
  * replicationFeedStreamFromMasterStream() */
-void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
+void replicationFeedSlaves(int dictid, robj **argv, int argc) {
     int j, len;
     char llstr[LONG_STR_SIZE];
 
@@ -451,7 +451,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
 
     /* If there aren't slaves, and there is no backlog buffer to populate,
      * we can return ASAP. */
-    if (server.repl_backlog == NULL && listLength(slaves) == 0) {
+    if (server.repl_backlog == NULL && listLength(server.slaves) == 0) {
         /* We increment the repl_offset anyway, since we use that for tracking AOF fsyncs
          * even when there's no replication active. This code will not be reached if AOF
          * is also disabled. */
@@ -460,7 +460,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     }
 
     /* We can't have slaves attached and no backlog. */
-    serverAssert(!(listLength(slaves) != 0 && server.repl_backlog == NULL));
+    serverAssert(!(listLength(server.slaves) != 0 && server.repl_backlog == NULL));
 
     /* Must install write handler for all replicas first before feeding
      * replication stream. */
@@ -1313,6 +1313,9 @@ int replicaPutOnline(client *slave) {
                           NULL);
     serverLog(LL_NOTICE,"Synchronization with replica %s succeeded",
         replicationGetSlaveName(slave));
+
+    /* Replicate slot being migrated/imported to the new replica */
+    clusterReplicateOpenSlots();
     return 1;
 }
 
@@ -3250,6 +3253,7 @@ void roleCommand(client *c) {
         if (slaveIsInHandshakeState()) {
             slavestate = "handshake";
         } else {
+            /* clang-format off */
             switch(server.repl_state) {
             case REPL_STATE_NONE: slavestate = "none"; break;
             case REPL_STATE_CONNECT: slavestate = "connect"; break;
@@ -3258,6 +3262,7 @@ void roleCommand(client *c) {
             case REPL_STATE_CONNECTED: slavestate = "connected"; break;
             default: slavestate = "unknown"; break;
             }
+            /* clang-format on */
         }
         addReplyBulkCString(c,slavestate);
         addReplyLongLong(c,server.master ? server.master->reploff : -1);
@@ -3619,8 +3624,8 @@ void unblockClientWaitingReplicas(client *c) {
     updateStatsOnUnblock(c, 0, 0, 0);
 }
 
-/* Check if there are clients blocked in WAIT or WAITAOF that can be unblocked
- * since we received enough ACKs from slaves. */
+/* Check if there are clients blocked in WAIT, WAITAOF, or WAIT_PREREPL
+ * that can be unblocked since we received enough ACKs from replicas. */
 void processClientsWaitingReplicas(void) {
     long long last_offset = 0;
     long long last_aof_offset = 0;
@@ -3637,6 +3642,7 @@ void processClientsWaitingReplicas(void) {
 
         client *c = ln->value;
         int is_wait_aof = c->bstate.btype == BLOCKED_WAITAOF;
+        int is_wait_prerepl = c->bstate.btype == BLOCKED_WAIT_PREREPL;
 
         if (is_wait_aof && c->bstate.numlocal && !server.aof_enabled) {
             addReplyError(c, "WAITAOF cannot be used when numlocal is set but appendonly is disabled.");
@@ -3686,6 +3692,8 @@ void processClientsWaitingReplicas(void) {
             addReplyArrayLen(c, 2);
             addReplyLongLong(c, numlocal);
             addReplyLongLong(c, numreplicas);
+        } else if (is_wait_prerepl) {
+            c->flags |= CLIENT_PREREPL_DONE;
         } else {
             addReplyLongLong(c, numreplicas);
         }
@@ -3788,8 +3796,7 @@ void replicationCron(void) {
 
         if (!manual_failover_in_progress) {
             ping_argv[0] = shared.ping;
-            replicationFeedSlaves(server.slaves, -1,
-                ping_argv, 1);
+            replicationFeedSlaves(-1, ping_argv, 1);
         }
     }
 

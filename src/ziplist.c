@@ -340,6 +340,7 @@ static inline unsigned int zipEncodingLenSize(unsigned char encoding) {
 
 /* Return bytes needed to store integer encoded by 'encoding' */
 static inline unsigned int zipIntSize(unsigned char encoding) {
+    /* clang-format off */
     switch(encoding) {
     case ZIP_INT_8B:  return 1;
     case ZIP_INT_16B: return 2;
@@ -347,6 +348,7 @@ static inline unsigned int zipIntSize(unsigned char encoding) {
     case ZIP_INT_32B: return 4;
     case ZIP_INT_64B: return 8;
     }
+    /* clang-format on */
     if (encoding >= ZIP_INT_IMM_MIN && encoding <= ZIP_INT_IMM_MAX)
         return 0; /* 4 bit immediate */
     /* bad encoding, covered by a previous call to ZIP_ASSERT_ENCODING */
@@ -1845,7 +1847,7 @@ static size_t strEntryBytesLarge(size_t slen) {
     return slen + zipStorePrevEntryLength(NULL, ZIP_BIG_PREVLEN) + zipStoreEntryEncoding(NULL, 0, slen);
 }
 
-/* ./redis-server test ziplist <randomseed> */
+/* ./valkey-server test ziplist <randomseed> */
 int ziplistTest(int argc, char **argv, int flags) {
     int accurate = (flags & TEST_ACCURATE);
     unsigned char *zl, *p;

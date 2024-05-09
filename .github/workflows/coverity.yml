@@ -13,7 +13,7 @@ jobs:
     if: github.repository == 'valkey-io/valkey'
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@main
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
     - name: Download and extract the Coverity Build Tool
       run: |
           wget -q https://scan.coverity.com/download/cxx/linux64 --post-data "token=${{ secrets.COVERITY_SCAN_TOKEN }}&project=valkey-io%2Fvalkey" -O cov-analysis-linux64.tar.gz

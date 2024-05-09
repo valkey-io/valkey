@@ -873,8 +873,7 @@ NULL
         server.aof_flush_sleep = atoi(c->argv[2]->ptr);
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"replicate") && c->argc >= 3) {
-        replicationFeedSlaves(server.slaves, -1,
-                c->argv + 2, c->argc - 2);
+        replicationFeedSlaves(-1, c->argv + 2, c->argc - 2);
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"error") && c->argc == 3) {
         sds errstr = sdsnewlen("-",1);
@@ -1192,6 +1191,7 @@ static void* getAndSetMcontextEip(ucontext_t *uc, void *eip) {
     #elif defined(__i386__)
     GET_SET_RETURN(uc->uc_mcontext->__ss.__eip, eip);
     #else
+    /* OSX PowerPC */
     GET_SET_RETURN(uc->uc_mcontext->__ss.__srr0, eip);
     #endif
 #elif defined(__APPLE__) && defined(MAC_OS_10_6_DETECTED)
@@ -1200,6 +1200,8 @@ static void* getAndSetMcontextEip(ucontext_t *uc, void *eip) {
     GET_SET_RETURN(uc->uc_mcontext->__ss.__rip, eip);
     #elif defined(__i386__)
     GET_SET_RETURN(uc->uc_mcontext->__ss.__eip, eip);
+    #elif defined(__ppc__)
+    GET_SET_RETURN(uc->uc_mcontext->__ss.__srr0, eip);
     #else
     /* OSX ARM64 */
     void *old_val = (void*)arm_thread_state64_get_pc(uc->uc_mcontext->__ss);
@@ -1344,7 +1346,7 @@ void logRegisters(ucontext_t *uc) {
         (unsigned long) uc->uc_mcontext->__ss.__gs
     );
     logStackContent((void**)uc->uc_mcontext->__ss.__esp);
-    #else
+    #elif defined(__arm64__)
     /* OSX ARM64 */
     serverLog(LL_WARNING,
     "\n"
@@ -1393,6 +1395,9 @@ void logRegisters(ucontext_t *uc) {
         (unsigned long) uc->uc_mcontext->__ss.__cpsr
     );
     logStackContent((void**) arm_thread_state64_get_sp(uc->uc_mcontext->__ss));
+    #else
+    /* At the moment we do not implement this for PowerPC */
+    NOT_SUPPORTED();
     #endif
 /* Linux */
 #elif defined(__linux__)
@@ -1992,7 +1997,7 @@ void logServerInfo(void) {
     robj *argv[1];
     argv[0] = createStringObject("all", strlen("all"));
     dict *section_dict = genInfoSectionDict(argv, 1, NULL, &all, &everything);
-    infostring = genRedisInfoString(section_dict, all, everything);
+    infostring = genValkeyInfoString(section_dict, all, everything);
     if (server.cluster_enabled){
         infostring = genClusterDebugString(infostring);
     }
@@ -2625,7 +2630,7 @@ static size_t get_ready_to_signal_threads_tids(int sig_num, pid_t tids[TIDS_MAX_
         if(tids_count == TIDS_MAX_SIZE) break;
     }
 
-    /* Swap the last tid with the the current thread id */
+    /* Swap the last tid with the current thread id */
     if(current_thread_index != -1) {
         pid_t last_tid = tids[tids_count - 1];
 

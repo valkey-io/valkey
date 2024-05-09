@@ -4,25 +4,25 @@
 #
 # Example usage:
 #
-# set c [redis_cluster {127.0.0.1:6379 127.0.0.1:6380}]
+# set c [valkey_cluster {127.0.0.1:6379 127.0.0.1:6380}]
 # $c set foo
 # $c get foo
 # $c close
 
 package require Tcl 8.5
-package provide redis_cluster 0.1
+package provide valkey_cluster 0.1
 
-namespace eval redis_cluster {}
-set ::redis_cluster::internal_id 0
-set ::redis_cluster::id 0
-array set ::redis_cluster::startup_nodes {}
-array set ::redis_cluster::nodes {}
-array set ::redis_cluster::slots {}
-array set ::redis_cluster::tls {}
+namespace eval valkey_cluster {}
+set ::valkey_cluster::internal_id 0
+set ::valkey_cluster::id 0
+array set ::valkey_cluster::startup_nodes {}
+array set ::valkey_cluster::nodes {}
+array set ::valkey_cluster::slots {}
+array set ::valkey_cluster::tls {}
 
 # List of "plain" commands, which are commands where the sole key is always
 # the first argument.
-set ::redis_cluster::plain_commands {
+set ::valkey_cluster::plain_commands {
     get set setnx setex psetex append strlen exists setbit getbit
     setrange getrange substr incr decr rpush lpush rpushx lpushx
     linsert rpop lpop brpop llen lindex lset lrange ltrim lrem
@@ -39,34 +39,34 @@ set ::redis_cluster::plain_commands {
 
 # Create a cluster client. The nodes are given as a list of host:port. The TLS
 # parameter (1 or 0) is optional and defaults to the global $::tls.
-proc redis_cluster {nodes {tls -1}} {
-    set id [incr ::redis_cluster::id]
-    set ::redis_cluster::startup_nodes($id) $nodes
-    set ::redis_cluster::nodes($id) {}
-    set ::redis_cluster::slots($id) {}
-    set ::redis_cluster::tls($id) [expr $tls == -1 ? $::tls : $tls]
-    set handle [interp alias {} ::redis_cluster::instance$id {} ::redis_cluster::__dispatch__ $id]
+proc valkey_cluster {nodes {tls -1}} {
+    set id [incr ::valkey_cluster::id]
+    set ::valkey_cluster::startup_nodes($id) $nodes
+    set ::valkey_cluster::nodes($id) {}
+    set ::valkey_cluster::slots($id) {}
+    set ::valkey_cluster::tls($id) [expr $tls == -1 ? $::tls : $tls]
+    set handle [interp alias {} ::valkey_cluster::instance$id {} ::valkey_cluster::__dispatch__ $id]
     $handle refresh_nodes_map
     return $handle
 }
 
 # Totally reset the slots / nodes state for the client, calls
 # CLUSTER NODES in the first startup node available, populates the
-# list of nodes ::redis_cluster::nodes($id) with an hash mapping node
+# list of nodes ::valkey_cluster::nodes($id) with an hash mapping node
 # ip:port to a representation of the node (another hash), and finally
-# maps ::redis_cluster::slots($id) with an hash mapping slot numbers
+# maps ::valkey_cluster::slots($id) with an hash mapping slot numbers
 # to node IDs.
 #
 # This function is called when a new Cluster client is initialized
 # and every time we get a -MOVED redirection error.
-proc ::redis_cluster::__method__refresh_nodes_map {id} {
+proc ::valkey_cluster::__method__refresh_nodes_map {id} {
     # Contact the first responding startup node.
     set idx 0; # Index of the node that will respond.
     set errmsg {}
-    foreach start_node $::redis_cluster::startup_nodes($id) {
+    foreach start_node $::valkey_cluster::startup_nodes($id) {
         set ip_port [lindex [split $start_node @] 0]
         lassign [split $ip_port :] start_host start_port
-        set tls $::redis_cluster::tls($id)
+        set tls $::valkey_cluster::tls($id)
         if {[catch {
             set r {}
             set r [valkey $start_host $start_port 0 $tls]
@@ -84,18 +84,18 @@ proc ::redis_cluster::__method__refresh_nodes_map {id} {
         }
     }
 
-    if {$idx == [llength $::redis_cluster::startup_nodes($id)]} {
+    if {$idx == [llength $::valkey_cluster::startup_nodes($id)]} {
         error "No good startup node found. $errmsg"
     }
 
     # Put the node that responded as first in the list if it is not
     # already the first.
     if {$idx != 0} {
-        set l $::redis_cluster::startup_nodes($id)
+        set l $::valkey_cluster::startup_nodes($id)
         set left [lrange $l 0 [expr {$idx-1}]]
         set right [lrange $l [expr {$idx+1}] end]
         set l [concat [lindex $l $idx] $left $right]
-        set ::redis_cluster::startup_nodes($id) $l
+        set ::valkey_cluster::startup_nodes($id) $l
     }
 
     # Parse CLUSTER NODES output to populate the nodes description.
@@ -114,7 +114,7 @@ proc ::redis_cluster::__method__refresh_nodes_map {id} {
 
         # Connect to the node
         set link {}
-        set tls $::redis_cluster::tls($id)
+        set tls $::valkey_cluster::tls($id)
         catch {set link [valkey $host $port 0 $tls]}
 
         # Build this node description as an hash.
@@ -130,17 +130,17 @@ proc ::redis_cluster::__method__refresh_nodes_map {id} {
             link $link \
         ]
         dict set nodes $addr $node
-        lappend ::redis_cluster::startup_nodes($id) $addr
+        lappend ::valkey_cluster::startup_nodes($id) $addr
     }
 
     # Close all the existing links in the old nodes map, and set the new
     # map as current.
-    foreach n $::redis_cluster::nodes($id) {
+    foreach n $::valkey_cluster::nodes($id) {
         catch {
             [dict get $n link] close
         }
     }
-    set ::redis_cluster::nodes($id) $nodes
+    set ::valkey_cluster::nodes($id) $nodes
 
     # Populates the slots -> nodes map.
     dict for {addr node} $nodes {
@@ -148,47 +148,47 @@ proc ::redis_cluster::__method__refresh_nodes_map {id} {
             lassign [split $slotrange -] start end
             if {$end == {}} {set end $start}
             for {set j $start} {$j <= $end} {incr j} {
-                dict set ::redis_cluster::slots($id) $j $addr
+                dict set ::valkey_cluster::slots($id) $j $addr
             }
         }
     }
 
     # Only retain unique entries in the startup nodes list
-    set ::redis_cluster::startup_nodes($id) [lsort -unique $::redis_cluster::startup_nodes($id)]
+    set ::valkey_cluster::startup_nodes($id) [lsort -unique $::valkey_cluster::startup_nodes($id)]
 }
 
-# Free a redis_cluster handle.
-proc ::redis_cluster::__method__close {id} {
+# Free a valkey_cluster handle.
+proc ::valkey_cluster::__method__close {id} {
     catch {
-        set nodes $::redis_cluster::nodes($id)
+        set nodes $::valkey_cluster::nodes($id)
         dict for {addr node} $nodes {
             catch {
                 [dict get $node link] close
             }
         }
     }
-    catch {unset ::redis_cluster::startup_nodes($id)}
-    catch {unset ::redis_cluster::nodes($id)}
-    catch {unset ::redis_cluster::slots($id)}
-    catch {unset ::redis_cluster::tls($id)}
-    catch {interp alias {} ::redis_cluster::instance$id {}}
+    catch {unset ::valkey_cluster::startup_nodes($id)}
+    catch {unset ::valkey_cluster::nodes($id)}
+    catch {unset ::valkey_cluster::slots($id)}
+    catch {unset ::valkey_cluster::tls($id)}
+    catch {interp alias {} ::valkey_cluster::instance$id {}}
 }
 
-proc ::redis_cluster::__method__masternode_for_slot {id slot} {
+proc ::valkey_cluster::__method__masternode_for_slot {id slot} {
     # Get the node mapped to this slot.
-    set node_addr [dict get $::redis_cluster::slots($id) $slot]
+    set node_addr [dict get $::valkey_cluster::slots($id) $slot]
     if {$node_addr eq {}} {
         error "No mapped node for slot $slot."
     }
-    return [dict get $::redis_cluster::nodes($id) $node_addr]
+    return [dict get $::valkey_cluster::nodes($id) $node_addr]
 }
 
-proc ::redis_cluster::__method__masternode_notfor_slot {id slot} {
+proc ::valkey_cluster::__method__masternode_notfor_slot {id slot} {
     # Get a node that is not mapped to this slot.
-    set node_addr [dict get $::redis_cluster::slots($id) $slot]
-    set addrs [dict keys $::redis_cluster::nodes($id)]
+    set node_addr [dict get $::valkey_cluster::slots($id) $slot]
+    set addrs [dict keys $::valkey_cluster::nodes($id)]
     foreach addr [lshuffle $addrs] {
-        set node [dict get $::redis_cluster::nodes($id) $addr]
+        set node [dict get $::valkey_cluster::nodes($id) $addr]
         if {$node_addr ne $addr && [dict get $node slaveof] eq "-"} {
             return $node
         }
@@ -196,22 +196,22 @@ proc ::redis_cluster::__method__masternode_notfor_slot {id slot} {
     error "Slot $slot is everywhere"
 }
 
-proc ::redis_cluster::__dispatch__ {id method args} {
-    if {[info command ::redis_cluster::__method__$method] eq {}} {
+proc ::valkey_cluster::__dispatch__ {id method args} {
+    if {[info command ::valkey_cluster::__method__$method] eq {}} {
         # Get the keys from the command.
-        set keys [::redis_cluster::get_keys_from_command $method $args]
+        set keys [::valkey_cluster::get_keys_from_command $method $args]
         if {$keys eq {}} {
-            error "Redis command '$method' is not supported by redis_cluster."
+            error "Valkey command '$method' is not supported by valkey_cluster."
         }
 
         # Resolve the keys in the corresponding hash slot they hash to.
-        set slot [::redis_cluster::get_slot_from_keys $keys]
+        set slot [::valkey_cluster::get_slot_from_keys $keys]
         if {$slot eq {}} {
             error "Invalid command: multiple keys not hashing to the same slot."
         }
 
         # Get the node mapped to this slot.
-        set node_addr [dict get $::redis_cluster::slots($id) $slot]
+        set node_addr [dict get $::valkey_cluster::slots($id) $slot]
         if {$node_addr eq {}} {
             error "No mapped node for slot $slot."
         }
@@ -221,7 +221,7 @@ proc ::redis_cluster::__dispatch__ {id method args} {
         set asking 0
         while {[incr retry -1]} {
             if {$retry < 5} {after 100}
-            set node [dict get $::redis_cluster::nodes($id) $node_addr]
+            set node [dict get $::valkey_cluster::nodes($id) $node_addr]
             set link [dict get $node link]
             if {$asking} {
                 $link ASKING
@@ -233,8 +233,8 @@ proc ::redis_cluster::__dispatch__ {id method args} {
                     [string range $e 0 2] eq {I/O} \
                 } {
                     # MOVED redirection.
-                    ::redis_cluster::__method__refresh_nodes_map $id
-                    set node_addr [dict get $::redis_cluster::slots($id) $slot]
+                    ::valkey_cluster::__method__refresh_nodes_map $id
+                    set node_addr [dict get $::valkey_cluster::slots($id) $slot]
                     continue
                 } elseif {[string range $e 0 2] eq {ASK}} {
                     # ASK redirection.
@@ -250,16 +250,16 @@ proc ::redis_cluster::__dispatch__ {id method args} {
                 return $e
             }
         }
-        error "Too many redirections or failures contacting Redis Cluster."
+        error "Too many redirections or failures contacting Valkey Cluster."
     } else {
-        uplevel 1 [list ::redis_cluster::__method__$method $id] $args
+        uplevel 1 [list ::valkey_cluster::__method__$method $id] $args
     }
 }
 
-proc ::redis_cluster::get_keys_from_command {cmd argv} {
+proc ::valkey_cluster::get_keys_from_command {cmd argv} {
     set cmd [string tolower $cmd]
     # Most commands get just one key as first argument.
-    if {[lsearch -exact $::redis_cluster::plain_commands $cmd] != -1} {
+    if {[lsearch -exact $::valkey_cluster::plain_commands $cmd] != -1} {
         return [list [lindex $argv 0]]
     }
 
@@ -277,7 +277,7 @@ proc ::redis_cluster::get_keys_from_command {cmd argv} {
 
 # Returns the CRC16 of the specified string.
 # The CRC parameters are described in the Cluster specification.
-set ::redis_cluster::XMODEMCRC16Lookup {
+set ::valkey_cluster::XMODEMCRC16Lookup {
     0x0000 0x1021 0x2042 0x3063 0x4084 0x50a5 0x60c6 0x70e7
     0x8108 0x9129 0xa14a 0xb16b 0xc18c 0xd1ad 0xe1ce 0xf1ef
     0x1231 0x0210 0x3273 0x2252 0x52b5 0x4294 0x72f7 0x62d6
@@ -312,19 +312,19 @@ set ::redis_cluster::XMODEMCRC16Lookup {
     0x6e17 0x7e36 0x4e55 0x5e74 0x2e93 0x3eb2 0x0ed1 0x1ef0
 }
 
-proc ::redis_cluster::crc16 {s} {
+proc ::valkey_cluster::crc16 {s} {
     set s [encoding convertto ascii $s]
     set crc 0
     foreach char [split $s {}] {
         scan $char %c byte
-        set crc [expr {(($crc<<8)&0xffff) ^ [lindex $::redis_cluster::XMODEMCRC16Lookup [expr {(($crc>>8)^$byte) & 0xff}]]}]
+        set crc [expr {(($crc<<8)&0xffff) ^ [lindex $::valkey_cluster::XMODEMCRC16Lookup [expr {(($crc>>8)^$byte) & 0xff}]]}]
     }
     return $crc
 }
 
 # Hash a single key returning the slot it belongs to, Implemented hash
 # tags as described in the Cluster specification.
-proc ::redis_cluster::hash {key} {
+proc ::valkey_cluster::hash {key} {
     set keylen [string length $key]
     set s {}
     set e {}
@@ -353,10 +353,10 @@ proc ::redis_cluster::hash {key} {
 # Return the slot the specified keys hash to.
 # If the keys hash to multiple slots, an empty string is returned to
 # signal that the command can't be run in Cluster.
-proc ::redis_cluster::get_slot_from_keys {keys} {
+proc ::valkey_cluster::get_slot_from_keys {keys} {
     set slot {}
     foreach k $keys {
-        set s [::redis_cluster::hash $k]
+        set s [::valkey_cluster::hash $k]
         if {$slot eq {}} {
             set slot $s
         } elseif {$slot != $s} {

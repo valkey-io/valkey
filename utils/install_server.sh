@@ -167,7 +167,7 @@ mkdir -p "$SERVER_DATA_DIR" || die "Could not create valkey data directory"
 #render the templates
 TMP_FILE="/tmp/${SERVER_PORT}.conf"
 DEFAULT_CONFIG="${SCRIPTPATH}/../valkey.conf"
-INIT_TPL_FILE="${SCRIPTPATH}/redis_init_script.tpl"
+INIT_TPL_FILE="${SCRIPTPATH}/valkey_init_script.tpl"
 INIT_SCRIPT_DEST="/etc/init.d/valkey_${SERVER_PORT}"
 PIDFILE="/var/run/valkey_${SERVER_PORT}.pid"
 
@@ -197,17 +197,17 @@ rm -f $TMP_FILE
 
 #we hard code the configs here to avoid issues with templates containing env vars
 #kinda lame but works!
-REDIS_INIT_HEADER=\
+VALKEY_INIT_HEADER=\
 "#!/bin/sh\n
 #Configurations injected by install_server below....\n\n
 EXEC=$SERVER_EXECUTABLE\n
 CLIEXEC=$CLI_EXEC\n
 PIDFILE=\"$PIDFILE\"\n
 CONF=\"$SERVER_CONFIG_FILE\"\n\n
-REDISPORT=\"$SERVER_PORT\"\n\n
+VALKEYPORT=\"$SERVER_PORT\"\n\n
 ###############\n\n"
 
-REDIS_CHKCONFIG_INFO=\
+VALKEY_CHKCONFIG_INFO=\
 "# REDHAT chkconfig header\n\n
 # chkconfig: - 58 74\n
 # description: valkey_${SERVER_PORT} is the valkey daemon.\n
@@ -220,15 +220,15 @@ REDIS_CHKCONFIG_INFO=\
 # Should-Start: \$syslog \$named\n
 # Should-Stop: \$syslog \$named\n
 # Short-Description: start and stop valkey_${SERVER_PORT}\n
-# Description: Redis daemon\n
+# Description: Valkey daemon\n
 ### END INIT INFO\n\n"
 
 if command -v chkconfig >/dev/null; then
 	#if we're a box with chkconfig on it we want to include info for chkconfig
-	echo "$REDIS_INIT_HEADER" "$REDIS_CHKCONFIG_INFO" > $TMP_FILE && cat $INIT_TPL_FILE >> $TMP_FILE || die "Could not write init script to $TMP_FILE"
+	echo "$VALKEY_INIT_HEADER" "$VALKEY_CHKCONFIG_INFO" > $TMP_FILE && cat $INIT_TPL_FILE >> $TMP_FILE || die "Could not write init script to $TMP_FILE"
 else
 	#combine the header and the template (which is actually a static footer)
-	echo "$REDIS_INIT_HEADER" > $TMP_FILE && cat $INIT_TPL_FILE >> $TMP_FILE || die "Could not write init script to $TMP_FILE"
+	echo "$VALKEY_INIT_HEADER" > $TMP_FILE && cat $INIT_TPL_FILE >> $TMP_FILE || die "Could not write init script to $TMP_FILE"
 fi
 
 ###
@@ -246,7 +246,7 @@ EXEC=$SERVER_EXECUTABLE
 CLIEXEC=$CLI_EXEC
 PIDFILE=$PIDFILE
 CONF="$SERVER_CONFIG_FILE"
-REDISPORT="$SERVER_PORT"
+VALKEYPORT="$SERVER_PORT"
 ###############
 # SysV Init Information
 # chkconfig: - 58 74
@@ -260,7 +260,7 @@ REDISPORT="$SERVER_PORT"
 # Should-Start: \$syslog \$named
 # Should-Stop: \$syslog \$named
 # Short-Description: start and stop valkey_${SERVER_PORT}
-# Description: Redis daemon
+# Description: Valkey daemon
 ### END INIT INFO
 
 EOT

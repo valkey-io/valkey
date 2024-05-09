@@ -107,6 +107,7 @@ void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int had_err
     const ustime_t total_cmd_duration = c->duration + blocked_us + reply_us;
     c->lastcmd->microseconds += total_cmd_duration;
     c->lastcmd->calls++;
+    c->commands_processed++;
     server.stat_numcommands++;
     if (had_errors)
         c->lastcmd->failed_calls++;
@@ -186,7 +187,8 @@ void unblockClient(client *c, int queue_for_reprocessing) {
         c->bstate.btype == BLOCKED_ZSET ||
         c->bstate.btype == BLOCKED_STREAM) {
         unblockClientWaitingData(c);
-    } else if (c->bstate.btype == BLOCKED_WAIT || c->bstate.btype == BLOCKED_WAITAOF) {
+    } else if (c->bstate.btype == BLOCKED_WAIT || c->bstate.btype == BLOCKED_WAITAOF ||
+               c->bstate.btype == BLOCKED_WAIT_PREREPL) {
         unblockClientWaitingReplicas(c);
     } else if (c->bstate.btype == BLOCKED_MODULE) {
         if (moduleClientIsBlockedOnKeys(c)) unblockClientWaitingData(c);
@@ -202,7 +204,8 @@ void unblockClient(client *c, int queue_for_reprocessing) {
 
     /* Reset the client for a new query, unless the client has pending command to process
      * or in case a shutdown operation was canceled and we are still in the processCommand sequence  */
-    if (!(c->flags & CLIENT_PENDING_COMMAND) && c->bstate.btype != BLOCKED_SHUTDOWN) {
+    if (!(c->flags & CLIENT_PENDING_COMMAND) && c->bstate.btype != BLOCKED_SHUTDOWN &&
+        c->bstate.btype != BLOCKED_WAIT_PREREPL) {
         freeClientOriginalArgv(c);
         /* Clients that are not blocked on keys are not reprocessed so we must
          * call reqresAppendResponse here (for clients blocked on key,
@@ -240,6 +243,8 @@ void replyToBlockedClientTimedOut(client *c) {
         addReplyLongLong(c,replicationCountAOFAcksByOffset(c->bstate.reploffset));
     } else if (c->bstate.btype == BLOCKED_MODULE) {
         moduleBlockedClientTimedOut(c, 0);
+    } else if (c->bstate.btype == BLOCKED_WAIT_PREREPL) {
+        addReplyErrorObject(c, shared.noreplicaserr);
     } else {
         serverPanic("Unknown btype in replyToBlockedClientTimedOut().");
     }
@@ -597,23 +602,30 @@ static void handleClientsBlockedOnKey(readyList *rl) {
     }
 }
 
-/* block a client due to wait command */
-void blockForReplication(client *c, mstime_t timeout, long long offset, long numreplicas) {
-    c->bstate.timeout = timeout;
-    c->bstate.reploffset = offset;
-    c->bstate.numreplicas = numreplicas;
-    listAddNodeHead(server.clients_waiting_acks,c);
-    blockClient(c,BLOCKED_WAIT);
-}
-
-/* block a client due to waitaof command */
-void blockForAofFsync(client *c, mstime_t timeout, long long offset, int numlocal, long numreplicas) {
+/* block a client for replica acknowledgement */
+void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, long numreplicas, int btype, int numlocal) {
     c->bstate.timeout = timeout;
     c->bstate.reploffset = offset;
     c->bstate.numreplicas = numreplicas;
     c->bstate.numlocal = numlocal;
-    listAddNodeHead(server.clients_waiting_acks,c);
-    blockClient(c,BLOCKED_WAITAOF);
+    listAddNodeHead(server.clients_waiting_acks, c);
+    blockClient(c, btype);
+}
+
+/* block a client due to pre-replication */
+void blockForPreReplication(client *c, mstime_t timeout, long long offset, long numreplicas) {
+    blockClientForReplicaAck(c, timeout, offset, numreplicas, BLOCKED_WAIT_PREREPL, 0);
+    c->flags |= CLIENT_PENDING_COMMAND;
+}
+
+/* block a client due to wait command */
+void blockForReplication(client *c, mstime_t timeout, long long offset, long numreplicas) {
+    blockClientForReplicaAck(c, timeout, offset, numreplicas, BLOCKED_WAIT, 0);
+}
+
+/* block a client due to waitaof command */
+void blockForAofFsync(client *c, mstime_t timeout, long long offset, int numlocal, long numreplicas) {
+    blockClientForReplicaAck(c, timeout, offset, numreplicas, BLOCKED_WAITAOF, numlocal);
 }
 
 /* Postpone client from executing a command. For example the server might be busy

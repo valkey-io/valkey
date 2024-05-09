@@ -14,7 +14,7 @@ test "Cluster is up" {
 }
 
 set iterations 20
-set cluster [redis_cluster 127.0.0.1:[get_instance_attrib valkey 0 port]]
+set cluster [valkey_cluster 127.0.0.1:[get_instance_attrib valkey 0 port]]
 
 while {[incr iterations -1]} {
     set tokill [randomInt 10]

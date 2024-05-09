@@ -11,7 +11,7 @@ proc fix_cluster {addr} {
         exec ../../../src/valkey-cli {*}[valkeycli_tls_config "../../../tests"] --cluster fix $addr << yes
     } result]
     if {$code != 0} {
-        puts "redis-cli --cluster fix returns non-zero exit code, output below:\n$result"
+        puts "valkey-cli --cluster fix returns non-zero exit code, output below:\n$result"
     }
     # Note: valkey-cli --cluster fix may return a non-zero exit code if nodes don't agree,
     # but we can ignore that and rely on the check below.
@@ -19,7 +19,7 @@ proc fix_cluster {addr} {
     wait_for_condition 100 100 {
         [catch {exec ../../../src/valkey-cli {*}[valkeycli_tls_config "../../../tests"] --cluster check $addr} result] == 0
     } else {
-        puts "redis-cli --cluster check returns non-zero exit code, output below:\n$result"
+        puts "valkey-cli --cluster check returns non-zero exit code, output below:\n$result"
         fail "Cluster could not settle with configuration"
     }
 }

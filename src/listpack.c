@@ -426,6 +426,7 @@ static inline void lpEncodeString(unsigned char *buf, unsigned char *s, uint32_t
  * lpCurrentEncodedSizeBytes or ASSERT_INTEGRITY_LEN (possibly since 'p' is
  * a return value of another function that validated its return. */
 static inline uint32_t lpCurrentEncodedSizeUnsafe(unsigned char *p) {
+    /* clang-format off */
     if (LP_ENCODING_IS_7BIT_UINT(p[0])) return 1;
     if (LP_ENCODING_IS_6BIT_STR(p[0])) return 1+LP_ENCODING_6BIT_STR_LEN(p);
     if (LP_ENCODING_IS_13BIT_INT(p[0])) return 2;
@@ -437,6 +438,7 @@ static inline uint32_t lpCurrentEncodedSizeUnsafe(unsigned char *p) {
     if (LP_ENCODING_IS_32BIT_STR(p[0])) return 5+LP_ENCODING_32BIT_STR_LEN(p);
     if (p[0] == LP_EOF) return 1;
     return 0;
+    /* clang-format on */
 }
 
 /* Return bytes needed to encode the length of the listpack element pointed by 'p'.
@@ -444,6 +446,7 @@ static inline uint32_t lpCurrentEncodedSizeUnsafe(unsigned char *p) {
  * of the element (excluding the element data itself)
  * If the element encoding is wrong then 0 is returned. */
 static inline uint32_t lpCurrentEncodedSizeBytes(unsigned char *p) {
+    /* clang-format off */
     if (LP_ENCODING_IS_7BIT_UINT(p[0])) return 1;
     if (LP_ENCODING_IS_6BIT_STR(p[0])) return 1;
     if (LP_ENCODING_IS_13BIT_INT(p[0])) return 1;
@@ -455,6 +458,7 @@ static inline uint32_t lpCurrentEncodedSizeBytes(unsigned char *p) {
     if (LP_ENCODING_IS_32BIT_STR(p[0])) return 5;
     if (p[0] == LP_EOF) return 1;
     return 0;
+    /* clang-format on */
 }
 
 /* Skip the current entry returning the next. It is invalid to call this

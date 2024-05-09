@@ -239,7 +239,7 @@ typedef void (*ValkeyModuleDisconnectFunc) (ValkeyModuleCtx *ctx, struct ValkeyM
 struct ValkeyModuleCommand {
     struct ValkeyModule *module;
     ValkeyModuleCmdFunc func;
-    struct serverCommand *rediscmd;
+    struct serverCommand *serverCmd;
 };
 typedef struct ValkeyModuleCommand ValkeyModuleCommand;
 
@@ -653,7 +653,7 @@ client *moduleAllocTempClient(void) {
     return c;
 }
 
-static void freeRedisModuleAsyncRMCallPromise(ValkeyModuleAsyncRMCallPromise *promise) {
+static void freeValkeyModuleAsyncRMCallPromise(ValkeyModuleAsyncRMCallPromise *promise) {
     if (--promise->ref_count > 0) {
         return;
     }
@@ -680,7 +680,7 @@ void moduleReleaseTempClient(client *c) {
     if (c->bstate.async_rm_call_handle) {
         ValkeyModuleAsyncRMCallPromise *promise = c->bstate.async_rm_call_handle;
         promise->c = NULL; /* Remove the client from the promise so it will no longer be possible to abort it. */
-        freeRedisModuleAsyncRMCallPromise(promise);
+        freeValkeyModuleAsyncRMCallPromise(promise);
         c->bstate.async_rm_call_handle = NULL;
     }
     moduleTempClients[moduleTempClientCount++] = c;
@@ -1001,7 +1001,7 @@ int moduleGetCommandChannelsViaAPI(struct serverCommand *cmd, robj **argv, int a
  *
  * These functions are used to implement custom commands.
  *
- * For examples, see https://redis.io/topics/modules-intro.
+ * For examples, see https://valkey.io/topics/modules-intro.
  * -------------------------------------------------------------------------- */
 
 /* Return non-zero if a module command, that was declared with the
@@ -1143,6 +1143,7 @@ int64_t commandFlagsFromString(char *s) {
     sds *tokens = sdssplitlen(s,strlen(s)," ",1,&count);
     for (j = 0; j < count; j++) {
         char *t = tokens[j];
+        /* clang-format off */
         if (!strcasecmp(t,"write")) flags |= CMD_WRITE;
         else if (!strcasecmp(t,"readonly")) flags |= CMD_READONLY;
         else if (!strcasecmp(t,"admin")) flags |= CMD_ADMIN;
@@ -1164,6 +1165,7 @@ int64_t commandFlagsFromString(char *s) {
         else if (!strcasecmp(t,"no-mandatory-keys")) flags |= CMD_NO_MANDATORY_KEYS;
         else if (!strcasecmp(t,"allow-busy")) flags |= CMD_ALLOW_BUSY;
         else break;
+        /* clang-format on */
     }
     sdsfreesplitres(tokens,count);
     if (j != count) return -1; /* Some token not processed correctly. */
@@ -1190,7 +1192,7 @@ ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module, sds d
  *
  * The command function type is the following:
  *
- *      int MyCommand_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc);
+ *      int MyCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc);
  *
  * And is supposed to always return VALKEYMODULE_OK.
  *
@@ -1215,7 +1217,7 @@ ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module, sds d
  *                    from the same input arguments and key values.
  *                    Starting from Redis OSS 7.0 this flag has been deprecated.
  *                    Declaring a command as "random" can be done using
- *                    command tips, see https://redis.io/topics/command-tips.
+ *                    command tips, see https://valkey.io/topics/command-tips.
  * * **"allow-stale"**: The command is allowed to run on slaves that don't
  *                      serve stale data. Don't use if you don't know what
  *                      this means.
@@ -1286,11 +1288,11 @@ int VM_CreateCommand(ValkeyModuleCtx *ctx, const char *name, ValkeyModuleCmdFunc
 
     sds declared_name = sdsnew(name);
     ValkeyModuleCommand *cp = moduleCreateCommandProxy(ctx->module, declared_name, sdsdup(declared_name), cmdfunc, flags, firstkey, lastkey, keystep);
-    cp->rediscmd->arity = cmdfunc ? -1 : -2; /* Default value, can be changed later via dedicated API */
+    cp->serverCmd->arity = cmdfunc ? -1 : -2; /* Default value, can be changed later via dedicated API */
 
-    serverAssert(dictAdd(server.commands, sdsdup(declared_name), cp->rediscmd) == DICT_OK);
-    serverAssert(dictAdd(server.orig_commands, sdsdup(declared_name), cp->rediscmd) == DICT_OK);
-    cp->rediscmd->id = ACLGetCommandID(declared_name); /* ID used for ACL. */
+    serverAssert(dictAdd(server.commands, sdsdup(declared_name), cp->serverCmd) == DICT_OK);
+    serverAssert(dictAdd(server.orig_commands, sdsdup(declared_name), cp->serverCmd) == DICT_OK);
+    cp->serverCmd->id = ACLGetCommandID(declared_name); /* ID used for ACL. */
     return VALKEYMODULE_OK;
 }
 
@@ -1302,7 +1304,7 @@ int VM_CreateCommand(ValkeyModuleCtx *ctx, const char *name, ValkeyModuleCmdFunc
  * Function will take the ownership of both 'declared_name' and 'fullname' SDS.
  */
 ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module, sds declared_name, sds fullname, ValkeyModuleCmdFunc cmdfunc, int64_t flags, int firstkey, int lastkey, int keystep) {
-    struct serverCommand *rediscmd;
+    struct serverCommand *serverCmd;
     ValkeyModuleCommand *cp;
 
     /* Create a command "proxy", which is a structure that is referenced
@@ -1312,34 +1314,34 @@ ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module, sds d
     cp = zcalloc(sizeof(*cp));
     cp->module = module;
     cp->func = cmdfunc;
-    cp->rediscmd = zcalloc(sizeof(*rediscmd));
-    cp->rediscmd->declared_name = declared_name; /* SDS for module commands */
-    cp->rediscmd->fullname = fullname;
-    cp->rediscmd->group = COMMAND_GROUP_MODULE;
-    cp->rediscmd->proc = ValkeyModuleCommandDispatcher;
-    cp->rediscmd->flags = flags | CMD_MODULE;
-    cp->rediscmd->module_cmd = cp;
+    cp->serverCmd = zcalloc(sizeof(*serverCmd));
+    cp->serverCmd->declared_name = declared_name; /* SDS for module commands */
+    cp->serverCmd->fullname = fullname;
+    cp->serverCmd->group = COMMAND_GROUP_MODULE;
+    cp->serverCmd->proc = ValkeyModuleCommandDispatcher;
+    cp->serverCmd->flags = flags | CMD_MODULE;
+    cp->serverCmd->module_cmd = cp;
     if (firstkey != 0) {
-        cp->rediscmd->key_specs_num = 1;
-        cp->rediscmd->key_specs = zcalloc(sizeof(keySpec));
-        cp->rediscmd->key_specs[0].flags = CMD_KEY_FULL_ACCESS;
+        cp->serverCmd->key_specs_num = 1;
+        cp->serverCmd->key_specs = zcalloc(sizeof(keySpec));
+        cp->serverCmd->key_specs[0].flags = CMD_KEY_FULL_ACCESS;
         if (flags & CMD_MODULE_GETKEYS)
-            cp->rediscmd->key_specs[0].flags |= CMD_KEY_VARIABLE_FLAGS;
-        cp->rediscmd->key_specs[0].begin_search_type = KSPEC_BS_INDEX;
-        cp->rediscmd->key_specs[0].bs.index.pos = firstkey;
-        cp->rediscmd->key_specs[0].find_keys_type = KSPEC_FK_RANGE;
-        cp->rediscmd->key_specs[0].fk.range.lastkey = lastkey < 0 ? lastkey : (lastkey-firstkey);
-        cp->rediscmd->key_specs[0].fk.range.keystep = keystep;
-        cp->rediscmd->key_specs[0].fk.range.limit = 0;
+            cp->serverCmd->key_specs[0].flags |= CMD_KEY_VARIABLE_FLAGS;
+        cp->serverCmd->key_specs[0].begin_search_type = KSPEC_BS_INDEX;
+        cp->serverCmd->key_specs[0].bs.index.pos = firstkey;
+        cp->serverCmd->key_specs[0].find_keys_type = KSPEC_FK_RANGE;
+        cp->serverCmd->key_specs[0].fk.range.lastkey = lastkey < 0 ? lastkey : (lastkey-firstkey);
+        cp->serverCmd->key_specs[0].fk.range.keystep = keystep;
+        cp->serverCmd->key_specs[0].fk.range.limit = 0;
     } else {
-        cp->rediscmd->key_specs_num = 0;
-        cp->rediscmd->key_specs = NULL;
+        cp->serverCmd->key_specs_num = 0;
+        cp->serverCmd->key_specs = NULL;
     }
-    populateCommandLegacyRangeSpec(cp->rediscmd);
-    cp->rediscmd->microseconds = 0;
-    cp->rediscmd->calls = 0;
-    cp->rediscmd->rejected_calls = 0;
-    cp->rediscmd->failed_calls = 0;
+    populateCommandLegacyRangeSpec(cp->serverCmd);
+    cp->serverCmd->microseconds = 0;
+    cp->serverCmd->calls = 0;
+    cp->serverCmd->rejected_calls = 0;
+    cp->serverCmd->failed_calls = 0;
     return cp;
 }
 
@@ -1400,7 +1402,7 @@ int VM_CreateSubcommand(ValkeyModuleCommand *parent, const char *name, ValkeyMod
     if ((flags & CMD_MODULE_NO_CLUSTER) && server.cluster_enabled)
         return VALKEYMODULE_ERR;
 
-    struct serverCommand *parent_cmd = parent->rediscmd;
+    struct serverCommand *parent_cmd = parent->serverCmd;
 
     if (parent_cmd->parent)
         return VALKEYMODULE_ERR; /* We don't allow more than one level of subcommands */
@@ -1422,9 +1424,9 @@ int VM_CreateSubcommand(ValkeyModuleCommand *parent, const char *name, ValkeyMod
 
     sds fullname = catSubCommandFullname(parent_cmd->fullname, name);
     ValkeyModuleCommand *cp = moduleCreateCommandProxy(parent->module, declared_name, fullname, cmdfunc, flags, firstkey, lastkey, keystep);
-    cp->rediscmd->arity = -2;
+    cp->serverCmd->arity = -2;
 
-    commandAddSubcommand(parent_cmd, cp->rediscmd, name);
+    commandAddSubcommand(parent_cmd, cp->serverCmd, name);
     return VALKEYMODULE_OK;
 }
 
@@ -1554,7 +1556,7 @@ int VM_SetCommandACLCategories(ValkeyModuleCommand *command, const char *aclflag
     if (!command || !command->module || !command->module->onload) return VALKEYMODULE_ERR;
     int64_t categories_flags = aclflags ? categoryFlagsFromString((char*)aclflags) : 0;
     if (categories_flags == -1) return VALKEYMODULE_ERR;
-    struct serverCommand *rcmd = command->rediscmd;
+    struct serverCommand *rcmd = command->serverCmd;
     rcmd->acl_categories = categories_flags; /* ACL categories flags for module command */
     command->module->num_commands_with_acl_categories++;
     return VALKEYMODULE_OK;
@@ -1605,7 +1607,7 @@ int VM_SetCommandACLCategories(ValkeyModuleCommand *command, const char *aclflag
  *     both strings set to NULL.
  *
  * - `tips`: A string of space-separated tips regarding this command, meant for
- *   clients and proxies. See https://redis.io/topics/command-tips.
+ *   clients and proxies. See https://valkey.io/topics/command-tips.
  *
  * - `arity`: Number of arguments, including the command name itself. A positive
  *   number specifies an exact number of arguments and a negative number
@@ -1867,7 +1869,7 @@ int VM_SetCommandInfo(ValkeyModuleCommand *command, const ValkeyModuleCommandInf
         return VALKEYMODULE_ERR;
     }
 
-    struct serverCommand *cmd = command->rediscmd;
+    struct serverCommand *cmd = command->serverCmd;
 
     /* Check if any info has already been set. Overwriting info involves freeing
      * the old info, which is not implemented. */
@@ -2516,7 +2518,7 @@ int VM_SignalModifiedKey(ValkeyModuleCtx *ctx, ValkeyModuleString *keyname) {
  * that wants to use automatic memory.
  *
  * When enabled, automatic memory management tracks and automatically frees
- * keys, call replies and RedisModuleString objects once the command returns. In most
+ * keys, call replies and ValkeyModuleString objects once the command returns. In most
  * cases this eliminates the need of calling the following functions:
  *
  * 1. ValkeyModule_CloseKey()
@@ -3205,7 +3207,7 @@ int VM_ReplyWithArray(ValkeyModuleCtx *ctx, long len) {
 }
 
 /* Reply with a RESP3 Map type of 'len' pairs.
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3.
+ * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
  * After starting a map reply, the module must make `len*2` calls to other
  * `ReplyWith*` style functions in order to emit the elements of the map.
@@ -3222,7 +3224,7 @@ int VM_ReplyWithMap(ValkeyModuleCtx *ctx, long len) {
 }
 
 /* Reply with a RESP3 Set type of 'len' elements.
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3.
+ * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
  * After starting a set reply, the module must make `len` calls to other
  * `ReplyWith*` style functions in order to emit the elements of the set.
@@ -3240,7 +3242,7 @@ int VM_ReplyWithSet(ValkeyModuleCtx *ctx, long len) {
 
 
 /* Add attributes (metadata) to the reply. Should be done before adding the
- * actual reply. see https://github.com/antirez/RESP3/blob/master/spec.md#attribute-type
+ * actual reply. see https://valkey.io/topics/protocol#attribute-type
  *
  * After starting an attribute's reply, the module must make `len*2` calls to other
  * `ReplyWith*` style functions in order to emit the elements of the attribute map.
@@ -3348,19 +3350,19 @@ void VM_ReplySetArrayLength(ValkeyModuleCtx *ctx, long len) {
 /* Very similar to ValkeyModule_ReplySetArrayLength except `len` should
  * exactly half of the number of `ReplyWith*` functions called in the
  * context of the map.
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3. */
+ * Visit https://valkey.io/topics/protocol for more info about RESP3. */
 void VM_ReplySetMapLength(ValkeyModuleCtx *ctx, long len) {
     moduleReplySetCollectionLength(ctx, len, COLLECTION_REPLY_MAP);
 }
 
 /* Very similar to ValkeyModule_ReplySetArrayLength
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3. */
+ * Visit https://valkey.io/topics/protocol for more info about RESP3. */
 void VM_ReplySetSetLength(ValkeyModuleCtx *ctx, long len) {
     moduleReplySetCollectionLength(ctx, len, COLLECTION_REPLY_SET);
 }
 
 /* Very similar to ValkeyModule_ReplySetMapLength
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3.
+ * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
  * Must not be called if VM_ReplyWithAttribute returned an error. */
 void VM_ReplySetAttributeLength(ValkeyModuleCtx *ctx, long len) {
@@ -3439,7 +3441,7 @@ int VM_ReplyWithNull(ValkeyModuleCtx *ctx) {
 }
 
 /* Reply with a RESP3 Boolean type.
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3.
+ * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
  * In RESP3, this is boolean type
  * In RESP2, it's a string response of "1" and "0" for true and false respectively.
@@ -3489,7 +3491,7 @@ int VM_ReplyWithCallReply(ValkeyModuleCtx *ctx, ValkeyModuleCallReply *reply) {
 }
 
 /* Reply with a RESP3 Double type.
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3.
+ * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
  * Send a string reply obtained converting the double 'd' into a bulk string.
  * This function is basically equivalent to converting a double into
@@ -3508,7 +3510,7 @@ int VM_ReplyWithDouble(ValkeyModuleCtx *ctx, double d) {
 }
 
 /* Reply with a RESP3 BigNumber type.
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3.
+ * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
  * In RESP3, this is a string of length `len` that is tagged as a BigNumber, 
  * however, it's up to the caller to ensure that it's a valid BigNumber.
@@ -5426,7 +5428,7 @@ int VM_HashGet(ValkeyModuleKey *key, int flags, ...) {
 /* --------------------------------------------------------------------------
  * ## Key API for Stream type
  *
- * For an introduction to streams, see https://redis.io/topics/streams-intro.
+ * For an introduction to streams, see https://valkey.io/topics/streams-intro.
  *
  * The type ValkeyModuleStreamID, which is used in stream functions, is a struct
  * with two 64-bit fields and is defined as
@@ -5916,7 +5918,7 @@ void VM_FreeCallReply(ValkeyModuleCallReply *reply) {
     if(callReplyType(reply) == VALKEYMODULE_REPLY_PROMISE) {
         ValkeyModuleAsyncRMCallPromise *promise = callReplyGetPrivateData(reply);
         ctx = promise->ctx;
-        freeRedisModuleAsyncRMCallPromise(promise);
+        freeValkeyModuleAsyncRMCallPromise(promise);
     } else {
         ctx = callReplyGetPrivateData(reply);
     }
@@ -6299,7 +6301,7 @@ fmterr:
  *        // Do something with myval.
  *      }
  *
- * This API is documented here: https://redis.io/topics/modules-intro
+ * This API is documented here: https://valkey.io/topics/modules-intro
  */
 ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...) {
     client *c = NULL;
@@ -6808,7 +6810,7 @@ robj *moduleTypeDupOrReply(client *c, robj *fromkey, robj *tokey, int todb, robj
 
 /* Register a new data type exported by the module. The parameters are the
  * following. Please for in depth documentation check the modules API
- * documentation, especially https://redis.io/topics/modules-native-types.
+ * documentation, especially https://valkey.io/topics/modules-native-types.
  *
  * * **name**: A 9 characters data type name that MUST be unique in the
  *   Modules ecosystem. Be creative... and there will be no collisions. Use
@@ -7110,7 +7112,7 @@ int VM_IsIOError(ValkeyModuleIO *io) {
     return io->error;
 }
 
-static int flushRedisModuleIOBuffer(ValkeyModuleIO *io) {
+static int flushValkeyModuleIOBuffer(ValkeyModuleIO *io) {
     if (!io->pre_flush_buffer) return 0;
 
     /* We have data that must be flushed before saving the current data.
@@ -7128,7 +7130,7 @@ static int flushRedisModuleIOBuffer(ValkeyModuleIO *io) {
  * data types. */
 void VM_SaveUnsigned(ValkeyModuleIO *io, uint64_t value) {
     if (io->error) return;
-    if (flushRedisModuleIOBuffer(io) == -1) goto saveerr;
+    if (flushValkeyModuleIOBuffer(io) == -1) goto saveerr;
     /* Save opcode. */
     int retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_UINT);
     if (retval == -1) goto saveerr;
@@ -7182,7 +7184,7 @@ int64_t VM_LoadSigned(ValkeyModuleIO *io) {
  * the RDB file. */
 void VM_SaveString(ValkeyModuleIO *io, ValkeyModuleString *s) {
     if (io->error) return;
-    if (flushRedisModuleIOBuffer(io) == -1) goto saveerr;
+    if (flushValkeyModuleIOBuffer(io) == -1) goto saveerr;
     /* Save opcode. */
     ssize_t retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_STRING);
     if (retval == -1) goto saveerr;
@@ -7201,7 +7203,7 @@ saveerr:
  * as input. */
 void VM_SaveStringBuffer(ValkeyModuleIO *io, const char *str, size_t len) {
     if (io->error) return;
-    if (flushRedisModuleIOBuffer(io) == -1) goto saveerr;
+    if (flushValkeyModuleIOBuffer(io) == -1) goto saveerr;
     /* Save opcode. */
     ssize_t retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_STRING);
     if (retval == -1) goto saveerr;
@@ -7260,7 +7262,7 @@ char *VM_LoadStringBuffer(ValkeyModuleIO *io, size_t *lenptr) {
  * It is possible to load back the value with ValkeyModule_LoadDouble(). */
 void VM_SaveDouble(ValkeyModuleIO *io, double value) {
     if (io->error) return;
-    if (flushRedisModuleIOBuffer(io) == -1) goto saveerr;
+    if (flushValkeyModuleIOBuffer(io) == -1) goto saveerr;
     /* Save opcode. */
     int retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_DOUBLE);
     if (retval == -1) goto saveerr;
@@ -7296,7 +7298,7 @@ loaderr:
  * It is possible to load back the value with ValkeyModule_LoadFloat(). */
 void VM_SaveFloat(ValkeyModuleIO *io, float value) {
     if (io->error) return;
-    if (flushRedisModuleIOBuffer(io) == -1) goto saveerr;
+    if (flushValkeyModuleIOBuffer(io) == -1) goto saveerr;
     /* Save opcode. */
     int retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_FLOAT);
     if (retval == -1) goto saveerr;
@@ -7697,7 +7699,7 @@ void VM_LatencyAddSample(const char *event, mstime_t latency) {
  * ## Blocking clients from modules
  *
  * For a guide about blocking commands in modules, see
- * https://redis.io/topics/modules-blocking-ops.
+ * https://valkey.io/topics/modules-blocking-ops.
  * -------------------------------------------------------------------------- */
 
 /* Returns 1 if the client already in the moduleUnblocked list, 0 otherwise. */
@@ -8717,7 +8719,7 @@ void moduleReleaseGIL(void) {
  * runs is dangerous and discouraged. In order to react to key space events with
  * write actions, please refer to `VM_AddPostNotificationJob`.
  *
- * See https://redis.io/topics/notifications for more information.
+ * See https://valkey.io/topics/notifications for more information.
  */
 int VM_SubscribeToKeyspaceEvents(ValkeyModuleCtx *ctx, int types, ValkeyModuleNotificationFunc callback) {
     ValkeyModuleKeyspaceSubscriber *sub = zmalloc(sizeof(*sub));
@@ -9823,7 +9825,7 @@ int moduleGetACLLogEntryReason(ValkeyModuleACLLogEntryReason reason) {
 /* Adds a new entry in the ACL log.
  * Returns VALKEYMODULE_OK on success and VALKEYMODULE_ERR on error.
  *
- * For more information about ACL log, please refer to https://redis.io/commands/acl-log */
+ * For more information about ACL log, please refer to https://valkey.io/commands/acl-log */
 int VM_ACLAddLogEntry(ValkeyModuleCtx *ctx, ValkeyModuleUser *user, ValkeyModuleString *object, ValkeyModuleACLLogEntryReason reason) {
     int acl_reason = moduleGetACLLogEntryReason(reason);
     if (!acl_reason) return VALKEYMODULE_ERR;
@@ -9834,7 +9836,7 @@ int VM_ACLAddLogEntry(ValkeyModuleCtx *ctx, ValkeyModuleUser *user, ValkeyModule
 /* Adds a new entry in the ACL log with the `username` ValkeyModuleString provided.
  * Returns VALKEYMODULE_OK on success and VALKEYMODULE_ERR on error.
  *
- * For more information about ACL log, please refer to https://redis.io/commands/acl-log */
+ * For more information about ACL log, please refer to https://valkey.io/commands/acl-log */
 int VM_ACLAddLogEntryByUserName(ValkeyModuleCtx *ctx, ValkeyModuleString *username, ValkeyModuleString *object, ValkeyModuleACLLogEntryReason reason) {
     int acl_reason = moduleGetACLLogEntryReason(reason);
     if (!acl_reason) return VALKEYMODULE_ERR;
@@ -10447,7 +10449,7 @@ ValkeyModuleServerInfoData *VM_GetServerInfo(ValkeyModuleCtx *ctx, const char *s
     robj *argv[1];
     argv[0] = section ? createStringObject(section, strlen(section)) : NULL;
     dict *section_dict = genInfoSectionDict(argv, section ? 1 : 0, NULL, &all, &everything);
-    sds info = genRedisInfoString(section_dict, all, everything);
+    sds info = genValkeyInfoString(section_dict, all, everything);
     int totlines, i;
     sds *lines = sdssplitlen(info, sdslen(info), "\r\n", 2, &totlines);
     for(i=0; i<totlines; i++) {

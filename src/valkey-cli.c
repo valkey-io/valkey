@@ -2999,6 +2999,7 @@ static void parseEnv(void) {
 static void usage(int err) {
     sds version = cliVersion();
     FILE *target = err ? stderr: stdout;
+    /* clang-format off */
     const char *tls_usage =
 #ifdef USE_OPENSSL
 "  --tls              Establish a secure TLS connection.\n"
@@ -3146,6 +3147,7 @@ version,tls_usage);
 "Type \"help\" in interactive mode for information on available commands\n"
 "and settings.\n"
 "\n");
+    /* clang-format on */
     sdsfree(version);
     exit(err);
 }
@@ -5388,6 +5390,7 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts,
             *p = '\0';
             char *token = line;
             line = p + 1;
+            /* clang-format off */
             switch(i++){
             case 0: name = token; break;
             case 1: addr = token; break;
@@ -5398,6 +5401,7 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts,
             case 6: config_epoch = token; break;
             case 7: link_status = token; break;
             }
+            /* clang-format on */
             if (i == 8) break; // Slots
         }
         if (!flags) {

@@ -98,10 +98,6 @@ int snprintf_async_signal_safe(char *to, size_t n, const char *fmt, ...)
 int snprintf_async_signal_safe(char *to, size_t n, const char *fmt, ...);
 #endif
 size_t valkey_strlcpy(char *dst, const char *src, size_t dsize);
-size_t redis_strlcat(char *dst, const char *src, size_t dsize);
-
-#ifdef SERVER_TEST
-int utilTest(int argc, char **argv, int flags);
-#endif
+size_t valkey_strlcat(char *dst, const char *src, size_t dsize);
 
 #endif

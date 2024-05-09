@@ -651,13 +651,15 @@ void updateDictResizePolicy(void) {
 }
 
 const char *strChildType(int type) {
+    /* clang-format off */
     switch(type) {
-        case CHILD_TYPE_RDB: return "RDB";
-        case CHILD_TYPE_AOF: return "AOF";
-        case CHILD_TYPE_LDB: return "LDB";
-        case CHILD_TYPE_MODULE: return "MODULE";
-        default: return "Unknown";
+    case CHILD_TYPE_RDB: return "RDB";
+    case CHILD_TYPE_AOF: return "AOF";
+    case CHILD_TYPE_LDB: return "LDB";
+    case CHILD_TYPE_MODULE: return "MODULE";
+    default: return "Unknown";
     }
+    /* clang-format on */
 }
 
 /* Return true if there are active children processes doing RDB saving,
@@ -1612,7 +1614,7 @@ static void sendGetackToReplicas(void) {
     argv[0] = shared.replconf;
     argv[1] = shared.getack;
     argv[2] = shared.special_asterick; /* Not used argument. */
-    replicationFeedSlaves(server.slaves, -1, argv, 3);
+    replicationFeedSlaves(-1, argv, 3);
 }
 
 extern int ProcessingEventsWhileBlocked;
@@ -1999,6 +2001,10 @@ void createSharedObjects(void) {
     shared.special_asterick = createStringObject("*",1);
     shared.special_equals = createStringObject("=",1);
     shared.redacted = makeObjectShared(createStringObject("(redacted)",10));
+    shared.cluster = createStringObject("CLUSTER", 7);
+    shared.setslot = createStringObject("SETSLOT", 7);
+    shared.importing = createStringObject("IMPORTING", 9);
+    shared.migrating = createStringObject("MIGRATING", 9);
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] =
@@ -3315,7 +3321,7 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
     if (server.aof_state != AOF_OFF && target & PROPAGATE_AOF)
         feedAppendOnlyFile(dbid,argv,argc);
     if (target & PROPAGATE_REPL)
-        replicationFeedSlaves(server.slaves,dbid,argv,argc);
+        replicationFeedSlaves(dbid,argv,argc);
 }
 
 /* Used inside commands to schedule the propagation of additional commands
@@ -3735,8 +3741,14 @@ void call(client *c, int flags) {
         }
     }
 
-    if (!(c->flags & CLIENT_BLOCKED))
+    if (!(c->flags & CLIENT_BLOCKED)) {
+        /* Modules may call commands in cron, in which case server.current_client
+         * is not set. */
+        if (server.current_client) {
+            server.current_client->commands_processed++;
+        }
         server.stat_numcommands++;
+    }
 
     /* Record peak memory after each command and before the eviction that runs
      * before the next command. */
@@ -5320,6 +5332,7 @@ void commandGetKeysCommand(client *c) {
 
 /* COMMAND HELP */
 void commandHelpCommand(client *c) {
+    /* clang-format off */
     const char *help[] = {
 "(no subcommand)",
 "    Return details about all commands.",
@@ -5341,7 +5354,7 @@ void commandHelpCommand(client *c) {
 "    Return the keys and the access flags from a full command.",
 NULL
     };
-
+    /* clang-format on */
     addReplyHelp(c, help);
 }
 
@@ -5423,7 +5436,7 @@ const char *getSafeInfoString(const char *s, size_t len, char **tmp) {
                        sizeof(unsafe_info_chars)-1);
 }
 
-sds genRedisInfoStringCommandStats(sds info, dict *commands) {
+sds genValkeyInfoStringCommandStats(sds info, dict *commands) {
     struct serverCommand *c;
     dictEntry *de;
     dictIterator *di;
@@ -5441,7 +5454,7 @@ sds genRedisInfoStringCommandStats(sds info, dict *commands) {
             if (tmpsafe != NULL) zfree(tmpsafe);
         }
         if (c->subcommands_dict) {
-            info = genRedisInfoStringCommandStats(info, c->subcommands_dict);
+            info = genValkeyInfoStringCommandStats(info, c->subcommands_dict);
         }
     }
     dictReleaseIterator(di);
@@ -5450,7 +5463,7 @@ sds genRedisInfoStringCommandStats(sds info, dict *commands) {
 }
 
 /* Writes the ACL metrics to the info */
-sds genRedisInfoStringACLStats(sds info) {
+sds genValkeyInfoStringACLStats(sds info) {
     info = sdscatprintf(info,
          "acl_access_denied_auth:%lld\r\n"
          "acl_access_denied_cmd:%lld\r\n"
@@ -5463,7 +5476,7 @@ sds genRedisInfoStringACLStats(sds info) {
     return info;
 }
 
-sds genRedisInfoStringLatencyStats(sds info, dict *commands) {
+sds genValkeyInfoStringLatencyStats(sds info, dict *commands) {
     struct serverCommand *c;
     dictEntry *de;
     dictIterator *di;
@@ -5478,7 +5491,7 @@ sds genRedisInfoStringLatencyStats(sds info, dict *commands) {
             if (tmpsafe != NULL) zfree(tmpsafe);
         }
         if (c->subcommands_dict) {
-            info = genRedisInfoStringLatencyStats(info, c->subcommands_dict);
+            info = genValkeyInfoStringLatencyStats(info, c->subcommands_dict);
         }
     }
     dictReleaseIterator(di);
@@ -5504,7 +5517,7 @@ void releaseInfoSectionDict(dict *sec) {
         dictRelease(sec);
 }
 
-/* Create a dictionary with unique section names to be used by genRedisInfoString.
+/* Create a dictionary with unique section names to be used by genValkeyInfoString.
  * 'argv' and 'argc' are list of arguments for INFO.
  * 'defaults' is an optional null terminated list of default sections.
  * 'out_all' and 'out_everything' are optional.
@@ -5568,7 +5581,7 @@ void totalNumberOfStatefulKeys(unsigned long *blocking_keys, unsigned long *bloc
 /* Create the string returned by the INFO command. This is decoupled
  * by the INFO command itself as we need to report the same information
  * on memory corruption problems. */
-sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
+sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     sds info = sdsempty();
     time_t uptime = server.unixtime-server.stat_starttime;
     int j;
@@ -5602,6 +5615,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             call_uname = 0;
         }
 
+        /* clang-format off */
         info = sdscatfmt(info, "# Server\r\n" FMTARGS(
             "redis_version:%s\r\n", REDIS_VERSION,
             "server_name:%s\r\n", SERVER_NAME,
@@ -5634,6 +5648,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "io_threads_active:%i\r\n", server.io_threads_active_num > 1,
             "io_threads_maximum_num:%i\r\n", server.io_threads_num,
             "io_threads_active_num:%i\r\n", server.io_threads_active_num));
+        /* clang-format on */
 
         /* Conditional properties */
         if (isShutdownInitiated()) {
@@ -5653,6 +5668,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
         getExpansiveClientsInfo(&maxin,&maxout);
         totalNumberOfStatefulKeys(&blocking_keys, &blocking_keys_on_nokey, &watched_keys);
         if (sections++) info = sdscat(info,"\r\n");
+        /* clang-format off */
         info = sdscatprintf(info, "# Clients\r\n" FMTARGS(
             "connected_clients:%lu\r\n", listLength(server.clients) - listLength(server.slaves),
             "cluster_connections:%lu\r\n", getClusterConnectionsCount(),
@@ -5667,6 +5683,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "total_watched_keys:%lu\r\n", watched_keys,
             "total_blocking_keys:%lu\r\n", blocking_keys,
             "total_blocking_keys_on_nokey:%lu\r\n", blocking_keys_on_nokey));
+        /* clang-format on */
     }
 
     /* Memory */
@@ -5703,6 +5720,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
         bytesToHuman(maxmemory_hmem,sizeof(maxmemory_hmem),server.maxmemory);
 
         if (sections++) info = sdscat(info,"\r\n");
+        /* clang-format off */
         info = sdscatprintf(info, "# Memory\r\n" FMTARGS(
             "used_memory:%zu\r\n", zmalloc_used,
             "used_memory_human:%s\r\n", hmem,
@@ -5761,6 +5779,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "active_defrag_running:%d\r\n", server.active_defrag_running,
             "lazyfree_pending_objects:%zu\r\n", lazyfreeGetPendingObjectsCount(),
             "lazyfreed_objects:%zu\r\n", lazyfreeGetFreedObjectsCount()));
+        /* clang-format on */
         freeMemoryOverheadData(mh);
     }
 
@@ -5776,6 +5795,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
         int aof_bio_fsync_status;
         atomicGet(server.aof_bio_fsync_status,aof_bio_fsync_status);
 
+        /* clang-format off */
         info = sdscatprintf(info, "# Persistence\r\n" FMTARGS(
             "loading:%d\r\n", (int)(server.loading && !server.async_loading),
             "async_loading:%d\r\n", (int)server.async_loading,
@@ -5812,8 +5832,10 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "aof_last_cow_size:%zu\r\n", server.stat_aof_cow_bytes,
             "module_fork_in_progress:%d\r\n", server.child_type == CHILD_TYPE_MODULE,
             "module_fork_last_cow_size:%zu\r\n", server.stat_module_cow_bytes));
+        /* clang-format on */
 
         if (server.aof_enabled) {
+            /* clang-format off */
             info = sdscatprintf(info, FMTARGS(
                 "aof_current_size:%lld\r\n", (long long) server.aof_current_size,
                 "aof_base_size:%lld\r\n", (long long) server.aof_rewrite_base_size,
@@ -5821,6 +5843,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
                 "aof_buffer_length:%zu\r\n", sdslen(server.aof_buf),
                 "aof_pending_bio_fsync:%lu\r\n", bioPendingJobsOfType(BIO_AOF_FSYNC),
                 "aof_delayed_fsync:%lu\r\n", server.aof_delayed_fsync));
+            /* clang-format on */
         }
 
         if (server.loading) {
@@ -5847,6 +5870,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
                 eta = (elapsed*remaining_bytes)/(server.loading_loaded_bytes+1);
             }
 
+            /* clang-format off */
             info = sdscatprintf(info, FMTARGS(
                 "loading_start_time:%jd\r\n", (intmax_t) server.loading_start_time,
                 "loading_total_bytes:%llu\r\n", (unsigned long long) server.loading_total_bytes,
@@ -5854,6 +5878,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
                 "loading_loaded_bytes:%llu\r\n", (unsigned long long) server.loading_loaded_bytes,
                 "loading_loaded_perc:%.2f\r\n", perc,
                 "loading_eta_seconds:%jd\r\n", (intmax_t)eta));
+            /* clang-format on */
         }
     }
 
@@ -5876,6 +5901,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
         atomicGet(server.stat_client_qbuf_limit_disconnections, stat_client_qbuf_limit_disconnections);
 
         if (sections++) info = sdscat(info,"\r\n");
+        /* clang-format off */
         info = sdscatprintf(info, "# Stats\r\n" FMTARGS(
             "total_connections_received:%lld\r\n", server.stat_numconnections,
             "total_commands_processed:%lld\r\n", server.stat_numcommands,
@@ -5935,7 +5961,8 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "eventloop_duration_cmd_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CMD].sum,
             "instantaneous_eventloop_cycles_per_sec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_CYCLE),
             "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION)));
-        info = genRedisInfoStringACLStats(info);
+        info = genValkeyInfoStringACLStats(info);
+        /* clang-format on */
     }
 
     /* Replication */
@@ -5957,6 +5984,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
                 slave_read_repl_offset = server.cached_master->read_reploff;
             }
 
+            /* clang-format off */
             info = sdscatprintf(info, FMTARGS(
                 "master_host:%s\r\n", server.masterhost,
                 "master_port:%d\r\n", server.masterport,
@@ -5965,18 +5993,21 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
                 "master_sync_in_progress:%d\r\n", server.repl_state == REPL_STATE_TRANSFER,
                 "slave_read_repl_offset:%lld\r\n", slave_read_repl_offset,
                 "slave_repl_offset:%lld\r\n", slave_repl_offset));
+            /* clang-format on */
 
             if (server.repl_state == REPL_STATE_TRANSFER) {
                 double perc = 0;
                 if (server.repl_transfer_size) {
                     perc = ((double)server.repl_transfer_read / server.repl_transfer_size) * 100;
                 }
+                /* clang-format off */
                 info = sdscatprintf(info, FMTARGS(
                     "master_sync_total_bytes:%lld\r\n", (long long) server.repl_transfer_size,
                     "master_sync_read_bytes:%lld\r\n", (long long) server.repl_transfer_read,
                     "master_sync_left_bytes:%lld\r\n", (long long) (server.repl_transfer_size - server.repl_transfer_read),
                     "master_sync_perc:%.2f\r\n", perc,
                     "master_sync_last_io_seconds_ago:%d\r\n", (int)(server.unixtime-server.repl_transfer_lastio)));
+                /* clang-format on */
             }
 
             if (server.repl_state != REPL_STATE_CONNECTED) {
@@ -5985,10 +6016,12 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
                     server.repl_down_since ?
                     (intmax_t)(server.unixtime-server.repl_down_since) : -1);
             }
+            /* clang-format off */
             info = sdscatprintf(info, FMTARGS(
                 "slave_priority:%d\r\n", server.slave_priority,
                 "slave_read_only:%d\r\n", server.repl_slave_ro,
                 "replica_announced:%d\r\n", server.replica_announced));
+            /* clang-format on */
         }
 
         info = sdscatprintf(info,
@@ -6034,6 +6067,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
                 slaveid++;
             }
         }
+        /* clang-format off */
         info = sdscatprintf(info, FMTARGS(
             "master_failover_state:%s\r\n", getFailoverStateString(),
             "master_replid:%s\r\n", server.replid,
@@ -6044,6 +6078,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "repl_backlog_size:%lld\r\n", server.repl_backlog_size,
             "repl_backlog_first_byte_offset:%lld\r\n", server.repl_backlog ? server.repl_backlog->offset : 0,
             "repl_backlog_histlen:%lld\r\n", server.repl_backlog ? server.repl_backlog->histlen : 0));
+        /* clang-format on */
     }
 
     /* CPU */
@@ -6085,7 +6120,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
     if (all_sections || (dictFind(section_dict,"commandstats") != NULL)) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, "# Commandstats\r\n");
-        info = genRedisInfoStringCommandStats(info, server.commands);
+        info = genValkeyInfoStringCommandStats(info, server.commands);
     }
 
     /* Error statistics */
@@ -6112,7 +6147,7 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info, "# Latencystats\r\n");
         if (server.latency_tracking_enabled) {
-            info = genRedisInfoStringLatencyStats(info, server.commands);
+            info = genValkeyInfoStringLatencyStats(info, server.commands);
         }
     }
 
@@ -6159,11 +6194,13 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
 
     if (dictFind(section_dict, "debug") != NULL) {
         if (sections++) info = sdscat(info,"\r\n");
+        /* clang-format off */
         info = sdscatprintf(info, "# Debug\r\n" FMTARGS(
             "eventloop_duration_aof_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_AOF].sum,
             "eventloop_duration_cron_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CRON].sum,
             "eventloop_duration_max:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].max,
             "eventloop_cmd_per_cycle_max:%lld\r\n", server.el_cmd_cnt_max));
+        /* clang-format on */
     }
 
     return info;
@@ -6178,7 +6215,7 @@ void infoCommand(client *c) {
     int all_sections = 0;
     int everything = 0;
     dict *sections_dict = genInfoSectionDict(c->argv+1, c->argc-1, NULL, &all_sections, &everything);
-    sds info = genRedisInfoString(sections_dict, all_sections, everything);
+    sds info = genValkeyInfoString(sections_dict, all_sections, everything);
     addReplyVerbatim(c,info,sdslen(info),"txt");
     sdsfree(info);
     releaseInfoSectionDict(sections_dict);
@@ -6897,17 +6934,13 @@ struct serverTest {
 } serverTests[] = {
     {"ziplist", ziplistTest},
     {"quicklist", quicklistTest},
-    {"intset", intsetTest},
     {"zipmap", zipmapTest},
     {"sha1test", sha1Test},
-    {"util", utilTest},
     {"endianconv", endianconvTest},
-    {"crc64", crc64Test},
     {"zmalloc", zmalloc_test},
     {"sds", sdsTest},
     {"dict", dictTest},
     {"listpack", listpackTest},
-    {"kvstore", kvstoreTest},
 };
 serverTestProc *getTestProcByName(const char *name) {
     int numtests = sizeof(serverTests)/sizeof(struct serverTest);
@@ -7024,15 +7057,13 @@ int main(int argc, char **argv) {
     else if (strstr(exec_name,"valkey-check-aof") != NULL)
         redis_check_aof_main(argc,argv);
     
-    /* If enable USE_REDIS_SYMLINKS, valkey may install symlinks like 
+    /* valkey may install symlinks like
      * redis-server -> valkey-server, redis-check-rdb -> valkey-check-rdb,
      * redis-check-aof -> valkey-check-aof, etc. */
-#ifdef USE_REDIS_SYMLINKS
     if (strstr(exec_name,"redis-check-rdb") != NULL)
         redis_check_rdb_main(argc, argv, NULL);
     else if (strstr(exec_name,"redis-check-aof") != NULL)
         redis_check_aof_main(argc,argv);
-#endif
 
     if (argc >= 2) {
         j = 1; /* First option to parse in argv[] */
@@ -7055,7 +7086,7 @@ int main(int argc, char **argv) {
                 exit(0);
             } else {
                 fprintf(stderr,"Please specify the amount of memory to test in megabytes.\n");
-                fprintf(stderr,"Example: ./redis-server --test-memory 4096\n\n");
+                fprintf(stderr,"Example: ./valkey-server --test-memory 4096\n\n");
                 exit(1);
             }
         } if (strcmp(argv[1], "--check-system") == 0) {

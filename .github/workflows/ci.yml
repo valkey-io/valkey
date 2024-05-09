@@ -10,11 +10,11 @@ jobs:
   test-ubuntu-latest:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
     - name: make
       # Fail build if there are warnings
       # build with TLS just for compilation coverage
-      run: make SERVER_CFLAGS='-Werror' BUILD_TLS=yes
+      run: make all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes
     - name: test
       run: |
         sudo apt-get install tcl8.6 tclx
@@ -27,11 +27,14 @@ jobs:
         make commands.def
         dirty=$(git diff)
         if [[ ! -z  $dirty ]]; then echo $dirty; exit 1; fi
+    - name: unit tests
+      run: |
+        ./src/valkey-unit-tests
 
   test-sanitizer-address:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: make
         # build with TLS module just for compilation coverage
         run: make SANITIZER=address SERVER_CFLAGS='-Werror -DDEBUG_ASSERTIONS' BUILD_TLS=module
@@ -49,7 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     container: debian:buster
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
     - name: make
       run: |
         apt-get update && apt-get install -y build-essential
@@ -58,14 +61,14 @@ jobs:
   build-macos-latest:
     runs-on: macos-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
     - name: make
       run: make SERVER_CFLAGS='-Werror'
 
   build-32bit:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
     - name: make
       run: |
         sudo apt-get update && sudo apt-get install libc6-dev-i386
@@ -74,7 +77,7 @@ jobs:
   build-libc-malloc:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
     - name: make
       run: make SERVER_CFLAGS='-Werror' MALLOC=libc
 
@@ -84,7 +87,7 @@ jobs:
     steps:
     # on centos7, actions/checkout@v4 does not work, so we use v3
     # ref. https://github.com/actions/checkout/issues/1487
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
 
     - name: make
       run: |

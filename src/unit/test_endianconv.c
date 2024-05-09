@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include "../endianconv.h"
 #include "test_help.h"
 
@@ -10,15 +12,15 @@ int test_endianconv(int argc, char *argv[], int flags) {
 
     snprintf(buf,sizeof(buf),"ciaoroma");
     memrev16(buf);
-    printf("%s\n", buf);
+    TEST_ASSERT(!strcmp(buf, "icaoroma"));
 
     snprintf(buf,sizeof(buf),"ciaoroma");
     memrev32(buf);
-    printf("%s\n", buf);
+    TEST_ASSERT(!strcmp(buf, "oaicroma"));
 
     snprintf(buf,sizeof(buf),"ciaoroma");
     memrev64(buf);
-    printf("%s\n", buf);
+    TEST_ASSERT(!strcmp(buf, "amoroaic"));
 
     return 0;
 }

@@ -21,13 +21,13 @@ int test_kvstoreIteratorRemoveAllKeysNoDeleteEmptyDict(int argc, char **argv, in
 int test_kvstoreIteratorRemoveAllKeysDeleteEmptyDict(int argc, char **argv, int flags);
 int test_kvstoreDictIteratorRemoveAllKeysNoDeleteEmptyDict(int argc, char **argv, int flags);
 int test_kvstoreDictIteratorRemoveAllKeysDeleteEmptyDict(int argc, char **argv, int flags);
+int test_sha1(int argc, char **argv, int flags);
 int test_string2ll(int argc, char **argv, int flags);
 int test_string2l(int argc, char **argv, int flags);
 int test_ll2string(int argc, char **argv, int flags);
 int test_ld2string(int argc, char **argv, int flags);
 int test_fixedpoint_d2string(int argc, char **argv, int flags);
 int test_reclaimFilePageCache(int argc, char **argv, int flags);
-int test_sha1(int argc, char **argv, int flags);
 
 unitTest __test_crc64_c[] = {{"test_crc64", test_crc64}, {NULL, NULL}};
 unitTest __test_crc64combine_c[] = {{"test_crc64combine", test_crc64combine}, {NULL, NULL}};

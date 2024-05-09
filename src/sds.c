@@ -349,6 +349,7 @@ sds sdsResize(sds s, size_t size, int would_regrow) {
      * type. */
     int use_realloc = (oldtype==type || (type < oldtype && type > SDS_TYPE_8));
     size_t newlen = use_realloc ? oldhdrlen+size+1 : hdrlen+size+1;
+    size_t newsize = 0;
 
     if (use_realloc) {
         int alloc_already_optimal = 0;
@@ -357,24 +358,25 @@ sds sdsResize(sds s, size_t size, int would_regrow) {
              * We aim to avoid calling realloc() when using Jemalloc if there is no
              * change in the allocation size, as it incurs a cost even if the
              * allocation size stays the same. */
-            alloc_already_optimal = (je_nallocx(newlen, 0) == zmalloc_size(sh));
+            newsize = zmalloc_size(sh);
+            alloc_already_optimal = (je_nallocx(newlen, 0) == newsize);
         #endif
         if (!alloc_already_optimal) {
-            newsh = s_realloc(sh, newlen);
+            newsh = s_realloc_usable(sh, newlen, &newsize);
             if (newsh == NULL) return NULL;
             s = (char*)newsh+oldhdrlen;
         }
     } else {
-        newsh = s_malloc(newlen);
+        newsh = s_malloc_usable(newlen, &newsize);
         if (newsh == NULL) return NULL;
         memcpy((char*)newsh+hdrlen, s, len);
         s_free(sh);
         s = (char*)newsh+hdrlen;
         s[-1] = type;
     }
-    s[len] = 0;
+    s[len] = '\0';
     sdssetlen(s, len);
-    sdssetalloc(s, size);
+    sdssetalloc(s, newsize - hdrlen - 1);
     return s;
 }
 
@@ -1470,27 +1472,27 @@ int sdsTest(int argc, char **argv, int flags) {
         x = sdsResize(x, 200, 1);
         test_cond("sdsrezie() expand len", sdslen(x) == 40);
         test_cond("sdsrezie() expand strlen", strlen(x) == 40);
-        test_cond("sdsrezie() expand alloc", sdsalloc(x) == 200);
+        test_cond("sdsrezie() expand alloc", sdsalloc(x) >= 200);
         /* Test sdsresize - trim free space */
         x = sdsResize(x, 80, 1);
         test_cond("sdsrezie() shrink len", sdslen(x) == 40);
         test_cond("sdsrezie() shrink strlen", strlen(x) == 40);
-        test_cond("sdsrezie() shrink alloc", sdsalloc(x) == 80);
+        test_cond("sdsrezie() shrink alloc", sdsalloc(x) >= 80);
         /* Test sdsresize - crop used space */
         x = sdsResize(x, 30, 1);
         test_cond("sdsrezie() crop len", sdslen(x) == 30);
         test_cond("sdsrezie() crop strlen", strlen(x) == 30);
-        test_cond("sdsrezie() crop alloc", sdsalloc(x) == 30);
+        test_cond("sdsrezie() crop alloc", sdsalloc(x) >= 30);
         /* Test sdsresize - extend to different class */
         x = sdsResize(x, 400, 1);
         test_cond("sdsrezie() expand len", sdslen(x) == 30);
         test_cond("sdsrezie() expand strlen", strlen(x) == 30);
-        test_cond("sdsrezie() expand alloc", sdsalloc(x) == 400);
+        test_cond("sdsrezie() expand alloc", sdsalloc(x) >= 400);
         /* Test sdsresize - shrink to different class */
         x = sdsResize(x, 4, 1);
         test_cond("sdsrezie() crop len", sdslen(x) == 4);
         test_cond("sdsrezie() crop strlen", strlen(x) == 4);
-        test_cond("sdsrezie() crop alloc", sdsalloc(x) == 4);
+        test_cond("sdsrezie() crop alloc", sdsalloc(x) >= 4);
         sdsfree(x);
     }
     return 0;

@@ -41,7 +41,6 @@
 #include <sys/wait.h>
 #include <sys/param.h>
 
-void freeClientArgv(client *c);
 off_t getAppendOnlyFileSize(sds filename, int *status);
 off_t getBaseAndIncrAppendOnlyFilesSize(aofManifest *am, int *status);
 int getBaseAndIncrAppendOnlyFilesNum(aofManifest *am);
@@ -701,7 +700,6 @@ void aofDelTempIncrAofFile(void) {
     bg_unlink(aof_filepath);
     sdsfree(aof_filepath);
     sdsfree(aof_filename);
-    return;
 }
 
 /* Called after `loadDataFromDisk` when the server starts. If `server.aof_state` is

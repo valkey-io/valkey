@@ -39,7 +39,7 @@ int test_zmallocAllocReallocCallocAndFree(int argc, char **argv, int flags) {
     return 0;
 }
 
-int test_zmallocAllocZeroBytesAndFree(int argc, char **argv, int flags) {
+int test_zmallocAllocZeroByteAndFree(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);

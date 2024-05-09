@@ -6934,7 +6934,7 @@ struct serverTest {
     {"zipmap", zipmapTest},
     {"sha1test", sha1Test},
     {"endianconv", endianconvTest},
-    {"sds", sdsTest},
+    {"zmalloc", zmalloc_test},
     {"dict", dictTest},
     {"listpack", listpackTest},
 };

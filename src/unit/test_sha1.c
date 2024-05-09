@@ -22,10 +22,6 @@ int test_sha1(int argc, char **argv, int flags) {
         SHA1Update(&ctx, buf, BUFSIZE);
     SHA1Final(hash, &ctx);
 
-    printf("SHA1=");
-    for(i=0;i<20;i++)
-        printf("%02x", hash[i]);
-    printf("\n");
     TEST_ASSERT(memcmp(hash, expected, 20) == 0);
     return 0;
 }

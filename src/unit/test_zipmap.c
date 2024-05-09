@@ -1,4 +1,6 @@
-#include "../zipmap.c"
+#include <stddef.h>
+#include "../zipmap.h"
+#include "../zmalloc.h"
 #include "test_help.h"
 
 int test_zipmapLookupLargeKey(int argc, char **argv, int flags) {

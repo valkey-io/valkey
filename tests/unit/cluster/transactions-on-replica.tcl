@@ -1,17 +1,13 @@
 # Check basic transactions on a replica.
 
-source "../tests/includes/init-tests.tcl"
-
-test "Create a primary with a replica" {
-    create_cluster 1 1
-}
+start_cluster 1 1 {tags {external:skip cluster}} {
 
 test "Cluster should start ok" {
-    assert_cluster_state ok
+    wait_for_cluster_state ok
 }
 
-set primary [Rn 0]
-set replica [Rn 1]
+set primary [srv 0 "client"]
+set replica [srv -1 "client"]
 
 test "Can't read from replica without READONLY" {
     $primary SET a 1
@@ -58,13 +54,13 @@ test "MULTI-EXEC with write operations is MOVED" {
 }
 
 test "read-only blocking operations from replica" {
-    set rd [valkey_deferring_client valkey 1]
+    set rd [valkey_deferring_client -1]
     $rd readonly
     $rd read
     $rd XREAD BLOCK 0 STREAMS k 0
 
     wait_for_condition 1000 50 {
-        [RI 1 blocked_clients] eq {1}
+        [s -1 blocked_clients] eq {1}
     } else {
         fail "client wasn't blocked"
     }
@@ -78,8 +74,10 @@ test "read-only blocking operations from replica" {
 
 test "reply MOVED when eval from replica for update" {
     catch {[$replica eval {#!lua
-        return redis.call('del','a')
+        return server.call('del','a')
         } 1 a
     ]} err
     assert {[string range $err 0 4] eq {MOVED}}
 }
+
+} ;# start_cluster

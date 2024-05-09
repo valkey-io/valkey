@@ -27,6 +27,6 @@ int test_sha1(int argc, char **argv, int flags)
     for(i=0;i<20;i++)
         printf("%02x", hash[i]);
     printf("\n");
-    assert(memcmp(hash, expected, 20) == 0);
+    TEST_ASSERT(memcmp(hash, expected, 20) == 0);
     return 0;
 }

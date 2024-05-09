@@ -43,6 +43,8 @@
 
 #define TEST_ASSERT(_c) TEST_ASSERT_MESSAGE("Failed assertion: " #_c, _c)
 
+#ifndef UNUSED
 #define UNUSED(x) (void)(x)
+#endif
 
 #endif

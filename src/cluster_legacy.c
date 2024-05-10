@@ -6940,12 +6940,12 @@ void clusterPromoteSelfToMaster(void) {
 }
 
 void updateAllCachedNodesHealth(void) {
-    dictIterator *di =  zmalloc(sizeof(*di));
+    dictIterator di;
+    dictInitSafeIterator(&di, server.cluster->nodes);
     dictEntry *de;
     clusterNode *node;
     int overall_health_changed = 0;
-    dictInitSafeIterator(di, server.cluster->nodes);
-    while((de = dictNext(di)) != NULL) {
+    while((de = dictNext(&di)) != NULL) {
         node = dictGetVal(de);
         int present_is_node_healthy = isNodeAvailable(node);
         if (present_is_node_healthy != node->is_node_healthy) {

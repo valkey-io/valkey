@@ -5241,7 +5241,7 @@ static int clusterManagerMoveSlot(clusterManagerNode *source,
          * source node has turned itself into a replica. This is not an error in
          * this scenario so we ignore it. See issue #9223.
          *
-         * Another acceptable error can arise now that the primary pre-replicates 
+         * Another acceptable error can arise now that the primary pre-replicates
          * `cluster setslot` commands to replicas while blocking the client on the
          * primary. This change enhances the reliability of `cluster setslot` in
          * the face of primary failures. However, while our client is blocked on
@@ -5252,7 +5252,7 @@ static int clusterManagerMoveSlot(clusterManagerNode *source,
         if (!success && err) {
             const char *acceptable[] = {
                 "ERR Please use SETSLOT only with masters.",
-                "UNBLOCKED force unblock from blocking operation, instance state changed (master -> replica?)"};
+                "UNBLOCKED"};
             for (size_t i = 0; i < sizeof(acceptable)/sizeof(acceptable[0]); i++) {
                 if (!strncmp(*err, acceptable[i], strlen(acceptable[i]))) {
                     zfree(*err);

@@ -11253,7 +11253,11 @@ int VM_Fork(ValkeyModuleForkDoneHandler cb, void *user_data) {
 
     if ((childpid = serverFork(CHILD_TYPE_MODULE)) == 0) {
         /* Child */
-        serverSetProcTitle("redis-module-fork");
+        if (strstr(server.exec_argv[0],"redis-server") != NULL) {
+            serverSetProcTitle("redis-module-fork");
+        } else {
+            serverSetProcTitle("valkey-module-fork");
+        }
     } else if (childpid == -1) {
         serverLog(LL_WARNING,"Can't fork for module: %s", strerror(errno));
     } else {

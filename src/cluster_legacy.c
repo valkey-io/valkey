@@ -6955,9 +6955,10 @@ void updateAllCachedNodesHealth(void) {
     }
 
     if (overall_health_changed) clearCachedClusterSlotsResp();
+}
+
 /* Replicate migrating and importing slot states to all replicas */
-void clusterReplicateOpenSlots(void)
-{
+void clusterReplicateOpenSlots(void) {
     if (!server.cluster_enabled) return;
 
     int argc = 5;

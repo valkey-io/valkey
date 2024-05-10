@@ -305,7 +305,8 @@ struct _clusterNode {
     clusterLink *link;          /* TCP/IP link established toward this node */
     clusterLink *inbound_link;  /* TCP/IP link accepted from this node */
     list *fail_reports;         /* List of nodes signaling this as failing */
-    int node_health;            /* Last updated node health, can be stale. Update by calling updateNodesHealth() */
+    int is_node_healthy;        /* Boolean last updated node health used for validating
+                                   cached response, can be stale. Update by calling updateAllCachedNodesHealth() */
 };
 
 struct clusterState {

@@ -110,7 +110,7 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen);
 void freeClusterLink(clusterLink *link);
 int verifyClusterNodeId(const char *name, int length);
 
-int isClusterSlotsResponseCached(enum connTypeForCaching conn_type) {
+int isClusterSlotsResponseCached(connTypeForCaching conn_type) {
     if (server.cluster->cached_cluster_slot_info[conn_type] &&
         sdslen(server.cluster->cached_cluster_slot_info[conn_type])) {
         return 1;
@@ -118,12 +118,12 @@ int isClusterSlotsResponseCached(enum connTypeForCaching conn_type) {
     return 0;
 }
 
-sds getClusterSlotReply(enum connTypeForCaching conn_type) {
+sds getClusterSlotReply(connTypeForCaching conn_type) {
     return server.cluster->cached_cluster_slot_info[conn_type];
 }
 
 void clearCachedClusterSlotsResp(void) {
-    for (enum connTypeForCaching conn_type = CACHE_CONN_TCP; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
+    for (connTypeForCaching conn_type = CACHE_CONN_TCP; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
         if (server.cluster->cached_cluster_slot_info[conn_type]) {
             sdsfree(server.cluster->cached_cluster_slot_info[conn_type]);
             server.cluster->cached_cluster_slot_info[conn_type] = NULL;
@@ -131,7 +131,7 @@ void clearCachedClusterSlotsResp(void) {
     }
 }
 
-void cacheSlotsResponse(sds response_to_cache, enum connTypeForCaching conn_type) {
+void cacheSlotsResponse(sds response_to_cache, connTypeForCaching conn_type) {
     server.cluster->cached_cluster_slot_info[conn_type] = response_to_cache;
 }
 
@@ -1056,7 +1056,7 @@ void clusterInit(void) {
 
     server.cluster->mf_end = 0;
     server.cluster->mf_slave = NULL;
-    for (enum connTypeForCaching conn_type = CACHE_CONN_TCP; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
+    for (connTypeForCaching conn_type = CACHE_CONN_TCP; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
         server.cluster->cached_cluster_slot_info[conn_type] = NULL;
     }
     resetManualFailover();
@@ -1383,7 +1383,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->repl_offset_time = 0;
     node->repl_offset = 0;
     listSetFreeMethod(node->fail_reports,zfree);
-    node->node_health = 0;
+    node->is_node_healthy = 0;
     return node;
 }
 
@@ -5649,7 +5649,7 @@ void clusterUpdateSlots(client *c, unsigned char *slots, int del) {
     }
 }
 
-long long getNodeOffSet(clusterNode *node) {
+long long getNodeOffset(clusterNode *node) {
     if (node->flags & CLUSTER_NODE_MYSELF) {
         return nodeIsSlave(node) ? replicationGetSlaveOffset() : server.master_repl_offset;
     } else {
@@ -5691,7 +5691,7 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
         reply_count++;
     }
 
-    long long node_offset = getNodeOffSet(node);
+    long long node_offset = getNodeOffset(node);
 
     addReplyBulkCString(c, "role");
     addReplyBulkCString(c, nodeIsSlave(node) ? "replica" : "master");
@@ -6567,30 +6567,20 @@ void clusterPromoteSelfToMaster(void) {
     replicationUnsetMaster();
 }
 
-void updateNodesHealth(void) {
-    dictIterator *di;
+void updateAllCachedNodesHealth(void) {
+    dictIterator *di =  zmalloc(sizeof(*di));
     dictEntry *de;
     clusterNode *node;
     int overall_health_changed = 0;
-    di = dictGetSafeIterator(server.cluster->nodes);
+    dictInitSafeIterator(di, server.cluster->nodes);
     while((de = dictNext(di)) != NULL) {
         node = dictGetVal(de);
-        int present_node_health;
-
-        long long node_offset = getNodeOffSet(node);
-
-        if (nodeFailed(node) || (nodeIsSlave(node) && node_offset == 0)) {
-            present_node_health = 0;
-        } else {
-            present_node_health = 1;
-        }
-
-        if (present_node_health != node->node_health) {
+        int present_is_node_healthy = isNodeAvailable(node);
+        if (present_is_node_healthy != node->is_node_healthy) {
             overall_health_changed = 1;
+            node->is_node_healthy = present_is_node_healthy;
         }
-        node->node_health = present_node_health;
     }
-    dictReleaseIterator(di);
 
     if (overall_health_changed) clearCachedClusterSlotsResp();
 }

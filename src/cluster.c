@@ -872,7 +872,7 @@ void clusterCommand(client *c) {
         clusterCommandMyShardId(c);
     } else if (!strcasecmp(c->argv[1]->ptr,"slots") && c->argc == 2) {
         /* CLUSTER SLOTS */
-        clusterCommandSlots(c);
+        clusterSlotsCommand(c);
     } else if (!strcasecmp(c->argv[1]->ptr,"shards") && c->argc == 2) {
         /* CLUSTER SHARDS */
         clusterCommandShards(c);
@@ -1311,24 +1311,6 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
     return 0;
 }
 
-/* Returns an indication if the replica node is fully available
- * and should be listed in CLUSTER SLOTS response.
- * Returns 1 for available nodes, 0 for nodes that have
- * not finished their initial sync, in failed state, or are
- * otherwise considered not available to serve read commands. */
-static int isReplicaAvailable(clusterNode *node) {
-    if (clusterNodeIsFailing(node)) {
-        return 0;
-    }
-    long long repl_offset = clusterNodeReplOffset(node);
-    if (clusterNodeIsMyself(node)) {
-        /* Nodes do not update their own information
-         * in the cluster node list. */
-        repl_offset = replicationGetSlaveOffset();
-    }
-    return (repl_offset != 0);
-}
-
 void addNodeToNodeReply(client *c, clusterNode *node) {
     char* hostname = clusterNodeHostname(node);
     addReplyArrayLen(c, 4);
@@ -1380,10 +1362,28 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
     serverAssert(length == 0);
 }
 
+/* Returns an indication if the node is fully available
+ * and should be listed in CLUSTER SLOTS response.
+ * Returns 1 for available nodes, 0 for nodes that have
+ * not finished their initial sync, in failed state, or are
+ * otherwise considered not available to serve read commands. */
+int isNodeAvailable(clusterNode *node) {
+    if (clusterNodeIsFailing(node)) {
+        return 0;
+    }
+    long long repl_offset = clusterNodeReplOffset(node);
+    if (clusterNodeIsMyself(node)) {
+        /* Nodes do not update their own information
+         * in the cluster node list. */
+        repl_offset = replicationGetSlaveOffset();
+    }
+    return (repl_offset != 0);
+}
+
 void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, int end_slot) {
     int i, nested_elements = 3; /* slots (2) + master addr (1) */
     for (i = 0; i < clusterNodeNumSlaves(node); i++) {
-        if (!isReplicaAvailable(clusterNodeGetSlave(node, i))) continue;
+        if (!isNodeAvailable(clusterNodeGetSlave(node, i))) continue;
         nested_elements++;
     }
     addReplyArrayLen(c, nested_elements);
@@ -1395,7 +1395,7 @@ void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, in
     for (i = 0; i < clusterNodeNumSlaves(node); i++) {
         /* This loop is copy/pasted from clusterGenNodeDescription()
          * with modifications for per-slot node aggregation. */
-        if (!isReplicaAvailable(clusterNodeGetSlave(node, i))) continue;
+        if (!isNodeAvailable(clusterNodeGetSlave(node, i))) continue;
         addNodeToNodeReply(c, clusterNodeGetSlave(node, i));
         nested_elements--;
     }
@@ -1439,7 +1439,7 @@ int verifyCachedClusterSlotsResponse(sds cached_response) {
     return result;
 }
 
-void clusterCommandSlots(client * c) {
+void clusterSlotsCommand(client *c) {
     /* Format: 1) 1) start slot
      *            2) end slot
      *            3) 1) master IP
@@ -1450,10 +1450,10 @@ void clusterCommandSlots(client * c) {
      *               3) node ID
      *           ... continued until done
      */
-    enum connTypeForCaching conn_type = connIsTLS(c->conn);
+    connTypeForCaching conn_type = connIsTLS(c->conn);
 
     /* Check if we have a response cached for cluster slots for early exit. */
-    updateNodesHealth();    
+    updateAllCachedNodesHealth();    
     if (isClusterSlotsResponseCached(conn_type)) {
         debugServerAssertWithInfo(c, NULL, verifyCachedClusterSlotsResponse(getClusterSlotReply(conn_type)) == 1);
         addReplyProto(c, getClusterSlotReply(conn_type), sdslen(getClusterSlotReply(conn_type)));

@@ -1,4 +1,4 @@
-# Test suite for redis-cli command-line hinting mechanism.
+# Test suite for valkey-cli command-line hinting mechanism.
 # Each test case consists of two strings: a (partial) input command line, and the expected hint string.
 
 # Command with one arg: GET key
@@ -36,7 +36,7 @@
 # Two-word command with multiple non-token block args:  CONFIG SET parameter value [parameter value ...]
 "CONFIG SET param " "value [parameter value ...]"
 "CONFIG SET param val " "[parameter value ...]"
-"CONFIG SET param val parm2 val2 " "[parameter value ...]"
+"CONFIG SET param val param2 val2 " "[parameter value ...]"
 
 # Command with nested optional args:  ZRANDMEMBER key [count [WITHSCORES]]
 "ZRANDMEMBER k " "[count [WITHSCORES]]"

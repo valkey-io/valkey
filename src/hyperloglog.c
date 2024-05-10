@@ -1,5 +1,5 @@
-/* hyperloglog.c - Redis HyperLogLog probabilistic cardinality approximation.
- * This file implements the algorithm and the exported Redis commands.
+/* hyperloglog.c - HyperLogLog probabilistic cardinality approximation.
+ * This file implements the algorithm and the exported commands.
  *
  * Copyright (c) 2014, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
@@ -34,14 +34,14 @@
 #include <stdint.h>
 #include <math.h>
 
-/* The Redis HyperLogLog implementation is based on the following ideas:
+/* The HyperLogLog implementation is based on the following ideas:
  *
  * * The use of a 64 bit hash function as proposed in [1], in order to estimate
  *   cardinalities larger than 10^9, at the cost of just 1 additional bit per
  *   register.
  * * The use of 16384 6-bit registers for a great level of accuracy, using
  *   a total of 12k per key.
- * * The use of the Redis string data type. No new type is introduced.
+ * * The use of the string data type. No new type is introduced.
  * * No attempt is made to compress the data structure as in [1]. Also the
  *   algorithm used is the original HyperLogLog Algorithm as in [2], with
  *   the only difference that a 64 bit hash function is used, so no correction
@@ -53,7 +53,7 @@
  * [2] P. Flajolet, Éric Fusy, O. Gandouet, and F. Meunier. Hyperloglog: The
  *     analysis of a near-optimal cardinality estimation algorithm.
  *
- * Redis uses two representations:
+ * We use two representations:
  *
  * 1) A "dense" representation where every entry is represented by
  *    a 6-bit integer.
@@ -88,7 +88,7 @@
  * Dense representation
  * ===
  *
- * The dense representation used by Redis is the following:
+ * The dense representation is the following:
  *
  * +--------+--------+--------+------//      //--+
  * |11000000|22221111|33333322|55444444 ....     |
@@ -391,9 +391,9 @@ static char *invalid_hll_err = "-INVALIDOBJ Corrupted HLL object detected";
 /* ========================= HyperLogLog algorithm  ========================= */
 
 /* Our hash function is MurmurHash2, 64 bit version.
- * It was modified for Redis in order to provide the same result in
+ * It was modified in order to provide the same result in
  * big and little endian archs (endian neutral). */
-REDIS_NO_SANITIZE("alignment")
+VALKEY_NO_SANITIZE("alignment")
 uint64_t MurmurHash64A (const void * key, int len, unsigned int seed) {
     const uint64_t m = 0xc6a4a7935bd1e995;
     const int r = 47;
@@ -520,7 +520,7 @@ int hllDenseAdd(uint8_t *registers, unsigned char *ele, size_t elesize) {
 void hllDenseRegHisto(uint8_t *registers, int* reghisto) {
     int j;
 
-    /* Redis default is to use 16384 registers 6 bits each. The code works
+    /* Default is to use 16384 registers 6 bits each. The code works
      * with other values by modifying the defines, but for our target value
      * we take a faster path with unrolled loops. */
     if (HLL_REGISTERS == 16384 && HLL_BITS == 6) {
@@ -1271,7 +1271,7 @@ void pfcountCommand(client *c) {
      * The user specified a single key. Either return the cached value
      * or compute one and update the cache.
      *
-     * Since a HLL is a regular Redis string type value, updating the cache does
+     * Since a HLL is a regular string type value, updating the cache does
      * modify the value. We do a lookupKeyRead anyway since this is flagged as a
      * read-only command. The difference is that with lookupKeyWrite, a
      * logically expired key on a replica is deleted, while with lookupKeyRead
@@ -1315,7 +1315,7 @@ void pfcountCommand(client *c) {
             hdr->card[6] = (card >> 48) & 0xff;
             hdr->card[7] = (card >> 56) & 0xff;
             /* This is considered a read-only command even if the cached value
-             * may be modified and given that the HLL is a Redis string
+             * may be modified and given that the HLL is a string
              * we need to propagate the change. */
             signalModifiedKey(c,c->db,c->argv[1]);
             server.dirty++;

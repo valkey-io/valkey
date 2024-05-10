@@ -13,7 +13,7 @@ test "(init) Remove old master entry from sentinels" {
 
 set redis_slaves [expr $::instances_count - 1]
 test "(init) Create a master-slaves cluster of [expr $redis_slaves+1] instances" {
-    create_redis_master_slave_cluster [expr {$redis_slaves+1}]
+    create_valkey_master_slave_cluster [expr {$redis_slaves+1}]
 }
 set master_id 0
 
@@ -22,8 +22,8 @@ test "(init) Sentinels can start monitoring a master" {
     set quorum [expr {$sentinels/2+1}]
     foreach_sentinel_id id {
         S $id SENTINEL MONITOR mymaster \
-              [get_instance_attrib redis $master_id host] \
-              [get_instance_attrib redis $master_id port] $quorum
+              [get_instance_attrib valkey $master_id host] \
+              [get_instance_attrib valkey $master_id port] $quorum
     }
     foreach_sentinel_id id {
         assert {[S $id sentinel master mymaster] ne {}}

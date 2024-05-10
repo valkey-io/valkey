@@ -42,7 +42,7 @@
         ],
         "reply_schema": {
             "type": "integer",
-            "description": "the length of the list after the push operation",
+            "description": "The length of the list after the push operation.",
             "minimum": 0
         },
         "arguments": [

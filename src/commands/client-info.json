@@ -20,7 +20,7 @@
             "NONDETERMINISTIC_OUTPUT"
         ],
         "reply_schema": {
-            "description": "a unique string, as described at the CLIENT LIST page, for the current client",
+            "description": "A unique string, as described at the CLIENT LIST page, for the current client.",
             "type": "string"
         }
     }

@@ -195,7 +195,7 @@ proc test {name code {okpattern undefined} {tags {}}} {
     set ::cur_test "$name in $::curfile"
     if {$::external} {
         catch {
-            set r [redis [srv 0 host] [srv 0 port] 0 $::tls]
+            set r [valkey [srv 0 host] [srv 0 port] 0 $::tls]
             catch {
                 $r debug log "### Starting test $::cur_test"
             }
@@ -258,7 +258,7 @@ proc test {name code {okpattern undefined} {tags {}}} {
     }
 
     if {$::traceleaks} {
-        set output [exec leaks redis-server]
+        set output [exec leaks valkey-server]
         if {![string match {*0 leaks*} $output]} {
             send_data_packet $::test_server_fd err "Detected a memory leak in test '$name': $output"
         }

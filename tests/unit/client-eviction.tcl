@@ -1,6 +1,6 @@
 tags {"external:skip logreqres:skip"} {
 
-# Get info about a redis client connection:
+# Get info about a server client connection:
 # name - name of client we want to query
 # f - field name from "CLIENT LIST" we want to get
 proc client_field {name f} {
@@ -20,14 +20,14 @@ proc client_exists {name} {
 }
 
 proc gen_client {} {
-    set rr [redis_client]
+    set rr [valkey_client]
     set name "tst_[randstring 4 4 simplealpha]"
     $rr client setname $name
     assert {[client_exists $name]}
     return [list $rr $name]
 }
 
-# Sum a value across all redis client connections:
+# Sum a value across all server client connections:
 # f - the field name from "CLIENT LIST" we want to sum
 proc clients_sum {f} {
     set sum 0
@@ -134,7 +134,7 @@ start_server {} {
 
     test "client evicted due to watched key list" {
         r flushdb
-        set rr [redis_client]
+        set rr [valkey_client]
 
         # Since watched key list is a small overhead this test uses a minimal maxmemory-clients config
         set temp_maxmemory_clients 200000
@@ -161,7 +161,7 @@ start_server {} {
         r config set maxmemory-clients $temp_maxmemory_clients
 
         # Test eviction due to pubsub patterns
-        set rr [redis_client]
+        set rr [valkey_client]
         # Add patterns until list maxes out maxmemory clients and causes client eviction
         catch {
             for {set j 0} {$j < $temp_maxmemory_clients} {incr j} {
@@ -172,7 +172,7 @@ start_server {} {
         $rr close
 
         # Test eviction due to pubsub channels
-        set rr [redis_client]
+        set rr [valkey_client]
         # Subscribe to global channels until list maxes out maxmemory clients and causes client eviction
         catch {
             for {set j 0} {$j < $temp_maxmemory_clients} {incr j} {
@@ -183,7 +183,7 @@ start_server {} {
         $rr close
 
         # Test eviction due to sharded pubsub channels
-        set rr [redis_client]
+        set rr [valkey_client]
         # Subscribe to sharded pubsub channels until list maxes out maxmemory clients and causes client eviction
         catch {
             for {set j 0} {$j < $temp_maxmemory_clients} {incr j} {
@@ -199,8 +199,8 @@ start_server {} {
 
     test "client evicted due to tracking redirection" {
         r flushdb
-        set rr [redis_client]
-        set redirected_c [redis_client]
+        set rr [valkey_client]
+        set redirected_c [valkey_client]
         $redirected_c client setname redirected_client
         set redir_id [$redirected_c client id]
         $redirected_c SUBSCRIBE __redis__:invalidate
@@ -232,7 +232,7 @@ start_server {} {
 
     test "client evicted due to client tracking prefixes" {
         r flushdb
-        set rr [redis_client]
+        set rr [valkey_client]
 
         # Since tracking prefixes list is a small overhead this test uses a minimal maxmemory-clients config
         set temp_maxmemory_clients 200000
@@ -257,7 +257,7 @@ start_server {} {
     test "client evicted due to output buf" {
         r flushdb
         r setrange k 200000 v
-        set rr [redis_deferring_client]
+        set rr [valkey_deferring_client]
         $rr client setname test_client
         $rr flush
         assert {[$rr read] == "OK"}
@@ -323,12 +323,12 @@ start_server {} {
         r flushdb
         set obuf_size [expr {$obuf_limit + [mb 1]}]
         r setrange k $obuf_size v
-        set rr1 [redis_client]
+        set rr1 [valkey_client]
         $rr1 client setname "qbuf-client"
-        set rr2 [redis_deferring_client]
+        set rr2 [valkey_deferring_client]
         $rr2 client setname "obuf-client1"
         assert_equal [$rr2 read] OK
-        set rr3 [redis_deferring_client]
+        set rr3 [valkey_deferring_client]
         $rr3 client setname "obuf-client2"
         assert_equal [$rr3 read] OK
 
@@ -381,7 +381,7 @@ start_server {} {
         # Make multiple clients consume together roughly 1mb less than maxmemory_clients
         set rrs {}
         for {set j 0} {$j < $client_count} {incr j} {
-            set rr [redis_client]
+            set rr [valkey_client]
             lappend rrs $rr
             $rr client setname client$j
             $rr write [join [list "*2\r\n\$$qbsize\r\n" [string repeat v $qbsize]] ""]
@@ -420,7 +420,7 @@ start_server {} {
         set max_client_mem 0
         set rrs {}
         for {set j 0} {$j < $client_count} {incr j} {
-            set rr [redis_client]
+            set rr [valkey_client]
             lappend rrs $rr
             $rr client setname client$j
             $rr write [join [list "*2\r\n\$$client_mem\r\n" [string repeat v $client_mem]] ""]
@@ -486,7 +486,7 @@ start_server {} {
             set size [lindex $sizes $i]
 
             for {set j 0} {$j < $clients_per_size} {incr j} {
-                set rr [redis_client]
+                set rr [valkey_client]
                 lappend rrs $rr
                 $rr client setname client-$i
                 $rr write [join [list "*2\r\n\$$size\r\n" [string repeat v $size]] ""]
@@ -543,7 +543,7 @@ start_server {} {
 
         test "client total memory grows during $type" {
             r setrange k [mb 1] v
-            set rr [redis_client]
+            set rr [valkey_client]
             $rr client setname test_client
             if {$type eq "client no-evict"} {
                 $rr client no-evict on

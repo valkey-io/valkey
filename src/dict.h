@@ -210,7 +210,6 @@ void dictSetDoubleVal(dictEntry *de, double val);
 int64_t dictIncrSignedIntegerVal(dictEntry *de, int64_t val);
 uint64_t dictIncrUnsignedIntegerVal(dictEntry *de, uint64_t val);
 double dictIncrDoubleVal(dictEntry *de, double val);
-void *dictEntryMetadata(dictEntry *de);
 void *dictGetKey(const dictEntry *de);
 void *dictGetVal(const dictEntry *de);
 int64_t dictGetSignedIntegerVal(const dictEntry *de);
@@ -249,7 +248,7 @@ dictStats* dictGetStatsHt(dict *d, int htidx, int full);
 void dictCombineStats(dictStats *from, dictStats *into);
 void dictFreeStats(dictStats *stats);
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 int dictTest(int argc, char *argv[], int flags);
 #endif
 

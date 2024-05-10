@@ -108,7 +108,7 @@ start_server {tags {"acl external:skip"}} {
     } {*NOPERM*channel*}
 
     test {By default, only default user is able to subscribe to any channel} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd AUTH default pwd
         $rd read
         $rd SUBSCRIBE foo
@@ -124,7 +124,7 @@ start_server {tags {"acl external:skip"}} {
     } {*NOPERM*channel*}
 
     test {By default, only default user is able to subscribe to any shard channel} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd AUTH default pwd
         $rd read
         $rd SSUBSCRIBE foo
@@ -140,7 +140,7 @@ start_server {tags {"acl external:skip"}} {
     } {*NOPERM*channel*}
 
     test {By default, only default user is able to subscribe to any pattern} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd AUTH default pwd
         $rd read
         $rd PSUBSCRIBE bar*
@@ -209,7 +209,7 @@ start_server {tags {"acl external:skip"}} {
     }
 
     test {It's possible to allow subscribing to a subset of channels} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd AUTH psuser pspass
         $rd read
         $rd SUBSCRIBE foo:1
@@ -222,7 +222,7 @@ start_server {tags {"acl external:skip"}} {
     } {*NOPERM*channel*}
 
     test {It's possible to allow subscribing to a subset of shard channels} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd AUTH psuser pspass
         $rd read
         $rd SSUBSCRIBE foo:1
@@ -235,7 +235,7 @@ start_server {tags {"acl external:skip"}} {
     } {*NOPERM*channel*}
 
     test {It's possible to allow subscribing to a subset of channel patterns} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd AUTH psuser pspass
         $rd read
         $rd PSUBSCRIBE foo:1
@@ -248,7 +248,7 @@ start_server {tags {"acl external:skip"}} {
     } {*NOPERM*channel*}
     
     test {Subscribers are killed when revoked of channel permission} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r ACL setuser psuser resetchannels &foo:1
         $rd AUTH psuser pspass
         $rd read
@@ -262,7 +262,7 @@ start_server {tags {"acl external:skip"}} {
     } {0}
 
     test {Subscribers are killed when revoked of channel permission} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r ACL setuser psuser resetchannels &foo:1
         $rd AUTH psuser pspass
         $rd read
@@ -276,7 +276,7 @@ start_server {tags {"acl external:skip"}} {
     } {0}
 
     test {Subscribers are killed when revoked of pattern permission} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r ACL setuser psuser resetchannels &bar:*
         $rd AUTH psuser pspass
         $rd read
@@ -290,7 +290,7 @@ start_server {tags {"acl external:skip"}} {
     } {0}
 
     test {Subscribers are killed when revoked of allchannels permission} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r ACL setuser psuser allchannels
         $rd AUTH psuser pspass
         $rd read
@@ -304,7 +304,7 @@ start_server {tags {"acl external:skip"}} {
     } {0}
 
     test {Subscribers are pardoned if literal permissions are retained and/or gaining allchannels} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r ACL setuser psuser resetchannels &foo:1 &bar:* &orders
         $rd AUTH psuser pspass
         $rd read
@@ -326,7 +326,7 @@ start_server {tags {"acl external:skip"}} {
     test {blocked command gets rejected when reprocessed after permission change} {
         r auth default ""
         r config resetstat
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r ACL setuser psuser reset on nopass +@all allkeys
         $rd AUTH psuser pspass
         $rd read
@@ -526,7 +526,7 @@ start_server {tags {"acl external:skip"}} {
         }
     }
 
-    # Note that the order of the generated ACL rules is not stable in Redis
+    # Note that the order of the generated ACL rules is not stable in the server
     # so we need to match the different parts and not as a whole string.
     test {ACL GETUSER is able to translate back command permissions} {
         # Subtractive
@@ -612,7 +612,7 @@ start_server {tags {"acl external:skip"}} {
         r ACL SETUSER adv-test -@all +select|0 +select|0 +debug|segfault +debug
         assert_equal "-@all +select|0 +debug" [dict get [r ACL getuser adv-test] commands]
 
-        # Unnecessary categories are retained for potentional future compatibility
+        # Unnecessary categories are retained for potential future compatibility
         r ACL SETUSER adv-test -@all -@dangerous
         assert_equal "-@all -@dangerous" [dict get [r ACL getuser adv-test] commands]
 
@@ -666,16 +666,16 @@ start_server {tags {"acl external:skip"}} {
          for {set j 0} {$j < 10} {incr j} {
              assert_error "*WRONGPASS*" {r AUTH user1 doo}
          }
-         set entry_id_lastest_error [dict get [lindex [r ACL LOG] 0] entry-id]
+         set entry_id_latest_error [dict get [lindex [r ACL LOG] 0] entry-id]
          set timestamp_created_updated [dict get [lindex [r ACL LOG] 0] timestamp-created]
          set timestamp_last_updated_after_update [dict get [lindex [r ACL LOG] 0] timestamp-last-updated]
-         assert {$entry_id_lastest_error eq $entry_id_initial_error}
+         assert {$entry_id_latest_error eq $entry_id_initial_error}
          assert {$timestamp_last_update_original < $timestamp_last_updated_after_update}
          assert {$timestamp_created_original eq $timestamp_created_updated}
          r ACL setuser user2 >doo
          assert_error "*WRONGPASS*" {r AUTH user2 foo}
          set new_error_entry_id [dict get [lindex [r ACL LOG] 0] entry-id]
-         assert {$new_error_entry_id eq $entry_id_lastest_error + 1 }
+         assert {$new_error_entry_id eq $entry_id_latest_error + 1 }
     }
 
     test {ACL LOG shows failed command executions at toplevel} {
@@ -754,7 +754,7 @@ start_server {tags {"acl external:skip"}} {
     }
 
     test {ACL LOG can distinguish the transaction context (2)} {
-        set rd1 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
         r ACL SETUSER antirez +incr
 
         r AUTH antirez foo
@@ -830,7 +830,7 @@ start_server {tags {"acl external:skip"}} {
 
     test {When default user is off, new connections are not authenticated} {
         r ACL setuser default off
-        catch {set rd1 [redis_deferring_client]} e
+        catch {set rd1 [valkey_deferring_client]} e
         r ACL setuser default on
         set e
     } {*NOAUTH*}
@@ -905,7 +905,7 @@ start_server {tags {"acl external:skip"}} {
     test {ACL load non-existing configured ACL file} {
        catch {r ACL load} err
        set err
-    } {*Redis instance is not configured to use an ACL file*}
+    } {*instance is not configured to use an ACL file*}
 
     # If there is an AUTH failure the metric increases
     test {ACL-Metrics user AUTH failure} {
@@ -1024,8 +1024,8 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allc
         reconnect
         r ACL SETUSER doug on nopass resetchannels &test* +@all ~*
 
-        set rd1 [redis_deferring_client]
-        set rd2 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
 
         $rd1 AUTH alice alice
         $rd1 read
@@ -1055,8 +1055,8 @@ start_server [list overrides [list "dir" $server_path "acl-pubsub-default" "allc
         reconnect
         r ACL SETUSER mortimer on >mortimer ~* &* +@all
 
-        set rd1 [redis_deferring_client]
-        set rd2 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
 
         $rd1 AUTH alice alice
         $rd1 read
@@ -1227,10 +1227,10 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags
     }
     
     test {Test loading duplicate users in config on startup} {
-        catch {exec src/placeholderkv-server --user foo --user foo} err
+        catch {exec src/valkey-server --user foo --user foo} err
         assert_match {*Duplicate user*} $err
 
-        catch {exec src/placeholderkv-server --user default --user default} err
+        catch {exec src/valkey-server --user default --user default} err
         assert_match {*Duplicate user*} $err
     } {} {external:skip}
 }

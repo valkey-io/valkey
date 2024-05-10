@@ -41,11 +41,11 @@
                     "minimum": 1
                 },
                 {
-                    "description": "in case key doesn't exist.",
+                    "description": "In case key doesn't exist.",
                     "const": 0
                 },
                 {
-                    "description": "when the pivot wasn't found.",
+                    "description": "When the pivot wasn't found.",
                     "const": -1
                 }
             ]

@@ -30,7 +30,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "../redismodule.h"
+#include "../valkeymodule.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -40,79 +40,79 @@
 #define MSGTYPE_PONG 2
 
 /* HELLOCLUSTER.PINGALL */
-int PingallCommand_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+int PingallCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
-    RedisModule_SendClusterMessage(ctx,NULL,MSGTYPE_PING,"Hey",3);
-    return RedisModule_ReplyWithSimpleString(ctx, "OK");
+    ValkeyModule_SendClusterMessage(ctx,NULL,MSGTYPE_PING,"Hey",3);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
 /* HELLOCLUSTER.LIST */
-int ListCommand_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+int ListCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
     size_t numnodes;
-    char **ids = RedisModule_GetClusterNodesList(ctx,&numnodes);
+    char **ids = ValkeyModule_GetClusterNodesList(ctx,&numnodes);
     if (ids == NULL) {
-        return RedisModule_ReplyWithError(ctx,"Cluster not enabled");
+        return ValkeyModule_ReplyWithError(ctx,"Cluster not enabled");
     }
 
-    RedisModule_ReplyWithArray(ctx,numnodes);
+    ValkeyModule_ReplyWithArray(ctx,numnodes);
     for (size_t j = 0; j < numnodes; j++) {
         int port;
-        RedisModule_GetClusterNodeInfo(ctx,ids[j],NULL,NULL,&port,NULL);
-        RedisModule_ReplyWithArray(ctx,2);
-        RedisModule_ReplyWithStringBuffer(ctx,ids[j],REDISMODULE_NODE_ID_LEN);
-        RedisModule_ReplyWithLongLong(ctx,port);
+        ValkeyModule_GetClusterNodeInfo(ctx,ids[j],NULL,NULL,&port,NULL);
+        ValkeyModule_ReplyWithArray(ctx,2);
+        ValkeyModule_ReplyWithStringBuffer(ctx,ids[j],VALKEYMODULE_NODE_ID_LEN);
+        ValkeyModule_ReplyWithLongLong(ctx,port);
     }
-    RedisModule_FreeClusterNodesList(ids);
-    return REDISMODULE_OK;
+    ValkeyModule_FreeClusterNodesList(ids);
+    return VALKEYMODULE_OK;
 }
 
 /* Callback for message MSGTYPE_PING */
-void PingReceiver(RedisModuleCtx *ctx, const char *sender_id, uint8_t type, const unsigned char *payload, uint32_t len) {
-    RedisModule_Log(ctx,"notice","PING (type %d) RECEIVED from %.*s: '%.*s'",
-        type,REDISMODULE_NODE_ID_LEN,sender_id,(int)len, payload);
-    RedisModule_SendClusterMessage(ctx,NULL,MSGTYPE_PONG,"Ohi!",4);
-    RedisModuleCallReply *reply = RedisModule_Call(ctx, "INCR", "c", "pings_received");
-    RedisModule_FreeCallReply(reply);
+void PingReceiver(ValkeyModuleCtx *ctx, const char *sender_id, uint8_t type, const unsigned char *payload, uint32_t len) {
+    ValkeyModule_Log(ctx,"notice","PING (type %d) RECEIVED from %.*s: '%.*s'",
+        type,VALKEYMODULE_NODE_ID_LEN,sender_id,(int)len, payload);
+    ValkeyModule_SendClusterMessage(ctx,NULL,MSGTYPE_PONG,"Ohi!",4);
+    ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, "INCR", "c", "pings_received");
+    ValkeyModule_FreeCallReply(reply);
 }
 
 /* Callback for message MSGTYPE_PONG. */
-void PongReceiver(RedisModuleCtx *ctx, const char *sender_id, uint8_t type, const unsigned char *payload, uint32_t len) {
-    RedisModule_Log(ctx,"notice","PONG (type %d) RECEIVED from %.*s: '%.*s'",
-        type,REDISMODULE_NODE_ID_LEN,sender_id,(int)len, payload);
+void PongReceiver(ValkeyModuleCtx *ctx, const char *sender_id, uint8_t type, const unsigned char *payload, uint32_t len) {
+    ValkeyModule_Log(ctx,"notice","PONG (type %d) RECEIVED from %.*s: '%.*s'",
+        type,VALKEYMODULE_NODE_ID_LEN,sender_id,(int)len, payload);
 }
 
-/* This function must be present on each Redis module. It is used in order to
- * register the commands into the Redis server. */
-int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+/* This function must be present on each module. It is used in order to
+ * register the commands into the server. */
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
-    if (RedisModule_Init(ctx,"hellocluster",1,REDISMODULE_APIVER_1)
-        == REDISMODULE_ERR) return REDISMODULE_ERR;
+    if (ValkeyModule_Init(ctx,"hellocluster",1,VALKEYMODULE_APIVER_1)
+        == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"hellocluster.pingall",
-        PingallCommand_RedisCommand,"readonly",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"hellocluster.pingall",
+        PingallCommand_ValkeyCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"hellocluster.list",
-        ListCommand_RedisCommand,"readonly",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"hellocluster.list",
+        ListCommand_ValkeyCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    /* Disable Redis Cluster sharding and redirections. This way every node
+    /* Disable Cluster sharding and redirections. This way every node
      * will be able to access every possible key, regardless of the hash slot.
      * This way the PING message handler will be able to increment a specific
      * variable. Normally you do that in order for the distributed system
      * you create as a module to have total freedom in the keyspace
      * manipulation. */
-    RedisModule_SetClusterFlags(ctx,REDISMODULE_CLUSTER_FLAG_NO_REDIRECTION);
+    ValkeyModule_SetClusterFlags(ctx,VALKEYMODULE_CLUSTER_FLAG_NO_REDIRECTION);
 
     /* Register our handlers for different message types. */
-    RedisModule_RegisterClusterMessageReceiver(ctx,MSGTYPE_PING,PingReceiver);
-    RedisModule_RegisterClusterMessageReceiver(ctx,MSGTYPE_PONG,PongReceiver);
-    return REDISMODULE_OK;
+    ValkeyModule_RegisterClusterMessageReceiver(ctx,MSGTYPE_PING,PingReceiver);
+    ValkeyModule_RegisterClusterMessageReceiver(ctx,MSGTYPE_PONG,PongReceiver);
+    return VALKEYMODULE_OK;
 }

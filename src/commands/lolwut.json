@@ -1,6 +1,6 @@
 {
     "LOLWUT": {
-        "summary": "Displays computer art and the Redis version",
+        "summary": "Displays computer art and the server version",
         "group": "server",
         "since": "5.0.0",
         "arity": -1,
@@ -11,7 +11,7 @@
         ],
         "reply_schema": {
             "type": "string",
-            "description": "String containing the generative computer art, and a text with the Redis version."
+            "description": "String containing the generative computer art, and a text with the server version."
         },
         "arguments": [
             {

@@ -1,4 +1,4 @@
-proc rediscli_tls_config {testsdir} {
+proc valkeycli_tls_config {testsdir} {
     set tlsdir [file join $testsdir tls]
     set cert [file join $tlsdir client.crt]
     set key [file join $tlsdir client.key]
@@ -11,23 +11,30 @@ proc rediscli_tls_config {testsdir} {
     }
 }
 
-# Returns command line for executing redis-cli
-proc rediscli {host port {opts {}}} {
-    set cmd [list src/placeholderkv-cli -h $host -p $port]
-    lappend cmd {*}[rediscli_tls_config "tests"]
+# Returns command line for executing valkey-cli
+proc valkeycli {host port {opts {}}} {
+    set cmd [list src/valkey-cli -h $host -p $port]
+    lappend cmd {*}[valkeycli_tls_config "tests"]
     lappend cmd {*}$opts
     return $cmd
 }
 
-# Returns command line for executing redis-cli with a unix socket address
-proc rediscli_unixsocket {unixsocket {opts {}}} {
-    return [list src/placeholderkv-cli -s $unixsocket {*}$opts]
+proc valkeycliuri {scheme host port {opts {}}} {
+    set cmd [list src/valkey-cli -u $scheme$host:$port]
+    lappend cmd {*}[valkeycli_tls_config "tests"]
+    lappend cmd {*}$opts
+    return $cmd
 }
 
-# Run redis-cli with specified args on the server of specified level.
+# Returns command line for executing valkey-cli with a unix socket address
+proc valkeycli_unixsocket {unixsocket {opts {}}} {
+    return [list src/valkey-cli -s $unixsocket {*}$opts]
+}
+
+# Run valkey-cli with specified args on the server of specified level.
 # Returns output broken down into individual lines.
-proc rediscli_exec {level args} {
-    set cmd [rediscli_unixsocket [srv $level unixsocket] $args]
+proc valkeycli_exec {level args} {
+    set cmd [valkeycli_unixsocket [srv $level unixsocket] $args]
     set fd [open "|$cmd" "r"]
     set ret [lrange [split [read $fd] "\n"] 0 end-1]
     close $fd

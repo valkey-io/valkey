@@ -164,14 +164,17 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx, client *engine_client, client *ca
             int deny_write_type = writeCommandsDeniedByDiskError();
             if (deny_write_type != DISK_ERROR_TYPE_NONE && !obey_client) {
                 if (deny_write_type == DISK_ERROR_TYPE_RDB)
-                    addReplyError(caller, "-MISCONF Redis is configured to save RDB snapshots, "
+                    addReplyErrorFormat(caller, "-MISCONF %s is configured to save RDB snapshots, "
                                      "but it's currently unable to persist to disk. "
-                                     "Writable scripts are blocked. Use 'no-writes' flag for read only scripts.");
+                                     "Writable scripts are blocked. Use 'no-writes' flag for read only scripts.",
+                                     server.extended_redis_compat ? "Redis" : SERVER_TITLE);
                 else
-                    addReplyErrorFormat(caller, "-MISCONF Redis is configured to persist data to AOF, "
+                    addReplyErrorFormat(caller, "-MISCONF %s is configured to persist data to AOF, "
                                            "but it's currently unable to persist to disk. "
                                            "Writable scripts are blocked. Use 'no-writes' flag for read only scripts. "
-                                           "AOF error: %s", strerror(server.aof_last_write_errno));
+                                           "AOF error: %s",
+                                        server.extended_redis_compat ? "Redis" : SERVER_TITLE,
+                                        strerror(server.aof_last_write_errno));
                 return C_ERR;
             }
 
@@ -319,12 +322,12 @@ void scriptKill(client *c, int is_eval) {
     addReply(c, shared.ok);
 }
 
-static int scriptVerifyCommandArity(struct redisCommand *cmd, int argc, sds *err) {
+static int scriptVerifyCommandArity(struct serverCommand *cmd, int argc, sds *err) {
     if (!cmd || ((cmd->arity > 0 && cmd->arity != argc) || (argc < -cmd->arity))) {
         if (cmd)
-            *err = sdsnew("Wrong number of args calling Redis command from script");
+            *err = sdsnew("Wrong number of args calling command from script");
         else
-            *err = sdsnew("Unknown Redis command called from script");
+            *err = sdsnew("Unknown command called from script");
         return C_ERR;
     }
     return C_OK;
@@ -424,7 +427,7 @@ static int scriptVerifyClusterState(scriptRunCtx *run_ctx, client *c, client *or
     if (!server.cluster_enabled || mustObeyClient(original_c)) {
         return C_OK;
     }
-    /* If this is a Redis Cluster node, we need to make sure the script is not
+    /* If this is a Cluster node, we need to make sure the script is not
      * trying to access non-local keys, with the exception of commands
      * received from our master or when loading the AOF back in memory. */
     int error_code;
@@ -527,7 +530,7 @@ static int scriptVerifyAllowStale(client *c, sds *err) {
     return C_ERR;
 }
 
-/* Call a Redis command.
+/* Call a server command.
  * The reply is written to the run_ctx client and it is
  * up to the engine to take and parse.
  * The err out variable is set only if error occurs and describe the error.
@@ -541,7 +544,7 @@ void scriptCall(scriptRunCtx *run_ctx, sds *err) {
     /* Process module hooks */
     moduleCallCommandFilters(c);
 
-    struct redisCommand *cmd = lookupCommand(c->argv, c->argc);
+    struct serverCommand *cmd = lookupCommand(c->argv, c->argc);
     c->cmd = c->lastcmd = c->realcmd = cmd;
     if (scriptVerifyCommandArity(cmd, c->argc, err) != C_OK) {
         goto error;

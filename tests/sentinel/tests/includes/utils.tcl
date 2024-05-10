@@ -1,5 +1,5 @@
 proc restart_killed_instances {} {
-    foreach type {redis sentinel} {
+    foreach type {valkey sentinel} {
         foreach_${type}_id id {
             if {[get_instance_attrib $type $id pid] == -1} {
                 puts -nonewline "$type/$id "

@@ -14,7 +14,7 @@
             "SCRIPTING"
         ],
         "reply_schema": {
-            "description": "the serialized payload",
+            "description": "The serialized payload.",
             "type": "string"
         }
     }

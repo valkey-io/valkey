@@ -59,11 +59,11 @@ struct functionsLibCtx {
     dict *engines_stats; /* Per engine statistics */
 };
 
-typedef struct functionsLibMataData {
+typedef struct functionsLibMetaData {
     sds engine;
     sds name;
     sds code;
-} functionsLibMataData;
+} functionsLibMetaData;
 
 dictType engineDictType = {
         dictSdsCaseHash,       /* hash function */
@@ -404,7 +404,7 @@ done:
 /* Register an engine, should be called once by the engine on startup and give the following:
  *
  * - engine_name - name of the engine to register
- * - engine_ctx - the engine ctx that should be used by Redis to interact with the engine */
+ * - engine_ctx - the engine ctx that should be used by the server to interact with the engine */
 int functionsRegisterEngine(const char *engine_name, engine *engine) {
     sds engine_name_sds = sdsnew(engine_name);
     if (dictFetchValue(engines, engine_name_sds)) {
@@ -826,6 +826,7 @@ void functionFlushCommand(client *c) {
 
 /* FUNCTION HELP */
 void functionHelpCommand(client *c) {
+    /* clang-format off */
     const char *help[] = {
 "LOAD [REPLACE] <FUNCTION CODE>",
 "    Create a new library with the given library name and code.",
@@ -864,6 +865,7 @@ void functionHelpCommand(client *c) {
 "      libraries with the new libraries (notice that even on this option there is a chance of failure",
 "      in case of functions name collision with another library).",
 NULL };
+    /* clang-format on */
     addReplyHelp(c, help);
 }
 
@@ -886,7 +888,7 @@ static int functionsVerifyName(sds name) {
     return C_OK;
 }
 
-int functionExtractLibMetaData(sds payload, functionsLibMataData *md, sds *err) {
+int functionExtractLibMetaData(sds payload, functionsLibMetaData *md, sds *err) {
     sds name = NULL;
     sds engine = NULL;
     if (strncmp(payload, "#!", 2) != 0) {
@@ -945,7 +947,7 @@ error:
     return C_ERR;
 }
 
-void functionFreeLibMetaData(functionsLibMataData *md) {
+void functionFreeLibMetaData(functionsLibMetaData *md) {
     if (md->code) sdsfree(md->code);
     if (md->name) sdsfree(md->name);
     if (md->engine) sdsfree(md->engine);
@@ -958,7 +960,7 @@ sds functionsCreateWithLibraryCtx(sds code, int replace, sds* err, functionsLibC
     dictEntry *entry = NULL;
     functionLibInfo *new_li = NULL;
     functionLibInfo *old_li = NULL;
-    functionsLibMataData md = {0};
+    functionsLibMetaData md = {0};
     if (functionExtractLibMetaData(code, &md, err) != C_OK) {
         return NULL;
     }

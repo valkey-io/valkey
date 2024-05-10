@@ -4,8 +4,8 @@
 #include "functions.h"
 #include "cluster.h"
 
-static redisAtomic size_t lazyfree_objects = 0;
-static redisAtomic size_t lazyfreed_objects = 0;
+static serverAtomic size_t lazyfree_objects = 0;
+static serverAtomic size_t lazyfreed_objects = 0;
 
 /* Release objects from the lazyfree thread. It's just decrRefCount()
  * updating the count of objects to release. */
@@ -172,7 +172,7 @@ void freeObjAsync(robj *key, robj *obj, int dbid) {
     size_t free_effort = lazyfreeGetFreeEffort(key,obj,dbid);
     /* Note that if the object is shared, to reclaim it now it is not
      * possible. This rarely happens, however sometimes the implementation
-     * of parts of the Redis core may call incrRefCount() to protect
+     * of parts of the server core may call incrRefCount() to protect
      * objects, and then call dbDelete(). */
     if (free_effort > LAZYFREE_THRESHOLD && obj->refcount == 1) {
         atomicIncr(lazyfree_objects,1);
@@ -182,10 +182,10 @@ void freeObjAsync(robj *key, robj *obj, int dbid) {
     }
 }
 
-/* Empty a Redis DB asynchronously. What the function does actually is to
+/* Empty a DB asynchronously. What the function does actually is to
  * create a new empty set of hash tables and scheduling the old ones for
  * lazy freeing. */
-void emptyDbAsync(redisDb *db) {
+void emptyDbAsync(serverDb *db) {
     int slot_count_bits = 0;
     int flags = KVSTORE_ALLOCATE_DICTS_ON_DEMAND;
     if (server.cluster_enabled) {

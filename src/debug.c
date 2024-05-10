@@ -142,7 +142,7 @@ void mixStringObjectDigest(unsigned char *digest, robj *o) {
  * Note that this function does not reset the initial 'digest' passed, it
  * will continue mixing this object digest to anything that was already
  * present. */
-void xorObjectDigest(redisDb *db, robj *keyobj, unsigned char *digest, robj *o) {
+void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o) {
     uint32_t aux = htonl(o->type);
     mixDigest(digest,&aux,sizeof(aux));
     long long expiretime = getExpire(db,keyobj);
@@ -258,7 +258,7 @@ void xorObjectDigest(redisDb *db, robj *keyobj, unsigned char *digest, robj *o) 
         }
         streamIteratorStop(&si);
     } else if (o->type == OBJ_MODULE) {
-        RedisModuleDigest md = {{0},{0},keyobj,db->id};
+        ValkeyModuleDigest md = {{0},{0},keyobj,db->id};
         moduleValue *mv = o->ptr;
         moduleType *mt = mv->type;
         moduleInitDigestContext(md);
@@ -288,7 +288,7 @@ void computeDatasetDigest(unsigned char *final) {
     memset(final,0,20); /* Start with a clean result */
 
     for (j = 0; j < server.dbnum; j++) {
-        redisDb *db = server.db+j;
+        serverDb *db = server.db+j;
         if (kvstoreSize(db->keys) == 0)
             continue;
         kvstoreIterator *kvs_it = kvstoreIteratorInit(db->keys);
@@ -410,14 +410,14 @@ void debugCommand(client *c) {
 "DIGEST-VALUE <key> [<key> ...]",
 "    Output a hex signature of the values of all the specified keys.",
 "ERROR <string>",
-"    Return a Redis protocol error with <string> as message. Useful for clients",
-"    unit tests to simulate Redis errors.",
+"    Return a RESP protocol error with <string> as message. Useful for clients",
+"    unit tests to simulate error replies.",
 "LEAK <string>",
 "    Create a memory leak of the input string.",
 "LOG <message>",
 "    Write <message> to the server log.",
 "HTSTATS <dbid> [full]",
-"    Return hash table statistics of the specified Redis database.",
+"    Return hash table statistics of the specified database.",
 "HTSTATS-KEY <key> [full]",
 "    Like HTSTATS but for the hash table stored at <key>'s value.",
 "LOADAOF",
@@ -468,7 +468,7 @@ void debugCommand(client *c) {
 "    Crash the server with sigsegv.",
 "SET-ACTIVE-EXPIRE <0|1>",
 "    Setting it to 0 disables expiring keys in background when they are not",
-"    accessed (otherwise the Redis behavior). Setting it to 1 reenables back the",
+"    accessed (otherwise the behavior). Setting it to 1 reenables back the",
 "    default.",
 "QUICKLIST-PACKED-THRESHOLD <size>",
 "    Sets the threshold for elements to be inserted as plain vs packed nodes",
@@ -480,7 +480,7 @@ void debugCommand(client *c) {
 "STRINGMATCH-TEST",
 "    Run a fuzz tester against the stringmatchlen() function.",
 "STRUCTSIZE",
-"    Return the size of different Redis core C structures.",
+"    Return the size of different core C structures.",
 "LISTPACK <key>",
 "    Show low level info about the listpack encoding of <key>.",
 "QUICKLIST <key> [<0|1>]",
@@ -873,8 +873,7 @@ NULL
         server.aof_flush_sleep = atoi(c->argv[2]->ptr);
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"replicate") && c->argc >= 3) {
-        replicationFeedSlaves(server.slaves, -1,
-                c->argv + 2, c->argc - 2);
+        replicationFeedSlaves(-1, c->argv + 2, c->argc - 2);
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"error") && c->argc == 3) {
         sds errstr = sdsnewlen("-",1);
@@ -1157,8 +1156,9 @@ void _serverPanic(const char *file, int line, const char *msg, ...) {
 int bugReportStart(void) {
     pthread_mutex_lock(&bug_report_start_mutex);
     if (bug_report_start == 0) {
-        serverLogRaw(LL_WARNING|LL_RAW,
-        "\n\n=== REDIS BUG REPORT START: Cut & paste starting from here ===\n");
+        serverLog(LL_WARNING|LL_RAW,
+                  "\n\n=== %s BUG REPORT START: Cut & paste starting from here ===\n",
+                  server.extended_redis_compat ? "REDIS" : "VALKEY");
         bug_report_start = 1;
         pthread_mutex_unlock(&bug_report_start_mutex);
         return 1;
@@ -1191,6 +1191,7 @@ static void* getAndSetMcontextEip(ucontext_t *uc, void *eip) {
     #elif defined(__i386__)
     GET_SET_RETURN(uc->uc_mcontext->__ss.__eip, eip);
     #else
+    /* OSX PowerPC */
     GET_SET_RETURN(uc->uc_mcontext->__ss.__srr0, eip);
     #endif
 #elif defined(__APPLE__) && defined(MAC_OS_10_6_DETECTED)
@@ -1199,6 +1200,8 @@ static void* getAndSetMcontextEip(ucontext_t *uc, void *eip) {
     GET_SET_RETURN(uc->uc_mcontext->__ss.__rip, eip);
     #elif defined(__i386__)
     GET_SET_RETURN(uc->uc_mcontext->__ss.__eip, eip);
+    #elif defined(__ppc__)
+    GET_SET_RETURN(uc->uc_mcontext->__ss.__srr0, eip);
     #else
     /* OSX ARM64 */
     void *old_val = (void*)arm_thread_state64_get_pc(uc->uc_mcontext->__ss);
@@ -1260,7 +1263,7 @@ static void* getAndSetMcontextEip(ucontext_t *uc, void *eip) {
 #undef NOT_SUPPORTED
 }
 
-REDIS_NO_SANITIZE("address")
+VALKEY_NO_SANITIZE("address")
 void logStackContent(void **sp) {
     int i;
     for (i = 15; i >= 0; i--) {
@@ -1343,7 +1346,7 @@ void logRegisters(ucontext_t *uc) {
         (unsigned long) uc->uc_mcontext->__ss.__gs
     );
     logStackContent((void**)uc->uc_mcontext->__ss.__esp);
-    #else
+    #elif defined(__arm64__)
     /* OSX ARM64 */
     serverLog(LL_WARNING,
     "\n"
@@ -1392,6 +1395,9 @@ void logRegisters(ucontext_t *uc) {
         (unsigned long) uc->uc_mcontext->__ss.__cpsr
     );
     logStackContent((void**) arm_thread_state64_get_sp(uc->uc_mcontext->__ss));
+    #else
+    /* At the moment we do not implement this for PowerPC */
+    NOT_SUPPORTED();
     #endif
 /* Linux */
 #elif defined(__linux__)
@@ -1789,9 +1795,9 @@ void logRegisters(ucontext_t *uc) {
 
 #endif /* HAVE_BACKTRACE */
 
-/* Return a file descriptor to write directly to the Redis log with the
+/* Return a file descriptor to write directly to the server log with the
  * write(2) syscall, that can be used in critical sections of the code
- * where the rest of Redis can't be trusted (for example during the memory
+ * where the rest of server can't be trusted (for example during the memory
  * test) or when an API call requires a raw fd.
  *
  * Close it with closeDirectLogFiledes(). */
@@ -1991,7 +1997,7 @@ void logServerInfo(void) {
     robj *argv[1];
     argv[0] = createStringObject("all", strlen("all"));
     dict *section_dict = genInfoSectionDict(argv, 1, NULL, &all, &everything);
-    infostring = genRedisInfoString(section_dict, all, everything);
+    infostring = genValkeyInfoString(section_dict, all, everything);
     if (server.cluster_enabled){
         infostring = genClusterDebugString(infostring);
     }
@@ -2023,7 +2029,7 @@ void logModulesInfo(void) {
 }
 
 /* Log information about the "current" client, that is, the client that is
- * currently being served by Redis. May be NULL if Redis is not serving a
+ * currently being served by the server. May be NULL if the server is not serving a
  * client right now. */
 void logCurrentClient(client *cc, const char *title) {
     if (cc == NULL) return;
@@ -2149,7 +2155,7 @@ static void killMainThread(void) {
 
 /* Kill the running threads (other than current) in an unclean way. This function
  * should be used only when it's critical to stop the threads for some reason.
- * Currently Redis does this only on crash (for instance on SIGSEGV) in order
+ * Currently the server does this only on crash (for instance on SIGSEGV) in order
  * to perform a fast memory check without other threads messing with memory. */
 void killThreads(void) {
     killMainThread();
@@ -2252,7 +2258,7 @@ static void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
 
     bugReportStart();
     serverLog(LL_WARNING,
-        "Redis %s crashed by signal: %d, si_code: %d", REDIS_VERSION, sig, info->si_code);
+        SERVER_NAME " %s crashed by signal: %d, si_code: %d", VALKEY_VERSION, sig, info->si_code);
     if (sig == SIGSEGV || sig == SIGBUS) {
         serverLog(LL_WARNING,
         "Accessing address: %p", (void*)info->si_addr);
@@ -2379,14 +2385,14 @@ void printCrashReport(void) {
 void bugReportEnd(int killViaSignal, int sig) {
     struct sigaction act;
 
-    serverLogRawFromHandler(LL_WARNING|LL_RAW,
-"\n=== REDIS BUG REPORT END. Make sure to include from START to END. ===\n\n"
-"       Please report the crash by opening an issue on github:\n\n"
-"           http://github.com/redis/redis/issues\n\n"
-"  If a Redis module was involved, please open in the module's repo instead.\n\n"
-"  Suspect RAM error? Use redis-server --test-memory to verify it.\n\n"
-"  Some other issues could be detected by redis-server --check-system\n"
-);
+    serverLogFromHandler(LL_WARNING|LL_RAW,
+                         "\n=== %s BUG REPORT END. Make sure to include from START to END. ===\n\n"
+                         "       Please report the crash by opening an issue on github:\n\n"
+                         "           https://github.com/valkey-io/valkey/issues\n\n"
+                         "  If a module was involved, please open in the module's repo instead.\n\n"
+                         "  Suspect RAM error? Use valkey-server --test-memory to verify it.\n\n"
+                         "  Some other issues could be detected by valkey-server --check-system\n",
+                         server.extended_redis_compat ? "REDIS" : "VALKEY");
 
     /* free(messages); Don't call free() with possibly corrupted memory. */
     if (server.daemonize && server.supervised == 0 && server.pidfile) unlink(server.pidfile);
@@ -2624,7 +2630,7 @@ static size_t get_ready_to_signal_threads_tids(int sig_num, pid_t tids[TIDS_MAX_
         if(tids_count == TIDS_MAX_SIZE) break;
     }
 
-    /* Swap the last tid with the the current thread id */
+    /* Swap the last tid with the current thread id */
     if(current_thread_index != -1) {
         pid_t last_tid = tids[tids_count - 1];
 

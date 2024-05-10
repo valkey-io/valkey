@@ -233,7 +233,7 @@ int prepareReplicasToWrite(void) {
     return prepared;
 }
 
-/* Wrapper for feedReplicationBuffer() that takes Redis string objects
+/* Wrapper for feedReplicationBuffer() that takes string Objects
  * as input. */
 void feedReplicationBufferWithObject(robj *o) {
     char llstr[LONG_STR_SIZE];
@@ -434,7 +434,7 @@ void feedReplicationBuffer(char *s, size_t len) {
  * received by our clients in order to create the replication stream.
  * Instead if the instance is a replica and has sub-replicas attached, we use
  * replicationFeedStreamFromMasterStream() */
-void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
+void replicationFeedSlaves(int dictid, robj **argv, int argc) {
     int j, len;
     char llstr[LONG_STR_SIZE];
 
@@ -451,7 +451,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
 
     /* If there aren't slaves, and there is no backlog buffer to populate,
      * we can return ASAP. */
-    if (server.repl_backlog == NULL && listLength(slaves) == 0) {
+    if (server.repl_backlog == NULL && listLength(server.slaves) == 0) {
         /* We increment the repl_offset anyway, since we use that for tracking AOF fsyncs
          * even when there's no replication active. This code will not be reached if AOF
          * is also disabled. */
@@ -460,7 +460,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     }
 
     /* We can't have slaves attached and no backlog. */
-    serverAssert(!(listLength(slaves) != 0 && server.repl_backlog == NULL));
+    serverAssert(!(listLength(server.slaves) != 0 && server.repl_backlog == NULL));
 
     /* Must install write handler for all replicas first before feeding
      * replication stream. */
@@ -821,8 +821,8 @@ int masterTryPartialResynchronization(client *c, long long psync_offset) {
     refreshGoodSlavesCount();
 
     /* Fire the replica change modules event. */
-    moduleFireServerEvent(REDISMODULE_EVENT_REPLICA_CHANGE,
-                          REDISMODULE_SUBEVENT_REPLICA_CHANGE_ONLINE,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_REPLICA_CHANGE,
+                          VALKEYMODULE_SUBEVENT_REPLICA_CHANGE_ONLINE,
                           NULL);
 
     return C_OK; /* The caller can return, no full resync needed. */
@@ -1030,7 +1030,7 @@ void syncCommand(client *c) {
         }
     } else {
         /* If a slave uses SYNC, we are dealing with an old implementation
-         * of the replication protocol (like redis-cli --slave). Flag the client
+         * of the replication protocol (like valkey-cli --slave). Flag the client
          * so that we don't expect to receive REPLCONF ACK feedbacks. */
         c->flags |= CLIENT_PRE_PSYNC;
     }
@@ -1142,7 +1142,7 @@ void syncCommand(client *c) {
  *
  * - listening-port <port>
  * - ip-address <ip>
- * What is the listening ip and port of the Replica redis instance, so that
+ * What is the listening ip and port of the Replica instance, so that
  * the master can accurately lists replicas and their listening ports in the
  * INFO output.
  *
@@ -1308,11 +1308,14 @@ int replicaPutOnline(client *slave) {
 
     refreshGoodSlavesCount();
     /* Fire the replica change modules event. */
-    moduleFireServerEvent(REDISMODULE_EVENT_REPLICA_CHANGE,
-                          REDISMODULE_SUBEVENT_REPLICA_CHANGE_ONLINE,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_REPLICA_CHANGE,
+                          VALKEYMODULE_SUBEVENT_REPLICA_CHANGE_ONLINE,
                           NULL);
     serverLog(LL_NOTICE,"Synchronization with replica %s succeeded",
         replicationGetSlaveName(slave));
+
+    /* Replicate slot being migrated/imported to the new replica */
+    clusterReplicateOpenSlots();
     return 1;
 }
 
@@ -1618,7 +1621,7 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
         client *slave = ln->value;
 
         if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_END) {
-            struct redis_stat buf;
+            struct valkey_stat buf;
 
             if (bgsaveerr != C_OK) {
                 freeClientAsync(slave);
@@ -1666,8 +1669,8 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
                 }
                 slave->repl_start_cmd_stream_on_ack = 1;
             } else {
-                if ((slave->repldbfd = open(server.rdb_filename,O_RDONLY)) == -1 ||
-                    redis_fstat(slave->repldbfd,&buf) == -1) {
+                if ((slave->repldbfd = open(server.rdb_filename, O_RDONLY)) == -1 ||
+                    valkey_fstat(slave->repldbfd, &buf) == -1) {
                     freeClientAsync(slave);
                     serverLog(LL_WARNING,"SYNC failed. Can't open/stat DB after BGSAVE: %s", strerror(errno));
                     continue;
@@ -1840,13 +1843,13 @@ static int useDisklessLoad(void) {
 /* Helper function for readSyncBulkPayload() to initialize tempDb
  * before socket-loading the new db from master. The tempDb may be populated
  * by swapMainDbWithTempDb or freed by disklessLoadDiscardTempDb later. */
-redisDb *disklessLoadInitTempDb(void) {
+serverDb *disklessLoadInitTempDb(void) {
     return initTempDb();
 }
 
 /* Helper function for readSyncBulkPayload() to discard our tempDb
  * when the loading succeeded or failed. */
-void disklessLoadDiscardTempDb(redisDb *tempDb) {
+void disklessLoadDiscardTempDb(serverDb *tempDb) {
     discardTempDb(tempDb, replicationEmptyDbCallback);
 }
 
@@ -1870,7 +1873,7 @@ void readSyncBulkPayload(connection *conn) {
     char buf[PROTO_IOBUF_LEN];
     ssize_t nread, readlen, nwritten;
     int use_diskless_load = useDisklessLoad();
-    redisDb *diskless_load_tempDb = NULL;
+    serverDb *diskless_load_tempDb = NULL;
     functionsLibCtx* temp_functions_lib_ctx = NULL;
     int empty_db_flags = server.repl_slave_lazy_flush ? EMPTYDB_ASYNC :
                                                         EMPTYDB_NO_FLAGS;
@@ -2038,7 +2041,7 @@ void readSyncBulkPayload(connection *conn) {
     /* We reach this point in one of the following cases:
      *
      * 1. The replica is using diskless replication, that is, it reads data
-     *    directly from the socket to the Redis memory, without using
+     *    directly from the socket to the server memory, without using
      *    a temporary RDB file on disk. In that case we just block and
      *    read everything from the socket.
      *
@@ -2068,8 +2071,8 @@ void readSyncBulkPayload(connection *conn) {
         diskless_load_tempDb = disklessLoadInitTempDb();
         temp_functions_lib_ctx = functionsLibCtxCreate();
 
-        moduleFireServerEvent(REDISMODULE_EVENT_REPL_ASYNC_LOAD,
-                              REDISMODULE_SUBEVENT_REPL_ASYNC_LOAD_STARTED,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_REPL_ASYNC_LOAD,
+                              VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_STARTED,
                               NULL);
     } else {
         replicationAttachToNewMaster();
@@ -2088,7 +2091,7 @@ void readSyncBulkPayload(connection *conn) {
     rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
     if (use_diskless_load) {
         rio rdb;
-        redisDb *dbarray;
+        serverDb *dbarray;
         functionsLibCtx* functions_lib_ctx;
         int asyncLoading = 0;
 
@@ -2142,8 +2145,8 @@ void readSyncBulkPayload(connection *conn) {
 
             if (server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
                 /* Discard potentially partially loaded tempDb. */
-                moduleFireServerEvent(REDISMODULE_EVENT_REPL_ASYNC_LOAD,
-                                      REDISMODULE_SUBEVENT_REPL_ASYNC_LOAD_ABORTED,
+                moduleFireServerEvent(VALKEYMODULE_EVENT_REPL_ASYNC_LOAD,
+                                      VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_ABORTED,
                                       NULL);
 
                 disklessLoadDiscardTempDb(diskless_load_tempDb);
@@ -2173,8 +2176,8 @@ void readSyncBulkPayload(connection *conn) {
             /* swap existing functions ctx with the temporary one */
             functionsLibCtxSwapWithCurrent(temp_functions_lib_ctx);
 
-            moduleFireServerEvent(REDISMODULE_EVENT_REPL_ASYNC_LOAD,
-                        REDISMODULE_SUBEVENT_REPL_ASYNC_LOAD_COMPLETED,
+            moduleFireServerEvent(VALKEYMODULE_EVENT_REPL_ASYNC_LOAD,
+                        VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_COMPLETED,
                         NULL);
 
             /* Delete the old db as it's useless now. */
@@ -2269,8 +2272,8 @@ void readSyncBulkPayload(connection *conn) {
     server.repl_down_since = 0;
 
     /* Fire the master link modules event. */
-    moduleFireServerEvent(REDISMODULE_EVENT_MASTER_LINK_CHANGE,
-                          REDISMODULE_SUBEVENT_MASTER_LINK_UP,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE,
+                          VALKEYMODULE_SUBEVENT_PRIMARY_LINK_UP,
                           NULL);
 
     /* After a full resynchronization we use the replication ID and
@@ -2288,7 +2291,7 @@ void readSyncBulkPayload(connection *conn) {
     serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Finished with success");
 
     if (server.supervised_mode == SUPERVISED_SYSTEMD) {
-        redisCommunicateSystemd("STATUS=MASTER <-> REPLICA sync: Finished with success. Ready to accept connections in read-write mode.\n");
+        serverCommunicateSystemd("STATUS=MASTER <-> REPLICA sync: Finished with success. Ready to accept connections in read-write mode.\n");
     }
 
     /* Send the initial ACK immediately to put this replica in online state. */
@@ -2342,7 +2345,7 @@ char *sendCommand(connection *conn, ...) {
     size_t argslen = 0;
     char *arg;
 
-    /* Create the command to send to the master, we use redis binary
+    /* Create the command to send to the master, we use binary
      * protocol to make sure correct arguments are sent. This function
      * is not safe for all binary data. */
     va_start(ap,conn);
@@ -2665,7 +2668,7 @@ void syncWithMaster(connection *conn) {
 
         /* We accept only two replies as valid, a positive +PONG reply
          * (we just check for "+") or an authentication error.
-         * Note that older versions of Redis replied with "operation not
+         * Note that older versions of Redis OSS replied with "operation not
          * permitted" instead of using a proper error code, so we test
          * both. */
         if (err[0] != '+' &&
@@ -2765,7 +2768,7 @@ void syncWithMaster(connection *conn) {
     if (server.repl_state == REPL_STATE_RECEIVE_PORT_REPLY) {
         err = receiveSynchronousResponse(conn);
         if (err == NULL) goto no_response_error;
-        /* Ignore the error if any, not all the Redis versions support
+        /* Ignore the error if any, not all the Redis OSS versions support
          * REPLCONF listening-port. */
         if (err[0] == '-') {
             serverLog(LL_NOTICE,"(Non critical) Master does not understand "
@@ -2783,7 +2786,7 @@ void syncWithMaster(connection *conn) {
     if (server.repl_state == REPL_STATE_RECEIVE_IP_REPLY) {
         err = receiveSynchronousResponse(conn);
         if (err == NULL) goto no_response_error;
-        /* Ignore the error if any, not all the Redis versions support
+        /* Ignore the error if any, not all the Redis OSS versions support
          * REPLCONF ip-address. */
         if (err[0] == '-') {
             serverLog(LL_NOTICE,"(Non critical) Master does not understand "
@@ -2798,7 +2801,7 @@ void syncWithMaster(connection *conn) {
     if (server.repl_state == REPL_STATE_RECEIVE_CAPA_REPLY) {
         err = receiveSynchronousResponse(conn);
         if (err == NULL) goto no_response_error;
-        /* Ignore the error if any, not all the Redis versions support
+        /* Ignore the error if any, not all the Redis OSS versions support
          * REPLCONF capa. */
         if (err[0] == '-') {
             serverLog(LL_NOTICE,"(Non critical) Master does not understand "
@@ -2859,7 +2862,7 @@ void syncWithMaster(connection *conn) {
     if (psync_result == PSYNC_CONTINUE) {
         serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Master accepted a Partial Resynchronization.");
         if (server.supervised_mode == SUPERVISED_SYSTEMD) {
-            redisCommunicateSystemd("STATUS=MASTER <-> REPLICA sync: Partial Resynchronization accepted. Ready to accept connections in read-write mode.\n");
+            serverCommunicateSystemd("STATUS=MASTER <-> REPLICA sync: Partial Resynchronization accepted. Ready to accept connections in read-write mode.\n");
         }
         return;
     }
@@ -3044,14 +3047,14 @@ void replicationSetMaster(char *ip, int port) {
     }
 
     /* Fire the role change modules event. */
-    moduleFireServerEvent(REDISMODULE_EVENT_REPLICATION_ROLE_CHANGED,
-                          REDISMODULE_EVENT_REPLROLECHANGED_NOW_REPLICA,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_REPLICATION_ROLE_CHANGED,
+                          VALKEYMODULE_EVENT_REPLROLECHANGED_NOW_REPLICA,
                           NULL);
 
     /* Fire the master link modules event. */
     if (server.repl_state == REPL_STATE_CONNECTED)
-        moduleFireServerEvent(REDISMODULE_EVENT_MASTER_LINK_CHANGE,
-                              REDISMODULE_SUBEVENT_MASTER_LINK_DOWN,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE,
+                              VALKEYMODULE_SUBEVENT_PRIMARY_LINK_DOWN,
                               NULL);
 
     server.repl_state = REPL_STATE_CONNECT;
@@ -3066,8 +3069,8 @@ void replicationUnsetMaster(void) {
 
     /* Fire the master link modules event. */
     if (server.repl_state == REPL_STATE_CONNECTED)
-        moduleFireServerEvent(REDISMODULE_EVENT_MASTER_LINK_CHANGE,
-                              REDISMODULE_SUBEVENT_MASTER_LINK_DOWN,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE,
+                              VALKEYMODULE_SUBEVENT_PRIMARY_LINK_DOWN,
                               NULL);
 
     /* Clear masterhost first, since the freeClient calls
@@ -3108,8 +3111,8 @@ void replicationUnsetMaster(void) {
     server.repl_down_since = 0;
 
     /* Fire the role change modules event. */
-    moduleFireServerEvent(REDISMODULE_EVENT_REPLICATION_ROLE_CHANGED,
-                          REDISMODULE_EVENT_REPLROLECHANGED_NOW_MASTER,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_REPLICATION_ROLE_CHANGED,
+                          VALKEYMODULE_EVENT_REPLROLECHANGED_NOW_PRIMARY,
                           NULL);
 
     /* Restart the AOF subsystem in case we shut it down during a sync when
@@ -3122,8 +3125,8 @@ void replicationUnsetMaster(void) {
 void replicationHandleMasterDisconnection(void) {
     /* Fire the master link modules event. */
     if (server.repl_state == REPL_STATE_CONNECTED)
-        moduleFireServerEvent(REDISMODULE_EVENT_MASTER_LINK_CHANGE,
-                              REDISMODULE_SUBEVENT_MASTER_LINK_DOWN,
+        moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE,
+                              VALKEYMODULE_SUBEVENT_PRIMARY_LINK_DOWN,
                               NULL);
 
     server.master = NULL;
@@ -3250,6 +3253,7 @@ void roleCommand(client *c) {
         if (slaveIsInHandshakeState()) {
             slavestate = "handshake";
         } else {
+            /* clang-format off */
             switch(server.repl_state) {
             case REPL_STATE_NONE: slavestate = "none"; break;
             case REPL_STATE_CONNECT: slavestate = "connect"; break;
@@ -3258,6 +3262,7 @@ void roleCommand(client *c) {
             case REPL_STATE_CONNECTED: slavestate = "connected"; break;
             default: slavestate = "unknown"; break;
             }
+            /* clang-format on */
         }
         addReplyBulkCString(c,slavestate);
         addReplyLongLong(c,server.master ? server.master->reploff : -1);
@@ -3411,8 +3416,8 @@ void replicationResurrectCachedMaster(connection *conn) {
     server.repl_down_since = 0;
 
     /* Fire the master link modules event. */
-    moduleFireServerEvent(REDISMODULE_EVENT_MASTER_LINK_CHANGE,
-                          REDISMODULE_SUBEVENT_MASTER_LINK_UP,
+    moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE,
+                          VALKEYMODULE_SUBEVENT_PRIMARY_LINK_UP,
                           NULL);
 
     /* Re-add to the list of clients. */
@@ -3465,9 +3470,9 @@ int checkGoodReplicasStatus(void) {
 }
 
 /* ----------------------- SYNCHRONOUS REPLICATION --------------------------
- * Redis synchronous replication design can be summarized in points:
+ * Synchronous replication design can be summarized in points:
  *
- * - Redis masters have a global replication offset, used by PSYNC.
+ * - Masters have a global replication offset, used by PSYNC.
  * - Master increment the offset every time new commands are sent to slaves.
  * - Slaves ping back masters with the offset processed so far.
  *
@@ -3540,7 +3545,7 @@ void waitCommand(client *c) {
     long long offset = c->woff;
 
     if (server.masterhost) {
-        addReplyError(c,"WAIT cannot be used with replica instances. Please also note that since Redis 4.0 if a replica is configured to be writable (which is not the default) writes to replicas are just local and are not propagated.");
+        addReplyError(c,"WAIT cannot be used with replica instances. Please also note that if a replica is configured to be writable (which is not the default) writes to replicas are just local and are not propagated.");
         return;
     }
 
@@ -3619,8 +3624,8 @@ void unblockClientWaitingReplicas(client *c) {
     updateStatsOnUnblock(c, 0, 0, 0);
 }
 
-/* Check if there are clients blocked in WAIT or WAITAOF that can be unblocked
- * since we received enough ACKs from slaves. */
+/* Check if there are clients blocked in WAIT, WAITAOF, or WAIT_PREREPL
+ * that can be unblocked since we received enough ACKs from replicas. */
 void processClientsWaitingReplicas(void) {
     long long last_offset = 0;
     long long last_aof_offset = 0;
@@ -3637,6 +3642,7 @@ void processClientsWaitingReplicas(void) {
 
         client *c = ln->value;
         int is_wait_aof = c->bstate.btype == BLOCKED_WAITAOF;
+        int is_wait_prerepl = c->bstate.btype == BLOCKED_WAIT_PREREPL;
 
         if (is_wait_aof && c->bstate.numlocal && !server.aof_enabled) {
             addReplyError(c, "WAITAOF cannot be used when numlocal is set but appendonly is disabled.");
@@ -3686,6 +3692,8 @@ void processClientsWaitingReplicas(void) {
             addReplyArrayLen(c, 2);
             addReplyLongLong(c, numlocal);
             addReplyLongLong(c, numreplicas);
+        } else if (is_wait_prerepl) {
+            c->flags |= CLIENT_PREREPL_DONE;
         } else {
             addReplyLongLong(c, numreplicas);
         }
@@ -3777,7 +3785,7 @@ void replicationCron(void) {
         listLength(server.slaves))
     {
         /* Note that we don't send the PING if the clients are paused during
-         * a Redis Cluster manual failover: the PING we send will otherwise
+         * a Cluster manual failover: the PING we send will otherwise
          * alter the replication offsets of master and slave, and will no longer
          * match the one stored into 'mf_master_offset' state. */
         int manual_failover_in_progress =
@@ -3788,8 +3796,7 @@ void replicationCron(void) {
 
         if (!manual_failover_in_progress) {
             ping_argv[0] = shared.ping;
-            replicationFeedSlaves(server.slaves, -1,
-                ping_argv, 1);
+            replicationFeedSlaves(-1, ping_argv, 1);
         }
     }
 
@@ -3895,7 +3902,7 @@ void replicationCron(void) {
 
     replicationStartPendingFork();
 
-    /* Remove the RDB file used for replication if Redis is not running
+    /* Remove the RDB file used for replication if the server is not running
      * with any persistence. */
     removeRDBUsedToSyncReplicas();
 

@@ -41,7 +41,6 @@
 #include <sys/wait.h>
 #include <sys/param.h>
 
-void freeClientArgv(client *c);
 off_t getAppendOnlyFileSize(sds filename, int *status);
 off_t getBaseAndIncrAppendOnlyFilesSize(aofManifest *am, int *status);
 int getBaseAndIncrAppendOnlyFilesNum(aofManifest *am);
@@ -59,11 +58,11 @@ void aof_background_fsync_and_close(int fd);
  *
  * Append-only files consist of three types:
  *
- * BASE: Represents a Redis snapshot from the time of last AOF rewrite. The manifest
+ * BASE: Represents a server snapshot from the time of last AOF rewrite. The manifest
  * file contains at most a single BASE file, which will always be the first file in the
  * list.
  *
- * INCR: Represents all write commands executed by Redis following the last successful
+ * INCR: Represents all write commands executed by the server following the last successful
  * AOF rewrite. In some cases it is possible to have several ordered INCR files. For
  * example:
  *   - During an on-going AOF rewrite
@@ -119,7 +118,7 @@ aofInfo *aofInfoDup(aofInfo *orig) {
 
 /* Format aofInfo as a string and it will be a line in the manifest.
  *
- * When update this format, make sure to update redis-check-aof as well. */
+ * When update this format, make sure to update valkey-check-aof as well. */
 sds aofInfoFormat(sds buf, aofInfo *ai) {
     sds filename_repr = NULL;
 
@@ -222,10 +221,10 @@ sds getAofManifestAsString(aofManifest *am) {
 }
 
 /* Load the manifest information from the disk to `server.aof_manifest`
- * when the Redis server start.
+ * when the server starts.
  *
  * During loading, this function does strict error checking and will abort
- * the entire Redis server process on error (I/O error, invalid format, etc.)
+ * the entire server process on error (I/O error, invalid format, etc.)
  *
  * If the AOF directory or manifest file do not exist, this will be ignored
  * in order to support seamless upgrades from previous versions which did not
@@ -253,7 +252,7 @@ void aofLoadManifestFromDisk(void) {
     sdsfree(am_filepath);
 }
 
-/* Generic manifest loading function, used in `aofLoadManifestFromDisk` and redis-check-aof tool. */
+/* Generic manifest loading function, used in `aofLoadManifestFromDisk` and valkey-check-aof tool. */
 #define MANIFEST_MAX_LINE 1024
 aofManifest *aofLoadManifestFromFile(sds am_filepath) {
     const char *err = NULL;
@@ -561,7 +560,7 @@ int writeAofManifestFile(sds buf) {
         buf += nwritten;
     }
 
-    if (redis_fsync(fd) == -1) {
+    if (valkey_fsync(fd) == -1) {
         serverLog(LL_WARNING, "Fail to fsync the temp AOF file %s: %s.",
             tmp_am_name, strerror(errno));
 
@@ -609,7 +608,7 @@ int persistAofManifest(aofManifest *am) {
     return ret;
 }
 
-/* Called in `loadAppendOnlyFiles` when we upgrade from a old version redis.
+/* Called in `loadAppendOnlyFiles` when we upgrade from a old version of the server.
  *
  * 1) Create AOF directory use 'server.aof_dirname' as the name.
  * 2) Use 'server.aof_filename' to construct a BASE type aofInfo and add it to
@@ -617,7 +616,7 @@ int persistAofManifest(aofManifest *am) {
  * 3) Move the old AOF file (server.aof_filename) to AOF directory.
  *
  * If any of the above steps fails or crash occurs, this will not cause any
- * problems, and redis will retry the upgrade process when it restarts.
+ * problems, and the server will retry the upgrade process when it restarts.
  */
 void aofUpgradePrepare(aofManifest *am) {
     serverAssert(!aofFileExist(server.aof_filename));
@@ -701,16 +700,15 @@ void aofDelTempIncrAofFile(void) {
     bg_unlink(aof_filepath);
     sdsfree(aof_filepath);
     sdsfree(aof_filename);
-    return;
 }
 
-/* Called after `loadDataFromDisk` when redis start. If `server.aof_state` is
+/* Called after `loadDataFromDisk` when the server starts. If `server.aof_state` is
  * 'AOF_ON', It will do three things:
- * 1. Force create a BASE file when redis starts with an empty dataset
+ * 1. Force create a BASE file when the server starts with an empty dataset
  * 2. Open the last opened INCR type AOF for writing, If not, create a new one
  * 3. Synchronously update the manifest file to the disk
  *
- * If any of the above steps fails, the redis process will exit.
+ * If any of the above steps fails, the server process will exit.
  */
 void aofOpenIfNeededOnServerStart(void) {
     if (server.aof_state != AOF_ON) {
@@ -856,7 +854,7 @@ cleanup:
 
 /* Whether to limit the execution of Background AOF rewrite.
  *
- * At present, if AOFRW fails, redis will automatically retry. If it continues
+ * At present, if AOFRW fails, the server will automatically retry. If it continues
  * to fail, we may get a lot of very small INCR files. so we need an AOFRW
  * limiting measure.
  *
@@ -953,7 +951,7 @@ void killAppendOnlyChild(void) {
 void stopAppendOnly(void) {
     serverAssert(server.aof_state != AOF_OFF);
     flushAppendOnlyFile(1);
-    if (redis_fsync(server.aof_fd) == -1) {
+    if (valkey_fsync(server.aof_fd) == -1) {
         serverLog(LL_WARNING,"Fail to fsync the AOF file: %s",strerror(errno));
     } else {
         server.aof_last_fsync = server.mstime;
@@ -996,7 +994,7 @@ int startAppendOnly(void) {
 
         if (rewriteAppendOnlyFileBackground() == C_ERR) {
             server.aof_state = AOF_OFF;
-            serverLog(LL_WARNING,"Redis needs to enable the AOF but can't trigger a background AOF rewrite operation. Check the above logs for more info about the error.");
+            serverLog(LL_WARNING,"The server needs to enable the AOF but can't trigger a background AOF rewrite operation. Check the above logs for more info about the error.");
             return C_ERR;
         }
     }
@@ -1121,7 +1119,7 @@ void flushAppendOnlyFile(int force) {
             /* Otherwise fall through, and go write since we can't wait
              * over two seconds. */
             server.aof_delayed_fsync++;
-            serverLog(LL_NOTICE,"Asynchronous AOF fsync is taking too long (disk is busy?). Writing the AOF buffer without waiting for fsync to complete, this may slow down Redis.");
+            serverLog(LL_NOTICE,"Asynchronous AOF fsync is taking too long (disk is busy?). Writing the AOF buffer without waiting for fsync to complete, this may slow down the server.");
         }
     }
     /* We want to perform a single write. This should be guaranteed atomic
@@ -1183,7 +1181,7 @@ void flushAppendOnlyFile(int force) {
             if (ftruncate(server.aof_fd, server.aof_last_incr_size) == -1) {
                 if (can_log) {
                     serverLog(LL_WARNING, "Could not remove short write "
-                             "from the append-only file.  Redis may refuse "
+                             "from the append-only file. The server may refuse "
                              "to load the AOF the next time it starts.  "
                              "ftruncate: %s", strerror(errno));
                 }
@@ -1224,7 +1222,7 @@ void flushAppendOnlyFile(int force) {
          * OK state and log the event. */
         if (server.aof_last_write_status == C_ERR) {
             serverLog(LL_NOTICE,
-                "AOF write error looks solved, Redis can write again.");
+                "AOF write error looks solved. The server can write again.");
             server.aof_last_write_status = C_OK;
         }
     }
@@ -1248,13 +1246,13 @@ try_fsync:
 
     /* Perform the fsync if needed. */
     if (server.aof_fsync == AOF_FSYNC_ALWAYS) {
-        /* redis_fsync is defined as fdatasync() for Linux in order to avoid
+        /* valkey_fsync is defined as fdatasync() for Linux in order to avoid
          * flushing metadata. */
         latencyStartMonitor(latency);
         /* Let's try to get this data on the disk. To guarantee data safe when
          * the AOF fsync policy is 'always', we should exit if failed to fsync
          * AOF (see comment next to the exit(1) after write error above). */
-        if (redis_fsync(server.aof_fd) == -1) {
+        if (valkey_fsync(server.aof_fd) == -1) {
             serverLog(LL_WARNING,"Can't persist AOF for fsync error when the "
               "AOF fsync policy is 'always': %s. Exiting...", strerror(errno));
             exit(1);
@@ -1371,7 +1369,7 @@ void feedAppendOnlyFile(int dictid, robj **argv, int argc) {
  * AOF loading
  * ------------------------------------------------------------------------- */
 
-/* In Redis commands are always executed in the context of a client, so in
+/* Commands are always executed in the context of a client, so in
  * order to load the append only file we need to create a fake client. */
 struct client *createAOFClient(void) {
     struct client *c = createClient(NULL);
@@ -1390,7 +1388,7 @@ struct client *createAOFClient(void) {
     c->flags = CLIENT_DENY_BLOCKING;
 
     /* We set the fake client as a slave waiting for the synchronization
-     * so that Redis will not try to send replies to this client. */
+     * so that the server will not try to send replies to this client. */
     c->replstate = SLAVE_STATE_WAIT_BGSAVE_START;
     return c;
 }
@@ -1403,7 +1401,7 @@ struct client *createAOFClient(void) {
  * AOF_FAILED: Failed to load the AOF file. */
 int loadSingleAppendOnlyFile(char *filename) {
     struct client *fakeClient;
-    struct redis_stat sb;
+    struct valkey_stat sb;
     int old_aof_state = server.aof_state;
     long loops = 0;
     off_t valid_up_to = 0; /* Offset of latest well-formed command loaded. */
@@ -1415,7 +1413,7 @@ int loadSingleAppendOnlyFile(char *filename) {
     FILE *fp = fopen(aof_filepath, "r");
     if (fp == NULL) {
         int en = errno;
-        if (redis_stat(aof_filepath, &sb) == 0 || errno != ENOENT) {
+        if (valkey_stat(aof_filepath, &sb) == 0 || errno != ENOENT) {
             serverLog(LL_WARNING,"Fatal error: can't open the append log file %s for reading: %s", filename, strerror(en));
             sdsfree(aof_filepath);
             return AOF_OPEN_ERR;
@@ -1426,7 +1424,7 @@ int loadSingleAppendOnlyFile(char *filename) {
         }
     }
 
-    if (fp && redis_fstat(fileno(fp),&sb) != -1 && sb.st_size == 0) {
+    if (fp && valkey_fstat(fileno(fp), &sb) != -1 && sb.st_size == 0) {
         fclose(fp);
         sdsfree(aof_filepath);
         return AOF_EMPTY;
@@ -1481,7 +1479,7 @@ int loadSingleAppendOnlyFile(char *filename) {
         robj **argv;
         char buf[AOF_ANNOTATION_LINE_MAX_LEN];
         sds argsds;
-        struct redisCommand *cmd;
+        struct serverCommand *cmd;
 
         /* Serve the clients from time to time */
         if (!(loops++ % 1024)) {
@@ -1634,14 +1632,14 @@ uxeof: /* Unexpected AOF end of file. */
         }
     }
     serverLog(LL_WARNING, "Unexpected end of file reading the append only file %s. You can: "
-        "1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename.manifest>. "
+        "1) Make a backup of your AOF file, then use ./valkey-check-aof --fix <filename.manifest>. "
         "2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server.", filename);
     ret = AOF_FAILED;
     goto cleanup;
 
 fmterr: /* Format error. */
     serverLog(LL_WARNING, "Bad file format reading the append only file %s: "
-        "make a backup of your AOF file, then use ./redis-check-aof --fix <filename.manifest>", filename);
+        "make a backup of your AOF file, then use ./valkey-check-aof --fix <filename.manifest>", filename);
     ret = AOF_FAILED;
     /* fall through to cleanup. */
 
@@ -1664,7 +1662,7 @@ int loadAppendOnlyFiles(aofManifest *am) {
     int total_num, aof_num = 0, last_file;
 
     /* If the 'server.aof_filename' file exists in dir, we may be starting
-     * from an old redis version. We will use enter upgrade mode in three situations.
+     * from an old server version. We will use enter upgrade mode in three situations.
      *
      * 1. If the 'server.aof_dirname' directory not exist
      * 2. If the 'server.aof_dirname' directory exists but the manifest file is missing
@@ -1954,7 +1952,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
 }
 
 /* Write either the key or the value of the currently selected item of a hash.
- * The 'hi' argument passes a valid Redis hash iterator.
+ * The 'hi' argument passes a valid hash iterator.
  * The 'what' filed specifies if to write a key or a value and can be
  * either OBJ_HASH_KEY or OBJ_HASH_VALUE.
  *
@@ -2035,6 +2033,7 @@ int rioWriteStreamPendingEntry(rio *r, robj *key, const char *groupname, size_t 
                RETRYCOUNT <count> JUSTID FORCE. */
     streamID id;
     streamDecodeID(rawid,&id);
+    /* clang-format off */
     if (rioWriteBulkCount(r,'*',12) == 0) return 0;
     if (rioWriteBulkString(r,"XCLAIM",6) == 0) return 0;
     if (rioWriteBulkObject(r,key) == 0) return 0;
@@ -2048,6 +2047,7 @@ int rioWriteStreamPendingEntry(rio *r, robj *key, const char *groupname, size_t 
     if (rioWriteBulkLongLong(r,nack->delivery_count) == 0) return 0;
     if (rioWriteBulkString(r,"JUSTID",6) == 0) return 0;
     if (rioWriteBulkString(r,"FORCE",5) == 0) return 0;
+    /* clang-format on */
     return 1;
 }
 
@@ -2056,12 +2056,14 @@ int rioWriteStreamPendingEntry(rio *r, robj *key, const char *groupname, size_t 
  * All this in the context of the specified key and group. */
 int rioWriteStreamEmptyConsumer(rio *r, robj *key, const char *groupname, size_t groupname_len, streamConsumer *consumer) {
     /* XGROUP CREATECONSUMER <key> <group> <consumer> */
+    /* clang-format off */
     if (rioWriteBulkCount(r,'*',5) == 0) return 0;
     if (rioWriteBulkString(r,"XGROUP",6) == 0) return 0;
     if (rioWriteBulkString(r,"CREATECONSUMER",14) == 0) return 0;
     if (rioWriteBulkObject(r,key) == 0) return 0;
     if (rioWriteBulkString(r,groupname,groupname_len) == 0) return 0;
     if (rioWriteBulkString(r,consumer->name,sdslen(consumer->name)) == 0) return 0;
+    /* clang-format on */
     return 1;
 }
 
@@ -2208,10 +2210,10 @@ int rewriteStreamObject(rio *r, robj *key, robj *o) {
 }
 
 /* Call the module type callback in order to rewrite a data type
- * that is exported by a module and is not handled by Redis itself.
+ * that is exported by a module and is not handled by the server itself.
  * The function returns 0 on error, 1 on success. */
 int rewriteModuleObject(rio *r, robj *key, robj *o, int dbid) {
-    RedisModuleIO io;
+    ValkeyModuleIO io;
     moduleValue *mv = o->ptr;
     moduleType *mt = mv->type;
     moduleInitIOContext(io,mt,r,key,dbid);
@@ -2260,7 +2262,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
 
     for (j = 0; j < server.dbnum; j++) {
         char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
-        redisDb *db = server.db + j;
+        serverDb *db = server.db + j;
         if (kvstoreSize(db->keys) == 0) continue;
 
         /* SELECT the new DB */
@@ -2347,7 +2349,7 @@ werr:
  * "filename". Used both by REWRITEAOF and BGREWRITEAOF.
  *
  * In order to minimize the number of commands needed in the rewritten
- * log Redis uses variadic commands when possible, such as RPUSH, SADD
+ * log, the server uses variadic commands when possible, such as RPUSH, SADD
  * and ZADD. However at max AOF_REWRITE_ITEMS_PER_CMD items per time
  * are inserted using a single command. */
 int rewriteAppendOnlyFile(char *filename) {
@@ -2419,7 +2421,7 @@ werr:
 /* This is how rewriting of the append only file in background works:
  *
  * 1) The user calls BGREWRITEAOF
- * 2) Redis calls this function, that forks():
+ * 2) The server calls this function, that forks():
  *    2a) the child rewrite the append only file in a temp file.
  *    2b) the parent open a new INCR AOF file to continue writing.
  * 3) When the child finished '2a' exists.
@@ -2467,12 +2469,16 @@ int rewriteAppendOnlyFileBackground(void) {
 
     server.stat_aof_rewrites++;
 
-    if ((childpid = redisFork(CHILD_TYPE_AOF)) == 0) {
+    if ((childpid = serverFork(CHILD_TYPE_AOF)) == 0) {
         char tmpfile[256];
 
         /* Child */
-        redisSetProcTitle("redis-aof-rewrite");
-        redisSetCpuAffinity(server.aof_rewrite_cpulist);
+        if (strstr(server.exec_argv[0],"redis-server") != NULL) {
+            serverSetProcTitle("redis-aof-rewrite");
+        } else {
+            serverSetProcTitle("valkey-aof-rewrite");
+        }
+        serverSetCpuAffinity(server.aof_rewrite_cpulist);
         snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) getpid());
         if (rewriteAppendOnlyFile(tmpfile) == C_OK) {
             serverLog(LL_NOTICE,
@@ -2531,13 +2537,13 @@ void aofRemoveTempFile(pid_t childpid) {
  * The status argument is an optional output argument to be filled with
  * one of the AOF_ status values. */
 off_t getAppendOnlyFileSize(sds filename, int *status) {
-    struct redis_stat sb;
+    struct valkey_stat sb;
     off_t size;
     mstime_t latency;
 
     sds aof_filepath = makePath(server.aof_dirname, filename);
     latencyStartMonitor(latency);
-    if (redis_stat(aof_filepath, &sb) == -1) {
+    if (valkey_stat(aof_filepath, &sb) == -1) {
         if (status) *status = errno == ENOENT ? AOF_NOT_EXIST : AOF_OPEN_ERR;
         serverLog(LL_WARNING, "Unable to obtain the AOF file %s length. stat: %s",
             filename, strerror(errno));

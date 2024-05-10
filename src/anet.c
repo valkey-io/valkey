@@ -194,6 +194,7 @@ int anetKeepAlive(char *err, int fd, int interval)
     }
 
     intvl = idle/3;
+    if (intvl < 10) intvl = 10; /* kernel expects at least 10 seconds */
     if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl))) {
         anetSetError(err, "setsockopt TCP_KEEPINTVL: %s\n", strerror(errno));
         return ANET_ERR;
@@ -216,9 +217,7 @@ int anetKeepAlive(char *err, int fd, int interval)
 
     /* Note that the consequent probes will not be sent at equal intervals on Solaris,
      * but will be sent using the exponential backoff algorithm. */
-    intvl = idle/3;
-    cnt = 3;
-    int time_to_abort = intvl * cnt;
+    int time_to_abort = idle;
     if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE_ABORT_THRESHOLD, &time_to_abort, sizeof(time_to_abort))) {
         anetSetError(err, "setsockopt TCP_KEEPCNT: %s\n", strerror(errno));
         return ANET_ERR;
@@ -372,7 +371,7 @@ int anetResolve(char *err, char *host, char *ipbuf, size_t ipbuf_len,
 
 static int anetSetReuseAddr(char *err, int fd) {
     int yes = 1;
-    /* Make sure connection-intensive things like the redis benchmark
+    /* Make sure connection-intensive things like the benchmark tool
      * will be able to close/open sockets a zillion of times */
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
         anetSetError(err, "setsockopt SO_REUSEADDR: %s", strerror(errno));
@@ -381,19 +380,51 @@ static int anetSetReuseAddr(char *err, int fd) {
     return ANET_OK;
 }
 
-static int anetCreateSocket(char *err, int domain) {
+/* In general, SOCK_CLOEXEC won't have noticeable effect
+ * except for cases which really need this flag.
+ * Otherwise, it is just a flag that is nice to have.
+ * Its absence shouldn't affect a common socket's functionality.
+ */
+#define ANET_SOCKET_CLOEXEC 1
+#define ANET_SOCKET_NONBLOCK 2
+#define ANET_SOCKET_REUSEADDR 4
+static int anetCreateSocket(char *err, int domain, int type, int protocol, int flags) {
     int s;
-    if ((s = socket(domain, SOCK_STREAM, 0)) == -1) {
+
+#ifdef SOCK_CLOEXEC
+    if (flags & ANET_SOCKET_CLOEXEC) {
+      type |= SOCK_CLOEXEC;
+      flags &= ~ANET_SOCKET_CLOEXEC;
+    }
+#endif
+
+#ifdef SOCK_NONBLOCK
+    if (flags & ANET_SOCKET_NONBLOCK) {
+      type |= SOCK_NONBLOCK;
+      flags &= ~ANET_SOCKET_NONBLOCK;
+    }
+#endif
+
+    if ((s = socket(domain, type, protocol)) == -1) {
         anetSetError(err, "creating socket: %s", strerror(errno));
         return ANET_ERR;
     }
 
-    /* Make sure connection-intensive things like the redis benchmark
-     * will be able to close/open sockets a zillion of times */
-    if (anetSetReuseAddr(err,s) == ANET_ERR) {
+    if (flags & ANET_SOCKET_CLOEXEC && anetCloexec(s) == ANET_ERR) {
         close(s);
         return ANET_ERR;
     }
+
+    if (flags & ANET_SOCKET_NONBLOCK && anetNonBlock(err, s) == ANET_ERR) {
+        close(s);
+        return ANET_ERR;
+    }
+
+    if (flags & ANET_SOCKET_REUSEADDR && anetSetReuseAddr(err,s) == ANET_ERR) {
+        close(s);
+        return ANET_ERR;
+    }
+
     return s;
 }
 
@@ -419,12 +450,15 @@ static int anetTcpGenericConnect(char *err, const char *addr, int port,
     for (p = servinfo; p != NULL; p = p->ai_next) {
         /* Try to create the socket and to connect it.
          * If we fail in the socket() call, or on connect(), we retry with
-         * the next entry in servinfo. */
-        if ((s = socket(p->ai_family,p->ai_socktype,p->ai_protocol)) == -1)
+         * the next entry in servinfo.
+         *
+         * Make sure connection-intensive things like the benchmark tool
+         * will be able to close/open sockets a zillion of times.
+         */
+        int sockflags = ANET_SOCKET_CLOEXEC | ANET_SOCKET_REUSEADDR;
+        if (flags & ANET_CONNECT_NONBLOCK) sockflags |= ANET_SOCKET_NONBLOCK;
+        if ((s = anetCreateSocket(err,p->ai_family,p->ai_socktype,p->ai_protocol,sockflags)) == ANET_ERR)
             continue;
-        if (anetSetReuseAddr(err,s) == ANET_ERR) goto error;
-        if (flags & ANET_CONNECT_NONBLOCK && anetNonBlock(err,s) != ANET_OK)
-            goto error;
         if (source_addr) {
             int bound = 0;
             /* Using getaddrinfo saves us from self-determining IPv4 vs IPv6 */
@@ -490,34 +524,6 @@ int anetTcpNonBlockBestEffortBindConnect(char *err, const char *addr, int port,
 {
     return anetTcpGenericConnect(err,addr,port,source_addr,
             ANET_CONNECT_NONBLOCK|ANET_CONNECT_BE_BINDING);
-}
-
-int anetUnixGenericConnect(char *err, const char *path, int flags)
-{
-    int s;
-    struct sockaddr_un sa;
-
-    if ((s = anetCreateSocket(err,AF_LOCAL)) == ANET_ERR)
-        return ANET_ERR;
-
-    sa.sun_family = AF_LOCAL;
-    redis_strlcpy(sa.sun_path,path,sizeof(sa.sun_path));
-    if (flags & ANET_CONNECT_NONBLOCK) {
-        if (anetNonBlock(err,s) != ANET_OK) {
-            close(s);
-            return ANET_ERR;
-        }
-    }
-    if (connect(s,(struct sockaddr*)&sa,sizeof(sa)) == -1) {
-        if (errno == EINPROGRESS &&
-            flags & ANET_CONNECT_NONBLOCK)
-            return s;
-
-        anetSetError(err, "connect: %s", strerror(errno));
-        close(s);
-        return ANET_ERR;
-    }
-    return s;
 }
 
 static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len, int backlog, mode_t perm) {
@@ -608,12 +614,15 @@ int anetUnixServer(char *err, char *path, mode_t perm, int backlog)
         anetSetError(err,"unix socket path too long (%zu), must be under %zu", strlen(path), sizeof(sa.sun_path));
         return ANET_ERR;
     }
-    if ((s = anetCreateSocket(err,AF_LOCAL)) == ANET_ERR)
+
+    int type = SOCK_STREAM;
+    int flags = ANET_SOCKET_CLOEXEC | ANET_SOCKET_NONBLOCK;
+    if ((s = anetCreateSocket(err,AF_LOCAL,type,0,flags)) == ANET_ERR)
         return ANET_ERR;
 
     memset(&sa,0,sizeof(sa));
     sa.sun_family = AF_LOCAL;
-    redis_strlcpy(sa.sun_path,path,sizeof(sa.sun_path));
+    valkey_strlcpy(sa.sun_path,path,sizeof(sa.sun_path));
     if (anetListen(err,s,(struct sockaddr*)&sa,sizeof(sa),backlog,perm) == ANET_ERR)
         return ANET_ERR;
     return s;
@@ -736,7 +745,7 @@ error:
  * and one of the use cases is O_CLOEXEC|O_NONBLOCK. */
 int anetPipe(int fds[2], int read_flags, int write_flags) {
     int pipe_flags = 0;
-#if defined(__linux__) || defined(__FreeBSD__)
+#ifdef HAVE_PIPE2
     /* When possible, try to leverage pipe2() to apply flags that are common to both ends.
      * There is no harm to set O_CLOEXEC to prevent fd leaks. */
     pipe_flags = O_CLOEXEC | (read_flags & write_flags);

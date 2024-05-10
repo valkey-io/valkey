@@ -20,9 +20,8 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         assert { [string match "*cmdstat_module*" $info] }
     }
 
-    test {test redis version} {
-        set version [s redis_version]
-        assert_equal $version [r test.redisversion]
+    test {test valkey version} {
+        assert_equal [s valkey_version] [r test.serverversion]
     }
 
     test {test long double conversions} {
@@ -120,7 +119,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
     }
 
     test {tracking with rm_call sanity} {
-        set rd_trk [redis_client]
+        set rd_trk [valkey_client]
         $rd_trk HELLO 3
         $rd_trk CLIENT TRACKING on
         r MSET key1{t} 1 key2{t} 1
@@ -135,7 +134,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
     }
 
     test {tracking with rm_call with script} {
-        set rd_trk [redis_client]
+        set rd_trk [valkey_client]
         $rd_trk HELLO 3
         $rd_trk CLIENT TRACKING on
         r MSET key1{t} 1 key2{t} 1
@@ -466,7 +465,7 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         # rm_call in script mode
         assert_error {MISCONF *} {r test.rm_call_flags S set x 1}
 
-        # repeate with script
+        # repeat with script
         assert_error {MISCONF *} {r test.rm_call eval {
             return redis.call('set','x',1)
             } 1 x
@@ -550,7 +549,7 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
     test {test RM_Call with large arg for SET command} {
         # set a big value to trigger increasing the query buf
         r set foo [string repeat A 100000]
-        # set a smaller value but > PROTO_MBULK_BIG_ARG (32*1024) Redis will try to save the query buf itself on the DB.
+        # set a smaller value but > PROTO_MBULK_BIG_ARG (32*1024) the server will try to save the query buf itself on the DB.
         r test.call_generic set bar [string repeat A 33000]
         # asset the value was trimmed
         assert {[r memory usage bar] < 42000}; # 42K to count for Jemalloc's additional memory overhead.

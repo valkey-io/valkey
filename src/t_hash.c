@@ -137,7 +137,7 @@ int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vle
     return C_ERR;
 }
 
-/* Like hashTypeGetValue() but returns a Redis object, which is useful for
+/* Like hashTypeGetValue() but returns an Object, which is useful for
  * interaction with the hash type outside t_hash.c.
  * The function returns NULL if the field is not found in the hash. Otherwise
  * a newly allocated string object with the value is returned. */

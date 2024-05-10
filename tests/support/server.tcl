@@ -4,7 +4,7 @@ set ::valgrind_errors {}
 
 proc start_server_error {config_file error} {
     set err {}
-    append err "Can't start the Redis server\n"
+    append err "Can't start the Valkey server\n"
     append err "CONFIGURATION:\n"
     append err [exec cat $config_file]
     append err "\nERROR:\n"
@@ -275,7 +275,7 @@ proc create_server_config_file {filename config config_lines} {
 }
 
 proc spawn_server {config_file stdout stderr args} {
-    set cmd [list src/placeholderkv-server $config_file]
+    set cmd [list src/valkey-server $config_file]
     set args {*}$args
     if {[llength $args] > 0} {
         lappend cmd {*}$args
@@ -347,7 +347,7 @@ proc run_external_server_test {code overrides} {
     set srv {}
     dict set srv "host" $::host
     dict set srv "port" $::port
-    set client [redis $::host $::port 0 $::tls]
+    set client [valkey $::host $::port 0 $::tls]
     dict set srv "client" $client
     if {!$::singledb} {
         $client select 9
@@ -480,13 +480,13 @@ proc start_server {options {code undefined}} {
     set config {}
     if {$::tls} {
         if {$::tls_module} {
-            lappend config_lines [list "loadmodule" [format "%s/src/redis-tls.so" [pwd]]]
+            lappend config_lines [list "loadmodule" [format "%s/src/valkey-tls.so" [pwd]]]
         }
         dict set config "tls-cert-file" [format "%s/tests/tls/server.crt" [pwd]]
         dict set config "tls-key-file" [format "%s/tests/tls/server.key" [pwd]]
         dict set config "tls-client-cert-file" [format "%s/tests/tls/client.crt" [pwd]]
         dict set config "tls-client-key-file" [format "%s/tests/tls/client.key" [pwd]]
-        dict set config "tls-dh-params-file" [format "%s/tests/tls/redis.dh" [pwd]]
+        dict set config "tls-dh-params-file" [format "%s/tests/tls/valkey.dh" [pwd]]
         dict set config "tls-ca-cert-file" [format "%s/tests/tls/ca.crt" [pwd]]
         dict set config "loglevel" "debug"
     }
@@ -536,7 +536,7 @@ proc start_server {options {code undefined}} {
     }
 
     # write new configuration to temporary file
-    set config_file [tmpfile redis.conf]
+    set config_file [tmpfile valkey.conf]
     create_server_config_file $config_file $config $config_lines
 
     set stdout [format "%s/%s" [dict get $config "dir"] "stdout"]

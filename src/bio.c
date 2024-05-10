@@ -1,4 +1,4 @@
-/* Background I/O service for Redis.
+/* Background I/O service for the server.
  *
  * This file implements operations that we need to perform in the background.
  * Currently there is only a single operation, that is a background close(2)
@@ -8,7 +8,7 @@
  *
  * In the future we'll either continue implementing new things we need or
  * we'll switch to libeio. However there are probably long term uses for this
- * file as we may want to put here Redis specific background tasks (for instance
+ * file as we may want to put here server specific background tasks (for instance
  * it is not impossible that we'll need a non blocking FLUSHDB/FLUSHALL
  * implementation).
  *
@@ -113,7 +113,7 @@ void *bioProcessBackgroundJobs(void *arg);
 
 /* Make sure we have enough stack to perform all the things we do in the
  * main thread. */
-#define REDIS_THREAD_STACK_SIZE (1024*1024*4)
+#define VALKEY_THREAD_STACK_SIZE (1024*1024*4)
 
 /* Initialize the background system, spawning the thread. */
 void bioInit(void) {
@@ -133,7 +133,7 @@ void bioInit(void) {
     pthread_attr_init(&attr);
     pthread_attr_getstacksize(&attr,&stacksize);
     if (!stacksize) stacksize = 1; /* The world is full of Solaris Fixes */
-    while (stacksize < REDIS_THREAD_STACK_SIZE) stacksize *= 2;
+    while (stacksize < VALKEY_THREAD_STACK_SIZE) stacksize *= 2;
     pthread_attr_setstacksize(&attr, stacksize);
 
     /* Ready to spawn our threads. We use the single argument the thread
@@ -210,9 +210,9 @@ void *bioProcessBackgroundJobs(void *arg) {
     /* Check that the worker is within the right interval. */
     serverAssert(worker < BIO_WORKER_NUM);
 
-    redis_set_thread_title(bio_worker_title[worker]);
+    valkey_set_thread_title(bio_worker_title[worker]);
 
-    redisSetCpuAffinity(server.bio_cpulist);
+    serverSetCpuAffinity(server.bio_cpulist);
 
     makeThreadKillable();
 
@@ -245,7 +245,7 @@ void *bioProcessBackgroundJobs(void *arg) {
 
         if (job_type == BIO_CLOSE_FILE) {
             if (job->fd_args.need_fsync &&
-                redis_fsync(job->fd_args.fd) == -1 &&
+                valkey_fsync(job->fd_args.fd) == -1 &&
                 errno != EBADF && errno != EINVAL)
             {
                 serverLog(LL_WARNING, "Fail to fsync the AOF file: %s",strerror(errno));
@@ -260,7 +260,7 @@ void *bioProcessBackgroundJobs(void *arg) {
             /* The fd may be closed by main thread and reused for another
              * socket, pipe, or file. We just ignore these errno because
              * aof fsync did not really fail. */
-            if (redis_fsync(job->fd_args.fd) == -1 &&
+            if (valkey_fsync(job->fd_args.fd) == -1 &&
                 errno != EBADF && errno != EINVAL)
             {
                 int last_status;
@@ -323,7 +323,7 @@ void bioDrainWorker(int job_type) {
 
 /* Kill the running bio threads in an unclean way. This function should be
  * used only when it's critical to stop the threads for some reason.
- * Currently Redis does this only on crash (for instance on SIGSEGV) in order
+ * Currently the server does this only on crash (for instance on SIGSEGV) in order
  * to perform a fast memory check without other threads messing with memory. */
 void bioKillThreads(void) {
     int err;

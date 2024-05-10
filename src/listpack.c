@@ -42,7 +42,7 @@
 
 #include "listpack.h"
 #include "listpack_malloc.h"
-#include "redisassert.h"
+#include "serverassert.h"
 #include "util.h"
 
 #define LP_HDR_SIZE 6       /* 32 bit total len + 16 bit number of elements. */
@@ -165,7 +165,7 @@ int lpSafeToAdd(unsigned char* lp, size_t add) {
  *
  * -----------------------------------------------------------------------------
  *
- * Credits: this function was adapted from the Redis source code, file
+ * Credits: this function was adapted from the Redis OSS source code, file
  * "utils.c", function string2ll(), and is copyright:
  *
  * Copyright(C) 2011, Pieter Noordhuis
@@ -426,6 +426,7 @@ static inline void lpEncodeString(unsigned char *buf, unsigned char *s, uint32_t
  * lpCurrentEncodedSizeBytes or ASSERT_INTEGRITY_LEN (possibly since 'p' is
  * a return value of another function that validated its return. */
 static inline uint32_t lpCurrentEncodedSizeUnsafe(unsigned char *p) {
+    /* clang-format off */
     if (LP_ENCODING_IS_7BIT_UINT(p[0])) return 1;
     if (LP_ENCODING_IS_6BIT_STR(p[0])) return 1+LP_ENCODING_6BIT_STR_LEN(p);
     if (LP_ENCODING_IS_13BIT_INT(p[0])) return 2;
@@ -437,6 +438,7 @@ static inline uint32_t lpCurrentEncodedSizeUnsafe(unsigned char *p) {
     if (LP_ENCODING_IS_32BIT_STR(p[0])) return 5+LP_ENCODING_32BIT_STR_LEN(p);
     if (p[0] == LP_EOF) return 1;
     return 0;
+    /* clang-format on */
 }
 
 /* Return bytes needed to encode the length of the listpack element pointed by 'p'.
@@ -444,6 +446,7 @@ static inline uint32_t lpCurrentEncodedSizeUnsafe(unsigned char *p) {
  * of the element (excluding the element data itself)
  * If the element encoding is wrong then 0 is returned. */
 static inline uint32_t lpCurrentEncodedSizeBytes(unsigned char *p) {
+    /* clang-format off */
     if (LP_ENCODING_IS_7BIT_UINT(p[0])) return 1;
     if (LP_ENCODING_IS_6BIT_STR(p[0])) return 1;
     if (LP_ENCODING_IS_13BIT_INT(p[0])) return 1;
@@ -455,6 +458,7 @@ static inline uint32_t lpCurrentEncodedSizeBytes(unsigned char *p) {
     if (LP_ENCODING_IS_32BIT_STR(p[0])) return 5;
     if (p[0] == LP_EOF) return 1;
     return 0;
+    /* clang-format on */
 }
 
 /* Skip the current entry returning the next. It is invalid to call this
@@ -885,7 +889,7 @@ unsigned char *lpInsert(unsigned char *lp, unsigned char *elestr, unsigned char 
         } else if (elestr) {
             lpEncodeString(dst,elestr,size);
         } else {
-            redis_unreachable();
+            valkey_unreachable();
         }
         dst += enclen;
         memcpy(dst,backlen,backlen_size);
@@ -1679,7 +1683,7 @@ void lpRepr(unsigned char *lp) {
     printf("{end}\n\n");
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 
 #include <sys/time.h>
 #include "adlist.h"
@@ -1817,7 +1821,7 @@ int listpackTest(int argc, char *argv[], int flags) {
     unsigned char *lp, *p, *vstr;
     int64_t vlen;
     unsigned char intbuf[LP_INTBUF_SIZE];
-    int accurate = (flags & REDIS_TEST_ACCURATE);
+    int accurate = (flags & TEST_ACCURATE);
 
     TEST("Create int list") {
         lp = createIntList();

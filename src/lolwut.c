@@ -30,7 +30,7 @@
  *
  * This file implements the LOLWUT command. The command should do something
  * fun and interesting, and should be replaced by a new implementation at
- * each new version of Redis.
+ * each new version of the server.
  */
 
 #include "server.h"
@@ -41,10 +41,10 @@ void lolwut5Command(client *c);
 void lolwut6Command(client *c);
 
 /* The default target for LOLWUT if no matching version was found.
- * This is what unstable versions of Redis will display. */
+ * This is what unstable versions of the server will display. */
 void lolwutUnstableCommand(client *c) {
     sds rendered = sdsnew("Redis ver. ");
-    rendered = sdscat(rendered,REDIS_VERSION);
+    rendered = sdscat(rendered,VALKEY_VERSION);
     rendered = sdscatlen(rendered,"\n",1);
     addReplyVerbatim(c,rendered,sdslen(rendered),"txt");
     sdsfree(rendered);
@@ -52,7 +52,7 @@ void lolwutUnstableCommand(client *c) {
 
 /* LOLWUT [VERSION <version>] [... version specific arguments ...] */
 void lolwutCommand(client *c) {
-    char *v = REDIS_VERSION;
+    char *v = VALKEY_VERSION;
     char verstr[64];
 
     if (c->argc >= 3 && !strcasecmp(c->argv[1]->ptr,"version")) {

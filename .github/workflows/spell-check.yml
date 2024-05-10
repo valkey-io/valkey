@@ -9,6 +9,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Spellcheck
@@ -16,17 +19,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
-      - name: pip cache
-        uses: actions/cache@v4
+      - name: Install typos
+        uses: taiki-e/install-action@cd5df4de2e75f3b819ba55f780f7bb8cd4a05a41 # v2.32.2
         with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: ${{ runner.os }}-pip-
-
-      - name: Install prerequisites
-        run: sudo pip install -r ./.codespell/requirements.txt
+          tool: typos
 
       - name: Spell check
-        run: codespell --config=./.codespell/.codespellrc
+        run: typos --config=./.config/typos.toml

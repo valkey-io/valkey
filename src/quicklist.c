@@ -37,7 +37,7 @@
 #include "listpack.h"
 #include "util.h" /* for ll2string */
 #include "lzf.h"
-#include "redisassert.h"
+#include "serverassert.h"
 
 #ifndef REDIS_STATIC
 #define REDIS_STATIC static
@@ -212,7 +212,7 @@ void quicklistRelease(quicklist *quicklist) {
  * Returns 1 if listpack compressed successfully.
  * Returns 0 if compression failed or if listpack too small to compress. */
 REDIS_STATIC int __quicklistCompressNode(quicklistNode *node) {
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
     node->attempted_compress = 1;
 #endif
     if (node->dont_compress) return 0;
@@ -254,7 +254,7 @@ REDIS_STATIC int __quicklistCompressNode(quicklistNode *node) {
 /* Uncompress the listpack in 'node' and update encoding details.
  * Returns 1 on successful decode, 0 on failure to decode. */
 REDIS_STATIC int __quicklistDecompressNode(quicklistNode *node) {
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
     node->attempted_compress = 0;
 #endif
     node->recompress = 0;
@@ -499,7 +499,7 @@ int quicklistNodeExceedsLimit(int fill, size_t new_sz, unsigned int new_count) {
         return new_count > count_limit;
     }
 
-    redis_unreachable();
+    valkey_unreachable();
 }
 
 /* Determines whether a given size qualifies as a large element based on a threshold
@@ -1791,7 +1791,7 @@ void quicklistBookmarksClear(quicklist *ql) {
 }
 
 /* The rest of this file is test cases and test helpers. */
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include <stdint.h>
 #include <sys/time.h>
 #include "testhelp.h"
@@ -2019,7 +2019,7 @@ int quicklistTest(int argc, char *argv[], int flags) {
     UNUSED(argc);
     UNUSED(argv);
 
-    int accurate = (flags & REDIS_TEST_ACCURATE);
+    int accurate = (flags & TEST_ACCURATE);
     unsigned int err = 0;
     int optimize_start =
         -(int)(sizeof(optimization_level) / sizeof(*optimization_level));
@@ -3259,7 +3259,7 @@ int quicklistTest(int argc, char *argv[], int flags) {
         quicklistRelease(ql);
     }
 
-    if (flags & REDIS_TEST_LARGE_MEMORY) {
+    if (flags & TEST_LARGE_MEMORY) {
         TEST("compress and decompress quicklist listpack node") {
             quicklistNode *node = quicklistCreateNode();
             node->entry = lpNew(0);

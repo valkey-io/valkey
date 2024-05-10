@@ -1,4 +1,4 @@
-#include "redismodule.h"
+#include "valkeymodule.h"
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -7,156 +7,156 @@
 #include <errno.h>
 
 /* Sanity tests to verify inputs and return values. */
-int sanity(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+int sanity(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
-    RedisModuleRdbStream *s = RedisModule_RdbStreamCreateFromFile("dbnew.rdb");
+    ValkeyModuleRdbStream *s = ValkeyModule_RdbStreamCreateFromFile("dbnew.rdb");
 
     /* NULL stream should fail. */
-    if (RedisModule_RdbLoad(ctx, NULL, 0) == REDISMODULE_OK || errno != EINVAL) {
-        RedisModule_ReplyWithError(ctx, strerror(errno));
+    if (ValkeyModule_RdbLoad(ctx, NULL, 0) == VALKEYMODULE_OK || errno != EINVAL) {
+        ValkeyModule_ReplyWithError(ctx, strerror(errno));
         goto out;
     }
 
     /* Invalid flags should fail. */
-    if (RedisModule_RdbLoad(ctx, s, 188) == REDISMODULE_OK || errno != EINVAL) {
-        RedisModule_ReplyWithError(ctx, strerror(errno));
+    if (ValkeyModule_RdbLoad(ctx, s, 188) == VALKEYMODULE_OK || errno != EINVAL) {
+        ValkeyModule_ReplyWithError(ctx, strerror(errno));
         goto out;
     }
 
     /* Missing file should fail. */
-    if (RedisModule_RdbLoad(ctx, s, 0) == REDISMODULE_OK || errno != ENOENT) {
-        RedisModule_ReplyWithError(ctx, strerror(errno));
+    if (ValkeyModule_RdbLoad(ctx, s, 0) == VALKEYMODULE_OK || errno != ENOENT) {
+        ValkeyModule_ReplyWithError(ctx, strerror(errno));
         goto out;
     }
 
     /* Save RDB file. */
-    if (RedisModule_RdbSave(ctx, s, 0) != REDISMODULE_OK || errno != 0) {
-        RedisModule_ReplyWithError(ctx, strerror(errno));
+    if (ValkeyModule_RdbSave(ctx, s, 0) != VALKEYMODULE_OK || errno != 0) {
+        ValkeyModule_ReplyWithError(ctx, strerror(errno));
         goto out;
     }
 
     /* Load the saved RDB file. */
-    if (RedisModule_RdbLoad(ctx, s, 0) != REDISMODULE_OK || errno != 0) {
-        RedisModule_ReplyWithError(ctx, strerror(errno));
+    if (ValkeyModule_RdbLoad(ctx, s, 0) != VALKEYMODULE_OK || errno != 0) {
+        ValkeyModule_ReplyWithError(ctx, strerror(errno));
         goto out;
     }
 
-    RedisModule_ReplyWithSimpleString(ctx, "OK");
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 
  out:
-    RedisModule_RdbStreamFree(s);
-    return REDISMODULE_OK;
+    ValkeyModule_RdbStreamFree(s);
+    return VALKEYMODULE_OK;
 }
 
-int cmd_rdbsave(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int cmd_rdbsave(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
 
     size_t len;
-    const char *filename = RedisModule_StringPtrLen(argv[1], &len);
+    const char *filename = ValkeyModule_StringPtrLen(argv[1], &len);
 
     char tmp[len + 1];
     memcpy(tmp, filename, len);
     tmp[len] = '\0';
 
-    RedisModuleRdbStream *stream = RedisModule_RdbStreamCreateFromFile(tmp);
+    ValkeyModuleRdbStream *stream = ValkeyModule_RdbStreamCreateFromFile(tmp);
 
-    if (RedisModule_RdbSave(ctx, stream, 0) != REDISMODULE_OK || errno != 0) {
-        RedisModule_ReplyWithError(ctx, strerror(errno));
+    if (ValkeyModule_RdbSave(ctx, stream, 0) != VALKEYMODULE_OK || errno != 0) {
+        ValkeyModule_ReplyWithError(ctx, strerror(errno));
         goto out;
     }
 
-    RedisModule_ReplyWithSimpleString(ctx, "OK");
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 
 out:
-    RedisModule_RdbStreamFree(stream);
-    return REDISMODULE_OK;
+    ValkeyModule_RdbStreamFree(stream);
+    return VALKEYMODULE_OK;
 }
 
 /* Fork before calling RM_RdbSave(). */
-int cmd_rdbsave_fork(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int cmd_rdbsave_fork(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
 
     size_t len;
-    const char *filename = RedisModule_StringPtrLen(argv[1], &len);
+    const char *filename = ValkeyModule_StringPtrLen(argv[1], &len);
 
     char tmp[len + 1];
     memcpy(tmp, filename, len);
     tmp[len] = '\0';
 
-    int fork_child_pid = RedisModule_Fork(NULL, NULL);
+    int fork_child_pid = ValkeyModule_Fork(NULL, NULL);
     if (fork_child_pid < 0) {
-        RedisModule_ReplyWithError(ctx, strerror(errno));
-        return REDISMODULE_OK;
+        ValkeyModule_ReplyWithError(ctx, strerror(errno));
+        return VALKEYMODULE_OK;
     } else if (fork_child_pid > 0) {
         /* parent */
-        RedisModule_ReplyWithSimpleString(ctx, "OK");
-        return REDISMODULE_OK;
+        ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+        return VALKEYMODULE_OK;
     }
 
-    RedisModuleRdbStream *stream = RedisModule_RdbStreamCreateFromFile(tmp);
+    ValkeyModuleRdbStream *stream = ValkeyModule_RdbStreamCreateFromFile(tmp);
 
     int ret = 0;
-    if (RedisModule_RdbSave(ctx, stream, 0) != REDISMODULE_OK) {
+    if (ValkeyModule_RdbSave(ctx, stream, 0) != VALKEYMODULE_OK) {
         ret = errno;
     }
-    RedisModule_RdbStreamFree(stream);
+    ValkeyModule_RdbStreamFree(stream);
 
-    RedisModule_ExitFromChild(ret);
-    return REDISMODULE_OK;
+    ValkeyModule_ExitFromChild(ret);
+    return VALKEYMODULE_OK;
 }
 
-int cmd_rdbload(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int cmd_rdbload(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
 
     size_t len;
-    const char *filename = RedisModule_StringPtrLen(argv[1], &len);
+    const char *filename = ValkeyModule_StringPtrLen(argv[1], &len);
 
     char tmp[len + 1];
     memcpy(tmp, filename, len);
     tmp[len] = '\0';
 
-    RedisModuleRdbStream *stream = RedisModule_RdbStreamCreateFromFile(tmp);
+    ValkeyModuleRdbStream *stream = ValkeyModule_RdbStreamCreateFromFile(tmp);
 
-    if (RedisModule_RdbLoad(ctx, stream, 0) != REDISMODULE_OK || errno != 0) {
-        RedisModule_RdbStreamFree(stream);
-        RedisModule_ReplyWithError(ctx, strerror(errno));
-        return REDISMODULE_OK;
+    if (ValkeyModule_RdbLoad(ctx, stream, 0) != VALKEYMODULE_OK || errno != 0) {
+        ValkeyModule_RdbStreamFree(stream);
+        ValkeyModule_ReplyWithError(ctx, strerror(errno));
+        return VALKEYMODULE_OK;
     }
 
-    RedisModule_RdbStreamFree(stream);
-    RedisModule_ReplyWithSimpleString(ctx, "OK");
-    return REDISMODULE_OK;
+    ValkeyModule_RdbStreamFree(stream);
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
 }
 
-int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
-    if (RedisModule_Init(ctx, "rdbloadsave", 1, REDISMODULE_APIVER_1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_Init(ctx, "rdbloadsave", 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx, "test.sanity", sanity, "", 0, 0, 0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.sanity", sanity, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx, "test.rdbsave", cmd_rdbsave, "", 0, 0, 0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.rdbsave", cmd_rdbsave, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx, "test.rdbsave_fork", cmd_rdbsave_fork, "", 0, 0, 0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.rdbsave_fork", cmd_rdbsave_fork, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx, "test.rdbload", cmd_rdbload, "", 0, 0, 0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.rdbload", cmd_rdbload, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }

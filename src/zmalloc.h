@@ -99,8 +99,8 @@
 #include <malloc.h>
 #endif
 
-/* We can enable the Redis defrag capabilities only if we are using Jemalloc
- * and the version used is our special version modified for Redis having
+/* We can enable the server defrag capabilities only if we are using Jemalloc
+ * and the version used is our special version modified for the server having
  * the ability to return per-allocation fragmentation hints. */
 #if defined(USE_JEMALLOC) && defined(JEMALLOC_FRAG_HINT)
 #define HAVE_DEFRAG
@@ -168,7 +168,7 @@ __attribute__((alloc_size(2),noinline)) void *extend_to_usable(void *ptr, size_t
 
 int get_proc_stat_ll(int i, long long *res);
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 int zmalloc_test(int argc, char **argv, int flags);
 #endif
 

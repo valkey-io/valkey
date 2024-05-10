@@ -190,7 +190,7 @@
 #include "ziplist.h"
 #include "config.h"
 #include "endianconv.h"
-#include "redisassert.h"
+#include "serverassert.h"
 
 #define ZIP_END 255         /* Special "end of ziplist" entry. */
 #define ZIP_BIG_PREVLEN 254 /* ZIP_BIG_PREVLEN - 1 is the max number of bytes of
@@ -340,6 +340,7 @@ static inline unsigned int zipEncodingLenSize(unsigned char encoding) {
 
 /* Return bytes needed to store integer encoded by 'encoding' */
 static inline unsigned int zipIntSize(unsigned char encoding) {
+    /* clang-format off */
     switch(encoding) {
     case ZIP_INT_8B:  return 1;
     case ZIP_INT_16B: return 2;
@@ -347,10 +348,11 @@ static inline unsigned int zipIntSize(unsigned char encoding) {
     case ZIP_INT_32B: return 4;
     case ZIP_INT_64B: return 8;
     }
+    /* clang-format on */
     if (encoding >= ZIP_INT_IMM_MIN && encoding <= ZIP_INT_IMM_MAX)
         return 0; /* 4 bit immediate */
     /* bad encoding, covered by a previous call to ZIP_ASSERT_ENCODING */
-    redis_unreachable();
+    valkey_unreachable();
     return 0;
 }
 
@@ -1686,7 +1688,7 @@ unsigned int ziplistRandomPairsUnique(unsigned char *zl, unsigned int count, zip
     return picked;
 }
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 #include <sys/time.h>
 #include "adlist.h"
 #include "sds.h"
@@ -1845,9 +1847,9 @@ static size_t strEntryBytesLarge(size_t slen) {
     return slen + zipStorePrevEntryLength(NULL, ZIP_BIG_PREVLEN) + zipStoreEntryEncoding(NULL, 0, slen);
 }
 
-/* ./redis-server test ziplist <randomseed> */
+/* ./valkey-server test ziplist <randomseed> */
 int ziplistTest(int argc, char **argv, int flags) {
-    int accurate = (flags & REDIS_TEST_ACCURATE);
+    int accurate = (flags & TEST_ACCURATE);
     unsigned char *zl, *p;
     unsigned char *entry;
     unsigned int elen;

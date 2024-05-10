@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest a feature for Redis
+about: Suggest a feature
 title: '[NEW]'
 labels: ''
 assignees: ''

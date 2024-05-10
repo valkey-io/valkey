@@ -44,7 +44,7 @@ user *DefaultUser;  /* Global reference to the default user.
                        different user. */
 
 list *UsersToLoad;  /* This is a list of users found in the configuration file
-                       that we'll need to load in the final stage of Redis
+                       that we'll need to load in the final stage of the server
                        initialization, after all the modules are already
                        loaded. Every list element is a NULL terminated
                        array of SDS pointers: the first is the user name,
@@ -64,7 +64,7 @@ static unsigned long nextid = 0; /* Next command id that has not been assigned *
 struct ACLCategoryItem {
     char *name;
     uint64_t flag;
-} ACLDefaultCommandCategories[] = { /* See redis.conf for details on each category. */
+} ACLDefaultCommandCategories[] = { /* See valkey.conf for details on each category. */
     {"keyspace", ACL_CATEGORY_KEYSPACE},
     {"read", ACL_CATEGORY_READ},
     {"write", ACL_CATEGORY_WRITE},
@@ -168,7 +168,7 @@ typedef struct {
      * execute this command.
      *
      * If the bit for a given command is NOT set and the command has
-     * allowed first-args, Redis will also check allowed_firstargs in order to
+     * allowed first-args, the server will also check allowed_firstargs in order to
      * understand if the command can be executed. */
     uint64_t allowed_commands[USER_COMMAND_BITS_COUNT/64];
     /* allowed_firstargs is used by ACL rules to block access to a command unless a
@@ -502,7 +502,7 @@ void ACLFreeUserAndKillClients(user *u) {
         if (c->user == u) {
             /* We'll free the connection asynchronously, so
              * in theory to set a different user is not needed.
-             * However if there are bugs in Redis, soon or later
+             * However if there are bugs in the server, soon or later
              * this may result in some security hole: it's much
              * more defensive to set the default user and put
              * it in non authenticated mode. */
@@ -635,7 +635,7 @@ void ACLSelectorRemoveCommandRule(aclSelector *selector, sds new_rule) {
     sdsupdatelen(selector->command_rules);
 }
 
-/* This function is resopnsible for updating the command_rules struct so that relative ordering of
+/* This function is responsible for updating the command_rules struct so that relative ordering of
  * commands and categories is maintained and can be reproduced without loss. */
 void ACLUpdateCommandRules(aclSelector *selector, const char *rule, int allow) {
     sds new_rule = sdsnew(rule);
@@ -649,7 +649,7 @@ void ACLUpdateCommandRules(aclSelector *selector, const char *rule, int allow) {
 
 /* This function is used to allow/block a specific command.
  * Allowing/blocking a container command also applies for its subcommands */
-void ACLChangeSelectorPerm(aclSelector *selector, struct redisCommand *cmd, int allow) {
+void ACLChangeSelectorPerm(aclSelector *selector, struct serverCommand *cmd, int allow) {
     unsigned long id = cmd->id;
     ACLSetSelectorCommandBit(selector,id,allow);
     ACLResetFirstArgsForCommand(selector,id);
@@ -657,7 +657,7 @@ void ACLChangeSelectorPerm(aclSelector *selector, struct redisCommand *cmd, int 
         dictEntry *de;
         dictIterator *di = dictGetSafeIterator(cmd->subcommands_dict);
         while((de = dictNext(di)) != NULL) {
-            struct redisCommand *sub = (struct redisCommand *)dictGetVal(de);
+            struct serverCommand *sub = (struct serverCommand *)dictGetVal(de);
             ACLSetSelectorCommandBit(selector,sub->id,allow);
         }
         dictReleaseIterator(di);
@@ -674,7 +674,7 @@ void ACLSetSelectorCommandBitsForCategory(dict *commands, aclSelector *selector,
     dictIterator *di = dictGetIterator(commands);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
-        struct redisCommand *cmd = dictGetVal(de);
+        struct serverCommand *cmd = dictGetVal(de);
         if (cmd->acl_categories & cflag) {
             ACLChangeSelectorPerm(selector,cmd,value);
         }
@@ -738,7 +738,7 @@ void ACLCountCategoryBitsForCommands(dict *commands, aclSelector *selector, unsi
     dictIterator *di = dictGetIterator(commands);
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
-        struct redisCommand *cmd = dictGetVal(de);
+        struct serverCommand *cmd = dictGetVal(de);
         if (cmd->acl_categories & cflag) {
             if (ACLGetSelectorCommandBit(selector,cmd->id))
                 (*on)++;
@@ -922,8 +922,8 @@ robj *ACLDescribeUser(user *u) {
 /* Get a command from the original command table, that is not affected
  * by the command renaming operations: we base all the ACL work from that
  * table, so that ACLs are valid regardless of command renaming. */
-struct redisCommand *ACLLookupCommand(const char *name) {
-    struct redisCommand *cmd;
+struct serverCommand *ACLLookupCommand(const char *name) {
+    struct serverCommand *cmd;
     sds sdsname = sdsnew(name);
     cmd = lookupCommandBySdsLogic(server.orig_commands,sdsname);
     sdsfree(sdsname);
@@ -1023,7 +1023,7 @@ cleanup:
  * +@<category> Allow the execution of all the commands in such category
  *              with valid categories are like @admin, @set, @sortedset, ...
  *              and so forth, see the full list in the server.c file where
- *              the Redis command table is described and defined.
+ *              the command table is described and defined.
  *              The special category @all means all the commands, but currently
  *              present in the server, and that will be loaded in the future
  *              via modules.
@@ -1140,7 +1140,7 @@ int ACLSetSelector(aclSelector *selector, const char* op, size_t oplen) {
         selector->flags &= ~SELECTOR_FLAG_ALLCHANNELS;
     } else if (op[0] == '+' && op[1] != '@') {
         if (strrchr(op,'|') == NULL) {
-            struct redisCommand *cmd = ACLLookupCommand(op+1);
+            struct serverCommand *cmd = ACLLookupCommand(op+1);
             if (cmd == NULL) {
                 errno = ENOENT;
                 return C_ERR;
@@ -1154,7 +1154,7 @@ int ACLSetSelector(aclSelector *selector, const char* op, size_t oplen) {
             sub[0] = '\0';
             sub++;
 
-            struct redisCommand *cmd = ACLLookupCommand(copy);
+            struct serverCommand *cmd = ACLLookupCommand(copy);
 
             /* Check if the command exists. We can't check the
              * first-arg to see if it is valid. */
@@ -1203,7 +1203,7 @@ int ACLSetSelector(aclSelector *selector, const char* op, size_t oplen) {
             zfree(copy);
         }
     } else if (op[0] == '-' && op[1] != '@') {
-        struct redisCommand *cmd = ACLLookupCommand(op+1);
+        struct serverCommand *cmd = ACLLookupCommand(op+1);
         if (cmd == NULL) {
             errno = ENOENT;
             return C_ERR;
@@ -1601,10 +1601,12 @@ static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keyle
     listRewind(selector->patterns,&li);
 
     int key_flags = 0;
+    /* clang-format off */
     if (keyspec_flags & CMD_KEY_ACCESS) key_flags |= ACL_READ_PERMISSION;
     if (keyspec_flags & CMD_KEY_INSERT) key_flags |= ACL_WRITE_PERMISSION;
     if (keyspec_flags & CMD_KEY_DELETE) key_flags |= ACL_WRITE_PERMISSION;
     if (keyspec_flags & CMD_KEY_UPDATE) key_flags |= ACL_WRITE_PERMISSION;
+    /* clang-format on */
 
     /* Test this key against every pattern. */
     while((ln = listNext(&li))) {
@@ -1632,10 +1634,12 @@ static int ACLSelectorHasUnrestrictedKeyAccess(aclSelector *selector, int flags)
     listRewind(selector->patterns,&li);
 
     int access_flags = 0;
+    /* clang-format off */
     if (flags & CMD_KEY_ACCESS) access_flags |= ACL_READ_PERMISSION;
     if (flags & CMD_KEY_INSERT) access_flags |= ACL_WRITE_PERMISSION;
     if (flags & CMD_KEY_DELETE) access_flags |= ACL_WRITE_PERMISSION;
     if (flags & CMD_KEY_UPDATE) access_flags |= ACL_WRITE_PERMISSION;
+    /* clang-format on */
 
     /* Test this key against every pattern. */
     while((ln = listNext(&li))) {
@@ -1699,7 +1703,7 @@ void cleanupACLKeyResultCache(aclKeyResultCache *cache) {
  * command cannot be executed because the selector is not allowed to run such
  * command, the second and third if the command is denied because the selector is trying
  * to access a key or channel that are not among the specified patterns. */
-static int ACLSelectorCheckCmd(aclSelector *selector, struct redisCommand *cmd, robj **argv, int argc, int *keyidxptr, aclKeyResultCache *cache) {
+static int ACLSelectorCheckCmd(aclSelector *selector, struct serverCommand *cmd, robj **argv, int argc, int *keyidxptr, aclKeyResultCache *cache) {
     uint64_t id = cmd->id;
     int ret;
     if (!(selector->flags & SELECTOR_FLAG_ALLCOMMANDS) && !(cmd->flags & CMD_NO_AUTH)) {
@@ -1799,7 +1803,7 @@ int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags) {
  * granted in addition to the access required by the command. Returns 1 
  * if the user has access or 0 otherwise.
  */
-int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct redisCommand *cmd, robj **argv, int argc, int flags) {
+int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd, robj **argv, int argc, int flags) {
     listIter li;
     listNode *ln;
     int local_idxptr;
@@ -1858,7 +1862,7 @@ int ACLUserCheckChannelPerm(user *u, sds channel, int is_pattern) {
  * If the command fails an ACL check, idxptr will be to set to the first argv entry that
  * causes the failure, either 0 if the command itself fails or the idx of the key/channel
  * that causes the failure */
-int ACLCheckAllUserCommandPerm(user *u, struct redisCommand *cmd, robj **argv, int argc, int *idxptr) {
+int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int *idxptr) {
     listIter li;
     listNode *ln;
 
@@ -2272,7 +2276,7 @@ int ACLLoadConfiguredUsers(void) {
 
 /* This function loads the ACL from the specified filename: every line
  * is validated and should be either empty or in the format used to specify
- * users in the redis.conf configuration or in the ACL file, that is:
+ * users in the valkey.conf or in the ACL file, that is:
  *
  *  user <username> ... rules ...
  *
@@ -2535,7 +2539,7 @@ int ACLSaveToFile(const char *filename) {
         }
         offset += written_bytes;
     }
-    if (redis_fsync(fd) == -1) {
+    if (valkey_fsync(fd) == -1) {
         serverLog(LL_WARNING,"Syncing ACL file for ACL SAVE: %s",
             strerror(errno));
         goto cleanup;
@@ -2566,17 +2570,17 @@ cleanup:
 
 /* This function is called once the server is already running, modules are
  * loaded, and we are ready to start, in order to load the ACLs either from
- * the pending list of users defined in redis.conf, or from the ACL file.
+ * the pending list of users defined in valkey.conf, or from the ACL file.
  * The function will just exit with an error if the user is trying to mix
  * both the loading methods. */
 void ACLLoadUsersAtStartup(void) {
     if (server.acl_filename[0] != '\0' && listLength(UsersToLoad) != 0) {
         serverLog(LL_WARNING,
-            "Configuring Redis with users defined in redis.conf and at "
+            "Configuring %s with users defined in valkey.conf and at "
             "the same setting an ACL file path is invalid. This setup "
             "is very likely to lead to configuration errors and security "
             "holes, please define either an ACL file or declare users "
-            "directly in your redis.conf, but not both.");
+            "directly in your valkey.conf, but not both.", SERVER_TITLE);
         exit(1);
     }
 
@@ -2590,7 +2594,7 @@ void ACLLoadUsersAtStartup(void) {
         sds errors = ACLLoadFromFile(server.acl_filename);
         if (errors) {
             serverLog(LL_WARNING,
-                "Aborting Redis startup because of ACL errors: %s", errors);
+                "Aborting %s startup because of ACL errors: %s", SERVER_TITLE, errors);
             sdsfree(errors);
             exit(1);
         }
@@ -2700,13 +2704,15 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
     if (object) {
         le->object = object;
     } else {
+        /* clang-format off */
         switch(reason) {
-            case ACL_DENIED_CMD: le->object = sdsdup(c->cmd->fullname); break;
-            case ACL_DENIED_KEY: le->object = sdsdup(c->argv[argpos]->ptr); break;
-            case ACL_DENIED_CHANNEL: le->object = sdsdup(c->argv[argpos]->ptr); break;
-            case ACL_DENIED_AUTH: le->object = sdsdup(c->argv[0]->ptr); break;
-            default: le->object = sdsempty();
+        case ACL_DENIED_CMD: le->object = sdsdup(c->cmd->fullname); break;
+        case ACL_DENIED_KEY: le->object = sdsdup(c->argv[argpos]->ptr); break;
+        case ACL_DENIED_CHANNEL: le->object = sdsdup(c->argv[argpos]->ptr); break;
+        case ACL_DENIED_AUTH: le->object = sdsdup(c->argv[0]->ptr); break;
+        default: le->object = sdsempty();
         }
+        /* clang-format on */
     }
 
     /* if we have a real client from the network, use it (could be missing on module timers) */
@@ -2754,7 +2760,7 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
     }
 }
 
-sds getAclErrorMessage(int acl_res, user *user, struct redisCommand *cmd, sds errored_val, int verbose) {
+sds getAclErrorMessage(int acl_res, user *user, struct serverCommand *cmd, sds errored_val, int verbose) {
     switch (acl_res) {
     case ACL_DENIED_CMD:
         return sdscatfmt(sdsempty(), "User %S has no permissions to run "
@@ -2787,7 +2793,7 @@ void aclCatWithFlags(client *c, dict *commands, uint64_t cflag, int *arraylen) {
     dictIterator *di = dictGetIterator(commands);
 
     while ((de = dictNext(di)) != NULL) {
-        struct redisCommand *cmd = dictGetVal(de);
+        struct serverCommand *cmd = dictGetVal(de);
         if (cmd->flags & CMD_MODULE) continue;
         if (cmd->acl_categories & cflag) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
@@ -2999,7 +3005,7 @@ void aclCommand(client *c) {
     } else if (server.acl_filename[0] == '\0' &&
                (!strcasecmp(sub,"load") || !strcasecmp(sub,"save")))
     {
-        addReplyError(c,"This Redis instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (assuming you have a Redis configuration file set) in order to store users in the Redis configuration.");
+        addReplyError(c,"This instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (assuming you have a configuration file set) in order to store users in the configuration.");
         return;
     } else if (!strcasecmp(sub,"load") && c->argc == 2) {
         sds errors = ACLLoadFromFile(server.acl_filename);
@@ -3090,6 +3096,7 @@ void aclCommand(client *c) {
 
             addReplyBulkCString(c,"reason");
             char *reasonstr;
+            /* clang-format off */
             switch(le->reason) {
             case ACL_DENIED_CMD: reasonstr="command"; break;
             case ACL_DENIED_KEY: reasonstr="key"; break;
@@ -3097,10 +3104,12 @@ void aclCommand(client *c) {
             case ACL_DENIED_AUTH: reasonstr="auth"; break;
             default: reasonstr="unknown";
             }
+            /* clang-format on */
             addReplyBulkCString(c,reasonstr);
 
             addReplyBulkCString(c,"context");
             char *ctxstr;
+            /* clang-format off */
             switch(le->context) {
             case ACL_LOG_CTX_TOPLEVEL: ctxstr="toplevel"; break;
             case ACL_LOG_CTX_MULTI: ctxstr="multi"; break;
@@ -3108,6 +3117,7 @@ void aclCommand(client *c) {
             case ACL_LOG_CTX_MODULE: ctxstr="module"; break;
             default: ctxstr="unknown";
             }
+            /* clang-format on */
             addReplyBulkCString(c,ctxstr);
 
             addReplyBulkCString(c,"object");
@@ -3127,7 +3137,7 @@ void aclCommand(client *c) {
             addReplyLongLong(c, le->ctime);
         }
     } else if (!strcasecmp(sub,"dryrun") && c->argc >= 4) {
-        struct redisCommand *cmd;
+        struct serverCommand *cmd;
         user *u = ACLGetUserByName(c->argv[2]->ptr,sdslen(c->argv[2]->ptr));
         if (u == NULL) {
             addReplyErrorFormat(c, "User '%s' not found", (char *)c->argv[2]->ptr);
@@ -3156,6 +3166,7 @@ void aclCommand(client *c) {
 
         addReply(c,shared.ok);
     } else if (c->argc == 2 && !strcasecmp(sub,"help")) {
+        /* clang-format off */
         const char *help[] = {
 "CAT [<category>]",
 "    List all commands that belong to <category>, or all command categories",
@@ -3185,13 +3196,14 @@ void aclCommand(client *c) {
 "    Return the current connection username.",
 NULL
         };
+        /* clang-format on */
         addReplyHelp(c,help);
     } else {
         addReplySubcommandSyntaxError(c);
     }
 }
 
-void addReplyCommandCategories(client *c, struct redisCommand *cmd) {
+void addReplyCommandCategories(client *c, struct serverCommand *cmd) {
     int flagcount = 0;
     void *flaglen = addReplyDeferredLen(c);
     for (int j = 0; ACLCommandCategories[j].flag != 0; j++) {
@@ -3204,7 +3216,7 @@ void addReplyCommandCategories(client *c, struct redisCommand *cmd) {
 }
 
 /* AUTH <password>
- * AUTH <username> <password> (Redis >= 6.0 form)
+ * AUTH <username> <password> (Redis OSS >= 6.0 form)
  *
  * When the user is omitted it means that we are trying to authenticate
  * against the default user. */

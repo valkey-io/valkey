@@ -3603,7 +3603,7 @@ int rdbSaveToSlavesSockets(int req, rdbSaveInfo *rsi) {
         if (strstr(server.exec_argv[0],"redis-server") != NULL) {
             serverSetProcTitle("redis-rdb-to-slaves");
         } else {
-            serverSetProcTitle("valkey-rdb-to-slaves");
+            serverSetProcTitle("valkey-rdb-to-replicas");
         }
         serverSetCpuAffinity(server.bgsave_cpulist);
 

@@ -39,6 +39,7 @@
 
 #include <math.h>
 #include <fcntl.h>
+#include <stdatomic.h>
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -2971,7 +2972,7 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         processModuleLoadingProgressEvent(0);
     }
     if (server.repl_state == REPL_STATE_TRANSFER && rioCheckType(r) == RIO_TYPE_CONN) {
-        atomicIncr(server.stat_net_repl_input_bytes, len);
+        atomic_fetch_add_explicit(&server.stat_net_repl_input_bytes,len,memory_order_relaxed);
     }
 }
 

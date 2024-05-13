@@ -46,7 +46,7 @@ int test_zmallocAllocZeroByteAndFree(int argc, char **argv, int flags) {
     void *ptr;
 
     ptr = zmalloc(0);
-    printf("Allocated 0 bytes; used: %zu\n", zmalloc_used_memory());
+    TEST_PRINT_INFO("Allocated 0 bytes; used: %zu\n", zmalloc_used_memory());
     zfree(ptr);
 
     TEST_ASSERT(zmalloc_used_memory() == 0);

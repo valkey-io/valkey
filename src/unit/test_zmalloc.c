@@ -28,7 +28,7 @@ int test_zmallocAllocReallocCallocAndFree(int argc, char **argv, int flags) {
     TEST_PRINT_INFO("Reallocated to 456 bytes; used: %zu\n", zmalloc_used_memory());
 
     ptr2 = zcalloc(123);
-    printf("Callocated 123 bytes; used: %zu\n", zmalloc_used_memory());
+    TEST_PRINT_INFO("Callocated 123 bytes; used: %zu\n", zmalloc_used_memory());
 
     zfree(ptr);
     zfree(ptr2);

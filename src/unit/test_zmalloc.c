@@ -32,7 +32,7 @@ int test_zmallocAllocReallocCallocAndFree(int argc, char **argv, int flags) {
 
     zfree(ptr);
     zfree(ptr2);
-    printf("Freed pointers; used: %zu\n", zmalloc_used_memory());
+    TEST_PRINT_INFO("Freed pointers; used: %zu\n", zmalloc_used_memory());
 
     TEST_ASSERT(zmalloc_used_memory() == 0);
 

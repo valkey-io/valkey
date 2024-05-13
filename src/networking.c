@@ -1619,7 +1619,7 @@ void freeClient(client *c) {
     }
 
     /* Free the query buffer */
-    if (c->querybuf == thread_shared_qb) {
+    if (c->querybuf && c->querybuf == thread_shared_qb) {
         sdsclear(c->querybuf);
     } else {
         sdsfree(c->querybuf);

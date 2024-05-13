@@ -6,7 +6,7 @@ int test_zmallocInitialUsedMemory(int argc, char **argv, int flags) {
     UNUSED(argv);
     UNUSED(flags);
 
-    printf("Malloc prefix size: %d\n", (int) PREFIX_SIZE);
+    TEST_PRINT_INFO("Malloc prefix size: %d\n", (int) PREFIX_SIZE);
 
     TEST_ASSERT(zmalloc_used_memory() == 0);
 

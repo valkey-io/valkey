@@ -341,7 +341,7 @@ static sds getClientOutputBuffer(client *c) {
  * It needs be paired with `stopCaching` function to stop caching. */
 client *createCachedResponseClient(void) {
     struct client *recording_client = createClient(NULL);
-    /* Allocating the `conn` allows to prepare the caching client before adding more
+    /* Allocating the `conn` allows to prepare the caching client before adding
      * data to the clients output buffer by `prepareClientToWrite`. */
     recording_client->conn  = zcalloc(sizeof(connection));
     return recording_client;

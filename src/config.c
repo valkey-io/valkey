@@ -2588,7 +2588,7 @@ static int updateOOMScoreAdj(const char **err) {
 
 int invalidateClusterSlotsResp(const char **err) {
     UNUSED(err);
-    clearCachedClusterSlotsResp();
+    clearCachedClusterSlotsResponse();
     return 1;
 }
 

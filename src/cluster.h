@@ -119,7 +119,7 @@ ConnectionType *connTypeOfCluster(void);
 
 int isClusterSlotsResponseCached(connTypeForCaching conn_type);
 sds getClusterSlotReply(connTypeForCaching conn_type);
-void clearCachedClusterSlotsResp(void);
+void clearCachedClusterSlotsResponse(void);
 void cacheSlotsResponse(sds response_to_cache, connTypeForCaching conn_type);
 void updateAllCachedNodesHealth(void);
 int isNodeAvailable(clusterNode *node);

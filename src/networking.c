@@ -2134,7 +2134,7 @@ void initSharedQueryBuf(void) {
  * If any data remained in the buffer, the client will take ownership of the buffer 
  * and a new empty buffer will be allocated for the shared buffer. */
 void resetSharedQueryBuf(client *c) {
-    if (c->querybuf != thread_shared_qb) return;
+    serverAssert(c->querybuf == thread_shared_qb);
     size_t remaining = sdslen(c->querybuf) - c->qb_pos;
 
     if (remaining > 0) {

@@ -1,5 +1,5 @@
 # Helper functions to simulate search-in-radius in the Tcl side in order to
-# verify the Redis implementation with a fuzzy test.
+# verify the server implementation with a fuzzy test.
 proc geo_degrad deg {expr {$deg*(atan(1)*8/360)}}
 proc geo_raddeg rad {expr {$rad/(atan(1)*8/360)}}
 
@@ -632,7 +632,7 @@ start_server {tags {"geo"}} {
                             continue
                         }
                         if {$mydist < [expr {$radius_km*1000}]} {
-                            # This is a false positive for redis since given the
+                            # This is a false positive for the server since given the
                             # same points the higher precision calculation provided
                             # by TCL shows the point within range
                             incr rounding_errors
@@ -656,7 +656,7 @@ start_server {tags {"geo"}} {
             if {$res != $res2} {
                 set diff [compare_lists $res $res2]
                 puts "*** Possible problem in GEO radius query ***"
-                puts "Redis: $res"
+                puts "Valkey: $res"
                 puts "Tcl  : $res2"
                 puts "Diff : $diff"
                 puts [join $debuginfo "\n"]
@@ -664,7 +664,7 @@ start_server {tags {"geo"}} {
                     if {[lsearch -exact $res2 $place] != -1} {
                         set where "(only in Tcl)"
                     } else {
-                        set where "(only in Redis)"
+                        set where "(only in Valkey)"
                     }
                     lassign [lindex [r geopos mypoints $place] 0] lon lat
                     set mydist [geo_distance $lon $lat $search_lon $search_lat]

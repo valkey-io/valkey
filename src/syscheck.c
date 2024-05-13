@@ -63,7 +63,7 @@ static sds read_sysfs_line(char *path) {
 }
 
 /* Verify our clocksource implementation doesn't go through a system call (uses vdso).
- * Going through a system call to check the time degrades Redis performance. */
+ * Going through a system call to check the time degrades server performance. */
 static int checkClocksource(sds *error_msg) {
     unsigned long test_time_us, system_hz;
     struct timespec ts;
@@ -117,7 +117,7 @@ static int checkClocksource(sds *error_msg) {
 }
 
 /* Verify we're not using the `xen` clocksource. The xen hypervisor's default clocksource is slow and affects
- * Redis's performance. This has been measured on ec2 xen based instances. ec2 recommends using the non-default
+ * the server's performance. This has been measured on ec2 xen based instances. ec2 recommends using the non-default
  * tsc clock source for these instances. */
 int checkXenClocksource(sds *error_msg) {
     sds curr = read_sysfs_line("/sys/devices/system/clocksource/clocksource0/current_clocksource");
@@ -127,7 +127,7 @@ int checkXenClocksource(sds *error_msg) {
     } else if (strcmp(curr, "xen") == 0) {
         *error_msg = sdsnew(
             "Your system is configured to use the 'xen' clocksource which might lead to degraded performance. "
-            "Check the result of the [slow-clocksource] system check: run 'redis-server --check-system' to check if "
+            "Check the result of the [slow-clocksource] system check: run 'valkey-server --check-system' to check if "
             "the system's clocksource isn't degrading performance.");
         res = -1;
     }
@@ -180,10 +180,10 @@ int checkTHPEnabled(sds *error_msg) {
     if (strstr(buf,"[always]") != NULL) {
         *error_msg = sdsnew(
             "You have Transparent Huge Pages (THP) support enabled in your kernel. "
-            "This will create latency and memory usage issues with Redis. "
+            "This will create latency and memory usage issues with Valkey. "
             "To fix this issue run the command 'echo madvise > /sys/kernel/mm/transparent_hugepage/enabled' as root, "
             "and add it to your /etc/rc.local in order to retain the setting after a reboot. "
-            "Redis must be restarted after THP is disabled (set to 'madvise' or 'never').");
+            "Valkey must be restarted after THP is disabled (set to 'madvise' or 'never').");
         return -1;
     } else {
         return 1;

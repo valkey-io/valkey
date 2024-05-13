@@ -30,7 +30,7 @@ start_server {tags {"modules"}} {
         r del mystream
 
         # Blocking XREAD on an empty key
-        set rd1 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
         $rd1 XREAD BLOCK 3000 STREAMS mystream $
         # wait until client is actually blocked
         wait_for_condition 50 100 {
@@ -42,7 +42,7 @@ start_server {tags {"modules"}} {
         assert_equal "{mystream {{$id {field 1 value a}}}}" [$rd1 read]
 
         # Blocking XREAD on an existing stream
-        set rd2 [redis_deferring_client]
+        set rd2 [valkey_deferring_client]
         $rd2 XREAD BLOCK 3000 STREAMS mystream $
         # wait until client is actually blocked
         wait_for_condition 50 100 {

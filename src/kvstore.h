@@ -72,8 +72,4 @@ dictEntry *kvstoreDictTwoPhaseUnlinkFind(kvstore *kvs, int didx, const void *key
 void kvstoreDictTwoPhaseUnlinkFree(kvstore *kvs, int didx, dictEntry *he, dictEntry **plink, int table_index);
 int kvstoreDictDelete(kvstore *kvs, int didx, const void *key);
 
-#ifdef SERVER_TEST
-int kvstoreTest(int argc, char *argv[], int flags);
-#endif
-
 #endif /* DICTARRAY_H_ */

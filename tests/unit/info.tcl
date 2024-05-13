@@ -60,7 +60,7 @@ start_server {tags {"info" "external:skip"}} {
             r config resetstat
             r CONFIG SET latency-tracking yes
             r CONFIG SET latency-tracking-info-percentiles "50.0 99.0 99.9"
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             r del list1{t}
 
             $rd blpop list1{t} 0
@@ -259,7 +259,7 @@ start_server {tags {"info" "external:skip"}} {
 
         test {errorstats: blocking commands} {
             r config resetstat
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             $rd client id
             set rd_id [$rd read]
             r del list1{t}
@@ -394,8 +394,8 @@ start_server {tags {"info" "external:skip"}} {
         test {clients: pubsub clients} {
             set info [r info clients]
             assert_equal [getInfoProperty $info pubsub_clients] {0}
-            set rd1 [redis_deferring_client]
-            set rd2 [redis_deferring_client]
+            set rd1 [valkey_deferring_client]
+            set rd2 [valkey_deferring_client]
             # basic count
             assert_equal {1} [ssubscribe $rd1 {chan1}]
             assert_equal {1} [subscribe $rd2 {chan2}]
@@ -424,7 +424,7 @@ start_server {tags {"info" "external:skip"}} {
         }
 
         test {clients: watching clients} {
-            set r2 [redis_client]
+            set r2 [valkey_client]
             assert_equal [s watching_clients] 0
             assert_equal [s total_watched_keys] 0
             assert_match {*watch=0*} [r client info]

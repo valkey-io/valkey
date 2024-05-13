@@ -31,7 +31,7 @@
  * Modules API documentation information
  *
  * The comments in this file are used to generate the API documentation on the
- * Redis website.
+ * website.
  *
  * Each function starting with VM_ and preceded by a block comment is included
  * in the API documentation. To hide a VM_ function, put a blank line between
@@ -69,7 +69,7 @@
 
 /* --------------------------------------------------------------------------
  * Private data structures used by the modules system. Those are data
- * structures that are never exposed to Redis Modules, if not as void
+ * structures that are never exposed to Modules, if not as void
  * pointers that have an API the module can call with them)
  * -------------------------------------------------------------------------- */
 
@@ -109,7 +109,7 @@ struct AutoMemEntry {
 #define VALKEYMODULE_AM_DICT 4
 #define VALKEYMODULE_AM_INFO 5
 
-/* The pool allocator block. Redis Modules can allocate memory via this special
+/* The pool allocator block. Modules can allocate memory via this special
  * allocator that will automatically release it all once the callback returns.
  * This means that it can only be used for ephemeral allocations. However
  * there are two advantages for modules to use this API:
@@ -132,7 +132,7 @@ typedef struct ValkeyModulePoolAllocBlock {
     char memory[];
 } ValkeyModulePoolAllocBlock;
 
-/* This structure represents the context in which Redis modules operate.
+/* This structure represents the context in which modules operate.
  * Most APIs module can access, get a pointer to the context, so that the API
  * implementation can hold state across calls, or remember what to free after
  * the call and so forth.
@@ -187,7 +187,7 @@ typedef struct ValkeyModuleCtx ValkeyModuleCtx;
 #define VALKEYMODULE_CTX_COMMAND (1<<9) /* Context created to serve a command from call() or AOF (which calls cmd->proc directly) */
 
 
-/* This represents a Redis key opened with VM_OpenKey(). */
+/* This represents a key opened with VM_OpenKey(). */
 struct ValkeyModuleKey {
     ValkeyModuleCtx *ctx;
     serverDb *db;
@@ -229,7 +229,7 @@ struct ValkeyModuleKey {
 #define VALKEYMODULE_ZSET_RANGE_POS 3
 
 /* Function pointer type of a function representing a command inside
- * a Redis module. */
+ * a module. */
 struct ValkeyModuleBlockedClient;
 typedef int (*ValkeyModuleCmdFunc) (ValkeyModuleCtx *ctx, void **argv, int argc);
 typedef int (*ValkeyModuleAuthCallback)(ValkeyModuleCtx *ctx, void *username, void *password, ValkeyModuleString **err);
@@ -239,7 +239,7 @@ typedef void (*ValkeyModuleDisconnectFunc) (ValkeyModuleCtx *ctx, struct ValkeyM
 struct ValkeyModuleCommand {
     struct ValkeyModule *module;
     ValkeyModuleCmdFunc func;
-    struct serverCommand *rediscmd;
+    struct serverCommand *serverCmd;
 };
 typedef struct ValkeyModuleCommand ValkeyModuleCommand;
 
@@ -399,15 +399,15 @@ typedef struct ValkeyModuleServerInfoData {
 #define VALKEYMODULE_ARGV_DRY_RUN (1<<10)
 #define VALKEYMODULE_ARGV_ALLOW_BLOCK (1<<11)
 
-/* Determine whether Redis should signalModifiedKey implicitly.
+/* Determine whether the server should signalModifiedKey implicitly.
  * In case 'ctx' has no 'module' member (and therefore no module->options),
- * we assume default behavior, that is, Redis signals.
+ * we assume default behavior, that is, the server signals.
  * (see VM_GetThreadSafeContext) */
 #define SHOULD_SIGNAL_MODIFIED_KEYS(ctx) \
     ((ctx)->module? !((ctx)->module->options & VALKEYMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED) : 1)
 
 /* Server events hooks data structures and defines: this modules API
- * allow modules to subscribe to certain events in Redis, such as
+ * allow modules to subscribe to certain events in the server, such as
  * the start and end of an RDB or AOF save, the change of role in replication,
  * and similar other events. */
 
@@ -419,13 +419,13 @@ typedef struct ValkeyModuleEventListener {
 
 list *ValkeyModule_EventListeners; /* Global list of all the active events. */
 
-/* Data structures related to the redis module users */
+/* Data structures related to the module users */
 
 /* This is the object returned by VM_CreateModuleUser(). The module API is
  * able to create users, set ACLs to such users, and later authenticate
  * clients using such newly created users. */
 typedef struct ValkeyModuleUser {
-    user *user; /* Reference to the real redis user */
+    user *user; /* Reference to the real user */
     int free_user; /* Indicates that user should also be freed when this object is freed */
 } ValkeyModuleUser;
 
@@ -439,7 +439,7 @@ typedef struct ValkeyModuleKeyOptCtx {
                                               as `copy2`, 'from_dbid' and 'to_dbid' are both valid. */
 } ValkeyModuleKeyOptCtx;
 
-/* Data structures related to redis module configurations */
+/* Data structures related to module configurations */
 /* The function signatures for module config get callbacks. These are identical to the ones exposed in valkeymodule.h. */
 typedef ValkeyModuleString * (*ValkeyModuleConfigGetStringFunc)(const char *name, void *privdata);
 typedef long long (*ValkeyModuleConfigGetNumericFunc)(const char *name, void *privdata);
@@ -513,13 +513,13 @@ int moduleVerifyResourceName(const char *name);
 /* --------------------------------------------------------------------------
  * ## Heap allocation raw functions
  *
- * Memory allocated with these functions are taken into account by Redis key
- * eviction algorithms and are reported in Redis memory usage information.
+ * Memory allocated with these functions are taken into account by key
+ * eviction algorithms and are reported in memory usage information.
  * -------------------------------------------------------------------------- */
 
 /* Use like malloc(). Memory allocated with this function is reported in
- * Redis INFO memory, used for keys eviction according to maxmemory settings
- * and in general is taken into account as memory allocated by Redis.
+ * INFO memory, used for keys eviction according to maxmemory settings
+ * and in general is taken into account as memory allocated by the server.
  * You should avoid using malloc().
  * This function panics if unable to allocate enough memory. */
 void *VM_Alloc(size_t bytes) {
@@ -540,8 +540,8 @@ void *VM_TryAlloc(size_t bytes) {
 }
 
 /* Use like calloc(). Memory allocated with this function is reported in
- * Redis INFO memory, used for keys eviction according to maxmemory settings
- * and in general is taken into account as memory allocated by Redis.
+ * INFO memory, used for keys eviction according to maxmemory settings
+ * and in general is taken into account as memory allocated by the server.
  * You should avoid using calloc() directly. */
 void *VM_Calloc(size_t nmemb, size_t size) {
     return zcalloc_usable(nmemb*size,NULL);
@@ -653,7 +653,7 @@ client *moduleAllocTempClient(void) {
     return c;
 }
 
-static void freeRedisModuleAsyncRMCallPromise(ValkeyModuleAsyncRMCallPromise *promise) {
+static void freeValkeyModuleAsyncRMCallPromise(ValkeyModuleAsyncRMCallPromise *promise) {
     if (--promise->ref_count > 0) {
         return;
     }
@@ -680,7 +680,7 @@ void moduleReleaseTempClient(client *c) {
     if (c->bstate.async_rm_call_handle) {
         ValkeyModuleAsyncRMCallPromise *promise = c->bstate.async_rm_call_handle;
         promise->c = NULL; /* Remove the client from the promise so it will no longer be possible to abort it. */
-        freeRedisModuleAsyncRMCallPromise(promise);
+        freeValkeyModuleAsyncRMCallPromise(promise);
         c->bstate.async_rm_call_handle = NULL;
     }
     moduleTempClients[moduleTempClientCount++] = c;
@@ -848,7 +848,7 @@ void moduleFreeContext(ValkeyModuleCtx *ctx) {
 }
 
 static CallReply *moduleParseReply(client *c, ValkeyModuleCtx *ctx) {
-    /* Convert the result of the Redis command into a module reply. */
+    /* Convert the result of the command into a module reply. */
     sds proto = sdsnewlen(c->buf,c->bufpos);
     c->bufpos = 0;
     while(listLength(c->reply)) {
@@ -923,7 +923,7 @@ void moduleCreateContext(ValkeyModuleCtx *out_ctx, ValkeyModule *module, int ctx
     }
 }
 
-/* This Redis command binds the normal Redis command invocation with commands
+/* This command binds the normal command invocation with commands
  * exported by modules. */
 void ValkeyModuleCommandDispatcher(client *c) {
     ValkeyModuleCommand *cp = c->cmd->module_cmd;
@@ -940,7 +940,7 @@ void ValkeyModuleCommandDispatcher(client *c) {
      * the client argument vectors: sometimes this will result in the SDS
      * string having unused space at the end. Later if a module takes ownership
      * of the RedisString, such space will be wasted forever. Inside the
-     * Redis core this is not a problem because tryObjectEncoding() is called
+     * server core this is not a problem because tryObjectEncoding() is called
      * before storing strings in the key space. Here we need to do it
      * for the module. */
     for (int i = 0; i < c->argc; i++) {
@@ -999,9 +999,9 @@ int moduleGetCommandChannelsViaAPI(struct serverCommand *cmd, robj **argv, int a
 /* --------------------------------------------------------------------------
  * ## Commands API
  *
- * These functions are used to implement custom Redis commands.
+ * These functions are used to implement custom commands.
  *
- * For examples, see https://redis.io/topics/modules-intro.
+ * For examples, see https://valkey.io/topics/modules-intro.
  * -------------------------------------------------------------------------- */
 
 /* Return non-zero if a module command, that was declared with the
@@ -1076,8 +1076,8 @@ int VM_IsChannelsPositionRequest(ValkeyModuleCtx *ctx) {
  * * VALKEYMODULE_CMD_CHANNEL_PUBLISH: This command will publish to this channel.
  * * VALKEYMODULE_CMD_CHANNEL_PATTERN: Instead of acting on a specific channel, will act on any 
  *                                    channel specified by the pattern. This is the same access
- *                                    used by the PSUBSCRIBE and PUNSUBSCRIBE commands available 
- *                                    in Redis. Not intended to be used with PUBLISH permissions.
+ *                                    used by the PSUBSCRIBE and PUNSUBSCRIBE commands.
+ *                                    Not intended to be used with PUBLISH permissions.
  *
  * The following is an example of how it could be used:
  *
@@ -1134,7 +1134,7 @@ int isCommandNameValid(const char *name) {
 }
 
 /* Helper for VM_CreateCommand(). Turns a string representing command
- * flags into the command flags used by the Redis core.
+ * flags into the command flags used by the server core.
  *
  * It returns the set of flags, or -1 if unknown flags are found. */
 int64_t commandFlagsFromString(char *s) {
@@ -1143,6 +1143,7 @@ int64_t commandFlagsFromString(char *s) {
     sds *tokens = sdssplitlen(s,strlen(s)," ",1,&count);
     for (j = 0; j < count; j++) {
         char *t = tokens[j];
+        /* clang-format off */
         if (!strcasecmp(t,"write")) flags |= CMD_WRITE;
         else if (!strcasecmp(t,"readonly")) flags |= CMD_READONLY;
         else if (!strcasecmp(t,"admin")) flags |= CMD_ADMIN;
@@ -1164,6 +1165,7 @@ int64_t commandFlagsFromString(char *s) {
         else if (!strcasecmp(t,"no-mandatory-keys")) flags |= CMD_NO_MANDATORY_KEYS;
         else if (!strcasecmp(t,"allow-busy")) flags |= CMD_ALLOW_BUSY;
         else break;
+        /* clang-format on */
     }
     sdsfreesplitres(tokens,count);
     if (j != count) return -1; /* Some token not processed correctly. */
@@ -1172,7 +1174,7 @@ int64_t commandFlagsFromString(char *s) {
 
 ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module, sds declared_name, sds fullname, ValkeyModuleCmdFunc cmdfunc, int64_t flags, int firstkey, int lastkey, int keystep);
 
-/* Register a new command in the Redis server, that will be handled by
+/* Register a new command in the server, that will be handled by
  * calling the function pointer 'cmdfunc' using the ValkeyModule calling
  * convention.
  *
@@ -1190,7 +1192,7 @@ ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module, sds d
  *
  * The command function type is the following:
  *
- *      int MyCommand_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc);
+ *      int MyCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc);
  *
  * And is supposed to always return VALKEYMODULE_OK.
  *
@@ -1213,9 +1215,9 @@ ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module, sds d
  * * **"pubsub"**:    The command publishes things on Pub/Sub channels.
  * * **"random"**:    The command may have different outputs even starting
  *                    from the same input arguments and key values.
- *                    Starting from Redis 7.0 this flag has been deprecated.
+ *                    Starting from Redis OSS 7.0 this flag has been deprecated.
  *                    Declaring a command as "random" can be done using
- *                    command tips, see https://redis.io/topics/command-tips.
+ *                    command tips, see https://valkey.io/topics/command-tips.
  * * **"allow-stale"**: The command is allowed to run on slaves that don't
  *                      serve stale data. Don't use if you don't know what
  *                      this means.
@@ -1230,7 +1232,7 @@ ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module, sds d
  * * **"getkeys-api"**: The command implements the interface to return
  *                      the arguments that are keys. Used when start/stop/step
  *                      is not enough because of the command syntax.
- * * **"no-cluster"**: The command should not register in Redis Cluster
+ * * **"no-cluster"**: The command should not register in Cluster
  *                     since is not designed to work with it because, for
  *                     example, is unable to report the position of the
  *                     keys, programmatically creates key names, or any
@@ -1249,7 +1251,7 @@ ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module, sds d
  *                          the arguments that are channels.
  *
  * The last three parameters specify which arguments of the new command are
- * Redis keys. See https://redis.io/commands/command for more information.
+ * keys. See https://valkey.io/commands/command for more information.
  *
  * * `firstkey`: One-based index of the first argument that's a key.
  *               Position 0 is always the command name itself.
@@ -1267,7 +1269,7 @@ ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module, sds d
  * only be used to find keys that exist at constant indices.
  * For non-trivial key arguments, you may pass 0,0,0 and use
  * ValkeyModule_SetCommandInfo to set key specs using a more advanced scheme and use
- * ValkeyModule_SetCommandACLCategories to set Redis ACL categories of the commands. */
+ * ValkeyModule_SetCommandACLCategories to set ACL categories of the commands. */
 int VM_CreateCommand(ValkeyModuleCtx *ctx, const char *name, ValkeyModuleCmdFunc cmdfunc, const char *strflags, int firstkey, int lastkey, int keystep) {
     if (!ctx->module->onload)
         return VALKEYMODULE_ERR;
@@ -1286,11 +1288,11 @@ int VM_CreateCommand(ValkeyModuleCtx *ctx, const char *name, ValkeyModuleCmdFunc
 
     sds declared_name = sdsnew(name);
     ValkeyModuleCommand *cp = moduleCreateCommandProxy(ctx->module, declared_name, sdsdup(declared_name), cmdfunc, flags, firstkey, lastkey, keystep);
-    cp->rediscmd->arity = cmdfunc ? -1 : -2; /* Default value, can be changed later via dedicated API */
+    cp->serverCmd->arity = cmdfunc ? -1 : -2; /* Default value, can be changed later via dedicated API */
 
-    serverAssert(dictAdd(server.commands, sdsdup(declared_name), cp->rediscmd) == DICT_OK);
-    serverAssert(dictAdd(server.orig_commands, sdsdup(declared_name), cp->rediscmd) == DICT_OK);
-    cp->rediscmd->id = ACLGetCommandID(declared_name); /* ID used for ACL. */
+    serverAssert(dictAdd(server.commands, sdsdup(declared_name), cp->serverCmd) == DICT_OK);
+    serverAssert(dictAdd(server.orig_commands, sdsdup(declared_name), cp->serverCmd) == DICT_OK);
+    cp->serverCmd->id = ACLGetCommandID(declared_name); /* ID used for ACL. */
     return VALKEYMODULE_OK;
 }
 
@@ -1302,44 +1304,44 @@ int VM_CreateCommand(ValkeyModuleCtx *ctx, const char *name, ValkeyModuleCmdFunc
  * Function will take the ownership of both 'declared_name' and 'fullname' SDS.
  */
 ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module, sds declared_name, sds fullname, ValkeyModuleCmdFunc cmdfunc, int64_t flags, int firstkey, int lastkey, int keystep) {
-    struct serverCommand *rediscmd;
+    struct serverCommand *serverCmd;
     ValkeyModuleCommand *cp;
 
     /* Create a command "proxy", which is a structure that is referenced
      * in the command table, so that the generic command that works as
-     * binding between modules and Redis, can know what function to call
+     * binding between modules and the server, can know what function to call
      * and what the module is. */
     cp = zcalloc(sizeof(*cp));
     cp->module = module;
     cp->func = cmdfunc;
-    cp->rediscmd = zcalloc(sizeof(*rediscmd));
-    cp->rediscmd->declared_name = declared_name; /* SDS for module commands */
-    cp->rediscmd->fullname = fullname;
-    cp->rediscmd->group = COMMAND_GROUP_MODULE;
-    cp->rediscmd->proc = ValkeyModuleCommandDispatcher;
-    cp->rediscmd->flags = flags | CMD_MODULE;
-    cp->rediscmd->module_cmd = cp;
+    cp->serverCmd = zcalloc(sizeof(*serverCmd));
+    cp->serverCmd->declared_name = declared_name; /* SDS for module commands */
+    cp->serverCmd->fullname = fullname;
+    cp->serverCmd->group = COMMAND_GROUP_MODULE;
+    cp->serverCmd->proc = ValkeyModuleCommandDispatcher;
+    cp->serverCmd->flags = flags | CMD_MODULE;
+    cp->serverCmd->module_cmd = cp;
     if (firstkey != 0) {
-        cp->rediscmd->key_specs_num = 1;
-        cp->rediscmd->key_specs = zcalloc(sizeof(keySpec));
-        cp->rediscmd->key_specs[0].flags = CMD_KEY_FULL_ACCESS;
+        cp->serverCmd->key_specs_num = 1;
+        cp->serverCmd->key_specs = zcalloc(sizeof(keySpec));
+        cp->serverCmd->key_specs[0].flags = CMD_KEY_FULL_ACCESS;
         if (flags & CMD_MODULE_GETKEYS)
-            cp->rediscmd->key_specs[0].flags |= CMD_KEY_VARIABLE_FLAGS;
-        cp->rediscmd->key_specs[0].begin_search_type = KSPEC_BS_INDEX;
-        cp->rediscmd->key_specs[0].bs.index.pos = firstkey;
-        cp->rediscmd->key_specs[0].find_keys_type = KSPEC_FK_RANGE;
-        cp->rediscmd->key_specs[0].fk.range.lastkey = lastkey < 0 ? lastkey : (lastkey-firstkey);
-        cp->rediscmd->key_specs[0].fk.range.keystep = keystep;
-        cp->rediscmd->key_specs[0].fk.range.limit = 0;
+            cp->serverCmd->key_specs[0].flags |= CMD_KEY_VARIABLE_FLAGS;
+        cp->serverCmd->key_specs[0].begin_search_type = KSPEC_BS_INDEX;
+        cp->serverCmd->key_specs[0].bs.index.pos = firstkey;
+        cp->serverCmd->key_specs[0].find_keys_type = KSPEC_FK_RANGE;
+        cp->serverCmd->key_specs[0].fk.range.lastkey = lastkey < 0 ? lastkey : (lastkey-firstkey);
+        cp->serverCmd->key_specs[0].fk.range.keystep = keystep;
+        cp->serverCmd->key_specs[0].fk.range.limit = 0;
     } else {
-        cp->rediscmd->key_specs_num = 0;
-        cp->rediscmd->key_specs = NULL;
+        cp->serverCmd->key_specs_num = 0;
+        cp->serverCmd->key_specs = NULL;
     }
-    populateCommandLegacyRangeSpec(cp->rediscmd);
-    cp->rediscmd->microseconds = 0;
-    cp->rediscmd->calls = 0;
-    cp->rediscmd->rejected_calls = 0;
-    cp->rediscmd->failed_calls = 0;
+    populateCommandLegacyRangeSpec(cp->serverCmd);
+    cp->serverCmd->microseconds = 0;
+    cp->serverCmd->calls = 0;
+    cp->serverCmd->rejected_calls = 0;
+    cp->serverCmd->failed_calls = 0;
     return cp;
 }
 
@@ -1400,7 +1402,7 @@ int VM_CreateSubcommand(ValkeyModuleCommand *parent, const char *name, ValkeyMod
     if ((flags & CMD_MODULE_NO_CLUSTER) && server.cluster_enabled)
         return VALKEYMODULE_ERR;
 
-    struct serverCommand *parent_cmd = parent->rediscmd;
+    struct serverCommand *parent_cmd = parent->serverCmd;
 
     if (parent_cmd->parent)
         return VALKEYMODULE_ERR; /* We don't allow more than one level of subcommands */
@@ -1422,9 +1424,9 @@ int VM_CreateSubcommand(ValkeyModuleCommand *parent, const char *name, ValkeyMod
 
     sds fullname = catSubCommandFullname(parent_cmd->fullname, name);
     ValkeyModuleCommand *cp = moduleCreateCommandProxy(parent->module, declared_name, fullname, cmdfunc, flags, firstkey, lastkey, keystep);
-    cp->rediscmd->arity = -2;
+    cp->serverCmd->arity = -2;
 
-    commandAddSubcommand(parent_cmd, cp->rediscmd, name);
+    commandAddSubcommand(parent_cmd, cp->serverCmd, name);
     return VALKEYMODULE_OK;
 }
 
@@ -1518,7 +1520,7 @@ int matchAclCategoryFlag(char *flag, int64_t *acl_categories_flags) {
 }
 
 /* Helper for VM_SetCommandACLCategories(). Turns a string representing acl category
- * flags into the acl category flags used by Redis ACL which allows users to access 
+ * flags into the acl category flags used by the server ACL which allows users to access
  * the module commands by acl categories.
  * 
  * It returns the set of acl flags, or -1 if unknown flags are found. */
@@ -1554,7 +1556,7 @@ int VM_SetCommandACLCategories(ValkeyModuleCommand *command, const char *aclflag
     if (!command || !command->module || !command->module->onload) return VALKEYMODULE_ERR;
     int64_t categories_flags = aclflags ? categoryFlagsFromString((char*)aclflags) : 0;
     if (categories_flags == -1) return VALKEYMODULE_ERR;
-    struct serverCommand *rcmd = command->rediscmd;
+    struct serverCommand *rcmd = command->serverCmd;
     rcmd->acl_categories = categories_flags; /* ACL categories flags for module command */
     command->module->num_commands_with_acl_categories++;
     return VALKEYMODULE_OK;
@@ -1584,7 +1586,7 @@ int VM_SetCommandACLCategories(ValkeyModuleCommand *command, const char *aclflag
  *
  * All fields except `version` are optional. Explanation of the fields:
  *
- * - `version`: This field enables compatibility with different Redis versions.
+ * - `version`: This field enables compatibility with different server versions.
  *   Always set this field to VALKEYMODULE_COMMAND_INFO_VERSION.
  *
  * - `summary`: A short description of the command (optional).
@@ -1592,7 +1594,7 @@ int VM_SetCommandACLCategories(ValkeyModuleCommand *command, const char *aclflag
  * - `complexity`: Complexity description (optional).
  *
  * - `since`: The version where the command was introduced (optional).
- *   Note: The version specified should be the module's, not Redis version.
+ *   Note: The version specified should be the module's, not the server version.
  *
  * - `history`: An array of ValkeyModuleCommandHistoryEntry (optional), which is
  *   a struct with the following fields:
@@ -1605,11 +1607,11 @@ int VM_SetCommandACLCategories(ValkeyModuleCommand *command, const char *aclflag
  *     both strings set to NULL.
  *
  * - `tips`: A string of space-separated tips regarding this command, meant for
- *   clients and proxies. See https://redis.io/topics/command-tips.
+ *   clients and proxies. See https://valkey.io/topics/command-tips.
  *
  * - `arity`: Number of arguments, including the command name itself. A positive
  *   number specifies an exact number of arguments and a negative number
- *   specifies a minimum number of arguments, so use -N to say >= N. Redis
+ *   specifies a minimum number of arguments, so use -N to say >= N. The server
  *   validates a call before passing it to a module, so this can replace an
  *   arity check inside the module command implementation. A value of 0 (or an
  *   omitted arity field) is equivalent to -2 if the command has sub commands
@@ -1626,7 +1628,7 @@ int VM_SetCommandACLCategories(ValkeyModuleCommand *command, const char *aclflag
  *
  *     Key-specs cause the triplet (firstkey, lastkey, keystep) given in
  *     VM_CreateCommand to be recomputed, but it is still useful to provide
- *     these three parameters in VM_CreateCommand, to better support old Redis
+ *     these three parameters in VM_CreateCommand, to better support old server
  *     versions where VM_SetCommandInfo is not available.
  *
  *     Note that key-specs don't fully replace the "getkeys-api" (see
@@ -1867,7 +1869,7 @@ int VM_SetCommandInfo(ValkeyModuleCommand *command, const ValkeyModuleCommandInf
         return VALKEYMODULE_ERR;
     }
 
-    struct serverCommand *cmd = command->rediscmd;
+    struct serverCommand *cmd = command->serverCmd;
 
     /* Check if any info has already been set. Overwriting info involves freeing
      * the old info, which is not implemented. */
@@ -2283,7 +2285,7 @@ void moduleListFree(void *config) {
 void VM_SetModuleAttribs(ValkeyModuleCtx *ctx, const char *name, int ver, int apiver) {
     /* Called by VM_Init() to setup the `ctx->module` structure.
      *
-     * This is an internal function, Redis modules developers don't need
+     * This is an internal function, module developers don't need
      * to use it. */
     ValkeyModule *module;
 
@@ -2376,21 +2378,21 @@ int VM_BlockedClientMeasureTimeEnd(ValkeyModuleBlockedClient *bc) {
     return VALKEYMODULE_OK;
 }
 
-/* This API allows modules to let Redis process background tasks, and some
+/* This API allows modules to let the server process background tasks, and some
  * commands during long blocking execution of a module command.
  * The module can call this API periodically.
  * The flags is a bit mask of these:
  *
  * - `VALKEYMODULE_YIELD_FLAG_NONE`: No special flags, can perform some background
  *                                  operations, but not process client commands.
- * - `VALKEYMODULE_YIELD_FLAG_CLIENTS`: Redis can also process client commands.
+ * - `VALKEYMODULE_YIELD_FLAG_CLIENTS`: The server can also process client commands.
  *
  * The `busy_reply` argument is optional, and can be used to control the verbose
  * error string after the `-BUSY` error code.
  *
- * When the `VALKEYMODULE_YIELD_FLAG_CLIENTS` is used, Redis will only start
+ * When the `VALKEYMODULE_YIELD_FLAG_CLIENTS` is used, the server will only start
  * processing client commands after the time defined by the
- * `busy-reply-threshold` config, in which case Redis will start rejecting most
+ * `busy-reply-threshold` config, in which case the server will start rejecting most
  * commands with `-BUSY` error, but allow the ones marked with the `allow-busy`
  * flag to be executed.
  * This API can also be used in thread safe context (while locked), and during
@@ -2407,10 +2409,10 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
     long long now = getMonotonicUs();
     if (now >= ctx->next_yield_time) {
         /* In loading mode, there's no need to handle busy_module_yield_reply,
-         * and busy_module_yield_flags, since redis is anyway rejecting all
+         * and busy_module_yield_flags, since the server is anyway rejecting all
          * commands with -LOADING. */
         if (server.loading) {
-            /* Let redis process events */
+            /* Let the server process events */
             processEventsWhileBlocked();
         } else {
             const char *prev_busy_module_yield_reply = server.busy_module_yield_reply;
@@ -2425,7 +2427,7 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
             if (flags & VALKEYMODULE_YIELD_FLAG_CLIENTS)
                 server.busy_module_yield_flags |= BUSY_MODULE_YIELD_CLIENTS;
 
-            /* Let redis process events */
+            /* Let the server process events */
             if (!pthread_equal(server.main_thread_id, pthread_self())) {
                 /* If we are not in the main thread, we defer event loop processing to the main thread
                  * after the main thread enters acquiring GIL state in order to protect the event
@@ -2482,11 +2484,11 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
  * 
  * VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD:
  * Setting this flag indicates module awareness of diskless async replication (repl-diskless-load=swapdb)
- * and that redis could be serving reads during replication instead of blocking with LOADING status.
+ * and that the server could be serving reads during replication instead of blocking with LOADING status.
  *
  * VALKEYMODULE_OPTIONS_ALLOW_NESTED_KEYSPACE_NOTIFICATIONS:
  * Declare that the module wants to get nested key-space notifications.
- * By default, Redis will not fire key-space notifications that happened inside
+ * By default, the server will not fire key-space notifications that happened inside
  * a key-space notification callback. This flag allows to change this behavior
  * and fire nested key-space notifications. Notice: if enabled, the module
  * should protected itself from infinite recursion. */
@@ -2516,7 +2518,7 @@ int VM_SignalModifiedKey(ValkeyModuleCtx *ctx, ValkeyModuleString *keyname) {
  * that wants to use automatic memory.
  *
  * When enabled, automatic memory management tracks and automatically frees
- * keys, call replies and Redis string objects once the command returns. In most
+ * keys, call replies and ValkeyModuleString objects once the command returns. In most
  * cases this eliminates the need of calling the following functions:
  *
  * 1. ValkeyModule_CloseKey()
@@ -2725,7 +2727,7 @@ ValkeyModuleString *VM_CreateStringFromStreamID(ValkeyModuleCtx *ctx, const Valk
     return o;
 }
 
-/* Free a module string object obtained with one of the Redis modules API calls
+/* Free a module string object obtained with one of the module API calls
  * that return new string objects.
  *
  * It is possible to call this function even when automatic memory management
@@ -2984,11 +2986,11 @@ int VM_StringAppendBuffer(ValkeyModuleCtx *ctx, ValkeyModuleString *str, const c
  * string in a module command before the string is potentially available
  * to other threads is generally safe.
  *
- * Currently, Redis may also automatically trim retained strings when a
+ * Currently, the server may also automatically trim retained strings when a
  * module command returns. However, doing this explicitly should still be
  * a preferred option:
  *
- * 1. Future versions of Redis may abandon auto-trimming.
+ * 1. Future versions of the server may abandon auto-trimming.
  * 2. Auto-trimming as currently implemented is *not thread safe*.
  *    A background thread manipulating a recently retained string may end up
  *    in a race condition with the auto-trim, which could result with
@@ -3205,7 +3207,7 @@ int VM_ReplyWithArray(ValkeyModuleCtx *ctx, long len) {
 }
 
 /* Reply with a RESP3 Map type of 'len' pairs.
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3.
+ * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
  * After starting a map reply, the module must make `len*2` calls to other
  * `ReplyWith*` style functions in order to emit the elements of the map.
@@ -3222,7 +3224,7 @@ int VM_ReplyWithMap(ValkeyModuleCtx *ctx, long len) {
 }
 
 /* Reply with a RESP3 Set type of 'len' elements.
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3.
+ * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
  * After starting a set reply, the module must make `len` calls to other
  * `ReplyWith*` style functions in order to emit the elements of the set.
@@ -3240,7 +3242,7 @@ int VM_ReplyWithSet(ValkeyModuleCtx *ctx, long len) {
 
 
 /* Add attributes (metadata) to the reply. Should be done before adding the
- * actual reply. see https://github.com/antirez/RESP3/blob/master/spec.md#attribute-type
+ * actual reply. see https://valkey.io/topics/protocol#attribute-type
  *
  * After starting an attribute's reply, the module must make `len*2` calls to other
  * `ReplyWith*` style functions in order to emit the elements of the attribute map.
@@ -3348,19 +3350,19 @@ void VM_ReplySetArrayLength(ValkeyModuleCtx *ctx, long len) {
 /* Very similar to ValkeyModule_ReplySetArrayLength except `len` should
  * exactly half of the number of `ReplyWith*` functions called in the
  * context of the map.
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3. */
+ * Visit https://valkey.io/topics/protocol for more info about RESP3. */
 void VM_ReplySetMapLength(ValkeyModuleCtx *ctx, long len) {
     moduleReplySetCollectionLength(ctx, len, COLLECTION_REPLY_MAP);
 }
 
 /* Very similar to ValkeyModule_ReplySetArrayLength
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3. */
+ * Visit https://valkey.io/topics/protocol for more info about RESP3. */
 void VM_ReplySetSetLength(ValkeyModuleCtx *ctx, long len) {
     moduleReplySetCollectionLength(ctx, len, COLLECTION_REPLY_SET);
 }
 
 /* Very similar to ValkeyModule_ReplySetMapLength
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3.
+ * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
  * Must not be called if VM_ReplyWithAttribute returned an error. */
 void VM_ReplySetAttributeLength(ValkeyModuleCtx *ctx, long len) {
@@ -3439,7 +3441,7 @@ int VM_ReplyWithNull(ValkeyModuleCtx *ctx) {
 }
 
 /* Reply with a RESP3 Boolean type.
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3.
+ * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
  * In RESP3, this is boolean type
  * In RESP2, it's a string response of "1" and "0" for true and false respectively.
@@ -3452,7 +3454,7 @@ int VM_ReplyWithBool(ValkeyModuleCtx *ctx, int b) {
     return VALKEYMODULE_OK;
 }
 
-/* Reply exactly what a Redis command returned us with ValkeyModule_Call().
+/* Reply exactly what a command returned us with ValkeyModule_Call().
  * This function is useful when we use ValkeyModule_Call() in order to
  * execute some command, as we want to reply to the client exactly the
  * same reply we obtained by the command.
@@ -3489,7 +3491,7 @@ int VM_ReplyWithCallReply(ValkeyModuleCtx *ctx, ValkeyModuleCallReply *reply) {
 }
 
 /* Reply with a RESP3 Double type.
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3.
+ * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
  * Send a string reply obtained converting the double 'd' into a bulk string.
  * This function is basically equivalent to converting a double into
@@ -3508,7 +3510,7 @@ int VM_ReplyWithDouble(ValkeyModuleCtx *ctx, double d) {
 }
 
 /* Reply with a RESP3 BigNumber type.
- * Visit https://github.com/antirez/RESP3/blob/master/spec.md for more info about RESP3.
+ * Visit https://valkey.io/topics/protocol for more info about RESP3.
  *
  * In RESP3, this is a string of length `len` that is tagged as a BigNumber, 
  * however, it's up to the caller to ensure that it's a valid BigNumber.
@@ -3565,8 +3567,8 @@ int VM_ReplyWithLongDouble(ValkeyModuleCtx *ctx, long double ld) {
  * #### Note about calling this function from a thread safe context:
  *
  * Normally when you call this function from the callback implementing a
- * module command, or any other callback provided by the Redis Module API,
- * Redis will accumulate all the calls to this function in the context of
+ * module command, or any other callback provided by the Module API,
+ * The server will accumulate all the calls to this function in the context of
  * the callback, and will propagate all the commands wrapped in a MULTI/EXEC
  * transaction. However when calling this function from a threaded safe context
  * that can live an undefined amount of time, and can be locked/unlocked in
@@ -3838,7 +3840,7 @@ int VM_GetSelectedDb(ValkeyModuleCtx *ctx) {
 
 /* Return the current context's flags. The flags provide information on the
  * current request context (whether the client is a Lua script or in a MULTI),
- * and about the Redis instance in general, i.e replication and persistence.
+ * and about the instance in general, i.e replication and persistence.
  *
  * It is possible to call this function even with a NULL context, however
  * in this case the following flags will not be reported:
@@ -3854,15 +3856,15 @@ int VM_GetSelectedDb(ValkeyModuleCtx *ctx) {
  *  * VALKEYMODULE_CTX_FLAGS_REPLICATED: The command was sent over the replication
  *    link by the MASTER
  *
- *  * VALKEYMODULE_CTX_FLAGS_PRIMARY: The Redis instance is a primary
+ *  * VALKEYMODULE_CTX_FLAGS_PRIMARY: The instance is a primary
  *
- *  * VALKEYMODULE_CTX_FLAGS_REPLICA: The Redis instance is a replica
+ *  * VALKEYMODULE_CTX_FLAGS_REPLICA: The instance is a replica
  *
- *  * VALKEYMODULE_CTX_FLAGS_READONLY: The Redis instance is read-only
+ *  * VALKEYMODULE_CTX_FLAGS_READONLY: The instance is read-only
  *
- *  * VALKEYMODULE_CTX_FLAGS_CLUSTER: The Redis instance is in cluster mode
+ *  * VALKEYMODULE_CTX_FLAGS_CLUSTER: The instance is in cluster mode
  *
- *  * VALKEYMODULE_CTX_FLAGS_AOF: The Redis instance has AOF enabled
+ *  * VALKEYMODULE_CTX_FLAGS_AOF: The instance has AOF enabled
  *
  *  * VALKEYMODULE_CTX_FLAGS_RDB: The instance has RDB enabled
  *
@@ -3871,7 +3873,7 @@ int VM_GetSelectedDb(ValkeyModuleCtx *ctx) {
  *  * VALKEYMODULE_CTX_FLAGS_EVICT:  Maxmemory is set and has an eviction
  *    policy that may delete keys
  *
- *  * VALKEYMODULE_CTX_FLAGS_OOM: Redis is out of memory according to the
+ *  * VALKEYMODULE_CTX_FLAGS_OOM: The server is out of memory according to the
  *    maxmemory setting.
  *
  *  * VALKEYMODULE_CTX_FLAGS_OOM_WARNING: Less than 25% of memory remains before
@@ -3897,13 +3899,13 @@ int VM_GetSelectedDb(ValkeyModuleCtx *ctx) {
  *  * VALKEYMODULE_CTX_FLAGS_MULTI_DIRTY: The next EXEC will fail due to dirty
  *                                       CAS (touched keys).
  *
- *  * VALKEYMODULE_CTX_FLAGS_IS_CHILD: Redis is currently running inside
+ *  * VALKEYMODULE_CTX_FLAGS_IS_CHILD: The server is currently running inside
  *                                    background child process.
  *
  *  * VALKEYMODULE_CTX_FLAGS_RESP3: Indicate the that client attached to this
  *                                 context is using RESP3.
  *
- *  * VALKEYMODULE_CTX_FLAGS_SERVER_STARTUP: The Redis instance is starting
+ *  * VALKEYMODULE_CTX_FLAGS_SERVER_STARTUP: The instance is starting
  */
 int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
     int flags = 0;
@@ -3989,7 +3991,7 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
     if (hasActiveChildProcess()) flags |= VALKEYMODULE_CTX_FLAGS_ACTIVE_CHILD;
     if (server.in_fork_child) flags |= VALKEYMODULE_CTX_FLAGS_IS_CHILD;
 
-    /* Non-empty server.loadmodule_queue means that Redis is starting. */
+    /* Non-empty server.loadmodule_queue means that the server is starting. */
     if (listLength(server.loadmodule_queue) > 0)
         flags |= VALKEYMODULE_CTX_FLAGS_SERVER_STARTUP;
 
@@ -3997,7 +3999,7 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
 }
 
 /* Returns true if a client sent the CLIENT PAUSE command to the server or
- * if Redis Cluster does a manual failover, pausing the clients.
+ * if the Cluster does a manual failover, pausing the clients.
  * This is needed when we have a master with replicas, and want to write,
  * without adding further data to the replication channel, that the replicas
  * replication offset, match the one of the master. When this happens, it is
@@ -4024,7 +4026,7 @@ int VM_AvoidReplicaTraffic(void) {
  * is out of range.
  *
  * Note that the client will retain the currently selected DB even after
- * the Redis command implemented by the module calling this function
+ * the command implemented by the module calling this function
  * returns.
  *
  * If the module command wishes to change something in a different DB and
@@ -4066,7 +4068,7 @@ static void moduleInitKeyTypeSpecific(ValkeyModuleKey *key) {
     }
 }
 
-/* Return a handle representing a Redis key, so that it is possible
+/* Return a handle representing a key, so that it is possible
  * to call other APIs with the key handle as argument to perform
  * operations on the key.
  *
@@ -4116,7 +4118,7 @@ ValkeyModuleKey *VM_OpenKey(ValkeyModuleCtx *ctx, robj *keyname, int mode) {
 /**
  * Returns the full OpenKey modes mask, using the return value
  * the module can check if a certain set of OpenKey modes are supported
- * by the redis server version in use.
+ * by the server version in use.
  * Example:
  *
  *        int supportedMode = VM_GetOpenKeyModesAll();
@@ -4524,7 +4526,7 @@ int moduleListIteratorSeek(ValkeyModuleKey *key, long index, int mode) {
  * - ENOTSUP if the key is of another type than list.
  * - EBADF if the key is not opened for writing.
  *
- * Note: Before Redis 7.0, `errno` was not set by this function. */
+ * Note: Before Redis OSS 7.0, `errno` was not set by this function. */
 int VM_ListPush(ValkeyModuleKey *key, int where, ValkeyModuleString *ele) {
     if (!key || !ele) {
         errno = EINVAL;
@@ -4558,7 +4560,7 @@ int VM_ListPush(ValkeyModuleKey *key, int where, ValkeyModuleString *ele) {
  * - ENOTSUP if the key is empty or of another type than list.
  * - EBADF if the key is not opened for writing.
  *
- * Note: Before Redis 7.0, `errno` was not set by this function. */
+ * Note: Before Redis OSS 7.0, `errno` was not set by this function. */
 ValkeyModuleString *VM_ListPop(ValkeyModuleKey *key, int where) {
     if (!key) {
         errno = EINVAL;
@@ -4976,7 +4978,7 @@ int VM_ZsetLastInScoreRange(ValkeyModuleKey *key, double min, double max, int mi
  * VALKEYMODULE_ERR.
  *
  * Note that this function takes 'min' and 'max' in the same form of the
- * Redis ZRANGEBYLEX command. */
+ * ZRANGEBYLEX command. */
 int zsetInitLexRange(ValkeyModuleKey *key, ValkeyModuleString *min, ValkeyModuleString *max, int first) {
     if (!key->value || key->value->type != OBJ_ZSET) return VALKEYMODULE_ERR;
 
@@ -5225,7 +5227,7 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
  *                               strings instead of ValkeyModuleString objects.
  *     VALKEYMODULE_HASH_COUNT_ALL: Include the number of inserted fields in the
  *                                 returned number, in addition to the number of
- *                                 updated and deleted fields. (Added in Redis
+ *                                 updated and deleted fields. (Added in Redis OSS
  *                                 6.2.)
  *
  * Unless NX is specified, the command overwrites the old field value with
@@ -5245,7 +5247,7 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
  * flag VALKEYMODULE_HASH_COUNT_ALL is set, inserted fields not previously
  * existing in the hash are also counted.
  *
- * If the return value is zero, `errno` is set (since Redis 6.2) as follows:
+ * If the return value is zero, `errno` is set (since Redis OSS 6.2) as follows:
  *
  * - EINVAL if any unknown flags are set or if key is NULL.
  * - ENOTSUP if the key is associated with a non Hash value.
@@ -5256,8 +5258,8 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
  *   back due to the NX and XX flags.
  *
  * NOTICE: The return value semantics of this function are very different
- * between Redis 6.2 and older versions. Modules that use it should determine
- * the Redis version and handle it accordingly.
+ * between Redis OSS 6.2 and older versions. Modules that use it should determine
+ * the server version and handle it accordingly.
  */
 int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
     va_list ap;
@@ -5426,7 +5428,7 @@ int VM_HashGet(ValkeyModuleKey *key, int flags, ...) {
 /* --------------------------------------------------------------------------
  * ## Key API for Stream type
  *
- * For an introduction to streams, see https://redis.io/topics/streams-intro.
+ * For an introduction to streams, see https://valkey.io/topics/streams-intro.
  *
  * The type ValkeyModuleStreamID, which is used in stream functions, is a struct
  * with two 64-bit fields and is defined as
@@ -5891,9 +5893,9 @@ long long VM_StreamTrimByID(ValkeyModuleKey *key, int flags, ValkeyModuleStreamI
 }
 
 /* --------------------------------------------------------------------------
- * ## Calling Redis commands from modules
+ * ## Calling commands from modules
  *
- * VM_Call() sends a command to Redis. The remaining functions handle the reply.
+ * VM_Call() sends a command to the server. The remaining functions handle the reply.
  * -------------------------------------------------------------------------- */
 
 
@@ -5916,7 +5918,7 @@ void VM_FreeCallReply(ValkeyModuleCallReply *reply) {
     if(callReplyType(reply) == VALKEYMODULE_REPLY_PROMISE) {
         ValkeyModuleAsyncRMCallPromise *promise = callReplyGetPrivateData(reply);
         ctx = promise->ctx;
-        freeRedisModuleAsyncRMCallPromise(promise);
+        freeValkeyModuleAsyncRMCallPromise(promise);
     } else {
         ctx = callReplyGetPrivateData(reply);
     }
@@ -6043,7 +6045,7 @@ void VM_CallReplyPromiseSetUnblockHandler(ValkeyModuleCallReply *reply, ValkeyMo
  * If the execution was aborted successfully, it is promised that the unblock handler will not be called.
  * That said, it is possible that the abort operation will successes but the operation will still continue.
  * This can happened if, for example, a module implements some blocking command and does not respect the
- * disconnect callback. For pure Redis commands this can not happened.*/
+ * disconnect callback. For server-provided commands this can not happened.*/
 int VM_CallReplyPromiseAbort(ValkeyModuleCallReply *reply, void **private_data) {
     ValkeyModuleAsyncRMCallPromise *promise = callReplyGetPrivateData(reply);
     if (!promise->c) return VALKEYMODULE_ERR; /* Promise can not be aborted, either already aborted or already finished. */
@@ -6197,9 +6199,9 @@ fmterr:
     return NULL;
 }
 
-/* Exported API to call any Redis command from modules.
+/* Exported API to call any command from modules.
  *
- * * **cmdname**: The Redis command to call.
+ * * **cmdname**: The command to call.
  * * **fmt**: A format specifier string for the command's arguments. Each
  *   of the arguments should be specified by a valid type specification. The
  *   format specifier can also contain the modifiers `!`, `A`, `3` and `R` which
@@ -6211,7 +6213,7 @@ fmterr:
  *     * `l` -- The argument is a `long long` integer.
  *     * `s` -- The argument is a ValkeyModuleString.
  *     * `v` -- The argument(s) is a vector of ValkeyModuleString.
- *     * `!` -- Sends the Redis command and its arguments to replicas and AOF.
+ *     * `!` -- Sends the command and its arguments to replicas and AOF.
  *     * `A` -- Suppress AOF propagation, send only to replicas (requires `!`).
  *     * `R` -- Suppress replicas propagation, send only to AOF (requires `!`).
  *     * `3` -- Return a RESP3 reply. This will change the command reply.
@@ -6229,7 +6231,7 @@ fmterr:
  *              the command to run as the determined user, so that any future user
  *              dependent activity, such as ACL checks within scripts will proceed as
  *              expected.
- *              Otherwise, the command will run as the Redis unrestricted user.
+ *              Otherwise, the command will run as the unrestricted user.
  *     * `S` -- Run the command in a script mode, this means that it will raise
  *              an error if a command which are not allowed inside a script
  *              (flagged with the `deny-script` flag) is invoked (like SHUTDOWN).
@@ -6252,7 +6254,7 @@ fmterr:
  *              The module can use this reply object to set a handler which will be called when
  *              the command gets unblocked using ValkeyModule_CallReplyPromiseSetUnblockHandler.
  *              The handler must be set immediately after the command invocation (without releasing
- *              the Redis lock in between). If the handler is not set, the blocking command will
+ *              the lock in between). If the handler is not set, the blocking command will
  *              still continue its execution but the reply will be ignored (fire and forget),
  *              notice that this is dangerous in case of role change, as explained below.
  *              The module can use ValkeyModule_CallReplyPromiseAbort to abort the command invocation
@@ -6260,21 +6262,21 @@ fmterr:
  *              details). It is also the module's responsibility to abort the execution on role change, either by using
  *              server event (to get notified when the instance becomes a replica) or relying on the disconnect
  *              callback of the original client. Failing to do so can result in a write operation on a replica.
- *              Unlike other call replies, promise call reply **must** be freed while the Redis GIL is locked.
+ *              Unlike other call replies, promise call reply **must** be freed while the GIL is locked.
  *              Notice that on unblocking, the only promise is that the unblock handler will be called,
  *              If the blocking VM_Call caused the module to also block some real client (using VM_BlockClient),
  *              it is the module responsibility to unblock this client on the unblock handler.
  *              On the unblock handler it is only allowed to perform the following:
- *              * Calling additional Redis commands using VM_Call
+ *              * Calling additional commands using VM_Call
  *              * Open keys using VM_OpenKey
  *              * Replicate data to the replica or AOF
  *
- *              Specifically, it is not allowed to call any Redis module API which are client related such as:
+ *              Specifically, it is not allowed to call any module API which are client related such as:
  *              * VM_Reply* API's
  *              * VM_BlockClient
  *              * VM_GetCurrentUserName
  *
- * * **...**: The actual arguments to the Redis command.
+ * * **...**: The actual arguments to the command.
  *
  * On success a ValkeyModuleCallReply object is returned, otherwise
  * NULL is returned and errno is set to the following values:
@@ -6299,7 +6301,7 @@ fmterr:
  *        // Do something with myval.
  *      }
  *
- * This API is documented here: https://redis.io/topics/modules-intro
+ * This API is documented here: https://valkey.io/topics/modules-intro
  */
 ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...) {
     client *c = NULL;
@@ -6511,7 +6513,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         }
     }
 
-    /* If this is a Redis Cluster node, we need to make sure the module is not
+    /* If this is a Cluster node, we need to make sure the module is not
      * trying to access non-local keys, with the exception of commands
      * received from our master. */
     if (server.cluster_enabled && !mustObeyClient(ctx->client)) {
@@ -6616,8 +6618,8 @@ const char *VM_CallReplyProto(ValkeyModuleCallReply *reply, size_t *len) {
  * ## Modules data types
  *
  * When String DMA or using existing data structures is not enough, it is
- * possible to create new data types from scratch and export them to
- * Redis. The module must provide a set of callbacks for handling the
+ * possible to create new data types from scratch.
+ * The module must provide a set of callbacks for handling the
  * new values exported (for example in order to provide RDB saving/loading,
  * AOF rewrite, and so forth). In this section we define this API.
  * -------------------------------------------------------------------------- */
@@ -6808,9 +6810,9 @@ robj *moduleTypeDupOrReply(client *c, robj *fromkey, robj *tokey, int todb, robj
 
 /* Register a new data type exported by the module. The parameters are the
  * following. Please for in depth documentation check the modules API
- * documentation, especially https://redis.io/topics/modules-native-types.
+ * documentation, especially https://valkey.io/topics/modules-native-types.
  *
- * * **name**: A 9 characters data type name that MUST be unique in the Redis
+ * * **name**: A 9 characters data type name that MUST be unique in the
  *   Modules ecosystem. Be creative... and there will be no collisions. Use
  *   the charset A-Z a-z 9-0, plus the two "-_" characters. A good
  *   idea is to use, for example `<typename>-<vendor>`. For example
@@ -6870,7 +6872,7 @@ robj *moduleTypeDupOrReply(client *c, robj *fromkey, robj *tokey, int todb, robj
  *   freeing the value. for example: how many pointers are gonna be freed. Note that if it 
  *   returns 0, we'll always do an async free.
  * * **unlink**: A callback function pointer that used to notifies the module that the key has 
- *   been removed from the DB by redis, and may soon be freed by a background thread. Note that 
+ *   been removed from the DB by the server, and may soon be freed by a background thread. Note that 
  *   it won't be called on FLUSHALL/FLUSHDB (both sync and async), and the module can use the 
  *   ValkeyModuleEvent_FlushDB to hook into that.
  * * **copy**: A callback function pointer that is used to make a copy of the specified key.
@@ -6914,7 +6916,7 @@ robj *moduleTypeDupOrReply(client *c, robj *fromkey, robj *tokey, int todb, robj
  * If ValkeyModule_CreateDataType() is called outside of ValkeyModule_OnLoad() function,
  * there is already a module registering a type with the same name,
  * or if the module name or encver is invalid, NULL is returned.
- * Otherwise the new type is registered into Redis, and a reference of
+ * Otherwise the new type is registered into the server, and a reference of
  * type ValkeyModuleType is returned: the caller of the function should store
  * this reference into a global variable to make future use of it in the
  * modules type API, since a single module may register multiple types.
@@ -7110,7 +7112,7 @@ int VM_IsIOError(ValkeyModuleIO *io) {
     return io->error;
 }
 
-static int flushRedisModuleIOBuffer(ValkeyModuleIO *io) {
+static int flushValkeyModuleIOBuffer(ValkeyModuleIO *io) {
     if (!io->pre_flush_buffer) return 0;
 
     /* We have data that must be flushed before saving the current data.
@@ -7128,7 +7130,7 @@ static int flushRedisModuleIOBuffer(ValkeyModuleIO *io) {
  * data types. */
 void VM_SaveUnsigned(ValkeyModuleIO *io, uint64_t value) {
     if (io->error) return;
-    if (flushRedisModuleIOBuffer(io) == -1) goto saveerr;
+    if (flushValkeyModuleIOBuffer(io) == -1) goto saveerr;
     /* Save opcode. */
     int retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_UINT);
     if (retval == -1) goto saveerr;
@@ -7182,7 +7184,7 @@ int64_t VM_LoadSigned(ValkeyModuleIO *io) {
  * the RDB file. */
 void VM_SaveString(ValkeyModuleIO *io, ValkeyModuleString *s) {
     if (io->error) return;
-    if (flushRedisModuleIOBuffer(io) == -1) goto saveerr;
+    if (flushValkeyModuleIOBuffer(io) == -1) goto saveerr;
     /* Save opcode. */
     ssize_t retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_STRING);
     if (retval == -1) goto saveerr;
@@ -7201,7 +7203,7 @@ saveerr:
  * as input. */
 void VM_SaveStringBuffer(ValkeyModuleIO *io, const char *str, size_t len) {
     if (io->error) return;
-    if (flushRedisModuleIOBuffer(io) == -1) goto saveerr;
+    if (flushValkeyModuleIOBuffer(io) == -1) goto saveerr;
     /* Save opcode. */
     ssize_t retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_STRING);
     if (retval == -1) goto saveerr;
@@ -7260,7 +7262,7 @@ char *VM_LoadStringBuffer(ValkeyModuleIO *io, size_t *lenptr) {
  * It is possible to load back the value with ValkeyModule_LoadDouble(). */
 void VM_SaveDouble(ValkeyModuleIO *io, double value) {
     if (io->error) return;
-    if (flushRedisModuleIOBuffer(io) == -1) goto saveerr;
+    if (flushValkeyModuleIOBuffer(io) == -1) goto saveerr;
     /* Save opcode. */
     int retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_DOUBLE);
     if (retval == -1) goto saveerr;
@@ -7296,7 +7298,7 @@ loaderr:
  * It is possible to load back the value with ValkeyModule_LoadFloat(). */
 void VM_SaveFloat(ValkeyModuleIO *io, float value) {
     if (io->error) return;
-    if (flushRedisModuleIOBuffer(io) == -1) goto saveerr;
+    if (flushValkeyModuleIOBuffer(io) == -1) goto saveerr;
     /* Save opcode. */
     int retval = rdbSaveLen(io->rio, RDB_MODULE_OPCODE_FLOAT);
     if (retval == -1) goto saveerr;
@@ -7390,11 +7392,11 @@ ssize_t rdbSaveModulesAux(rio *rdb, int when) {
  * one element after the other, for all the elements that constitute a given
  * data structure. The function call must be followed by the call to
  * `ValkeyModule_DigestEndSequence` eventually, when all the elements that are
- * always in a given order are added. See the Redis Modules data types
- * documentation for more info. However this is a quick example that uses Redis
- * data types as an example.
+ * always in a given order are added. See the Modules data types
+ * documentation for more info. However this is a quick example that uses the
+ * Set, Hash and List data types as an example.
  *
- * To add a sequence of unordered elements (for example in the case of a Redis
+ * To add a sequence of unordered elements (for example in the case of a
  * Set), the pattern to use is:
  *
  *     foreach element {
@@ -7414,7 +7416,7 @@ ssize_t rdbSaveModulesAux(rio *rdb, int when) {
  *     }
  *
  * Because the key and value will be always in the above order, while instead
- * the single key-value pairs, can appear in any position into a Redis hash.
+ * the single key-value pairs, can appear in any position into a hash.
  *
  * A list of ordered elements would be implemented with:
  *
@@ -7447,13 +7449,13 @@ void VM_DigestEndSequence(ValkeyModuleDigest *md) {
  *
  * This call basically reuses the 'rdb_load' callback which module data types
  * implement in order to allow a module to arbitrarily serialize/de-serialize
- * keys, similar to how the Redis 'DUMP' and 'RESTORE' commands are implemented.
+ * keys, similar to how the 'DUMP' and 'RESTORE' commands are implemented.
  *
  * Modules should generally use the VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS flag and
  * make sure the de-serialization code properly checks and handles IO errors
  * (freeing allocated buffers and returning a NULL).
  *
- * If this is NOT done, Redis will handle corrupted (or just truncated) serialized
+ * If this is NOT done, the server will handle corrupted (or just truncated) serialized
  * data by producing an error message and terminating the process.
  */
 void *VM_LoadDataTypeFromStringEncver(const ValkeyModuleString *str, const moduleType *mt, int encver) {
@@ -7487,7 +7489,7 @@ void *VM_LoadDataTypeFromString(const ValkeyModuleString *str, const moduleType 
  *
  * This call basically reuses the 'rdb_save' callback which module data types
  * implement in order to allow a module to arbitrarily serialize/de-serialize
- * keys, similar to how the Redis 'DUMP' and 'RESTORE' commands are implemented.
+ * keys, similar to how the 'DUMP' and 'RESTORE' commands are implemented.
  */
 ValkeyModuleString *VM_SaveDataTypeToString(ValkeyModuleCtx *ctx, void *data, const moduleType *mt) {
     rio payload;
@@ -7526,7 +7528,7 @@ int VM_GetDbIdFromDigest(ValkeyModuleDigest *dig) {
  * is only called in the context of the aof_rewrite method of data types exported
  * by a module. The command works exactly like ValkeyModule_Call() in the way
  * the parameters are passed, but it does not return anything as the error
- * handling is performed by Redis itself. */
+ * handling is performed by the server itself. */
 void VM_EmitAOF(ValkeyModuleIO *io, const char *cmdname, const char *fmt, ...) {
     if (io->error) return;
     struct serverCommand *cmd;
@@ -7545,7 +7547,7 @@ void VM_EmitAOF(ValkeyModuleIO *io, const char *cmdname, const char *fmt, ...) {
         return;
     }
 
-    /* Emit the arguments into the AOF in Redis protocol format. */
+    /* Emit the arguments into the AOF in RESP format. */
     va_start(ap, fmt);
     argv = moduleCreateArgvFromUserFormat(cmdname,fmt,&argc,&flags,ap);
     va_end(ap);
@@ -7636,7 +7638,7 @@ void moduleLogRaw(ValkeyModule *module, const char *levelstr, const char *fmt, v
     serverLogRaw(level,msg);
 }
 
-/* Produces a log message to the standard Redis log, the format accepts
+/* Produces a log message to the standard server log, the format accepts
  * printf-alike specifiers, while level is a string describing the log
  * level to use when emitting the log, and must be one of the following:
  *
@@ -7673,13 +7675,13 @@ void VM_LogIOError(ValkeyModuleIO *io, const char *levelstr, const char *fmt, ..
     va_end(ap);
 }
 
-/* Redis-like assert function.
+/* Valkey assert function.
  *
  * The macro `ValkeyModule_Assert(expression)` is recommended, rather than
  * calling this function directly.
  *
  * A failed assertion will shut down the server and produce logging information
- * that looks identical to information generated by Redis itself.
+ * that looks identical to information generated by the server itself.
  */
 void VM__Assert(const char *estr, const char *file, int line) {
     _serverAssert(estr, file, line);
@@ -7697,7 +7699,7 @@ void VM_LatencyAddSample(const char *event, mstime_t latency) {
  * ## Blocking clients from modules
  *
  * For a guide about blocking commands in modules, see
- * https://redis.io/topics/modules-blocking-ops.
+ * https://valkey.io/topics/modules-blocking-ops.
  * -------------------------------------------------------------------------- */
 
 /* Returns 1 if the client already in the moduleUnblocked list, 0 otherwise. */
@@ -7712,7 +7714,7 @@ int isModuleClientUnblocked(client *c) {
  * because the client is terminated, but is also called for cleanup when a
  * client is unblocked in a clean way after replaying.
  *
- * What we do here is just to set the client to NULL in the redis module
+ * What we do here is just to set the client to NULL in the module
  * blocked client handle. This way if the client is terminated while there
  * is a pending threaded operation involving the blocked client, we'll know
  * that the client no longer exists and no reply callback should be called.
@@ -8124,10 +8126,10 @@ void VM_BlockClientSetPrivateData(ValkeyModuleBlockedClient *blocked_client, voi
 }
 
 /* This call is similar to ValkeyModule_BlockClient(), however in this case we
- * don't just block the client, but also ask Redis to unblock it automatically
+ * don't just block the client, but also ask the server to unblock it automatically
  * once certain keys become "ready", that is, contain more data.
  *
- * Basically this is similar to what a typical Redis command usually does,
+ * Basically this is similar to what a typical command usually does,
  * like BLPOP or BZPOPMAX: the client blocks if it cannot be served ASAP,
  * and later when the key receives new data (a list push for instance), the
  * client is unblocked and served.
@@ -8166,7 +8168,7 @@ void VM_BlockClientSetPrivateData(ValkeyModuleBlockedClient *blocked_client, voi
  * be accessible later in the reply callback. Normally when blocking with
  * ValkeyModule_BlockClient() the private data to reply to the client is
  * passed when calling ValkeyModule_UnblockClient() but here the unblocking
- * is performed by Redis itself, so we need to have some private data before
+ * is performed by the server itself, so we need to have some private data before
  * hand. The private data is used to store any information about the specific
  * unblocking operation that you are implementing. Such information will be
  * freed using the free_privdata callback provided by the user.
@@ -8225,7 +8227,7 @@ int moduleUnblockClientByHandle(ValkeyModuleBlockedClient *bc, void *privdata) {
     return VALKEYMODULE_OK;
 }
 
-/* This API is used by the Redis core to unblock a client that was blocked
+/* This API is used by the server core to unblock a client that was blocked
  * by a module. */
 void moduleUnblockClient(client *c) {
     ValkeyModuleBlockedClient *bc = c->bstate.module_blocked_handle;
@@ -8304,7 +8306,7 @@ void VM_SetDisconnectCallback(ValkeyModuleBlockedClient *bc, ValkeyModuleDisconn
  *
  * Clients end into this list because of calls to VM_UnblockClient(),
  * however it is possible that while the module was doing work for the
- * blocked client, it was terminated by Redis (for timeout or other reasons).
+ * blocked client, it was terminated by the server (for timeout or other reasons).
  * When this happens the ValkeyModuleBlockedClient structure in the queue
  * will have the 'client' field set to NULL. */
 void moduleHandleBlockedClients(void) {
@@ -8506,8 +8508,8 @@ int VM_BlockedClientDisconnected(ValkeyModuleCtx *ctx) {
  * ## Thread Safe Contexts
  * -------------------------------------------------------------------------- */
 
-/* Return a context which can be used inside threads to make Redis context
- * calls with certain modules APIs. If 'bc' is not NULL then the module will
+/* Return a context which can be used inside threads to make calls requiring a
+ * context with certain modules APIs. If 'bc' is not NULL then the module will
  * be bound to a blocked client, and it will be possible to use the
  * `ValkeyModule_Reply*` family of functions to accumulate a reply for when the
  * client will be unblocked. Otherwise the thread safe context will be
@@ -8698,9 +8700,9 @@ void moduleReleaseGIL(void) {
  *
  * `type` is the event type bit, that must match the mask given at registration
  * time. The event string is the actual command being executed, and key is the
- * relevant Redis key.
+ * relevant key.
  *
- * Notification callback gets executed with a redis context that can not be
+ * Notification callback gets executed with a context that can not be
  * used to send anything to the client, and has the db number where the event
  * occurred as its selected db number.
  *
@@ -8708,16 +8710,16 @@ void moduleReleaseGIL(void) {
  * module notifications to work.
  *
  * Warning: the notification callbacks are performed in a synchronous manner,
- * so notification callbacks must to be fast, or they would slow Redis down.
+ * so notification callbacks must to be fast, or they would slow the server down.
  * If you need to take long actions, use threads to offload them.
  *
  * Moreover, the fact that the notification is executed synchronously means
- * that the notification code will be executed in the middle on Redis logic
+ * that the notification code will be executed in the middle of server logic
  * (commands logic, eviction, expire). Changing the key space while the logic
  * runs is dangerous and discouraged. In order to react to key space events with
  * write actions, please refer to `VM_AddPostNotificationJob`.
  *
- * See https://redis.io/topics/notifications for more information.
+ * See https://valkey.io/topics/notifications for more information.
  */
 int VM_SubscribeToKeyspaceEvents(ValkeyModuleCtx *ctx, int types, ValkeyModuleNotificationFunc callback) {
     ValkeyModuleKeyspaceSubscriber *sub = zmalloc(sizeof(*sub));
@@ -8757,7 +8759,7 @@ void firePostExecutionUnitJobs(void) {
 
 /* When running inside a key space notification callback, it is dangerous and highly discouraged to perform any write
  * operation (See `VM_SubscribeToKeyspaceEvents`). In order to still perform write actions in this scenario,
- * Redis provides `VM_AddPostNotificationJob` API. The API allows to register a job callback which Redis will call
+ * the server provides `VM_AddPostNotificationJob` API. The API allows to register a job callback which the server will call
  * when the following condition are promised to be fulfilled:
  * 1. It is safe to perform any write operation.
  * 2. The job will be called atomically along side the key space notification.
@@ -8766,7 +8768,7 @@ void firePostExecutionUnitJobs(void) {
  * This raises a concerns of entering an infinite loops, we consider infinite loops
  * as a logical bug that need to be fixed in the module, an attempt to protect against
  * infinite loops by halting the execution could result in violation of the feature correctness
- * and so Redis will make no attempt to protect the module from infinite loops.
+ * and so the server will make no attempt to protect the module from infinite loops.
  *
  * 'free_pd' can be NULL and in such case will not be used.
  *
@@ -8978,8 +8980,8 @@ int VM_SendClusterMessage(ValkeyModuleCtx *ctx, const char *target_id, uint8_t t
 /* Return an array of string pointers, each string pointer points to a cluster
  * node ID of exactly VALKEYMODULE_NODE_ID_LEN bytes (without any null term).
  * The number of returned node IDs is stored into `*numnodes`.
- * However if this function is called by a module not running an a Redis
- * instance with Redis Cluster enabled, NULL is returned instead.
+ * However if this function is called by a module not running an an
+ * instance with Cluster enabled, NULL is returned instead.
  *
  * The IDs returned can be used with ValkeyModule_GetClusterNodeInfo() in order
  * to get more information about single node.
@@ -9056,7 +9058,7 @@ int VM_GetClusterNodeInfo(ValkeyModuleCtx *ctx, const char *id, char *ip, char *
         return VALKEYMODULE_ERR;
     }
 
-    if (ip) redis_strlcpy(ip, clusterNodeIp(node),NET_IP_STR_LEN);
+    if (ip) valkey_strlcpy(ip, clusterNodeIp(node),NET_IP_STR_LEN);
 
     if (master_id) {
         /* If the information is not available, the function will set the
@@ -9083,10 +9085,10 @@ int VM_GetClusterNodeInfo(ValkeyModuleCtx *ctx, const char *id, char *ip, char *
     return VALKEYMODULE_OK;
 }
 
-/* Set Redis Cluster flags in order to change the normal behavior of
- * Redis Cluster, especially with the goal of disabling certain functions.
+/* Set Cluster flags in order to change the normal behavior of
+ * Cluster, especially with the goal of disabling certain functions.
  * This is useful for modules that use the Cluster API in order to create
- * a different distributed system, but still want to use the Redis Cluster
+ * a different distributed system, but still want to use the Cluster
  * message bus. Flags that can be set:
  *
  * * CLUSTER_MODULE_FLAG_NO_FAILOVER
@@ -9094,11 +9096,11 @@ int VM_GetClusterNodeInfo(ValkeyModuleCtx *ctx, const char *id, char *ip, char *
  *
  * With the following effects:
  *
- * * NO_FAILOVER: prevent Redis Cluster slaves from failing over a dead master.
+ * * NO_FAILOVER: prevent Cluster slaves from failing over a dead master.
  *                Also disables the replica migration feature.
  *
  * * NO_REDIRECTION: Every node will accept any key, without trying to perform
- *                   partitioning according to the Redis Cluster algorithm.
+ *                   partitioning according to the Cluster algorithm.
  *                   Slots information will still be propagated across the
  *                   cluster, but without effect. */
 void VM_SetClusterFlags(ValkeyModuleCtx *ctx, uint64_t flags) {
@@ -9131,7 +9133,7 @@ const char *VM_ClusterCanonicalKeyNameInSlot(unsigned int slot) {
  * module timers subsystem in order to process the next event.
  *
  * All the timers are stored into a radix tree, ordered by expire time, when
- * the main Redis event loop timer callback is called, we try to process all
+ * the main server event loop timer callback is called, we try to process all
  * the timers already expired one after the other. Then we re-enter the event
  * loop registering a timer that will expire when the next to process module
  * timer will expire.
@@ -9377,7 +9379,7 @@ static void eventLoopCbWritable(struct aeEventLoop *ae, int fd, void *user_data,
  * On success VALKEYMODULE_OK is returned, otherwise
  * VALKEYMODULE_ERR is returned and errno is set to the following values:
  *
- * * ERANGE: `fd` is negative or higher than `maxclients` Redis config.
+ * * ERANGE: `fd` is negative or higher than `maxclients` server config.
  * * EINVAL: `callback` is NULL or `mask` value is invalid.
  *
  * `errno` might take other values in case of an internal error.
@@ -9452,7 +9454,7 @@ int VM_EventLoopAdd(int fd, int mask, ValkeyModuleEventLoopFunc func, void *user
  * On success VALKEYMODULE_OK is returned, otherwise
  * VALKEYMODULE_ERR is returned and errno is set to the following values:
  *
- * * ERANGE: `fd` is negative or higher than `maxclients` Redis config.
+ * * ERANGE: `fd` is negative or higher than `maxclients` server config.
  * * EINVAL: `mask` value is invalid.
  */
 int VM_EventLoopDel(int fd, int mask) {
@@ -9478,7 +9480,7 @@ int VM_EventLoopDel(int fd, int mask) {
     return VALKEYMODULE_OK;
 }
 
-/* This function can be called from other threads to trigger callback on Redis
+/* This function can be called from other threads to trigger callback on the server
  * main thread. On success VALKEYMODULE_OK is returned. If `func` is NULL
  * VALKEYMODULE_ERR is returned and errno is set to EINVAL.
  */
@@ -9529,7 +9531,7 @@ static void eventLoopHandleOneShotEvents(void) {
 /* --------------------------------------------------------------------------
  * ## Modules ACL API
  *
- * Implements a hook into the authentication and authorization within Redis.
+ * Implements a hook into the authentication and authorization within the server.
  * --------------------------------------------------------------------------*/
 
 /* This function is called when a client's user has changed and invokes the
@@ -9588,7 +9590,7 @@ static void moduleFreeAuthenticatedClients(ValkeyModule *module) {
     }
 }
 
-/* Creates a Redis ACL user that the module can use to authenticate a client.
+/* Creates an ACL user that the module can use to authenticate a client.
  * After obtaining the user, the module should set what such user can do
  * using the VM_SetUserACL() function. Once configured, the user
  * can be used in order to authenticate a connection, with the specified
@@ -9600,7 +9602,7 @@ static void moduleFreeAuthenticatedClients(ValkeyModule *module) {
  * * Users created here are not checked for duplicated name, so it's up to
  *   the module calling this function to take care of not creating users
  *   with the same name.
- * * The created user can be used to authenticate multiple Redis connections.
+ * * The created user can be used to authenticate multiple connections.
  *
  * The caller can later free the user using the function
  * VM_FreeModuleUser(). When this function is called, if there are
@@ -9628,7 +9630,7 @@ int VM_FreeModuleUser(ValkeyModuleUser *user) {
     return VALKEYMODULE_OK;
 }
 
-/* Sets the permissions of a user created through the redis module
+/* Sets the permissions of a user created through the module
  * interface. The syntax is the same as ACL SETUSER, so refer to the
  * documentation in acl.c for more information. See VM_CreateModuleUser
  * for detailed usage.
@@ -9640,7 +9642,7 @@ int VM_SetModuleUserACL(ValkeyModuleUser *user, const char* acl) {
 }
 
 /* Sets the permission of a user with a complete ACL string, such as one
- * would use on the redis ACL SETUSER command line API. This differs from
+ * would use on the ACL SETUSER command line API. This differs from
  * VM_SetModuleUserACL, which only takes single ACL operations at a time.
  *
  * Returns VALKEYMODULE_OK on success and VALKEYMODULE_ERR on failure
@@ -9823,7 +9825,7 @@ int moduleGetACLLogEntryReason(ValkeyModuleACLLogEntryReason reason) {
 /* Adds a new entry in the ACL log.
  * Returns VALKEYMODULE_OK on success and VALKEYMODULE_ERR on error.
  *
- * For more information about ACL log, please refer to https://redis.io/commands/acl-log */
+ * For more information about ACL log, please refer to https://valkey.io/commands/acl-log */
 int VM_ACLAddLogEntry(ValkeyModuleCtx *ctx, ValkeyModuleUser *user, ValkeyModuleString *object, ValkeyModuleACLLogEntryReason reason) {
     int acl_reason = moduleGetACLLogEntryReason(reason);
     if (!acl_reason) return VALKEYMODULE_ERR;
@@ -9834,7 +9836,7 @@ int VM_ACLAddLogEntry(ValkeyModuleCtx *ctx, ValkeyModuleUser *user, ValkeyModule
 /* Adds a new entry in the ACL log with the `username` ValkeyModuleString provided.
  * Returns VALKEYMODULE_OK on success and VALKEYMODULE_ERR on error.
  *
- * For more information about ACL log, please refer to https://redis.io/commands/acl-log */
+ * For more information about ACL log, please refer to https://valkey.io/commands/acl-log */
 int VM_ACLAddLogEntryByUserName(ValkeyModuleCtx *ctx, ValkeyModuleString *username, ValkeyModuleString *object, ValkeyModuleACLLogEntryReason reason) {
     int acl_reason = moduleGetACLLogEntryReason(reason);
     if (!acl_reason) return VALKEYMODULE_ERR;
@@ -9895,7 +9897,7 @@ static int authenticateClientWithUser(ValkeyModuleCtx *ctx, user *user, ValkeyMo
 }
 
 
-/* Authenticate the current context's user with the provided redis acl user.
+/* Authenticate the current context's user with the provided acl user.
  * Returns VALKEYMODULE_ERR if the user is disabled.
  *
  * See authenticateClientWithUser for information about callback, client_id,
@@ -9904,7 +9906,7 @@ int VM_AuthenticateClientWithUser(ValkeyModuleCtx *ctx, ValkeyModuleUser *module
     return authenticateClientWithUser(ctx, module_user->user, callback, privdata, client_id);
 }
 
-/* Authenticate the current context's user with the provided redis acl user.
+/* Authenticate the current context's user with the provided acl user.
  * Returns VALKEYMODULE_ERR if the user is disabled or the user does not exist.
  *
  * See authenticateClientWithUser for information about callback, client_id,
@@ -10447,7 +10449,7 @@ ValkeyModuleServerInfoData *VM_GetServerInfo(ValkeyModuleCtx *ctx, const char *s
     robj *argv[1];
     argv[0] = section ? createStringObject(section, strlen(section)) : NULL;
     dict *section_dict = genInfoSectionDict(argv, section ? 1 : 0, NULL, &all, &everything);
-    sds info = genRedisInfoString(section_dict, all, everything);
+    sds info = genValkeyInfoString(section_dict, all, everything);
     int totlines, i;
     sds *lines = sdssplitlen(info, sdslen(info), "\r\n", 2, &totlines);
     for(i=0; i<totlines; i++) {
@@ -10717,11 +10719,11 @@ int moduleUnregisterFilters(ValkeyModule *module) {
 
 /* Register a new command filter function.
  *
- * Command filtering makes it possible for modules to extend Redis by plugging
+ * Command filtering makes it possible for modules to extend the server by plugging
  * into the execution flow of all commands.
  *
- * A registered filter gets called before Redis executes *any* command.  This
- * includes both core Redis commands and commands registered by any module.  The
+ * A registered filter gets called before the server executes *any* command.  This
+ * includes both core server commands and commands registered by any module.  The
  * filter applies in all execution paths including:
  *
  * 1. Invocation by a client.
@@ -10732,21 +10734,21 @@ int moduleUnregisterFilters(ValkeyModule *module) {
  * The filter executes in a special filter context, which is different and more
  * limited than a ValkeyModuleCtx.  Because the filter affects any command, it
  * must be implemented in a very efficient way to reduce the performance impact
- * on Redis.  All Redis Module API calls that require a valid context (such as
+ * on the server.  All Module API calls that require a valid context (such as
  * `ValkeyModule_Call()`, `ValkeyModule_OpenKey()`, etc.) are not supported in a
  * filter context.
  *
  * The `ValkeyModuleCommandFilterCtx` can be used to inspect or modify the
- * executed command and its arguments.  As the filter executes before Redis
+ * executed command and its arguments.  As the filter executes before the server
  * begins processing the command, any change will affect the way the command is
- * processed.  For example, a module can override Redis commands this way:
+ * processed.  For example, a module can override server commands this way:
  *
  * 1. Register a `MODULE.SET` command which implements an extended version of
- *    the Redis `SET` command.
+ *    the `SET` command.
  * 2. Register a command filter which detects invocation of `SET` on a specific
  *    pattern of keys.  Once detected, the filter will replace the first
  *    argument from `SET` to `MODULE.SET`.
- * 3. When filter execution is complete, Redis considers the new command name
+ * 3. When filter execution is complete, the server considers the new command name
  *    and therefore executes the module's own command.
  *
  * Note that in the above use case, if `MODULE.SET` itself uses
@@ -10847,7 +10849,7 @@ ValkeyModuleString *VM_CommandFilterArgGet(ValkeyModuleCommandFilterCtx *fctx, i
 }
 
 /* Modify the filtered command by inserting a new argument at the specified
- * position.  The specified ValkeyModuleString argument may be used by Redis
+ * position.  The specified ValkeyModuleString argument may be used by the server
  * after the filter context is destroyed, so it must not be auto-memory
  * allocated, freed or used elsewhere.
  */
@@ -10871,7 +10873,7 @@ int VM_CommandFilterArgInsert(ValkeyModuleCommandFilterCtx *fctx, int pos, Valke
 }
 
 /* Modify the filtered command by replacing an existing argument with a new one.
- * The specified ValkeyModuleString argument may be used by Redis after the
+ * The specified ValkeyModuleString argument may be used by the server after the
  * filter context is destroyed, so it must not be auto-memory allocated, freed
  * or used elsewhere.
  */
@@ -10946,7 +10948,7 @@ size_t VM_MallocSizeDict(ValkeyModuleDict* dict) {
 }
 
 /* Return the a number between 0 to 1 indicating the amount of memory
- * currently used, relative to the Redis "maxmemory" configuration.
+ * currently used, relative to the server "maxmemory" configuration.
  *
  * * 0 - No memory limit configured.
  * * Between 0 and 1 - The percentage of the memory used normalized in 0-1 range.
@@ -11018,7 +11020,7 @@ void VM_ScanCursorDestroy(ValkeyModuleScanCursor *cursor) {
  *     void scan_callback(ValkeyModuleCtx *ctx, ValkeyModuleString *keyname,
  *                        ValkeyModuleKey *key, void *privdata);
  *
- * - `ctx`: the redis module context provided to for the scan.
+ * - `ctx`: the module context provided to for the scan.
  * - `keyname`: owned by the caller and need to be retained if used after this
  *   function.
  * - `key`: holds info on the key and value, it is provided as best effort, in
@@ -11051,7 +11053,7 @@ void VM_ScanCursorDestroy(ValkeyModuleScanCursor *cursor) {
  *
  * It is also possible to restart an existing cursor using VM_ScanCursorRestart.
  *
- * IMPORTANT: This API is very similar to the Redis SCAN command from the
+ * IMPORTANT: This API is very similar to the SCAN command from the
  * point of view of the guarantees it provides. This means that the API
  * may report duplicated keys, but guarantees to report at least one time
  * every key that was there from the start to the end of the scanning process.
@@ -11060,7 +11062,7 @@ void VM_ScanCursorDestroy(ValkeyModuleScanCursor *cursor) {
  * that the internal state of the database may change. For instance it is safe
  * to delete or modify the current key, but may not be safe to delete any
  * other key.
- * Moreover playing with the Redis keyspace while iterating may have the
+ * Moreover playing with the keyspace while iterating may have the
  * effect of returning more duplicates. A safe pattern is to store the keys
  * names you want to modify elsewhere, and perform the actions on the keys
  * later when the iteration is complete. However this can cost a lot of
@@ -11116,7 +11118,7 @@ static void moduleScanKeyCallback(void *privdata, const dictEntry *de) {
  *
  *     void scan_callback(ValkeyModuleKey *key, ValkeyModuleString* field, ValkeyModuleString* value, void *privdata);
  *
- * - key - the redis key context provided to for the scan.
+ * - key - the key context provided to for the scan.
  * - field - field name, owned by the caller and need to be retained if used
  *   after this function.
  * - value - value string or NULL for set type, owned by the caller and need to
@@ -11238,7 +11240,7 @@ int VM_ScanKey(ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor, ValkeyModul
 /* Create a background child process with the current frozen snapshot of the
  * main process where you can do some processing in the background without
  * affecting / freezing the traffic and no need for threads and GIL locking.
- * Note that Redis allows for only one concurrent fork.
+ * Note that the server allows for only one concurrent fork.
  * When the child wants to exit, it should call ValkeyModule_ExitFromChild.
  * If the parent wants to kill the child it should call ValkeyModule_KillForkChild
  * The done handler callback will be executed on the parent process when the
@@ -11251,7 +11253,11 @@ int VM_Fork(ValkeyModuleForkDoneHandler cb, void *user_data) {
 
     if ((childpid = serverFork(CHILD_TYPE_MODULE)) == 0) {
         /* Child */
-        serverSetProcTitle("redis-module-fork");
+        if (strstr(server.exec_argv[0],"redis-server") != NULL) {
+            serverSetProcTitle("redis-module-fork");
+        } else {
+            serverSetProcTitle("valkey-module-fork");
+        }
     } else if (childpid == -1) {
         serverLog(LL_WARNING,"Can't fork for module: %s", strerror(errno));
     } else {
@@ -11371,7 +11377,7 @@ static uint64_t moduleEventVersions[] = {
  *                                     uint64_t subevent,
  *                                     void *data);
  *
- * The 'ctx' is a normal Redis module context that the callback can use in
+ * The 'ctx' is a normal module context that the callback can use in
  * order to call other modules APIs. The 'eid' is the event itself, this
  * is only useful in the case the module subscribed to multiple events: using
  * the 'id' field of this structure it is possible to check if the event
@@ -11494,15 +11500,15 @@ static uint64_t moduleEventVersions[] = {
  *     * `VALKEYMODULE_SUBEVENT_REPLICA_CHANGE_OFFLINE`
  *
  *     No additional information is available so far: future versions
- *     of Redis will have an API in order to enumerate the replicas
+ *     of the server will have an API in order to enumerate the replicas
  *     connected and their state.
  *
  * * ValkeyModuleEvent_CronLoop
  *
- *     This event is called every time Redis calls the serverCron()
+ *     This event is called every time the server calls the serverCron()
  *     function in order to do certain bookkeeping. Modules that are
  *     required to do operations from time to time may use this callback.
- *     Normally Redis calls this function 10 times per second, but
+ *     Normally the server calls this function 10 times per second, but
  *     this changes depending on the "hz" configuration.
  *     No sub events are available.
  *
@@ -11511,7 +11517,7 @@ static uint64_t moduleEventVersions[] = {
  *
  *         int32_t hz;  // Approximate number of events per second.
  *
- * * ValkeyModuleEvent_MasterLinkChange
+ * * ValkeyModuleEvent_PrimaryLinkChange
  *
  *     This is called for replicas in order to notify when the
  *     replication link becomes functional (up) with our master,
@@ -11567,12 +11573,12 @@ static uint64_t moduleEventVersions[] = {
  *
  * * ValkeyModuleEvent_ReplBackup
  * 
- *     WARNING: Replication Backup events are deprecated since Redis 7.0 and are never fired.
+ *     WARNING: Replication Backup events are deprecated since Redis OSS 7.0 and are never fired.
  *     See ValkeyModuleEvent_ReplAsyncLoad for understanding how Async Replication Loading events
  *     are now triggered when repl-diskless-load is set to swapdb.
  *
  *     Called when repl-diskless-load config is set to swapdb,
- *     And redis needs to backup the current database for the
+ *     And the server needs to backup the current database for the
  *     possibility to be restored later. A module with global data and
  *     maybe with aux_load and aux_save callbacks may need to use this
  *     notification to backup / restore / discard its globals.
@@ -11586,7 +11592,7 @@ static uint64_t moduleEventVersions[] = {
  *
  *     Called when repl-diskless-load config is set to swapdb and a replication with a master of same
  *     data set history (matching replication ID) occurs.
- *     In which case redis serves current data set while loading new database in memory from socket.
+ *     In which case the server serves current data set while loading new database in memory from socket.
  *     Modules must have declared they support this mechanism in order to activate it, through
  *     VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD flag.
  *     The following sub events are available:
@@ -11736,7 +11742,7 @@ typedef struct KeyInfo {
     int mode;
 } KeyInfo;
 
-/* This is called by the Redis internals every time we want to fire an
+/* This is called by the server internals every time we want to fire an
  * event that can be intercepted by some module. The pointer 'data' is useful
  * in order to populate the event-specific structure when needed, in order
  * to return the structure with more information to the callback.
@@ -11963,7 +11969,7 @@ int moduleRegisterApi(const char *funcname, void *funcptr) {
     moduleRegisterApi("ValkeyModule_" #name, (void *)(unsigned long)VM_ ## name);\
     moduleRegisterApi("RedisModule_" #name, (void *)(unsigned long)VM_ ## name);\
 
-/* Global initialization at Redis startup. */
+/* Global initialization at server startup. */
 void moduleRegisterCoreAPI(void);
 
 /* Currently, this function is just a placeholder for the module system
@@ -12002,11 +12008,11 @@ void moduleInitModulesSystem(void) {
 
     moduleRegisterCoreAPI();
 
-    /* Create a pipe for module threads to be able to wake up the redis main thread.
+    /* Create a pipe for module threads to be able to wake up the server main thread.
      * Make the pipe non blocking. This is just a best effort aware mechanism
      * and we do not want to block not in the read nor in the write half.
      * Enable close-on-exec flag on pipes in case of the fork-exec system calls in
-     * sentinels or redis servers. */
+     * sentinels or servers. */
     if (anetPipe(server.module_pipe, O_CLOEXEC|O_NONBLOCK, O_CLOEXEC|O_NONBLOCK) == -1) {
         serverLog(LL_WARNING,
             "Can't create the pipe for module threads: %s", strerror(errno));
@@ -12337,7 +12343,7 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
         return C_ERR;
     }
 
-    /* Redis module loaded! Register it. */
+    /* Module loaded! Register it. */
     dictAdd(modules,ctx.module->name,ctx.module);
     ctx.module->blocked_clients = 0;
     ctx.module->handle = handle;
@@ -12627,7 +12633,7 @@ int moduleVerifyResourceName(const char *name) {
 static char configerr[CONFIG_ERR_SIZE];
 static void propagateErrorString(ValkeyModuleString *err_in, const char **err) {
     if (err_in) {
-        redis_strlcpy(configerr, err_in->ptr, CONFIG_ERR_SIZE);
+        valkey_strlcpy(configerr, err_in->ptr, CONFIG_ERR_SIZE);
         decrRefCount(err_in);
         *err = configerr;
     }
@@ -12808,11 +12814,11 @@ unsigned int maskModuleEnumConfigFlags(unsigned int flags) {
     return new_flags;
 }
 
-/* Create a string config that Redis users can interact with via the Redis config file,
+/* Create a string config that users can interact with via the server config file,
  * `CONFIG SET`, `CONFIG GET`, and `CONFIG REWRITE` commands.
  *
  * The actual config value is owned by the module, and the `getfn`, `setfn` and optional
- * `applyfn` callbacks that are provided to Redis in order to access or manipulate the
+ * `applyfn` callbacks that are provided to the server in order to access or manipulate the
  * value. The `getfn` callback retrieves the value from the module, while the `setfn`
  * callback provides a value to be stored into the module config.
  * The optional `applyfn` callback is called after a `CONFIG SET` command modified one or
@@ -12823,10 +12829,10 @@ unsigned int maskModuleEnumConfigFlags(unsigned int flags) {
  * are identical, and the callback will only be run once.
  * Both the `setfn` and `applyfn` can return an error if the provided value is invalid or
  * cannot be used.
- * The config also declares a type for the value that is validated by Redis and
+ * The config also declares a type for the value that is validated by the server and
  * provided to the module. The config system provides the following types:
  *
- * * Redis String: Binary safe string data.
+ * * String: Binary safe string data.
  * * Enum: One of a finite number of string tokens, provided during registration.
  * * Numeric: 64 bit signed integer, which also supports min and max values.
  * * Bool: Yes or no value.
@@ -12834,7 +12840,7 @@ unsigned int maskModuleEnumConfigFlags(unsigned int flags) {
  * The `setfn` callback is expected to return VALKEYMODULE_OK when the value is successfully
  * applied. It can also return VALKEYMODULE_ERR if the value can't be applied, and the
  * *err pointer can be set with a ValkeyModuleString error message to provide to the client.
- * This ValkeyModuleString will be freed by redis after returning from the set callback.
+ * This ValkeyModuleString will be freed by the server after returning from the set callback.
  *
  * All configs are registered with a name, a type, a default value, private data that is made
  * available in the callbacks, as well as several flags that modify the behavior of the config.
@@ -12918,8 +12924,8 @@ int VM_RegisterBoolConfig(ValkeyModuleCtx *ctx, const char *name, int default_va
  * Create an enum config that server clients can interact with via the 
  * `CONFIG SET`, `CONFIG GET`, and `CONFIG REWRITE` commands. 
  * Enum configs are a set of string tokens to corresponding integer values, where 
- * the string value is exposed to Redis clients but the value passed Redis and the
- * module is the integer value. These values are defined in enum_values, an array
+ * the string value is exposed to clients but the inter value is passed to the server
+ * and the module. These values are defined in enum_values, an array
  * of null-terminated c strings, and int_vals, an array of enum values who has an
  * index partner in enum_values.
  * Example Implementation:
@@ -13129,7 +13135,7 @@ int VM_RdbSave(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
     return VALKEYMODULE_OK;
 }
 
-/* Redis MODULE command.
+/* MODULE command.
  *
  * MODULE LIST
  * MODULE LOAD <path> [args...]
@@ -13268,7 +13274,7 @@ int VM_GetLFU(ValkeyModuleKey *key, long long *lfu_freq) {
 /**
  * Returns the full module options flags mask, using the return value
  * the module can check if a certain set of module options are supported
- * by the redis server version in use.
+ * by the server version in use.
  * Example:
  *
  *        int supportedFlags = VM_GetModuleOptionsAll();
@@ -13285,7 +13291,7 @@ int VM_GetModuleOptionsAll(void) {
 /**
  * Returns the full ContextFlags mask, using the return value
  * the module can check if a certain set of flags are supported
- * by the redis server version in use.
+ * by the server version in use.
  * Example:
  *
  *        int supportedFlags = VM_GetContextFlagsAll();
@@ -13302,7 +13308,7 @@ int VM_GetContextFlagsAll(void) {
 /**
  * Returns the full KeyspaceNotification mask, using the return value
  * the module can check if a certain set of flags are supported
- * by the redis server version in use.
+ * by the server version in use.
  * Example:
  *
  *        int supportedFlags = VM_GetKeyspaceNotificationFlagsAll();
@@ -13317,7 +13323,7 @@ int VM_GetKeyspaceNotificationFlagsAll(void) {
 }
 
 /**
- * Return the redis version in format of 0x00MMmmpp.
+ * Return the server version in format of 0x00MMmmpp.
  * Example for 6.0.7 the return value will be 0x00060007.
  */
 int VM_GetServerVersion(void) {
@@ -13325,7 +13331,7 @@ int VM_GetServerVersion(void) {
 }
 
 /**
- * Return the current redis-server runtime value of VALKEYMODULE_TYPE_METHOD_VERSION.
+ * Return the current server runtime value of VALKEYMODULE_TYPE_METHOD_VERSION.
  * You can use that when calling VM_CreateDataType to know which fields of
  * ValkeyModuleTypeMethods are gonna be supported and which will be ignored.
  */
@@ -13382,7 +13388,7 @@ int VM_ModuleTypeReplaceValue(ValkeyModuleKey *key, moduleType *mt, void *new_va
  * * ENOENT: Specified command does not exist.
  * * EINVAL: Invalid command arity specified.
  *
- * NOTE: The returned array is not a Redis Module object so it does not
+ * NOTE: The returned array is not a Module object so it does not
  * get automatically freed even when auto-memory is used. The caller
  * must explicitly call VM_Free() to free it, same as the out_flags pointer if
  * used.
@@ -13554,7 +13560,7 @@ void *VM_DefragAlloc(ValkeyModuleDefragCtx *ctx, void *ptr) {
  * Typically this means strings retained with VM_RetainString or VM_HoldString
  * may not be defragmentable. One exception is command argvs which, if retained
  * by the module, will end up with a single reference (because the reference
- * on the Redis side is dropped as soon as the command callback returns).
+ * on the server side is dropped as soon as the command callback returns).
  */
 ValkeyModuleString *VM_DefragValkeyModuleString(ValkeyModuleDefragCtx *ctx, ValkeyModuleString *str) {
     UNUSED(ctx);

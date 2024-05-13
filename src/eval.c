@@ -80,7 +80,7 @@ dictType shaScriptObjectDictType = {
 /* Lua context */
 struct luaCtx {
     lua_State *lua; /* The Lua interpreter. We use just one for all clients */
-    client *lua_client;   /* The "fake client" to query Redis from Lua */
+    client *lua_client;   /* The "fake client" to query the server from Lua */
     dict *lua_scripts;         /* A dictionary of SHA1 -> Lua scripts */
     list *lua_scripts_lru_list; /* A list of SHA1, first in first out LRU eviction. */
     unsigned long long lua_scripts_mem;  /* Cached scripts' memory + oh */
@@ -94,7 +94,7 @@ struct ldbState {
     int active; /* Are we debugging EVAL right now? */
     int forked; /* Is this a fork()ed debugging session? */
     list *logs; /* List of messages to send to the client. */
-    list *traces; /* Messages about Redis commands executed since last stop.*/
+    list *traces; /* Messages about commands executed since last stop.*/
     list *children; /* All forked debugging sessions pids. */
     int bp[LDB_BREAKPOINTS_MAX]; /* An array of breakpoints line numbers. */
     int bpcount; /* Number of valid entries inside bp. */
@@ -184,7 +184,7 @@ int luaRedisReplicateCommandsCommand(lua_State *lua) {
  * This function is called the first time at server startup with
  * the 'setup' argument set to 1.
  *
- * It can be called again multiple times during the lifetime of the Redis
+ * It can be called again multiple times during the lifetime of the
  * process, with 'setup' set to 0, and following a scriptingRelease() call,
  * in order to reset the Lua scripting environment.
  *
@@ -252,7 +252,7 @@ void scriptingInit(int setup) {
         lua_pcall(lua,0,0,0);
     }
 
-    /* Create the (non connected) client that we use to execute Redis commands
+    /* Create the (non connected) client that we use to execute server commands
      * inside the Lua interpreter.
      * Note: there is no need to create it again when this function is called
      * by scriptingReset(). */
@@ -285,7 +285,7 @@ void freeLuaScriptsSync(dict *lua_scripts, list *lua_scripts_lru_list, lua_State
      * using libc. libc may take a bit longer to return the memory to the OS,
      * so after lua_close, we call malloc_trim try to purge it earlier.
      *
-     * We do that only when Redis itself does not use libc. When Lua and Redis
+     * We do that only when the server itself does not use libc. When Lua and the server
      * use different allocators, one won't use the fragmentation holes of the
      * other, and released memory can take a long time until it is returned to
      * the OS. */
@@ -675,6 +675,7 @@ void evalShaRoCommand(client *c) {
 
 void scriptCommand(client *c) {
     if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
+        /* clang-format off */
         const char *help[] = {
 "DEBUG (YES|SYNC|NO)",
 "    Set the debug mode for subsequent scripts executed.",
@@ -682,8 +683,8 @@ void scriptCommand(client *c) {
 "    Return information about the existence of the scripts in the script cache.",
 "FLUSH [ASYNC|SYNC]",
 "    Flush the Lua scripts cache. Very dangerous on replicas.",
-"    When called without the optional mode argument, the behavior is determined by the",
-"    lazyfree-lazy-user-flush configuration directive. Valid modes are:",
+"    When called without the optional mode argument, the behavior is determined",
+"     by the lazyfree-lazy-user-flush configuration directive. Valid modes are:",
 "    * ASYNC: Asynchronously flush the scripts cache.",
 "    * SYNC: Synchronously flush the scripts cache.",
 "KILL",
@@ -692,6 +693,7 @@ void scriptCommand(client *c) {
 "    Load a script into the scripts cache without executing it.",
 NULL
         };
+        /* clang-format on */
         addReplyHelp(c, help);
     } else if (c->argc >= 2 && !strcasecmp(c->argv[1]->ptr,"flush")) {
         int async = 0;
@@ -763,7 +765,7 @@ unsigned long evalScriptsMemory(void) {
 }
 
 /* ---------------------------------------------------------------------------
- * LDB: Redis Lua debugging facilities
+ * LDB: Lua debugging facilities
  * ------------------------------------------------------------------------- */
 
 /* Initialize Lua debugger data structures. */
@@ -860,7 +862,7 @@ void ldbSendLogs(void) {
 /* Start a debugging session before calling EVAL implementation.
  * The technique we use is to capture the client socket file descriptor,
  * in order to perform direct I/O with it from within Lua hooks. This
- * way we don't have to re-enter Redis in order to handle I/O.
+ * way we don't have to re-enter the server in order to handle I/O.
  *
  * The function returns 1 if the caller should proceed to call EVAL,
  * and 0 if instead the caller should abort the operation (this happens
@@ -888,7 +890,7 @@ int ldbStartSession(client *c) {
             /* Log the creation of the child and close the listening
              * socket to make sure if the parent crashes a reset is sent
              * to the clients. */
-            serverLog(LL_NOTICE,"Redis forked for debugging eval");
+            serverLog(LL_NOTICE,"%s forked for debugging eval", SERVER_TITLE);
         } else {
             /* Parent */
             listAddNodeTail(ldb.children,(void*)(unsigned long)cp);
@@ -897,7 +899,7 @@ int ldbStartSession(client *c) {
         }
     } else {
         serverLog(LL_NOTICE,
-            "Redis synchronous debugging eval session started");
+            "%s synchronous debugging eval session started", SERVER_TITLE);
     }
 
     /* Setup our debugging session. */
@@ -934,7 +936,7 @@ void ldbEndSession(client *c) {
         exitFromChild(0);
     } else {
         serverLog(LL_NOTICE,
-            "Redis synchronous debugging eval session ended");
+            "%s synchronous debugging eval session ended", SERVER_TITLE);
     }
 
     /* Otherwise let's restore client's state. */
@@ -1053,7 +1055,7 @@ sds *ldbReplParseCommand(int *argcp, char** err) {
     sds copy = sdsdup(ldb.cbuf);
     char *p = copy;
 
-    /* This Redis protocol parser is a joke... just the simplest thing that
+    /* This RESP parser is a joke... just the simplest thing that
      * works in this context. It is also very forgiving regarding broken
      * protocol. */
 
@@ -1244,13 +1246,14 @@ char *ldbRedisProtocolToHuman_Null(sds *o, char *reply);
 char *ldbRedisProtocolToHuman_Bool(sds *o, char *reply);
 char *ldbRedisProtocolToHuman_Double(sds *o, char *reply);
 
-/* Get Redis protocol from 'reply' and appends it in human readable form to
+/* Get RESP from 'reply' and appends it in human readable form to
  * the passed SDS string 'o'.
  *
  * Note that the SDS string is passed by reference (pointer of pointer to
  * char*) so that we can return a modified pointer, as for SDS semantics. */
 char *ldbRedisProtocolToHuman(sds *o, char *reply) {
     char *p = reply;
+    /* clang-format off */
     switch(*p) {
     case ':': p = ldbRedisProtocolToHuman_Int(o,reply); break;
     case '$': p = ldbRedisProtocolToHuman_Bulk(o,reply); break;
@@ -1263,11 +1266,12 @@ char *ldbRedisProtocolToHuman(sds *o, char *reply) {
     case '#': p = ldbRedisProtocolToHuman_Bool(o,reply); break;
     case ',': p = ldbRedisProtocolToHuman_Double(o,reply); break;
     }
+    /* clang-format on */
     return p;
 }
 
 /* The following functions are helpers for ldbRedisProtocolToHuman(), each
- * take care of a given Redis return type. */
+ * take care of a given RESP return type. */
 
 char *ldbRedisProtocolToHuman_Int(sds *o, char *reply) {
     char *p = strchr(reply+1,'\r');
@@ -1372,7 +1376,7 @@ char *ldbRedisProtocolToHuman_Double(sds *o, char *reply) {
     return p+2;
 }
 
-/* Log a Redis reply as debugger output, in a human readable format.
+/* Log a RESP reply as debugger output, in a human readable format.
  * If the resulting string is longer than 'len' plus a few more chars
  * used as prefix, it gets truncated. */
 void ldbLogRedisReply(char *reply) {
@@ -1515,9 +1519,9 @@ void ldbEval(lua_State *lua, sds *argv, int argc) {
     lua_pop(lua,1);
 }
 
-/* Implement the debugger "redis" command. We use a trick in order to make
+/* Implement the debugger "server" command. We use a trick in order to make
  * the implementation very simple: we just call the Lua redis.call() command
- * implementation, with ldb.step enabled, so as a side effect the Redis command
+ * implementation, with ldb.step enabled, so as a side effect the command
  * and its reply are logged. */
 void ldbRedis(lua_State *lua, sds *argv, int argc) {
     int j;
@@ -1677,7 +1681,7 @@ ldbLog(sdsnew("                     next line of code."));
             luaPushError(lua, "script aborted for user request");
             luaError(lua);
         } else if (argc > 1 &&
-                   (!strcasecmp(argv[0],"r") || !strcasecmp(argv[0],"redis"))) {
+                   (!strcasecmp(argv[0],"r") || !strcasecmp(argv[0],REDIS_API_NAME) || !strcasecmp(argv[0],SERVER_API_NAME))) {
             ldbRedis(lua,argv,argc);
             ldbSendLogs();
         } else if ((!strcasecmp(argv[0],"p") || !strcasecmp(argv[0],"print"))) {

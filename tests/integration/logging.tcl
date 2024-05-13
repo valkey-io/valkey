@@ -8,7 +8,7 @@ if {$system_name eq {linux}} {
 }
 
 # look for the DEBUG command in the backtrace, used when we triggered
-# a stack trace print while we know redis is running that command.
+# a stack trace print while we know the server is running that command.
 proc check_log_backtrace_for_debug {log_pattern} {
     # search for the final line in the stacktraces generation to make sure it was completed.
     set pattern "* STACK TRACE DONE *"
@@ -17,7 +17,7 @@ proc check_log_backtrace_for_debug {log_pattern} {
     set res [wait_for_log_messages 0 \"$log_pattern\" 0 100 100]
     if {$::verbose} { puts $res}
 
-    # If the stacktrace is printed more than once, it means redis crashed during crash report generation
+    # If the stacktrace is printed more than once, it means the server crashed during crash report generation
     assert_equal [count_log_message 0 "STACK TRACE -"] 1
 
     upvar threads_mngr_supported threads_mngr_supported
@@ -30,7 +30,7 @@ proc check_log_backtrace_for_debug {log_pattern} {
         # the following are skipped since valgrind is slow and a timeout can happen
         if {!$::valgrind} {
             assert_equal [count_log_message 0 "wait_threads(): waiting threads timed out"] 0
-            # make sure redis prints stack trace for all threads. we know 3 threads are idle in bio.c
+            # make sure the server prints stack trace for all threads. we know 3 threads are idle in bio.c
             assert_equal [count_log_message 0 "bioProcessBackgroundJobs"] 3
         }
     }
@@ -55,7 +55,7 @@ if {$backtrace_supported} {
             r debug sleep 1
             
             check_log_backtrace_for_debug "*WATCHDOG TIMER EXPIRED*"
-            # make sure redis is still alive
+            # make sure the server is still alive
             assert_equal "PONG" [r ping]
         }
     }
@@ -77,7 +77,7 @@ if {!$::valgrind} {
             r deferred 1
             r debug sleep 10 ;# so that we see the function in the stack trace
             r flush
-            after 100 ;# wait for redis to get into the sleep
+            after 100 ;# wait for the server to get into the sleep
             exec kill -SIGABRT $pid
             $check_cb "*crashed by signal*"
         }
@@ -100,12 +100,12 @@ if {!$::valgrind} {
             r deferred 1
             r debug sleep 10 ;# so that we see the function in the stack trace
             r flush
-            after 100 ;# wait for redis to get into the sleep
+            after 100 ;# wait for the server to get into the sleep
             exec kill -SIGALRM $pid
             $check_cb "*Received SIGALRM*"
             r read
             r deferred 0
-            # make sure redis is still alive
+            # make sure the server is still alive
             assert_equal "PONG" [r ping]
         }
     }

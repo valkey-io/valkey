@@ -1,7 +1,7 @@
 source "../tests/includes/init-tests.tcl"
 
 test "Check acceptable replica-priority values" {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         if {$id == $master_id} continue
 
         # ensure replica-announced accepts yes and no
@@ -24,7 +24,7 @@ test "Check acceptable replica-priority values" {
             fail "Able to set replica-announced with something else than yes or no (a3b2c1) whereas it should not be possible"
         }
 
-        # test only the first redis replica, no need to double test
+        # test only the first replica, no need to double test
         break
     }
 }
@@ -49,9 +49,9 @@ proc 10_test_number_of_replicas {n_replicas_expected} {
 proc 10_set_replica_announced {master_id announced n_replicas} {
     test "Set replica-announced=$announced on $n_replicas replicas" {
         set i 0
-        foreach_redis_id id {
+        foreach_valkey_id id {
             if {$id == $master_id} continue
-            #puts "set replica-announce=$announced on redis #$id"
+            #puts "set replica-announce=$announced on valkey #$id"
             R $id CONFIG SET replica-announced "$announced"
             incr i
             if { $n_replicas!="all" && $i >= $n_replicas } { break }

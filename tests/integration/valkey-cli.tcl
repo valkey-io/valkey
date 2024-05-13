@@ -360,7 +360,7 @@ start_server {tags {"cli"}} {
 
 if {!$::tls} { ;# fake_redis_node doesn't support TLS
     test_nontty_cli "ASK redirect test" {
-        # Set up two fake Redis nodes.
+        # Set up two fake nodes.
         set tclsh [info nameofexecutable]
         set script "tests/helpers/fake_redis_node.tcl"
         set port1 [find_available_port $::baseport $::portcount]
@@ -375,7 +375,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
             [catch {close [socket "127.0.0.1" $port1]}] == 0 && \
             [catch {close [socket "127.0.0.1" $port2]}] == 0
         } else {
-            fail "Failed to start fake Redis nodes"
+            fail "Failed to start fake Valkey nodes"
         }
         # Run the cli
         assert_equal "OK" [run_cli_host_port_db "127.0.0.1" $port1 0 -c SET foo bar]
@@ -444,7 +444,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         r acl deluser clitest
     }
     
-    proc test_redis_cli_rdb_dump {functions_only} {
+    proc test_valkey_cli_rdb_dump {functions_only} {
         r flushdb
         r function flush
 
@@ -480,12 +480,12 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
     test "Dumping an RDB - functions only: $functions_only" {
         # Disk-based master
         assert_match "OK" [r config set repl-diskless-sync no]
-        test_redis_cli_rdb_dump $functions_only
+        test_valkey_cli_rdb_dump $functions_only
 
         # Disk-less master
         assert_match "OK" [r config set repl-diskless-sync yes]
         assert_match "OK" [r config set repl-diskless-sync-delay 0]
-        test_redis_cli_rdb_dump $functions_only
+        test_valkey_cli_rdb_dump $functions_only
     } {} {needs:repl needs:debug}
 
     } ;# foreach functions_only
@@ -504,12 +504,12 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         assert_equal {key:2} [run_cli --scan --quoted-pattern {"*:\x32"}]
     }
 
-    proc test_redis_cli_repl {} {
+    proc test_valkey_cli_repl {} {
         set fd [open_cli "--replica"]
         wait_for_condition 500 100 {
             [string match {*slave0:*state=online*} [r info]]
         } else {
-            fail "redis-cli --replica did not connect"
+            fail "valkey-cli --replica did not connect"
         }
 
         for {set i 0} {$i < 100} {incr i} {
@@ -519,7 +519,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         wait_for_condition 500 100 {
             [string match {*test-value-99*} [read_cli $fd]]
         } else {
-            fail "redis-cli --replica didn't read commands"
+            fail "valkey-cli --replica didn't read commands"
         }
 
         fconfigure $fd -blocking true
@@ -531,12 +531,12 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
     test "Connecting as a replica" {
         # Disk-based master
         assert_match "OK" [r config set repl-diskless-sync no]
-        test_redis_cli_repl
+        test_valkey_cli_repl
 
         # Disk-less master
         assert_match "OK" [r config set repl-diskless-sync yes]
         assert_match "OK" [r config set repl-diskless-sync-delay 0]
-        test_redis_cli_repl
+        test_valkey_cli_repl
     } {} {needs:repl}
 
     test "Piping raw protocol" {
@@ -605,5 +605,27 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
 
         assert_equal 3 [exec {*}$cmdline ZCARD new_zset]
         assert_equal "a\n1\nb\n2\nc\n3" [exec {*}$cmdline ZRANGE new_zset 0 -1 WITHSCORES]
+    }
+
+    test "Valid Connection Scheme: redis://" {
+        set cmdline [valkeycliuri "redis://" [srv host] [srv port]]
+        assert_equal {PONG} [exec {*}$cmdline PING]
+    }
+
+    test "Valid Connection Scheme: valkey://" {
+        set cmdline [valkeycliuri "valkey://" [srv host] [srv port]]
+        assert_equal {PONG} [exec {*}$cmdline PING]
+    }
+
+    if {$::tls} {
+        test "Valid Connection Scheme: rediss://" {
+            set cmdline [valkeycliuri "rediss://" [srv host] [srv port]]
+            assert_equal {PONG} [exec {*}$cmdline PING]
+        }
+
+        test "Valid Connection Scheme: valkeys://" {
+            set cmdline [valkeycliuri "valkeys://" [srv host] [srv port]]
+            assert_equal {PONG} [exec {*}$cmdline PING]
+        }
     }
 }

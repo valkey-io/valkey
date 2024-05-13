@@ -24,7 +24,9 @@ start_server {tags {"querybuf slow"}} {
     # The test will run at least 2s to check if client query
     # buffer will be resized when client idle 2s.
     test "query buffer resized correctly" {
-        set rd [redis_deferring_client]
+
+        set rd [valkey_deferring_client]
+
         $rd client setname test_client
         $rd read
 
@@ -59,7 +61,7 @@ start_server {tags {"querybuf slow"}} {
         r debug pause-cron 1
 
         # Memory will increase by more than 32k due to client query buffer.
-        set rd [redis_client]
+        set rd [valkey_client]
         $rd client setname test_client
 
         # Create a large query buffer (more than PROTO_RESIZE_THRESHOLD - 32k)
@@ -87,7 +89,7 @@ start_server {tags {"querybuf slow"}} {
     } {0} {needs:debug}
 
     test "query buffer resized correctly with fat argv" {
-        set rd [redis_client]
+        set rd [valkey_client]
         $rd client setname test_client
         $rd write "*3\r\n\$3\r\nset\r\n\$1\r\na\r\n\$1000000\r\n"
         $rd flush

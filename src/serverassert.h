@@ -1,8 +1,8 @@
 /* serverassert.h -- Drop in replacements assert.h that prints the stack trace
- *                  in the Redis logs.
+ *                  in the server logs.
  *
  * This file should be included instead of "assert.h" inside libraries used by
- * Redis that are using assertions, so instead of Redis disappearing with
+ * the server that are using assertions, so instead of the server disappearing with
  * SIGABORT, we get the details and stack trace inside the log file.
  *
  * ----------------------------------------------------------------------------
@@ -38,10 +38,23 @@
 #ifndef VALKEY_ASSERT_H
 #define VALKEY_ASSERT_H
 
-#include "config.h"
+/* This file shouldn't have any dependencies to any other Valkey code. */
 
-#define assert(_e) (likely((_e))?(void)0 : (_serverAssert(#_e,__FILE__,__LINE__),redis_unreachable()))
-#define panic(...) _serverPanic(__FILE__,__LINE__,__VA_ARGS__),redis_unreachable()
+#if __GNUC__ >= 5 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 5)
+#define valkey_unreachable __builtin_unreachable
+#else
+#include <stdlib.h>
+#define valkey_unreachable abort
+#endif
+
+#if __GNUC__ >= 3
+#define likely(x) __builtin_expect(!!(x), 1)
+#else
+#define likely(x) (x)
+#endif
+
+#define assert(_e) (likely((_e))?(void)0 : (_serverAssert(#_e,__FILE__,__LINE__),valkey_unreachable()))
+#define panic(...) _serverPanic(__FILE__,__LINE__,__VA_ARGS__),valkey_unreachable()
 
 void _serverAssert(const char *estr, const char *file, int line);
 void _serverPanic(const char *file, int line, const char *msg, ...);

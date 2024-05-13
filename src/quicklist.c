@@ -499,7 +499,7 @@ int quicklistNodeExceedsLimit(int fill, size_t new_sz, unsigned int new_count) {
         return new_count > count_limit;
     }
 
-    redis_unreachable();
+    valkey_unreachable();
 }
 
 /* Determines whether a given size qualifies as a large element based on a threshold
@@ -2019,7 +2019,7 @@ int quicklistTest(int argc, char *argv[], int flags) {
     UNUSED(argc);
     UNUSED(argv);
 
-    int accurate = (flags & REDIS_TEST_ACCURATE);
+    int accurate = (flags & TEST_ACCURATE);
     unsigned int err = 0;
     int optimize_start =
         -(int)(sizeof(optimization_level) / sizeof(*optimization_level));
@@ -3259,7 +3259,7 @@ int quicklistTest(int argc, char *argv[], int flags) {
         quicklistRelease(ql);
     }
 
-    if (flags & REDIS_TEST_LARGE_MEMORY) {
+    if (flags & TEST_LARGE_MEMORY) {
         TEST("compress and decompress quicklist listpack node") {
             quicklistNode *node = quicklistCreateNode();
             node->entry = lpNew(0);

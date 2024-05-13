@@ -1,4 +1,4 @@
-# Primitive tests on cluster-enabled redis using redis-cli
+# Primitive tests on cluster-enabled server using valkey-cli
 
 source tests/support/cli.tcl
 
@@ -17,7 +17,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
     set node2 [srv -1 client]
     set node3 [srv -2 client]
     set node3_pid [srv -2 pid]
-    set node3_rd [redis_deferring_client -2]
+    set node3_rd [valkey_deferring_client -2]
 
     test {Create 3 node cluster} {
         exec src/valkey-cli --cluster-yes --cluster create \
@@ -79,7 +79,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
         }
     }
 
-    set node1_rd [redis_deferring_client 0]
+    set node1_rd [valkey_deferring_client 0]
 
     test "use previous hostip in \"cluster-preferred-endpoint-type unknown-endpoint\" mode" {
         
@@ -87,7 +87,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
         set endpoint_type_before_set [lindex [split [$node1 CONFIG GET cluster-preferred-endpoint-type] " "] 1]
         $node1 CONFIG SET cluster-preferred-endpoint-type unknown-endpoint
 
-        # when redis-cli not in cluster mode, return MOVE with empty host
+        # when valkey-cli not in cluster mode, return MOVE with empty host
         set slot_for_foo [$node1 CLUSTER KEYSLOT foo]
         assert_error "*MOVED $slot_for_foo :*" {$node1 set foo bar}
 
@@ -160,8 +160,8 @@ start_multiple_servers 3 [list overrides $base_conf] {
 # Test that functions are propagated on add-node
 start_multiple_servers 5 [list overrides $base_conf] {
 
-    set node4_rd [redis_client -3]
-    set node5_rd [redis_client -4]
+    set node4_rd [valkey_client -3]
+    set node5_rd [valkey_client -4]
 
     test {Functions are added to new node on valkey-cli cluster add-node} {
         exec src/valkey-cli --cluster-yes --cluster create \
@@ -261,7 +261,7 @@ test {Migrate the last slot away from a node using valkey-cli} {
             fail "Cluster doesn't stabilize"
         }
 
-        set newnode_r [redis_client -3]
+        set newnode_r [valkey_client -3]
         set newnode_id [$newnode_r CLUSTER MYID]
 
         # Find out which node has the key "foo" by asking the new node for a
@@ -269,10 +269,10 @@ test {Migrate the last slot away from a node using valkey-cli} {
         catch { $newnode_r get foo } e
         assert_match "MOVED $slot *" $e
         lassign [split [lindex $e 2] :] owner_host owner_port
-        set owner_r [redis $owner_host $owner_port 0 $::tls]
+        set owner_r [valkey $owner_host $owner_port 0 $::tls]
         set owner_id [$owner_r CLUSTER MYID]
 
-        # Move slot to new node using plain Redis commands
+        # Move slot to new node using plain commands
         assert_equal OK [$newnode_r CLUSTER SETSLOT $slot IMPORTING $owner_id]
         assert_equal OK [$owner_r CLUSTER SETSLOT $slot MIGRATING $newnode_id]
         assert_equal {foo} [$owner_r CLUSTER GETKEYSINSLOT $slot 10]
@@ -295,7 +295,7 @@ test {Migrate the last slot away from a node using valkey-cli} {
             fail "Cluster doesn't stabilize"
         }
 
-        # Move the only slot back to original node using redis-cli
+        # Move the only slot back to original node using valkey-cli
         exec src/valkey-cli --cluster reshard 127.0.0.1:[srv -3 port] \
             --cluster-from $newnode_id \
             --cluster-to $owner_id \
@@ -317,13 +317,10 @@ test {Migrate the last slot away from a node using valkey-cli} {
         catch { $newnode_r get foo } e
         assert_equal "MOVED $slot $owner_host:$owner_port" $e
 
-        # Check that the empty node has turned itself into a replica of the new
-        # owner and that the new owner knows that.
-        wait_for_condition 1000 50 {
-            [string match "*slave*" [$owner_r CLUSTER REPLICAS $owner_id]]
-        } else {
-            fail "Empty node didn't turn itself into a replica."
-        }
+        # Check that the now empty primary node doesn't turn itself into
+        # a replica of any other nodes
+        wait_for_cluster_propagation
+        assert_match *master* [$owner_r role]
     }
 }
 

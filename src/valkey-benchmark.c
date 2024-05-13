@@ -1,4 +1,4 @@
-/* Redis benchmark utility.
+/* Server benchmark utility.
  *
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
@@ -1134,12 +1134,14 @@ static int fetchClusterConfiguration(void) {
             *p = '\0';
             char *token = line;
             line = p + 1;
+            /* clang-format off */
             switch(i++){
             case 0: name = token; break;
             case 1: addr = token; break;
             case 2: flags = token; break;
             case 3: master_id = token; break;
             }
+            /* clang-format on */
             if (i == 8) break; // Slots
         }
         if (!flags) {
@@ -1377,7 +1379,7 @@ static void updateClusterSlotsConfiguration(void) {
     pthread_mutex_unlock(&config.is_updating_slots_mutex);
 }
 
-/* Generate random data for redis benchmark. See #7196. */
+/* Generate random data for the benchmark. See #7196. */
 static void genBenchmarkRandomData(char *data, int count) {
     static uint32_t state = 1234;
     int i = 0;
@@ -1560,6 +1562,7 @@ invalid:
     printf("Invalid option \"%s\" or option argument missing\n\n",argv[i]);
 
 usage:
+    /* clang-format off */
     tls_usage =
 #ifdef USE_OPENSSL
 " --tls              Establish a secure TLS connection.\n"
@@ -1592,10 +1595,10 @@ usage:
 " -s <socket>        Server socket (overrides host and port)\n"
 " -a <password>      Password for Valkey Auth\n"
 " --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.\n"
-" -u <uri>           Server URI on format redis://user:password@host:port/dbnum\n"
+" -u <uri>           Server URI on format valkey://user:password@host:port/dbnum\n"
 "                    User, password and dbnum are optional. For authentication\n"
 "                    without a username, use username 'default'. For TLS, use\n"
-"                    the scheme 'rediss'.\n"
+"                    the scheme 'valkeys'.\n"
 " -c <clients>       Number of parallel connections (default 50).\n"
 "                    Note: If --cluster is used then number of clients has to be\n"
 "                    the same or higher than the number of nodes.\n"
@@ -1651,6 +1654,7 @@ tls_usage,
 " On user specified command lines __rand_int__ is replaced with a random integer\n"
 " with a range of values selected by the -r option.\n"
     );
+    /* clang-format on */
     exit(exit_status);
 }
 
@@ -1787,7 +1791,7 @@ int main(int argc, char **argv) {
             }
             exit(1);
         }
-        if (config.cluster_node_count <= 1) {
+        if (config.cluster_node_count == 0) {
             fprintf(stderr, "Invalid cluster: %d node(s).\n",
                     config.cluster_node_count);
             exit(1);

@@ -70,8 +70,8 @@ start_server {} {
     }
 
     test {WAIT replica multiple clients unblock - reuse last result} {
-        set rd [redis_deferring_client -1]
-        set rd2 [redis_deferring_client -1]
+        set rd [valkey_deferring_client -1]
+        set rd2 [valkey_deferring_client -1]
 
         pause_process $slave_pid
 
@@ -125,7 +125,7 @@ tags {"wait aof network external:skip"} {
 
         test {WAITAOF local wait and then stop aof} {
             r config set appendfsync no
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             $rd incr foo
             $rd read
             $rd waitaof 1 0 0
@@ -187,7 +187,7 @@ tags {"wait aof network external:skip"} {
             $replica config set appendfsync no
 
             test {WAITAOF on demoted master gets unblocked with an error} {
-                set rd [redis_deferring_client]
+                set rd [valkey_deferring_client]
                 $rd incr foo
                 $rd read
                 $rd waitaof 0 1 0
@@ -268,8 +268,8 @@ tags {"wait aof network external:skip"} {
             }
 
             test {WAITAOF replica multiple clients unblock - reuse last result} {
-                set rd [redis_deferring_client -1]
-                set rd2 [redis_deferring_client -1]
+                set rd [valkey_deferring_client -1]
+                set rd2 [valkey_deferring_client -1]
 
                 pause_process $replica_pid
 
@@ -311,7 +311,7 @@ tags {"wait aof network external:skip"} {
             }
 
             test {WAITAOF master without backlog, wait is released when the replica finishes full-sync} {
-                set rd [redis_deferring_client -1]
+                set rd [valkey_deferring_client -1]
                 $rd incr foo
                 $rd read
                 $rd waitaof 0 1 0
@@ -353,7 +353,7 @@ tags {"wait aof network external:skip"} {
 
             test {WAITAOF master client didn't send any write command} {
                 $master config set repl-ping-replica-period 1
-                set client [redis_client -1]
+                set client [valkey_client -1]
                 after 1200 ;# wait for PING
                 assert_equal [$master waitaof 1 1 0] {1 1}
                 $client close
@@ -362,7 +362,7 @@ tags {"wait aof network external:skip"} {
 
             test {WAITAOF master client didn't send any command} {
                 $master config set repl-ping-replica-period 1
-                set client [redis [srv -1 "host"] [srv -1 "port"] 0 $::tls]
+                set client [valkey [srv -1 "host"] [srv -1 "port"] 0 $::tls]
                 after 1200 ;# wait for PING
                 assert_equal [$master waitaof 1 1 0] {1 1}
                 $client close
@@ -401,8 +401,8 @@ tags {"wait aof network external:skip"} {
                             }
 
                             # add some writes and block a client on each master
-                            set rd [redis_deferring_client -3]
-                            set rd2 [redis_deferring_client -1]
+                            set rd [valkey_deferring_client -3]
+                            set rd2 [valkey_deferring_client -1]
                             $rd set boo 11
                             $rd2 set boo 22
                             $rd read
@@ -454,8 +454,8 @@ start_server {} {
     }
 
     test {WAIT and WAITAOF replica multiple clients unblock - reuse last result} {
-        set rd [redis_deferring_client]
-        set rd2 [redis_deferring_client]
+        set rd [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
 
         $master config set appendonly yes
         $replica1 config set appendonly yes

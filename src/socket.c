@@ -31,7 +31,7 @@
 #include "connhelpers.h"
 
 /* The connections module provides a lean abstraction of network connections
- * to avoid direct socket and async event management across the Redis code base.
+ * to avoid direct socket and async event management across the server code base.
  *
  * It does NOT provide advanced connection features commonly found in similar
  * libraries such as complete in/out buffer management, throttling, etc. These

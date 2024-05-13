@@ -1,7 +1,7 @@
 foreach is_eval {0 1} {
 foreach script_compatibility_api {server redis} {
 
-# We run the tests using both the server APIs, e.g. server.call(), and redis APIs, e.g. redis.call(),
+# We run the tests using both the server APIs, e.g. server.call(), and valkey APIs, e.g. redis.call(),
 # in order to ensure compatibility.
 if {$script_compatibility_api eq "server"} {
     proc replace_script_redis_api_with_server {args} {
@@ -349,7 +349,7 @@ start_server {tags {"scripting"}} {
             run_script "redis.call('nosuchcommand')" 0
         } e
         set e
-    } {*Unknown Redis*}
+    } {*Unknown command*}
 
     test {EVAL - redis.call variant raises a Lua error on Redis cmd error (1)} {
         set e {}
@@ -377,7 +377,7 @@ start_server {tags {"scripting"}} {
 
     test {EVAL - JSON numeric decoding} {
         # We must return the table as a string because otherwise
-        # Redis converts floats to ints and we get 0 and 1023 instead
+        # the server converts floats to ints and we get 0 and 1023 instead
         # of 0.0003 and 1023.2 as the parsed output.
         run_script {return
                  table.concat(
@@ -770,7 +770,7 @@ start_server {tags {"scripting"}} {
         r script flush ;# reset Lua VM
         r set x 0
         # Use a non blocking client to speedup the loop.
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         for {set j 0} {$j < 10000} {incr j} {
             run_script_on_connection $rd {return redis.call("incr",KEYS[1])} 1 x
         }
@@ -896,8 +896,8 @@ start_server {tags {"scripting"}} {
     } {ERR Number of keys can't be negative}
 
     test {Scripts can handle commands with incorrect arity} {
-        assert_error "ERR Wrong number of args calling Redis command from script*" {run_script "redis.call('set','invalid')" 0}
-        assert_error "ERR Wrong number of args calling Redis command from script*" {run_script "redis.call('incr')" 0}
+        assert_error "ERR Wrong number of args calling command from script*" {run_script "redis.call('set','invalid')" 0}
+        assert_error "ERR Wrong number of args calling command from script*" {run_script "redis.call('incr')" 0}
     }
 
     test {Correct handling of reused argv (issue #1939)} {
@@ -1022,7 +1022,7 @@ start_server {tags {"scripting"}} {
         } 0] {}
 
         # Check error due to invalid command
-        assert_error {ERR *Invalid command passed to redis.acl_check_cmd()*} {run_script {
+        assert_error {ERR *Invalid command passed to server.acl_check_cmd()*} {run_script {
             return redis.acl_check_cmd('invalid-cmd','arg')
         } 0}
     }
@@ -1138,7 +1138,7 @@ start_server {tags {"scripting"}} {
 # instance at all.
 start_server {tags {"scripting"}} {
     test {Timedout read-only scripts can be killed by SCRIPT KILL} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r config set lua-time-limit 10
         run_script_on_connection $rd {while true do end} 0
         after 200
@@ -1151,7 +1151,7 @@ start_server {tags {"scripting"}} {
     }
 
     test {Timedout read-only scripts can be killed by SCRIPT KILL even when use pcall} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r config set lua-time-limit 10
         run_script_on_connection $rd {local f = function() while 1 do redis.call('ping') end end while 1 do pcall(f) end} 0
 
@@ -1179,7 +1179,7 @@ start_server {tags {"scripting"}} {
     }
 
     test {Timedout script does not cause a false dead client} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r config set lua-time-limit 10
 
         # senging (in a pipeline):
@@ -1240,9 +1240,9 @@ start_server {tags {"scripting"}} {
         r config set appendonly yes
 
         # create clients, and set one to block waiting for key 'x'
-        set rd [redis_deferring_client]
-        set rd2 [redis_deferring_client]
-        set r3 [redis_client]
+        set rd [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
+        set r3 [valkey_client]
         $rd2 blpop x 0
         wait_for_blocked_clients_count 1
 
@@ -1280,7 +1280,7 @@ start_server {tags {"scripting"}} {
     } {OK} {external:skip needs:debug}
 
     test {Timedout scripts that modified data can't be killed by SCRIPT KILL} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r config set lua-time-limit 10
         run_script_on_connection $rd {redis.call('set',KEYS[1],'y'); while true do end} 1 x
         after 200
@@ -1300,7 +1300,7 @@ start_server {tags {"scripting"}} {
         assert_match {BUSY*} $e
         catch {r shutdown nosave}
         # Make sure the server was killed
-        catch {set rd [redis_deferring_client]} e
+        catch {set rd [valkey_deferring_client]} e
         assert_match {*connection refused*} $e
     } {} {external:skip}
 }
@@ -1348,7 +1348,7 @@ start_server {tags {"scripting"}} {
             } ;# is_eval
 
             test "Replication of script multiple pushes to list with BLPOP" {
-                set rd [redis_deferring_client]
+                set rd [valkey_deferring_client]
                 $rd brpop a 0
                 run_script {
                     redis.call("lpush",KEYS[1],"1");
@@ -1414,7 +1414,7 @@ start_server {tags {"scripting repl external:skip"}} {
             }
         }
 
-        # replicate_commands is the default on Redis Function
+        # replicate_commands is the default on server Functions
         test "Redis.replicate_commands() can be issued anywhere now" {
             r eval {
                 redis.call('set','foo','bar');
@@ -1440,7 +1440,7 @@ start_server {tags {"scripting repl external:skip"}} {
             set e
         } {*Invalid*flags*}
 
-        test "Test selective replication of certain Redis commands from Lua" {
+        test "Test selective replication of certain commands from Lua" {
             r del a b c d
             run_script {
                 redis.call('set','a','1');
@@ -1542,9 +1542,22 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         r write $cmd
         r flush
         set ret [r read]
-        assert_match {*Unknown Redis command called from script*} $ret
+        assert_match {*Unknown command called from script*} $ret
         # make sure the server is still ok
         reconnect
+        assert_equal [r ping] {PONG}
+    }
+    
+    test {Test scripting debug lua server invocations} {
+        r script debug sync
+        r eval {return 'hello'} 0 
+        set cmd "*2\r\n\$6\r\nserver\r\n\$4\r\nping\r\n"
+        r write $cmd
+        r flush
+        set ret [r read]
+        puts $ret
+        assert_match {*PONG*} $ret
+        reconnect 
         assert_equal [r ping] {PONG}
     }
 }
@@ -2058,8 +2071,8 @@ start_server {tags {"scripting"}} {
             # temporarily set the server to master, so it doesn't block the queuing
             # and we can test the evaluation of the flags on exec
             r replicaof no one
-            set rr [redis_client]
-            set rr2 [redis_client]
+            set rr [valkey_client]
+            set rr2 [valkey_client]
             $rr multi
             $rr2 multi
 
@@ -2125,7 +2138,7 @@ start_server {tags {"scripting"}} {
 
             # run a slow script that does one write, then waits for INFO to indicate
             # that the replica dropped, and then runs another write
-            set rd [redis_deferring_client -1]
+            set rd [valkey_deferring_client -1]
             $rd eval {
                 redis.call('set','x',"script value")
                 while true do
@@ -2227,7 +2240,7 @@ start_server {tags {"scripting"}} {
     test "Consistent eval error reporting" {
         r config resetstat
         r config set maxmemory 1
-        # Script aborted due to Redis state (OOM) should report script execution error with detailed internal error
+        # Script aborted due to server state (OOM) should report script execution error with detailed internal error
         assert_error {OOM command not allowed when used memory > 'maxmemory'*} {
             r eval {return redis.call('set','x','y')} 1 x
         }
@@ -2236,7 +2249,7 @@ start_server {tags {"scripting"}} {
         assert_match {calls=0*rejected_calls=1,failed_calls=0*} [cmdrstat set r]
         assert_match {calls=1*rejected_calls=0,failed_calls=1*} [cmdrstat eval r]
 
-        # redis.pcall() failure due to Redis state (OOM) returns lua error table with Redis error message without '-' prefix
+        # redis.pcall() failure due to server state (OOM) returns lua error table with server error message without '-' prefix
         r config resetstat
         assert_equal [
             r eval {
@@ -2268,7 +2281,7 @@ start_server {tags {"scripting"}} {
 
         r config set maxmemory 0
         r config resetstat
-        # Script aborted due to error result of Redis command
+        # Script aborted due to error result of server command
         assert_error {ERR DB index is out of range*} {
             r eval {return redis.call('select',99)} 0
         }
@@ -2277,7 +2290,7 @@ start_server {tags {"scripting"}} {
         assert_match {calls=1*rejected_calls=0,failed_calls=1*} [cmdrstat select r]
         assert_match {calls=1*rejected_calls=0,failed_calls=1*} [cmdrstat eval r]
         
-        # redis.pcall() failure due to error in Redis command returns lua error table with redis error message without '-' prefix
+        # redis.pcall() failure due to error in server command returns lua error table with server error message without '-' prefix
         r config resetstat
         assert_equal [
             r eval {
@@ -2304,7 +2317,7 @@ start_server {tags {"scripting"}} {
         assert_match {calls=0*rejected_calls=1,failed_calls=0*} [cmdrstat set r]
         assert_match {calls=1*rejected_calls=0,failed_calls=1*} [cmdrstat eval_ro r]
 
-        # redis.pcall() failure due to scripting specific error state (write cmd with eval_ro) returns lua error table with Redis error message without '-' prefix
+        # redis.pcall() failure due to scripting specific error state (write cmd with eval_ro) returns lua error table with server error message without '-' prefix
         r config resetstat
         assert_equal [
             r eval_ro {
@@ -2372,7 +2385,7 @@ start_server {tags {"scripting"}} {
     }
 
     test "LUA test pcall with non string/integer arg" {
-        assert_error "ERR Lua redis lib command arguments must be strings or integers*" {
+        assert_error "ERR Command arguments must be strings or integers*" {
             r eval {
                 local x={}
                 return redis.call("ping", x)

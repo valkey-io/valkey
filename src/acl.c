@@ -44,7 +44,7 @@ user *DefaultUser;  /* Global reference to the default user.
                        different user. */
 
 list *UsersToLoad;  /* This is a list of users found in the configuration file
-                       that we'll need to load in the final stage of Redis
+                       that we'll need to load in the final stage of the server
                        initialization, after all the modules are already
                        loaded. Every list element is a NULL terminated
                        array of SDS pointers: the first is the user name,
@@ -168,7 +168,7 @@ typedef struct {
      * execute this command.
      *
      * If the bit for a given command is NOT set and the command has
-     * allowed first-args, Redis will also check allowed_firstargs in order to
+     * allowed first-args, the server will also check allowed_firstargs in order to
      * understand if the command can be executed. */
     uint64_t allowed_commands[USER_COMMAND_BITS_COUNT/64];
     /* allowed_firstargs is used by ACL rules to block access to a command unless a
@@ -502,7 +502,7 @@ void ACLFreeUserAndKillClients(user *u) {
         if (c->user == u) {
             /* We'll free the connection asynchronously, so
              * in theory to set a different user is not needed.
-             * However if there are bugs in Redis, soon or later
+             * However if there are bugs in the server, soon or later
              * this may result in some security hole: it's much
              * more defensive to set the default user and put
              * it in non authenticated mode. */
@@ -1023,7 +1023,7 @@ cleanup:
  * +@<category> Allow the execution of all the commands in such category
  *              with valid categories are like @admin, @set, @sortedset, ...
  *              and so forth, see the full list in the server.c file where
- *              the Redis command table is described and defined.
+ *              the command table is described and defined.
  *              The special category @all means all the commands, but currently
  *              present in the server, and that will be loaded in the future
  *              via modules.
@@ -1601,10 +1601,12 @@ static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keyle
     listRewind(selector->patterns,&li);
 
     int key_flags = 0;
+    /* clang-format off */
     if (keyspec_flags & CMD_KEY_ACCESS) key_flags |= ACL_READ_PERMISSION;
     if (keyspec_flags & CMD_KEY_INSERT) key_flags |= ACL_WRITE_PERMISSION;
     if (keyspec_flags & CMD_KEY_DELETE) key_flags |= ACL_WRITE_PERMISSION;
     if (keyspec_flags & CMD_KEY_UPDATE) key_flags |= ACL_WRITE_PERMISSION;
+    /* clang-format on */
 
     /* Test this key against every pattern. */
     while((ln = listNext(&li))) {
@@ -1632,10 +1634,12 @@ static int ACLSelectorHasUnrestrictedKeyAccess(aclSelector *selector, int flags)
     listRewind(selector->patterns,&li);
 
     int access_flags = 0;
+    /* clang-format off */
     if (flags & CMD_KEY_ACCESS) access_flags |= ACL_READ_PERMISSION;
     if (flags & CMD_KEY_INSERT) access_flags |= ACL_WRITE_PERMISSION;
     if (flags & CMD_KEY_DELETE) access_flags |= ACL_WRITE_PERMISSION;
     if (flags & CMD_KEY_UPDATE) access_flags |= ACL_WRITE_PERMISSION;
+    /* clang-format on */
 
     /* Test this key against every pattern. */
     while((ln = listNext(&li))) {
@@ -2535,7 +2539,7 @@ int ACLSaveToFile(const char *filename) {
         }
         offset += written_bytes;
     }
-    if (redis_fsync(fd) == -1) {
+    if (valkey_fsync(fd) == -1) {
         serverLog(LL_WARNING,"Syncing ACL file for ACL SAVE: %s",
             strerror(errno));
         goto cleanup;
@@ -2572,11 +2576,11 @@ cleanup:
 void ACLLoadUsersAtStartup(void) {
     if (server.acl_filename[0] != '\0' && listLength(UsersToLoad) != 0) {
         serverLog(LL_WARNING,
-            "Configuring Redis with users defined in redis.conf and at "
+            "Configuring %s with users defined in valkey.conf and at "
             "the same setting an ACL file path is invalid. This setup "
             "is very likely to lead to configuration errors and security "
             "holes, please define either an ACL file or declare users "
-            "directly in your redis.conf, but not both.");
+            "directly in your valkey.conf, but not both.", SERVER_TITLE);
         exit(1);
     }
 
@@ -2590,7 +2594,7 @@ void ACLLoadUsersAtStartup(void) {
         sds errors = ACLLoadFromFile(server.acl_filename);
         if (errors) {
             serverLog(LL_WARNING,
-                "Aborting Redis startup because of ACL errors: %s", errors);
+                "Aborting %s startup because of ACL errors: %s", SERVER_TITLE, errors);
             sdsfree(errors);
             exit(1);
         }
@@ -2700,13 +2704,15 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
     if (object) {
         le->object = object;
     } else {
+        /* clang-format off */
         switch(reason) {
-            case ACL_DENIED_CMD: le->object = sdsdup(c->cmd->fullname); break;
-            case ACL_DENIED_KEY: le->object = sdsdup(c->argv[argpos]->ptr); break;
-            case ACL_DENIED_CHANNEL: le->object = sdsdup(c->argv[argpos]->ptr); break;
-            case ACL_DENIED_AUTH: le->object = sdsdup(c->argv[0]->ptr); break;
-            default: le->object = sdsempty();
+        case ACL_DENIED_CMD: le->object = sdsdup(c->cmd->fullname); break;
+        case ACL_DENIED_KEY: le->object = sdsdup(c->argv[argpos]->ptr); break;
+        case ACL_DENIED_CHANNEL: le->object = sdsdup(c->argv[argpos]->ptr); break;
+        case ACL_DENIED_AUTH: le->object = sdsdup(c->argv[0]->ptr); break;
+        default: le->object = sdsempty();
         }
+        /* clang-format on */
     }
 
     /* if we have a real client from the network, use it (could be missing on module timers) */
@@ -2999,7 +3005,7 @@ void aclCommand(client *c) {
     } else if (server.acl_filename[0] == '\0' &&
                (!strcasecmp(sub,"load") || !strcasecmp(sub,"save")))
     {
-        addReplyError(c,"This Redis instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (assuming you have a Redis configuration file set) in order to store users in the Redis configuration.");
+        addReplyError(c,"This instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (assuming you have a configuration file set) in order to store users in the configuration.");
         return;
     } else if (!strcasecmp(sub,"load") && c->argc == 2) {
         sds errors = ACLLoadFromFile(server.acl_filename);
@@ -3090,6 +3096,7 @@ void aclCommand(client *c) {
 
             addReplyBulkCString(c,"reason");
             char *reasonstr;
+            /* clang-format off */
             switch(le->reason) {
             case ACL_DENIED_CMD: reasonstr="command"; break;
             case ACL_DENIED_KEY: reasonstr="key"; break;
@@ -3097,10 +3104,12 @@ void aclCommand(client *c) {
             case ACL_DENIED_AUTH: reasonstr="auth"; break;
             default: reasonstr="unknown";
             }
+            /* clang-format on */
             addReplyBulkCString(c,reasonstr);
 
             addReplyBulkCString(c,"context");
             char *ctxstr;
+            /* clang-format off */
             switch(le->context) {
             case ACL_LOG_CTX_TOPLEVEL: ctxstr="toplevel"; break;
             case ACL_LOG_CTX_MULTI: ctxstr="multi"; break;
@@ -3108,6 +3117,7 @@ void aclCommand(client *c) {
             case ACL_LOG_CTX_MODULE: ctxstr="module"; break;
             default: ctxstr="unknown";
             }
+            /* clang-format on */
             addReplyBulkCString(c,ctxstr);
 
             addReplyBulkCString(c,"object");
@@ -3156,6 +3166,7 @@ void aclCommand(client *c) {
 
         addReply(c,shared.ok);
     } else if (c->argc == 2 && !strcasecmp(sub,"help")) {
+        /* clang-format off */
         const char *help[] = {
 "CAT [<category>]",
 "    List all commands that belong to <category>, or all command categories",
@@ -3185,6 +3196,7 @@ void aclCommand(client *c) {
 "    Return the current connection username.",
 NULL
         };
+        /* clang-format on */
         addReplyHelp(c,help);
     } else {
         addReplySubcommandSyntaxError(c);
@@ -3204,7 +3216,7 @@ void addReplyCommandCategories(client *c, struct serverCommand *cmd) {
 }
 
 /* AUTH <password>
- * AUTH <username> <password> (Redis >= 6.0 form)
+ * AUTH <username> <password> (Redis OSS >= 6.0 form)
  *
  * When the user is omitted it means that we are trying to authenticate
  * against the default user. */

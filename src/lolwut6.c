@@ -30,7 +30,7 @@
  *
  * This file implements the LOLWUT command. The command should do something
  * fun and interesting, and should be replaced by a new implementation at
- * each new version of Redis.
+ * each new version of the server.
  *
  * Thanks to Michele Hiki Falcone for the original image that inspired
  * the image, part of his game, Plaguemon.

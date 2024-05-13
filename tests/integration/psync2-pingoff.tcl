@@ -1,5 +1,5 @@
 # These tests were added together with the meaningful offset implementation
-# in redis 6.0.0, which was later abandoned in 6.0.4, they used to test that
+# in valkey OSS 6.0.0, which was later abandoned in 6.0.4, they used to test that
 # servers are able to PSYNC with replicas even if the replication stream has
 # PINGs at the end which present in one sever and missing on another.
 # We keep these tests just because they reproduce edge cases in the replication

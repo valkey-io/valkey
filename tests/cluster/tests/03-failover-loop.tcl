@@ -14,7 +14,7 @@ test "Cluster is up" {
 }
 
 set iterations 20
-set cluster [redis_cluster 127.0.0.1:[get_instance_attrib redis 0 port]]
+set cluster [valkey_cluster 127.0.0.1:[get_instance_attrib valkey 0 port]]
 
 while {[incr iterations -1]} {
     set tokill [randomInt 10]
@@ -25,7 +25,7 @@ while {[incr iterations -1]} {
     if {$role eq {master}} {
         set slave {}
         set myid [dict get [get_myself $tokill] id]
-        foreach_redis_id id {
+        foreach_valkey_id id {
             if {$id == $tokill} continue
             if {[dict get [get_myself $id] slaveof] eq $myid} {
                 set slave $id
@@ -64,7 +64,7 @@ while {[incr iterations -1]} {
     test "Terminating node #$tokill" {
         # Stop AOF so that an initial AOFRW won't prevent the instance from terminating
         R $tokill config set appendonly no
-        kill_instance redis $tokill
+        kill_instance valkey $tokill
     }
 
     if {$role eq {master}} {
@@ -89,7 +89,7 @@ while {[incr iterations -1]} {
     }
 
     test "Restarting node #$tokill" {
-        restart_instance redis $tokill
+        restart_instance valkey $tokill
     }
 
     test "Instance #$tokill is now a slave" {
@@ -111,7 +111,7 @@ while {[incr iterations -1]} {
 }
 
 test "Post condition: current_epoch >= my_epoch everywhere" {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         assert {[CI $id cluster_current_epoch] >= [CI $id cluster_my_epoch]}
     }
 }

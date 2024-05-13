@@ -4,7 +4,7 @@
  * defined into endianconv.h, this way we define everything is a non-operation
  * if the arch is already little endian.
  *
- * Redis tries to encode everything as little endian (but a few things that need
+ * The server tries to encode everything as little endian (but a few things that need
  * to be backward compatible are still in big endian) because most of the
  * production environments are little endian, and we have a lot of conversions
  * in a few places because ziplists, intsets, zipmaps, need to be endian-neutral
@@ -100,30 +100,3 @@ uint64_t intrev64(uint64_t v) {
     memrev64(&v);
     return v;
 }
-
-#ifdef SERVER_TEST
-#include <stdio.h>
-
-#define UNUSED(x) (void)(x)
-int endianconvTest(int argc, char *argv[], int flags) {
-    char buf[32];
-
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-
-    snprintf(buf,sizeof(buf),"ciaoroma");
-    memrev16(buf);
-    printf("%s\n", buf);
-
-    snprintf(buf,sizeof(buf),"ciaoroma");
-    memrev32(buf);
-    printf("%s\n", buf);
-
-    snprintf(buf,sizeof(buf),"ciaoroma");
-    memrev64(buf);
-    printf("%s\n", buf);
-
-    return 0;
-}
-#endif

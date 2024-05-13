@@ -343,7 +343,7 @@ void setKey(client *c, serverDb *db, robj *key, robj *val, int flags) {
     if (!(flags & SETKEY_NO_SIGNAL)) signalModifiedKey(c,db,key);
 }
 
-/* Return a random key, in form of a Redis object.
+/* Return a random key, in form of an Object.
  * If there are no keys, NULL is returned.
  *
  * The function makes sure to return keys not already expired. */
@@ -427,7 +427,7 @@ int dbAsyncDelete(serverDb *db, robj *key) {
     return dbGenericDelete(db, key, 1, DB_FLAG_KEY_DELETED);
 }
 
-/* This is a wrapper whose behavior depends on the Redis lazy free
+/* This is a wrapper whose behavior depends on the server lazy free
  * configuration. Deletes the key synchronously or asynchronously. */
 int dbDelete(serverDb *db, robj *key) {
     return dbGenericDelete(db, key, server.lazyfree_lazy_server_del, DB_FLAG_KEY_DELETED);
@@ -507,11 +507,11 @@ long long emptyDbStructure(serverDb *dbarray, int dbnum, int async,
 }
 
 /* Remove all data (keys and functions) from all the databases in a
- * Redis server. If callback is given the function is called from
+ * server. If callback is given the function is called from
  * time to time to signal that work is in progress.
  *
  * The dbnum can be -1 if all the DBs should be flushed, or the specified
- * DB number if we want to flush only a single Redis database number.
+ * DB number if we want to flush only a single database number.
  *
  * Flags are be EMPTYDB_NO_FLAGS if no special flags are specified or
  * EMPTYDB_ASYNC if we want the memory to be freed in a different thread
@@ -542,7 +542,7 @@ long long emptyData(int dbnum, int flags, void(callback)(dict*)) {
      * there. */
     signalFlushedDb(dbnum, async);
 
-    /* Empty redis database structure. */
+    /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
 
     if (dbnum == -1) flushSlaveKeysWithExpireList();
@@ -695,7 +695,7 @@ void flushAllDataAndResetRDB(int flags) {
 
 /* FLUSHDB [ASYNC]
  *
- * Flushes the currently SELECTed Redis DB. */
+ * Flushes the currently SELECTed DB. */
 void flushdbCommand(client *c) {
     int flags;
 
@@ -853,7 +853,7 @@ typedef struct {
     long long type; /* the particular type when scan the db */
     sds pattern;  /* pattern string, NULL means no pattern */
     long sampled; /* cumulative number of keys sampled */
-    int no_values; /* set to 1 means to return keys only */
+    int only_keys; /* set to 1 means to return keys only */
 } scanData;
 
 /* Helper function to compare key type in scan commands */
@@ -885,7 +885,7 @@ void scanCallback(void *privdata, const dictEntry *de) {
     serverAssert(!((data->type != LLONG_MAX) && o));
 
     /* Filter an element if it isn't the type we want. */
-    /* TODO: uncomment in redis 8.0
+    /* TODO: uncomment in version 8.0
     if (!o && data->type != LLONG_MAX) {
         robj *rval = dictGetVal(de);
         if (!objectTypeCompare(rval, data->type)) return;
@@ -905,18 +905,22 @@ void scanCallback(void *privdata, const dictEntry *de) {
         key = keysds;
     } else if (o->type == OBJ_HASH) {
         key = keysds;
-        val = dictGetVal(de);
+        if (!data->only_keys) {
+            val = dictGetVal(de);
+        }
     } else if (o->type == OBJ_ZSET) {
-        char buf[MAX_LONG_DOUBLE_CHARS];
-        int len = ld2string(buf, sizeof(buf), *(double *)dictGetVal(de), LD_STR_AUTO);
         key = sdsdup(keysds);
-        val = sdsnewlen(buf, len);
+        if (!data->only_keys) {
+            char buf[MAX_LONG_DOUBLE_CHARS];
+            int len = ld2string(buf, sizeof(buf), *(double *)dictGetVal(de), LD_STR_AUTO);
+            val = sdsnewlen(buf, len);
+        }
     } else {
         serverPanic("Type not handled in SCAN callback.");
     }
 
     listAddNodeTail(keys, key);
-    if (val && !data->no_values) listAddNodeTail(keys, val);
+    if (val) listAddNodeTail(keys, val);
 }
 
 /* Try to parse a SCAN cursor stored at object 'o':
@@ -989,7 +993,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     sds pat = NULL;
     sds typename = NULL;
     long long type = LLONG_MAX;
-    int patlen = 0, use_pattern = 0, no_values = 0;
+    int patlen = 0, use_pattern = 0, only_keys = 0;
     dict *ht;
 
     /* Object must be NULL (to iterate keys names), or the type of the object
@@ -1030,7 +1034,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             typename = c->argv[i+1]->ptr;
             type = getObjectTypeByName(typename);
             if (type == LLONG_MAX) {
-                /* TODO: uncomment in redis 8.0
+                /* TODO: uncomment in version 8.0
                 addReplyErrorFormat(c, "unknown type name '%s'", typename);
                 return; */
             }
@@ -1040,7 +1044,14 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
                 addReplyError(c, "NOVALUES option can only be used in HSCAN");
                 return;
             }
-            no_values = 1;
+            only_keys = 1;
+            i++;
+        } else if (!strcasecmp(c->argv[i]->ptr, "noscores")) {
+            if (!o || o->type != OBJ_ZSET) {
+                addReplyError(c, "NOSCORES option can only be used in ZSCAN");
+                return;
+            }
+            only_keys = 1;
             i++;
         } else {
             addReplyErrorObject(c,shared.syntaxerr);
@@ -1101,7 +1112,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
          * working on an empty dict, one with a lot of empty buckets, and
          * for the buckets are not empty, we need to limit the spampled number
          * to prevent a long hang time caused by filtering too many keys;
-         * 6. data.no_values: to control whether values will be returned or 
+         * 6. data.only_keys: to control whether values will be returned or 
          * only keys are returned. */
         scanData data = {
             .keys = keys,
@@ -1109,7 +1120,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             .type = type,
             .pattern = use_pattern ? pat : NULL,
             .sampled = 0,
-            .no_values = no_values,
+            .only_keys = only_keys,
         };
 
         /* A pattern may restrict all matching keys to one cluster slot. */
@@ -1164,7 +1175,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             /* add key object */
             listAddNodeTail(keys, sdsnewlen(str, len));
             /* add value object */
-            if (!no_values) {
+            if (!only_keys) {
                 str = lpGet(p, &len, intbuf);
                 listAddNodeTail(keys, sdsnewlen(str, len));
             }
@@ -1185,7 +1196,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             sds key = listNodeValue(ln);
             initStaticStringObject(kobj, key);
             /* Filter an element if it isn't the type we want. */
-            /* TODO: remove this in redis 8.0 */
+            /* TODO: remove this in version 8.0 */
             if (typename) {
                 robj* typecheck = lookupKeyReadWithFlags(c->db, &kobj, LOOKUP_NOTOUCH|LOOKUP_NONOTIFY);
                 if (!typecheck || !objectTypeCompare(typecheck, type)) {
@@ -1565,7 +1576,7 @@ void scanDatabaseForDeletedKeys(serverDb *emptied, serverDb *replaced_with) {
  * the new database even if already connected. Note that the client
  * structure c->db points to a given DB, so we need to be smarter and
  * swap the underlying referenced structures, otherwise we would need
- * to fix all the references to the Redis DB structure.
+ * to fix all the references to the DB structure.
  *
  * Returns C_ERR if at least one of the DB ids are out of range, otherwise
  * C_OK is returned. */
@@ -2072,7 +2083,9 @@ int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int s
                 if (cmd->flags & CMD_MODULE || cmd->arity < 0) {
                     continue;
                 } else {
-                    serverPanic("Redis built-in command declared keys positions not matching the arity requirements.");
+                    serverPanic("%s built-in command declared keys positions"
+                        " not matching the arity requirements.",
+                        server.extended_redis_compat ? "Redis" : "Valkey");
                 }
             }
             keys[result->numkeys].pos = i;
@@ -2109,7 +2122,7 @@ invalid_spec:
  * length of the array is returned by reference into *numkeys.
  * 
  * Along with the position, this command also returns the flags that are
- * associated with how Redis will access the key.
+ * associated with how the server will access the key.
  *
  * 'cmd' must be point to the corresponding entry into the serverCommand
  * table, according to the command name in argv[0]. */
@@ -2146,7 +2159,7 @@ int doesCommandHaveKeys(struct serverCommand *cmd) {
         (getAllKeySpecsFlags(cmd, 1) & CMD_KEY_NOT_KEY);        /* has at least one key-spec not marked as NOT_KEY */
 }
 
-/* A simplified channel spec table that contains all of the redis commands
+/* A simplified channel spec table that contains all of the commands
  * and which channels they have and how they are accessed. */
 typedef struct ChannelSpecs {
     serverCommandProc *proc; /* Command procedure to match against */
@@ -2193,7 +2206,7 @@ int doesCommandHaveChannelsWithFlags(struct serverCommand *cmd, int flags) {
  * length of the array is returned by reference into *numkeys.
  * 
  * Along with the position, this command also returns the flags that are
- * associated with how Redis will access the channel.
+ * associated with how the server will access the channel.
  *
  * 'cmd' must be point to the corresponding entry into the serverCommand
  * table, according to the command name in argv[0]. */
@@ -2265,7 +2278,9 @@ int getKeysUsingLegacyRangeSpec(struct serverCommand *cmd, robj **argv, int argc
                 result->numkeys = 0;
                 return 0;
             } else {
-                serverPanic("Redis built-in command declared keys positions not matching the arity requirements.");
+                serverPanic("%s built-in command declared keys positions"
+                    " not matching the arity requirements.",
+                    server.extended_redis_compat ? "Redis" : "Valkey");
             }
         }
         keys[i].pos = j;

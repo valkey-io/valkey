@@ -27,7 +27,7 @@ proc cluster_response_tls {tls_cluster} {
     test "CLUSTER SLOTS with different connection type -- tls-cluster $tls_cluster" {
         set slots1 [R 0 cluster slots]
         set pport [srv 0 pport]
-        set cluster_client [redis_cluster 127.0.0.1:$pport 0]
+        set cluster_client [valkey_cluster 127.0.0.1:$pport 0]
         set slots2 [$cluster_client cluster slots]
         $cluster_client close
         # Compare the ports in the first row
@@ -38,15 +38,15 @@ proc cluster_response_tls {tls_cluster} {
         set nodes [R 0 cluster nodes]
         set port1 [get_port_from_node_info [lindex [split $nodes "\r\n"] 0]]
         set pport [srv 0 pport]
-        set cluster_client [redis_cluster 127.0.0.1:$pport 0]
+        set cluster_client [valkey_cluster 127.0.0.1:$pport 0]
         set nodes [$cluster_client cluster nodes]
         set port2 [get_port_from_node_info [lindex [split $nodes "\r\n"] 0]]
         $cluster_client close
         assert_not_equal $port1 $port2
     }
 
-    set cluster [redis_cluster 127.0.0.1:[srv 0 port]]
-    set cluster_pport [redis_cluster 127.0.0.1:[srv 0 pport] 0]
+    set cluster [valkey_cluster 127.0.0.1:[srv 0 port]]
+    set cluster_pport [valkey_cluster 127.0.0.1:[srv 0 pport] 0]
     $cluster refresh_nodes_map
 
     test "Set many keys in the cluster -- tls-cluster $tls_cluster" {

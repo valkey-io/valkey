@@ -448,7 +448,7 @@ start_server {
         "list-max-ziplist-size" -1
     }
 } {
-    source "tests/unit/type/list-common.tcl"
+    array set largevalue [generate_largevalue_test_array]
 
     # A helper function to execute either B*POP or BLMPOP* with one input key.
     proc bpop_command {rd pop key timeout} {
@@ -645,7 +645,7 @@ foreach {type large} [array get largevalue] {
     foreach {type large} [array get largevalue] {
     foreach {pop} {BLPOP BLMPOP_LEFT} {
         test "$pop: single existing list - $type" {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             create_$type blist "a b $large c d"
 
             bpop_command $rd $pop blist 1
@@ -671,7 +671,7 @@ foreach {type large} [array get largevalue] {
         }
 
         test "$pop: multiple existing lists - $type" {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             create_$type blist1{t} "a $large c"
             create_$type blist2{t} "d $large f"
 
@@ -700,7 +700,7 @@ foreach {type large} [array get largevalue] {
         }
 
         test "$pop: second list has an entry - $type" {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             r del blist1{t}
             create_$type blist2{t} "d $large f"
 
@@ -722,7 +722,7 @@ foreach {type large} [array get largevalue] {
             r del target{t}
             r rpush target{t} bar
 
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             create_$type blist{t} "a b $large c d"
 
             $rd brpoplpush blist{t} target{t} 1
@@ -739,7 +739,7 @@ foreach {type large} [array get largevalue] {
                     r del target{t}
                     r rpush target{t} bar
 
-                    set rd [redis_deferring_client]
+                    set rd [valkey_deferring_client]
                     create_$type blist{t} "a b $large c d"
 
                     $rd blmove blist{t} target{t} $wherefrom $whereto 1
@@ -766,7 +766,7 @@ foreach {type large} [array get largevalue] {
 
 foreach {pop} {BLPOP BLMPOP_LEFT} {
     test "$pop, LPUSH + DEL should not awake blocked client" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r del list
 
         bpop_command $rd $pop list 0
@@ -783,7 +783,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
     }
 
     test "$pop, LPUSH + DEL + SET should not awake blocked client" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r del list
 
         bpop_command $rd $pop list 0
@@ -802,7 +802,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
 }
 
     test "BLPOP with same key multiple times should work (issue #801)" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r del list1{t} list2{t}
 
         # Data arriving after the BLPOP.
@@ -827,7 +827,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
 
 foreach {pop} {BLPOP BLMPOP_LEFT} {
     test "MULTI/EXEC is isolated from the point of view of $pop" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r del list
 
         bpop_command $rd $pop list 0
@@ -843,7 +843,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
     }
 
     test "$pop with variadic LPUSH" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r del blist
         bpop_command $rd $pop blist 0
         wait_for_blocked_client
@@ -855,7 +855,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
 }
 
     test "BRPOPLPUSH with zero timeout should block indefinitely" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r del blist{t} target{t}
         r rpush target{t} bar
         $rd brpoplpush blist{t} target{t} 0
@@ -869,7 +869,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
     foreach wherefrom {left right} {
         foreach whereto {left right} {
             test "BLMOVE $wherefrom $whereto with zero timeout should block indefinitely" {
-                set rd [redis_deferring_client]
+                set rd [valkey_deferring_client]
                 r del blist{t} target{t}
                 r rpush target{t} bar
                 $rd blmove blist{t} target{t} $wherefrom $whereto 0
@@ -889,8 +889,8 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
     foreach wherefrom {left right} {
         foreach whereto {left right} {
             test "BLMOVE ($wherefrom, $whereto) with a client BLPOPing the target list" {
-                set rd [redis_deferring_client]
-                set rd2 [redis_deferring_client]
+                set rd [valkey_deferring_client]
+                set rd2 [valkey_deferring_client]
                 r del blist{t} target{t}
                 $rd2 blpop target{t} 0
                 wait_for_blocked_clients_count 1
@@ -907,7 +907,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
     }
 
     test "BRPOPLPUSH with wrong source type" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r del blist{t} target{t}
         r set blist{t} nolist
         $rd brpoplpush blist{t} target{t} 1
@@ -916,7 +916,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
     }
 
     test "BRPOPLPUSH with wrong destination type" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r del blist{t} target{t}
         r set target{t} nolist
         r lpush blist{t} foo
@@ -924,7 +924,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         assert_error "WRONGTYPE*" {$rd read}
         $rd close
 
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r del blist{t} target{t}
         r set target{t} nolist
         $rd brpoplpush blist{t} target{t} 0
@@ -936,7 +936,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
     }
 
     test "BRPOPLPUSH maintains order of elements after failure" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r del blist{t} target{t}
         r set target{t} nolist
         $rd brpoplpush blist{t} target{t} 0
@@ -948,8 +948,8 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
     } {a b c}
 
     test "BRPOPLPUSH with multiple blocked clients" {
-        set rd1 [redis_deferring_client]
-        set rd2 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
         r del blist{t} target1{t} target2{t}
         r set target1{t} nolist
         $rd1 brpoplpush blist{t} target1{t} 0
@@ -966,10 +966,10 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
     }
 
     test "BLMPOP with multiple blocked clients" {
-        set rd1 [redis_deferring_client]
-        set rd2 [redis_deferring_client]
-        set rd3 [redis_deferring_client]
-        set rd4 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
+        set rd3 [valkey_deferring_client]
+        set rd4 [valkey_deferring_client]
         r del blist{t} blist2{t}
 
         $rd1 blmpop 0 2 blist{t} blist2{t} left count 1
@@ -999,8 +999,8 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
     }
 
     test "Linked LMOVEs" {
-      set rd1 [redis_deferring_client]
-      set rd2 [redis_deferring_client]
+      set rd1 [valkey_deferring_client]
+      set rd2 [valkey_deferring_client]
 
       r del list1{t} list2{t} list3{t}
 
@@ -1019,8 +1019,8 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
     }
 
     test "Circular BRPOPLPUSH" {
-      set rd1 [redis_deferring_client]
-      set rd2 [redis_deferring_client]
+      set rd1 [valkey_deferring_client]
+      set rd2 [valkey_deferring_client]
 
       r del list1{t} list2{t}
 
@@ -1038,7 +1038,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
     }
 
     test "Self-referential BRPOPLPUSH" {
-      set rd [redis_deferring_client]
+      set rd [valkey_deferring_client]
 
       r del blist{t}
 
@@ -1066,8 +1066,8 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
     } {foo bar {} {} {bar foo}}
 
     test "PUSH resulting from BRPOPLPUSH affect WATCH" {
-        set blocked_client [redis_deferring_client]
-        set watching_client [redis_deferring_client]
+        set blocked_client [valkey_deferring_client]
+        set watching_client [valkey_deferring_client]
         r del srclist{t} dstlist{t} somekey{t}
         r set somekey{t} somevalue
         $blocked_client brpoplpush srclist{t} dstlist{t} 0
@@ -1087,8 +1087,8 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
     } {}
 
     test "BRPOPLPUSH does not affect WATCH while still blocked" {
-        set blocked_client [redis_deferring_client]
-        set watching_client [redis_deferring_client]
+        set blocked_client [valkey_deferring_client]
+        set watching_client [valkey_deferring_client]
         r del srclist{t} dstlist{t} somekey{t}
         r set somekey{t} somevalue
         $blocked_client brpoplpush srclist{t} dstlist{t} 0
@@ -1109,7 +1109,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
     } {somevalue}
 
     test {BRPOPLPUSH timeout} {
-      set rd [redis_deferring_client]
+      set rd [valkey_deferring_client]
 
       $rd brpoplpush foo_list{t} bar_list{t} 1
       wait_for_blocked_clients_count 1
@@ -1124,7 +1124,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         r select 1
         r rpush k hello
         r select 9
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd brpop k 5
         wait_for_blocked_clients_count 1
         r swapdb 1 9
@@ -1138,7 +1138,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         r select 1
         r rpush k hello
         r pexpire k 100
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd deferred 0
         $rd select 9
         set id [$rd client id]
@@ -1184,7 +1184,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         r flushall
         r debug set-active-expire 0
 
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd client id
         set id [$rd read]
         $rd brpop k 0
@@ -1224,7 +1224,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
     test {BLPOP unblock but the key is expired and then block again - reprocessing command} {
         r flushall
         r debug set-active-expire 0
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         set start [clock milliseconds]
         $rd blpop mylist 1
@@ -1251,7 +1251,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
 
 foreach {pop} {BLPOP BLMPOP_LEFT} {
     test "$pop when new key is moved into place" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         r del foo{t}
 
         bpop_command $rd $pop foo{t} 0
@@ -1264,7 +1264,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
     } {foo{t} hij}
 
     test "$pop when result key is created by SORT..STORE" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         # zero out list from previous test without explicit delete
         r lpop foo{t}
@@ -1291,7 +1291,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         
     foreach {pop} {BLPOP BRPOP BLMPOP_LEFT BLMPOP_RIGHT} {
         test "$pop: with single empty list argument" {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             r del blist1
             bpop_command $rd $pop blist1 1
             wait_for_blocked_client
@@ -1302,14 +1302,14 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         }
 
         test "$pop: with negative timeout" {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             bpop_command $rd $pop blist1 -1
             assert_error "ERR *is negative*" {$rd read}
             $rd close
         }
 
         test "$pop: with non-integer timeout" {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             r del blist1
             bpop_command $rd $pop blist1 0.1
             r rpush blist1 foo
@@ -1321,7 +1321,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         test "$pop: with zero timeout should block indefinitely" {
             # To test this, use a timeout of 0 and wait a second.
             # The blocking pop should still be waiting for a push.
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             bpop_command $rd $pop blist1 0
             wait_for_blocked_client
             r rpush blist1 foo
@@ -1332,7 +1332,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         test "$pop: with 0.001 timeout should not block indefinitely" {
             # Use a timeout of 0.001 and wait for the number of blocked clients to equal 0.
             # Validate the empty read from the deferring client.
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             bpop_command $rd $pop blist1 0.001
             wait_for_blocked_clients_count 0
             assert_equal {} [$rd read]
@@ -1340,7 +1340,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         }
 
         test "$pop: second argument is not a list" {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             r del blist1{t} blist2{t}
             r set blist2{t} nolist{t}
             bpop_command_two_key $rd $pop blist1{t} blist2{t} 1
@@ -1349,7 +1349,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         }
 
         test "$pop: timeout" {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             r del blist1{t} blist2{t}
             bpop_command_two_key $rd $pop blist1{t} blist2{t} 1
             wait_for_blocked_client
@@ -1358,7 +1358,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         }
 
         test "$pop: arguments are empty" {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             r del blist1{t} blist2{t}
 
             bpop_command_two_key $rd $pop blist1{t} blist2{t} 1
@@ -1393,7 +1393,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
 }
 
     test {BLMPOP propagate as pop with count command to replica} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         set repl [attach_to_replication_stream]
 
         # BLMPOP without being blocked.
@@ -2009,8 +2009,8 @@ foreach {type large} [array get largevalue] {
     }
 
     test "Regression for bug 593 - chaining BRPOPLPUSH with other blocking cmds" {
-        set rd1 [redis_deferring_client]
-        set rd2 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
 
         $rd1 brpoplpush a{t} b{t} 0
         $rd1 brpoplpush a{t} b{t} 0
@@ -2025,7 +2025,7 @@ foreach {type large} [array get largevalue] {
 
     test "BLPOP/BLMOVE should increase dirty" {
         r del lst{t} lst1{t}
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         set dirty [s rdb_changes_since_last_save]
         $rd blpop lst{t} 0
@@ -2049,7 +2049,7 @@ foreach {type large} [array get largevalue] {
 foreach {pop} {BLPOP BLMPOP_RIGHT} {
     test "client unblock tests" {
         r del l
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd client id
         set id [$rd read]
 
@@ -2261,8 +2261,8 @@ foreach {pop} {BLPOP BLMPOP_RIGHT} {
     } {12 0 9223372036854775808 2147483647 32767 127}
     
     test "Unblock fairness is kept while pipelining" {
-        set rd1 [redis_deferring_client]
-        set rd2 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
         
         # delete the list in case already exists
         r del mylist
@@ -2296,9 +2296,9 @@ foreach {pop} {BLPOP BLMPOP_RIGHT} {
     }
     
     test "Unblock fairness is kept during nested unblock" {
-        set rd1 [redis_deferring_client]
-        set rd2 [redis_deferring_client]
-        set rd3 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
+        set rd3 [valkey_deferring_client]
         
         # delete the list in case already exists
         r del l1{t} l2{t} l3{t}
@@ -2334,7 +2334,7 @@ foreach {pop} {BLPOP BLMPOP_RIGHT} {
         r del mylist
         
         # create a test client
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         
         # reset the server stats
         r config resetstat
@@ -2357,7 +2357,7 @@ foreach {pop} {BLPOP BLMPOP_RIGHT} {
         r del mylist
         
         # create a test client
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd client id
         set id [$rd read]
 
@@ -2380,9 +2380,9 @@ foreach {pop} {BLPOP BLMPOP_RIGHT} {
         r del src{t} dst{t} key1{t} key2{t} key3{t}
         set repl [attach_to_replication_stream]
 
-        set rd1 [redis_deferring_client]
-        set rd2 [redis_deferring_client]
-        set rd3 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
+        set rd3 [valkey_deferring_client]
 
         $rd1 blmove src{t} dst{t} left right 0
         wait_for_blocked_clients_count 1

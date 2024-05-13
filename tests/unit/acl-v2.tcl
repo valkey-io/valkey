@@ -1,5 +1,5 @@
 start_server {tags {"acl external:skip"}} {
-    set r2 [redis_client]
+    set r2 [valkey_client]
     test {Test basic multiple selectors} {
         r ACL SETUSER selector-1 on -@all resetkeys nopass
         $r2 auth selector-1 password

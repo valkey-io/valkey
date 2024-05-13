@@ -159,7 +159,7 @@ class Response(object):
             count = int(line[1:])
             for i in range(count):
                 field = Response(f, line_counter)
-                # Redis allows fields to be non-strings but JSON doesn't.
+                # The server allows fields to be non-strings but JSON doesn't.
                 # Luckily, for any kind of response we can validate, the fields are
                 # always strings (example: XINFO STREAM)
                 # The reason we can't always convert to string is because of DEBUG PROTOCOL MAP

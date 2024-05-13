@@ -1,5 +1,4 @@
 #include "../zmalloc.c"
-#undef UNUSED
 #include "test_help.h"
 
 int test_zmallocInitialUsedMemory(int argc, char **argv, int flags) {

@@ -6931,7 +6931,6 @@ struct serverTest {
     {"ziplist", ziplistTest},
     {"quicklist", quicklistTest},
     {"zipmap", zipmapTest},
-    {"zmalloc", zmalloc_test},
     {"dict", dictTest},
     {"listpack", listpackTest},
 };

@@ -732,6 +732,21 @@ long long getInstantaneousMetric(int metric) {
     return sum / STATS_METRIC_SAMPLES;
 }
 
+/* Return the cache hit rate. */
+float getCacheHitRatioMetric(long long keyspace_hits, long long keyspace_misses) {
+    long long sum = 0;
+    float CacheHitRatio = 0;
+
+    if (keyspace_hits == 0 && keyspace_misses == 0) {
+        return 0;
+    }
+
+    sum = keyspace_hits + keyspace_misses;
+    CacheHitRatio = (float)keyspace_hits/(float)sum;
+
+    return 100 * CacheHitRatio;
+}
+
 /* The client query buffer is an sds.c string that can end with a lot of
  * free space not used, this function reclaims space if needed.
  *
@@ -5926,6 +5941,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "current_eviction_exceeded_time:%lld\r\n", current_eviction_exceeded_time / 1000,
             "keyspace_hits:%lld\r\n", server.stat_keyspace_hits,
             "keyspace_misses:%lld\r\n", server.stat_keyspace_misses,
+            "keyspace_hit_ratio:%2.f%%\r\n", getCacheHitRatioMetric(server.stat_keyspace_hits, server.stat_keyspace_misses),
             "pubsub_channels:%llu\r\n", kvstoreSize(server.pubsub_channels),
             "pubsub_patterns:%lu\r\n", dictSize(server.pubsub_patterns),
             "pubsubshard_channels:%llu\r\n", kvstoreSize(server.pubsubshard_channels),

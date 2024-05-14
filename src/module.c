@@ -2433,8 +2433,7 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
                  * after the main thread enters acquiring GIL state in order to protect the event
                  * loop (ae.c) and avoid potential race conditions. */
 
-                int acquiring;
-                atomicGet(server.module_gil_acquiring, acquiring);
+                int acquiring = atomic_load_explicit(&server.module_gil_acquiring, memory_order_relaxed);
                 if (!acquiring) {
                     /* If the main thread has not yet entered the acquiring GIL state,
                      * we attempt to wake it up and exit without waiting for it to

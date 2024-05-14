@@ -34,7 +34,6 @@
 #include "config.h"
 #include "solarisfixes.h"
 #include "rio.h"
-#include "atomicvar.h"
 #include "commands.h"
 
 #include <stdio.h>

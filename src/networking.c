@@ -28,7 +28,6 @@
  */
 
 #include "server.h"
-#include "atomicvar.h"
 #include "cluster.h"
 #include "script.h"
 #include "fpconv_dtoa.h"
@@ -37,6 +36,7 @@
 #include <sys/uio.h>
 #include <math.h>
 #include <ctype.h>
+#include <stdatomic.h>
 
 static void setProtocolError(const char *errstr, client *c);
 static void pauseClientsByClient(mstime_t end, int isPauseClientAll);
@@ -132,8 +132,7 @@ client *createClient(connection *conn) {
     }
     c->buf = zmalloc_usable(PROTO_REPLY_CHUNK_BYTES, &c->buf_usable_size);
     selectDb(c,0);
-    uint64_t client_id;
-    atomicGetIncr(server.next_client_id, client_id, 1);
+    uint64_t client_id = atomic_fetch_add_explicit(&server.next_client_id,1,memory_order_relaxed);
     c->id = client_id;
 #ifdef LOG_REQ_RES
     reqresReset(c, 0);
@@ -1963,7 +1962,7 @@ int _writeToClient(client *c, ssize_t *nwritten) {
  * thread safe. */
 int writeToClient(client *c, int handler_installed) {
     /* Update total number of writes on server */
-    atomicIncr(server.stat_total_writes_processed, 1);
+    atomic_fetch_add_explicit(&server.stat_total_writes_processed,1, memory_order_relaxed);
 
     ssize_t nwritten = 0, totwritten = 0;
 
@@ -1990,9 +1989,9 @@ int writeToClient(client *c, int handler_installed) {
     }
 
     if (getClientType(c) == CLIENT_TYPE_SLAVE) {
-        atomicIncr(server.stat_net_repl_output_bytes, totwritten);
+        atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes, totwritten, memory_order_relaxed);
     } else {
-        atomicIncr(server.stat_net_output_bytes, totwritten);
+        atomic_fetch_add_explicit(&server.stat_net_output_bytes, totwritten, memory_order_relaxed);
     }
     c->net_output_bytes += totwritten;
 
@@ -2649,7 +2648,7 @@ void readQueryFromClient(connection *conn) {
     if (postponeClientRead(c)) return;
 
     /* Update total number of reads on server */
-    atomicIncr(server.stat_total_reads_processed, 1);
+    atomic_fetch_add_explicit(&server.stat_total_reads_processed,1,memory_order_relaxed);
 
     readlen = PROTO_IOBUF_LEN;
     /* If this is a multi bulk request, and we are processing a bulk reply
@@ -2718,9 +2717,9 @@ void readQueryFromClient(connection *conn) {
     c->lastinteraction = server.unixtime;
     if (c->flags & CLIENT_MASTER) {
         c->read_reploff += nread;
-        atomicIncr(server.stat_net_repl_input_bytes, nread);
+        atomic_fetch_add_explicit(&server.stat_net_repl_input_bytes,nread,memory_order_relaxed);
     } else {
-        atomicIncr(server.stat_net_input_bytes, nread);
+        atomic_fetch_add_explicit(&server.stat_net_input_bytes,nread,memory_order_relaxed);
     }
     c->net_input_bytes += nread;
 
@@ -2738,7 +2737,7 @@ void readQueryFromClient(connection *conn) {
         sdsfree(ci);
         sdsfree(bytes);
         freeClientAsync(c);
-        atomicIncr(server.stat_client_qbuf_limit_disconnections, 1);
+        atomic_fetch_add_explicit(&server.stat_client_qbuf_limit_disconnections,1,memory_order_relaxed);
         goto done;
     }
 
@@ -4210,7 +4209,7 @@ void processEventsWhileBlocked(void) {
 #endif
 
 typedef struct __attribute__((aligned(CACHE_LINE_SIZE))) threads_pending {
-    serverAtomic unsigned long value;
+    _Atomic unsigned long value;
 } threads_pending;
 
 pthread_t io_threads[IO_THREADS_MAX_NUM];
@@ -4224,13 +4223,12 @@ int io_threads_op;      /* IO_THREADS_OP_IDLE, IO_THREADS_OP_READ or IO_THREADS_
 list *io_threads_list[IO_THREADS_MAX_NUM];
 
 static inline unsigned long getIOPendingCount(int i) {
-    unsigned long count = 0;
-    atomicGetWithSync(io_threads_pending[i].value, count);
+    unsigned long count = atomic_load(&io_threads_pending[i].value);
     return count;
 }
 
 static inline void setIOPendingCount(int i, unsigned long count) {
-    atomicSetWithSync(io_threads_pending[i].value, count);
+    atomic_store(&io_threads_pending[i].value, count);
 }
 
 void *IOThreadMain(void *myid) {

@@ -33,7 +33,6 @@
 #include "slowlog.h"
 #include "bio.h"
 #include "latency.h"
-#include "atomicvar.h"
 #include "mt19937-64.h"
 #include "functions.h"
 #include "hdr_histogram.h"

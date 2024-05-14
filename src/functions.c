@@ -31,7 +31,6 @@
 #include "sds.h"
 #include "dict.h"
 #include "adlist.h"
-#include "atomicvar.h"
 
 #define LOAD_TIMEOUT_MS 500
 

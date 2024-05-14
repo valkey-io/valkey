@@ -263,17 +263,17 @@ void *bioProcessBackgroundJobs(void *arg) {
             if (valkey_fsync(job->fd_args.fd) == -1 &&
                 errno != EBADF && errno != EINVAL)
             {
-                int last_status;
-                atomicGet(server.aof_bio_fsync_status,last_status);
-                atomicSet(server.aof_bio_fsync_status,C_ERR);
-                atomicSet(server.aof_bio_fsync_errno,errno);
+                int last_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
+
+                atomic_store_explicit(&server.aof_bio_fsync_status, C_ERR, memory_order_relaxed);
+                atomic_store_explicit(&server.aof_bio_fsync_errno, errno, memory_order_relaxed);
                 if (last_status == C_OK) {
                     serverLog(LL_WARNING,
                         "Fail to fsync the AOF file: %s",strerror(errno));
                 }
             } else {
-                atomicSet(server.aof_bio_fsync_status,C_OK);
-                atomicSet(server.fsynced_reploff_pending, job->fd_args.offset);
+                atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
+                atomic_store_explicit(&server.fsynced_reploff_pending, job->fd_args.offset, memory_order_relaxed);
             }
 
             if (job->fd_args.need_reclaim_cache) {

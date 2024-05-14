@@ -66,7 +66,7 @@ int clusterAllowFailoverCmd(client *c);
 void clusterPromoteSelfToMaster(void);
 int clusterManualFailoverTimeLimit(void);
 
-void clusterSlotsCommand(client * c);
+void clusterCommandSlots(client * c);
 void clusterCommandMyId(client *c);
 void clusterCommandMyShardId(client *c);
 void clusterCommandShards(client *c);
@@ -117,10 +117,6 @@ void migrateCommand(client *c);
 void clusterCommand(client *c);
 ConnectionType *connTypeOfCluster(void);
 
-int isClusterSlotsResponseCached(connTypeForCaching conn_type);
-sds getClusterSlotReply(connTypeForCaching conn_type);
-void clearCachedClusterSlotsResponse(void);
-void cacheSlotsResponse(sds response_to_cache, connTypeForCaching conn_type);
-void updateAllCachedNodesHealth(void);
+int detectAndUpdateCachedNodeHealth(void);
 int isNodeAvailable(clusterNode *node);
 #endif /* __CLUSTER_H */

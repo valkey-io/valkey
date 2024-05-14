@@ -319,14 +319,16 @@ int prepareClientToWrite(client *c) {
     return C_OK;
 }
 
-/* Returns everything in the client reply linked list in a SDS format. */
+/* Returns everything in the client reply linked list in a SDS format.
+ * This should only be used only with a caching client. */
 static sds getClientOutputBuffer(client *c) {
     sds cmd_response = sdsempty();
     listIter li;
     listNode *ln;
     clientReplyBlock *val_block;
     listRewind(c->reply,&li);
-    
+
+    /* Here, c->buf is not used, thus we confirm c->bufpos remains 0. */
     serverAssert(c->bufpos == 0);
     while ((ln = listNext(&li)) != NULL) {
         val_block = (clientReplyBlock *)listNodeValue(ln);

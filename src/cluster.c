@@ -872,7 +872,7 @@ void clusterCommand(client *c) {
         clusterCommandMyShardId(c);
     } else if (!strcasecmp(c->argv[1]->ptr,"slots") && c->argc == 2) {
         /* CLUSTER SLOTS */
-        clusterSlotsCommand(c);
+        clusterCommandSlots(c);
     } else if (!strcasecmp(c->argv[1]->ptr,"shards") && c->argc == 2) {
         /* CLUSTER SHARDS */
         clusterCommandShards(c);
@@ -1403,6 +1403,15 @@ void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, in
     serverAssert(nested_elements == 3); /* Original 3 elements */
 }
 
+void clearCachedClusterSlotsResponse(void) {
+    for (connTypeForCaching conn_type = CACHE_CONN_TCP; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
+        if (server.cached_cluster_slot_info[conn_type]) {
+            sdsfree(server.cached_cluster_slot_info[conn_type]);
+            server.cached_cluster_slot_info[conn_type] = NULL;
+        }
+    }
+}
+
 sds generateClusterSlotResponse(void) {
     client *recording_client = createCachedResponseClient();
     clusterNode *n = NULL;
@@ -1435,12 +1444,12 @@ sds generateClusterSlotResponse(void) {
 int verifyCachedClusterSlotsResponse(sds cached_response) {
     sds generated_response = generateClusterSlotResponse();
     int result = !sdscmp(generated_response, cached_response);
-    if (!result) serverLog(LL_NOTICE,"\ngenerated_response:\n%s\n\ncached_response:\n%s", generated_response, cached_response);
+    if (!result) serverLog(LL_WARNING,"\ngenerated_response:\n%s\n\ncached_response:\n%s", generated_response, cached_response);
     sdsfree(generated_response);
     return result;
 }
 
-void clusterSlotsCommand(client *c) {
+void clusterCommandSlots(client *c) {
     /* Format: 1) 1) start slot
      *            2) end slot
      *            3) 1) master IP
@@ -1453,16 +1462,17 @@ void clusterSlotsCommand(client *c) {
      */
     connTypeForCaching conn_type = connIsTLS(c->conn);
 
-    /* Check if we have a response cached for cluster slots for early exit. */
-    updateAllCachedNodesHealth();    
-    if (isClusterSlotsResponseCached(conn_type)) {
-        debugServerAssertWithInfo(c, NULL, verifyCachedClusterSlotsResponse(getClusterSlotReply(conn_type)) == 1);
-        addReplyProto(c, getClusterSlotReply(conn_type), sdslen(getClusterSlotReply(conn_type)));
-        return;
+    if (detectAndUpdateCachedNodeHealth()) clearCachedClusterSlotsResponse();
+
+    sds cached_reply = server.cached_cluster_slot_info[conn_type];
+    if (!cached_reply) {
+        cached_reply = generateClusterSlotResponse();
+        server.cached_cluster_slot_info[conn_type] = cached_reply;
+    } else {
+        debugServerAssertWithInfo(c, NULL, verifyCachedClusterSlotsResponse(cached_reply) == 1);
     }
 
-    cacheSlotsResponse(generateClusterSlotResponse(), conn_type);
-    addReplyProto(c, getClusterSlotReply(conn_type), sdslen(getClusterSlotReply(conn_type)));
+    addReplyProto(c, cached_reply, sdslen(cached_reply));
 }
 
 /* -----------------------------------------------------------------------------

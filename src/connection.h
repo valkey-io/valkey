@@ -66,7 +66,7 @@ typedef enum connTypeForCaching {
     CACHE_CONN_TCP,
     CACHE_CONN_TLS,
     CACHE_CONN_TYPE_MAX
-}connTypeForCaching;
+} connTypeForCaching;
 
 typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 

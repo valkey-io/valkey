@@ -110,31 +110,6 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen);
 void freeClusterLink(clusterLink *link);
 int verifyClusterNodeId(const char *name, int length);
 
-int isClusterSlotsResponseCached(connTypeForCaching conn_type) {
-    if (server.cluster->cached_cluster_slot_info[conn_type] &&
-        sdslen(server.cluster->cached_cluster_slot_info[conn_type])) {
-        return 1;
-    }
-    return 0;
-}
-
-sds getClusterSlotReply(connTypeForCaching conn_type) {
-    return server.cluster->cached_cluster_slot_info[conn_type];
-}
-
-void clearCachedClusterSlotsResponse(void) {
-    for (connTypeForCaching conn_type = CACHE_CONN_TCP; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
-        if (server.cluster->cached_cluster_slot_info[conn_type]) {
-            sdsfree(server.cluster->cached_cluster_slot_info[conn_type]);
-            server.cluster->cached_cluster_slot_info[conn_type] = NULL;
-        }
-    }
-}
-
-void cacheSlotsResponse(sds response_to_cache, connTypeForCaching conn_type) {
-    server.cluster->cached_cluster_slot_info[conn_type] = response_to_cache;
-}
-
 int getNodeDefaultClientPort(clusterNode *n) {
     return server.tls_cluster ? n->tls_port : n->tcp_port;
 }
@@ -1068,7 +1043,7 @@ void clusterInit(void) {
     server.cluster->mf_end = 0;
     server.cluster->mf_slave = NULL;
     for (connTypeForCaching conn_type = CACHE_CONN_TCP; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
-        server.cluster->cached_cluster_slot_info[conn_type] = NULL;
+        server.cached_cluster_slot_info[conn_type] = NULL;
     }
     resetManualFailover();
     clusterUpdateMyselfFlags();
@@ -6939,7 +6914,7 @@ void clusterPromoteSelfToMaster(void) {
     replicationUnsetMaster();
 }
 
-void updateAllCachedNodesHealth(void) {
+int detectAndUpdateCachedNodeHealth(void) {
     dictIterator di;
     dictInitSafeIterator(&di, server.cluster->nodes);
     dictEntry *de;
@@ -6954,7 +6929,7 @@ void updateAllCachedNodesHealth(void) {
         }
     }
 
-    if (overall_health_changed) clearCachedClusterSlotsResponse();
+    return overall_health_changed;
 }
 
 /* Replicate migrating and importing slot states to all replicas */

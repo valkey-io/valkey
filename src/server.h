@@ -1568,7 +1568,6 @@ struct valkeyServer {
     dict *orig_commands;        /* Command table before command renaming. */
     aeEventLoop *el;
     rax *errors;                /* Errors table */
-    int errors_enabled;         /* If true, errorstats is enabled, and we will add new errors. */
     unsigned int lruclock; /* Clock for LRU eviction */
     volatile sig_atomic_t shutdown_asap; /* Shutdown ordered by signal handler. */
     mstime_t shutdown_mstime;   /* Timestamp to limit graceful shutdown. */
@@ -2563,9 +2562,15 @@ int validateProcTitleTemplate(const char *template);
 int serverCommunicateSystemd(const char *sd_notify_msg);
 void serverSetCpuAffinity(const char *cpulist);
 
+/* ERROR STATS constants */
+#define ERROR_STATS_LUA_LIMIT 128 /* After the errors RAX reaches this limit, instead of tracking 
+                                    custom LUA errors, we track the error under `error_LUA`. */
+
 /* afterErrorReply flags */
 #define ERR_REPLY_FLAG_NO_STATS_UPDATE (1ULL<<0) /* Indicating that we should not update
                                                     error stats after sending error reply */
+#define ERR_REPLY_FLAG_LUA (1ULL<<1) /* Indicating that we are coming in from ScriptCall */
+
 /* networking.c -- Networking and Client related operations */
 client *createClient(connection *conn);
 void freeClient(client *c);

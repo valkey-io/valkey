@@ -281,18 +281,12 @@ start_server {tags {"info" "external:skip"}} {
                     r eval {return redis.error_reply(string.format('%s my error message', ARGV[1]))} 0 $j
                 }
             }
-
-            assert_equal [count_log_message 0 "Errorstats stopped adding new errors"] 1
-            assert_equal [count_log_message 0 "Current errors code list"] 1
-            assert_equal "count=1" [errorstat ERRORSTATS_DISABLED]
-
-            # Since we currently have no metrics exposed for server.errors, we use lazyfree
-            # to verify that we only have 128 errors.
-            wait_for_condition 50 100 {
-                [s lazyfreed_objects] eq 128
-            } else {
-                fail "errorstats resetstat lazyfree error"
-            }
+            # Validate that custom LUA errors are tracked in `LUA_ERRORSTATS_DISABLED` when errors
+            # has 128 entries.
+            assert_equal "count=972" [errorstat LUA_ERRORSTATS_DISABLED]
+            # Validate that non LUA errors continue to be tracked even when we have >=128 entries.
+            assert_error {ERR syntax error} {r set a b c d e f g}
+            assert_equal "count=1" [errorstat ERR]
         }
 
         test {stats: eventloop metrics} {

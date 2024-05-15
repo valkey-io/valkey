@@ -639,7 +639,7 @@ static void luaReplyToRedisReply(client *c, client* script_client, lua_State *lu
             errorInfo err_info = {0};
             luaExtractErrorInformation(lua, &err_info);
             addReplyErrorFormatEx(c,
-                                  err_info.ignore_err_stats_update? ERR_REPLY_FLAG_NO_STATS_UPDATE: 0,
+                                  err_info.ignore_err_stats_update? ERR_REPLY_FLAG_NO_STATS_UPDATE | ERR_REPLY_FLAG_LUA: ERR_REPLY_FLAG_LUA,
                                   "-%s",
                                   err_info.msg);
             luaErrorInformationDiscard(&err_info);

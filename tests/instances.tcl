@@ -299,7 +299,7 @@ proc parse_options {} {
             set val2 [lindex $::argv [expr $j+2]]
             dict set ::global_config $val $val2
             incr j 2
-        } elseif {$opt eq {--fastfail}} {
+        } elseif {$opt eq {--fast-fail}} {
             set ::exit_on_failure 1
         } elseif {$opt eq {--stop}} {
             set ::stop_on_failure 1
@@ -319,7 +319,7 @@ proc parse_options {} {
             puts "--tls-module            Run tests in TLS mode with Valkey module."
             puts "--host <host>           Use hostname instead of 127.0.0.1."
             puts "--config <k> <v>        Extra config argument(s)."
-            puts "--fastfail              Exit immediately once the first test fails."
+            puts "--fast-fail             Exit immediately once the first test fails."
             puts "--stop                  Blocks once the first test fails."
             puts "--loop                  Execute the specified set of tests forever."
             puts "--help                  Shows this help."
@@ -488,7 +488,7 @@ while 1 {
             # letting the tests resume, so we'll eventually reach the cleanup and report crashes
 
             if {$::exit_on_failure} {
-                puts -nonewline "(Fastfail: test will exit now)"
+                puts -nonewline "(Fast fail: test will exit now)"
                 flush stdout
                 exit 1
             }

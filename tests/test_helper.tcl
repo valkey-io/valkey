@@ -385,7 +385,7 @@ proc read_from_test_client fd {
         lappend ::failed_tests $err
         set ::active_clients_task($fd) "(ERR) $data"
         if {$::exit_on_failure} {
-            puts -nonewline "(Fastfail: test will exit now)"
+            puts -nonewline "(Fast fail: test will exit now)"
             flush stdout
             exit 1
         }

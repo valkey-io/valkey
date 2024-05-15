@@ -9017,7 +9017,7 @@ void VM_FreeClusterNodesList(char **ids) {
  * is disabled. */
 const char *VM_GetMyClusterID(void) {
     if (!server.cluster_enabled) return NULL;
-    return getMyClusterId();
+    return clusterNodeGetName(getMyClusterNode());
 }
 
 /* Return the number of nodes in the cluster, regardless of their state
@@ -9064,8 +9064,8 @@ int VM_GetClusterNodeInfo(ValkeyModuleCtx *ctx, const char *id, char *ip, char *
         /* If the information is not available, the function will set the
          * field to zero bytes, so that when the field can't be populated the
          * function kinda remains predictable. */
-        if (clusterNodeIsSlave(node) && clusterNodeGetSlaveof(node))
-            memcpy(master_id, clusterNodeGetName(clusterNodeGetSlaveof(node)) ,VALKEYMODULE_NODE_ID_LEN);
+        if (clusterNodeIsSlave(node) && clusterNodeGetMaster(node))
+            memcpy(master_id, clusterNodeGetName(clusterNodeGetMaster(node)) ,VALKEYMODULE_NODE_ID_LEN);
         else
             memset(master_id,0,VALKEYMODULE_NODE_ID_LEN);
     }
@@ -11253,7 +11253,11 @@ int VM_Fork(ValkeyModuleForkDoneHandler cb, void *user_data) {
 
     if ((childpid = serverFork(CHILD_TYPE_MODULE)) == 0) {
         /* Child */
-        serverSetProcTitle("redis-module-fork");
+        if (strstr(server.exec_argv[0],"redis-server") != NULL) {
+            serverSetProcTitle("redis-module-fork");
+        } else {
+            serverSetProcTitle("valkey-module-fork");
+        }
     } else if (childpid == -1) {
         serverLog(LL_WARNING,"Can't fork for module: %s", strerror(errno));
     } else {

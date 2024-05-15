@@ -4588,9 +4588,7 @@ int writeCommandsDeniedByDiskError(void) {
             return DISK_ERROR_TYPE_AOF;
         }
         /* AOF fsync error. */
-        int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
-        atomic_thread_fence(memory_order_acquire);
-        
+        int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_acquire);
         if (aof_bio_fsync_status == C_ERR) {
             server.aof_last_write_errno = atomic_load_explicit(&server.aof_bio_fsync_errno, memory_order_relaxed);
             return DISK_ERROR_TYPE_AOF;

@@ -112,7 +112,7 @@ int ThreadsManager_runOnThreads(pid_t *tids, size_t tids_len, run_on_thread_cb c
 
 
 static int test_and_start(void) {
-    /* atomic_exchange_expicit sets the variable to 1 and returns the previous value */
+    /* atomic_exchange_explicit sets the variable to 1 and returns the previous value */
     int prev_state = atomic_exchange_explicit(&g_in_progress,1,memory_order_relaxed);
 
     /* If prev_state is 1, g_in_progress was on. */

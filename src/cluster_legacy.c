@@ -495,7 +495,6 @@ int clusterLoadConfig(char *filename) {
         }
         *p = '\0';
         memcpy(n->ip,aux_argv[0],strlen(aux_argv[0])+1);
-        clearCachedClusterSlotsResponse();
         char *port = p+1;
         char *busp = strchr(port,'@');
         if (busp) {

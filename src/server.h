@@ -2683,7 +2683,6 @@ int authRequired(client *c);
 void putClientInPendingWriteQueue(client *c);
 client *createCachedResponseClient(void);
 sds stopCaching(client *recording_client);
-void clearCachedClusterSlotsResponse(void);
 
 /* logreqres.c - logging of requests and responses */
 void reqresReset(client *c, int free_buf);

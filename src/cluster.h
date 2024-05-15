@@ -104,6 +104,10 @@ const char *clusterNodePreferredEndpoint(clusterNode *n);
 long long clusterNodeReplOffset(clusterNode *node);
 clusterNode *clusterLookupNode(const char *name, int length);
 void clusterReplicateOpenSlots(void);
+int detectAndUpdateCachedNodeHealth(void);
+client *createCachedResponseClient(void);
+sds stopCaching(client *recording_client);
+void clearCachedClusterSlotsResponse(void);
 
 /* functions with shared implementations */
 clusterNode *getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int *hashslot, int *ask);
@@ -116,7 +120,5 @@ int isValidAuxString(char *s, unsigned int length);
 void migrateCommand(client *c);
 void clusterCommand(client *c);
 ConnectionType *connTypeOfCluster(void);
-
-int detectAndUpdateCachedNodeHealth(void);
 int isNodeAvailable(clusterNode *node);
 #endif /* __CLUSTER_H */

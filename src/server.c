@@ -254,8 +254,8 @@ mstime_t commandTimeSnapshot(void) {
 
 /* After an RDB dump or AOF rewrite we exit from children using _exit() instead of
  * exit(), because the latter may interact with the same file objects used by
- * the parent process. However if we are testing the coverage normal exit() is
- * used in order to obtain the right coverage information. */
+ * the parent process. However if we are testing for coverage, in order to obtain
+ * the child process coverage data we first need to flush gcov files. */
 void exitFromChild(int retcode) {
 #ifdef COVERAGE_TEST
     extern void __gcov_flush(void);

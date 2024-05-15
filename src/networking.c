@@ -513,25 +513,23 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
     if (!(flags & ERR_REPLY_FLAG_NO_STATS_UPDATE)) {
         /* Increment the global error counter */
         server.stat_total_error_replies++;
+        /* Increment the error stats */
         /* After the errors RAX reaches this limit, instead of tracking
          * custom LUA errors, we track the error under `error_LUA` */
         if (flags & ERR_REPLY_FLAG_LUA && raxSize(server.errors) >= ERROR_STATS_LUA_LIMIT) {
             incrementErrorCount("LUA_ERRORSTATS_DISABLED", 23);
+        /* If the string already starts with "-..." then the error prefix
+        * is provided by the caller ( we limit the search to 32 chars). Otherwise we use "-ERR". */ 
+        } else if (s[0] != '-') {
+            incrementErrorCount("ERR", 3);
         } else {
-            /* Increment the error stats
-            * If the string already starts with "-..." then the error prefix
-            * is provided by the caller ( we limit the search to 32 chars). Otherwise we use "-ERR". */
-            if (s[0] != '-') {
-                incrementErrorCount("ERR", 3);
+            char *spaceloc = memchr(s, ' ', len < 32 ? len : 32);
+            if (spaceloc) {
+                const size_t errEndPos = (size_t)(spaceloc - s);
+                incrementErrorCount(s+1, errEndPos-1);
             } else {
-                char *spaceloc = memchr(s, ' ', len < 32 ? len : 32);
-                if (spaceloc) {
-                    const size_t errEndPos = (size_t)(spaceloc - s);
-                    incrementErrorCount(s+1, errEndPos-1);
-                } else {
-                    /* Fallback to ERR if we can't retrieve the error prefix */
-                    incrementErrorCount("ERR", 3);
-                }
+                /* Fallback to ERR if we can't retrieve the error prefix */
+                incrementErrorCount("ERR", 3);
             }
         }
     } else {

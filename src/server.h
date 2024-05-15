@@ -2569,7 +2569,8 @@ void serverSetCpuAffinity(const char *cpulist);
 /* afterErrorReply flags */
 #define ERR_REPLY_FLAG_NO_STATS_UPDATE (1ULL<<0) /* Indicating that we should not update
                                                     error stats after sending error reply */
-#define ERR_REPLY_FLAG_LUA (1ULL<<1) /* Indicating that we are coming in from ScriptCall */
+#define ERR_REPLY_FLAG_LUA (1ULL<<1) /* Indicating that the error message is from LUA replying
+                                        to a client */
 
 /* networking.c -- Networking and Client related operations */
 client *createClient(connection *conn);

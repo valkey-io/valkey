@@ -4588,9 +4588,11 @@ int writeCommandsDeniedByDiskError(void) {
             return DISK_ERROR_TYPE_AOF;
         }
         /* AOF fsync error. */
-        int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status,memory_order_relaxed);
+        int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
+        atomic_thread_fence(memory_order_acquire);
+        
         if (aof_bio_fsync_status == C_ERR) {
-            server.aof_last_write_errno = atomic_load_explicit(&server.aof_bio_fsync_errno,memory_order_relaxed);
+            server.aof_last_write_errno = atomic_load_explicit(&server.aof_bio_fsync_errno, memory_order_relaxed);
             return DISK_ERROR_TYPE_AOF;
         }
     }
@@ -5628,7 +5630,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "arch_bits:%i\r\n", server.arch_bits,
             "monotonic_clock:%s\r\n", monotonicInfoString(),
             "multiplexing_api:%s\r\n", aeGetApiName(),
-            "atomicvar_api:%s\r\n", REDIS_ATOMIC_API,
             "gcc_version:%s\r\n", GNUC_VERSION_STR,
             "process_id:%I\r\n", (int64_t) getpid(),
             "process_supervised:%s\r\n", supervised,

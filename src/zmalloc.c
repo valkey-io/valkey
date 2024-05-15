@@ -51,7 +51,6 @@ void zlibc_free(void *ptr) {
 
 #include <string.h>
 #include "zmalloc.h"
-#include "atomicvar.h"
 #include <stdatomic.h>
 
 #define UNUSED(x) ((void)(x))

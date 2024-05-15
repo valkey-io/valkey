@@ -62,6 +62,7 @@
 
 #include "server.h"
 #include "bio.h"
+#include <stdatomic.h>
 
 static char* bio_worker_title[] = {
     "bio_close_file",
@@ -265,8 +266,8 @@ void *bioProcessBackgroundJobs(void *arg) {
             {
                 int last_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
 
-                atomic_store_explicit(&server.aof_bio_fsync_status, C_ERR, memory_order_relaxed);
                 atomic_store_explicit(&server.aof_bio_fsync_errno, errno, memory_order_relaxed);
+                atomic_store_explicit(&server.aof_bio_fsync_status, C_ERR, memory_order_release);
                 if (last_status == C_OK) {
                     serverLog(LL_WARNING,
                         "Fail to fsync the AOF file: %s",strerror(errno));

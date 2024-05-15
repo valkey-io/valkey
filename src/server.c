@@ -258,10 +258,10 @@ mstime_t commandTimeSnapshot(void) {
  * used in order to obtain the right coverage information. */
 void exitFromChild(int retcode) {
 #ifdef COVERAGE_TEST
-    exit(retcode);
-#else
-    _exit(retcode);
+    extern void __gcov_flush(void);
+    __gcov_flush();
 #endif
+    _exit(retcode);
 }
 
 /*====================== Hash table type implementation  ==================== */

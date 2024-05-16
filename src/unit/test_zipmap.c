@@ -4,7 +4,7 @@
 static void zipmapRepr(unsigned char *p) {
     unsigned int l;
 
-    printf("{status %u}",*p++);
+    p++;
     while(1) {
         if (p[0] == ZIPMAP_END) {
             break;
@@ -93,7 +93,7 @@ int test_zipmapPerformDirectLookup(int argc, char *argv[], int flags) {
 
     if (zipmapGet(zm,(unsigned char*) "foo",3,&value,&vlen)) {
         TEST_ASSERT(5 == vlen);
-        TEST_ASSERT(strcmp("12345", (const char*)value));
+        TEST_ASSERT(!strcmp("12345", (const char*)value));
     }
     zfree(zm);
     return 0;

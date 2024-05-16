@@ -53,13 +53,32 @@ static inline int sdsHdrSize(char type) {
     return 0;
 }
 
-static inline char sdsReqType(size_t string_size) {
-    if (sizeof(struct sdshdr5) + string_size + 1 <= 1<<5) return SDS_TYPE_5;
-    if (sizeof(struct sdshdr8) + string_size + 1 <= 1<<8) return SDS_TYPE_8;
-    if (sizeof(struct sdshdr16) + string_size + 1 <= 1<<16) return SDS_TYPE_16;
+/* Returns the maximum len and alloc for a given type.
+ *
+ * The buffer includes header and null terminator. The total buffer size must be
+ * up to 2^5, 2^8, 2^16, and 2^32 bytes. We assume jemalloc uses these sizes for
+ * allocation. Otherwise jemalloc allocates larger buffer, which length can't be
+ * stored in alloc field. */
+static inline size_t sdsTypeMaxSize(char type) {
+    if (type == SDS_TYPE_5)
+        return (1<<5) - sizeof(struct sdshdr5) - 1;
+    if (type == SDS_TYPE_8)
+        return (1<<8) - sizeof(struct sdshdr8) - 1;
+    if (type == SDS_TYPE_16)
+        return (1<<16) - sizeof(struct sdshdr16) - 1;
 #if (LONG_MAX == LLONG_MAX)
-    if (sizeof(struct sdshdr32) + string_size + 1 <= 1ll<<32)
-        return SDS_TYPE_32;
+    if (type == SDS_TYPE_32)
+        return (1ll<<32) - sizeof(struct sdshdr32) - 1;
+#endif
+    return -1; /* this is equivalent to the max SDS_TYPE_64 or SDS_TYPE_32 */
+}
+
+static inline char sdsReqType(size_t string_size) {
+    if (string_size <= sdsTypeMaxSize(SDS_TYPE_5)) return SDS_TYPE_5;
+    if (string_size <= sdsTypeMaxSize(SDS_TYPE_8)) return SDS_TYPE_8;
+    if (string_size <= sdsTypeMaxSize(SDS_TYPE_16)) return SDS_TYPE_16;
+#if (LONG_MAX == LLONG_MAX)
+    if (string_size <= sdsTypeMaxSize(SDS_TYPE_32)) return SDS_TYPE_32;
     return SDS_TYPE_64;
 #else
     return SDS_TYPE_32;
@@ -110,7 +129,7 @@ sds _sdsnewlen(const void *init, size_t initlen, int trymalloc) {
     s = (char *)sh + hdrlen;
     fp = ((unsigned char *)s) - 1;
     usable = usable - hdrlen - 1;
-    if (usable > sdsTypeMaxSize(type)) usable = sdsTypeMaxSize(type);
+    assert(usable <= sdsTypeMaxSize(type));
     switch (type) {
     case SDS_TYPE_5: {
         *fp = type | (initlen << SDS_TYPE_BITS);
@@ -268,7 +287,7 @@ sds _sdsMakeRoomFor(sds s, size_t addlen, int greedy) {
         sdssetlen(s, len);
     }
     usable = usable - hdrlen - 1;
-    if (usable > sdsTypeMaxSize(type)) usable = sdsTypeMaxSize(type);
+    assert(usable <= sdsTypeMaxSize(type));
     sdssetalloc(s, usable);
     return s;
 }

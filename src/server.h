@@ -404,6 +404,9 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_REPROCESSING_COMMAND (1ULL<<50) /* The client is re-processing the command. */
 #define CLIENT_PREREPL_DONE (1ULL<<51) /* Indicate that pre-replication has been done on the client */
 
+/* Client capabilities */
+#define CLIENT_CAPA_REDIRECT (1<<0)    /* Indicate that the client can handle redirection */
+
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
 typedef enum blocking_type {
@@ -1164,6 +1167,7 @@ typedef struct {
 typedef struct client {
     uint64_t id;            /* Client incremental unique ID. */
     uint64_t flags;         /* Client flags: CLIENT_* macros. */
+    uint64_t capa;          /* Client capabilities: CLIENT_CAPA* macros. */
     connection *conn;
     int resp;               /* RESP protocol version. Can be 2 or 3. */
     serverDb *db;            /* Pointer to currently SELECTed DB. */
@@ -1917,7 +1921,6 @@ struct valkeyServer {
     int repl_serve_stale_data; /* Serve stale data when link is down? */
     int repl_slave_ro;          /* Slave is read only? */
     int repl_slave_ignore_maxmemory;    /* If true slaves do not evict. */
-    int repl_replica_enable_redirect;   /* If true replica would redirect read&write commands to master. */
     time_t repl_down_since; /* Unix time at which link with master went down */
     int repl_disable_tcp_nodelay;   /* Disable TCP_NODELAY after SYNC? */
     int slave_priority;             /* Reported in INFO and used by Sentinel. */

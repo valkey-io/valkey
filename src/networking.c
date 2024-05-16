@@ -166,6 +166,7 @@ client *createClient(connection *conn) {
     c->bulklen = -1;
     c->sentlen = 0;
     c->flags = 0;
+    c->capa = 0;
     c->slot = -1;
     c->ctime = c->lastinteraction = server.unixtime;
     c->duration = 0;
@@ -3579,6 +3580,13 @@ NULL
             addReply(c,shared.ok);
         } else if (!strcasecmp(c->argv[2]->ptr,"off")) {
             c->flags &= ~CLIENT_NO_TOUCH;
+            addReply(c,shared.ok);
+        } else {
+            addReplyErrorObject(c,shared.syntaxerr);
+        }
+    } else if (!strcasecmp(c->argv[1]->ptr,"capa") && c->argc == 3) {
+        if (!strcasecmp(c->argv[2]->ptr,"redirect")) {
+            c->capa |= CLIENT_CAPA_REDIRECT;
             addReply(c,shared.ok);
         } else {
             addReplyErrorObject(c,shared.syntaxerr);

@@ -18,8 +18,8 @@ start_server {tags {needs:repl external:skip}} {
             assert_error {READONLY*} {r set foo bar}
         }
 
-        test {replica redirect read and write command when enable replica-enable-redirect} {
-            r config set replica-enable-redirect yes
+        test {replica redirect read and write command after CLIENT CAPA REDIRECT} {
+            r client capa redirect
             assert_error "REDIRECT $master_host:$master_port" {r set foo bar}
             assert_error "REDIRECT $master_host:$master_port" {r get foo}
         }

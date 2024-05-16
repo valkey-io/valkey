@@ -4040,7 +4040,7 @@ int processCommand(client *c) {
     }
 
     if (!server.cluster_enabled &&
-        server.repl_replica_enable_redirect &&
+        c->capa & CLIENT_CAPA_REDIRECT &&
         server.masterhost &&
         !mustObeyClient(c) &&
         (is_write_command ||

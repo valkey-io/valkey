@@ -517,7 +517,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         /* After the errors RAX reaches this limit, instead of tracking
          * custom LUA errors, we track the error under `error_LUA` */
         if (flags & ERR_REPLY_FLAG_LUA && raxSize(server.errors) >= ERROR_STATS_LUA_LIMIT) {
-            incrementErrorCount("LUA_ERRORSTATS_DISABLED", 23);
+            incrementErrorCount(LUA_ERRORSTATS_OVERFLOW_ERR, strlen(LUA_ERRORSTATS_OVERFLOW_ERR));
         /* If the string already starts with "-..." then the error prefix
         * is provided by the caller ( we limit the search to 32 chars). Otherwise we use "-ERR". */ 
         } else if (s[0] != '-') {

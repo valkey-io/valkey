@@ -2564,7 +2564,8 @@ void serverSetCpuAffinity(const char *cpulist);
 
 /* ERROR STATS constants */
 #define ERROR_STATS_LUA_LIMIT 128 /* After the errors RAX reaches this limit, instead of tracking 
-                                    custom LUA errors, we track the error under `error_LUA`. */
+                                    custom LUA errors, we track the error under `error_LUA_ERRORSTATS_OVERFLOW`. */
+#define LUA_ERRORSTATS_OVERFLOW_ERR "LUA_ERRORSTATS_OVERFLOW"
 
 /* afterErrorReply flags */
 #define ERR_REPLY_FLAG_NO_STATS_UPDATE (1ULL<<0) /* Indicating that we should not update

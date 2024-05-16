@@ -281,9 +281,9 @@ start_server {tags {"info" "external:skip"}} {
                     r eval {return redis.error_reply(string.format('%s my error message', ARGV[1]))} 0 $j
                 }
             }
-            # Validate that custom LUA errors are tracked in `LUA_ERRORSTATS_DISABLED` when errors
+            # Validate that custom LUA errors are tracked in `LUA_ERRORSTATS_OVERFLOW` when errors
             # has 128 entries.
-            assert_equal "count=972" [errorstat LUA_ERRORSTATS_DISABLED]
+            assert_equal "count=972" [errorstat LUA_ERRORSTATS_OVERFLOW]
             # Validate that non LUA errors continue to be tracked even when we have >=128 entries.
             assert_error {ERR syntax error} {r set a b c d e f g}
             assert_equal "count=1" [errorstat ERR]

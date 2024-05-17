@@ -339,7 +339,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     set R1_id [R 1 CLUSTER MYID]
 
     test "CLUSTER SETSLOT with an explicit timeout" {
-        # trigger a replica failure
+        # Pause the replica to simulate a failure
         pause_process [srv -3 pid]
 
         # Setslot with an explicit 1ms timeoout
@@ -353,5 +353,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
         # Setslot should fail with not enough good replicas to write after the timeout
         assert_equal {NOREPLICAS Not enough good replicas to write.} $e
+
+        resume_process [srv -3 pid]
     }
 }

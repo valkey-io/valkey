@@ -73,7 +73,7 @@ int clusterManualFailoverTimeLimit(void);
 void clusterCommandSlots(client *c);
 void clusterCommandMyId(client *c);
 void clusterCommandMyShardId(client *c);
-void clusterCommandShards(client *c, int topology);
+void clusterCommandShards(client *c);
 sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary);
 
 int clusterNodeCoversSlot(clusterNode *n, int slot);

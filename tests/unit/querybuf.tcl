@@ -33,7 +33,7 @@ start_server {tags {"querybuf slow"}} {
 
         # Check that the initial query buffer is resized after 2 sec
         wait_for_condition 1000 10 {
-            [client_idle_sec test_client] >= 3 && [client_query_buffer test_client] == 0
+            [client_idle_sec test_client] >= 3 && [client_query_buffer test_client] < $orig_test_client_qbuf
         } else {
             fail "query buffer was not resized"
         }

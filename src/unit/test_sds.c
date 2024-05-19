@@ -4,6 +4,7 @@
 #include "test_help.h"
 
 #include "../sds.h"
+#include "../sdsalloc.h"
 
 static sds sdsTestTemplateCallback(sds varname, void *arg) {
     UNUSED(arg);
@@ -262,5 +263,44 @@ int test_sds(int argc, char **argv, int flags) {
     TEST_ASSERT_MESSAGE("sdsReszie() crop strlen", strlen(x) == 4);
     TEST_ASSERT_MESSAGE("sdsReszie() crop alloc", sdsalloc(x) >= 4);
     sdsfree(x);
+
+    return 0;
+}
+
+int test_typesAndAllocSize(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    sds x = sdsnewlen("test", 30);
+    TEST_ASSERT_MESSAGE("len 30 type", (x[-1] & SDS_TYPE_MASK) == SDS_TYPE_5);
+    TEST_ASSERT_MESSAGE("len 30 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    sdsfree(x);
+
+    x = sdsnewlen("test", 31);
+    TEST_ASSERT_MESSAGE("len 31 type", (x[-1] & SDS_TYPE_MASK) == SDS_TYPE_8);
+    TEST_ASSERT_MESSAGE("len 31 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    sdsfree(x);
+
+    x = sdsnewlen("test", 252);
+    TEST_ASSERT_MESSAGE("len 252 type", (x[-1] & SDS_TYPE_MASK) == SDS_TYPE_8);
+    TEST_ASSERT_MESSAGE("len 252 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    sdsfree(x);
+
+    x = sdsnewlen("test", 253);
+    TEST_ASSERT_MESSAGE("len 253 type", (x[-1] & SDS_TYPE_MASK) == SDS_TYPE_16);
+    TEST_ASSERT_MESSAGE("len 253 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    sdsfree(x);
+
+    x = sdsnewlen("test", 65530);
+    TEST_ASSERT_MESSAGE("len 65530 type", (x[-1] & SDS_TYPE_MASK) == SDS_TYPE_16);
+    TEST_ASSERT_MESSAGE("len 65530 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    sdsfree(x);
+
+    x = sdsnewlen("test", 65531);
+    TEST_ASSERT_MESSAGE("len 65531 type", (x[-1] & SDS_TYPE_MASK) == SDS_TYPE_32);
+    TEST_ASSERT_MESSAGE("len 65531 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    sdsfree(x);
+
     return 0;
 }

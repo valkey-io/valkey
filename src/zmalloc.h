@@ -123,7 +123,6 @@ void *zrealloc_usable(void *ptr, size_t size, size_t *usable);
 void *ztrymalloc_usable(size_t size, size_t *usable);
 void *ztrycalloc_usable(size_t size, size_t *usable);
 void *ztryrealloc_usable(void *ptr, size_t size, size_t *usable);
-void zfree_usable(void *ptr, size_t *usable);
 __attribute__((malloc)) char *zstrdup(const char *s);
 size_t zmalloc_used_memory(void);
 void zmalloc_set_oom_handler(void (*oom_handler)(size_t));

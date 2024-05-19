@@ -2,6 +2,7 @@
 lzf*
 crccombine.*
 crcspeed.*
+fmtargs.h
 mt19937-64.*
 pqsort.*
 setcpuaffinity.c

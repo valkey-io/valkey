@@ -27,3 +27,6 @@ SpacesInSquareBrackets: false
 ReflowComments: true
 CommentPragmas: '^\\s*\\*'
 SortIncludes: false
+AllowAllParametersOfDeclarationOnNextLine: false
+BinPackParameters: false
+AlignAfterOpenBracket: Align

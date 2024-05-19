@@ -3096,7 +3096,7 @@ int clusterProcessPacket(clusterLink *link) {
             link->node ? link->node->name : "NULL");
 
         if (sender && (sender->flags & CLUSTER_NODE_MEET)) {
-            // Once we get a response for MEET from the sender, we can stop sending more MEET
+            /* Once we get a response for MEET from the sender, we can stop sending more MEET. */
             sender->flags &= ~CLUSTER_NODE_MEET;
         }
 

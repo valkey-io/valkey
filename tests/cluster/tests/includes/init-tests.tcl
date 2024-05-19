@@ -74,18 +74,16 @@ proc join_nodes_in_cluster {} {
     return 1
 }
 
-if {![info exists do_not_join_cluster_nodes] || !$do_not_join_cluster_nodes} {
-    test "Cluster Join and auto-discovery test" {
-        # Use multiple attempts since sometimes nodes timeout
-        # while attempting to connect.
-        for {set attempts 3} {$attempts > 0} {incr attempts -1} {
-            if {[join_nodes_in_cluster] == 1} {
-                break
-            }
+test "Cluster Join and auto-discovery test" {
+    # Use multiple attempts since sometimes nodes timeout
+    # while attempting to connect.
+    for {set attempts 3} {$attempts > 0} {incr attempts -1} {
+        if {[join_nodes_in_cluster] == 1} {
+            break
         }
-        if {$attempts == 0} {
-            fail "Cluster failed to form full mesh"
-        }
+    }
+    if {$attempts == 0} {
+        fail "Cluster failed to form full mesh"
     }
 }
 

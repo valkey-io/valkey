@@ -53,36 +53,28 @@ static inline int sdsHdrSize(char type) {
     return 0;
 }
 
-static inline size_t sdsTypeMaxSize(char type);
-
 static inline char sdsReqType(size_t string_size) {
-    if (string_size <= sdsTypeMaxSize(SDS_TYPE_5)) return SDS_TYPE_5;
-    if (string_size <= sdsTypeMaxSize(SDS_TYPE_8)) return SDS_TYPE_8;
-    if (string_size <= sdsTypeMaxSize(SDS_TYPE_16)) return SDS_TYPE_16;
+    if (string_size < 1<<5) return SDS_TYPE_5;
+    if (string_size <= (1<<8) - sizeof(struct sdshdr8) - 1) return SDS_TYPE_8;
+    if (string_size <= (1<<16) - sizeof(struct sdshdr16) - 1) return SDS_TYPE_16;
 #if (LONG_MAX == LLONG_MAX)
-    if (string_size <= sdsTypeMaxSize(SDS_TYPE_32)) return SDS_TYPE_32;
+    if (string_size <= (1ll<<32) - sizeof(struct sdshdr32) - 1) return SDS_TYPE_32;
     return SDS_TYPE_64;
 #else
     return SDS_TYPE_32;
 #endif
 }
 
-/* Returns the maximum len and alloc for a given type.
- *
- * The buffer includes header and null terminator. The total buffer size must be
- * up to 2^5, 2^8, 2^16, and 2^32 bytes. We assume jemalloc uses these sizes for
- * allocation. Otherwise jemalloc allocates larger buffer, which length can't be
- * stored in alloc field. */
 static inline size_t sdsTypeMaxSize(char type) {
     if (type == SDS_TYPE_5)
-        return (1<<5) - sizeof(struct sdshdr5) - 1;
+        return (1<<5) - 1;
     if (type == SDS_TYPE_8)
-        return (1<<8) - sizeof(struct sdshdr8) - 1;
+        return (1<<8) - 1;
     if (type == SDS_TYPE_16)
-        return (1<<16) - sizeof(struct sdshdr16) - 1;
+        return (1<<16) - 1;
 #if (LONG_MAX == LLONG_MAX)
     if (type == SDS_TYPE_32)
-        return (1ll<<32) - sizeof(struct sdshdr32) - 1;
+        return (1ll<<32) - 1;
 #endif
     return -1; /* this is equivalent to the max SDS_TYPE_64 or SDS_TYPE_32 */
 }
@@ -109,25 +101,27 @@ sds _sdsnewlen(const void *init, size_t initlen, int trymalloc) {
     if (type == SDS_TYPE_5 && initlen == 0) type = SDS_TYPE_8;
     int hdrlen = sdsHdrSize(type);
     unsigned char *fp; /* flags pointer. */
-    size_t usable;
+    size_t bufsize, usable;
 
     assert(initlen + hdrlen + 1 > initlen); /* Catch size_t overflow */
-    sh = trymalloc ? s_trymalloc_usable(hdrlen + initlen + 1, &usable) : s_malloc_usable(hdrlen + initlen + 1, &usable);
+    sh = trymalloc ? s_trymalloc_usable(hdrlen + initlen + 1, &bufsize) : s_malloc_usable(hdrlen + initlen + 1, &bufsize);
     if (sh == NULL) return NULL;
     if (init == SDS_NOINIT)
         init = NULL;
     else if (!init)
         memset(sh, 0, hdrlen + initlen + 1);
+    usable = bufsize - hdrlen - 1;
+
+    /* Adjust type if usable won't fit into alloc. */
+    if (type != SDS_TYPE_5 && usable > sdsTypeMaxSize(type)) {
+        type = sdsReqType(usable);
+        hdrlen = sdsHdrSize(type);
+        usable = bufsize - hdrlen - 1;
+        assert(usable <= sdsTypeMaxSize(type));
+    }
+
     s = (char *)sh + hdrlen;
     fp = ((unsigned char *)s) - 1;
-    usable = usable - hdrlen - 1;
-
-#ifdef USE_JEMALLOC
-    assert(usable <= sdsTypeMaxSize(type));
-#else
-    if (usable > sdsTypeMaxSize(type))
-        usable = sdsTypeMaxSize(type);
-#endif
 
     switch (type) {
     case SDS_TYPE_5: {
@@ -245,7 +239,8 @@ sds _sdsMakeRoomFor(sds s, size_t addlen, int greedy) {
     size_t len, newlen, reqlen;
     char type, oldtype = s[-1] & SDS_TYPE_MASK;
     int hdrlen;
-    size_t usable;
+    size_t bufsize, usable;
+    int use_realloc, adjust_type;
 
     /* Return ASAP if there is enough space left. */
     if (avail >= addlen) return s;
@@ -270,28 +265,41 @@ sds _sdsMakeRoomFor(sds s, size_t addlen, int greedy) {
 
     hdrlen = sdsHdrSize(type);
     assert(hdrlen + newlen + 1 > reqlen); /* Catch size_t overflow */
-    if (oldtype == type) {
-        newsh = s_realloc_usable(sh, hdrlen + newlen + 1, &usable);
+    use_realloc = (oldtype == type);
+    if (use_realloc) {
+        newsh = s_realloc_usable(sh, hdrlen + newlen + 1, &bufsize);
         if (newsh == NULL) return NULL;
         s = (char *)newsh + hdrlen;
     } else {
         /* Since the header size changes, need to move the string forward,
          * and can't use realloc */
-        newsh = s_malloc_usable(hdrlen + newlen + 1, &usable);
+        newsh = s_malloc_usable(hdrlen + newlen + 1, &bufsize);
         if (newsh == NULL) return NULL;
-        memcpy((char *)newsh + hdrlen, s, len + 1);
-        s_free(sh);
+    }
+    usable = bufsize - hdrlen - 1;
+
+    /* Adjust type if usable won't fit into alloc. */
+    adjust_type = (type != SDS_TYPE_5 && usable > sdsTypeMaxSize(type));
+    if (adjust_type) {
+        type = sdsReqType(usable);
+        hdrlen = sdsHdrSize(type);
+        usable = bufsize - hdrlen - 1;
+        assert(usable <= sdsTypeMaxSize(type));
+    }
+
+    if (adjust_type || !use_realloc) {
+        if (use_realloc) {
+            /* if we use realloc newsh and s are overlapping */
+            memmove((char*)newsh + hdrlen, s, len + 1);
+        } else {
+            memcpy((char*)newsh + hdrlen, s, len + 1);
+            s_free(sh);
+        }
+
         s = (char *)newsh + hdrlen;
         s[-1] = type;
         sdssetlen(s, len);
     }
-    usable = usable - hdrlen - 1;
-#ifdef USE_JEMALLOC
-    assert(usable <= sdsTypeMaxSize(type));
-#else
-    if (usable > sdsTypeMaxSize(type))
-        usable = sdsTypeMaxSize(type);
-#endif
 
     sdssetalloc(s, usable);
     return s;
@@ -328,7 +336,7 @@ sds sdsRemoveFreeSpace(sds s, int would_regrow) {
  * allocation size, this is done in order to avoid repeated calls to this
  * function when the caller detects that it has excess space. */
 sds sdsResize(sds s, size_t size, int would_regrow) {
-    void *sh, *newsh;
+    void *sh, *newsh = NULL;
     char type, oldtype = s[-1] & SDS_TYPE_MASK;
     int hdrlen, oldhdrlen = sdsHdrSize(oldtype);
     size_t len = sdslen(s);
@@ -356,7 +364,8 @@ sds sdsResize(sds s, size_t size, int would_regrow) {
      * type. */
     int use_realloc = (oldtype == type || (type < oldtype && type > SDS_TYPE_8));
     size_t newlen = use_realloc ? oldhdrlen + size + 1 : hdrlen + size + 1;
-    size_t newsize = 0;
+    size_t bufsize = 0;
+    size_t newsize;
 
     if (use_realloc) {
         int alloc_already_optimal = 0;
@@ -365,33 +374,45 @@ sds sdsResize(sds s, size_t size, int would_regrow) {
          * We aim to avoid calling realloc() when using Jemalloc if there is no
          * change in the allocation size, as it incurs a cost even if the
          * allocation size stays the same. */
-        newsize = zmalloc_size(sh);
-        alloc_already_optimal = (je_nallocx(newlen, 0) == newsize);
+        bufsize = zmalloc_size(sh);
+        alloc_already_optimal = (je_nallocx(newlen, 0) == bufsize);
 #endif
         if (!alloc_already_optimal) {
-            newsh = s_realloc_usable(sh, newlen, &newsize);
+            newsh = s_realloc_usable(sh, newlen, &bufsize);
             if (newsh == NULL) return NULL;
             s = (char *)newsh + oldhdrlen;
-            newsize -= (oldhdrlen + 1);
         }
+        newsize = bufsize - oldhdrlen - 1;
     } else {
-        newsh = s_malloc_usable(newlen, &newsize);
+        newsh = s_malloc_usable(newlen, &bufsize);
         if (newsh == NULL) return NULL;
-        memcpy((char *)newsh + hdrlen, s, len);
-        s_free(sh);
+        newsize = bufsize - hdrlen - 1;
+    }
+
+    /* Adjust type if usable won't fit into alloc. */
+    int adjust_type = (type != SDS_TYPE_5 && newsize > sdsTypeMaxSize(type));
+    if (adjust_type) {
+        type = sdsReqType(newsize);
+        hdrlen = sdsHdrSize(type);
+        newsize = bufsize - hdrlen - 1;
+        assert(newsize <= sdsTypeMaxSize(type));
+    }
+
+    if (adjust_type || !use_realloc) {
+        if (use_realloc) {
+            /* if we use realloc newsh and s are overlapping */
+            memmove((char*)newsh + hdrlen, s, len + 1);
+        } else {
+            memcpy((char*)newsh + hdrlen, s, len + 1);
+            s_free(sh);
+        }
+
         s = (char *)newsh + hdrlen;
         s[-1] = type;
-        newsize -= (hdrlen + 1);
     }
+
     s[len] = '\0';
     sdssetlen(s, len);
-
-#ifdef USE_JEMALLOC
-    assert(newsize <= sdsTypeMaxSize(s[-1]));
-#else
-    if (newsize > sdsTypeMaxSize(s[-1])) newsize = sdsTypeMaxSize(s[-1]);
-#endif
-
     sdssetalloc(s, newsize);
     return s;
 }

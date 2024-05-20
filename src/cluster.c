@@ -1438,9 +1438,9 @@ sds generateClusterSlotResponse(void) {
         }
     }
     setDeferredArrayLen(recording_client, slot_replylen, num_masters);
-    sds cluster_slot_respose = aggregateClientOutputBuffer(recording_client);
+    sds cluster_slot_response = aggregateClientOutputBuffer(recording_client);
     deleteCachedResponseClient(recording_client);
-    return cluster_slot_respose;
+    return cluster_slot_response;
 }
 
 int verifyCachedClusterSlotsResponse(sds cached_response) {

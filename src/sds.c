@@ -378,6 +378,7 @@ sds sdsResize(sds s, size_t size, int would_regrow) {
     }
     s[len] = '\0';
     sdssetlen(s, len);
+    if (newsize > sdsTypeMaxSize(s[-1])) newsize = sdsTypeMaxSize(s[-1]);
     sdssetalloc(s, newsize);
     return s;
 }

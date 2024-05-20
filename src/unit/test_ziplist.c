@@ -213,10 +213,10 @@ int test_ziplistGetElementAtIndex3(int argc, char **argv, int flags) {
     UNUSED(flags);
     if (argc >= 4)
         srand(atoi(argv[3]));
-    zl = createList();
+    zl = createList(); /* "hello", "foo", "quux", "1024" */
     p = ziplistIndex(zl, 3);
     TEST_ASSERT(p != NULL);
-    TEST_ASSERT(ziplistGet(p, &entry, &elen, &value) == 1);
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"1024", 4));
     zfree(zl);
     return 0;
 }
@@ -236,10 +236,10 @@ int test_ziplistGetLastElement(int argc, char **argv, int flags) {
     UNUSED(flags);
     if (argc >= 4)
         srand(atoi(argv[3]));
-    zl = createList();
+    zl = createList(); /* "hello", "foo", "quux", "1024" */
     p = ziplistIndex(zl, -1);
     TEST_ASSERT(p != NULL);
-    TEST_ASSERT(ziplistGet(p, &entry, &elen, &value));
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"1024", 4));
     zfree(zl);
     return 0;
 }
@@ -248,10 +248,10 @@ int test_ziplistGetFirstElement(int argc, char **argv, int flags) {
     UNUSED(flags);
     if (argc >= 4)
         srand(atoi(argv[3]));
-    zl = createList();
+    zl = createList(); /* "hello", "foo", "quux", "1024" */
     p = ziplistIndex(zl, -4);
     TEST_ASSERT(p != NULL);
-    TEST_ASSERT(ziplistGet(p, &entry, &elen, &value));
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"hello", 5));
     zfree(zl);
     return 0;
 }
@@ -260,7 +260,7 @@ int test_ziplistGetElementOutOfRangeReverse(int argc, char **argv, int flags) {
     UNUSED(flags);
     if (argc >= 4)
         srand(atoi(argv[3]));
-    zl = createList();
+    zl = createList(); /* "hello", "foo", "quux", "1024" */
     p = ziplistIndex(zl, -5);
     TEST_ASSERT(p == NULL);
     zfree(zl);
@@ -353,9 +353,15 @@ int test_ziplistDeleteInclusiveRange0To0(int argc, char **argv, int flags) {
     UNUSED(flags);
     if (argc >= 4)
         srand(atoi(argv[3]));
-    zl = createList();
+    zl = createList(); /* "hello", "foo", "quux", "1024" */
+
+    p = ziplistIndex(zl, 0);
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"hello", 5));
     int orig_len = ziplistLen(zl);
+
     zl = ziplistDeleteRange(zl, 0, 1);
+
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"foo", 3));
     int new_len = ziplistLen(zl);
     TEST_ASSERT(orig_len - 1 == new_len);
     zfree(zl);
@@ -366,9 +372,20 @@ int test_ziplistDeleteInclusiveRange0To1(int argc, char **argv, int flags) {
     UNUSED(flags);
     if (argc >= 4)
         srand(atoi(argv[3]));
-    zl = createList();
+    zl = createList(); /* "hello", "foo", "quux", "1024" */
+
+    p = ziplistIndex(zl, 0);
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"hello", 5));
+    p = ziplistIndex(zl, 1);
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"foo", 3));
     int orig_len = ziplistLen(zl);
-    zl = ziplistDeleteRange(zl, 0, 2);
+
+    zl = ziplistDeleteRange(zl, 0, 2); /* "quux", "1024" */
+
+    p = ziplistIndex(zl, 0);
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"quux", 4));
+    p = ziplistIndex(zl, 1);
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"1024", 4));
     int new_len = ziplistLen(zl);
     TEST_ASSERT(orig_len - 2 == new_len);
     zfree(zl);
@@ -379,9 +396,18 @@ int test_ziplistDeleteInclusiveRange1To2(int argc, char **argv, int flags) {
     UNUSED(flags);
     if (argc >= 4)
         srand(atoi(argv[3]));
-    zl = createList();
+    zl = createList(); /* "hello", "foo", "quux", "1024" */
+
+    p = ziplistIndex(zl, 1);
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"foo", 3));
+    p = ziplistIndex(zl, 2);
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"quux", 4));
     int orig_len = ziplistLen(zl);
-    zl = ziplistDeleteRange(zl, 1, 2);
+
+    zl = ziplistDeleteRange(zl, 1, 2); /* "hello", "1024" */
+
+    p = ziplistIndex(zl, 1);
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"1024", 4));
     int new_len = ziplistLen(zl);
     TEST_ASSERT(orig_len - 2 == new_len);
     zfree(zl);
@@ -405,7 +431,8 @@ int test_ziplistDeleteWithNumOverflow(int argc, char **argv, int flags) {
     UNUSED(flags);
     if (argc >= 4)
         srand(atoi(argv[3]));
-    zl = createList();
+    zl = createList(); /* "hello", "foo", "quux", "1024" */
+
     int orig_len = ziplistLen(zl);
     zl = ziplistDeleteRange(zl, 1, 5);
     int new_len = ziplistLen(zl);
@@ -418,7 +445,7 @@ int test_ziplistDeleteFooWhileIterating(int argc, char **argv, int flags) {
     UNUSED(flags);
     if (argc >= 4)
         srand(atoi(argv[3]));
-    zl = createList();
+    zl = createList(); /* "hello", "foo", "quux", "1024" */
     p = ziplistIndex(zl, 0);
     while (ziplistGet(p, &entry, &elen, &value)) {
         TEST_ASSERT(p != NULL);
@@ -428,9 +455,10 @@ int test_ziplistDeleteFooWhileIterating(int argc, char **argv, int flags) {
             p = ziplistNext(zl, p);
         }
     }
-    p = ziplistIndex(zl, 0);
+    p = ziplistIndex(zl, 1);
     ziplistGet(p, &entry, &elen, &value);
-    TEST_ASSERT(strncmp("foo", (char *) entry, elen) != 0);
+    TEST_ASSERT(!ziplistCompare(p, (unsigned char *)"foo", 3));
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"quux", 4));
     zfree(zl);
     return 0;
 }

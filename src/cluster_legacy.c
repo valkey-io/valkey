@@ -5882,7 +5882,7 @@ void clusterUpdateSlots(client *c, unsigned char *slots, int del) {
     }
 }
 
-long long getNodeOffset(clusterNode *node) {
+long long getNodeReplicationOffset(clusterNode *node) {
     if (node->flags & CLUSTER_NODE_MYSELF) {
         return nodeIsSlave(node) ? replicationGetSlaveOffset() : server.master_repl_offset;
     } else {
@@ -5924,7 +5924,7 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
         reply_count++;
     }
 
-    long long node_offset = getNodeOffset(node);
+    long long node_offset = getNodeReplicationOffset(node);
 
     addReplyBulkCString(c, "role");
     addReplyBulkCString(c, nodeIsSlave(node) ? "replica" : "master");

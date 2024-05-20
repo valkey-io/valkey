@@ -2655,6 +2655,7 @@ int updateClusterFlags(const char **err) {
 static int updateClusterAnnouncedPort(const char **err) {
     UNUSED(err);
     clusterUpdateMyselfAnnouncedPorts();
+    clearCachedClusterSlotsResponse();
     return 1;
 }
 

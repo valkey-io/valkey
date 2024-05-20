@@ -321,7 +321,7 @@ int prepareClientToWrite(client *c) {
 
 /* Returns everything in the client reply linked list in a SDS format.
  * This should only be used only with a caching client. */
-static sds getClientOutputBuffer(client *c) {
+sds aggregateClientOutputBuffer(client *c) {
     sds cmd_response = sdsempty();
     listIter li;
     listNode *ln;
@@ -340,7 +340,7 @@ static sds getClientOutputBuffer(client *c) {
 /* This function creates and returns a fake client for recording the command response 
  * to initiate caching of any command response.
  *
- * It needs be paired with `stopCaching` function to stop caching. */
+ * It needs be paired with `deleteCachedResponseClient` function to stop caching. */
 client *createCachedResponseClient(void) {
     struct client *recording_client = createClient(NULL);
     /* Allocating the `conn` allows to prepare the caching client before adding
@@ -351,12 +351,10 @@ client *createCachedResponseClient(void) {
 
 /* This function is used to stop caching of any command response after `createCachedResponseClient` is called.
  * It returns the command response as SDS from the recording_client's reply buffer. */
-sds stopCaching(client *recording_client) {
+void deleteCachedResponseClient(client *recording_client) {
     zfree(recording_client->conn);
     recording_client->conn = NULL;
-    sds output_buff = getClientOutputBuffer(recording_client);
     freeClient(recording_client);
-    return output_buff;
 }
 
 /* -----------------------------------------------------------------------------

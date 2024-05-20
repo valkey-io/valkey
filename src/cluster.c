@@ -1376,7 +1376,7 @@ int isNodeAvailable(clusterNode *node) {
     if (clusterNodeIsMyself(node)) {
         /* Nodes do not update their own information
          * in the cluster node list. */
-        repl_offset = replicationGetSlaveOffset();
+        repl_offset = getNodeReplicationOffset(node);
     }
     return (repl_offset != 0);
 }
@@ -1438,15 +1438,18 @@ sds generateClusterSlotResponse(void) {
         }
     }
     setDeferredArrayLen(recording_client, slot_replylen, num_masters);
-    return stopCaching(recording_client);
+    sds cluster_slot_respose = aggregateClientOutputBuffer(recording_client);
+    deleteCachedResponseClient(recording_client);
+    return cluster_slot_respose;
 }
 
 int verifyCachedClusterSlotsResponse(sds cached_response) {
     sds generated_response = generateClusterSlotResponse();
-    int result = !sdscmp(generated_response, cached_response);
-    if (!result) serverLog(LL_WARNING,"\ngenerated_response:\n%s\n\ncached_response:\n%s", generated_response, cached_response);
+    int is_equal = !sdscmp(generated_response, cached_response);
+    /* Here, we use LL_WARNING so this gets printed when debug assertions are enabled and the system is about to crash. */
+    if (!is_equal) serverLog(LL_WARNING,"\ngenerated_response:\n%s\n\ncached_response:\n%s", generated_response, cached_response);
     sdsfree(generated_response);
-    return result;
+    return is_equal;
 }
 
 void clusterCommandSlots(client *c) {

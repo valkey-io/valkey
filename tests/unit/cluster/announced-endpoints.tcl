@@ -8,13 +8,16 @@ start_cluster 2 2 {tags {external:skip cluster}} {
         }
         set count [expr [llength $::servers] + 1]
         set used_port [find_available_port $baseport $count]
+        R 0 CLUSTER SLOTS
+        R 1 CLUSTER SLOTS
 
         R 0 config set cluster-announce-tls-port $used_port
         R 0 config set cluster-announce-port $used_port
 
         assert_match "*:$used_port@*" [R 0 CLUSTER NODES]
+        assert_match "*$used_port*" [R 0 CLUSTER SLOTS]
         wait_for_condition 50 100 {
-            [string match "*:$used_port@*" [R 1 CLUSTER NODES]]
+            ([string match "*:$used_port@*" [R 1 CLUSTER NODES]] && [string match "*$used_port*" [R 1 CLUSTER SLOTS]])
         } else {
             fail "Cluster announced port was not propagated via gossip"
         }

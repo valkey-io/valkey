@@ -106,7 +106,7 @@ clusterNode *clusterLookupNode(const char *name, int length);
 void clusterReplicateOpenSlots(void);
 int detectAndUpdateCachedNodeHealth(void);
 client *createCachedResponseClient(void);
-sds stopCaching(client *recording_client);
+void deleteCachedResponseClient(client *recording_client);
 void clearCachedClusterSlotsResponse(void);
 
 /* functions with shared implementations */
@@ -121,4 +121,6 @@ void migrateCommand(client *c);
 void clusterCommand(client *c);
 ConnectionType *connTypeOfCluster(void);
 int isNodeAvailable(clusterNode *node);
+long long getNodeReplicationOffset(clusterNode *node);
+sds aggregateClientOutputBuffer(client *c);
 #endif /* __CLUSTER_H */

@@ -41,8 +41,6 @@ static long long usec(void) {
 static void stress(int pos, int num, int maxsize, int dnum) {
     int i, j, k;
     unsigned char *zl;
-    char posstr[2][5] = {"HEAD", "TAIL"};
-    long long start;
     for (i = 0; i < maxsize; i += dnum) {
         zl = ziplistNew();
         for (j = 0; j < i; j++) {
@@ -50,13 +48,10 @@ static void stress(int pos, int num, int maxsize, int dnum) {
         }
 
         /* Do num times a push+pop from pos */
-        start = usec();
         for (k = 0; k < num; k++) {
             zl = ziplistPush(zl, (unsigned char *) "quux", 4, pos);
             zl = ziplistDeleteRange(zl, 0, 1);
         }
-        printf("List size: %8d, bytes: %8d, %dx push+pop (%s): %6lld usec\n",
-               i, intrev32ifbe(ZIPLIST_BYTES(zl)), num, posstr[pos], usec() - start);
         zfree(zl);
     }
 }
@@ -70,7 +65,6 @@ static unsigned char *pop(unsigned char *zl, int where) {
     if (ziplistGet(p, &vstr, &vlen, &vlong)) {
         return ziplistDelete(zl, &p);
     } else {
-        printf("ERROR: Could not pop\n");
         exit(1);
     }
 }
@@ -840,8 +834,11 @@ int test_ziplistStressWithVariableSize(int argc, char **argv, int flags) {
     unsigned long long start = usec();
     int maxsize = accurate ? 16384 : 16;
     stress(ZIPLIST_HEAD, 100000, maxsize, 256);
+    TEST_PRINT_INFO("Stress with variable size HEAD: usec=%lld", usec() - start);
+
+    start = usec();
     stress(ZIPLIST_TAIL, 100000, maxsize, 256);
-    TEST_PRINT_INFO("Done. usec=%lld", usec() - start);
+    TEST_PRINT_INFO("Stress with variable size TAIL: usec=%lld", usec() - start);
 
     return 0;
 }
@@ -1016,7 +1013,7 @@ int test_ziplistStress__ziplistCascadeUpdate(int argc, char **argv, int flags) {
     }
     unsigned long long start = usec();
     zl = ziplistPush(zl, (unsigned char *) data, ZIP_BIG_PREVLEN - 3, ZIPLIST_HEAD);
-    TEST_PRINT_INFO("Done: usec=%lld", usec() - start);
+    TEST_PRINT_INFO("Stress __ziplistCascadeUpdate: usec=%lld", usec() - start);
 
 
     zfree(zl);

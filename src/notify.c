@@ -42,6 +42,7 @@ int keyspaceEventsStringToFlags(char *classes) {
     int c, flags = 0;
 
     while((c = *p++) != '\0') {
+        /* clang-format off */
         switch(c) {
         case 'A': flags |= NOTIFY_ALL; break;
         case 'g': flags |= NOTIFY_GENERIC; break;
@@ -60,6 +61,7 @@ int keyspaceEventsStringToFlags(char *classes) {
         case 'n': flags |= NOTIFY_NEW; break;
         default: return -1;
         }
+        /* clang-format on */
     }
     return flags;
 }
@@ -71,6 +73,7 @@ int keyspaceEventsStringToFlags(char *classes) {
 sds keyspaceEventsFlagsToString(int flags) {
     sds res;
 
+    /* clang-format off */
     res = sdsempty();
     if ((flags & NOTIFY_ALL) == NOTIFY_ALL) {
         res = sdscatlen(res,"A",1);
@@ -91,6 +94,7 @@ sds keyspaceEventsFlagsToString(int flags) {
     if (flags & NOTIFY_KEYEVENT) res = sdscatlen(res,"E",1);
     if (flags & NOTIFY_KEY_MISS) res = sdscatlen(res,"m",1);
     return res;
+    /* clang-format on */
 }
 
 /* The API provided to the rest of the serer core is a simple function:

@@ -2999,6 +2999,7 @@ static void parseEnv(void) {
 static void usage(int err) {
     sds version = cliVersion();
     FILE *target = err ? stderr: stdout;
+    /* clang-format off */
     const char *tls_usage =
 #ifdef USE_OPENSSL
 "  --tls              Establish a secure TLS connection.\n"
@@ -3146,6 +3147,7 @@ version,tls_usage);
 "Type \"help\" in interactive mode for information on available commands\n"
 "and settings.\n"
 "\n");
+    /* clang-format on */
     sdsfree(version);
     exit(err);
 }
@@ -5239,13 +5241,30 @@ static int clusterManagerMoveSlot(clusterManagerNode *source,
         /* Inform the source node. If the source node has just lost its last
          * slot and the target node has already informed the source node, the
          * source node has turned itself into a replica. This is not an error in
-         * this scenario so we ignore it. See issue #9223. */
+         * this scenario so we ignore it. See issue #9223.
+         *
+         * Another acceptable error can arise now that the primary pre-replicates
+         * `cluster setslot` commands to replicas while blocking the client on the
+         * primary. This change enhances the reliability of `cluster setslot` in
+         * the face of primary failures. However, while our client is blocked on
+         * the primary awaiting replication, the primary might become a replica
+         * for the same reason as mentioned above, resulting in the client being
+         * unblocked with the role change error. */
         success = clusterManagerSetSlot(source, target, slot, "node", err);
-        const char *acceptable = "ERR Please use SETSLOT only with masters.";
-        if (!success && err && !strncmp(*err, acceptable, strlen(acceptable))) {
-            zfree(*err);
-            *err = NULL;
-        } else if (!success && err) {
+        if (!success && err) {
+            const char *acceptable[] = {
+                "ERR Please use SETSLOT only with masters.",
+                "UNBLOCKED"};
+            for (size_t i = 0; i < sizeof(acceptable)/sizeof(acceptable[0]); i++) {
+                if (!strncmp(*err, acceptable[i], strlen(acceptable[i]))) {
+                    zfree(*err);
+                    *err = NULL;
+                    success = 1;
+                    break;
+                }
+            }
+        }
+        if (!success && err) {
             return 0;
         }
 
@@ -5388,6 +5407,7 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts,
             *p = '\0';
             char *token = line;
             line = p + 1;
+            /* clang-format off */
             switch(i++){
             case 0: name = token; break;
             case 1: addr = token; break;
@@ -5398,6 +5418,7 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts,
             case 6: config_epoch = token; break;
             case 7: link_status = token; break;
             }
+            /* clang-format on */
             if (i == 8) break; // Slots
         }
         if (!flags) {

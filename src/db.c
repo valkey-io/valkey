@@ -885,11 +885,10 @@ void scanCallback(void *privdata, const dictEntry *de) {
     serverAssert(!((data->type != LLONG_MAX) && o));
 
     /* Filter an element if it isn't the type we want. */
-    /* TODO: uncomment in version 8.0
     if (!o && data->type != LLONG_MAX) {
         robj *rval = dictGetVal(de);
         if (!objectTypeCompare(rval, data->type)) return;
-    }*/
+    }
 
     /* Filter element if it does not match the pattern. */
     sds keysds = dictGetKey(de);
@@ -1034,9 +1033,8 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             typename = c->argv[i+1]->ptr;
             type = getObjectTypeByName(typename);
             if (type == LLONG_MAX) {
-                /* TODO: uncomment in version 8.0
                 addReplyErrorFormat(c, "unknown type name '%s'", typename);
-                return; */
+                return;
             }
             i+= 2;
         } else if (!strcasecmp(c->argv[i]->ptr, "novalues")) {
@@ -1195,15 +1193,6 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
         while ((ln = listNext(&li))) {
             sds key = listNodeValue(ln);
             initStaticStringObject(kobj, key);
-            /* Filter an element if it isn't the type we want. */
-            /* TODO: remove this in version 8.0 */
-            if (typename) {
-                robj* typecheck = lookupKeyReadWithFlags(c->db, &kobj, LOOKUP_NOTOUCH|LOOKUP_NONOTIFY);
-                if (!typecheck || !objectTypeCompare(typecheck, type)) {
-                    listDelNode(keys, ln);
-                }
-                continue;
-            }
             if (expireIfNeeded(c->db, &kobj, 0) != KEY_VALID) {
                 listDelNode(keys, ln);
             }
@@ -2083,7 +2072,9 @@ int getKeysUsingKeySpecs(struct serverCommand *cmd, robj **argv, int argc, int s
                 if (cmd->flags & CMD_MODULE || cmd->arity < 0) {
                     continue;
                 } else {
-                    serverPanic("Redis built-in command declared keys positions not matching the arity requirements.");
+                    serverPanic("%s built-in command declared keys positions"
+                        " not matching the arity requirements.",
+                        server.extended_redis_compat ? "Redis" : "Valkey");
                 }
             }
             keys[result->numkeys].pos = i;
@@ -2276,7 +2267,9 @@ int getKeysUsingLegacyRangeSpec(struct serverCommand *cmd, robj **argv, int argc
                 result->numkeys = 0;
                 return 0;
             } else {
-                serverPanic("Redis built-in command declared keys positions not matching the arity requirements.");
+                serverPanic("%s built-in command declared keys positions"
+                    " not matching the arity requirements.",
+                    server.extended_redis_compat ? "Redis" : "Valkey");
             }
         }
         keys[i].pos = j;

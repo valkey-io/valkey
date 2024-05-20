@@ -41,7 +41,6 @@
 #include <sys/wait.h>
 #include <sys/param.h>
 
-void freeClientArgv(client *c);
 off_t getAppendOnlyFileSize(sds filename, int *status);
 off_t getBaseAndIncrAppendOnlyFilesSize(aofManifest *am, int *status);
 int getBaseAndIncrAppendOnlyFilesNum(aofManifest *am);
@@ -701,7 +700,6 @@ void aofDelTempIncrAofFile(void) {
     bg_unlink(aof_filepath);
     sdsfree(aof_filepath);
     sdsfree(aof_filename);
-    return;
 }
 
 /* Called after `loadDataFromDisk` when the server starts. If `server.aof_state` is
@@ -2035,6 +2033,7 @@ int rioWriteStreamPendingEntry(rio *r, robj *key, const char *groupname, size_t 
                RETRYCOUNT <count> JUSTID FORCE. */
     streamID id;
     streamDecodeID(rawid,&id);
+    /* clang-format off */
     if (rioWriteBulkCount(r,'*',12) == 0) return 0;
     if (rioWriteBulkString(r,"XCLAIM",6) == 0) return 0;
     if (rioWriteBulkObject(r,key) == 0) return 0;
@@ -2048,6 +2047,7 @@ int rioWriteStreamPendingEntry(rio *r, robj *key, const char *groupname, size_t 
     if (rioWriteBulkLongLong(r,nack->delivery_count) == 0) return 0;
     if (rioWriteBulkString(r,"JUSTID",6) == 0) return 0;
     if (rioWriteBulkString(r,"FORCE",5) == 0) return 0;
+    /* clang-format on */
     return 1;
 }
 
@@ -2056,12 +2056,14 @@ int rioWriteStreamPendingEntry(rio *r, robj *key, const char *groupname, size_t 
  * All this in the context of the specified key and group. */
 int rioWriteStreamEmptyConsumer(rio *r, robj *key, const char *groupname, size_t groupname_len, streamConsumer *consumer) {
     /* XGROUP CREATECONSUMER <key> <group> <consumer> */
+    /* clang-format off */
     if (rioWriteBulkCount(r,'*',5) == 0) return 0;
     if (rioWriteBulkString(r,"XGROUP",6) == 0) return 0;
     if (rioWriteBulkString(r,"CREATECONSUMER",14) == 0) return 0;
     if (rioWriteBulkObject(r,key) == 0) return 0;
     if (rioWriteBulkString(r,groupname,groupname_len) == 0) return 0;
     if (rioWriteBulkString(r,consumer->name,sdslen(consumer->name)) == 0) return 0;
+    /* clang-format on */
     return 1;
 }
 

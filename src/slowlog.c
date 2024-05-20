@@ -38,8 +38,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
-#include "server.h"
 #include "slowlog.h"
 
 /* Create a new slowlog entry.
@@ -141,6 +139,7 @@ void slowlogReset(void) {
  * slow log. */
 void slowlogCommand(client *c) {
     if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
+        /* clang-format off */
         const char *help[] = {
 "GET [<count>]",
 "    Return top <count> entries from the slowlog (default: 10, -1 mean all).",
@@ -153,6 +152,7 @@ void slowlogCommand(client *c) {
 "    Reset the slowlog.",
 NULL
         };
+        /* clang-format on */
         addReplyHelp(c, help);
     } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"reset")) {
         slowlogReset();

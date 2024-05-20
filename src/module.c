@@ -1143,6 +1143,7 @@ int64_t commandFlagsFromString(char *s) {
     sds *tokens = sdssplitlen(s,strlen(s)," ",1,&count);
     for (j = 0; j < count; j++) {
         char *t = tokens[j];
+        /* clang-format off */
         if (!strcasecmp(t,"write")) flags |= CMD_WRITE;
         else if (!strcasecmp(t,"readonly")) flags |= CMD_READONLY;
         else if (!strcasecmp(t,"admin")) flags |= CMD_ADMIN;
@@ -1164,6 +1165,7 @@ int64_t commandFlagsFromString(char *s) {
         else if (!strcasecmp(t,"no-mandatory-keys")) flags |= CMD_NO_MANDATORY_KEYS;
         else if (!strcasecmp(t,"allow-busy")) flags |= CMD_ALLOW_BUSY;
         else break;
+        /* clang-format on */
     }
     sdsfreesplitres(tokens,count);
     if (j != count) return -1; /* Some token not processed correctly. */
@@ -9015,7 +9017,7 @@ void VM_FreeClusterNodesList(char **ids) {
  * is disabled. */
 const char *VM_GetMyClusterID(void) {
     if (!server.cluster_enabled) return NULL;
-    return getMyClusterId();
+    return clusterNodeGetName(getMyClusterNode());
 }
 
 /* Return the number of nodes in the cluster, regardless of their state
@@ -9062,8 +9064,8 @@ int VM_GetClusterNodeInfo(ValkeyModuleCtx *ctx, const char *id, char *ip, char *
         /* If the information is not available, the function will set the
          * field to zero bytes, so that when the field can't be populated the
          * function kinda remains predictable. */
-        if (clusterNodeIsSlave(node) && clusterNodeGetSlaveof(node))
-            memcpy(master_id, clusterNodeGetName(clusterNodeGetSlaveof(node)) ,VALKEYMODULE_NODE_ID_LEN);
+        if (clusterNodeIsSlave(node) && clusterNodeGetMaster(node))
+            memcpy(master_id, clusterNodeGetName(clusterNodeGetMaster(node)) ,VALKEYMODULE_NODE_ID_LEN);
         else
             memset(master_id,0,VALKEYMODULE_NODE_ID_LEN);
     }
@@ -10447,7 +10449,7 @@ ValkeyModuleServerInfoData *VM_GetServerInfo(ValkeyModuleCtx *ctx, const char *s
     robj *argv[1];
     argv[0] = section ? createStringObject(section, strlen(section)) : NULL;
     dict *section_dict = genInfoSectionDict(argv, section ? 1 : 0, NULL, &all, &everything);
-    sds info = genRedisInfoString(section_dict, all, everything);
+    sds info = genValkeyInfoString(section_dict, all, everything);
     int totlines, i;
     sds *lines = sdssplitlen(info, sdslen(info), "\r\n", 2, &totlines);
     for(i=0; i<totlines; i++) {
@@ -11251,7 +11253,11 @@ int VM_Fork(ValkeyModuleForkDoneHandler cb, void *user_data) {
 
     if ((childpid = serverFork(CHILD_TYPE_MODULE)) == 0) {
         /* Child */
-        serverSetProcTitle("redis-module-fork");
+        if (strstr(server.exec_argv[0],"redis-server") != NULL) {
+            serverSetProcTitle("redis-module-fork");
+        } else {
+            serverSetProcTitle("valkey-module-fork");
+        }
     } else if (childpid == -1) {
         serverLog(LL_WARNING,"Can't fork for module: %s", strerror(errno));
     } else {

@@ -4,7 +4,6 @@
 
 #include "../config.h"
 #include "../util.h"
-#undef UNUSED
 #include "test_help.h"
 
 int test_string2ll(int argc, char **argv, int flags) {
@@ -267,12 +266,14 @@ static int cache_exist(int fd) {
      * page is currently resident in memory */
     return flag&1;
 }
+#endif
 
 int test_reclaimFilePageCache(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
 
+#if defined(__linux__)
     char *tmpfile = "/tmp/redis-reclaim-cache-test";
     int fd = open(tmpfile, O_RDWR|O_CREAT, 0644);
     TEST_ASSERT(fd >= 0);
@@ -292,8 +293,6 @@ int test_reclaimFilePageCache(int argc, char **argv, int flags) {
     TEST_ASSERT(!cache_exist(fd));
 
     unlink(tmpfile);
-    printf("reclaimFilePageCache test is ok\n");
-
+#endif
     return 0;
 }
-#endif

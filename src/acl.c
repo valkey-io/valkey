@@ -44,7 +44,7 @@ user *DefaultUser;  /* Global reference to the default user.
                        different user. */
 
 list *UsersToLoad;  /* This is a list of users found in the configuration file
-                       that we'll need to load in the final stage of Redis
+                       that we'll need to load in the final stage of the server
                        initialization, after all the modules are already
                        loaded. Every list element is a NULL terminated
                        array of SDS pointers: the first is the user name,
@@ -1601,10 +1601,12 @@ static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keyle
     listRewind(selector->patterns,&li);
 
     int key_flags = 0;
+    /* clang-format off */
     if (keyspec_flags & CMD_KEY_ACCESS) key_flags |= ACL_READ_PERMISSION;
     if (keyspec_flags & CMD_KEY_INSERT) key_flags |= ACL_WRITE_PERMISSION;
     if (keyspec_flags & CMD_KEY_DELETE) key_flags |= ACL_WRITE_PERMISSION;
     if (keyspec_flags & CMD_KEY_UPDATE) key_flags |= ACL_WRITE_PERMISSION;
+    /* clang-format on */
 
     /* Test this key against every pattern. */
     while((ln = listNext(&li))) {
@@ -1632,10 +1634,12 @@ static int ACLSelectorHasUnrestrictedKeyAccess(aclSelector *selector, int flags)
     listRewind(selector->patterns,&li);
 
     int access_flags = 0;
+    /* clang-format off */
     if (flags & CMD_KEY_ACCESS) access_flags |= ACL_READ_PERMISSION;
     if (flags & CMD_KEY_INSERT) access_flags |= ACL_WRITE_PERMISSION;
     if (flags & CMD_KEY_DELETE) access_flags |= ACL_WRITE_PERMISSION;
     if (flags & CMD_KEY_UPDATE) access_flags |= ACL_WRITE_PERMISSION;
+    /* clang-format on */
 
     /* Test this key against every pattern. */
     while((ln = listNext(&li))) {
@@ -2700,13 +2704,15 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
     if (object) {
         le->object = object;
     } else {
+        /* clang-format off */
         switch(reason) {
-            case ACL_DENIED_CMD: le->object = sdsdup(c->cmd->fullname); break;
-            case ACL_DENIED_KEY: le->object = sdsdup(c->argv[argpos]->ptr); break;
-            case ACL_DENIED_CHANNEL: le->object = sdsdup(c->argv[argpos]->ptr); break;
-            case ACL_DENIED_AUTH: le->object = sdsdup(c->argv[0]->ptr); break;
-            default: le->object = sdsempty();
+        case ACL_DENIED_CMD: le->object = sdsdup(c->cmd->fullname); break;
+        case ACL_DENIED_KEY: le->object = sdsdup(c->argv[argpos]->ptr); break;
+        case ACL_DENIED_CHANNEL: le->object = sdsdup(c->argv[argpos]->ptr); break;
+        case ACL_DENIED_AUTH: le->object = sdsdup(c->argv[0]->ptr); break;
+        default: le->object = sdsempty();
         }
+        /* clang-format on */
     }
 
     /* if we have a real client from the network, use it (could be missing on module timers) */
@@ -3090,6 +3096,7 @@ void aclCommand(client *c) {
 
             addReplyBulkCString(c,"reason");
             char *reasonstr;
+            /* clang-format off */
             switch(le->reason) {
             case ACL_DENIED_CMD: reasonstr="command"; break;
             case ACL_DENIED_KEY: reasonstr="key"; break;
@@ -3097,10 +3104,12 @@ void aclCommand(client *c) {
             case ACL_DENIED_AUTH: reasonstr="auth"; break;
             default: reasonstr="unknown";
             }
+            /* clang-format on */
             addReplyBulkCString(c,reasonstr);
 
             addReplyBulkCString(c,"context");
             char *ctxstr;
+            /* clang-format off */
             switch(le->context) {
             case ACL_LOG_CTX_TOPLEVEL: ctxstr="toplevel"; break;
             case ACL_LOG_CTX_MULTI: ctxstr="multi"; break;
@@ -3108,6 +3117,7 @@ void aclCommand(client *c) {
             case ACL_LOG_CTX_MODULE: ctxstr="module"; break;
             default: ctxstr="unknown";
             }
+            /* clang-format on */
             addReplyBulkCString(c,ctxstr);
 
             addReplyBulkCString(c,"object");
@@ -3156,6 +3166,7 @@ void aclCommand(client *c) {
 
         addReply(c,shared.ok);
     } else if (c->argc == 2 && !strcasecmp(sub,"help")) {
+        /* clang-format off */
         const char *help[] = {
 "CAT [<category>]",
 "    List all commands that belong to <category>, or all command categories",
@@ -3185,6 +3196,7 @@ void aclCommand(client *c) {
 "    Return the current connection username.",
 NULL
         };
+        /* clang-format on */
         addReplyHelp(c,help);
     } else {
         addReplySubcommandSyntaxError(c);

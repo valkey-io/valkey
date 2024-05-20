@@ -2813,6 +2813,7 @@ sds catClientInfoString(sds s, client *client) {
         else
             *p++ = 'S';
     }
+    /* clang-format off */
     if (client->flags & CLIENT_MASTER) *p++ = 'M';
     if (client->flags & CLIENT_PUBSUB) *p++ = 'P';
     if (client->flags & CLIENT_MULTI) *p++ = 'x';
@@ -2829,6 +2830,7 @@ sds catClientInfoString(sds s, client *client) {
     if (client->flags & CLIENT_NO_EVICT) *p++ = 'e';
     if (client->flags & CLIENT_NO_TOUCH) *p++ = 'T';
     if (p == flags) *p++ = 'N';
+    /* clang-format on */
     *p++ = '\0';
 
     p = events;
@@ -2848,6 +2850,7 @@ sds catClientInfoString(sds s, client *client) {
         used_blocks_of_repl_buf = last->id - cur->id + 1;
     }
 
+    /* clang-format off */
     sds ret = sdscatfmt(s, FMTARGS(
         "id=%U", (unsigned long long) client->id,
         " addr=%s", getClientPeerId(client),
@@ -2883,6 +2886,7 @@ sds catClientInfoString(sds s, client *client) {
         " tot-net-in=%U", client->net_input_bytes,
         " tot-net-out=%U", client->net_output_bytes,
         " tot-cmds=%U", client->commands_processed));
+    /* clang-format on */
     return ret;
 }
 
@@ -3025,6 +3029,7 @@ void clientCommand(client *c) {
     listIter li;
 
     if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"help")) {
+        /* clang-format off */
         const char *help[] = {
 "CACHING (YES|NO)",
 "    Enable/disable tracking of the keys for next command in OPTIN/OPTOUT modes.",
@@ -3083,6 +3088,7 @@ void clientCommand(client *c) {
 "    Will not touch LRU/LFU stats when this mode is on.",
 NULL
         };
+        /* clang-format on */
         addReplyHelp(c, help);
     } else if (!strcasecmp(c->argv[1]->ptr,"id") && c->argc == 2) {
         /* CLIENT ID */
@@ -3242,6 +3248,7 @@ NULL
         listRewind(server.clients,&li);
         while ((ln = listNext(&li)) != NULL) {
             client *client = listNodeValue(ln);
+            /* clang-format off */
             if (addr && strcmp(getClientPeerId(client),addr) != 0) continue;
             if (laddr && strcmp(getClientSockname(client),laddr) != 0) continue;
             if (type != -1 && getClientType(client) != type) continue;
@@ -3249,6 +3256,7 @@ NULL
             if (user && client->user != user) continue;
             if (c == client && skipme) continue;
             if (max_age != 0 && (long long)(commandTimeSnapshot() / 1000 - client->ctime) < max_age) continue;
+            /* clang-format on */
 
             /* Kill it. */
             if (c == client) {

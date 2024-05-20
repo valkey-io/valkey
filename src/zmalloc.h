@@ -31,6 +31,8 @@
 #ifndef __ZMALLOC_H
 #define __ZMALLOC_H
 
+#include <stddef.h>
+
 /* Double expansion needed for stringification of macro values. */
 #define __xstr(s) __str(s)
 #define __str(s) #s
@@ -167,9 +169,5 @@ __attribute__((alloc_size(2),noinline)) void *extend_to_usable(void *ptr, size_t
 #endif
 
 int get_proc_stat_ll(int i, long long *res);
-
-#ifdef SERVER_TEST
-int zmalloc_test(int argc, char **argv, int flags);
-#endif
 
 #endif /* __ZMALLOC_H */

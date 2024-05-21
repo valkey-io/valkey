@@ -287,9 +287,19 @@ start_server {tags {"info" "external:skip"}} {
             # Validate that non LUA errors continue to be tracked even when we have >=128 entries.
             assert_error {ERR syntax error} {r set a b c d e f g}
             assert_equal "count=1" [errorstat ERR]
-            assert_error "My error message" {r eval {return server.error_reply(string.format('My error message'))} 0}
+            # Test LUA error variants.
+            assert_error "My error message" {r eval {return server.error_reply('My error message')} 0}
             assert_error "My error message" {r eval {return {err = 'My error message'}} 0}
             assert_equal "count=974" [errorstat LUA_ERRORSTATS_OVERFLOW]
+            # Function calls that contain custom error messages should call be included in overflow counter
+            r FUNCTION LOAD replace [format "#!lua name=mylib\nserver.register_function('customerrorfn', function() return server.error_reply('My error message') end)"]
+            assert_error "My error message" {r fcall customerrorfn 0}
+            assert_equal "count=975" [errorstat LUA_ERRORSTATS_OVERFLOW]
+            # Function calls that contain non lua errors should continue to be tracked normally (in a separate counter).
+            r FUNCTION LOAD replace [format "#!lua name=mylib\nserver.register_function('invalidgetcmd', function() return server.call('get', 'x', 'x', 'x') end)"]
+            assert_error "ERR Wrong number of args*" {r fcall invalidgetcmd 0}
+            assert_equal "count=975" [errorstat LUA_ERRORSTATS_OVERFLOW]
+            assert_equal "count=2" [errorstat ERR]
         }
 
         test {stats: eventloop metrics} {

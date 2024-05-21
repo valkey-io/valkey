@@ -2976,8 +2976,12 @@ int clusterProcessPacket(clusterLink *link) {
 
     /* Validate that the packet is well-formed */
     if (!clusterIsValidPacket(link)) {
-        if (server.cluster_close_link_on_packet_drop) {
+        clusterMsg *hdr = (clusterMsg*) link->rcvbuf;
+        uint16_t type = ntohs(hdr->type);
+        if (server.debug_cluster_close_link_on_packet_drop &&
+            type == server.cluster_drop_packet_filter) {
             freeClusterLink(link);
+            serverLog(LL_WARNING, "Closing link for matching packet type %hu", type);
             return 0;
         }
         return 1;
@@ -3098,6 +3102,9 @@ int clusterProcessPacket(clusterLink *link) {
         if (sender && (sender->flags & CLUSTER_NODE_MEET)) {
             /* Once we get a response for MEET from the sender, we can stop sending more MEET. */
             sender->flags &= ~CLUSTER_NODE_MEET;
+            serverLog(LL_NOTICE,
+                      "Successfully completed handshake with %.40s (%s)",
+                      sender->name, sender->human_nodename);
         }
 
         if (!link->inbound) {
@@ -3625,16 +3632,16 @@ void clusterLinkConnectHandler(connection *conn) {
          * replaced by the clusterSendPing() call. */
         node->ping_sent = old_ping_sent;
     }
-    /* NOTE: We cannot clear the MEET flag from the node until we get a response
-     * from the other node. If the MEET packet is not accepted by the other node
-     * due to link failure, we want to continue sending MEET. If we don't
-     * continue sending MEET, this node will know about the other node, but the
-     * other node will never add this node. Every node always responds to PINGs
-     * from unknown nodes with a PONG, so this node will know about the other
-     * node and continue sending PINGs. But the other node won't add this node
-     * until it sees a MEET (or it gets to know about this node from a trusted
-     * third node). In this case, clearing the MEET flag here leads to asymmetry
-     * in the cluster membership.
+    /* NOTE: Assume the current node is A and is asked to MEET another node B.
+     * Once A sends MEET to B, it cannot clear the MEET flag for B until it
+     * gets a response from B. If the MEET packet is not accepted by B due to
+     * link failure, A must continue sending MEET. If A doesn't continue sending
+     * MEET, A will know about B, but B will never add A. Every node always
+     * responds to PINGs from unknown nodes with a PONG, so A will know about B
+     * and continue sending PINGs. But B won't add A until it sees a MEET (or it
+     * gets to know about A from a trusted third node C). In this case, clearing
+     * the MEET flag here leads to asymmetry in the cluster membership. So, we
+     * clear the MEET flag in clusterProcessPacket.
      */
     serverLog(LL_DEBUG,"Connecting with Node %.40s at %s:%d",
             node->name, node->ip, node->cport);

@@ -34,7 +34,7 @@ tags {tls:skip external:skip cluster} {
             cluster_allocate_slots 2 0
         }
 
-        test "MEET is reliabile when target drops the initial MEETs" {
+        test "MEET is reliable when target drops the initial MEETs" {
             # Make 0 drop the initial MEET messages due to link failure
             R 0 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_MEET
             R 0 DEBUG CLOSE-CLUSTER-LINK-ON-PACKET-DROP 1

@@ -121,7 +121,14 @@ sds _sdsnewlen(const void *init, size_t initlen, int trymalloc) {
     s = (char *)sh + hdrlen;
     fp = ((unsigned char *)s) - 1;
     usable = usable - hdrlen - 1;
+
+#ifdef USE_JEMALLOC
     assert(usable <= sdsTypeMaxSize(type));
+#else
+    if (usable > sdsTypeMaxSize(type))
+        usable = sdsTypeMaxSize(type);
+#endif
+
     switch (type) {
     case SDS_TYPE_5: {
         *fp = type | (initlen << SDS_TYPE_BITS);
@@ -279,7 +286,13 @@ sds _sdsMakeRoomFor(sds s, size_t addlen, int greedy) {
         sdssetlen(s, len);
     }
     usable = usable - hdrlen - 1;
+#ifdef USE_JEMALLOC
     assert(usable <= sdsTypeMaxSize(type));
+#else
+    if (usable > sdsTypeMaxSize(type))
+        usable = sdsTypeMaxSize(type);
+#endif
+
     sdssetalloc(s, usable);
     return s;
 }
@@ -372,7 +385,13 @@ sds sdsResize(sds s, size_t size, int would_regrow) {
     }
     s[len] = '\0';
     sdssetlen(s, len);
+
+#ifdef USE_JEMALLOC
+    assert(newsize <= sdsTypeMaxSize(s[-1]));
+#else
     if (newsize > sdsTypeMaxSize(s[-1])) newsize = sdsTypeMaxSize(s[-1]);
+#endif
+
     sdssetalloc(s, newsize);
     return s;
 }

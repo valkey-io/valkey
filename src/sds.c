@@ -53,6 +53,20 @@ static inline int sdsHdrSize(char type) {
     return 0;
 }
 
+static inline size_t sdsTypeMaxSize(char type);
+
+static inline char sdsReqType(size_t string_size) {
+    if (string_size <= sdsTypeMaxSize(SDS_TYPE_5)) return SDS_TYPE_5;
+    if (string_size <= sdsTypeMaxSize(SDS_TYPE_8)) return SDS_TYPE_8;
+    if (string_size <= sdsTypeMaxSize(SDS_TYPE_16)) return SDS_TYPE_16;
+#if (LONG_MAX == LLONG_MAX)
+    if (string_size <= sdsTypeMaxSize(SDS_TYPE_32)) return SDS_TYPE_32;
+    return SDS_TYPE_64;
+#else
+    return SDS_TYPE_32;
+#endif
+}
+
 /* Returns the maximum len and alloc for a given type.
  *
  * The buffer includes header and null terminator. The total buffer size must be
@@ -69,28 +83,6 @@ static inline size_t sdsTypeMaxSize(char type) {
 #if (LONG_MAX == LLONG_MAX)
     if (type == SDS_TYPE_32)
         return (1ll<<32) - sizeof(struct sdshdr32) - 1;
-#endif
-    return -1; /* this is equivalent to the max SDS_TYPE_64 or SDS_TYPE_32 */
-}
-
-static inline char sdsReqType(size_t string_size) {
-    if (string_size <= sdsTypeMaxSize(SDS_TYPE_5)) return SDS_TYPE_5;
-    if (string_size <= sdsTypeMaxSize(SDS_TYPE_8)) return SDS_TYPE_8;
-    if (string_size <= sdsTypeMaxSize(SDS_TYPE_16)) return SDS_TYPE_16;
-#if (LONG_MAX == LLONG_MAX)
-    if (string_size <= sdsTypeMaxSize(SDS_TYPE_32)) return SDS_TYPE_32;
-    return SDS_TYPE_64;
-#else
-    return SDS_TYPE_32;
-#endif
-}
-
-static inline size_t sdsTypeMaxSize(char type) {
-    if (type == SDS_TYPE_5) return (1 << 5) - 1;
-    if (type == SDS_TYPE_8) return (1 << 8) - 1;
-    if (type == SDS_TYPE_16) return (1 << 16) - 1;
-#if (LONG_MAX == LLONG_MAX)
-    if (type == SDS_TYPE_32) return (1ll << 32) - 1;
 #endif
     return -1; /* this is equivalent to the max SDS_TYPE_64 or SDS_TYPE_32 */
 }

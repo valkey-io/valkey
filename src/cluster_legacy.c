@@ -762,6 +762,7 @@ void clusterSaveConfigOrDie(int do_fsync) {
         serverLog(LL_WARNING,"Fatal: can't update cluster config file.");
         exit(1);
     }
+    clearCachedClusterSlotsResponse();
 }
 
 /* Lock the cluster config using flock(), and retain the file descriptor used to
@@ -890,7 +891,6 @@ void clusterUpdateMyselfIp(void) {
         } else {
             myself->ip[0] = '\0'; /* Force autodetection. */
         }
-        clearCachedClusterSlotsResponse();
     }
 }
 
@@ -908,7 +908,6 @@ static void updateAnnouncedHostname(clusterNode *node, char *new) {
     } else if (sdslen(node->hostname) != 0) {
         sdsclear(node->hostname);
     }
-    clearCachedClusterSlotsResponse();
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
@@ -1502,7 +1501,6 @@ int clusterNodeAddSlave(clusterNode *master, clusterNode *slave) {
     master->numslaves++;
     qsort(master->slaves, master->numslaves, sizeof(clusterNode *), clusterNodeNameComparator);
     master->flags |= CLUSTER_NODE_MIGRATE_TO;
-    clearCachedClusterSlotsResponse();
     return C_OK;
 }
 
@@ -1549,7 +1547,6 @@ void clusterAddNode(clusterNode *node) {
     retval = dictAdd(server.cluster->nodes,
             sdsnewlen(node->name,CLUSTER_NAMELEN), node);
     serverAssert(retval == DICT_OK);
-    clearCachedClusterSlotsResponse();
 }
 
 /* Remove a node from the cluster. The function performs the high level
@@ -1591,7 +1588,6 @@ void clusterDelNode(clusterNode *delnode) {
 
     /* 3) Remove the node from the owning shard */
     clusterRemoveNodeFromShard(delnode);
-    clearCachedClusterSlotsResponse();
 
     /* 4) Free the node, unlinking it from the cluster. */
     freeClusterNode(delnode);
@@ -2211,7 +2207,6 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
                 node->tls_port = msg_tls_port;
                 node->cport = ntohs(g->cport);
                 node->flags &= ~CLUSTER_NODE_NOADDR;
-                clearCachedClusterSlotsResponse();
             }
         } else if (!node) {
             /* If it's not in NOADDR state and we don't have it, we
@@ -2307,7 +2302,6 @@ int nodeUpdateAddressIfNeeded(clusterNode *node, clusterLink *link,
     serverLog(LL_NOTICE,"Address updated for node %.40s (%s), now %s:%d",
         node->name, node->human_nodename, node->ip, getNodeDefaultClientPort(node)); 
 
-    clearCachedClusterSlotsResponse();
     /* Check if this is our master and we have to change the
      * replication target as well. */
     if (nodeIsSlave(myself) && myself->slaveof == node)
@@ -2329,7 +2323,6 @@ void clusterSetNodeAsMaster(clusterNode *n) {
     n->flags |= CLUSTER_NODE_MASTER;
     n->slaveof = NULL;
 
-    clearCachedClusterSlotsResponse();
     /* Update config and state. */
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG|
                          CLUSTER_TODO_UPDATE_STATE);
@@ -2374,8 +2367,6 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
         serverLog(LL_NOTICE,"Discarding UPDATE message about myself.");
         return;
     }
-    
-    clearCachedClusterSlotsResponse();
     
     for (j = 0; j < CLUSTER_SLOTS; j++) {
         if (bitmapTestBit(slots,j)) {
@@ -3064,7 +3055,6 @@ int clusterProcessPacket(clusterLink *link) {
                 strcmp(ip,myself->ip))
             {
                 memcpy(myself->ip,ip,NET_IP_STR_LEN);
-                clearCachedClusterSlotsResponse();
                 serverLog(LL_NOTICE,"IP address for this node updated to %s",
                     myself->ip);
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
@@ -3150,7 +3140,6 @@ int clusterProcessPacket(clusterLink *link) {
                 link->node->cport = 0;
                 freeClusterLink(link);
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
-                clearCachedClusterSlotsResponse();
                 return 0;
             }
         }
@@ -4465,7 +4454,6 @@ void clusterFailoverReplaceYourMaster(void) {
     /* 3) Update state and save config. */
     clusterUpdateState();
     clusterSaveConfigOrDie(1);
-    clearCachedClusterSlotsResponse();
 
     /* 4) Pong all the other nodes so that they can update the state
      *    accordingly and detect that we switched to master role. */
@@ -4520,7 +4508,6 @@ void clusterHandleSlaveFailover(void) {
         server.cluster->cant_failover_reason = CLUSTER_CANT_FAILOVER_NONE;
         return;
     }
-    clearCachedClusterSlotsResponse();
 
     /* Set data_age to the number of milliseconds we are disconnected from
      * the master. */
@@ -5251,7 +5238,6 @@ int clusterAddSlot(clusterNode *n, int slot) {
     if (server.cluster->slots[slot]) return C_ERR;
     clusterNodeSetSlotBit(n,slot);
     server.cluster->slots[slot] = n;
-    clearCachedClusterSlotsResponse();
     bitmapClearBit(server.cluster->owner_not_claiming_slot, slot);
     return C_OK;
 }
@@ -5271,7 +5257,6 @@ int clusterDelSlot(int slot) {
     server.cluster->slots[slot] = NULL;
     /* Make owner_not_claiming_slot flag consistent with slot ownership information. */
     bitmapClearBit(server.cluster->owner_not_claiming_slot, slot);
-    clearCachedClusterSlotsResponse();
     return C_OK;
 }
 

@@ -287,8 +287,8 @@ start_server {tags {"info" "external:skip"}} {
             # Validate that non LUA errors continue to be tracked even when we have >=128 entries.
             assert_error {ERR syntax error} {r set a b c d e f g}
             assert_equal "count=1" [errorstat ERR]
-            r eval {return server.error_reply(string.format('My error message'))} 0
-            r eval {return {err = 'My error message'}} 0
+            assert_error "My error message" {r eval {return server.error_reply(string.format('My error message'))} 0}
+            assert_error "My error message" {r eval {return {err = 'My error message'}} 0}
             assert_equal "count=974" [errorstat LUA_ERRORSTATS_OVERFLOW]
         }
 

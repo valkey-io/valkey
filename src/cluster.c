@@ -1312,24 +1312,6 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
     return 0;
 }
 
-/* Returns an indication if the replica node is fully available
- * and should be listed in CLUSTER SLOTS response.
- * Returns 1 for available nodes, 0 for nodes that have
- * not finished their initial sync, in failed state, or are
- * otherwise considered not available to serve read commands. */
-static int isReplicaAvailable(clusterNode *node) {
-    if (clusterNodeIsFailing(node)) {
-        return 0;
-    }
-    long long repl_offset = clusterNodeReplOffset(node);
-    if (clusterNodeIsMyself(node)) {
-        /* Nodes do not update their own information
-         * in the cluster node list. */
-        repl_offset = replicationGetSlaveOffset();
-    }
-    return (repl_offset != 0);
-}
-
 void addNodeToNodeReply(client *c, clusterNode *node) {
     char* hostname = clusterNodeHostname(node);
     addReplyArrayLen(c, 4);
@@ -1381,10 +1363,28 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
     serverAssert(length == 0);
 }
 
+/* Returns an indication if the node is fully available
+ * and should be listed in CLUSTER SLOTS response.
+ * Returns 1 for available nodes, 0 for nodes that have
+ * not finished their initial sync, in failed state, or are
+ * otherwise considered not available to serve read commands. */
+int isNodeAvailable(clusterNode *node) {
+    if (clusterNodeIsFailing(node)) {
+        return 0;
+    }
+    long long repl_offset = clusterNodeReplOffset(node);
+    if (clusterNodeIsMyself(node)) {
+        /* Nodes do not update their own information
+         * in the cluster node list. */
+        repl_offset = getNodeReplicationOffset(node);
+    }
+    return (repl_offset != 0);
+}
+
 void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, int end_slot) {
     int i, nested_elements = 3; /* slots (2) + master addr (1) */
     for (i = 0; i < clusterNodeNumSlaves(node); i++) {
-        if (!isReplicaAvailable(clusterNodeGetSlave(node, i))) continue;
+        if (!isNodeAvailable(clusterNodeGetSlave(node, i))) continue;
         nested_elements++;
     }
     addReplyArrayLen(c, nested_elements);
@@ -1396,27 +1396,27 @@ void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, in
     for (i = 0; i < clusterNodeNumSlaves(node); i++) {
         /* This loop is copy/pasted from clusterGenNodeDescription()
          * with modifications for per-slot node aggregation. */
-        if (!isReplicaAvailable(clusterNodeGetSlave(node, i))) continue;
+        if (!isNodeAvailable(clusterNodeGetSlave(node, i))) continue;
         addNodeToNodeReply(c, clusterNodeGetSlave(node, i));
         nested_elements--;
     }
     serverAssert(nested_elements == 3); /* Original 3 elements */
 }
 
-void clusterCommandSlots(client * c) {
-    /* Format: 1) 1) start slot
-     *            2) end slot
-     *            3) 1) master IP
-     *               2) master port
-     *               3) node ID
-     *            4) 1) replica IP
-     *               2) replica port
-     *               3) node ID
-     *           ... continued until done
-     */
+void clearCachedClusterSlotsResponse(void) {
+    for (connTypeForCaching conn_type = CACHE_CONN_TCP; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
+        if (server.cached_cluster_slot_info[conn_type]) {
+            sdsfree(server.cached_cluster_slot_info[conn_type]);
+            server.cached_cluster_slot_info[conn_type] = NULL;
+        }
+    }
+}
+
+sds generateClusterSlotResponse(void) {
+    client *recording_client = createCachedResponseClient();
     clusterNode *n = NULL;
     int num_masters = 0, start = -1;
-    void *slot_replylen = addReplyDeferredLen(c);
+    void *slot_replylen = addReplyDeferredLen(recording_client);
 
     for (int i = 0; i <= CLUSTER_SLOTS; i++) {
         /* Find start node and slot id. */
@@ -1430,14 +1430,52 @@ void clusterCommandSlots(client * c) {
         /* Add cluster slots info when occur different node with start
          * or end of slot. */
         if (i == CLUSTER_SLOTS || n != getNodeBySlot(i)) {
-            addNodeReplyForClusterSlot(c, n, start, i-1);
+            addNodeReplyForClusterSlot(recording_client, n, start, i-1);
             num_masters++;
             if (i == CLUSTER_SLOTS) break;
             n = getNodeBySlot(i);
             start = i;
         }
     }
-    setDeferredArrayLen(c, slot_replylen, num_masters);
+    setDeferredArrayLen(recording_client, slot_replylen, num_masters);
+    sds cluster_slot_response = aggregateClientOutputBuffer(recording_client);
+    deleteCachedResponseClient(recording_client);
+    return cluster_slot_response;
+}
+
+int verifyCachedClusterSlotsResponse(sds cached_response) {
+    sds generated_response = generateClusterSlotResponse();
+    int is_equal = !sdscmp(generated_response, cached_response);
+    /* Here, we use LL_WARNING so this gets printed when debug assertions are enabled and the system is about to crash. */
+    if (!is_equal) serverLog(LL_WARNING,"\ngenerated_response:\n%s\n\ncached_response:\n%s", generated_response, cached_response);
+    sdsfree(generated_response);
+    return is_equal;
+}
+
+void clusterCommandSlots(client *c) {
+    /* Format: 1) 1) start slot
+     *            2) end slot
+     *            3) 1) master IP
+     *               2) master port
+     *               3) node ID
+     *            4) 1) replica IP
+     *               2) replica port
+     *               3) node ID
+     *           ... continued until done
+     */
+    connTypeForCaching conn_type = connIsTLS(c->conn);
+
+    if (detectAndUpdateCachedNodeHealth()) clearCachedClusterSlotsResponse();
+
+    sds cached_reply = server.cached_cluster_slot_info[conn_type];
+    if (!cached_reply) {
+        cached_reply = generateClusterSlotResponse();
+        server.cached_cluster_slot_info[conn_type] = cached_reply;
+    } else {
+        debugServerAssertWithInfo(c, NULL, verifyCachedClusterSlotsResponse(cached_reply) == 1);
+    }
+
+    addReplyProto(c, cached_reply, sdslen(cached_reply));
 }
 
 /* -----------------------------------------------------------------------------

@@ -2027,6 +2027,7 @@ struct valkeyServer {
     unsigned long long cluster_link_msg_queue_limit_bytes;  /* Memory usage limit on individual link msg queue */
     int cluster_drop_packet_filter; /* Debug config that allows tactically
                                    * dropping packets of a specific type */
+    sds cached_cluster_slot_info[CACHE_CONN_TYPE_MAX];
     /* Scripting */
     mstime_t busy_reply_threshold;  /* Script / module timeout in milliseconds */
     int pre_command_oom_state;         /* OOM before command (script?) was started */
@@ -2680,6 +2681,8 @@ void initThreadedIO(void);
 client *lookupClientByID(uint64_t id);
 int authRequired(client *c);
 void putClientInPendingWriteQueue(client *c);
+client *createCachedResponseClient(void);
+void deleteCachedResponseClient(client *recording_client);
 
 /* logreqres.c - logging of requests and responses */
 void reqresReset(client *c, int free_buf);

@@ -60,13 +60,13 @@ int handleDebugClusterCommand(client *c);
 const char **clusterDebugCommandExtendedHelp(void);
 /* handle implementation specific cluster commands. Return 1 if handled, 0 otherwise. */
 int clusterCommandSpecial(client *c);
-const char** clusterCommandExtendedHelp(void);
+const char **clusterCommandExtendedHelp(void);
 
 int clusterAllowFailoverCmd(client *c);
 void clusterPromoteSelfToMaster(void);
 int clusterManualFailoverTimeLimit(void);
 
-void clusterCommandSlots(client * c);
+void clusterCommandSlots(client *c);
 void clusterCommandMyId(client *c);
 void clusterCommandMyShardId(client *c);
 void clusterCommandShards(client *c);
@@ -74,19 +74,15 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary);
 
 int clusterNodeCoversSlot(clusterNode *n, int slot);
 int getNodeDefaultClientPort(clusterNode *n);
-int clusterNodeIsMyself(clusterNode *n);
 clusterNode *getMyClusterNode(void);
-char *getMyClusterId(void);
 int getClusterSize(void);
 int getMyShardSlotCount(void);
 int handleDebugClusterCommand(client *c);
-int clusterNodePending(clusterNode  *node);
+int clusterNodePending(clusterNode *node);
 int clusterNodeIsMaster(clusterNode *n);
 char **getClusterNodesList(size_t *numnodes);
-int clusterNodeIsMaster(clusterNode *n);
 char *clusterNodeIp(clusterNode *node);
 int clusterNodeIsSlave(clusterNode *node);
-clusterNode *clusterNodeGetSlaveof(clusterNode *node);
 clusterNode *clusterNodeGetMaster(clusterNode *node);
 char *clusterNodeGetName(clusterNode *node);
 int clusterNodeTimedOut(clusterNode *node);
@@ -106,6 +102,7 @@ clusterNode *clusterLookupNode(const char *name, int length);
 void clusterReplicateOpenSlots(void);
 
 /* functions with shared implementations */
+int clusterNodeIsMyself(clusterNode *n);
 clusterNode *getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int *hashslot, int *ask);
 int clusterRedirectBlockedClientIfNeeded(client *c);
 void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_code);

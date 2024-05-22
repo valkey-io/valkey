@@ -227,32 +227,40 @@ int test_sds(int argc, char **argv, int flags) {
                 memcmp(x, "v1={value1} {} v2=value2", 24) == 0);
     sdsfree(x);
 
-    /* Test sdsresize - extend */
+    /* Test sdsResize - extend */
     x = sdsnew("1234567890123456789012345678901234567890");
     x = sdsResize(x, 200, 1);
-    TEST_ASSERT_MESSAGE("sdsrezie() expand len", sdslen(x) == 40);
-    TEST_ASSERT_MESSAGE("sdsrezie() expand strlen", strlen(x) == 40);
-    TEST_ASSERT_MESSAGE("sdsrezie() expand alloc", sdsalloc(x) == 200);
-    /* Test sdsresize - trim free space */
+    TEST_ASSERT_MESSAGE("sdsReszie() expand type", x[-1] == SDS_TYPE_8);
+    TEST_ASSERT_MESSAGE("sdsReszie() expand len", sdslen(x) == 40);
+    TEST_ASSERT_MESSAGE("sdsReszie() expand strlen", strlen(x) == 40);
+    /* Different allocator allocates at least as large as requested size,
+     * to confirm the allocator won't waste too much,
+     * we add a largest size checker here. */
+    TEST_ASSERT_MESSAGE("sdsReszie() expand alloc", sdsalloc(x) >= 200 && sdsalloc(x) < 400);
+    /* Test sdsResize - trim free space */
     x = sdsResize(x, 80, 1);
-    TEST_ASSERT_MESSAGE("sdsrezie() shrink len", sdslen(x) == 40);
-    TEST_ASSERT_MESSAGE("sdsrezie() shrink strlen", strlen(x) == 40);
-    TEST_ASSERT_MESSAGE("sdsrezie() shrink alloc", sdsalloc(x) == 80);
-    /* Test sdsresize - crop used space */
+    TEST_ASSERT_MESSAGE("sdsReszie() shrink type", x[-1] == SDS_TYPE_8);
+    TEST_ASSERT_MESSAGE("sdsReszie() shrink len", sdslen(x) == 40);
+    TEST_ASSERT_MESSAGE("sdsReszie() shrink strlen", strlen(x) == 40);
+    TEST_ASSERT_MESSAGE("sdsReszie() shrink alloc", sdsalloc(x) >= 80);
+    /* Test sdsResize - crop used space */
     x = sdsResize(x, 30, 1);
-    TEST_ASSERT_MESSAGE("sdsrezie() crop len", sdslen(x) == 30);
-    TEST_ASSERT_MESSAGE("sdsrezie() crop strlen", strlen(x) == 30);
-    TEST_ASSERT_MESSAGE("sdsrezie() crop alloc", sdsalloc(x) == 30);
-    /* Test sdsresize - extend to different class */
+    TEST_ASSERT_MESSAGE("sdsReszie() crop type", x[-1] == SDS_TYPE_8);
+    TEST_ASSERT_MESSAGE("sdsReszie() crop len", sdslen(x) == 30);
+    TEST_ASSERT_MESSAGE("sdsReszie() crop strlen", strlen(x) == 30);
+    TEST_ASSERT_MESSAGE("sdsReszie() crop alloc", sdsalloc(x) >= 30);
+    /* Test sdsResize - extend to different class */
     x = sdsResize(x, 400, 1);
-    TEST_ASSERT_MESSAGE("sdsrezie() expand len", sdslen(x) == 30);
-    TEST_ASSERT_MESSAGE("sdsrezie() expand strlen", strlen(x) == 30);
-    TEST_ASSERT_MESSAGE("sdsrezie() expand alloc", sdsalloc(x) == 400);
-    /* Test sdsresize - shrink to different class */
+    TEST_ASSERT_MESSAGE("sdsReszie() expand type", x[-1] == SDS_TYPE_16);
+    TEST_ASSERT_MESSAGE("sdsReszie() expand len", sdslen(x) == 30);
+    TEST_ASSERT_MESSAGE("sdsReszie() expand strlen", strlen(x) == 30);
+    TEST_ASSERT_MESSAGE("sdsReszie() expand alloc", sdsalloc(x) >= 400);
+    /* Test sdsResize - shrink to different class */
     x = sdsResize(x, 4, 1);
-    TEST_ASSERT_MESSAGE("sdsrezie() crop len", sdslen(x) == 4);
-    TEST_ASSERT_MESSAGE("sdsrezie() crop strlen", strlen(x) == 4);
-    TEST_ASSERT_MESSAGE("sdsrezie() crop alloc", sdsalloc(x) == 4);
+    TEST_ASSERT_MESSAGE("sdsReszie() crop type", x[-1] == SDS_TYPE_8);
+    TEST_ASSERT_MESSAGE("sdsReszie() crop len", sdslen(x) == 4);
+    TEST_ASSERT_MESSAGE("sdsReszie() crop strlen", strlen(x) == 4);
+    TEST_ASSERT_MESSAGE("sdsReszie() crop alloc", sdsalloc(x) >= 4);
     sdsfree(x);
     return 0;
 }

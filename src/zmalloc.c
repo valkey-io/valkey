@@ -382,25 +382,6 @@ void zfree(void *ptr) {
 #endif
 }
 
-/* Similar to zfree, '*usable' is set to the usable size being freed. */
-void zfree_usable(void *ptr, size_t *usable) {
-#ifndef HAVE_MALLOC_SIZE
-    void *realptr;
-    size_t oldsize;
-#endif
-
-    if (ptr == NULL) return;
-#ifdef HAVE_MALLOC_SIZE
-    update_zmalloc_stat_free(*usable = zmalloc_size(ptr));
-    free(ptr);
-#else
-    realptr = (char*)ptr-PREFIX_SIZE;
-    *usable = oldsize = *((size_t*)realptr);
-    update_zmalloc_stat_free(oldsize+PREFIX_SIZE);
-    free(realptr);
-#endif
-}
-
 char *zstrdup(const char *s) {
     size_t l = strlen(s)+1;
     char *p = zmalloc(l);
@@ -907,57 +888,3 @@ size_t zmalloc_get_memory_size(void) {
     return 0L;          /* Unknown OS. */
 #endif
 }
-
-#ifdef SERVER_TEST
-#include "testhelp.h"
-#include "serverassert.h"
-
-#define TEST(name) printf("test — %s\n", name);
-
-int zmalloc_test(int argc, char **argv, int flags) {
-    void *ptr, *ptr2;
-
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-
-    printf("Malloc prefix size: %d\n", (int) PREFIX_SIZE);
-
-    TEST("Initial used memory is 0") {
-        assert(zmalloc_used_memory() == 0);
-    }
-
-    TEST("Allocated 123 bytes") {
-        ptr = zmalloc(123);
-        printf("Allocated 123 bytes; used: %zu\n", zmalloc_used_memory());
-    }
-
-    TEST("Reallocated to 456 bytes") {
-        ptr = zrealloc(ptr, 456);
-        printf("Reallocated to 456 bytes; used: %zu\n", zmalloc_used_memory());
-    }
-
-    TEST("Callocated 123 bytes") {
-        ptr2 = zcalloc(123);
-        printf("Callocated 123 bytes; used: %zu\n", zmalloc_used_memory());
-    }
-
-    TEST("Freed pointers") {
-        zfree(ptr);
-        zfree(ptr2);
-        printf("Freed pointers; used: %zu\n", zmalloc_used_memory());
-    }
-
-    TEST("Allocated 0 bytes") {
-        ptr = zmalloc(0);
-        printf("Allocated 0 bytes; used: %zu\n", zmalloc_used_memory());
-        zfree(ptr);
-    }
-
-    TEST("At the end used memory is 0") {
-        assert(zmalloc_used_memory() == 0);
-    }
-
-    return 0;
-}
-#endif

@@ -600,11 +600,9 @@ jobs:
       - name: make
         run: make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-DSERVER_TEST -Werror -DDEBUG_ASSERTIONS'
       - name: testprep
-        # Work around ASAN issue, see https://github.com/google/sanitizers/issues/1716
         run: |
           sudo apt-get update
           sudo apt-get install tcl8.6 tclx -y
-          sudo sysctl vm.mmap_rnd_bits=28
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest --accurate --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -898,7 +896,7 @@ jobs:
   build-macos:
     strategy:
       matrix:
-        os: [macos-11, macos-13]
+        os: [macos-12, macos-14]
     runs-on: ${{ matrix.os }}
     if: |
       (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
@@ -1073,3 +1071,35 @@ jobs:
     - name: validator
       run: ./utils/req-res-log-validator.py --verbose --fail-missing-reply-schemas ${{ (!contains(github.event.inputs.skiptests, 'valkey') && !contains(github.event.inputs.skiptests, 'module') && !contains(github.event.inputs.sentinel, 'valkey') && !contains(github.event.inputs.skiptests, 'cluster')) && github.event.inputs.test_args == '' && github.event.inputs.cluster_test_args == '' && '--fail-commands-not-all-hit' || '' }}
 
+  notify-about-job-results:
+    runs-on: ubuntu-latest
+    if: always() && github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey'
+    needs: [test-ubuntu-jemalloc, test-ubuntu-jemalloc-fortify, test-ubuntu-libc-malloc, test-ubuntu-no-malloc-usable-size, test-ubuntu-32bit, test-ubuntu-tls, test-ubuntu-tls-no-tls, test-ubuntu-io-threads, test-ubuntu-reclaim-cache, test-valgrind-test, test-valgrind-misc, test-valgrind-no-malloc-usable-size-test, test-valgrind-no-malloc-usable-size-misc, test-sanitizer-address, test-sanitizer-undefined, test-centos7-jemalloc, test-centos7-tls-module, test-centos7-tls-module-no-tls, test-macos-latest, test-macos-latest-sentinel, test-macos-latest-cluster, build-macos, test-freebsd, test-alpine-jemalloc, test-alpine-libc-malloc, reply-schemas-validator]
+    steps:
+      - name: Collect job status
+        run: |
+          FAILED_JOBS=()
+          NEEDS_JSON='${{ toJSON(needs) }}'
+          JOBS=($(echo "$NEEDS_JSON" | jq 'keys' | tr -d '[] ,'))
+          for JOB in ${JOBS[@]}; do
+            JOB_RESULT=$(echo "$NEEDS_JSON" | jq ".[$JOB][\"result\"]" | tr -d '"')
+            if [ $JOB_RESULT = "failure" ]; then
+              FAILED_JOBS+=($JOB)
+            fi
+          done
+          
+          if [[ ${#FAILED_JOBS[@]} -ne 0 ]]; then
+            echo "FAILED_JOBS=${FAILED_JOBS[@]}" >> $GITHUB_ENV
+            echo "STATUS=failure" >> $GITHUB_ENV
+          else
+            echo "STATUS=success" >> $GITHUB_ENV
+          fi
+      - name: Notify about results
+        uses: ravsamhq/notify-slack-action@v2
+        with:
+          status: ${{ env.STATUS }}
+          notify_when: "failure"
+          notification_title: "Daily test run <${{github.server_url}}/${{github.repository}}/actions/runs/${{github.run_id}}|Failure>"
+          message_format: ":fire: Tests failed: ${{ env.FAILED_JOBS }}"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_NOTIFICATIONS_WEBHOOK_URL }}

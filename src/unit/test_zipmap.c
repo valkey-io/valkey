@@ -93,7 +93,7 @@ int test_zipmapPerformDirectLookup(int argc, char *argv[], int flags) {
 
     if (zipmapGet(zm,(unsigned char*) "foo",3,&value,&vlen)) {
         TEST_ASSERT(5 == vlen);
-        TEST_ASSERT(!strcmp("12345", (const char*)value,vlen));
+        TEST_ASSERT(!strncmp("12345", (const char*)value,vlen));
     }
     zfree(zm);
     return 0;

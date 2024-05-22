@@ -456,6 +456,8 @@ user *ACLCreateUser(const char *name, size_t namelen) {
     aclSelector *s = ACLCreateSelector(SELECTOR_FLAG_ROOT);
     listAddNodeHead(u->selectors, s);
 
+    u->clients = listCreate();
+
     raxInsert(Users,(unsigned char*)name,namelen,u,NULL);
     return u;
 }
@@ -487,6 +489,7 @@ void ACLFreeUser(user *u) {
     }
     listRelease(u->passwords);
     listRelease(u->selectors);
+    listRelease(u->clients);
     zfree(u);
 }
 
@@ -3253,6 +3256,11 @@ void authCommand(client *c) {
     robj *err = NULL;
     int result = ACLAuthenticateUser(c, username, password, &err);
     if (result == AUTH_OK) {
+        listNode *ln=listSearchKey(c->user->clients, c);
+        if(ln == NULL) {
+            listAddNodeTail(c->user->clients, c);
+            c->user_client_node = listLast(c->user->clients);
+        }
         addReply(c, shared.ok);
     } else if (result == AUTH_ERR) {
         addAuthErrReply(c, err);

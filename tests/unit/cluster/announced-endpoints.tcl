@@ -8,6 +8,9 @@ start_cluster 2 2 {tags {external:skip cluster}} {
         }
         set count [expr [llength $::servers] + 1]
         set used_port [find_available_port $baseport $count]
+
+        # We execute CLUSTER SLOTS command to trigger the debug assertions, ensuring that the cached response is 
+        # invalidated when we update any of cluster-announce-tls-port or cluster-announce-port.
         R 0 CLUSTER SLOTS
         R 1 CLUSTER SLOTS
 

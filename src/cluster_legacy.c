@@ -2367,7 +2367,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
         serverLog(LL_NOTICE,"Discarding UPDATE message about myself.");
         return;
     }
-    
+
     for (j = 0; j < CLUSTER_SLOTS; j++) {
         if (bitmapTestBit(slots,j)) {
             sender_slots++;

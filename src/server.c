@@ -6929,7 +6929,6 @@ struct serverTest {
     serverTestProc *proc;
     int failed;
 } serverTests[] = {
-    {"ziplist", ziplistTest},
     {"quicklist", quicklistTest},
     {"zipmap", zipmapTest},
     {"dict", dictTest},

@@ -762,6 +762,7 @@ void clusterSaveConfigOrDie(int do_fsync) {
         serverLog(LL_WARNING,"Fatal: can't update cluster config file.");
         exit(1);
     }
+    clearCachedClusterSlotsResponse();
 }
 
 /* Lock the cluster config using flock(), and retain the file descriptor used to
@@ -1039,6 +1040,9 @@ void clusterInit(void) {
 
     server.cluster->mf_end = 0;
     server.cluster->mf_slave = NULL;
+    for (connTypeForCaching conn_type = CACHE_CONN_TCP; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
+        server.cached_cluster_slot_info[conn_type] = NULL;
+    }
     resetManualFailover();
     clusterUpdateMyselfFlags();
     clusterUpdateMyselfIp();
@@ -1363,6 +1367,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->repl_offset_time = 0;
     node->repl_offset = 0;
     listSetFreeMethod(node->fail_reports,zfree);
+    node->is_node_healthy = 0;
     return node;
 }
 
@@ -5862,6 +5867,14 @@ void clusterUpdateSlots(client *c, unsigned char *slots, int del) {
     }
 }
 
+long long getNodeReplicationOffset(clusterNode *node) {
+    if (node->flags & CLUSTER_NODE_MYSELF) {
+        return nodeIsSlave(node) ? replicationGetSlaveOffset() : server.master_repl_offset;
+    } else {
+        return node->repl_offset;
+    }
+}
+
 /* Add detailed information of a node to the output buffer of the given client. */
 void addNodeDetailsToShardReply(client *c, clusterNode *node) {
     int reply_count = 0;
@@ -5896,12 +5909,7 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
         reply_count++;
     }
 
-    long long node_offset;
-    if (node->flags & CLUSTER_NODE_MYSELF) {
-        node_offset = nodeIsSlave(node) ? replicationGetSlaveOffset() : server.master_repl_offset;
-    } else {
-        node_offset = node->repl_offset;
-    }
+    long long node_offset = getNodeReplicationOffset(node);
 
     addReplyBulkCString(c, "role");
     addReplyBulkCString(c, nodeIsSlave(node) ? "replica" : "master");
@@ -6882,9 +6890,26 @@ void clusterPromoteSelfToMaster(void) {
     replicationUnsetMaster();
 }
 
+int detectAndUpdateCachedNodeHealth(void) {
+    dictIterator di;
+    dictInitSafeIterator(&di, server.cluster->nodes);
+    dictEntry *de;
+    clusterNode *node;
+    int overall_health_changed = 0;
+    while((de = dictNext(&di)) != NULL) {
+        node = dictGetVal(de);
+        int present_is_node_healthy = isNodeAvailable(node);
+        if (present_is_node_healthy != node->is_node_healthy) {
+            overall_health_changed = 1;
+            node->is_node_healthy = present_is_node_healthy;
+        }
+    }
+
+    return overall_health_changed;
+}
+
 /* Replicate migrating and importing slot states to all replicas */
-void clusterReplicateOpenSlots(void)
-{
+void clusterReplicateOpenSlots(void) {
     if (!server.cluster_enabled) return;
 
     int argc = 5;

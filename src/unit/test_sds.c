@@ -334,7 +334,7 @@ int test_typesAndAllocSize(int argc, char **argv, int flags) {
 
 /* The test verifies that we can adjust SDS types if an allocator returned
  * larger buffer. The maximum length for type SDS_TYPE_X is
- * 2^X - header_size(SDS_TYPE_X) - 1. The maxium value to be stored in alloc
+ * 2^X - header_size(SDS_TYPE_X) - 1. The maximum value to be stored in alloc
  * field is 2^X - 1. When allocated buffer is larger than
  * 2^X + header_size(SDS_TYPE_X), we "move" to a larger type SDS_TYPE_Y. To be
  * sure SDS_TYPE_Y header fits into 2^X + header_size(SDS_TYPE_X) + 1 bytes, the

@@ -1122,13 +1122,9 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
     /* MIGRATE always works in the context of the local node if the slot
      * is open (migrating or importing state). We need to be able to freely
      * move keys among instances in this case. */
-<<<<<<< HEAD
     if ((migrating_slot || importing_slot) && cmd->proc == migrateCommand && clusterNodeIsMaster(myself)) {
         return myself;
     }
-=======
-    if ((migrating_slot || importing_slot) && cmd->proc == migrateCommand) return myself;
->>>>>>> unstable
 
     /* If we don't have all the keys and we are migrating the slot, send
      * an ASK redirection or TRYAGAIN. */

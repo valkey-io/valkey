@@ -379,12 +379,12 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 }
 
-start_cluster 3 3 {tags {external:skip cluster} overrides {crash-memcheck-enabled no cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
     set R1_id [R 1 CLUSTER MYID]
 
     test "CLUSTER SETSLOT with an explicit timeout" {
-        # Simulate a replica crash
-        catch {R 3 DEBUG SEGFAULT} e
+        # Pause the replica to simulate a failure
+        pause_process [srv -3 pid]
 
         # Setslot with an explicit 1ms timeoout
         set start_time [clock milliseconds]
@@ -397,5 +397,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {crash-memcheck-enable
 
         # Setslot should fail with not enough good replicas to write after the timeout
         assert_equal {NOREPLICAS Not enough good replicas to write.} $e
+
+        resume_process [srv -3 pid]
     }
 }

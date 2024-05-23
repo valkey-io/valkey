@@ -63,7 +63,7 @@
 #include "server.h"
 #include "bio.h"
 
-static char* bio_worker_title[] = {
+static char *bio_worker_title[] = {
     "bio_close_file",
     "bio_aof",
     "bio_lazy_free",
@@ -94,18 +94,18 @@ typedef union bio_job {
     /* Job specific arguments.*/
     struct {
         int type;
-        int fd; /* Fd for file based background jobs */
-        long long offset; /* A job-specific offset, if applicable */
-        unsigned need_fsync:1; /* A flag to indicate that a fsync is required before
-                                * the file is closed. */
-        unsigned need_reclaim_cache:1; /* A flag to indicate that reclaim cache is required before
-                                * the file is closed. */
+        int fd;                          /* Fd for file based background jobs */
+        long long offset;                /* A job-specific offset, if applicable */
+        unsigned need_fsync : 1;         /* A flag to indicate that a fsync is required before
+                                          * the file is closed. */
+        unsigned need_reclaim_cache : 1; /* A flag to indicate that reclaim cache is required before
+                                          * the file is closed. */
     } fd_args;
 
     struct {
         int type;
         lazy_free_fn *free_fn; /* Function that will free the provided arguments */
-        void *free_args[]; /* List of arguments to be passed to the free function */
+        void *free_args[];     /* List of arguments to be passed to the free function */
     } free_args;
 } bio_job;
 
@@ -113,7 +113,7 @@ void *bioProcessBackgroundJobs(void *arg);
 
 /* Make sure we have enough stack to perform all the things we do in the
  * main thread. */
-#define VALKEY_THREAD_STACK_SIZE (1024*1024*4)
+#define VALKEY_THREAD_STACK_SIZE (1024 * 1024 * 4)
 
 /* Initialize the background system, spawning the thread. */
 void bioInit(void) {
@@ -124,14 +124,14 @@ void bioInit(void) {
 
     /* Initialization of state vars and objects */
     for (j = 0; j < BIO_WORKER_NUM; j++) {
-        pthread_mutex_init(&bio_mutex[j],NULL);
-        pthread_cond_init(&bio_newjob_cond[j],NULL);
+        pthread_mutex_init(&bio_mutex[j], NULL);
+        pthread_cond_init(&bio_newjob_cond[j], NULL);
         bio_jobs[j] = listCreate();
     }
 
     /* Set the stack size as by default it may be small in some system */
     pthread_attr_init(&attr);
-    pthread_attr_getstacksize(&attr,&stacksize);
+    pthread_attr_getstacksize(&attr, &stacksize);
     if (!stacksize) stacksize = 1; /* The world is full of Solaris Fixes */
     while (stacksize < VALKEY_THREAD_STACK_SIZE) stacksize *= 2;
     pthread_attr_setstacksize(&attr, stacksize);
@@ -140,8 +140,8 @@ void bioInit(void) {
      * function accepts in order to pass the job ID the thread is
      * responsible for. */
     for (j = 0; j < BIO_WORKER_NUM; j++) {
-        void *arg = (void*)(unsigned long) j;
-        if (pthread_create(&thread,&attr,bioProcessBackgroundJobs,arg) != 0) {
+        void *arg = (void *)(unsigned long)j;
+        if (pthread_create(&thread, &attr, bioProcessBackgroundJobs, arg) != 0) {
             serverLog(LL_WARNING, "Fatal: Can't initialize Background Jobs. Error message: %s", strerror(errno));
             exit(1);
         }
@@ -153,7 +153,7 @@ void bioSubmitJob(int type, bio_job *job) {
     job->header.type = type;
     unsigned long worker = bio_job_to_worker[type];
     pthread_mutex_lock(&bio_mutex[worker]);
-    listAddNodeTail(bio_jobs[worker],job);
+    listAddNodeTail(bio_jobs[worker], job);
     bio_jobs_counter[type]++;
     pthread_cond_signal(&bio_newjob_cond[worker]);
     pthread_mutex_unlock(&bio_mutex[worker]);
@@ -204,7 +204,7 @@ void bioCreateFsyncJob(int fd, long long offset, int need_reclaim_cache) {
 
 void *bioProcessBackgroundJobs(void *arg) {
     bio_job *job;
-    unsigned long worker = (unsigned long) arg;
+    unsigned long worker = (unsigned long)arg;
     sigset_t sigset;
 
     /* Check that the worker is within the right interval. */
@@ -222,10 +222,9 @@ void *bioProcessBackgroundJobs(void *arg) {
     sigemptyset(&sigset);
     sigaddset(&sigset, SIGALRM);
     if (pthread_sigmask(SIG_BLOCK, &sigset, NULL))
-        serverLog(LL_WARNING,
-            "Warning: can't mask SIGALRM in bio.c thread: %s", strerror(errno));
+        serverLog(LL_WARNING, "Warning: can't mask SIGALRM in bio.c thread: %s", strerror(errno));
 
-    while(1) {
+    while (1) {
         listNode *ln;
 
         /* The loop always starts with the lock hold. */
@@ -244,15 +243,12 @@ void *bioProcessBackgroundJobs(void *arg) {
         int job_type = job->header.type;
 
         if (job_type == BIO_CLOSE_FILE) {
-            if (job->fd_args.need_fsync &&
-                valkey_fsync(job->fd_args.fd) == -1 &&
-                errno != EBADF && errno != EINVAL)
-            {
-                serverLog(LL_WARNING, "Fail to fsync the AOF file: %s",strerror(errno));
+            if (job->fd_args.need_fsync && valkey_fsync(job->fd_args.fd) == -1 && errno != EBADF && errno != EINVAL) {
+                serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
             }
             if (job->fd_args.need_reclaim_cache) {
                 if (reclaimFilePageCache(job->fd_args.fd, 0, 0) == -1) {
-                    serverLog(LL_NOTICE,"Unable to reclaim page cache: %s", strerror(errno));
+                    serverLog(LL_NOTICE, "Unable to reclaim page cache: %s", strerror(errno));
                 }
             }
             close(job->fd_args.fd);
@@ -260,29 +256,25 @@ void *bioProcessBackgroundJobs(void *arg) {
             /* The fd may be closed by main thread and reused for another
              * socket, pipe, or file. We just ignore these errno because
              * aof fsync did not really fail. */
-            if (valkey_fsync(job->fd_args.fd) == -1 &&
-                errno != EBADF && errno != EINVAL)
-            {
+            if (valkey_fsync(job->fd_args.fd) == -1 && errno != EBADF && errno != EINVAL) {
                 int last_status;
-                atomicGet(server.aof_bio_fsync_status,last_status);
-                atomicSet(server.aof_bio_fsync_status,C_ERR);
-                atomicSet(server.aof_bio_fsync_errno,errno);
+                atomicGet(server.aof_bio_fsync_status, last_status);
+                atomicSet(server.aof_bio_fsync_status, C_ERR);
+                atomicSet(server.aof_bio_fsync_errno, errno);
                 if (last_status == C_OK) {
-                    serverLog(LL_WARNING,
-                        "Fail to fsync the AOF file: %s",strerror(errno));
+                    serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
                 }
             } else {
-                atomicSet(server.aof_bio_fsync_status,C_OK);
+                atomicSet(server.aof_bio_fsync_status, C_OK);
                 atomicSet(server.fsynced_reploff_pending, job->fd_args.offset);
             }
 
             if (job->fd_args.need_reclaim_cache) {
                 if (reclaimFilePageCache(job->fd_args.fd, 0, 0) == -1) {
-                    serverLog(LL_NOTICE,"Unable to reclaim page cache: %s", strerror(errno));
+                    serverLog(LL_NOTICE, "Unable to reclaim page cache: %s", strerror(errno));
                 }
             }
-            if (job_type == BIO_CLOSE_AOF)
-                close(job->fd_args.fd);
+            if (job_type == BIO_CLOSE_AOF) close(job->fd_args.fd);
         } else if (job_type == BIO_LAZY_FREE) {
             job->free_args.free_fn(job->free_args.free_args);
         } else {
@@ -332,13 +324,10 @@ void bioKillThreads(void) {
     for (j = 0; j < BIO_WORKER_NUM; j++) {
         if (bio_threads[j] == pthread_self()) continue;
         if (bio_threads[j] && pthread_cancel(bio_threads[j]) == 0) {
-            if ((err = pthread_join(bio_threads[j],NULL)) != 0) {
-                serverLog(LL_WARNING,
-                    "Bio worker thread #%lu can not be joined: %s",
-                        j, strerror(err));
+            if ((err = pthread_join(bio_threads[j], NULL)) != 0) {
+                serverLog(LL_WARNING, "Bio worker thread #%lu can not be joined: %s", j, strerror(err));
             } else {
-                serverLog(LL_WARNING,
-                    "Bio worker thread #%lu terminated",j);
+                serverLog(LL_WARNING, "Bio worker thread #%lu terminated", j);
             }
         }
     }

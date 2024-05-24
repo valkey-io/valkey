@@ -715,7 +715,7 @@ typedef enum {
 #define LATENCY_HISTOGRAM_MAX_VALUE 1000000000L /* <= 1 secs */
 #define LATENCY_HISTOGRAM_PRECISION                                                                                    \
     2 /* Maintain a value precision of 2 significant digits across LATENCY_HISTOGRAM_MIN_VALUE and                     \
-       * LATENCY_HISTOGRAM_MAX_VALUE range. Value quantization within the range will thus be no larger than 1/100th                                               \
+       * LATENCY_HISTOGRAM_MAX_VALUE range. Value quantization within the range will thus be no larger than 1/100th    \
        * (or 1%) of any value. The total size per histogram should sit around 40 KiB Bytes. */
 
 /* Busy module flags, see busy_module_yield_flags */

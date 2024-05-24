@@ -3005,6 +3005,7 @@ static int applyClientMaxMemoryUsage(const char **err) {
 }
 
 standardConfig static_configs[] = {
+    /* clang-format on */
     /* Bool configs */
     createBoolConfig("rdbchecksum", NULL, IMMUTABLE_CONFIG, server.rdb_checksum, 1, NULL, NULL),
     createBoolConfig("daemonize", NULL, IMMUTABLE_CONFIG, server.daemonize, 0, NULL, NULL),
@@ -3224,6 +3225,7 @@ standardConfig static_configs[] = {
 
     /* NULL Terminator, this is dropped when we convert to the runtime array. */
     {NULL}
+    /* clang-format on */
 };
 
 /* Create a new config by copying the passed in config. Returns 1 on success

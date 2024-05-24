@@ -3005,7 +3005,7 @@ static int applyClientMaxMemoryUsage(const char **err) {
 }
 
 standardConfig static_configs[] = {
-    /* clang-format on */
+    /* clang-format off */
     /* Bool configs */
     createBoolConfig("rdbchecksum", NULL, IMMUTABLE_CONFIG, server.rdb_checksum, 1, NULL, NULL),
     createBoolConfig("daemonize", NULL, IMMUTABLE_CONFIG, server.daemonize, 0, NULL, NULL),

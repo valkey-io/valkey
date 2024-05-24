@@ -138,19 +138,35 @@ usage:
 
             /* get the single-character version for single-byte Redis behavior */
             set_crc64_cutoffs(0, crc64_test_size+1);
-            if (bench_crc64(data, crc64_test_size, passes, expect, "crc_1byte", csv)) return 1;
+            if (bench_crc64(data, crc64_test_size, passes, expect, "crc_1byte", csv)) {
+                zfree(data);
+                data = NULL;
+                return 1;
+            }
 
             set_crc64_cutoffs(crc64_test_size+1, crc64_test_size+1);
             /* run with 8-byte "single" path, crcfaster */
-            if (bench_crc64(data, crc64_test_size, passes, expect, "crcspeed", csv)) return 1;
+            if (bench_crc64(data, crc64_test_size, passes, expect, "crcspeed", csv)) {
+                zfree(data);
+                data = NULL;
+                return 1;
+            }
 
             /* run with dual 8-byte paths */
             set_crc64_cutoffs(1, crc64_test_size+1);
-            if (bench_crc64(data, crc64_test_size, passes, expect, "crcdual", csv)) return 1;
+            if (bench_crc64(data, crc64_test_size, passes, expect, "crcdual", csv)) {
+                zfree(data);
+                data = NULL;
+                return 1;
+            }
 
             /* run with tri 8-byte paths */
             set_crc64_cutoffs(1, 1);
-            if (bench_crc64(data, crc64_test_size, passes, expect, "crctri", csv)) return 1;
+            if (bench_crc64(data, crc64_test_size, passes, expect, "crctri", csv))  {
+                zfree(data);
+                data = NULL;
+                return 1;
+            }
 
             /* Be free memory region, be free. */
             zfree(data);

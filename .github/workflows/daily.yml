@@ -674,7 +674,7 @@ jobs:
 
   test-rpm-distros-jemalloc:
     if: |
-       (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch')) &&
+       (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
        !contains(github.event.inputs.skipjobs, 'rpm-distros')
     strategy:
       fail-fast: false
@@ -738,7 +738,7 @@ jobs:
 
   test-rpm-distros-tls-module:
     if: |
-       (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch')) &&
+       (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
        !contains(github.event.inputs.skipjobs, 'tls')
     strategy:
       fail-fast: false
@@ -808,7 +808,7 @@ jobs:
 
   test-rpm-distros-tls-module-no-tls:
     if: |
-       (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch')) &&
+       (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
        !contains(github.event.inputs.skipjobs, 'tls')
     strategy:
       fail-fast: false

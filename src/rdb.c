@@ -3023,8 +3023,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                           "FATAL: Data file was created with a %s "
                           "server configured to handle more than %d "
                           "databases. Exiting\n",
-                          server.dbnum,
-                          server.extended_redis_compat ? "Redis" : "Valkey");
+                          server.extended_redis_compat ? "Redis" : "Valkey",
+                          server.dbnum);
                 exit(1);
             }
             db = rdb_loading_ctx->dbarray + dbid;

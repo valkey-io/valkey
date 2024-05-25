@@ -54,7 +54,6 @@ typedef struct dictType {
     /* Callbacks */
     uint64_t (*hashFunction)(const void *key);
     void *(*keyDup)(dict *d, const void *key);
-    void *(*valDup)(dict *d, const void *obj);
     int (*keyCompare)(dict *d, const void *key1, const void *key2);
     void (*keyDestructor)(dict *d, void *key);
     void (*valDestructor)(dict *d, void *obj);
@@ -199,7 +198,7 @@ void *dictFetchValue(dict *d, const void *key);
 int dictShrinkIfNeeded(dict *d);
 int dictExpandIfNeeded(dict *d);
 void dictSetKey(dict *d, dictEntry *de, void *key);
-void dictSetVal(dict *d, dictEntry *de, void *val);
+void dictSetVal(dictEntry *de, void *val);
 void dictSetSignedIntegerVal(dictEntry *de, int64_t val);
 void dictSetUnsignedIntegerVal(dictEntry *de, uint64_t val);
 void dictSetDoubleVal(dictEntry *de, double val);

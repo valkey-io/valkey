@@ -202,7 +202,7 @@ static void dbAddInternal(serverDb *db, robj *key, robj *val, int update_if_exis
     serverAssertWithInfo(NULL, key, de != NULL);
     kvstoreDictSetKey(db->keys, slot, de, sdsdup(key->ptr));
     initObjectLRUOrLFU(val);
-    kvstoreDictSetVal(db->keys, slot, de, val);
+    kvstoreDictSetVal(de, val);
     signalKeyAsReady(db, key, val->type);
     notifyKeyspaceEvent(NOTIFY_NEW, "new", key, db->id);
 }
@@ -251,7 +251,7 @@ int dbAddRDBLoad(serverDb *db, sds key, robj *val) {
     dictEntry *de = kvstoreDictAddRaw(db->keys, slot, key, NULL);
     if (de == NULL) return 0;
     initObjectLRUOrLFU(val);
-    kvstoreDictSetVal(db->keys, slot, de, val);
+    kvstoreDictSetVal(de, val);
     return 1;
 }
 
@@ -289,7 +289,7 @@ static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEn
         /* Because of RM_StringDMA, old may be changed, so we need get old again */
         old = dictGetVal(de);
     }
-    kvstoreDictSetVal(db->keys, slot, de, val);
+    kvstoreDictSetVal(de, val);
     if (server.lazyfree_lazy_server_del) {
         freeObjAsync(key, old, db->id);
     } else {
@@ -398,7 +398,7 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
         if (async) {
             /* Because of dbUnshareStringValue, the val in de may change. */
             freeObjAsync(key, dictGetVal(de), db->id);
-            kvstoreDictSetVal(db->keys, slot, de, NULL);
+            kvstoreDictSetVal(de, NULL);
         }
         /* Deleting an entry from the expires dict will not free the sds of
          * the key, because it is shared with the main dictionary. */

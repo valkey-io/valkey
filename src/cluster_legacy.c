@@ -144,7 +144,6 @@ static inline int defaultClientPort(void) {
 dictType clusterNodesDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     dictSdsDestructor, /* key destructor */
     NULL,              /* val destructor */
@@ -157,7 +156,6 @@ dictType clusterNodesDictType = {
 dictType clusterNodesBlackListDictType = {
     dictSdsCaseHash,       /* hash function */
     NULL,                  /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     NULL,                  /* val destructor */
@@ -168,7 +166,6 @@ dictType clusterNodesBlackListDictType = {
 dictType clusterSdsToListType = {
     dictSdsHash,        /* hash function */
     NULL,               /* key dup */
-    NULL,               /* val dup */
     dictSdsKeyCompare,  /* key compare */
     dictSdsDestructor,  /* key destructor */
     dictListDestructor, /* val destructor */

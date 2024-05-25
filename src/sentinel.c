@@ -430,7 +430,6 @@ void dictInstancesValDestructor(dict *d, void *obj) {
 dictType instancesDictType = {
     dictSdsHash,                /* hash function */
     NULL,                       /* key dup */
-    NULL,                       /* val dup */
     dictSdsKeyCompare,          /* key compare */
     NULL,                       /* key destructor */
     dictInstancesValDestructor, /* val destructor */
@@ -444,7 +443,6 @@ dictType instancesDictType = {
 dictType leaderVotesDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     NULL,              /* key destructor */
     NULL,              /* val destructor */
@@ -455,7 +453,6 @@ dictType leaderVotesDictType = {
 dictType renamedCommandsDictType = {
     dictSdsCaseHash,       /* hash function */
     NULL,                  /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     dictSdsDestructor,     /* val destructor */

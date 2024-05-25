@@ -793,9 +793,8 @@ void kvstoreDictSetKey(kvstore *kvs, int didx, dictEntry *de, void *key) {
     dictSetKey(d, de, key);
 }
 
-void kvstoreDictSetVal(kvstore *kvs, int didx, dictEntry *de, void *val) {
-    dict *d = kvstoreGetDict(kvs, didx);
-    dictSetVal(d, de, val);
+void kvstoreDictSetVal(dictEntry *de, void *val) {
+    dictSetVal(de, val);
 }
 
 dictEntry *

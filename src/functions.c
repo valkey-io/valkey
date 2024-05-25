@@ -65,7 +65,6 @@ typedef struct functionsLibMetaData {
 dictType engineDictType = {
     dictSdsCaseHash,       /* hash function */
     dictSdsDup,            /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     NULL,                  /* val destructor */
@@ -75,7 +74,6 @@ dictType engineDictType = {
 dictType functionDictType = {
     dictSdsCaseHash,       /* hash function */
     dictSdsDup,            /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     NULL,                  /* val destructor */
@@ -85,7 +83,6 @@ dictType functionDictType = {
 dictType engineStatsDictType = {
     dictSdsCaseHash,       /* hash function */
     dictSdsDup,            /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     engineStatsDispose,    /* val destructor */
@@ -95,7 +92,6 @@ dictType engineStatsDictType = {
 dictType libraryFunctionDictType = {
     dictSdsHash,           /* hash function */
     dictSdsDup,            /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCompare,     /* key compare */
     dictSdsDestructor,     /* key destructor */
     engineFunctionDispose, /* val destructor */
@@ -105,7 +101,6 @@ dictType libraryFunctionDictType = {
 dictType librariesDictType = {
     dictSdsHash,          /* hash function */
     dictSdsDup,           /* key dup */
-    NULL,                 /* val dup */
     dictSdsKeyCompare,    /* key compare */
     dictSdsDestructor,    /* key destructor */
     engineLibraryDispose, /* val destructor */
@@ -286,7 +281,7 @@ static void libraryUnlink(functionsLibCtx *lib_ctx, functionLibInfo *li) {
     }
     dictReleaseIterator(iter);
     entry = dictUnlink(lib_ctx->libraries, li->name);
-    dictSetVal(lib_ctx->libraries, entry, NULL);
+    dictSetVal(entry, NULL);
     dictFreeUnlinkedEntry(lib_ctx->libraries, entry);
     lib_ctx->cache_memory -= libraryMallocSize(li);
 
@@ -370,7 +365,7 @@ libraryJoin(functionsLibCtx *functions_lib_ctx_dst, functionsLibCtx *functions_l
     while ((entry = dictNext(iter))) {
         functionLibInfo *li = dictGetVal(entry);
         libraryLink(functions_lib_ctx_dst, li);
-        dictSetVal(functions_lib_ctx_src->libraries, entry, NULL);
+        dictSetVal(entry, NULL);
     }
     dictReleaseIterator(iter);
     iter = NULL;

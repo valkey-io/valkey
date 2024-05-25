@@ -1478,7 +1478,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
                 /* Note that we did not removed the original element from
                  * the hash table representing the sorted set, so we just
                  * update the score. */
-                dictSetVal(zs->dict, de, &znode->score); /* Update score ptr. */
+                dictSetVal(de, &znode->score); /* Update score ptr. */
                 *out_flags |= ZADD_OUT_UPDATED;
             }
             return 1;
@@ -2527,7 +2527,6 @@ static void zdiff(zsetopsrc *src, long setnum, zset *dstzset, size_t *maxelelen,
 dictType setAccumulatorDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     NULL,              /* key destructor */
     NULL,              /* val destructor */

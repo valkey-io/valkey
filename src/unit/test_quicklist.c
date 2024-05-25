@@ -2089,6 +2089,77 @@ int test_quicklistLtrimTestDAtCompress(int argc, char **argv, int flags) {
     return 0;
 }
 
+int test_quicklistVerifySpecificCompressionOfInteriorNodes(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    int accurate = flags & UNIT_TEST_ACCURATE;
+
+    TEST("verify specific compression of interior nodes");
+
+    /* Run a longer test of compression depth outside of primary test loop. */
+    int list_sizes[] = {250, 251, 500, 999, 1000};
+    int list_count = accurate ? (int)(sizeof(list_sizes) / sizeof(*list_sizes)) : 1;
+    for (int list = 0; list < list_count; list++) {
+
+        for (int f = 0; f < fill_count; f++) {
+            for (int depth = 1; depth < 40; depth++) {
+                /* skip over many redundant test cases */
+                quicklist *ql = quicklistNew(fills[f], depth);
+                for (int i = 0; i < list_sizes[list]; i++) {
+                    quicklistPushTail(ql, genstr("hello TAIL", i + 1), 64);
+                    quicklistPushHead(ql, genstr("hello HEAD", i + 1), 64);
+                }
+
+                for (int step = 0; step < 2; step++) {
+                    /* test remove node */
+                    if (step == 1) {
+                        for (int i = 0; i < list_sizes[list] / 2; i++) {
+                            unsigned char *data;
+                            TEST_ASSERT(quicklistPop(ql, QUICKLIST_HEAD, &data,
+                                                NULL, NULL));
+                            zfree(data);
+                            TEST_ASSERT(quicklistPop(ql, QUICKLIST_TAIL, &data,
+                                                NULL, NULL));
+                            zfree(data);
+                        }
+                    }
+                    quicklistNode *node = ql->head;
+                    unsigned int low_raw = ql->compress;
+                    unsigned int high_raw = ql->len - ql->compress;
+
+                    for (unsigned int at = 0; at < ql->len;
+                        at++, node = node->next) {
+                        if (at < low_raw || at >= high_raw) {
+                            if (node->encoding != QUICKLIST_NODE_ENCODING_RAW) {
+                                TEST_PRINT_INFO("Incorrect compression: node %d is "
+                                    "compressed at depth %d ((%u, %u); total "
+                                    "nodes: %lu; size: %zu)",
+                                    at, depth, low_raw, high_raw, ql->len,
+                                    node->sz);
+                                err++;
+                            }
+                        } else {
+                            if (node->encoding != QUICKLIST_NODE_ENCODING_LZF) {
+                                TEST_PRINT_INFO("Incorrect non-compression: node %d is NOT "
+                                    "compressed at depth %d ((%u, %u); total "
+                                    "nodes: %lu; size: %zu; attempted: %d)",
+                                    at, depth, low_raw, high_raw, ql->len,
+                                    node->sz, node->attempted_compress);
+                                err++;
+                            }
+                        }
+                    }
+                }
+
+                quicklistRelease(ql);
+            }
+        }
+    }
+    TEST_ASSERT(err == 0);
+    return 0;
+}
+
 /*-----------------------------------------------------------------------------
  * Quicklist Bookmark Unit Test
  *----------------------------------------------------------------------------*/

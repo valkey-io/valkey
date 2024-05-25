@@ -2088,3 +2088,146 @@ int test_quicklistLtrimTestDAtCompress(int argc, char **argv, int flags) {
     TEST_ASSERT(err == 0);
     return 0;
 }
+
+/*-----------------------------------------------------------------------------
+ * Quicklist Bookmark Unit Test
+ *----------------------------------------------------------------------------*/
+
+int test_quicklistBookmarkGetUpdatedToNextItem(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    TEST("bookmark get updated to next item");
+
+    quicklist *ql = quicklistNew(1, 0);
+    quicklistPushTail(ql, "1", 1);
+    quicklistPushTail(ql, "2", 1);
+    quicklistPushTail(ql, "3", 1);
+    quicklistPushTail(ql, "4", 1);
+    quicklistPushTail(ql, "5", 1);
+    TEST_ASSERT(ql->len==5);
+    /* add two bookmarks, one pointing to the node before the last. */
+    TEST_ASSERT(quicklistBookmarkCreate(&ql, "_dummy", ql->head->next));
+    TEST_ASSERT(quicklistBookmarkCreate(&ql, "_test", ql->tail->prev));
+    /* test that the bookmark returns the right node, delete it and see that the bookmark points to the last node */
+    TEST_ASSERT(quicklistBookmarkFind(ql, "_test") == ql->tail->prev);
+    TEST_ASSERT(quicklistDelRange(ql, -2, 1));
+    TEST_ASSERT(quicklistBookmarkFind(ql, "_test") == ql->tail);
+    /* delete the last node, and see that the bookmark was deleted. */
+    TEST_ASSERT(quicklistDelRange(ql, -1, 1));
+    TEST_ASSERT(quicklistBookmarkFind(ql, "_test") == NULL);
+    /* test that other bookmarks aren't affected */
+    TEST_ASSERT(quicklistBookmarkFind(ql, "_dummy") == ql->head->next);
+    TEST_ASSERT(quicklistBookmarkFind(ql, "_missing") == NULL);
+    TEST_ASSERT(ql->len==3);
+    quicklistBookmarksClear(ql); /* for coverage */
+    TEST_ASSERT(quicklistBookmarkFind(ql, "_dummy") == NULL);
+    quicklistRelease(ql);
+    return 0;
+}
+
+int test_quicklistBookmarkLimit(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    TEST("bookmark limit");
+    
+    int i;
+    quicklist *ql = quicklistNew(1, 0);
+    quicklistPushHead(ql, "1", 1);
+    for (i=0; i < QL_MAX_BM; i++)
+        TEST_ASSERT(quicklistBookmarkCreate(&ql, genstr("",i), ql->head));
+    /* when all bookmarks are used, creation fails */
+    TEST_ASSERT(!quicklistBookmarkCreate(&ql, "_test", ql->head));
+    /* delete one and see that we can now create another */
+    TEST_ASSERT(quicklistBookmarkDelete(ql, "0"));
+    TEST_ASSERT(quicklistBookmarkCreate(&ql, "_test", ql->head));
+    /* delete one and see that the rest survive */
+    TEST_ASSERT(quicklistBookmarkDelete(ql, "_test"));
+    for (i=1; i < QL_MAX_BM; i++)
+        TEST_ASSERT(quicklistBookmarkFind(ql, genstr("",i)) == ql->head);
+    /* make sure the deleted ones are indeed gone */
+    TEST_ASSERT(!quicklistBookmarkFind(ql, "0"));
+    TEST_ASSERT(!quicklistBookmarkFind(ql, "_test"));
+    quicklistRelease(ql);
+    return 0;
+}
+
+int test_quicklistCompressAndDecompressQuicklistListpackNode(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    TEST("compress and decompress quicklist listpack node");
+
+    if (!(flags & UNIT_TEST_LARGE_MEMORY)) return 0;
+
+    quicklistNode *node = quicklistCreateNode();
+    node->entry = lpNew(0);
+
+    /* Just to avoid triggering the assertion in __quicklistCompressNode(),
+        * it disables the passing of quicklist head or tail node. */
+    node->prev = quicklistCreateNode();
+    node->next = quicklistCreateNode();
+
+    /* Create a rand string */
+    size_t sz = (1 << 25); /* 32MB per one entry */
+    unsigned char *s = zmalloc(sz);
+    randstring(s, sz);
+
+    /* Keep filling the node, until it reaches 1GB */
+    for (int i = 0; i < 32; i++) {
+        node->entry = lpAppend(node->entry, s, sz);
+        node->sz = lpBytes((node)->entry);
+
+        long long start = mstime();
+        TEST_ASSERT(__quicklistCompressNode(node));
+        TEST_ASSERT(__quicklistDecompressNode(node));
+        TEST_PRINT_INFO("Compress and decompress: %zu MB in %.2f seconds.\n",
+                node->sz/1024/1024, (float)(mstime() - start) / 1000);
+    }
+
+    zfree(s);
+    zfree(node->prev);
+    zfree(node->next);
+    zfree(node->entry);
+    zfree(node);
+    return 0;
+}
+
+int test_quicklistCompressAndDecomressQuicklistPlainNodeLargeThanUINT32MAX(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    TEST("compress and decomress quicklist plain node large than UINT32_MAX");
+
+    if (!(flags & UNIT_TEST_LARGE_MEMORY)) return 0;
+
+    #if ULONG_MAX >= 0xffffffffffffffff
+
+    size_t sz = (1ull << 32);
+    unsigned char *s = zmalloc(sz);
+    randstring(s, sz);
+    memcpy(s, "helloworld", 10);
+    memcpy(s + sz - 10, "1234567890", 10);
+
+    quicklistNode *node = __quicklistCreateNode(QUICKLIST_NODE_CONTAINER_PLAIN, s, sz);
+
+    /* Just to avoid triggering the assertion in __quicklistCompressNode(),
+    * it disables the passing of quicklist head or tail node. */
+    node->prev = quicklistCreateNode();
+    node->next = quicklistCreateNode();
+
+    long long start = mstime();
+    TEST_ASSERT(__quicklistCompressNode(node));
+    TEST_ASSERT(__quicklistDecompressNode(node));
+    TEST_PRINT_INFO("Compress and decompress: %zu MB in %.2f seconds.\n",
+        node->sz/1024/1024, (float)(mstime() - start) / 1000);
+
+    TEST_ASSERT(memcmp(node->entry, "helloworld", 10) == 0);
+    TEST_ASSERT(memcmp(node->entry + sz - 10, "1234567890", 10) == 0);
+    zfree(node->prev);
+    zfree(node->next);
+    zfree(node->entry);
+    zfree(node);
+
+    #endif
+    return 0;
+}

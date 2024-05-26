@@ -338,6 +338,27 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
     set R1_id [R 1 CLUSTER MYID]
 
+    test "CLUSTER SETSLOT with invalid timeouts" {
+        catch {R 0 CLUSTER SETSLOT 609 MIGRATING $R1_id TIMEOUT} e
+        assert_equal $e "ERR Missing timeout value"
+
+        catch {R 0 CLUSTER SETSLOT 609 MIGRATING $R1_id TIMEOUT -1} e
+        assert_equal $e "ERR timeout is negative"
+
+        catch {R 0 CLUSTER SETSLOT 609 MIGRATING $R1_id TIMEOUT 99999999999999999999} e
+        assert_equal $e "ERR timeout is not an integer or out of range"
+
+        catch {R 0 CLUSTER SETSLOT 609 MIGRATING $R1_id TIMEOUT abc} e
+        assert_equal $e "ERR timeout is not an integer or out of range"
+
+        catch {R 0 CLUSTER SETSLOT 609 TIMEOUT 100 MIGRATING $R1_id} e
+        assert_equal $e "ERR Invalid CLUSTER SETSLOT action or number of arguments. Try CLUSTER HELP"
+    }
+}
+
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+    set R1_id [R 1 CLUSTER MYID]
+
     test "CLUSTER SETSLOT with an explicit timeout" {
         # Pause the replica to simulate a failure
         pause_process [srv -3 pid]

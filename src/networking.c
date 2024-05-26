@@ -178,6 +178,7 @@ client *createClient(connection *conn) {
     c->repl_last_partial_write = 0;
     c->slave_listening_port = 0;
     c->slave_addr = NULL;
+    c->replica_version = 0;
     c->slave_capa = SLAVE_CAPA_NONE;
     c->slave_req = SLAVE_REQ_NONE;
     c->reply = listCreate();

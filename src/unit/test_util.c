@@ -253,6 +253,18 @@ int test_fixedpoint_d2string(int argc, char **argv, int flags) {
     return 0;
 }
 
+int test_version2num(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    TEST_ASSERT(version2num("7.2.5") == 0x070205);
+    TEST_ASSERT(version2num("255.255.255") == 0xffffff);
+    TEST_ASSERT(version2num("1.-2.-3") == -1);
+    TEST_ASSERT(version2num("1.2.3-rc4") == -1);
+    TEST_ASSERT(version2num("") == -1);
+    return 0;
+}
+
 #if defined(__linux__)
 /* Since fadvise and mincore is only supported in specific platforms like
  * Linux, we only verify the fadvise mechanism works in Linux */

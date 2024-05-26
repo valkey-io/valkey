@@ -78,6 +78,7 @@ int d2string(char *buf, size_t len, double value);
 int fixedpoint_d2string(char *dst, size_t dstlen, double dvalue, int fractional_digits);
 int ld2string(char *buf, size_t len, long double value, ld2string_mode mode);
 int double2ll(double d, long long *out);
+int version2num(const char *version);
 int yesnotoi(char *s);
 sds getAbsolutePath(char *filename);
 long getTimeZone(void);

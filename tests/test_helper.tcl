@@ -65,6 +65,7 @@ set ::active_servers {} ; # Pids of active server instances.
 set ::dont_clean 0
 set ::dont_pre_clean 0
 set ::wait_server 0
+set ::exit_on_failure 0
 set ::stop_on_failure 0
 set ::dump_logs 0
 set ::loop 0
@@ -221,6 +222,16 @@ proc valkey_client {args} {
     return $client
 }
 
+proc valkey_deferring_client_by_addr {host port} {
+    set client [valkey $host $port 1 $::tls]
+    return $client
+}
+
+proc valkey_client_by_addr {host port} {
+    set client [valkey $host $port 0 $::tls]
+    return $client
+}
+
 # Provide easy access to INFO properties. Same semantic as "proc r".
 proc s {args} {
     set level 0
@@ -373,6 +384,11 @@ proc read_from_test_client fd {
         puts $err
         lappend ::failed_tests $err
         set ::active_clients_task($fd) "(ERR) $data"
+        if {$::exit_on_failure} {
+            puts -nonewline "(Fast fail: test will exit now)"
+            flush stdout
+            exit 1
+        }
         if {$::stop_on_failure} {
             puts -nonewline "(Test stopped, press enter to resume the tests)"
             flush stdout
@@ -554,6 +570,7 @@ proc print_help_screen {} {
         "--dont-clean       Don't delete valkey log files after the run."
         "--dont-pre-clean   Don't delete existing valkey log files before the run."
         "--no-latency       Skip latency measurements and validation by some tests."
+        "--fastfail         Exit immediately once the first test fails."
         "--stop             Blocks once the first test fails."
         "--loop             Execute the specified set of tests forever."
         "--loops <count>    Execute the specified set of tests several times."
@@ -678,6 +695,8 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         set ::wait_server 1
     } elseif {$opt eq {--dump-logs}} {
         set ::dump_logs 1
+    } elseif {$opt eq {--fastfail}} {
+        set ::exit_on_failure 1
     } elseif {$opt eq {--stop}} {
         set ::stop_on_failure 1
     } elseif {$opt eq {--loop}} {

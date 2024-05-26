@@ -51,7 +51,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    int numtests = sizeof(unitTestSuite)/sizeof(struct unitTest);
+    int numtests = sizeof(unitTestSuite)/sizeof(struct unitTestSuite);
     int failed_num = 0, suites_executed = 0;
     for (int j = 0; j < numtests; j++) {
         if (file && strcasecmp(file, unitTestSuite[j].filename)) continue;

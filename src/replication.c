@@ -42,6 +42,7 @@
 #include <stdatomic.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <ctype.h>
 
 void replicationDiscardCachedMaster(void);
 void replicationResurrectCachedMaster(connection *conn);
@@ -376,6 +377,12 @@ void incrementalTrimReplicationBacklog(size_t max_blocks) {
 
 /* Free replication buffer blocks that are referenced by this client. */
 void freeReplicaReferencedReplBuffer(client *replica) {
+    if (replica->flags & CLIENT_REPL_RDB_CHANNEL) {
+        serverLog(LL_DEBUG, "Remove psync waiting slave %s with cid %llu from replicas rax.", 
+            replicationGetSlaveName(replica), (long long unsigned int)replica->associated_rdb_client_id);
+        uint64_t id = htonu64(replica->id);
+        raxRemove(server.slaves_waiting_psync,(unsigned char*)&id,sizeof(id),NULL);        
+    }
     if (replica->ref_repl_buf_node != NULL) {
         /* Decrease the start buffer node reference count. */
         replBufBlock *o = listNodeValue(replica->ref_repl_buf_node);

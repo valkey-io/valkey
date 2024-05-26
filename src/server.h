@@ -431,11 +431,11 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_REPLICATION_DONE (1ULL << 51)         /* Indicate that replication has been done on the client */
 #define CLIENT_AUTHENTICATED (1ULL << 52)            /* Indicate a client has successfully authenticated */
 
-#define CLIENT_REPL_MAIN_CHANNEL (1ULL<<50) /* RDB Channel: track a connection
+#define CLIENT_REPL_MAIN_CHANNEL (1ULL<<52) /* RDB Channel: track a connection
                                                  which is used for online replication data */
-#define CLIENT_REPL_RDB_CHANNEL (1ULL<<51) /* RDB Channel: track a connection
+#define CLIENT_REPL_RDB_CHANNEL (1ULL<<53) /* RDB Channel: track a connection
                                                  which is used for rdb snapshot */
-#define CLIENT_PROTECTED_RDB_CHANNEL (1ULL<<52) /* Client should kept until PSYNC establishment. */
+#define CLIENT_PROTECTED_RDB_CHANNEL (1ULL<<54) /* Client should kept until PSYNC establishment. */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */

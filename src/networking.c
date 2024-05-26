@@ -1695,9 +1695,6 @@ void freeClient(client *c) {
         if (c->repl_state == REPLICA_STATE_ONLINE)
             moduleFireServerEvent(VALKEYMODULE_EVENT_REPLICA_CHANGE, VALKEYMODULE_SUBEVENT_REPLICA_CHANGE_OFFLINE,
                                   NULL);
-        if (c->flags & CLIENT_REPL_RDB_CHANNEL) {
-            uint64_t id = htonu64(c->id);
-            raxRemove(server.slaves_waiting_psync,(unsigned char*)&id,sizeof(id),NULL);        }
     }
 
     /* Primary/replica cleanup Case 2:
@@ -2762,7 +2759,7 @@ void readQueryFromClient(connection *conn) {
             sds info = catClientInfoString(sdsempty(), c);
             serverLog(LL_VERBOSE, "Client closed connection %s", info);
             if (c->flags & CLIENT_PROTECTED_RDB_CHANNEL) {
-                serverLog(LL_VERBOSE, "Postpone RDB client (%llu) free for %d seconds", (unsigned long long)c->id, server.wait_before_rdb_client_free);
+                serverLog(LL_VERBOSE, "Postpone RDB client id=%llu (%s) free for %d seconds", (unsigned long long)c->id, replicationGetSlaveName(c), server.wait_before_rdb_client_free);
             }
             sdsfree(info);
         }

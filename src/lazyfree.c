@@ -11,7 +11,7 @@ static _Atomic size_t lazyfreed_objects = 0;
 /* Release objects from the lazyfree thread. It's just decrRefCount()
  * updating the count of objects to release. */
 void lazyfreeFreeObject(void *args[]) {
-    robj *o = (robj *) args[0];
+    robj *o = (robj *)args[0];
     decrRefCount(o);
     atomic_fetch_sub_explicit(&lazyfree_objects,1,memory_order_relaxed);
     atomic_fetch_add_explicit(&lazyfreed_objects,1,memory_order_relaxed);
@@ -119,7 +119,7 @@ size_t lazyfreeGetFreeEffort(robj *key, robj *obj, int dbid) {
     } else if (obj->type == OBJ_SET && obj->encoding == OBJ_ENCODING_HT) {
         dict *ht = obj->ptr;
         return dictSize(ht);
-    } else if (obj->type == OBJ_ZSET && obj->encoding == OBJ_ENCODING_SKIPLIST){
+    } else if (obj->type == OBJ_ZSET && obj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = obj->ptr;
         return zs->zsl->length;
     } else if (obj->type == OBJ_HASH && obj->encoding == OBJ_ENCODING_HT) {
@@ -139,13 +139,13 @@ size_t lazyfreeGetFreeEffort(robj *key, robj *obj, int dbid) {
         if (s->cgroups && raxSize(s->cgroups)) {
             raxIterator ri;
             streamCG *cg;
-            raxStart(&ri,s->cgroups);
-            raxSeek(&ri,"^",NULL,0);
+            raxStart(&ri, s->cgroups);
+            raxSeek(&ri, "^", NULL, 0);
             /* There must be at least one group so the following should always
              * work. */
             serverAssert(raxNext(&ri));
             cg = ri.data;
-            effort += raxSize(s->cgroups)*(1+raxSize(cg->pel));
+            effort += raxSize(s->cgroups) * (1 + raxSize(cg->pel));
             raxStop(&ri);
         }
         return effort;
@@ -168,7 +168,7 @@ size_t lazyfreeGetFreeEffort(robj *key, robj *obj, int dbid) {
 
 /* Free an object, if the object is huge enough, free it in async way. */
 void freeObjAsync(robj *key, robj *obj, int dbid) {
-    size_t free_effort = lazyfreeGetFreeEffort(key,obj,dbid);
+    size_t free_effort = lazyfreeGetFreeEffort(key, obj, dbid);
     /* Note that if the object is shared, to reclaim it now it is not
      * possible. This rarely happens, however sometimes the implementation
      * of parts of the server core may call incrRefCount() to protect

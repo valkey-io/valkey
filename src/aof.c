@@ -946,7 +946,7 @@ void stopAppendOnly(void) {
     server.aof_last_incr_size = 0;
     server.aof_last_incr_fsync_offset = 0;
     server.fsynced_reploff = -1;
-    atomicSet(server.fsynced_reploff_pending, 0);
+    atomic_store_explicit(&server.fsynced_reploff_pending, 0, memory_order_relaxed);
     killAppendOnlyChild();
     sdsfree(server.aof_buf);
     server.aof_buf = sdsempty();
@@ -985,11 +985,11 @@ int startAppendOnly(void) {
     }
     server.aof_last_fsync = server.mstime;
     /* If AOF fsync error in bio job, we just ignore it and log the event. */
-    int aof_bio_fsync_status;
-    atomicGet(server.aof_bio_fsync_status, aof_bio_fsync_status);
+    int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
     if (aof_bio_fsync_status == C_ERR) {
-        serverLog(LL_WARNING, "AOF reopen, just ignore the AOF fsync error in bio job");
-        atomicSet(server.aof_bio_fsync_status, C_OK);
+        serverLog(LL_WARNING,
+            "AOF reopen, just ignore the AOF fsync error in bio job");
+        atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
     }
 
     /* If AOF was in error state, we just ignore it and log the event. */
@@ -1074,7 +1074,7 @@ void flushAppendOnlyFile(int force) {
              * (because there's no reason, from the AOF POV, to call fsync) and then WAITAOF may wait on
              * the higher offset (which contains data that was only propagated to replicas, and not to AOF) */
             if (!sync_in_progress && server.aof_fsync != AOF_FSYNC_NO)
-                atomicSet(server.fsynced_reploff_pending, server.master_repl_offset);
+                atomic_store_explicit(&server.fsynced_reploff_pending, server.master_repl_offset, memory_order_relaxed);
             return;
         }
     }
@@ -1244,8 +1244,9 @@ try_fsync:
         latencyAddSampleIfNeeded("aof-fsync-always", latency);
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         server.aof_last_fsync = server.mstime;
-        atomicSet(server.fsynced_reploff_pending, server.master_repl_offset);
-    } else if (server.aof_fsync == AOF_FSYNC_EVERYSEC && server.mstime - server.aof_last_fsync >= 1000) {
+        atomic_store_explicit(&server.fsynced_reploff_pending, server.master_repl_offset, memory_order_relaxed);
+    } else if (server.aof_fsync == AOF_FSYNC_EVERYSEC &&
+               server.mstime - server.aof_last_fsync >= 1000) {
         if (!sync_in_progress) {
             aof_background_fsync(server.aof_fd);
             server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
@@ -2409,7 +2410,7 @@ int rewriteAppendOnlyFileBackground(void) {
 
         /* Set the initial repl_offset, which will be applied to fsynced_reploff
          * when AOFRW finishes (after possibly being updated by a bio thread) */
-        atomicSet(server.fsynced_reploff_pending, server.master_repl_offset);
+        atomic_store_explicit(&server.fsynced_reploff_pending, server.master_repl_offset, memory_order_relaxed);
         server.fsynced_reploff = 0;
     }
 
@@ -2647,8 +2648,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
             /* Update the fsynced replication offset that just now become valid.
              * This could either be the one we took in startAppendOnly, or a
              * newer one set by the bio thread. */
-            long long fsynced_reploff_pending;
-            atomicGet(server.fsynced_reploff_pending, fsynced_reploff_pending);
+            long long fsynced_reploff_pending = atomic_load_explicit(&server.fsynced_reploff_pending, memory_order_relaxed);
             server.fsynced_reploff = fsynced_reploff_pending;
         }
 

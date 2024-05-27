@@ -29,7 +29,6 @@
 
 #include "server.h"
 #include "cluster.h"
-#include "atomicvar.h"
 #include "latency.h"
 #include "script.h"
 #include "functions.h"

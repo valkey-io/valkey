@@ -71,6 +71,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     set R3_id [R 3 CLUSTER MYID]
     set R4_id [R 4 CLUSTER MYID]
     set R5_id [R 5 CLUSTER MYID]
+    R 0 SET "{aga}2" banana
 
     test "Slot migration states are replicated" {
         # Validate initial states
@@ -139,8 +140,51 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
         assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
         catch {[R 3 get aga]} e
-        assert_equal {MOVED} [lindex [split $e] 0]
-        assert_equal {609} [lindex [split $e] 1]
+        set port0 [srv 0 port]
+        assert_equal "MOVED 609 127.0.0.1:$port0" $e
+    }
+
+    test "Replica of migrating node returns ASK redirect after READONLY" {
+        # Validate initial states
+        assert_equal [get_open_slots 0] "\[609->-$R1_id\]"
+        assert_equal [get_open_slots 1] "\[609-<-$R0_id\]"
+        assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
+        assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
+        # Read missing key in readonly replica in migrating state.
+        assert_equal OK [R 3 READONLY]
+        set port1 [srv -1 port]
+        catch {[R 3 get aga]} e
+        assert_equal "ASK 609 127.0.0.1:$port1" $e
+        assert_equal OK [R 3 READWRITE]
+    }
+
+    test "Replica of migrating node returns TRYAGAIN after READONLY" {
+        # Validate initial states
+        assert_equal [get_open_slots 0] "\[609->-$R1_id\]"
+        assert_equal [get_open_slots 1] "\[609-<-$R0_id\]"
+        assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
+        assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
+        # Read some existing and some missing keys in readonly replica in
+        # migrating state results in TRYAGAIN, just like its primary would do.
+        assert_equal OK [R 3 READONLY]
+        catch {[R 3 mget "{aga}1" "{aga}2"]} e
+        assert_match "TRYAGAIN *" $e
+        assert_equal OK [R 3 READWRITE]
+    }
+
+    test "Replica of importing node returns TRYAGAIN after READONLY and ASKING" {
+        # Validate initial states
+        assert_equal [get_open_slots 0] "\[609->-$R1_id\]"
+        assert_equal [get_open_slots 1] "\[609-<-$R0_id\]"
+        assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
+        assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
+        # A client follows an ASK redirect to a primary, but wants to read from a replica.
+        # The replica returns TRYAGAIN just like a primary would do for two missing keys.
+        assert_equal OK [R 4 READONLY]
+        assert_equal OK [R 4 ASKING]
+        catch {R 4 MGET "{aga}1" "{aga}2"} e
+        assert_match "TRYAGAIN *" $e
+        assert_equal OK [R 4 READWRITE]
     }
 
     test "New replica inherits migrating slot" {

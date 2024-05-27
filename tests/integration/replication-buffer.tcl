@@ -203,7 +203,7 @@ start_server {} {
         r set key [string repeat A [expr 64*2048]]
         # master will close replica2's connection since replica2's output
         # buffer limit is reached, so there only is replica1.
-        wait_for_condition 1000000 100 {
+        wait_for_condition 100 100 {
             [s connected_slaves] eq {1}
         } else {
             fail "master didn't disconnect with replica2"

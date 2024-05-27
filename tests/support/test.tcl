@@ -142,18 +142,21 @@ proc wait_for_condition {maxtries delay e _else_ elsescript} {
 }
 
 proc verify_replica_online {master replica_idx max_retry} {
-    while {$max_retry} {
+    set pause 100
+    set count_down $max_retry
+    while {$count_down} {
         set info [$master info]
         set pattern *slave$replica_idx:*state=online*
         if {[string match $pattern $info]} {
             break
         } else {
-            incr max_retry -1
-            after 100
+            incr count_down -1
+            after $pause
         }
     }
-    if {$max_retry == 0} {
-        error "assertion:Replica not correctly synchronized"
+    if {$count_down == 0} {
+        set threashold [expr {$max_retry*$pause/1000}]
+        error "assertion:Replica is not in sync after $threashold seconds"
     } 
 }
 

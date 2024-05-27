@@ -1364,8 +1364,8 @@ void sendBulkToSlave(connection *conn) {
             freeClient(slave);
             return;
         }
-        atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes,nwritten,memory_order_relaxed);
-        sdsrange(slave->replpreamble,nwritten,-1);
+        atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes, nwritten, memory_order_relaxed);
+        sdsrange(slave->replpreamble, nwritten, -1);
         if (sdslen(slave->replpreamble) == 0) {
             sdsfree(slave->replpreamble);
             slave->replpreamble = NULL;
@@ -1392,7 +1392,7 @@ void sendBulkToSlave(connection *conn) {
         return;
     }
     slave->repldboff += nwritten;
-    atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes,nwritten,memory_order_relaxed);
+    atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes, nwritten, memory_order_relaxed);
     if (slave->repldboff == slave->repldbsize) {
         closeRepldbfd(slave);
         connSetWriteHandler(slave->conn, NULL);
@@ -1434,7 +1434,7 @@ void rdbPipeWriteHandler(struct connection *conn) {
         return;
     } else {
         slave->repldboff += nwritten;
-        atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes,nwritten,memory_order_relaxed);
+        atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes, nwritten, memory_order_relaxed);
         if (slave->repldboff < server.rdb_pipe_bufflen) {
             slave->repl_last_partial_write = server.unixtime;
             return; /* more data to write.. */
@@ -1507,7 +1507,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
                 /* Note: when use diskless replication, 'repldboff' is the offset
                  * of 'rdb_pipe_buff' sent rather than the offset of entire RDB. */
                 slave->repldboff = nwritten;
-                atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes,nwritten,memory_order_relaxed);
+                atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes, nwritten, memory_order_relaxed);
             }
             /* If we were unable to write all the data to one of the replicas,
              * setup write handler (and disable pipe read handler, below) */
@@ -1815,7 +1815,7 @@ void readSyncBulkPayload(connection *conn) {
         } else {
             /* nread here is returned by connSyncReadLine(), which calls syncReadLine() and
              * convert "\r\n" to '\0' so 1 byte is lost. */
-            atomic_fetch_add_explicit(&server.stat_net_repl_input_bytes,nread+1,memory_order_relaxed);
+            atomic_fetch_add_explicit(&server.stat_net_repl_input_bytes, nread + 1, memory_order_relaxed);
         }
 
         if (buf[0] == '-') {
@@ -1884,7 +1884,7 @@ void readSyncBulkPayload(connection *conn) {
             cancelReplicationHandshake(1);
             return;
         }
-        atomic_fetch_add_explicit(&server.stat_net_repl_input_bytes,nread,memory_order_relaxed);
+        atomic_fetch_add_explicit(&server.stat_net_repl_input_bytes, nread, memory_order_relaxed);
 
         /* When a mark is used, we want to detect EOF asap in order to avoid
          * writing the EOF mark into the file... */

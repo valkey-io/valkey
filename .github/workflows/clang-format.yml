@@ -1,0 +1,35 @@
+name: Clang Format Check
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+
+jobs:
+  clang-format-check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    - name: Set up Clang
+      run: |
+        sudo apt-get update -y
+        sudo apt-get upgrade -y
+        sudo apt-get install -y clang-format
+    - name: Run clang-format
+      id: clang-format
+      run: |
+        # Run clang-format and capture the diff
+        cd src
+        clang-format -i **/*.c **/*.h
+        git diff --exit-code
+      shell: bash
+
+    - name: Check for formatting changes
+      if: ${{ failure() }}
+      run: |
+        echo "Code is not formatted correctly."
+        exit 1
+

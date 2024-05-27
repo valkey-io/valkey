@@ -1,5 +1,6 @@
 .*.swp
 *.o
+*.a
 *.xo
 *.so
 *.d
@@ -12,6 +13,7 @@ dump.rdb
 *-cli
 *-sentinel
 *-server
+*-unit-tests
 doc-tools
 release
 misc/*
@@ -23,8 +25,7 @@ release.h
 src/transfer.sh
 src/configs
 redis.ds
-src/redis.conf
-src/nodes.conf
+src/*.conf
 deps/lua/src/lua
 deps/lua/src/luac
 deps/lua/src/liblua.a

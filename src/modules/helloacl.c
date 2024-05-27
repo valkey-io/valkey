@@ -31,160 +31,160 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "../redismodule.h"
+#include "../valkeymodule.h"
 #include <pthread.h>
 #include <unistd.h>
 
 // A simple global user
-static RedisModuleUser *global;
+static ValkeyModuleUser *global;
 static uint64_t global_auth_client_id = 0;
 
 /* HELLOACL.REVOKE 
  * Synchronously revoke access from a user. */
-int RevokeCommand_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+int RevokeCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
     if (global_auth_client_id) {
-        RedisModule_DeauthenticateAndCloseClient(ctx, global_auth_client_id);
-        return RedisModule_ReplyWithSimpleString(ctx, "OK");
+        ValkeyModule_DeauthenticateAndCloseClient(ctx, global_auth_client_id);
+        return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
     } else {
-        return RedisModule_ReplyWithError(ctx, "Global user currently not used");    
+        return ValkeyModule_ReplyWithError(ctx, "Global user currently not used");    
     }
 }
 
 /* HELLOACL.RESET 
  * Synchronously delete and re-create a module user. */
-int ResetCommand_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+int ResetCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
-    RedisModule_FreeModuleUser(global);
-    global = RedisModule_CreateModuleUser("global");
-    RedisModule_SetModuleUserACL(global, "allcommands");
-    RedisModule_SetModuleUserACL(global, "allkeys");
-    RedisModule_SetModuleUserACL(global, "on");
+    ValkeyModule_FreeModuleUser(global);
+    global = ValkeyModule_CreateModuleUser("global");
+    ValkeyModule_SetModuleUserACL(global, "allcommands");
+    ValkeyModule_SetModuleUserACL(global, "allkeys");
+    ValkeyModule_SetModuleUserACL(global, "on");
 
-    return RedisModule_ReplyWithSimpleString(ctx, "OK");
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
 /* Callback handler for user changes, use this to notify a module of 
  * changes to users authenticated by the module */
 void HelloACL_UserChanged(uint64_t client_id, void *privdata) {
-    REDISMODULE_NOT_USED(privdata);
-    REDISMODULE_NOT_USED(client_id);
+    VALKEYMODULE_NOT_USED(privdata);
+    VALKEYMODULE_NOT_USED(client_id);
     global_auth_client_id = 0;
 }
 
 /* HELLOACL.AUTHGLOBAL 
  * Synchronously assigns a module user to the current context. */
-int AuthGlobalCommand_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+int AuthGlobalCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
     if (global_auth_client_id) {
-        return RedisModule_ReplyWithError(ctx, "Global user currently used");    
+        return ValkeyModule_ReplyWithError(ctx, "Global user currently used");    
     }
 
-    RedisModule_AuthenticateClientWithUser(ctx, global, HelloACL_UserChanged, NULL, &global_auth_client_id);
+    ValkeyModule_AuthenticateClientWithUser(ctx, global, HelloACL_UserChanged, NULL, &global_auth_client_id);
 
-    return RedisModule_ReplyWithSimpleString(ctx, "OK");
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
 #define TIMEOUT_TIME 1000
 
 /* Reply callback for auth command HELLOACL.AUTHASYNC */
-int HelloACL_Reply(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+int HelloACL_Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
     size_t length;
 
-    RedisModuleString *user_string = RedisModule_GetBlockedClientPrivateData(ctx);
-    const char *name = RedisModule_StringPtrLen(user_string, &length);
+    ValkeyModuleString *user_string = ValkeyModule_GetBlockedClientPrivateData(ctx);
+    const char *name = ValkeyModule_StringPtrLen(user_string, &length);
 
-    if (RedisModule_AuthenticateClientWithACLUser(ctx, name, length, NULL, NULL, NULL) == 
-            REDISMODULE_ERR) {
-        return RedisModule_ReplyWithError(ctx, "Invalid Username or password");    
+    if (ValkeyModule_AuthenticateClientWithACLUser(ctx, name, length, NULL, NULL, NULL) == 
+            VALKEYMODULE_ERR) {
+        return ValkeyModule_ReplyWithError(ctx, "Invalid Username or password");    
     }
-    return RedisModule_ReplyWithSimpleString(ctx, "OK");
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
 /* Timeout callback for auth command HELLOACL.AUTHASYNC */
-int HelloACL_Timeout(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
-    return RedisModule_ReplyWithSimpleString(ctx, "Request timedout");
+int HelloACL_Timeout(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "Request timedout");
 }
 
 /* Private data frees data for HELLOACL.AUTHASYNC command. */
-void HelloACL_FreeData(RedisModuleCtx *ctx, void *privdata) {
-    REDISMODULE_NOT_USED(ctx);
-    RedisModule_FreeString(NULL, privdata);
+void HelloACL_FreeData(ValkeyModuleCtx *ctx, void *privdata) {
+    VALKEYMODULE_NOT_USED(ctx);
+    ValkeyModule_FreeString(NULL, privdata);
 }
 
 /* Background authentication can happen here. */
 void *HelloACL_ThreadMain(void *args) {
     void **targs = args;
-    RedisModuleBlockedClient *bc = targs[0];
-    RedisModuleString *user = targs[1];
-    RedisModule_Free(targs);
+    ValkeyModuleBlockedClient *bc = targs[0];
+    ValkeyModuleString *user = targs[1];
+    ValkeyModule_Free(targs);
 
-    RedisModule_UnblockClient(bc,user);
+    ValkeyModule_UnblockClient(bc,user);
     return NULL;
 }
 
 /* HELLOACL.AUTHASYNC 
  * Asynchronously assigns an ACL user to the current context. */
-int AuthAsyncCommand_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    if (argc != 2) return RedisModule_WrongArity(ctx);
+int AuthAsyncCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) return ValkeyModule_WrongArity(ctx);
 
     pthread_t tid;
-    RedisModuleBlockedClient *bc = RedisModule_BlockClient(ctx, HelloACL_Reply, HelloACL_Timeout, HelloACL_FreeData, TIMEOUT_TIME);
+    ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(ctx, HelloACL_Reply, HelloACL_Timeout, HelloACL_FreeData, TIMEOUT_TIME);
     
 
-    void **targs = RedisModule_Alloc(sizeof(void*)*2);
+    void **targs = ValkeyModule_Alloc(sizeof(void*)*2);
     targs[0] = bc;
-    targs[1] = RedisModule_CreateStringFromString(NULL, argv[1]);
+    targs[1] = ValkeyModule_CreateStringFromString(NULL, argv[1]);
 
     if (pthread_create(&tid, NULL, HelloACL_ThreadMain, targs) != 0) {
-        RedisModule_AbortBlock(bc);
-        return RedisModule_ReplyWithError(ctx, "-ERR Can't start thread");
+        ValkeyModule_AbortBlock(bc);
+        return ValkeyModule_ReplyWithError(ctx, "-ERR Can't start thread");
     }
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-/* This function must be present on each Redis module. It is used in order to
- * register the commands into the Redis server. */
-int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+/* This function must be present on each module. It is used in order to
+ * register the commands into the server. */
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
-    if (RedisModule_Init(ctx,"helloacl",1,REDISMODULE_APIVER_1)
-        == REDISMODULE_ERR) return REDISMODULE_ERR;
+    if (ValkeyModule_Init(ctx,"helloacl",1,VALKEYMODULE_APIVER_1)
+        == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"helloacl.reset",
-        ResetCommand_RedisCommand,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"helloacl.reset",
+        ResetCommand_ValkeyCommand,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"helloacl.revoke",
-        RevokeCommand_RedisCommand,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"helloacl.revoke",
+        RevokeCommand_ValkeyCommand,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"helloacl.authglobal",
-        AuthGlobalCommand_RedisCommand,"no-auth",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"helloacl.authglobal",
+        AuthGlobalCommand_ValkeyCommand,"no-auth",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"helloacl.authasync",
-        AuthAsyncCommand_RedisCommand,"no-auth",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"helloacl.authasync",
+        AuthAsyncCommand_ValkeyCommand,"no-auth",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    global = RedisModule_CreateModuleUser("global");
-    RedisModule_SetModuleUserACL(global, "allcommands");
-    RedisModule_SetModuleUserACL(global, "allkeys");
-    RedisModule_SetModuleUserACL(global, "on");
+    global = ValkeyModule_CreateModuleUser("global");
+    ValkeyModule_SetModuleUserACL(global, "allcommands");
+    ValkeyModule_SetModuleUserACL(global, "allkeys");
+    ValkeyModule_SetModuleUserACL(global, "on");
 
     global_auth_client_id = 0;
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }

@@ -72,7 +72,7 @@ all: $(TEST_MODULES)
 32bit:
 	$(MAKE) CFLAGS="-m32" LDFLAGS="-m32"
 
-%.xo: %.c ../../src/redismodule.h
+%.xo: %.c ../../src/valkeymodule.h
 	$(CC) -I../../src $(CFLAGS) $(SHOBJ_CFLAGS) -fPIC -c $< -o $@
 
 %.so: %.xo

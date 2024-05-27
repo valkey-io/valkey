@@ -43,7 +43,7 @@ tags {"aof external:skip"} {
         }
 
         test "Truncated AOF loaded: we expect foo to be equal to 5" {
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
             assert {[$client get foo] eq "5"}
         }
@@ -60,7 +60,7 @@ tags {"aof external:skip"} {
         }
 
         test "Truncated AOF loaded: we expect foo to be equal to 6 now" {
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
             assert {[$client get foo] eq "6"}
         }
@@ -104,7 +104,7 @@ tags {"aof external:skip"} {
         }
     }
 
-    ## Test that redis-check-aof indeed sees this AOF is not valid
+    ## Test that valkey-check-aof indeed sees this AOF is not valid
     test "Short read: Utility should confirm the AOF is not valid" {
         catch {
             exec src/valkey-check-aof $aof_manifest_file
@@ -136,7 +136,7 @@ tags {"aof external:skip"} {
         }
 
         test "Fixed AOF: Keyspace should contain values that were parseable" {
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
             assert_equal "hello" [$client get foo]
             assert_equal "" [$client get bar]
@@ -156,7 +156,7 @@ tags {"aof external:skip"} {
         }
 
         test "AOF+SPOP: Set should have 1 member" {
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
             assert_equal 1 [$client scard set]
         }
@@ -176,7 +176,7 @@ tags {"aof external:skip"} {
         }
 
         test "AOF+SPOP: Set should have 1 member" {
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
             assert_equal 1 [$client scard set]
         }
@@ -195,14 +195,14 @@ tags {"aof external:skip"} {
         }
 
         test "AOF+EXPIRE: List should be empty" {
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
             assert_equal 0 [$client llen list]
         }
     }
 
     start_server {overrides {appendonly {yes}}} {
-        test {Redis should not try to convert DEL into EXPIREAT for EXPIRE -1} {
+        test {Server should not try to convert DEL into EXPIREAT for EXPIRE -1} {
             r set x 10
             r expire x -1
         }
@@ -210,7 +210,7 @@ tags {"aof external:skip"} {
 
     start_server {overrides {appendonly {yes} appendfsync always}} {
         test {AOF fsync always barrier issue} {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             # Set a sleep when aof is flushed, so that we have a chance to look
             # at the aof size and detect if the response of an incr command
             # arrives before the data was written (and hopefully fsynced)
@@ -272,8 +272,8 @@ tags {"aof external:skip"} {
 
     start_server_aof [list dir $server_path aof-load-truncated no] {
         test "AOF+LMPOP/BLMPOP: pop elements from the list" {
-            set client [redis [srv host] [srv port] 0 $::tls]
-            set client2 [redis [srv host] [srv port] 1 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            set client2 [valkey [srv host] [srv port] 1 $::tls]
             wait_done_loading $client
 
             # Pop all elements from mylist, should be blmpop delete mylist.
@@ -299,7 +299,7 @@ tags {"aof external:skip"} {
 
     start_server_aof [list dir $server_path aof-load-truncated no] {
         test "AOF+LMPOP/BLMPOP: after pop elements from the list" {
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
 
             # mylist and mylist2 no longer exist.
@@ -319,8 +319,8 @@ tags {"aof external:skip"} {
 
     start_server_aof [list dir $server_path aof-load-truncated no] {
         test "AOF+ZMPOP/BZMPOP: pop elements from the zset" {
-            set client [redis [srv host] [srv port] 0 $::tls]
-            set client2 [redis [srv host] [srv port] 1 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
+            set client2 [valkey [srv host] [srv port] 1 $::tls]
             wait_done_loading $client
 
             # Pop all elements from myzset, should be bzmpop delete myzset.
@@ -346,7 +346,7 @@ tags {"aof external:skip"} {
 
     start_server_aof [list dir $server_path aof-load-truncated no] {
         test "AOF+ZMPOP/BZMPOP: after pop elements from the zset" {
-            set client [redis [srv host] [srv port] 0 $::tls]
+            set client [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $client
 
             # myzset and myzset2 no longer exist.
@@ -374,7 +374,7 @@ tags {"aof external:skip"} {
         }
     }
 
-    # redis could load AOF which has timestamp annotations inside
+    # The server could load AOF which has timestamp annotations inside
     create_aof $aof_dirpath $aof_file {
         append_to_aof "#TS:1628217470\r\n"
         append_to_aof [formatCommand set foo1 bar1]
@@ -387,7 +387,7 @@ tags {"aof external:skip"} {
     }
     start_server_aof [list dir $server_path] {
         test {Successfully load AOF which has timestamp annotations inside} {
-            set c [redis [srv host] [srv port] 0 $::tls]
+            set c [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $c
             assert_equal "bar1" [$c get foo1]
             assert_equal "bar2" [$c get foo2]
@@ -399,7 +399,7 @@ tags {"aof external:skip"} {
         # truncate to timestamp 1628217473
         exec src/valkey-check-aof --truncate-to-timestamp 1628217473 $aof_manifest_file
         start_server_aof [list dir $server_path] {
-            set c [redis [srv host] [srv port] 0 $::tls]
+            set c [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $c
             assert_equal "bar1" [$c get foo1]
             assert_equal "bar2" [$c get foo2]
@@ -409,7 +409,7 @@ tags {"aof external:skip"} {
         # truncate to timestamp 1628217471
         exec src/valkey-check-aof --truncate-to-timestamp 1628217471 $aof_manifest_file
         start_server_aof [list dir $server_path] {
-            set c [redis [srv host] [srv port] 0 $::tls]
+            set c [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $c
             assert_equal "bar1" [$c get foo1]
             assert_equal "bar2" [$c get foo2]
@@ -419,7 +419,7 @@ tags {"aof external:skip"} {
         # truncate to timestamp 1628217470
         exec src/valkey-check-aof --truncate-to-timestamp 1628217470 $aof_manifest_file
         start_server_aof [list dir $server_path] {
-            set c [redis [srv host] [srv port] 0 $::tls]
+            set c [valkey [srv host] [srv port] 0 $::tls]
             wait_done_loading $c
             assert_equal "bar1" [$c get foo1]
             assert_equal "" [$c get foo2]
@@ -438,7 +438,7 @@ tags {"aof external:skip"} {
                 append_to_aof [formatCommand select 9]
                 append_to_aof [formatCommand eval {redis.call('set',KEYS[1],'y'); for i=1,1500000 do redis.call('ping') end return 'ok'} 1 x]
             }
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
             $rd debug loadaof
             $rd flush
             wait_for_condition 100 10 {
@@ -469,7 +469,7 @@ tags {"aof external:skip"} {
         }
     }
 
-    test {Test redis-check-aof for old style resp AOF} {
+    test {Test valkey-check-aof for old style resp AOF} {
         create_aof $aof_dirpath $aof_file {
             append_to_aof [formatCommand set foo hello]
             append_to_aof [formatCommand set bar world]
@@ -481,7 +481,7 @@ tags {"aof external:skip"} {
         assert_match "*Start checking Old-Style AOF*is valid*" $result
     }
 
-    test {Test redis-check-aof for old style resp AOF - has data in the same format as manifest} {
+    test {Test valkey-check-aof for old style resp AOF - has data in the same format as manifest} {
         create_aof $aof_dirpath $aof_file {
             append_to_aof [formatCommand set file file]
             append_to_aof [formatCommand set "file appendonly.aof.2.base.rdb seq 2 type b" "file appendonly.aof.2.base.rdb seq 2 type b"]
@@ -493,14 +493,14 @@ tags {"aof external:skip"} {
         assert_match "*Start checking Old-Style AOF*is valid*" $result
     }
 
-    test {Test redis-check-aof for old style rdb-preamble AOF} {
+    test {Test valkey-check-aof for old style rdb-preamble AOF} {
         catch {
             exec src/valkey-check-aof tests/assets/rdb-preamble.aof
         } result
         assert_match "*Start checking Old-Style AOF*RDB preamble is OK, proceeding with AOF tail*is valid*" $result
     }
 
-    test {Test redis-check-aof for Multi Part AOF with resp AOF base} {
+    test {Test valkey-check-aof for Multi Part AOF with resp AOF base} {
         create_aof $aof_dirpath $aof_base_file {
             append_to_aof [formatCommand set foo hello]
             append_to_aof [formatCommand set bar world]
@@ -522,7 +522,7 @@ tags {"aof external:skip"} {
         assert_match "*Start checking Multi Part AOF*Start to check BASE AOF (RESP format)*BASE AOF*is valid*Start to check INCR files*INCR AOF*is valid*All AOF files and manifest are valid*" $result
     }
 
-    test {Test redis-check-aof for Multi Part AOF with rdb-preamble AOF base} {
+    test {Test valkey-check-aof for Multi Part AOF with rdb-preamble AOF base} {
         exec cp tests/assets/rdb-preamble.aof $aof_base_file
 
         create_aof $aof_dirpath $aof_file {
@@ -541,7 +541,7 @@ tags {"aof external:skip"} {
         assert_match "*Start checking Multi Part AOF*Start to check BASE AOF (RDB format)*DB preamble is OK, proceeding with AOF tail*BASE AOF*is valid*Start to check INCR files*INCR AOF*is valid*All AOF files and manifest are valid*" $result
     }
 
-    test {Test redis-check-aof for Multi Part AOF contains a format error} {
+    test {Test valkey-check-aof for Multi Part AOF contains a format error} {
         create_aof_manifest $aof_dirpath $aof_manifest_file {
             append_to_manifest "file appendonly.aof.1.base.aof seq 1 type b\n"
             append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
@@ -554,7 +554,7 @@ tags {"aof external:skip"} {
         assert_match "*Invalid AOF manifest file format*" $result
     }
 
-    test {Test redis-check-aof only truncates the last file for Multi Part AOF in fix mode} {
+    test {Test valkey-check-aof only truncates the last file for Multi Part AOF in fix mode} {
         create_aof $aof_dirpath $aof_base_file {
             append_to_aof [formatCommand set foo hello]
             append_to_aof [formatCommand multi]
@@ -582,7 +582,7 @@ tags {"aof external:skip"} {
         assert_match "*Failed to truncate AOF*because it is not the last file*" $result
     }
 
-    test {Test redis-check-aof only truncates the last file for Multi Part AOF in truncate-to-timestamp mode} {
+    test {Test valkey-check-aof only truncates the last file for Multi Part AOF in truncate-to-timestamp mode} {
         create_aof $aof_dirpath $aof_base_file {
             append_to_aof "#TS:1628217470\r\n"
             append_to_aof [formatCommand set foo1 bar1]

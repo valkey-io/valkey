@@ -7,7 +7,6 @@
         "arity": 2,
         "container": "CLUSTER",
         "function": "clusterCommand",
-        "history": [],
         "command_flags": [
             "STALE"
         ],
@@ -15,7 +14,7 @@
             "NONDETERMINISTIC_OUTPUT"
         ],
         "reply_schema": {
-            "description": "the node's shard id",
+            "description": "The node's shard id.",
             "type": "string"
         }
     }

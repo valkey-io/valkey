@@ -13,7 +13,7 @@
             "RESPONSE_POLICY:SPECIAL"
         ],
         "reply_schema": {
-            "description": "memory problems report",
+            "description": "Memory problems report.",
             "type": "string"
         }
     }

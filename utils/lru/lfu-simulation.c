@@ -8,7 +8,7 @@ int keyspace_size = 1000000;
 time_t switch_after = 30; /* Switch access pattern after N seconds. */
 
 struct entry {
-    /* Field that the LFU Redis implementation will have (we have
+    /* Field that the LFU implementation will have (we have
      * 24 bits of total space in the object->lru field). */
     uint8_t counter;    /* Logarithmic counter. */
     uint16_t decrtime;  /* (Reduced precision) time of last decrement. */

@@ -31,7 +31,7 @@
 #define __FUNCTIONS_H_
 
 /*
- * functions.c unit provides the Redis Functions API:
+ * functions.c unit provides the Functions API:
  * * FUNCTION LOAD
  * * FUNCTION LIST
  * * FUNCTION CALL (FCALL and FCALL_RO)
@@ -50,7 +50,7 @@
 
 #include "server.h"
 #include "script.h"
-#include "redismodule.h"
+#include "valkeymodule.h"
 
 typedef struct functionLibInfo functionLibInfo;
 
@@ -68,12 +68,17 @@ typedef struct engine {
     int (*create)(void *engine_ctx, functionLibInfo *li, sds code, size_t timeout, sds *err);
 
     /* Invoking a function, r_ctx is an opaque object (from engine POV).
-     * The r_ctx should be used by the engine to interaction with Redis,
+     * The r_ctx should be used by the engine to interaction with the server,
      * such interaction could be running commands, set resp, or set
      * replication mode
      */
-    void (*call)(scriptRunCtx *r_ctx, void *engine_ctx, void *compiled_function,
-            robj **keys, size_t nkeys, robj **args, size_t nargs);
+    void (*call)(scriptRunCtx *r_ctx,
+                 void *engine_ctx,
+                 void *compiled_function,
+                 robj **keys,
+                 size_t nkeys,
+                 robj **args,
+                 size_t nargs);
 
     /* get current used memory by the engine */
     size_t (*get_used_memory)(void *engine_ctx);
@@ -104,7 +109,7 @@ typedef struct functionInfo {
     sds name;            /* Function name */
     void *function;      /* Opaque object that set by the function's engine and allow it
                             to run the function, usually it's the function compiled code. */
-    functionLibInfo* li; /* Pointer to the library created the function */
+    functionLibInfo *li; /* Pointer to the library created the function */
     sds desc;            /* Function description */
     uint64_t f_flags;    /* Function flags */
 } functionInfo;
@@ -119,15 +124,15 @@ struct functionLibInfo {
 };
 
 int functionsRegisterEngine(const char *engine_name, engine *engine_ctx);
-sds functionsCreateWithLibraryCtx(sds code, int replace, sds* err, functionsLibCtx *lib_ctx, size_t timeout);
+sds functionsCreateWithLibraryCtx(sds code, int replace, sds *err, functionsLibCtx *lib_ctx, size_t timeout);
 unsigned long functionsMemory(void);
 unsigned long functionsMemoryOverhead(void);
 unsigned long functionsNum(void);
 unsigned long functionsLibNum(void);
-dict* functionsLibGet(void);
+dict *functionsLibGet(void);
 size_t functionsLibCtxFunctionsLen(functionsLibCtx *functions_ctx);
-functionsLibCtx* functionsLibCtxGetCurrent(void);
-functionsLibCtx* functionsLibCtxCreate(void);
+functionsLibCtx *functionsLibCtxGetCurrent(void);
+functionsLibCtx *functionsLibCtxCreate(void);
 void functionsLibCtxClearCurrent(int async);
 void functionsLibCtxFree(functionsLibCtx *lib_ctx);
 void functionsLibCtxClear(functionsLibCtx *lib_ctx);

@@ -1,7 +1,7 @@
 # Initialization tests -- most units will start including this.
 
 test "(init) Restart killed instances" {
-    foreach type {redis} {
+    foreach type {valkey} {
         foreach_${type}_id id {
             if {[get_instance_attrib $type $id pid] == -1} {
                 puts -nonewline "$type/$id "
@@ -13,7 +13,7 @@ test "(init) Restart killed instances" {
 }
 
 test "Cluster nodes are reachable" {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         # Every node should be reachable.
         wait_for_condition 1000 50 {
             ([catch {R $id ping} ping_reply] == 0) &&
@@ -26,7 +26,7 @@ test "Cluster nodes are reachable" {
 }
 
 test "Cluster nodes hard reset" {
-    foreach_redis_id id {
+    foreach_valkey_id id {
         if {$::valgrind} {
             set node_timeout 10000
         } else {
@@ -55,15 +55,15 @@ proc join_nodes_in_cluster {} {
     # If auto-discovery works all nodes will know every other node
     # eventually.
     set ids {}
-    foreach_redis_id id {lappend ids $id}
+    foreach_valkey_id id {lappend ids $id}
     for {set j 0} {$j < [expr [llength $ids]-1]} {incr j} {
         set a [lindex $ids $j]
         set b [lindex $ids [expr $j+1]]
-        set b_port [get_instance_attrib redis $b port]
+        set b_port [get_instance_attrib valkey $b port]
         R $a cluster meet 127.0.0.1 $b_port
     }
 
-    foreach_redis_id id {
+    foreach_valkey_id id {
         wait_for_condition 1000 50 {
             [llength [get_cluster_nodes $id connected]] == [llength $ids]
         } else {

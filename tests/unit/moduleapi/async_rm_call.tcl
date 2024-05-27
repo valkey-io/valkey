@@ -16,7 +16,7 @@ start_server {tags {"modules"}} {
     }
 
     test "Blpop on threaded async RM_Call" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         $rd do_rm_call_async_on_thread blpop l 0
         wait_for_blocked_clients_count 1
@@ -29,7 +29,7 @@ start_server {tags {"modules"}} {
     foreach cmd {do_rm_call_async do_rm_call_async_script_mode } {
 
         test "Blpop on async RM_Call using $cmd" {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
 
             $rd $cmd blpop l 0
             wait_for_blocked_clients_count 1
@@ -40,7 +40,7 @@ start_server {tags {"modules"}} {
         }
 
         test "Brpop on async RM_Call using $cmd" {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
 
             $rd $cmd brpop l 0
             wait_for_blocked_clients_count 1
@@ -51,7 +51,7 @@ start_server {tags {"modules"}} {
         }
 
         test "Brpoplpush on async RM_Call using $cmd" {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
 
             $rd $cmd brpoplpush l1 l2 0
             wait_for_blocked_clients_count 1
@@ -63,7 +63,7 @@ start_server {tags {"modules"}} {
         } {a}
 
         test "Blmove on async RM_Call using $cmd" {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
 
             $rd $cmd blmove l1 l2 LEFT LEFT 0
             wait_for_blocked_clients_count 1
@@ -75,7 +75,7 @@ start_server {tags {"modules"}} {
         } {a}
 
         test "Bzpopmin on async RM_Call using $cmd" {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
 
             $rd $cmd bzpopmin s 0
             wait_for_blocked_clients_count 1
@@ -86,7 +86,7 @@ start_server {tags {"modules"}} {
         }
 
         test "Bzpopmax on async RM_Call using $cmd" {
-            set rd [redis_deferring_client]
+            set rd [valkey_deferring_client]
 
             $rd $cmd bzpopmax s 0
             wait_for_blocked_clients_count 1
@@ -98,7 +98,7 @@ start_server {tags {"modules"}} {
     }
 
     test {Nested async RM_Call} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         $rd do_rm_call_async do_rm_call_async do_rm_call_async do_rm_call_async blpop l 0
         wait_for_blocked_clients_count 1
@@ -109,8 +109,8 @@ start_server {tags {"modules"}} {
     }
 
     test {Test multiple async RM_Call waiting on the same event} {
-        set rd1 [redis_deferring_client]
-        set rd2 [redis_deferring_client]
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
 
         $rd1 do_rm_call_async do_rm_call_async do_rm_call_async do_rm_call_async blpop l 0
         $rd2 do_rm_call_async do_rm_call_async do_rm_call_async do_rm_call_async blpop l 0
@@ -136,7 +136,7 @@ start_server {tags {"modules"}} {
     }
 
     test {async RM_Call inside async RM_Call callback} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd wait_and_do_rm_call blpop l 0
         wait_for_blocked_clients_count 1
 
@@ -161,11 +161,11 @@ start_server {tags {"modules"}} {
 
     test {Become replica while having async RM_Call running} {
         r flushall
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd do_rm_call_async blpop l 0
         wait_for_blocked_clients_count 1
 
-        #become a replica of a not existing redis
+        #become a replica of a not existing server
         r replicaof localhost 30000
 
         catch {[$rd read]} e
@@ -182,7 +182,7 @@ start_server {tags {"modules"}} {
 
     test {Pipeline with blocking RM_Call} {
         r flushall
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         set buf ""
         append buf "do_rm_call_async blpop l 0\r\n"
         append buf "ping\r\n"
@@ -202,7 +202,7 @@ start_server {tags {"modules"}} {
 
     test {blocking RM_Call abort} {
         r flushall
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         
         $rd client id
         set client_id [$rd read]
@@ -229,7 +229,7 @@ start_server {tags {"modules"}} {
         r flushall
         set repl [attach_to_replication_stream]
 
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         $rd do_rm_call_async blpop l 0
         wait_for_blocked_clients_count 1
@@ -251,7 +251,7 @@ start_server {tags {"modules"}} {
         r flushall
         set repl [attach_to_replication_stream]
 
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         $rd blpop_and_set_multiple_keys l x 1 y 2
         wait_for_blocked_clients_count 1
@@ -277,7 +277,7 @@ start_server {tags {"modules"}} {
         r flushall
         set repl [attach_to_replication_stream]
 
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         $rd do_rm_call_async_no_replicate blpop l 0
         wait_for_blocked_clients_count 1
@@ -307,7 +307,7 @@ start_server {tags {"modules"}} {
         r flushall
         set repl [attach_to_replication_stream]
 
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         $rd blpop_and_set_multiple_keys l string_foo 1 string_bar 2
         wait_for_blocked_clients_count 1
@@ -346,7 +346,7 @@ start_server {tags {"modules"}} {
         r DEBUG SET-ACTIVE-EXPIRE 0
         set repl [attach_to_replication_stream]
 
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         $rd blpop_and_set_multiple_keys l string_foo 1 string_bar 2
         wait_for_blocked_clients_count 1
@@ -421,7 +421,7 @@ start_server {tags {"modules"}} {
     r module load $testmodule3
 
     test {Test unblock handler on module blocked on keys} {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
 
         r fsl.push l 1
         $rd do_rm_call_async FSL.BPOPGT l 3 0

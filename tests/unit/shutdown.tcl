@@ -22,7 +22,7 @@ start_server {tags {"shutdown external:skip"}} {
 
         catch {r shutdown nosave}
         # Make sure the server was killed
-        catch {set rd [redis_deferring_client]} e
+        catch {set rd [valkey_deferring_client]} e
         assert_match {*connection refused*} $e
 
         # Temp rdb file must be deleted

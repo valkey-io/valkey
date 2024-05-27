@@ -6,10 +6,10 @@ test {CONFIG SET port number} {
 
         # available port
         set avail_port [find_available_port $::baseport $::portcount]
-        set rd [redis [srv 0 host] [srv 0 port] 0 $::tls]
+        set rd [valkey [srv 0 host] [srv 0 port] 0 $::tls]
         $rd CONFIG SET $port_cfg $avail_port
         $rd close
-        set rd [redis [srv 0 host] $avail_port 0 $::tls]
+        set rd [valkey [srv 0 host] $avail_port 0 $::tls]
         $rd PING
 
         # already inuse port
@@ -18,7 +18,7 @@ test {CONFIG SET port number} {
         $rd close
 
         # make sure server still listening on the previous port
-        set rd [redis [srv 0 host] $avail_port 0 $::tls]
+        set rd [valkey [srv 0 host] $avail_port 0 $::tls]
         $rd PING
         $rd close
     }
@@ -31,7 +31,7 @@ test {CONFIG SET bind address} {
         assert_match {*Failed to bind to specified addresses*} $e
 
         # make sure server still bound to the previous address
-        set rd [redis [srv 0 host] [srv 0 port] 0 $::tls]
+        set rd [valkey [srv 0 host] [srv 0 port] 0 $::tls]
         $rd PING
         $rd close
     }
@@ -109,7 +109,7 @@ start_server {config "minimal.conf" tags {"external:skip"}} {
         assert_equal "" [lindex [r CONFIG GET bind] 1]
 
         # No additional clients can connect
-        catch {redis_client} err
+        catch {valkey_client} err
         assert_match {*connection refused*} $err
 
         # CONFIG REWRITE handles empty bindaddr
@@ -121,18 +121,18 @@ start_server {config "minimal.conf" tags {"external:skip"}} {
 
         # Make sure bind parameter is as expected and server handles binding
         # accordingly.
-        # (it seems that rediscli_exec behaves differently in RESP3, possibly
-        # because CONFIG GET returns a dict instead of a list so redis-cli emits
+        # (it seems that valkeycli_exec behaves differently in RESP3, possibly
+        # because CONFIG GET returns a dict instead of a list so valkey-cli emits
         # it in a single line)
         if {$::force_resp3} {
-            assert_equal {{bind }} [rediscli_exec 0 config get bind]
+            assert_equal {{bind }} [valkeycli_exec 0 config get bind]
         } else {
-            assert_equal {bind {}} [rediscli_exec 0 config get bind]
+            assert_equal {bind {}} [valkeycli_exec 0 config get bind]
         }
         catch {reconnect 0} err
         assert_match {*connection refused*} $err
 
-        assert_equal {OK} [rediscli_exec 0 config set bind *]
+        assert_equal {OK} [valkeycli_exec 0 config set bind *]
         reconnect 0
         r ping
     } {PONG}
@@ -154,18 +154,18 @@ start_server {config "minimal.conf" tags {"external:skip"}} {
 
             # Setting a password should disable protected mode
             assert_equal {OK} [r config set requirepass "secret"]
-            set r2 [redis $myaddr [srv 0 "port"] 0 $::tls]
+            set r2 [valkey $myaddr [srv 0 "port"] 0 $::tls]
             assert_equal {OK} [$r2 auth secret]
             assert_equal {PONG} [$r2 ping]
 
             # Clearing the password re-enables protected mode
             assert_equal {OK} [r config set requirepass ""]
-            set r2 [redis $myaddr [srv 0 "port"] 0 $::tls]
+            set r2 [valkey $myaddr [srv 0 "port"] 0 $::tls]
             assert_match {*DENIED*} $err
 
             # Explicitly disabling protected-mode works
             assert_equal {OK} [r config set protected-mode no]
-            set r2 [redis $myaddr [srv 0 "port"] 0 $::tls]
+            set r2 [valkey $myaddr [srv 0 "port"] 0 $::tls]
             assert_equal {PONG} [$r2 ping]
         }
     }

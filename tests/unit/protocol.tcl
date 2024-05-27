@@ -94,7 +94,7 @@ start_server {tags {"protocol network"}} {
                     set elapsed [expr {[clock seconds]-$test_start}]
                     if {$elapsed > $test_time_limit} {
                         close $s
-                        error "assertion:Redis did not closed connection after protocol desync"
+                        error "assertion:Valkey did not closed connection after protocol desync"
                     }
                 }
             }
@@ -234,7 +234,7 @@ start_server {tags {"protocol network"}} {
 
 start_server {tags {"regression"}} {
     test "Regression for a crash with blocking ops and pipelining" {
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         set fd [r channel]
         set proto "*3\r\n\$5\r\nBLPOP\r\n\$6\r\nnolist\r\n\$1\r\n0\r\n"
         puts -nonewline $fd $proto$proto

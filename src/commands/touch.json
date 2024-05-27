@@ -45,7 +45,7 @@
             }
         ],
         "reply_schema": {
-            "description": "the number of touched keys",
+            "description": "The number of touched keys.",
             "type": "integer",
             "minimum": 0
         }

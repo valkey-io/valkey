@@ -61,7 +61,7 @@ start_server {tags {"dismiss external:skip"}} {
         for {set i 0} {$i < 100} {incr i} {
             r lpush mylist $item
         }
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd lrange mylist 0 -1
         $rd flush
         after 100
@@ -74,7 +74,7 @@ start_server {tags {"dismiss external:skip"}} {
     test {dismiss client query buffer} {
         # Big pending query buffer
         set bigstr [string repeat A 8192]
-        set rd [redis_deferring_client]
+        set rd [valkey_deferring_client]
         $rd write "*2\r\n\$8192\r\n"
         $rd write $bigstr\r\n
         $rd flush

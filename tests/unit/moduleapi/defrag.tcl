@@ -7,7 +7,7 @@ start_server {tags {"modules"} overrides {{save ""}}} {
     r config set active-defrag-threshold-lower 0
     r config set active-defrag-cycle-min 99
 
-    # try to enable active defrag, it will fail if redis was compiled without it
+    # try to enable active defrag, it will fail if the server was compiled without it
     catch {r config set activedefrag yes} e
     if {[r config get activedefrag] eq "activedefrag yes"} {
 

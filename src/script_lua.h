@@ -38,10 +38,10 @@
  *   the top of the Lua stack. In addition, parsing the execution
  *   result and convert it to the resp and reply to the client.
  *
- * * Run Redis commands from within the Lua code (Including
+ * * Run server commands from within the Lua code (Including
  *   parsing the reply and create a Lua object out of it).
  *
- * * Register Redis API to the Lua interpreter. Only shared
+ * * Register the server API to the Lua interpreter. Only shared
  *   API are registered (API that is only relevant on eval.c
  *   (like debugging) are registered on eval.c).
  *
@@ -57,28 +57,35 @@
 #define REGISTRY_RUN_CTX_NAME "__RUN_CTX__"
 #define REGISTRY_SET_GLOBALS_PROTECTION_NAME "__GLOBAL_PROTECTION__"
 #define REDIS_API_NAME "redis"
+#define SERVER_API_NAME "server"
 
 typedef struct errorInfo {
     sds msg;
     sds source;
     sds line;
     int ignore_err_stats_update;
-}errorInfo;
+} errorInfo;
 
-void luaRegisterRedisAPI(lua_State* lua);
+void luaRegisterRedisAPI(lua_State *lua);
 sds luaGetStringSds(lua_State *lua, int index);
 void luaRegisterGlobalProtectionFunction(lua_State *lua);
 void luaSetErrorMetatable(lua_State *lua);
 void luaSetAllowListProtection(lua_State *lua);
 void luaSetTableProtectionRecursively(lua_State *lua);
-void luaRegisterLogFunction(lua_State* lua);
-void luaRegisterVersion(lua_State* lua);
+void luaRegisterLogFunction(lua_State *lua);
+void luaRegisterVersion(lua_State *lua);
 void luaPushErrorBuff(lua_State *lua, sds err_buff);
 void luaPushError(lua_State *lua, const char *error);
 int luaError(lua_State *lua);
-void luaSaveOnRegistry(lua_State* lua, const char* name, void* ptr);
-void* luaGetFromRegistry(lua_State* lua, const char* name);
-void luaCallFunction(scriptRunCtx* r_ctx, lua_State *lua, robj** keys, size_t nkeys, robj** args, size_t nargs, int debug_enabled);
+void luaSaveOnRegistry(lua_State *lua, const char *name, void *ptr);
+void *luaGetFromRegistry(lua_State *lua, const char *name);
+void luaCallFunction(scriptRunCtx *r_ctx,
+                     lua_State *lua,
+                     robj **keys,
+                     size_t nkeys,
+                     robj **args,
+                     size_t nargs,
+                     int debug_enabled);
 void luaExtractErrorInformation(lua_State *lua, errorInfo *err_info);
 void luaErrorInformationDiscard(errorInfo *err_info);
 unsigned long luaMemory(lua_State *lua);

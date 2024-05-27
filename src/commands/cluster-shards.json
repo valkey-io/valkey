@@ -7,7 +7,6 @@
         "arity": 2,
         "container": "CLUSTER",
         "function": "clusterCommand",
-        "history": [],
         "command_flags": [
             "LOADING",
             "STALE"
@@ -16,21 +15,21 @@
             "NONDETERMINISTIC_OUTPUT"
         ],
         "reply_schema": {
-            "description": "a nested list of a map of hash ranges and shard nodes describing individual shards",
+            "description": "A nested list of a map of hash ranges and shard nodes describing individual shards.",
             "type": "array",
             "items": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                     "slots": {
-                        "description": "an even number element array specifying the start and end slot numbers for slot ranges owned by this shard",
+                        "description": "An even number element array specifying the start and end slot numbers for slot ranges owned by this shard.",
                         "type": "array",
                         "items": {
                             "type": "integer"
                         }
                     },
                     "nodes": {
-                        "description": "nodes that handle these slot ranges",
+                        "description": "Nodes that handle these slot ranges.",
                         "type": "array",
                         "items": {
                             "type": "object",

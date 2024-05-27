@@ -65,17 +65,17 @@
             }
         ],
         "reply_schema": {
-            "description": "cursor and scan response in array form",
+            "description": "Cursor and scan response in array form.",
             "type": "array",
             "minItems": 2,
             "maxItems": 2,
             "items": [
                 {
-                    "description": "cursor",
+                    "description": "Cursor.",
                     "type": "string"
                 },
                 {
-                    "description": "list of key/value pairs from the hash where each even element is the key, and each odd element is the value, or when novalues option is on, a list of keys from the hash",
+                    "description": "List of key/value pairs from the hash where each even element is the key, and each odd element is the value, or when novalues option is on, a list of keys from the hash.",
                     "type": "array",
                     "items": {
                         "type": "string"

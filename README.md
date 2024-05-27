@@ -1,3 +1,5 @@
+[![codecov](https://codecov.io/gh/valkey-io/valkey/graph/badge.svg?token=KYYSJAYC5F)](https://codecov.io/gh/valkey-io/valkey)
+
 This README is under construction as we work to build a new community driven high performance key-value store.
 
 This project was forked from the open source Redis project right before the transition to their new source available licenses.
@@ -183,6 +185,11 @@ In order to install Valkey binaries into /usr/local/bin, just use:
 You can use `make PREFIX=/some/other/directory install` if you wish to use a
 different destination.
 
+_Note_: For compatibility with Redis, we create symlinks from the Redis names (`redis-server`, `redis-cli`, etc.) to the Valkey binaries installed by `make install`.
+The symlinks are created in same directory as the Valkey binaries.
+The symlinks are removed when using `make uninstall`.
+The creation of the symlinks can be skipped by setting the makefile variable `USE_REDIS_SYMLINKS=no`.
+
 `make install` will just install binaries in your system, but will not configure
 init scripts and configuration files in the appropriate place. This is not
 needed if you just want to play a bit with Valkey, but if you are installing
@@ -208,3 +215,9 @@ Please see the [CONTRIBUTING.md][2]. For security bugs and vulnerabilities, plea
 [1]: https://github.com/valkey-io/valkey/blob/unstable/COPYING
 [2]: https://github.com/valkey-io/valkey/blob/unstable/CONTRIBUTING.md
 [3]: https://github.com/valkey-io/valkey/blob/unstable/SECURITY.md
+
+Valkey is an open community project under LF Projects
+-----------------
+Valkey a Series of LF Projects, LLC
+2810 N Church St, PMB 57274
+Wilmington, Delaware 19802-4447

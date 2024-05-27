@@ -875,12 +875,14 @@ err:
 /* Parses a version string on the form "major.minor.patch" and returns an
  * integer on the form 0xMMmmpp. Returns -1 on parse error. */
 int version2num(const char *version) {
-    int v = 0, part = 0;
+    int v = 0, part = 0, numdots = 0;
     const char *p = version;
     do {
         if (*p >= '0' && *p <= '9') {
             part = part * 10 + (unsigned)(*p - '0');
+            if (part > 255) return -1;
         } else if (*p == '.') {
+            if (++numdots > 2) return -1;
             v = (v << 8) | part;
             part = 0;
         } else {
@@ -888,6 +890,7 @@ int version2num(const char *version) {
         }
         p++;
     } while (*p);
+    if (numdots != 2) return -1;
     v = (v << 8) | part;
     return v;
 }

@@ -24,12 +24,16 @@ jobs:
         # Run clang-format and capture the diff
         cd src
         clang-format -i **/*.c **/*.h
-        git diff --exit-code
+        # Capture the diff output
+        DIFF=$(git diff)
+        if [ ! -z "$DIFF" ]; then
+          echo "::set-output name=diff::$DIFF"
+        fi
       shell: bash
 
     - name: Check for formatting changes
-      if: ${{ failure() }}
+      if: steps.clang-format.outputs.diff
       run: |
-        echo "Code is not formatted correctly."
+        echo "Code is not formatted correctly. Here is the diff:"
+        echo "${{ steps.clang-format.outputs.diff }}"
         exit 1
-

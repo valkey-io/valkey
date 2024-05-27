@@ -14,4 +14,3 @@ sha1.*
 sha256.*
 siphash.c
 strl.c
-unit/test_files.h

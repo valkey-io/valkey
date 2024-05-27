@@ -356,7 +356,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {crash-memcheck-enable
     }
 }
 
-start_cluster 3 3 {tags {tags {external:skip cluster regression} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } } {
+start_cluster 3 3 {tags {external:skip cluster regression} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
     test "Client blocked on XREADGROUP while stream's slot is migrated" {
         set stream_name stream
         set slot [R 0 CLUSTER KEYSLOT $stream_name]

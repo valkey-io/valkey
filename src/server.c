@@ -5389,7 +5389,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "executable:%s\r\n", server.executable ? server.executable : "",
             "config_file:%s\r\n", server.configfile ? server.configfile : "",
             "io_threads_active:%i\r\n", server.io_threads_active_num > 1,
-            "io_threads_maximum_num:%i\r\n", server.io_threads_num,
             "io_threads_active_num:%i\r\n", server.io_threads_active_num));
         /* clang-format on */
 

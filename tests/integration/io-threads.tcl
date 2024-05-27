@@ -21,7 +21,6 @@ tags {"io-threads external:skip"} {
             set server_info [r info server]
 
             assert_equal {0} [get_info_field $server_info io_threads_active]
-            assert_equal {1} [get_info_field $server_info io_threads_maximum_num]
             assert_equal {1} [get_info_field $server_info io_threads_active_num]
 
             assert_equal {OK} [r set k v]
@@ -39,7 +38,6 @@ tags {"io-threads external:skip"} {
             set server_info [r info server]
 
             assert_equal {0} [get_info_field $server_info io_threads_active]
-            assert_equal {4} [get_info_field $server_info io_threads_maximum_num]
             assert_equal {1} [get_info_field $server_info io_threads_active_num]
 
             assert_equal {OK} [r set k v]

@@ -75,6 +75,16 @@ static inline size_t sdsTypeMaxSize(char type) {
     return -1; /* this is equivalent to the max SDS_TYPE_64 or SDS_TYPE_32 */
 }
 
+static inline int adjustTypeIfNeeded(char *type, int *hdrlen, size_t bufsize) {
+    size_t usable = bufsize - *hdrlen - 1;
+    if (*type != SDS_TYPE_5 && usable > sdsTypeMaxSize(*type)) {
+        *type = sdsReqType(usable);
+        *hdrlen = sdsHdrSize(*type);
+        return 1;
+    }
+    return 0;
+}
+
 /* Create a new sds string with the content specified by the 'init' pointer
  * and 'initlen'.
  * If NULL is used for 'init' the string is initialized with zero bytes.
@@ -106,15 +116,9 @@ sds _sdsnewlen(const void *init, size_t initlen, int trymalloc) {
         init = NULL;
     else if (!init)
         memset(sh, 0, hdrlen + initlen + 1);
-    usable = bufsize - hdrlen - 1;
 
-    /* Adjust type if usable won't fit into alloc. */
-    if (type != SDS_TYPE_5 && usable > sdsTypeMaxSize(type)) {
-        type = sdsReqType(usable);
-        hdrlen = sdsHdrSize(type);
-        usable = bufsize - hdrlen - 1;
-        assert(usable <= sdsTypeMaxSize(type));
-    }
+    adjustTypeIfNeeded(&type, &hdrlen, bufsize);
+    usable = bufsize - hdrlen - 1;
 
     s = (char *)sh + hdrlen;
     fp = ((unsigned char *)s) - 1;
@@ -127,6 +131,7 @@ sds _sdsnewlen(const void *init, size_t initlen, int trymalloc) {
     case SDS_TYPE_8: {
         SDS_HDR_VAR(8, s);
         sh->len = initlen;
+        assert(usable <= sdsTypeMaxSize(type));
         sh->alloc = usable;
         *fp = type;
         break;
@@ -134,6 +139,7 @@ sds _sdsnewlen(const void *init, size_t initlen, int trymalloc) {
     case SDS_TYPE_16: {
         SDS_HDR_VAR(16, s);
         sh->len = initlen;
+        assert(usable <= sdsTypeMaxSize(type));
         sh->alloc = usable;
         *fp = type;
         break;
@@ -141,6 +147,7 @@ sds _sdsnewlen(const void *init, size_t initlen, int trymalloc) {
     case SDS_TYPE_32: {
         SDS_HDR_VAR(32, s);
         sh->len = initlen;
+        assert(usable <= sdsTypeMaxSize(type));
         sh->alloc = usable;
         *fp = type;
         break;
@@ -148,6 +155,7 @@ sds _sdsnewlen(const void *init, size_t initlen, int trymalloc) {
     case SDS_TYPE_64: {
         SDS_HDR_VAR(64, s);
         sh->len = initlen;
+        assert(usable <= sdsTypeMaxSize(type));
         sh->alloc = usable;
         *fp = type;
         break;
@@ -236,7 +244,7 @@ sds _sdsMakeRoomFor(sds s, size_t addlen, int greedy) {
     char type, oldtype = s[-1] & SDS_TYPE_MASK;
     int hdrlen;
     size_t bufsize, usable;
-    int use_realloc, adjust_type;
+    int use_realloc;
 
     /* Return ASAP if there is enough space left. */
     if (avail >= addlen) return s;
@@ -266,37 +274,27 @@ sds _sdsMakeRoomFor(sds s, size_t addlen, int greedy) {
         newsh = s_realloc_usable(sh, hdrlen + newlen + 1, &bufsize);
         if (newsh == NULL) return NULL;
         s = (char *)newsh + hdrlen;
+
+        if (adjustTypeIfNeeded(&type, &hdrlen, bufsize)) {
+            memmove((char *)newsh + hdrlen, s, len + 1);
+            s = (char *)newsh + hdrlen;
+            s[-1] = type;
+            sdssetlen(s, len);
+        }
     } else {
         /* Since the header size changes, need to move the string forward,
          * and can't use realloc */
         newsh = s_malloc_usable(hdrlen + newlen + 1, &bufsize);
         if (newsh == NULL) return NULL;
-    }
-    usable = bufsize - hdrlen - 1;
-
-    /* Adjust type if usable won't fit into alloc. */
-    adjust_type = (type != SDS_TYPE_5 && usable > sdsTypeMaxSize(type));
-    if (adjust_type) {
-        type = sdsReqType(usable);
-        hdrlen = sdsHdrSize(type);
-        usable = bufsize - hdrlen - 1;
-        assert(usable <= sdsTypeMaxSize(type));
-    }
-
-    if (adjust_type || !use_realloc) {
-        if (use_realloc) {
-            /* if we use realloc newsh and s are overlapping */
-            memmove((char*)newsh + hdrlen, s, len + 1);
-        } else {
-            memcpy((char*)newsh + hdrlen, s, len + 1);
-            s_free(sh);
-        }
-
+        adjustTypeIfNeeded(&type, &hdrlen, bufsize);
+        memcpy((char *)newsh + hdrlen, s, len + 1);
+        s_free(sh);
         s = (char *)newsh + hdrlen;
         s[-1] = type;
         sdssetlen(s, len);
     }
-
+    usable = bufsize - hdrlen - 1;
+    assert(type == SDS_TYPE_5 || usable <= sdsTypeMaxSize(type));
     sdssetalloc(s, usable);
     return s;
 }
@@ -377,34 +375,26 @@ sds sdsResize(sds s, size_t size, int would_regrow) {
             newsh = s_realloc_usable(sh, newlen, &bufsize);
             if (newsh == NULL) return NULL;
             s = (char *)newsh + oldhdrlen;
+
+            if (adjustTypeIfNeeded(&oldtype, &oldhdrlen, bufsize)) {
+                memmove((char *)newsh + oldhdrlen, s, len + 1);
+                s = (char *)newsh + oldhdrlen;
+                s[-1] = oldtype;
+                sdssetlen(s, len);
+            }
         }
         newsize = bufsize - oldhdrlen - 1;
+        assert(oldtype == SDS_TYPE_5 || newsize <= sdsTypeMaxSize(oldtype));
     } else {
         newsh = s_malloc_usable(newlen, &bufsize);
         if (newsh == NULL) return NULL;
-        newsize = bufsize - hdrlen - 1;
-    }
-
-    /* Adjust type if usable won't fit into alloc. */
-    int adjust_type = (type != SDS_TYPE_5 && newsize > sdsTypeMaxSize(type));
-    if (adjust_type) {
-        type = sdsReqType(newsize);
-        hdrlen = sdsHdrSize(type);
-        newsize = bufsize - hdrlen - 1;
-        assert(newsize <= sdsTypeMaxSize(type));
-    }
-
-    if (adjust_type || !use_realloc) {
-        if (use_realloc) {
-            /* if we use realloc newsh and s are overlapping */
-            memmove((char*)newsh + hdrlen, s, len + 1);
-        } else {
-            memcpy((char*)newsh + hdrlen, s, len + 1);
-            s_free(sh);
-        }
-
+        adjustTypeIfNeeded(&type, &hdrlen, bufsize);
+        memcpy((char *)newsh + hdrlen, s, len + 1);
+        s_free(sh);
         s = (char *)newsh + hdrlen;
         s[-1] = type;
+        newsize = bufsize - hdrlen - 1;
+        assert(type == SDS_TYPE_5 || newsize <= sdsTypeMaxSize(type));
     }
 
     s[len] = '\0';

@@ -23,10 +23,10 @@ typedef struct cliCommandArg {
      * For use at runtime.
      * Fields used to keep track of input word matches for command-line hinting.
      */
-    int matched;  /* How many input words have been matched by this argument? */
-    int matched_token;  /* Has the token been matched? */
+    int matched;       /* How many input words have been matched by this argument? */
+    int matched_token; /* Has the token been matched? */
     int matched_name;  /* Has the name been matched? */
-    int matched_all;  /* Has the whole argument been consumed (no hint needed)? */
+    int matched_all;   /* Has the whole argument been consumed (no hint needed)? */
 } cliCommandArg;
 
 /* Command documentation info used for help output */

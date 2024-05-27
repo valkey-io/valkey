@@ -355,3 +355,30 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {crash-memcheck-enable
         assert_equal {NOREPLICAS Not enough good replicas to write.} $e
     }
 }
+
+start_cluster 3 3 {tags {tags {external:skip cluster regression} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } } {
+    test "Client blocked on XREADGROUP while stream's slot is migrated" {
+        set stream_name stream
+        set slot [R 0 CLUSTER KEYSLOT $stream_name]
+
+        # Find which node owns the slot
+        set source_cluster_id [dict get [get_slot_owner_info $slot] id]
+        set source [RByID $source_cluster_id]
+
+        # Calculate the target node using a cyclic sequence
+        set target [expr {($source + 1) % 3}]
+        set target_cluster_id [dict get [cluster_get_myself $target] id]
+
+        # Start a background process to simulate a blocked client on XREADGROUP
+        R $source XGROUP CREATE $stream_name mygroup $ MKSTREAM
+        exec sh -c "echo 'xreadgroup GROUP mygroup consumer BLOCK 0 streams $stream_name >' | src/valkey-cli -h 127.0.0.1 -p [lindex [R $source CONFIG GET port] 1] " &
+        after 1000
+
+        # Migrate the slot to the target node
+        R $source CLUSTER SETSLOT $slot MIGRATING $target_cluster_id
+        R $target CLUSTER SETSLOT $slot IMPORTING $source_cluster_id
+
+        # This line should cause the crash
+        R $source MIGRATE 127.0.0.1 [lindex [R $target CONFIG GET port] 1] $stream_name 0 5000
+    }
+}

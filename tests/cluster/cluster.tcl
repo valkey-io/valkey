@@ -59,30 +59,6 @@ proc get_node_by_id {instance_id node_id} {
     return {}
 }
 
-# Get info on the node that owns a specific slot by parsing
-# the CLUSTER NODES output of the instance Number 'instance_id'
-proc get_slot_owner_info {instance_id slot} {
-    set nodes [get_cluster_nodes $instance_id]
-    foreach n $nodes {
-        set slots [dict get $n slots]
-        foreach _slot $slots {
-            if {[regexp {^[0-9]+$} $_slot]} {
-                if {$_slot eq $slot} {
-                    return $n
-                }
-            } elseif {[regexp {^([0-9]+)-([0-9]+)$} $_slot -> min max]} {
-                set min [expr {$min}]
-                set max [expr {$max}]
-                if {$slot >= $min && $slot <= $max} {
-                    return $n
-                }
-            } else {
-                fail "Unexpected format in CLUSTER NODES"
-            }
-        }
-    }
-}
-
 # Return the value of the specified CLUSTER INFO field.
 proc CI {n field} {
     get_info_field [R $n cluster info] $field

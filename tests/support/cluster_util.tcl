@@ -305,6 +305,41 @@ proc get_cluster_nodes {id {status "*"}} {
     return $nodes
 }
 
+# Get info on the node that owns a specific slot by parsing
+# the CLUSTER NODES output of the instance Number 'instance_id'
+proc get_slot_owner_info {slot {instance_id 0}} {
+    set nodes [get_cluster_nodes $instance_id]
+    foreach n $nodes {
+        set slots [dict get $n slots]
+        foreach _slot $slots {
+            if {[regexp {^[0-9]+$} $_slot]} {
+                if {$_slot eq $slot} {
+                    return $n
+                }
+            } elseif {[regexp {^([0-9]+)-([0-9]+)$} $_slot -> min max]} {
+                set min [expr {$min}]
+                set max [expr {$max}]
+                if {$slot >= $min && $slot <= $max} {
+                    return $n
+                }
+            } else {
+                fail "Unexpected format in CLUSTER NODES"
+            }
+        }
+    }
+}
+
+proc RByID {id} {
+    set i 0
+    while {1} {
+        set my_info [cluster_get_myself $i]
+        if {[dict get $my_info id] == $id} {
+            return $i
+        }
+        incr i 
+    }
+}
+
 # Returns 1 if no node knows node_id, 0 if any node knows it.
 proc node_is_forgotten {node_id} {
     for {set j 0} {$j < [llength $::servers]} {incr j} {

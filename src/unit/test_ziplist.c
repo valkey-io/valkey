@@ -360,7 +360,7 @@ int test_ziplistDeleteInclusiveRange0To0(int argc, char **argv, int flags) {
     int orig_len = ziplistLen(zl);
 
     zl = ziplistDeleteRange(zl, 0, 1);
-
+    p = ziplistIndex(zl, 0);
     TEST_ASSERT(ziplistCompare(p, (unsigned char *)"foo", 3));
     int new_len = ziplistLen(zl);
     TEST_ASSERT(orig_len - 1 == new_len);

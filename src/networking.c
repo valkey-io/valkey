@@ -2394,7 +2394,7 @@ int processMultibulkBuffer(client *c) {
                  * or equal to ll+2. If the data length is greater than
                  * ll+2, trimming querybuf is just a waste of time, because
                  * at this time the querybuf contains not only our bulk. */
-               if (sdslen(c->querybuf) - c->qb_pos <= (size_t)ll + 2) {
+                if (sdslen(c->querybuf) - c->qb_pos <= (size_t)ll + 2) {
                     if (c->querybuf == thread_shared_qb) {
                         /* Let the client take the ownership of the shared buffer. */
                         initSharedQueryBuf();

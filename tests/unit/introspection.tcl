@@ -41,6 +41,14 @@ start_server {tags {"introspection"}} {
         return ""
     }
 
+    proc get_client_tot_in_out_cmds {id} {
+        set info_list [r client list]
+        set in [get_field_in_client_list $id $info_list "tot-net-in"]
+        set out [get_field_in_client_list $id $info_list "tot-net-out"]
+        set cmds [get_field_in_client_list $id $info_list "tot-cmds"]
+        return [list $in $out $cmds]
+    }
+
     test {client input output and command process statistics} {
         set info1 [r client info]
         set input1 [get_field_in_client_info $info1 "tot-net-in"]
@@ -63,21 +71,29 @@ start_server {tags {"introspection"}} {
         set output3 [get_field_in_client_list $rd_id $info_list "tot-net-out"]
         set cmd3 [get_field_in_client_list $rd_id $info_list "tot-cmds"]
         $rd blpop mylist 0
-        set info_list [r client list]
-        set input4 [get_field_in_client_list $rd_id $info_list "tot-net-in"]
-        set output4 [get_field_in_client_list $rd_id $info_list "tot-net-out"]
-        set cmd4 [get_field_in_client_list $rd_id $info_list "tot-cmds"]
-        assert_equal [expr $input3+34] $input4
-        assert_equal $output3 $output4
-        assert_equal $cmd3 $cmd4
+        set input4 [expr $input3 + 34]
+        set output4 $output3
+        set cmd4 $cmd3
+        wait_for_condition 5 100 {
+            [list $input4 $output4 $cmd4] eq [get_client_tot_in_out_cmds $rd_id]
+        } else {
+            puts "--------- tot-net-in tot-net-out tot-cmds (4)"
+            puts "Expected: [list $input4 $output4 $cmd4]"
+            puts "Actual:   [get_client_tot_in_out_cmds $rd_id]"
+            fail "Blocked BLPOP didn't increment expected client fields"
+        }
         r lpush mylist a
-        set info_list [r client list]
-        set input5 [get_field_in_client_list $rd_id $info_list "tot-net-in"]
-        set output5 [get_field_in_client_list $rd_id $info_list "tot-net-out"]
-        set cmd5 [get_field_in_client_list $rd_id $info_list "tot-cmds"]
-        assert_equal $input4 $input5
-        assert_equal [expr $output4+23] $output5
-        assert_equal [expr $cmd4+1] $cmd5
+        set input5 $input4
+        set output5 [expr $output4 + 23]
+        set cmd5 [expr $cmd4 + 1]
+        wait_for_condition 5 100 {
+            [list $input5 $output5 $cmd5] eq [get_client_tot_in_out_cmds $rd_id]
+        } else {
+            puts "--------- tot-net-in tot-net-out tot-cmds (5)"
+            puts "Expected: [list $input5 $output5 $cmd5]"
+            puts "Actual:   [get_client_tot_in_out_cmds $rd_id]"
+            fail "Unblocked BLPOP didn't increment expected client fields"
+        }
         $rd close
         # test recursive command
         set info [r client info]

@@ -1122,7 +1122,10 @@ void syncCommand(client *c) {
  * - rdb-filter-only <include-filters>
  * Define "include" filters for the RDB snapshot. Currently we only support
  * a single include filter: "functions". Passing an empty string "" will
- * result in an empty RDB. */
+ * result in an empty RDB.
+ *
+ * - version <major.minor.patch>
+ * The replica reports its version. */
 void replconfCommand(client *c) {
     int j;
 
@@ -1225,6 +1228,15 @@ void replconfCommand(client *c) {
                 }
             }
             sdsfreesplitres(filters, filter_count);
+        } else if (!strcasecmp(c->argv[j]->ptr, "version")) {
+            /* REPLCONF VERSION x.y.z */
+            int version = version2num(c->argv[j + 1]->ptr);
+            if (version >= 0) {
+                c->replica_version = version;
+            } else {
+                addReplyErrorFormat(c, "Unrecognized version format: %s", (char *)c->argv[j + 1]->ptr);
+                return;
+            }
         } else {
             addReplyErrorFormat(c, "Unrecognized REPLCONF option: %s", (char *)c->argv[j]->ptr);
             return;
@@ -2623,6 +2635,10 @@ void syncWithMaster(connection *conn) {
         err = sendCommand(conn, "REPLCONF", "capa", "eof", "capa", "psync2", NULL);
         if (err) goto write_error;
 
+        /* Inform the primary of our (replica) version. */
+        err = sendCommand(conn, "REPLCONF", "version", VALKEY_VERSION, NULL);
+        if (err) goto write_error;
+
         server.repl_state = REPL_STATE_RECEIVE_AUTH_REPLY;
         return;
     }
@@ -2692,6 +2708,22 @@ void syncWithMaster(connection *conn) {
             serverLog(LL_NOTICE,
                       "(Non critical) Master does not understand "
                       "REPLCONF capa: %s",
+                      err);
+        }
+        sdsfree(err);
+        err = NULL;
+        server.repl_state = REPL_STATE_RECEIVE_VERSION_REPLY;
+    }
+
+    /* Receive VERSION reply. */
+    if (server.repl_state == REPL_STATE_RECEIVE_VERSION_REPLY) {
+        err = receiveSynchronousResponse(conn);
+        if (err == NULL) goto no_response_error;
+        /* Ignore the error if any. Valkey >= 8 supports REPLCONF VERSION. */
+        if (err[0] == '-') {
+            serverLog(LL_NOTICE,
+                      "(Non critical) Primary does not understand "
+                      "REPLCONF VERSION: %s",
                       err);
         }
         sdsfree(err);

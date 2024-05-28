@@ -6552,3 +6552,29 @@ void clusterReplicateOpenSlots(void) {
 
     zfree(argv);
 }
+
+del_stat delUnOwnedKeys() {
+    del_stat result = {0, 0};
+    if (!server.cluster_enabled) {
+        return result;
+    }
+
+    clusterNode *master;
+    if (clusterNodeIsMaster(server.cluster->myself)) {
+        master = myself;
+    } else {
+        master = server.cluster->myself->slaveof;
+    }
+    for (int i = 0; i < CLUSTER_SLOTS; i++) {
+        if (server.cluster->slots[i] != master) {
+            unsigned int deleted = delKeysInSlot(i);
+            result.deleted_keys += deleted;
+            if (deleted > 0) {
+                result.unowned_slots++;
+                serverLog(LL_NOTICE, "Deleted %u keys from unowned slot: %d after loading RDB", deleted, i);
+            }
+        }
+    }
+    serverLog(LL_NOTICE, "Deleted totoal: %d unowned keys from total: %d unowned slots after loading RDB", result.deleted_keys, result.unowned_slots);
+    return result;
+}

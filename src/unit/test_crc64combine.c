@@ -159,7 +159,7 @@ again:
 
             /* run with tri 8-byte paths */
             set_crc64_cutoffs(1, 1);
-            if (bench_crc64(data, crc64_test_size, passes, expect, "crctri", csv))  {
+            if (bench_crc64(data, crc64_test_size, passes, expect, "crctri", csv)) {
                 zfree(data);
                 data = NULL;
                 return 1;

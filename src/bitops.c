@@ -808,10 +808,9 @@ void bitcountCommand(client *c) {
             }
         }
         if (c->argc >= 4) {
-            if (getLongLongFromObjectOrReply(c,c->argv[3],&end,NULL) != C_OK)
-                return;
+            if (getLongLongFromObjectOrReply(c, c->argv[3], &end, NULL) != C_OK) return;
         }
-        
+
         /* Lookup, check for type. */
         o = lookupKeyRead(c->db, c->argv[1]);
         if (checkType(c, o, OBJ_STRING)) return;
@@ -821,7 +820,7 @@ void bitcountCommand(client *c) {
         /* Make sure we will not overflow */
         serverAssert(totlen <= LLONG_MAX >> 3);
 
-        if (c->argc < 4) end = totlen-1;
+        if (c->argc < 4) end = totlen - 1;
 
         /* Convert negative indexes */
         if (start < 0 && end < 0 && start > end) {

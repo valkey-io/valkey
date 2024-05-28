@@ -20,7 +20,7 @@ long long _ustime(void) {
     long long ust;
 
     gettimeofday(&tv, NULL);
-    ust = ((long long)tv.tv_sec)*1000000;
+    ust = ((long long)tv.tv_sec) * 1000000;
     ust += tv.tv_usec;
     return ust;
 }
@@ -28,18 +28,17 @@ long long _ustime(void) {
 static int bench_crc64(unsigned char *data, uint64_t size, long long passes, uint64_t check, char *name, int csv) {
     uint64_t min = size, hash = 0;
     long long original_start = _ustime(), original_end;
-    for (long long i=passes; i > 0; i--) {
+    for (long long i = passes; i > 0; i--) {
         hash = crc64(0, data, size);
     }
     original_end = _ustime();
     min = (original_end - original_start) * 1000 / passes;
     /* approximate nanoseconds without nstime */
     if (csv) {
-        printf("%s,%" PRIu64 ",%" PRIu64 ",%d\n",
-            name, size, (1000 * size) / min, hash == check);
+        printf("%s,%" PRIu64 ",%" PRIu64 ",%d\n", name, size, (1000 * size) / min, hash == check);
     } else {
-        TEST_PRINT_INFO("test size=%" PRIu64 " algorithm=%s %" PRIu64 " M/sec matches=%d",
-            size, name, (1000 * size) / min, hash == check);
+        TEST_PRINT_INFO("test size=%" PRIu64 " algorithm=%s %" PRIu64 " M/sec matches=%d", size, name,
+                        (1000 * size) / min, hash == check);
     }
     return hash != check;
 }
@@ -49,7 +48,7 @@ const uint64_t BENCH_RPOLY = UINT64_C(0x95ac9329ac4bc9b5);
 static void bench_combine(char *label, uint64_t size, uint64_t expect, int csv) {
     uint64_t min = size, start = expect, thash = expect ^ (expect >> 17);
     long long original_start = _ustime(), original_end;
-    for (int i=0; i < 1000; i++) {
+    for (int i = 0; i < 1000; i++) {
         crc64_combine(thash, start, size, BENCH_RPOLY, 64);
     }
     original_end = _ustime();
@@ -67,8 +66,8 @@ static void genBenchmarkRandomData(char *data, int count) {
     int i = 0;
 
     while (count--) {
-        state = (state*1103515245+12345);
-        data[i++] = '0'+((state>>16)&63);
+        state = (state * 1103515245 + 12345);
+        data[i++] = '0' + ((state >> 16) & 63);
     }
 }
 
@@ -84,29 +83,27 @@ int test_crc64combine(int argc, char **argv, int flags) {
     int i, lastarg, csv = 0, loop = 0, combine = 0;
 again:
     for (i = 3; i < argc; i++) {
-        lastarg = (i == (argc-1));
-        if (!strcmp(argv[i],"--help")) {
+        lastarg = (i == (argc - 1));
+        if (!strcmp(argv[i], "--help")) {
             goto usage;
-        } else if (!strcmp(argv[i],"--csv")) {
+        } else if (!strcmp(argv[i], "--csv")) {
             csv = 1;
-        } else if (!strcmp(argv[i],"-l")) {
+        } else if (!strcmp(argv[i], "-l")) {
             loop = 1;
-        } else if (!strcmp(argv[i],"--crc")) {
+        } else if (!strcmp(argv[i], "--crc")) {
             if (lastarg) goto invalid;
             crc64_test_size = atoll(argv[++i]);
-        } else if (!strcmp(argv[i],"--combine")) {
+        } else if (!strcmp(argv[i], "--combine")) {
             combine = 1;
         } else {
-invalid:
-            printf("Invalid option \"%s\" or option argument missing\n\n",argv[i]);
-usage:
-            printf(
-"Usage: --single test_crc64combine.c [OPTIONS]\n\n"
-" --csv              Output in CSV format\n"
-" -l                 Loop. Run the tests forever\n"
-" --crc <bytes>      Benchmark crc64 faster options, using a buffer this big, and quit when done.\n"
-" --combine          Benchmark crc64 combine value ranges and timings.\n"
-            );
+        invalid:
+            printf("Invalid option \"%s\" or option argument missing\n\n", argv[i]);
+        usage:
+            printf("Usage: --single test_crc64combine.c [OPTIONS]\n\n"
+                   " --csv              Output in CSV format\n"
+                   " -l                 Loop. Run the tests forever\n"
+                   " --crc <bytes>      Benchmark crc64 faster options, using a buffer this big, and quit when done.\n"
+                   " --combine          Benchmark crc64 combine value ranges and timings.\n");
             return 1;
         }
     }
@@ -115,11 +112,11 @@ usage:
     long long init_start, init_end;
 
     do {
-        unsigned char* data = NULL;
+        unsigned char *data = NULL;
         uint64_t passes = 0;
         if (crc64_test_size) {
             data = zmalloc(crc64_test_size);
-            genBenchmarkRandomData((char*)data, crc64_test_size);
+            genBenchmarkRandomData((char *)data, crc64_test_size);
             /* We want to hash about 1 gig of data in total, looped, to get a good
              * idea of our performance.
              */
@@ -130,22 +127,22 @@ usage:
 
         crc64_init();
         /* warm up the cache */
-        set_crc64_cutoffs(crc64_test_size+1, crc64_test_size+1);
+        set_crc64_cutoffs(crc64_test_size + 1, crc64_test_size + 1);
         uint64_t expect = crc64(0, data, crc64_test_size);
 
         if (!combine && crc64_test_size) {
             if (csv && init_this_loop) printf("algorithm,buffer,performance,crc64_matches\n");
 
             /* get the single-character version for single-byte Redis behavior */
-            set_crc64_cutoffs(0, crc64_test_size+1);
+            set_crc64_cutoffs(0, crc64_test_size + 1);
             if (bench_crc64(data, crc64_test_size, passes, expect, "crc_1byte", csv)) return 1;
 
-            set_crc64_cutoffs(crc64_test_size+1, crc64_test_size+1);
+            set_crc64_cutoffs(crc64_test_size + 1, crc64_test_size + 1);
             /* run with 8-byte "single" path, crcfaster */
             if (bench_crc64(data, crc64_test_size, passes, expect, "crcspeed", csv)) return 1;
 
             /* run with dual 8-byte paths */
-            set_crc64_cutoffs(1, crc64_test_size+1);
+            set_crc64_cutoffs(1, crc64_test_size + 1);
             if (bench_crc64(data, crc64_test_size, passes, expect, "crcdual", csv)) return 1;
 
             /* run with tri 8-byte paths */
@@ -161,11 +158,7 @@ usage:
         if (combine) {
             if (init_this_loop) {
                 init_start = _ustime();
-                crc64_combine(
-                    UINT64_C(0xdeadbeefdeadbeef),
-                    UINT64_C(0xfeebdaedfeebdaed),
-                    INIT_SIZE,
-                    BENCH_RPOLY, 64);
+                crc64_combine(UINT64_C(0xdeadbeefdeadbeef), UINT64_C(0xfeebdaedfeebdaed), INIT_SIZE, BENCH_RPOLY, 64);
                 init_end = _ustime();
 
                 init_end -= init_start;

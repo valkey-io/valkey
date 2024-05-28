@@ -112,7 +112,7 @@ __attribute__((noinline)) int ThreadsManager_runOnThreads(pid_t *tids, size_t ti
 
 static int test_and_start(void) {
     /* atomic_exchange_explicit sets the variable to 1 and returns the previous value */
-    int prev_state = atomic_exchange_explicit(&g_in_progress,1,memory_order_relaxed);
+    int prev_state = atomic_exchange_explicit(&g_in_progress, 1, memory_order_relaxed);
 
     /* If prev_state is 1, g_in_progress was on. */
     return prev_state;
@@ -123,7 +123,7 @@ __attribute__((noinline)) static void invoke_callback(int sig) {
     run_on_thread_cb callback = g_callback;
     if (callback) {
         callback();
-        atomic_fetch_add_explicit(&g_num_threads_done,1,memory_order_relaxed);
+        atomic_fetch_add_explicit(&g_num_threads_done, 1, memory_order_relaxed);
     } else {
         serverLogFromHandler(LL_WARNING, "tid %ld: ThreadsManager g_callback is NULL", syscall(SYS_gettid));
     }
@@ -145,7 +145,7 @@ static void wait_threads(void) {
         /* Sleep a bit to yield to other threads. */
         /* usleep isn't listed as signal safe, so we use select instead */
         select(0, NULL, NULL, NULL, &tv);
-        curr_done_count = atomic_load_explicit(&g_num_threads_done,memory_order_relaxed);
+        curr_done_count = atomic_load_explicit(&g_num_threads_done, memory_order_relaxed);
         clock_gettime(CLOCK_REALTIME, &curr_time);
     } while (curr_done_count < g_tids_len && curr_time.tv_sec <= timeout_time.tv_sec);
 
@@ -160,7 +160,7 @@ static void ThreadsManager_cleanups(void) {
     g_num_threads_done = 0;
 
     /* Lastly, turn off g_in_progress */
-    atomic_store_explicit(&g_in_progress,0,memory_order_relaxed);
+    atomic_store_explicit(&g_in_progress, 0, memory_order_relaxed);
 }
 #else
 

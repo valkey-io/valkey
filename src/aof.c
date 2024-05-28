@@ -987,8 +987,7 @@ int startAppendOnly(void) {
     /* If AOF fsync error in bio job, we just ignore it and log the event. */
     int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
     if (aof_bio_fsync_status == C_ERR) {
-        serverLog(LL_WARNING,
-            "AOF reopen, just ignore the AOF fsync error in bio job");
+        serverLog(LL_WARNING, "AOF reopen, just ignore the AOF fsync error in bio job");
         atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
     }
 
@@ -1245,8 +1244,7 @@ try_fsync:
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         server.aof_last_fsync = server.mstime;
         atomic_store_explicit(&server.fsynced_reploff_pending, server.master_repl_offset, memory_order_relaxed);
-    } else if (server.aof_fsync == AOF_FSYNC_EVERYSEC &&
-               server.mstime - server.aof_last_fsync >= 1000) {
+    } else if (server.aof_fsync == AOF_FSYNC_EVERYSEC && server.mstime - server.aof_last_fsync >= 1000) {
         if (!sync_in_progress) {
             aof_background_fsync(server.aof_fd);
             server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
@@ -2648,7 +2646,8 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
             /* Update the fsynced replication offset that just now become valid.
              * This could either be the one we took in startAppendOnly, or a
              * newer one set by the bio thread. */
-            long long fsynced_reploff_pending = atomic_load_explicit(&server.fsynced_reploff_pending, memory_order_relaxed);
+            long long fsynced_reploff_pending =
+                atomic_load_explicit(&server.fsynced_reploff_pending, memory_order_relaxed);
             server.fsynced_reploff = fsynced_reploff_pending;
         }
 

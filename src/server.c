@@ -1258,10 +1258,10 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         long long stat_net_input_bytes, stat_net_output_bytes;
         long long stat_net_repl_input_bytes, stat_net_repl_output_bytes;
 
-        stat_net_input_bytes = atomic_load_explicit(&server.stat_net_input_bytes,memory_order_relaxed);
-        stat_net_output_bytes = atomic_load_explicit(&server.stat_net_output_bytes,memory_order_relaxed);
-        stat_net_repl_input_bytes = atomic_load_explicit(&server.stat_net_repl_input_bytes,memory_order_relaxed);
-        stat_net_repl_output_bytes = atomic_load_explicit(&server.stat_net_repl_output_bytes,memory_order_relaxed);
+        stat_net_input_bytes = atomic_load_explicit(&server.stat_net_input_bytes, memory_order_relaxed);
+        stat_net_output_bytes = atomic_load_explicit(&server.stat_net_output_bytes, memory_order_relaxed);
+        stat_net_repl_input_bytes = atomic_load_explicit(&server.stat_net_repl_input_bytes, memory_order_relaxed);
+        stat_net_repl_output_bytes = atomic_load_explicit(&server.stat_net_repl_output_bytes, memory_order_relaxed);
 
         monotime current_time = getMonotonicUs();
         long long factor = 1000000; // us
@@ -1737,12 +1737,10 @@ void afterSleep(struct aeEventLoop *eventLoop) {
         if (moduleCount()) {
             mstime_t latency;
             latencyStartMonitor(latency);
-            atomic_store_explicit(&server.module_gil_acquiring,1,memory_order_relaxed);
+            atomic_store_explicit(&server.module_gil_acquiring, 1, memory_order_relaxed);
             moduleAcquireGIL();
-            atomic_store_explicit(&server.module_gil_acquiring,0,memory_order_relaxed);
-            moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP,
-                                  VALKEYMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP,
-                                  NULL);
+            atomic_store_explicit(&server.module_gil_acquiring, 0, memory_order_relaxed);
+            moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP, VALKEYMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP, NULL);
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("module-acquire-GIL", latency);
         }
@@ -1991,7 +1989,7 @@ void initServerConfig(void) {
     server.aof_flush_sleep = 0;
     server.aof_last_fsync = time(NULL) * 1000;
     server.aof_cur_timestamp = 0;
-    atomic_store_explicit(&server.aof_bio_fsync_status,C_OK,memory_order_relaxed);
+    atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
     server.aof_rewrite_time_last = -1;
     server.aof_rewrite_time_start = -1;
     server.aof_lastbgrewrite_status = C_OK;
@@ -2481,10 +2479,10 @@ void resetServerStats(void) {
     server.stat_sync_partial_ok = 0;
     server.stat_sync_partial_err = 0;
     server.stat_io_reads_processed = 0;
-    atomic_store_explicit(&server.stat_total_reads_processed,0,memory_order_relaxed);
+    atomic_store_explicit(&server.stat_total_reads_processed, 0, memory_order_relaxed);
     server.stat_io_writes_processed = 0;
-    atomic_store_explicit(&server.stat_total_writes_processed,0,memory_order_relaxed);
-    atomic_store_explicit(&server.stat_client_qbuf_limit_disconnections,0,memory_order_relaxed);
+    atomic_store_explicit(&server.stat_total_writes_processed, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.stat_client_qbuf_limit_disconnections, 0, memory_order_relaxed);
     server.stat_client_outbuf_limit_disconnections = 0;
     for (j = 0; j < STATS_METRIC_COUNT; j++) {
         server.inst_metric[j].idx = 0;
@@ -2495,10 +2493,10 @@ void resetServerStats(void) {
     server.stat_aof_rewrites = 0;
     server.stat_rdb_saves = 0;
     server.stat_aofrw_consecutive_failures = 0;
-    atomic_store_explicit(&server.stat_net_input_bytes,0,memory_order_relaxed);
-    atomic_store_explicit(&server.stat_net_output_bytes,0,memory_order_relaxed);
-    atomic_store_explicit(&server.stat_net_repl_input_bytes,0,memory_order_relaxed);
-    atomic_store_explicit(&server.stat_net_repl_output_bytes,0,memory_order_relaxed);
+    atomic_store_explicit(&server.stat_net_input_bytes, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.stat_net_output_bytes, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.stat_net_repl_input_bytes, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.stat_net_repl_output_bytes, 0, memory_order_relaxed);
     server.stat_unexpected_error_replies = 0;
     server.stat_total_error_replies = 0;
     server.stat_dump_payload_sanitizations = 0;
@@ -5530,7 +5528,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         } else if (server.stat_current_save_keys_total) {
             fork_perc = ((double)server.stat_current_save_keys_processed / server.stat_current_save_keys_total) * 100;
         }
-        int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status,memory_order_relaxed);
+        int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
 
         /* clang-format off */
         info = sdscatprintf(info, "# Persistence\r\n" FMTARGS(
@@ -5629,14 +5627,15 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         long long current_active_defrag_time =
             server.stat_last_active_defrag_time ? (long long)elapsedUs(server.stat_last_active_defrag_time) : 0;
         long long stat_client_qbuf_limit_disconnections;
-        
+
         stat_total_reads_processed = atomic_load_explicit(&server.stat_total_reads_processed, memory_order_relaxed);
         stat_total_writes_processed = atomic_load_explicit(&server.stat_total_writes_processed, memory_order_relaxed);
         stat_net_input_bytes = atomic_load_explicit(&server.stat_net_input_bytes, memory_order_relaxed);
         stat_net_output_bytes = atomic_load_explicit(&server.stat_net_output_bytes, memory_order_relaxed);
         stat_net_repl_input_bytes = atomic_load_explicit(&server.stat_net_repl_input_bytes, memory_order_relaxed);
         stat_net_repl_output_bytes = atomic_load_explicit(&server.stat_net_repl_output_bytes, memory_order_relaxed);
-        stat_client_qbuf_limit_disconnections = atomic_load_explicit(&server.stat_client_qbuf_limit_disconnections, memory_order_relaxed);
+        stat_client_qbuf_limit_disconnections =
+            atomic_load_explicit(&server.stat_client_qbuf_limit_disconnections, memory_order_relaxed);
 
         if (sections++) info = sdscat(info, "\r\n");
         /* clang-format off */

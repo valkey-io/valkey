@@ -2428,20 +2428,21 @@ sds ACLLoadFromFile(const char *filename) {
             client *c = listNodeValue(ln);
             user *original = c->user;
             list *channels = NULL;
-            user *new = ACLGetUserByName(c->user->name, sdslen(c->user->name));
-            if (new && user_channels) {
-                if (!raxFind(user_channels, (unsigned char *)(new->name), sdslen(new->name), (void **)&channels)) {
-                    channels = getUpcomingChannelList(new, original);
-                    raxInsert(user_channels, (unsigned char *)(new->name), sdslen(new->name), channels, NULL);
+            user *new_user = ACLGetUserByName(c->user->name, sdslen(c->user->name));
+            if (new_user && user_channels) {
+                if (!raxFind(user_channels, (unsigned char *)(new_user->name), sdslen(new_user->name),
+                             (void **)&channels)) {
+                    channels = getUpcomingChannelList(new_user, original);
+                    raxInsert(user_channels, (unsigned char *)(new_user->name), sdslen(new_user->name), channels, NULL);
                 }
             }
             /* When the new channel list is NULL, it means the new user's channel list is a superset of the old user's
              * list. */
-            if (!new || (channels && ACLShouldKillPubsubClient(c, channels))) {
+            if (!new_user || (channels && ACLShouldKillPubsubClient(c, channels))) {
                 freeClient(c);
                 continue;
             }
-            c->user = new;
+            c->user = new_user;
         }
 
         if (user_channels) raxFreeWithCallback(user_channels, (void (*)(void *))listRelease);

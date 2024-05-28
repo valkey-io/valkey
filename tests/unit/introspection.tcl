@@ -77,7 +77,10 @@ start_server {tags {"introspection"}} {
         wait_for_condition 5 100 {
             [list $input4 $output4 $cmd4] eq [get_client_tot_in_out_cmds $rd_id]
         } else {
-            fail "Blocked BLPOP didn't only increment client's tot-net-in"
+            puts "--------- tot-net-in tot-net-out tot-cmds (4)"
+            puts "Expected: [list $input4 $output4 $cmd4]"
+            puts "Actual:   [get_client_tot_in_out_cmds $rd_id]"
+            fail "Blocked BLPOP didn't increment expected client fields"
         }
         r lpush mylist a
         set input5 $input4
@@ -86,7 +89,10 @@ start_server {tags {"introspection"}} {
         wait_for_condition 5 100 {
             [list $input5 $output5 $cmd5] eq [get_client_tot_in_out_cmds $rd_id]
         } else {
-            fail "Unblocked BLPOP didn't only increment client's tot-net-out and tot-cmds"
+            puts "--------- tot-net-in tot-net-out tot-cmds (5)"
+            puts "Expected: [list $input5 $output5 $cmd5]"
+            puts "Actual:   [get_client_tot_in_out_cmds $rd_id]"
+            fail "Unblocked BLPOP didn't increment expected client fields"
         }
         $rd close
         # test recursive command

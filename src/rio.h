@@ -37,13 +37,13 @@
 #include "sds.h"
 #include "connection.h"
 
-#define RIO_FLAG_READ_ERROR (1<<0)
-#define RIO_FLAG_WRITE_ERROR (1<<1)
+#define RIO_FLAG_READ_ERROR (1 << 0)
+#define RIO_FLAG_WRITE_ERROR (1 << 1)
 
-#define RIO_TYPE_FILE (1<<0)
-#define RIO_TYPE_BUFFER (1<<1)
-#define RIO_TYPE_CONN (1<<2)
-#define RIO_TYPE_FD (1<<3)
+#define RIO_TYPE_FILE (1 << 0)
+#define RIO_TYPE_BUFFER (1 << 1)
+#define RIO_TYPE_CONN (1 << 2)
+#define RIO_TYPE_FD (1 << 3)
 
 struct _rio {
     /* Backend functions.
@@ -79,21 +79,21 @@ struct _rio {
         /* Stdio file pointer target. */
         struct {
             FILE *fp;
-            off_t buffered; /* Bytes written since last fsync. */
-            off_t autosync; /* fsync after 'autosync' bytes written. */
-            unsigned reclaim_cache:1; /* A flag to indicate reclaim cache after fsync */
+            off_t buffered;             /* Bytes written since last fsync. */
+            off_t autosync;             /* fsync after 'autosync' bytes written. */
+            unsigned reclaim_cache : 1; /* A flag to indicate reclaim cache after fsync */
         } file;
         /* Connection object (used to read from socket) */
         struct {
             connection *conn;   /* Connection */
-            off_t pos;    /* pos in buf that was returned */
-            sds buf;      /* buffered data */
+            off_t pos;          /* pos in buf that was returned */
+            sds buf;            /* buffered data */
             size_t read_limit;  /* don't allow to buffer/read more than that */
             size_t read_so_far; /* amount of data read from the rio (not buffered) */
         } conn;
         /* FD target (used to write to pipe). */
         struct {
-            int fd;       /* File descriptor. */
+            int fd; /* File descriptor. */
             off_t pos;
             sds buf;
         } fd;
@@ -109,13 +109,14 @@ typedef struct _rio rio;
 static inline size_t rioWrite(rio *r, const void *buf, size_t len) {
     if (r->flags & RIO_FLAG_WRITE_ERROR) return 0;
     while (len) {
-        size_t bytes_to_write = (r->max_processing_chunk && r->max_processing_chunk < len) ? r->max_processing_chunk : len;
-        if (r->update_cksum) r->update_cksum(r,buf,bytes_to_write);
-        if (r->write(r,buf,bytes_to_write) == 0) {
+        size_t bytes_to_write =
+            (r->max_processing_chunk && r->max_processing_chunk < len) ? r->max_processing_chunk : len;
+        if (r->update_cksum) r->update_cksum(r, buf, bytes_to_write);
+        if (r->write(r, buf, bytes_to_write) == 0) {
             r->flags |= RIO_FLAG_WRITE_ERROR;
             return 0;
         }
-        buf = (char*)buf + bytes_to_write;
+        buf = (char *)buf + bytes_to_write;
         len -= bytes_to_write;
         r->processed_bytes += bytes_to_write;
     }
@@ -125,13 +126,14 @@ static inline size_t rioWrite(rio *r, const void *buf, size_t len) {
 static inline size_t rioRead(rio *r, void *buf, size_t len) {
     if (r->flags & RIO_FLAG_READ_ERROR) return 0;
     while (len) {
-        size_t bytes_to_read = (r->max_processing_chunk && r->max_processing_chunk < len) ? r->max_processing_chunk : len;
-        if (r->read(r,buf,bytes_to_read) == 0) {
+        size_t bytes_to_read =
+            (r->max_processing_chunk && r->max_processing_chunk < len) ? r->max_processing_chunk : len;
+        if (r->read(r, buf, bytes_to_read) == 0) {
             r->flags |= RIO_FLAG_READ_ERROR;
             return 0;
         }
-        if (r->update_cksum) r->update_cksum(r,buf,bytes_to_read);
-        buf = (char*)buf + bytes_to_read;
+        if (r->update_cksum) r->update_cksum(r, buf, bytes_to_read);
+        buf = (char *)buf + bytes_to_read;
         len -= bytes_to_read;
         r->processed_bytes += bytes_to_read;
     }
@@ -159,7 +161,7 @@ static inline int rioGetWriteError(rio *r) {
 }
 
 static inline void rioClearErrors(rio *r) {
-    r->flags &= ~(RIO_FLAG_READ_ERROR|RIO_FLAG_WRITE_ERROR);
+    r->flags &= ~(RIO_FLAG_READ_ERROR | RIO_FLAG_WRITE_ERROR);
 }
 
 void rioInitWithFile(rio *r, FILE *fp);
@@ -168,7 +170,7 @@ void rioInitWithConn(rio *r, connection *conn, size_t read_limit);
 void rioInitWithFd(rio *r, int fd);
 
 void rioFreeFd(rio *r);
-void rioFreeConn(rio *r, sds* out_remainingBufferedData);
+void rioFreeConn(rio *r, sds *out_remainingBufferedData);
 
 size_t rioWriteBulkCount(rio *r, char prefix, long count);
 size_t rioWriteBulkString(rio *r, const char *buf, size_t len);
@@ -180,6 +182,6 @@ int rioWriteBulkObject(rio *r, struct serverObject *obj);
 
 void rioGenericUpdateChecksum(rio *r, const void *buf, size_t len);
 void rioSetAutoSync(rio *r, off_t bytes);
-void rioSetReclaimCache(rio *r, int enabled); 
+void rioSetReclaimCache(rio *r, int enabled);
 uint8_t rioCheckType(rio *r);
 #endif

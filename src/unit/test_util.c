@@ -253,6 +253,21 @@ int test_fixedpoint_d2string(int argc, char **argv, int flags) {
     return 0;
 }
 
+int test_version2num(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    TEST_ASSERT(version2num("7.2.5") == 0x070205);
+    TEST_ASSERT(version2num("255.255.255") == 0xffffff);
+    TEST_ASSERT(version2num("7.2.256") == -1);
+    TEST_ASSERT(version2num("7.2") == -1);
+    TEST_ASSERT(version2num("7.2.1.0") == -1);
+    TEST_ASSERT(version2num("1.-2.-3") == -1);
+    TEST_ASSERT(version2num("1.2.3-rc4") == -1);
+    TEST_ASSERT(version2num("") == -1);
+    return 0;
+}
+
 #if defined(__linux__)
 /* Since fadvise and mincore is only supported in specific platforms like
  * Linux, we only verify the fadvise mechanism works in Linux */
@@ -266,12 +281,14 @@ static int cache_exist(int fd) {
      * page is currently resident in memory */
     return flag&1;
 }
+#endif
 
 int test_reclaimFilePageCache(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
 
+#if defined(__linux__)
     char *tmpfile = "/tmp/redis-reclaim-cache-test";
     int fd = open(tmpfile, O_RDWR|O_CREAT, 0644);
     TEST_ASSERT(fd >= 0);
@@ -291,8 +308,6 @@ int test_reclaimFilePageCache(int argc, char **argv, int flags) {
     TEST_ASSERT(!cache_exist(fd));
 
     unlink(tmpfile);
-    printf("reclaimFilePageCache test is ok\n");
-
+#endif
     return 0;
 }
-#endif

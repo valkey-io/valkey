@@ -2105,7 +2105,7 @@ void initSharedQueryBuf(void) {
 }
 
 /* Resets the shared query buffer used by the given client.
- * If any data remained in the buffer, the client will take ownership of the buffer 
+ * If any data remained in the buffer, the client will take ownership of the buffer
  * and a new empty buffer will be allocated for the shared buffer. */
 void resetSharedQueryBuf(client *c) {
     serverAssert(c->querybuf == thread_shared_qb);
@@ -2611,8 +2611,8 @@ int processInputBuffer(client *c) {
             }
 
             if (c->querybuf == thread_shared_qb) {
-                /* Before processing the command, reset the shared query buffer to its default state. 
-                 * This avoids unintentionally modifying the shared qb during processCommand as we may use 
+                /* Before processing the command, reset the shared query buffer to its default state.
+                 * This avoids unintentionally modifying the shared qb during processCommand as we may use
                  * the shared qb for other clients during processEventsWhileBlocked */
                 resetSharedQueryBuf(c);
             }
@@ -2678,8 +2678,7 @@ void readQueryFromClient(connection *conn) {
      * processMultiBulkBuffer() can avoid copying buffers to create the
      * robj representing the argument. */
 
-    if (c->reqtype == PROTO_REQ_MULTIBULK && c->multibulklen && c->bulklen != -1 && c->bulklen >= PROTO_MBULK_BIG_ARG)
-    {
+    if (c->reqtype == PROTO_REQ_MULTIBULK && c->multibulklen && c->bulklen != -1 && c->bulklen >= PROTO_MBULK_BIG_ARG) {
         ssize_t remaining = (size_t)(c->bulklen + 2) - (qblen - c->qb_pos);
         big_arg = 1;
 

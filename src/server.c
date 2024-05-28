@@ -727,7 +727,7 @@ int clientsCronResizeQueryBuffer(client *c) {
             /* 1) Query is idle for a long time. */
             size_t remaining = sdslen(c->querybuf) - c->qb_pos;
             if (!(c->flags & CLIENT_MASTER) && !remaining) {
-                /* If the client is not a master and no data is pending, 
+                /* If the client is not a master and no data is pending,
                  * The client can safely use the shared query buffer in the next read - free the client's querybuf. */
                 sdsfree(c->querybuf);
                 /* By setting the querybuf to NULL, the client will use the shared query buffer in the next read.

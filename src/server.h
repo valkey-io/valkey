@@ -466,14 +466,15 @@ typedef enum {
     REPL_STATE_CONNECT,    /* Must connect to master */
     REPL_STATE_CONNECTING, /* Connecting to master */
     /* --- Handshake states, must be ordered --- */
-    REPL_STATE_RECEIVE_PING_REPLY,  /* Wait for PING reply */
-    REPL_STATE_SEND_HANDSHAKE,      /* Send handshake sequence to master */
-    REPL_STATE_RECEIVE_AUTH_REPLY,  /* Wait for AUTH reply */
-    REPL_STATE_RECEIVE_PORT_REPLY,  /* Wait for REPLCONF reply */
-    REPL_STATE_RECEIVE_IP_REPLY,    /* Wait for REPLCONF reply */
-    REPL_STATE_RECEIVE_CAPA_REPLY,  /* Wait for REPLCONF reply */
-    REPL_STATE_SEND_PSYNC,          /* Send PSYNC */
-    REPL_STATE_RECEIVE_PSYNC_REPLY, /* Wait for PSYNC reply */
+    REPL_STATE_RECEIVE_PING_REPLY,    /* Wait for PING reply */
+    REPL_STATE_SEND_HANDSHAKE,        /* Send handshake sequence to master */
+    REPL_STATE_RECEIVE_AUTH_REPLY,    /* Wait for AUTH reply */
+    REPL_STATE_RECEIVE_PORT_REPLY,    /* Wait for REPLCONF reply */
+    REPL_STATE_RECEIVE_IP_REPLY,      /* Wait for REPLCONF reply */
+    REPL_STATE_RECEIVE_CAPA_REPLY,    /* Wait for REPLCONF reply */
+    REPL_STATE_RECEIVE_VERSION_REPLY, /* Wait for REPLCONF reply */
+    REPL_STATE_SEND_PSYNC,            /* Send PSYNC */
+    REPL_STATE_RECEIVE_PSYNC_REPLY,   /* Wait for PSYNC reply */
     /* --- End of handshake states --- */
     REPL_STATE_TRANSFER,  /* Receiving .rdb from master */
     REPL_STATE_CONNECTED, /* Connected to master */
@@ -1256,8 +1257,9 @@ typedef struct client {
     char replid[CONFIG_RUN_ID_SIZE + 1]; /* Master replication ID (if master). */
     int slave_listening_port;            /* As configured with: REPLCONF listening-port */
     char *slave_addr;                    /* Optionally given by REPLCONF ip-address */
-    int slave_capa;                      /* Slave capabilities: SLAVE_CAPA_* bitwise OR. */
-    int slave_req;                       /* Slave requirements: SLAVE_REQ_* */
+    int replica_version;                 /* Version on the form 0xMMmmpp. */
+    short slave_capa;                    /* Slave capabilities: SLAVE_CAPA_* bitwise OR. */
+    short slave_req;                     /* Slave requirements: SLAVE_REQ_* */
     multiState mstate;                   /* MULTI/EXEC state */
     blockingState bstate;                /* blocking state */
     long long woff;                      /* Last write global replication offset. */

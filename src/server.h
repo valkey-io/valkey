@@ -714,7 +714,7 @@ typedef enum {
 #define LATENCY_HISTOGRAM_MAX_VALUE 1000000000L /* <= 1 secs */
 #define LATENCY_HISTOGRAM_PRECISION                                                                                    \
     2 /* Maintain a value precision of 2 significant digits across LATENCY_HISTOGRAM_MIN_VALUE and                     \
-       * LATENCY_HISTOGRAM_MAX_VALUE range. Value quantization within the range will thus be no larger than 1/100th                                               \
+       * LATENCY_HISTOGRAM_MAX_VALUE range. Value quantization within the range will thus be no larger than 1/100th    \
        * (or 1%) of any value. The total size per histogram should sit around 40 KiB Bytes. */
 
 /* Busy module flags, see busy_module_yield_flags */
@@ -1670,13 +1670,13 @@ struct valkeyServer {
     uint32_t paused_actions;    /* Bitmask of actions that are currently paused */
     list *postponed_clients;    /* List of postponed clients */
     pause_event client_pause_per_purpose[NUM_PAUSE_PURPOSES];
-    char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
-    dict *migrate_cached_sockets;/* MIGRATE cached sockets */
-    _Atomic uint64_t next_client_id; /* Next client unique ID. Incremental. */
-    int protected_mode;         /* Don't accept external connections. */
-    int io_threads_num;         /* Number of IO threads to use. */
-    int io_threads_do_reads;    /* Read and parse from IO threads? */
-    int io_threads_active;      /* Is IO threads currently active? */
+    char neterr[ANET_ERR_LEN];                /* Error buffer for anet.c */
+    dict *migrate_cached_sockets;             /* MIGRATE cached sockets */
+    _Atomic uint64_t next_client_id;          /* Next client unique ID. Incremental. */
+    int protected_mode;                       /* Don't accept external connections. */
+    int io_threads_num;                       /* Number of IO threads to use. */
+    int io_threads_do_reads;                  /* Read and parse from IO threads? */
+    int io_threads_active;                    /* Is IO threads currently active? */
     long long events_processed_while_blocked; /* processEventsWhileBlocked() */
     int enable_protected_configs; /* Enable the modification of protected configs, see PROTECTED_ACTION_ALLOWED_* */
     int enable_debug_cmd;         /* Enable DEBUG commands, see PROTECTED_ACTION_ALLOWED_* */
@@ -1697,61 +1697,64 @@ struct valkeyServer {
     long long stat_expiredkeys;                    /* Number of expired keys */
     double stat_expired_stale_perc;                /* Percentage of keys probably expired */
     long long stat_expired_time_cap_reached_count; /* Early expire cycle stops.*/
-    long long stat_expire_cycle_time_used; /* Cumulative microseconds used. */
-    long long stat_evictedkeys;     /* Number of evicted keys (maxmemory) */
-    long long stat_evictedclients;  /* Number of evicted clients */
-    long long stat_evictedscripts;  /* Number of evicted lua scripts. */
-    long long stat_total_eviction_exceeded_time;  /* Total time over the memory limit, unit us */
-    monotime stat_last_eviction_exceeded_time;  /* Timestamp of current eviction start, unit us */
-    long long stat_keyspace_hits;   /* Number of successful lookups of keys */
-    long long stat_keyspace_misses; /* Number of failed lookups of keys */
-    long long stat_active_defrag_hits;      /* number of allocations moved */
-    long long stat_active_defrag_misses;    /* number of allocations scanned but not moved */
-    long long stat_active_defrag_key_hits;  /* number of keys with moved allocations */
-    long long stat_active_defrag_key_misses;/* number of keys scanned and not moved */
-    long long stat_active_defrag_scanned;   /* number of dictEntries scanned */
-    long long stat_total_active_defrag_time; /* Total time memory fragmentation over the limit, unit us */
-    monotime stat_last_active_defrag_time; /* Timestamp of current active defrag start */
-    size_t stat_peak_memory;        /* Max used memory record */
-    long long stat_aof_rewrites;    /* number of aof file rewrites performed */
-    long long stat_aofrw_consecutive_failures; /* The number of consecutive failures of aofrw */
-    long long stat_rdb_saves;       /* number of rdb saves performed */
-    long long stat_fork_time;       /* Time needed to perform latest fork() */
-    double stat_fork_rate;          /* Fork rate in GB/sec. */
-    long long stat_total_forks;     /* Total count of fork. */
-    long long stat_rejected_conn;   /* Clients rejected because of maxclients */
-    long long stat_sync_full;       /* Number of full resyncs with slaves. */
-    long long stat_sync_partial_ok; /* Number of accepted PSYNC requests. */
-    long long stat_sync_partial_err;/* Number of unaccepted PSYNC requests. */
-    list *slowlog;                  /* SLOWLOG list of commands */
-    long long slowlog_entry_id;     /* SLOWLOG current entry ID */
-    long long slowlog_log_slower_than; /* SLOWLOG time limit (to get logged) */
-    unsigned long slowlog_max_len;     /* SLOWLOG max number of items logged */
-    struct malloc_stats cron_malloc_stats; /* sampled in serverCron(). */
-    _Atomic long long stat_net_input_bytes; /* Bytes read from network. */
-    _Atomic long long stat_net_output_bytes; /* Bytes written to network. */
-    _Atomic long long stat_net_repl_input_bytes; /* Bytes read during replication, added to stat_net_input_bytes in 'info'. */
-    _Atomic long long stat_net_repl_output_bytes; /* Bytes written during replication, added to stat_net_output_bytes in 'info'. */
-    size_t stat_current_cow_peak;   /* Peak size of copy on write bytes. */
-    size_t stat_current_cow_bytes;  /* Copy on write bytes while child is active. */
-    monotime stat_current_cow_updated;  /* Last update time of stat_current_cow_bytes */
-    size_t stat_current_save_keys_processed;  /* Processed keys while child is active. */
-    size_t stat_current_save_keys_total;  /* Number of keys when child started. */
-    size_t stat_rdb_cow_bytes;      /* Copy on write bytes during RDB saving. */
-    size_t stat_aof_cow_bytes;      /* Copy on write bytes during AOF rewrite. */
-    size_t stat_module_cow_bytes;   /* Copy on write bytes during module fork. */
-    double stat_module_progress;   /* Module save progress. */
-    size_t stat_clients_type_memory[CLIENT_TYPE_COUNT];/* Mem usage by type */
-    size_t stat_cluster_links_memory; /* Mem usage by cluster links */
-    long long stat_unexpected_error_replies; /* Number of unexpected (aof-loading, replica to master, etc.) error replies */
+    long long stat_expire_cycle_time_used;         /* Cumulative microseconds used. */
+    long long stat_evictedkeys;                    /* Number of evicted keys (maxmemory) */
+    long long stat_evictedclients;                 /* Number of evicted clients */
+    long long stat_evictedscripts;                 /* Number of evicted lua scripts. */
+    long long stat_total_eviction_exceeded_time;   /* Total time over the memory limit, unit us */
+    monotime stat_last_eviction_exceeded_time;     /* Timestamp of current eviction start, unit us */
+    long long stat_keyspace_hits;                  /* Number of successful lookups of keys */
+    long long stat_keyspace_misses;                /* Number of failed lookups of keys */
+    long long stat_active_defrag_hits;             /* number of allocations moved */
+    long long stat_active_defrag_misses;           /* number of allocations scanned but not moved */
+    long long stat_active_defrag_key_hits;         /* number of keys with moved allocations */
+    long long stat_active_defrag_key_misses;       /* number of keys scanned and not moved */
+    long long stat_active_defrag_scanned;          /* number of dictEntries scanned */
+    long long stat_total_active_defrag_time;       /* Total time memory fragmentation over the limit, unit us */
+    monotime stat_last_active_defrag_time;         /* Timestamp of current active defrag start */
+    size_t stat_peak_memory;                       /* Max used memory record */
+    long long stat_aof_rewrites;                   /* number of aof file rewrites performed */
+    long long stat_aofrw_consecutive_failures;     /* The number of consecutive failures of aofrw */
+    long long stat_rdb_saves;                      /* number of rdb saves performed */
+    long long stat_fork_time;                      /* Time needed to perform latest fork() */
+    double stat_fork_rate;                         /* Fork rate in GB/sec. */
+    long long stat_total_forks;                    /* Total count of fork. */
+    long long stat_rejected_conn;                  /* Clients rejected because of maxclients */
+    long long stat_sync_full;                      /* Number of full resyncs with slaves. */
+    long long stat_sync_partial_ok;                /* Number of accepted PSYNC requests. */
+    long long stat_sync_partial_err;               /* Number of unaccepted PSYNC requests. */
+    list *slowlog;                                 /* SLOWLOG list of commands */
+    long long slowlog_entry_id;                    /* SLOWLOG current entry ID */
+    long long slowlog_log_slower_than;             /* SLOWLOG time limit (to get logged) */
+    unsigned long slowlog_max_len;                 /* SLOWLOG max number of items logged */
+    struct malloc_stats cron_malloc_stats;         /* sampled in serverCron(). */
+    _Atomic long long stat_net_input_bytes;        /* Bytes read from network. */
+    _Atomic long long stat_net_output_bytes;       /* Bytes written to network. */
+    _Atomic long long
+        stat_net_repl_input_bytes; /* Bytes read during replication, added to stat_net_input_bytes in 'info'. */
+    _Atomic long long
+        stat_net_repl_output_bytes;    /* Bytes written during replication, added to stat_net_output_bytes in 'info'. */
+    size_t stat_current_cow_peak;      /* Peak size of copy on write bytes. */
+    size_t stat_current_cow_bytes;     /* Copy on write bytes while child is active. */
+    monotime stat_current_cow_updated; /* Last update time of stat_current_cow_bytes */
+    size_t stat_current_save_keys_processed;            /* Processed keys while child is active. */
+    size_t stat_current_save_keys_total;                /* Number of keys when child started. */
+    size_t stat_rdb_cow_bytes;                          /* Copy on write bytes during RDB saving. */
+    size_t stat_aof_cow_bytes;                          /* Copy on write bytes during AOF rewrite. */
+    size_t stat_module_cow_bytes;                       /* Copy on write bytes during module fork. */
+    double stat_module_progress;                        /* Module save progress. */
+    size_t stat_clients_type_memory[CLIENT_TYPE_COUNT]; /* Mem usage by type */
+    size_t stat_cluster_links_memory;                   /* Mem usage by cluster links */
+    long long
+        stat_unexpected_error_replies;  /* Number of unexpected (aof-loading, replica to master, etc.) error replies */
     long long stat_total_error_replies; /* Total number of issued error replies ( command + rejected errors ) */
-    long long stat_dump_payload_sanitizations; /* Number deep dump payloads integrity validations. */
-    long long stat_io_reads_processed; /* Number of read events processed by IO / Main threads */
-    long long stat_io_writes_processed; /* Number of write events processed by IO / Main threads */
-    _Atomic long long stat_total_reads_processed; /* Total number of read events processed */
-    _Atomic long long stat_total_writes_processed; /* Total number of write events processed */
-    _Atomic long long stat_client_qbuf_limit_disconnections;  /* Total number of clients reached query buf length limit */
-    long long stat_client_outbuf_limit_disconnections;  /* Total number of clients reached output buf length limit */
+    long long stat_dump_payload_sanitizations;               /* Number deep dump payloads integrity validations. */
+    long long stat_io_reads_processed;                       /* Number of read events processed by IO / Main threads */
+    long long stat_io_writes_processed;                      /* Number of write events processed by IO / Main threads */
+    _Atomic long long stat_total_reads_processed;            /* Total number of read events processed */
+    _Atomic long long stat_total_writes_processed;           /* Total number of write events processed */
+    _Atomic long long stat_client_qbuf_limit_disconnections; /* Total number of clients reached query buf length limit */
+    long long stat_client_outbuf_limit_disconnections; /* Total number of clients reached output buf length limit */
     /* The following two are used to track instantaneous metrics, like
      * number of operations per second, network traffic. */
     struct {
@@ -1811,43 +1814,43 @@ struct valkeyServer {
     unsigned int max_new_conns_per_cycle;     /* The maximum number of tcp connections that will be accepted during each
                                                  invocation of the event loop. */
     /* AOF persistence */
-    int aof_enabled;                /* AOF configuration */
-    int aof_state;                  /* AOF_(ON|OFF|WAIT_REWRITE) */
-    int aof_fsync;                  /* Kind of fsync() policy */
-    char *aof_filename;             /* Basename of the AOF file and manifest file */
-    char *aof_dirname;              /* Name of the AOF directory */
-    int aof_no_fsync_on_rewrite;    /* Don't fsync if a rewrite is in prog. */
-    int aof_rewrite_perc;           /* Rewrite AOF if % growth is > M and... */
-    off_t aof_rewrite_min_size;     /* the AOF file is at least N bytes. */
-    off_t aof_rewrite_base_size;    /* AOF size on latest startup or rewrite. */
-    off_t aof_current_size;         /* AOF current size (Including BASE + INCRs). */
-    off_t aof_last_incr_size;       /* The size of the latest incr AOF. */
-    off_t aof_last_incr_fsync_offset; /* AOF offset which is already requested to be synced to disk.
-                                       * Compare with the aof_last_incr_size. */
-    int aof_flush_sleep;            /* Micros to sleep before flush. (used by tests) */
-    int aof_rewrite_scheduled;      /* Rewrite once BGSAVE terminates. */
-    sds aof_buf;      /* AOF buffer, written before entering the event loop */
-    int aof_fd;       /* File descriptor of currently selected AOF file */
-    int aof_selected_db; /* Currently selected DB in AOF */
+    int aof_enabled;                    /* AOF configuration */
+    int aof_state;                      /* AOF_(ON|OFF|WAIT_REWRITE) */
+    int aof_fsync;                      /* Kind of fsync() policy */
+    char *aof_filename;                 /* Basename of the AOF file and manifest file */
+    char *aof_dirname;                  /* Name of the AOF directory */
+    int aof_no_fsync_on_rewrite;        /* Don't fsync if a rewrite is in prog. */
+    int aof_rewrite_perc;               /* Rewrite AOF if % growth is > M and... */
+    off_t aof_rewrite_min_size;         /* the AOF file is at least N bytes. */
+    off_t aof_rewrite_base_size;        /* AOF size on latest startup or rewrite. */
+    off_t aof_current_size;             /* AOF current size (Including BASE + INCRs). */
+    off_t aof_last_incr_size;           /* The size of the latest incr AOF. */
+    off_t aof_last_incr_fsync_offset;   /* AOF offset which is already requested to be synced to disk.
+                                         * Compare with the aof_last_incr_size. */
+    int aof_flush_sleep;                /* Micros to sleep before flush. (used by tests) */
+    int aof_rewrite_scheduled;          /* Rewrite once BGSAVE terminates. */
+    sds aof_buf;                        /* AOF buffer, written before entering the event loop */
+    int aof_fd;                         /* File descriptor of currently selected AOF file */
+    int aof_selected_db;                /* Currently selected DB in AOF */
     mstime_t aof_flush_postponed_start; /* mstime of postponed AOF flush */
     mstime_t aof_last_fsync;            /* mstime of last fsync() */
-    time_t aof_rewrite_time_last;   /* Time used by last AOF rewrite run. */
-    time_t aof_rewrite_time_start;  /* Current AOF rewrite start time. */
-    time_t aof_cur_timestamp;       /* Current record timestamp in AOF */
-    int aof_timestamp_enabled;      /* Enable record timestamp in AOF */
-    int aof_lastbgrewrite_status;   /* C_OK or C_ERR */
-    unsigned long aof_delayed_fsync;  /* delayed AOF fsync() counter */
-    int aof_rewrite_incremental_fsync;/* fsync incrementally while aof rewriting? */
-    int rdb_save_incremental_fsync;   /* fsync incrementally while rdb saving? */
-    int aof_last_write_status;      /* C_OK or C_ERR */
-    int aof_last_write_errno;       /* Valid if aof write/fsync status is ERR */
-    int aof_load_truncated;         /* Don't stop on unexpected AOF EOF. */
-    int aof_use_rdb_preamble;       /* Specify base AOF to use RDB encoding on AOF rewrites. */
-    _Atomic int aof_bio_fsync_status; /* Status of AOF fsync in bio job. */
-    _Atomic int aof_bio_fsync_errno;  /* Errno of AOF fsync in bio job. */
-    aofManifest *aof_manifest;       /* Used to track AOFs. */
-    int aof_disable_auto_gc;         /* If disable automatically deleting HISTORY type AOFs?
-                                        default no. (for testings). */
+    time_t aof_rewrite_time_last;       /* Time used by last AOF rewrite run. */
+    time_t aof_rewrite_time_start;      /* Current AOF rewrite start time. */
+    time_t aof_cur_timestamp;           /* Current record timestamp in AOF */
+    int aof_timestamp_enabled;          /* Enable record timestamp in AOF */
+    int aof_lastbgrewrite_status;       /* C_OK or C_ERR */
+    unsigned long aof_delayed_fsync;    /* delayed AOF fsync() counter */
+    int aof_rewrite_incremental_fsync;  /* fsync incrementally while aof rewriting? */
+    int rdb_save_incremental_fsync;     /* fsync incrementally while rdb saving? */
+    int aof_last_write_status;          /* C_OK or C_ERR */
+    int aof_last_write_errno;           /* Valid if aof write/fsync status is ERR */
+    int aof_load_truncated;             /* Don't stop on unexpected AOF EOF. */
+    int aof_use_rdb_preamble;           /* Specify base AOF to use RDB encoding on AOF rewrites. */
+    _Atomic int aof_bio_fsync_status;   /* Status of AOF fsync in bio job. */
+    _Atomic int aof_bio_fsync_errno;    /* Errno of AOF fsync in bio job. */
+    aofManifest *aof_manifest;          /* Used to track AOFs. */
+    int aof_disable_auto_gc;            /* If disable automatically deleting HISTORY type AOFs?
+                                           default no. (for testings). */
 
     /* RDB persistence */
     long long dirty;                      /* Changes to DB from the last save */
@@ -1905,35 +1908,35 @@ struct valkeyServer {
     int shutdown_on_sigterm; /* Shutdown flags configured for SIGTERM. */
 
     /* Replication (master) */
-    char replid[CONFIG_RUN_ID_SIZE+1];  /* My current replication ID. */
-    char replid2[CONFIG_RUN_ID_SIZE+1]; /* replid inherited from master*/
-    long long master_repl_offset;   /* My current replication offset */
-    long long second_replid_offset; /* Accept offsets up to this for replid2. */
-    _Atomic long long fsynced_reploff_pending;/* Largest replication offset to
-                                     * potentially have been fsynced, applied to
-                                       fsynced_reploff only when AOF state is AOF_ON
-                                       (not during the initial rewrite) */
-    long long fsynced_reploff;      /* Largest replication offset that has been confirmed to be fsynced */
-    int slaveseldb;                 /* Last SELECTed DB in replication output */
-    int repl_ping_slave_period;     /* Master pings the slave every N seconds */
-    replBacklog *repl_backlog;      /* Replication backlog for partial syncs */
-    long long repl_backlog_size;    /* Backlog circular buffer size */
-    time_t repl_backlog_time_limit; /* Time without slaves after the backlog
-                                       gets released. */
-    time_t repl_no_slaves_since;    /* We have no slaves since that time.
-                                       Only valid if server.slaves len is 0. */
-    int repl_min_slaves_to_write;   /* Min number of slaves to write. */
-    int repl_min_slaves_max_lag;    /* Max lag of <count> slaves to write. */
-    int repl_good_slaves_count;     /* Number of slaves with lag <= max_lag. */
-    int repl_diskless_sync;         /* Master send RDB to slaves sockets directly. */
-    int repl_diskless_load;         /* Slave parse RDB directly from the socket.
-                                     * see REPL_DISKLESS_LOAD_* enum */
-    int repl_diskless_sync_delay;   /* Delay to start a diskless repl BGSAVE. */
-    int repl_diskless_sync_max_replicas;/* Max replicas for diskless repl BGSAVE
-                                         * delay (start sooner if they all connect). */
-    size_t repl_buffer_mem;         /* The memory of replication buffer. */
-    list *repl_buffer_blocks;       /* Replication buffers blocks list
-                                     * (serving replica clients and repl backlog) */
+    char replid[CONFIG_RUN_ID_SIZE + 1];       /* My current replication ID. */
+    char replid2[CONFIG_RUN_ID_SIZE + 1];      /* replid inherited from master*/
+    long long master_repl_offset;              /* My current replication offset */
+    long long second_replid_offset;            /* Accept offsets up to this for replid2. */
+    _Atomic long long fsynced_reploff_pending; /* Largest replication offset to
+                                      * potentially have been fsynced, applied to
+                                        fsynced_reploff only when AOF state is AOF_ON
+                                        (not during the initial rewrite) */
+    long long fsynced_reploff;                 /* Largest replication offset that has been confirmed to be fsynced */
+    int slaveseldb;                            /* Last SELECTed DB in replication output */
+    int repl_ping_slave_period;                /* Master pings the slave every N seconds */
+    replBacklog *repl_backlog;                 /* Replication backlog for partial syncs */
+    long long repl_backlog_size;               /* Backlog circular buffer size */
+    time_t repl_backlog_time_limit;            /* Time without slaves after the backlog
+                                                  gets released. */
+    time_t repl_no_slaves_since;               /* We have no slaves since that time.
+                                                  Only valid if server.slaves len is 0. */
+    int repl_min_slaves_to_write;              /* Min number of slaves to write. */
+    int repl_min_slaves_max_lag;               /* Max lag of <count> slaves to write. */
+    int repl_good_slaves_count;                /* Number of slaves with lag <= max_lag. */
+    int repl_diskless_sync;                    /* Master send RDB to slaves sockets directly. */
+    int repl_diskless_load;                    /* Slave parse RDB directly from the socket.
+                                                * see REPL_DISKLESS_LOAD_* enum */
+    int repl_diskless_sync_delay;              /* Delay to start a diskless repl BGSAVE. */
+    int repl_diskless_sync_max_replicas;       /* Max replicas for diskless repl BGSAVE
+                                                * delay (start sooner if they all connect). */
+    size_t repl_buffer_mem;                    /* The memory of replication buffer. */
+    list *repl_buffer_blocks;                  /* Replication buffers blocks list
+                                                * (serving replica clients and repl backlog) */
     /* Replication (slave) */
     char *masteruser;                   /* AUTH with this user and masterauth with master */
     sds masterauth;                     /* AUTH with this password with master */
@@ -2017,13 +2020,13 @@ struct valkeyServer {
     int list_max_listpack_size;
     int list_compress_depth;
     /* time cache */
-    _Atomic time_t unixtime; /* Unix time sampled every cron cycle. */
-    time_t timezone;            /* Cached timezone. As set by tzset(). */
-    int daylight_active;        /* Currently in daylight saving time. */
-    mstime_t mstime;            /* 'unixtime' in milliseconds. */
-    ustime_t ustime;            /* 'unixtime' in microseconds. */
-    mstime_t cmd_time_snapshot; /* Time snapshot of the root execution nesting. */
-    size_t blocking_op_nesting; /* Nesting level of blocking operation, used to reset blocked_last_cron. */
+    _Atomic time_t unixtime;     /* Unix time sampled every cron cycle. */
+    time_t timezone;             /* Cached timezone. As set by tzset(). */
+    int daylight_active;         /* Currently in daylight saving time. */
+    mstime_t mstime;             /* 'unixtime' in milliseconds. */
+    ustime_t ustime;             /* 'unixtime' in microseconds. */
+    mstime_t cmd_time_snapshot;  /* Time snapshot of the root execution nesting. */
+    size_t blocking_op_nesting;  /* Nesting level of blocking operation, used to reset blocked_last_cron. */
     long long blocked_last_cron; /* Indicate the mstime of the last time we did cron jobs from a blocking operation */
     /* Pubsub */
     kvstore *pubsub_channels;      /* Map channels to list of subscribed clients */
@@ -2717,6 +2720,7 @@ void linkClient(client *c);
 void protectClient(client *c);
 void unprotectClient(client *c);
 void initThreadedIO(void);
+void initSharedQueryBuf(void);
 client *lookupClientByID(uint64_t id);
 int authRequired(client *c);
 void putClientInPendingWriteQueue(client *c);

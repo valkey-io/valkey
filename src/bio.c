@@ -257,9 +257,7 @@ void *bioProcessBackgroundJobs(void *arg) {
             /* The fd may be closed by main thread and reused for another
              * socket, pipe, or file. We just ignore these errno because
              * aof fsync did not really fail. */
-            if (valkey_fsync(job->fd_args.fd) == -1 &&
-                errno != EBADF && errno != EINVAL)
-            {
+            if (valkey_fsync(job->fd_args.fd) == -1 && errno != EBADF && errno != EINVAL) {
                 int last_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
 
                 atomic_store_explicit(&server.aof_bio_fsync_errno, errno, memory_order_relaxed);

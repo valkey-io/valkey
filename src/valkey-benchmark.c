@@ -115,8 +115,8 @@ static struct config {
     int cluster_node_count;
     struct clusterNode **cluster_nodes;
     struct serverConfig *redis_config;
-    struct hdr_histogram* latency_histogram;
-    struct hdr_histogram* current_sec_latency_histogram;
+    struct hdr_histogram *latency_histogram;
+    struct hdr_histogram *current_sec_latency_histogram;
     _Atomic int is_fetching_slots;
     _Atomic int is_updating_slots;
     _Atomic int slots_last_update;
@@ -344,7 +344,7 @@ static void freeClient(client c) {
     aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
     if (c->thread_id >= 0) {
-        int requests_finished = atomic_load_explicit(&config.requests_finished,memory_order_relaxed);
+        int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
         if (requests_finished >= config.requests) {
             aeStop(el);
         }
@@ -402,7 +402,7 @@ static void setClusterKeyHashTag(client c) {
     assert(c->thread_id >= 0);
     clusterNode *node = c->cluster_node;
     assert(node);
-    int is_updating_slots = atomic_load_explicit(&config.is_updating_slots,memory_order_relaxed);
+    int is_updating_slots = atomic_load_explicit(&config.is_updating_slots, memory_order_relaxed);
     /* If updateClusterSlotsConfiguration is updating the slots array,
      * call updateClusterSlotsConfiguration is order to block the thread
      * since the mutex is locked. When the slots will be updated by the
@@ -423,7 +423,7 @@ static void setClusterKeyHashTag(client c) {
 }
 
 static void clientDone(client c) {
-    int requests_finished = atomic_load_explicit(&config.requests_finished,memory_order_relaxed);
+    int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
     if (requests_finished >= config.requests) {
         freeClient(c);
         if (!config.num_threads && config.el) aeStop(config.el);
@@ -517,23 +517,27 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     }
                     continue;
                 }
-                int requests_finished = atomic_fetch_add_explicit(&config.requests_finished,1,memory_order_relaxed);
-                if (requests_finished < config.requests){
-                        if (config.num_threads == 0) {
-                            hdr_record_value(
-                            config.latency_histogram,  // Histogram to record to
-                            (long)c->latency<=CONFIG_LATENCY_HISTOGRAM_MAX_VALUE ? (long)c->latency : CONFIG_LATENCY_HISTOGRAM_MAX_VALUE);  // Value to record
-                            hdr_record_value(
-                            config.current_sec_latency_histogram,  // Histogram to record to
-                            (long)c->latency<=CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE ? (long)c->latency : CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE);  // Value to record
-                        } else {
-                            hdr_record_value_atomic(
-                            config.latency_histogram,  // Histogram to record to
-                            (long)c->latency<=CONFIG_LATENCY_HISTOGRAM_MAX_VALUE ? (long)c->latency : CONFIG_LATENCY_HISTOGRAM_MAX_VALUE);  // Value to record
-                            hdr_record_value_atomic(
-                            config.current_sec_latency_histogram,  // Histogram to record to
-                            (long)c->latency<=CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE ? (long)c->latency : CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE);  // Value to record
-                        }
+                int requests_finished = atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
+                if (requests_finished < config.requests) {
+                    if (config.num_threads == 0) {
+                        hdr_record_value(config.latency_histogram, // Histogram to record to
+                                         (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_MAX_VALUE
+                                             ? (long)c->latency
+                                             : CONFIG_LATENCY_HISTOGRAM_MAX_VALUE); // Value to record
+                        hdr_record_value(config.current_sec_latency_histogram,      // Histogram to record to
+                                         (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE
+                                             ? (long)c->latency
+                                             : CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE); // Value to record
+                    } else {
+                        hdr_record_value_atomic(config.latency_histogram, // Histogram to record to
+                                                (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_MAX_VALUE
+                                                    ? (long)c->latency
+                                                    : CONFIG_LATENCY_HISTOGRAM_MAX_VALUE); // Value to record
+                        hdr_record_value_atomic(config.current_sec_latency_histogram,      // Histogram to record to
+                                                (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE
+                                                    ? (long)c->latency
+                                                    : CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE); // Value to record
+                    }
                 }
                 c->pending--;
                 if (c->pending == 0) {
@@ -556,7 +560,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     /* Initialize request when nothing was written. */
     if (c->written == 0) {
         /* Enforce upper bound to number of requests. */
-        int requests_issued = atomic_fetch_add_explicit(&config.requests_issued,config.pipeline,memory_order_relaxed);
+        int requests_issued = atomic_fetch_add_explicit(&config.requests_issued, config.pipeline, memory_order_relaxed);
         if (requests_issued >= config.requests) {
             return;
         }
@@ -794,7 +798,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
         /* In idle mode, clients still need to register readHandler for catching errors */
         aeCreateFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
 
-    listAddNodeTail(config.clients,c);
+    listAddNodeTail(config.clients, c);
     atomic_fetch_add_explicit(&config.liveclients, 1, memory_order_relaxed);
 
     c->slots_last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
@@ -1232,10 +1236,9 @@ static int fetchClusterSlotsConfiguration(client c) {
     redisReply *reply = NULL;
 
     is_fetching_slots = atomic_fetch_add_explicit(&config.is_fetching_slots, 1, memory_order_relaxed);
-    if (is_fetching_slots) return -1; //TODO: use other codes || errno ?
+    if (is_fetching_slots) return -1; // TODO: use other codes || errno ?
     atomic_store_explicit(&config.is_fetching_slots, 1, memory_order_relaxed);
-    fprintf(stderr,
-            "WARNING: Cluster slots configuration changed, fetching new one...\n");
+    fprintf(stderr, "WARNING: Cluster slots configuration changed, fetching new one...\n");
     const char *errmsg = "Failed to update cluster slots configuration";
     static dictType dtype = {
         dictSdsHash,       /* hash function */

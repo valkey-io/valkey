@@ -104,10 +104,10 @@ tags {"aof external:skip"} {
         }
     }
 
-    ## Test that redis-check-aof indeed sees this AOF is not valid
+    ## Test that valkey-check-aof indeed sees this AOF is not valid
     test "Short read: Utility should confirm the AOF is not valid" {
         catch {
-            exec src/redis-check-aof $aof_manifest_file
+            exec src/valkey-check-aof $aof_manifest_file
         } result
         assert_match "*not valid*" $result
     }
@@ -119,13 +119,13 @@ tags {"aof external:skip"} {
         }
 
         catch {
-            exec src/redis-check-aof $aof_manifest_file
+            exec src/valkey-check-aof $aof_manifest_file
         } result
         assert_match "*ok_up_to_line=8*" $result
     }
 
     test "Short read: Utility should be able to fix the AOF" {
-        set result [exec src/redis-check-aof --fix $aof_manifest_file << "y\n"]
+        set result [exec src/valkey-check-aof --fix $aof_manifest_file << "y\n"]
         assert_match "*Successfully truncated AOF*" $result
     }
 
@@ -397,7 +397,7 @@ tags {"aof external:skip"} {
 
     test {Truncate AOF to specific timestamp} {
         # truncate to timestamp 1628217473
-        exec src/redis-check-aof --truncate-to-timestamp 1628217473 $aof_manifest_file
+        exec src/valkey-check-aof --truncate-to-timestamp 1628217473 $aof_manifest_file
         start_server_aof [list dir $server_path] {
             set c [redis [srv host] [srv port] 0 $::tls]
             wait_done_loading $c
@@ -407,7 +407,7 @@ tags {"aof external:skip"} {
         }
 
         # truncate to timestamp 1628217471
-        exec src/redis-check-aof --truncate-to-timestamp 1628217471 $aof_manifest_file
+        exec src/valkey-check-aof --truncate-to-timestamp 1628217471 $aof_manifest_file
         start_server_aof [list dir $server_path] {
             set c [redis [srv host] [srv port] 0 $::tls]
             wait_done_loading $c
@@ -417,7 +417,7 @@ tags {"aof external:skip"} {
         }
 
         # truncate to timestamp 1628217470
-        exec src/redis-check-aof --truncate-to-timestamp 1628217470 $aof_manifest_file
+        exec src/valkey-check-aof --truncate-to-timestamp 1628217470 $aof_manifest_file
         start_server_aof [list dir $server_path] {
             set c [redis [srv host] [srv port] 0 $::tls]
             wait_done_loading $c
@@ -426,7 +426,7 @@ tags {"aof external:skip"} {
         }
 
         # truncate to timestamp 1628217469
-        catch {exec src/redis-check-aof --truncate-to-timestamp 1628217469 $aof_manifest_file} e
+        catch {exec src/valkey-check-aof --truncate-to-timestamp 1628217469 $aof_manifest_file} e
         assert_match {*aborting*} $e
     }
 
@@ -469,38 +469,38 @@ tags {"aof external:skip"} {
         }
     }
 
-    test {Test redis-check-aof for old style resp AOF} {
+    test {Test valkey-check-aof for old style resp AOF} {
         create_aof $aof_dirpath $aof_file {
             append_to_aof [formatCommand set foo hello]
             append_to_aof [formatCommand set bar world]
         }
 
         catch {
-            exec src/redis-check-aof $aof_file
+            exec src/valkey-check-aof $aof_file
         } result
         assert_match "*Start checking Old-Style AOF*is valid*" $result
     }
 
-    test {Test redis-check-aof for old style resp AOF - has data in the same format as manifest} {
+    test {Test valkey-check-aof for old style resp AOF - has data in the same format as manifest} {
         create_aof $aof_dirpath $aof_file {
             append_to_aof [formatCommand set file file]
             append_to_aof [formatCommand set "file appendonly.aof.2.base.rdb seq 2 type b" "file appendonly.aof.2.base.rdb seq 2 type b"]
         }
 
         catch {
-            exec src/redis-check-aof $aof_file
+            exec src/valkey-check-aof $aof_file
         } result
         assert_match "*Start checking Old-Style AOF*is valid*" $result
     }
 
-    test {Test redis-check-aof for old style rdb-preamble AOF} {
+    test {Test valkey-check-aof for old style rdb-preamble AOF} {
         catch {
-            exec src/redis-check-aof tests/assets/rdb-preamble.aof
+            exec src/valkey-check-aof tests/assets/rdb-preamble.aof
         } result
         assert_match "*Start checking Old-Style AOF*RDB preamble is OK, proceeding with AOF tail*is valid*" $result
     }
 
-    test {Test redis-check-aof for Multi Part AOF with resp AOF base} {
+    test {Test valkey-check-aof for Multi Part AOF with resp AOF base} {
         create_aof $aof_dirpath $aof_base_file {
             append_to_aof [formatCommand set foo hello]
             append_to_aof [formatCommand set bar world]
@@ -517,12 +517,12 @@ tags {"aof external:skip"} {
         }
 
         catch {
-            exec src/redis-check-aof $aof_manifest_file
+            exec src/valkey-check-aof $aof_manifest_file
         } result
         assert_match "*Start checking Multi Part AOF*Start to check BASE AOF (RESP format)*BASE AOF*is valid*Start to check INCR files*INCR AOF*is valid*All AOF files and manifest are valid*" $result
     }
 
-    test {Test redis-check-aof for Multi Part AOF with rdb-preamble AOF base} {
+    test {Test valkey-check-aof for Multi Part AOF with rdb-preamble AOF base} {
         exec cp tests/assets/rdb-preamble.aof $aof_base_file
 
         create_aof $aof_dirpath $aof_file {
@@ -536,12 +536,12 @@ tags {"aof external:skip"} {
         }
 
         catch {
-            exec src/redis-check-aof $aof_manifest_file
+            exec src/valkey-check-aof $aof_manifest_file
         } result
         assert_match "*Start checking Multi Part AOF*Start to check BASE AOF (RDB format)*DB preamble is OK, proceeding with AOF tail*BASE AOF*is valid*Start to check INCR files*INCR AOF*is valid*All AOF files and manifest are valid*" $result
     }
 
-    test {Test redis-check-aof for Multi Part AOF contains a format error} {
+    test {Test valkey-check-aof for Multi Part AOF contains a format error} {
         create_aof_manifest $aof_dirpath $aof_manifest_file {
             append_to_manifest "file appendonly.aof.1.base.aof seq 1 type b\n"
             append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
@@ -549,12 +549,12 @@ tags {"aof external:skip"} {
         }
 
         catch {
-            exec src/redis-check-aof $aof_manifest_file
+            exec src/valkey-check-aof $aof_manifest_file
         } result
         assert_match "*Invalid AOF manifest file format*" $result
     }
 
-    test {Test redis-check-aof only truncates the last file for Multi Part AOF in fix mode} {
+    test {Test valkey-check-aof only truncates the last file for Multi Part AOF in fix mode} {
         create_aof $aof_dirpath $aof_base_file {
             append_to_aof [formatCommand set foo hello]
             append_to_aof [formatCommand multi]
@@ -572,17 +572,17 @@ tags {"aof external:skip"} {
         }
 
         catch {
-            exec src/redis-check-aof $aof_manifest_file
+            exec src/valkey-check-aof $aof_manifest_file
         } result
         assert_match "*not valid*" $result
 
         catch {
-            exec src/redis-check-aof --fix $aof_manifest_file
+            exec src/valkey-check-aof --fix $aof_manifest_file
         } result
         assert_match "*Failed to truncate AOF*because it is not the last file*" $result
     }
 
-    test {Test redis-check-aof only truncates the last file for Multi Part AOF in truncate-to-timestamp mode} {
+    test {Test valkey-check-aof only truncates the last file for Multi Part AOF in truncate-to-timestamp mode} {
         create_aof $aof_dirpath $aof_base_file {
             append_to_aof "#TS:1628217470\r\n"
             append_to_aof [formatCommand set foo1 bar1]
@@ -605,7 +605,7 @@ tags {"aof external:skip"} {
         }
 
         catch {
-            exec src/redis-check-aof --truncate-to-timestamp 1628217473 $aof_manifest_file
+            exec src/valkey-check-aof --truncate-to-timestamp 1628217473 $aof_manifest_file
         } result
         assert_match "*Failed to truncate AOF*to timestamp*because it is not the last file*" $result
     }

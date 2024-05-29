@@ -7152,7 +7152,7 @@ int main(int argc, char **argv) {
 #ifdef USE_REDIS_SYMLINKS
     if (strstr(exec_name,"redis-check-rdb") != NULL)
         redis_check_rdb_main(argc, argv, NULL);
-    else if (strstr(exec_name,"redis-check-aof") != NULL)
+    else if (strstr(exec_name,"valkey-check-aof") != NULL)
         redis_check_aof_main(argc,argv);
 #endif
 

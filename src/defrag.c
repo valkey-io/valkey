@@ -247,7 +247,7 @@ void activeDefragZsetEntry(zset *zs, dictEntry *de) {
     if ((newsds = activeDefragSds(sdsele))) dictSetKey(zs->dict, de, newsds);
     newscore = zslDefrag(zs->zsl, *(double *)dictGetVal(de), sdsele, newsds);
     if (newscore) {
-        dictSetVal(de, newscore);
+        dictSetVal(zs->dict, de, newscore);
     }
 }
 
@@ -673,7 +673,7 @@ void defragKey(defragCtx *ctx, dictEntry *de) {
     /* Try to defrag robj and / or string value. */
     ob = dictGetVal(de);
     if ((newob = activeDefragStringOb(ob))) {
-        kvstoreDictSetVal(de, newob);
+        kvstoreDictSetVal(db->keys, slot, de, newob);
         ob = newob;
     }
 
@@ -785,7 +785,7 @@ void defragPubsubScanCallback(void *privdata, const dictEntry *de) {
 
     /* Try to defrag the dictionary of clients that is stored as the value part. */
     if ((newclients = dictDefragTables(clients)))
-        kvstoreDictSetVal((dictEntry *)de, newclients);
+        kvstoreDictSetVal(pubsub_channels, ctx->slot, (dictEntry *)de, newclients);
 
     server.stat_active_defrag_scanned++;
 }

@@ -278,7 +278,7 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
             channel = dictGetKey(existing);
         } else {
             clients = dictCreate(&clientDictType);
-            kvstoreDictSetVal(de, clients);
+            kvstoreDictSetVal(*type.serverPubSubChannels, slot, de, clients);
             incrRefCount(channel);
         }
 

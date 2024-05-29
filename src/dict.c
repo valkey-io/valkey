@@ -48,6 +48,8 @@
 #include "serverassert.h"
 #include "monotonic.h"
 
+#define UNUSED(V) ((void)V)
+
 /* Using dictSetResizeEnabled() we make possible to disable
  * resizing and rehashing of the hash table as needed. This is very important
  * for us, as we use copy-on-write and don't want to move too much memory
@@ -450,7 +452,7 @@ int dictAdd(dict *d, void *key, void *val) {
     dictEntry *entry = dictAddRaw(d, key, NULL);
 
     if (!entry) return DICT_ERR;
-    if (!d->type->no_value) dictSetVal(entry, val);
+    if (!d->type->no_value) dictSetVal(d, entry, val);
     return DICT_OK;
 }
 
@@ -537,7 +539,7 @@ int dictReplace(dict *d, void *key, void *val) {
      * does not exists dictAdd will succeed. */
     entry = dictAddRaw(d, key, &existing);
     if (entry) {
-        dictSetVal(entry, val);
+        dictSetVal(d, entry, val);
         return 1;
     }
 
@@ -547,7 +549,7 @@ int dictReplace(dict *d, void *key, void *val) {
      * you want to increment (set), and then decrement (free), and not the
      * reverse. */
     void *oldval = dictGetVal(existing);
-    dictSetVal(existing, val);
+    dictSetVal(d, existing, val);
     if (d->type->valDestructor) d->type->valDestructor(d, oldval);
     return 0;
 }
@@ -799,7 +801,8 @@ void dictSetKey(dict *d, dictEntry *de, void *key) {
         de->key = key;
 }
 
-void dictSetVal(dictEntry *de, void *val) {
+void dictSetVal(dict *d, dictEntry *de, void *val) {
+    UNUSED(d);
     assert(entryHasValue(de));
     de->v.val = val;
 }

@@ -1478,7 +1478,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
                 /* Note that we did not removed the original element from
                  * the hash table representing the sorted set, so we just
                  * update the score. */
-                dictSetVal(de, &znode->score); /* Update score ptr. */
+                dictSetVal(zs->dict, de, &znode->score); /* Update score ptr. */
                 *out_flags |= ZADD_OUT_UPDATED;
             }
             return 1;

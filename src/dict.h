@@ -198,7 +198,7 @@ void *dictFetchValue(dict *d, const void *key);
 int dictShrinkIfNeeded(dict *d);
 int dictExpandIfNeeded(dict *d);
 void dictSetKey(dict *d, dictEntry *de, void *key);
-void dictSetVal(dictEntry *de, void *val);
+void dictSetVal(dict *d, dictEntry *de, void *val);
 void dictSetSignedIntegerVal(dictEntry *de, int64_t val);
 void dictSetUnsignedIntegerVal(dictEntry *de, uint64_t val);
 void dictSetDoubleVal(dictEntry *de, double val);

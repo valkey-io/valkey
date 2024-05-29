@@ -2846,10 +2846,9 @@ int clusterIsValidPacket(clusterLink *link) {
 int clusterProcessPacket(clusterLink *link) {
     /* Validate that the packet is well-formed */
     if (!clusterIsValidPacket(link)) {
-        clusterMsg *hdr = (clusterMsg*) link->rcvbuf;
+        clusterMsg *hdr = (clusterMsg *)link->rcvbuf;
         uint16_t type = ntohs(hdr->type);
-        if (server.debug_cluster_close_link_on_packet_drop &&
-            type == server.cluster_drop_packet_filter) {
+        if (server.debug_cluster_close_link_on_packet_drop && type == server.cluster_drop_packet_filter) {
             freeClusterLink(link);
             serverLog(LL_WARNING, "Closing link for matching packet type %hu", type);
             return 0;
@@ -2957,9 +2956,8 @@ int clusterProcessPacket(clusterLink *link) {
         if (sender && (sender->flags & CLUSTER_NODE_MEET)) {
             /* Once we get a response for MEET from the sender, we can stop sending more MEET. */
             sender->flags &= ~CLUSTER_NODE_MEET;
-            serverLog(LL_NOTICE,
-                      "Successfully completed handshake with %.40s (%s)",
-                      sender->name, sender->human_nodename);
+            serverLog(LL_NOTICE, "Successfully completed handshake with %.40s (%s)", sender->name,
+                      sender->human_nodename);
         }
         if (!link->inbound) {
             if (nodeInHandshake(link->node)) {

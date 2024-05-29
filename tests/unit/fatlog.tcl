@@ -66,7 +66,6 @@ start_server {tags {"fatlog"}} {
         r acl getuser fatlog-test-user
         r acl deluser fatlog-test-user non-existing-user
         r config set fatlog-log-bigger-than 0
-        r config set fatlog-log-bigger-than -1
         set fatlog_resp [r fatlog get -1]
 
         # Make sure normal configs work, but the two sensitive
@@ -91,7 +90,6 @@ start_server {tags {"fatlog"}} {
         r migrate [srv 0 host] [srv 0 port] key 9 5000
         r migrate [srv 0 host] [srv 0 port] key 9 5000 AUTH user
         r migrate [srv 0 host] [srv 0 port] key 9 5000 AUTH2 user password
-        r config set fatlog-log-bigger-than -1
         set fatlog_resp [r fatlog get]
 
         # Make sure all 3 commands were logged, but the sensitive fields are omitted
@@ -192,7 +190,7 @@ start_server {tags {"fatlog"}} {
         r fatlog reset
         r get a
         assert_equal [r fatlog len] 1
-        r config set fatlog-log-bigger-than -1
+        r config set fatlog-max-len 0
         r fatlog reset
         r get a
         assert_equal [r fatlog len] 0

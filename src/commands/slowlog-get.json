@@ -6,7 +6,7 @@
         "since": "2.2.12",
         "arity": -2,
         "container": "SLOWLOG",
-        "function": "heavyLoadLogCommand",
+        "function": "slowlogCommand",
         "history": [
             [
                 "4.0.0",

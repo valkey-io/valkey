@@ -30,7 +30,7 @@
 #include "server.h"
 #include "monotonic.h"
 #include "cluster.h"
-#include "heavyloadlog.h"
+#include "slowlog.h"
 #include "bio.h"
 #include "latency.h"
 #include "mt19937-64.h"
@@ -2702,7 +2702,7 @@ void initServer(void) {
         serverPanic("Functions initialization failed, check the server logs.");
         exit(1);
     }
-    heavyLoadLogInit();
+    slowlogInit();
     latencyMonitorInit();
     initSharedQueryBuf();
 
@@ -3251,14 +3251,14 @@ void slowlogPushCurrentCommand(client *c, struct serverCommand *cmd, ustime_t du
 
 /* Log the last command a client executed into the fatlog. */
 void fatlogPushCurrentCommand(client *c, struct serverCommand *cmd, size_t size) {
-    /* Some commands may contain sensitive data that should not be available in the slowlog. */
+    /* Some commands may contain sensitive data that should not be available in the fatlog. */
     if (cmd->flags & CMD_SKIP_SLOWLOG) return;
 
     /* If command argument vector was rewritten, use the original
      * arguments. */
     robj **argv = c->original_argv ? c->original_argv : c->argv;
     int argc = c->original_argv ? c->original_argc : c->argc;
-    fatlogPushEntryIfNeeded(c,argv,argc,size);
+    fatlogPushEntryIfNeeded(c, argv, argc, size);
 }
 
 /* This function is called in order to update the total command histogram duration.

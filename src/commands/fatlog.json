@@ -3,7 +3,7 @@
         "summary": "A container for fat log commands.",
         "complexity": "Depends on subcommand.",
         "group": "server",
-        "since": "7.2.5",
+        "since": "8.0.0",
         "arity": -2
     }
 }

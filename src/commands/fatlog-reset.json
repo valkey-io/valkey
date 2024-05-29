@@ -3,10 +3,10 @@
         "summary": "Clears all entries from the fat log.",
         "complexity": "O(N) where N is the number of entries in the fatlog",
         "group": "server",
-        "since": "7.2.5",
+        "since": "8.0.0",
         "arity": 2,
         "container": "FATLOG",
-        "function": "heavyLoadLogCommand",
+        "function": "slowlogCommand",
         "command_flags": [
             "ADMIN",
             "LOADING",

@@ -3,10 +3,10 @@
         "summary": "Show helpful text about the different subcommands",
         "complexity": "O(1)",
         "group": "server",
-        "since": "7.2.5",
+        "since": "8.0.0",
         "arity": 2,
         "container": "FATLOG",
-        "function": "heavyLoadLogCommand",
+        "function": "slowlogCommand",
         "command_flags": [
             "LOADING",
             "STALE"

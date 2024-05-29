@@ -3,10 +3,10 @@
         "summary": "Returns the fat log's entries.",
         "complexity": "O(N) where N is the number of entries returned",
         "group": "server",
-        "since": "7.2.5",
+        "since": "8.0.0",
         "arity": -2,
         "container": "FATLOG",
-        "function": "heavyLoadLogCommand",
+        "function": "slowlogCommand",
         "history": [],
         "command_flags": [
             "ADMIN",

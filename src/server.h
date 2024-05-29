@@ -2318,9 +2318,7 @@ typedef int serverGetKeysProc(struct serverCommand *cmd, robj **argv, int argc, 
  *
  * CMD_SKIP_MONITOR:  Do not automatically propagate the command on MONITOR.
  *
- * CMD_SKIP_SLOWLOG:  Do not automatically propagate the command to the slowlog.
- * 
- * CMD_SKIP_FATLOG:  Do not automatically propagate the command to the fatlog.
+ * CMD_SKIP_SLOWLOG:  Do not automatically propagate the command to the slowlog and fatlog.
  *
  * CMD_ASKING:      Perform an implicit ASKING for this command, so the
  *                  command will be accepted in cluster mode if the slot is marked
@@ -3593,7 +3591,7 @@ void saveCommand(client *c);
 void bgsaveCommand(client *c);
 void bgrewriteaofCommand(client *c);
 void shutdownCommand(client *c);
-void heavyLoadLogCommand(client *c);
+void slowlogCommand(client *c);
 void moveCommand(client *c);
 void copyCommand(client *c);
 void renameCommand(client *c);

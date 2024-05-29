@@ -6,7 +6,7 @@
         "since": "6.2.0",
         "arity": 2,
         "container": "SLOWLOG",
-        "function": "heavyLoadLogCommand",
+        "function": "slowlogCommand",
         "command_flags": [
             "LOADING",
             "STALE"

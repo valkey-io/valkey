@@ -22,7 +22,7 @@ tags {tls:skip external:skip cluster} {
             wait_for_cluster_state fail
         }
 
-        set CLUSTER_PACKET_TYPE_MEET 2
+        set CLUSTER_PACKET_TYPE_PONG 1
         set CLUSTER_PACKET_TYPE_NONE -1
 
         test "Cluster nodes haven't met each other" {
@@ -31,34 +31,46 @@ tags {tls:skip external:skip cluster} {
         }
 
         test "Allocate slots" {
-            cluster_allocate_slots 2 0
+            cluster_allocate_slots 2 0;# primaries replicas
         }
 
-        test "MEET is reliable when target drops the initial MEETs" {
-            # Make 0 drop the initial MEET messages due to link failure
-            R 0 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_MEET
-            R 0 DEBUG CLOSE-CLUSTER-LINK-ON-PACKET-DROP 1
+        test "Multiple MEETs from Node 1 to Node 0 should work" {
+            # Make 1 drop the PONG responses to MEET
+            R 1 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_PONG
+            # It is important to close the connection on drop, otherwise a subsequent MEET won't be sent
+            R 1 DEBUG CLOSE-CLUSTER-LINK-ON-PACKET-DROP 1
 
             R 1 CLUSTER MEET 127.0.0.1 [srv 0 port]
 
-            # Wait for at least a few MEETs to be sent so that we are sure that 0 is
-            # dropping them.
+            # Wait for at least a few MEETs to be sent so that we are sure that 1 is dropping the response to MEET.
             wait_for_condition 1000 50 {
-                [CI 0 cluster_stats_messages_meet_received] >= 3
+                [CI 0 cluster_stats_messages_meet_received] > 1 &&
+                [CI 1 cluster_state] eq {fail} && [CI 0 cluster_state] eq {ok}
             } else {
                 fail "Cluster node 1 never sent multiple MEETs to 0"
             }
 
-            # Make sure the nodes still don't know about each other
+            # 0 will be connected to 1, but 1 won't see that 0 is connected
             assert {[llength [get_cluster_nodes 1 connected]] == 1}
-            assert {[llength [get_cluster_nodes 0 connected]] == 1}
+            assert {[llength [get_cluster_nodes 0 connected]] == 2}
 
-            R 0 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_NONE
+            # Drop incoming and outgoing links from/to 1
+            R 0 DEBUG CLUSTERLINK KILL ALL [R 1 CLUSTER MYID]
 
-            # If the MEET is reliable, both a and b will turn to cluster state ok
+            # Wait for 0 to know about 1 again after 1 sends a MEET
+            wait_for_condition 1000 50 {
+                [llength [get_cluster_nodes 0 connected]] == 2
+            } else {
+                fail "Cluster node 1 never sent multiple MEETs to 0"
+            }
+
+            # Undo packet drop
+            R 1 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_NONE
+            R 1 DEBUG CLOSE-CLUSTER-LINK-ON-PACKET-DROP 0
+
+            # Both a and b will turn to cluster state ok
             wait_for_condition 1000 50 {
                 [CI 1 cluster_state] eq {ok} && [CI 0 cluster_state] eq {ok} &&
-                [CI 0 cluster_stats_messages_meet_received] >= 4 &&
                 [CI 1 cluster_stats_messages_meet_sent] == [CI 0 cluster_stats_messages_meet_received]
             } else {
                 fail "1 cluster_state:[CI 1 cluster_state], 0 cluster_state: [CI 0 cluster_state]"

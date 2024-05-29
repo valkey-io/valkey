@@ -195,6 +195,7 @@ start_server {} {
         set R_host($j) [srv [expr 0-$j] host]
         set R_port($j) [srv [expr 0-$j] port]
         $R($j) CONFIG SET repl-ping-replica-period 1
+        $R($j) config set repl-timeout 300
     }
 
     test "Chained replicas disconnect when replica re-connect with the same master" {

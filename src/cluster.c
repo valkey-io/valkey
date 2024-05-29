@@ -1237,7 +1237,6 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
     } else {
         serverPanic("getNodeByQuery() unknown error.");
     }
-    c->duration = 0;
 }
 
 /* This function is called by the function processing clients incrementally

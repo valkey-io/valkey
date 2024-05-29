@@ -153,30 +153,26 @@ void slowlogReset(list *log_list) {
 void slowlogCommand(client *c) {
     const char **help;
     list *log_list;
-    const char *slowlog_help[] = {
-"GET [<count>]",
-"    Return top <count> entries from the slowlog (default: 10, -1 mean all).",
-"    Entries are made of:",
-"    id, timestamp, time in microseconds, arguments array, client IP and port,",
-"    client name",
-"LEN",
-"    Return the length of the slowlog.",
-"RESET",
-"    Reset the slowlog.",
-NULL
-        };
-    const char *fatlog_help[] = {
-"GET [<count>]",
-"    Return top <count> entries from the fatlog (default: 10, -1 mean all).",
-"    Entries are made of:",
-"    id, timestamp, size in bytes, arguments array, client IP and port,",
-"    client name",
-"LEN",
-"    Return the length of the fatlog.",
-"RESET",
-"    Reset the fatlog.",
-NULL
-        };
+    const char *slowlog_help[] = {"GET [<count>]",
+                                  "    Return top <count> entries from the slowlog (default: 10, -1 mean all).",
+                                  "    Entries are made of:",
+                                  "    id, timestamp, time in microseconds, arguments array, client IP and port,",
+                                  "    client name",
+                                  "LEN",
+                                  "    Return the length of the slowlog.",
+                                  "RESET",
+                                  "    Reset the slowlog.",
+                                  NULL};
+    const char *fatlog_help[] = {"GET [<count>]",
+                                 "    Return top <count> entries from the fatlog (default: 10, -1 mean all).",
+                                 "    Entries are made of:",
+                                 "    id, timestamp, size in bytes, arguments array, client IP and port,",
+                                 "    client name",
+                                 "LEN",
+                                 "    Return the length of the fatlog.",
+                                 "RESET",
+                                 "    Reset the fatlog.",
+                                 NULL};
 
     if (!strcasecmp(c->argv[0]->ptr, "slowlog")) {
         help = slowlog_help;

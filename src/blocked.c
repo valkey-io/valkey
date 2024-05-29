@@ -209,11 +209,11 @@ void unblockClient(client *c, int queue_for_reprocessing) {
         resetClient(c);
     }
 
+    /* We count blocked client stats on regular clients and not on module clients */
+    if (!(c->flags & CLIENT_MODULE)) server.blocked_clients--;
+    server.blocked_clients_by_type[c->bstate.btype]--;
     /* Clear the flags, and put the client in the unblocked list so that
      * we'll process new commands in its query buffer ASAP. */
-    if (!(c->flags & CLIENT_MODULE))
-        server.blocked_clients--; /* We count blocked client stats on regular clients and not on module clients */
-    server.blocked_clients_by_type[c->bstate.btype]--;
     c->flags &= ~CLIENT_BLOCKED;
     c->bstate.btype = BLOCKED_NONE;
     c->bstate.unblock_on_nokey = 0;
@@ -228,16 +228,20 @@ void replyToBlockedClientTimedOut(client *c) {
     if (c->bstate.btype == BLOCKED_LIST || c->bstate.btype == BLOCKED_ZSET || c->bstate.btype == BLOCKED_STREAM) {
         addReplyNullArray(c);
         updateStatsOnUnblock(c, 0, 0, 0);
-    } else if (c->cmd == shared.wait_cmd) {
-        addReplyLongLong(c, replicationCountAcksByOffset(c->bstate.reploffset));
-    } else if (c->cmd == shared.waitaof_cmd) {
-        addReplyArrayLen(c, 2);
-        addReplyLongLong(c, server.fsynced_reploff >= c->bstate.reploffset);
-        addReplyLongLong(c, replicationCountAOFAcksByOffset(c->bstate.reploffset));
+    } else if (c->bstate.btype == BLOCKED_WAIT) {
+        if (c->cmd == shared.wait_cmd) {
+            addReplyLongLong(c, replicationCountAcksByOffset(c->bstate.reploffset));
+        } else if (c->cmd == shared.waitaof_cmd) {
+            addReplyArrayLen(c, 2);
+            addReplyLongLong(c, server.fsynced_reploff >= c->bstate.reploffset);
+            addReplyLongLong(c, replicationCountAOFAcksByOffset(c->bstate.reploffset));
+        } else if (c->cmd == shared.setslot_cmd) {
+            addReplyErrorObject(c, shared.noreplicaserr);
+        } else {
+            serverPanic("Unknown wait command %s in replyToBlockedClientTimedOut().", c->cmd->declared_name);
+        }
     } else if (c->bstate.btype == BLOCKED_MODULE) {
         moduleBlockedClientTimedOut(c, 0);
-    } else if (c->cmd == shared.setslot_cmd) {
-        addReplyErrorObject(c, shared.noreplicaserr);
     } else {
         serverPanic("Unknown btype in replyToBlockedClientTimedOut().");
     }

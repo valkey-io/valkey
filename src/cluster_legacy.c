@@ -6026,7 +6026,7 @@ void clusterCommandSetSlot(client *c) {
          * 2. The repl offset target is set to the master's current repl offset + 1.
          *    There is no concern of partial replication because replicas always
          *    ack the repl offset at the command boundary. */
-        blockClientForReplicaAck(c, mstime() + timeout_ms, server.master_repl_offset + 1, myself->numslaves, 0);
+        blockClientForReplicaAck(c, timeout_ms, server.master_repl_offset + 1, myself->numslaves, 0);
         /* Mark client as pending command for execution after replication to replicas. */
         c->flags |= CLIENT_PENDING_COMMAND;
         replicationRequestAckFromSlaves();

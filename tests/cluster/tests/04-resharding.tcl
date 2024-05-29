@@ -125,7 +125,7 @@ test "Cluster consistency during live resharding" {
     } else {
         fail "Resharding is not terminating after some time."
     }
-
+    wait_for_cluster_propagation
 }
 
 test "Verify $numkeys keys for consistency with logical content" {

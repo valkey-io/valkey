@@ -71,7 +71,7 @@ struct HelloTypeObject *createHelloTypeObject(void) {
 void HelloTypeInsert(struct HelloTypeObject *o, int64_t ele) {
     struct HelloTypeNode *next = o->head, *newnode, *prev = NULL;
 
-    while(next && next->value < ele) {
+    while (next && next->value < ele) {
         prev = next;
         next = next->next;
     }
@@ -89,7 +89,7 @@ void HelloTypeInsert(struct HelloTypeObject *o, int64_t ele) {
 void HelloTypeReleaseObject(struct HelloTypeObject *o) {
     struct HelloTypeNode *cur, *next;
     cur = o->head;
-    while(cur) {
+    while (cur) {
         next = cur->next;
         ValkeyModule_Free(cur);
         cur = next;
@@ -104,34 +104,31 @@ int HelloTypeInsert_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **arg
     ValkeyModule_AutoMemory(ctx); /* Use automatic memory management. */
 
     if (argc != 3) return ValkeyModule_WrongArity(ctx);
-    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx,argv[1],
-        VALKEYMODULE_READ|VALKEYMODULE_WRITE);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ | VALKEYMODULE_WRITE);
     int type = ValkeyModule_KeyType(key);
-    if (type != VALKEYMODULE_KEYTYPE_EMPTY &&
-        ValkeyModule_ModuleTypeGetType(key) != HelloType)
-    {
-        return ValkeyModule_ReplyWithError(ctx,VALKEYMODULE_ERRORMSG_WRONGTYPE);
+    if (type != VALKEYMODULE_KEYTYPE_EMPTY && ValkeyModule_ModuleTypeGetType(key) != HelloType) {
+        return ValkeyModule_ReplyWithError(ctx, VALKEYMODULE_ERRORMSG_WRONGTYPE);
     }
 
     long long value;
-    if ((ValkeyModule_StringToLongLong(argv[2],&value) != VALKEYMODULE_OK)) {
-        return ValkeyModule_ReplyWithError(ctx,"ERR invalid value: must be a signed 64 bit integer");
+    if ((ValkeyModule_StringToLongLong(argv[2], &value) != VALKEYMODULE_OK)) {
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid value: must be a signed 64 bit integer");
     }
 
     /* Create an empty value object if the key is currently empty. */
     struct HelloTypeObject *hto;
     if (type == VALKEYMODULE_KEYTYPE_EMPTY) {
         hto = createHelloTypeObject();
-        ValkeyModule_ModuleTypeSetValue(key,HelloType,hto);
+        ValkeyModule_ModuleTypeSetValue(key, HelloType, hto);
     } else {
         hto = ValkeyModule_ModuleTypeGetValue(key);
     }
 
     /* Insert the new element. */
-    HelloTypeInsert(hto,value);
-    ValkeyModule_SignalKeyAsReady(ctx,argv[1]);
+    HelloTypeInsert(hto, value);
+    ValkeyModule_SignalKeyAsReady(ctx, argv[1]);
 
-    ValkeyModule_ReplyWithLongLong(ctx,hto->len);
+    ValkeyModule_ReplyWithLongLong(ctx, hto->len);
     ValkeyModule_ReplicateVerbatim(ctx);
     return VALKEYMODULE_OK;
 }
@@ -141,34 +138,28 @@ int HelloTypeRange_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv
     ValkeyModule_AutoMemory(ctx); /* Use automatic memory management. */
 
     if (argc != 4) return ValkeyModule_WrongArity(ctx);
-    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx,argv[1],
-        VALKEYMODULE_READ|VALKEYMODULE_WRITE);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ | VALKEYMODULE_WRITE);
     int type = ValkeyModule_KeyType(key);
-    if (type != VALKEYMODULE_KEYTYPE_EMPTY &&
-        ValkeyModule_ModuleTypeGetType(key) != HelloType)
-    {
-        return ValkeyModule_ReplyWithError(ctx,VALKEYMODULE_ERRORMSG_WRONGTYPE);
+    if (type != VALKEYMODULE_KEYTYPE_EMPTY && ValkeyModule_ModuleTypeGetType(key) != HelloType) {
+        return ValkeyModule_ReplyWithError(ctx, VALKEYMODULE_ERRORMSG_WRONGTYPE);
     }
 
     long long first, count;
-    if (ValkeyModule_StringToLongLong(argv[2],&first) != VALKEYMODULE_OK ||
-        ValkeyModule_StringToLongLong(argv[3],&count) != VALKEYMODULE_OK ||
-        first < 0 || count < 0)
-    {
-        return ValkeyModule_ReplyWithError(ctx,
-            "ERR invalid first or count parameters");
+    if (ValkeyModule_StringToLongLong(argv[2], &first) != VALKEYMODULE_OK ||
+        ValkeyModule_StringToLongLong(argv[3], &count) != VALKEYMODULE_OK || first < 0 || count < 0) {
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid first or count parameters");
     }
 
     struct HelloTypeObject *hto = ValkeyModule_ModuleTypeGetValue(key);
     struct HelloTypeNode *node = hto ? hto->head : NULL;
-    ValkeyModule_ReplyWithArray(ctx,VALKEYMODULE_POSTPONED_LEN);
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
     long long arraylen = 0;
-    while(node && count--) {
-        ValkeyModule_ReplyWithLongLong(ctx,node->value);
+    while (node && count--) {
+        ValkeyModule_ReplyWithLongLong(ctx, node->value);
         arraylen++;
         node = node->next;
     }
-    ValkeyModule_ReplySetArrayLength(ctx,arraylen);
+    ValkeyModule_ReplySetArrayLength(ctx, arraylen);
     return VALKEYMODULE_OK;
 }
 
@@ -177,17 +168,14 @@ int HelloTypeLen_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, 
     ValkeyModule_AutoMemory(ctx); /* Use automatic memory management. */
 
     if (argc != 2) return ValkeyModule_WrongArity(ctx);
-    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx,argv[1],
-        VALKEYMODULE_READ|VALKEYMODULE_WRITE);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ | VALKEYMODULE_WRITE);
     int type = ValkeyModule_KeyType(key);
-    if (type != VALKEYMODULE_KEYTYPE_EMPTY &&
-        ValkeyModule_ModuleTypeGetType(key) != HelloType)
-    {
-        return ValkeyModule_ReplyWithError(ctx,VALKEYMODULE_ERRORMSG_WRONGTYPE);
+    if (type != VALKEYMODULE_KEYTYPE_EMPTY && ValkeyModule_ModuleTypeGetType(key) != HelloType) {
+        return ValkeyModule_ReplyWithError(ctx, VALKEYMODULE_ERRORMSG_WRONGTYPE);
     }
 
     struct HelloTypeObject *hto = ValkeyModule_ModuleTypeGetValue(key);
-    ValkeyModule_ReplyWithLongLong(ctx,hto ? hto->len : 0);
+    ValkeyModule_ReplyWithLongLong(ctx, hto ? hto->len : 0);
     return VALKEYMODULE_OK;
 }
 
@@ -201,11 +189,9 @@ int HelloBlock_Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) 
     VALKEYMODULE_NOT_USED(argc);
 
     ValkeyModuleString *keyname = ValkeyModule_GetBlockedClientReadyKey(ctx);
-    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx,keyname,VALKEYMODULE_READ);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, keyname, VALKEYMODULE_READ);
     int type = ValkeyModule_KeyType(key);
-    if (type != VALKEYMODULE_KEYTYPE_MODULE ||
-        ValkeyModule_ModuleTypeGetType(key) != HelloType)
-    {
+    if (type != VALKEYMODULE_KEYTYPE_MODULE || ValkeyModule_ModuleTypeGetType(key) != HelloType) {
         ValkeyModule_CloseKey(key);
         return VALKEYMODULE_ERR;
     }
@@ -213,14 +199,14 @@ int HelloBlock_Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) 
     /* In case the key is able to serve our blocked client, let's directly
      * use our original command implementation to make this example simpler. */
     ValkeyModule_CloseKey(key);
-    return HelloTypeRange_ValkeyCommand(ctx,argv,argc-1);
+    return HelloTypeRange_ValkeyCommand(ctx, argv, argc - 1);
 }
 
 /* Timeout callback for blocking command HELLOTYPE.BRANGE */
 int HelloBlock_Timeout(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
-    return ValkeyModule_ReplyWithSimpleString(ctx,"Request timedout");
+    return ValkeyModule_ReplyWithSimpleString(ctx, "Request timedout");
 }
 
 /* Private data freeing callback for HELLOTYPE.BRANGE command. */
@@ -235,31 +221,28 @@ void HelloBlock_FreeData(ValkeyModuleCtx *ctx, void *privdata) {
 int HelloTypeBRange_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 5) return ValkeyModule_WrongArity(ctx);
     ValkeyModule_AutoMemory(ctx); /* Use automatic memory management. */
-    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx,argv[1],
-        VALKEYMODULE_READ|VALKEYMODULE_WRITE);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ | VALKEYMODULE_WRITE);
     int type = ValkeyModule_KeyType(key);
-    if (type != VALKEYMODULE_KEYTYPE_EMPTY &&
-        ValkeyModule_ModuleTypeGetType(key) != HelloType)
-    {
-        return ValkeyModule_ReplyWithError(ctx,VALKEYMODULE_ERRORMSG_WRONGTYPE);
+    if (type != VALKEYMODULE_KEYTYPE_EMPTY && ValkeyModule_ModuleTypeGetType(key) != HelloType) {
+        return ValkeyModule_ReplyWithError(ctx, VALKEYMODULE_ERRORMSG_WRONGTYPE);
     }
 
     /* Parse the timeout before even trying to serve the client synchronously,
      * so that we always fail ASAP on syntax errors. */
     long long timeout;
-    if (ValkeyModule_StringToLongLong(argv[4],&timeout) != VALKEYMODULE_OK) {
-        return ValkeyModule_ReplyWithError(ctx,
-            "ERR invalid timeout parameter");
+    if (ValkeyModule_StringToLongLong(argv[4], &timeout) != VALKEYMODULE_OK) {
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid timeout parameter");
     }
 
     /* Can we serve the reply synchronously? */
     if (type != VALKEYMODULE_KEYTYPE_EMPTY) {
-        return HelloTypeRange_ValkeyCommand(ctx,argv,argc-1);
+        return HelloTypeRange_ValkeyCommand(ctx, argv, argc - 1);
     }
 
     /* Otherwise let's block on the key. */
     void *privdata = ValkeyModule_Alloc(100);
-    ValkeyModule_BlockClientOnKeys(ctx,HelloBlock_Reply,HelloBlock_Timeout,HelloBlock_FreeData,timeout,argv+1,1,privdata);
+    ValkeyModule_BlockClientOnKeys(ctx, HelloBlock_Reply, HelloBlock_Timeout, HelloBlock_FreeData, timeout, argv + 1, 1,
+                                   privdata);
     return VALKEYMODULE_OK;
 }
 
@@ -272,9 +255,9 @@ void *HelloTypeRdbLoad(ValkeyModuleIO *rdb, int encver) {
     }
     uint64_t elements = ValkeyModule_LoadUnsigned(rdb);
     struct HelloTypeObject *hto = createHelloTypeObject();
-    while(elements--) {
+    while (elements--) {
         int64_t ele = ValkeyModule_LoadSigned(rdb);
-        HelloTypeInsert(hto,ele);
+        HelloTypeInsert(hto, ele);
     }
     return hto;
 }
@@ -282,9 +265,9 @@ void *HelloTypeRdbLoad(ValkeyModuleIO *rdb, int encver) {
 void HelloTypeRdbSave(ValkeyModuleIO *rdb, void *value) {
     struct HelloTypeObject *hto = value;
     struct HelloTypeNode *node = hto->head;
-    ValkeyModule_SaveUnsigned(rdb,hto->len);
-    while(node) {
-        ValkeyModule_SaveSigned(rdb,node->value);
+    ValkeyModule_SaveUnsigned(rdb, hto->len);
+    while (node) {
+        ValkeyModule_SaveSigned(rdb, node->value);
         node = node->next;
     }
 }
@@ -292,8 +275,8 @@ void HelloTypeRdbSave(ValkeyModuleIO *rdb, void *value) {
 void HelloTypeAofRewrite(ValkeyModuleIO *aof, ValkeyModuleString *key, void *value) {
     struct HelloTypeObject *hto = value;
     struct HelloTypeNode *node = hto->head;
-    while(node) {
-        ValkeyModule_EmitAOF(aof,"HELLOTYPE.INSERT","sl",key,node->value);
+    while (node) {
+        ValkeyModule_EmitAOF(aof, "HELLOTYPE.INSERT", "sl", key, node->value);
         node = node->next;
     }
 }
@@ -303,7 +286,7 @@ void HelloTypeAofRewrite(ValkeyModuleIO *aof, ValkeyModuleString *key, void *val
 size_t HelloTypeMemUsage(const void *value) {
     const struct HelloTypeObject *hto = value;
     struct HelloTypeNode *node = hto->head;
-    return sizeof(*hto) + sizeof(*node)*hto->len;
+    return sizeof(*hto) + sizeof(*node) * hto->len;
 }
 
 void HelloTypeFree(void *value) {
@@ -313,8 +296,8 @@ void HelloTypeFree(void *value) {
 void HelloTypeDigest(ValkeyModuleDigest *md, void *value) {
     struct HelloTypeObject *hto = value;
     struct HelloTypeNode *node = hto->head;
-    while(node) {
-        ValkeyModule_DigestAddLongLong(md,node->value);
+    while (node) {
+        ValkeyModule_DigestAddLongLong(md, node->value);
         node = node->next;
     }
     ValkeyModule_DigestEndSequence(md);
@@ -326,36 +309,33 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
-    if (ValkeyModule_Init(ctx,"hellotype",1,VALKEYMODULE_APIVER_1)
-        == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
+    if (ValkeyModule_Init(ctx, "hellotype", 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
-    ValkeyModuleTypeMethods tm = {
-        .version = VALKEYMODULE_TYPE_METHOD_VERSION,
-        .rdb_load = HelloTypeRdbLoad,
-        .rdb_save = HelloTypeRdbSave,
-        .aof_rewrite = HelloTypeAofRewrite,
-        .mem_usage = HelloTypeMemUsage,
-        .free = HelloTypeFree,
-        .digest = HelloTypeDigest
-    };
+    ValkeyModuleTypeMethods tm = {.version = VALKEYMODULE_TYPE_METHOD_VERSION,
+                                  .rdb_load = HelloTypeRdbLoad,
+                                  .rdb_save = HelloTypeRdbSave,
+                                  .aof_rewrite = HelloTypeAofRewrite,
+                                  .mem_usage = HelloTypeMemUsage,
+                                  .free = HelloTypeFree,
+                                  .digest = HelloTypeDigest};
 
-    HelloType = ValkeyModule_CreateDataType(ctx,"hellotype",0,&tm);
+    HelloType = ValkeyModule_CreateDataType(ctx, "hellotype", 0, &tm);
     if (HelloType == NULL) return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx,"hellotype.insert",
-        HelloTypeInsert_ValkeyCommand,"write deny-oom",1,1,1) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "hellotype.insert", HelloTypeInsert_ValkeyCommand, "write deny-oom", 1, 1, 1) ==
+        VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx,"hellotype.range",
-        HelloTypeRange_ValkeyCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "hellotype.range", HelloTypeRange_ValkeyCommand, "readonly", 1, 1, 1) ==
+        VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx,"hellotype.len",
-        HelloTypeLen_ValkeyCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "hellotype.len", HelloTypeLen_ValkeyCommand, "readonly", 1, 1, 1) ==
+        VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx,"hellotype.brange",
-        HelloTypeBRange_ValkeyCommand,"readonly",1,1,1) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "hellotype.brange", HelloTypeBRange_ValkeyCommand, "readonly", 1, 1, 1) ==
+        VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

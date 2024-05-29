@@ -29,15 +29,15 @@
 
 #include "threads_mngr.h"
 /* Anti-warning macro... */
-#define UNUSED(V) ((void) V)
+#define UNUSED(V) ((void)V)
 
 #ifdef __linux__
-#include "atomicvar.h"
 #include "server.h"
 
 #include <signal.h>
 #include <time.h>
 #include <sys/syscall.h>
+#include <stdatomic.h>
 
 #define IN_PROGRESS 1
 static const clock_t RUN_ON_THREADS_TIMEOUT = 2;
@@ -46,10 +46,10 @@ static const clock_t RUN_ON_THREADS_TIMEOUT = 2;
 
 static run_on_thread_cb g_callback = NULL;
 static volatile size_t g_tids_len = 0;
-static serverAtomic size_t g_num_threads_done = 0;
+static _Atomic size_t g_num_threads_done = 0;
 
 /* This flag is set while ThreadsManager_runOnThreads is running */
-static serverAtomic int g_in_progress = 0;
+static _Atomic int g_in_progress = 0;
 
 /*============================ Internal prototypes ========================== */
 
@@ -75,10 +75,9 @@ void ThreadsManager_init(void) {
     sigaction(SIGUSR2, &act, NULL);
 }
 
-__attribute__ ((noinline))
-int ThreadsManager_runOnThreads(pid_t *tids, size_t tids_len, run_on_thread_cb callback) {
+__attribute__((noinline)) int ThreadsManager_runOnThreads(pid_t *tids, size_t tids_len, run_on_thread_cb callback) {
     /* Check if it is safe to start running. If not - return */
-    if(test_and_start() == IN_PROGRESS) {
+    if (test_and_start() == IN_PROGRESS) {
         return 0;
     }
 
@@ -95,7 +94,7 @@ int ThreadsManager_runOnThreads(pid_t *tids, size_t tids_len, run_on_thread_cb c
 
     /* Send signal to all the threads in tids */
     pid_t pid = getpid();
-    for (size_t i = 0; i < tids_len ; ++i) {
+    for (size_t i = 0; i < tids_len; ++i) {
         syscall(SYS_tgkill, pid, tids[i], THREADS_SIGNAL);
     }
 
@@ -112,21 +111,19 @@ int ThreadsManager_runOnThreads(pid_t *tids, size_t tids_len, run_on_thread_cb c
 
 
 static int test_and_start(void) {
-    /* atomicFlagGetSet sets the variable to 1 and returns the previous value */
-    int prev_state;
-    atomicFlagGetSet(g_in_progress, prev_state);
+    /* atomic_exchange_explicit sets the variable to 1 and returns the previous value */
+    int prev_state = atomic_exchange_explicit(&g_in_progress, 1, memory_order_relaxed);
 
     /* If prev_state is 1, g_in_progress was on. */
     return prev_state;
 }
 
-__attribute__ ((noinline))
-static void invoke_callback(int sig) {
+__attribute__((noinline)) static void invoke_callback(int sig) {
     UNUSED(sig);
     run_on_thread_cb callback = g_callback;
     if (callback) {
         callback();
-        atomicIncr(g_num_threads_done, 1);
+        atomic_fetch_add_explicit(&g_num_threads_done, 1, memory_order_relaxed);
     } else {
         serverLogFromHandler(LL_WARNING, "tid %ld: ThreadsManager g_callback is NULL", syscall(SYS_gettid));
     }
@@ -144,21 +141,17 @@ static void wait_threads(void) {
     struct timespec curr_time;
 
     do {
-        struct timeval tv = {
-            .tv_sec = 0,
-            .tv_usec = 10};
+        struct timeval tv = {.tv_sec = 0, .tv_usec = 10};
         /* Sleep a bit to yield to other threads. */
         /* usleep isn't listed as signal safe, so we use select instead */
         select(0, NULL, NULL, NULL, &tv);
-        atomicGet(g_num_threads_done, curr_done_count);
+        curr_done_count = atomic_load_explicit(&g_num_threads_done, memory_order_relaxed);
         clock_gettime(CLOCK_REALTIME, &curr_time);
-    } while (curr_done_count < g_tids_len &&
-             curr_time.tv_sec <= timeout_time.tv_sec);
+    } while (curr_done_count < g_tids_len && curr_time.tv_sec <= timeout_time.tv_sec);
 
     if (curr_time.tv_sec > timeout_time.tv_sec) {
         serverLogRawFromHandler(LL_WARNING, "wait_threads(): waiting threads timed out");
     }
-
 }
 
 static void ThreadsManager_cleanups(void) {
@@ -167,8 +160,7 @@ static void ThreadsManager_cleanups(void) {
     g_num_threads_done = 0;
 
     /* Lastly, turn off g_in_progress */
-    atomicSet(g_in_progress, 0);
-
+    atomic_store_explicit(&g_in_progress, 0, memory_order_relaxed);
 }
 #else
 

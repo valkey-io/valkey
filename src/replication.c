@@ -3497,7 +3497,7 @@ void waitaofCommand(client *c) {
 
     /* Otherwise block the client and put it into our list of clients
      * waiting for ack from slaves. */
-    blockClientForReplicaAck(c, timeout, c->woff, numlocal, numreplicas);
+    blockClientForReplicaAck(c, timeout, c->woff, numreplicas, numlocal);
 
     /* Make sure that the server will send an ACK request to all the slaves
      * before returning to the event loop. */
@@ -3579,7 +3579,7 @@ void processClientsWaitingReplicas(void) {
             addReplyArrayLen(c, 2);
             addReplyLongLong(c, numlocal);
             addReplyLongLong(c, numreplicas);
-        } else if (c->flags | CLIENT_PENDING_COMMAND) {
+        } else if (c->flags & CLIENT_PENDING_COMMAND) {
             c->flags |= CLIENT_REPLICATION_DONE;
         } else {
             addReplyLongLong(c, numreplicas);

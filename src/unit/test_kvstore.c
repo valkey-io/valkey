@@ -2,7 +2,7 @@
 #include "test_help.h"
 
 uint64_t hashTestCallback(const void *key) {
-    return dictGenHashFunction((unsigned char*)key, strlen((char*)key));
+    return dictGenHashFunction((unsigned char *)key, strlen((char *)key));
 }
 
 void freeTestCallback(dict *d, void *val) {
@@ -10,23 +10,15 @@ void freeTestCallback(dict *d, void *val) {
     zfree(val);
 }
 
-dictType KvstoreDictTestType = {
-    hashTestCallback,
-    NULL,
-    NULL,
-    NULL,
-    freeTestCallback,
-    NULL,
-    NULL
-};
+dictType KvstoreDictTestType = {hashTestCallback, NULL, NULL, NULL, freeTestCallback, NULL, NULL};
 
 char *stringFromInt(int value) {
     char buf[32];
     int len;
     char *s;
 
-    len = snprintf(buf, sizeof(buf), "%d",value);
-    s = zmalloc(len+1);
+    len = snprintf(buf, sizeof(buf), "%d", value);
+    s = zmalloc(len + 1);
     memcpy(s, buf, len);
     s[len] = '\0';
     return s;
@@ -80,7 +72,7 @@ int test_kvstoreIteratorRemoveAllKeysNoDeleteEmptyDict(int argc, char **argv, in
     }
 
     kvs_it = kvstoreIteratorInit(kvs1);
-    while((de = kvstoreIteratorNext(kvs_it)) != NULL) {
+    while ((de = kvstoreIteratorNext(kvs_it)) != NULL) {
         curr_slot = kvstoreIteratorGetCurrentDictIndex(kvs_it);
         key = dictGetKey(de);
         TEST_ASSERT(kvstoreDictDelete(kvs1, curr_slot, key) == DICT_OK);
@@ -116,7 +108,7 @@ int test_kvstoreIteratorRemoveAllKeysDeleteEmptyDict(int argc, char **argv, int 
     }
 
     kvs_it = kvstoreIteratorInit(kvs2);
-    while((de = kvstoreIteratorNext(kvs_it)) != NULL) {
+    while ((de = kvstoreIteratorNext(kvs_it)) != NULL) {
         curr_slot = kvstoreIteratorGetCurrentDictIndex(kvs_it);
         key = dictGetKey(de);
         TEST_ASSERT(kvstoreDictDelete(kvs2, curr_slot, key) == DICT_OK);
@@ -124,7 +116,8 @@ int test_kvstoreIteratorRemoveAllKeysDeleteEmptyDict(int argc, char **argv, int 
     kvstoreIteratorRelease(kvs_it);
 
     /* Make sure the dict was removed from the rehashing list. */
-    while (kvstoreIncrementallyRehash(kvs2, 1000)) {}
+    while (kvstoreIncrementallyRehash(kvs2, 1000)) {
+    }
 
     dict *d = kvstoreGetDict(kvs2, didx);
     TEST_ASSERT(d == NULL);
@@ -154,7 +147,7 @@ int test_kvstoreDictIteratorRemoveAllKeysNoDeleteEmptyDict(int argc, char **argv
     }
 
     kvs_di = kvstoreGetDictSafeIterator(kvs1, didx);
-    while((de = kvstoreDictIteratorNext(kvs_di)) != NULL) {
+    while ((de = kvstoreDictIteratorNext(kvs_di)) != NULL) {
         key = dictGetKey(de);
         TEST_ASSERT(kvstoreDictDelete(kvs1, didx, key) == DICT_OK);
     }
@@ -188,7 +181,7 @@ int test_kvstoreDictIteratorRemoveAllKeysDeleteEmptyDict(int argc, char **argv, 
     }
 
     kvs_di = kvstoreGetDictSafeIterator(kvs2, didx);
-    while((de = kvstoreDictIteratorNext(kvs_di)) != NULL) {
+    while ((de = kvstoreDictIteratorNext(kvs_di)) != NULL) {
         key = dictGetKey(de);
         TEST_ASSERT(kvstoreDictDelete(kvs2, didx, key) == DICT_OK);
     }

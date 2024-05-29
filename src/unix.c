@@ -53,10 +53,10 @@ static int connUnixListen(connListener *listener) {
     int fd;
     mode_t *perm = (mode_t *)listener->priv;
 
-    if (listener->bindaddr_count == 0)
-        return C_OK;
+    if (listener->bindaddr_count == 0) return C_OK;
 
-    /* currently listener->bindaddr_count is always 1, we still use a loop here in case the server supports multi Unix socket in the future */
+    /* currently listener->bindaddr_count is always 1, we still use a loop here in case the server supports multi Unix
+     * socket in the future */
     for (int j = 0; j < listener->bindaddr_count; j++) {
         char *addr = listener->bindaddr[j];
 
@@ -96,16 +96,14 @@ static void connUnixAcceptHandler(aeEventLoop *el, int fd, void *privdata, int m
     UNUSED(mask);
     UNUSED(privdata);
 
-    while(max--) {
+    while (max--) {
         cfd = anetUnixAccept(server.neterr, fd);
         if (cfd == ANET_ERR) {
-            if (errno != EWOULDBLOCK)
-                serverLog(LL_WARNING,
-                    "Accepting client connection: %s", server.neterr);
+            if (errno != EWOULDBLOCK) serverLog(LL_WARNING, "Accepting client connection: %s", server.neterr);
             return;
         }
-        serverLog(LL_VERBOSE,"Accepted connection to %s", server.unixsocket);
-        acceptCommonHandler(connCreateAcceptedUnix(cfd, NULL),CLIENT_UNIX_SOCKET,NULL);
+        serverLog(LL_VERBOSE, "Accepted connection to %s", server.unixsocket);
+        acceptCommonHandler(connCreateAcceptedUnix(cfd, NULL), CLIENT_UNIX_SOCKET, NULL);
     }
 }
 
@@ -200,7 +198,6 @@ static ConnectionType CT_Unix = {
     .process_pending_data = NULL,
 };
 
-int RedisRegisterConnectionTypeUnix(void)
-{
+int RedisRegisterConnectionTypeUnix(void) {
     return connTypeRegister(&CT_Unix);
 }

@@ -1612,7 +1612,13 @@ void freeClient(client *c) {
 
     /* Log link disconnection with replica */
     if (getClientType(c) == CLIENT_TYPE_REPLICA) {
-        serverLog(LL_NOTICE, "Connection with replica %s lost.", replicationGetReplicaName(c));
+        if (c->flags & CLIENT_REPL_RDB_CHANNEL) {
+            serverLog(LL_NOTICE,"Replica %s rdb channel disconnected.",
+                replicationGetReplicaName(c));
+        } else {
+            serverLog(LL_NOTICE,"Connection with replica %s lost.",
+                replicationGetReplicaName(c));
+        }
     }
 
     /* Free the query buffer */
@@ -2759,7 +2765,7 @@ void readQueryFromClient(connection *conn) {
             sds info = catClientInfoString(sdsempty(), c);
             serverLog(LL_VERBOSE, "Client closed connection %s", info);
             if (c->flags & CLIENT_PROTECTED_RDB_CHANNEL) {
-                serverLog(LL_VERBOSE, "Postpone RDB client id=%llu (%s) free for %d seconds", (unsigned long long)c->id, replicationGetSlaveName(c), server.wait_before_rdb_client_free);
+                serverLog(LL_VERBOSE, "Postpone RDB client id=%llu (%s) free for %d seconds", (unsigned long long)c->id, replicationGetReplicaName(c), server.wait_before_rdb_client_free);
             }
             sdsfree(info);
         }

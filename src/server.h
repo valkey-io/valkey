@@ -3503,7 +3503,7 @@ void blockForPreReplication(client *c, mstime_t timeout, long long offset, long 
 void blockForAofFsync(client *c, mstime_t timeout, long long offset, int numlocal, long numreplicas);
 void replicationRequestAckFromSlaves(void);
 void signalDeletedKeyAsReady(serverDb *db, robj *key, int type);
-void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int had_errors);
+void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int failed_or_rejected);
 void scanDatabaseForDeletedKeys(serverDb *emptied, serverDb *replaced_with);
 void totalNumberOfStatefulKeys(unsigned long *blocking_keys,
                                unsigned long *blocking_keys_on_nokey,

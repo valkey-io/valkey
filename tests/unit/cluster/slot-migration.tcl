@@ -429,7 +429,7 @@ start_cluster 2 0 {tags {external:skip cluster regression} overrides {cluster-al
         set stream_name aga
         set slot 609
 
-        # Start a background process to simulate a blocked client on XREADGROUP
+        # Start a deferring client to simulate a blocked client on XREADGROUP
         R 0 XGROUP CREATE $stream_name mygroup $ MKSTREAM
         set rd [valkey_deferring_client]
         $rd xreadgroup GROUP mygroup consumer BLOCK 0 streams $stream_name >

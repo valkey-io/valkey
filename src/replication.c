@@ -3532,7 +3532,7 @@ void processClientsWaitingReplicas(void) {
         int numreplicas = 0;
 
         client *c = ln->value;
-        int is_wait_aof = c->cmd == shared.waitaof_cmd;
+        int is_wait_aof = c->cmd->proc == waitaofCommand;
 
         if (is_wait_aof && c->bstate.numlocal && !server.aof_enabled) {
             addReplyError(c, "WAITAOF cannot be used when numlocal is set but appendonly is disabled.");

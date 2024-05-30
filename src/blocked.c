@@ -229,13 +229,13 @@ void replyToBlockedClientTimedOut(client *c) {
         addReplyNullArray(c);
         updateStatsOnUnblock(c, 0, 0, 0);
     } else if (c->bstate.btype == BLOCKED_WAIT) {
-        if (c->cmd == shared.wait_cmd) {
+        if (c->cmd->proc == waitCommand) {
             addReplyLongLong(c, replicationCountAcksByOffset(c->bstate.reploffset));
-        } else if (c->cmd == shared.waitaof_cmd) {
+        } else if (c->cmd->proc == waitaofCommand) {
             addReplyArrayLen(c, 2);
             addReplyLongLong(c, server.fsynced_reploff >= c->bstate.reploffset);
             addReplyLongLong(c, replicationCountAOFAcksByOffset(c->bstate.reploffset));
-        } else if (c->cmd == shared.setslot_cmd) {
+        } else if (c->cmd->proc == clusterCommand) {
             addReplyErrorObject(c, shared.noreplicaserr);
         } else {
             serverPanic("Unknown wait command %s in replyToBlockedClientTimedOut().", c->cmd->declared_name);

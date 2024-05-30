@@ -1375,7 +1375,6 @@ struct sharedObjectsStruct {
         *maphdr[OBJ_SHARED_BULKHDR_LEN],                                   /* "%<value>\r\n" */
         *sethdr[OBJ_SHARED_BULKHDR_LEN];                                   /* "~<value>\r\n" */
     sds minstring, maxstring;
-    struct serverCommand *wait_cmd, *waitaof_cmd, *setslot_cmd;
 };
 
 /* ZSETs use a specialized version of Skiplists */

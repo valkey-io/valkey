@@ -1952,11 +1952,6 @@ void createSharedObjects(void) {
      * string in string comparisons for the ZRANGEBYLEX command. */
     shared.minstring = sdsnew("minstring");
     shared.maxstring = sdsnew("maxstring");
-
-    /* Shared command object */
-    shared.wait_cmd = lookupCommandByCString("WAIT");
-    shared.waitaof_cmd = lookupCommandByCString("WAITAOF");
-    shared.setslot_cmd = lookupCommandByCString("CLUSTER|SETSLOT");
 }
 
 void initServerClientMemUsageBuckets(void) {

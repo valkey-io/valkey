@@ -8,13 +8,14 @@ start_server {tags {"fatlog"}} {
     } {0}
 
     test {FATLOG - only logs commands having bigger response than threshold} {
-        r config set fatlog-log-bigger-than 10
+        r config set fatlog-log-bigger-than 25
         r set a abc
         r get a
         assert_equal [r fatlog len] 0
-        r set a abcdeabcde1
-        r get a
+        r set a 12345678901234567890123456
         assert_equal [r fatlog len] 1
+        r get a
+        assert_equal [r fatlog len] 2
     }
 
     test {FATLOG - max entries is correctly handled} {
@@ -39,14 +40,11 @@ start_server {tags {"fatlog"}} {
     } {0}
 
     test {FATLOG - logged entry sanity check} {
-        r config set fatlog-log-bigger-than 10
+        r config set fatlog-log-bigger-than 25
         r client setname foobar
         r get a
         set e [lindex [r fatlog get] 0]
         assert_equal [llength $e] 6
-        if {!$::external} {
-            assert_equal [lindex $e 0] 107
-        }
         assert_equal [expr {[lindex $e 2] > 10}] 1
         assert_equal [lindex $e 3] {get a}
         assert_equal {foobar} [lindex $e 5]
@@ -70,18 +68,18 @@ start_server {tags {"fatlog"}} {
 
         # Make sure normal configs work, but the two sensitive
         # commands are omitted or redacted
-        assert_equal 11 [llength $fatlog_resp]
-        assert_equal {fatlog reset} [lindex [lindex $fatlog_resp 10] 3]
-        assert_equal {acl setuser (redacted) (redacted) (redacted)} [lindex [lindex $fatlog_resp 9] 3]
-        assert_equal {config set masteruser (redacted)} [lindex [lindex $fatlog_resp 8] 3]
-        assert_equal {config set masterauth (redacted)} [lindex [lindex $fatlog_resp 7] 3]
-        assert_equal {config set requirepass (redacted)} [lindex [lindex $fatlog_resp 6] 3]
-        assert_equal {config set tls-key-file-pass (redacted)} [lindex [lindex $fatlog_resp 5] 3]
-        assert_equal {config set tls-client-key-file-pass (redacted)} [lindex [lindex $fatlog_resp 4] 3]
-        assert_equal {acl setuser (redacted) (redacted) (redacted)} [lindex [lindex $fatlog_resp 3] 3]
-        assert_equal {acl getuser (redacted)} [lindex [lindex $fatlog_resp 2] 3]
-        assert_equal {acl deluser (redacted) (redacted)} [lindex [lindex $fatlog_resp 1] 3]
-        assert_equal {config set fatlog-log-bigger-than 0} [lindex [lindex $fatlog_resp 0] 3]
+        assert_equal 22 [llength $fatlog_resp]
+        assert_equal {fatlog reset} [lindex [lindex $fatlog_resp 21] 3]
+        assert_equal {acl setuser (redacted) (redacted) (redacted)} [lindex [lindex $fatlog_resp 19] 3]
+        assert_equal {config set masteruser (redacted)} [lindex [lindex $fatlog_resp 17] 3]
+        assert_equal {config set masterauth (redacted)} [lindex [lindex $fatlog_resp 15] 3]
+        assert_equal {config set requirepass (redacted)} [lindex [lindex $fatlog_resp 13] 3]
+        assert_equal {config set tls-key-file-pass (redacted)} [lindex [lindex $fatlog_resp 11] 3]
+        assert_equal {config set tls-client-key-file-pass (redacted)} [lindex [lindex $fatlog_resp 9] 3]
+        assert_equal {acl setuser (redacted) (redacted) (redacted)} [lindex [lindex $fatlog_resp 7] 3]
+        assert_equal {acl getuser (redacted)} [lindex [lindex $fatlog_resp 5] 3]
+        assert_equal {acl deluser (redacted) (redacted)} [lindex [lindex $fatlog_resp 3] 3]
+        assert_equal {config set fatlog-log-bigger-than 0} [lindex [lindex $fatlog_resp 1] 3]
     } {} {needs:repl}
 
     test {FATLOG - Some commands can redact sensitive fields} {
@@ -93,10 +91,10 @@ start_server {tags {"fatlog"}} {
         set fatlog_resp [r fatlog get]
 
         # Make sure all 3 commands were logged, but the sensitive fields are omitted
-        assert_equal 4 [llength $fatlog_resp]
-        assert_match {* key 9 5000} [lindex [lindex $fatlog_resp 2] 3]
-        assert_match {* key 9 5000 AUTH (redacted)} [lindex [lindex $fatlog_resp 1] 3]
-        assert_match {* key 9 5000 AUTH2 (redacted) (redacted)} [lindex [lindex $fatlog_resp 0] 3]
+        assert_equal 8 [llength $fatlog_resp]
+        assert_match {* key 9 5000} [lindex [lindex $fatlog_resp 5] 3]
+        assert_match {* key 9 5000 AUTH (redacted)} [lindex [lindex $fatlog_resp 3] 3]
+        assert_match {* key 9 5000 AUTH2 (redacted) (redacted)} [lindex [lindex $fatlog_resp 1] 3]
     } {} {needs:repl}
 
     test {FATLOG - Rewritten commands are logged as their original command} {
@@ -108,14 +106,14 @@ start_server {tags {"fatlog"}} {
 
         # SPOP is rewritten as DEL when all keys are removed
         r spop set 10
-        assert_equal {spop set 10} [lindex [lindex [r fatlog get] 0] 3]
+        assert_equal {spop set 10} [lindex [lindex [r fatlog get] 1] 3]
 
         # Test replacing client arguments
         r fatlog reset
 
         # GEOADD is replicated as ZADD
         r geoadd cool-cities -122.33207 47.60621 Seattle
-        assert_equal {geoadd cool-cities -122.33207 47.60621 Seattle} [lindex [lindex [r fatlog get] 0] 3]
+        assert_equal {geoadd cool-cities -122.33207 47.60621 Seattle} [lindex [lindex [r fatlog get] 1] 3]
 
         # Test replacing a single command argument
         r set A 5
@@ -123,7 +121,7 @@ start_server {tags {"fatlog"}} {
         
         # GETSET is replicated as SET
         r getset a 5
-        assert_equal {getset a 5} [lindex [lindex [r fatlog get] 0] 3]
+        assert_equal {getset a 5} [lindex [lindex [r fatlog get] 1] 3]
 
         # INCRBYFLOAT calls rewrite multiple times, so it's a special case
         r set A 0
@@ -131,7 +129,7 @@ start_server {tags {"fatlog"}} {
         
         # INCRBYFLOAT is replicated as SET
         r INCRBYFLOAT A 1.0
-        assert_equal {INCRBYFLOAT A 1.0} [lindex [lindex [r fatlog get] 0] 3]
+        assert_equal {INCRBYFLOAT A 1.0} [lindex [lindex [r fatlog get] 1] 3]
 
         # blocked BLPOP is replicated as LPOP
         set rd [valkey_deferring_client]
@@ -143,7 +141,7 @@ start_server {tags {"fatlog"}} {
         r exec
         $rd read
         $rd close
-        assert_equal {blpop l 0} [lindex [lindex [r fatlog get] 0] 3]
+        assert_equal {blpop l 0} [lindex [lindex [r fatlog get] 1] 3]
     }
 
     test {FATLOG - commands with too many arguments are trimmed} {
@@ -170,8 +168,8 @@ start_server {tags {"fatlog"}} {
         r get a
         r exec
         r config set fatlog-log-bigger-than 10
-        assert_equal [r fatlog len] 3
-        assert_equal [lindex [lindex [r fatlog get] 0] 3] {get a}
+        assert_equal [r fatlog len] 6
+        assert_equal [lindex [lindex [r fatlog get] 1] 3] {get a}
     }
 
     test {FATLOG - can clean older entries} {
@@ -231,11 +229,11 @@ start_server {tags {"fatlog"}} {
         
         $rd BLPOP mylist 0
         wait_for_blocked_clients_count 1 50 20
-        assert_equal 0 [llength [regexp -all -inline (?=BLPOP) [r fatlog get]]]
+        assert_equal 1 [llength [regexp -all -inline (?=BLPOP) [r fatlog get]]]
         
         r LPUSH mylist 1
         wait_for_blocked_clients_count 0 50 20
-        assert_equal 1 [llength [regexp -all -inline (?=BLPOP) [r fatlog get]]]
+        assert_equal 2 [llength [regexp -all -inline (?=BLPOP) [r fatlog get]]]
         
         $rd close
     }

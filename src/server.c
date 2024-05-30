@@ -3455,6 +3455,10 @@ void call(client *c, int flags) {
      * re-processed. */
     if (reprocessing_command) c->flag.reprocessing_command = 1;
 
+    if (update_command_stats) {
+        fatlogPushCurrentCommand(c, real_cmd, c->argv_len_sum);
+    }
+
     /* To record how many reply bytes generated in this command. */
     c->cmd_reply_length = 0;
 

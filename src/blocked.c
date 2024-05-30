@@ -181,7 +181,7 @@ void queueClientForReprocessing(client *c) {
 /* Unblock a client calling the right function depending on the kind
  * of operation the client is blocking for. */
 void unblockClient(client *c, int queue_for_reprocessing) {
-    if (c->bstate.btype == BLOCKED_LIST || c->bstate.btype == BLOCKED_ZSET || c->bstate.btype == BLOCKED_STREAM) {
+    if (c->bstate.btype == BLOCKED_DATA) {
         unblockClientWaitingData(c);
     } else if (c->bstate.btype == BLOCKED_WAIT) {
         unblockClientWaitingReplicas(c);
@@ -225,7 +225,7 @@ void unblockClient(client *c, int queue_for_reprocessing) {
  * send it a reply of some kind. After this function is called,
  * unblockClient() will be called with the same client as argument. */
 void replyToBlockedClientTimedOut(client *c) {
-    if (c->bstate.btype == BLOCKED_LIST || c->bstate.btype == BLOCKED_ZSET || c->bstate.btype == BLOCKED_STREAM) {
+    if (c->bstate.btype == BLOCKED_DATA) {
         addReplyNullArray(c);
         updateStatsOnUnblock(c, 0, 0, 0);
     } else if (c->bstate.btype == BLOCKED_WAIT) {
@@ -434,10 +434,10 @@ static void unblockClientWaitingData(client *c) {
 
 static blocking_type getBlockedTypeByType(int type) {
     switch (type) {
-    case OBJ_LIST: return BLOCKED_LIST;
-    case OBJ_ZSET: return BLOCKED_ZSET;
+    case OBJ_LIST: return BLOCKED_DATA;
+    case OBJ_ZSET: return BLOCKED_DATA;
+    case OBJ_STREAM: return BLOCKED_DATA;
     case OBJ_MODULE: return BLOCKED_MODULE;
-    case OBJ_STREAM: return BLOCKED_STREAM;
     default: return BLOCKED_NONE;
     }
 }
@@ -625,8 +625,7 @@ static void unblockClientOnKey(client *c, robj *key) {
 
     /* Only in case of blocking API calls, we might be blocked on several keys.
        however we should force unblock the entire blocking keys */
-    serverAssert(c->bstate.btype == BLOCKED_STREAM || c->bstate.btype == BLOCKED_LIST ||
-                 c->bstate.btype == BLOCKED_ZSET);
+    serverAssert(c->bstate.btype == BLOCKED_DATA);
 
     /* We need to unblock the client before calling processCommandAndResetClient
      * because it checks the CLIENT_BLOCKED flag */

@@ -432,11 +432,9 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
  * if CLIENT_BLOCKED flag is set. */
 typedef enum blocking_type {
     BLOCKED_NONE,     /* Not blocked, no CLIENT_BLOCKED flag set. */
-    BLOCKED_LIST,     /* BLPOP & co. */
+    BLOCKED_DATA,     /* Block on data: BLPOP & co., XREAD, BZPOP et al. */
     BLOCKED_WAIT,     /* WAIT for synchronous replication. */
     BLOCKED_MODULE,   /* Blocked by a loadable module. */
-    BLOCKED_STREAM,   /* XREAD. */
-    BLOCKED_ZSET,     /* BZPOP et al. */
     BLOCKED_POSTPONE, /* Blocked by processCommand, re-try processing later. */
     BLOCKED_SHUTDOWN, /* SHUTDOWN. */
     BLOCKED_NUM,      /* Number of blocked states. */

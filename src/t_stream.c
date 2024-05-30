@@ -2404,7 +2404,7 @@ void xreadCommand(client *c) {
                 decrRefCount(argv_streamid);
             }
         }
-        blockForKeys(c, BLOCKED_STREAM, c->argv + streams_arg, streams_count, timeout, xreadgroup);
+        blockForKeys(c, BLOCKED_DATA, c->argv + streams_arg, streams_count, timeout, xreadgroup);
         goto cleanup;
     }
 

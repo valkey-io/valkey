@@ -433,7 +433,7 @@ start_cluster 2 0 {tags {external:skip cluster regression} overrides {cluster-al
         R 0 XGROUP CREATE $stream_name mygroup $ MKSTREAM
         set rd [valkey_deferring_client]
         $rd xreadgroup GROUP mygroup consumer BLOCK 0 streams $stream_name >
-        after 1000
+        wait_for_blocked_client
 
         # Migrate the slot to the target node
         R 0 CLUSTER SETSLOT $slot MIGRATING [dict get [cluster_get_myself 1] id]

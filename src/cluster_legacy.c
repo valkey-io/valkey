@@ -752,7 +752,6 @@ void clusterSaveConfigOrDie(int do_fsync) {
         serverLog(LL_WARNING, "Fatal: can't update cluster config file.");
         exit(1);
     }
-    clearCachedClusterSlotsResponse();
 }
 
 /* Lock the cluster config using flock(), and retain the file descriptor used to
@@ -4847,6 +4846,9 @@ void clusterBeforeSleep(void) {
 }
 
 void clusterDoBeforeSleep(int flags) {
+    /* Clear the cache if there are config changes here. */
+    if (flags & CLUSTER_TODO_SAVE_CONFIG) clearCachedClusterSlotsResponse();
+
     server.cluster->todo_before_sleep |= flags;
 }
 

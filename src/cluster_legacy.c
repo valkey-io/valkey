@@ -6018,7 +6018,7 @@ void clusterCommandSetSlot(client *c) {
      * This ensures that all replicas have the latest topology information, enabling
      * a reliable slot ownership transfer even if the primary node went down during
      * the process. */
-    if (nodeIsMaster(myself) && myself->numslaves != 0 && (c->flags & CLIENT_PREREPL_DONE) == 0) {
+    if (nodeIsMaster(myself) && myself->numslaves != 0 && (c->flags & CLIENT_REPLICATION_DONE) == 0) {
         forceCommandPropagation(c, PROPAGATE_REPL);
         /* We are a primary and this is the first time we see this `SETSLOT`
          * command. Force-replicate the command to all of our replicas
@@ -6028,7 +6028,9 @@ void clusterCommandSetSlot(client *c) {
          * 2. The repl offset target is set to the master's current repl offset + 1.
          *    There is no concern of partial replication because replicas always
          *    ack the repl offset at the command boundary. */
-        blockForPreReplication(c, timeout_ms, server.master_repl_offset + 1, myself->numslaves);
+        blockClientForReplicaAck(c, timeout_ms, server.master_repl_offset + 1, myself->numslaves, 0);
+        /* Mark client as pending command for execution after replication to replicas. */
+        c->flags |= CLIENT_PENDING_COMMAND;
         replicationRequestAckFromSlaves();
         return;
     }

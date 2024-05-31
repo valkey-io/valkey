@@ -3457,7 +3457,7 @@ void waitCommand(client *c) {
 
     /* Otherwise block the client and put it into our list of clients
      * waiting for ack from slaves. */
-    blockForReplication(c, timeout, offset, numreplicas);
+    blockClientForReplicaAck(c, timeout, offset, numreplicas, 0);
 
     /* Make sure that the server will send an ACK request to all the slaves
      * before returning to the event loop. */
@@ -3497,7 +3497,7 @@ void waitaofCommand(client *c) {
 
     /* Otherwise block the client and put it into our list of clients
      * waiting for ack from slaves. */
-    blockForAofFsync(c, timeout, c->woff, numlocal, numreplicas);
+    blockClientForReplicaAck(c, timeout, c->woff, numreplicas, numlocal);
 
     /* Make sure that the server will send an ACK request to all the slaves
      * before returning to the event loop. */
@@ -3532,8 +3532,7 @@ void processClientsWaitingReplicas(void) {
         int numreplicas = 0;
 
         client *c = ln->value;
-        int is_wait_aof = c->bstate.btype == BLOCKED_WAITAOF;
-        int is_wait_prerepl = c->bstate.btype == BLOCKED_WAIT_PREREPL;
+        int is_wait_aof = c->cmd->proc == waitaofCommand;
 
         if (is_wait_aof && c->bstate.numlocal && !server.aof_enabled) {
             addReplyError(c, "WAITAOF cannot be used when numlocal is set but appendonly is disabled.");
@@ -3580,8 +3579,8 @@ void processClientsWaitingReplicas(void) {
             addReplyArrayLen(c, 2);
             addReplyLongLong(c, numlocal);
             addReplyLongLong(c, numreplicas);
-        } else if (is_wait_prerepl) {
-            c->flags |= CLIENT_PREREPL_DONE;
+        } else if (c->flags & CLIENT_PENDING_COMMAND) {
+            c->flags |= CLIENT_REPLICATION_DONE;
         } else {
             addReplyLongLong(c, numreplicas);
         }

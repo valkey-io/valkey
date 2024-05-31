@@ -426,23 +426,21 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_MODULE_PREVENT_AOF_PROP (1ULL << 48)  /* Module client do not want to propagate to AOF */
 #define CLIENT_MODULE_PREVENT_REPL_PROP (1ULL << 49) /* Module client do not want to propagate to replica */
 #define CLIENT_REPROCESSING_COMMAND (1ULL << 50)     /* The client is re-processing the command. */
-#define CLIENT_PREREPL_DONE (1ULL << 51)             /* Indicate that pre-replication has been done on the client */
+#define CLIENT_REPLICATION_DONE (1ULL << 51)         /* Indicate that replication has been done on the client */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
 typedef enum blocking_type {
-    BLOCKED_NONE,         /* Not blocked, no CLIENT_BLOCKED flag set. */
-    BLOCKED_LIST,         /* BLPOP & co. */
-    BLOCKED_WAIT,         /* WAIT for synchronous replication. */
-    BLOCKED_WAITAOF,      /* WAITAOF for AOF file fsync. */
-    BLOCKED_MODULE,       /* Blocked by a loadable module. */
-    BLOCKED_STREAM,       /* XREAD. */
-    BLOCKED_ZSET,         /* BZPOP et al. */
-    BLOCKED_POSTPONE,     /* Blocked by processCommand, re-try processing later. */
-    BLOCKED_SHUTDOWN,     /* SHUTDOWN. */
-    BLOCKED_WAIT_PREREPL, /* WAIT for pre-replication and then run the command. */
-    BLOCKED_NUM,          /* Number of blocked states. */
-    BLOCKED_END           /* End of enumeration */
+    BLOCKED_NONE,     /* Not blocked, no CLIENT_BLOCKED flag set. */
+    BLOCKED_LIST,     /* BLPOP & co. */
+    BLOCKED_WAIT,     /* WAIT for synchronous replication. */
+    BLOCKED_MODULE,   /* Blocked by a loadable module. */
+    BLOCKED_STREAM,   /* XREAD. */
+    BLOCKED_ZSET,     /* BZPOP et al. */
+    BLOCKED_POSTPONE, /* Blocked by processCommand, re-try processing later. */
+    BLOCKED_SHUTDOWN, /* SHUTDOWN. */
+    BLOCKED_NUM,      /* Number of blocked states. */
+    BLOCKED_END       /* End of enumeration */
 } blocking_type;
 
 /* Client request types */
@@ -3498,9 +3496,7 @@ void signalKeyAsReady(serverDb *db, robj *key, int type);
 void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeout, int unblock_on_nokey);
 void blockClientShutdown(client *c);
 void blockPostponeClient(client *c);
-void blockForReplication(client *c, mstime_t timeout, long long offset, long numreplicas);
-void blockForPreReplication(client *c, mstime_t timeout, long long offset, long numreplicas);
-void blockForAofFsync(client *c, mstime_t timeout, long long offset, int numlocal, long numreplicas);
+void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, long numreplicas, int numlocal);
 void replicationRequestAckFromSlaves(void);
 void signalDeletedKeyAsReady(serverDb *db, robj *key, int type);
 void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int had_errors);

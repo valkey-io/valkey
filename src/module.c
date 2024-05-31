@@ -8369,7 +8369,7 @@ void moduleBlockedClientTimedOut(client *c, int from_module) {
 
     if (!from_module)
         updateStatsOnUnblock(c, bc->background_duration, 0, 
-                            ((server.stat_total_error_replies != prev_error_replies) ? ERROR_COMMAND_FAILED : 0));
+                             ((server.stat_total_error_replies != prev_error_replies) ? ERROR_COMMAND_FAILED : 0));
 
     /* For timeout events, we do not want to call the disconnect callback,
      * because the blocked client will be automatically disconnected in

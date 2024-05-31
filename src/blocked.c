@@ -692,7 +692,7 @@ static void moduleUnblockClientOnKey(client *c, robj *key) {
 
     if (moduleTryServeClientBlockedOnKey(c, key)) {
         updateStatsOnUnblock(c, 0, elapsedUs(replyTimer),
-                            ((server.stat_total_error_replies != prev_error_replies) ? ERROR_COMMAND_FAILED : 0));
+                             ((server.stat_total_error_replies != prev_error_replies) ? ERROR_COMMAND_FAILED : 0));
         moduleUnblockClient(c);
     }
     /* We need to call afterCommand even if the client was not unblocked

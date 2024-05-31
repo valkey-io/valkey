@@ -1048,10 +1048,12 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
                  * can safely serve the request, otherwise we return a TRYAGAIN
                  * error). To do so we set the importing/migrating state and
                  * increment a counter for every missing key. */
-                if (n == myself && getMigratingSlotDest(slot) != NULL) {
-                    migrating_slot = 1;
-                } else if (getImportingSlotSource(slot) != NULL) {
-                    importing_slot = 1;
+                if (clusterNodeIsMaster(myself) || c->flags & CLIENT_READONLY) {
+                    if (n == clusterNodeGetMaster(myself) && getMigratingSlotDest(slot) != NULL) {
+                        migrating_slot = 1;
+                    } else if (getImportingSlotSource(slot) != NULL) {
+                        importing_slot = 1;
+                    }
                 }
             } else {
                 /* If it is not the first key/channel, make sure it is exactly
@@ -1120,7 +1122,9 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
     /* MIGRATE always works in the context of the local node if the slot
      * is open (migrating or importing state). We need to be able to freely
      * move keys among instances in this case. */
-    if ((migrating_slot || importing_slot) && cmd->proc == migrateCommand) return myself;
+    if ((migrating_slot || importing_slot) && cmd->proc == migrateCommand && clusterNodeIsMaster(myself)) {
+        return myself;
+    }
 
     /* If we don't have all the keys and we are migrating the slot, send
      * an ASK redirection or TRYAGAIN. */

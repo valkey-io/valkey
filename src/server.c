@@ -33,7 +33,6 @@
 #include "slowlog.h"
 #include "bio.h"
 #include "latency.h"
-#include "atomicvar.h"
 #include "mt19937-64.h"
 #include "functions.h"
 #include "hdr_histogram.h"
@@ -715,6 +714,8 @@ long long getInstantaneousMetric(int metric) {
  *
  * The function always returns 0 as it never terminates the client. */
 int clientsCronResizeQueryBuffer(client *c) {
+    /* If the client query buffer is NULL, it is using the shared query buffer and there is nothing to do. */
+    if (c->querybuf == NULL) return 0;
     size_t querybuf_size = sdsalloc(c->querybuf);
     time_t idletime = server.unixtime - c->lastinteraction;
 
@@ -724,7 +725,18 @@ int clientsCronResizeQueryBuffer(client *c) {
         /* There are two conditions to resize the query buffer: */
         if (idletime > 2) {
             /* 1) Query is idle for a long time. */
-            c->querybuf = sdsRemoveFreeSpace(c->querybuf, 1);
+            size_t remaining = sdslen(c->querybuf) - c->qb_pos;
+            if (!(c->flags & CLIENT_MASTER) && !remaining) {
+                /* If the client is not a master and no data is pending,
+                 * The client can safely use the shared query buffer in the next read - free the client's querybuf. */
+                sdsfree(c->querybuf);
+                /* By setting the querybuf to NULL, the client will use the shared query buffer in the next read.
+                 * We don't move the client to the shared query buffer immediately, because if we allocated a private
+                 * query buffer for the client, it's likely that the client will use it again soon. */
+                c->querybuf = NULL;
+            } else {
+                c->querybuf = sdsRemoveFreeSpace(c->querybuf, 1);
+            }
         } else if (querybuf_size > PROTO_RESIZE_THRESHOLD && querybuf_size / 2 > c->querybuf_peak) {
             /* 2) Query buffer is too big for latest peak and is larger than
              *    resize threshold. Trim excess space but only up to a limit,
@@ -740,7 +752,7 @@ int clientsCronResizeQueryBuffer(client *c) {
 
     /* Reset the peak again to capture the peak memory usage in the next
      * cycle. */
-    c->querybuf_peak = sdslen(c->querybuf);
+    c->querybuf_peak = c->querybuf ? sdslen(c->querybuf) : 0;
     /* We reset to either the current used, or currently processed bulk size,
      * which ever is bigger. */
     if (c->bulklen != -1 && (size_t)c->bulklen + 2 > c->querybuf_peak) c->querybuf_peak = c->bulklen + 2;
@@ -808,7 +820,9 @@ size_t ClientsPeakMemInput[CLIENTS_PEAK_MEM_USAGE_SLOTS] = {0};
 size_t ClientsPeakMemOutput[CLIENTS_PEAK_MEM_USAGE_SLOTS] = {0};
 
 int clientsCronTrackExpansiveClients(client *c, int time_idx) {
-    size_t in_usage = sdsZmallocSize(c->querybuf) + c->argv_len_sum + (c->argv ? zmalloc_size(c->argv) : 0);
+    size_t qb_size = c->querybuf ? sdsZmallocSize(c->querybuf) : 0;
+    size_t argv_size = c->argv ? zmalloc_size(c->argv) : 0;
+    size_t in_usage = qb_size + c->argv_len_sum + argv_size;
     size_t out_usage = getClientOutputBufferMemoryUsage(c);
 
     /* Track the biggest values observed so far in this slot. */
@@ -1075,7 +1089,7 @@ static inline void updateCachedTimeWithUs(int update_daylight_info, const long l
     server.ustime = ustime;
     server.mstime = server.ustime / 1000;
     time_t unixtime = server.mstime / 1000;
-    atomicSet(server.unixtime, unixtime);
+    atomic_store_explicit(&server.unixtime, unixtime, memory_order_relaxed);
 
     /* To get information about daylight saving time, we need to call
      * localtime_r and cache the result. However calling localtime_r in this
@@ -1258,10 +1272,12 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     run_with_period(100) {
         long long stat_net_input_bytes, stat_net_output_bytes;
         long long stat_net_repl_input_bytes, stat_net_repl_output_bytes;
-        atomicGet(server.stat_net_input_bytes, stat_net_input_bytes);
-        atomicGet(server.stat_net_output_bytes, stat_net_output_bytes);
-        atomicGet(server.stat_net_repl_input_bytes, stat_net_repl_input_bytes);
-        atomicGet(server.stat_net_repl_output_bytes, stat_net_repl_output_bytes);
+
+        stat_net_input_bytes = atomic_load_explicit(&server.stat_net_input_bytes, memory_order_relaxed);
+        stat_net_output_bytes = atomic_load_explicit(&server.stat_net_output_bytes, memory_order_relaxed);
+        stat_net_repl_input_bytes = atomic_load_explicit(&server.stat_net_repl_input_bytes, memory_order_relaxed);
+        stat_net_repl_output_bytes = atomic_load_explicit(&server.stat_net_repl_output_bytes, memory_order_relaxed);
+
         monotime current_time = getMonotonicUs();
         long long factor = 1000000; // us
         trackInstantaneousMetric(STATS_METRIC_COMMAND, server.stat_numcommands, current_time, factor);
@@ -1667,8 +1683,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * If an initial rewrite is in progress then not all data is guaranteed to have actually been
      * persisted to disk yet, so we cannot update the field. We will wait for the rewrite to complete. */
     if (server.aof_state == AOF_ON && server.fsynced_reploff != -1) {
-        long long fsynced_reploff_pending;
-        atomicGet(server.fsynced_reploff_pending, fsynced_reploff_pending);
+        long long fsynced_reploff_pending = atomic_load_explicit(&server.fsynced_reploff_pending, memory_order_relaxed);
         server.fsynced_reploff = fsynced_reploff_pending;
 
         /* If we have blocked [WAIT]AOF clients, and fsynced_reploff changed, we want to try to
@@ -1737,10 +1752,9 @@ void afterSleep(struct aeEventLoop *eventLoop) {
         if (moduleCount()) {
             mstime_t latency;
             latencyStartMonitor(latency);
-
-            atomicSet(server.module_gil_acquring, 1);
+            atomic_store_explicit(&server.module_gil_acquiring, 1, memory_order_relaxed);
             moduleAcquireGIL();
-            atomicSet(server.module_gil_acquring, 0);
+            atomic_store_explicit(&server.module_gil_acquiring, 0, memory_order_relaxed);
             moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP, VALKEYMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP, NULL);
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("module-acquire-GIL", latency);
@@ -1990,7 +2004,7 @@ void initServerConfig(void) {
     server.aof_flush_sleep = 0;
     server.aof_last_fsync = time(NULL) * 1000;
     server.aof_cur_timestamp = 0;
-    atomicSet(server.aof_bio_fsync_status, C_OK);
+    atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
     server.aof_rewrite_time_last = -1;
     server.aof_rewrite_time_start = -1;
     server.aof_lastbgrewrite_status = C_OK;
@@ -2480,10 +2494,10 @@ void resetServerStats(void) {
     server.stat_sync_partial_ok = 0;
     server.stat_sync_partial_err = 0;
     server.stat_io_reads_processed = 0;
-    atomicSet(server.stat_total_reads_processed, 0);
+    atomic_store_explicit(&server.stat_total_reads_processed, 0, memory_order_relaxed);
     server.stat_io_writes_processed = 0;
-    atomicSet(server.stat_total_writes_processed, 0);
-    atomicSet(server.stat_client_qbuf_limit_disconnections, 0);
+    atomic_store_explicit(&server.stat_total_writes_processed, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.stat_client_qbuf_limit_disconnections, 0, memory_order_relaxed);
     server.stat_client_outbuf_limit_disconnections = 0;
     for (j = 0; j < STATS_METRIC_COUNT; j++) {
         server.inst_metric[j].idx = 0;
@@ -2494,10 +2508,10 @@ void resetServerStats(void) {
     server.stat_aof_rewrites = 0;
     server.stat_rdb_saves = 0;
     server.stat_aofrw_consecutive_failures = 0;
-    atomicSet(server.stat_net_input_bytes, 0);
-    atomicSet(server.stat_net_output_bytes, 0);
-    atomicSet(server.stat_net_repl_input_bytes, 0);
-    atomicSet(server.stat_net_repl_output_bytes, 0);
+    atomic_store_explicit(&server.stat_net_input_bytes, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.stat_net_output_bytes, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.stat_net_repl_input_bytes, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.stat_net_repl_output_bytes, 0, memory_order_relaxed);
     server.stat_unexpected_error_replies = 0;
     server.stat_total_error_replies = 0;
     server.stat_dump_payload_sanitizations = 0;
@@ -2712,6 +2726,7 @@ void initServer(void) {
     }
     slowlogInit();
     latencyMonitorInit();
+    initSharedQueryBuf();
 
     /* Initialize ACL default password if it exists */
     ACLUpdateDefaultUserPassword(server.requirepass);
@@ -3868,6 +3883,7 @@ int processCommand(client *c) {
                 flagTransaction(c);
             }
             clusterRedirectClient(c, n, c->slot, error_code);
+            c->duration = 0;
             c->cmd->rejected_calls++;
             return C_OK;
         }
@@ -4380,10 +4396,9 @@ int writeCommandsDeniedByDiskError(void) {
             return DISK_ERROR_TYPE_AOF;
         }
         /* AOF fsync error. */
-        int aof_bio_fsync_status;
-        atomicGet(server.aof_bio_fsync_status, aof_bio_fsync_status);
+        int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_acquire);
         if (aof_bio_fsync_status == C_ERR) {
-            atomicGet(server.aof_bio_fsync_errno, server.aof_last_write_errno);
+            server.aof_last_write_errno = atomic_load_explicit(&server.aof_bio_fsync_errno, memory_order_relaxed);
             return DISK_ERROR_TYPE_AOF;
         }
     }
@@ -5374,7 +5389,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "arch_bits:%i\r\n", server.arch_bits,
             "monotonic_clock:%s\r\n", monotonicInfoString(),
             "multiplexing_api:%s\r\n", aeGetApiName(),
-            "atomicvar_api:%s\r\n", REDIS_ATOMIC_API,
             "gcc_version:%s\r\n", GNUC_VERSION_STR,
             "process_id:%I\r\n", (int64_t) getpid(),
             "process_supervised:%s\r\n", supervised,
@@ -5531,8 +5545,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         } else if (server.stat_current_save_keys_total) {
             fork_perc = ((double)server.stat_current_save_keys_processed / server.stat_current_save_keys_total) * 100;
         }
-        int aof_bio_fsync_status;
-        atomicGet(server.aof_bio_fsync_status, aof_bio_fsync_status);
+        int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
 
         /* clang-format off */
         info = sdscatprintf(info, "# Persistence\r\n" FMTARGS(
@@ -5631,13 +5644,15 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         long long current_active_defrag_time =
             server.stat_last_active_defrag_time ? (long long)elapsedUs(server.stat_last_active_defrag_time) : 0;
         long long stat_client_qbuf_limit_disconnections;
-        atomicGet(server.stat_total_reads_processed, stat_total_reads_processed);
-        atomicGet(server.stat_total_writes_processed, stat_total_writes_processed);
-        atomicGet(server.stat_net_input_bytes, stat_net_input_bytes);
-        atomicGet(server.stat_net_output_bytes, stat_net_output_bytes);
-        atomicGet(server.stat_net_repl_input_bytes, stat_net_repl_input_bytes);
-        atomicGet(server.stat_net_repl_output_bytes, stat_net_repl_output_bytes);
-        atomicGet(server.stat_client_qbuf_limit_disconnections, stat_client_qbuf_limit_disconnections);
+
+        stat_total_reads_processed = atomic_load_explicit(&server.stat_total_reads_processed, memory_order_relaxed);
+        stat_total_writes_processed = atomic_load_explicit(&server.stat_total_writes_processed, memory_order_relaxed);
+        stat_net_input_bytes = atomic_load_explicit(&server.stat_net_input_bytes, memory_order_relaxed);
+        stat_net_output_bytes = atomic_load_explicit(&server.stat_net_output_bytes, memory_order_relaxed);
+        stat_net_repl_input_bytes = atomic_load_explicit(&server.stat_net_repl_input_bytes, memory_order_relaxed);
+        stat_net_repl_output_bytes = atomic_load_explicit(&server.stat_net_repl_output_bytes, memory_order_relaxed);
+        stat_client_qbuf_limit_disconnections =
+            atomic_load_explicit(&server.stat_client_qbuf_limit_disconnections, memory_order_relaxed);
 
         if (sections++) info = sdscat(info, "\r\n");
         /* clang-format off */
@@ -6312,7 +6327,7 @@ void dismissMemory(void *ptr, size_t size_hint) {
 void dismissClientMemory(client *c) {
     /* Dismiss client query buffer and static reply buffer. */
     dismissMemory(c->buf, c->buf_usable_size);
-    dismissSds(c->querybuf);
+    if (c->querybuf) dismissSds(c->querybuf);
     /* Dismiss argv array only if we estimate it contains a big buffer. */
     if (c->argc && c->argv_len_sum / c->argc >= server.page_size) {
         for (int i = 0; i < c->argc; i++) {

@@ -36,6 +36,7 @@ const char *commandGroupStr(int index) {
 /* BITCOUNT history */
 commandHistory BITCOUNT_History[] = {
 {"7.0.0","Added the `BYTE|BIT` option."},
+{"8.0.0","`end` made optional; when called without argument the command reports the last BYTE."},
 };
 #endif
 
@@ -51,23 +52,28 @@ keySpec BITCOUNT_Keyspecs[1] = {
 };
 #endif
 
-/* BITCOUNT range unit argument table */
-struct COMMAND_ARG BITCOUNT_range_unit_Subargs[] = {
+/* BITCOUNT range end_unit_block unit argument table */
+struct COMMAND_ARG BITCOUNT_range_end_unit_block_unit_Subargs[] = {
 {MAKE_ARG("byte",ARG_TYPE_PURE_TOKEN,-1,"BYTE",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("bit",ARG_TYPE_PURE_TOKEN,-1,"BIT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* BITCOUNT range end_unit_block argument table */
+struct COMMAND_ARG BITCOUNT_range_end_unit_block_Subargs[] = {
+{MAKE_ARG("end",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("unit",ARG_TYPE_ONEOF,-1,NULL,NULL,"7.0.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=BITCOUNT_range_end_unit_block_unit_Subargs},
 };
 
 /* BITCOUNT range argument table */
 struct COMMAND_ARG BITCOUNT_range_Subargs[] = {
 {MAKE_ARG("start",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("end",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("unit",ARG_TYPE_ONEOF,-1,NULL,NULL,"7.0.0",CMD_ARG_OPTIONAL,2,NULL),.subargs=BITCOUNT_range_unit_Subargs},
+{MAKE_ARG("end-unit-block",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=BITCOUNT_range_end_unit_block_Subargs},
 };
 
 /* BITCOUNT argument table */
 struct COMMAND_ARG BITCOUNT_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("range",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,3,NULL),.subargs=BITCOUNT_range_Subargs},
+{MAKE_ARG("range",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=BITCOUNT_range_Subargs},
 };
 
 /********** BITFIELD ********************/
@@ -10661,7 +10667,7 @@ struct COMMAND_ARG WATCH_Args[] = {
 /* Main command table */
 struct COMMAND_STRUCT serverCommandTable[] = {
 /* bitmap */
-{MAKE_CMD("bitcount","Counts the number of set bits (population counting) in a string.","O(N)","2.6.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,BITCOUNT_History,1,BITCOUNT_Tips,0,bitcountCommand,-2,CMD_READONLY,ACL_CATEGORY_BITMAP,BITCOUNT_Keyspecs,1,NULL,2),.args=BITCOUNT_Args},
+{MAKE_CMD("bitcount","Counts the number of set bits (population counting) in a string.","O(N)","2.6.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,BITCOUNT_History,2,BITCOUNT_Tips,0,bitcountCommand,-2,CMD_READONLY,ACL_CATEGORY_BITMAP,BITCOUNT_Keyspecs,1,NULL,2),.args=BITCOUNT_Args},
 {MAKE_CMD("bitfield","Performs arbitrary bitfield integer operations on strings.","O(1) for each subcommand specified","3.2.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,BITFIELD_History,0,BITFIELD_Tips,0,bitfieldCommand,-2,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_BITMAP,BITFIELD_Keyspecs,1,bitfieldGetKeys,2),.args=BITFIELD_Args},
 {MAKE_CMD("bitfield_ro","Performs arbitrary read-only bitfield integer operations on strings.","O(1) for each subcommand specified","6.0.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,BITFIELD_RO_History,0,BITFIELD_RO_Tips,0,bitfieldroCommand,-2,CMD_READONLY|CMD_FAST,ACL_CATEGORY_BITMAP,BITFIELD_RO_Keyspecs,1,NULL,2),.args=BITFIELD_RO_Args},
 {MAKE_CMD("bitop","Performs bitwise operations on multiple strings, and stores the result.","O(N)","2.6.0",CMD_DOC_NONE,NULL,NULL,"bitmap",COMMAND_GROUP_BITMAP,BITOP_History,0,BITOP_Tips,0,bitopCommand,-4,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_BITMAP,BITOP_Keyspecs,2,NULL,3),.args=BITOP_Args},

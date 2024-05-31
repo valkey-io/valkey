@@ -41,6 +41,7 @@
 #include <assert.h>
 #include <math.h>
 #include <pthread.h>
+#include <stdatomic.h>
 
 #include <sdscompat.h> /* Use hiredis' sds compat header that maps sds calls to their hi_ variants */
 #include <sds.h>       /* Use hiredis sds. */
@@ -54,7 +55,6 @@
 #include "adlist.h"
 #include "dict.h"
 #include "zmalloc.h"
-#include "atomicvar.h"
 #include "crc16_slottable.h"
 #include "hdr_histogram.h"
 #include "cli_common.h"
@@ -84,11 +84,11 @@ static struct config {
     int tls;
     struct cliSSLconfig sslconfig;
     int numclients;
-    serverAtomic int liveclients;
+    _Atomic int liveclients;
     int requests;
-    serverAtomic int requests_issued;
-    serverAtomic int requests_finished;
-    serverAtomic int previous_requests_finished;
+    _Atomic int requests_issued;
+    _Atomic int requests_finished;
+    _Atomic int previous_requests_finished;
     int last_printed_bytes;
     long long previous_tick;
     int keysize;
@@ -117,9 +117,9 @@ static struct config {
     struct serverConfig *redis_config;
     struct hdr_histogram *latency_histogram;
     struct hdr_histogram *current_sec_latency_histogram;
-    serverAtomic int is_fetching_slots;
-    serverAtomic int is_updating_slots;
-    serverAtomic int slots_last_update;
+    _Atomic int is_fetching_slots;
+    _Atomic int is_updating_slots;
+    _Atomic int slots_last_update;
     int enable_tracking;
     pthread_mutex_t liveclients_mutex;
     pthread_mutex_t is_updating_slots_mutex;
@@ -344,8 +344,7 @@ static void freeClient(client c) {
     aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
     if (c->thread_id >= 0) {
-        int requests_finished = 0;
-        atomicGet(config.requests_finished, requests_finished);
+        int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
         if (requests_finished >= config.requests) {
             aeStop(el);
         }
@@ -403,8 +402,7 @@ static void setClusterKeyHashTag(client c) {
     assert(c->thread_id >= 0);
     clusterNode *node = c->cluster_node;
     assert(node);
-    int is_updating_slots = 0;
-    atomicGet(config.is_updating_slots, is_updating_slots);
+    int is_updating_slots = atomic_load_explicit(&config.is_updating_slots, memory_order_relaxed);
     /* If updateClusterSlotsConfiguration is updating the slots array,
      * call updateClusterSlotsConfiguration is order to block the thread
      * since the mutex is locked. When the slots will be updated by the
@@ -425,8 +423,7 @@ static void setClusterKeyHashTag(client c) {
 }
 
 static void clientDone(client c) {
-    int requests_finished = 0;
-    atomicGet(config.requests_finished, requests_finished);
+    int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
     if (requests_finished >= config.requests) {
         freeClient(c);
         if (!config.num_threads && config.el) aeStop(config.el);
@@ -520,8 +517,7 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     }
                     continue;
                 }
-                int requests_finished = 0;
-                atomicGetIncr(config.requests_finished, requests_finished, 1);
+                int requests_finished = atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
                 if (requests_finished < config.requests) {
                     if (config.num_threads == 0) {
                         hdr_record_value(config.latency_histogram, // Histogram to record to
@@ -564,8 +560,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     /* Initialize request when nothing was written. */
     if (c->written == 0) {
         /* Enforce upper bound to number of requests. */
-        int requests_issued = 0;
-        atomicGetIncr(config.requests_issued, requests_issued, config.pipeline);
+        int requests_issued = atomic_fetch_add_explicit(&config.requests_issued, config.pipeline, memory_order_relaxed);
         if (requests_issued >= config.requests) {
             return;
         }
@@ -573,7 +568,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         /* Really initialize: randomize keys and set start time. */
         if (config.randomkeys) randomizeClientKey(c);
         if (config.cluster_mode && c->staglen > 0) setClusterKeyHashTag(c);
-        atomicGet(config.slots_last_update, c->slots_last_update);
+        c->slots_last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
         c->start = ustime();
         c->latency = -1;
     }
@@ -804,8 +799,9 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
         aeCreateFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
 
     listAddNodeTail(config.clients, c);
-    atomicIncr(config.liveclients, 1);
-    atomicGet(config.slots_last_update, c->slots_last_update);
+    atomic_fetch_add_explicit(&config.liveclients, 1, memory_order_relaxed);
+
+    c->slots_last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
     return c;
 }
 
@@ -1231,15 +1227,17 @@ static int fetchClusterSlotsConfiguration(client c) {
     UNUSED(c);
     int success = 1, is_fetching_slots = 0, last_update = 0;
     size_t i;
-    atomicGet(config.slots_last_update, last_update);
+
+    last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
     if (c->slots_last_update < last_update) {
         c->slots_last_update = last_update;
         return -1;
     }
     redisReply *reply = NULL;
-    atomicGetIncr(config.is_fetching_slots, is_fetching_slots, 1);
+
+    is_fetching_slots = atomic_fetch_add_explicit(&config.is_fetching_slots, 1, memory_order_relaxed);
     if (is_fetching_slots) return -1; // TODO: use other codes || errno ?
-    atomicSet(config.is_fetching_slots, 1);
+    atomic_store_explicit(&config.is_fetching_slots, 1, memory_order_relaxed);
     fprintf(stderr, "WARNING: Cluster slots configuration changed, fetching new one...\n");
     const char *errmsg = "Failed to update cluster slots configuration";
     static dictType dtype = {
@@ -1310,14 +1308,15 @@ cleanup:
     freeReplyObject(reply);
     redisFree(ctx);
     dictRelease(masters);
-    atomicSet(config.is_fetching_slots, 0);
+    atomic_store_explicit(&config.is_fetching_slots, 0, memory_order_relaxed);
     return success;
 }
 
 /* Atomically update the new slots configuration. */
 static void updateClusterSlotsConfiguration(void) {
     pthread_mutex_lock(&config.is_updating_slots_mutex);
-    atomicSet(config.is_updating_slots, 1);
+    atomic_store_explicit(&config.is_updating_slots, 1, memory_order_relaxed);
+
     int i;
     for (i = 0; i < config.cluster_node_count; i++) {
         clusterNode *node = config.cluster_nodes[i];
@@ -1330,8 +1329,8 @@ static void updateClusterSlotsConfiguration(void) {
             zfree(oldslots);
         }
     }
-    atomicSet(config.is_updating_slots, 0);
-    atomicIncr(config.slots_last_update, 1);
+    atomic_store_explicit(&config.is_updating_slots, 0, memory_order_relaxed);
+    atomic_fetch_add_explicit(&config.slots_last_update, 1, memory_order_relaxed);
     pthread_mutex_unlock(&config.is_updating_slots_mutex);
 }
 
@@ -1615,13 +1614,10 @@ int showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData
     UNUSED(eventLoop);
     UNUSED(id);
     benchmarkThread *thread = (benchmarkThread *)clientData;
-    int liveclients = 0;
-    int requests_finished = 0;
-    int previous_requests_finished = 0;
+    int liveclients = atomic_load_explicit(&config.liveclients, memory_order_relaxed);
+    int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
+    int previous_requests_finished = atomic_load_explicit(&config.previous_requests_finished, memory_order_relaxed);
     long long current_tick = mstime();
-    atomicGet(config.liveclients, liveclients);
-    atomicGet(config.requests_finished, requests_finished);
-    atomicGet(config.previous_requests_finished, previous_requests_finished);
 
     if (liveclients == 0 && requests_finished != config.requests) {
         fprintf(stderr, "All clients disconnected... aborting.\n");
@@ -1646,7 +1642,7 @@ int showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData
     const float instantaneous_dt = (float)(current_tick - config.previous_tick) / 1000.0;
     const float instantaneous_rps = (float)(requests_finished - previous_requests_finished) / instantaneous_dt;
     config.previous_tick = current_tick;
-    atomicSet(config.previous_requests_finished, requests_finished);
+    atomic_store_explicit(&config.previous_requests_finished, requests_finished, memory_order_relaxed);
     printf("%*s\r", config.last_printed_bytes, " "); /* ensure there is a clean line */
     int printed_bytes =
         printf("%s: rps=%.1f (overall: %.1f) avg_msec=%.3f (overall: %.3f)\r", config.title, instantaneous_rps, rps,

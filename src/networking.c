@@ -4340,13 +4340,11 @@ int adjustIOThreadCount(void) {
     if (server.io_threads_num == 1) return 1;
 
     int pending = listLength(server.clients_pending_write);
-    server.clients_pending_write_avg_num = (int)max(
-        server.clients_pending_write_avg_num * SMOOTH_FACTOR +
-        pending * (1 - SMOOTH_FACTOR), pending);
+    server.clients_pending_write_avg_num =
+        (int)max(server.clients_pending_write_avg_num * SMOOTH_FACTOR + pending * (1 - SMOOTH_FACTOR), pending);
 
     /* The target io-thread number should be within the range of [1, io_threads_num]. */
-    int target_num = min(server.io_threads_num,
-        max(1, server.clients_pending_write_avg_num / IO_THREAD_BATCH_NUM));
+    int target_num = min(server.io_threads_num, max(1, server.clients_pending_write_avg_num / IO_THREAD_BATCH_NUM));
 
     if (server.io_threads_active_num < target_num) {
         /* Increasing active threads. */
@@ -4410,7 +4408,7 @@ int handleClientsWithPendingWritesUsingThreads(void) {
         }
 
         int target_id = item_id % io_threads_active_num;
-        listAddNodeTail(io_threads_list[target_id],c);
+        listAddNodeTail(io_threads_list[target_id], c);
         item_id++;
     }
 
@@ -4504,7 +4502,7 @@ int handleClientsWithPendingReadsUsingThreads(void) {
     while ((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
         int target_id = item_id % server.io_threads_active_num;
-        listAddNodeTail(io_threads_list[target_id],c);
+        listAddNodeTail(io_threads_list[target_id], c);
         item_id++;
     }
 

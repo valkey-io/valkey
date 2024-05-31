@@ -17,11 +17,11 @@ start_server {tags {"info and its relative command"}} {
             assert { [string match "*used_cpu_user*" $info] }
             assert { ![string match "*sentinel_tilt*" $info] }
             assert { [string match "*used_memory*" $info] }
-            if ($arg == "" || $arg == "default") {
-                assert { ![string match "*rejected_calls*" $info] }
+            if {$arg == "" || $arg == "default"} {
+                assert { ![string match "*rejected_calls*" $info] }        
             } else {
-                assert { [string match "*rejected_calls*" $info] }
-            }
+                assert { [string match "*rejected_calls*" $info] }        
+            }        
         }
     }
 

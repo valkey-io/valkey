@@ -546,8 +546,7 @@ int clusterLoadConfig(char *filename) {
             } else if (!strcasecmp(s, "noflags")) {
                 /* nothing to do */
             } else {
-                serverPanic("Unknown flag in %s cluster config file",
-                    server.extended_redis_compat ? "redis" : "valkey");
+                serverPanic("Unknown flag in %s cluster config file", SERVER_NAME);
             }
             if (p) s = p + 1;
         }

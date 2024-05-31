@@ -388,7 +388,7 @@ char *zstrdup(const char *s) {
 }
 
 size_t zmalloc_used_memory(void) {
-    size_t um = atomic_load_explicit(&used_memory,memory_order_relaxed);
+    size_t um = atomic_load_explicit(&used_memory, memory_order_relaxed);
     return um;
 }
 

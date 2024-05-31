@@ -1122,7 +1122,10 @@ void syncCommand(client *c) {
  * - rdb-filter-only <include-filters>
  * Define "include" filters for the RDB snapshot. Currently we only support
  * a single include filter: "functions". Passing an empty string "" will
- * result in an empty RDB. */
+ * result in an empty RDB.
+ *
+ * - version <major.minor.patch>
+ * The replica reports its version. */
 void replconfCommand(client *c) {
     int j;
 
@@ -1225,6 +1228,15 @@ void replconfCommand(client *c) {
                 }
             }
             sdsfreesplitres(filters, filter_count);
+        } else if (!strcasecmp(c->argv[j]->ptr, "version")) {
+            /* REPLCONF VERSION x.y.z */
+            int version = version2num(c->argv[j + 1]->ptr);
+            if (version >= 0) {
+                c->replica_version = version;
+            } else {
+                addReplyErrorFormat(c, "Unrecognized version format: %s", (char *)c->argv[j + 1]->ptr);
+                return;
+            }
         } else {
             addReplyErrorFormat(c, "Unrecognized REPLCONF option: %s", (char *)c->argv[j]->ptr);
             return;
@@ -1364,8 +1376,8 @@ void sendBulkToSlave(connection *conn) {
             freeClient(slave);
             return;
         }
-        atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes,nwritten,memory_order_relaxed);
-        sdsrange(slave->replpreamble,nwritten,-1);
+        atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes, nwritten, memory_order_relaxed);
+        sdsrange(slave->replpreamble, nwritten, -1);
         if (sdslen(slave->replpreamble) == 0) {
             sdsfree(slave->replpreamble);
             slave->replpreamble = NULL;
@@ -1392,7 +1404,7 @@ void sendBulkToSlave(connection *conn) {
         return;
     }
     slave->repldboff += nwritten;
-    atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes,nwritten,memory_order_relaxed);
+    atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes, nwritten, memory_order_relaxed);
     if (slave->repldboff == slave->repldbsize) {
         closeRepldbfd(slave);
         connSetWriteHandler(slave->conn, NULL);
@@ -1434,7 +1446,7 @@ void rdbPipeWriteHandler(struct connection *conn) {
         return;
     } else {
         slave->repldboff += nwritten;
-        atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes,nwritten,memory_order_relaxed);
+        atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes, nwritten, memory_order_relaxed);
         if (slave->repldboff < server.rdb_pipe_bufflen) {
             slave->repl_last_partial_write = server.unixtime;
             return; /* more data to write.. */
@@ -1507,7 +1519,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
                 /* Note: when use diskless replication, 'repldboff' is the offset
                  * of 'rdb_pipe_buff' sent rather than the offset of entire RDB. */
                 slave->repldboff = nwritten;
-                atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes,nwritten,memory_order_relaxed);
+                atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes, nwritten, memory_order_relaxed);
             }
             /* If we were unable to write all the data to one of the replicas,
              * setup write handler (and disable pipe read handler, below) */
@@ -1710,6 +1722,9 @@ void replicationCreateMasterClient(connection *conn, int dbid) {
      * connection. */
     server.master->flags |= CLIENT_MASTER;
 
+    /* Allocate a private query buffer for the master client instead of using the shared query buffer.
+     * This is done because the master's query buffer data needs to be preserved for my sub-replicas to use. */
+    server.master->querybuf = sdsempty();
     server.master->authenticated = 1;
     server.master->reploff = server.master_initial_offset;
     server.master->read_reploff = server.master->reploff;
@@ -1815,7 +1830,7 @@ void readSyncBulkPayload(connection *conn) {
         } else {
             /* nread here is returned by connSyncReadLine(), which calls syncReadLine() and
              * convert "\r\n" to '\0' so 1 byte is lost. */
-            atomic_fetch_add_explicit(&server.stat_net_repl_input_bytes,nread+1,memory_order_relaxed);
+            atomic_fetch_add_explicit(&server.stat_net_repl_input_bytes, nread + 1, memory_order_relaxed);
         }
 
         if (buf[0] == '-') {
@@ -1884,7 +1899,7 @@ void readSyncBulkPayload(connection *conn) {
             cancelReplicationHandshake(1);
             return;
         }
-        atomic_fetch_add_explicit(&server.stat_net_repl_input_bytes,nread,memory_order_relaxed);
+        atomic_fetch_add_explicit(&server.stat_net_repl_input_bytes, nread, memory_order_relaxed);
 
         /* When a mark is used, we want to detect EOF asap in order to avoid
          * writing the EOF mark into the file... */
@@ -2623,6 +2638,10 @@ void syncWithMaster(connection *conn) {
         err = sendCommand(conn, "REPLCONF", "capa", "eof", "capa", "psync2", NULL);
         if (err) goto write_error;
 
+        /* Inform the primary of our (replica) version. */
+        err = sendCommand(conn, "REPLCONF", "version", VALKEY_VERSION, NULL);
+        if (err) goto write_error;
+
         server.repl_state = REPL_STATE_RECEIVE_AUTH_REPLY;
         return;
     }
@@ -2692,6 +2711,22 @@ void syncWithMaster(connection *conn) {
             serverLog(LL_NOTICE,
                       "(Non critical) Master does not understand "
                       "REPLCONF capa: %s",
+                      err);
+        }
+        sdsfree(err);
+        err = NULL;
+        server.repl_state = REPL_STATE_RECEIVE_VERSION_REPLY;
+    }
+
+    /* Receive VERSION reply. */
+    if (server.repl_state == REPL_STATE_RECEIVE_VERSION_REPLY) {
+        err = receiveSynchronousResponse(conn);
+        if (err == NULL) goto no_response_error;
+        /* Ignore the error if any. Valkey >= 8 supports REPLCONF VERSION. */
+        if (err[0] == '-') {
+            serverLog(LL_NOTICE,
+                      "(Non critical) Primary does not understand "
+                      "REPLCONF VERSION: %s",
                       err);
         }
         sdsfree(err);

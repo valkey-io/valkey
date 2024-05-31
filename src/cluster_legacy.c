@@ -752,7 +752,6 @@ void clusterSaveConfigOrDie(int do_fsync) {
         serverLog(LL_WARNING, "Fatal: can't update cluster config file.");
         exit(1);
     }
-    clearCachedClusterSlotsResponse();
 }
 
 /* Lock the cluster config using flock(), and retain the file descriptor used to
@@ -4847,6 +4846,9 @@ void clusterBeforeSleep(void) {
 }
 
 void clusterDoBeforeSleep(int flags) {
+    /* Clear the cache if there are config changes here. */
+    if (flags & CLUSTER_TODO_SAVE_CONFIG) clearCachedClusterSlotsResponse();
+
     server.cluster->todo_before_sleep |= flags;
 }
 
@@ -5878,10 +5880,18 @@ char *clusterNodeGetShardId(clusterNode *node) {
     return node->shard_id;
 }
 
-int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out, int *timeout_out) {
+/* clusterParseSetSlotCommand validates the arguments of the CLUSTER SETSLOT command,
+ * extracts the target slot number (slot_out), and determines the target node (node_out)
+ * if applicable. It also calculates a timeout value (timeout_out) based on an optional
+ * timeout argument. If provided, the timeout is added to the current time to obtain an
+ * absolute timestamp; if omitted, the default timeout CLUSTER_OPERATION_TIMEOUT is used;
+ * if set to 0, it indicates no timeout. The function returns 1 if successful, and 0
+ * otherwise, after sending an error message to the client. */
+int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out, mstime_t *timeout_out) {
     int slot = -1;
     clusterNode *n = NULL;
-    int timeout = 0;
+    mstime_t timeout = commandTimeSnapshot() + CLUSTER_OPERATION_TIMEOUT;
+    int optarg_pos = 0;
 
     /* Allow primaries to replicate "CLUSTER SETSLOT" */
     if (!(c->flags & CLIENT_MASTER) && nodeIsSlave(myself)) {
@@ -5889,27 +5899,10 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
         return 0;
     }
 
-    /* Process optional arguments */
-    for (int i = 0; i < c->argc;) {
-        if (!strcasecmp(c->argv[i]->ptr, "timeout")) {
-            if (i + 1 < c->argc) {
-                timeout = (int)strtol(c->argv[i + 1]->ptr, NULL, 10);
-                decrRefCount(c->argv[i]);
-                decrRefCount(c->argv[i + 1]);
-                memmove(&c->argv[i], &c->argv[i + 2], c->argc - i - 2);
-                c->argc -= 2;
-                continue;
-            }
-            addReplyError(c, "Missing timeout value.");
-            return 0;
-        }
-        i++;
-    }
-
     if ((slot = getSlotOrReply(c, c->argv[2])) == -1) return 0;
 
     if (!strcasecmp(c->argv[3]->ptr, "migrating") && c->argc >= 5) {
-        /* Scope the check to primaries only */
+        /* CLUSTER SETSLOT <SLOT> MIGRATING <NODE> */
         if (nodeIsMaster(myself) && server.cluster->slots[slot] != myself) {
             addReplyErrorFormat(c, "I'm not the owner of hash slot %u", slot);
             return 0;
@@ -5923,7 +5916,9 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
             addReplyError(c, "Target node is not a master");
             return 0;
         }
+        if (c->argc > 5) optarg_pos = 5;
     } else if (!strcasecmp(c->argv[3]->ptr, "importing") && c->argc >= 5) {
+        /* CLUSTER SETSLOT <SLOT> IMPORTING <NODE> */
         if (server.cluster->slots[slot] == myself) {
             addReplyErrorFormat(c, "I'm already the owner of hash slot %u", slot);
             return 0;
@@ -5937,8 +5932,10 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
             addReplyError(c, "Target node is not a master");
             return 0;
         }
+        if (c->argc > 5) optarg_pos = 5;
     } else if (!strcasecmp(c->argv[3]->ptr, "stable") && c->argc >= 4) {
-        /* Do nothing */
+        /* CLUSTER SETSLOT <SLOT> STABLE */
+        if (c->argc > 4) optarg_pos = 4;
     } else if (!strcasecmp(c->argv[3]->ptr, "node") && c->argc >= 5) {
         /* CLUSTER SETSLOT <SLOT> NODE <NODE ID> */
         n = clusterLookupNode(c->argv[4]->ptr, sdslen(c->argv[4]->ptr));
@@ -5961,9 +5958,21 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
                 return 0;
             }
         }
+        if (c->argc > 5) optarg_pos = 5;
     } else {
         addReplyError(c, "Invalid CLUSTER SETSLOT action or number of arguments. Try CLUSTER HELP");
         return 0;
+    }
+
+    /* Process optional arguments */
+    for (int i = optarg_pos; i < c->argc; i++) {
+        if (!strcasecmp(c->argv[i]->ptr, "timeout")) {
+            if (i + 1 >= c->argc) {
+                addReplyError(c, "Missing timeout value");
+                return 0;
+            }
+            if (getTimeoutFromObjectOrReply(c, c->argv[i + 1], &timeout, UNIT_MILLISECONDS) != C_OK) return 0;
+        }
     }
 
     *slot_out = slot;
@@ -5974,7 +5983,7 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
 
 void clusterCommandSetSlot(client *c) {
     int slot;
-    int timeout_ms;
+    mstime_t timeout_ms;
     clusterNode *n;
 
     if (!clusterParseSetSlotCommand(c, &slot, &n, &timeout_ms)) return;
@@ -6019,10 +6028,7 @@ void clusterCommandSetSlot(client *c) {
          * 2. The repl offset target is set to the master's current repl offset + 1.
          *    There is no concern of partial replication because replicas always
          *    ack the repl offset at the command boundary. */
-        if (timeout_ms == 0) {
-            timeout_ms = CLUSTER_OPERATION_TIMEOUT;
-        }
-        blockForPreReplication(c, mstime() + timeout_ms, server.master_repl_offset + 1, myself->numslaves);
+        blockForPreReplication(c, timeout_ms, server.master_repl_offset + 1, myself->numslaves);
         replicationRequestAckFromSlaves();
         return;
     }

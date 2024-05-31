@@ -781,12 +781,12 @@ unsigned char *lpInsert(unsigned char *lp,
     unsigned char backlen[LP_MAX_BACKLEN_SIZE];
 
     uint64_t enclen; /* The length of the encoded element. */
-    int delete = (elestr == NULL && eleint == NULL);
+    int del_ele = (elestr == NULL && eleint == NULL);
 
     /* when deletion, it is conceptually replacing the element with a
      * zero-length element. So whatever we get passed as 'where', set
      * it to LP_REPLACE. */
-    if (delete) where = LP_REPLACE;
+    if (del_ele) where = LP_REPLACE;
 
     /* If we need to insert after the current element, we just jump to the
      * next element (that could be the EOF one) and handle the case of
@@ -825,7 +825,7 @@ unsigned char *lpInsert(unsigned char *lp,
     /* We need to also encode the backward-parsable length of the element
      * and append it to the end: this allows to traverse the listpack from
      * the end to the start. */
-    unsigned long backlen_size = (!delete) ? lpEncodeBacklen(backlen, enclen) : 0;
+    unsigned long backlen_size = (!del_ele) ? lpEncodeBacklen(backlen, enclen) : 0;
     uint64_t old_listpack_bytes = lpGetTotalBytes(lp);
     uint32_t replaced_len = 0;
     if (where == LP_REPLACE) {
@@ -870,9 +870,9 @@ unsigned char *lpInsert(unsigned char *lp,
         *newp = dst;
         /* In case of deletion, set 'newp' to NULL if the next element is
          * the EOF element. */
-        if (delete && dst[0] == LP_EOF) *newp = NULL;
+        if (del_ele && dst[0] == LP_EOF) *newp = NULL;
     }
-    if (!delete) {
+    if (!del_ele) {
         if (enctype == LP_ENCODING_INT) {
             memcpy(dst, eleint, enclen);
         } else if (elestr) {
@@ -886,10 +886,10 @@ unsigned char *lpInsert(unsigned char *lp,
     }
 
     /* Update header. */
-    if (where != LP_REPLACE || delete) {
+    if (where != LP_REPLACE || del_ele) {
         uint32_t num_elements = lpGetNumElements(lp);
         if (num_elements != LP_HDR_NUMELE_UNKNOWN) {
-            if (!delete)
+            if (!del_ele)
                 lpSetNumElements(lp, num_elements + 1);
             else
                 lpSetNumElements(lp, num_elements - 1);

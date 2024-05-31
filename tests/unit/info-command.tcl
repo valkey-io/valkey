@@ -1,10 +1,4 @@
 start_server {tags {"info and its relative command"}} {
-    # Print version information at the beginning
-    set info [r info]
-    regexp {redis_version:(.*?)\r\n} $info - version
-    regexp {redis_git_sha1:(.*?)\r\n} $info - sha1
-    puts "Testing Valkey version $version ($sha1)"
-
     test "info command with at most one sub command" {
         foreach arg {"" "all" "default" "everything"} {
             if {$arg == ""} {
@@ -64,4 +58,5 @@ start_server {tags {"info and its relative command"}} {
         # check that we didn't get the same info twice
         assert { ![string match "*used_cpu_user_children*used_cpu_user_children*" $info] }
     }
+   
 }

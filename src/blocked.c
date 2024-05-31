@@ -102,9 +102,9 @@ void blockClient(client *c, int btype) {
  * However in case the client was timed out or in case of module blocked client is being unblocked
  * the command will not be reprocessed and we need to make stats update.
  * This function will make updates to the commandstats, slowlog and monitors.
- * The failed_or_rejected parameter is an indication that the blocked command was either failed internally or 
+ * The failed_or_rejected parameter is an indication that the blocked command was either failed internally or
  * rejected/aborted externally. In case the command was rejected the value ERROR_COMMAND_REJECTED should be passed.
- * In case the command failed internally, ERROR_COMMAND_FAILED should be passed. 
+ * In case the command failed internally, ERROR_COMMAND_FAILED should be passed.
  * A value of zero indicate no error was reported after the command was unblocked  */
 void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int failed_or_rejected) {
     const ustime_t total_cmd_duration = c->duration + blocked_us + reply_us;
@@ -113,8 +113,9 @@ void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int failed_
     c->commands_processed++;
     server.stat_numcommands++;
     debugServerAssertWithInfo(c, NULL, failed_or_rejected >= 0 && failed_or_rejected < ERROR_COMMAND_FAILED);
-    if (failed_or_rejected & ERROR_COMMAND_FAILED) c->lastcmd->failed_calls++;
-    else if (failed_or_rejected & ERROR_COMMAND_REJECTED) 
+    if (failed_or_rejected & ERROR_COMMAND_FAILED)
+        c->lastcmd->failed_calls++;
+    else if (failed_or_rejected & ERROR_COMMAND_REJECTED)
         c->lastcmd->rejected_calls++;
     if (server.latency_tracking_enabled)
         updateCommandLatencyHistogram(&(c->lastcmd->latency_histogram), total_cmd_duration * 1000);
@@ -690,7 +691,8 @@ static void moduleUnblockClientOnKey(client *c, robj *key) {
     elapsedStart(&replyTimer);
 
     if (moduleTryServeClientBlockedOnKey(c, key)) {
-        updateStatsOnUnblock(c, 0, elapsedUs(replyTimer), ((server.stat_total_error_replies != prev_error_replies) ? ERROR_COMMAND_FAILED : 0));
+        updateStatsOnUnblock(c, 0, elapsedUs(replyTimer),
+                            ((server.stat_total_error_replies != prev_error_replies) ? ERROR_COMMAND_FAILED : 0));
         moduleUnblockClient(c);
     }
     /* We need to call afterCommand even if the client was not unblocked

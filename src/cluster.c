@@ -1415,7 +1415,7 @@ void clusterCommandSlots(client *c) {
      *               3) node ID
      *           ... continued until done
      */
-    connTypeForCaching conn_type = connIsTLS(c->conn);
+    connTypeForCaching conn_type = shouldReturnTlsInfo();
 
     if (detectAndUpdateCachedNodeHealth()) clearCachedClusterSlotsResponse();
 

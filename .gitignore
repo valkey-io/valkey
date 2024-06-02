@@ -46,3 +46,4 @@ redis.code-workspace
 .cscope*
 .swp
 nodes.conf
+tests/cluster/tmp/*

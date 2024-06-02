@@ -1215,20 +1215,19 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
 
     /* Handle additional dynamic aux fields */
     if (rdbAuxFields != NULL) {
-        dictIterator *di = dictGetIterator(rdbAuxFields);
+        dictIterator di;
+        dictInitIterator(&di, rdbAuxFields);
         dictEntry *de;
-        while ((de = dictNext(di)) != NULL) {
+        while ((de = dictNext(&di)) != NULL) {
             rdbAuxFieldCodec *codec = (rdbAuxFieldCodec *)dictGetVal(de);
             sds s = codec->encoder(rdbflags);
             if (s == NULL) continue;
             if (rdbSaveAuxFieldStrStr(rdb, dictGetKey(de), s) == -1) {
                 sdsfree(s);
-                dictReleaseIterator(di);
                 return -1;
             }
             sdsfree(s);
         }
-        dictReleaseIterator(di);
     }
 
     return 1;

@@ -114,7 +114,7 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen);
 void freeClusterLink(clusterLink *link);
 int verifyClusterNodeId(const char *name, int length);
 sds clusterEncodeOpenSlotsAuxField(int rdbflags);
-int clusterDecodeOpenSlotsAuxField(int rdbflags, void *s);
+int clusterDecodeOpenSlotsAuxField(int rdbflags, char *s);
 
 int getNodeDefaultClientPort(clusterNode *n) {
     return server.tls_cluster ? n->tls_port : n->tcp_port;
@@ -6526,11 +6526,11 @@ int detectAndUpdateCachedNodeHealth(void) {
     return overall_health_changed;
 }
 
-/* Replicate migrating and importing slot states to all replicas */
+/* Encode open slot states into an sds string to be persisted as an aux field in RDB. */
 sds clusterEncodeOpenSlotsAuxField(int rdbflags) {
     if (!server.cluster_enabled) return NULL;
 
-    /* Open slots should not be persisted (nor loaded) */
+    /* Open slots should not be persisted to an RDB file. This data is intended only for full sync. */
     if ((rdbflags & RDBFLAGS_REPLICATION) == 0) return NULL;
 
     sds s = NULL;
@@ -6555,37 +6555,37 @@ sds clusterEncodeOpenSlotsAuxField(int rdbflags) {
     return s;
 }
 
-int clusterDecodeOpenSlotsAuxField(int rdbflags, void *p) {
+/* Decode the open slot aux field and restore the in-memory slot states. */
+int clusterDecodeOpenSlotsAuxField(int rdbflags, char *p) {
     if (!server.cluster_enabled || p == NULL) return C_OK;
 
-    /* Open slots should not be loaded (nor persisted) */
+    /* Open slots should not be loaded from a persisted RDB file, but only from a full sync. */
     if ((rdbflags & RDBFLAGS_REPLICATION) == 0) return C_OK;
 
-    char *s = p;
-    while (*s) {
+    while (*p) {
         /* Extract slot number */
-        int slot = atoi(s);
+        int slot = atoi(p);
         if (slot < 0 || slot >= CLUSTER_SLOTS) return C_ERR;
 
-        while (*s && *s != '<' && *s != '>') s++;
-        if (*s != '<' && *s != '>') return C_ERR;
+        while (*p && *p != '<' && *p != '>') p++;
+        if (*p != '<' && *p != '>') return C_ERR;
 
         /* Determine if it's an importing or migrating slot */
-        int is_importing = (*s == '<');
-        s++;
+        int is_importing = (*p == '<');
+        p++;
 
         /* Extract the node name */
         char node_name[CLUSTER_NAMELEN];
         int k = 0;
-        while (*s && *s != ',' && k < CLUSTER_NAMELEN) {
-            node_name[k++] = *s++;
+        while (*p && *p != ',' && k < CLUSTER_NAMELEN) {
+            node_name[k++] = *p++;
         }
 
         /* Ensure the node name is of the correct length */
-        if (k != CLUSTER_NAMELEN || *s != ',') return C_ERR;
+        if (k != CLUSTER_NAMELEN || *p != ',') return C_ERR;
 
         /* Move to the next slot */
-        s++;
+        p++;
 
         /* Find the corresponding node */
         clusterNode *node = clusterLookupNode(node_name, CLUSTER_NAMELEN);

@@ -701,10 +701,11 @@ typedef enum {
 #define serverAssert(_e) (likely(_e) ? (void)0 : (_serverAssert(#_e, __FILE__, __LINE__), valkey_unreachable()))
 #define serverPanic(...) _serverPanic(__FILE__, __LINE__, __VA_ARGS__), valkey_unreachable()
 
-/* The following macro provides a conditional assertion that is only executed
+/* The following macros provide a conditional assertion that is only executed
  * when the server config 'enable-debug-assert' is true. This is useful for adding
  * assertions that are too computationally expensive or risky to run in normal
  * operation, but are valuable for debugging or testing. */
+#define debugServerAssert(...) (server.enable_debug_assert ? serverAssert(__VA_ARGS__) : (void)0)
 #define debugServerAssertWithInfo(...) (server.enable_debug_assert ? serverAssertWithInfo(__VA_ARGS__) : (void)0)
 
 /* latency histogram per command init settings */

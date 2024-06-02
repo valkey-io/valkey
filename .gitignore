@@ -45,3 +45,4 @@ redis.code-workspace
 .cache
 .cscope*
 .swp
+tests/cluster/tmp/*

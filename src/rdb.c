@@ -1213,7 +1213,7 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     }
     if (rdbSaveAuxFieldStrInt(rdb, "aof-base", aof_base) == -1) return -1;
 
-    /* Handle additional server aux fileds */
+    /* Handle additional dynamic aux fields */
     if (rdbAuxFields != NULL) {
         dictIterator *di = dictGetIterator(rdbAuxFields);
         dictEntry *de;

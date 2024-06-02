@@ -1270,9 +1270,6 @@ int replicaPutOnline(client *slave) {
     /* Fire the replica change modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_REPLICA_CHANGE, VALKEYMODULE_SUBEVENT_REPLICA_CHANGE_ONLINE, NULL);
     serverLog(LL_NOTICE, "Synchronization with replica %s succeeded", replicationGetSlaveName(slave));
-
-    /* Replicate slot being migrated/imported to the new replica */
-    clusterReplicateOpenSlots();
     return 1;
 }
 

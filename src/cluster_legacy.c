@@ -113,6 +113,8 @@ int auxTlsPortPresent(clusterNode *n);
 static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen);
 void freeClusterLink(clusterLink *link);
 int verifyClusterNodeId(const char *name, int length);
+sds clusterEncodeOpenSlotsAuxField(int rdbflags);
+int clusterDecodeOpenSlotsAuxField(int rdbflags, void *s);
 
 int getNodeDefaultClientPort(clusterNode *n) {
     return server.tls_cluster ? n->tls_port : n->tcp_port;
@@ -1016,6 +1018,10 @@ void clusterInit(void) {
         serverLog(LL_WARNING, "No bind address is configured, but it is required for the Cluster bus.");
         exit(1);
     }
+
+    /* Register our own rdb aux fields */
+    serverAssert(rdbRegisterAuxField("cluster-slot-states", clusterEncodeOpenSlotsAuxField,
+                                     clusterDecodeOpenSlotsAuxField) == C_OK);
 
     /* Set myself->port/cport/pport to my listening ports, we'll just need to
      * discover the IP address via MEET messages. */
@@ -6521,38 +6527,81 @@ int detectAndUpdateCachedNodeHealth(void) {
 }
 
 /* Replicate migrating and importing slot states to all replicas */
-void clusterReplicateOpenSlots(void) {
-    if (!server.cluster_enabled) return;
+sds clusterEncodeOpenSlotsAuxField(int rdbflags) {
+    if (!server.cluster_enabled) return NULL;
 
-    int argc = 5;
-    robj **argv = zmalloc(sizeof(robj *) * argc);
+    /* Open slots should not be persisted (nor loaded) */
+    if ((rdbflags & RDBFLAGS_REPLICATION) == 0) return NULL;
 
-    argv[0] = shared.cluster;
-    argv[1] = shared.setslot;
+    sds s = NULL;
 
     for (int i = 0; i < 2; i++) {
-        clusterNode **nodes_ptr = NULL;
+        clusterNode **nodes_ptr;
         if (i == 0) {
             nodes_ptr = server.cluster->importing_slots_from;
-            argv[3] = shared.importing;
         } else {
             nodes_ptr = server.cluster->migrating_slots_to;
-            argv[3] = shared.migrating;
         }
 
         for (int j = 0; j < CLUSTER_SLOTS; j++) {
             if (nodes_ptr[j] == NULL) continue;
-
-            argv[2] = createStringObjectFromLongLongForValue(j);
-            sds name = sdsnewlen(nodes_ptr[j]->name, sizeof(nodes_ptr[j]->name));
-            argv[4] = createObject(OBJ_STRING, name);
-
-            replicationFeedSlaves(0, argv, argc);
-
-            decrRefCount(argv[2]);
-            decrRefCount(argv[4]);
+            if (s == NULL) s = sdsempty();
+            s = sdscatfmt(s, "%i%s", j, (i == 0) ? "<" : ">");
+            s = sdscatlen(s, nodes_ptr[j]->name, CLUSTER_NAMELEN);
+            s = sdscatlen(s, ",", 1);
         }
     }
 
-    zfree(argv);
+    return s;
+}
+
+int clusterDecodeOpenSlotsAuxField(int rdbflags, void *p) {
+    if (!server.cluster_enabled || p == NULL) return C_OK;
+
+    /* Open slots should not be loaded (nor persisted) */
+    if ((rdbflags & RDBFLAGS_REPLICATION) == 0) return C_OK;
+
+    char *s = p;
+    while (*s) {
+        /* Extract slot number */
+        int slot = atoi(s);
+        if (slot < 0 || slot >= CLUSTER_SLOTS) return C_ERR;
+
+        while (*s && *s != '<' && *s != '>') s++;
+        if (*s != '<' && *s != '>') return C_ERR;
+
+        /* Determine if it's an importing or migrating slot */
+        int is_importing = (*s == '<');
+        s++;
+
+        /* Extract the node name */
+        char node_name[CLUSTER_NAMELEN];
+        int k = 0;
+        while (*s && *s != ',' && k < CLUSTER_NAMELEN) {
+            node_name[k++] = *s++;
+        }
+
+        /* Ensure the node name is of the correct length */
+        if (k != CLUSTER_NAMELEN || *s != ',') return C_ERR;
+
+        /* Move to the next slot */
+        s++;
+
+        /* Find the corresponding node */
+        clusterNode *node = clusterLookupNode(node_name, CLUSTER_NAMELEN);
+        if (!node) {
+            /* Create a new node if not found */
+            node = createClusterNode(node_name, 0);
+            clusterAddNode(node);
+        }
+
+        /* Set the slot state */
+        if (is_importing) {
+            server.cluster->importing_slots_from[slot] = node;
+        } else {
+            server.cluster->migrating_slots_to[slot] = node;
+        }
+    }
+
+    return C_OK;
 }

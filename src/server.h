@@ -701,10 +701,11 @@ typedef enum {
 #define serverAssert(_e) (likely(_e) ? (void)0 : (_serverAssert(#_e, __FILE__, __LINE__), valkey_unreachable()))
 #define serverPanic(...) _serverPanic(__FILE__, __LINE__, __VA_ARGS__), valkey_unreachable()
 
-/* The following macro provides a conditional assertion that is only executed
+/* The following macros provide a conditional assertion that is only executed
  * when the server config 'enable-debug-assert' is true. This is useful for adding
  * assertions that are too computationally expensive or risky to run in normal
  * operation, but are valuable for debugging or testing. */
+#define debugServerAssert(...) (server.enable_debug_assert ? serverAssert(__VA_ARGS__) : (void)0)
 #define debugServerAssertWithInfo(...) (server.enable_debug_assert ? serverAssertWithInfo(__VA_ARGS__) : (void)0)
 
 /* latency histogram per command init settings */
@@ -1030,6 +1031,9 @@ typedef struct rdbLoadingCtx {
     serverDb *dbarray;
     functionsLibCtx *functions_lib_ctx;
 } rdbLoadingCtx;
+
+typedef sds (*rdbAuxFieldEncoder)(int flags);
+typedef int (*rdbAuxFieldDecoder)(int flags, void *p);
 
 /* Client MULTI/EXEC state */
 typedef struct multiCmd {
@@ -1367,11 +1371,11 @@ struct sharedObjectsStruct {
         *xgroup, *xclaim, *script, *replconf, *eval, *persist, *set, *pexpireat, *pexpire, *time, *pxat, *absttl,
         *retrycount, *force, *justid, *entriesread, *lastid, *ping, *setid, *keepttl, *load, *createconsumer, *getack,
         *special_asterick, *special_equals, *default_username, *redacted, *ssubscribebulk, *sunsubscribebulk,
-        *smessagebulk, *cluster, *setslot, *importing, *migrating, *select[PROTO_SHARED_SELECT_CMDS],
-        *integers[OBJ_SHARED_INTEGERS], *mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
-        *bulkhdr[OBJ_SHARED_BULKHDR_LEN],                                  /* "$<value>\r\n" */
-        *maphdr[OBJ_SHARED_BULKHDR_LEN],                                   /* "%<value>\r\n" */
-        *sethdr[OBJ_SHARED_BULKHDR_LEN];                                   /* "~<value>\r\n" */
+        *smessagebulk, *select[PROTO_SHARED_SELECT_CMDS], *integers[OBJ_SHARED_INTEGERS],
+        *mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
+        *bulkhdr[OBJ_SHARED_BULKHDR_LEN],  /* "$<value>\r\n" */
+        *maphdr[OBJ_SHARED_BULKHDR_LEN],   /* "%<value>\r\n" */
+        *sethdr[OBJ_SHARED_BULKHDR_LEN];   /* "~<value>\r\n" */
     sds minstring, maxstring;
 };
 
@@ -2602,6 +2606,7 @@ int serverSetProcTitle(char *title);
 int validateProcTitleTemplate(const char *template);
 int serverCommunicateSystemd(const char *sd_notify_msg);
 void serverSetCpuAffinity(const char *cpulist);
+void dictVanillaFree(dict *d, void *val);
 
 /* afterErrorReply flags */
 #define ERR_REPLY_FLAG_NO_STATS_UPDATE                                                                                 \
@@ -2903,6 +2908,7 @@ void rebaseReplicationBuffer(long long base_repl_offset);
 void showLatestBacklog(void);
 void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask);
 void rdbPipeWriteHandlerConnRemoved(struct connection *conn);
+int rdbRegisterAuxField(char *auxfield, rdbAuxFieldEncoder encoder, rdbAuxFieldDecoder decoder);
 void clearFailoverState(void);
 void updateFailoverStatus(void);
 void abortFailover(const char *err);

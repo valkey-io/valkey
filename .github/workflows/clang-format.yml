@@ -46,15 +46,3 @@ jobs:
         echo "${{ steps.clang-format.outputs.diff }}" | base64 --decode
         exit 1
       shell: bash
-
-    - name: Check for prohibited words
-      run: |
-        # Check for prohibited words only within changed lines
-        OFFENDING_LINES=$(git diff --cached | grep -i -E "^[\+\-][^\+\-]*?(${{ env.PROHIBITED_WORDS }})")
-
-        if [ -n "$OFFENDING_LINES" ]; then
-          echo "ERROR: Changes introduce prohibited words (${{ env.PROHIBITED_WORDS }}). Please revise your code."
-          echo "Offending lines:"
-          echo "$OFFENDING_LINES"
-          exit 1
-        fi

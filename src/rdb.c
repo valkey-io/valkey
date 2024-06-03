@@ -3021,7 +3021,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             if (dbid >= (unsigned)server.dbnum) {
                 serverLog(LL_WARNING,
                           "FATAL: Data file was created with a %s server configured to handle "
-                          "more than %d databases. Exiting\n", SERVER_TITLE, server.dbnum);
+                          "more than %d databases. Exiting\n",
+                          SERVER_TITLE, server.dbnum);
                 exit(1);
             }
             db = rdb_loading_ctx->dbarray + dbid;

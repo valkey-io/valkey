@@ -116,7 +116,6 @@ typedef struct {
 dictType rdbAuxFieldDictType = {
     dictSdsCaseHash,       /* hash function */
     NULL,                  /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     dictVanillaFree,       /* val destructor */

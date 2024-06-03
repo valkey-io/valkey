@@ -140,7 +140,7 @@ void serverLogRaw(int level, const char *msg) {
         } else if (pid != server.pid) {
             role_char = 'C'; /* RDB / AOF writing child. */
         } else {
-            role_char = (server.primary_host ? 'S' : 'M'); /* Slave or Master. */
+            role_char = (server.primary_host ? 'S' : 'M'); /* replica or Primary. */
         }
         fprintf(fp, "%d:%c %s %c %s\n", (int)getpid(), role_char, buf, c[level], msg);
     }
@@ -240,7 +240,7 @@ mstime_t commandTimeSnapshot(void) {
      * This is specifically important in the context of scripts, where we
      * pretend that time freezes. This way a key can expire only the first time
      * it is accessed and not in the middle of the script execution, making
-     * propagation to slaves / AOF consistent. See issue #1525 for more info.
+     * propagation to replicas / AOF consistent. See issue #1525 for more info.
      * Note that we cannot use the cached server.mstime because it can change
      * in processEventsWhileBlocked etc. */
     return server.cmd_time_snapshot;
@@ -727,7 +727,7 @@ int clientsCronResizeQueryBuffer(client *c) {
             /* 1) Query is idle for a long time. */
             size_t remaining = sdslen(c->querybuf) - c->qb_pos;
             if (!(c->flags & CLIENT_PRIMARY) && !remaining) {
-                /* If the client is not a master and no data is pending,
+                /* If the client is not a primary and no data is pending,
                  * The client can safely use the shared query buffer in the next read - free the client's querybuf. */
                 sdsfree(c->querybuf);
                 /* By setting the querybuf to NULL, the client will use the shared query buffer in the next read.
@@ -910,7 +910,7 @@ void removeClientFromMemUsageBucket(client *c, int allow_eviction) {
  * together clients consuming about the same amount of memory and can quickly
  * free them in case we reach maxmemory-clients (client eviction).
  *
- * Note: This function filters clients of type no-evict, master or replica regardless
+ * Note: This function filters clients of type no-evict, primary or replica regardless
  * of whether the eviction is enabled or not, so the memory usage we get from these
  * types of clients via the INFO command may be out of date.
  *
@@ -1035,8 +1035,8 @@ void clientsCron(void) {
  * incrementally in the databases, such as active key expiring, resizing,
  * rehashing. */
 void databasesCron(void) {
-    /* Expire keys by random sampling. Not required for slaves
-     * as master will synthesize DELs for us. */
+    /* Expire keys by random sampling. Not required for replicas
+     * as primary will synthesize DELs for us. */
     if (server.active_expire_enabled) {
         if (iAmPrimary()) {
             activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
@@ -1422,7 +1422,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* Clear the paused actions state if needed. */
     updatePausedActions();
 
-    /* Replication cron function -- used to reconnect to master,
+    /* Replication cron function -- used to reconnect to primary,
      * detect transfer failures, start background RDB transfers and so forth.
      *
      * If the server is trying to failover then run the replication cron faster so
@@ -1635,7 +1635,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP, VALKEYMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP, NULL);
     }
 
-    /* Send all the slaves an ACK request if at least one client blocked
+    /* Send all the replicas an ACK request if at least one client blocked
      * during the previous event loop iteration. Note that we do this after
      * processUnblockedClients(), so if there are multiple pipelined WAITs
      * and the just unblocked WAIT gets blocked again, we don't have to wait
@@ -1643,7 +1643,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      *
      * We also don't send the ACKs while clients are paused, since it can
      * increment the replication backlog, they'll be sent after the pause
-     * if we are still the master. */
+     * if we are still the primary. */
     if (server.get_ack_from_replicas && !isPausedActionsWithUpdate(PAUSE_ACTION_REPLICA)) {
         sendGetackToReplicas();
         server.get_ack_from_replicas = 0;
@@ -2162,7 +2162,7 @@ int restartServer(int flags, mstime_t delay) {
  * to user specified configuration. This is currently implemented on Linux
  * only.
  *
- * A process_class value of -1 implies OOM_CONFIG_MASTER or OOM_CONFIG_REPLICA,
+ * A process_class value of -1 implies OOM_CONFIG_PRIMARY or OOM_CONFIG_REPLICA,
  * depending on current role.
  */
 int setOOMScoreAdj(int process_class) {
@@ -3165,7 +3165,7 @@ struct serverCommand *lookupCommandOrOriginal(robj **argv, int argc) {
     return cmd;
 }
 
-/* Commands arriving from the master client or AOF client, should never be rejected. */
+/* Commands arriving from the primary client or AOF client, should never be rejected. */
 int mustObeyClient(client *c) {
     return c->id == CLIENT_ID_AOF || c->flags & CLIENT_PRIMARY;
 }
@@ -3184,7 +3184,7 @@ static int shouldPropagate(int target) {
 }
 
 /* Propagate the specified command (in the context of the specified database id)
- * to AOF and Slaves.
+ * to AOF and replicas.
  *
  * flags are an xor between:
  * + PROPAGATE_NONE (no propagation of command at all)
@@ -3387,7 +3387,7 @@ int incrCommandStatsOnError(struct serverCommand *cmd, int flags) {
  * CMD_CALL_NONE        No flags.
  * CMD_CALL_PROPAGATE_AOF   Append command to AOF if it modified the dataset
  *                          or if the client flags are forcing propagation.
- * CMD_CALL_PROPAGATE_REPL  Send command to slaves if it modified the dataset
+ * CMD_CALL_PROPAGATE_REPL  Send command to replicas if it modified the dataset
  *                          or if the client flags are forcing propagation.
  * CMD_CALL_PROPAGATE   Alias for PROPAGATE_AOF|PROPAGATE_REPL.
  * CMD_CALL_FULL        Alias for SLOWLOG|STATS|PROPAGATE.
@@ -3400,12 +3400,12 @@ int incrCommandStatsOnError(struct serverCommand *cmd, int flags) {
  *    in the call flags, then the command is propagated even if the
  *    dataset was not affected by the command.
  * 2. If the client flags CLIENT_PREVENT_REPL_PROP or CLIENT_PREVENT_AOF_PROP
- *    are set, the propagation into AOF or to slaves is not performed even
+ *    are set, the propagation into AOF or to replicas is not performed even
  *    if the command modified the dataset.
  *
  * Note that regardless of the client flags, if CMD_CALL_PROPAGATE_AOF
  * or CMD_CALL_PROPAGATE_REPL are not set, then respectively AOF or
- * slaves propagation will never occur.
+ * replicas propagation will never occur.
  *
  * Client flags are modified by the implementation of a given command
  * using the following API:
@@ -3446,7 +3446,7 @@ void call(client *c, int flags) {
 
     /* Call the command. */
     dirty = server.dirty;
-    long long old_master_repl_offset = server.primary_repl_offset;
+    long long old_primary_repl_offset = server.primary_repl_offset;
     incrCommandStatsOnError(NULL, 0);
 
     const long long call_timer = ustime();
@@ -3622,7 +3622,7 @@ void call(client *c, int flags) {
 
     /* Remember the replication offset of the client, right after its last
      * command that resulted in propagation. */
-    if (old_master_repl_offset != server.primary_repl_offset) c->woff = server.primary_repl_offset;
+    if (old_primary_repl_offset != server.primary_repl_offset) c->woff = server.primary_repl_offset;
 
     /* Client pause takes effect after a transaction has finished. This needs
      * to be located after everything is propagated. */
@@ -3871,7 +3871,7 @@ int processCommand(client *c) {
 
     /* If cluster is enabled perform the cluster redirection here.
      * However we don't perform the redirection if:
-     * 1) The sender of this command is our master.
+     * 1) The sender of this command is our primary.
      * 2) The command has no key arguments. */
     if (server.cluster_enabled && !mustObeyClient(c) &&
         !(!(c->cmd->flags & CMD_MOVABLE_KEYS) && c->cmd->key_specs_num == 0 && c->cmd->proc != execCommand)) {
@@ -3914,8 +3914,8 @@ int processCommand(client *c) {
          * message belongs to the old value of the key before it gets evicted.*/
         trackingHandlePendingKeyInvalidations();
 
-        /* performEvictions may flush slave output buffers. This may result
-         * in a slave, that may be the active client, to be freed. */
+        /* performEvictions may flush replica output buffers. This may result
+         * in a replica, that may be the active client, to be freed. */
         if (server.current_client == NULL) return C_ERR;
 
         if (out_of_memory && is_denyoom_command) {
@@ -3936,7 +3936,7 @@ int processCommand(client *c) {
     if (server.tracking_clients) trackingLimitUsedSlots();
 
     /* Don't accept write commands if there are problems persisting on disk
-     * unless coming from our master, in which case check the replica ignore
+     * unless coming from our primary, in which case check the replica ignore
      * disk write error config to either log or crash. */
     int deny_write_type = writeCommandsDeniedByDiskError();
     if (deny_write_type != DISK_ERROR_TYPE_NONE && (is_write_command || c->cmd->proc == pingCommand)) {
@@ -3961,15 +3961,15 @@ int processCommand(client *c) {
         }
     }
 
-    /* Don't accept write commands if there are not enough good slaves and
-     * user configured the min-slaves-to-write option. */
+    /* Don't accept write commands if there are not enough good replicas and
+     * user configured the min-replicas-to-write option. */
     if (is_write_command && !checkGoodReplicasStatus()) {
         rejectCommand(c, shared.noreplicaserr);
         return C_OK;
     }
 
-    /* Don't accept write commands if this is a read only slave. But
-     * accept write commands if this is our master. */
+    /* Don't accept write commands if this is a read only replica. But
+     * accept write commands if this is our primary. */
     if (server.primary_host && server.repl_replica_ro && !obey_client && is_write_command) {
         rejectCommand(c, shared.roreplicaerr);
         return C_OK;
@@ -3990,7 +3990,7 @@ int processCommand(client *c) {
 
     /* Only allow commands with flag "t", such as INFO, REPLICAOF and so on,
      * when replica-serve-stale-data is no and we are a replica with a broken
-     * link with master. */
+     * link with primary. */
     if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
         is_denystale_command) {
         rejectCommand(c, shared.primarydownerr);
@@ -4327,7 +4327,7 @@ int finishShutdown(void) {
             /* Ooops.. error saving! The best we can do is to continue
              * operating. Note that if there was a background saving process,
              * in the next cron() the server will be notified that the background
-             * saving aborted, handling special stuff like slaves pending for
+             * saving aborted, handling special stuff like replicas pending for
              * synchronization... */
             if (force) {
                 serverLog(LL_WARNING, "Error trying to save the DB. Exit anyway.");
@@ -4352,7 +4352,7 @@ int finishShutdown(void) {
         unlink(server.pidfile);
     }
 
-    /* Best effort flush of slave output buffers, so that we hopefully
+    /* Best effort flush of replica output buffers, so that we hopefully
      * send them pending writes. */
     flushReplicasOutputBuffers();
 
@@ -5728,15 +5728,15 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                             "role:%s\r\n",
                             server.primary_host == NULL ? "master" : "slave");
         if (server.primary_host) {
-            long long slave_repl_offset = 1;
-            long long slave_read_repl_offset = 1;
+            long long replica_repl_offset = 1;
+            long long replica_read_repl_offset = 1;
 
             if (server.primary) {
-                slave_repl_offset = server.primary->reploff;
-                slave_read_repl_offset = server.primary->read_reploff;
+                replica_repl_offset = server.primary->reploff;
+                replica_read_repl_offset = server.primary->read_reploff;
             } else if (server.cached_primary) {
-                slave_repl_offset = server.cached_primary->reploff;
-                slave_read_repl_offset = server.cached_primary->read_reploff;
+                replica_repl_offset = server.cached_primary->reploff;
+                replica_read_repl_offset = server.cached_primary->read_reploff;
             }
 
             /* clang-format off */
@@ -5746,8 +5746,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "master_link_status:%s\r\n", (server.repl_state == REPL_STATE_CONNECTED) ? "up" : "down",
                 "master_last_io_seconds_ago:%d\r\n", server.primary ? ((int)(server.unixtime-server.primary->last_interaction)) : -1,
                 "master_sync_in_progress:%d\r\n", server.repl_state == REPL_STATE_TRANSFER,
-                "slave_read_repl_offset:%lld\r\n", slave_read_repl_offset,
-                "slave_repl_offset:%lld\r\n", slave_repl_offset));
+                "slave_read_repl_offset:%lld\r\n", replica_read_repl_offset,
+                "slave_repl_offset:%lld\r\n", replica_repl_offset));
             /* clang-format on */
 
             if (server.repl_state == REPL_STATE_TRANSFER) {
@@ -5779,37 +5779,37 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
 
         info = sdscatprintf(info, "connected_slaves:%lu\r\n", listLength(server.replicas));
 
-        /* If min-slaves-to-write is active, write the number of slaves
+        /* If min-replicas-to-write is active, write the number of replicas
          * currently considered 'good'. */
         if (server.repl_min_replicas_to_write && server.repl_min_replicas_max_lag) {
             info = sdscatprintf(info, "min_slaves_good_slaves:%d\r\n", server.repl_good_replicas_count);
         }
 
         if (listLength(server.replicas)) {
-            int slaveid = 0;
+            int replica_id = 0;
             listNode *ln;
             listIter li;
 
             listRewind(server.replicas, &li);
             while ((ln = listNext(&li))) {
-                client *slave = listNodeValue(ln);
-                char ip[NET_IP_STR_LEN], *slaveip = slave->replica_addr;
+                client *replica = listNodeValue(ln);
+                char ip[NET_IP_STR_LEN], *replica_ip = replica->replica_addr;
                 int port;
                 long lag = 0;
 
-                if (!slaveip) {
-                    if (connAddrPeerName(slave->conn, ip, sizeof(ip), &port) == -1) continue;
-                    slaveip = ip;
+                if (!replica_ip) {
+                    if (connAddrPeerName(replica->conn, ip, sizeof(ip), &port) == -1) continue;
+                    replica_ip = ip;
                 }
-                const char *state = replstateToString(slave->repl_state);
+                const char *state = replstateToString(replica->repl_state);
                 if (state[0] == '\0') continue;
-                if (slave->repl_state == REPLICA_STATE_ONLINE) lag = time(NULL) - slave->repl_ack_time;
+                if (replica->repl_state == REPLICA_STATE_ONLINE) lag = time(NULL) - replica->repl_ack_time;
 
                 info = sdscatprintf(info,
                                     "slave%d:ip=%s,port=%d,state=%s,"
                                     "offset=%lld,lag=%ld\r\n",
-                                    slaveid, slaveip, slave->replica_listening_port, state, slave->repl_ack_off, lag);
-                slaveid++;
+                                    replica_id, replica_ip, replica->replica_listening_port, state, replica->repl_ack_off, lag);
+                replica_id++;
             }
         }
         /* clang-format off */
@@ -5971,7 +5971,7 @@ void monitorCommand(client *c) {
         return;
     }
 
-    /* ignore MONITOR if already slave or in monitor mode */
+    /* ignore MONITOR if already replica or in monitor mode */
     if (c->flags & CLIENT_REPLICA) return;
 
     c->flags |= (CLIENT_REPLICA | CLIENT_MONITOR);
@@ -6410,7 +6410,7 @@ void loadDataFromDisk(void) {
         errno = 0; /* Prevent a stale value from affecting error checking */
         int rdb_flags = RDBFLAGS_NONE;
         if (iAmPrimary()) {
-            /* Master may delete expired keys when loading, we should
+            /* Primary may delete expired keys when loading, we should
              * propagate expire to replication backlog. */
             createReplicationBacklog();
             rdb_flags |= RDBFLAGS_FEED_REPL;
@@ -6429,18 +6429,18 @@ void loadDataFromDisk(void) {
                 if (!iAmPrimary()) {
                     memcpy(server.replid, rsi.repl_id, sizeof(server.replid));
                     server.primary_repl_offset = rsi.repl_offset;
-                    /* If this is a replica, create a cached master from this
+                    /* If this is a replica, create a cached primary from this
                      * information, in order to allow partial resynchronizations
-                     * with masters. */
+                     * with primaries. */
                     replicationCachePrimaryUsingMyself();
                     selectDb(server.cached_primary, rsi.repl_stream_db);
                 } else {
-                    /* If this is a master, we can save the replication info
+                    /* If this is a primary, we can save the replication info
                      * as secondary ID and offset, in order to allow replicas
-                     * to partial resynchronizations with masters. */
+                     * to partial resynchronizations with primaries. */
                     memcpy(server.replid2, rsi.repl_id, sizeof(server.replid));
                     server.second_replid_offset = rsi.repl_offset + 1;
-                    /* Rebase master_repl_offset from rsi.repl_offset. */
+                    /* Rebase primary_repl_offset from rsi.repl_offset. */
                     server.primary_repl_offset += rsi.repl_offset;
                     serverAssert(server.repl_backlog);
                     server.repl_backlog->offset = server.primary_repl_offset - server.repl_backlog->histlen + 1;
@@ -6453,7 +6453,7 @@ void loadDataFromDisk(void) {
             exit(1);
         }
 
-        /* We always create replication backlog if server is a master, we need
+        /* We always create replication backlog if server is a primary, we need
          * it because we put DELs in it when loading expired keys in RDB, but
          * if RDB doesn't have replication info or there is no rdb, it is not
          * possible to support partial resynchronization, to avoid extra memory
@@ -6737,7 +6737,7 @@ int main(int argc, char **argv) {
 
     /* We need to init sentinel right now as parsing the configuration file
      * in sentinel mode will have the effect of populating the sentinel
-     * data structures with master nodes to monitor. */
+     * data structures with primary nodes to monitor. */
     if (server.sentinel_mode) {
         initSentinelConfig();
         initSentinel();

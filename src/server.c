@@ -1364,7 +1364,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                 used = kvstoreSize(server.db[j].keys);
                 vkeys = kvstoreSize(server.db[j].expires);
                 if (used || vkeys) {
-                    serverLog(LL_VERBOSE, "DB %d: Total %lld keys (%lld/%lld volatile keys) in %lld slots HT.", j, used, vkeys, used, size);
+                    serverLog(LL_VERBOSE, "DB %d: Total %lld keys (%lld/%lld volatile keys) in %lld slots HT.", j, used,
+                              vkeys, used, size);
                 }
             }
         }

@@ -31,10 +31,10 @@ typedef struct stream {
  * commands. */
 typedef struct streamIterator {
     stream *stream;                     /* The stream we are iterating. */
-    streamID master_id;                 /* ID of the master entry at listpack head. */
-    uint64_t master_fields_count;       /* Master entries # of fields. */
-    unsigned char *master_fields_start; /* Master entries start in listpack. */
-    unsigned char *master_fields_ptr;   /* Master field to emit next. */
+    streamID primary_id;                 /* ID of the primary entry at listpack head. */
+    uint64_t primary_fields_count;       /* Primary entries # of fields. */
+    unsigned char *primary_fields_start; /* Primary entries start in listpack. */
+    unsigned char *primary_fields_ptr;   /* Primary field to emit next. */
     int entry_flags;                    /* Flags of entry we are emitting. */
     int rev;                            /* True if iterating end to start (reverse). */
     int skip_tombstones;                /* True if not emitting tombstone entries. */
@@ -97,7 +97,7 @@ typedef struct streamNACK {
 } streamNACK;
 
 /* Stream propagation information, passed to functions in order to propagate
- * XCLAIM commands to AOF and slaves. */
+ * XCLAIM commands to AOF and replicas. */
 typedef struct streamPropInfo {
     robj *keyname;
     robj *groupname;

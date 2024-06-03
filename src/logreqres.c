@@ -80,7 +80,7 @@ static int reqresShouldLog(client *c) {
     /* Ignore client with streaming non-standard response */
     if (c->flags & (CLIENT_PUBSUB | CLIENT_MONITOR | CLIENT_REPLICA)) return 0;
 
-    /* We only work on masters (didn't implement reqresAppendResponse to work on shared slave buffers) */
+    /* We only work on primaries (didn't implement reqresAppendResponse to work on shared replica buffers) */
     if (getClientType(c) == CLIENT_TYPE_PRIMARY) return 0;
 
     return 1;

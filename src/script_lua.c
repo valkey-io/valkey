@@ -1074,7 +1074,7 @@ static int luaRedisStatusReplyCommand(lua_State *lua) {
 /* redis.set_repl()
  *
  * Set the propagation of write commands executed in the context of the
- * script to on/off for AOF and slaves. */
+ * script to on/off for AOF and replicas. */
 static int luaRedisSetReplCommand(lua_State *lua) {
     int flags, argc = lua_gettop(lua);
 

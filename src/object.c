@@ -1271,7 +1271,7 @@ sds getMemoryDoctorReport(void) {
     int high_alloc_frag = 0; /* High allocator fragmentation. */
     int high_proc_rss = 0;   /* High process rss overhead. */
     int high_alloc_rss = 0;  /* High rss overhead. */
-    int big_slave_buf = 0;   /* Slave buffers are too big. */
+    int big_replica_buf = 0;   /* Replica buffers are too big. */
     int big_client_buf = 0;  /* Client buffers are too big. */
     int many_scripts = 0;    /* Script cache has too many scripts. */
     int num_reports = 0;
@@ -1312,16 +1312,16 @@ sds getMemoryDoctorReport(void) {
         }
 
         /* Clients using more than 200k each average? */
-        long numslaves = listLength(server.replicas);
-        long numclients = listLength(server.clients) - numslaves;
+        long num_replicas = listLength(server.replicas);
+        long numclients = listLength(server.clients) - num_replicas;
         if (mh->clients_normal / numclients > (1024 * 200)) {
             big_client_buf = 1;
             num_reports++;
         }
 
-        /* Slaves using more than 10 MB each? */
-        if (numslaves > 0 && mh->clients_replicas > (1024 * 1024 * 10)) {
-            big_slave_buf = 1;
+        /* Replicas using more than 10 MB each? */
+        if (num_replicas > 0 && mh->clients_replicas > (1024 * 1024 * 10)) {
+            big_replica_buf = 1;
             num_reports++;
         }
 
@@ -1386,7 +1386,7 @@ sds getMemoryDoctorReport(void) {
                    "1.1 (this means that the Resident Set Size of the Valkey process is much larger than the RSS the "
                    "allocator holds). This problem may be due to Lua scripts or Modules.\n\n");
         }
-        if (big_slave_buf) {
+        if (big_replica_buf) {
             s = sdscat(s,
                        " * Big replica buffers: The replica output buffers in this instance are greater than 10MB for "
                        "each replica (on average). This likely means that there is some replica instance that is "

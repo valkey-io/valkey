@@ -9,9 +9,9 @@
 #define CLUSTER_FAIL_UNDO_TIME_MULT 2        /* Undo fail if primary is back. */
 #define CLUSTER_MF_TIMEOUT 5000              /* Milliseconds to do a manual failover. */
 #define CLUSTER_MF_PAUSE_MULT 2              /* Primary pause manual failover mult. */
-#define CLUSTER_REPLICA_MIGRATION_DELAY 5000 /* Delay for slave migration. */
+#define CLUSTER_REPLICA_MIGRATION_DELAY 5000 /* Delay for replica migration. */
 
-/* Reasons why a slave is not able to failover. */
+/* Reasons why a replica is not able to failover. */
 #define CLUSTER_CANT_FAILOVER_NONE 0
 #define CLUSTER_CANT_FAILOVER_DATA_AGE 1
 #define CLUSTER_CANT_FAILOVER_WAITING_DELAY 2
@@ -42,7 +42,7 @@ typedef struct clusterLink {
 
 /* Cluster node flags and macros. */
 #define CLUSTER_NODE_PRIMARY 1                 /* The node is a primary */
-#define CLUSTER_NODE_REPLICA 2                 /* The node is a slave */
+#define CLUSTER_NODE_REPLICA 2                 /* The node is a replica */
 #define CLUSTER_NODE_PFAIL 4                   /* Failure? Need acknowledge */
 #define CLUSTER_NODE_FAIL 8                    /* The node is believed to be malfunctioning */
 #define CLUSTER_NODE_MYSELF 16                 /* This node is myself */
@@ -50,7 +50,7 @@ typedef struct clusterLink {
 #define CLUSTER_NODE_NOADDR 64                 /* We don't know the address of this node */
 #define CLUSTER_NODE_MEET 128                  /* Send a MEET message to this node */
 #define CLUSTER_NODE_MIGRATE_TO 256            /* Primary eligible for replica migration. */
-#define CLUSTER_NODE_NOFAILOVER 512            /* Slave will not try to failover. */
+#define CLUSTER_NODE_NOFAILOVER 512            /* replica will not try to failover. */
 #define CLUSTER_NODE_EXTENSIONS_SUPPORTED 1024 /* This node supports extensions. */
 #define CLUSTER_NODE_NULL_NAME                                                                                         \
     "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
@@ -218,9 +218,9 @@ typedef struct {
     uint64_t currentEpoch;        /* The epoch accordingly to the sending node. */
     uint64_t configEpoch;         /* The config epoch if it's a primary, or the last
                                      epoch advertised by its primary if it is a
-                                     slave. */
+                                     replica. */
     uint64_t offset;              /* Primary replication offset if node is a primary or
-                                     processed replication offset if node is a slave. */
+                                     processed replication offset if node is a replica. */
     char sender[CLUSTER_NAMELEN]; /* Name of the sender node */
     unsigned char myslots[CLUSTER_SLOTS / 8];
     char replicaof[CLUSTER_NAMELEN];
@@ -287,10 +287,10 @@ struct _clusterNode {
     uint16_t *slot_info_pairs;              /* Slots info represented as (start/end) pair (consecutive index). */
     int slot_info_pairs_count;              /* Used number of slots in slot_info_pairs */
     int numslots;                           /* Number of slots handled by this node */
-    int num_replicas;                       /* Number of slave nodes, if this is a primar */
-    clusterNode **replicas;                 /* pointers to slave nodes */
+    int num_replicas;                       /* Number of replica nodes, if this is a primar */
+    clusterNode **replicas;                 /* pointers to replica nodes */
     clusterNode *replicaof;                 /* pointer to the primary node. Note that it
-                                             may be NULL even if the node is a slave
+                                             may be NULL even if the node is a replica
                                              if we don't have the parimary node in our
                                              tables. */
     unsigned long long last_in_ping_gossip; /* The number of the last carried in the ping gossip section */
@@ -298,7 +298,7 @@ struct _clusterNode {
     mstime_t pong_received;                 /* Unix time we received the pong */
     mstime_t data_received;                 /* Unix time we received any data */
     mstime_t fail_time;                     /* Unix time when FAIL flag was set */
-    mstime_t voted_time;                    /* Last time we voted for a slave of this parimary */
+    mstime_t voted_time;                    /* Last time we voted for a replica of this parimary */
     mstime_t repl_offset_time;              /* Unix time we received offset for this node */
     mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
     long long repl_offset;                  /* Last known repl offset for this node. */
@@ -326,21 +326,21 @@ struct clusterState {
     clusterNode *migrating_slots_to[CLUSTER_SLOTS];
     clusterNode *importing_slots_from[CLUSTER_SLOTS];
     clusterNode *slots[CLUSTER_SLOTS];
-    /* The following fields are used to take the slave state on elections. */
+    /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;  /* Time of previous or next election. */
     int failover_auth_count;      /* Number of votes received so far. */
     int failover_auth_sent;       /* True if we already asked for votes. */
-    int failover_auth_rank;       /* This slave rank for current auth request. */
+    int failover_auth_rank;       /* This replica rank for current auth request. */
     uint64_t failover_auth_epoch; /* Epoch of the current election. */
-    int cant_failover_reason;     /* Why a slave is currently not able to
+    int cant_failover_reason;     /* Why a replica is currently not able to
                                      failover. See the CANT_FAILOVER_* macros. */
     /* Manual failover state in common. */
     mstime_t mf_end; /* Manual failover time limit (ms unixtime).
                         It is zero if there is no MF in progress. */
     /* Manual failover state of primary. */
-    clusterNode *mf_replica; /* Slave performing the manual failover. */
-    /* Manual failover state of slave. */
-    long long mf_primary_offset; /* Primary offset the slave needs to start MF
+    clusterNode *mf_replica; /* replica performing the manual failover. */
+    /* Manual failover state of replica. */
+    long long mf_primary_offset; /* Primary offset the replica needs to start MF
                                    or -1 if still not received. */
     int mf_can_start;            /* If non-zero signal that the manual failover
                                     can start requesting primary vote. */

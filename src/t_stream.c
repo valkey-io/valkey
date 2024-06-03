@@ -488,7 +488,7 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
      * to do so we consider the ID as a single 128 bit number written in
      * big endian, so that the most significant bytes are the first ones. */
     uint64_t rax_key[2]; /* Key in the radix tree containing the listpack.*/
-    streamID primary_id;  /* ID of the primary entry in the listpack. */
+    streamID primary_id; /* ID of the primary entry in the listpack. */
 
     /* Create a new listpack and radix tree node if needed. Note that when
      * a new listpack is created, we populate it with a "primary entry". This
@@ -767,7 +767,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
 
         /* Skip all the primary fields. */
         int64_t primary_fields_count = lpGetInteger(p);
-        p = lpNext(lp, p);                                                   /* Skip the first field. */
+        p = lpNext(lp, p);                                                    /* Skip the first field. */
         for (int64_t j = 0; j < primary_fields_count; j++) p = lpNext(lp, p); /* Skip all primary fields. */
         p = lpNext(lp, p); /* Skip the zero primary entry terminator. */
 

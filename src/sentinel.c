@@ -109,9 +109,9 @@ static mstime_t sentinel_default_failover_timeout = 60 * 3 * 1000;
 #define SENTINEL_DEFAULT_ANNOUNCE_HOSTNAMES 0
 
 /* Failover machine different states. */
-#define SENTINEL_FAILOVER_STATE_NONE 0               /* No failover in progress. */
-#define SENTINEL_FAILOVER_STATE_WAIT_START 1         /* Wait for failover_start_time*/
-#define SENTINEL_FAILOVER_STATE_SELECT_REPLICA 2     /* Select replica to promote */
+#define SENTINEL_FAILOVER_STATE_NONE 0                 /* No failover in progress. */
+#define SENTINEL_FAILOVER_STATE_WAIT_START 1           /* Wait for failover_start_time*/
+#define SENTINEL_FAILOVER_STATE_SELECT_REPLICA 2       /* Select replica to promote */
 #define SENTINEL_FAILOVER_STATE_SEND_REPLICAOF_NOONE 3 /* Replica -> Primary */
 #define SENTINEL_FAILOVER_STATE_WAIT_PROMOTION 4       /* Wait replica to change role */
 #define SENTINEL_FAILOVER_STATE_RECONF_REPLICAS 5      /* REPLICAOF newprimary */
@@ -182,28 +182,28 @@ typedef struct instanceLink {
 } instanceLink;
 
 typedef struct sentinelRedisInstance {
-    int flags;                                /* See SRI_... defines */
-    char *name;                               /* Primary name from the point of view of this sentinel. */
-    char *runid;                              /* Run ID of this instance, or unique ID if is a Sentinel.*/
-    uint64_t config_epoch;                    /* Configuration epoch. */
-    sentinelAddr *addr;                       /* Primary host. */
-    instanceLink *link;                       /* Link to the instance, may be shared for Sentinels. */
-    mstime_t last_pub_time;                   /* Last time we sent hello via Pub/Sub. */
-    mstime_t last_hello_time;                 /* Only used if SRI_SENTINEL is set. Last time
-                                                 we received a hello from this Sentinel
-                                                 via Pub/Sub. */
-    mstime_t last_primary_down_reply_time;    /* Time of last reply to
-                                                SENTINEL is-primary-down command. */
-    mstime_t s_down_since_time;               /* Subjectively down since time. */
-    mstime_t o_down_since_time;               /* Objectively down since time. */
-    mstime_t down_after_period;               /* Consider it down after that period. */
+    int flags;                                 /* See SRI_... defines */
+    char *name;                                /* Primary name from the point of view of this sentinel. */
+    char *runid;                               /* Run ID of this instance, or unique ID if is a Sentinel.*/
+    uint64_t config_epoch;                     /* Configuration epoch. */
+    sentinelAddr *addr;                        /* Primary host. */
+    instanceLink *link;                        /* Link to the instance, may be shared for Sentinels. */
+    mstime_t last_pub_time;                    /* Last time we sent hello via Pub/Sub. */
+    mstime_t last_hello_time;                  /* Only used if SRI_SENTINEL is set. Last time
+                                                  we received a hello from this Sentinel
+                                                  via Pub/Sub. */
+    mstime_t last_primary_down_reply_time;     /* Time of last reply to
+                                                 SENTINEL is-primary-down command. */
+    mstime_t s_down_since_time;                /* Subjectively down since time. */
+    mstime_t o_down_since_time;                /* Objectively down since time. */
+    mstime_t down_after_period;                /* Consider it down after that period. */
     mstime_t primary_reboot_down_after_period; /* Consider primary down after that period. */
     mstime_t primary_reboot_since_time;        /* primary reboot time since time. */
-    mstime_t info_refresh;                    /* Time at which we received INFO output from it. */
-    dict *renamed_commands;                   /* Commands renamed in this instance:
-                                                 Sentinel will use the alternative commands
-                                                 mapped on this table to send things like
-                                                 REPLICAOF, CONFIG, INFO, ... */
+    mstime_t info_refresh;                     /* Time at which we received INFO output from it. */
+    dict *renamed_commands;                    /* Commands renamed in this instance:
+                                                  Sentinel will use the alternative commands
+                                                  mapped on this table to send things like
+                                                  REPLICAOF, CONFIG, INFO, ... */
 
     /* Role and the first time we observed it.
      * This is useful in order to delay replacing what the instance reports
@@ -223,10 +223,10 @@ typedef struct sentinelRedisInstance {
     char *auth_user;     /* Username for ACLs AUTH against primary & replica. */
 
     /* Replica specific. */
-    mstime_t primary_link_down_time;      /* Replica replication link down time. */
-    int replica_priority;                 /* Replica priority according to its INFO output. */
-    int replica_announced;                /* Replica announcing according to its INFO output. */
-    mstime_t replica_reconf_sent_time;    /* Time at which we sent REPLICA OF <new> */
+    mstime_t primary_link_down_time;        /* Replica replication link down time. */
+    int replica_priority;                   /* Replica priority according to its INFO output. */
+    int replica_announced;                  /* Replica announcing according to its INFO output. */
+    mstime_t replica_reconf_sent_time;      /* Time at which we sent REPLICA OF <new> */
     struct sentinelRedisInstance *primary;  /* Primary instance if it's replica. */
     char *replica_primary_host;             /* Primary host as reported by INFO */
     int replica_primary_port;               /* Primary port as reported by INFO */
@@ -241,10 +241,10 @@ typedef struct sentinelRedisInstance {
     uint64_t failover_epoch; /* Epoch of the currently started failover. */
     int failover_state;      /* See SENTINEL_FAILOVER_STATE_* defines. */
     mstime_t failover_state_change_time;
-    mstime_t failover_start_time;                 /* Last failover attempt start time. */
-    mstime_t failover_timeout;                    /* Max time to refresh failover state. */
-    mstime_t failover_delay_logged;               /* For what failover_start_time value we
-                                                     logged the failover delay. */
+    mstime_t failover_start_time;                   /* Last failover attempt start time. */
+    mstime_t failover_timeout;                      /* Max time to refresh failover state. */
+    mstime_t failover_delay_logged;                 /* For what failover_start_time value we
+                                                       logged the failover delay. */
     struct sentinelRedisInstance *promoted_replica; /* Promoted replica instance. */
     /* Scripts executed to notify admin or reconfigure clients: when they
      * are set to NULL no script is executed. */

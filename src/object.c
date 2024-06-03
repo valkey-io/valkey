@@ -1271,7 +1271,7 @@ sds getMemoryDoctorReport(void) {
     int high_alloc_frag = 0; /* High allocator fragmentation. */
     int high_proc_rss = 0;   /* High process rss overhead. */
     int high_alloc_rss = 0;  /* High rss overhead. */
-    int big_replica_buf = 0;   /* Replica buffers are too big. */
+    int big_replica_buf = 0; /* Replica buffers are too big. */
     int big_client_buf = 0;  /* Client buffers are too big. */
     int many_scripts = 0;    /* Script cache has too many scripts. */
     int num_reports = 0;

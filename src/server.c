@@ -5808,7 +5808,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 info = sdscatprintf(info,
                                     "slave%d:ip=%s,port=%d,state=%s,"
                                     "offset=%lld,lag=%ld\r\n",
-                                    replica_id, replica_ip, replica->replica_listening_port, state, replica->repl_ack_off, lag);
+                                    replica_id, replica_ip, replica->replica_listening_port, state,
+                                    replica->repl_ack_off, lag);
                 replica_id++;
             }
         }

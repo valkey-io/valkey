@@ -1033,7 +1033,7 @@ typedef struct rdbLoadingCtx {
 } rdbLoadingCtx;
 
 typedef sds (*rdbAuxFieldEncoder)(int flags);
-typedef int (*rdbAuxFieldDecoder)(int flags, sds p);
+typedef int (*rdbAuxFieldDecoder)(int flags, sds s);
 
 /* Client MULTI/EXEC state */
 typedef struct multiCmd {

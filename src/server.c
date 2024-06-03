@@ -1380,8 +1380,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
         run_with_period(5000) {
             serverLog(LL_DEBUG, "Total: %lu clients connected (%lu replicas), %s(%zu bytes) in use",
-                      listLength(server.clients) - listLength(server.slaves), listLength(server.slaves),
-                      hmem, zmalloc_used);
+                      listLength(server.clients) - listLength(server.slaves), listLength(server.slaves), hmem,
+                      zmalloc_used);
         }
     }
 

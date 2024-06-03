@@ -1222,6 +1222,35 @@ void cronUpdateMemoryStats(void) {
     }
 }
 
+/* Convert an amount of bytes into a human readable string in the form
+ * of 100B, 2G, 100M, 4K, and so forth. */
+void bytesToHuman(char *s, size_t size, unsigned long long n) {
+    double d;
+
+    if (n < 1024) {
+        /* Bytes */
+        snprintf(s, size, "%lluB", n);
+    } else if (n < (1024 * 1024)) {
+        d = (double)n / (1024);
+        snprintf(s, size, "%.2fK", d);
+    } else if (n < (1024LL * 1024 * 1024)) {
+        d = (double)n / (1024 * 1024);
+        snprintf(s, size, "%.2fM", d);
+    } else if (n < (1024LL * 1024 * 1024 * 1024)) {
+        d = (double)n / (1024LL * 1024 * 1024);
+        snprintf(s, size, "%.2fG", d);
+    } else if (n < (1024LL * 1024 * 1024 * 1024 * 1024)) {
+        d = (double)n / (1024LL * 1024 * 1024 * 1024);
+        snprintf(s, size, "%.2fT", d);
+    } else if (n < (1024LL * 1024 * 1024 * 1024 * 1024 * 1024)) {
+        d = (double)n / (1024LL * 1024 * 1024 * 1024 * 1024);
+        snprintf(s, size, "%.2fP", d);
+    } else {
+        /* Let's hope we never need this */
+        snprintf(s, size, "%lluB", n);
+    }
+}
+
 /* This is our timer interrupt, called server.hz times per second.
  * Here is where we do a number of things that need to be done asynchronously.
  * For instance:
@@ -1335,7 +1364,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                 used = kvstoreSize(server.db[j].keys);
                 vkeys = kvstoreSize(server.db[j].expires);
                 if (used || vkeys) {
-                    serverLog(LL_VERBOSE, "DB %d: %lld keys (%lld volatile) in %lld slots HT.", j, used, vkeys, size);
+                    serverLog(LL_VERBOSE, "DB %d: Total %lld keys (%lld/%lld volatile keys) in %lld slots HT.", j, used, vkeys, used, size);
                 }
             }
         }
@@ -1343,10 +1372,15 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* Show information about connected clients */
     if (!server.sentinel_mode) {
+        char hmem[64];
+        size_t zmalloc_used = zmalloc_used_memory();
+
+        bytesToHuman(hmem, sizeof(hmem), zmalloc_used);
+
         run_with_period(5000) {
-            serverLog(LL_DEBUG, "%lu clients connected (%lu replicas), %zu bytes in use",
+            serverLog(LL_DEBUG, "Total: %lu clients connected (%lu replicas), %s(%zu bytes) in use",
                       listLength(server.clients) - listLength(server.slaves), listLength(server.slaves),
-                      zmalloc_used_memory());
+                      hmem, zmalloc_used);
         }
     }
 
@@ -5124,35 +5158,6 @@ NULL
     };
     /* clang-format on */
     addReplyHelp(c, help);
-}
-
-/* Convert an amount of bytes into a human readable string in the form
- * of 100B, 2G, 100M, 4K, and so forth. */
-void bytesToHuman(char *s, size_t size, unsigned long long n) {
-    double d;
-
-    if (n < 1024) {
-        /* Bytes */
-        snprintf(s, size, "%lluB", n);
-    } else if (n < (1024 * 1024)) {
-        d = (double)n / (1024);
-        snprintf(s, size, "%.2fK", d);
-    } else if (n < (1024LL * 1024 * 1024)) {
-        d = (double)n / (1024 * 1024);
-        snprintf(s, size, "%.2fM", d);
-    } else if (n < (1024LL * 1024 * 1024 * 1024)) {
-        d = (double)n / (1024LL * 1024 * 1024);
-        snprintf(s, size, "%.2fG", d);
-    } else if (n < (1024LL * 1024 * 1024 * 1024 * 1024)) {
-        d = (double)n / (1024LL * 1024 * 1024 * 1024);
-        snprintf(s, size, "%.2fT", d);
-    } else if (n < (1024LL * 1024 * 1024 * 1024 * 1024 * 1024)) {
-        d = (double)n / (1024LL * 1024 * 1024 * 1024 * 1024);
-        snprintf(s, size, "%.2fP", d);
-    } else {
-        /* Let's hope we never need this */
-        snprintf(s, size, "%lluB", n);
-    }
 }
 
 /* Fill percentile distribution of latencies. */

@@ -911,15 +911,15 @@ void clusterCommand(client *c) {
             return;
         }
 
-        if (clusterNodeIsSlave(n)) {
+        if (clusterNodeIsReplica(n)) {
             addReplyError(c, "The specified node is not a master");
             return;
         }
 
         /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client. */
-        addReplyArrayLen(c, clusterNodeNumSlaves(n));
-        for (j = 0; j < clusterNodeNumSlaves(n); j++) {
-            sds ni = clusterGenNodeDescription(c, clusterNodeGetSlave(n, j), shouldReturnTlsInfo());
+        addReplyArrayLen(c, clusterNodeNumReplicas(n));
+        for (j = 0; j < clusterNodeNumReplicas(n); j++) {
+            sds ni = clusterGenNodeDescription(c, clusterNodeGetReplica(n, j), shouldReturnTlsInfo());
             addReplyBulkCString(c, ni);
             sdsfree(ni);
         }
@@ -1048,8 +1048,8 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
                  * can safely serve the request, otherwise we return a TRYAGAIN
                  * error). To do so we set the importing/migrating state and
                  * increment a counter for every missing key. */
-                if (clusterNodeIsMaster(myself) || c->flags & CLIENT_READONLY) {
-                    if (n == clusterNodeGetMaster(myself) && getMigratingSlotDest(slot) != NULL) {
+                if (clusterNodeIsPrimary(myself) || c->flags & CLIENT_READONLY) {
+                    if (n == clusterNodeGetPrimary(myself) && getMigratingSlotDest(slot) != NULL) {
                         migrating_slot = 1;
                     } else if (getImportingSlotSource(slot) != NULL) {
                         importing_slot = 1;
@@ -1122,7 +1122,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
     /* MIGRATE always works in the context of the local node if the slot
      * is open (migrating or importing state). We need to be able to freely
      * move keys among instances in this case. */
-    if ((migrating_slot || importing_slot) && cmd->proc == migrateCommand && clusterNodeIsMaster(myself)) {
+    if ((migrating_slot || importing_slot) && cmd->proc == migrateCommand && clusterNodeIsPrimary(myself)) {
         return myself;
     }
 
@@ -1157,8 +1157,8 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
      * is serving, we can reply without redirection. */
     int is_write_command =
         (cmd_flags & CMD_WRITE) || (c->cmd->proc == execCommand && (c->mstate.cmd_flags & CMD_WRITE));
-    if (((c->flags & CLIENT_READONLY) || pubsubshard_included) && !is_write_command && clusterNodeIsSlave(myself) &&
-        clusterNodeGetMaster(myself) == n) {
+    if (((c->flags & CLIENT_READONLY) || pubsubshard_included) && !is_write_command && clusterNodeIsReplica(myself) &&
+        clusterNodeGetPrimary(myself) == n) {
         return myself;
     }
 
@@ -1240,8 +1240,8 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
 
             /* if the client is read-only and attempting to access key that our
              * replica can handle, allow it. */
-            if ((c->flags & CLIENT_READONLY) && !(c->lastcmd->flags & CMD_WRITE) && clusterNodeIsSlave(myself) &&
-                clusterNodeGetMaster(myself) == node) {
+            if ((c->flags & CLIENT_READONLY) && !(c->lastcmd->flags & CMD_WRITE) && clusterNodeIsReplica(myself) &&
+                clusterNodeGetPrimary(myself) == node) {
                 node = myself;
             }
 
@@ -1332,8 +1332,8 @@ int isNodeAvailable(clusterNode *node) {
 
 void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, int end_slot) {
     int i, nested_elements = 3; /* slots (2) + master addr (1) */
-    for (i = 0; i < clusterNodeNumSlaves(node); i++) {
-        if (!isNodeAvailable(clusterNodeGetSlave(node, i))) continue;
+    for (i = 0; i < clusterNodeNumReplicas(node); i++) {
+        if (!isNodeAvailable(clusterNodeGetReplica(node, i))) continue;
         nested_elements++;
     }
     addReplyArrayLen(c, nested_elements);
@@ -1342,11 +1342,11 @@ void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, in
     addNodeToNodeReply(c, node);
 
     /* Remaining nodes in reply are replicas for slot range */
-    for (i = 0; i < clusterNodeNumSlaves(node); i++) {
+    for (i = 0; i < clusterNodeNumReplicas(node); i++) {
         /* This loop is copy/pasted from clusterGenNodeDescription()
          * with modifications for per-slot node aggregation. */
-        if (!isNodeAvailable(clusterNodeGetSlave(node, i))) continue;
-        addNodeToNodeReply(c, clusterNodeGetSlave(node, i));
+        if (!isNodeAvailable(clusterNodeGetReplica(node, i))) continue;
+        addNodeToNodeReply(c, clusterNodeGetReplica(node, i));
         nested_elements--;
     }
     serverAssert(nested_elements == 3); /* Original 3 elements */

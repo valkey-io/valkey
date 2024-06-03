@@ -104,7 +104,7 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
          * It's possible that the WRITE flag is set even during a readonly
          * command, since the command may trigger events that cause modules to
          * perform additional writes. */
-        int is_ro_replica = server.masterhost && server.repl_slave_ro;
+        int is_ro_replica = server.primary_host && server.repl_replica_ro;
         int expire_flags = 0;
         if (flags & LOOKUP_WRITE && !is_ro_replica) expire_flags |= EXPIRE_FORCE_DELETE_EXPIRED;
         if (flags & LOOKUP_NOEXPIRE) expire_flags |= EXPIRE_AVOID_DELETE_EXPIRED;
@@ -361,7 +361,7 @@ robj *dbRandomKey(serverDb *db) {
         key = dictGetKey(de);
         keyobj = createStringObject(key, sdslen(key));
         if (dbFindExpires(db, key)) {
-            if (allvolatile && server.masterhost && --maxtries == 0) {
+            if (allvolatile && server.primary_host && --maxtries == 0) {
                 /* If the DB is composed only of keys with an expire set,
                  * it could happen that all the keys are already logically
                  * expired in the slave, so the function cannot stop because
@@ -540,7 +540,7 @@ long long emptyData(int dbnum, int flags, void(callback)(dict *)) {
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
 
-    if (dbnum == -1) flushSlaveKeysWithExpireList();
+    if (dbnum == -1) flushReplicaKeysWithExpireList();
 
     if (with_functions) {
         serverAssert(dbnum == -1);
@@ -673,7 +673,7 @@ void flushAllDataAndResetRDB(int flags) {
     if (server.saveparamslen > 0) {
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
-        rdbSave(SLAVE_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE);
+        rdbSave(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE);
     }
 
 #if defined(USE_JEMALLOC)
@@ -1610,7 +1610,7 @@ void swapMainDbWithTempDb(serverDb *tempDb) {
     }
 
     trackingInvalidateKeysOnFlush(1);
-    flushSlaveKeysWithExpireList();
+    flushReplicaKeysWithExpireList();
 }
 
 /* SWAPDB db1 db2 */
@@ -1666,8 +1666,8 @@ void setExpire(client *c, serverDb *db, robj *key, long long when) {
         dictSetSignedIntegerVal(de, when);
     }
 
-    int writable_slave = server.masterhost && server.repl_slave_ro == 0;
-    if (c && writable_slave && !(c->flags & CLIENT_MASTER)) rememberSlaveKeyWithExpire(db, key);
+    int writable_slave = server.primary_host && server.repl_replica_ro == 0;
+    if (c && writable_slave && !(c->flags & CLIENT_PRIMARY)) rememberReplicaKeyWithExpire(db, key);
 }
 
 /* Return the expire time of the specified key, or -1 if no expire
@@ -1795,8 +1795,8 @@ keyStatus expireIfNeeded(serverDb *db, robj *key, int flags) {
      *
      * When replicating commands from the master, keys are never considered
      * expired. */
-    if (server.masterhost != NULL) {
-        if (server.current_client && (server.current_client->flags & CLIENT_MASTER)) return KEY_VALID;
+    if (server.primary_host != NULL) {
+        if (server.current_client && (server.current_client->flags & CLIENT_PRIMARY)) return KEY_VALID;
         if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return KEY_EXPIRED;
     }
 

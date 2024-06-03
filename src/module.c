@@ -3664,12 +3664,12 @@ int modulePopulateReplicationInfoStructure(void *ri, int structver) {
     ValkeyModuleReplicationInfoV1 *ri1 = ri;
     memset(ri1, 0, sizeof(*ri1));
     ri1->version = structver;
-    ri1->master = server.masterhost == NULL;
-    ri1->masterhost = server.masterhost ? server.masterhost : "";
-    ri1->masterport = server.masterport;
+    ri1->master = server.primary_host == NULL;
+    ri1->masterhost = server.primary_host ? server.primary_host : "";
+    ri1->masterport = server.primary_port;
     ri1->replid1 = server.replid;
     ri1->replid2 = server.replid2;
-    ri1->repl1_offset = server.master_repl_offset;
+    ri1->repl1_offset = server.primary_repl_offset;
     ri1->repl2_offset = server.second_replid_offset;
     return VALKEYMODULE_OK;
 }
@@ -3855,7 +3855,7 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
         if (ctx->client) {
             if (ctx->client->flags & CLIENT_DENY_BLOCKING) flags |= VALKEYMODULE_CTX_FLAGS_DENY_BLOCKING;
             /* Module command received from MASTER, is replicated. */
-            if (ctx->client->flags & CLIENT_MASTER) flags |= VALKEYMODULE_CTX_FLAGS_REPLICATED;
+            if (ctx->client->flags & CLIENT_PRIMARY) flags |= VALKEYMODULE_CTX_FLAGS_REPLICATED;
             if (ctx->client->resp == 3) {
                 flags |= VALKEYMODULE_CTX_FLAGS_RESP3;
             }
@@ -3880,7 +3880,7 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
         flags |= VALKEYMODULE_CTX_FLAGS_LOADING;
 
     /* Maxmemory and eviction policy */
-    if (server.maxmemory > 0 && (!server.masterhost || !server.repl_slave_ignore_maxmemory)) {
+    if (server.maxmemory > 0 && (!server.primary_host || !server.repl_replica_ignore_maxmemory)) {
         flags |= VALKEYMODULE_CTX_FLAGS_MAXMEMORY;
 
         if (server.maxmemory_policy != MAXMEMORY_NO_EVICTION) flags |= VALKEYMODULE_CTX_FLAGS_EVICT;
@@ -3891,11 +3891,11 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
     if (server.saveparamslen > 0) flags |= VALKEYMODULE_CTX_FLAGS_RDB;
 
     /* Replication flags */
-    if (server.masterhost == NULL) {
+    if (server.primary_host == NULL) {
         flags |= VALKEYMODULE_CTX_FLAGS_PRIMARY;
     } else {
         flags |= VALKEYMODULE_CTX_FLAGS_REPLICA;
-        if (server.repl_slave_ro) flags |= VALKEYMODULE_CTX_FLAGS_READONLY;
+        if (server.repl_replica_ro) flags |= VALKEYMODULE_CTX_FLAGS_READONLY;
 
         /* Replica state flags. */
         if (server.repl_state == REPL_STATE_CONNECT || server.repl_state == REPL_STATE_CONNECTING) {
@@ -6369,21 +6369,21 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
                 goto cleanup;
             }
 
-            if (server.masterhost && server.repl_slave_ro && !obey_client) {
+            if (server.primary_host && server.repl_replica_ro && !obey_client) {
                 errno = ESPIPE;
                 if (error_as_call_replies) {
-                    sds msg = sdsdup(shared.roslaveerr->ptr);
+                    sds msg = sdsdup(shared.roreplicaerr->ptr);
                     reply = callReplyCreateError(msg, ctx);
                 }
                 goto cleanup;
             }
         }
 
-        if (server.masterhost && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
+        if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
             !(cmd_flags & CMD_STALE)) {
             errno = ESPIPE;
             if (error_as_call_replies) {
-                sds msg = sdsdup(shared.masterdownerr->ptr);
+                sds msg = sdsdup(shared.primarydownerr->ptr);
                 reply = callReplyCreateError(msg, ctx);
             }
             goto cleanup;
@@ -8293,7 +8293,7 @@ void moduleHandleBlockedClients(void) {
 
             /* Update the wait offset, we don't know if this blocked client propagated anything,
              * currently we rather not add any API for that, so we just assume it did. */
-            c->woff = server.master_repl_offset;
+            c->woff = server.primary_repl_offset;
 
             /* Put the client in the list of clients that need to write
              * if there are pending replies here. This is needed since
@@ -8687,7 +8687,7 @@ int VM_AddPostNotificationJob(ValkeyModuleCtx *ctx,
                               ValkeyModulePostNotificationJobFunc callback,
                               void *privdata,
                               void (*free_privdata)(void *)) {
-    if (server.loading || (server.masterhost && server.repl_slave_ro)) {
+    if (server.loading || (server.primary_host && server.repl_replica_ro)) {
         return VALKEYMODULE_ERR;
     }
     ValkeyModulePostExecUnitJob *job = zmalloc(sizeof(*job));
@@ -8984,8 +8984,8 @@ int VM_GetClusterNodeInfo(ValkeyModuleCtx *ctx, const char *id, char *ip, char *
         /* If the information is not available, the function will set the
          * field to zero bytes, so that when the field can't be populated the
          * function kinda remains predictable. */
-        if (clusterNodeIsSlave(node) && clusterNodeGetMaster(node))
-            memcpy(master_id, clusterNodeGetName(clusterNodeGetMaster(node)), VALKEYMODULE_NODE_ID_LEN);
+        if (clusterNodeIsReplica(node) && clusterNodeGetPrimary(node))
+            memcpy(master_id, clusterNodeGetName(clusterNodeGetPrimary(node)), VALKEYMODULE_NODE_ID_LEN);
         else
             memset(master_id, 0, VALKEYMODULE_NODE_ID_LEN);
     }
@@ -8996,8 +8996,8 @@ int VM_GetClusterNodeInfo(ValkeyModuleCtx *ctx, const char *id, char *ip, char *
     if (flags) {
         *flags = 0;
         if (clusterNodeIsMyself(node)) *flags |= VALKEYMODULE_NODE_MYSELF;
-        if (clusterNodeIsMaster(node)) *flags |= VALKEYMODULE_NODE_PRIMARY;
-        if (clusterNodeIsSlave(node)) *flags |= VALKEYMODULE_NODE_REPLICA;
+        if (clusterNodeIsPrimary(node)) *flags |= VALKEYMODULE_NODE_PRIMARY;
+        if (clusterNodeIsReplica(node)) *flags |= VALKEYMODULE_NODE_REPLICA;
         if (clusterNodeTimedOut(node)) *flags |= VALKEYMODULE_NODE_PFAIL;
         if (clusterNodeIsFailing(node)) *flags |= VALKEYMODULE_NODE_FAIL;
         if (clusterNodeIsNoFailover(node)) *flags |= VALKEYMODULE_NODE_NOFAILOVER;
@@ -12911,13 +12911,13 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
     }
 
     /* Not allowed on replicas. */
-    if (server.masterhost != NULL) {
+    if (server.primary_host != NULL) {
         errno = ENOTSUP;
         return VALKEYMODULE_ERR;
     }
 
     /* Drop replicas if exist. */
-    disconnectSlaves();
+    disconnectReplicas();
     freeReplicationBacklog();
 
     if (server.aof_state != AOF_OFF) stopAppendOnly();

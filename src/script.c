@@ -49,7 +49,7 @@ static void exitScriptTimedoutMode(scriptRunCtx *run_ctx) {
     run_ctx->flags &= ~SCRIPT_TIMEDOUT;
     blockingOperationEnds();
     /* if we are a replica and we have an active master, set it for continue processing */
-    if (server.masterhost && server.master) queueClientForReprocessing(server.master);
+    if (server.primary_host && server.primary) queueClientForReprocessing(server.primary);
 }
 
 static void enterScriptTimedoutMode(scriptRunCtx *run_ctx) {
@@ -135,7 +135,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
     int client_allow_oom = !!(caller->flags & CLIENT_ALLOW_OOM);
 
     int running_stale =
-        server.masterhost && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0;
+        server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0;
     int obey_client = mustObeyClient(caller);
 
     if (!(script_flags & SCRIPT_FLAG_EVAL_COMPAT_MODE)) {
@@ -156,7 +156,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
              * 1. we are not a readonly replica
              * 2. no disk error detected
              * 3. command is not `fcall_ro`/`eval[sha]_ro` */
-            if (server.masterhost && server.repl_slave_ro && !obey_client) {
+            if (server.primary_host && server.repl_replica_ro && !obey_client) {
                 addReplyError(caller, "-READONLY Can not run script with write flag on readonly replica");
                 return C_ERR;
             }
@@ -206,7 +206,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
     } else {
         /* Special handling for backwards compatibility (no shebang eval[sha]) mode */
         if (running_stale) {
-            addReplyErrorObject(caller, shared.masterdownerr);
+            addReplyErrorObject(caller, shared.primarydownerr);
             return C_ERR;
         }
     }
@@ -372,8 +372,8 @@ static int scriptVerifyWriteCommandAllow(scriptRunCtx *run_ctx, char **err) {
      * of this script. */
     int deny_write_type = writeCommandsDeniedByDiskError();
 
-    if (server.masterhost && server.repl_slave_ro && !mustObeyClient(run_ctx->original_client)) {
-        *err = sdsdup(shared.roslaveerr->ptr);
+    if (server.primary_host && server.repl_replica_ro && !mustObeyClient(run_ctx->original_client)) {
+        *err = sdsdup(shared.roreplicaerr->ptr);
         return C_ERR;
     }
 
@@ -498,7 +498,7 @@ int scriptSetRepl(scriptRunCtx *run_ctx, int repl) {
 }
 
 static int scriptVerifyAllowStale(client *c, sds *err) {
-    if (!server.masterhost) {
+    if (!server.primary_host) {
         /* Not a replica, stale is irrelevant */
         return C_OK;
     }

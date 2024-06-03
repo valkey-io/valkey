@@ -478,7 +478,7 @@ static int isSafeToPerformEvictions(void) {
 
     /* By default replicas should ignore maxmemory
      * and just be masters exact copies. */
-    if (server.masterhost && server.repl_slave_ignore_maxmemory) return 0;
+    if (server.primary_host && server.repl_replica_ignore_maxmemory) return 0;
 
     /* If 'evict' action is paused, for whatever reason, then return false */
     if (isPausedActionsWithUpdate(PAUSE_ACTION_EVICT)) return 0;
@@ -538,7 +538,7 @@ int performEvictions(void) {
     long long mem_freed = 0; /* Maybe become negative */
     mstime_t latency, eviction_latency;
     long long delta;
-    int slaves = listLength(server.slaves);
+    int slaves = listLength(server.replicas);
     int result = EVICT_FAIL;
 
     if (getMaxmemoryState(&mem_reported, NULL, &mem_tofree, NULL) == C_OK) {
@@ -697,7 +697,7 @@ int performEvictions(void) {
                  * start spending so much time here that is impossible to
                  * deliver data to the replicas fast enough, so we force the
                  * transmission here inside the loop. */
-                if (slaves) flushSlavesOutputBuffers();
+                if (slaves) flushReplicasOutputBuffers();
 
                 /* Normally our stop condition is the ability to release
                  * a fixed, pre-computed amount of memory. However when we

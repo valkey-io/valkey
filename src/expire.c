@@ -406,7 +406,7 @@ dict *slaveKeysWithExpire = NULL;
 
 /* Check the set of keys created by the master with an expire set in order to
  * check if they should be evicted. */
-void expireSlaveKeys(void) {
+void expireReplicaKeys(void) {
     if (slaveKeysWithExpire == NULL || dictSize(slaveKeysWithExpire) == 0) return;
 
     int cycles = 0, noexpire = 0;
@@ -465,7 +465,7 @@ void expireSlaveKeys(void) {
 
 /* Track keys that received an EXPIRE or similar command in the context
  * of a writable slave. */
-void rememberSlaveKeyWithExpire(serverDb *db, robj *key) {
+void rememberReplicaKeyWithExpire(serverDb *db, robj *key) {
     if (slaveKeysWithExpire == NULL) {
         static dictType dt = {
             dictSdsHash,       /* hash function */
@@ -496,7 +496,7 @@ void rememberSlaveKeyWithExpire(serverDb *db, robj *key) {
 }
 
 /* Return the number of keys we are tracking. */
-size_t getSlaveKeyWithExpireCount(void) {
+size_t getReplicaKeyWithExpireCount(void) {
     if (slaveKeysWithExpire == NULL) return 0;
     return dictSize(slaveKeysWithExpire);
 }
@@ -509,7 +509,7 @@ size_t getSlaveKeyWithExpireCount(void) {
  * but it is not worth it since anyway race conditions using the same set
  * of key names in a writable slave and in its master will lead to
  * inconsistencies. This is just a best-effort thing we do. */
-void flushSlaveKeysWithExpireList(void) {
+void flushReplicaKeysWithExpireList(void) {
     if (slaveKeysWithExpire) {
         dictRelease(slaveKeysWithExpire);
         slaveKeysWithExpire = NULL;
@@ -523,7 +523,7 @@ int checkAlreadyExpired(long long when) {
      *
      * Instead we add the already expired key to the database with expire time
      * (possibly in the past) and wait for an explicit DEL from the master. */
-    return (when <= commandTimeSnapshot() && !server.loading && !server.masterhost);
+    return (when <= commandTimeSnapshot() && !server.loading && !server.primary_host);
 }
 
 #define EXPIRE_NX (1 << 0)

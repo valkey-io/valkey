@@ -49,11 +49,12 @@ jobs:
 
     - name: Check for prohibited words
       run: |
-        # Get a list of changed files
-        CHANGED_FILES=$(git diff --name-only --cached)
+        # Check for prohibited words only within changed lines
+        OFFENDING_LINES=$(git diff --cached | grep -i -E "^[\+\-][^\+\-]*?(${{ env.PROHIBITED_WORDS }})")
 
-        # Check for prohibited words only within changed files
-        if echo "$CHANGED_FILES" | xargs grep -i -E '(master|masters|slave|slaves)'; then
-          echo "ERROR: Changes introduce prohibited words (master, masters, slave, slaves). Please revise your code."
+        if [ -n "$OFFENDING_LINES" ]; then
+          echo "ERROR: Changes introduce prohibited words (${{ env.PROHIBITED_WORDS }}). Please revise your code."
+          echo "Offending lines:"
+          echo "$OFFENDING_LINES"
           exit 1
         fi

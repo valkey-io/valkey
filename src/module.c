@@ -11780,7 +11780,6 @@ int dictCStringKeyCompare(dict *d, const void *key1, const void *key2) {
 dictType moduleAPIDictType = {
     dictCStringKeyHash,    /* hash function */
     NULL,                  /* key dup */
-    NULL,                  /* val dup */
     dictCStringKeyCompare, /* key compare */
     NULL,                  /* key destructor */
     NULL,                  /* val destructor */
@@ -11811,7 +11810,6 @@ void moduleInitModulesSystemLast(void) {
 dictType sdsKeyValueHashDictType = {
     dictSdsCaseHash,       /* hash function */
     NULL,                  /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     dictSdsDestructor,     /* val destructor */

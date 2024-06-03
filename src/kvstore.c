@@ -794,8 +794,9 @@ void kvstoreDictSetKey(kvstore *kvs, int didx, dictEntry *de, void *key) {
 }
 
 void kvstoreDictSetVal(kvstore *kvs, int didx, dictEntry *de, void *val) {
-    dict *d = kvstoreGetDict(kvs, didx);
-    dictSetVal(d, de, val);
+    UNUSED(kvs);
+    UNUSED(didx);
+    dictSetVal(NULL, de, val);
 }
 
 dictEntry *

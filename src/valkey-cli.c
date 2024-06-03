@@ -882,7 +882,6 @@ static void cliInitHelp(void) {
     dictType groupsdt = {
         dictSdsHash,       /* hash function */
         NULL,              /* key dup */
-        NULL,              /* val dup */
         dictSdsKeyCompare, /* key compare */
         dictSdsDestructor, /* key destructor */
         NULL,              /* val destructor */
@@ -3544,7 +3543,6 @@ typedef struct clusterManagerLink {
 static dictType clusterManagerDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     NULL,              /* key destructor */
     dictSdsDestructor, /* val destructor */
@@ -3554,7 +3552,6 @@ static dictType clusterManagerDictType = {
 static dictType clusterManagerLinkDictType = {
     dictSdsHash,        /* hash function */
     NULL,               /* key dup */
-    NULL,               /* val dup */
     dictSdsKeyCompare,  /* key compare */
     dictSdsDestructor,  /* key destructor */
     dictListDestructor, /* val destructor */
@@ -8628,7 +8625,6 @@ void type_free(dict *d, void *val) {
 static dictType typeinfoDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     NULL,              /* key destructor (owned by the value)*/
     type_free,         /* val destructor */

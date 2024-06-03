@@ -470,7 +470,6 @@ void rememberSlaveKeyWithExpire(serverDb *db, robj *key) {
         static dictType dt = {
             dictSdsHash,       /* hash function */
             NULL,              /* key dup */
-            NULL,              /* val dup */
             dictSdsKeyCompare, /* key compare */
             dictSdsDestructor, /* key destructor */
             NULL,              /* val destructor */

@@ -71,7 +71,6 @@ static uint64_t dictStrCaseHash(const void *key) {
 dictType shaScriptObjectDictType = {
     dictStrCaseHash,         /* hash function */
     NULL,                    /* key dup */
-    NULL,                    /* val dup */
     dictSdsKeyCaseCompare,   /* key compare */
     dictSdsDestructor,       /* key destructor */
     dictLuaScriptDestructor, /* val destructor */

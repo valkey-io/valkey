@@ -114,7 +114,7 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen);
 void freeClusterLink(clusterLink *link);
 int verifyClusterNodeId(const char *name, int length);
 sds clusterEncodeOpenSlotsAuxField(int rdbflags);
-int clusterDecodeOpenSlotsAuxField(int rdbflags, char *s);
+int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 
 int getNodeDefaultClientPort(clusterNode *n) {
     return server.tls_cluster ? n->tls_port : n->tcp_port;
@@ -6556,36 +6556,36 @@ sds clusterEncodeOpenSlotsAuxField(int rdbflags) {
 }
 
 /* Decode the open slot aux field and restore the in-memory slot states. */
-int clusterDecodeOpenSlotsAuxField(int rdbflags, char *p) {
-    if (!server.cluster_enabled || p == NULL) return C_OK;
+int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s) {
+    if (!server.cluster_enabled || s == NULL) return C_OK;
 
     /* Open slots should not be loaded from a persisted RDB file, but only from a full sync. */
     if ((rdbflags & RDBFLAGS_REPLICATION) == 0) return C_OK;
 
-    while (*p) {
+    while (*s) {
         /* Extract slot number */
-        int slot = atoi(p);
+        int slot = atoi(s);
         if (slot < 0 || slot >= CLUSTER_SLOTS) return C_ERR;
 
-        while (*p && *p != '<' && *p != '>') p++;
-        if (*p != '<' && *p != '>') return C_ERR;
+        while (*s && *s != '<' && *s != '>') s++;
+        if (*s != '<' && *s != '>') return C_ERR;
 
         /* Determine if it's an importing or migrating slot */
-        int is_importing = (*p == '<');
-        p++;
+        int is_importing = (*s == '<');
+        s++;
 
         /* Extract the node name */
         char node_name[CLUSTER_NAMELEN];
         int k = 0;
-        while (*p && *p != ',' && k < CLUSTER_NAMELEN) {
-            node_name[k++] = *p++;
+        while (*s && *s != ',' && k < CLUSTER_NAMELEN) {
+            node_name[k++] = *s++;
         }
 
         /* Ensure the node name is of the correct length */
-        if (k != CLUSTER_NAMELEN || *p != ',') return C_ERR;
+        if (k != CLUSTER_NAMELEN || *s != ',') return C_ERR;
 
         /* Move to the next slot */
-        p++;
+        s++;
 
         /* Find the corresponding node */
         clusterNode *node = clusterLookupNode(node_name, CLUSTER_NAMELEN);

@@ -5686,7 +5686,7 @@ sds genClusterInfoString(void) {
                         "cluster_slots_fail:%d\r\n"
                         "cluster_known_nodes:%lu\r\n"
                         "cluster_size:%d\r\n"
-                        "cluster_currentEpoch:%llu\r\n"
+                        "cluster_current_epoch:%llu\r\n"
                         "cluster_my_epoch:%llu\r\n",
                         statestr[server.cluster->state], slots_assigned, slots_ok, slots_pfail, slots_fail,
                         dictSize(server.cluster->nodes), server.cluster->size,

@@ -662,3 +662,89 @@ start_server {tags {"repl rdb-channel external:skip"}} {
         stop_write_load $load_handle2
     }
 }
+
+foreach rdbchan {no yes} {
+start_server {tags {"repl rdb-channel external:skip"}} {
+    set master [srv 0 client]
+    set master_host [srv 0 host]
+    set master_port [srv 0 port]
+    set loglines [count_log_lines 0]
+
+    $master config set repl-diskless-sync yes
+    $master config set repl-rdb-channel yes
+    $master config set loglevel debug
+    $master config set repl-diskless-sync-delay 5
+    
+    # Generating RDB will cost 5s(10 * 0.5s)
+    $master debug populate 10 master 10
+    $master config set rdb-key-save-delay 500000
+    $master config set repl-rdb-channel $rdbchan
+
+    start_server {} {
+        set replica1 [srv 0 client]
+        $replica1 config set repl-rdb-channel $rdbchan
+        $replica1 config set loglevel debug
+        start_server {} {
+            set replica2 [srv 0 client]
+            $replica2 config set repl-rdb-channel $rdbchan
+            $replica2 config set loglevel debug
+            $replica2 config set repl-timeout 60
+
+            set load_handle [start_one_key_write_load $master_host $master_port 100 "mykey1"]
+            test "Sync should continue if not all slaves dropped rdb-channel $rdbchan" {
+                $replica1 slaveof $master_host $master_port
+                $replica2 slaveof $master_host $master_port
+
+                wait_for_condition 50 1000 {
+                    [status $master rdb_bgsave_in_progress] == 1
+                } else {
+                    fail "Sync did not start"
+                }
+                if {$rdbchan == "yes"} {
+                    # Wait for both replicas main conns to establish psync
+                    wait_for_condition 50 1000 {
+                        [status $master sync_partial_ok] == 2
+                    } else {
+                        fail "Replicas main conns didn't establish psync [status $master sync_partial_ok]"
+                    }
+                }
+
+                catch {$replica1 shutdown nosave}
+                wait_for_condition 50 2000 {
+                    [status $replica2 master_link_status] == "up" &&
+                    [status $master sync_full] == 2 &&
+                    (($rdbchan == "yes" && [status $master sync_partial_ok] == 2) || $rdbchan == "no")
+                } else {
+                    fail "Sync session interapted\n
+                        sync_full:[status $master sync_full]\n
+                        sync_partial_ok:[status $master sync_partial_ok]"
+                }
+            }
+            $replica2 slaveof no one
+            test "Master abort sync if all slaves dropped rdb-channel $rdbchan" {
+                set cur_psync [status $master sync_partial_ok]
+                $replica2 slaveof $master_host $master_port
+
+                wait_for_condition 50 1000 {
+                    [status $master rdb_bgsave_in_progress] == 1
+                } else {
+                    fail "Sync did not start"
+                }
+                if {$rdbchan == "yes"} {
+                    # Wait for both replicas main conns to establish psync
+                    wait_for_condition 50 1000 {
+                        [status $master sync_partial_ok] == $cur_psync + 1
+                    } else {
+                        fail "Replicas main conns didn't establish psync [status $master sync_partial_ok]"
+                    }
+                }
+
+                catch {$replica2 shutdown nosave}
+                
+                # TODO cehck that master abort the sync (child process is killed)
+            }
+            stop_write_load $load_handle
+        }
+    }
+}
+}

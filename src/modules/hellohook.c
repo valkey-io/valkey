@@ -37,20 +37,17 @@
 #include <string.h>
 
 /* Client state change callback. */
-void clientChangeCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
-{
+void clientChangeCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data) {
     VALKEYMODULE_NOT_USED(ctx);
     VALKEYMODULE_NOT_USED(e);
 
     ValkeyModuleClientInfo *ci = data;
     printf("Client %s event for client #%llu %s:%d\n",
-        (sub == VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED) ?
-            "connection" : "disconnection",
-        (unsigned long long)ci->id,ci->addr,ci->port);
+           (sub == VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED) ? "connection" : "disconnection",
+           (unsigned long long)ci->id, ci->addr, ci->port);
 }
 
-void flushdbCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
-{
+void flushdbCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data) {
     VALKEYMODULE_NOT_USED(ctx);
     VALKEYMODULE_NOT_USED(e);
 
@@ -58,17 +55,16 @@ void flushdbCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, vo
     if (sub == VALKEYMODULE_SUBEVENT_FLUSHDB_START) {
         if (fi->dbnum != -1) {
             ValkeyModuleCallReply *reply;
-            reply = ValkeyModule_Call(ctx,"DBSIZE","");
+            reply = ValkeyModule_Call(ctx, "DBSIZE", "");
             long long numkeys = ValkeyModule_CallReplyInteger(reply);
-            printf("FLUSHDB event of database %d started (%lld keys in DB)\n",
-                fi->dbnum, numkeys);
+            printf("FLUSHDB event of database %d started (%lld keys in DB)\n", fi->dbnum, numkeys);
             ValkeyModule_FreeCallReply(reply);
         } else {
             printf("FLUSHALL event started\n");
         }
     } else {
         if (fi->dbnum != -1) {
-            printf("FLUSHDB event of database %d ended\n",fi->dbnum);
+            printf("FLUSHDB event of database %d ended\n", fi->dbnum);
         } else {
             printf("FLUSHALL event ended\n");
         }
@@ -81,12 +77,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
-    if (ValkeyModule_Init(ctx,"hellohook",1,VALKEYMODULE_APIVER_1)
-        == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
+    if (ValkeyModule_Init(ctx, "hellohook", 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
-    ValkeyModule_SubscribeToServerEvent(ctx,
-        ValkeyModuleEvent_ClientChange, clientChangeCallback);
-    ValkeyModule_SubscribeToServerEvent(ctx,
-        ValkeyModuleEvent_FlushDB, flushdbCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_ClientChange, clientChangeCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_FlushDB, flushdbCallback);
     return VALKEYMODULE_OK;
 }

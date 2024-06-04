@@ -73,6 +73,20 @@ test "Verify cluster-preferred-endpoint-type behavior for redirects and info" {
     # Verify prefer hostname behavior
     R 0 config set cluster-preferred-endpoint-type hostname
 
+    # Make sure the cache is cleared when updating hostname.
+    R 0 multi
+    R 0 cluster slots
+    R 0 config set cluster-announce-hostname "new-me.com"
+    R 0 cluster slots
+    set multi_result [R 0 exec]
+    set slot_result1 [lindex $multi_result 0]
+    set slot_result2 [lindex $multi_result 2]
+    assert_equal "me.com" [get_slot_field $slot_result1 0 2 0]
+    assert_equal "new-me.com" [get_slot_field $slot_result2 0 2 0]
+
+    # Set it back to its original value.
+    R 0 config set cluster-announce-hostname "me.com"
+
     set slot_result [R 0 cluster slots]
     assert_equal "me.com" [get_slot_field $slot_result 0 2 0]
     assert_equal "them.com" [get_slot_field $slot_result 2 2 0]

@@ -1,0 +1,48 @@
+name: Clang Format Check
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+
+jobs:
+  clang-format-check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    - name: Set up Clang
+      run: |
+        sudo apt-get update -y
+        sudo apt-get upgrade -y
+        sudo apt-get install software-properties-common -y
+        wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/llvm-toolchain.gpg > /dev/null
+        echo "deb [signed-by=/usr/share/keyrings/llvm-toolchain.gpg] http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-18 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+        sudo apt-get update -y
+        sudo apt-get install clang-format-18 -y
+    - name: Run clang-format
+      id: clang-format
+      run: |
+        # Run clang-format and capture the diff
+        cd src
+        shopt -s globstar
+        clang-format-18 -i **/*.c **/*.h
+        # Capture the diff output
+        DIFF=$(git diff)
+        if [ ! -z "$DIFF" ]; then
+          # Encode the diff in Base64 to ensure it's handled as a single line
+          ENCODED_DIFF=$(echo "$DIFF" | base64 -w 0)
+          echo "diff=$ENCODED_DIFF" >> $GITHUB_OUTPUT
+        fi
+      shell: bash
+
+    - name: Check for formatting changes
+      if: ${{ steps.clang-format.outputs.diff }}
+      run: |
+        echo "Code is not formatted correctly. Here is the diff:"
+        # Decode the Base64 diff to display it
+        echo "${{ steps.clang-format.outputs.diff }}" | base64 --decode
+        exit 1
+      shell: bash

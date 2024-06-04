@@ -3304,6 +3304,8 @@ static int isSensitiveCommand(int argc, char **argv) {
             for (int j = 2; j < argc; j = j+2) {
                 if (!strcasecmp(argv[j],"masterauth") ||
                     !strcasecmp(argv[j],"masteruser") ||
+                    !strcasecmp(argv[j],"primaryuser") ||
+                    !strcasecmp(argv[j],"primaryauth") ||
                     !strcasecmp(argv[j],"tls-key-file-pass") ||
                     !strcasecmp(argv[j],"tls-client-key-file-pass") ||
                     !strcasecmp(argv[j],"requirepass")) {

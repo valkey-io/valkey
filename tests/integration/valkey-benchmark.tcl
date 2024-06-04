@@ -44,7 +44,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
         }
 
         test {benchmark: connecting using URI with authentication set,get} {
-            r config set masterauth pass
+            r config set primaryauth pass
             set cmd [valkeybenchmarkuriuserpass $master_host $master_port "default" pass "-c 5 -n 10 -t set,get"]
             common_bench_setup $cmd
             default_set_get_checks
@@ -145,7 +145,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             }
 
             test {benchmark: tls connecting using URI with authentication set,get} {
-                r config set masterauth pass
+                r config set primaryauth pass
                 set cmd [valkeybenchmarkuriuserpass $master_host $master_port "default" pass "-c 5 -n 10 -t set,get"]
                 common_bench_setup $cmd
                 default_set_get_checks

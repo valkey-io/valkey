@@ -39,6 +39,7 @@
 #include "syscheck.h"
 #include "threads_mngr.h"
 #include "fmtargs.h"
+#include "io_uring.h"
 
 #include <time.h>
 #include <signal.h>
@@ -1579,7 +1580,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         processed += handleClientsWithPendingReadsUsingThreads();
         processed += connTypeProcessPendingData();
         if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE) flushAppendOnlyFile(0);
-        processed += handleClientsWithPendingWrites();
+        processed += handleClientsWithPendingWrites(0);
         processed += freeClientsInAsyncFreeQueue();
         server.events_processed_while_blocked += processed;
         return;
@@ -1674,8 +1675,20 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         if (listLength(server.clients_waiting_acks) && prev_fsynced_reploff != server.fsynced_reploff) dont_sleep = 1;
     }
 
-    /* Handle writes with pending output buffers. */
-    handleClientsWithPendingWritesUsingThreads();
+    /* Handle writes with pending output buffers.
+     * In the first phase, we will try to leverage io_uring to handle fsync asynchronously,
+     * just skip the client that has pending writes. */
+    handleClientsWithPendingWritesUsingThreads(1);
+
+    if (canFsyncUsingIOUring()) {
+        /* Wait io_uring_prep_fsync finished. */
+        ioUringWaitFsyncBarrier();
+        server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
+        server.aof_last_fsync = server.mstime;
+        atomic_store_explicit(&server.fsynced_reploff_pending, server.master_repl_offset, memory_order_relaxed);
+        /* Write clients that have propagated commands pending output buffers. */
+        handleClientsWithPendingWritesUsingThreads(0);
+    }
 
     /* Record cron time in beforeSleep. This does not include the time consumed by AOF writing and IO writing above. */
     monotime cron_start_time_after_write = getMonotonicUs();
@@ -2796,6 +2809,7 @@ void initListeners(void) {
 void InitServerLast(void) {
     bioInit();
     initThreadedIO();
+    initIOUring();
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
     server.initial_memory_usage = zmalloc_used_memory();
 }
@@ -3563,7 +3577,10 @@ void call(client *c, int flags) {
 
         /* Call alsoPropagate() only if at least one of AOF / replication
          * propagation is needed. */
-        if (propagate_flags != PROPAGATE_NONE) alsoPropagate(c->db->id, c->argv, c->argc, propagate_flags);
+        if (propagate_flags != PROPAGATE_NONE && shouldPropagate(propagate_flags)) {
+            alsoPropagate(c->db->id, c->argv, c->argc, propagate_flags);
+            c->flags |= CLIENT_PROPAGATING;
+        }
     }
 
     /* Restore the old replication flags, since call() can be executed
@@ -6968,6 +6985,7 @@ int main(int argc, char **argv) {
 
     aeMain(server.el);
     aeDeleteEventLoop(server.el);
+    freeIOUring();
     return 0;
 }
 

@@ -31,6 +31,7 @@
 #include "bio.h"
 #include "rio.h"
 #include "functions.h"
+#include "io_uring.h"
 
 #include <signal.h>
 #include <fcntl.h>
@@ -1226,24 +1227,29 @@ try_fsync:
 
     /* Perform the fsync if needed. */
     if (server.aof_fsync == AOF_FSYNC_ALWAYS) {
-        /* valkey_fsync is defined as fdatasync() for Linux in order to avoid
-         * flushing metadata. */
-        latencyStartMonitor(latency);
-        /* Let's try to get this data on the disk. To guarantee data safe when
-         * the AOF fsync policy is 'always', we should exit if failed to fsync
-         * AOF (see comment next to the exit(1) after write error above). */
-        if (valkey_fsync(server.aof_fd) == -1) {
-            serverLog(LL_WARNING,
-                      "Can't persist AOF for fsync error when the "
-                      "AOF fsync policy is 'always': %s. Exiting...",
-                      strerror(errno));
-            exit(1);
+        /* If user enable io_uring and system support it, give io_uring a chance? */
+        if (server.io_uring_enabled && server.io_uring) {
+            ioUringPrepFsyncAndSubmit(server.aof_fd);
+        } else {
+            /* valkey_fsync is defined as fdatasync() for Linux in order to avoid
+             * flushing metadata. */
+            latencyStartMonitor(latency);
+            /* Let's try to get this data on the disk. To guarantee data safe when
+             * the AOF fsync policy is 'always', we should exit if failed to fsync
+             * AOF (see comment next to the exit(1) after write error above). */
+            if (valkey_fsync(server.aof_fd) == -1) {
+                serverLog(LL_WARNING,
+                          "Can't persist AOF for fsync error when the "
+                          "AOF fsync policy is 'always': %s. Exiting...",
+                          strerror(errno));
+                exit(1);
+            }
+            latencyEndMonitor(latency);
+            latencyAddSampleIfNeeded("aof-fsync-always", latency);
+            server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
+            server.aof_last_fsync = server.mstime;
+            atomic_store_explicit(&server.fsynced_reploff_pending, server.master_repl_offset, memory_order_relaxed);
         }
-        latencyEndMonitor(latency);
-        latencyAddSampleIfNeeded("aof-fsync-always", latency);
-        server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
-        server.aof_last_fsync = server.mstime;
-        atomic_store_explicit(&server.fsynced_reploff_pending, server.master_repl_offset, memory_order_relaxed);
     } else if (server.aof_fsync == AOF_FSYNC_EVERYSEC && server.mstime - server.aof_last_fsync >= 1000) {
         if (!sync_in_progress) {
             aof_background_fsync(server.aof_fd);

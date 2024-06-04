@@ -427,6 +427,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_MODULE_PREVENT_REPL_PROP (1ULL << 49) /* Module client do not want to propagate to replica */
 #define CLIENT_REPROCESSING_COMMAND (1ULL << 50)     /* The client is re-processing the command. */
 #define CLIENT_REPLICATION_DONE (1ULL << 51)         /* Indicate that replication has been done on the client */
+#define CLIENT_PROPAGATING (1ULL << 52)              /* Indicate that client has propagated command. */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -2118,6 +2119,9 @@ struct valkeyServer {
     int reply_buffer_resizing_enabled; /* Is reply buffer resizing enabled (1 by default) */
     /* Local environment */
     char *locale_collate;
+    /* io_uring */
+    int io_uring_enabled; /* If io_uring enabled (0 by default) */
+    struct io_uring *io_uring;
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -2706,8 +2710,8 @@ void processEventsWhileBlocked(void);
 void whileBlockedCron(void);
 void blockingOperationStarts(void);
 void blockingOperationEnds(void);
-int handleClientsWithPendingWrites(void);
-int handleClientsWithPendingWritesUsingThreads(void);
+int handleClientsWithPendingWrites(int skip_clients_with_propagating_writes);
+int handleClientsWithPendingWritesUsingThreads(int skip_clients_with_propagating_writes);
 int handleClientsWithPendingReadsUsingThreads(void);
 int stopThreadedIOIfNeeded(void);
 int clientHasPendingReplies(client *c);

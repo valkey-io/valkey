@@ -543,7 +543,7 @@ int clusterLoadConfig(char *filename) {
             } else if (!strcasecmp(s, "noflags")) {
                 /* nothing to do */
             } else {
-                serverPanic("Unknown flag in redis cluster config file");
+                serverPanic("Unknown flag in %s cluster config file", SERVER_TITLE);
             }
             if (p) s = p + 1;
         }

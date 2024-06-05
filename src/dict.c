@@ -1748,7 +1748,7 @@ char *stringFromLongLong(long long value) {
     return s;
 }
 
-dictType BenchmarkDictType = {hashCallback, NULL, NULL, compareCallback, freeCallback, NULL, NULL};
+dictType BenchmarkDictType = {hashCallback, NULL, compareCallback, freeCallback, NULL, NULL};
 
 #define start_benchmark() start = timeInMilliseconds()
 #define end_benchmark(msg)                                                                                             \

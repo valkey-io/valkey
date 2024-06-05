@@ -2529,8 +2529,8 @@ static void zdiff(zsetopsrc *src, long setnum, zset *dstzset, size_t *maxelelen,
     }
 }
 
-#define DUPLICATE_OPTION_WEIGHTS   1<<1
-#define DUPLICATE_OPTION_AGGREGATE 1<<2
+#define DUPLICATE_OPTION_WEIGHTS 1 << 1
+#define DUPLICATE_OPTION_AGGREGATE 1 << 2
 
 /* The zunionInterDiffGenericCommand() function is called in order to implement the
  * following commands: ZUNION, ZINTER, ZDIFF, ZUNIONSTORE, ZINTERSTORE, ZDIFFSTORE,

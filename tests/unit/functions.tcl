@@ -1,9 +1,9 @@
 proc get_function_code {args} {
-    return [format "#!%s name=%s\nredis.register_function('%s', function(KEYS, ARGV)\n %s \nend)" [lindex $args 0] [lindex $args 1] [lindex $args 2] [lindex $args 3]]
+    return [format "#!%s name=%s\nserver.register_function('%s', function(KEYS, ARGV)\n %s \nend)" [lindex $args 0] [lindex $args 1] [lindex $args 2] [lindex $args 3]]
 }
 
 proc get_no_writes_function_code {args} {
-    return [format "#!%s name=%s\nredis.register_function{function_name='%s', callback=function(KEYS, ARGV)\n %s \nend, flags={'no-writes'}}" [lindex $args 0] [lindex $args 1] [lindex $args 2] [lindex $args 3]]
+    return [format "#!%s name=%s\nserver.register_function{function_name='%s', callback=function(KEYS, ARGV)\n %s \nend, flags={'no-writes'}}" [lindex $args 0] [lindex $args 1] [lindex $args 2] [lindex $args 3]]
 }
 
 start_server {tags {"scripting"}} {
@@ -433,7 +433,7 @@ test {FUNCTION can processes create, delete and flush commands in AOF when doing
     start_server {} {
         r config set appendonly yes
         waitForBgrewriteaof r
-        r FUNCTION LOAD "#!lua name=test\nredis.register_function('test', function() return 'hello' end)"
+        r FUNCTION LOAD "#!lua name=test\nserver.register_function('test', function() return 'hello' end)"
         r config set slave-read-only yes
         r slaveof 127.0.0.1 0
         r debug loadaof
@@ -447,7 +447,7 @@ test {FUNCTION can processes create, delete and flush commands in AOF when doing
         r slaveof no one
         assert_equal [r function list] {}
 
-        r FUNCTION LOAD "#!lua name=test\nredis.register_function('test', function() return 'hello' end)"
+        r FUNCTION LOAD "#!lua name=test\nserver.register_function('test', function() return 'hello' end)"
         r FUNCTION FLUSH
 
         r slaveof 127.0.0.1 0
@@ -463,7 +463,7 @@ start_server {tags {"scripting"}} {
             local function ping()
                 return redis.call('ping')
             end
-            redis.register_function(
+            server.register_function(
                 'f1',
                 function(keys, args)
                     return ping()
@@ -478,13 +478,13 @@ start_server {tags {"scripting"}} {
             local function add1(a)
                 return a + 1
             end
-            redis.register_function(
+            server.register_function(
                 'f1',
                 function(keys, args)
                     return add1(1)
                 end
             )
-            redis.register_function(
+            server.register_function(
                 'f2',
                 function(keys, args)
                     return add1(2)
@@ -502,19 +502,19 @@ start_server {tags {"scripting"}} {
                 local function add1(a)
                     return a + 2
                 end
-                redis.register_function(
+                server.register_function(
                     'f1',
                     function(keys, args)
                         return add1(1)
                     end
                 )
-                redis.register_function(
+                server.register_function(
                     'f2',
                     'not a function'
                 )
             }
         } e
-        assert_match {*second argument to redis.register_function must be a function*} $e
+        assert_match {*second argument to server.register_function must be a function*} $e
         assert_equal [r fcall f1 0] {2}
         assert_equal [r fcall f2 0] {3}
     }
@@ -522,7 +522,7 @@ start_server {tags {"scripting"}} {
     test {LIBRARIES - test registration function name collision} {
         catch {
             r function load replace {#!lua name=lib2
-                redis.register_function(
+                server.register_function(
                     'f1',
                     function(keys, args)
                         return 1
@@ -538,13 +538,13 @@ start_server {tags {"scripting"}} {
     test {LIBRARIES - test registration function name collision on same library} {
         catch {
             r function load replace {#!lua name=lib2
-                redis.register_function(
+                server.register_function(
                     'f1',
                     function(keys, args)
                         return 1
                     end
                 )
-                redis.register_function(
+                server.register_function(
                     'f1',
                     function(keys, args)
                         return 1
@@ -558,43 +558,43 @@ start_server {tags {"scripting"}} {
     test {LIBRARIES - test registration with no argument} {
         catch {
             r function load replace {#!lua name=lib2
-                redis.register_function()
+                server.register_function()
             }
         } e
         set _ $e
-    } {*wrong number of arguments to redis.register_function*}
+    } {*wrong number of arguments to server.register_function*}
 
     test {LIBRARIES - test registration with only name} {
         catch {
             r function load replace {#!lua name=lib2
-                redis.register_function('f1')
+                server.register_function('f1')
             }
         } e
         set _ $e
-    } {*calling redis.register_function with a single argument is only applicable to Lua table*}
+    } {*calling server.register_function with a single argument is only applicable to Lua table*}
 
     test {LIBRARIES - test registration with to many arguments} {
         catch {
             r function load replace {#!lua name=lib2
-                redis.register_function('f1', function() return 1 end, {}, 'description', 'extra arg')
+                server.register_function('f1', function() return 1 end, {}, 'description', 'extra arg')
             }
         } e
         set _ $e
-    } {*wrong number of arguments to redis.register_function*}
+    } {*wrong number of arguments to server.register_function*}
 
     test {LIBRARIES - test registration with no string name} {
         catch {
             r function load replace {#!lua name=lib2
-                redis.register_function(nil, function() return 1 end)
+                server.register_function(nil, function() return 1 end)
             }
         } e
         set _ $e
-    } {*first argument to redis.register_function must be a string*}
+    } {*first argument to server.register_function must be a string*}
 
     test {LIBRARIES - test registration with wrong name format} {
         catch {
             r function load replace {#!lua name=lib2
-                redis.register_function('test\0test', function() return 1 end)
+                server.register_function('test\0test', function() return 1 end)
             }
         } e
         set _ $e
@@ -603,7 +603,7 @@ start_server {tags {"scripting"}} {
     test {LIBRARIES - test registration with empty name} {
         catch {
             r function load replace {#!lua name=lib2
-                redis.register_function('', function() return 1 end)
+                server.register_function('', function() return 1 end)
             }
         } e
         set _ $e
@@ -703,10 +703,10 @@ start_server {tags {"scripting"}} {
 
     test {LIBRARIES - register function inside a function} {
         r function load {#!lua name=lib
-            redis.register_function(
+            server.register_function(
                 'f1',
                 function(keys, args)
-                    redis.register_function(
+                    server.register_function(
                         'f2',
                         function(key, args)
                             return 2
@@ -751,7 +751,7 @@ start_server {tags {"scripting"}} {
 
     test {LIBRARIES - named arguments} {
         r function load {#!lua name=lib
-            redis.register_function{
+            server.register_function{
                 function_name='f1',
                 callback=function()
                     return 'hello'
@@ -765,7 +765,7 @@ start_server {tags {"scripting"}} {
     test {LIBRARIES - named arguments, bad function name} {
         catch {
             r function load replace {#!lua name=lib
-                redis.register_function{
+                server.register_function{
                     function_name=function() return 1 end,
                     callback=function()
                         return 'hello'
@@ -775,12 +775,12 @@ start_server {tags {"scripting"}} {
             }
         } e
         set _ $e
-    } {*function_name argument given to redis.register_function must be a string*}
+    } {*function_name argument given to server.register_function must be a string*}
 
     test {LIBRARIES - named arguments, bad callback type} {
         catch {
             r function load replace {#!lua name=lib
-                redis.register_function{
+                server.register_function{
                     function_name='f1',
                     callback='bad',
                     description='some desc'
@@ -788,12 +788,12 @@ start_server {tags {"scripting"}} {
             }
         } e
         set _ $e
-    } {*callback argument given to redis.register_function must be a function*}
+    } {*callback argument given to server.register_function must be a function*}
 
     test {LIBRARIES - named arguments, bad description} {
         catch {
             r function load replace {#!lua name=lib
-                redis.register_function{
+                server.register_function{
                     function_name='f1',
                     callback=function()
                         return 'hello'
@@ -803,12 +803,12 @@ start_server {tags {"scripting"}} {
             }
         } e
         set _ $e
-    } {*description argument given to redis.register_function must be a string*}
+    } {*description argument given to server.register_function must be a string*}
 
     test {LIBRARIES - named arguments, unknown argument} {
         catch {
             r function load replace {#!lua name=lib
-                redis.register_function{
+                server.register_function{
                     function_name='f1',
                     callback=function()
                         return 'hello'
@@ -819,12 +819,12 @@ start_server {tags {"scripting"}} {
             }
         } e
         set _ $e
-    } {*unknown argument given to redis.register_function*}
+    } {*unknown argument given to server.register_function*}
 
     test {LIBRARIES - named arguments, missing function name} {
         catch {
             r function load replace {#!lua name=lib
-                redis.register_function{
+                server.register_function{
                     callback=function()
                         return 'hello'
                     end,
@@ -833,19 +833,19 @@ start_server {tags {"scripting"}} {
             }
         } e
         set _ $e
-    } {*redis.register_function must get a function name argument*}
+    } {*server.register_function must get a function name argument*}
 
     test {LIBRARIES - named arguments, missing callback} {
         catch {
             r function load replace {#!lua name=lib
-                redis.register_function{
+                server.register_function{
                     function_name='f1',
                     description='desc'
                 }
             }
         } e
         set _ $e
-    } {*redis.register_function must get a callback argument*}
+    } {*server.register_function must get a callback argument*}
 
     test {FUNCTION - test function restore with function name collision} {
         r function flush
@@ -853,19 +853,19 @@ start_server {tags {"scripting"}} {
             local function add1(a)
                 return a + 1
             end
-            redis.register_function(
+            server.register_function(
                 'f1',
                 function(keys, args)
                     return add1(1)
                 end
             )
-            redis.register_function(
+            server.register_function(
                 'f2',
                 function(keys, args)
                     return add1(2)
                 end
             )
-            redis.register_function(
+            server.register_function(
                 'f3',
                 function(keys, args)
                     return add1(3)
@@ -877,7 +877,7 @@ start_server {tags {"scripting"}} {
 
         # load a library with different name but with the same function name
         r function load {#!lua name=lib1
-            redis.register_function(
+            server.register_function(
                 'f6',
                 function(keys, args)
                     return 7
@@ -888,19 +888,19 @@ start_server {tags {"scripting"}} {
             local function add1(a)
                 return a + 1
             end
-            redis.register_function(
+            server.register_function(
                 'f4',
                 function(keys, args)
                     return add1(4)
                 end
             )
-            redis.register_function(
+            server.register_function(
                 'f5',
                 function(keys, args)
                     return add1(5)
                 end
             )
-            redis.register_function(
+            server.register_function(
                 'f3',
                 function(keys, args)
                     return add1(3)
@@ -926,14 +926,14 @@ start_server {tags {"scripting"}} {
     test {FUNCTION - test function list with code} {
         r function flush
         r function load {#!lua name=library1
-            redis.register_function('f6', function(keys, args) return 7 end)
+            server.register_function('f6', function(keys, args) return 7 end)
         }
         r function list withcode
-    } {{library_name library1 engine LUA functions {{name f6 description {} flags {}}} library_code {*redis.register_function('f6', function(keys, args) return 7 end)*}}}
+    } {{library_name library1 engine LUA functions {{name f6 description {} flags {}}} library_code {*server.register_function('f6', function(keys, args) return 7 end)*}}}
 
     test {FUNCTION - test function list with pattern} {
         r function load {#!lua name=lib1
-            redis.register_function('f7', function(keys, args) return 7 end)
+            server.register_function('f7', function(keys, args) return 7 end)
         }
         r function list libraryname library*
     } {{library_name library1 engine LUA functions {{name f6 description {} flags {}}}}}
@@ -961,14 +961,14 @@ start_server {tags {"scripting"}} {
     test {FUNCTION - verify OOM on function load and function restore} {
         r function flush
         r function load replace {#!lua name=test
-            redis.register_function('f1', function() return 1 end)
+            server.register_function('f1', function() return 1 end)
         }
         set payload [r function dump]
         r config set maxmemory 1
 
         r function flush
         catch {r function load replace {#!lua name=test
-            redis.register_function('f1', function() return 1 end)
+            server.register_function('f1', function() return 1 end)
         }} e
         assert_match {*command not allowed when used memory*} $e
 
@@ -981,7 +981,7 @@ start_server {tags {"scripting"}} {
 
     test {FUNCTION - verify allow-omm allows running any command} {
         r FUNCTION load replace {#!lua name=f1
-            redis.register_function{
+            server.register_function{
                 function_name='f1',
                 callback=function() return redis.call('set', 'x', '1') end,
                 flags={'allow-oom'}
@@ -1000,18 +1000,18 @@ start_server {tags {"scripting"}} {
 start_server {tags {"scripting"}} {
     test {FUNCTION - wrong flags type named arguments} {
         catch {r function load replace {#!lua name=test
-            redis.register_function{
+            server.register_function{
                 function_name = 'f1',
                 callback = function() return 1 end,
                 flags = 'bad flags type'
             }
         }} e
         set _ $e
-    } {*flags argument to redis.register_function must be a table representing function flags*}
+    } {*flags argument to server.register_function must be a table representing function flags*}
 
     test {FUNCTION - wrong flag type} {
         catch {r function load replace {#!lua name=test
-            redis.register_function{
+            server.register_function{
                 function_name = 'f1',
                 callback = function() return 1 end,
                 flags = {function() return 1 end}
@@ -1022,7 +1022,7 @@ start_server {tags {"scripting"}} {
 
     test {FUNCTION - unknown flag} {
         catch {r function load replace {#!lua name=test
-            redis.register_function{
+            server.register_function{
                 function_name = 'f1',
                 callback = function() return 1 end,
                 flags = {'unknown'}
@@ -1033,7 +1033,7 @@ start_server {tags {"scripting"}} {
 
     test {FUNCTION - write script on fcall_ro} {
         r function load replace {#!lua name=test
-            redis.register_function{
+            server.register_function{
                 function_name = 'f1',
                 callback = function() return redis.call('set', 'x', 1) end
             }
@@ -1044,7 +1044,7 @@ start_server {tags {"scripting"}} {
 
     test {FUNCTION - write script with no-writes flag} {
         r function load replace {#!lua name=test
-            redis.register_function{
+            server.register_function{
                 function_name = 'f1',
                 callback = function() return redis.call('set', 'x', 1) end,
                 flags = {'no-writes'}
@@ -1056,7 +1056,7 @@ start_server {tags {"scripting"}} {
 
     test {FUNCTION - deny oom} {
         r FUNCTION load replace {#!lua name=test
-            redis.register_function('f1', function() return redis.call('set', 'x', '1') end) 
+            server.register_function('f1', function() return redis.call('set', 'x', '1') end) 
         }
 
         r config set maxmemory 1
@@ -1069,7 +1069,7 @@ start_server {tags {"scripting"}} {
 
     test {FUNCTION - deny oom on no-writes function} {
         r FUNCTION load replace {#!lua name=test
-            redis.register_function{function_name='f1', callback=function() return 'hello' end, flags={'no-writes'}}
+            server.register_function{function_name='f1', callback=function() return 'hello' end, flags={'no-writes'}}
         }
 
         r config set maxmemory 1
@@ -1082,10 +1082,10 @@ start_server {tags {"scripting"}} {
 
     test {FUNCTION - allow stale} {
         r FUNCTION load replace {#!lua name=test
-            redis.register_function{function_name='f1', callback=function() return 'hello' end, flags={'no-writes'}}
-            redis.register_function{function_name='f2', callback=function() return 'hello' end, flags={'allow-stale', 'no-writes'}}
-            redis.register_function{function_name='f3', callback=function() return redis.call('get', 'x') end, flags={'allow-stale', 'no-writes'}}
-            redis.register_function{function_name='f4', callback=function() return redis.call('info', 'server') end, flags={'allow-stale', 'no-writes'}}
+            server.register_function{function_name='f1', callback=function() return 'hello' end, flags={'no-writes'}}
+            server.register_function{function_name='f2', callback=function() return 'hello' end, flags={'allow-stale', 'no-writes'}}
+            server.register_function{function_name='f3', callback=function() return redis.call('get', 'x') end, flags={'allow-stale', 'no-writes'}}
+            server.register_function{function_name='f4', callback=function() return redis.call('info', 'server') end, flags={'allow-stale', 'no-writes'}}
         }
         
         r config set replica-serve-stale-data no
@@ -1110,13 +1110,13 @@ start_server {tags {"scripting"}} {
         r FUNCTION load replace {#!lua name=test
             local version = redis.REDIS_VERSION_NUM
 
-            redis.register_function{function_name='get_version_v1', callback=function()
+            server.register_function{function_name='get_version_v1', callback=function()
               return string.format('%s.%s.%s',
                                     bit.band(bit.rshift(version, 16), 0x000000ff),
                                     bit.band(bit.rshift(version, 8), 0x000000ff),
                                     bit.band(version, 0x000000ff))
             end}
-            redis.register_function{function_name='get_version_v2', callback=function() return redis.REDIS_VERSION end}
+            server.register_function{function_name='get_version_v2', callback=function() return redis.REDIS_VERSION end}
         }
 
         catch {[r fcall f1 0]} e
@@ -1127,12 +1127,12 @@ start_server {tags {"scripting"}} {
         r FUNCTION FLUSH
 
         r FUNCTION load {#!lua name=test1
-            redis.register_function('f1', function() return 1 end)
-            redis.register_function('f2', function() return 1 end)
+            server.register_function('f1', function() return 1 end)
+            server.register_function('f2', function() return 1 end)
         }
 
         r FUNCTION load {#!lua name=test2
-            redis.register_function('f3', function() return 1 end)
+            server.register_function('f3', function() return 1 end)
         }
 
         r function stats
@@ -1152,12 +1152,12 @@ start_server {tags {"scripting"}} {
         r FUNCTION FLUSH
 
         r FUNCTION load {#!lua name=test1
-            redis.register_function('f1', function() return 1 end)
-            redis.register_function('f2', function() return 1 end)
+            server.register_function('f1', function() return 1 end)
+            server.register_function('f2', function() return 1 end)
         }
 
         catch {r FUNCTION load {#!lua name=test1
-            redis.register_function('f3', function() return 1 end)
+            server.register_function('f3', function() return 1 end)
         }} e
         assert_match "*Library 'test1' already exists*" $e
         
@@ -1172,35 +1172,35 @@ start_server {tags {"scripting"}} {
 
     test {FUNCTION - function test empty engine} {
          catch {r function load replace {#! name=test
-            redis.register_function('foo', function() return 1 end)
+            server.register_function('foo', function() return 1 end)
         }} e
         set _ $e
     } {ERR Engine '' not found}
 
     test {FUNCTION - function test unknown metadata value} {
          catch {r function load replace {#!lua name=test foo=bar
-            redis.register_function('foo', function() return 1 end)
+            server.register_function('foo', function() return 1 end)
         }} e
         set _ $e
     } {ERR Invalid metadata value given: foo=bar}
 
     test {FUNCTION - function test no name} {
          catch {r function load replace {#!lua
-            redis.register_function('foo', function() return 1 end)
+            server.register_function('foo', function() return 1 end)
         }} e
         set _ $e
     } {ERR Library name was not given}
 
     test {FUNCTION - function test multiple names} {
          catch {r function load replace {#!lua name=foo name=bar
-            redis.register_function('foo', function() return 1 end)
+            server.register_function('foo', function() return 1 end)
         }} e
         set _ $e
     } {ERR Invalid metadata value, name argument was given multiple times}
 
     test {FUNCTION - function test name with quotes} {
         r function load replace {#!lua name="foo"
-            redis.register_function('foo', function() return 1 end)
+            server.register_function('foo', function() return 1 end)
         }
     } {foo}
 
@@ -1208,7 +1208,7 @@ start_server {tags {"scripting"}} {
         r FUNCTION FLUSH
 
         r FUNCTION load {#!lua name=test1
-            redis.register_function('f1', function() 
+            server.register_function('f1', function() 
                 mt = getmetatable(_G)
                 original_globals = mt.__index
                 original_globals['redis'] = function() return 1 end

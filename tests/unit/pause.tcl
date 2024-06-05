@@ -133,7 +133,7 @@ start_server {tags {"pause network"}} {
         r set x y
         # create a function for later
         r FUNCTION load replace {#!lua name=f1
-            redis.register_function{
+            server.register_function{
                 function_name='f1',
                 callback=function() return "hello" end,
                 flags={'no-writes'}

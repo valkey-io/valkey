@@ -1497,19 +1497,19 @@ void ldbRedis(lua_State *lua, sds *argv, int argc) {
         /* Increase the Lua stack if needed to make sure there is enough room
          * to push 'argc + 1' elements to the stack. On failure, return error.
          * Notice that we need, in worst case, 'argc + 1' elements because we push all the arguments
-         * given by the user (without the first argument) and we also push the 'redis' global table and
-         * 'redis.call' function so:
-         * (1 (redis table)) + (1 (redis.call function)) + (argc - 1 (all arguments without the first)) = argc + 1*/
+         * given by the user (without the first argument) and we also push the 'server' global table and
+         * 'server.call' function so:
+         * (1 (server table)) + (1 (server.call function)) + (argc - 1 (all arguments without the first)) = argc + 1*/
         ldbLogRedisReply("max lua stack reached");
         return;
     }
 
-    lua_getglobal(lua, "redis");
+    lua_getglobal(lua, "server");
     lua_pushstring(lua, "call");
-    lua_gettable(lua, -2); /* Stack: redis, redis.call */
+    lua_gettable(lua, -2); /* Stack: server, server.call */
     for (j = 1; j < argc; j++) lua_pushlstring(lua, argv[j], sdslen(argv[j]));
-    ldb.step = 1;                   /* Force redis.call() to log. */
-    lua_pcall(lua, argc - 1, 1, 0); /* Stack: redis, result */
+    ldb.step = 1;                   /* Force server.call() to log. */
+    lua_pcall(lua, argc - 1, 1, 0); /* Stack: server, result */
     ldb.step = 0;                   /* Disable logging. */
     lua_pop(lua, 2);                /* Discard the result and clean the stack. */
 }
@@ -1612,15 +1612,15 @@ int ldbRepl(lua_State *lua) {
             ldbLog(sdsnew("[b]reak 0            Remove all breakpoints."));
             ldbLog(sdsnew("[t]race              Show a backtrace."));
             ldbLog(sdsnew("[e]val <code>        Execute some Lua code (in a different callframe)."));
-            ldbLog(sdsnew("[r]edis <cmd>        Execute a Redis command."));
-            ldbLog(sdsnew("[m]axlen [len]       Trim logged Redis replies and Lua var dumps to len."));
+            ldbLog(sdsnew("[v]alkey <cmd>       Execute a command."));
+            ldbLog(sdsnew("[m]axlen [len]       Trim logged replies and Lua var dumps to len."));
             ldbLog(sdsnew("                     Specifying zero as <len> means unlimited."));
             ldbLog(sdsnew("[a]bort              Stop the execution of the script. In sync"));
             ldbLog(sdsnew("                     mode dataset changes will be retained."));
             ldbLog(sdsnew(""));
             ldbLog(sdsnew("Debugger functions you can call from Lua scripts:"));
-            ldbLog(sdsnew("redis.debug()        Produce logs in the debugger console."));
-            ldbLog(sdsnew("redis.breakpoint()   Stop execution like if there was a breakpoint in the"));
+            ldbLog(sdsnew("server.debug()       Produce logs in the debugger console."));
+            ldbLog(sdsnew("server.breakpoint()  Stop execution like if there was a breakpoint in the"));
             ldbLog(sdsnew("                     next line of code."));
             ldbSendLogs();
         } else if (!strcasecmp(argv[0], "s") || !strcasecmp(argv[0], "step") || !strcasecmp(argv[0], "n") ||
@@ -1644,8 +1644,12 @@ int ldbRepl(lua_State *lua) {
         } else if (!strcasecmp(argv[0], "a") || !strcasecmp(argv[0], "abort")) {
             luaPushError(lua, "script aborted for user request");
             luaError(lua);
-        } else if (argc > 1 && (!strcasecmp(argv[0], "r") || !strcasecmp(argv[0], REDIS_API_NAME) ||
+        } else if (argc > 1 && (!strcasecmp(argv[0], "r") || !strcasecmp(argv[0], "redis") ||
+                                !strcasecmp(argv[0], "v") || !strcasecmp(argv[0], "valkey") ||
                                 !strcasecmp(argv[0], SERVER_API_NAME))) {
+            /* [r]redis or [v]alkey calls a command. We accept "server" too, but
+             * not "s" because that's "step". Neither can we use [c]all because
+             * "c" is continue. */
             ldbRedis(lua, argv, argc);
             ldbSendLogs();
         } else if ((!strcasecmp(argv[0], "p") || !strcasecmp(argv[0], "print"))) {
@@ -1667,7 +1671,7 @@ int ldbRepl(lua_State *lua) {
             ldbList(1, 1000000);
             ldbSendLogs();
         } else {
-            ldbLog(sdsnew("<error> Unknown Redis Lua debugger command or "
+            ldbLog(sdsnew("<error> Unknown Lua debugger command or "
                           "wrong number of arguments."));
             ldbSendLogs();
         }
@@ -1711,7 +1715,7 @@ void luaLdbLineHook(lua_State *lua, lua_Debug *ar) {
     if (ldb.step || bp) {
         char *reason = "step over";
         if (bp)
-            reason = ldb.luabp ? "redis.breakpoint() called" : "break point";
+            reason = ldb.luabp ? "server.breakpoint() called" : "break point";
         else if (timeout)
             reason = "timeout reached, infinite loop?";
         ldb.step = 0;

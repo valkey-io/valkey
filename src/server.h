@@ -562,6 +562,7 @@ typedef enum {
 #define REPL_DISKLESS_LOAD_DISABLED 0
 #define REPL_DISKLESS_LOAD_WHEN_DB_EMPTY 1
 #define REPL_DISKLESS_LOAD_SWAPDB 2
+#define REPL_DISKLESS_LOAD_SYNC_FALLBACK 3
 
 /* TLS Client Authentication */
 #define TLS_CLIENT_AUTH_NO 0
@@ -669,6 +670,12 @@ typedef enum {
 #define RDB_CHILD_TYPE_NONE 0
 #define RDB_CHILD_TYPE_DISK 1   /* RDB is written to disk. */
 #define RDB_CHILD_TYPE_SOCKET 2 /* RDB is written to replica socket. */
+
+/* RDB load type on replica. */
+#define RDB_LOAD_TYPE_NONE -1
+#define RDB_LOAD_TYPE_DISK 0    /* RDB is loaded to disk. */
+#define RDB_LOAD_TYPE_PARSER 1   /* RDB is loaded to parser. */
+const char *strRDBLoadType(int); 
 
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes. */
@@ -1969,6 +1976,9 @@ struct valkeyServer {
                                          * when it receives an error on the replication stream */
     int repl_ignore_disk_write_error;   /* Configures whether replicas panic when unable to
                                          * persist writes to AOF. */
+    int last_sync_aborted; /* 1 if last sync with primary was aborteded on replica side, resets to 0 on sync success. */
+    int sync_aborts_total; /* total aborts on replica side during sync with primary. */
+    int replica_last_sync_type; /* last sync type on replica side - parser / disk. */
     /* The following two fields is where we store primary PSYNC replid/offset
      * while the PSYNC is in progress. At the end we'll copy the fields into
      * the server->primary client structure. */

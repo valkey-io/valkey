@@ -64,6 +64,11 @@ static ConnectionType *connTypeOfReplication(void) {
     return connectionTypeTcp();
 }
 
+static int shouldFallbackToDisklessLoad(void) {
+  		return server.repl_diskless_load == REPL_DISKLESS_LOAD_SYNC_FALLBACK &&
+  		        (server.last_sync_aborted == 1);
+}
+
 /* Return the pointer to a string representing the replica ip:listening_port
  * pair. Mostly useful for logging, since we want to log a replica using its
  * IP address and its listening port which is more clear for the user, for
@@ -1758,7 +1763,8 @@ void restartAOFAfterSYNC(void) {
 static int useDisklessLoad(void) {
     /* compute boolean decision to use diskless load */
     int enabled = server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB ||
-                  (server.repl_diskless_load == REPL_DISKLESS_LOAD_WHEN_DB_EMPTY && dbTotalServerKeyCount() == 0);
+                  (server.repl_diskless_load == REPL_DISKLESS_LOAD_WHEN_DB_EMPTY && dbTotalServerKeyCount() == 0) ||
+                  shouldFallbackToDisklessLoad();
 
     if (enabled) {
         /* Check all modules handle read errors, otherwise it's not safe to use diskless load. */
@@ -1767,7 +1773,8 @@ static int useDisklessLoad(void) {
             enabled = 0;
         }
         /* Check all modules handle async replication, otherwise it's not safe to use diskless load. */
-        else if (server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB && !moduleAllModulesHandleReplAsyncLoad()) {
+        else if ((server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB || shouldFallbackToDisklessLoad()) 
+                && !moduleAllModulesHandleReplAsyncLoad()) {
             serverLog(LL_NOTICE,
                       "Skipping diskless-load because there are modules that are not aware of async replication.");
             enabled = 0;
@@ -1809,6 +1816,7 @@ void readSyncBulkPayload(connection *conn) {
     char buf[PROTO_IOBUF_LEN];
     ssize_t nread, readlen, nwritten;
     int use_diskless_load = useDisklessLoad();
+    server.replica_last_sync_type = use_diskless_load;
     serverDb *diskless_load_tempDb = NULL;
     functionsLibCtx *temp_functions_lib_ctx = NULL;
     int empty_db_flags = server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
@@ -1867,13 +1875,13 @@ void readSyncBulkPayload(connection *conn) {
             /* Set any repl_transfer_size to avoid entering this code path
              * at the next call. */
             server.repl_transfer_size = 0;
-            serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: receiving streamed RDB from primary with EOF %s",
-                      use_diskless_load ? "to parser" : "to disk");
+            serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: receiving streamed RDB from primary with EOF to %s",
+                      strRDBLoadType(use_diskless_load));
         } else {
             usemark = 0;
             server.repl_transfer_size = strtol(buf + 1, NULL, 10);
-            serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: receiving %lld bytes from primary %s",
-                      (long long)server.repl_transfer_size, use_diskless_load ? "to parser" : "to disk");
+            serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: receiving %lld bytes from primary to %s",
+                      (long long)server.repl_transfer_size, strRDBLoadType(use_diskless_load));
         }
         return;
     }
@@ -2179,6 +2187,18 @@ void readSyncBulkPayload(connection *conn) {
         server.repl_transfer_fd = -1;
         server.repl_transfer_tmpfile = NULL;
     }
+
+    /* We are loading the rdb from disk, which can take a while. Thus, there is a chance that
+  	 * the connection has been closed on the primary side during the rdb load due to a
+  	 * COB overrun. Since the replica doesn't perform I/O on any of it's connections
+  	 * during the rdb loading phase, it will not be aware of such disconnection. */
+  	if (connGetState(conn) != CONN_STATE_CONNECTED) {
+  	    serverLog(LL_WARNING,"Error condition on socket for SYNC: %s",
+  	             connGetLastError(conn));
+  	    goto error;
+  	}
+  	
+  	server.last_sync_aborted = 0;
 
     /* Final setup of the connected replica <- primary link */
     replicationCreateMasterClient(server.repl_transfer_s, rsi.repl_stream_db);
@@ -2887,6 +2907,8 @@ void undoConnectWithMaster(void) {
 void replicationAbortSyncTransfer(void) {
     serverAssert(server.repl_state == REPL_STATE_TRANSFER);
     undoConnectWithMaster();
+    server.last_sync_aborted = 1;
+    server.sync_aborts_total++;
     if (server.repl_transfer_fd != -1) {
         close(server.repl_transfer_fd);
         bg_unlink(server.repl_transfer_tmpfile);

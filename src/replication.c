@@ -262,7 +262,7 @@ void removeSlaveFromPsyncWaitingRax(client* slave) {
     }
     peer_slave->ref_repl_buf_node = NULL;
     peer_slave->flags &= ~CLIENT_PROTECTED_RDB_CHANNEL;
-    serverLog(LL_DEBUG, "Remove psync waiting slave %s with cid %llu, repl buffer block %s", 
+    serverLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu, repl buffer block %s", 
         replicationGetReplicaName(slave), (long long unsigned int)slave->associated_rdb_client_id, o? "ref count decreased": "doesn't exist");
     uint64_t id = htonu64(peer_slave->id);
     raxRemove(server.slaves_waiting_psync,(unsigned char*)&id,sizeof(id),NULL);
@@ -378,10 +378,11 @@ void incrementalTrimReplicationBacklog(size_t max_blocks) {
 /* Free replication buffer blocks that are referenced by this client. */
 void freeReplicaReferencedReplBuffer(client *replica) {
     if (replica->flags & CLIENT_REPL_RDB_CHANNEL) {
-        serverLog(LL_DEBUG, "Remove psync waiting slave %s with cid %llu from replicas rax.", 
-            replicationGetReplicaName(replica), (long long unsigned int)replica->associated_rdb_client_id);
         uint64_t id = htonu64(replica->id);
-        raxRemove(server.slaves_waiting_psync,(unsigned char*)&id,sizeof(id),NULL);        
+        if(raxRemove(server.slaves_waiting_psync,(unsigned char*)&id,sizeof(id),NULL)) {
+            serverLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu from replicas rax.",
+                replicationGetReplicaName(replica), (long long unsigned int)replica->associated_rdb_client_id);
+        }
     }
     if (replica->ref_repl_buf_node != NULL) {
         /* Decrease the start buffer node reference count. */

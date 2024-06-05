@@ -663,7 +663,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
     }
 }
 
-foreach rdbchan {no yes} {
+foreach rdbchan {yes no} {
 start_server {tags {"repl rdb-channel external:skip"}} {
     set master [srv 0 client]
     set master_host [srv 0 host]
@@ -675,9 +675,10 @@ start_server {tags {"repl rdb-channel external:skip"}} {
     $master config set loglevel debug
     $master config set repl-diskless-sync-delay 5
     
-    # Generating RDB will cost 5s(10 * 0.5s)
-    $master debug populate 10 master 10
-    $master config set rdb-key-save-delay 500000
+    # Generating RDB will cost 5s(10000 * 0.0005s)
+    $master debug populate 10000 master 1
+    $master config set rdb-key-save-delay 500
+
     $master config set repl-rdb-channel $rdbchan
 
     start_server {} {
@@ -720,7 +721,13 @@ start_server {tags {"repl rdb-channel external:skip"}} {
                         sync_partial_ok:[status $master sync_partial_ok]"
                 }
             }
+            
             $replica2 slaveof no one
+
+            # Generating RDB will cost 500s(1000000 * 0.0001s)
+            $master debug populate 1000000 master 1
+            $master config set rdb-key-save-delay 100
+    
             test "Master abort sync if all slaves dropped rdb-channel $rdbchan" {
                 set cur_psync [status $master sync_partial_ok]
                 $replica2 slaveof $master_host $master_port
@@ -740,8 +747,11 @@ start_server {tags {"repl rdb-channel external:skip"}} {
                 }
 
                 catch {$replica2 shutdown nosave}
-                
-                # TODO cehck that master abort the sync (child process is killed)
+                wait_for_condition 50 1000 {
+                    [status $master rdb_bgsave_in_progress] == 0
+                } else {
+                    fail "Master should abort the sync"
+                }
             }
             stop_write_load $load_handle
         }

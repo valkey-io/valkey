@@ -3081,7 +3081,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             } else if (!strcasecmp(auxkey->ptr, "redis-ver")) {
                 serverLog(LL_NOTICE, "Loading RDB produced by Redis version %s", (char *)auxval->ptr);
             } else if (!strcasecmp(auxkey->ptr, "valkey-ver")) {
-                serverLog(LL_NOTICE, "Loading RDB produced by valkey version %s", (char *)auxval->ptr);
+                serverLog(LL_NOTICE, "Loading RDB produced by Valkey version %s", (char *)auxval->ptr);
             } else if (!strcasecmp(auxkey->ptr, "ctime")) {
                 time_t age = time(NULL) - strtol(auxval->ptr, NULL, 10);
                 if (age < 0) age = 0;

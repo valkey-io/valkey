@@ -925,7 +925,7 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "stringmatch-test") && c->argc == 2) {
         stringmatchlen_fuzz_test();
-        addReplyStatus(c, "Apparently Redis did not crash: test passed");
+        addReplyStatus(c, "Apparently the server did not crash: test passed");
     } else if (!strcasecmp(c->argv[1]->ptr, "set-disable-deny-scripts") && c->argc == 3) {
         server.script_disable_deny_script = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);

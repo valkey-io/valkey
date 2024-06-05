@@ -561,7 +561,7 @@ int clusterLoadConfig(char *filename) {
                 clusterAddNode(master);
             }
             /* shard_id can be absent if we are loading a nodes.conf generated
-             * by an older version of Redis; we should follow the primary's
+             * by an older version; we should follow the primary's
              * shard_id in this case */
             if (auxFieldHandlers[af_shard_id].isPresent(n) == 0) {
                 memcpy(n->shard_id, master->shard_id, CLUSTER_NAMELEN);

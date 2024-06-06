@@ -897,7 +897,7 @@ static int luaRedisGenericCommand(lua_State *lua, int raise_error) {
 
     /* Log the command if debugging is active. */
     if (ldbIsEnabled()) {
-        sds cmdlog = sdsnew("<redis>");
+        sds cmdlog = sdsnew("<command>");
         for (j = 0; j < c->argc; j++) {
             if (j == 10) {
                 cmdlog = sdscatprintf(cmdlog, " ... (%d more)", c->argc - j - 1);

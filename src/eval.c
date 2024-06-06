@@ -1644,8 +1644,8 @@ int ldbRepl(lua_State *lua) {
         } else if (!strcasecmp(argv[0], "a") || !strcasecmp(argv[0], "abort")) {
             luaPushError(lua, "script aborted for user request");
             luaError(lua);
-        } else if (argc > 1 && (!strcasecmp(argv[0], "r") || !strcasecmp(argv[0], "redis") ||
-                                !strcasecmp(argv[0], "v") || !strcasecmp(argv[0], "valkey") ||
+        } else if (argc > 1 && ((!strcasecmp(argv[0], "r") || !strcasecmp(argv[0], "redis")) ||
+                                (!strcasecmp(argv[0], "v") || !strcasecmp(argv[0], "valkey")) ||
                                 !strcasecmp(argv[0], SERVER_API_NAME))) {
             /* [r]redis or [v]alkey calls a command. We accept "server" too, but
              * not "s" because that's "step". Neither can we use [c]all because

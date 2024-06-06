@@ -155,8 +155,8 @@ proc verify_replica_online {master replica_idx max_retry} {
         }
     }
     if {$count_down == 0} {
-        set threashold [expr {$max_retry*$pause/1000}]
-        error "assertion:Replica is not in sync after $threashold seconds"
+        set threshold [expr {$max_retry*$pause/1000}]
+        error "assertion:Replica is not in sync after $threshold seconds"
     } 
 }
 

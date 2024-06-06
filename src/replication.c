@@ -2855,7 +2855,7 @@ void streamReplDataBufToDb(client *c) {
         replStreamProgressCallback(offset, o->used, &last_progress_callback);
         offset += o->used;
         listDelNode(server.pending_repl_data.blocks, cur);
-    } 
+    }
     blockingOperationEnds();
 }
 

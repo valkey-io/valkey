@@ -246,9 +246,11 @@ start_server {tags {"repl rdb-channel external:skip"}} {
 
                 verify_replica_online $master 0 500
                 verify_replica_online $master 1 500
-                set res [wait_for_log_messages -2 {"*MASTER <-> REPLICA sync: Finished with success*"} $loglines 2000 1]
-                set loglines [lindex $res 1]
-                incr $loglines                
+                wait_for_condition 50 1000 {
+                    [status $replica1 master_link_status] == "up"
+                } else {
+                    fail "Replica is not synced"
+                }           
             }
 
             $replica1 slaveof no one
@@ -268,9 +270,11 @@ start_server {tags {"repl rdb-channel external:skip"}} {
 
                 verify_replica_online $master 0 500
                 verify_replica_online $master 1 500
-                set res [wait_for_log_messages -2 {"*MASTER <-> REPLICA sync: Finished with success*"} $loglines 2000 1]
-                set loglines [lindex $res 1]
-                incr $loglines 
+                wait_for_condition 50 1000 {
+                    [status $replica1 master_link_status] == "up"
+                } else {
+                    fail "Replica is not synced"
+                }
             }
 
             $replica1 slaveof no one
@@ -305,9 +309,11 @@ start_server {tags {"repl rdb-channel external:skip"}} {
 
                 # Wait for sync to succeed 
                 wait_for_value_to_propegate_to_replica $master $replica1 "key4"
-                set res [wait_for_log_messages -2 {"*MASTER <-> REPLICA sync: Finished with success*"} $loglines 4000 1]
-                set loglines [lindex $res 1]
-                incr $loglines 
+                wait_for_condition 50 1000 {
+                    [status $replica1 master_link_status] == "up"
+                } else {
+                    fail "Replica is not synced"
+                }
             }
 
             $replica1 slaveof no one
@@ -331,9 +337,11 @@ start_server {tags {"repl rdb-channel external:skip"}} {
                 # Wait for mitigation and resync
                 wait_for_value_to_propegate_to_replica $master $replica1 "key5"
 
-                set res [wait_for_log_messages -2 {"*MASTER <-> REPLICA sync: Finished with success*"} $loglines 4000 1]
-                set loglines [lindex $res 1]
-                incr $loglines 
+                wait_for_condition 50 1000 {
+                    [status $replica1 master_link_status] == "up"
+                } else {
+                    fail "Replica is not synced"
+                }
             }
         }
     }
@@ -365,7 +373,11 @@ start_server {tags {"repl rdb-channel external:skip"}} {
             wait_for_value_to_propegate_to_replica $master $replica "key1"
 
             verify_replica_online $master 0 500
-            set res [wait_for_log_messages -1 {"*MASTER <-> REPLICA sync: Finished with success*"} $loglines 2000 1]
+            wait_for_condition 50 1000 {
+                [status $replica master_link_status] == "up"
+            } else {
+                fail "Replica is not synced"
+            }
             # Confirm the occurrence of a race condition.
             set res [wait_for_log_messages -1 {"*RDB channel sync - psync established after rdb load*"} $loglines 2000 1]
             set loglines [lindex $res 1]
@@ -383,7 +395,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
         set master [srv 0 client]
         set master_host [srv 0 host]
         set master_port [srv 0 port]
-        set backlog_size [expr {10 ** 6}]
+        set backlog_size [expr {10 ** 5}]
         set loglines [count_log_lines -1]
 
         $master config set repl-diskless-sync yes
@@ -394,28 +406,37 @@ start_server {tags {"repl rdb-channel external:skip"}} {
         $master config set rdb-key-save-delay 200
         populate 10000 master 10000
         
-        set load_handle0 [start_write_load $master_host $master_port 20]
+        set load_handle1 [start_one_key_write_load $master_host $master_port 100 "mykey1"]
+        set load_handle2 [start_one_key_write_load $master_host $master_port 100 "mykey2"]
+        set load_handle3 [start_one_key_write_load $master_host $master_port 100 "mykey3"]
 
         $replica config set repl-rdb-channel yes
         $replica config set loglevel debug
         $replica config set repl-timeout 10
-        # Stop replica after master fork for 2 seconds
-        $replica debug sleep-after-fork [expr {2 * [expr {10 ** 6}]}]
+        # Stop replica after master fork for 5 seconds
+        $replica debug sleep-after-fork [expr {5 * [expr {10 ** 6}]}]
 
         test "Test rdb-channel connection peering - replica able to establish psync" {
             $replica slaveof $master_host $master_port
             # Verify repl backlog can grow
-            wait_for_condition 5000 10 {
+            wait_for_condition 1000 10 {
                 [s 0 mem_total_replication_buffers] > [expr {2 * $backlog_size}]
             } else {
                 fail "Master should allow backlog to grow beyond its limits during rdb-channel sync handshake"
             }
 
             verify_replica_online $master 0 500
-            set res [wait_for_log_messages -1 {"*MASTER <-> REPLICA sync: Finished with success*"} $loglines 2000 1]      
+            wait_for_condition 50 1000 {
+                [status $replica master_link_status] == "up"
+            } else {
+                fail "Replica is not synced"
+            }
         }
 
-        stop_write_load $load_handle0
+        stop_write_load $load_handle1
+        stop_write_load $load_handle2
+        stop_write_load $load_handle3
+
     }
 }
 
@@ -463,7 +484,11 @@ start_server {tags {"repl rdb-channel external:skip"}} {
                 set loglines [lindex $res 1]
                 incr $loglines 
                 verify_replica_online $master 0 700
-                wait_for_log_messages -2 {"*MASTER <-> REPLICA sync: Finished with success*"} 0 2000 1
+                wait_for_condition 50 1000 {
+                    [status $replica1 master_link_status] == "up"
+                } else {
+                    fail "Replica is not synced"
+                }
                 $replica1 slaveof no one
                 assert [string match *slaves_waiting_psync:0* [$master info replication]]
             }
@@ -474,7 +499,11 @@ start_server {tags {"repl rdb-channel external:skip"}} {
                 set loglines [lindex $res 1]
                 incr $loglines 
                 verify_replica_online $master 0 700
-                wait_for_log_messages -1 {"*MASTER <-> REPLICA sync: Finished with success*"} 0 2000 1
+                wait_for_condition 50 1000 {
+                    [status $replica2 master_link_status] == "up"
+                } else {
+                    fail "Replica is not synced"
+                }
                 assert [string match *slaves_waiting_psync:0* [$master info replication]]
             }
 

@@ -66,7 +66,7 @@ typedef struct errorInfo {
     int ignore_err_stats_update;
 } errorInfo;
 
-void luaRegisterRedisAPI(lua_State *lua);
+void luaRegisterServerAPI(lua_State *lua);
 sds luaGetStringSds(lua_State *lua, int index);
 void luaRegisterGlobalProtectionFunction(lua_State *lua);
 void luaSetErrorMetatable(lua_State *lua);

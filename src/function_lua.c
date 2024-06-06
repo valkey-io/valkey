@@ -423,7 +423,7 @@ int luaEngineInitEngine(void) {
     luaEngineCtx *lua_engine_ctx = zmalloc(sizeof(*lua_engine_ctx));
     lua_engine_ctx->lua = lua_open();
 
-    luaRegisterRedisAPI(lua_engine_ctx->lua);
+    luaRegisterServerAPI(lua_engine_ctx->lua);
 
     /* Register the library commands table and fields and store it to registry */
     lua_newtable(lua_engine_ctx->lua); /* load library globals */

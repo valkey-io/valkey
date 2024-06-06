@@ -11825,7 +11825,7 @@ int moduleRegisterApi(const char *funcname, void *funcptr) {
  * so that legacy Redis module binaries can continue to function */
 #define REGISTER_API(name) \
     moduleRegisterApi("ValkeyModule_" #name, (void *)(unsigned long)VM_ ## name);\
-    moduleRegisterApi("ValkeyModule_" #name, (void *)(unsigned long)VM_ ## name);\
+    moduleRegisterApi("RedisModule_" #name, (void *)(unsigned long)VM_ ## name);\
 
 /* Global initialization at Redis startup. */
 void moduleRegisterCoreAPI(void);

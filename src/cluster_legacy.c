@@ -144,7 +144,6 @@ static inline int defaultClientPort(void) {
 dictType clusterNodesDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     dictSdsDestructor, /* key destructor */
     NULL,              /* val destructor */
@@ -157,7 +156,6 @@ dictType clusterNodesDictType = {
 dictType clusterNodesBlackListDictType = {
     dictSdsCaseHash,       /* hash function */
     NULL,                  /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     NULL,                  /* val destructor */
@@ -168,7 +166,6 @@ dictType clusterNodesBlackListDictType = {
 dictType clusterSdsToListType = {
     dictSdsHash,        /* hash function */
     NULL,               /* key dup */
-    NULL,               /* val dup */
     dictSdsKeyCompare,  /* key compare */
     dictSdsDestructor,  /* key destructor */
     dictListDestructor, /* val destructor */
@@ -546,7 +543,7 @@ int clusterLoadConfig(char *filename) {
             } else if (!strcasecmp(s, "noflags")) {
                 /* nothing to do */
             } else {
-                serverPanic("Unknown flag in redis cluster config file");
+                serverPanic("Unknown flag in %s cluster config file", SERVER_TITLE);
             }
             if (p) s = p + 1;
         }
@@ -564,7 +561,7 @@ int clusterLoadConfig(char *filename) {
                 clusterAddNode(primary);
             }
             /* shard_id can be absent if we are loading a nodes.conf generated
-             * by an older version of Redis; we should follow the primary's
+             * by an older version; we should follow the primary's
              * shard_id in this case */
             if (auxFieldHandlers[af_shard_id].isPresent(n) == 0) {
                 memcpy(n->shard_id, primary->shard_id, CLUSTER_NAMELEN);

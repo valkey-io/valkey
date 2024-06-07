@@ -423,7 +423,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 }
 
-start_cluster 2 0 {tags {external:skip cluster regression} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+start_cluster 2 0 {tags {tls:skip external:skip cluster regression} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
     # Issue #563 regression test
     test "Client blocked on XREADGROUP while stream's slot is migrated" {
         set stream_name aga

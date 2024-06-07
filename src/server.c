@@ -424,7 +424,6 @@ int dictResizeAllowed(size_t moreMem, double usedRatio) {
 dictType objectKeyPointerValueDictType = {
     dictEncObjHash,       /* hash function */
     NULL,                 /* key dup */
-    NULL,                 /* val dup */
     dictEncObjKeyCompare, /* key compare */
     dictObjectDestructor, /* key destructor */
     NULL,                 /* val destructor */
@@ -436,7 +435,6 @@ dictType objectKeyPointerValueDictType = {
 dictType objectKeyHeapPointerValueDictType = {
     dictEncObjHash,       /* hash function */
     NULL,                 /* key dup */
-    NULL,                 /* val dup */
     dictEncObjKeyCompare, /* key compare */
     dictObjectDestructor, /* key destructor */
     dictVanillaFree,      /* val destructor */
@@ -447,7 +445,6 @@ dictType objectKeyHeapPointerValueDictType = {
 dictType setDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     dictSdsDestructor, /* key destructor */
     NULL,              /* val destructor */
@@ -460,7 +457,6 @@ dictType setDictType = {
 dictType zsetDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     NULL,              /* Note: SDS string shared & freed by skiplist */
     NULL,              /* val destructor */
@@ -471,7 +467,6 @@ dictType zsetDictType = {
 dictType dbDictType = {
     dictSdsHash,          /* hash function */
     NULL,                 /* key dup */
-    NULL,                 /* val dup */
     dictSdsKeyCompare,    /* key compare */
     dictSdsDestructor,    /* key destructor */
     dictObjectDestructor, /* val destructor */
@@ -482,7 +477,6 @@ dictType dbDictType = {
 dictType dbExpiresDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     NULL,              /* key destructor */
     NULL,              /* val destructor */
@@ -493,7 +487,6 @@ dictType dbExpiresDictType = {
 dictType commandTableDictType = {
     dictSdsCaseHash,       /* hash function */
     NULL,                  /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     NULL,                  /* val destructor */
@@ -504,7 +497,6 @@ dictType commandTableDictType = {
 dictType hashDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     dictSdsDestructor, /* key destructor */
     dictSdsDestructor, /* val destructor */
@@ -515,7 +507,6 @@ dictType hashDictType = {
 dictType sdsReplyDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     NULL,              /* key destructor */
     NULL,              /* val destructor */
@@ -528,7 +519,6 @@ dictType sdsReplyDictType = {
 dictType keylistDictType = {
     dictObjHash,          /* hash function */
     NULL,                 /* key dup */
-    NULL,                 /* val dup */
     dictObjKeyCompare,    /* key compare */
     dictObjectDestructor, /* key destructor */
     dictListDestructor,   /* val destructor */
@@ -540,7 +530,6 @@ dictType keylistDictType = {
 dictType objToDictDictType = {
     dictObjHash,          /* hash function */
     NULL,                 /* key dup */
-    NULL,                 /* val dup */
     dictObjKeyCompare,    /* key compare */
     dictObjectDestructor, /* key destructor */
     dictDictDestructor,   /* val destructor */
@@ -552,7 +541,6 @@ dictType objToDictDictType = {
 dictType modulesDictType = {
     dictSdsCaseHash,       /* hash function */
     NULL,                  /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     NULL,                  /* val destructor */
@@ -563,7 +551,6 @@ dictType modulesDictType = {
 dictType migrateCacheDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     dictSdsDestructor, /* key destructor */
     NULL,              /* val destructor */
@@ -575,7 +562,6 @@ dictType migrateCacheDictType = {
 dictType stringSetDictType = {
     dictCStrCaseHash,       /* hash function */
     NULL,                   /* key dup */
-    NULL,                   /* val dup */
     dictCStrKeyCaseCompare, /* key compare */
     dictSdsDestructor,      /* key destructor */
     NULL,                   /* val destructor */
@@ -587,7 +573,6 @@ dictType stringSetDictType = {
 dictType externalStringType = {
     dictCStrCaseHash,       /* hash function */
     NULL,                   /* key dup */
-    NULL,                   /* val dup */
     dictCStrKeyCaseCompare, /* key compare */
     NULL,                   /* key destructor */
     NULL,                   /* val destructor */
@@ -599,7 +584,6 @@ dictType externalStringType = {
 dictType sdsHashDictType = {
     dictSdsCaseHash,       /* hash function */
     NULL,                  /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     dictVanillaFree,       /* val destructor */
@@ -610,7 +594,6 @@ dictType sdsHashDictType = {
 dictType clientDictType = {
     dictClientHash,       /* hash function */
     NULL,                 /* key dup */
-    NULL,                 /* val dup */
     dictClientKeyCompare, /* key compare */
     .no_value = 1         /* no values in this dict */
 };

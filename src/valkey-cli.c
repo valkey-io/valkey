@@ -882,7 +882,6 @@ static void cliInitHelp(void) {
     dictType groupsdt = {
         dictSdsHash,       /* hash function */
         NULL,              /* key dup */
-        NULL,              /* val dup */
         dictSdsKeyCompare, /* key compare */
         dictSdsDestructor, /* key destructor */
         NULL,              /* val destructor */
@@ -1908,6 +1907,7 @@ sds sdsCatColorizedLdbReply(sds o, char *s, size_t len) {
     char *color = "white";
 
     if (strstr(s, "<debug>")) color = "bold";
+    if (strstr(s, "<command>")) color = "green";
     if (strstr(s, "<redis>")) color = "green";
     if (strstr(s, "<reply>")) color = "cyan";
     if (strstr(s, "<error>")) color = "red";
@@ -3546,7 +3546,6 @@ typedef struct clusterManagerLink {
 static dictType clusterManagerDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     NULL,              /* key destructor */
     dictSdsDestructor, /* val destructor */
@@ -3556,7 +3555,6 @@ static dictType clusterManagerDictType = {
 static dictType clusterManagerLinkDictType = {
     dictSdsHash,        /* hash function */
     NULL,               /* key dup */
-    NULL,               /* val dup */
     dictSdsKeyCompare,  /* key compare */
     dictSdsDestructor,  /* key destructor */
     dictListDestructor, /* val destructor */
@@ -8630,7 +8628,6 @@ void type_free(dict *d, void *val) {
 static dictType typeinfoDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     NULL,              /* key destructor (owned by the value)*/
     type_free,         /* val destructor */

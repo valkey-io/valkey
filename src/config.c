@@ -986,7 +986,6 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state);
 dictType optionToLineDictType = {
     dictSdsCaseHash,       /* hash function */
     NULL,                  /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     dictListDestructor,    /* val destructor */
@@ -996,7 +995,6 @@ dictType optionToLineDictType = {
 dictType optionSetDictType = {
     dictSdsCaseHash,       /* hash function */
     NULL,                  /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     NULL,                  /* val destructor */

@@ -48,6 +48,8 @@
 #include "serverassert.h"
 #include "monotonic.h"
 
+#define UNUSED(V) ((void)V)
+
 /* Using dictSetResizeEnabled() we make possible to disable
  * resizing and rehashing of the hash table as needed. This is very important
  * for us, as we use copy-on-write and don't want to move too much memory
@@ -800,8 +802,9 @@ void dictSetKey(dict *d, dictEntry *de, void *key) {
 }
 
 void dictSetVal(dict *d, dictEntry *de, void *val) {
+    UNUSED(d);
     assert(entryHasValue(de));
-    de->v.val = d->type->valDup ? d->type->valDup(d, val) : val;
+    de->v.val = val;
 }
 
 void dictSetSignedIntegerVal(dictEntry *de, int64_t val) {
@@ -1745,7 +1748,7 @@ char *stringFromLongLong(long long value) {
     return s;
 }
 
-dictType BenchmarkDictType = {hashCallback, NULL, NULL, compareCallback, freeCallback, NULL, NULL};
+dictType BenchmarkDictType = {hashCallback, NULL, compareCallback, freeCallback, NULL, NULL};
 
 #define start_benchmark() start = timeInMilliseconds()
 #define end_benchmark(msg)                                                                                             \

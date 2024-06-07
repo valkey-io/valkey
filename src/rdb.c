@@ -3021,10 +3021,9 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             if ((dbid = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             if (dbid >= (unsigned)server.dbnum) {
                 serverLog(LL_WARNING,
-                          "FATAL: Data file was created with a Redis "
-                          "server configured to handle more than %d "
-                          "databases. Exiting\n",
-                          server.dbnum);
+                          "FATAL: Data file was created with a %s server configured to handle "
+                          "more than %d databases. Exiting\n",
+                          SERVER_TITLE, server.dbnum);
                 exit(1);
             }
             db = rdb_loading_ctx->dbarray + dbid;
@@ -3082,7 +3081,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             } else if (!strcasecmp(auxkey->ptr, "redis-ver")) {
                 serverLog(LL_NOTICE, "Loading RDB produced by Redis version %s", (char *)auxval->ptr);
             } else if (!strcasecmp(auxkey->ptr, "valkey-ver")) {
-                serverLog(LL_NOTICE, "Loading RDB produced by valkey version %s", (char *)auxval->ptr);
+                serverLog(LL_NOTICE, "Loading RDB produced by Valkey version %s", (char *)auxval->ptr);
             } else if (!strcasecmp(auxkey->ptr, "ctime")) {
                 time_t age = time(NULL) - strtol(auxval->ptr, NULL, 10);
                 if (age < 0) age = 0;

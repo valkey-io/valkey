@@ -1243,7 +1243,6 @@ static int fetchClusterSlotsConfiguration(client c) {
     static dictType dtype = {
         dictSdsHash,       /* hash function */
         NULL,              /* key dup */
-        NULL,              /* val dup */
         dictSdsKeyCompare, /* key compare */
         NULL,              /* key destructor */
         NULL,              /* val destructor */

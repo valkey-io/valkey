@@ -1069,7 +1069,7 @@ void flushAppendOnlyFile(int force) {
         } else {
             /* All data is fsync'd already: Update fsynced_reploff_pending just in case.
              * This is needed to avoid a WAITAOF hang in case a module used RM_Call with the NO_AOF flag,
-             * in which case master_repl_offset will increase but fsynced_reploff_pending won't be updated
+             * in which case primary_repl_offset will increase but fsynced_reploff_pending won't be updated
              * (because there's no reason, from the AOF POV, to call fsync) and then WAITAOF may wait on
              * the higher offset (which contains data that was only propagated to replicas, and not to AOF) */
             if (!sync_in_progress && server.aof_fsync != AOF_FSYNC_NO)
@@ -1356,7 +1356,7 @@ struct client *createAOFClient(void) {
     c->id = CLIENT_ID_AOF; /* So modules can identify it's the AOF client. */
 
     /*
-     * The AOF client should never be blocked (unlike master
+     * The AOF client should never be blocked (unlike primary
      * replication connection).
      * This is because blocking the AOF client might cause
      * deadlock (because potentially no one will unblock it).
@@ -2404,7 +2404,7 @@ int rewriteAppendOnlyFileBackground(void) {
          * between updates to `fsynced_reploff_pending` of the worker thread, belonging
          * to the previous AOF, and the new one. This concern is specific for a full
          * sync scenario where we don't wanna risk the ACKed replication offset
-         * jumping backwards or forward when switching to a different master. */
+         * jumping backwards or forward when switching to a different primary. */
         bioDrainWorker(BIO_AOF_FSYNC);
 
         /* Set the initial repl_offset, which will be applied to fsynced_reploff

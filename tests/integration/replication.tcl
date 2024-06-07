@@ -574,12 +574,12 @@ foreach testType {Successful Aborted} {
 
             # Set a function value on replica to check status during loading, on failure and after swapping db
             $replica function load {#!lua name=test
-                redis.register_function('test', function() return 'hello1' end)
+                server.register_function('test', function() return 'hello1' end)
             }
 
             # Set a function value on master to check it reaches the replica when replication ends
             $master function load {#!lua name=test
-                redis.register_function('test', function() return 'hello2' end)
+                server.register_function('test', function() return 'hello2' end)
             }
 
             # Remember the sync_full stat before the client kill.
@@ -727,7 +727,7 @@ test {diskless loading short read} {
 
             # Set a function value to check short read handling on functions
             r function load {#!lua name=test
-                redis.register_function('test', function() return 'hello1' end)
+                server.register_function('test', function() return 'hello1' end)
             }
 
             for {set k 0} {$k < 3} {incr k} {

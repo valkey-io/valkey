@@ -78,10 +78,10 @@ static int reqresShouldLog(client *c) {
     if (!server.req_res_logfile) return 0;
 
     /* Ignore client with streaming non-standard response */
-    if (c->flags & (CLIENT_PUBSUB | CLIENT_MONITOR | CLIENT_SLAVE)) return 0;
+    if (c->flags & (CLIENT_PUBSUB | CLIENT_MONITOR | CLIENT_REPLICA)) return 0;
 
-    /* We only work on masters (didn't implement reqresAppendResponse to work on shared slave buffers) */
-    if (getClientType(c) == CLIENT_TYPE_MASTER) return 0;
+    /* We only work on primaries (didn't implement reqresAppendResponse to work on shared replica buffers) */
+    if (getClientType(c) == CLIENT_TYPE_PRIMARY) return 0;
 
     return 1;
 }

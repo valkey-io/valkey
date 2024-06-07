@@ -17,7 +17,7 @@ start_cluster 1 0 {tags {external:skip cluster}} {
                 return 'OK'
             end
 
-            redis.register_function('test_cross_slot', test_cross_slot)}
+            server.register_function('test_cross_slot', test_cross_slot)}
         assert_error "ERR Script attempted to access keys that do not hash to the same slot*" {r FCALL test_cross_slot 0}
     }
 
@@ -45,7 +45,7 @@ start_cluster 1 0 {tags {external:skip cluster}} {
                 return 'OK'
             end
 
-            redis.register_function{function_name='test_cross_slot', callback=test_cross_slot, flags={ 'allow-cross-slot-keys' }}}
+            server.register_function{function_name='test_cross_slot', callback=test_cross_slot, flags={ 'allow-cross-slot-keys' }}}
         r FCALL test_cross_slot 0
 
         # Retrieve data from different slot to verify data has been stored in the correct dictionary in cluster-enabled setup
@@ -73,7 +73,7 @@ start_cluster 1 0 {tags {external:skip cluster}} {
 
     test "Function no-cluster flag" {
         R 0 function load {#!lua name=test
-            redis.register_function{function_name='f1', callback=function() return 'hello' end, flags={'no-cluster'}}
+            server.register_function{function_name='f1', callback=function() return 'hello' end, flags={'no-cluster'}}
         }
         catch {R 0 fcall f1 0} e
         assert_match {*Can not run script on cluster, 'no-cluster' flag is set*} $e

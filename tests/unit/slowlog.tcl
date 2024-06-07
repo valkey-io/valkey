@@ -64,8 +64,8 @@ start_server {tags {"slowlog"} overrides {slowlog-log-slower-than 1000000}} {
         r config set slowlog-log-slower-than 0
         r slowlog reset
         catch {r acl setuser "slowlog test user" +get +set} _
-        r config set masteruser ""
-        r config set masterauth ""
+        r config set primaryuser ""
+        r config set primaryauth ""
         r config set requirepass ""
         r config set tls-key-file-pass ""
         r config set tls-client-key-file-pass ""
@@ -81,8 +81,8 @@ start_server {tags {"slowlog"} overrides {slowlog-log-slower-than 1000000}} {
         assert_equal 11 [llength $slowlog_resp]
         assert_equal {slowlog reset} [lindex [lindex $slowlog_resp 10] 3]
         assert_equal {acl setuser (redacted) (redacted) (redacted)} [lindex [lindex $slowlog_resp 9] 3]
-        assert_equal {config set masteruser (redacted)} [lindex [lindex $slowlog_resp 8] 3]
-        assert_equal {config set masterauth (redacted)} [lindex [lindex $slowlog_resp 7] 3]
+        assert_equal {config set primaryuser (redacted)} [lindex [lindex $slowlog_resp 8] 3]
+        assert_equal {config set primaryauth (redacted)} [lindex [lindex $slowlog_resp 7] 3]
         assert_equal {config set requirepass (redacted)} [lindex [lindex $slowlog_resp 6] 3]
         assert_equal {config set tls-key-file-pass (redacted)} [lindex [lindex $slowlog_resp 5] 3]
         assert_equal {config set tls-client-key-file-pass (redacted)} [lindex [lindex $slowlog_resp 4] 3]

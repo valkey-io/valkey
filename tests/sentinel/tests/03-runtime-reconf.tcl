@@ -9,14 +9,14 @@ proc server_set_password {} {
     foreach_valkey_id id {
         assert_equal {OK} [R $id CONFIG SET requirepass $::password]
         assert_equal {OK} [R $id AUTH $::password]
-        assert_equal {OK} [R $id CONFIG SET masterauth $::password]
+        assert_equal {OK} [R $id CONFIG SET primaryauth $::password]
     }
 }
 
 proc server_reset_password {} {
     foreach_valkey_id id {
         assert_equal {OK} [R $id CONFIG SET requirepass ""]
-        assert_equal {OK} [R $id CONFIG SET masterauth ""]
+        assert_equal {OK} [R $id CONFIG SET primaryauth ""]
     }
 }
 
@@ -26,16 +26,16 @@ proc server_set_acl {id} {
 
     R $id CLIENT KILL USER default SKIPME no
     assert_equal {OK} [R $id AUTH $::user $::password]
-    assert_equal {OK} [R $id CONFIG SET masteruser $::user]
-    assert_equal {OK} [R $id CONFIG SET masterauth $::password]
+    assert_equal {OK} [R $id CONFIG SET primaryuser $::user]
+    assert_equal {OK} [R $id CONFIG SET primaryauth $::password]
 }
 
 proc server_reset_acl {id} {
     assert_equal {OK} [R $id ACL SETUSER default on]
     assert_equal {1} [R $id ACL DELUSER $::user]
 
-    assert_equal {OK} [R $id CONFIG SET masteruser ""]
-    assert_equal {OK} [R $id CONFIG SET masterauth ""]
+    assert_equal {OK} [R $id CONFIG SET primaryuser ""]
+    assert_equal {OK} [R $id CONFIG SET primaryauth ""]
 }
 
 proc verify_sentinel_connect_replicas {id} {

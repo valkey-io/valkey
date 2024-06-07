@@ -41,7 +41,7 @@ jobs:
     - name: Check for formatting changes
       if: ${{ steps.clang-format.outputs.diff }}
       run: |
-        echo "Code is not formatted correctly. Here is the diff:"
+        echo "ERROR: Code is not formatted correctly. Here is the diff:"
         # Decode the Base64 diff to display it
         echo "${{ steps.clang-format.outputs.diff }}" | base64 --decode
         exit 1

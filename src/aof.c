@@ -904,12 +904,12 @@ int aofFsyncInProgress(void) {
 /* Starts a background task that performs fsync() against the specified
  * file descriptor (the one of the AOF file) in another thread. */
 void aof_background_fsync(int fd) {
-    bioCreateFsyncJob(fd, server.master_repl_offset, 1);
+    bioCreateFsyncJob(fd, server.primary_repl_offset, 1);
 }
 
 /* Close the fd on the basis of aof_background_fsync. */
 void aof_background_fsync_and_close(int fd) {
-    bioCreateCloseAofJob(fd, server.master_repl_offset, 1);
+    bioCreateCloseAofJob(fd, server.primary_repl_offset, 1);
 }
 
 /* Kills an AOFRW child process if exists */
@@ -1069,11 +1069,12 @@ void flushAppendOnlyFile(int force) {
         } else {
             /* All data is fsync'd already: Update fsynced_reploff_pending just in case.
              * This is needed to avoid a WAITAOF hang in case a module used RM_Call with the NO_AOF flag,
-             * in which case master_repl_offset will increase but fsynced_reploff_pending won't be updated
+             * in which case primary_repl_offset will increase but fsynced_reploff_pending won't be updated
              * (because there's no reason, from the AOF POV, to call fsync) and then WAITAOF may wait on
              * the higher offset (which contains data that was only propagated to replicas, and not to AOF) */
             if (!sync_in_progress && server.aof_fsync != AOF_FSYNC_NO)
-                atomic_store_explicit(&server.fsynced_reploff_pending, server.master_repl_offset, memory_order_relaxed);
+                atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset,
+                                      memory_order_relaxed);
             return;
         }
     }
@@ -1243,7 +1244,7 @@ try_fsync:
         latencyAddSampleIfNeeded("aof-fsync-always", latency);
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         server.aof_last_fsync = server.mstime;
-        atomic_store_explicit(&server.fsynced_reploff_pending, server.master_repl_offset, memory_order_relaxed);
+        atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset, memory_order_relaxed);
     } else if (server.aof_fsync == AOF_FSYNC_EVERYSEC && server.mstime - server.aof_last_fsync >= 1000) {
         if (!sync_in_progress) {
             aof_background_fsync(server.aof_fd);
@@ -1355,7 +1356,7 @@ struct client *createAOFClient(void) {
     c->id = CLIENT_ID_AOF; /* So modules can identify it's the AOF client. */
 
     /*
-     * The AOF client should never be blocked (unlike master
+     * The AOF client should never be blocked (unlike primary
      * replication connection).
      * This is because blocking the AOF client might cause
      * deadlock (because potentially no one will unblock it).
@@ -1365,9 +1366,9 @@ struct client *createAOFClient(void) {
      */
     c->flags = CLIENT_DENY_BLOCKING;
 
-    /* We set the fake client as a slave waiting for the synchronization
+    /* We set the fake client as a replica waiting for the synchronization
      * so that the server will not try to send replies to this client. */
-    c->replstate = SLAVE_STATE_WAIT_BGSAVE_START;
+    c->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
     return c;
 }
 
@@ -2320,7 +2321,7 @@ int rewriteAppendOnlyFile(char *filename) {
 
     if (server.aof_use_rdb_preamble) {
         int error;
-        if (rdbSaveRio(SLAVE_REQ_NONE, &aof, &error, RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
+        if (rdbSaveRio(REPLICA_REQ_NONE, &aof, &error, RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
             errno = error;
             goto werr;
         }
@@ -2403,12 +2404,12 @@ int rewriteAppendOnlyFileBackground(void) {
          * between updates to `fsynced_reploff_pending` of the worker thread, belonging
          * to the previous AOF, and the new one. This concern is specific for a full
          * sync scenario where we don't wanna risk the ACKed replication offset
-         * jumping backwards or forward when switching to a different master. */
+         * jumping backwards or forward when switching to a different primary. */
         bioDrainWorker(BIO_AOF_FSYNC);
 
         /* Set the initial repl_offset, which will be applied to fsynced_reploff
          * when AOFRW finishes (after possibly being updated by a bio thread) */
-        atomic_store_explicit(&server.fsynced_reploff_pending, server.master_repl_offset, memory_order_relaxed);
+        atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset, memory_order_relaxed);
         server.fsynced_reploff = 0;
     }
 

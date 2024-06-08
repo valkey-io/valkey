@@ -162,7 +162,7 @@ typedef struct clusterNode {
     int port;
     sds name;
     int flags;
-    sds replicate; /* Master ID if node is a slave */
+    sds replicate; /* Primary ID if node is a replica */
     int *slots;
     int slots_count;
     int *updated_slots;      /* Used by updateClusterSlotsConfiguration */
@@ -1092,7 +1092,7 @@ static int fetchClusterConfiguration(void) {
         *p = '\0';
         line = lines;
         lines = p + 1;
-        char *name = NULL, *addr = NULL, *flags = NULL, *master_id = NULL;
+        char *name = NULL, *addr = NULL, *flags = NULL, *primary_id = NULL;
         int i = 0;
         while ((p = strchr(line, ' ')) != NULL) {
             *p = '\0';
@@ -1103,7 +1103,7 @@ static int fetchClusterConfiguration(void) {
             case 0: name = token; break;
             case 1: addr = token; break;
             case 2: flags = token; break;
-            case 3: master_id = token; break;
+            case 3: primary_id = token; break;
             }
             /* clang-format on */
             if (i == 8) break; // Slots
@@ -1114,7 +1114,7 @@ static int fetchClusterConfiguration(void) {
             goto cleanup;
         }
         int myself = (strstr(flags, "myself") != NULL);
-        int is_replica = (strstr(flags, "slave") != NULL || (master_id != NULL && master_id[0] != '-'));
+        int is_replica = (strstr(flags, "slave") != NULL || (primary_id != NULL && primary_id[0] != '-'));
         if (is_replica) continue;
         if (addr == NULL) {
             fprintf(stderr, "Invalid CLUSTER NODES reply: missing addr.\n");
@@ -1249,7 +1249,7 @@ static int fetchClusterSlotsConfiguration(client c) {
         NULL               /* allow to expand */
     };
     /* printf("[%d] fetchClusterSlotsConfiguration\n", c->thread_id); */
-    dict *masters = dictCreate(&dtype);
+    dict *primaries = dictCreate(&dtype);
     redisContext *ctx = NULL;
     for (i = 0; i < (size_t)config.cluster_node_count; i++) {
         clusterNode *node = config.cluster_nodes[i];
@@ -1267,7 +1267,7 @@ static int fetchClusterSlotsConfiguration(client c) {
         if (node->updated_slots != NULL) zfree(node->updated_slots);
         node->updated_slots = NULL;
         node->updated_slots_count = 0;
-        dictReplace(masters, node->name, node);
+        dictReplace(primaries, node->name, node);
     }
     reply = redisCommand(ctx, "CLUSTER SLOTS");
     if (reply == NULL || reply->type == REDIS_REPLY_ERROR) {
@@ -1287,7 +1287,7 @@ static int fetchClusterSlotsConfiguration(client c) {
         assert(nr->type == REDIS_REPLY_ARRAY && nr->elements >= 3);
         assert(nr->element[2]->str != NULL);
         sds name = sdsnew(nr->element[2]->str);
-        dictEntry *entry = dictFind(masters, name);
+        dictEntry *entry = dictFind(primaries, name);
         if (entry == NULL) {
             success = 0;
             fprintf(stderr,
@@ -1306,7 +1306,7 @@ static int fetchClusterSlotsConfiguration(client c) {
 cleanup:
     freeReplyObject(reply);
     redisFree(ctx);
-    dictRelease(masters);
+    dictRelease(primaries);
     atomic_store_explicit(&config.is_fetching_slots, 0, memory_order_relaxed);
     return success;
 }

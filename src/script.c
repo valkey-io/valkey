@@ -48,8 +48,8 @@ static void exitScriptTimedoutMode(scriptRunCtx *run_ctx) {
     serverAssert(scriptIsTimedout());
     run_ctx->flags &= ~SCRIPT_TIMEDOUT;
     blockingOperationEnds();
-    /* if we are a replica and we have an active master, set it for continue processing */
-    if (server.masterhost && server.master) queueClientForReprocessing(server.master);
+    /* if we are a replica and we have an active primary, set it for continue processing */
+    if (server.primary_host && server.primary) queueClientForReprocessing(server.primary);
 }
 
 static void enterScriptTimedoutMode(scriptRunCtx *run_ctx) {
@@ -135,7 +135,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
     int client_allow_oom = !!(caller->flags & CLIENT_ALLOW_OOM);
 
     int running_stale =
-        server.masterhost && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0;
+        server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0;
     int obey_client = mustObeyClient(caller);
 
     if (!(script_flags & SCRIPT_FLAG_EVAL_COMPAT_MODE)) {
@@ -156,7 +156,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
              * 1. we are not a readonly replica
              * 2. no disk error detected
              * 3. command is not `fcall_ro`/`eval[sha]_ro` */
-            if (server.masterhost && server.repl_slave_ro && !obey_client) {
+            if (server.primary_host && server.repl_replica_ro && !obey_client) {
                 addReplyError(caller, "-READONLY Can not run script with write flag on readonly replica");
                 return C_ERR;
             }
@@ -186,8 +186,8 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
                 return C_ERR;
             }
 
-            /* Don't accept write commands if there are not enough good slaves and
-             * user configured the min-slaves-to-write option. */
+            /* Don't accept write commands if there are not enough good replicas and
+             * user configured the min-replicas-to-write option. */
             if (!checkGoodReplicasStatus()) {
                 addReplyErrorObject(caller, shared.noreplicaserr);
                 return C_ERR;
@@ -206,7 +206,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
     } else {
         /* Special handling for backwards compatibility (no shebang eval[sha]) mode */
         if (running_stale) {
-            addReplyErrorObject(caller, shared.masterdownerr);
+            addReplyErrorObject(caller, shared.primarydownerr);
             return C_ERR;
         }
     }
@@ -367,13 +367,13 @@ static int scriptVerifyWriteCommandAllow(scriptRunCtx *run_ctx, char **err) {
      * fail it on unpredictable error state. */
     if ((run_ctx->flags & SCRIPT_WRITE_DIRTY)) return C_OK;
 
-    /* Write commands are forbidden against read-only slaves, or if a
+    /* Write commands are forbidden against read-only replicas, or if a
      * command marked as non-deterministic was already called in the context
      * of this script. */
     int deny_write_type = writeCommandsDeniedByDiskError();
 
-    if (server.masterhost && server.repl_slave_ro && !mustObeyClient(run_ctx->original_client)) {
-        *err = sdsdup(shared.roslaveerr->ptr);
+    if (server.primary_host && server.repl_replica_ro && !mustObeyClient(run_ctx->original_client)) {
+        *err = sdsdup(shared.roreplicaerr->ptr);
         return C_ERR;
     }
 
@@ -382,8 +382,8 @@ static int scriptVerifyWriteCommandAllow(scriptRunCtx *run_ctx, char **err) {
         return C_ERR;
     }
 
-    /* Don't accept write commands if there are not enough good slaves and
-     * user configured the min-slaves-to-write option. Note this only reachable
+    /* Don't accept write commands if there are not enough good replicas and
+     * user configured the min-replicas-to-write option. Note this only reachable
      * for Eval scripts that didn't declare flags, see the other check in
      * scriptPrepareForRun */
     if (!checkGoodReplicasStatus()) {
@@ -423,7 +423,7 @@ static int scriptVerifyClusterState(scriptRunCtx *run_ctx, client *c, client *or
     }
     /* If this is a Cluster node, we need to make sure the script is not
      * trying to access non-local keys, with the exception of commands
-     * received from our master or when loading the AOF back in memory. */
+     * received from our primary or when loading the AOF back in memory. */
     int error_code;
     /* Duplicate relevant flags in the script client. */
     c->flags &= ~(CLIENT_READONLY | CLIENT_ASKING);
@@ -498,7 +498,7 @@ int scriptSetRepl(scriptRunCtx *run_ctx, int repl) {
 }
 
 static int scriptVerifyAllowStale(client *c, sds *err) {
-    if (!server.masterhost) {
+    if (!server.primary_host) {
         /* Not a replica, stale is irrelevant */
         return C_OK;
     }

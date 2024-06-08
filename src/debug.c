@@ -552,7 +552,7 @@ void debugCommand(client *c) {
         if (save) {
             rdbSaveInfo rsi, *rsiptr;
             rsiptr = rdbPopulateSaveInfo(&rsi);
-            if (rdbSave(SLAVE_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) != C_OK) {
+            if (rdbSave(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) != C_OK) {
                 addReplyErrorObject(c, shared.err);
                 return;
             }
@@ -845,7 +845,7 @@ void debugCommand(client *c) {
         server.aof_flush_sleep = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "replicate") && c->argc >= 3) {
-        replicationFeedSlaves(-1, c->argv + 2, c->argc - 2);
+        replicationFeedReplicas(-1, c->argv + 2, c->argc - 2);
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "error") && c->argc == 3) {
         sds errstr = sdsnewlen("-", 1);
@@ -925,7 +925,7 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "stringmatch-test") && c->argc == 2) {
         stringmatchlen_fuzz_test();
-        addReplyStatus(c, "Apparently Redis did not crash: test passed");
+        addReplyStatus(c, "Apparently the server did not crash: test passed");
     } else if (!strcasecmp(c->argv[1]->ptr, "set-disable-deny-scripts") && c->argc == 3) {
         server.script_disable_deny_script = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);

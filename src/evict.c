@@ -321,7 +321,7 @@ unsigned long LFUDecrAndReturn(robj *o) {
     return counter;
 }
 
-/* We don't want to count AOF buffers and slaves output buffers as
+/* We don't want to count AOF buffers and replicas output buffers as
  * used memory: the eviction should use mostly data size, because
  * it can cause feedback-loop when we push DELs into them, putting
  * more and more DELs will make them bigger, if we count them, we
@@ -377,7 +377,7 @@ size_t freeMemoryGetNotCountedMemory(void) {
  *  'total'     total amount of bytes used.
  *              (Populated both for C_ERR and C_OK)
  *
- *  'logical'   the amount of memory used minus the slaves/AOF buffers.
+ *  'logical'   the amount of memory used minus the replicas/AOF buffers.
  *              (Populated when C_ERR is returned)
  *
  *  'tofree'    the amount of memory that should be released
@@ -393,7 +393,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     size_t mem_reported, mem_used, mem_tofree;
 
     /* Check if we are over the memory usage limit. If we are not, no need
-     * to subtract the slaves output buffers. We can just return ASAP. */
+     * to subtract the replicas output buffers. We can just return ASAP. */
     mem_reported = zmalloc_used_memory();
     if (total) *total = mem_reported;
 
@@ -404,7 +404,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     }
     if (mem_reported <= server.maxmemory && !level) return C_OK;
 
-    /* Remove the size of slaves output buffers and AOF buffer from the
+    /* Remove the size of replicas output buffers and AOF buffer from the
      * count of used memory. */
     mem_used = mem_reported;
     size_t overhead = freeMemoryGetNotCountedMemory();
@@ -477,8 +477,8 @@ static int isSafeToPerformEvictions(void) {
     if (isInsideYieldingLongCommand() || server.loading) return 0;
 
     /* By default replicas should ignore maxmemory
-     * and just be masters exact copies. */
-    if (server.masterhost && server.repl_slave_ignore_maxmemory) return 0;
+     * and just be primaries exact copies. */
+    if (server.primary_host && server.repl_replica_ignore_maxmemory) return 0;
 
     /* If 'evict' action is paused, for whatever reason, then return false */
     if (isPausedActionsWithUpdate(PAUSE_ACTION_EVICT)) return 0;
@@ -538,7 +538,7 @@ int performEvictions(void) {
     long long mem_freed = 0; /* Maybe become negative */
     mstime_t latency, eviction_latency;
     long long delta;
-    int slaves = listLength(server.slaves);
+    int replicas = listLength(server.replicas);
     int result = EVICT_FAIL;
 
     if (getMaxmemoryState(&mem_reported, NULL, &mem_tofree, NULL) == C_OK) {
@@ -697,7 +697,7 @@ int performEvictions(void) {
                  * start spending so much time here that is impossible to
                  * deliver data to the replicas fast enough, so we force the
                  * transmission here inside the loop. */
-                if (slaves) flushSlavesOutputBuffers();
+                if (replicas) flushReplicasOutputBuffers();
 
                 /* Normally our stop condition is the ability to release
                  * a fixed, pre-computed amount of memory. However when we

@@ -311,7 +311,7 @@ start_server {tags {"introspection"}} {
 
     test {MONITOR can log commands issued by functions} {
         r function load replace {#!lua name=test
-            redis.register_function('test', function() return redis.call('set', 'foo', 'bar') end)
+            server.register_function('test', function() return redis.call('set', 'foo', 'bar') end)
         }
         set rd [valkey_deferring_client]
         $rd monitor

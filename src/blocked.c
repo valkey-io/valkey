@@ -87,7 +87,7 @@ void initClientBlockingState(client *c) {
  * and will be processed when the client is unblocked. */
 void blockClient(client *c, int btype) {
     /* Master client should never be blocked unless pause or module */
-    serverAssert(!(c->flags & CLIENT_MASTER && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE));
+    serverAssert(!(c->flags & CLIENT_PRIMARY && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE));
 
     c->flags |= CLIENT_BLOCKED;
     c->bstate.btype = btype;
@@ -265,8 +265,8 @@ void replyToClientsBlockedOnShutdown(void) {
 
 /* Mass-unblock clients because something changed in the instance that makes
  * blocking no longer safe. For example clients blocked in list operations
- * in an instance which turns from master to slave is unsafe, so this function
- * is called when a master turns into a slave.
+ * in an instance which turns from master to replica is unsafe, so this function
+ * is called when a master turns into a replica.
  *
  * The semantics is to send an -UNBLOCKED error to the client, disconnecting
  * it at the same time. */

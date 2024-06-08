@@ -1032,6 +1032,9 @@ typedef struct rdbLoadingCtx {
     functionsLibCtx *functions_lib_ctx;
 } rdbLoadingCtx;
 
+typedef sds (*rdbAuxFieldEncoder)(int flags);
+typedef int (*rdbAuxFieldDecoder)(int flags, sds s);
+
 /* Client MULTI/EXEC state */
 typedef struct multiCmd {
     robj **argv;
@@ -1368,11 +1371,11 @@ struct sharedObjectsStruct {
         *xgroup, *xclaim, *script, *replconf, *eval, *persist, *set, *pexpireat, *pexpire, *time, *pxat, *absttl,
         *retrycount, *force, *justid, *entriesread, *lastid, *ping, *setid, *keepttl, *load, *createconsumer, *getack,
         *special_asterick, *special_equals, *default_username, *redacted, *ssubscribebulk, *sunsubscribebulk,
-        *smessagebulk, *cluster, *setslot, *importing, *migrating, *select[PROTO_SHARED_SELECT_CMDS],
-        *integers[OBJ_SHARED_INTEGERS], *mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
-        *bulkhdr[OBJ_SHARED_BULKHDR_LEN],                                  /* "$<value>\r\n" */
-        *maphdr[OBJ_SHARED_BULKHDR_LEN],                                   /* "%<value>\r\n" */
-        *sethdr[OBJ_SHARED_BULKHDR_LEN];                                   /* "~<value>\r\n" */
+        *smessagebulk, *select[PROTO_SHARED_SELECT_CMDS], *integers[OBJ_SHARED_INTEGERS],
+        *mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
+        *bulkhdr[OBJ_SHARED_BULKHDR_LEN],  /* "$<value>\r\n" */
+        *maphdr[OBJ_SHARED_BULKHDR_LEN],   /* "%<value>\r\n" */
+        *sethdr[OBJ_SHARED_BULKHDR_LEN];   /* "~<value>\r\n" */
     sds minstring, maxstring;
 };
 
@@ -2603,6 +2606,7 @@ int serverSetProcTitle(char *title);
 int validateProcTitleTemplate(const char *template);
 int serverCommunicateSystemd(const char *sd_notify_msg);
 void serverSetCpuAffinity(const char *cpulist);
+void dictVanillaFree(dict *d, void *val);
 
 /* afterErrorReply flags */
 #define ERR_REPLY_FLAG_NO_STATS_UPDATE                                                                                 \
@@ -2904,6 +2908,7 @@ void rebaseReplicationBuffer(long long base_repl_offset);
 void showLatestBacklog(void);
 void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask);
 void rdbPipeWriteHandlerConnRemoved(struct connection *conn);
+int rdbRegisterAuxField(char *auxfield, rdbAuxFieldEncoder encoder, rdbAuxFieldDecoder decoder);
 void clearFailoverState(void);
 void updateFailoverStatus(void);
 void abortFailover(const char *err);

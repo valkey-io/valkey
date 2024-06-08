@@ -15,9 +15,6 @@ proc get_cluster_role {srv_idx} {
 }
 
 proc wait_for_role {srv_idx role} {
-    set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
-    # wait for a gossip cycle for states to be propagated throughout the cluster
-    after $node_timeout
     wait_for_condition 100 100 {
         [lindex [split [R $srv_idx ROLE] " "] 0] eq $role
     } else {
@@ -198,7 +195,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_equal {OK} [R 3 CLUSTER REPLICATE $R0_id]
         wait_for_role 3 slave
         # Validate that R3 now sees slot 609 open
-        assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
+        wait_for_slot_state 3 "\[609->-$R1_id\]"
     }
 
     test "New replica inherits importing slot" {
@@ -212,7 +209,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_equal {OK} [R 4 CLUSTER REPLICATE $R1_id]
         wait_for_role 4 slave
         # Validate that R4 now sees slot 609 open
-        assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
+        wait_for_slot_state 4 "\[609-<-$R0_id\]"
     }
 }
 

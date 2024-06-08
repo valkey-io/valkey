@@ -103,7 +103,6 @@ char *clusterNodeHostname(clusterNode *node);
 const char *clusterNodePreferredEndpoint(clusterNode *n);
 long long clusterNodeReplOffset(clusterNode *node);
 clusterNode *clusterLookupNode(const char *name, int length);
-void clusterReplicateOpenSlots(void);
 int detectAndUpdateCachedNodeHealth(void);
 client *createCachedResponseClient(void);
 void deleteCachedResponseClient(client *recording_client);

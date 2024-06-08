@@ -36,6 +36,7 @@
 #include "functions.h"
 #include "intset.h" /* Compact integer set structure */
 #include "bio.h"
+#include "zmalloc.h"
 
 #include <math.h>
 #include <fcntl.h>
@@ -105,6 +106,30 @@ void rdbReportError(int corruption_error, int linenum, char *reason, ...) {
     }
     serverLog(LL_WARNING, "Terminating server after rdb file reading failure.");
     exit(1);
+}
+
+typedef struct {
+    rdbAuxFieldEncoder encoder;
+    rdbAuxFieldDecoder decoder;
+} rdbAuxFieldCodec;
+
+dictType rdbAuxFieldDictType = {
+    dictSdsCaseHash,       /* hash function */
+    NULL,                  /* key dup */
+    dictSdsKeyCaseCompare, /* key compare */
+    dictSdsDestructor,     /* key destructor */
+    dictVanillaFree,       /* val destructor */
+    NULL                   /* allow to expand */
+};
+
+dict *rdbAuxFields = NULL;
+
+int rdbRegisterAuxField(char *auxfield, rdbAuxFieldEncoder encoder, rdbAuxFieldDecoder decoder) {
+    if (rdbAuxFields == NULL) rdbAuxFields = dictCreate(&rdbAuxFieldDictType);
+    rdbAuxFieldCodec *codec = zmalloc(sizeof(rdbAuxFieldCodec));
+    codec->encoder = encoder;
+    codec->decoder = decoder;
+    return dictAdd(rdbAuxFields, sdsnew(auxfield), (void *)codec) == DICT_OK ? C_OK : C_ERR;
 }
 
 ssize_t rdbWriteRaw(rio *rdb, void *p, size_t len) {
@@ -1186,6 +1211,24 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         if (rdbSaveAuxFieldStrInt(rdb, "repl-offset", server.primary_repl_offset) == -1) return -1;
     }
     if (rdbSaveAuxFieldStrInt(rdb, "aof-base", aof_base) == -1) return -1;
+
+    /* Handle additional dynamic aux fields */
+    if (rdbAuxFields != NULL) {
+        dictIterator di;
+        dictInitIterator(&di, rdbAuxFields);
+        dictEntry *de;
+        while ((de = dictNext(&di)) != NULL) {
+            rdbAuxFieldCodec *codec = (rdbAuxFieldCodec *)dictGetVal(de);
+            sds s = codec->encoder(rdbflags);
+            if (s == NULL) continue;
+            if (rdbSaveAuxFieldStrStr(rdb, dictGetKey(de), s) == -1) {
+                sdsfree(s);
+                return -1;
+            }
+            sdsfree(s);
+        }
+    }
+
     return 1;
 }
 
@@ -3099,9 +3142,22 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             } else if (!strcasecmp(auxkey->ptr, "redis-bits")) {
                 /* Just ignored. */
             } else {
-                /* We ignore fields we don't understand, as by AUX field
-                 * contract. */
-                serverLog(LL_DEBUG, "Unrecognized RDB AUX field: '%s'", (char *)auxkey->ptr);
+                /* Check if this is a dynamic aux field */
+                int handled = 0;
+                if (rdbAuxFields != NULL) {
+                    dictEntry *de = dictFind(rdbAuxFields, auxkey->ptr);
+                    if (de != NULL) {
+                        handled = 1;
+                        rdbAuxFieldCodec *codec = (rdbAuxFieldCodec *)dictGetVal(de);
+                        if (codec->decoder(rdbflags, auxval->ptr) < 0) goto eoferr;
+                    }
+                }
+
+                if (!handled) {
+                    /* We ignore fields we don't understand, as by AUX field
+                     * contract. */
+                    serverLog(LL_DEBUG, "Unrecognized RDB AUX field: '%s'", (char *)auxkey->ptr);
+                }
             }
 
             decrRefCount(auxkey);

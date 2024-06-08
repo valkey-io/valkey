@@ -2579,10 +2579,6 @@ void *preparePingExt(clusterMsgPingExt *ext, uint16_t type, uint32_t length) {
     return &ext->ext[0];
 }
 
-clusterMsgPingExt *nextPingExt(clusterMsgPingExt *ext) {
-    return (clusterMsgPingExt *)((char *)ext + ntohl(ext->length));
-}
-
 /* 1. If a NULL hdr is provided, compute the extension size;
  * 2. If a non-NULL hdr is provided, write the hostname ping
  *    extension at the start of the cursor. This function
@@ -2607,7 +2603,7 @@ uint32_t writePingExt(clusterMsg *hdr, int gossipcount) {
             memcpy(ext->hostname, myself->hostname, sdslen(myself->hostname));
 
             /* Move the write cursor */
-            cursor = nextPingExt(cursor);
+            cursor = getNextPingExt(cursor);
         }
 
         totlen += getHostnamePingExtSize();
@@ -2622,7 +2618,7 @@ uint32_t writePingExt(clusterMsg *hdr, int gossipcount) {
             memcpy(ext->human_nodename, myself->human_nodename, sdslen(myself->human_nodename));
 
             /* Move the write cursor */
-            cursor = nextPingExt(cursor);
+            cursor = getNextPingExt(cursor);
         }
 
         totlen += getHumanNodenamePingExtSize();
@@ -2644,7 +2640,7 @@ uint32_t writePingExt(clusterMsg *hdr, int gossipcount) {
                 ext->ttl = htonu64(ttl);
 
                 /* Move the write cursor */
-                cursor = nextPingExt(cursor);
+                cursor = getNextPingExt(cursor);
             }
             totlen += getForgottenNodeExtSize();
             extensions++;
@@ -2658,7 +2654,7 @@ uint32_t writePingExt(clusterMsg *hdr, int gossipcount) {
         memcpy(ext->shard_id, myself->shard_id, CLUSTER_NAMELEN);
 
         /* Move the write cursor */
-        cursor = nextPingExt(cursor);
+        cursor = getNextPingExt(cursor);
     }
     totlen += getShardIdPingExtSize();
     extensions++;

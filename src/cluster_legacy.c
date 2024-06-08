@@ -4892,7 +4892,7 @@ void bitmapClearBit(unsigned char *bitmap, int pos) {
  * MIGRATE_TO flag the when a primary gets the first slot. */
 int clusterPrimariesHaveReplicas(void) {
     dictIterator di;
-    dictInitSafeIterator(&di, server.cluster->nodes);
+    dicitInitIterator(&di, server.cluster->nodes);
     dictEntry *de;
     int replicas = 0;
     while ((de = dictNext(&di)) != NULL) {

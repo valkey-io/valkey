@@ -955,7 +955,7 @@ void dictInitIterator(dictIterator *iter, dict *d) {
 }
 
 /* Initialize a safe iterator, which is allowed to modify the dictionary while iterating.
- * You must call dictResetIterator when you are done with a safe iterator. */
+ * You must call dictResetIterator when you are doneg with a safe iterator. */
 void dictInitSafeIterator(dictIterator *iter, dict *d) {
     dictInitIterator(iter, d);
     iter->safe = 1;
@@ -966,8 +966,7 @@ void dictResetIterator(dictIterator *iter) {
         if (iter->safe) {
             dictResumeRehashing(iter->d);
             assert(iter->d->pauserehash >= 0);
-        }
-        else
+        } else
             assert(iter->fingerprint == dictFingerprint(iter->d));
     }
 }

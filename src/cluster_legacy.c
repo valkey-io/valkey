@@ -6501,7 +6501,7 @@ void clusterPromoteSelfToMaster(void) {
 
 int detectAndUpdateCachedNodeHealth(void) {
     dictIterator di;
-    dictInitSafeIterator(&di, server.cluster->nodes);
+    dictInitIterator(&di, server.cluster->nodes);
     dictEntry *de;
     clusterNode *node;
     int overall_health_changed = 0;

@@ -89,3 +89,15 @@ jobs:
         dnf -y install epel-release gcc make procps-ng which
         make -j SERVER_CFLAGS='-Werror'
 
+  format-yaml:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.22.4'
+    - name: Format Yaml files
+      run: |
+        go install github.com/google/yamlfmt/cmd/yamlfmt@latest
+        yamlfmt .
+

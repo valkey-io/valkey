@@ -707,7 +707,7 @@ int clientsCronResizeQueryBuffer(client *c) {
         if (idletime > 2) {
             /* 1) Query is idle for a long time. */
             size_t remaining = sdslen(c->querybuf) - c->qb_pos;
-            if (!(c->flags & CLIENT_PRIMARY) && !remaining) {
+            if (!(c->flag.primary) && !remaining) {
                 /* If the client is not a primary and no data is pending,
                  * The client can safely use the shared query buffer in the next read - free the client's querybuf. */
                 sdsfree(c->querybuf);
@@ -858,7 +858,7 @@ void updateClientMemoryUsage(client *c) {
 }
 
 int clientEvictionAllowed(client *c) {
-    if (server.maxmemory_clients == 0 || c->flags & CLIENT_NO_EVICT || !c->conn) {
+    if (server.maxmemory_clients == 0 || c->flag.no_evict || !c->conn) {
         return 0;
     }
     int type = getClientType(c);
@@ -3144,7 +3144,7 @@ struct serverCommand *lookupCommandOrOriginal(robj **argv, int argc) {
 
 /* Commands arriving from the primary client or AOF client, should never be rejected. */
 int mustObeyClient(client *c) {
-    return c->id == CLIENT_ID_AOF || c->flags & CLIENT_PRIMARY;
+    return c->id == CLIENT_ID_AOF || c->flag.primary;
 }
 
 static int shouldPropagate(int target) {
@@ -3216,25 +3216,25 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target) {
  * specific command execution into AOF / Replication. */
 void forceCommandPropagation(client *c, int flags) {
     serverAssert(c->cmd->flags & (CMD_WRITE | CMD_MAY_REPLICATE));
-    if (flags & PROPAGATE_REPL) c->flags |= CLIENT_FORCE_REPL;
-    if (flags & PROPAGATE_AOF) c->flags |= CLIENT_FORCE_AOF;
+    if (flags & PROPAGATE_REPL) c->flag.force_repl = 1;
+    if (flags & PROPAGATE_AOF) c->flag.force_aof = 1;
 }
 
 /* Avoid that the executed command is propagated at all. This way we
  * are free to just propagate what we want using the alsoPropagate()
  * API. */
 void preventCommandPropagation(client *c) {
-    c->flags |= CLIENT_PREVENT_PROP;
+    c->flag.prevent_prop = 1;
 }
 
 /* AOF specific version of preventCommandPropagation(). */
 void preventCommandAOF(client *c) {
-    c->flags |= CLIENT_PREVENT_AOF_PROP;
+    c->flag.prevent_aof_prop = 1;
 }
 
 /* Replication specific version of preventCommandPropagation(). */
 void preventCommandReplication(client *c) {
-    c->flags |= CLIENT_PREVENT_REPL_PROP;
+    c->flag.prevent_repl_prop = 1;
 }
 
 /* Log the last command a client executed into the slowlog. */
@@ -3395,7 +3395,8 @@ int incrCommandStatsOnError(struct serverCommand *cmd, int flags) {
  */
 void call(client *c, int flags) {
     long long dirty;
-    uint64_t client_old_flags = c->flags;
+    struct ClientFlags client_old_flags = c->flag;
+
     struct serverCommand *real_cmd = c->realcmd;
     client *prev_client = server.executing_client;
     server.executing_client = c;
@@ -3412,7 +3413,9 @@ void call(client *c, int flags) {
 
     /* Initialization: clear the flags that must be set by the command on
      * demand, and initialize the array for additional commands propagation. */
-    c->flags &= ~(CLIENT_FORCE_AOF | CLIENT_FORCE_REPL | CLIENT_PREVENT_PROP);
+    c->flag.force_aof = 0;
+    c->flag.force_repl = 0;
+    c->flag.prevent_prop = 0;
 
     /* The server core is in charge of propagation when the first entry point
      * of call() is processCommand().
@@ -3433,12 +3436,12 @@ void call(client *c, int flags) {
      * sending client side caching message in the middle of a command reply.
      * In case of blocking commands, the flag will be un-set only after successfully
      * re-processing and unblock the client.*/
-    c->flags |= CLIENT_EXECUTING_COMMAND;
+    c->flag.executing_command = 1;
 
     /* Setting the CLIENT_REPROCESSING_COMMAND flag so that during the actual
      * processing of the command proc, the client is aware that it is being
      * re-processed. */
-    if (reprocessing_command) c->flags |= CLIENT_REPROCESSING_COMMAND;
+    if (reprocessing_command) c->flag.reprocessing_command = 1;
 
     monotime monotonic_start = 0;
     if (monotonicGetType() == MONOTONIC_CLOCK_HW) monotonic_start = getMonotonicUs();
@@ -3446,13 +3449,13 @@ void call(client *c, int flags) {
     c->cmd->proc(c);
 
     /* Clear the CLIENT_REPROCESSING_COMMAND flag after the proc is executed. */
-    if (reprocessing_command) c->flags &= ~CLIENT_REPROCESSING_COMMAND;
+    if (reprocessing_command) c->flag.reprocessing_command = 0;
 
     exitExecutionUnit();
 
     /* In case client is blocked after trying to execute the command,
      * it means the execution is not yet completed and we MIGHT reprocess the command in the future. */
-    if (!(c->flags & CLIENT_BLOCKED)) c->flags &= ~(CLIENT_EXECUTING_COMMAND);
+    if (!(c->flag.blocked)) c->flag.executing_command = 0;
 
     /* In order to avoid performance implication due to querying the clock using a system call 3 times,
      * we use a monotonic clock, when we are sure its cost is very low, and fall back to non-monotonic call otherwise. */
@@ -3478,9 +3481,9 @@ void call(client *c, int flags) {
 
     /* After executing command, we will close the client after writing entire
      * reply if it is set 'CLIENT_CLOSE_AFTER_COMMAND' flag. */
-    if (c->flags & CLIENT_CLOSE_AFTER_COMMAND) {
-        c->flags &= ~CLIENT_CLOSE_AFTER_COMMAND;
-        c->flags |= CLIENT_CLOSE_AFTER_REPLY;
+    if (c->flag.close_after_command) {
+        c->flag.close_after_command = 0;
+        c->flag.close_after_reply = 1;
     }
 
     /* Note: the code below uses the real command that was executed
@@ -3498,7 +3501,7 @@ void call(client *c, int flags) {
 
     /* Log the command into the Slow log if needed.
      * If the client is blocked we will handle slowlog when it is unblocked. */
-    if (update_command_stats && !(c->flags & CLIENT_BLOCKED)) slowlogPushCurrentCommand(c, real_cmd, c->duration);
+    if (update_command_stats && !(c->flag.blocked)) slowlogPushCurrentCommand(c, real_cmd, c->duration);
 
     /* Send the command to clients in MONITOR mode if applicable,
      * since some administrative commands are considered too dangerous to be shown.
@@ -3512,20 +3515,20 @@ void call(client *c, int flags) {
 
     /* Clear the original argv.
      * If the client is blocked we will handle slowlog when it is unblocked. */
-    if (!(c->flags & CLIENT_BLOCKED)) freeClientOriginalArgv(c);
+    if (!(c->flag.blocked)) freeClientOriginalArgv(c);
 
     /* populate the per-command statistics that we show in INFO commandstats.
      * If the client is blocked we will handle latency stats and duration when it is unblocked. */
-    if (update_command_stats && !(c->flags & CLIENT_BLOCKED)) {
+    if (update_command_stats && !(c->flag.blocked)) {
         real_cmd->calls++;
         real_cmd->microseconds += c->duration;
-        if (server.latency_tracking_enabled && !(c->flags & CLIENT_BLOCKED))
+        if (server.latency_tracking_enabled && !(c->flag.blocked))
             updateCommandLatencyHistogram(&(real_cmd->latency_histogram), c->duration * 1000);
     }
 
     /* The duration needs to be reset after each call except for a blocked command,
      * which is expected to record and reset the duration after unblocking. */
-    if (!(c->flags & CLIENT_BLOCKED)) {
+    if (!(c->flag.blocked)) {
         c->duration = 0;
     }
 
@@ -3533,8 +3536,8 @@ void call(client *c, int flags) {
      * We never propagate EXEC explicitly, it will be implicitly
      * propagated if needed (see propagatePendingCommands).
      * Also, module commands take care of themselves */
-    if (flags & CMD_CALL_PROPAGATE && (c->flags & CLIENT_PREVENT_PROP) != CLIENT_PREVENT_PROP &&
-        c->cmd->proc != execCommand && !(c->cmd->flags & CMD_MODULE)) {
+    if (flags & CMD_CALL_PROPAGATE && !(c->flag.prevent_prop) && c->cmd->proc != execCommand &&
+        !(c->cmd->flags & CMD_MODULE)) {
         int propagate_flags = PROPAGATE_NONE;
 
         /* Check if the command operated changes in the data set. If so
@@ -3543,17 +3546,15 @@ void call(client *c, int flags) {
 
         /* If the client forced AOF / replication of the command, set
          * the flags regardless of the command effects on the data set. */
-        if (c->flags & CLIENT_FORCE_REPL) propagate_flags |= PROPAGATE_REPL;
-        if (c->flags & CLIENT_FORCE_AOF) propagate_flags |= PROPAGATE_AOF;
+        if (c->flag.force_repl) propagate_flags |= PROPAGATE_REPL;
+        if (c->flag.force_aof) propagate_flags |= PROPAGATE_AOF;
 
         /* However prevent AOF / replication propagation if the command
          * implementation called preventCommandPropagation() or similar,
          * or if we don't have the call() flags to do so. */
-        if (c->flags & CLIENT_PREVENT_REPL_PROP || c->flags & CLIENT_MODULE_PREVENT_REPL_PROP ||
-            !(flags & CMD_CALL_PROPAGATE_REPL))
+        if (c->flag.prevent_repl_prop || c->flag.module_prevent_repl_prop || !(flags & CMD_CALL_PROPAGATE_REPL))
             propagate_flags &= ~PROPAGATE_REPL;
-        if (c->flags & CLIENT_PREVENT_AOF_PROP || c->flags & CLIENT_MODULE_PREVENT_AOF_PROP ||
-            !(flags & CMD_CALL_PROPAGATE_AOF))
+        if (c->flag.prevent_aof_prop || c->flag.module_prevent_aof_prop || !(flags & CMD_CALL_PROPAGATE_AOF))
             propagate_flags &= ~PROPAGATE_AOF;
 
         /* Call alsoPropagate() only if at least one of AOF / replication
@@ -3563,8 +3564,9 @@ void call(client *c, int flags) {
 
     /* Restore the old replication flags, since call() can be executed
      * recursively. */
-    c->flags &= ~(CLIENT_FORCE_AOF | CLIENT_FORCE_REPL | CLIENT_PREVENT_PROP);
-    c->flags |= client_old_flags & (CLIENT_FORCE_AOF | CLIENT_FORCE_REPL | CLIENT_PREVENT_PROP);
+    c->flag.force_aof = client_old_flags.force_aof;
+    c->flag.force_repl = client_old_flags.force_repl;
+    c->flag.prevent_prop = client_old_flags.prevent_prop;
 
     /* If the client has keys tracking enabled for client side caching,
      * make sure to remember the keys it fetched via this command. For read-only
@@ -3574,13 +3576,13 @@ void call(client *c, int flags) {
         /* We use the tracking flag of the original external client that
          * triggered the command, but we take the keys from the actual command
          * being executed. */
-        if (server.current_client && (server.current_client->flags & CLIENT_TRACKING) &&
-            !(server.current_client->flags & CLIENT_TRACKING_BCAST)) {
+        if (server.current_client && (server.current_client->flag.tracking) &&
+            !(server.current_client->flag.tracking_bcast)) {
             trackingRememberKeys(server.current_client, c);
         }
     }
 
-    if (!(c->flags & CLIENT_BLOCKED)) {
+    if (!(c->flag.blocked)) {
         /* Modules may call commands in cron, in which case server.current_client
          * is not set. */
         if (server.current_client) {
@@ -3828,7 +3830,7 @@ int processCommand(client *c) {
         }
     }
 
-    if (c->flags & CLIENT_MULTI && c->cmd->flags & CMD_NO_MULTI) {
+    if (c->flag.multi && c->cmd->flags & CMD_NO_MULTI) {
         rejectCommandFormat(c, "Command not allowed inside a transaction");
         return C_OK;
     }
@@ -3838,8 +3840,8 @@ int processCommand(client *c) {
     int acl_errpos;
     int acl_retval = ACLCheckAllPerm(c, &acl_errpos);
     if (acl_retval != ACL_OK) {
-        addACLLogEntry(c, acl_retval, (c->flags & CLIENT_MULTI) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, acl_errpos,
-                       NULL, NULL);
+        addACLLogEntry(c, acl_retval, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, acl_errpos, NULL,
+                       NULL);
         sds msg = getAclErrorMessage(acl_retval, c->user, c->cmd, c->argv[acl_errpos]->ptr, 0);
         rejectCommandFormat(c, "-NOPERM %s", msg);
         sdsfree(msg);
@@ -3868,7 +3870,7 @@ int processCommand(client *c) {
     }
 
     if (!server.cluster_enabled && c->capa & CLIENT_CAPA_REDIRECT && server.primary_host && !mustObeyClient(c) &&
-        (is_write_command || (is_read_command && !(c->flags & CLIENT_READONLY)))) {
+        (is_write_command || (is_read_command && !(c->flag.readonly)))) {
         addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
         return C_OK;
     }
@@ -3960,7 +3962,7 @@ int processCommand(client *c) {
 
     /* Only allow a subset of commands in the context of Pub/Sub if the
      * connection is in RESP2 mode. With RESP3 there are no limits. */
-    if ((c->flags & CLIENT_PUBSUB && c->resp == 2) && c->cmd->proc != pingCommand && c->cmd->proc != subscribeCommand &&
+    if ((c->flag.pubsub && c->resp == 2) && c->cmd->proc != pingCommand && c->cmd->proc != subscribeCommand &&
         c->cmd->proc != ssubscribeCommand && c->cmd->proc != unsubscribeCommand &&
         c->cmd->proc != sunsubscribeCommand && c->cmd->proc != psubscribeCommand &&
         c->cmd->proc != punsubscribeCommand && c->cmd->proc != quitCommand && c->cmd->proc != resetCommand) {
@@ -4016,21 +4018,21 @@ int processCommand(client *c) {
     /* Prevent a replica from sending commands that access the keyspace.
      * The main objective here is to prevent abuse of client pause check
      * from which replicas are exempt. */
-    if ((c->flags & CLIENT_REPLICA) && (is_may_replicate_command || is_write_command || is_read_command)) {
+    if ((c->flag.replica) && (is_may_replicate_command || is_write_command || is_read_command)) {
         rejectCommandFormat(c, "Replica can't interact with the keyspace");
         return C_OK;
     }
 
     /* If the server is paused, block the client until
      * the pause has ended. Replicas are never paused. */
-    if (!(c->flags & CLIENT_REPLICA) && ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) ||
-                                         ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command))) {
+    if (!(c->flag.replica) && ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) ||
+                               ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command))) {
         blockPostponeClient(c);
         return C_OK;
     }
 
     /* Exec the command */
-    if (c->flags & CLIENT_MULTI && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
+    if (c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
         c->cmd->proc != multiCommand && c->cmd->proc != watchCommand && c->cmd->proc != quitCommand &&
         c->cmd->proc != resetCommand) {
         queueMultiCommand(c, cmd_flags);
@@ -4410,7 +4412,7 @@ void pingCommand(client *c) {
         return;
     }
 
-    if (c->flags & CLIENT_PUBSUB && c->resp == 2) {
+    if (c->flag.pubsub && c->resp == 2) {
         addReply(c, shared.mbulkhdr[2]);
         addReplyBulkCBuffer(c, "pong", 4);
         if (c->argc == 1)
@@ -5949,7 +5951,7 @@ void infoCommand(client *c) {
 }
 
 void monitorCommand(client *c) {
-    if (c->flags & CLIENT_DENY_BLOCKING) {
+    if (c->flag.deny_blocking) {
         /**
          * A client that has CLIENT_DENY_BLOCKING flag on
          * expects a reply per command and so can't execute MONITOR. */
@@ -5958,9 +5960,10 @@ void monitorCommand(client *c) {
     }
 
     /* ignore MONITOR if already replica or in monitor mode */
-    if (c->flags & CLIENT_REPLICA) return;
+    if (c->flag.replica) return;
 
-    c->flags |= (CLIENT_REPLICA | CLIENT_MONITOR);
+    c->flag.replica = 1;
+    c->flag.monitor = 1;
     listAddNodeTail(server.monitors, c);
     addReply(c, shared.ok);
 }

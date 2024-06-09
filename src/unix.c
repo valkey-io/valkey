@@ -92,6 +92,8 @@ static connection *connCreateAcceptedUnix(int fd, void *priv) {
 static void connUnixAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     int cfd;
     int max = server.max_new_conns_per_cycle;
+    struct ClientFlags flags = {0};
+    flags.unix_socket = 1;
     UNUSED(el);
     UNUSED(mask);
     UNUSED(privdata);
@@ -103,7 +105,7 @@ static void connUnixAcceptHandler(aeEventLoop *el, int fd, void *privdata, int m
             return;
         }
         serverLog(LL_VERBOSE, "Accepted connection to %s", server.unixsocket);
-        acceptCommonHandler(connCreateAcceptedUnix(cfd, NULL), CLIENT_UNIX_SOCKET, NULL);
+        acceptCommonHandler(connCreateAcceptedUnix(cfd, NULL), flags, NULL);
     }
 }
 

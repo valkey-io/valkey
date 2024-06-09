@@ -343,92 +343,6 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CMD_DOC_DEPRECATED (1 << 0) /* Command is deprecated */
 #define CMD_DOC_SYSCMD (1 << 1)     /* System (internal) command */
 
-/* Client flags */
-#define CLIENT_REPLICA (1 << 0)           /* This client is a replica */
-#define CLIENT_PRIMARY (1 << 1)           /* This client is a primary */
-#define CLIENT_MONITOR (1 << 2)           /* This client is a replica monitor, see MONITOR */
-#define CLIENT_MULTI (1 << 3)             /* This client is in a MULTI context */
-#define CLIENT_BLOCKED (1 << 4)           /* The client is waiting in a blocking operation */
-#define CLIENT_DIRTY_CAS (1 << 5)         /* Watched keys modified. EXEC will fail. */
-#define CLIENT_CLOSE_AFTER_REPLY (1 << 6) /* Close after writing entire reply. */
-#define CLIENT_UNBLOCKED                                                                                               \
-    (1 << 7)                                 /* This client was unblocked and is stored in                             \
-                                               server.unblocked_clients */
-#define CLIENT_SCRIPT (1 << 8)               /* This is a non connected client used by Lua */
-#define CLIENT_ASKING (1 << 9)               /* Client issued the ASKING command */
-#define CLIENT_CLOSE_ASAP (1 << 10)          /* Close this client ASAP */
-#define CLIENT_UNIX_SOCKET (1 << 11)         /* Client connected via Unix domain socket */
-#define CLIENT_DIRTY_EXEC (1 << 12)          /* EXEC will fail for errors while queueing */
-#define CLIENT_PRIMARY_FORCE_REPLY (1 << 13) /* Queue replies even if is primary */
-#define CLIENT_FORCE_AOF (1 << 14)           /* Force AOF propagation of current cmd. */
-#define CLIENT_FORCE_REPL (1 << 15)          /* Force replication of current cmd. */
-#define CLIENT_PRE_PSYNC (1 << 16)           /* Instance don't understand PSYNC. */
-#define CLIENT_READONLY (1 << 17)            /* Cluster client is in read-only state. */
-#define CLIENT_PUBSUB (1 << 18)              /* Client is in Pub/Sub mode. */
-#define CLIENT_PREVENT_AOF_PROP (1 << 19)    /* Don't propagate to AOF. */
-#define CLIENT_PREVENT_REPL_PROP (1 << 20)   /* Don't propagate to replicas. */
-#define CLIENT_PREVENT_PROP (CLIENT_PREVENT_AOF_PROP | CLIENT_PREVENT_REPL_PROP)
-#define CLIENT_PENDING_WRITE                                                                                           \
-    (1 << 21)                            /* Client has output to send but a write                                      \
-                                            handler is yet not installed. */
-#define CLIENT_REPLY_OFF (1 << 22)       /* Don't send replies to client. */
-#define CLIENT_REPLY_SKIP_NEXT (1 << 23) /* Set CLIENT_REPLY_SKIP for next cmd */
-#define CLIENT_REPLY_SKIP (1 << 24)      /* Don't send just this reply. */
-#define CLIENT_LUA_DEBUG (1 << 25)       /* Run EVAL in debug mode. */
-#define CLIENT_LUA_DEBUG_SYNC (1 << 26)  /* EVAL debugging without fork() */
-#define CLIENT_MODULE (1 << 27)          /* Non connected client used by some module. */
-#define CLIENT_PROTECTED (1 << 28)       /* Client should not be freed for now. */
-#define CLIENT_EXECUTING_COMMAND                                                                                       \
-    (1 << 29) /* Indicates that the client is currently in the process of handling                                     \
-               a command. usually this will be marked only during call()                                               \
-               however, blocked clients might have this flag kept until they                                           \
-               will try to reprocess the command. */
-
-#define CLIENT_PENDING_COMMAND                                                                                         \
-    (1 << 30) /* Indicates the client has a fully                                                                      \
-               * parsed command ready for execution. */
-#define CLIENT_TRACKING                                                                                                \
-    (1ULL << 31)                                  /* Client enabled keys tracking in order to                          \
-                                                  perform client side caching. */
-#define CLIENT_TRACKING_BROKEN_REDIR (1ULL << 32) /* Target client is invalid. */
-#define CLIENT_TRACKING_BCAST (1ULL << 33)        /* Tracking in BCAST mode. */
-#define CLIENT_TRACKING_OPTIN (1ULL << 34)        /* Tracking in opt-in mode. */
-#define CLIENT_TRACKING_OPTOUT (1ULL << 35)       /* Tracking in opt-out mode. */
-#define CLIENT_TRACKING_CACHING                                                                                        \
-    (1ULL << 36) /* CACHING yes/no was given,                                                                          \
-                    depending on optin/optout mode. */
-#define CLIENT_TRACKING_NOLOOP                                                                                         \
-    (1ULL << 37)                           /* Don't send invalidation messages                                         \
-                                              about writes performed by myself.*/
-#define CLIENT_IN_TO_TABLE (1ULL << 38)    /* This client is in the timeout table. */
-#define CLIENT_PROTOCOL_ERROR (1ULL << 39) /* Protocol error chatting with it. */
-#define CLIENT_CLOSE_AFTER_COMMAND                                                                                     \
-    (1ULL << 40) /* Close after executing commands                                                                     \
-                  * and writing entire reply. */
-#define CLIENT_DENY_BLOCKING                                                                                           \
-    (1ULL << 41) /* Indicate that the client should not be blocked.                                                    \
-                    currently, turned on inside MULTI, Lua, RM_Call,                                                   \
-                    and AOF client */
-#define CLIENT_REPL_RDBONLY                                                                                            \
-    (1ULL << 42) /* This client is a replica that only wants                                                           \
-                    RDB without replication buffer. */
-#define CLIENT_NO_EVICT                                                                                                \
-    (1ULL << 43) /* This client is protected against client                                                            \
-                    memory eviction. */
-#define CLIENT_ALLOW_OOM                                                                                               \
-    (1ULL << 44)                     /* Client used by RM_Call is allowed to fully execute                             \
-                                        scripts even when in OOM */
-#define CLIENT_NO_TOUCH (1ULL << 45) /* This client will not touch LFU/LRU stats. */
-#define CLIENT_PUSHING (1ULL << 46)  /* This client is pushing notifications. */
-#define CLIENT_MODULE_AUTH_HAS_RESULT                                                                                  \
-    (1ULL << 47)                                     /* Indicates a client in the middle of module based               \
-                                                        auth had been authenticated from the Module. */
-#define CLIENT_MODULE_PREVENT_AOF_PROP (1ULL << 48)  /* Module client do not want to propagate to AOF */
-#define CLIENT_MODULE_PREVENT_REPL_PROP (1ULL << 49) /* Module client do not want to propagate to replica */
-#define CLIENT_REPROCESSING_COMMAND (1ULL << 50)     /* The client is re-processing the command. */
-#define CLIENT_REPLICATION_DONE (1ULL << 51)         /* Indicate that replication has been done on the client */
-#define CLIENT_AUTHENTICATED (1ULL << 52)            /* Indicate a client has successfully authenticated */
-
 /* Client capabilities */
 #define CLIENT_CAPA_REDIRECT (1 << 0) /* Indicate that the client can handle redirection */
 
@@ -1203,9 +1117,70 @@ typedef struct {
 } clientReqResInfo;
 #endif
 
+typedef struct ClientFlags {
+    uint64_t primary : 1;
+    uint64_t replica : 1;
+    uint64_t monitor : 1;
+    uint64_t multi : 1;
+    uint64_t blocked : 1;
+    uint64_t dirty_cas : 1;
+    uint64_t close_after_reply : 1;
+    uint64_t unblocked : 1;
+    uint64_t script : 1;
+    uint64_t asking : 1;
+    uint64_t close_asap : 1;
+    uint64_t unix_socket : 1;
+    uint64_t dirty_exec : 1;
+    uint64_t primary_force_reply : 1;
+    uint64_t force_aof : 1;
+    uint64_t force_repl : 1;
+    uint64_t pre_psync : 1;
+    uint64_t readonly : 1;
+    uint64_t pubsub : 1;
+    uint64_t prevent_aof_prop : 1;
+    uint64_t prevent_repl_prop : 1;
+    uint64_t prevent_prop : 1;
+    uint64_t pending_write : 1;
+    uint64_t reply_off : 1;
+    uint64_t reply_skip_next : 1;
+    uint64_t reply_skip : 1;
+    uint64_t lua_debug : 1;
+    uint64_t lua_debug_sync : 1;
+    uint64_t module : 1;
+    uint64_t protected : 1;
+    uint64_t executing_command : 1;
+    uint64_t pending_command : 1;
+    uint64_t tracking : 1;
+    uint64_t tracking_broken_redir : 1;
+    uint64_t tracking_bcast : 1;
+    uint64_t tracking_optin : 1;
+    uint64_t tracking_optout : 1;
+    uint64_t tracking_caching : 1;
+    uint64_t tracking_noloop : 1;
+    uint64_t in_to_table : 1;
+    uint64_t protocol_error : 1;
+    uint64_t close_after_command : 1;
+    uint64_t deny_blocking : 1;
+    uint64_t repl_rdbonly : 1;
+    uint64_t no_evict : 1;
+    uint64_t allow_oom : 1;
+    uint64_t no_touch : 1;
+    uint64_t pushing : 1;
+    uint64_t module_auth_has_result : 1;
+    uint64_t module_prevent_aof_prop : 1;
+    uint64_t module_prevent_repl_prop : 1;
+    uint64_t reprocessing_command : 1;
+    uint64_t replication_done : 1;
+    uint64_t authenticated : 1;
+    uint64_t reserved : 11;
+} ClientFlags;
+
 typedef struct client {
-    uint64_t id;    /* Client incremental unique ID. */
-    uint64_t flags; /* Client flags: CLIENT_* macros. */
+    uint64_t id; /* Client incremental unique ID. */
+    union {
+        uint64_t raw_flag;
+        struct ClientFlags flag;
+    };
     connection *conn;
     int resp;                            /* RESP protocol version. Can be 2 or 3. */
     uint32_t capa;                       /* Client capabilities: CLIENT_CAPA* macros. */
@@ -2642,7 +2617,7 @@ void setDeferredSetLen(client *c, void *node, long length);
 void setDeferredAttributeLen(client *c, void *node, long length);
 void setDeferredPushLen(client *c, void *node, long length);
 int processInputBuffer(client *c);
-void acceptCommonHandler(connection *conn, int flags, char *ip);
+void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip);
 void readQueryFromClient(connection *conn);
 int prepareClientToWrite(client *c);
 void addReplyNull(client *c);
@@ -2758,7 +2733,7 @@ void addReplyStatusFormat(client *c, const char *fmt, ...);
 #endif
 
 /* Client side caching (tracking mode) */
-void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **prefix, size_t numprefix);
+void enableTracking(client *c, uint64_t redirect_to, struct ClientFlags options, robj **prefix, size_t numprefix);
 void disableTracking(client *c);
 void trackingRememberKeys(client *tracking, client *executing);
 void trackingInvalidateKey(client *c, robj *keyobj, int bcast);

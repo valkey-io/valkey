@@ -187,7 +187,7 @@ start_server {} {
         assert_equal [$master debug digest] [$replica1 debug digest]
     }
 
-    test {Replication backlog memory will become smaller if disconnecting with replica} {
+    test "Replication backlog memory will become smaller if disconnecting with replica rdbchannel $rdbchannel" {
         assert {[s repl_backlog_histlen] > [expr 2*10000*10000]}
         if {$rdbchannel == "yes"} {
             # 1 connection of replica1 
@@ -204,7 +204,9 @@ start_server {} {
         # master will close replica2's connection since replica2's output
         # buffer limit is reached, so there only is replica1.
         wait_for_condition 100 100 {
-            [s connected_slaves] eq {1}
+            [s connected_slaves] eq {1} ||
+            ([s connected_slaves] eq {2} &&
+            [string match {*slave*state=wait_bgsave*type=rdb-conn*} [$master info]])
         } else {
             fail "master didn't disconnect with replica2"
         }

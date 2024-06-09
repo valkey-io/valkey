@@ -1721,12 +1721,11 @@ void replicationCreateMasterClient(connection *conn, int dbid) {
      * to pass the execution to a background thread and unblock after the
      * execution is done. This is the reason why we allow blocking the replication
      * connection. */
-    server.primary->flags |= CLIENT_PRIMARY;
+    server.primary->flags |= (CLIENT_PRIMARY | CLIENT_AUTHENTICATED);
 
     /* Allocate a private query buffer for the primary client instead of using the shared query buffer.
      * This is done because the primary's query buffer data needs to be preserved for my sub-replicas to use. */
     server.primary->querybuf = sdsempty();
-    server.primary->authenticated = 1;
     server.primary->reploff = server.primary_initial_offset;
     server.primary->read_reploff = server.primary->reploff;
     server.primary->user = NULL; /* This client can do everything. */
@@ -3306,7 +3305,7 @@ void replicationResurrectCachedMaster(connection *conn) {
     server.primary->conn = conn;
     connSetPrivateData(server.primary->conn, server.primary);
     server.primary->flags &= ~(CLIENT_CLOSE_AFTER_REPLY | CLIENT_CLOSE_ASAP);
-    server.primary->authenticated = 1;
+    server.primary->flags |= CLIENT_AUTHENTICATED;
     server.primary->last_interaction = server.unixtime;
     server.repl_state = REPL_STATE_CONNECTED;
     server.repl_down_since = 0;

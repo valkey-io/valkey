@@ -370,14 +370,13 @@ start_server {tags {"repl rdb-channel external:skip"}} {
         test "Test rdb-channel psync established after rdb load" {
             $replica slaveof $master_host $master_port
 
-            wait_for_value_to_propegate_to_replica $master $replica "key1"
-
             verify_replica_online $master 0 500
             wait_for_condition 50 1000 {
                 [status $replica master_link_status] == "up"
             } else {
                 fail "Replica is not synced"
             }
+            wait_for_value_to_propegate_to_replica $master $replica "key1"
             # Confirm the occurrence of a race condition.
             set res [wait_for_log_messages -1 {"*RDB channel sync - psync established after rdb load*"} $loglines 2000 1]
             set loglines [lindex $res 1]

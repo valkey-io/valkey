@@ -161,11 +161,11 @@ proc verify_replica_online {master replica_idx max_retry} {
 }
 
 proc wait_for_value_to_propegate_to_replica {master replica key} {
-    set val [$master get key]
-    wait_for_condition 50 1000 {
+    set val [$master get $key]
+    wait_for_condition 50 500 {
                 ([$replica get $key] eq $val)
     } else {
-        error "key $key did not propegate"
+        error "Key $key did not propegate. Expected $val but got [$replica get $key]"
     }
 }
 

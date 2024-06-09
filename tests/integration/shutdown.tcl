@@ -156,9 +156,11 @@ test "Shutting down master waits for replica then fails" {
             set rd2 [valkey_deferring_client -1]
             $rd1 shutdown
             $rd2 shutdown
-            set info_clients [$master info clients]
-            assert_match "*connected_clients:3*" $info_clients
-            assert_match "*blocked_clients:2*" $info_clients
+            wait_for_condition 50 100 {
+                [s -1 connected_clients] == 3 && [s -1 blocked_clients] == 2
+            } else {
+                fail "Number of clients is wrong."
+            }
 
             # Start a very slow initial AOFRW, which will prevent shutdown.
             $master config set rdb-key-save-delay 30000000; # 30 seconds
@@ -209,9 +211,11 @@ test "Shutting down master waits for replica then aborted" {
             set rd2 [valkey_deferring_client -1]
             $rd1 shutdown
             $rd2 shutdown
-            set info_clients [$master info clients]
-            assert_match "*connected_clients:3*" $info_clients
-            assert_match "*blocked_clients:2*" $info_clients
+            wait_for_condition 50 100 {
+                [s -1 connected_clients] == 3 && [s -1 blocked_clients] == 2
+            } else {
+                fail "Number of clients is wrong."
+            }
 
             # Abort the shutdown
             $master shutdown abort

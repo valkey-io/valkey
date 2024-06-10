@@ -4888,7 +4888,7 @@ void bitmapClearBit(unsigned char *bitmap, int pos) {
  * MIGRATE_TO flag the when a primary gets the first slot. */
 int clusterPrimariesHaveReplicas(void) {
     dictIterator di;
-    dictInitSafeIterator(&di, server.cluster->nodes);
+    dictInitIterator(&di, server.cluster->nodes);
     dictEntry *de;
     int replicas = 0;
     while ((de = dictNext(&di)) != NULL) {
@@ -6509,7 +6509,7 @@ void clusterPromoteSelfToPrimary(void) {
 
 int detectAndUpdateCachedNodeHealth(void) {
     dictIterator di;
-    dictInitSafeIterator(&di, server.cluster->nodes);
+    dictInitIterator(&di, server.cluster->nodes);
     dictEntry *de;
     clusterNode *node;
     int overall_health_changed = 0;

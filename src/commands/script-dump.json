@@ -1,0 +1,44 @@
+{
+    "DUMP": {
+        "summary": "Dump server-side Lua scripts in the script cache.",
+        "complexity": "O(N) with N being the number of scripts to check (so checking a single script is an O(1) operation).",
+        "group": "scripting",
+        "since": "7.2.4",
+        "arity": -3,
+        "container": "SCRIPT",
+        "function": "scriptCommand",
+        "command_flags": [
+            "NOSCRIPT"
+        ],
+        "acl_categories": [
+            "SCRIPTING"
+        ],
+        "command_tips": [
+            "REQUEST_POLICY:ALL_SHARDS",
+            "RESPONSE_POLICY:AGG_LOGICAL_AND"
+        ],
+        "arguments": [
+            {
+                "name": "sha1",
+                "type": "string",
+                "multiple": true
+            }
+        ],
+        "reply_schema": {
+            "description": "An array of lua scripts that correspond to the specified SHA1 digest arguments.",
+            "type": "array",
+            "items": {
+                "oneOf": [
+                    {
+                        "description": "lua script if sha1 hash exists in script cache.",
+                        "type": "string"
+                    },
+                    {
+                        "description": "null if sha1 hash does not exist in script cache.",
+                        "type": "null"
+                    }
+                ]
+            }
+        }
+    }
+}

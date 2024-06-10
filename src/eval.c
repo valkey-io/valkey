@@ -35,6 +35,7 @@
  * 2. scriptingInit() - initServer() function from server.c invokes this to initialize LUA at startup.
  *                      It is also invoked between 2 eval invocations to reset Lua.
  */
+#include "dict.h"
 #include "server.h"
 #include "sha1.h"
 #include "rand.h"
@@ -675,6 +676,8 @@ void scriptCommand(client *c) {
 "    Kill the currently executing Lua script.",
 "LOAD <script>",
 "    Load a script into the scripts cache without executing it.",
+"DUMP <sha1> [<sha1> ...]",
+"    Dump a script from the scipts cache.",
 NULL
         };
         /* clang-format on */
@@ -727,6 +730,25 @@ NULL
         } else {
             addReplyError(c, "Use SCRIPT DEBUG YES/SYNC/NO");
             return;
+        }
+    } else if (c->argc > 2 && !strcasecmp(c->argv[1]->ptr, "dump")) {
+        int j;
+        dictEntry *de;
+        luaScript *ls;
+
+        addReplyArrayLen(c, c->argc - 2);
+        for (j = 2; j < c->argc; j++) {
+            if (sdslen(c->argv[j]->ptr) != 40) {
+                addReply(c, shared.null[c->resp]);
+                continue;
+            }
+
+            if ((de = dictFind(lctx.lua_scripts, c->argv[j]->ptr))) {
+                ls = dictGetVal(de);
+                addReplyBulk(c, ls->body);
+            } else {
+                addReply(c, shared.null[c->resp]);
+            }
         }
     } else {
         addReplySubcommandSyntaxError(c);

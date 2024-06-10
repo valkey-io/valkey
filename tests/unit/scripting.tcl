@@ -638,6 +638,11 @@ start_server {tags {"scripting"}} {
             [r evalsha b534286061d4b9e4026607613b95c06c06015ae8 0]
     } {b534286061d4b9e4026607613b95c06c06015ae8 loaded}
 
+    test {SCRIPT DUMP - is able to dump scripts from the scripting cache} {
+        list \
+            [r script dump b534286061d4b9e4026607613b95c06c06015ae8 b534286061d4b9 b534286061d4b9e4026607613b95c06c06015ae8 b534286061d4b9e4026607613b95c06c06015a11] \
+    } {{{return 'loaded'} {} {return 'loaded'} {}}}
+
     test "SORT is normally not alpha re-ordered for the scripting engine" {
         r del myset
         r sadd myset 1 2 3 4 10

@@ -133,7 +133,7 @@ int rw_attribute(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return VALKEYMODULE_OK;
 }
 
-/* RW.PUSH target_client_id lenth */
+/* RW.PUSH target_client_id length */
 int rw_push(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 3) return ValkeyModule_WrongArity(ctx);
 

@@ -119,7 +119,7 @@ aofInfo *aofInfoDup(aofInfo *orig) {
 
 /* Format aofInfo as a string and it will be a line in the manifest.
  *
- * When update this format, make sure to update redis-check-aof as well. */
+ * When update this format, make sure to update valkey-check-aof as well. */
 sds aofInfoFormat(sds buf, aofInfo *ai) {
     sds filename_repr = NULL;
 

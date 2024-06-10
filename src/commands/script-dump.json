@@ -3,7 +3,7 @@
         "summary": "Dump server-side Lua scripts in the script cache.",
         "complexity": "O(N) with N being the number of scripts to check (so checking a single script is an O(1) operation).",
         "group": "scripting",
-        "since": "7.2.4",
+        "since": "8.0.0",
         "arity": -3,
         "container": "SCRIPT",
         "function": "scriptCommand",

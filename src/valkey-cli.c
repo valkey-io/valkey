@@ -5141,8 +5141,7 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts, char *
             *p = '\0';
             char *token = line;
             line = p + 1;
-            /* clang-format off */
-            switch(i++){
+            switch (i++){
             case 0: name = token; break;
             case 1: addr = token; break;
             case 2: flags = token; break;
@@ -5152,7 +5151,6 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts, char *
             case 6: config_epoch = token; break;
             case 7: link_status = token; break;
             }
-            /* clang-format on */
             if (i == 8) break; // Slots
         }
         if (!flags) {

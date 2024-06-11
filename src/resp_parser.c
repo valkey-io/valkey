@@ -209,7 +209,6 @@ static int parseMap(ReplyParser *parser, void *p_ctx) {
 
 /* Parse a reply pointed to by parser->curr_location. */
 int parseReply(ReplyParser *parser, void *p_ctx) {
-    /* clang-format off */
     switch (parser->curr_location[0]) {
     case '$': return parseBulk(parser, p_ctx);
     case '+': return parseSimpleString(parser, p_ctx);
@@ -226,6 +225,5 @@ int parseReply(ReplyParser *parser, void *p_ctx) {
     case '|': return parseAttributes(parser, p_ctx);
     default: if (parser->callbacks.error) parser->callbacks.error(p_ctx);
     }
-    /* clang-format on */
     return C_ERR;
 }

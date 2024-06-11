@@ -614,15 +614,13 @@ void updateDictResizePolicy(void) {
 }
 
 const char *strChildType(int type) {
-    /* clang-format off */
-    switch(type) {
+    switch (type) {
     case CHILD_TYPE_RDB: return "RDB";
     case CHILD_TYPE_AOF: return "AOF";
     case CHILD_TYPE_LDB: return "LDB";
     case CHILD_TYPE_MODULE: return "MODULE";
     default: return "Unknown";
     }
-    /* clang-format on */
 }
 
 /* Return true if there are active children processes doing RDB saving,
@@ -5080,29 +5078,27 @@ void commandGetKeysCommand(client *c) {
 
 /* COMMAND HELP */
 void commandHelpCommand(client *c) {
-    /* clang-format off */
     const char *help[] = {
-"(no subcommand)",
-"    Return details about all commands.",
-"COUNT",
-"    Return the total number of commands in this server.",
-"LIST",
-"    Return a list of all commands in this server.",
-"INFO [<command-name> ...]",
-"    Return details about multiple commands.",
-"    If no command names are given, documentation details for all",
-"    commands are returned.",
-"DOCS [<command-name> ...]",
-"    Return documentation details about multiple commands.",
-"    If no command names are given, documentation details for all",
-"    commands are returned.",
-"GETKEYS <full-command>",
-"    Return the keys from a full command.",
-"GETKEYSANDFLAGS <full-command>",
-"    Return the keys and the access flags from a full command.",
-NULL
+        "(no subcommand)",
+        "    Return details about all commands.",
+        "COUNT",
+        "    Return the total number of commands in this server.",
+        "LIST",
+        "    Return a list of all commands in this server.",
+        "INFO [<command-name> ...]",
+        "    Return details about multiple commands.",
+        "    If no command names are given, documentation details for all",
+        "    commands are returned.",
+        "DOCS [<command-name> ...]",
+        "    Return documentation details about multiple commands.",
+        "    If no command names are given, documentation details for all",
+        "    commands are returned.",
+        "GETKEYS <full-command>",
+        "    Return the keys from a full command.",
+        "GETKEYSANDFLAGS <full-command>",
+        "    Return the keys and the access flags from a full command.",
+        NULL
     };
-    /* clang-format on */
     addReplyHelp(c, help);
 }
 

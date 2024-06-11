@@ -2843,7 +2843,6 @@ sds catClientInfoString(sds s, client *client) {
         else
             *p++ = 'S';
     }
-    /* clang-format off */
     if (client->flags & CLIENT_PRIMARY) *p++ = 'M';
     if (client->flags & CLIENT_PUBSUB) *p++ = 'P';
     if (client->flags & CLIENT_MULTI) *p++ = 'x';
@@ -2860,7 +2859,6 @@ sds catClientInfoString(sds s, client *client) {
     if (client->flags & CLIENT_NO_EVICT) *p++ = 'e';
     if (client->flags & CLIENT_NO_TOUCH) *p++ = 'T';
     if (p == flags) *p++ = 'N';
-    /* clang-format on */
     *p++ = '\0';
 
     p = events;
@@ -3269,15 +3267,13 @@ NULL
         listRewind(server.clients, &li);
         while ((ln = listNext(&li)) != NULL) {
             client *client = listNodeValue(ln);
-            /* clang-format off */
-            if (addr && strcmp(getClientPeerId(client),addr) != 0) continue;
-            if (laddr && strcmp(getClientSockname(client),laddr) != 0) continue;
+            if (addr && strcmp(getClientPeerId(client), addr) != 0) continue;
+            if (laddr && strcmp(getClientSockname(client), laddr) != 0) continue;
             if (type != -1 && getClientType(client) != type) continue;
             if (id != 0 && client->id != id) continue;
             if (user && client->user != user) continue;
             if (c == client && skipme) continue;
             if (max_age != 0 && (long long)(commandTimeSnapshot() / 1000 - client->ctime) < max_age) continue;
-            /* clang-format on */
 
             /* Kill it. */
             if (c == client) {

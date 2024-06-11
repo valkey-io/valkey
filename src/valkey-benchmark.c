@@ -146,7 +146,7 @@ typedef struct _client {
     int thread_id;
     struct clusterNode *cluster_node;
     int slots_last_update;
-} * client;
+} *client;
 
 /* Threads. */
 

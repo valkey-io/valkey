@@ -676,7 +676,7 @@ void scriptCommand(client *c) {
 "    Kill the currently executing Lua script.",
 "LOAD <script>",
 "    Load a script into the scripts cache without executing it.",
-"DUMP <sha1> [<sha1> ...]",
+"DUMP <sha1>",
 "    Dump a script from the scipts cache.",
 NULL
         };
@@ -731,24 +731,20 @@ NULL
             addReplyError(c, "Use SCRIPT DEBUG YES/SYNC/NO");
             return;
         }
-    } else if (c->argc > 2 && !strcasecmp(c->argv[1]->ptr, "dump")) {
-        int j;
+    } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr, "dump")) {
         dictEntry *de;
         luaScript *ls;
 
-        addReplyArrayLen(c, c->argc - 2);
-        for (j = 2; j < c->argc; j++) {
-            if (sdslen(c->argv[j]->ptr) != 40) {
-                addReply(c, shared.null[c->resp]);
-                continue;
-            }
+        if (sdslen(c->argv[2]->ptr) != 40) {
+            addReplyError(c, "Sha1 length must be 40");
+            return;
+        }
 
-            if ((de = dictFind(lctx.lua_scripts, c->argv[j]->ptr))) {
-                ls = dictGetVal(de);
-                addReplyBulk(c, ls->body);
-            } else {
-                addReply(c, shared.null[c->resp]);
-            }
+        if ((de = dictFind(lctx.lua_scripts, c->argv[2]->ptr))) {
+            ls = dictGetVal(de);
+            addReplyBulk(c, ls->body);
+        } else {
+            addReply(c, shared.null[c->resp]);
         }
     } else {
         addReplySubcommandSyntaxError(c);

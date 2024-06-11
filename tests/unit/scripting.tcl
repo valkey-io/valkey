@@ -640,8 +640,13 @@ start_server {tags {"scripting"}} {
 
     test {SCRIPT DUMP - is able to dump scripts from the scripting cache} {
         list \
-            [r script dump b534286061d4b9e4026607613b95c06c06015ae8 b534286061d4b9 b534286061d4b9e4026607613b95c06c06015ae8 b534286061d4b9e4026607613b95c06c06015a11] \
-    } {{{return 'loaded'} {} {return 'loaded'} {}}}
+            [r script dump b534286061d4b9e4026607613b95c06c06015ae8] \
+            [r script dump b534286061d4b9e4026607613b95c06c06015ae1]
+    } {{return 'loaded'} {}}
+
+    test {SCRIPT DUMP - wrong sha1 length} {
+        assert_error "ERR Sha1 length must be 40" {r script dump b534286061d4b06c06015ae8}
+    }
 
     test "SORT is normally not alpha re-ordered for the scripting engine" {
         r del myset

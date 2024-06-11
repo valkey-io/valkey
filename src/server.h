@@ -2136,12 +2136,17 @@ typedef struct {
  * for returning channel information.
  */
 typedef struct {
-    keyReference keysbuf[MAX_KEYS_BUFFER]; /* Pre-allocated buffer, to save heap allocations */
-    keyReference *keys;                    /* Key indices array, points to keysbuf or heap */
     int numkeys;                           /* Number of key indices return */
     int size;                              /* Available array size */
+    keyReference *keys;                    /* Key indices array, points to keysbuf or heap */
+    keyReference keysbuf[MAX_KEYS_BUFFER]; /* Pre-allocated buffer, to save heap allocations */
 } getKeysResult;
-#define GETKEYS_RESULT_INIT {{{0}}, NULL, 0, MAX_KEYS_BUFFER}
+
+static inline void initGetKeysResult(getKeysResult *result) {
+    result->numkeys = 0;
+    result->size = 0;
+    result->keys = NULL;
+}
 
 /* Key specs definitions.
  *

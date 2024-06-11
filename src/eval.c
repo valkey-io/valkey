@@ -677,7 +677,7 @@ void scriptCommand(client *c) {
 "LOAD <script>",
 "    Load a script into the scripts cache without executing it.",
 "DUMP <sha1>",
-"    Dump a script from the scipts cache.",
+"    Dump a script from the scripts cache.",
 NULL
         };
         /* clang-format on */

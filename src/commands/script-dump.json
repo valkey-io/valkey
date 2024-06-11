@@ -4,7 +4,7 @@
         "complexity": "O(1).",
         "group": "scripting",
         "since": "8.0.0",
-        "arity": -3,
+        "arity": 3,
         "container": "SCRIPT",
         "function": "scriptCommand",
         "command_flags": [

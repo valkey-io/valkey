@@ -5078,27 +5078,29 @@ void commandGetKeysCommand(client *c) {
 
 /* COMMAND HELP */
 void commandHelpCommand(client *c) {
+    /* clang-format off */
     const char *help[] = {
-        "(no subcommand)",
-        "    Return details about all commands.",
-        "COUNT",
-        "    Return the total number of commands in this server.",
-        "LIST",
-        "    Return a list of all commands in this server.",
-        "INFO [<command-name> ...]",
-        "    Return details about multiple commands.",
-        "    If no command names are given, documentation details for all",
-        "    commands are returned.",
-        "DOCS [<command-name> ...]",
-        "    Return documentation details about multiple commands.",
-        "    If no command names are given, documentation details for all",
-        "    commands are returned.",
-        "GETKEYS <full-command>",
-        "    Return the keys from a full command.",
-        "GETKEYSANDFLAGS <full-command>",
-        "    Return the keys and the access flags from a full command.",
-        NULL
+"(no subcommand)",
+"    Return details about all commands.",
+"COUNT",
+"    Return the total number of commands in this server.",
+"LIST",
+"    Return a list of all commands in this server.",
+"INFO [<command-name> ...]",
+"    Return details about multiple commands.",
+"    If no command names are given, documentation details for all",
+"    commands are returned.",
+"DOCS [<command-name> ...]",
+"    Return documentation details about multiple commands.",
+"    If no command names are given, documentation details for all",
+"    commands are returned.",
+"GETKEYS <full-command>",
+"    Return the keys from a full command.",
+"GETKEYSANDFLAGS <full-command>",
+"    Return the keys and the access flags from a full command.",
+NULL
     };
+    /* clang-format on */
     addReplyHelp(c, help);
 }
 

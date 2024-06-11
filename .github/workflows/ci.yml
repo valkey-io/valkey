@@ -92,12 +92,39 @@ jobs:
   format-yaml:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-    - uses: actions/setup-go@v5
+    - name: Checkout code
+      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
       with:
         go-version: '1.22.4'
-    - name: Format Yaml files
+
+    - name: Setup YAML formatter
       run: |
         go install github.com/google/yamlfmt/cmd/yamlfmt@latest
-        yamlfmt .
+
+    - name: Run yamlfmt
+      id: yamlfmt
+      run: |
+        yamlfmt -lint .
+        # Capture the diff output
+        DIFF=$(git diff)
+        if [ ! -z "$DIFF" ]; then
+          # Encode the diff in Base64 to ensure it's handled as a single line
+          ENCODED_DIFF=$(echo "$DIFF" | base64 -w 0)
+          echo "diff=$ENCODED_DIFF" >> $GITHUB_OUTPUT
+        fi
+      shell: bash
+
+    - name: Check for formatting changes
+      if: ${{ steps.yamlfmt.outputs.diff }}
+      run: |
+        echo "ERROR: YAML file is not formatted properly. Here is the diff: "
+        # Decode the Base64 diff to display it
+        echo "${{ steps.clang-format.outputs.diff }}" | base64 --decode
+        exit 1
+      shell: bash
+
+
 

@@ -21,13 +21,13 @@ CLANG := $(findstring clang,$(shell sh -c '$(CC) --version | head -1'))
 # some automatic defaults are added to it. To specify optimization flags
 # explicitly without any defaults added, pass the OPT variable instead.
 OPTIMIZATION?=-O3
-# ifeq ($(OPTIMIZATION),-O3)
-# 	ifeq (clang,$(CLANG))
-# 		OPTIMIZATION+=-flto
-# 	else
-# 		OPTIMIZATION+=-flto=auto
-# 	endif
-# endif
+ifeq ($(OPTIMIZATION),-O3)
+	ifeq (clang,$(CLANG))
+		OPTIMIZATION+=-flto
+	else
+		OPTIMIZATION+=-flto=auto
+	endif
+endif
 ifneq ($(OPTIMIZATION),-O0)
 	OPTIMIZATION+=-fno-omit-frame-pointer
 endif

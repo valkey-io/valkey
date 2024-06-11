@@ -223,7 +223,8 @@ int parseReply(ReplyParser *parser, void *p_ctx) {
     case '(': return parseBigNumber(parser, p_ctx);
     case '=': return parseVerbatimString(parser, p_ctx);
     case '|': return parseAttributes(parser, p_ctx);
-    default: if (parser->callbacks.error) parser->callbacks.error(p_ctx);
+    default:
+        if (parser->callbacks.error) parser->callbacks.error(p_ctx);
     }
     return C_ERR;
 }

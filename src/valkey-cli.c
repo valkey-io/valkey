@@ -5141,7 +5141,7 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts, char *
             *p = '\0';
             char *token = line;
             line = p + 1;
-            switch (i++){
+            switch (i++) {
             case 0: name = token; break;
             case 1: addr = token; break;
             case 2: flags = token; break;

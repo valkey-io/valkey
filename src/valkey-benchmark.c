@@ -146,7 +146,7 @@ typedef struct _client {
     int thread_id;
     struct clusterNode *cluster_node;
     int slots_last_update;
-} *client;
+} * client;
 
 /* Threads. */
 
@@ -1098,7 +1098,7 @@ static int fetchClusterConfiguration(void) {
             *p = '\0';
             char *token = line;
             line = p + 1;
-            switch (i++){
+            switch (i++) {
             case 0: name = token; break;
             case 1: addr = token; break;
             case 2: flags = token; break;

@@ -341,7 +341,7 @@ static inline unsigned int zipEncodingLenSize(unsigned char encoding) {
 /* Return bytes needed to store integer encoded by 'encoding' */
 static inline unsigned int zipIntSize(unsigned char encoding) {
     switch (encoding) {
-    case ZIP_INT_8B:  return 1;
+    case ZIP_INT_8B: return 1;
     case ZIP_INT_16B: return 2;
     case ZIP_INT_24B: return 3;
     case ZIP_INT_32B: return 4;

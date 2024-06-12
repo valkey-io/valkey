@@ -648,7 +648,7 @@ start_server {tags {"scripting"}} {
         assert_error {NOSCRIPT*} {r script dump AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA}
     }
 
-    test {SCRIPT DUMP - scirpt not exist return noscript error} {
+    test {SCRIPT DUMP - script not exist return noscript error} {
         r script flush
         assert_error {NOSCRIPT*} {r script dump 4f5a49d7b18244a3b100d159b78b51474e23e081}
     }

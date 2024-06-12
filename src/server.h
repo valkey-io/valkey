@@ -2144,7 +2144,7 @@ typedef struct {
 
 static inline void initGetKeysResult(getKeysResult *result) {
     result->numkeys = 0;
-    result->size = 0;
+    result->size = MAX_KEYS_BUFFER;
     result->keys = NULL;
 }
 

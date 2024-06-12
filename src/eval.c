@@ -447,6 +447,13 @@ sds luaCreateFunction(client *c, robj *body, int evalsha) {
     sha1hex(funcname + 2, body->ptr, sdslen(body->ptr));
 
     if ((de = dictFind(lctx.lua_scripts, funcname + 2)) != NULL) {
+        /* If the script was previously added via EVAL, we promote it to
+         * SCRIPT LOAD, prevent it from being evicted later. */
+        luaScript *l = dictGetVal(de);
+        if (evalsha && l->node) {
+            listDelNode(lctx.lua_scripts_lru_list, l->node);
+            l->node = NULL;
+        }
         return dictGetKey(de);
     }
 

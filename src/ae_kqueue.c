@@ -104,10 +104,8 @@ static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
     struct kevent evs[2];
     int nch = 0;
 
-    if (mask & AE_READABLE)
-        EV_SET(evs + nch++, fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
-    if (mask & AE_WRITABLE)
-        EV_SET(evs + nch++, fd, EVFILT_WRITE, EV_ADD, 0, 0, NULL);
+    if (mask & AE_READABLE) EV_SET(evs + nch++, fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
+    if (mask & AE_WRITABLE) EV_SET(evs + nch++, fd, EVFILT_WRITE, EV_ADD, 0, 0, NULL);
 
     return kevent(state->kqfd, evs, nch, NULL, 0, NULL);
 }
@@ -117,10 +115,8 @@ static void aeApiDelEvent(aeEventLoop *eventLoop, int fd, int mask) {
     struct kevent evs[2];
     int nch = 0;
 
-    if (mask & AE_READABLE)
-        EV_SET(evs + nch++, fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-    if (mask & AE_WRITABLE)
-        EV_SET(evs + nch++, fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+    if (mask & AE_READABLE) EV_SET(evs + nch++, fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+    if (mask & AE_WRITABLE) EV_SET(evs + nch++, fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
 
     kevent(state->kqfd, evs, nch, NULL, 0, NULL);
 }

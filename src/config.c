@@ -2295,7 +2295,19 @@ static int isValidActiveDefrag(int val, const char **err) {
     return 1;
 }
 
+static int isValidClusterConfigFile(char *val, const char **err) {
+    if (!strcmp(val, "")) {
+        *err = "cluster-config-file can't be empty";
+        return 0;
+    }
+    return 1;
+}
+
 static int isValidDBfilename(char *val, const char **err) {
+    if (!strcmp(val, "")) {
+        *err = "dbfilename can't be empty";
+        return 0;
+    }
     if (!pathIsBaseName(val)) {
         *err = "dbfilename can't be a path, just a filename";
         return 0;
@@ -2656,6 +2668,10 @@ static int setConfigDirOption(standardConfig *config, sds *argv, int argc, const
     UNUSED(config);
     if (argc != 1) {
         *err = "wrong number of arguments";
+        return 0;
+    }
+    if (!strcmp(argv[0], "")) {
+        *err = "dir can't be empty";
         return 0;
     }
     if (chdir(argv[0]) == -1) {
@@ -3061,7 +3077,7 @@ standardConfig static_configs[] = {
     createStringConfig("replica-announce-ip", "slave-announce-ip", MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.replica_announce_ip, NULL, NULL, NULL),
     createStringConfig("primaryuser", "masteruser", MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.primary_user, NULL, NULL, NULL),
     createStringConfig("cluster-announce-ip", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_ip, NULL, NULL, updateClusterIp),
-    createStringConfig("cluster-config-file", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.cluster_configfile, "nodes.conf", NULL, NULL),
+    createStringConfig("cluster-config-file", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.cluster_configfile, "nodes.conf", isValidClusterConfigFile, NULL),
     createStringConfig("cluster-announce-hostname", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_hostname, NULL, isValidAnnouncedHostname, updateClusterHostname),
     createStringConfig("cluster-announce-human-nodename", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_human_nodename, NULL, isValidAnnouncedNodename, updateClusterHumanNodename),
     createStringConfig("syslog-ident", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.syslog_ident, SERVER_NAME, NULL, NULL),

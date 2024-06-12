@@ -734,16 +734,11 @@ NULL
         dictEntry *de;
         luaScript *ls;
 
-        if (sdslen(c->argv[2]->ptr) != 40) {
-            addReplyError(c, "Sha1 length must be 40");
-            return;
-        }
-
         if ((de = dictFind(lctx.lua_scripts, c->argv[2]->ptr))) {
             ls = dictGetVal(de);
             addReplyBulk(c, ls->body);
         } else {
-            addReply(c, shared.null[c->resp]);
+            addReplyErrorObject(c, shared.noscripterr);
         }
     } else {
         addReplySubcommandSyntaxError(c);

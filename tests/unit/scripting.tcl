@@ -639,13 +639,18 @@ start_server {tags {"scripting"}} {
     } {b534286061d4b9e4026607613b95c06c06015ae8 loaded}
 
     test {SCRIPT DUMP - is able to dump scripts from the scripting cache} {
-        list \
-            [r script dump b534286061d4b9e4026607613b95c06c06015ae8] \
-            [r script dump b534286061d4b9e4026607613b95c06c06015ae1]
-    } {{return 'loaded'} {}}
+        r script load "return 'dump'"
+        r script dump 4f5a49d7b18244a3b100d159b78b51474e23e081
+    } {return 'dump'}
 
-    test {SCRIPT DUMP - wrong sha1 length} {
-        assert_error "ERR Sha1 length must be 40" {r script dump b534286061d4b06c06015ae8}
+    test {SCRIPT DUMP - wrong sha1 length or invalid sha1 char return noscript error} {
+        assert_error {NOSCRIPT*} {r script dump b534286061d4b06c06015ae8}
+        assert_error {NOSCRIPT*} {r script dump AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA}
+    }
+
+    test {SCRIPT DUMP - scirpt not exist return noscript error} {
+        r script flush
+        assert_error {NOSCRIPT*} {r script dump 4f5a49d7b18244a3b100d159b78b51474e23e081}
     }
 
     test "SORT is normally not alpha re-ordered for the scripting engine" {

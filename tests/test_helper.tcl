@@ -26,7 +26,7 @@ proc initialize_test_dir {} {
     set dir [pwd]
     
     foreach test_dir $::test_dirs {
-        if {$::filter_test_dir ne "" && ![string match $test_dir $::filter_test_dir]} {
+        if {$::filter_test_dir ne "" && ![string match tests/$test_dir $::filter_test_dir]} {
             continue
         }
         set files [glob -nocomplain $dir/tests/$test_dir/*.tcl]
@@ -644,7 +644,12 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--quiet}} {
         set ::quiet 1
     } elseif {$opt eq {--test-dir}} {
-        set ::filter_test_dir $arg
+        if {[file isdirectory $arg] eq 0} {
+            puts "Invalid directory path provided: $arg"
+            flush stdout;
+            exit 1
+        }
+        set ::filter_test_dir [string trim $arg "/"]
         incr j
     } elseif {$opt eq {--tls} || $opt eq {--tls-module}} {
         package require tls 1.6

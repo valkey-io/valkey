@@ -1098,14 +1098,12 @@ static int fetchClusterConfiguration(void) {
             *p = '\0';
             char *token = line;
             line = p + 1;
-            /* clang-format off */
-            switch(i++){
+            switch (i++) {
             case 0: name = token; break;
             case 1: addr = token; break;
             case 2: flags = token; break;
             case 3: primary_id = token; break;
             }
-            /* clang-format on */
             if (i == 8) break; // Slots
         }
         if (!flags) {

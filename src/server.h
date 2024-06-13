@@ -427,6 +427,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_MODULE_PREVENT_REPL_PROP (1ULL << 49) /* Module client do not want to propagate to replica */
 #define CLIENT_REPROCESSING_COMMAND (1ULL << 50)     /* The client is re-processing the command. */
 #define CLIENT_REPLICATION_DONE (1ULL << 51)         /* Indicate that replication has been done on the client */
+#define CLIENT_AUTHENTICATED (1ULL << 52)            /* Indicate a client has successfully authenticated */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -1238,7 +1239,6 @@ typedef struct client {
     dictEntry *cur_script;   /* Cached pointer to the dictEntry of the script being executed. */
     time_t last_interaction; /* Time of the last interaction, used for timeout */
     time_t obuf_soft_limit_reached_time;
-    int authenticated;                   /* Needed when the default user requires auth. */
     int repl_state;                      /* Replication state if this is a replica. */
     int repl_start_cmd_stream_on_ack;    /* Install replica write handler on first ACK. */
     int repldbfd;                        /* Replication DB file descriptor. */

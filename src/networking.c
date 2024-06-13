@@ -104,14 +104,18 @@ static void clientSetDefaultAuth(client *c) {
     /* If the default user does not require authentication, the user is
      * directly authenticated. */
     c->user = DefaultUser;
-    c->authenticated = (c->user->flags & USER_FLAG_NOPASS) && !(c->user->flags & USER_FLAG_DISABLED);
+    if ((c->user->flags & USER_FLAG_NOPASS) && !(c->user->flags & USER_FLAG_DISABLED)) {
+        c->flags |= CLIENT_AUTHENTICATED;
+    } else {
+        c->flags &= ~CLIENT_AUTHENTICATED;
+    }
 }
 
 int authRequired(client *c) {
     /* Check if the user is authenticated. This check is skipped in case
      * the default user is flagged as "nopass" and is active. */
-    int auth_required =
-        (!(DefaultUser->flags & USER_FLAG_NOPASS) || (DefaultUser->flags & USER_FLAG_DISABLED)) && !c->authenticated;
+    int auth_required = (!(DefaultUser->flags & USER_FLAG_NOPASS) || (DefaultUser->flags & USER_FLAG_DISABLED)) &&
+                        !(c->flags & CLIENT_AUTHENTICATED);
     return auth_required;
 }
 
@@ -2839,7 +2843,6 @@ sds catClientInfoString(sds s, client *client) {
         else
             *p++ = 'S';
     }
-    /* clang-format off */
     if (client->flags & CLIENT_PRIMARY) *p++ = 'M';
     if (client->flags & CLIENT_PUBSUB) *p++ = 'P';
     if (client->flags & CLIENT_MULTI) *p++ = 'x';
@@ -2856,7 +2859,6 @@ sds catClientInfoString(sds s, client *client) {
     if (client->flags & CLIENT_NO_EVICT) *p++ = 'e';
     if (client->flags & CLIENT_NO_TOUCH) *p++ = 'T';
     if (p == flags) *p++ = 'N';
-    /* clang-format on */
     *p++ = '\0';
 
     p = events;
@@ -3265,15 +3267,13 @@ NULL
         listRewind(server.clients, &li);
         while ((ln = listNext(&li)) != NULL) {
             client *client = listNodeValue(ln);
-            /* clang-format off */
-            if (addr && strcmp(getClientPeerId(client),addr) != 0) continue;
-            if (laddr && strcmp(getClientSockname(client),laddr) != 0) continue;
+            if (addr && strcmp(getClientPeerId(client), addr) != 0) continue;
+            if (laddr && strcmp(getClientSockname(client), laddr) != 0) continue;
             if (type != -1 && getClientType(client) != type) continue;
             if (id != 0 && client->id != id) continue;
             if (user && client->user != user) continue;
             if (c == client && skipme) continue;
             if (max_age != 0 && (long long)(commandTimeSnapshot() / 1000 - client->ctime) < max_age) continue;
-            /* clang-format on */
 
             /* Kill it. */
             if (c == client) {
@@ -3642,7 +3642,7 @@ void helloCommand(client *c) {
     }
 
     /* At this point we need to be authenticated to continue. */
-    if (!c->authenticated) {
+    if (!(c->flags & CLIENT_AUTHENTICATED)) {
         addReplyError(c, "-NOAUTH HELLO must be called with the client already "
                          "authenticated, otherwise the HELLO <proto> AUTH <user> <pass> "
                          "option can be used to authenticate the client and "

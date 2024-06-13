@@ -33,10 +33,19 @@ start_server {tags {"querybuf slow"}} {
         # Make sure query buff has size of 0 bytes at start as the client uses the shared qb.
         assert {[client_query_buffer test_client] == 0}
 
+        # Pause cron to prevent premature shrinking (timing issue).
+        r debug pause-cron 1
+
         # Send partial command to client to make sure it doesn't use the shared qb.
         $rd write "*3\r\n\$3\r\nset\r\n\$2\r\na"
         $rd flush
-        after 100
+        # Wait for the client to start using a private query buffer. 
+        wait_for_condition 1000 10 {
+            [client_query_buffer test_client] > 0
+        } else {
+            fail "client should start using a private query buffer"
+        }
+     
         # send the rest of the command
         $rd write "a\r\n\$1\r\nb\r\n"
         $rd flush
@@ -47,6 +56,9 @@ start_server {tags {"querybuf slow"}} {
         # but at least the basic IO reading buffer size (PROTO_IOBUF_LEN) 16k
         set MAX_QUERY_BUFFER_SIZE [expr 32768 + 2] ; # 32k + 2, allowing for potential greedy allocation of (16k + 1) * 2 bytes for the query buffer.
         assert {$orig_test_client_qbuf >= 16384 && $orig_test_client_qbuf <= $MAX_QUERY_BUFFER_SIZE}
+
+        # Allow shrinking to occur
+        r debug pause-cron 0
 
         # Check that the initial query buffer is resized after 2 sec
         wait_for_condition 1000 10 {

@@ -7917,7 +7917,7 @@ int checkModuleAuthentication(client *c, robj *username, robj *password, robj **
     }
     if (c->flags & CLIENT_MODULE_AUTH_HAS_RESULT) {
         c->flags &= ~CLIENT_MODULE_AUTH_HAS_RESULT;
-        if (c->authenticated) return AUTH_OK;
+        if (c->flags & CLIENT_AUTHENTICATED) return AUTH_OK;
     }
     return AUTH_ERR;
 }
@@ -9465,7 +9465,7 @@ void revokeClientAuthentication(client *c) {
     moduleNotifyUserChanged(c);
 
     c->user = DefaultUser;
-    c->authenticated = 0;
+    c->flags &= ~CLIENT_AUTHENTICATED;
     /* We will write replies to this client later, so we can't close it
      * directly even if async. */
     if (c == server.current_client) {
@@ -9787,7 +9787,7 @@ static int authenticateClientWithUser(ValkeyModuleCtx *ctx,
     moduleNotifyUserChanged(ctx->client);
 
     ctx->client->user = user;
-    ctx->client->authenticated = 1;
+    ctx->client->flags |= CLIENT_AUTHENTICATED;
 
     if (clientHasModuleAuthInProgress(ctx->client)) {
         ctx->client->flags |= CLIENT_MODULE_AUTH_HAS_RESULT;

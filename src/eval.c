@@ -1221,20 +1221,18 @@ char *ldbRespToHuman_Double(sds *o, char *reply);
  * char*) so that we can return a modified pointer, as for SDS semantics. */
 char *ldbRespToHuman(sds *o, char *reply) {
     char *p = reply;
-    /* clang-format off */
-    switch(*p) {
-    case ':': p = ldbRespToHuman_Int(o,reply); break;
-    case '$': p = ldbRespToHuman_Bulk(o,reply); break;
-    case '+': p = ldbRespToHuman_Status(o,reply); break;
-    case '-': p = ldbRespToHuman_Status(o,reply); break;
-    case '*': p = ldbRespToHuman_MultiBulk(o,reply); break;
-    case '~': p = ldbRespToHuman_Set(o,reply); break;
-    case '%': p = ldbRespToHuman_Map(o,reply); break;
-    case '_': p = ldbRespToHuman_Null(o,reply); break;
-    case '#': p = ldbRespToHuman_Bool(o,reply); break;
-    case ',': p = ldbRespToHuman_Double(o,reply); break;
+    switch (*p) {
+    case ':': p = ldbRespToHuman_Int(o, reply); break;
+    case '$': p = ldbRespToHuman_Bulk(o, reply); break;
+    case '+': p = ldbRespToHuman_Status(o, reply); break;
+    case '-': p = ldbRespToHuman_Status(o, reply); break;
+    case '*': p = ldbRespToHuman_MultiBulk(o, reply); break;
+    case '~': p = ldbRespToHuman_Set(o, reply); break;
+    case '%': p = ldbRespToHuman_Map(o, reply); break;
+    case '_': p = ldbRespToHuman_Null(o, reply); break;
+    case '#': p = ldbRespToHuman_Bool(o, reply); break;
+    case ',': p = ldbRespToHuman_Double(o, reply); break;
     }
-    /* clang-format on */
     return p;
 }
 

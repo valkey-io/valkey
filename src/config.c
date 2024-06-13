@@ -1367,11 +1367,11 @@ void rewriteConfigSaveOption(standardConfig *config, const char *name, struct re
     if (!server.saveparamslen) {
         rewriteConfigRewriteLine(state, name, sdsnew("save \"\""), 1);
     } else {
+        line = sdsnew(name);
         for (j = 0; j < server.saveparamslen; j++) {
-            line = sdscatprintf(sdsempty(), "save %ld %d", (long)server.saveparams[j].seconds,
-                                server.saveparams[j].changes);
-            rewriteConfigRewriteLine(state, name, line, 1);
+            line = sdscatprintf(line, " %ld %d", (long)server.saveparams[j].seconds, server.saveparams[j].changes);
         }
+        rewriteConfigRewriteLine(state, name, line, 1);
     }
 
     /* Mark "save" as processed in case server.saveparamslen is zero. */

@@ -217,8 +217,7 @@ sds createLatencyReport(void) {
     if (dictSize(server.latency_events) == 0 && server.latency_monitor_threshold == 0) {
         report = sdscat(
             report, "I'm sorry, Dave, I can't do that. Latency monitoring is disabled in this Valkey instance. You may "
-                    "use \"CONFIG SET latency-monitor-threshold <milliseconds>.\" in order to enable it. If we weren't "
-                    "in a deep space mission I'd suggest to take a look at https://valkey.io/topics/latency-monitor.\n");
+                    "use \"CONFIG SET latency-monitor-threshold <milliseconds>.\" in order to enable it.\n");
         return report;
     }
 
@@ -237,8 +236,7 @@ sds createLatencyReport(void) {
         if (ts == NULL) continue;
         eventnum++;
         if (eventnum == 1) {
-            report = sdscat(report, "Dave, I have observed latency spikes in this Valkey instance. You don't mind "
-                                    "talking about it, do you Dave?\n\n");
+            report = sdscat(report, "Latency spikes are observed in this Valkey instance.\n\n");
         }
         analyzeLatencyForEvent(event, &ls);
 
@@ -358,18 +356,17 @@ sds createLatencyReport(void) {
     }
 
     if (eventnum == 0 && advices == 0) {
-        report = sdscat(report, "Dave, no latency spike was observed during the lifetime of this Valkey instance, not "
-                                "in the slightest bit. I honestly think you ought to sit down calmly, take a stress "
-                                "pill, and think things over.\n");
+        report = sdscat(report, "No latency spike was observed during the lifetime of this Valkey instance, not "
+                                "in the slightest bit.\n");
     } else if (eventnum > 0 && advices == 0) {
         report =
-            sdscat(report, "\nWhile there are latency events logged, I'm not able to suggest any easy fix. Please use "
-                           "the Valkey community to get some help, providing this report in your help request.\n");
+            sdscat(report, "\nThere are latency events logged, they are not easy to fix. Please get "
+                           "some help from Valkey community, providing this report in your help request.\n");
     } else {
         /* Add all the suggestions accumulated so far. */
 
         /* Better VM. */
-        report = sdscat(report, "\nI have a few advices for you:\n\n");
+        report = sdscat(report, "\nHere is some advice for you:\n\n");
         if (advise_better_vm) {
             report = sdscat(report, "- If you are using a virtual machine, consider upgrading it with a faster one "
                                     "using a hypervisior that provides less latency during fork() calls. Xen is known "

@@ -107,25 +107,25 @@ start_cluster 1 0 {tags {external:skip cluster}} {
     set expected_slots_to_key_count [dict create $key_slot 1]
 
     test "CLUSTER SLOT-STATS contains default value upon valkey-server startup" {
-        set slot_stats [R 0 CLUSTER SLOT-STATS]
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
         assert_empty_slot_stats $slot_stats
     }
 
     test "CLUSTER SLOT-STATS contains correct metrics upon key introduction" {
         R 0 SET $key TEST
-        set slot_stats [R 0 CLUSTER SLOT-STATS]
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
         assert_empty_slot_stats_with_exception $slot_stats $expected_slots_to_key_count
     }
 
     test "CLUSTER SLOT-STATS contains correct metrics upon key mutation" {
         R 0 SET $key NEW_VALUE
-        set slot_stats [R 0 CLUSTER SLOT-STATS]
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
         assert_empty_slot_stats_with_exception $slot_stats $expected_slots_to_key_count
     }
 
     test "CLUSTER SLOT-STATS contains correct metrics upon key deletion" {
         R 0 DEL $key
-        set slot_stats [R 0 CLUSTER SLOT-STATS]
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
         assert_empty_slot_stats $slot_stats
     }
 
@@ -135,13 +135,13 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         R 0 CLUSTER DELSLOTS $key_slot
         set expected_slots [initialize_expected_slots_dict]
         dict unset expected_slots $key_slot
-        set slot_stats [R 0 CLUSTER SLOT-STATS]
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
         assert {[dict size $expected_slots] == 16383}
         assert_slot_visibility $slot_stats $expected_slots
 
         R 0 CLUSTER ADDSLOTS $key_slot
         set expected_slots [initialize_expected_slots_dict]
-        set slot_stats [R 0 CLUSTER SLOT-STATS]
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
         assert {[dict size $expected_slots] == 16384}
         assert_slot_visibility $slot_stats $expected_slots
     }
@@ -268,37 +268,37 @@ start_cluster 1 1 {tags {external:skip cluster}} {
 
     test "CLUSTER SLOT-STATS key-count replication for new keys" {
         R 0 SET $key VALUE
-        set slot_stats_master [R 0 CLUSTER SLOT-STATS]
+        set slot_stats_master [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
 
         set expected_slots_key_count [dict create $key_slot 1]
         assert_slot_stats_key_count $slot_stats_master $expected_slots_key_count
         wait_for_replica_key_exists $key 1
 
-        set slot_stats_replica [R 1 CLUSTER SLOT-STATS]
+        set slot_stats_replica [R 1 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
         assert {$slot_stats_master eq $slot_stats_replica}
     }
 
     test "CLUSTER SLOT-STATS key-count replication for existing keys" {
         R 0 SET $key VALUE_UPDATED
-        set slot_stats_master [R 0 CLUSTER SLOT-STATS]
+        set slot_stats_master [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
 
         set expected_slots_key_count [dict create $key_slot 1]
         assert_slot_stats_key_count $slot_stats_master $expected_slots_key_count
         wait_for_replica_key_exists $key 1
 
-        set slot_stats_replica [R 1 CLUSTER SLOT-STATS]
+        set slot_stats_replica [R 1 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
         assert {$slot_stats_master eq $slot_stats_replica}
     }
 
     test "CLUSTER SLOT-STATS key-count replication for deleting keys" {
         R 0 DEL $key
-        set slot_stats_master [R 0 CLUSTER SLOT-STATS]
+        set slot_stats_master [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
 
         set expected_slots_key_count [dict create $key_slot 0]
         assert_slot_stats_key_count $slot_stats_master $expected_slots_key_count
         wait_for_replica_key_exists $key 0
 
-        set slot_stats_replica [R 1 CLUSTER SLOT-STATS]
+        set slot_stats_replica [R 1 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
         assert {$slot_stats_master eq $slot_stats_replica}
     }
 }

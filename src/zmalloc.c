@@ -31,6 +31,7 @@
 #include "fmacros.h"
 #include "config.h"
 #include "solarisfixes.h"
+#include "serverassert.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -628,8 +629,6 @@ size_t zmalloc_get_rss(void) {
 #endif
 
 #if defined(USE_JEMALLOC)
-
-#include "serverassert.h"
 
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)

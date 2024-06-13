@@ -47,7 +47,7 @@ test "Primary reboot in very short time" {
     R $master_id config rewrite
 
     foreach_sentinel_id id {
-        S $id SENTINEL SET mymaster master-reboot-down-after-period 5000
+        S $id SENTINEL SET mymaster primary-reboot-down-after-period 5000
         S $id sentinel debug ping-period 500
         S $id sentinel debug ask-period 500 
     }
@@ -56,6 +56,38 @@ test "Primary reboot in very short time" {
     reboot_instance valkey $master_id
     
     foreach_sentinel_id id {        
+        wait_for_condition 1000 100 {
+            [lindex [S $id SENTINEL GET-MASTER-ADDR-BY-NAME mymaster] 1] != $old_port
+        } else {
+            fail "At least one Sentinel did not receive failover info"
+        }
+    }
+
+    set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
+    set master_id [get_instance_id_by_port valkey [lindex $addr 1]]
+
+    # Make sure the instance load all the dataset
+    while 1 {
+        catch {[$link ping]} retval
+        if {[string match {*LOADING*} $retval]} {
+            after 100
+            continue
+        } else {
+            break
+        }
+    }
+
+    # Check the master-reboot-down-after-period still works
+    foreach_sentinel_id id {
+        S $id SENTINEL SET mymaster master-reboot-down-after-period 5000
+        S $id sentinel debug ping-period 500
+        S $id sentinel debug ask-period 500
+    }
+
+    kill_instance valkey $master_id
+    reboot_instance valkey $master_id
+
+    foreach_sentinel_id id {
         wait_for_condition 1000 100 {
             [lindex [S $id SENTINEL GET-MASTER-ADDR-BY-NAME mymaster] 1] != $old_port
         } else {

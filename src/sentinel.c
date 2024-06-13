@@ -1946,7 +1946,7 @@ const char *sentinelHandleConfiguration(char **argv, int argc) {
         if ((sentinel.announce_hostnames = yesnotoi(argv[1])) == -1) {
             return "Please specify yes or no for the announce-hostnames option.";
         }
-    } else if (!strcasecmp(argv[0], "master-reboot-down-after-period") && argc == 3) {
+    } else if ((!strcasecmp(argv[0], "primary-reboot-down-after-period") || !strcasecmp(argv[0], "master-reboot-down-after-period")) && argc == 3) {
         /* primary-reboot-down-after-period <name> <milliseconds> */
         ri = sentinelGetPrimaryByName(argv[1]);
         if (!ri) return "No such master with specified name.";
@@ -2058,9 +2058,9 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
 
         /* sentinel primary-reboot-down-after-period */
         if (primary->primary_reboot_down_after_period != 0) {
-            line = sdscatprintf(sdsempty(), "sentinel master-reboot-down-after-period %s %ld", primary->name,
+            line = sdscatprintf(sdsempty(), "sentinel primary-reboot-down-after-period %s %ld", primary->name,
                                 (long)primary->primary_reboot_down_after_period);
-            rewriteConfigRewriteLine(state, "sentinel master-reboot-down-after-period", line, 1);
+            rewriteConfigRewriteLine(state, "sentinel primary-reboot-down-after-period", line, 1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
 
@@ -2184,7 +2184,7 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
     rewriteConfigMarkAsProcessed(state, "sentinel known-replica");
     rewriteConfigMarkAsProcessed(state, "sentinel known-sentinel");
     rewriteConfigMarkAsProcessed(state, "sentinel rename-command");
-    rewriteConfigMarkAsProcessed(state, "sentinel master-reboot-down-after-period");
+    rewriteConfigMarkAsProcessed(state, "sentinel primary-reboot-down-after-period");
 }
 
 /* This function uses the config rewriting in order to persist
@@ -4249,7 +4249,7 @@ void sentinelSetCommand(client *c) {
                 dictAdd(ri->renamed_commands, oldname, newname);
             }
             changes++;
-        } else if (!strcasecmp(option, "master-reboot-down-after-period") && moreargs > 0) {
+        } else if ((!strcasecmp(option, "primary-reboot-down-after-period") || !strcasecmp(option, "master-reboot-down-after-period")) && moreargs > 0) {
             /* primary-reboot-down-after-period <milliseconds> */
             robj *o = c->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll < 0) {

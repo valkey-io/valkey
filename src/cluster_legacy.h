@@ -277,6 +277,25 @@ static_assert(offsetof(clusterMsg, data) == 2256, "unexpected field offset");
                                               master is up. */
 #define CLUSTERMSG_FLAG0_EXT_DATA (1 << 2) /* Message contains extension data */
 
+typedef struct {
+    char sig[4];                  /* Signature "RCmb" (Cluster message bus). */
+    uint32_t totlen;              /* Total length of this message */
+    uint16_t ver;                 /* Protocol version, currently set to CLUSTER_PROTO_VER. */
+    uint16_t port;                /* Primary port number (TCP or TLS). */
+    uint16_t type;                /* Message type */
+    union clusterMsgData data;
+} clusterMsgPubsub;
+
+
+static_assert(offsetof(clusterMsgPubsub, sig) == 0, "unexpected field offset");
+static_assert(offsetof(clusterMsgPubsub, totlen) == 4, "unexpected field offset");
+static_assert(offsetof(clusterMsgPubsub, ver) == 8, "unexpected field offset");
+static_assert(offsetof(clusterMsgPubsub, port) == 10, "unexpected field offset");
+static_assert(offsetof(clusterMsgPubsub, type) == 12, "unexpected field offset");
+static_assert(offsetof(clusterMsgPubsub, data) == 16, "unexpected field offset");
+
+#define CLUSTERMSGPUBSUB_MIN_LEN (sizeof(clusterMsgPubsub) - sizeof(union clusterMsgData))
+
 struct _clusterNode {
     mstime_t ctime;                         /* Node object creation time. */
     char name[CLUSTER_NAMELEN];             /* Node name, hex string, sha1-size */

@@ -322,17 +322,11 @@ start_server {tags {"repl rdb-channel external:skip"}} {
             $master set key5 val5
             
             test "Rdb-channel-sync fails when primary diskless disabled" {
+                set cur_psync [status $master sync_partial_ok]
                 $master config set repl-diskless-sync no
 
                 $replica1 config set repl-rdb-channel yes
                 $replica1 slaveof $master_host $master_port
-
-                # Wait for sync to fail
-                wait_for_condition 100 50 {
-                    [log_file_matches $replica1_log "*Master does not understand REPLCONF main-conn*"]
-                } else {
-                    fail "rdb-connection sync rollback should have been triggered."
-                }
 
                 # Wait for mitigation and resync
                 wait_for_value_to_propegate_to_replica $master $replica1 "key5"
@@ -342,6 +336,9 @@ start_server {tags {"repl rdb-channel external:skip"}} {
                 } else {
                     fail "Replica is not synced"
                 }
+
+                # Verify that we did not use rdb-channel sync
+                assert {[status $master sync_partial_ok] == $cur_psync}
             }
         }
     }

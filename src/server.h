@@ -527,12 +527,13 @@ typedef enum {
 #define REPLICA_CAPA_NONE 0
 #define REPLICA_CAPA_EOF (1 << 0)    /* Can parse the RDB EOF streaming format. */
 #define REPLICA_CAPA_PSYNC2 (1 << 1) /* Supports PSYNC2 protocol. */
+#define REPLICA_CAPA_RDB_CHANNEL (1<<2) /* Supports RDB channel sync */
 
 /* Replica requirements */
 #define REPLICA_REQ_NONE 0
 #define REPLICA_REQ_RDB_EXCLUDE_DATA (1 << 0)      /* Exclude data from RDB */
 #define REPLICA_REQ_RDB_EXCLUDE_FUNCTIONS (1 << 1) /* Exclude functions from RDB */
-#define SLAVE_REQ_RDB_CHANNEL (1 << 2)           /* Use rdb-channel sync */
+#define REPLICA_REQ_RDB_CHANNEL (1 << 2)           /* Use rdb-channel sync */
 /* Mask of all bits in the replica requirements bitfield that represent non-standard (filtered) RDB requirements */
 #define REPLICA_REQ_RDB_MASK (REPLICA_REQ_RDB_EXCLUDE_DATA | REPLICA_REQ_RDB_EXCLUDE_FUNCTIONS)
 

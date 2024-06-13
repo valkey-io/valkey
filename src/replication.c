@@ -1092,8 +1092,10 @@ void syncCommand(client *c) {
              * resync on purpose when they are not able to partially
              * resync. */
             if (primary_replid[0] != '?') server.stat_sync_partial_err++;
-            if (c->flags & CLIENT_REPL_MAIN_CHANNEL) {
-                serverLog(LL_NOTICE,"Replica %s is marked as main-conn, and psync isn't possible. Full sync will continue with dedicated RDB connection.", replicationGetReplicaName(c));
+            if (c->replica_capa & REPLICA_CAPA_RDB_CHANNEL) {
+                c->flags |= CLIENT_REPL_MAIN_CHANNEL;                
+                serverLog(LL_NOTICE,"Replica %s is capable of rdb-channel synchronization, and partial sync isn't possible. "
+                    "Full sync will continue with dedicated RDB connection.", replicationGetReplicaName(c));
                 if (connWrite(c->conn,"-FULLSYNCNEEDED\r\n",17) != 17) {
                     freeClientAsync(c);
                 }
@@ -1209,10 +1211,11 @@ void syncCommand(client *c) {
  * the primary can accurately lists replicas and their listening ports in the
  * INFO output.
  *
- * - capa <eof|psync2>
+ * - capa <eof|psync2|dual-channel>
  * What is the capabilities of this instance.
  * eof: supports EOF-style RDB transfer for diskless replication.
  * psync2: supports PSYNC v2, so understands +CONTINUE <new repl ID>.
+ * dual-channel: supports full sync using rdb channel.
  *
  * - ack <offset> [fack <aofofs>]
  * Replica informs the primary the amount of replication stream that it
@@ -1237,11 +1240,7 @@ void syncCommand(client *c) {
  * - rdb-channel <1|0>
  * Used to identify the client as a replica's rdb connection in an rdb connection 
  * sync session. 
- * 
- * - main-conn <1|0>
- * Used to identify the replica main connection during 
- * rdb-connection sync. It also means that if psync is impossible, master 
- * should not auto trigger full sync. */
+ * */
 void replconfCommand(client *c) {
     int j;
 
@@ -1277,6 +1276,12 @@ void replconfCommand(client *c) {
                 c->replica_capa |= REPLICA_CAPA_EOF;
             else if (!strcasecmp(c->argv[j + 1]->ptr, "psync2"))
                 c->replica_capa |= REPLICA_CAPA_PSYNC2;
+            else if (!strcasecmp(c->argv[j+1]->ptr,"dual-channel") && 
+                server.rdb_channel_enabled && server.repl_diskless_sync) {
+                /* If rdb-channel is disable on this primary, treat this command as unrecognized 
+                 * replconf option. */
+                c->replica_capa |= REPLICA_CAPA_RDB_CHANNEL;
+            }
         } else if (!strcasecmp(c->argv[j]->ptr, "ack")) {
             /* REPLCONF ACK is used by replica to inform the primary the amount
              * of replication stream that it processed so far. It is an
@@ -1367,32 +1372,10 @@ void replconfCommand(client *c) {
             } 
             if (start_with_offset == 1) {
                 c->flags |= CLIENT_REPL_RDB_CHANNEL;
-                c->replica_req |= SLAVE_REQ_RDB_CHANNEL;
+                c->replica_req |= REPLICA_REQ_RDB_CHANNEL;
             } else {
                 c->flags &= ~CLIENT_REPL_RDB_CHANNEL;
-                c->replica_req &= ~SLAVE_REQ_RDB_CHANNEL;
-            }
-        } else if (!strcasecmp(c->argv[j]->ptr, "main-conn") && server.rdb_channel_enabled) {
-            /* If rdb-channel is disable on this master, treat this command as unrecognized 
-             * replconf option. */
-            long main_conn = 0;
-            if (getRangeLongFromObjectOrReply(c, c->argv[j +1],
-                    0, 1, &main_conn, NULL) != C_OK) {
-                return;
-            } 
-            if (main_conn == 1) {
-                if (!server.repl_diskless_sync) {
-                    /* When the primary uses disk for full sync, replicas can usually join during the time the 
-                     * primary saves the database to disk. RDB-channel-sync, however, does not allow replicas 
-                     * to join the primary since the COB does not keep the needed replication data. To avoid 
-                     * making the primary create a new snapshot for each replica, we forbid rdb-channel-sync
-                     * along with primary disk-based sync */
-                    addReplyErrorFormat(c,"Rdb channel sync is not allowed when repl-diskless-sync disabled on primary");
-                    return;
-                }
-                c->flags |= CLIENT_REPL_MAIN_CHANNEL;
-            } else {
-                c->flags &= ~CLIENT_REPL_MAIN_CHANNEL;
+                c->replica_req &= ~REPLICA_REQ_RDB_CHANNEL;
             }
         } else if (!strcasecmp(c->argv[j]->ptr, "set-rdb-conn-id")) {
             /* REPLCONF identify <client-id> is used to identify the current replica main connection with existing
@@ -3052,6 +3035,9 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
 
     if (!strncmp(reply, "+FULLRESYNC", 11)) {
         char *replid = NULL, *offset = NULL;
+        if (server.rdb_channel_enabled) {
+            server.master_supports_rdb_channel = 0;
+        }
 
         /* FULL RESYNC, parse the reply in order to extract the replid
          * and the replication offset. */
@@ -3147,8 +3133,10 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
     }
 
     if (!strncmp(reply, "-FULLSYNCNEEDED", 15)) {
-        /* In case the main connection with master is at main-conn mode, the master 
-         * will respond with -FULLSYNCNEEDED to imply that psync is not possible */
+        /* A response of -FULLSYNCNEEDED from the master implies that partial 
+         * synchronization is not possible. Full sync will continue on dedicated 
+         * RDB channel. */
+        server.master_supports_rdb_channel = 1;
         serverLog(LL_NOTICE, "PSYNC is not possible, initialize RDB channel.");
         sdsfree(reply);
         return PSYNC_FULLRESYNC_RDB_CONN;
@@ -3389,11 +3377,10 @@ void syncWithMaster(connection *conn) {
             if (err) goto write_error;
         }
 
-        /* When using rdb-channel for sync, mark the main connection only for psync.
-         * The master's capabilities will also be verified here, since if the master
-         * does not support rdb-channel sync, it will not understand this command. */
+        /* When using rdb-channel for sync, announce that the replica is capable
+         * of rdb channel sync. */
         if (server.rdb_channel_enabled) {
-           err = sendCommand(conn,"REPLCONF", "main-conn", "1", NULL);
+           err = sendCommand(conn,"REPLCONF", "capa" ,"dual-channel", NULL);
         }
 
         /* Inform the primary of our (replica) capabilities.
@@ -3476,15 +3463,7 @@ void syncWithMaster(connection *conn) {
         err = receiveSynchronousResponse(conn);
         if (err == NULL) goto error;
         else if (err[0] == '-') {
-            /* Activate rdb-channel fallback mechanism. The master did not understand 
-             * REPLCONF main-conn. This means the master does not support RDB channel 
-             * synchronization. The replica will continue the sync session with one 
-             * channel (normally). */
-            serverLog(LL_WARNING, "Master does not understand REPLCONF main-conn aborting rdb-channel sync %s", err);
-            server.master_supports_rdb_channel = 0;
-        } else if (memcmp(err, "+OK", 3) == 0) {
-            /* Master support rdb-connection sync. Continue with rdb-channel approach. */
-            server.master_supports_rdb_channel = 1;
+            serverLog(LL_NOTICE,"(Non critical) Master is not capable of rdb-channel sync");
         }
         sdsfree(err);
         server.repl_state = REPL_STATE_RECEIVE_CAPA_REPLY;

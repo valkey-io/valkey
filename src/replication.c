@@ -3242,44 +3242,55 @@ void setupMainConnForPsync(connection *conn) {
  *  - Once the replica completes loading the rdb, it drops the rdb-connection and streams the accumulated incremental 
  *    changes into memory. Repl steady state continues normally.
  * 
- * * Replica state machine *
- *                                                             RDB Channel Sync                                                 
- *                                                          ┌──────────────────────────────────────────────────────────────┐    
- *                                                          │   RDB connection states               Main connection state  │    
- * ┌───────────────────┐           ┌────────────┐           │     ┌────────────────────────────┐    ┌───────────────────┐  │    
- * │RECEIVE_PING_REPLY │       ┌───►SEND_PSYNC  │ -FULLSYNCNEEDED─┤REPL_RDB_CONN_SEND_HANDSHAKE│ ┌──►SEND_HANDSHAKE     │  │    
- * └────────┬──────────┘       │   └─┬──────────┘        │  │     └────┬───────────────────────┘ │  └──┬────────────────┘  │    
- *          │+PONG             │     │PSYNC (use cached-master)        │                         │     │REPLCONF set-rdb-conn-id
- * ┌────────▼──────────┐       │   ┌─▼─────────────────┐ │  │  ┌───────▼───────────────────────┐ │  ┌──▼────────────────┐  │    
- * │SEND_HANDSHAKE     │       │ ┌─┤RECEIVE_PSYNC_REPLY├─┘  │  │RDB_CONN_RECEIVE_AUTH_REPLY    │ │  │RECEIVE_CAPA_REPLY │  │    
- * └────────┬──────────┘       │ │ └─┬─────────────────┘    │  └───────┬───────────────────────┘ │  └──┬────────────────┘  │    
- *          │                  │ │   │+FULLRESYNC           │          │+OK                      │     │+OK                │    
- * ┌────────▼──────────┐       │ │ ┌─▼─────────────────┐    │  ┌───────▼───────────────────────┐ │  ┌──▼────────────────┐  │    
- * │RECEIVE_AUTH_REPLY │       │ │ │TRANSFER           │    │  │RDB_CONN_RECEIVE_REPLCONF_REPLY│ │  │SEND_PSYNC         │  │    
- * └────────┬──────────┘       │ │ └───────────────────┘    │  └───────┬───────────────────────┘ │  └──┬────────────────┘  │    
- *          │+OK               │ │                          │          │+OK                      │     │PSYNC use snapshot │    
- * ┌────────▼──────────┐       │ │                          │  ┌───────▼───────────────┐         │     │end-offset provided│    
- * │RECEIVE_PORT_REPLY │       │ │                          │  │RDB_CONN_RECEIVE_ENDOFF│         │     │by the master      │    
- * └────────┬──────────┘       │ │                          │  └───────┬───────────────┘         │  ┌──▼────────────────┐  │    
- *          │+OK               │ │+CONTINUE                 │          │$ENDOFF                  │  │RECEIVE_PSYNC_REPLY│  │    
- * ┌────────▼──────────┐       │ │                          │          ├─────────────────────────┘  └──┬────────────────┘  │    
- * │RECEIVE_IP_REPLY   │       │ │                          │          │                               │+CONTINUE          │    
- * └────────┬──────────┘       │ │                          │  ┌───────▼───────────────┐            ┌──▼────────────────┐  │    
- *          │+OK               │ │                          │  │RDB_CONN_RDB_LOAD      │            │TRANSFER           │  │    
- * ┌────────▼──────────┐       │ │                          │  └───────┬───────────────┘            └────┬──────────────┘  │    
- * │RECEIVE_IP_REPLY   │       │ │                          │          │Done loading snapshot            │                 │    
- * └────────┬──────────┘       │ │                          │  ┌───────▼───────────────┐                 │                 │    
- *          │+OK               │ │                          │  │RDB_CONN_RDB_LOADED    │                 │                 │    
- * ┌────────▼────────────────┐ │ │                          │  └───────┬───────────────┘                 │                 │    
- * │RECEIVE_NO_FULLSYNC_REPLY│ │ │                          │          │                                 │                 │    
- * └─┬────┬──────────────────┘ │ └────┐                     │          │Slave loads local replication    │                 │    
- *   │+OK │Unrecognized REPLCONF      │                     │          │buffer into memory               │                 │    
- * ┌─▼────▼────────────┐       │      │            ┌────────┼──────────┴─────────────────────────────────┘                 │    
- * │RECEIVE_CAPA_REPLY ├───────┘      │            │        │                                                              │    
- * └───────────────────┘           ┌──▼────────────▼───┐    │                                                              │    
- *                                 │CONNECTED          │    └──────────────────────────────────────────────────────────────┘    
- *                                 └───────────────────┘                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
- */ 
+ * * Replica state machine *                                                                        
+ * ┌───────────────────┐             RDB Channel Sync                                                  
+ * │RECEIVE_PING_REPLY │          ┌──────────────────────────────────────────────────────────────┐     
+ * └────────┬──────────┘          │   RDB connection states              Main connection state   │     
+ *          │+PONG                │     ┌────────────────────────────┐   ┌───────────────────┐   │     
+ * ┌────────▼──────────┐        ┌─┼─────►REPL_RDB_CONN_SEND_HANDSHAKE│ ┌─►SEND_HANDSHAKE     │   │     
+ * │SEND_HANDSHAKE     │        │ │     └────┬───────────────────────┘ │ └──┬────────────────┘   │     
+ * └────────┬──────────┘        │ │          │                         │    │REPLCONF set-rdb-conn-id  
+ *          │                   │ │  ┌───────▼───────────────────────┐ │ ┌──▼────────────────┐   │     
+ * ┌────────▼──────────┐        │ │  │RDB_CONN_RECEIVE_AUTH_REPLY    │ │ │RECEIVE_CAPA_REPLY │   │     
+ * │RECEIVE_AUTH_REPLY │        │ │  └───────┬───────────────────────┘ │ └──┬────────────────┘   │     
+ * └────────┬──────────┘        │ │          │+OK                      │    │+OK                 │     
+ *          │+OK                │ │  ┌───────▼───────────────────────┐ │ ┌──▼────────────────┐   │     
+ * ┌────────▼──────────┐        │ │  │RDB_CONN_RECEIVE_REPLCONF_REPLY│ │ │SEND_PSYNC         │   │     
+ * │RECEIVE_PORT_REPLY │        │ │  └───────┬───────────────────────┘ │ └──┬────────────────┘   │     
+ * └────────┬──────────┘        │ │          │+OK                      │    │PSYNC use snapshot  │     
+ *          │+OK                │ │  ┌───────▼───────────────┐         │    │end-offset provided │     
+ * ┌────────▼──────────┐        │ │  │RDB_CONN_RECEIVE_ENDOFF│         │    │by the master       │     
+ * │RECEIVE_IP_REPLY   │        │ │  └───────┬───────────────┘         │ ┌──▼────────────────┐   │     
+ * └────────┬──────────┘        │ │          │$ENDOFF                  │ │RECEIVE_PSYNC_REPLY│   │     
+ *          │+OK                │ │          ├─────────────────────────┘ └──┬────────────────┘   │     
+ * ┌────────▼──────────┐        │ │          │                              │+CONTINUE           │     
+ * │RECEIVE_IP_REPLY   │        │ │  ┌───────▼───────────────┐           ┌──▼────────────────┐   │     
+ * └────────┬──────────┘        │ │  │RDB_CONN_RDB_LOAD      │           │TRANSFER           │   │     
+ *          │+OK                │ │  └───────┬───────────────┘           └─────┬─────────────┘   │     
+ * ┌────────▼────────────────┐  │ │          │Done loading                     │                 │     
+ * │RECEIVE_NO_FULLSYNC_REPLY│  │ │  ┌───────▼───────────────┐                 │                 │     
+ * └─┬────┬──────────────────┘  │ │  │RDB_CONN_RDB_LOADED    │                 │                 │     
+ *   │+OK │Unrecognized REPLCONF│ │  └───────┬───────────────┘                 │                 │     
+ * ┌─▼────▼────────────┐        │ │          │                                 │                 │     
+ * │RECEIVE_CAPA_REPLY │        │ │          │Replica loads local replication  │                 │     
+ * └────────┬──────────┘        │ │          │buffer into memory               │                 │     
+ *          │                   │ │          └──────────────┬──────────────────┘                 │     
+ * ┌────────▼───┐               │ │                         │                                    │     
+ * │SEND_PSYNC  │               │ └─────────────────────────┼────────────────────────────────────┘     
+ * └─┬──────────┘               │                           │                                          
+ *   │PSYNC (use cached-master) │                           │                                          
+ * ┌─▼─────────────────┐        │                           │                                          
+ * │RECEIVE_PSYNC_REPLY│        │                           │                                          
+ * └────────┬─┬────────┘        │                           │                                          
+ * +CONTINUE│ │-FULLSYNCNEEDED  │                           │                                          
+ *   │      │ └─────────────────┘                           │                                          
+ *   │      │+FULLRESYNC                                    │                                          
+ *   │    ┌─▼─────────────────┐                   ┌─────────▼─────────┐                                
+ *   │    │TRANSFER           ├───────────────────►CONNECTED          │                                
+ *   │    └───────────────────┘                   └─────────▲─────────┘                                
+ *   │                                                      │                                          
+ *   └──────────────────────────────────────────────────────┘                                          
+ */
 /* This handler fires when the non blocking connect was able to
  * establish a connection with the primary. */
 void syncWithMaster(connection *conn) {

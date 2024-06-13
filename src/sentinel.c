@@ -4251,7 +4251,9 @@ void sentinelSetCommand(client *c) {
                 dictAdd(ri->renamed_commands, oldname, newname);
             }
             changes++;
-        } else if ((!strcasecmp(option, "primary-reboot-down-after-period") || !strcasecmp(option, "master-reboot-down-after-period")) && moreargs > 0) {
+        } else if ((!strcasecmp(option, "primary-reboot-down-after-period") || 
+                    !strcasecmp(option, "master-reboot-down-after-period")) && 
+                    moreargs > 0) {
             /* primary-reboot-down-after-period <milliseconds> */
             robj *o = c->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll < 0) {

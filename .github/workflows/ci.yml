@@ -6,7 +6,6 @@ permissions:
   contents: read
 
 jobs:
-
   test-ubuntu-latest:
     runs-on: ubuntu-latest
     steps:
@@ -98,7 +97,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22.4'
+          go-version: "1.22.4"
 
       - name: Setup YAML formatter
         run: |
@@ -107,7 +106,7 @@ jobs:
       - name: Run yamlfmt
         id: yamlfmt
         run: |
-          yamlfmt -lint .
+          yamlfmt -lint -conf .config/format.yml .
           # Capture the diff output
           DIFF=$(git diff)
           if [ ! -z "$DIFF" ]; then
@@ -125,4 +124,3 @@ jobs:
           echo "${{ steps.clang-format.outputs.diff }}" | base64 --decode
           exit 1
         shell: bash
-

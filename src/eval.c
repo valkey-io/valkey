@@ -734,7 +734,7 @@ NULL
         dictEntry *de;
         luaScript *ls;
 
-        if ((de = dictFind(lctx.lua_scripts, c->argv[2]->ptr))) {
+        if (sdslen(c->argv[2]->ptr) == 40 && (de = dictFind(lctx.lua_scripts, c->argv[2]->ptr))) {
             ls = dictGetVal(de);
             addReplyBulk(c, ls->body);
         } else {

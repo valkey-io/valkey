@@ -26,8 +26,8 @@
                     "type": "string"
                 },
                 {
-                    "description": "null if sha1 hash does not exist in script cache.",
-                    "type": "null"
+                    "description": "noscript error if sha1 hash does not exist in script cache.",
+                    "const": "NOSCRIPT No matching script."
                 }
             ]
         }

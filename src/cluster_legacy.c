@@ -1867,7 +1867,7 @@ void markNodeAsFailingIfNeeded(clusterNode *node) {
     if (nodeFailed(node)) return;    /* Already FAILing. */
 
     failures = clusterNodeFailureReportsCount(node);
-    /* Also count myself as a voter if I'm a primary. */
+    /* Also count myself as a voter if I'm a primary with slots. */
     if (clusterNodeIsPrimary(myself) && myself->numslots) failures++;
     if (failures < needed_quorum) return; /* No weak agreement from primaries. */
 
@@ -2090,7 +2090,7 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
         /* Ignore gossips about self. */
         if (node && node != myself) {
             /* We already know this node.
-               Handle failure reports, only when the sender is a primary. */
+               Handle failure reports, only when the sender is a primary with slots. */
             if (sender && clusterNodeIsPrimary(sender) && sender->numslots) {
                 if (flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) {
                     if (clusterNodeAddFailureReport(node, sender)) {

@@ -1946,7 +1946,9 @@ const char *sentinelHandleConfiguration(char **argv, int argc) {
         if ((sentinel.announce_hostnames = yesnotoi(argv[1])) == -1) {
             return "Please specify yes or no for the announce-hostnames option.";
         }
-    } else if ((!strcasecmp(argv[0], "primary-reboot-down-after-period") || !strcasecmp(argv[0], "master-reboot-down-after-period")) && argc == 3) {
+    } else if ((!strcasecmp(argv[0], "primary-reboot-down-after-period") || 
+                !strcasecmp(argv[0], "master-reboot-down-after-period")) && 
+		argc == 3) {
         /* primary-reboot-down-after-period <name> <milliseconds> */
         ri = sentinelGetPrimaryByName(argv[1]);
         if (!ri) return "No such master with specified name.";

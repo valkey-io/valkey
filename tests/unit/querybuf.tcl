@@ -39,7 +39,13 @@ start_server {tags {"querybuf slow"}} {
         # Send partial command to client to make sure it doesn't use the shared qb.
         $rd write "*3\r\n\$3\r\nset\r\n\$2\r\na"
         $rd flush
-        after 100
+        # Wait for the client to start using a private query buffer. 
+        wait_for_condition 1000 10 {
+            [client_query_buffer test_client] > 0
+        } else {
+            fail "client should start using a private query buffer"
+        }
+     
         # send the rest of the command
         $rd write "a\r\n\$1\r\nb\r\n"
         $rd flush

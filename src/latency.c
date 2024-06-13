@@ -46,12 +46,9 @@ uint64_t dictStringHash(const void *key) {
     return dictGenHashFunction(key, strlen(key));
 }
 
-void dictVanillaFree(dict *d, void *val);
-
 dictType latencyTimeSeriesDictType = {
     dictStringHash,       /* hash function */
     NULL,                 /* key dup */
-    NULL,                 /* val dup */
     dictStringKeyCompare, /* key compare */
     dictVanillaFree,      /* key destructor */
     dictVanillaFree,      /* val destructor */

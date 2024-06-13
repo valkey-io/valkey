@@ -506,7 +506,7 @@ void ACLFreeUserAndKillClients(user *u) {
              * more defensive to set the default user and put
              * it in non authenticated mode. */
             c->user = DefaultUser;
-            c->authenticated = 0;
+            c->flags &= ~CLIENT_AUTHENTICATED;
             /* We will write replies to this client later, so we can't
              * close it directly even if async. */
             if (c == server.current_client) {
@@ -1494,7 +1494,7 @@ void addAuthErrReply(client *c, robj *err) {
  * The return value is AUTH_OK on success (valid username / password pair) & AUTH_ERR otherwise. */
 int checkPasswordBasedAuth(client *c, robj *username, robj *password) {
     if (ACLCheckUserCredentials(username, password) == C_OK) {
-        c->authenticated = 1;
+        c->flags |= CLIENT_AUTHENTICATED;
         c->user = ACLGetUserByName(username->ptr, sdslen(username->ptr));
         moduleNotifyUserChanged(c);
         return AUTH_OK;
@@ -1587,12 +1587,10 @@ static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keyle
     listRewind(selector->patterns, &li);
 
     int key_flags = 0;
-    /* clang-format off */
     if (keyspec_flags & CMD_KEY_ACCESS) key_flags |= ACL_READ_PERMISSION;
     if (keyspec_flags & CMD_KEY_INSERT) key_flags |= ACL_WRITE_PERMISSION;
     if (keyspec_flags & CMD_KEY_DELETE) key_flags |= ACL_WRITE_PERMISSION;
     if (keyspec_flags & CMD_KEY_UPDATE) key_flags |= ACL_WRITE_PERMISSION;
-    /* clang-format on */
 
     /* Test this key against every pattern. */
     while ((ln = listNext(&li))) {
@@ -1618,12 +1616,10 @@ static int ACLSelectorHasUnrestrictedKeyAccess(aclSelector *selector, int flags)
     listRewind(selector->patterns, &li);
 
     int access_flags = 0;
-    /* clang-format off */
     if (flags & CMD_KEY_ACCESS) access_flags |= ACL_READ_PERMISSION;
     if (flags & CMD_KEY_INSERT) access_flags |= ACL_WRITE_PERMISSION;
     if (flags & CMD_KEY_DELETE) access_flags |= ACL_WRITE_PERMISSION;
     if (flags & CMD_KEY_UPDATE) access_flags |= ACL_WRITE_PERMISSION;
-    /* clang-format on */
 
     /* Test this key against every pattern. */
     while ((ln = listNext(&li))) {
@@ -2428,20 +2424,21 @@ sds ACLLoadFromFile(const char *filename) {
             client *c = listNodeValue(ln);
             user *original = c->user;
             list *channels = NULL;
-            user *new = ACLGetUserByName(c->user->name, sdslen(c->user->name));
-            if (new && user_channels) {
-                if (!raxFind(user_channels, (unsigned char *)(new->name), sdslen(new->name), (void **)&channels)) {
-                    channels = getUpcomingChannelList(new, original);
-                    raxInsert(user_channels, (unsigned char *)(new->name), sdslen(new->name), channels, NULL);
+            user *new_user = ACLGetUserByName(c->user->name, sdslen(c->user->name));
+            if (new_user && user_channels) {
+                if (!raxFind(user_channels, (unsigned char *)(new_user->name), sdslen(new_user->name),
+                             (void **)&channels)) {
+                    channels = getUpcomingChannelList(new_user, original);
+                    raxInsert(user_channels, (unsigned char *)(new_user->name), sdslen(new_user->name), channels, NULL);
                 }
             }
             /* When the new channel list is NULL, it means the new user's channel list is a superset of the old user's
              * list. */
-            if (!new || (channels && ACLShouldKillPubsubClient(c, channels))) {
+            if (!new_user || (channels && ACLShouldKillPubsubClient(c, channels))) {
                 freeClient(c);
                 continue;
             }
-            c->user = new;
+            c->user = new_user;
         }
 
         if (user_channels) raxFreeWithCallback(user_channels, (void (*)(void *))listRelease);
@@ -2668,15 +2665,13 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
     if (object) {
         le->object = object;
     } else {
-        /* clang-format off */
-        switch(reason) {
+        switch (reason) {
         case ACL_DENIED_CMD: le->object = sdsdup(c->cmd->fullname); break;
         case ACL_DENIED_KEY: le->object = sdsdup(c->argv[argpos]->ptr); break;
         case ACL_DENIED_CHANNEL: le->object = sdsdup(c->argv[argpos]->ptr); break;
         case ACL_DENIED_AUTH: le->object = sdsdup(c->argv[0]->ptr); break;
         default: le->object = sdsempty();
         }
-        /* clang-format on */
     }
 
     /* if we have a real client from the network, use it (could be missing on module timers) */
@@ -3057,28 +3052,24 @@ void aclCommand(client *c) {
 
             addReplyBulkCString(c, "reason");
             char *reasonstr;
-            /* clang-format off */
-            switch(le->reason) {
-            case ACL_DENIED_CMD: reasonstr="command"; break;
-            case ACL_DENIED_KEY: reasonstr="key"; break;
-            case ACL_DENIED_CHANNEL: reasonstr="channel"; break;
-            case ACL_DENIED_AUTH: reasonstr="auth"; break;
-            default: reasonstr="unknown";
+            switch (le->reason) {
+            case ACL_DENIED_CMD: reasonstr = "command"; break;
+            case ACL_DENIED_KEY: reasonstr = "key"; break;
+            case ACL_DENIED_CHANNEL: reasonstr = "channel"; break;
+            case ACL_DENIED_AUTH: reasonstr = "auth"; break;
+            default: reasonstr = "unknown";
             }
-            /* clang-format on */
             addReplyBulkCString(c, reasonstr);
 
             addReplyBulkCString(c, "context");
             char *ctxstr;
-            /* clang-format off */
-            switch(le->context) {
-            case ACL_LOG_CTX_TOPLEVEL: ctxstr="toplevel"; break;
-            case ACL_LOG_CTX_MULTI: ctxstr="multi"; break;
-            case ACL_LOG_CTX_LUA: ctxstr="lua"; break;
-            case ACL_LOG_CTX_MODULE: ctxstr="module"; break;
-            default: ctxstr="unknown";
+            switch (le->context) {
+            case ACL_LOG_CTX_TOPLEVEL: ctxstr = "toplevel"; break;
+            case ACL_LOG_CTX_MULTI: ctxstr = "multi"; break;
+            case ACL_LOG_CTX_LUA: ctxstr = "lua"; break;
+            case ACL_LOG_CTX_MODULE: ctxstr = "module"; break;
+            default: ctxstr = "unknown";
             }
-            /* clang-format on */
             addReplyBulkCString(c, ctxstr);
 
             addReplyBulkCString(c, "object");

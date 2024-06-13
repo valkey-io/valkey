@@ -11,7 +11,7 @@ on:
     inputs:
       skipjobs:
         description: 'jobs to skip (delete the ones you wanna keep, do not leave empty)'
-        default: 'valgrind,sanitizer,tls,freebsd,macos,alpine,32bit,iothreads,ubuntu,centos,malloc,specific,fortify,reply-schema'
+        default: 'valgrind,sanitizer,tls,freebsd,macos,alpine,32bit,iothreads,ubuntu,rpm-distros,malloc,specific,fortify,reply-schema'
       skiptests:
         description: 'tests to skip (delete the ones you wanna keep, do not leave empty)'
         default: 'valkey,modules,sentinel,cluster,unittest'
@@ -598,7 +598,7 @@ jobs:
           repository: ${{ env.GITHUB_REPOSITORY }}
           ref: ${{ env.GITHUB_HEAD_REF }}
       - name: make
-        run: make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-DSERVER_TEST -Werror -DDEBUG_ASSERTIONS'
+        run: make all-with-unit-tests OPT=-O3 SANITIZER=address SERVER_CFLAGS='-DSERVER_TEST -Werror'
       - name: testprep
         run: |
           sudo apt-get update
@@ -672,13 +672,34 @@ jobs:
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: ./src/valkey-unit-tests --accurate
 
-  test-centos7-jemalloc:
-    runs-on: ubuntu-latest
+  test-rpm-distros-jemalloc:
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
-      !contains(github.event.inputs.skipjobs, 'centos')
-    container: centos:7
+       (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+       !contains(github.event.inputs.skipjobs, 'rpm-distros')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: test-almalinux8-jemalloc
+            container: almalinux:8
+            install_epel: true
+          - name: test-almalinux9-jemalloc
+            container: almalinux:8
+            install_epel: true
+          - name: test-centosstream9-jemalloc
+            container: quay.io/centos/centos:stream9
+            install_epel: true
+          - name: test-fedoralatest-jemalloc
+            container: fedora:latest
+          - name: test-fedorarawhide-jemalloc
+            container: fedora:rawhide
+
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+
+    container: ${{ matrix.container }}
     timeout-minutes: 14400
+
     steps:
     - name: prep
       if: github.event_name == 'workflow_dispatch'
@@ -689,18 +710,19 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    # On centos7 actions/checkout@v4 does not work, so we use v3
-    # ref. https://github.com/actions/checkout/issues/1487
-    - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
+    - name: Install EPEL
+      if: matrix.install_epel
+      run: dnf -y install epel-release
     - name: make
       run: |
-        yum -y install gcc make
-        make SERVER_CFLAGS='-Werror'
+        dnf -y install gcc make procps-ng which /usr/bin/kill
+        make -j SERVER_CFLAGS='-Werror'
     - name: testprep
-      run: yum -y install which tcl tclx
+      run: dnf -y install tcl tcltls
     - name: test
       if: true && !contains(github.event.inputs.skiptests, 'valkey')
       run: ./runtest --accurate --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -714,13 +736,34 @@ jobs:
       if: true && !contains(github.event.inputs.skiptests, 'cluster')
       run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
 
-  test-centos7-tls-module:
-    runs-on: ubuntu-latest
+  test-rpm-distros-tls-module:
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
-      !contains(github.event.inputs.skipjobs, 'tls')
-    container: centos:7
+       (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+       !contains(github.event.inputs.skipjobs, 'tls')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: test-almalinux8-tls-module
+            container: almalinux:8
+            install_epel: true
+          - name: test-almalinux9-tls-module
+            container: almalinux:8
+            install_epel: true
+          - name: test-centosstream9-tls-module
+            container: quay.io/centos/centos:stream9
+            install_epel: true
+          - name: test-fedoralatest-tls-module
+            container: fedora:latest
+          - name: test-fedorarawhide-tls-module
+            container: fedora:rawhide
+
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+
+    container: ${{ matrix.container }}
     timeout-minutes: 14400
+
     steps:
     - name: prep
       if: github.event_name == 'workflow_dispatch'
@@ -731,20 +774,20 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    # On centos7 actions/checkout@v4 does not work, so we use v3
-    # ref. https://github.com/actions/checkout/issues/1487
-    - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
+    - name: Install EPEL
+      if: matrix.install_epel
+      run: dnf -y install epel-release
     - name: make
       run: |
-        yum -y install centos-release-scl epel-release
-        yum -y install devtoolset-7 openssl-devel openssl
-        scl enable devtoolset-7 "make BUILD_TLS=module SERVER_CFLAGS='-Werror'"
+        dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill
+        make -j BUILD_TLS=module SERVER_CFLAGS='-Werror'
     - name: testprep
       run: |
-        yum -y install tcl tcltls tclx
+        dnf -y install tcl tcltls
         ./utils/gen-test-certs.sh
     - name: test
       if: true && !contains(github.event.inputs.skiptests, 'valkey')
@@ -763,13 +806,34 @@ jobs:
       run: |
         ./runtest-cluster --tls-module ${{github.event.inputs.cluster_test_args}}
 
-  test-centos7-tls-module-no-tls:
-    runs-on: ubuntu-latest
+  test-rpm-distros-tls-module-no-tls:
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
-      !contains(github.event.inputs.skipjobs, 'tls')
-    container: centos:7
+       (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+       !contains(github.event.inputs.skipjobs, 'tls')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: test-almalinux8-tls-module-no-tls
+            container: almalinux:8
+            install_epel: true
+          - name: test-almalinux9-tls-module-no-tls
+            container: almalinux:8
+            install_epel: true
+          - name: test-centosstream9-tls-module-no-tls
+            container: quay.io/centos/centos:stream9
+            install_epel: true
+          - name: test-fedoralatest-tls-module-no-tls
+            container: fedora:latest
+          - name: test-fedorarawhide-tls-module-no-tls
+            container: fedora:rawhide
+
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+
+    container: ${{ matrix.container }}
     timeout-minutes: 14400
+
     steps:
     - name: prep
       if: github.event_name == 'workflow_dispatch'
@@ -780,20 +844,20 @@ jobs:
         echo "skiptests: ${{github.event.inputs.skiptests}}"
         echo "test_args: ${{github.event.inputs.test_args}}"
         echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
-    # On centos7 actions/checkout@v4 does not work, so we use v3
-    # ref. https://github.com/actions/checkout/issues/1487
-    - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       with:
         repository: ${{ env.GITHUB_REPOSITORY }}
         ref: ${{ env.GITHUB_HEAD_REF }}
+    - name: Install EPEL
+      if: matrix.install_epel
+      run: dnf -y install epel-release
     - name: make
       run: |
-        yum -y install centos-release-scl epel-release
-        yum -y install devtoolset-7 openssl-devel openssl
-        scl enable devtoolset-7 "make BUILD_TLS=module SERVER_CFLAGS='-Werror'"
+        dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill
+        make -j BUILD_TLS=module SERVER_CFLAGS='-Werror'
     - name: testprep
       run: |
-        yum -y install tcl tcltls tclx
+        dnf -y install tcl tcltls
         ./utils/gen-test-certs.sh
     - name: test
       if: true && !contains(github.event.inputs.skiptests, 'valkey')
@@ -1074,7 +1138,7 @@ jobs:
   notify-about-job-results:
     runs-on: ubuntu-latest
     if: always() && github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey'
-    needs: [test-ubuntu-jemalloc, test-ubuntu-jemalloc-fortify, test-ubuntu-libc-malloc, test-ubuntu-no-malloc-usable-size, test-ubuntu-32bit, test-ubuntu-tls, test-ubuntu-tls-no-tls, test-ubuntu-io-threads, test-ubuntu-reclaim-cache, test-valgrind-test, test-valgrind-misc, test-valgrind-no-malloc-usable-size-test, test-valgrind-no-malloc-usable-size-misc, test-sanitizer-address, test-sanitizer-undefined, test-centos7-jemalloc, test-centos7-tls-module, test-centos7-tls-module-no-tls, test-macos-latest, test-macos-latest-sentinel, test-macos-latest-cluster, build-macos, test-freebsd, test-alpine-jemalloc, test-alpine-libc-malloc, reply-schemas-validator]
+    needs: [test-ubuntu-jemalloc, test-ubuntu-jemalloc-fortify, test-ubuntu-libc-malloc, test-ubuntu-no-malloc-usable-size, test-ubuntu-32bit, test-ubuntu-tls, test-ubuntu-tls-no-tls, test-ubuntu-io-threads, test-ubuntu-reclaim-cache, test-valgrind-test, test-valgrind-misc, test-valgrind-no-malloc-usable-size-test, test-valgrind-no-malloc-usable-size-misc, test-sanitizer-address, test-sanitizer-undefined, test-rpm-distros-jemalloc, test-rpm-distros-tls-module, test-rpm-distros-tls-module-no-tls, test-macos-latest, test-macos-latest-sentinel, test-macos-latest-cluster, build-macos, test-freebsd, test-alpine-jemalloc, test-alpine-libc-malloc, reply-schemas-validator]
     steps:
       - name: Collect job status
         run: |

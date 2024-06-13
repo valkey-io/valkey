@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: make
         # build with TLS module just for compilation coverage
-        run: make SANITIZER=address SERVER_CFLAGS='-Werror -DDEBUG_ASSERTIONS' BUILD_TLS=module
+        run: make SANITIZER=address SERVER_CFLAGS='-Werror' BUILD_TLS=module
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx -y
       - name: test
@@ -78,16 +78,14 @@ jobs:
     - name: make
       run: make SERVER_CFLAGS='-Werror' MALLOC=libc
 
-  build-centos7-jemalloc:
+  build-almalinux8-jemalloc:
     runs-on: ubuntu-latest
-    container: centos:7
+    container: almalinux:8
     steps:
-    # on centos7, actions/checkout@v4 does not work, so we use v3
-    # ref. https://github.com/actions/checkout/issues/1487
-    - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
     - name: make
       run: |
-        yum -y install gcc make
-        make SERVER_CFLAGS='-Werror'
+        dnf -y install epel-release gcc make procps-ng which
+        make -j SERVER_CFLAGS='-Werror'
 

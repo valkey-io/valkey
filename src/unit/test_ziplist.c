@@ -6,10 +6,10 @@
 
 static unsigned char *createList(void) {
     unsigned char *zl = ziplistNew();
-    zl = ziplistPush(zl, (unsigned char *) "foo", 3, ZIPLIST_TAIL);
-    zl = ziplistPush(zl, (unsigned char *) "quux", 4, ZIPLIST_TAIL);
-    zl = ziplistPush(zl, (unsigned char *) "hello", 5, ZIPLIST_HEAD);
-    zl = ziplistPush(zl, (unsigned char *) "1024", 4, ZIPLIST_TAIL);
+    zl = ziplistPush(zl, (unsigned char *)"foo", 3, ZIPLIST_TAIL);
+    zl = ziplistPush(zl, (unsigned char *)"quux", 4, ZIPLIST_TAIL);
+    zl = ziplistPush(zl, (unsigned char *)"hello", 5, ZIPLIST_HEAD);
+    zl = ziplistPush(zl, (unsigned char *)"1024", 4, ZIPLIST_TAIL);
     return zl;
 }
 
@@ -18,24 +18,24 @@ static unsigned char *createIntList(void) {
     char buf[32];
 
     snprintf(buf, sizeof(buf), "100");
-    zl = ziplistPush(zl, (unsigned char *) buf, strlen(buf), ZIPLIST_TAIL);
+    zl = ziplistPush(zl, (unsigned char *)buf, strlen(buf), ZIPLIST_TAIL);
     snprintf(buf, sizeof(buf), "128000");
-    zl = ziplistPush(zl, (unsigned char *) buf, strlen(buf), ZIPLIST_TAIL);
+    zl = ziplistPush(zl, (unsigned char *)buf, strlen(buf), ZIPLIST_TAIL);
     snprintf(buf, sizeof(buf), "-100");
-    zl = ziplistPush(zl, (unsigned char *) buf, strlen(buf), ZIPLIST_HEAD);
+    zl = ziplistPush(zl, (unsigned char *)buf, strlen(buf), ZIPLIST_HEAD);
     snprintf(buf, sizeof(buf), "4294967296");
-    zl = ziplistPush(zl, (unsigned char *) buf, strlen(buf), ZIPLIST_HEAD);
+    zl = ziplistPush(zl, (unsigned char *)buf, strlen(buf), ZIPLIST_HEAD);
     snprintf(buf, sizeof(buf), "non integer");
-    zl = ziplistPush(zl, (unsigned char *) buf, strlen(buf), ZIPLIST_TAIL);
+    zl = ziplistPush(zl, (unsigned char *)buf, strlen(buf), ZIPLIST_TAIL);
     snprintf(buf, sizeof(buf), "much much longer non integer");
-    zl = ziplistPush(zl, (unsigned char *) buf, strlen(buf), ZIPLIST_TAIL);
+    zl = ziplistPush(zl, (unsigned char *)buf, strlen(buf), ZIPLIST_TAIL);
     return zl;
 }
 
 static long long usec(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    return (((long long) tv.tv_sec) * 1000000) + tv.tv_usec;
+    return (((long long)tv.tv_sec) * 1000000) + tv.tv_usec;
 }
 
 static void stress(int pos, int num, int maxsize, int dnum) {
@@ -44,12 +44,12 @@ static void stress(int pos, int num, int maxsize, int dnum) {
     for (i = 0; i < maxsize; i += dnum) {
         zl = ziplistNew();
         for (j = 0; j < i; j++) {
-            zl = ziplistPush(zl, (unsigned char *) "quux", 4, ZIPLIST_TAIL);
+            zl = ziplistPush(zl, (unsigned char *)"quux", 4, ZIPLIST_TAIL);
         }
 
         /* Do num times a push+pop from pos */
         for (k = 0; k < num; k++) {
-            zl = ziplistPush(zl, (unsigned char *) "quux", 4, pos);
+            zl = ziplistPush(zl, (unsigned char *)"quux", 4, pos);
             zl = ziplistDeleteRange(zl, 0, 1);
         }
         zfree(zl);
@@ -74,24 +74,22 @@ static int randstring(char *target, unsigned int min, unsigned int max) {
     int len = min + rand() % (max - min + 1);
     int minval, maxval;
     switch (rand() % 3) {
-        case 0:
-            minval = 0;
-            maxval = 255;
-            break;
-        case 1:
-            minval = 48;
-            maxval = 122;
-            break;
-        case 2:
-            minval = 48;
-            maxval = 52;
-            break;
-        default:
-            assert(NULL);
+    case 0:
+        minval = 0;
+        maxval = 255;
+        break;
+    case 1:
+        minval = 48;
+        maxval = 122;
+        break;
+    case 2:
+        minval = 48;
+        maxval = 52;
+        break;
+    default: assert(NULL);
     }
 
-    while (p < len)
-        target[p++] = minval + rand() % (maxval - minval + 1);
+    while (p < len) target[p++] = minval + rand() % (maxval - minval + 1);
     return len;
 }
 
@@ -144,8 +142,7 @@ int iteration;
 
 int test_ziplistCreateIntList(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
 
     zl = createIntList();
     /* "4294967296", "-100", "100", "128000", "non integer", "much much longer non integer" */
@@ -174,8 +171,7 @@ int test_ziplistCreateIntList(int argc, char **argv, int flags) {
 
 int test_ziplistPop(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
 
     zl = createList(); /* "hello", "foo", "quux", "1024" */
 
@@ -211,8 +207,7 @@ int test_ziplistPop(int argc, char **argv, int flags) {
 
 int test_ziplistGetElementAtIndex3(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList(); /* "hello", "foo", "quux", "1024" */
     p = ziplistIndex(zl, 3);
     TEST_ASSERT(p != NULL);
@@ -223,8 +218,7 @@ int test_ziplistGetElementAtIndex3(int argc, char **argv, int flags) {
 
 int test_ziplistGetElementOutOfRange(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList();
     p = ziplistIndex(zl, 4);
     TEST_ASSERT(p == NULL);
@@ -234,8 +228,7 @@ int test_ziplistGetElementOutOfRange(int argc, char **argv, int flags) {
 
 int test_ziplistGetLastElement(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList(); /* "hello", "foo", "quux", "1024" */
     p = ziplistIndex(zl, -1);
     TEST_ASSERT(p != NULL);
@@ -246,8 +239,7 @@ int test_ziplistGetLastElement(int argc, char **argv, int flags) {
 
 int test_ziplistGetFirstElement(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList(); /* "hello", "foo", "quux", "1024" */
     p = ziplistIndex(zl, -4);
     TEST_ASSERT(p != NULL);
@@ -258,8 +250,7 @@ int test_ziplistGetFirstElement(int argc, char **argv, int flags) {
 
 int test_ziplistGetElementOutOfRangeReverse(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList(); /* "hello", "foo", "quux", "1024" */
     p = ziplistIndex(zl, -5);
     TEST_ASSERT(p == NULL);
@@ -269,8 +260,7 @@ int test_ziplistGetElementOutOfRangeReverse(int argc, char **argv, int flags) {
 
 int test_ziplistIterateThroughFullList(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList();
     p = ziplistIndex(zl, 0);
     while (ziplistGet(p, &entry, &elen, &value)) {
@@ -283,8 +273,7 @@ int test_ziplistIterateThroughFullList(int argc, char **argv, int flags) {
 
 int test_ziplistIterateThroughListFrom1ToEnd(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList();
     p = ziplistIndex(zl, 1);
     while (ziplistGet(p, &entry, &elen, &value)) {
@@ -297,8 +286,7 @@ int test_ziplistIterateThroughListFrom1ToEnd(int argc, char **argv, int flags) {
 
 int test_ziplistIterateThroughListFrom2ToEnd(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList();
     p = ziplistIndex(zl, 2);
     while (ziplistGet(p, &entry, &elen, &value)) {
@@ -311,8 +299,7 @@ int test_ziplistIterateThroughListFrom2ToEnd(int argc, char **argv, int flags) {
 
 int test_ziplistIterateThroughStartOutOfRange(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList();
     p = ziplistIndex(zl, 4);
     TEST_ASSERT(p == NULL);
@@ -322,8 +309,7 @@ int test_ziplistIterateThroughStartOutOfRange(int argc, char **argv, int flags) 
 
 int test_ziplistIterateBackToFront(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList();
     p = ziplistIndex(zl, -1);
     while (ziplistGet(p, &entry, &elen, &value)) {
@@ -336,8 +322,7 @@ int test_ziplistIterateBackToFront(int argc, char **argv, int flags) {
 
 int test_ziplistIterateBackToFrontDeletingAllItems(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList();
     p = ziplistIndex(zl, -1);
     while (ziplistGet(p, &entry, &elen, &value)) {
@@ -351,8 +336,7 @@ int test_ziplistIterateBackToFrontDeletingAllItems(int argc, char **argv, int fl
 
 int test_ziplistDeleteInclusiveRange0To0(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList(); /* "hello", "foo", "quux", "1024" */
 
     p = ziplistIndex(zl, 0);
@@ -370,8 +354,7 @@ int test_ziplistDeleteInclusiveRange0To0(int argc, char **argv, int flags) {
 
 int test_ziplistDeleteInclusiveRange0To1(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList(); /* "hello", "foo", "quux", "1024" */
 
     p = ziplistIndex(zl, 0);
@@ -394,8 +377,7 @@ int test_ziplistDeleteInclusiveRange0To1(int argc, char **argv, int flags) {
 
 int test_ziplistDeleteInclusiveRange1To2(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList(); /* "hello", "foo", "quux", "1024" */
 
     p = ziplistIndex(zl, 1);
@@ -416,8 +398,7 @@ int test_ziplistDeleteInclusiveRange1To2(int argc, char **argv, int flags) {
 
 int test_ziplistDeleteWithStartIndexOutOfRange(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList();
     int orig_len = ziplistLen(zl);
     zl = ziplistDeleteRange(zl, 5, 1);
@@ -429,8 +410,7 @@ int test_ziplistDeleteWithStartIndexOutOfRange(int argc, char **argv, int flags)
 
 int test_ziplistDeleteWithNumOverflow(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList(); /* "hello", "foo", "quux", "1024" */
 
     int orig_len = ziplistLen(zl);
@@ -443,13 +423,12 @@ int test_ziplistDeleteWithNumOverflow(int argc, char **argv, int flags) {
 
 int test_ziplistDeleteFooWhileIterating(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList(); /* "hello", "foo", "quux", "1024" */
     p = ziplistIndex(zl, 0);
     while (ziplistGet(p, &entry, &elen, &value)) {
         TEST_ASSERT(p != NULL);
-        if (entry && strncmp("foo", (char *) entry, elen) == 0) {
+        if (entry && strncmp("foo", (char *)entry, elen) == 0) {
             zl = ziplistDelete(zl, &p);
         } else {
             p = ziplistNext(zl, p);
@@ -465,21 +444,22 @@ int test_ziplistDeleteFooWhileIterating(int argc, char **argv, int flags) {
 
 int test_ziplistReplaceWithSameSize(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList(); /* "hello", "foo", "quux", "1024" */
     unsigned char *orig_zl = zl;
     p = ziplistIndex(zl, 0);
-    zl = ziplistReplace(zl, p, (unsigned char *) "zoink", 5);
+    zl = ziplistReplace(zl, p, (unsigned char *)"zoink", 5);
     p = ziplistIndex(zl, 3);
-    zl = ziplistReplace(zl, p, (unsigned char *) "yy", 2);
+    zl = ziplistReplace(zl, p, (unsigned char *)"yy", 2);
     p = ziplistIndex(zl, 1);
-    zl = ziplistReplace(zl, p, (unsigned char *) "65536", 5);
+    zl = ziplistReplace(zl, p, (unsigned char *)"65536", 5);
     p = ziplistIndex(zl, 0);
-    TEST_ASSERT(!memcmp((char *) p,
+    TEST_ASSERT(!memcmp((char *)p,
                         "\x00\x05zoink"
                         "\x07\xf0\x00\x00\x01" /* 65536 as int24 */
-                        "\x05\x04quux" "\x06\x02yy" "\xff",
+                        "\x05\x04quux"
+                        "\x06\x02yy"
+                        "\xff",
                         23));
     TEST_ASSERT(zl == orig_zl); /* no reallocations have happened */
     zfree(zl);
@@ -488,15 +468,17 @@ int test_ziplistReplaceWithSameSize(int argc, char **argv, int flags) {
 
 int test_ziplistReplaceWithDifferentSize(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList(); /* "hello", "foo", "quux", "1024" */
     p = ziplistIndex(zl, 1);
-    zl = ziplistReplace(zl, p, (unsigned char *) "squirrel", 8);
+    zl = ziplistReplace(zl, p, (unsigned char *)"squirrel", 8);
     p = ziplistIndex(zl, 0);
-    TEST_ASSERT(!strncmp((char *) p,
-                         "\x00\x05hello" "\x07\x08squirrel" "\x0a\x04quux"
-                         "\x06\xc0\x00\x04" "\xff",
+    TEST_ASSERT(!strncmp((char *)p,
+                         "\x00\x05hello"
+                         "\x07\x08squirrel"
+                         "\x0a\x04quux"
+                         "\x06\xc0\x00\x04"
+                         "\xff",
                          28));
     zfree(zl);
     return 0;
@@ -504,33 +486,31 @@ int test_ziplistReplaceWithDifferentSize(int argc, char **argv, int flags) {
 
 int test_ziplistRegressionTestForOver255ByteStrings(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     char v1[257] = {0}, v2[257] = {0};
     memset(v1, 'x', 256);
     memset(v2, 'y', 256);
     zl = ziplistNew();
-    zl = ziplistPush(zl, (unsigned char *) v1, strlen(v1), ZIPLIST_TAIL);
-    zl = ziplistPush(zl, (unsigned char *) v2, strlen(v2), ZIPLIST_TAIL);
+    zl = ziplistPush(zl, (unsigned char *)v1, strlen(v1), ZIPLIST_TAIL);
+    zl = ziplistPush(zl, (unsigned char *)v2, strlen(v2), ZIPLIST_TAIL);
 
     /* Pop values again and compare their value. */
     p = ziplistIndex(zl, 0);
     TEST_ASSERT(ziplistGet(p, &entry, &elen, &value));
-    TEST_ASSERT(strncmp(v1, (char *) entry, elen) == 0);
+    TEST_ASSERT(strncmp(v1, (char *)entry, elen) == 0);
     p = ziplistIndex(zl, 1);
     TEST_ASSERT(ziplistGet(p, &entry, &elen, &value));
-    TEST_ASSERT(strncmp(v2, (char *) entry, elen) == 0);
+    TEST_ASSERT(strncmp(v2, (char *)entry, elen) == 0);
     zfree(zl);
     return 0;
 }
 
 int test_ziplistRegressionTestDeleteNextToLastEntries(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     char v[3][257] = {{0}};
-    zlentry e[3] = {{.prevrawlensize = 0, .prevrawlen = 0, .lensize = 0,
-                            .len = 0, .headersize = 0, .encoding = 0, .p = NULL}};
+    zlentry e[3] = {
+        {.prevrawlensize = 0, .prevrawlen = 0, .lensize = 0, .len = 0, .headersize = 0, .encoding = 0, .p = NULL}};
     size_t i;
 
     for (i = 0; i < (sizeof(v) / sizeof(v[0])); i++) {
@@ -543,7 +523,7 @@ int test_ziplistRegressionTestDeleteNextToLastEntries(int argc, char **argv, int
 
     zl = ziplistNew();
     for (i = 0; i < (sizeof(v) / sizeof(v[0])); i++) {
-        zl = ziplistPush(zl, (unsigned char *) v[i], strlen(v[i]), ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)v[i], strlen(v[i]), ZIPLIST_TAIL);
     }
 
     verify(zl, e);
@@ -567,14 +547,13 @@ int test_ziplistRegressionTestDeleteNextToLastEntries(int argc, char **argv, int
 
 int test_ziplistCreateLongListAndCheckIndices(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = ziplistNew();
     char buf[32];
     int i, len;
     for (i = 0; i < 1000; i++) {
         len = snprintf(buf, sizeof(buf), "%d", i);
-        zl = ziplistPush(zl, (unsigned char *) buf, len, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, len, ZIPLIST_TAIL);
     }
     for (i = 0; i < 1000; i++) {
         p = ziplistIndex(zl, i);
@@ -591,25 +570,23 @@ int test_ziplistCreateLongListAndCheckIndices(int argc, char **argv, int flags) 
 
 int test_ziplistCompareStringWithZiplistEntries(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     zl = createList();
     p = ziplistIndex(zl, 0);
 
-    TEST_ASSERT(ziplistCompare(p, (unsigned char *) "hello", 5));
-    TEST_ASSERT(!ziplistCompare(p, (unsigned char *) "hella", 5));
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"hello", 5));
+    TEST_ASSERT(!ziplistCompare(p, (unsigned char *)"hella", 5));
 
     p = ziplistIndex(zl, 3);
-    TEST_ASSERT(ziplistCompare(p, (unsigned char *) "1024", 4));
-    TEST_ASSERT(!ziplistCompare(p, (unsigned char *) "1025", 4));
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"1024", 4));
+    TEST_ASSERT(!ziplistCompare(p, (unsigned char *)"1025", 4));
     zfree(zl);
     return 0;
 }
 
 int test_ziplistMergeTest(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     /* create list gives us: [hello, foo, quux, 1024] */
     zl = createList();
     unsigned char *zl2 = createList();
@@ -630,28 +607,27 @@ int test_ziplistMergeTest(int argc, char **argv, int flags) {
     TEST_ASSERT(ziplistLen(zl2) == 8);
 
     p = ziplistIndex(zl2, 0);
-    TEST_ASSERT(ziplistCompare(p, (unsigned char *) "hello", 5));
-    TEST_ASSERT(!ziplistCompare(p, (unsigned char *) "hella", 5));
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"hello", 5));
+    TEST_ASSERT(!ziplistCompare(p, (unsigned char *)"hella", 5));
 
     p = ziplistIndex(zl2, 3);
-    TEST_ASSERT(ziplistCompare(p, (unsigned char *) "1024", 4));
-    TEST_ASSERT(!ziplistCompare(p, (unsigned char *) "1025", 4));
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"1024", 4));
+    TEST_ASSERT(!ziplistCompare(p, (unsigned char *)"1025", 4));
 
     p = ziplistIndex(zl2, 4);
-    TEST_ASSERT(ziplistCompare(p, (unsigned char *) "hello", 5));
-    TEST_ASSERT(!ziplistCompare(p, (unsigned char *) "hella", 5));
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"hello", 5));
+    TEST_ASSERT(!ziplistCompare(p, (unsigned char *)"hella", 5));
 
     p = ziplistIndex(zl2, 7);
-    TEST_ASSERT(ziplistCompare(p, (unsigned char *) "1024", 4));
-    TEST_ASSERT(!ziplistCompare(p, (unsigned char *) "1025", 4));
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"1024", 4));
+    TEST_ASSERT(!ziplistCompare(p, (unsigned char *)"1025", 4));
 
     zfree(zl);
     return 0;
 }
 
 int test_ziplistStressWithRandomPayloadsOfDifferentEncoding(int argc, char **argv, int flags) {
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     int accurate = (flags & UNIT_TEST_ACCURATE);
     int i, j, len, where;
     unsigned char *p;
@@ -669,7 +645,7 @@ int test_ziplistStressWithRandomPayloadsOfDifferentEncoding(int argc, char **arg
     for (i = 0; i < iteration; i++) {
         zl = ziplistNew();
         ref = listCreate();
-        listSetFreeMethod(ref, (void (*)(void *)) sdsfree);
+        listSetFreeMethod(ref, (void (*)(void *))sdsfree);
         len = rand() % 256;
 
         /* Create lists */
@@ -679,22 +655,15 @@ int test_ziplistStressWithRandomPayloadsOfDifferentEncoding(int argc, char **arg
                 buflen = randstring(buf, 1, sizeof(buf) - 1);
             } else {
                 switch (rand() % 3) {
-                    case 0:
-                        buflen = snprintf(buf, sizeof(buf), "%lld", (0LL + rand()) >> 20);
-                        break;
-                    case 1:
-                        buflen = snprintf(buf, sizeof(buf), "%lld", (0LL + rand()));
-                        break;
-                    case 2:
-                        buflen = snprintf(buf, sizeof(buf), "%lld", (0LL + rand()) << 20);
-                        break;
-                    default:
-                        TEST_ASSERT(NULL);
+                case 0: buflen = snprintf(buf, sizeof(buf), "%lld", (0LL + rand()) >> 20); break;
+                case 1: buflen = snprintf(buf, sizeof(buf), "%lld", (0LL + rand())); break;
+                case 2: buflen = snprintf(buf, sizeof(buf), "%lld", (0LL + rand()) << 20); break;
+                default: TEST_ASSERT(NULL);
                 }
             }
 
             /* Add to ziplist */
-            zl = ziplistPush(zl, (unsigned char *) buf, buflen, where);
+            zl = ziplistPush(zl, (unsigned char *)buf, buflen, where);
 
             /* Add to reference list */
             if (where == ZIPLIST_HEAD) {
@@ -725,22 +694,20 @@ int test_ziplistStressWithRandomPayloadsOfDifferentEncoding(int argc, char **arg
         }
         zfree(zl);
         listRelease(ref);
-
     }
     return 0;
 }
 
 int test_ziplistCascadeUpdateEdgeCases(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     /* Inserting a entry with data length greater than ZIP_BIG_PREVLEN-4
      * will leads to cascade update. */
     size_t s1 = ZIP_BIG_PREVLEN - 4, s2 = ZIP_BIG_PREVLEN - 3;
     zl = ziplistNew();
 
-    zlentry e[4] = {{.prevrawlensize = 0, .prevrawlen = 0, .lensize = 0,
-                            .len = 0, .headersize = 0, .encoding = 0, .p = NULL}};
+    zlentry e[4] = {
+        {.prevrawlensize = 0, .prevrawlen = 0, .lensize = 0, .len = 0, .headersize = 0, .encoding = 0, .p = NULL}};
 
     zl = insertHelper(zl, 'a', s1, ZIPLIST_ENTRY_HEAD(zl));
     verify(zl, e);
@@ -811,9 +778,8 @@ int test_ziplistCascadeUpdateEdgeCases(int argc, char **argv, int flags) {
 
 int test_ziplistInsertEdgeCase(int argc, char **argv, int flags) {
     UNUSED(flags);
-    if (argc >= 4)
-        srand(atoi(argv[3]));
-    //From issue #7170
+    if (argc >= 4) srand(atoi(argv[3]));
+    // From issue #7170
     zl = ziplistNew();
 
     /* We set some values to almost reach the critical point - 254 */
@@ -822,15 +788,15 @@ int test_ziplistInsertEdgeCase(int argc, char **argv, int flags) {
     memset(A_250, 'A', 250);
 
     /* After the rpush, the list look like: [one two A_252 A_250 three 10] */
-    zl = ziplistPush(zl, (unsigned char *) "one", 3, ZIPLIST_TAIL);
-    zl = ziplistPush(zl, (unsigned char *) "two", 3, ZIPLIST_TAIL);
-    zl = ziplistPush(zl, (unsigned char *) A_252, strlen(A_252), ZIPLIST_TAIL);
-    zl = ziplistPush(zl, (unsigned char *) A_250, strlen(A_250), ZIPLIST_TAIL);
-    zl = ziplistPush(zl, (unsigned char *) "three", 5, ZIPLIST_TAIL);
-    zl = ziplistPush(zl, (unsigned char *) "10", 2, ZIPLIST_TAIL);
+    zl = ziplistPush(zl, (unsigned char *)"one", 3, ZIPLIST_TAIL);
+    zl = ziplistPush(zl, (unsigned char *)"two", 3, ZIPLIST_TAIL);
+    zl = ziplistPush(zl, (unsigned char *)A_252, strlen(A_252), ZIPLIST_TAIL);
+    zl = ziplistPush(zl, (unsigned char *)A_250, strlen(A_250), ZIPLIST_TAIL);
+    zl = ziplistPush(zl, (unsigned char *)"three", 5, ZIPLIST_TAIL);
+    zl = ziplistPush(zl, (unsigned char *)"10", 2, ZIPLIST_TAIL);
 
     p = ziplistIndex(zl, 2);
-    TEST_ASSERT(ziplistCompare(p, (unsigned char *) A_252, strlen(A_252)));
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)A_252, strlen(A_252)));
 
     /* When we remove A_252, the list became: [one two A_250 three 10]
      * A_250's prev node became node two, because node two quite small
@@ -840,23 +806,22 @@ int test_ziplistInsertEdgeCase(int argc, char **argv, int flags) {
     zl = ziplistDelete(zl, &p);
 
     p = ziplistIndex(zl, 3);
-    TEST_ASSERT(ziplistCompare(p, (unsigned char *) "three", 5));
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"three", 5));
 
     /* We want to insert a node after A_250, the list became: [one two A_250 10 three 10]
      * Because the new node is quite small, node three prevlenSize will shrink to 1 */
-    zl = ziplistInsert(zl, p, (unsigned char *) "10", 2);
+    zl = ziplistInsert(zl, p, (unsigned char *)"10", 2);
 
     /* Last element should equal 10 */
     p = ziplistIndex(zl, -1);
-    TEST_ASSERT(ziplistCompare(p, (unsigned char *) "10", 2));
+    TEST_ASSERT(ziplistCompare(p, (unsigned char *)"10", 2));
 
     zfree(zl);
     return 0;
 }
 
 int test_ziplistStressWithVariableSize(int argc, char **argv, int flags) {
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     int accurate = (flags & UNIT_TEST_ACCURATE);
 
     unsigned long long start = usec();
@@ -872,30 +837,29 @@ int test_ziplistStressWithVariableSize(int argc, char **argv, int flags) {
 }
 
 int test_BenchmarkziplistFind(int argc, char **argv, int flags) {
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     int accurate = (flags & UNIT_TEST_ACCURATE);
 
     zl = ziplistNew();
     iteration = accurate ? 100000 : 100;
     for (int i = 0; i < iteration; i++) {
         char buf[4096] = "asdf";
-        zl = ziplistPush(zl, (unsigned char *) buf, 4, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) buf, 40, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) buf, 400, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) buf, 4000, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "1", 1, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "10", 2, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "100", 3, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "1000", 4, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "10000", 5, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "100000", 6, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 4, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 40, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 400, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 4000, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"1", 1, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"10", 2, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"100", 3, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"1000", 4, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"10000", 5, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"100000", 6, ZIPLIST_TAIL);
     }
 
     unsigned long long start = usec();
     for (int i = 0; i < 2000; i++) {
         unsigned char *fptr = ziplistIndex(zl, ZIPLIST_HEAD);
-        fptr = ziplistFind(zl, fptr, (unsigned char *) "nothing", 7, 1);
+        fptr = ziplistFind(zl, fptr, (unsigned char *)"nothing", 7, 1);
     }
     TEST_PRINT_INFO("Benchmark ziplistFind: usec=%lld", usec() - start);
 
@@ -904,24 +868,23 @@ int test_BenchmarkziplistFind(int argc, char **argv, int flags) {
 }
 
 int test_BenchmarkziplistIndex(int argc, char **argv, int flags) {
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     int accurate = (flags & UNIT_TEST_ACCURATE);
 
     zl = ziplistNew();
     iteration = accurate ? 100000 : 100;
     for (int i = 0; i < iteration; i++) {
         char buf[4096] = "asdf";
-        zl = ziplistPush(zl, (unsigned char *) buf, 4, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) buf, 40, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) buf, 400, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) buf, 4000, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "1", 1, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "10", 2, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "100", 3, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "1000", 4, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "10000", 5, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "100000", 6, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 4, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 40, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 400, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 4000, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"1", 1, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"10", 2, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"100", 3, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"1000", 4, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"10000", 5, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"100000", 6, ZIPLIST_TAIL);
     }
 
     unsigned long long start = usec();
@@ -935,23 +898,22 @@ int test_BenchmarkziplistIndex(int argc, char **argv, int flags) {
 }
 
 int test_BenchmarkziplistValidateIntegrity(int argc, char **argv, int flags) {
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     int accurate = (flags & UNIT_TEST_ACCURATE);
     zl = ziplistNew();
     iteration = accurate ? 100000 : 100;
     for (int i = 0; i < iteration; i++) {
         char buf[4096] = "asdf";
-        zl = ziplistPush(zl, (unsigned char *) buf, 4, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) buf, 40, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) buf, 400, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) buf, 4000, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "1", 1, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "10", 2, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "100", 3, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "1000", 4, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "10000", 5, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "100000", 6, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 4, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 40, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 400, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 4000, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"1", 1, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"10", 2, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"100", 3, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"1000", 4, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"10000", 5, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"100000", 6, ZIPLIST_TAIL);
     }
     unsigned long long start = usec();
     for (int i = 0; i < 2000; i++) {
@@ -964,29 +926,28 @@ int test_BenchmarkziplistValidateIntegrity(int argc, char **argv, int flags) {
 }
 
 int test_BenchmarkziplistCompareWithString(int argc, char **argv, int flags) {
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     int accurate = (flags & UNIT_TEST_ACCURATE);
     zl = ziplistNew();
     iteration = accurate ? 100000 : 100;
     for (int i = 0; i < iteration; i++) {
         char buf[4096] = "asdf";
-        zl = ziplistPush(zl, (unsigned char *) buf, 4, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) buf, 40, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) buf, 400, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) buf, 4000, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "1", 1, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "10", 2, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "100", 3, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "1000", 4, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "10000", 5, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "100000", 6, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 4, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 40, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 400, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 4000, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"1", 1, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"10", 2, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"100", 3, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"1000", 4, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"10000", 5, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"100000", 6, ZIPLIST_TAIL);
     }
     unsigned long long start = usec();
     for (int i = 0; i < 2000; i++) {
         unsigned char *eptr = ziplistIndex(zl, 0);
         while (eptr != NULL) {
-            ziplistCompare(eptr, (unsigned char *) "nothing", 7);
+            ziplistCompare(eptr, (unsigned char *)"nothing", 7);
             eptr = ziplistNext(zl, eptr);
         }
     }
@@ -997,29 +958,28 @@ int test_BenchmarkziplistCompareWithString(int argc, char **argv, int flags) {
 }
 
 int test_BenchmarkziplistCompareWithNumber(int argc, char **argv, int flags) {
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     int accurate = (flags & UNIT_TEST_ACCURATE);
     zl = ziplistNew();
     iteration = accurate ? 100000 : 100;
     for (int i = 0; i < iteration; i++) {
         char buf[4096] = "asdf";
-        zl = ziplistPush(zl, (unsigned char *) buf, 4, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) buf, 40, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) buf, 400, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) buf, 4000, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "1", 1, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "10", 2, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "100", 3, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "1000", 4, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "10000", 5, ZIPLIST_TAIL);
-        zl = ziplistPush(zl, (unsigned char *) "100000", 6, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 4, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 40, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 400, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)buf, 4000, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"1", 1, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"10", 2, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"100", 3, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"1000", 4, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"10000", 5, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)"100000", 6, ZIPLIST_TAIL);
     }
     unsigned long long start = usec();
     for (int i = 0; i < 2000; i++) {
         unsigned char *eptr = ziplistIndex(zl, 0);
         while (eptr != NULL) {
-            ziplistCompare(eptr, (unsigned char *) "99999", 5);
+            ziplistCompare(eptr, (unsigned char *)"99999", 5);
             eptr = ziplistNext(zl, eptr);
         }
     }
@@ -1030,17 +990,16 @@ int test_BenchmarkziplistCompareWithNumber(int argc, char **argv, int flags) {
 }
 
 int test_ziplistStress__ziplistCascadeUpdate(int argc, char **argv, int flags) {
-    if (argc >= 4)
-        srand(atoi(argv[3]));
+    if (argc >= 4) srand(atoi(argv[3]));
     int accurate = (flags & UNIT_TEST_ACCURATE);
     char data[ZIP_BIG_PREVLEN];
     zl = ziplistNew();
     iteration = accurate ? 100000 : 100;
     for (int i = 0; i < iteration; i++) {
-        zl = ziplistPush(zl, (unsigned char *) data, ZIP_BIG_PREVLEN - 4, ZIPLIST_TAIL);
+        zl = ziplistPush(zl, (unsigned char *)data, ZIP_BIG_PREVLEN - 4, ZIPLIST_TAIL);
     }
     unsigned long long start = usec();
-    zl = ziplistPush(zl, (unsigned char *) data, ZIP_BIG_PREVLEN - 3, ZIPLIST_HEAD);
+    zl = ziplistPush(zl, (unsigned char *)data, ZIP_BIG_PREVLEN - 3, ZIPLIST_HEAD);
     TEST_PRINT_INFO("Stress __ziplistCascadeUpdate: usec=%lld", usec() - start);
 
 

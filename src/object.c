@@ -372,8 +372,7 @@ void incrRefCount(robj *o) {
 
 void decrRefCount(robj *o) {
     if (o->refcount == 1) {
-        /* clang-format off */
-        switch(o->type) {
+        switch (o->type) {
         case OBJ_STRING: freeStringObject(o); break;
         case OBJ_LIST: freeListObject(o); break;
         case OBJ_SET: freeSetObject(o); break;
@@ -383,7 +382,6 @@ void decrRefCount(robj *o) {
         case OBJ_STREAM: freeStreamObject(o); break;
         default: serverPanic("Unknown object type"); break;
         }
-        /* clang-format on */
         zfree(o);
     } else {
         if (o->refcount <= 0) serverPanic("decrRefCount against refcount <= 0");
@@ -552,8 +550,7 @@ void dismissObject(robj *o, size_t size_hint) {
          * so we avoid these pointless loops when they're not going to do anything. */
 #if defined(USE_JEMALLOC) && defined(__linux__)
     if (o->refcount != 1) return;
-    /* clang-format off */
-    switch(o->type) {
+    switch (o->type) {
     case OBJ_STRING: dismissStringObject(o); break;
     case OBJ_LIST: dismissListObject(o, size_hint); break;
     case OBJ_SET: dismissSetObject(o, size_hint); break;
@@ -562,7 +559,6 @@ void dismissObject(robj *o, size_t size_hint) {
     case OBJ_STREAM: dismissStreamObject(o, size_hint); break;
     default: break;
     }
-    /* clang-format on */
 #else
     UNUSED(o);
     UNUSED(size_hint);
@@ -647,8 +643,7 @@ robj *tryObjectEncodingEx(robj *o, int try_trim) {
          * Note that we avoid using shared integers when maxmemory is used
          * because every object needs to have a private LRU field for the LRU
          * algorithm to work well. */
-        if ((server.maxmemory == 0 || !(server.maxmemory_policy & MAXMEMORY_FLAG_NO_SHARED_INTEGERS)) && value >= 0 &&
-            value < OBJ_SHARED_INTEGERS) {
+        if (canUseSharedObject() && value >= 0 && value < OBJ_SHARED_INTEGERS) {
             decrRefCount(o);
             return shared.integers[value];
         } else {
@@ -931,8 +926,7 @@ int getIntFromObjectOrReply(client *c, robj *o, int *target, const char *msg) {
 }
 
 char *strEncoding(int encoding) {
-    /* clang-format off */
-    switch(encoding) {
+    switch (encoding) {
     case OBJ_ENCODING_RAW: return "raw";
     case OBJ_ENCODING_INT: return "int";
     case OBJ_ENCODING_HT: return "hashtable";
@@ -944,7 +938,6 @@ char *strEncoding(int encoding) {
     case OBJ_ENCODING_STREAM: return "stream";
     default: return "unknown";
     }
-    /* clang-format on */
 }
 
 /* =========================== Memory introspection ========================= */
@@ -1174,11 +1167,11 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
      * only if replication buffer memory is more than the repl backlog setting,
      * we consider the excess as replicas' memory. Otherwise, replication buffer
      * memory is the consumption of repl backlog. */
-    if (listLength(server.slaves) && (long long)server.repl_buffer_mem > server.repl_backlog_size) {
-        mh->clients_slaves = server.repl_buffer_mem - server.repl_backlog_size;
+    if (listLength(server.replicas) && (long long)server.repl_buffer_mem > server.repl_backlog_size) {
+        mh->clients_replicas = server.repl_buffer_mem - server.repl_backlog_size;
         mh->repl_backlog = server.repl_backlog_size;
     } else {
-        mh->clients_slaves = 0;
+        mh->clients_replicas = 0;
         mh->repl_backlog = server.repl_buffer_mem;
     }
     if (server.repl_backlog) {
@@ -1187,12 +1180,12 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
                             raxSize(server.repl_backlog->blocks_index) * sizeof(void *);
     }
     mem_total += mh->repl_backlog;
-    mem_total += mh->clients_slaves;
+    mem_total += mh->clients_replicas;
 
     /* Computing the memory used by the clients would be O(N) if done
      * here online. We use our values computed incrementally by
      * updateClientMemoryUsage(). */
-    mh->clients_normal = server.stat_clients_type_memory[CLIENT_TYPE_MASTER] +
+    mh->clients_normal = server.stat_clients_type_memory[CLIENT_TYPE_PRIMARY] +
                          server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] +
                          server.stat_clients_type_memory[CLIENT_TYPE_NORMAL];
     mem_total += mh->clients_normal;
@@ -1272,7 +1265,7 @@ sds getMemoryDoctorReport(void) {
     int high_alloc_frag = 0; /* High allocator fragmentation. */
     int high_proc_rss = 0;   /* High process rss overhead. */
     int high_alloc_rss = 0;  /* High rss overhead. */
-    int big_slave_buf = 0;   /* Slave buffers are too big. */
+    int big_replica_buf = 0; /* Replica buffers are too big. */
     int big_client_buf = 0;  /* Client buffers are too big. */
     int many_scripts = 0;    /* Script cache has too many scripts. */
     int num_reports = 0;
@@ -1313,16 +1306,16 @@ sds getMemoryDoctorReport(void) {
         }
 
         /* Clients using more than 200k each average? */
-        long numslaves = listLength(server.slaves);
-        long numclients = listLength(server.clients) - numslaves;
+        long num_replicas = listLength(server.replicas);
+        long numclients = listLength(server.clients) - num_replicas;
         if (mh->clients_normal / numclients > (1024 * 200)) {
             big_client_buf = 1;
             num_reports++;
         }
 
-        /* Slaves using more than 10 MB each? */
-        if (numslaves > 0 && mh->clients_slaves > (1024 * 1024 * 10)) {
-            big_slave_buf = 1;
+        /* Replicas using more than 10 MB each? */
+        if (num_replicas > 0 && mh->clients_replicas > (1024 * 1024 * 10)) {
+            big_replica_buf = 1;
             num_reports++;
         }
 
@@ -1387,7 +1380,7 @@ sds getMemoryDoctorReport(void) {
                    "1.1 (this means that the Resident Set Size of the Valkey process is much larger than the RSS the "
                    "allocator holds). This problem may be due to Lua scripts or Modules.\n\n");
         }
-        if (big_slave_buf) {
+        if (big_replica_buf) {
             s = sdscat(s,
                        " * Big replica buffers: The replica output buffers in this instance are greater than 10MB for "
                        "each replica (on average). This likely means that there is some replica instance that is "
@@ -1580,7 +1573,7 @@ NULL
         addReplyLongLong(c, mh->repl_backlog);
 
         addReplyBulkCString(c, "clients.slaves");
-        addReplyLongLong(c, mh->clients_slaves);
+        addReplyLongLong(c, mh->clients_replicas);
 
         addReplyBulkCString(c, "clients.normal");
         addReplyLongLong(c, mh->clients_normal);

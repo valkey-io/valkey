@@ -904,12 +904,12 @@ int aofFsyncInProgress(void) {
 /* Starts a background task that performs fsync() against the specified
  * file descriptor (the one of the AOF file) in another thread. */
 void aof_background_fsync(int fd) {
-    bioCreateFsyncJob(fd, server.master_repl_offset, 1);
+    bioCreateFsyncJob(fd, server.primary_repl_offset, 1);
 }
 
 /* Close the fd on the basis of aof_background_fsync. */
 void aof_background_fsync_and_close(int fd) {
-    bioCreateCloseAofJob(fd, server.master_repl_offset, 1);
+    bioCreateCloseAofJob(fd, server.primary_repl_offset, 1);
 }
 
 /* Kills an AOFRW child process if exists */
@@ -946,7 +946,7 @@ void stopAppendOnly(void) {
     server.aof_last_incr_size = 0;
     server.aof_last_incr_fsync_offset = 0;
     server.fsynced_reploff = -1;
-    atomicSet(server.fsynced_reploff_pending, 0);
+    atomic_store_explicit(&server.fsynced_reploff_pending, 0, memory_order_relaxed);
     killAppendOnlyChild();
     sdsfree(server.aof_buf);
     server.aof_buf = sdsempty();
@@ -985,11 +985,10 @@ int startAppendOnly(void) {
     }
     server.aof_last_fsync = server.mstime;
     /* If AOF fsync error in bio job, we just ignore it and log the event. */
-    int aof_bio_fsync_status;
-    atomicGet(server.aof_bio_fsync_status, aof_bio_fsync_status);
+    int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
     if (aof_bio_fsync_status == C_ERR) {
         serverLog(LL_WARNING, "AOF reopen, just ignore the AOF fsync error in bio job");
-        atomicSet(server.aof_bio_fsync_status, C_OK);
+        atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
     }
 
     /* If AOF was in error state, we just ignore it and log the event. */
@@ -1070,11 +1069,12 @@ void flushAppendOnlyFile(int force) {
         } else {
             /* All data is fsync'd already: Update fsynced_reploff_pending just in case.
              * This is needed to avoid a WAITAOF hang in case a module used RM_Call with the NO_AOF flag,
-             * in which case master_repl_offset will increase but fsynced_reploff_pending won't be updated
+             * in which case primary_repl_offset will increase but fsynced_reploff_pending won't be updated
              * (because there's no reason, from the AOF POV, to call fsync) and then WAITAOF may wait on
              * the higher offset (which contains data that was only propagated to replicas, and not to AOF) */
             if (!sync_in_progress && server.aof_fsync != AOF_FSYNC_NO)
-                atomicSet(server.fsynced_reploff_pending, server.master_repl_offset);
+                atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset,
+                                      memory_order_relaxed);
             return;
         }
     }
@@ -1244,7 +1244,7 @@ try_fsync:
         latencyAddSampleIfNeeded("aof-fsync-always", latency);
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         server.aof_last_fsync = server.mstime;
-        atomicSet(server.fsynced_reploff_pending, server.master_repl_offset);
+        atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset, memory_order_relaxed);
     } else if (server.aof_fsync == AOF_FSYNC_EVERYSEC && server.mstime - server.aof_last_fsync >= 1000) {
         if (!sync_in_progress) {
             aof_background_fsync(server.aof_fd);
@@ -1356,7 +1356,7 @@ struct client *createAOFClient(void) {
     c->id = CLIENT_ID_AOF; /* So modules can identify it's the AOF client. */
 
     /*
-     * The AOF client should never be blocked (unlike master
+     * The AOF client should never be blocked (unlike primary
      * replication connection).
      * This is because blocking the AOF client might cause
      * deadlock (because potentially no one will unblock it).
@@ -1366,9 +1366,9 @@ struct client *createAOFClient(void) {
      */
     c->flags = CLIENT_DENY_BLOCKING;
 
-    /* We set the fake client as a slave waiting for the synchronization
+    /* We set the fake client as a replica waiting for the synchronization
      * so that the server will not try to send replies to this client. */
-    c->replstate = SLAVE_STATE_WAIT_BGSAVE_START;
+    c->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
     return c;
 }
 
@@ -1994,21 +1994,19 @@ int rioWriteStreamPendingEntry(rio *r,
               RETRYCOUNT <count> JUSTID FORCE. */
     streamID id;
     streamDecodeID(rawid, &id);
-    /* clang-format off */
-    if (rioWriteBulkCount(r,'*',12) == 0) return 0;
-    if (rioWriteBulkString(r,"XCLAIM",6) == 0) return 0;
-    if (rioWriteBulkObject(r,key) == 0) return 0;
-    if (rioWriteBulkString(r,groupname,groupname_len) == 0) return 0;
-    if (rioWriteBulkString(r,consumer->name,sdslen(consumer->name)) == 0) return 0;
-    if (rioWriteBulkString(r,"0",1) == 0) return 0;
-    if (rioWriteBulkStreamID(r,&id) == 0) return 0;
-    if (rioWriteBulkString(r,"TIME",4) == 0) return 0;
-    if (rioWriteBulkLongLong(r,nack->delivery_time) == 0) return 0;
-    if (rioWriteBulkString(r,"RETRYCOUNT",10) == 0) return 0;
-    if (rioWriteBulkLongLong(r,nack->delivery_count) == 0) return 0;
-    if (rioWriteBulkString(r,"JUSTID",6) == 0) return 0;
-    if (rioWriteBulkString(r,"FORCE",5) == 0) return 0;
-    /* clang-format on */
+    if (rioWriteBulkCount(r, '*', 12) == 0) return 0;
+    if (rioWriteBulkString(r, "XCLAIM", 6) == 0) return 0;
+    if (rioWriteBulkObject(r, key) == 0) return 0;
+    if (rioWriteBulkString(r, groupname, groupname_len) == 0) return 0;
+    if (rioWriteBulkString(r, consumer->name, sdslen(consumer->name)) == 0) return 0;
+    if (rioWriteBulkString(r, "0", 1) == 0) return 0;
+    if (rioWriteBulkStreamID(r, &id) == 0) return 0;
+    if (rioWriteBulkString(r, "TIME", 4) == 0) return 0;
+    if (rioWriteBulkLongLong(r, nack->delivery_time) == 0) return 0;
+    if (rioWriteBulkString(r, "RETRYCOUNT", 10) == 0) return 0;
+    if (rioWriteBulkLongLong(r, nack->delivery_count) == 0) return 0;
+    if (rioWriteBulkString(r, "JUSTID", 6) == 0) return 0;
+    if (rioWriteBulkString(r, "FORCE", 5) == 0) return 0;
     return 1;
 }
 
@@ -2021,14 +2019,12 @@ int rioWriteStreamEmptyConsumer(rio *r,
                                 size_t groupname_len,
                                 streamConsumer *consumer) {
     /* XGROUP CREATECONSUMER <key> <group> <consumer> */
-    /* clang-format off */
-    if (rioWriteBulkCount(r,'*',5) == 0) return 0;
-    if (rioWriteBulkString(r,"XGROUP",6) == 0) return 0;
-    if (rioWriteBulkString(r,"CREATECONSUMER",14) == 0) return 0;
-    if (rioWriteBulkObject(r,key) == 0) return 0;
-    if (rioWriteBulkString(r,groupname,groupname_len) == 0) return 0;
-    if (rioWriteBulkString(r,consumer->name,sdslen(consumer->name)) == 0) return 0;
-    /* clang-format on */
+    if (rioWriteBulkCount(r, '*', 5) == 0) return 0;
+    if (rioWriteBulkString(r, "XGROUP", 6) == 0) return 0;
+    if (rioWriteBulkString(r, "CREATECONSUMER", 14) == 0) return 0;
+    if (rioWriteBulkObject(r, key) == 0) return 0;
+    if (rioWriteBulkString(r, groupname, groupname_len) == 0) return 0;
+    if (rioWriteBulkString(r, consumer->name, sdslen(consumer->name)) == 0) return 0;
     return 1;
 }
 
@@ -2321,7 +2317,7 @@ int rewriteAppendOnlyFile(char *filename) {
 
     if (server.aof_use_rdb_preamble) {
         int error;
-        if (rdbSaveRio(SLAVE_REQ_NONE, &aof, &error, RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
+        if (rdbSaveRio(REPLICA_REQ_NONE, &aof, &error, RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
             errno = error;
             goto werr;
         }
@@ -2404,12 +2400,12 @@ int rewriteAppendOnlyFileBackground(void) {
          * between updates to `fsynced_reploff_pending` of the worker thread, belonging
          * to the previous AOF, and the new one. This concern is specific for a full
          * sync scenario where we don't wanna risk the ACKed replication offset
-         * jumping backwards or forward when switching to a different master. */
+         * jumping backwards or forward when switching to a different primary. */
         bioDrainWorker(BIO_AOF_FSYNC);
 
         /* Set the initial repl_offset, which will be applied to fsynced_reploff
          * when AOFRW finishes (after possibly being updated by a bio thread) */
-        atomicSet(server.fsynced_reploff_pending, server.master_repl_offset);
+        atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset, memory_order_relaxed);
         server.fsynced_reploff = 0;
     }
 
@@ -2647,8 +2643,8 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
             /* Update the fsynced replication offset that just now become valid.
              * This could either be the one we took in startAppendOnly, or a
              * newer one set by the bio thread. */
-            long long fsynced_reploff_pending;
-            atomicGet(server.fsynced_reploff_pending, fsynced_reploff_pending);
+            long long fsynced_reploff_pending =
+                atomic_load_explicit(&server.fsynced_reploff_pending, memory_order_relaxed);
             server.fsynced_reploff = fsynced_reploff_pending;
         }
 

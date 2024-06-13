@@ -51,7 +51,7 @@ void zlibc_free(void *ptr) {
 
 #include <string.h>
 #include "zmalloc.h"
-#include "atomicvar.h"
+#include <stdatomic.h>
 
 #define UNUSED(x) ((void)(x))
 
@@ -87,10 +87,10 @@ void zlibc_free(void *ptr) {
 #define dallocx(ptr, flags) je_dallocx(ptr, flags)
 #endif
 
-#define update_zmalloc_stat_alloc(__n) atomicIncr(used_memory, (__n))
-#define update_zmalloc_stat_free(__n) atomicDecr(used_memory, (__n))
+#define update_zmalloc_stat_alloc(__n) atomic_fetch_add_explicit(&used_memory, (__n), memory_order_relaxed)
+#define update_zmalloc_stat_free(__n) atomic_fetch_sub_explicit(&used_memory, (__n), memory_order_relaxed)
 
-static serverAtomic size_t used_memory = 0;
+static _Atomic size_t used_memory = 0;
 
 static void zmalloc_default_oom(size_t size) {
     fprintf(stderr, "zmalloc: Out of memory trying to allocate %zu bytes\n", size);
@@ -388,8 +388,7 @@ char *zstrdup(const char *s) {
 }
 
 size_t zmalloc_used_memory(void) {
-    size_t um;
-    atomicGet(used_memory, um);
+    size_t um = atomic_load_explicit(&used_memory, memory_order_relaxed);
     return um;
 }
 

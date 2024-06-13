@@ -33,7 +33,6 @@
 #include "slowlog.h"
 #include "bio.h"
 #include "latency.h"
-#include "atomicvar.h"
 #include "mt19937-64.h"
 #include "functions.h"
 #include "hdr_histogram.h"
@@ -141,7 +140,7 @@ void serverLogRaw(int level, const char *msg) {
         } else if (pid != server.pid) {
             role_char = 'C'; /* RDB / AOF writing child. */
         } else {
-            role_char = (server.masterhost ? 'S' : 'M'); /* Slave or Master. */
+            role_char = (server.primary_host ? 'S' : 'M'); /* replica or Primary. */
         }
         fprintf(fp, "%d:%c %s %c %s\n", (int)getpid(), role_char, buf, c[level], msg);
     }
@@ -241,7 +240,7 @@ mstime_t commandTimeSnapshot(void) {
      * This is specifically important in the context of scripts, where we
      * pretend that time freezes. This way a key can expire only the first time
      * it is accessed and not in the middle of the script execution, making
-     * propagation to slaves / AOF consistent. See issue #1525 for more info.
+     * propagation to replicas / AOF consistent. See issue #1525 for more info.
      * Note that we cannot use the cached server.mstime because it can change
      * in processEventsWhileBlocked etc. */
     return server.cmd_time_snapshot;
@@ -425,7 +424,6 @@ int dictResizeAllowed(size_t moreMem, double usedRatio) {
 dictType objectKeyPointerValueDictType = {
     dictEncObjHash,       /* hash function */
     NULL,                 /* key dup */
-    NULL,                 /* val dup */
     dictEncObjKeyCompare, /* key compare */
     dictObjectDestructor, /* key destructor */
     NULL,                 /* val destructor */
@@ -437,7 +435,6 @@ dictType objectKeyPointerValueDictType = {
 dictType objectKeyHeapPointerValueDictType = {
     dictEncObjHash,       /* hash function */
     NULL,                 /* key dup */
-    NULL,                 /* val dup */
     dictEncObjKeyCompare, /* key compare */
     dictObjectDestructor, /* key destructor */
     dictVanillaFree,      /* val destructor */
@@ -448,7 +445,6 @@ dictType objectKeyHeapPointerValueDictType = {
 dictType setDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     dictSdsDestructor, /* key destructor */
     NULL,              /* val destructor */
@@ -461,7 +457,6 @@ dictType setDictType = {
 dictType zsetDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     NULL,              /* Note: SDS string shared & freed by skiplist */
     NULL,              /* val destructor */
@@ -472,7 +467,6 @@ dictType zsetDictType = {
 dictType dbDictType = {
     dictSdsHash,          /* hash function */
     NULL,                 /* key dup */
-    NULL,                 /* val dup */
     dictSdsKeyCompare,    /* key compare */
     dictSdsDestructor,    /* key destructor */
     dictObjectDestructor, /* val destructor */
@@ -483,7 +477,6 @@ dictType dbDictType = {
 dictType dbExpiresDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     NULL,              /* key destructor */
     NULL,              /* val destructor */
@@ -494,7 +487,6 @@ dictType dbExpiresDictType = {
 dictType commandTableDictType = {
     dictSdsCaseHash,       /* hash function */
     NULL,                  /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     NULL,                  /* val destructor */
@@ -505,7 +497,6 @@ dictType commandTableDictType = {
 dictType hashDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     dictSdsDestructor, /* key destructor */
     dictSdsDestructor, /* val destructor */
@@ -516,7 +507,6 @@ dictType hashDictType = {
 dictType sdsReplyDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     NULL,              /* key destructor */
     NULL,              /* val destructor */
@@ -529,7 +519,6 @@ dictType sdsReplyDictType = {
 dictType keylistDictType = {
     dictObjHash,          /* hash function */
     NULL,                 /* key dup */
-    NULL,                 /* val dup */
     dictObjKeyCompare,    /* key compare */
     dictObjectDestructor, /* key destructor */
     dictListDestructor,   /* val destructor */
@@ -541,7 +530,6 @@ dictType keylistDictType = {
 dictType objToDictDictType = {
     dictObjHash,          /* hash function */
     NULL,                 /* key dup */
-    NULL,                 /* val dup */
     dictObjKeyCompare,    /* key compare */
     dictObjectDestructor, /* key destructor */
     dictDictDestructor,   /* val destructor */
@@ -553,7 +541,6 @@ dictType objToDictDictType = {
 dictType modulesDictType = {
     dictSdsCaseHash,       /* hash function */
     NULL,                  /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     NULL,                  /* val destructor */
@@ -564,7 +551,6 @@ dictType modulesDictType = {
 dictType migrateCacheDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
-    NULL,              /* val dup */
     dictSdsKeyCompare, /* key compare */
     dictSdsDestructor, /* key destructor */
     NULL,              /* val destructor */
@@ -576,7 +562,6 @@ dictType migrateCacheDictType = {
 dictType stringSetDictType = {
     dictCStrCaseHash,       /* hash function */
     NULL,                   /* key dup */
-    NULL,                   /* val dup */
     dictCStrKeyCaseCompare, /* key compare */
     dictSdsDestructor,      /* key destructor */
     NULL,                   /* val destructor */
@@ -588,7 +573,6 @@ dictType stringSetDictType = {
 dictType externalStringType = {
     dictCStrCaseHash,       /* hash function */
     NULL,                   /* key dup */
-    NULL,                   /* val dup */
     dictCStrKeyCaseCompare, /* key compare */
     NULL,                   /* key destructor */
     NULL,                   /* val destructor */
@@ -600,7 +584,6 @@ dictType externalStringType = {
 dictType sdsHashDictType = {
     dictSdsCaseHash,       /* hash function */
     NULL,                  /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     dictVanillaFree,       /* val destructor */
@@ -611,7 +594,6 @@ dictType sdsHashDictType = {
 dictType clientDictType = {
     dictClientHash,       /* hash function */
     NULL,                 /* key dup */
-    NULL,                 /* val dup */
     dictClientKeyCompare, /* key compare */
     .no_value = 1         /* no values in this dict */
 };
@@ -632,15 +614,13 @@ void updateDictResizePolicy(void) {
 }
 
 const char *strChildType(int type) {
-    /* clang-format off */
-    switch(type) {
+    switch (type) {
     case CHILD_TYPE_RDB: return "RDB";
     case CHILD_TYPE_AOF: return "AOF";
     case CHILD_TYPE_LDB: return "LDB";
     case CHILD_TYPE_MODULE: return "MODULE";
     default: return "Unknown";
     }
-    /* clang-format on */
 }
 
 /* Return true if there are active children processes doing RDB saving,
@@ -715,8 +695,10 @@ long long getInstantaneousMetric(int metric) {
  *
  * The function always returns 0 as it never terminates the client. */
 int clientsCronResizeQueryBuffer(client *c) {
+    /* If the client query buffer is NULL, it is using the shared query buffer and there is nothing to do. */
+    if (c->querybuf == NULL) return 0;
     size_t querybuf_size = sdsalloc(c->querybuf);
-    time_t idletime = server.unixtime - c->lastinteraction;
+    time_t idletime = server.unixtime - c->last_interaction;
 
     /* Only resize the query buffer if the buffer is actually wasting at least a
      * few kbytes */
@@ -724,7 +706,18 @@ int clientsCronResizeQueryBuffer(client *c) {
         /* There are two conditions to resize the query buffer: */
         if (idletime > 2) {
             /* 1) Query is idle for a long time. */
-            c->querybuf = sdsRemoveFreeSpace(c->querybuf, 1);
+            size_t remaining = sdslen(c->querybuf) - c->qb_pos;
+            if (!(c->flags & CLIENT_PRIMARY) && !remaining) {
+                /* If the client is not a primary and no data is pending,
+                 * The client can safely use the shared query buffer in the next read - free the client's querybuf. */
+                sdsfree(c->querybuf);
+                /* By setting the querybuf to NULL, the client will use the shared query buffer in the next read.
+                 * We don't move the client to the shared query buffer immediately, because if we allocated a private
+                 * query buffer for the client, it's likely that the client will use it again soon. */
+                c->querybuf = NULL;
+            } else {
+                c->querybuf = sdsRemoveFreeSpace(c->querybuf, 1);
+            }
         } else if (querybuf_size > PROTO_RESIZE_THRESHOLD && querybuf_size / 2 > c->querybuf_peak) {
             /* 2) Query buffer is too big for latest peak and is larger than
              *    resize threshold. Trim excess space but only up to a limit,
@@ -740,7 +733,7 @@ int clientsCronResizeQueryBuffer(client *c) {
 
     /* Reset the peak again to capture the peak memory usage in the next
      * cycle. */
-    c->querybuf_peak = sdslen(c->querybuf);
+    c->querybuf_peak = c->querybuf ? sdslen(c->querybuf) : 0;
     /* We reset to either the current used, or currently processed bulk size,
      * which ever is bigger. */
     if (c->bulklen != -1 && (size_t)c->bulklen + 2 > c->querybuf_peak) c->querybuf_peak = c->bulklen + 2;
@@ -808,7 +801,9 @@ size_t ClientsPeakMemInput[CLIENTS_PEAK_MEM_USAGE_SLOTS] = {0};
 size_t ClientsPeakMemOutput[CLIENTS_PEAK_MEM_USAGE_SLOTS] = {0};
 
 int clientsCronTrackExpansiveClients(client *c, int time_idx) {
-    size_t in_usage = sdsZmallocSize(c->querybuf) + c->argv_len_sum + (c->argv ? zmalloc_size(c->argv) : 0);
+    size_t qb_size = c->querybuf ? sdsZmallocSize(c->querybuf) : 0;
+    size_t argv_size = c->argv ? zmalloc_size(c->argv) : 0;
+    size_t in_usage = qb_size + c->argv_len_sum + argv_size;
     size_t out_usage = getClientOutputBufferMemoryUsage(c);
 
     /* Track the biggest values observed so far in this slot. */
@@ -896,7 +891,7 @@ void removeClientFromMemUsageBucket(client *c, int allow_eviction) {
  * together clients consuming about the same amount of memory and can quickly
  * free them in case we reach maxmemory-clients (client eviction).
  *
- * Note: This function filters clients of type no-evict, master or replica regardless
+ * Note: This function filters clients of type no-evict, primary or replica regardless
  * of whether the eviction is enabled or not, so the memory usage we get from these
  * types of clients via the INFO command may be out of date.
  *
@@ -1021,13 +1016,13 @@ void clientsCron(void) {
  * incrementally in the databases, such as active key expiring, resizing,
  * rehashing. */
 void databasesCron(void) {
-    /* Expire keys by random sampling. Not required for slaves
-     * as master will synthesize DELs for us. */
+    /* Expire keys by random sampling. Not required for replicas
+     * as primary will synthesize DELs for us. */
     if (server.active_expire_enabled) {
-        if (iAmMaster()) {
+        if (iAmPrimary()) {
             activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
         } else {
-            expireSlaveKeys();
+            expireReplicaKeys();
         }
     }
 
@@ -1075,7 +1070,7 @@ static inline void updateCachedTimeWithUs(int update_daylight_info, const long l
     server.ustime = ustime;
     server.mstime = server.ustime / 1000;
     time_t unixtime = server.mstime / 1000;
-    atomicSet(server.unixtime, unixtime);
+    atomic_store_explicit(&server.unixtime, unixtime, memory_order_relaxed);
 
     /* To get information about daylight saving time, we need to call
      * localtime_r and cache the result. However calling localtime_r in this
@@ -1258,10 +1253,12 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     run_with_period(100) {
         long long stat_net_input_bytes, stat_net_output_bytes;
         long long stat_net_repl_input_bytes, stat_net_repl_output_bytes;
-        atomicGet(server.stat_net_input_bytes, stat_net_input_bytes);
-        atomicGet(server.stat_net_output_bytes, stat_net_output_bytes);
-        atomicGet(server.stat_net_repl_input_bytes, stat_net_repl_input_bytes);
-        atomicGet(server.stat_net_repl_output_bytes, stat_net_repl_output_bytes);
+
+        stat_net_input_bytes = atomic_load_explicit(&server.stat_net_input_bytes, memory_order_relaxed);
+        stat_net_output_bytes = atomic_load_explicit(&server.stat_net_output_bytes, memory_order_relaxed);
+        stat_net_repl_input_bytes = atomic_load_explicit(&server.stat_net_repl_input_bytes, memory_order_relaxed);
+        stat_net_repl_output_bytes = atomic_load_explicit(&server.stat_net_repl_output_bytes, memory_order_relaxed);
+
         monotime current_time = getMonotonicUs();
         long long factor = 1000000; // us
         trackInstantaneousMetric(STATS_METRIC_COMMAND, server.stat_numcommands, current_time, factor);
@@ -1329,7 +1326,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     if (!server.sentinel_mode) {
         run_with_period(5000) {
             serverLog(LL_DEBUG, "%lu clients connected (%lu replicas), %zu bytes in use",
-                      listLength(server.clients) - listLength(server.slaves), listLength(server.slaves),
+                      listLength(server.clients) - listLength(server.replicas), listLength(server.replicas),
                       zmalloc_used_memory());
         }
     }
@@ -1366,7 +1363,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                 serverLog(LL_NOTICE, "%d changes in %d seconds. Saving...", sp->changes, (int)sp->seconds);
                 rdbSaveInfo rsi, *rsiptr;
                 rsiptr = rdbPopulateSaveInfo(&rsi);
-                rdbSaveBackground(SLAVE_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE);
+                rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE);
                 break;
             }
         }
@@ -1406,7 +1403,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* Clear the paused actions state if needed. */
     updatePausedActions();
 
-    /* Replication cron function -- used to reconnect to master,
+    /* Replication cron function -- used to reconnect to primary,
      * detect transfer failures, start background RDB transfers and so forth.
      *
      * If the server is trying to failover then run the replication cron faster so
@@ -1450,7 +1447,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         (server.unixtime - server.lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY || server.lastbgsave_status == C_OK)) {
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
-        if (rdbSaveBackground(SLAVE_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) == C_OK)
+        if (rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) == C_OK)
             server.rdb_bgsave_scheduled = 0;
     }
 
@@ -1545,7 +1542,7 @@ static void sendGetackToReplicas(void) {
     argv[0] = shared.replconf;
     argv[1] = shared.getack;
     argv[2] = shared.special_asterick; /* Not used argument. */
-    replicationFeedSlaves(-1, argv, 3);
+    replicationFeedReplicas(-1, argv, 3);
 }
 
 extern int ProcessingEventsWhileBlocked;
@@ -1613,13 +1610,13 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
-    if (server.active_expire_enabled && iAmMaster()) activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
+    if (server.active_expire_enabled && iAmPrimary()) activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
     if (moduleCount()) {
         moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP, VALKEYMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP, NULL);
     }
 
-    /* Send all the slaves an ACK request if at least one client blocked
+    /* Send all the replicas an ACK request if at least one client blocked
      * during the previous event loop iteration. Note that we do this after
      * processUnblockedClients(), so if there are multiple pipelined WAITs
      * and the just unblocked WAIT gets blocked again, we don't have to wait
@@ -1627,10 +1624,10 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      *
      * We also don't send the ACKs while clients are paused, since it can
      * increment the replication backlog, they'll be sent after the pause
-     * if we are still the master. */
-    if (server.get_ack_from_slaves && !isPausedActionsWithUpdate(PAUSE_ACTION_REPLICA)) {
+     * if we are still the primary. */
+    if (server.get_ack_from_replicas && !isPausedActionsWithUpdate(PAUSE_ACTION_REPLICA)) {
         sendGetackToReplicas();
-        server.get_ack_from_slaves = 0;
+        server.get_ack_from_replicas = 0;
     }
 
     /* We may have received updates from clients about their current offset. NOTE:
@@ -1667,8 +1664,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * If an initial rewrite is in progress then not all data is guaranteed to have actually been
      * persisted to disk yet, so we cannot update the field. We will wait for the rewrite to complete. */
     if (server.aof_state == AOF_ON && server.fsynced_reploff != -1) {
-        long long fsynced_reploff_pending;
-        atomicGet(server.fsynced_reploff_pending, fsynced_reploff_pending);
+        long long fsynced_reploff_pending = atomic_load_explicit(&server.fsynced_reploff_pending, memory_order_relaxed);
         server.fsynced_reploff = fsynced_reploff_pending;
 
         /* If we have blocked [WAIT]AOF clients, and fsynced_reploff changed, we want to try to
@@ -1737,10 +1733,9 @@ void afterSleep(struct aeEventLoop *eventLoop) {
         if (moduleCount()) {
             mstime_t latency;
             latencyStartMonitor(latency);
-
-            atomicSet(server.module_gil_acquring, 1);
+            atomic_store_explicit(&server.module_gil_acquiring, 1, memory_order_relaxed);
             moduleAcquireGIL();
-            atomicSet(server.module_gil_acquring, 0);
+            atomic_store_explicit(&server.module_gil_acquiring, 0, memory_order_relaxed);
             moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP, VALKEYMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP, NULL);
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("module-acquire-GIL", latency);
@@ -1821,9 +1816,10 @@ void createSharedObjects(void) {
     shared.outofrangeerr = createObject(OBJ_STRING, sdsnew("-ERR index out of range\r\n"));
     shared.noscripterr = createObject(OBJ_STRING, sdsnew("-NOSCRIPT No matching script. Please use EVAL.\r\n"));
     createSharedObjectsWithCompat();
-    shared.masterdownerr = createObject(
+    shared.primarydownerr = createObject(
         OBJ_STRING, sdsnew("-MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.\r\n"));
-    shared.roslaveerr = createObject(OBJ_STRING, sdsnew("-READONLY You can't write against a read only replica.\r\n"));
+    shared.roreplicaerr =
+        createObject(OBJ_STRING, sdsnew("-READONLY You can't write against a read only replica.\r\n"));
     shared.noautherr = createObject(OBJ_STRING, sdsnew("-NOAUTH Authentication required.\r\n"));
     shared.oomerr = createObject(OBJ_STRING, sdsnew("-OOM command not allowed when used memory > 'maxmemory'.\r\n"));
     shared.execaborterr =
@@ -1916,10 +1912,6 @@ void createSharedObjects(void) {
     shared.special_asterick = createStringObject("*", 1);
     shared.special_equals = createStringObject("=", 1);
     shared.redacted = makeObjectShared(createStringObject("(redacted)", 10));
-    shared.cluster = createStringObject("CLUSTER", 7);
-    shared.setslot = createStringObject("SETSLOT", 7);
-    shared.importing = createStringObject("IMPORTING", 9);
-    shared.migrating = createStringObject("MIGRATING", 9);
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] = makeObjectShared(createObject(OBJ_STRING, (void *)(long)j));
@@ -1990,7 +1982,7 @@ void initServerConfig(void) {
     server.aof_flush_sleep = 0;
     server.aof_last_fsync = time(NULL) * 1000;
     server.aof_cur_timestamp = 0;
-    atomicSet(server.aof_bio_fsync_status, C_OK);
+    atomic_store_explicit(&server.aof_bio_fsync_status, C_OK, memory_order_relaxed);
     server.aof_rewrite_time_last = -1;
     server.aof_rewrite_time_start = -1;
     server.aof_lastbgrewrite_status = C_OK;
@@ -2030,23 +2022,23 @@ void initServerConfig(void) {
     appendServerSaveParams(60, 10000);  /* save after 1 minute and 10000 changes */
 
     /* Replication related */
-    server.masterhost = NULL;
-    server.masterport = 6379;
-    server.master = NULL;
-    server.cached_master = NULL;
-    server.master_initial_offset = -1;
+    server.primary_host = NULL;
+    server.primary_port = 6379;
+    server.primary = NULL;
+    server.cached_primary = NULL;
+    server.primary_initial_offset = -1;
     server.repl_state = REPL_STATE_NONE;
     server.repl_transfer_tmpfile = NULL;
     server.repl_transfer_fd = -1;
     server.repl_transfer_s = NULL;
     server.repl_syncio_timeout = CONFIG_REPL_SYNCIO_TIMEOUT;
     server.repl_down_since = 0; /* Never connected, repl is down since EVER. */
-    server.master_repl_offset = 0;
+    server.primary_repl_offset = 0;
     server.fsynced_reploff_pending = 0;
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;
-    server.repl_no_slaves_since = time(NULL);
+    server.repl_no_replicas_since = time(NULL);
 
     /* Failover related */
     server.failover_end_time = 0;
@@ -2147,11 +2139,11 @@ int restartServer(int flags, mstime_t delay) {
  * to user specified configuration. This is currently implemented on Linux
  * only.
  *
- * A process_class value of -1 implies OOM_CONFIG_MASTER or OOM_CONFIG_REPLICA,
+ * A process_class value of -1 implies OOM_CONFIG_PRIMARY or OOM_CONFIG_REPLICA,
  * depending on current role.
  */
 int setOOMScoreAdj(int process_class) {
-    if (process_class == -1) process_class = (server.masterhost ? CONFIG_OOM_REPLICA : CONFIG_OOM_MASTER);
+    if (process_class == -1) process_class = (server.primary_host ? CONFIG_OOM_REPLICA : CONFIG_OOM_PRIMARY);
 
     serverAssert(process_class >= 0 && process_class < CONFIG_OOM_COUNT);
 
@@ -2480,10 +2472,10 @@ void resetServerStats(void) {
     server.stat_sync_partial_ok = 0;
     server.stat_sync_partial_err = 0;
     server.stat_io_reads_processed = 0;
-    atomicSet(server.stat_total_reads_processed, 0);
+    atomic_store_explicit(&server.stat_total_reads_processed, 0, memory_order_relaxed);
     server.stat_io_writes_processed = 0;
-    atomicSet(server.stat_total_writes_processed, 0);
-    atomicSet(server.stat_client_qbuf_limit_disconnections, 0);
+    atomic_store_explicit(&server.stat_total_writes_processed, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.stat_client_qbuf_limit_disconnections, 0, memory_order_relaxed);
     server.stat_client_outbuf_limit_disconnections = 0;
     for (j = 0; j < STATS_METRIC_COUNT; j++) {
         server.inst_metric[j].idx = 0;
@@ -2494,10 +2486,10 @@ void resetServerStats(void) {
     server.stat_aof_rewrites = 0;
     server.stat_rdb_saves = 0;
     server.stat_aofrw_consecutive_failures = 0;
-    atomicSet(server.stat_net_input_bytes, 0);
-    atomicSet(server.stat_net_output_bytes, 0);
-    atomicSet(server.stat_net_repl_input_bytes, 0);
-    atomicSet(server.stat_net_repl_output_bytes, 0);
+    atomic_store_explicit(&server.stat_net_input_bytes, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.stat_net_output_bytes, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.stat_net_repl_input_bytes, 0, memory_order_relaxed);
+    atomic_store_explicit(&server.stat_net_repl_output_bytes, 0, memory_order_relaxed);
     server.stat_unexpected_error_replies = 0;
     server.stat_total_error_replies = 0;
     server.stat_dump_payload_sanitizations = 0;
@@ -2544,19 +2536,19 @@ void initServer(void) {
     server.clients = listCreate();
     server.clients_index = raxNew();
     server.clients_to_close = listCreate();
-    server.slaves = listCreate();
+    server.replicas = listCreate();
     server.monitors = listCreate();
     server.clients_pending_write = listCreate();
     server.clients_pending_read = listCreate();
     server.clients_timeout_table = raxNew();
     server.replication_allowed = 1;
-    server.slaveseldb = -1; /* Force to emit the first SELECT command. */
+    server.replicas_eldb = -1; /* Force to emit the first SELECT command. */
     server.unblocked_clients = listCreate();
     server.ready_keys = listCreate();
     server.tracking_pending_keys = listCreate();
     server.pending_push_messages = listCreate();
     server.clients_waiting_acks = listCreate();
-    server.get_ack_from_slaves = 0;
+    server.get_ack_from_replicas = 0;
     server.paused_actions = 0;
     memset(server.client_pause_per_purpose, 0, sizeof(server.client_pause_per_purpose));
     server.postponed_clients = listCreate();
@@ -2666,7 +2658,7 @@ void initServer(void) {
     server.lastbgsave_status = C_OK;
     server.aof_last_write_status = C_OK;
     server.aof_last_write_errno = 0;
-    server.repl_good_slaves_count = 0;
+    server.repl_good_replicas_count = 0;
     server.last_sig_received = 0;
 
     /* Initiate acl info struct */
@@ -2712,6 +2704,7 @@ void initServer(void) {
     }
     slowlogInit();
     latencyMonitorInit();
+    initSharedQueryBuf();
 
     /* Initialize ACL default password if it exists */
     ACLUpdateDefaultUserPassword(server.requirepass);
@@ -3149,9 +3142,9 @@ struct serverCommand *lookupCommandOrOriginal(robj **argv, int argc) {
     return cmd;
 }
 
-/* Commands arriving from the master client or AOF client, should never be rejected. */
+/* Commands arriving from the primary client or AOF client, should never be rejected. */
 int mustObeyClient(client *c) {
-    return c->id == CLIENT_ID_AOF || c->flags & CLIENT_MASTER;
+    return c->id == CLIENT_ID_AOF || c->flags & CLIENT_PRIMARY;
 }
 
 static int shouldPropagate(int target) {
@@ -3161,14 +3154,14 @@ static int shouldPropagate(int target) {
         if (server.aof_state != AOF_OFF) return 1;
     }
     if (target & PROPAGATE_REPL) {
-        if (server.masterhost == NULL && (server.repl_backlog || listLength(server.slaves) != 0)) return 1;
+        if (server.primary_host == NULL && (server.repl_backlog || listLength(server.replicas) != 0)) return 1;
     }
 
     return 0;
 }
 
 /* Propagate the specified command (in the context of the specified database id)
- * to AOF and Slaves.
+ * to AOF and replicas.
  *
  * flags are an xor between:
  * + PROPAGATE_NONE (no propagation of command at all)
@@ -3190,7 +3183,7 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
     serverAssert(!(isPausedActions(PAUSE_ACTION_REPLICA) && (!server.client_pause_in_transaction)));
 
     if (server.aof_state != AOF_OFF && target & PROPAGATE_AOF) feedAppendOnlyFile(dbid, argv, argc);
-    if (target & PROPAGATE_REPL) replicationFeedSlaves(dbid, argv, argc);
+    if (target & PROPAGATE_REPL) replicationFeedReplicas(dbid, argv, argc);
 }
 
 /* Used inside commands to schedule the propagation of additional commands
@@ -3371,7 +3364,7 @@ int incrCommandStatsOnError(struct serverCommand *cmd, int flags) {
  * CMD_CALL_NONE        No flags.
  * CMD_CALL_PROPAGATE_AOF   Append command to AOF if it modified the dataset
  *                          or if the client flags are forcing propagation.
- * CMD_CALL_PROPAGATE_REPL  Send command to slaves if it modified the dataset
+ * CMD_CALL_PROPAGATE_REPL  Send command to replicas if it modified the dataset
  *                          or if the client flags are forcing propagation.
  * CMD_CALL_PROPAGATE   Alias for PROPAGATE_AOF|PROPAGATE_REPL.
  * CMD_CALL_FULL        Alias for SLOWLOG|STATS|PROPAGATE.
@@ -3384,12 +3377,12 @@ int incrCommandStatsOnError(struct serverCommand *cmd, int flags) {
  *    in the call flags, then the command is propagated even if the
  *    dataset was not affected by the command.
  * 2. If the client flags CLIENT_PREVENT_REPL_PROP or CLIENT_PREVENT_AOF_PROP
- *    are set, the propagation into AOF or to slaves is not performed even
+ *    are set, the propagation into AOF or to replicas is not performed even
  *    if the command modified the dataset.
  *
  * Note that regardless of the client flags, if CMD_CALL_PROPAGATE_AOF
  * or CMD_CALL_PROPAGATE_REPL are not set, then respectively AOF or
- * slaves propagation will never occur.
+ * replicas propagation will never occur.
  *
  * Client flags are modified by the implementation of a given command
  * using the following API:
@@ -3430,7 +3423,7 @@ void call(client *c, int flags) {
 
     /* Call the command. */
     dirty = server.dirty;
-    long long old_master_repl_offset = server.master_repl_offset;
+    long long old_primary_repl_offset = server.primary_repl_offset;
     incrCommandStatsOnError(NULL, 0);
 
     const long long call_timer = ustime();
@@ -3606,7 +3599,7 @@ void call(client *c, int flags) {
 
     /* Remember the replication offset of the client, right after its last
      * command that resulted in propagation. */
-    if (old_master_repl_offset != server.master_repl_offset) c->woff = server.master_repl_offset;
+    if (old_primary_repl_offset != server.primary_repl_offset) c->woff = server.primary_repl_offset;
 
     /* Client pause takes effect after a transaction has finished. This needs
      * to be located after everything is propagated. */
@@ -3855,7 +3848,7 @@ int processCommand(client *c) {
 
     /* If cluster is enabled perform the cluster redirection here.
      * However we don't perform the redirection if:
-     * 1) The sender of this command is our master.
+     * 1) The sender of this command is our primary.
      * 2) The command has no key arguments. */
     if (server.cluster_enabled && !mustObeyClient(c) &&
         !(!(c->cmd->flags & CMD_MOVABLE_KEYS) && c->cmd->key_specs_num == 0 && c->cmd->proc != execCommand)) {
@@ -3868,6 +3861,7 @@ int processCommand(client *c) {
                 flagTransaction(c);
             }
             clusterRedirectClient(c, n, c->slot, error_code);
+            c->duration = 0;
             c->cmd->rejected_calls++;
             return C_OK;
         }
@@ -3897,8 +3891,8 @@ int processCommand(client *c) {
          * message belongs to the old value of the key before it gets evicted.*/
         trackingHandlePendingKeyInvalidations();
 
-        /* performEvictions may flush slave output buffers. This may result
-         * in a slave, that may be the active client, to be freed. */
+        /* performEvictions may flush replica output buffers. This may result
+         * in a replica, that may be the active client, to be freed. */
         if (server.current_client == NULL) return C_ERR;
 
         if (out_of_memory && is_denyoom_command) {
@@ -3919,7 +3913,7 @@ int processCommand(client *c) {
     if (server.tracking_clients) trackingLimitUsedSlots();
 
     /* Don't accept write commands if there are problems persisting on disk
-     * unless coming from our master, in which case check the replica ignore
+     * unless coming from our primary, in which case check the replica ignore
      * disk write error config to either log or crash. */
     int deny_write_type = writeCommandsDeniedByDiskError();
     if (deny_write_type != DISK_ERROR_TYPE_NONE && (is_write_command || c->cmd->proc == pingCommand)) {
@@ -3944,17 +3938,17 @@ int processCommand(client *c) {
         }
     }
 
-    /* Don't accept write commands if there are not enough good slaves and
-     * user configured the min-slaves-to-write option. */
+    /* Don't accept write commands if there are not enough good replicas and
+     * user configured the min-replicas-to-write option. */
     if (is_write_command && !checkGoodReplicasStatus()) {
         rejectCommand(c, shared.noreplicaserr);
         return C_OK;
     }
 
-    /* Don't accept write commands if this is a read only slave. But
-     * accept write commands if this is our master. */
-    if (server.masterhost && server.repl_slave_ro && !obey_client && is_write_command) {
-        rejectCommand(c, shared.roslaveerr);
+    /* Don't accept write commands if this is a read only replica. But
+     * accept write commands if this is our primary. */
+    if (server.primary_host && server.repl_replica_ro && !obey_client && is_write_command) {
+        rejectCommand(c, shared.roreplicaerr);
         return C_OK;
     }
 
@@ -3973,10 +3967,10 @@ int processCommand(client *c) {
 
     /* Only allow commands with flag "t", such as INFO, REPLICAOF and so on,
      * when replica-serve-stale-data is no and we are a replica with a broken
-     * link with master. */
-    if (server.masterhost && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
+     * link with primary. */
+    if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
         is_denystale_command) {
-        rejectCommand(c, shared.masterdownerr);
+        rejectCommand(c, shared.primarydownerr);
         return C_OK;
     }
 
@@ -4016,15 +4010,15 @@ int processCommand(client *c) {
     /* Prevent a replica from sending commands that access the keyspace.
      * The main objective here is to prevent abuse of client pause check
      * from which replicas are exempt. */
-    if ((c->flags & CLIENT_SLAVE) && (is_may_replicate_command || is_write_command || is_read_command)) {
+    if ((c->flags & CLIENT_REPLICA) && (is_may_replicate_command || is_write_command || is_read_command)) {
         rejectCommandFormat(c, "Replica can't interact with the keyspace");
         return C_OK;
     }
 
     /* If the server is paused, block the client until
      * the pause has ended. Replicas are never paused. */
-    if (!(c->flags & CLIENT_SLAVE) && ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) ||
-                                       ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command))) {
+    if (!(c->flags & CLIENT_REPLICA) && ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) ||
+                                         ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command))) {
         blockPostponeClient(c);
         return C_OK;
     }
@@ -4180,14 +4174,14 @@ static inline int isShutdownInitiated(void) {
  * need to wait for before shutting down. Returns 1 if we're ready to shut
  * down now. */
 int isReadyToShutdown(void) {
-    if (listLength(server.slaves) == 0) return 1; /* No replicas. */
+    if (listLength(server.replicas) == 0) return 1; /* No replicas. */
 
     listIter li;
     listNode *ln;
-    listRewind(server.slaves, &li);
+    listRewind(server.replicas, &li);
     while ((ln = listNext(&li)) != NULL) {
         client *replica = listNodeValue(ln);
-        if (replica->repl_ack_off != server.master_repl_offset) return 0;
+        if (replica->repl_ack_off != server.primary_repl_offset) return 0;
     }
     return 1;
 }
@@ -4229,16 +4223,16 @@ int finishShutdown(void) {
     listIter replicas_iter;
     listNode *replicas_list_node;
     int num_replicas = 0, num_lagging_replicas = 0;
-    listRewind(server.slaves, &replicas_iter);
+    listRewind(server.replicas, &replicas_iter);
     while ((replicas_list_node = listNext(&replicas_iter)) != NULL) {
         client *replica = listNodeValue(replicas_list_node);
         num_replicas++;
-        if (replica->repl_ack_off != server.master_repl_offset) {
+        if (replica->repl_ack_off != server.primary_repl_offset) {
             num_lagging_replicas++;
-            long lag = replica->replstate == SLAVE_STATE_ONLINE ? time(NULL) - replica->repl_ack_time : 0;
+            long lag = replica->repl_state == REPLICA_STATE_ONLINE ? time(NULL) - replica->repl_ack_time : 0;
             serverLog(LL_NOTICE, "Lagging replica %s reported offset %lld behind master, lag=%ld, state=%s.",
-                      replicationGetSlaveName(replica), server.master_repl_offset - replica->repl_ack_off, lag,
-                      replstateToString(replica->replstate));
+                      replicationGetReplicaName(replica), server.primary_repl_offset - replica->repl_ack_off, lag,
+                      replstateToString(replica->repl_state));
         }
     }
     if (num_replicas > 0) {
@@ -4306,11 +4300,11 @@ int finishShutdown(void) {
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
         /* Keep the page cache since it's likely to restart soon */
-        if (rdbSave(SLAVE_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_KEEP_CACHE) != C_OK) {
+        if (rdbSave(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_KEEP_CACHE) != C_OK) {
             /* Ooops.. error saving! The best we can do is to continue
              * operating. Note that if there was a background saving process,
              * in the next cron() the server will be notified that the background
-             * saving aborted, handling special stuff like slaves pending for
+             * saving aborted, handling special stuff like replicas pending for
              * synchronization... */
             if (force) {
                 serverLog(LL_WARNING, "Error trying to save the DB. Exit anyway.");
@@ -4335,9 +4329,9 @@ int finishShutdown(void) {
         unlink(server.pidfile);
     }
 
-    /* Best effort flush of slave output buffers, so that we hopefully
+    /* Best effort flush of replica output buffers, so that we hopefully
      * send them pending writes. */
-    flushSlavesOutputBuffers();
+    flushReplicasOutputBuffers();
 
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);
@@ -4380,10 +4374,9 @@ int writeCommandsDeniedByDiskError(void) {
             return DISK_ERROR_TYPE_AOF;
         }
         /* AOF fsync error. */
-        int aof_bio_fsync_status;
-        atomicGet(server.aof_bio_fsync_status, aof_bio_fsync_status);
+        int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_acquire);
         if (aof_bio_fsync_status == C_ERR) {
-            atomicGet(server.aof_bio_fsync_errno, server.aof_last_write_errno);
+            server.aof_last_write_errno = atomic_load_explicit(&server.aof_bio_fsync_errno, memory_order_relaxed);
             return DISK_ERROR_TYPE_AOF;
         }
     }
@@ -5158,10 +5151,10 @@ sds fillPercentileDistributionLatencies(sds info, const char *histogram_name, st
 
 const char *replstateToString(int replstate) {
     switch (replstate) {
-    case SLAVE_STATE_WAIT_BGSAVE_START:
-    case SLAVE_STATE_WAIT_BGSAVE_END: return "wait_bgsave";
-    case SLAVE_STATE_SEND_BULK: return "send_bulk";
-    case SLAVE_STATE_ONLINE: return "online";
+    case REPLICA_STATE_WAIT_BGSAVE_START:
+    case REPLICA_STATE_WAIT_BGSAVE_END: return "wait_bgsave";
+    case REPLICA_STATE_SEND_BULK: return "send_bulk";
+    case REPLICA_STATE_ONLINE: return "online";
     default: return "";
     }
 }
@@ -5374,7 +5367,6 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "arch_bits:%i\r\n", server.arch_bits,
             "monotonic_clock:%s\r\n", monotonicInfoString(),
             "multiplexing_api:%s\r\n", aeGetApiName(),
-            "atomicvar_api:%s\r\n", REDIS_ATOMIC_API,
             "gcc_version:%s\r\n", GNUC_VERSION_STR,
             "process_id:%I\r\n", (int64_t) getpid(),
             "process_supervised:%s\r\n", supervised,
@@ -5410,7 +5402,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         if (sections++) info = sdscat(info, "\r\n");
         /* clang-format off */
         info = sdscatprintf(info, "# Clients\r\n" FMTARGS(
-            "connected_clients:%lu\r\n", listLength(server.clients) - listLength(server.slaves),
+            "connected_clients:%lu\r\n", listLength(server.clients) - listLength(server.replicas),
             "cluster_connections:%lu\r\n", getClusterConnectionsCount(),
             "maxclients:%u\r\n", server.maxclients,
             "client_recent_max_input_buffer:%zu\r\n", maxin,
@@ -5509,7 +5501,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "mem_not_counted_for_evict:%zu\r\n", freeMemoryGetNotCountedMemory(),
             "mem_replication_backlog:%zu\r\n", mh->repl_backlog,
             "mem_total_replication_buffers:%zu\r\n", server.repl_buffer_mem,
-            "mem_clients_slaves:%zu\r\n", mh->clients_slaves,
+            "mem_clients_slaves:%zu\r\n", mh->clients_replicas,
             "mem_clients_normal:%zu\r\n", mh->clients_normal,
             "mem_cluster_links:%zu\r\n", mh->cluster_links,
             "mem_aof_buffer:%zu\r\n", mh->aof_buffer,
@@ -5531,8 +5523,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         } else if (server.stat_current_save_keys_total) {
             fork_perc = ((double)server.stat_current_save_keys_processed / server.stat_current_save_keys_total) * 100;
         }
-        int aof_bio_fsync_status;
-        atomicGet(server.aof_bio_fsync_status, aof_bio_fsync_status);
+        int aof_bio_fsync_status = atomic_load_explicit(&server.aof_bio_fsync_status, memory_order_relaxed);
 
         /* clang-format off */
         info = sdscatprintf(info, "# Persistence\r\n" FMTARGS(
@@ -5631,13 +5622,15 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         long long current_active_defrag_time =
             server.stat_last_active_defrag_time ? (long long)elapsedUs(server.stat_last_active_defrag_time) : 0;
         long long stat_client_qbuf_limit_disconnections;
-        atomicGet(server.stat_total_reads_processed, stat_total_reads_processed);
-        atomicGet(server.stat_total_writes_processed, stat_total_writes_processed);
-        atomicGet(server.stat_net_input_bytes, stat_net_input_bytes);
-        atomicGet(server.stat_net_output_bytes, stat_net_output_bytes);
-        atomicGet(server.stat_net_repl_input_bytes, stat_net_repl_input_bytes);
-        atomicGet(server.stat_net_repl_output_bytes, stat_net_repl_output_bytes);
-        atomicGet(server.stat_client_qbuf_limit_disconnections, stat_client_qbuf_limit_disconnections);
+
+        stat_total_reads_processed = atomic_load_explicit(&server.stat_total_reads_processed, memory_order_relaxed);
+        stat_total_writes_processed = atomic_load_explicit(&server.stat_total_writes_processed, memory_order_relaxed);
+        stat_net_input_bytes = atomic_load_explicit(&server.stat_net_input_bytes, memory_order_relaxed);
+        stat_net_output_bytes = atomic_load_explicit(&server.stat_net_output_bytes, memory_order_relaxed);
+        stat_net_repl_input_bytes = atomic_load_explicit(&server.stat_net_repl_input_bytes, memory_order_relaxed);
+        stat_net_repl_output_bytes = atomic_load_explicit(&server.stat_net_repl_output_bytes, memory_order_relaxed);
+        stat_client_qbuf_limit_disconnections =
+            atomic_load_explicit(&server.stat_client_qbuf_limit_disconnections, memory_order_relaxed);
 
         if (sections++) info = sdscat(info, "\r\n");
         /* clang-format off */
@@ -5674,7 +5667,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "latest_fork_usec:%lld\r\n", server.stat_fork_time,
             "total_forks:%lld\r\n", server.stat_total_forks,
             "migrate_cached_sockets:%ld\r\n", dictSize(server.migrate_cached_sockets),
-            "slave_expires_tracked_keys:%zu\r\n", getSlaveKeyWithExpireCount(),
+            "slave_expires_tracked_keys:%zu\r\n", getReplicaKeyWithExpireCount(),
             "active_defrag_hits:%lld\r\n", server.stat_active_defrag_hits,
             "active_defrag_misses:%lld\r\n", server.stat_active_defrag_misses,
             "active_defrag_key_hits:%lld\r\n", server.stat_active_defrag_key_hits,
@@ -5710,28 +5703,28 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         info = sdscatprintf(info,
                             "# Replication\r\n"
                             "role:%s\r\n",
-                            server.masterhost == NULL ? "master" : "slave");
-        if (server.masterhost) {
-            long long slave_repl_offset = 1;
-            long long slave_read_repl_offset = 1;
+                            server.primary_host == NULL ? "master" : "slave");
+        if (server.primary_host) {
+            long long replica_repl_offset = 1;
+            long long replica_read_repl_offset = 1;
 
-            if (server.master) {
-                slave_repl_offset = server.master->reploff;
-                slave_read_repl_offset = server.master->read_reploff;
-            } else if (server.cached_master) {
-                slave_repl_offset = server.cached_master->reploff;
-                slave_read_repl_offset = server.cached_master->read_reploff;
+            if (server.primary) {
+                replica_repl_offset = server.primary->reploff;
+                replica_read_repl_offset = server.primary->read_reploff;
+            } else if (server.cached_primary) {
+                replica_repl_offset = server.cached_primary->reploff;
+                replica_read_repl_offset = server.cached_primary->read_reploff;
             }
 
             /* clang-format off */
             info = sdscatprintf(info, FMTARGS(
-                "master_host:%s\r\n", server.masterhost,
-                "master_port:%d\r\n", server.masterport,
+                "master_host:%s\r\n", server.primary_host,
+                "master_port:%d\r\n", server.primary_port,
                 "master_link_status:%s\r\n", (server.repl_state == REPL_STATE_CONNECTED) ? "up" : "down",
-                "master_last_io_seconds_ago:%d\r\n", server.master ? ((int)(server.unixtime-server.master->lastinteraction)) : -1,
+                "master_last_io_seconds_ago:%d\r\n", server.primary ? ((int)(server.unixtime-server.primary->last_interaction)) : -1,
                 "master_sync_in_progress:%d\r\n", server.repl_state == REPL_STATE_TRANSFER,
-                "slave_read_repl_offset:%lld\r\n", slave_read_repl_offset,
-                "slave_repl_offset:%lld\r\n", slave_repl_offset));
+                "slave_read_repl_offset:%lld\r\n", replica_read_repl_offset,
+                "slave_repl_offset:%lld\r\n", replica_repl_offset));
             /* clang-format on */
 
             if (server.repl_state == REPL_STATE_TRANSFER) {
@@ -5755,45 +5748,46 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             }
             /* clang-format off */
             info = sdscatprintf(info, FMTARGS(
-                "slave_priority:%d\r\n", server.slave_priority,
-                "slave_read_only:%d\r\n", server.repl_slave_ro,
+                "slave_priority:%d\r\n", server.replica_priority,
+                "slave_read_only:%d\r\n", server.repl_replica_ro,
                 "replica_announced:%d\r\n", server.replica_announced));
             /* clang-format on */
         }
 
-        info = sdscatprintf(info, "connected_slaves:%lu\r\n", listLength(server.slaves));
+        info = sdscatprintf(info, "connected_slaves:%lu\r\n", listLength(server.replicas));
 
-        /* If min-slaves-to-write is active, write the number of slaves
+        /* If min-replicas-to-write is active, write the number of replicas
          * currently considered 'good'. */
-        if (server.repl_min_slaves_to_write && server.repl_min_slaves_max_lag) {
-            info = sdscatprintf(info, "min_slaves_good_slaves:%d\r\n", server.repl_good_slaves_count);
+        if (server.repl_min_replicas_to_write && server.repl_min_replicas_max_lag) {
+            info = sdscatprintf(info, "min_slaves_good_slaves:%d\r\n", server.repl_good_replicas_count);
         }
 
-        if (listLength(server.slaves)) {
-            int slaveid = 0;
+        if (listLength(server.replicas)) {
+            int replica_id = 0;
             listNode *ln;
             listIter li;
 
-            listRewind(server.slaves, &li);
+            listRewind(server.replicas, &li);
             while ((ln = listNext(&li))) {
-                client *slave = listNodeValue(ln);
-                char ip[NET_IP_STR_LEN], *slaveip = slave->slave_addr;
+                client *replica = listNodeValue(ln);
+                char ip[NET_IP_STR_LEN], *replica_ip = replica->replica_addr;
                 int port;
                 long lag = 0;
 
-                if (!slaveip) {
-                    if (connAddrPeerName(slave->conn, ip, sizeof(ip), &port) == -1) continue;
-                    slaveip = ip;
+                if (!replica_ip) {
+                    if (connAddrPeerName(replica->conn, ip, sizeof(ip), &port) == -1) continue;
+                    replica_ip = ip;
                 }
-                const char *state = replstateToString(slave->replstate);
+                const char *state = replstateToString(replica->repl_state);
                 if (state[0] == '\0') continue;
-                if (slave->replstate == SLAVE_STATE_ONLINE) lag = time(NULL) - slave->repl_ack_time;
+                if (replica->repl_state == REPLICA_STATE_ONLINE) lag = time(NULL) - replica->repl_ack_time;
 
                 info = sdscatprintf(info,
                                     "slave%d:ip=%s,port=%d,state=%s,"
                                     "offset=%lld,lag=%ld\r\n",
-                                    slaveid, slaveip, slave->slave_listening_port, state, slave->repl_ack_off, lag);
-                slaveid++;
+                                    replica_id, replica_ip, replica->replica_listening_port, state,
+                                    replica->repl_ack_off, lag);
+                replica_id++;
             }
         }
         /* clang-format off */
@@ -5801,7 +5795,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "master_failover_state:%s\r\n", getFailoverStateString(),
             "master_replid:%s\r\n", server.replid,
             "master_replid2:%s\r\n", server.replid2,
-            "master_repl_offset:%lld\r\n", server.master_repl_offset,
+            "master_repl_offset:%lld\r\n", server.primary_repl_offset,
             "second_repl_offset:%lld\r\n", server.second_replid_offset,
             "repl_backlog_active:%d\r\n", server.repl_backlog != NULL,
             "repl_backlog_size:%lld\r\n", server.repl_backlog_size,
@@ -5955,10 +5949,10 @@ void monitorCommand(client *c) {
         return;
     }
 
-    /* ignore MONITOR if already slave or in monitor mode */
-    if (c->flags & CLIENT_SLAVE) return;
+    /* ignore MONITOR if already replica or in monitor mode */
+    if (c->flags & CLIENT_REPLICA) return;
 
-    c->flags |= (CLIENT_SLAVE | CLIENT_MONITOR);
+    c->flags |= (CLIENT_REPLICA | CLIENT_MONITOR);
     listAddNodeTail(server.monitors, c);
     addReply(c, shared.ok);
 }
@@ -6312,7 +6306,7 @@ void dismissMemory(void *ptr, size_t size_hint) {
 void dismissClientMemory(client *c) {
     /* Dismiss client query buffer and static reply buffer. */
     dismissMemory(c->buf, c->buf_usable_size);
-    dismissSds(c->querybuf);
+    if (c->querybuf) dismissSds(c->querybuf);
     /* Dismiss argv array only if we estimate it contains a big buffer. */
     if (c->argc && c->argv_len_sum / c->argc >= server.page_size) {
         for (int i = 0; i < c->argc; i++) {
@@ -6393,8 +6387,8 @@ void loadDataFromDisk(void) {
         int rsi_is_valid = 0;
         errno = 0; /* Prevent a stale value from affecting error checking */
         int rdb_flags = RDBFLAGS_NONE;
-        if (iAmMaster()) {
-            /* Master may delete expired keys when loading, we should
+        if (iAmPrimary()) {
+            /* Primary may delete expired keys when loading, we should
              * propagate expire to replication backlog. */
             createReplicationBacklog();
             rdb_flags |= RDBFLAGS_FEED_REPL;
@@ -6410,26 +6404,26 @@ void loadDataFromDisk(void) {
                  * information in function rdbPopulateSaveInfo. */
                 rsi.repl_stream_db != -1) {
                 rsi_is_valid = 1;
-                if (!iAmMaster()) {
+                if (!iAmPrimary()) {
                     memcpy(server.replid, rsi.repl_id, sizeof(server.replid));
-                    server.master_repl_offset = rsi.repl_offset;
-                    /* If this is a replica, create a cached master from this
+                    server.primary_repl_offset = rsi.repl_offset;
+                    /* If this is a replica, create a cached primary from this
                      * information, in order to allow partial resynchronizations
-                     * with masters. */
-                    replicationCacheMasterUsingMyself();
-                    selectDb(server.cached_master, rsi.repl_stream_db);
+                     * with primaries. */
+                    replicationCachePrimaryUsingMyself();
+                    selectDb(server.cached_primary, rsi.repl_stream_db);
                 } else {
-                    /* If this is a master, we can save the replication info
+                    /* If this is a primary, we can save the replication info
                      * as secondary ID and offset, in order to allow replicas
-                     * to partial resynchronizations with masters. */
+                     * to partial resynchronizations with primaries. */
                     memcpy(server.replid2, rsi.repl_id, sizeof(server.replid));
                     server.second_replid_offset = rsi.repl_offset + 1;
-                    /* Rebase master_repl_offset from rsi.repl_offset. */
-                    server.master_repl_offset += rsi.repl_offset;
+                    /* Rebase primary_repl_offset from rsi.repl_offset. */
+                    server.primary_repl_offset += rsi.repl_offset;
                     serverAssert(server.repl_backlog);
-                    server.repl_backlog->offset = server.master_repl_offset - server.repl_backlog->histlen + 1;
+                    server.repl_backlog->offset = server.primary_repl_offset - server.repl_backlog->histlen + 1;
                     rebaseReplicationBuffer(rsi.repl_offset);
-                    server.repl_no_slaves_since = time(NULL);
+                    server.repl_no_replicas_since = time(NULL);
                 }
             }
         } else if (rdb_load_ret != RDB_NOT_EXIST) {
@@ -6437,7 +6431,7 @@ void loadDataFromDisk(void) {
             exit(1);
         }
 
-        /* We always create replication backlog if server is a master, we need
+        /* We always create replication backlog if server is a primary, we need
          * it because we put DELs in it when loading expired keys in RDB, but
          * if RDB doesn't have replication info or there is no rdb, it is not
          * possible to support partial resynchronization, to avoid extra memory
@@ -6592,9 +6586,9 @@ int serverIsSupervised(int mode) {
     return ret;
 }
 
-int iAmMaster(void) {
-    return ((!server.cluster_enabled && server.masterhost == NULL) ||
-            (server.cluster_enabled && clusterNodeIsMaster(getMyClusterNode())));
+int iAmPrimary(void) {
+    return ((!server.cluster_enabled && server.primary_host == NULL) ||
+            (server.cluster_enabled && clusterNodeIsPrimary(getMyClusterNode())));
 }
 
 #ifdef SERVER_TEST
@@ -6721,7 +6715,7 @@ int main(int argc, char **argv) {
 
     /* We need to init sentinel right now as parsing the configuration file
      * in sentinel mode will have the effect of populating the sentinel
-     * data structures with master nodes to monitor. */
+     * data structures with primary nodes to monitor. */
     if (server.sentinel_mode) {
         initSentinelConfig();
         initSentinel();
@@ -6941,7 +6935,7 @@ int main(int argc, char **argv) {
         }
 
         if (server.supervised_mode == SUPERVISED_SYSTEMD) {
-            if (!server.masterhost) {
+            if (!server.primary_host) {
                 serverCommunicateSystemd("STATUS=Ready to accept connections\n");
             } else {
                 serverCommunicateSystemd(

@@ -49,5 +49,6 @@
 #define s_realloc_usable zrealloc_usable
 #define s_trymalloc_usable ztrymalloc_usable
 #define s_tryrealloc_usable ztryrealloc_usable
+#define s_malloc_size zmalloc_size
 
 #endif

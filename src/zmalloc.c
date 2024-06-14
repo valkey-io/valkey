@@ -52,6 +52,7 @@ void zlibc_free(void *ptr) {
 #include <string.h>
 #include "zmalloc.h"
 #include <stdatomic.h>
+#include <threads.h>
 
 #define UNUSED(x) ((void)(x))
 
@@ -88,7 +89,7 @@ void zlibc_free(void *ptr) {
 #endif
 
 static _Atomic int64_t used_memory = 0;
-static __thread int64_t thread_used_memory_delta = 0;
+static thread_local int64_t thread_used_memory_delta = 0;
 
 #define THREAD_MEM_MAX_DELTA (1024 * 1024)
 

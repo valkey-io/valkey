@@ -69,7 +69,6 @@ int clusterDelSlot(int slot);
 int clusterDelNodeSlots(clusterNode *node);
 int clusterNodeSetSlotBit(clusterNode *n, int slot);
 void clusterSetPrimary(clusterNode *n, int closeSlots);
-static inline int clusterNodeIsVotingPrimary(clusterNode *n);
 void clusterHandleReplicaFailover(void);
 void clusterHandleReplicaMigration(int max_replicas);
 int bitmapTestBit(unsigned char *bitmap, int pos);
@@ -116,6 +115,14 @@ void freeClusterLink(clusterLink *link);
 int verifyClusterNodeId(const char *name, int length);
 sds clusterEncodeOpenSlotsAuxField(int rdbflags);
 int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
+
+/* Only primary that own slots have the voting rights.
+ * And only voting primary will be counted in cluster size.
+ *
+ * Returns 1 if the node has voting rights, otherwise returns 0. */
+static inline int clusterNodeIsVotingPrimary(clusterNode *n) {
+    return (n->flags & CLUSTER_NODE_PRIMARY) && n->numslots;
+}
 
 int getNodeDefaultClientPort(clusterNode *n) {
     return server.tls_cluster ? n->tls_port : n->tcp_port;
@@ -5805,14 +5812,6 @@ char **getClusterNodesList(size_t *numnodes) {
 
 int clusterNodeIsPrimary(clusterNode *n) {
     return n->flags & CLUSTER_NODE_PRIMARY;
-}
-
-/* Only primary that own slots have the voting rights.
- * And only voting primary will be counted in cluster size.
- *
- * Returns 1 if the node has voting rights, otherwise returns 0. */
-static inline int clusterNodeIsVotingPrimary(clusterNode *n) {
-    return (n->flags & CLUSTER_NODE_PRIMARY) && n->numslots;
 }
 
 int handleDebugClusterCommand(client *c) {

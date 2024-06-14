@@ -359,9 +359,8 @@ sds createLatencyReport(void) {
         report = sdscat(report, "No latency spike was observed during the lifetime of this Valkey instance, not "
                                 "in the slightest bit.\n");
     } else if (eventnum > 0 && advices == 0) {
-        report =
-            sdscat(report, "\nThere are latency events logged, they are not easy to fix. Please get "
-                           "some help from Valkey community, providing this report in your help request.\n");
+        report = sdscat(report, "\nThere are latency events logged that are not easy to fix. Please get some "
+                                "help from Valkey community, providing this report in your help request.\n");
     } else {
         /* Add all the suggestions accumulated so far. */
 
@@ -420,11 +419,11 @@ sds createLatencyReport(void) {
         }
 
         if (advise_ssd) {
-            report =
-                sdscat(report, "- SSD disks are able to reduce fsync latency, and total time needed for snapshotting "
-                               "and AOF log rewriting (resulting in smaller memory usage). With extremely high write "
-                               "load SSD disks can be a good option. However Valkey should perform reasonably with high "
-                               "load using normal disks. Use this advice as a last resort.\n");
+            report = sdscat(report,
+                            "- SSD disks are able to reduce fsync latency, and total time needed for snapshotting "
+                            "and AOF log rewriting (resulting in smaller memory usage). With extremely high write "
+                            "load SSD disks can be a good option. However Valkey should perform reasonably with high "
+                            "load using normal disks. Use this advice as a last resort.\n");
         }
 
         if (advise_data_writeback) {
@@ -480,13 +479,14 @@ sds createLatencyReport(void) {
         }
 
         if (advise_disable_thp) {
-            report = sdscat(report, "- I detected a non zero amount of anonymous huge pages used by your process. This "
-                                    "creates very serious latency events in different conditions, especially when "
-                                    "Valkey is persisting on disk. To disable THP support use the command 'echo never > "
-                                    "/sys/kernel/mm/transparent_hugepage/enabled', make sure to also add it into "
-                                    "/etc/rc.local so that the command will be executed again after a reboot. Note "
-                                    "that even if you have already disabled THP, you still need to restart the Valkey "
-                                    "process to get rid of the huge pages already created.\n");
+            report =
+                sdscat(report, "- I detected a non zero amount of anonymous huge pages used by your process. This "
+                               "creates very serious latency events in different conditions, especially when "
+                               "Valkey is persisting on disk. To disable THP support use the command 'echo never > "
+                               "/sys/kernel/mm/transparent_hugepage/enabled', make sure to also add it into "
+                               "/etc/rc.local so that the command will be executed again after a reboot. Note "
+                               "that even if you have already disabled THP, you still need to restart the Valkey "
+                               "process to get rid of the huge pages already created.\n");
         }
     }
 

@@ -614,15 +614,13 @@ void updateDictResizePolicy(void) {
 }
 
 const char *strChildType(int type) {
-    /* clang-format off */
-    switch(type) {
+    switch (type) {
     case CHILD_TYPE_RDB: return "RDB";
     case CHILD_TYPE_AOF: return "AOF";
     case CHILD_TYPE_LDB: return "LDB";
     case CHILD_TYPE_MODULE: return "MODULE";
     default: return "Unknown";
     }
-    /* clang-format on */
 }
 
 /* Return true if there are active children processes doing RDB saving,

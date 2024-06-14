@@ -3015,15 +3015,13 @@ static void populateDict(dict *options_dict, char **options) {
 }
 
 const char *getLogLevel(void) {
-    /* clang-format off */
-   switch (server.verbosity) {
+    switch (server.verbosity) {
     case LL_DEBUG: return "debug";
     case LL_VERBOSE: return "verbose";
     case LL_NOTICE: return "notice";
     case LL_WARNING: return "warning";
     case LL_NOTHING: return "nothing";
     }
-    /* clang-format on */
     return "unknown";
 }
 
@@ -3203,8 +3201,7 @@ void sentinelConfigGetCommand(client *c) {
 }
 
 const char *sentinelFailoverStateStr(int state) {
-    /* clang-format off */
-    switch(state) {
+    switch (state) {
     case SENTINEL_FAILOVER_STATE_NONE: return "none";
     case SENTINEL_FAILOVER_STATE_WAIT_START: return "wait_start";
     case SENTINEL_FAILOVER_STATE_SELECT_REPLICA: return "select_slave";
@@ -3214,7 +3211,6 @@ const char *sentinelFailoverStateStr(int state) {
     case SENTINEL_FAILOVER_STATE_UPDATE_CONFIG: return "update_config";
     default: return "unknown";
     }
-    /* clang-format on */
 }
 
 /* Server instance to RESP representation. */
@@ -3242,23 +3238,21 @@ void addReplySentinelRedisInstance(client *c, sentinelRedisInstance *ri) {
     fields++;
 
     addReplyBulkCString(c, "flags");
-    /* clang-format off */
-    if (ri->flags & SRI_S_DOWN) flags = sdscat(flags,"s_down,");
-    if (ri->flags & SRI_O_DOWN) flags = sdscat(flags,"o_down,");
-    if (ri->flags & SRI_PRIMARY) flags = sdscat(flags,"master,");
-    if (ri->flags & SRI_REPLICA) flags = sdscat(flags,"slave,");
-    if (ri->flags & SRI_SENTINEL) flags = sdscat(flags,"sentinel,");
-    if (ri->link->disconnected) flags = sdscat(flags,"disconnected,");
-    if (ri->flags & SRI_PRIMARY_DOWN) flags = sdscat(flags,"master_down,");
-    if (ri->flags & SRI_FAILOVER_IN_PROGRESS) flags = sdscat(flags,"failover_in_progress,");
-    if (ri->flags & SRI_PROMOTED) flags = sdscat(flags,"promoted,");
-    if (ri->flags & SRI_RECONF_SENT) flags = sdscat(flags,"reconf_sent,");
-    if (ri->flags & SRI_RECONF_INPROG) flags = sdscat(flags,"reconf_inprog,");
-    if (ri->flags & SRI_RECONF_DONE) flags = sdscat(flags,"reconf_done,");
-    if (ri->flags & SRI_FORCE_FAILOVER) flags = sdscat(flags,"force_failover,");
-    if (ri->flags & SRI_SCRIPT_KILL_SENT) flags = sdscat(flags,"script_kill_sent,");
-    if (ri->flags & SRI_PRIMARY_REBOOT) flags = sdscat(flags,"master_reboot,");
-    /* clang-format on */
+    if (ri->flags & SRI_S_DOWN) flags = sdscat(flags, "s_down,");
+    if (ri->flags & SRI_O_DOWN) flags = sdscat(flags, "o_down,");
+    if (ri->flags & SRI_PRIMARY) flags = sdscat(flags, "master,");
+    if (ri->flags & SRI_REPLICA) flags = sdscat(flags, "slave,");
+    if (ri->flags & SRI_SENTINEL) flags = sdscat(flags, "sentinel,");
+    if (ri->link->disconnected) flags = sdscat(flags, "disconnected,");
+    if (ri->flags & SRI_PRIMARY_DOWN) flags = sdscat(flags, "master_down,");
+    if (ri->flags & SRI_FAILOVER_IN_PROGRESS) flags = sdscat(flags, "failover_in_progress,");
+    if (ri->flags & SRI_PROMOTED) flags = sdscat(flags, "promoted,");
+    if (ri->flags & SRI_RECONF_SENT) flags = sdscat(flags, "reconf_sent,");
+    if (ri->flags & SRI_RECONF_INPROG) flags = sdscat(flags, "reconf_inprog,");
+    if (ri->flags & SRI_RECONF_DONE) flags = sdscat(flags, "reconf_done,");
+    if (ri->flags & SRI_FORCE_FAILOVER) flags = sdscat(flags, "force_failover,");
+    if (ri->flags & SRI_SCRIPT_KILL_SENT) flags = sdscat(flags, "script_kill_sent,");
+    if (ri->flags & SRI_PRIMARY_REBOOT) flags = sdscat(flags, "master_reboot,");
 
     if (sdslen(flags) != 0) sdsrange(flags, 0, -2); /* remove last "," */
     addReplyBulkCString(c, flags);

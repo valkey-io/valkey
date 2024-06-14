@@ -903,8 +903,8 @@ promote:                                         /* Promote to dense representat
      * convert from sparse to dense a register requires to be updated.
      *
      * Note that this in turn means that PFADD will make sure the command
-     * is propagated to slaves / AOF, so if there is a sparse -> dense
-     * conversion, it will be performed in all the slaves as well. */
+     * is propagated to replicas / AOF, so if there is a sparse -> dense
+     * conversion, it will be performed in all the replicas as well. */
     int dense_retval = hllDenseSet(hdr->registers, index, count);
     serverAssert(dense_retval == 1);
     return dense_retval;

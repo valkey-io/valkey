@@ -3,7 +3,7 @@ name: Build Release Packages
 on:
   release:
     types: [published]
-  
+
   workflow_dispatch:
     inputs:
       version:
@@ -44,20 +44,20 @@ jobs:
           INPUT_VERSION: ${{ inputs.version || github.ref_name }}
 
   generate-build-matrix:
-      name: Generating build matrix
-      runs-on: ubuntu-latest
-      outputs:
-        x86_64-build-matrix: ${{ steps.set-matrix.outputs.x86_64-build-matrix }}
-        arm64-build-matrix: ${{ steps.set-matrix.outputs.arm64-build-matrix }}
-      steps:
-        - name: Checkout repository
-          uses: actions/checkout@v4
-        # Set up the list of target to build so we can pass the JSON to the reusable job
-        - uses: ./.github/actions/generate-package-build-matrix
-          id: set-matrix
-          with:
-            ref: ${{ inputs.version || github.ref_name }}
-  
+    name: Generating build matrix
+    runs-on: ubuntu-latest
+    outputs:
+      x86_64-build-matrix: ${{ steps.set-matrix.outputs.x86_64-build-matrix }}
+      arm64-build-matrix: ${{ steps.set-matrix.outputs.arm64-build-matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      # Set up the list of target to build so we can pass the JSON to the reusable job
+      - uses: ./.github/actions/generate-package-build-matrix
+        id: set-matrix
+        with:
+          ref: ${{ inputs.version || github.ref_name }}
+
   release-build-linux-x86-packages:
     needs:
       - release-build-get-meta

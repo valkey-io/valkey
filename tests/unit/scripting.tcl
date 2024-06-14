@@ -1189,7 +1189,7 @@ start_server {tags {"scripting"}} {
             set buf "*3\r\n\$4\r\neval\r\n\$33\r\nwhile 1 do redis.call('ping') end\r\n\$1\r\n0\r\n"
             append buf "*1\r\n\$4\r\nping\r\n"
         } else {
-            set buf "*4\r\n\$8\r\nfunction\r\n\$4\r\nload\r\n\$7\r\nreplace\r\n\$97\r\n#!lua name=test\nredis.register_function('test', function() while 1 do redis.call('ping') end end)\r\n"
+            set buf "*4\r\n\$8\r\nfunction\r\n\$4\r\nload\r\n\$7\r\nreplace\r\n\$99\r\n#!lua name=test\nserver.register_function('test', function() while 1 do server.call('ping') end end)\r\n"
             append buf "*3\r\n\$5\r\nfcall\r\n\$4\r\ntest\r\n\$1\r\n0\r\n"
             append buf "*1\r\n\$4\r\nping\r\n"
         }
@@ -1525,13 +1525,13 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         r script debug sync
         r eval {return 'hello'} 0
         catch {r 'hello\0world'} e
-        assert_match {*Unknown Redis Lua debugger command*} $e
+        assert_match {*Unknown Lua debugger command*} $e
         catch {r 'hello\0'} e
-        assert_match {*Unknown Redis Lua debugger command*} $e
+        assert_match {*Unknown Lua debugger command*} $e
         catch {r '\0hello'} e
-        assert_match {*Unknown Redis Lua debugger command*} $e
+        assert_match {*Unknown Lua debugger command*} $e
         catch {r '\0hello\0'} e
-        assert_match {*Unknown Redis Lua debugger command*} $e
+        assert_match {*Unknown Lua debugger command*} $e
     }
 
     test {Test scripting debug lua stack overflow} {
@@ -1645,6 +1645,19 @@ start_server {tags {"scripting external:skip"}} {
         assert_equal $evicted [expr $num-500]
         # cached = num load scripts + 500 eval scripts
         assert_equal $cached [expr $num+500]
+    }
+
+    test {Lua scripts promoted from eval to script load} {
+        r script flush
+        r config resetstat
+
+        r eval "return 'hello world'" 0
+        set sha [r script load "return 'hello world'"]
+        for {set j 1} {$j <= 500} {incr j} {
+            r script load "return $j"
+            r eval "return 'str_$j'" 0
+        }
+        assert_equal {hello world} [r evalsha $sha 0]
     }
 }
 

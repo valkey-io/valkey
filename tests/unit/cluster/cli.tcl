@@ -181,7 +181,7 @@ start_multiple_servers 5 [list overrides $base_conf] {
         # upload a function to all the cluster
         exec src/valkey-cli --cluster-yes --cluster call 127.0.0.1:[srv 0 port] \
                            FUNCTION LOAD {#!lua name=TEST
-                               redis.register_function('test', function() return 'hello' end)
+                               server.register_function('test', function() return 'hello' end)
                            }
 
         # adding node to the cluster
@@ -205,7 +205,7 @@ start_multiple_servers 5 [list overrides $base_conf] {
 
         # add function to node 5
         assert_equal {TEST} [$node5_rd FUNCTION LOAD {#!lua name=TEST
-            redis.register_function('test', function() return 'hello' end)
+            server.register_function('test', function() return 'hello' end)
         }]
 
         # make sure functions was added to node 5

@@ -4,35 +4,34 @@ on:
   pull_request:
     branches:
       # any PR to a release branch.
-      - '[0-9].[0-9]'
+      - "[0-9].[0-9]"
   schedule:
-    - cron: '0 0 * * *'
+    - cron: "0 0 * * *"
   workflow_dispatch:
     inputs:
       skipjobs:
-        description: 'jobs to skip (delete the ones you wanna keep, do not leave empty)'
-        default: 'valgrind,sanitizer,tls,freebsd,macos,alpine,32bit,iothreads,ubuntu,rpm-distros,malloc,specific,fortify,reply-schema'
+        description: "jobs to skip (delete the ones you wanna keep, do not leave empty)"
+        default: "valgrind,sanitizer,tls,freebsd,macos,alpine,32bit,iothreads,ubuntu,rpm-distros,malloc,specific,fortify,reply-schema"
       skiptests:
-        description: 'tests to skip (delete the ones you wanna keep, do not leave empty)'
-        default: 'valkey,modules,sentinel,cluster,unittest'
+        description: "tests to skip (delete the ones you wanna keep, do not leave empty)"
+        default: "valkey,modules,sentinel,cluster,unittest"
       test_args:
-        description: 'extra test arguments'
-        default: ''
+        description: "extra test arguments"
+        default: ""
       cluster_test_args:
-        description: 'extra cluster / sentinel test arguments'
-        default: ''
+        description: "extra cluster / sentinel test arguments"
+        default: ""
       use_repo:
-        description: 'repo owner and name'
-        default: 'valkey-io/valkey'
+        description: "repo owner and name"
+        default: "valkey-io/valkey"
       use_git_ref:
-        description: 'git branch or sha to use'
-        default: 'unstable'
+        description: "git branch or sha to use"
+        default: "unstable"
 
 permissions:
   contents: read
 
 jobs:
-
   test-ubuntu-jemalloc:
     runs-on: ubuntu-latest
     if: |
@@ -396,7 +395,48 @@ jobs:
           ./src/valkey-cli save | grep OK > /dev/null
           vmtouch -v ./dump.rdb > /dev/null
       - name: test
-        run: "echo \"test SAVE doesn't increase cache\"\nCACHE0=$(grep -w file /sys/fs/cgroup/memory.stat | awk '{print $2}')\necho \"$CACHE0\"\n./src/valkey-server --daemonize yes --logfile /dev/null --dir /tmp/master --port 8080 --repl-diskless-sync no --pidfile /tmp/master/valkey.pid --rdbcompression no --enable-debug-command yes\n./src/valkey-cli -p 8080 debug populate 10000 k 102400\n./src/valkey-server --daemonize yes --logfile /dev/null --dir /tmp/slave --port 8081 --repl-diskless-load disabled --rdbcompression no\n./src/valkey-cli -p 8080 save > /dev/null\nVMOUT=$(vmtouch -v /tmp/master/dump.rdb)\necho $VMOUT\ngrep -q \" 0%\" <<< $VMOUT \nCACHE=$(grep -w file /sys/fs/cgroup/memory.stat | awk '{print $2}')\necho \"$CACHE\"\nif [ \"$(( $CACHE-$CACHE0 ))\" -gt \"8000000\" ]; then exit 1; fi\n#magic___^_^___line\necho \"test replication doesn't increase cache\"\n./src/valkey-cli -p 8081 REPLICAOF 127.0.0.1 8080 > /dev/null\nwhile [ $(./src/valkey-cli -p 8081 info replication | grep \"master_link_status:down\") ]; do sleep 1; done;\nsleep 1 # wait for the completion of cache reclaim bio\nVMOUT=$(vmtouch -v /tmp/master/dump.rdb)\necho $VMOUT\ngrep -q \" 0%\" <<< $VMOUT \nVMOUT=$(vmtouch -v /tmp/slave/dump.rdb)\necho $VMOUT\ngrep -q \" 0%\" <<< $VMOUT \nCACHE=$(grep -w file /sys/fs/cgroup/memory.stat | awk '{print $2}')\necho \"$CACHE\"\nif [ \"$(( $CACHE-$CACHE0 ))\" -gt \"8000000\" ]; then exit 1; fi\n#magic___^_^___line\necho \"test reboot doesn't increase cache\"\nPID=$(cat /tmp/master/valkey.pid)\nkill -15 $PID\nwhile [ -x /proc/${PID} ]; do sleep 1; done\n./src/valkey-server --daemonize yes --logfile /dev/null --dir /tmp/master --port 8080\nwhile [ $(./src/valkey-cli -p 8080 info persistence | grep \"loading:1\") ]; do sleep 1; done;\nsleep 1 # wait for the completion of cache reclaim bio\nVMOUT=$(vmtouch -v /tmp/master/dump.rdb)\necho $VMOUT\ngrep -q \" 0%\" <<< $VMOUT\nCACHE=$(grep -w file /sys/fs/cgroup/memory.stat | awk '{print $2}')\necho \"$CACHE\"\nif [ \"$(( $CACHE-$CACHE0 ))\" -gt \"8000000\" ]; then exit 1; fi\n#magic___^_^___line\n"
+        run: |
+          echo "test SAVE doesn't increase cache"
+          CACHE0=$(grep -w file /sys/fs/cgroup/memory.stat | awk '{print $2}')
+          echo "$CACHE0"
+          ./src/valkey-server --daemonize yes --logfile /dev/null --dir /tmp/master --port 8080 --repl-diskless-sync no --pidfile /tmp/master/valkey.pid --rdbcompression no --enable-debug-command yes
+          ./src/valkey-cli -p 8080 debug populate 10000 k 102400
+          ./src/valkey-server --daemonize yes --logfile /dev/null --dir /tmp/slave --port 8081 --repl-diskless-load disabled --rdbcompression no
+          ./src/valkey-cli -p 8080 save > /dev/null
+          VMOUT=$(vmtouch -v /tmp/master/dump.rdb)
+          echo $VMOUT
+          grep -q " 0%" <<< $VMOUT
+          CACHE=$(grep -w file /sys/fs/cgroup/memory.stat | awk '{print $2}')
+          echo "$CACHE"
+          if [ "$(( $CACHE-$CACHE0 ))" -gt "8000000" ]; then exit 1; fi
+          echo "test replication doesn't increase cache"
+          ./src/valkey-cli -p 8081 REPLICAOF 127.0.0.1 8080 > /dev/null
+          while [ $(./src/valkey-cli -p 8081 info replication | grep "master_link_status:down") ]; do sleep 1; done;
+          sleep 1 # wait for the completion of cache reclaim bio
+          VMOUT=$(vmtouch -v /tmp/master/dump.rdb)
+          echo $VMOUT
+          grep -q " 0%" <<< $VMOUT
+          VMOUT=$(vmtouch -v /tmp/slave/dump.rdb)
+          echo $VMOUT
+          grep -q " 0%" <<< $VMOUT
+          CACHE=$(grep -w file /sys/fs/cgroup/memory.stat | awk '{print $2}')
+          echo "$CACHE"
+          if [ "$(( $CACHE-$CACHE0 ))" -gt "8000000" ]; then exit 1; fi
+
+          echo "test reboot doesn't increase cache"
+          PID=$(cat /tmp/master/valkey.pid)
+          kill -15 $PID
+          while [ -x /proc/${PID} ]; do sleep 1; done
+          ./src/valkey-server --daemonize yes --logfile /dev/null --dir /tmp/master --port 8080
+          while [ $(./src/valkey-cli -p 8080 info persistence | grep "loading:1") ]; do sleep 1; done;
+          sleep 1 # wait for the completion of cache reclaim bio
+          VMOUT=$(vmtouch -v /tmp/master/dump.rdb)
+          echo $VMOUT
+          grep -q " 0%" <<< $VMOUT
+          CACHE=$(grep -w file /sys/fs/cgroup/memory.stat | awk '{print $2}')
+          echo "$CACHE"
+          if [ "$(( $CACHE-$CACHE0 ))" -gt "8000000" ]; then exit 1; fi
+
   test-valgrind-test:
     runs-on: ubuntu-latest
     if: |

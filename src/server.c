@@ -1683,7 +1683,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         ioUringWaitFsyncBarrier();
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         server.aof_last_fsync = server.mstime;
-        atomic_store_explicit(&server.fsynced_reploff_pending, server.master_repl_offset, memory_order_relaxed);
+        atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset, memory_order_relaxed);
         /* Write clients that have propagated commands pending output buffers. */
         handleClientsWithPendingWritesUsingThreads(0);
     }

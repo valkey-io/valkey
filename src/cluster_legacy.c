@@ -69,6 +69,7 @@ int clusterDelSlot(int slot);
 int clusterDelNodeSlots(clusterNode *node);
 int clusterNodeSetSlotBit(clusterNode *n, int slot);
 void clusterSetPrimary(clusterNode *n, int closeSlots);
+static inline int clusterNodeIsVotingPrimary(clusterNode *n);
 void clusterHandleReplicaFailover(void);
 void clusterHandleReplicaMigration(int max_replicas);
 int bitmapTestBit(unsigned char *bitmap, int pos);
@@ -5810,7 +5811,7 @@ int clusterNodeIsPrimary(clusterNode *n) {
  * And only voting primary will be counted in cluster size.
  *
  * Returns 1 if the node has voting rights, otherwise returns 0. */
-int clusterNodeIsVotingPrimary(clusterNode *n) {
+static inline int clusterNodeIsVotingPrimary(clusterNode *n) {
     return (n->flags & CLUSTER_NODE_PRIMARY) && n->numslots;
 }
 

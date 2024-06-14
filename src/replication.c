@@ -3149,8 +3149,7 @@ void roleCommand(client *c) {
         if (replicaIsInHandshakeState()) {
             replica_state = "handshake";
         } else {
-            /* clang-format off */
-            switch(server.repl_state) {
+            switch (server.repl_state) {
             case REPL_STATE_NONE: replica_state = "none"; break;
             case REPL_STATE_CONNECT: replica_state = "connect"; break;
             case REPL_STATE_CONNECTING: replica_state = "connecting"; break;
@@ -3158,7 +3157,6 @@ void roleCommand(client *c) {
             case REPL_STATE_CONNECTED: replica_state = "connected"; break;
             default: replica_state = "unknown"; break;
             }
-            /* clang-format on */
         }
         addReplyBulkCString(c, replica_state);
         addReplyLongLong(c, server.primary ? server.primary->reploff : -1);

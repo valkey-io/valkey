@@ -372,8 +372,7 @@ void incrRefCount(robj *o) {
 
 void decrRefCount(robj *o) {
     if (o->refcount == 1) {
-        /* clang-format off */
-        switch(o->type) {
+        switch (o->type) {
         case OBJ_STRING: freeStringObject(o); break;
         case OBJ_LIST: freeListObject(o); break;
         case OBJ_SET: freeSetObject(o); break;
@@ -383,7 +382,6 @@ void decrRefCount(robj *o) {
         case OBJ_STREAM: freeStreamObject(o); break;
         default: serverPanic("Unknown object type"); break;
         }
-        /* clang-format on */
         zfree(o);
     } else {
         if (o->refcount <= 0) serverPanic("decrRefCount against refcount <= 0");
@@ -552,8 +550,7 @@ void dismissObject(robj *o, size_t size_hint) {
          * so we avoid these pointless loops when they're not going to do anything. */
 #if defined(USE_JEMALLOC) && defined(__linux__)
     if (o->refcount != 1) return;
-    /* clang-format off */
-    switch(o->type) {
+    switch (o->type) {
     case OBJ_STRING: dismissStringObject(o); break;
     case OBJ_LIST: dismissListObject(o, size_hint); break;
     case OBJ_SET: dismissSetObject(o, size_hint); break;
@@ -562,7 +559,6 @@ void dismissObject(robj *o, size_t size_hint) {
     case OBJ_STREAM: dismissStreamObject(o, size_hint); break;
     default: break;
     }
-    /* clang-format on */
 #else
     UNUSED(o);
     UNUSED(size_hint);
@@ -930,8 +926,7 @@ int getIntFromObjectOrReply(client *c, robj *o, int *target, const char *msg) {
 }
 
 char *strEncoding(int encoding) {
-    /* clang-format off */
-    switch(encoding) {
+    switch (encoding) {
     case OBJ_ENCODING_RAW: return "raw";
     case OBJ_ENCODING_INT: return "int";
     case OBJ_ENCODING_HT: return "hashtable";
@@ -943,7 +938,6 @@ char *strEncoding(int encoding) {
     case OBJ_ENCODING_STREAM: return "stream";
     default: return "unknown";
     }
-    /* clang-format on */
 }
 
 /* =========================== Memory introspection ========================= */

@@ -1894,7 +1894,7 @@ unsigned long long dbScan(serverDb *db, unsigned long long cursor, dictScanFunct
  * the result, and can be called repeatedly to enlarge the result array.
  */
 keyReference *getKeysPrepareResult(getKeysResult *result, int numkeys) {
-    /* GETKEYS_RESULT_INIT initializes keys to NULL, point it to the pre-allocated stack
+    /* initGetKeysResult initializes keys to NULL, point it to the pre-allocated stack
      * buffer here. */
     if (!result->keys) {
         serverAssert(!result->numkeys);

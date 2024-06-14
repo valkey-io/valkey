@@ -4838,7 +4838,8 @@ void addReplyCommandDocs(client *c, struct serverCommand *cmd) {
 /* Helper for COMMAND GETKEYS and GETKEYSANDFLAGS */
 void getKeysSubcommandImpl(client *c, int with_flags) {
     struct serverCommand *cmd = lookupCommand(c->argv + 2, c->argc - 2);
-    getKeysResult result = GETKEYS_RESULT_INIT;
+    getKeysResult result;
+    initGetKeysResult(&result);
     int j;
 
     if (!cmd) {

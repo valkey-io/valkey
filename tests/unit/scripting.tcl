@@ -1646,6 +1646,19 @@ start_server {tags {"scripting external:skip"}} {
         # cached = num load scripts + 500 eval scripts
         assert_equal $cached [expr $num+500]
     }
+
+    test {Lua scripts promoted from eval to script load} {
+        r script flush
+        r config resetstat
+
+        r eval "return 'hello world'" 0
+        set sha [r script load "return 'hello world'"]
+        for {set j 1} {$j <= 500} {incr j} {
+            r script load "return $j"
+            r eval "return 'str_$j'" 0
+        }
+        assert_equal {hello world} [r evalsha $sha 0]
+    }
 }
 
 } ;# is_eval

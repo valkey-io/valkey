@@ -3128,39 +3128,7 @@ int clusterProcessPacket(clusterLink *link) {
             clusterUpdateSlotsConfigWith(sender_primary, senderConfigEpoch, hdr->myslots);
 
         /* Explicitly check for a replication loop before attempting the replication
-         * chain folding logic.
-         *
-         * In some rare case, slot config updates (via either PING/PONG or UPDATE)
-         * can be delivered out of order as illustrated below.
-         *
-         * 1. To keep the discussion simple, let's assume we have 2 shards, shard a
-         *    and shard b. Let's also assume there are two slots in total with shard
-         *    a owning slot 1 and shard b owning slot 2.
-         * 2. Shard a has two nodes: primary A and replica A*; shard b has primary
-         *    B and replica B*.
-         * 3. A manual failover was initiated on A* and A* just wins the election.
-         * 4. A* announces to the world that it now owns slot 1 using PING messages.
-         *    These PING messages are queued in the outgoing buffer to every other
-         *    node in the cluster, namely, A, B, and B*.
-         * 5. Keep in mind that there is no ordering in the delivery of these PING
-         *    messages. For the stale PING message to appear, we need the following
-         *    events in the exact order as they are laid out.
-         * a. An old PING message before A* becomes the new primary is still queued
-         *    in A*'s outgoing buffer to A. This later becomes the stale message,
-         *    which says A* is a replica of A. It is followed by A*'s election
-         *    winning announcement PING message.
-         * b. B or B* processes A's election winning announcement PING message
-         *    and sets slots[1]=A*.
-         * c. A sends a PING message to B (or B*). Since A hasn't learnt that A*
-         *    wins the election, it claims that it owns slot 1 but with a lower
-         *    epoch than B has on slot 1. This leads to B sending an UPDATE to
-         *    A directly saying A* is the new owner of slot 1 with a higher epoch.
-         * d. A receives the UPDATE from B and executes clusterUpdateSlotsConfigWith.
-         *    A now realizes that it is a replica of A* hence setting myself->replicaof
-         *    to A*.
-         * e. Finally, the pre-failover PING message queued up in A*'s outgoing
-         *    buffer to A is delivered and processed, out of order though, to A.
-         * f. This stale PING message creates the replication loop */
+         * chain folding logic. */
         if (myself->replicaof && myself->replicaof->replicaof && myself->replicaof->replicaof != myself) {
             /* Safeguard against sub-replicas. A replica's primary can turn itself
              * into a replica if its last slot is removed. If no other node takes
@@ -5853,8 +5821,14 @@ int clusterNodeIsReplica(clusterNode *node) {
 }
 
 clusterNode *clusterNodeGetPrimary(clusterNode *node) {
-    while (node->replicaof != NULL) node = node->replicaof;
-    return node;
+    clusterNode *primary = node;
+    while (primary->replicaof != NULL) {
+        primary = primary->replicaof;
+        if (primary == node) break;
+    }
+    /* Assert that a node's replicaof/primary chain does not form a cycle. */
+    debugServerAssert(primary->replicaof == NULL);
+    return primary;
 }
 
 char *clusterNodeGetName(clusterNode *node) {

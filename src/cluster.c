@@ -900,7 +900,6 @@ void clusterCommand(client *c) {
         }
         kvstoreReleaseDictIterator(kvs_di);
     } else if ((!strcasecmp(c->argv[1]->ptr, "slaves") || !strcasecmp(c->argv[1]->ptr, "replicas")) && c->argc == 3) {
-        /* CLUSTER SLAVES <NODE ID> */
         /* CLUSTER REPLICAS <NODE ID> */
         clusterNode *n = clusterLookupNode(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
         int j;
@@ -911,15 +910,15 @@ void clusterCommand(client *c) {
             return;
         }
 
-        if (clusterNodeIsSlave(n)) {
+        if (clusterNodeIsReplica(n)) {
             addReplyError(c, "The specified node is not a master");
             return;
         }
 
         /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client. */
-        addReplyArrayLen(c, clusterNodeNumSlaves(n));
-        for (j = 0; j < clusterNodeNumSlaves(n); j++) {
-            sds ni = clusterGenNodeDescription(c, clusterNodeGetSlave(n, j), shouldReturnTlsInfo());
+        addReplyArrayLen(c, clusterNodeNumReplicas(n));
+        for (j = 0; j < clusterNodeNumReplicas(n); j++) {
+            sds ni = clusterGenNodeDescription(c, clusterNodeGetReplica(n, j), shouldReturnTlsInfo());
             addReplyBulkCString(c, ni);
             sdsfree(ni);
         }
@@ -1048,8 +1047,8 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
                  * can safely serve the request, otherwise we return a TRYAGAIN
                  * error). To do so we set the importing/migrating state and
                  * increment a counter for every missing key. */
-                if (clusterNodeIsMaster(myself) || c->flags & CLIENT_READONLY) {
-                    if (n == clusterNodeGetMaster(myself) && getMigratingSlotDest(slot) != NULL) {
+                if (clusterNodeIsPrimary(myself) || c->flags & CLIENT_READONLY) {
+                    if (n == clusterNodeGetPrimary(myself) && getMigratingSlotDest(slot) != NULL) {
                         migrating_slot = 1;
                     } else if (getImportingSlotSource(slot) != NULL) {
                         importing_slot = 1;
@@ -1122,7 +1121,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
     /* MIGRATE always works in the context of the local node if the slot
      * is open (migrating or importing state). We need to be able to freely
      * move keys among instances in this case. */
-    if ((migrating_slot || importing_slot) && cmd->proc == migrateCommand && clusterNodeIsMaster(myself)) {
+    if ((migrating_slot || importing_slot) && cmd->proc == migrateCommand && clusterNodeIsPrimary(myself)) {
         return myself;
     }
 
@@ -1152,13 +1151,13 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         }
     }
 
-    /* Handle the read-only client case reading from a slave: if this
-     * node is a slave and the request is about a hash slot our master
+    /* Handle the read-only client case reading from a replica: if this
+     * node is a replica and the request is about a hash slot our primary
      * is serving, we can reply without redirection. */
     int is_write_command =
         (cmd_flags & CMD_WRITE) || (c->cmd->proc == execCommand && (c->mstate.cmd_flags & CMD_WRITE));
-    if (((c->flags & CLIENT_READONLY) || pubsubshard_included) && !is_write_command && clusterNodeIsSlave(myself) &&
-        clusterNodeGetMaster(myself) == n) {
+    if (((c->flags & CLIENT_READONLY) || pubsubshard_included) && !is_write_command && clusterNodeIsReplica(myself) &&
+        clusterNodeGetPrimary(myself) == n) {
         return myself;
     }
 
@@ -1204,7 +1203,7 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
  * to detect timeouts, in order to handle the following case:
  *
  * 1) A client blocks with BLPOP or similar blocking operation.
- * 2) The master migrates the hash slot elsewhere or turns into a slave.
+ * 2) The primary migrates the hash slot elsewhere or turns into a replica.
  * 3) The client may remain blocked forever (or up to the max timeout time)
  *    waiting for a key change that will never happen.
  *
@@ -1240,8 +1239,8 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
 
             /* if the client is read-only and attempting to access key that our
              * replica can handle, allow it. */
-            if ((c->flags & CLIENT_READONLY) && !(c->lastcmd->flags & CMD_WRITE) && clusterNodeIsSlave(myself) &&
-                clusterNodeGetMaster(myself) == node) {
+            if ((c->flags & CLIENT_READONLY) && !(c->lastcmd->flags & CMD_WRITE) && clusterNodeIsReplica(myself) &&
+                clusterNodeGetPrimary(myself) == node) {
                 node = myself;
             }
 
@@ -1331,9 +1330,9 @@ int isNodeAvailable(clusterNode *node) {
 }
 
 void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, int end_slot) {
-    int i, nested_elements = 3; /* slots (2) + master addr (1) */
-    for (i = 0; i < clusterNodeNumSlaves(node); i++) {
-        if (!isNodeAvailable(clusterNodeGetSlave(node, i))) continue;
+    int i, nested_elements = 3; /* slots (2) + primary addr (1) */
+    for (i = 0; i < clusterNodeNumReplicas(node); i++) {
+        if (!isNodeAvailable(clusterNodeGetReplica(node, i))) continue;
         nested_elements++;
     }
     addReplyArrayLen(c, nested_elements);
@@ -1342,11 +1341,11 @@ void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, in
     addNodeToNodeReply(c, node);
 
     /* Remaining nodes in reply are replicas for slot range */
-    for (i = 0; i < clusterNodeNumSlaves(node); i++) {
+    for (i = 0; i < clusterNodeNumReplicas(node); i++) {
         /* This loop is copy/pasted from clusterGenNodeDescription()
          * with modifications for per-slot node aggregation. */
-        if (!isNodeAvailable(clusterNodeGetSlave(node, i))) continue;
-        addNodeToNodeReply(c, clusterNodeGetSlave(node, i));
+        if (!isNodeAvailable(clusterNodeGetReplica(node, i))) continue;
+        addNodeToNodeReply(c, clusterNodeGetReplica(node, i));
         nested_elements--;
     }
     serverAssert(nested_elements == 3); /* Original 3 elements */
@@ -1364,7 +1363,7 @@ void clearCachedClusterSlotsResponse(void) {
 sds generateClusterSlotResponse(void) {
     client *recording_client = createCachedResponseClient();
     clusterNode *n = NULL;
-    int num_masters = 0, start = -1;
+    int num_primaries = 0, start = -1;
     void *slot_replylen = addReplyDeferredLen(recording_client);
 
     for (int i = 0; i <= CLUSTER_SLOTS; i++) {
@@ -1380,13 +1379,13 @@ sds generateClusterSlotResponse(void) {
          * or end of slot. */
         if (i == CLUSTER_SLOTS || n != getNodeBySlot(i)) {
             addNodeReplyForClusterSlot(recording_client, n, start, i - 1);
-            num_masters++;
+            num_primaries++;
             if (i == CLUSTER_SLOTS) break;
             n = getNodeBySlot(i);
             start = i;
         }
     }
-    setDeferredArrayLen(recording_client, slot_replylen, num_masters);
+    setDeferredArrayLen(recording_client, slot_replylen, num_primaries);
     sds cluster_slot_response = aggregateClientOutputBuffer(recording_client);
     deleteCachedResponseClient(recording_client);
     return cluster_slot_response;
@@ -1405,8 +1404,8 @@ int verifyCachedClusterSlotsResponse(sds cached_response) {
 void clusterCommandSlots(client *c) {
     /* Format: 1) 1) start slot
      *            2) end slot
-     *            3) 1) master IP
-     *               2) master port
+     *            3) 1) primary IP
+     *               2) primary port
      *               3) node ID
      *            4) 1) replica IP
      *               2) replica port
@@ -1446,8 +1445,8 @@ void askingCommand(client *c) {
 }
 
 /* The READONLY command is used by clients to enter the read-only mode.
- * In this mode slaves will not redirect clients as long as clients access
- * with read-only commands to keys that are served by the slave's master. */
+ * In this mode replica will not redirect clients as long as clients access
+ * with read-only commands to keys that are served by the replica's primary. */
 void readonlyCommand(client *c) {
     if (server.cluster_enabled == 0) {
         addReplyError(c, "This instance has cluster support disabled");

@@ -48,6 +48,8 @@
 
 #define UNUSED(V) ((void)V)
 
+static dict *kvstoreIteratorNextDict(kvstoreIterator *kvs_it);
+
 struct _kvstore {
     int flags;
     dictType dtype;
@@ -572,7 +574,7 @@ void kvstoreIteratorRelease(kvstoreIterator *kvs_it) {
 }
 
 /* Returns next dictionary from the iterator, or NULL if iteration is complete. */
-dict *kvstoreIteratorNextDict(kvstoreIterator *kvs_it) {
+static dict *kvstoreIteratorNextDict(kvstoreIterator *kvs_it) {
     if (kvs_it->next_didx == -1) return NULL;
 
     /* The dict may be deleted during the iteration process, so here need to check for NULL. */
@@ -600,13 +602,6 @@ dictEntry *kvstoreIteratorNext(kvstoreIterator *kvs_it) {
     if (!de) { /* No current dict or reached the end of the dictionary. */
         dict *d = kvstoreIteratorNextDict(kvs_it);
         if (!d) return NULL;
-        if (kvs_it->di.d) {
-            /* Before we move to the next dict, reset the iter of the previous dict. */
-            dictIterator *iter = &kvs_it->di;
-            dictResetIterator(iter);
-            /* In the safe iterator context, we may delete entries. */
-            freeDictIfNeeded(kvs_it->kvs, kvs_it->didx);
-        }
         dictInitSafeIterator(&kvs_it->di, d);
         de = dictNext(&kvs_it->di);
     }

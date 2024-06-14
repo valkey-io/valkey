@@ -368,21 +368,21 @@ void activeExpireCycle(int type) {
 }
 
 /*-----------------------------------------------------------------------------
- * Expires of keys created in writable slaves
+ * Expires of keys created in writable replicas
  *
- * Normally slaves do not process expires: they wait the masters to synthesize
- * DEL operations in order to retain consistency. However writable slaves are
- * an exception: if a key is created in the slave and an expire is assigned
- * to it, we need a way to expire such a key, since the master does not know
+ * Normally replicas do not process expires: they wait the primaries to synthesize
+ * DEL operations in order to retain consistency. However writable replicas are
+ * an exception: if a key is created in the replica and an expire is assigned
+ * to it, we need a way to expire such a key, since the primary does not know
  * anything about such a key.
  *
- * In order to do so, we track keys created in the slave side with an expire
- * set, and call the expireSlaveKeys() function from time to time in order to
+ * In order to do so, we track keys created in the replica side with an expire
+ * set, and call the expirereplicaKeys() function from time to time in order to
  * reclaim the keys if they already expired.
  *
  * Note that the use case we are trying to cover here, is a popular one where
- * slaves are put in writable mode in order to compute slow operations in
- * the slave side that are mostly useful to actually read data in a more
+ * replicas are put in writable mode in order to compute slow operations in
+ * the replica side that are mostly useful to actually read data in a more
  * processed way. Think at sets intersections in a tmp key, with an expire so
  * that it is also used as a cache to avoid intersecting every time.
  *
@@ -391,9 +391,9 @@ void activeExpireCycle(int type) {
  *----------------------------------------------------------------------------*/
 
 /* The dictionary where we remember key names and database ID of keys we may
- * want to expire from the slave. Since this function is not often used we
+ * want to expire from the replica. Since this function is not often used we
  * don't even care to initialize the database at startup. We'll do it once
- * the feature is used the first time, that is, when rememberSlaveKeyWithExpire()
+ * the feature is used the first time, that is, when rememberreplicaKeyWithExpire()
  * is called.
  *
  * The dictionary has an SDS string representing the key as the hash table
@@ -402,17 +402,17 @@ void activeExpireCycle(int type) {
  * with a DB id > 63 are not expired, but a trivial fix is to set the bitmap
  * to the max 64 bit unsigned value when we know there is a key with a DB
  * ID greater than 63, and check all the configured DBs in such a case. */
-dict *slaveKeysWithExpire = NULL;
+dict *replicaKeysWithExpire = NULL;
 
-/* Check the set of keys created by the master with an expire set in order to
+/* Check the set of keys created by the primary with an expire set in order to
  * check if they should be evicted. */
-void expireSlaveKeys(void) {
-    if (slaveKeysWithExpire == NULL || dictSize(slaveKeysWithExpire) == 0) return;
+void expireReplicaKeys(void) {
+    if (replicaKeysWithExpire == NULL || dictSize(replicaKeysWithExpire) == 0) return;
 
     int cycles = 0, noexpire = 0;
     mstime_t start = mstime();
     while (1) {
-        dictEntry *de = dictGetRandomKey(slaveKeysWithExpire);
+        dictEntry *de = dictGetRandomKey(replicaKeysWithExpire);
         sds keyname = dictGetKey(de);
         uint64_t dbids = dictGetUnsignedIntegerVal(de);
         uint64_t new_dbids = 0;
@@ -447,26 +447,26 @@ void expireSlaveKeys(void) {
         }
 
         /* Set the new bitmap as value of the key, in the dictionary
-         * of keys with an expire set directly in the writable slave. Otherwise
+         * of keys with an expire set directly in the writable replica. Otherwise
          * if the bitmap is zero, we no longer need to keep track of it. */
         if (new_dbids)
             dictSetUnsignedIntegerVal(de, new_dbids);
         else
-            dictDelete(slaveKeysWithExpire, keyname);
+            dictDelete(replicaKeysWithExpire, keyname);
 
         /* Stop conditions: found 3 keys we can't expire in a row or
          * time limit was reached. */
         cycles++;
         if (noexpire > 3) break;
         if ((cycles % 64) == 0 && mstime() - start > 1) break;
-        if (dictSize(slaveKeysWithExpire) == 0) break;
+        if (dictSize(replicaKeysWithExpire) == 0) break;
     }
 }
 
 /* Track keys that received an EXPIRE or similar command in the context
- * of a writable slave. */
-void rememberSlaveKeyWithExpire(serverDb *db, robj *key) {
-    if (slaveKeysWithExpire == NULL) {
+ * of a writable replica. */
+void rememberReplicaKeyWithExpire(serverDb *db, robj *key) {
+    if (replicaKeysWithExpire == NULL) {
         static dictType dt = {
             dictSdsHash,       /* hash function */
             NULL,              /* key dup */
@@ -475,17 +475,17 @@ void rememberSlaveKeyWithExpire(serverDb *db, robj *key) {
             NULL,              /* val destructor */
             NULL               /* allow to expand */
         };
-        slaveKeysWithExpire = dictCreate(&dt);
+        replicaKeysWithExpire = dictCreate(&dt);
     }
     if (db->id > 63) return;
 
-    dictEntry *de = dictAddOrFind(slaveKeysWithExpire, key->ptr);
+    dictEntry *de = dictAddOrFind(replicaKeysWithExpire, key->ptr);
     /* If the entry was just created, set it to a copy of the SDS string
      * representing the key: we don't want to need to take those keys
-     * in sync with the main DB. The keys will be removed by expireSlaveKeys()
+     * in sync with the main DB. The keys will be removed by expireReplicaKeys()
      * as it scans to find keys to remove. */
     if (dictGetKey(de) == key->ptr) {
-        dictSetKey(slaveKeysWithExpire, de, sdsdup(key->ptr));
+        dictSetKey(replicaKeysWithExpire, de, sdsdup(key->ptr));
         dictSetUnsignedIntegerVal(de, 0);
     }
 
@@ -495,34 +495,34 @@ void rememberSlaveKeyWithExpire(serverDb *db, robj *key) {
 }
 
 /* Return the number of keys we are tracking. */
-size_t getSlaveKeyWithExpireCount(void) {
-    if (slaveKeysWithExpire == NULL) return 0;
-    return dictSize(slaveKeysWithExpire);
+size_t getReplicaKeyWithExpireCount(void) {
+    if (replicaKeysWithExpire == NULL) return 0;
+    return dictSize(replicaKeysWithExpire);
 }
 
 /* Remove the keys in the hash table. We need to do that when data is
- * flushed from the server. We may receive new keys from the master with
+ * flushed from the server. We may receive new keys from the primary with
  * the same name/db and it is no longer a good idea to expire them.
  *
  * Note: technically we should handle the case of a single DB being flushed
  * but it is not worth it since anyway race conditions using the same set
- * of key names in a writable slave and in its master will lead to
+ * of key names in a writable replica and in its primary will lead to
  * inconsistencies. This is just a best-effort thing we do. */
-void flushSlaveKeysWithExpireList(void) {
-    if (slaveKeysWithExpire) {
-        dictRelease(slaveKeysWithExpire);
-        slaveKeysWithExpire = NULL;
+void flushReplicaKeysWithExpireList(void) {
+    if (replicaKeysWithExpire) {
+        dictRelease(replicaKeysWithExpire);
+        replicaKeysWithExpire = NULL;
     }
 }
 
 int checkAlreadyExpired(long long when) {
     /* EXPIRE with negative TTL, or EXPIREAT with a timestamp into the past
      * should never be executed as a DEL when load the AOF or in the context
-     * of a slave instance.
+     * of a replica instance.
      *
      * Instead we add the already expired key to the database with expire time
-     * (possibly in the past) and wait for an explicit DEL from the master. */
-    return (when <= commandTimeSnapshot() && !server.loading && !server.masterhost);
+     * (possibly in the past) and wait for an explicit DEL from the primary. */
+    return (when <= commandTimeSnapshot() && !server.loading && !server.primary_host);
 }
 
 #define EXPIRE_NX (1 << 0)

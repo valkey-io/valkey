@@ -691,9 +691,9 @@ typedef struct ValkeyModuleReplicationInfo {
     uint64_t version;      /* Not used since this structure is never passed
                               from the module to the core right now. Here
                               for future compatibility. */
-    int master;            /* true if primary, false if replica */
-    char *masterhost;      /* primary instance hostname for NOW_REPLICA */
-    int masterport;        /* primary instance port for NOW_REPLICA */
+    int primary;           /* true if primary, false if replica */
+    char *primary_host;    /* primary instance hostname for NOW_REPLICA */
+    int primary_port;      /* primary instance port for NOW_REPLICA */
     char *replid1;         /* Main replication ID */
     char *replid2;         /* Secondary replication ID */
     uint64_t repl1_offset; /* Main replication offset */

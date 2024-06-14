@@ -59,26 +59,26 @@ start_server {tags {"auth_binary_password external:skip"}} {
         r auth "abc\x00def"
     } {OK}
 
-    start_server {tags {"masterauth"}} {
+    start_server {tags {"primaryauth"}} {
         set master [srv -1 client]
         set master_host [srv -1 host]
         set master_port [srv -1 port]
         set slave [srv 0 client]
 
-        test {MASTERAUTH test with binary password} {
+        test {primaryauth test with binary password} {
             $master config set requirepass "abc\x00def"
 
-            # Configure the replica with masterauth
+            # Configure the replica with primaryauth
             set loglines [count_log_lines 0]
-            $slave config set masterauth "abc"
+            $slave config set primaryauth "abc"
             $slave slaveof $master_host $master_port
 
             # Verify replica is not able to sync with master
             wait_for_log_messages 0 {"*Unable to AUTH to MASTER*"} $loglines 1000 10
             assert_equal {down} [s 0 master_link_status]
             
-            # Test replica with the correct masterauth
-            $slave config set masterauth "abc\x00def"
+            # Test replica with the correct primaryauth
+            $slave config set primaryauth "abc\x00def"
             wait_for_condition 50 100 {
                 [s 0 master_link_status] eq {up}
             } else {

@@ -165,7 +165,7 @@ void roleChangeCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub,
     ValkeyModuleReplicationInfo *ri = data;
     char *keyname = (sub == VALKEYMODULE_EVENT_REPLROLECHANGED_NOW_PRIMARY) ?
         "role-master" : "role-replica";
-    LogStringEvent(ctx, keyname, ri->masterhost);
+    LogStringEvent(ctx, keyname, ri->primary_host);
 }
 
 void replicationChangeCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)

@@ -150,6 +150,11 @@ DEBUG=-g -ggdb
 # Linux ARM32 needs -latomic at linking time
 ifneq (,$(findstring armv,$(uname_M)))
         FINAL_LIBS+=-latomic
+else
+# Linux POWER needs -latomic at linking time
+ifneq (,$(findstring ppc,$(uname_M)))
+        FINAL_LIBS+=-latomic
+endif
 endif
 
 ifeq ($(uname_S),SunOS)

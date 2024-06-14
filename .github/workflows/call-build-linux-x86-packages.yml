@@ -51,7 +51,7 @@ jobs:
 
       - name: Make Valkey
         run: make -C src all BUILD_TLS=yes
-      
+
       - name: Create Tarball and SHA256sums
         run: |
           TAR_FILE_NAME=valkey-${{inputs.version}}-${{matrix.distro.platform}}-${{ matrix.distro.arch}}

@@ -43,20 +43,11 @@ proc check_server_response {server_id} {
 }
 
 # restart a server and wait for it to come back online
-proc restart_server_and_wait {server_id} {
+proc fail_server {server_id} {
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
-    set result [catch {R $server_id DEBUG RESTART [expr 3*$node_timeout]} err]
-
-    # Check if the error is the expected "I/O error reading reply"
-    if {$result != 0 && $err ne "I/O error reading reply"} {
-        fail "Unexpected error restarting server $server_id: $err"
-    }
-
-    wait_for_condition 100 100 {
-        [check_server_response $server_id] eq 1
-    } else {
-        fail "Server $server_id didn't come back online in time"
-    }
+    pause_process [srv [expr -1*$server_id] pid]
+    after [expr 3*$node_timeout]
+    resume_process [srv [expr -1*$server_id] pid]
 }
 
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
@@ -91,8 +82,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Migration target is auto-updated after failover in target shard" {
-        # Restart R1 to trigger an auto-failover to R4
-        restart_server_and_wait 1
+        # Trigger an auto-failover from R1 to R4
+        fail_server 1
         # Wait for R1 to become a replica
         wait_for_role 1 slave
         # Validate final states
@@ -111,8 +102,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Migration source is auto-updated after failover in source shard" {
-        # Restart R0 to trigger an auto-failover to R3
-        restart_server_and_wait 0
+        # Trigger an auto-failover from R0 to R3
+        fail_server 0
         # Wait for R0 to become a replica
         wait_for_role 0 slave
         # Validate final states
@@ -261,8 +252,8 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
 
     test "Empty-shard migration target is auto-updated after faiover in target shard" {
         wait_for_role 6 master
-        # Restart R6 to trigger an auto-failover to R7
-        restart_server_and_wait 6
+        # Trigger an auto-failover from R6 to R7
+        fail_server 6
         # Wait for R6 to become a replica
         wait_for_role 6 slave
         # Validate final states
@@ -282,8 +273,8 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
 
     test "Empty-shard migration source is auto-updated after faiover in source shard" {
         wait_for_role 0 master
-        # Restart R0 to trigger an auto-failover to R3
-        restart_server_and_wait 0
+        # Trigger an auto-failover from R0 to R3
+        fail_server 0
         # Wait for R0 to become a replica
         wait_for_role 0 slave
         # Validate final states

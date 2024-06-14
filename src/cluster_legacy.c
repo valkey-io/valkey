@@ -2094,8 +2094,8 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
             if (sender && clusterNodeIsPrimary(sender)) {
                 if (flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) {
                     if (clusterNodeAddFailureReport(node, sender)) {
-                        serverLog(LL_NOTICE, "Node %.40s (%s) reported node %.40s (%s) as not reachable.",
-                                  sender->name, sender->human_nodename, node->name, node->human_nodename);
+                        serverLog(LL_NOTICE, "Node %.40s (%s) reported node %.40s (%s) as not reachable.", sender->name,
+                                  sender->human_nodename, node->name, node->human_nodename);
                     }
                     markNodeAsFailingIfNeeded(node);
                 } else {
@@ -2971,7 +2971,7 @@ int clusterProcessPacket(clusterLink *link) {
                 /* If the reply has a non matching node ID we
                  * disconnect this node and set it as not having an associated
                  * address. */
-                serverLog(LL_WARNING,
+                serverLog(LL_NOTICE,
                           "PONG contains mismatching sender ID. About node %.40s (%s) in shard %.40s added %d ms ago, "
                           "having flags %d",
                           link->node->name, link->node->human_nodename, link->node->shard_id,

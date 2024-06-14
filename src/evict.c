@@ -676,12 +676,12 @@ int performEvictions(void) {
              * AOF and Output buffer memory will be freed eventually so
              * we only care about memory used by the key space. */
             enterExecutionUnit(1, 0);
-            delta = (long long)zmalloc_used_memory();
+            delta = (long long)zmalloc_used_memory_with_thread_delta();
             latencyStartMonitor(eviction_latency);
             dbGenericDelete(db, keyobj, server.lazyfree_lazy_eviction, DB_FLAG_KEY_EVICTED);
             latencyEndMonitor(eviction_latency);
             latencyAddSampleIfNeeded("eviction-del", eviction_latency);
-            delta -= (long long)zmalloc_used_memory();
+            delta -= (long long)zmalloc_used_memory_with_thread_delta();
             mem_freed += delta;
             server.stat_evictedkeys++;
             signalModifiedKey(NULL, db, keyobj);

@@ -87,10 +87,26 @@ void zlibc_free(void *ptr) {
 #define dallocx(ptr, flags) je_dallocx(ptr, flags)
 #endif
 
-#define update_zmalloc_stat_alloc(__n) atomic_fetch_add_explicit(&used_memory, (__n), memory_order_relaxed)
-#define update_zmalloc_stat_free(__n) atomic_fetch_sub_explicit(&used_memory, (__n), memory_order_relaxed)
+static _Atomic int64_t used_memory = 0;
+static __thread int64_t thread_used_memory_delta = 0;
 
-static _Atomic size_t used_memory = 0;
+#define THREAD_MEM_MAX_DELTA (1024 * 1024)
+
+static inline void update_zmalloc_stat_alloc(size_t size) {
+    thread_used_memory_delta += size;
+    if (thread_used_memory_delta >= THREAD_MEM_MAX_DELTA) {
+        atomic_fetch_add_explicit(&used_memory, thread_used_memory_delta, memory_order_relaxed);
+        thread_used_memory_delta = 0;
+    }
+}
+
+static inline void update_zmalloc_stat_free(size_t size) {
+    thread_used_memory_delta -= size;
+    if (thread_used_memory_delta <= THREAD_MEM_MAX_DELTA) {
+        atomic_fetch_add_explicit(&used_memory, thread_used_memory_delta, memory_order_relaxed);
+        thread_used_memory_delta = 0;
+    }
+}
 
 static void zmalloc_default_oom(size_t size) {
     fprintf(stderr, "zmalloc: Out of memory trying to allocate %zu bytes\n", size);
@@ -388,8 +404,16 @@ char *zstrdup(const char *s) {
 }
 
 size_t zmalloc_used_memory(void) {
-    size_t um = atomic_load_explicit(&used_memory, memory_order_relaxed);
-    return um;
+    /* Maybe become negative */
+    int64_t um = atomic_load_explicit(&used_memory, memory_order_relaxed);
+    return um < 0 ? 0 : um;
+}
+
+/* Flush the thread_used_memory_delta to global counter. */
+size_t zmalloc_used_memory_with_thread_delta(void) {
+    atomic_fetch_add_explicit(&used_memory, thread_used_memory_delta, memory_order_relaxed);
+    thread_used_memory_delta = 0;
+    return zmalloc_used_memory();
 }
 
 void zmalloc_set_oom_handler(void (*oom_handler)(size_t)) {

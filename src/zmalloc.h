@@ -126,6 +126,7 @@ void *ztrycalloc_usable(size_t size, size_t *usable);
 void *ztryrealloc_usable(void *ptr, size_t size, size_t *usable);
 __attribute__((malloc)) char *zstrdup(const char *s);
 size_t zmalloc_used_memory(void);
+size_t zmalloc_used_memory_with_thread_delta(void);
 void zmalloc_set_oom_handler(void (*oom_handler)(size_t));
 size_t zmalloc_get_rss(void);
 int zmalloc_get_allocator_info(size_t *allocated,

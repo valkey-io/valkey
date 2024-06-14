@@ -52,7 +52,6 @@ void zlibc_free(void *ptr) {
 #include <string.h>
 #include "zmalloc.h"
 #include <stdatomic.h>
-#include <threads.h>
 
 #define UNUSED(x) ((void)(x))
 
@@ -86,6 +85,12 @@ void zlibc_free(void *ptr) {
 #define free(ptr) je_free(ptr)
 #define mallocx(size, flags) je_mallocx(size, flags)
 #define dallocx(ptr, flags) je_dallocx(ptr, flags)
+#endif
+
+#if __STDC_NO_THREADS__
+#define thread_local __thread
+#else
+#include <threads.h>
 #endif
 
 static _Atomic int64_t used_memory = 0;

@@ -35,7 +35,7 @@ static int bench_crc64(unsigned char *data, uint64_t size, long long passes, uin
     min = (original_end - original_start) * 1000 / passes;
     /* approximate nanoseconds without nstime */
     if (csv) {
-        printf("%s,%" PRIu64 ",%" PRIu64 ",%d\n", name, size, (1000 * size) / min, hash == check);
+        TEST_PRINT_INFO("%s,%" PRIu64 ",%" PRIu64 ",%d", name, size, (1000 * size) / min, hash == check);
     } else {
         TEST_PRINT_INFO("test size=%" PRIu64 " algorithm=%s %" PRIu64 " M/sec matches=%d", size, name,
                         (1000 * size) / min, hash == check);
@@ -55,9 +55,9 @@ static void bench_combine(char *label, uint64_t size, uint64_t expect, int csv) 
     /* ran 1000 times, want ns per, counted us per 1000 ... */
     min = original_end - original_start;
     if (csv) {
-        printf("%s,%" PRIu64 ",%" PRIu64 "\n", label, size, min);
+        TEST_PRINT_INFO("%s,%" PRIu64 ",%" PRIu64, label, size, min);
     } else {
-        printf("%s size=%" PRIu64 " in %" PRIu64 " nsec\n", label, size, min);
+        TEST_PRINT_INFO("%s size=%" PRIu64 " in %" PRIu64 " nsec", label, size, min);
     }
 }
 
@@ -97,13 +97,14 @@ again:
             combine = 1;
         } else {
         invalid:
-            printf("Invalid option \"%s\" or option argument missing\n\n", argv[i]);
+            TEST_PRINT_INFO("Invalid option \"%s\" or option argument missing\n", argv[i]);
         usage:
-            printf("Usage: --single test_crc64combine.c [OPTIONS]\n\n"
-                   " --csv              Output in CSV format\n"
-                   " -l                 Loop. Run the tests forever\n"
-                   " --crc <bytes>      Benchmark crc64 faster options, using a buffer this big, and quit when done.\n"
-                   " --combine          Benchmark crc64 combine value ranges and timings.\n");
+            TEST_PRINT_LINE(
+                "Usage: --single test_crc64combine.c [OPTIONS]\n\n"
+                " --csv              Output in CSV format\n"
+                " -l                 Loop. Run the tests forever\n"
+                " --crc <bytes>      Benchmark crc64 faster options, using a buffer this big, and quit when done.\n"
+                " --combine          Benchmark crc64 combine value ranges and timings.");
             return 1;
         }
     }
@@ -131,7 +132,7 @@ again:
         uint64_t expect = crc64(0, data, crc64_test_size);
 
         if (!combine && crc64_test_size) {
-            if (csv && init_this_loop) printf("algorithm,buffer,performance,crc64_matches\n");
+            if (csv && init_this_loop) TEST_PRINT_LINE("algorithm,buffer,performance,crc64_matches");
 
             /* get the single-character version for single-byte Redis behavior */
             set_crc64_cutoffs(0, crc64_test_size + 1);
@@ -180,8 +181,8 @@ again:
                 init_end -= init_start;
                 init_end *= 1000;
                 if (csv) {
-                    printf("operation,size,nanoseconds\n");
-                    printf("init_64,%" PRIu64 ",%" PRIu64 "\n", INIT_SIZE, (uint64_t)init_end);
+                    TEST_PRINT_LINE("operation,size,nanoseconds");
+                    TEST_PRINT_INFO("init_64,%" PRIu64 ",%" PRIu64, INIT_SIZE, (uint64_t)init_end);
                 } else {
                     TEST_PRINT_INFO("init_64 size=%" PRIu64 " in %" PRIu64 " nsec", INIT_SIZE, (uint64_t)init_end);
                 }

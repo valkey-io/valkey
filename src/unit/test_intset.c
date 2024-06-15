@@ -208,7 +208,7 @@ int test_intsetStressLookups(int argc, char **argv, int flags) {
 
     start = usec();
     for (i = 0; i < num; i++) intsetSearch(is, rand() % ((1 << bits) - 1), NULL);
-    TEST_PRINT_INFO("%ld lookups, %ld element set, %lldusec\n", num, size, usec() - start);
+    TEST_PRINT_INFO("%ld lookups, %ld element set, %lldusec", num, size, usec() - start);
     zfree(is);
 
     return 0;

@@ -1773,8 +1773,7 @@ static int useDisklessLoad(void) {
             enabled = 0;
         }
         /* Check all modules handle async replication, otherwise it's not safe to use diskless load. */
-        else if ((server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB || shouldFallbackToDisklessLoad()) 
-                && !moduleAllModulesHandleReplAsyncLoad()) {
+        else if (server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB && !moduleAllModulesHandleReplAsyncLoad()) {
             serverLog(LL_NOTICE,
                       "Skipping diskless-load because there are modules that are not aware of async replication.");
             enabled = 0;
@@ -2188,13 +2187,14 @@ void readSyncBulkPayload(connection *conn) {
         server.repl_transfer_tmpfile = NULL;
     }
 
-    /* We are loading the rdb from disk, which can take a while. Thus, there is a chance that
-  	 * the connection has been closed on the primary side during the rdb load due to a
-  	 * COB overrun. Since the replica doesn't perform I/O on any of it's connections
-  	 * during the rdb loading phase, it will not be aware of such disconnection. */
+    /* We are loading the rdb from disk, which can take a while.
+     * During the load we periodically process event loop events like
+     * sending keepalive indication bytes from the replica to the primary.
+     * In case the the connection has been closed on the primary side during the 
+     * rdb load due to a COB overrun, the connection will be placed in ERROR state.*/
   	if (connGetState(conn) != CONN_STATE_CONNECTED) {
   	    serverLog(LL_WARNING,"Error condition on socket for SYNC: %s",
-  	             connGetLastError(conn));
+  	              connGetLastError(conn));
   	    goto error;
   	}
   	

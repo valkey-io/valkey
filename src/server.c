@@ -60,6 +60,7 @@
 #include <sys/utsname.h>
 #include <locale.h>
 #include <sys/socket.h>
+#include <assert.h>
 
 #ifdef __linux__
 #include <sys/mman.h>
@@ -627,13 +628,17 @@ const char *strChildType(int type) {
 
 
 const char *strRDBLoadType(int type) {
-    /* clang-format off */
+    assert(type == RDB_LOAD_TYPE_PARSER ||
+           type == RDB_LOAD_TYPE_DISK ||
+           type == RDB_LOAD_TYPE_NONE);
     switch(type) {
-    case RDB_LOAD_TYPE_PARSER: return "parser";
-    case RDB_LOAD_TYPE_DISK: return "disk";
-    default: return "unknown";
+        case RDB_LOAD_TYPE_PARSER:
+            return "parser";
+        case RDB_LOAD_TYPE_DISK:
+            return "disk";
+        default:
+            return "none";
     }
-    /* clang-format on */
 }
 
 /* Return true if there are active children processes doing RDB saving,

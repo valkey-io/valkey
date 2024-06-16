@@ -1755,9 +1755,8 @@ void clusterHandleConfigEpochCollision(clusterNode *sender) {
     server.cluster->currentEpoch++;
     myself->configEpoch = server.cluster->currentEpoch;
     clusterSaveConfigOrDie(1);
-    serverLog(LL_WARNING,
-              "WARNING: configEpoch collision with node %.40s (%s)."
-              " configEpoch set to %llu",
+    serverLog(LL_NOTICE,
+              "configEpoch collision with node %.40s (%s). configEpoch set to %llu",
               sender->name, sender->human_nodename, (unsigned long long)myself->configEpoch);
 }
 
@@ -3196,7 +3195,7 @@ int clusterProcessPacket(clusterLink *link) {
                 if (bitmapTestBit(hdr->myslots, j)) {
                     if (server.cluster->slots[j] == sender || isSlotUnclaimed(j)) continue;
                     if (server.cluster->slots[j]->configEpoch > senderConfigEpoch) {
-                        serverLog(LL_NOTICE,
+                        serverLog(LL_VERBOSE,
                                   "Node %.40s has old slots configuration, sending "
                                   "an UPDATE message about %.40s",
                                   sender->name, server.cluster->slots[j]->name);

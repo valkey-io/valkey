@@ -558,7 +558,6 @@ start_server {tags {"introspection"}} {
             socket-mark-id
             req-res-logfile
             client-default-resp
-            enable-io_uring
         }
 
         if {!$::tls} {

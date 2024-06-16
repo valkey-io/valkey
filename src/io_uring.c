@@ -34,10 +34,10 @@ io_uring *getIOUring() {
 
 /* Submit fdatasync request to io_uring. */
 void ioUringPrepFsyncAndSubmit(io_uring *io_uring, int fd) {
-    struct io_uring_sqe *sqe = io_uring_get_sqe(_io_uring);
+    struct io_uring_sqe *sqe = io_uring_get_sqe(io_uring);
     io_uring_prep_fsync(sqe, fd, IORING_FSYNC_DATASYNC);
     io_uring_queue_len++;
-    io_uring_submit(_io_uring);
+    io_uring_submit(io_uring);
 }
 
 void ioUringWaitFsyncBarrier(io_uring *io_uring) {
@@ -72,18 +72,24 @@ void freeIOUring(void) {
     }
 }
 #else
+#ifndef UNUSED
+#define UNUSED(V) ((void)V)
+#endif
+
 void initIOUring(void) {
 }
 
 io_uring *getIOUring(void) {
-    return NULL;
+    return 0;
 }
 
 void ioUringPrepFsyncAndSubmit(io_uring *io_uring, int fd) {
+    UNUSED(io_uring);
     UNUSED(fd);
 }
 
 void ioUringWaitFsyncBarrier(io_uring *io_uring) {
+    UNUSED(io_uring);
 }
 
 void freeIOUring(void) {

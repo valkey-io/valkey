@@ -2193,12 +2193,12 @@ void readSyncBulkPayload(connection *conn) {
      * In case the the connection has been closed on the primary side during the 
      * rdb load due to a COB overrun, the connection will be placed in ERROR state.*/
     if (connGetState(conn) != CONN_STATE_CONNECTED) {
-  	    serverLog(LL_WARNING,"Error condition on socket for SYNC: %s",
-  	              connGetLastError(conn));
-  	    goto error;
-  	}
+        serverLog(LL_WARNING,"Error condition on socket for SYNC: %s",
+                  connGetLastError(conn));
+        goto error;
+    }
   	
-  	server.last_sync_aborted = 0;
+    server.last_sync_aborted = 0;
 
     /* Final setup of the connected replica <- primary link */
     replicationCreateMasterClient(server.repl_transfer_s, rsi.repl_stream_db);

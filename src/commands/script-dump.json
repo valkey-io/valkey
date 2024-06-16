@@ -20,16 +20,8 @@
             }
         ],
         "reply_schema": {
-            "oneOf": [
-                {
-                    "description": "lua script if sha1 hash exists in script cache.",
-                    "type": "string"
-                },
-                {
-                    "description": "noscript error if sha1 hash does not exist in script cache.",
-                    "const": "NOSCRIPT No matching script."
-                }
-            ]
+            "description": "lua script if sha1 hash exists in script cache.",
+            "type": "string"
         }
     }
 }

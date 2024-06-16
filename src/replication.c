@@ -2192,7 +2192,7 @@ void readSyncBulkPayload(connection *conn) {
      * sending keepalive indication bytes from the replica to the primary.
      * In case the the connection has been closed on the primary side during the 
      * rdb load due to a COB overrun, the connection will be placed in ERROR state.*/
-  	if (connGetState(conn) != CONN_STATE_CONNECTED) {
+    if (connGetState(conn) != CONN_STATE_CONNECTED) {
   	    serverLog(LL_WARNING,"Error condition on socket for SYNC: %s",
   	              connGetLastError(conn));
   	    goto error;

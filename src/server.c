@@ -1679,8 +1679,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     handleClientsWithPendingWritesUsingThreads(1);
 
     if (canFsyncUsingIOUring()) {
+        io_uring *io_uring = getIOUring();
         /* Wait io_uring_prep_fsync finished. */
-        ioUringWaitFsyncBarrier();
+        ioUringWaitFsyncBarrier(io_uring);
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         server.aof_last_fsync = server.mstime;
         atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset, memory_order_relaxed);
@@ -2804,7 +2805,7 @@ void initListeners(void) {
 void InitServerLast(void) {
     bioInit();
     initThreadedIO();
-    initIOUring();
+    if (server.io_uring_enabled) initIOUring();
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
     server.initial_memory_usage = zmalloc_used_memory();
 }
@@ -6981,7 +6982,7 @@ int main(int argc, char **argv) {
 
     aeMain(server.el);
     aeDeleteEventLoop(server.el);
-    freeIOUring();
+    if (server.io_uring_enabled) freeIOUring();
     return 0;
 }
 

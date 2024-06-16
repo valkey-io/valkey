@@ -1229,8 +1229,9 @@ try_fsync:
     /* Perform the fsync if needed. */
     if (server.aof_fsync == AOF_FSYNC_ALWAYS) {
         /* If user enable io_uring and system support it, give io_uring a chance? */
-        if (server.io_uring_enabled && server.io_uring) {
-            ioUringPrepFsyncAndSubmit(server.aof_fd);
+        if (server.io_uring_enabled) {
+            io_uring *io_uring = getIOUring();
+            ioUringPrepFsyncAndSubmit(io_uring, server.aof_fd);
         } else {
             /* valkey_fsync is defined as fdatasync() for Linux in order to avoid
              * flushing metadata. */

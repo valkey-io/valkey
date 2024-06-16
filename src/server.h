@@ -2124,7 +2124,6 @@ struct valkeyServer {
     char *locale_collate;
     /* io_uring */
     int io_uring_enabled; /* If io_uring enabled (0 by default) */
-    struct io_uring *io_uring;
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -3816,6 +3815,10 @@ void lcsCommand(client *c);
 void quitCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
+
+/* io_uring*/
+/* To check if server is sutiable for io_uring to do the fsync work. */
+int canFsyncUsingIOUring(void);
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__((deprecated));

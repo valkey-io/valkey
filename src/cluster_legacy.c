@@ -1755,9 +1755,8 @@ void clusterHandleConfigEpochCollision(clusterNode *sender) {
     server.cluster->currentEpoch++;
     myself->configEpoch = server.cluster->currentEpoch;
     clusterSaveConfigOrDie(1);
-    serverLog(LL_NOTICE,
-              "configEpoch collision with node %.40s (%s). configEpoch set to %llu",
-              sender->name, sender->human_nodename, (unsigned long long)myself->configEpoch);
+    serverLog(LL_NOTICE, "configEpoch collision with node %.40s (%s). configEpoch set to %llu", sender->name,
+              sender->human_nodename, (unsigned long long)myself->configEpoch);
 }
 
 /* -----------------------------------------------------------------------------

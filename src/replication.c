@@ -65,8 +65,8 @@ static ConnectionType *connTypeOfReplication(void) {
 }
 
 static int shouldFallbackToDisklessLoad(void) {
-  		return server.repl_diskless_load == REPL_DISKLESS_LOAD_SYNC_FALLBACK &&
-  		        (server.last_sync_aborted == 1);
+    return server.repl_diskless_load == REPL_DISKLESS_LOAD_SYNC_FALLBACK &&
+           server.last_sync_aborted == 1;
 }
 
 /* Return the pointer to a string representing the replica ip:listening_port

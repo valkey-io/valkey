@@ -18,21 +18,22 @@ start_server {} {
                 $master set key:$i val:[concat "this is key :" ", $i!"]
             }
 
-            set loglines [count_log_lines 0]
             $replica replicaof $master_host $master_port
             # wait for the replica to start reading the rdb
 
             wait_for_condition 1000 50 {
-                    [string match {*replica_last_sync_type:disk*} [$replica info replication]] &&
-                    [string match {*connected_clients:1*} [$master info clients]]
-                } else {
-                    fail "Replica didn't try disk based load to begin with"
+                [string match {*replica_last_sync_type:disk*} [$replica info replication]] &&
+                [string match {*connected_clients:1*} [$master info clients]]
+            }
+            else {
+                fail "Replica didn't try disk based load to begin with"
             }
 
             wait_for_condition 1000 50 {
-                    [string match {*loading:1*} [$replica info persistence]] 
-                } else {
-                    fail "Replica isn't loading"
+                [string match {*loading:1*} [$replica info persistence]] 
+            } 
+            else {
+                fail "Replica isn't loading"
             }
 
             # Writing more keys to the primary during sync to cause a COB overrun
@@ -40,18 +41,20 @@ start_server {} {
                 $master set key:$i val:[concat "this is another key :" ", $i!"]
             }
 
-             wait_for_condition 1000 50 {
-                    [string match {*last_sync_aborted:1*} [$replica info replication]]
-                } else {
-                    fail "Primary didn't disconnect replica as expected"
+            wait_for_condition 1000 50 {
+                [string match {*last_sync_aborted:1*} [$replica info replication]]
+            }
+            else {
+                fail "Primary didn't disconnect replica as expected"
             }
             
             # Validate the second sync attempt is from socket (parser)
 
             wait_for_condition 1000 50 {
-                    [string match {*master_link_status:up*} [$replica info replication]]
-                } else {
-                    fail "Second sync attempt didn't succeeded from socket"
+                [string match {*master_link_status:up*} [$replica info replication]]
+            }
+            else {
+                fail "Second sync attempt didn't succeeded from socket"
             }
 
             assert_match {*replica_last_sync_type:parser*} [$replica info replication]

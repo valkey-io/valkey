@@ -86,6 +86,7 @@ configEnum shutdown_on_sig_enum[] = {{"default", 0},        {"save", SHUTDOWN_SA
 configEnum repl_diskless_load_enum[] = {{"disabled", REPL_DISKLESS_LOAD_DISABLED},
                                         {"on-empty-db", REPL_DISKLESS_LOAD_WHEN_DB_EMPTY},
                                         {"swapdb", REPL_DISKLESS_LOAD_SWAPDB},
+                                        {"diskless-fallback", REPL_DISKLESS_LOAD_SYNC_FALLBACK},
                                         {NULL, 0}};
 
 configEnum tls_auth_clients_enum[] = {{"no", TLS_CLIENT_AUTH_NO},

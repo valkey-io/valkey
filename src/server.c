@@ -60,6 +60,7 @@
 #include <sys/utsname.h>
 #include <locale.h>
 #include <sys/socket.h>
+#include <assert.h>
 
 #ifdef __linux__
 #include <sys/mman.h>
@@ -620,6 +621,16 @@ const char *strChildType(int type) {
     case CHILD_TYPE_LDB: return "LDB";
     case CHILD_TYPE_MODULE: return "MODULE";
     default: return "Unknown";
+    }
+}
+
+
+const char *strRDBLoadType(int type) {
+    assert(type == RDB_LOAD_TYPE_PARSER || type == RDB_LOAD_TYPE_DISK || type == RDB_LOAD_TYPE_NONE);
+    switch (type) {
+    case RDB_LOAD_TYPE_PARSER: return "parser";
+    case RDB_LOAD_TYPE_DISK: return "disk";
+    default: return "none";
     }
 }
 
@@ -2035,6 +2046,9 @@ void initServerConfig(void) {
     server.repl_down_since = 0; /* Never connected, repl is down since EVER. */
     server.primary_repl_offset = 0;
     server.fsynced_reploff_pending = 0;
+    server.sync_aborts_total = 0;
+    server.last_sync_aborted = 0;
+    server.replica_last_sync_type = -1;
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;
@@ -5725,7 +5739,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "master_last_io_seconds_ago:%d\r\n", server.primary ? ((int)(server.unixtime-server.primary->last_interaction)) : -1,
                 "master_sync_in_progress:%d\r\n", server.repl_state == REPL_STATE_TRANSFER,
                 "slave_read_repl_offset:%lld\r\n", replica_read_repl_offset,
-                "slave_repl_offset:%lld\r\n", replica_repl_offset));
+                "slave_repl_offset:%lld\r\n", replica_repl_offset,
+                "last_sync_aborted:%d\r\n", server.last_sync_aborted, 
+                "sync_aborts_total:%d\r\n", server.sync_aborts_total,
+                "replica_last_sync_type:%s\r\n", strRDBLoadType(server.replica_last_sync_type)));
             /* clang-format on */
 
             if (server.repl_state == REPL_STATE_TRANSFER) {

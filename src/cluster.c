@@ -43,6 +43,12 @@
 #include <math.h>
 #include <ctype.h>
 
+/* Only primaries that own slots have voting rights.
+ * Returns 1 if the node has voting rights, otherwise returns 0. */
+static inline int clusterNodeIsVotingPrimary(clusterNode *n) {
+    return (n->flags & CLUSTER_NODE_MASTER) && n->numslots;
+}
+
 /* A global reference to myself is handy to make code more clear.
  * Myself always points to server.cluster->myself, that is, the clusterNode
  * that represents this node. */
@@ -1961,8 +1967,8 @@ void markNodeAsFailingIfNeeded(clusterNode *node) {
     if (nodeFailed(node)) return; /* Already FAILing. */
 
     failures = clusterNodeFailureReportsCount(node);
-    /* Also count myself as a voter if I'm a master. */
-    if (nodeIsMaster(myself)) failures++;
+    /* Also count myself as a voter if I'm a voting primary. */
+    if (clusterNodeIsVotingPrimary(myself)) failures++;
     if (failures < needed_quorum) return; /* No weak agreement from masters. */
 
     serverLog(LL_NOTICE,
@@ -2005,7 +2011,7 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
      * 1) The FAIL state is old enough.
      * 2) It is yet serving slots from our point of view (not failed over).
      * Apparently no one is going to fix these slots, clear the FAIL flag. */
-    if (nodeIsMaster(node) && node->numslots > 0 &&
+    if (clusterNodeIsVotingPrimary(node) &&
         (now - node->fail_time) >
         (server.cluster_node_timeout * CLUSTER_FAIL_UNDO_TIME_MULT))
     {
@@ -2154,8 +2160,8 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
         node = clusterLookupNode(g->nodename, CLUSTER_NAMELEN);
         if (node) {
             /* We already know this node.
-               Handle failure reports, only when the sender is a master. */
-            if (sender && nodeIsMaster(sender) && node != myself) {
+               Handle failure reports, only when the sender is a voting primary. */
+            if (sender && clusterNodeIsVotingPrimary(sender) && node != myself) {
                 if (flags & (CLUSTER_NODE_FAIL|CLUSTER_NODE_PFAIL)) {
                     if (clusterNodeAddFailureReport(node,sender)) {
                         serverLog(LL_VERBOSE,
@@ -3198,10 +3204,10 @@ int clusterProcessPacket(clusterLink *link) {
         clusterSendFailoverAuthIfNeeded(sender,hdr);
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK) {
         if (!sender) return 1;  /* We don't know that node. */
-        /* We consider this vote only if the sender is a master serving
+        /* We consider this vote only if the sender is a primary serving
          * a non zero number of slots, and its currentEpoch is greater or
          * equal to epoch where this node started the election. */
-        if (nodeIsMaster(sender) && sender->numslots > 0 &&
+        if (clusterNodeIsVotingPrimary(sender) &&
             senderCurrentEpoch >= server.cluster->failover_auth_epoch)
         {
             server.cluster->failover_auth_count++;
@@ -4803,7 +4809,7 @@ void clusterCron(void) {
                 node->flags |= CLUSTER_NODE_PFAIL;
                 update_state = 1;
             }
-            if (nodeIsMaster(myself) && server.cluster->size == 1) {
+            if (clusterNodeIsVotingPrimary(myself) && server.cluster->size == 1) {
                 markNodeAsFailingIfNeeded(node);
             } else {
                 serverLog(LL_DEBUG,"*** NODE %.40s possibly failing", node->name);
@@ -5081,7 +5087,7 @@ void clusterUpdateState(void) {
         while((de = dictNext(di)) != NULL) {
             clusterNode *node = dictGetVal(de);
 
-            if (nodeIsMaster(node) && node->numslots) {
+            if (clusterNodeIsVotingPrimary(node)) {
                 server.cluster->size++;
                 if ((node->flags & (CLUSTER_NODE_FAIL|CLUSTER_NODE_PFAIL)) == 0)
                     reachable_masters++;

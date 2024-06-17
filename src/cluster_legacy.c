@@ -116,6 +116,12 @@ int verifyClusterNodeId(const char *name, int length);
 sds clusterEncodeOpenSlotsAuxField(int rdbflags);
 int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 
+/* Only primaries that own slots have voting rights.
+ * Returns 1 if the node has voting rights, otherwise returns 0. */
+static inline int clusterNodeIsVotingPrimary(clusterNode *n) {
+    return (n->flags & CLUSTER_NODE_PRIMARY) && n->numslots;
+}
+
 int getNodeDefaultClientPort(clusterNode *n) {
     return server.tls_cluster ? n->tls_port : n->tcp_port;
 }
@@ -1867,8 +1873,8 @@ void markNodeAsFailingIfNeeded(clusterNode *node) {
     if (nodeFailed(node)) return;    /* Already FAILing. */
 
     failures = clusterNodeFailureReportsCount(node);
-    /* Also count myself as a voter if I'm a primary. */
-    if (clusterNodeIsPrimary(myself)) failures++;
+    /* Also count myself as a voter if I'm a voting primary. */
+    if (clusterNodeIsVotingPrimary(myself)) failures++;
     if (failures < needed_quorum) return; /* No weak agreement from primaries. */
 
     serverLog(LL_NOTICE, "Marking node %.40s (%s) as failing (quorum reached).", node->name, node->human_nodename);
@@ -1908,7 +1914,7 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
      * 1) The FAIL state is old enough.
      * 2) It is yet serving slots from our point of view (not failed over).
      * Apparently no one is going to fix these slots, clear the FAIL flag. */
-    if (clusterNodeIsPrimary(node) && node->numslots > 0 &&
+    if (clusterNodeIsVotingPrimary(node) &&
         (now - node->fail_time) > (server.cluster_node_timeout * CLUSTER_FAIL_UNDO_TIME_MULT)) {
         serverLog(
             LL_NOTICE,
@@ -2090,8 +2096,8 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
         /* Ignore gossips about self. */
         if (node && node != myself) {
             /* We already know this node.
-               Handle failure reports, only when the sender is a primary. */
-            if (sender && clusterNodeIsPrimary(sender)) {
+               Handle failure reports, only when the sender is a voting primary. */
+            if (sender && clusterNodeIsVotingPrimary(sender)) {
                 if (flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) {
                     if (clusterNodeAddFailureReport(node, sender)) {
                         serverLog(LL_VERBOSE, "Node %.40s (%s) reported node %.40s (%s) as not reachable.",
@@ -3250,8 +3256,7 @@ int clusterProcessPacket(clusterLink *link) {
         /* We consider this vote only if the sender is a primary serving
          * a non zero number of slots, and its currentEpoch is greater or
          * equal to epoch where this node started the election. */
-        if (clusterNodeIsPrimary(sender) && sender->numslots > 0 &&
-            senderCurrentEpoch >= server.cluster->failover_auth_epoch) {
+        if (clusterNodeIsVotingPrimary(sender) && senderCurrentEpoch >= server.cluster->failover_auth_epoch) {
             server.cluster->failover_auth_count++;
             /* Maybe we reached a quorum here, set a flag to make sure
              * we check ASAP. */
@@ -4768,7 +4773,7 @@ void clusterCron(void) {
             if (!(node->flags & (CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL))) {
                 node->flags |= CLUSTER_NODE_PFAIL;
                 update_state = 1;
-                if (clusterNodeIsPrimary(myself) && server.cluster->size == 1) {
+                if (server.cluster->size == 1 && clusterNodeIsVotingPrimary(myself)) {
                     markNodeAsFailingIfNeeded(node);
                 } else {
                     serverLog(LL_DEBUG, "*** NODE %.40s possibly failing", node->name);
@@ -5038,7 +5043,7 @@ void clusterUpdateState(void) {
         while ((de = dictNext(di)) != NULL) {
             clusterNode *node = dictGetVal(de);
 
-            if (clusterNodeIsPrimary(node) && node->numslots) {
+            if (clusterNodeIsVotingPrimary(node)) {
                 server.cluster->size++;
                 if ((node->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) == 0) reachable_primaries++;
             }

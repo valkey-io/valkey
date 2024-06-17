@@ -4781,7 +4781,7 @@ void clusterCron(void) {
                 if (clusterNodeIsPrimary(myself) && server.cluster->size == 1) {
                     markNodeAsFailingIfNeeded(node);
                 } else {
-                    serverLog(LL_NOTICE, "NODE %.40s possibly failing.", node->name);
+                    serverLog(LL_NOTICE, "NODE %.40s (%s) possibly failing.", node->name, node->human_nodename);
                 }
             }
         }

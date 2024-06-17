@@ -2844,7 +2844,16 @@ int clusterIsValidPacket(clusterLink *link) {
  * received from the wrong sender ID). */
 int clusterProcessPacket(clusterLink *link) {
     /* Validate that the packet is well-formed */
-    if (!clusterIsValidPacket(link)) return 1;
+    if (!clusterIsValidPacket(link)) {
+        clusterMsg *hdr = (clusterMsg *)link->rcvbuf;
+        uint16_t type = ntohs(hdr->type);
+        if (server.debug_cluster_close_link_on_packet_drop && type == server.cluster_drop_packet_filter) {
+            freeClusterLink(link);
+            serverLog(LL_WARNING, "Closing link for matching packet type %hu", type);
+            return 0;
+        }
+        return 1;
+    }
 
     clusterMsg *hdr = (clusterMsg *)link->rcvbuf;
     uint16_t type = ntohs(hdr->type);
@@ -2942,6 +2951,13 @@ int clusterProcessPacket(clusterLink *link) {
     if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_PONG || type == CLUSTERMSG_TYPE_MEET) {
         serverLog(LL_DEBUG, "%s packet received: %.40s", clusterGetMessageTypeString(type),
                   link->node ? link->node->name : "NULL");
+
+        if (sender && (sender->flags & CLUSTER_NODE_MEET)) {
+            /* Once we get a response for MEET from the sender, we can stop sending more MEET. */
+            sender->flags &= ~CLUSTER_NODE_MEET;
+            serverLog(LL_NOTICE, "Successfully completed handshake with %.40s (%s)", sender->name,
+                      sender->human_nodename);
+        }
         if (!link->inbound) {
             if (nodeInHandshake(link->node)) {
                 /* If we already have this node, try to change the
@@ -3376,12 +3392,17 @@ void clusterLinkConnectHandler(connection *conn) {
          * replaced by the clusterSendPing() call. */
         node->ping_sent = old_ping_sent;
     }
-    /* We can clear the flag after the first packet is sent.
-     * If we'll never receive a PONG, we'll never send new packets
-     * to this node. Instead after the PONG is received and we
-     * are no longer in meet/handshake status, we want to send
-     * normal PING packets. */
-    node->flags &= ~CLUSTER_NODE_MEET;
+    /* NOTE: Assume the current node is A and is asked to MEET another node B.
+     * Once A sends MEET to B, it cannot clear the MEET flag for B until it
+     * gets a response from B. If the MEET packet is not accepted by B due to
+     * link failure, A must continue sending MEET. If A doesn't continue sending
+     * MEET, A will know about B, but B will never add A. Every node always
+     * responds to PINGs from unknown nodes with a PONG, so A will know about B
+     * and continue sending PINGs. But B won't add A until it sees a MEET (or it
+     * gets to know about A from a trusted third node C). In this case, clearing
+     * the MEET flag here leads to asymmetry in the cluster membership. So, we
+     * clear the MEET flag in clusterProcessPacket.
+     */
 
     serverLog(LL_DEBUG, "Connecting with Node %.40s at %s:%d", node->name, node->ip, node->cport);
 }

@@ -2069,6 +2069,8 @@ struct valkeyServer {
     unsigned long long cluster_link_msg_queue_limit_bytes; /* Memory usage limit on individual link msg queue */
     int cluster_drop_packet_filter;                        /* Debug config that allows tactically
                                                             * dropping packets of a specific type */
+    /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
+    uint32_t debug_cluster_close_link_on_packet_drop : 1;
     sds cached_cluster_slot_info[CACHE_CONN_TYPE_MAX];
     /* Scripting */
     mstime_t busy_reply_threshold;  /* Script / module timeout in milliseconds */

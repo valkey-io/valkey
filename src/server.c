@@ -628,16 +628,11 @@ const char *strChildType(int type) {
 
 
 const char *strRDBLoadType(int type) {
-    assert(type == RDB_LOAD_TYPE_PARSER ||
-           type == RDB_LOAD_TYPE_DISK ||
-           type == RDB_LOAD_TYPE_NONE);
-    switch(type) {
-        case RDB_LOAD_TYPE_PARSER:
-            return "parser";
-        case RDB_LOAD_TYPE_DISK:
-            return "disk";
-        default:
-            return "none";
+    assert(type == RDB_LOAD_TYPE_PARSER || type == RDB_LOAD_TYPE_DISK || type == RDB_LOAD_TYPE_NONE);
+    switch (type) {
+    case RDB_LOAD_TYPE_PARSER: return "parser";
+    case RDB_LOAD_TYPE_DISK: return "disk";
+    default: return "none";
     }
 }
 

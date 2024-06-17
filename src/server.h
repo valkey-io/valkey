@@ -673,9 +673,9 @@ typedef enum {
 
 /* RDB load type on replica. */
 #define RDB_LOAD_TYPE_NONE -1
-#define RDB_LOAD_TYPE_DISK 0    /* RDB is loaded to disk. */
-#define RDB_LOAD_TYPE_PARSER 1   /* RDB is loaded to parser. */
-const char *strRDBLoadType(int); 
+#define RDB_LOAD_TYPE_DISK 0   /* RDB is loaded to disk. */
+#define RDB_LOAD_TYPE_PARSER 1 /* RDB is loaded to parser. */
+const char *strRDBLoadType(int);
 
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes. */

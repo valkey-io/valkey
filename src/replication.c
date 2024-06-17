@@ -65,8 +65,7 @@ static ConnectionType *connTypeOfReplication(void) {
 }
 
 static int shouldFallbackToDisklessLoad(void) {
-    return server.repl_diskless_load == REPL_DISKLESS_LOAD_SYNC_FALLBACK &&
-           server.last_sync_aborted == 1;
+    return server.repl_diskless_load == REPL_DISKLESS_LOAD_SYNC_FALLBACK && server.last_sync_aborted == 1;
 }
 
 /* Return the pointer to a string representing the replica ip:listening_port
@@ -2190,14 +2189,13 @@ void readSyncBulkPayload(connection *conn) {
     /* We are loading the rdb from disk, which can take a while.
      * During the load we periodically process event loop events like
      * sending keepalive indication bytes from the replica to the primary.
-     * In case the the connection has been closed on the primary side during the 
+     * In case the the connection has been closed on the primary side during the
      * rdb load due to a COB overrun, the connection will be placed in ERROR state.*/
     if (connGetState(conn) != CONN_STATE_CONNECTED) {
-        serverLog(LL_WARNING,"Error condition on socket for SYNC: %s",
-                  connGetLastError(conn));
+        serverLog(LL_WARNING, "Error condition on socket for SYNC: %s", connGetLastError(conn));
         goto error;
     }
-  	
+
     server.last_sync_aborted = 0;
 
     /* Final setup of the connected replica <- primary link */

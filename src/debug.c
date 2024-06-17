@@ -429,6 +429,9 @@ void debugCommand(client *c) {
             "    Show low level info about `key` and associated value.",
             "DROP-CLUSTER-PACKET-FILTER <packet-type>",
             "    Drop all packets that match the filtered type. Set to -1 allow all packets.",
+            "CLOSE-CLUSTER-LINK-ON-PACKET-DROP <0|1>",
+            "    This is valid only when DROP-CLUSTER-PACKET-FILTER is set to a valid packet type."
+            "    When set to 1, the cluster link is closed after dropping a packet based on the filter."
             "OOM",
             "    Crash the server simulating an out-of-memory error.",
             "PANIC",
@@ -592,6 +595,9 @@ void debugCommand(client *c) {
         long packet_type;
         if (getLongFromObjectOrReply(c, c->argv[2], &packet_type, NULL) != C_OK) return;
         server.cluster_drop_packet_filter = packet_type;
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "close-cluster-link-on-packet-drop") && c->argc == 3) {
+        server.debug_cluster_close_link_on_packet_drop = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "object") && c->argc == 3) {
         dictEntry *de;

@@ -827,9 +827,9 @@ start_server {tags {"introspection"}} {
         # Something like `valkey-server --some-config --config-value1 --config-value2 --loglevel debug` would break,
         # because if you want to pass a value to a config starting with `--`, it can only be a single value.
         catch {exec src/valkey-server --replicaof 127.0.0.1 abc} err
-        assert_match {*'replicaof "127.0.0.1" "abc"'*Invalid master port*} $err
+        assert_match {*'replicaof "127.0.0.1" "abc"'*Invalid primary port*} $err
         catch {exec src/valkey-server --replicaof --127.0.0.1 abc} err
-        assert_match {*'replicaof "--127.0.0.1" "abc"'*Invalid master port*} $err
+        assert_match {*'replicaof "--127.0.0.1" "abc"'*Invalid primary port*} $err
         catch {exec src/valkey-server --replicaof --127.0.0.1 --abc} err
         assert_match {*'replicaof "--127.0.0.1"'*wrong number of arguments*} $err
     } {} {external:skip}

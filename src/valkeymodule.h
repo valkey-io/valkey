@@ -1469,7 +1469,7 @@ VALKEYMODULE_API int (*ValkeyModule_SendClusterMessage)(ValkeyModuleCtx *ctx,
 VALKEYMODULE_API int (*ValkeyModule_GetClusterNodeInfo)(ValkeyModuleCtx *ctx,
                                                         const char *id,
                                                         char *ip,
-                                                        char *master_id,
+                                                        char *primary_id,
                                                         int *port,
                                                         int *flags) VALKEYMODULE_ATTR;
 VALKEYMODULE_API char **(*ValkeyModule_GetClusterNodesList)(ValkeyModuleCtx *ctx, size_t *numnodes)VALKEYMODULE_ATTR;

@@ -32,6 +32,7 @@
 #include "script.h"
 #include "fpconv_dtoa.h"
 #include "fmtargs.h"
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <math.h>
@@ -586,11 +587,11 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
             to = "AOF-loading-client";
             from = "server";
         } else if (ctype == CLIENT_TYPE_PRIMARY) {
-            to = "master";
+            to = "primary";
             from = "replica";
         } else {
             to = "replica";
-            from = "master";
+            from = "primary";
         }
 
         if (len > 4096) len = 4096;
@@ -2232,7 +2233,7 @@ int processInlineBuffer(client *c) {
         sdsfreesplitres(argv, argc);
         serverLog(LL_WARNING, "WARNING: Receiving inline protocol from primary, primary stream corruption? Closing the "
                               "primary connection and discarding the cached primary.");
-        setProtocolError("Master using the inline protocol. Desync?", c);
+        setProtocolError("Primary using the inline protocol. Desync?", c);
         return C_ERR;
     }
 
@@ -3075,7 +3076,7 @@ void clientCommand(client *c) {
 "      Kill connections made from the specified address",
 "    * LADDR (<ip:port>|<unixsocket>:0)",
 "      Kill connections made to specified local address",
-"    * TYPE (NORMAL|MASTER|REPLICA|PUBSUB)",
+"    * TYPE (NORMAL|PRIMARY|REPLICA|PUBSUB)",
 "      Kill connections by type.",
 "    * USER <username>",
 "      Kill connections authenticated by <username>.",
@@ -3087,7 +3088,7 @@ void clientCommand(client *c) {
 "      Kill connections older than the specified age.",
 "LIST [options ...]",
 "    Return information about client connections. Options:",
-"    * TYPE (NORMAL|MASTER|REPLICA|PUBSUB)",
+"    * TYPE (NORMAL|PRIMARY|REPLICA|PUBSUB)",
 "      Return clients of specified type.",
 "UNPAUSE",
 "    Stop the current client pause, resuming traffic.",
@@ -3898,7 +3899,7 @@ int getClientTypeByName(char *name) {
         return CLIENT_TYPE_REPLICA;
     else if (!strcasecmp(name, "pubsub"))
         return CLIENT_TYPE_PUBSUB;
-    else if (!strcasecmp(name, "master"))
+    else if (!strcasecmp(name, "master") || !strcasecmp(name, "primary"))
         return CLIENT_TYPE_PRIMARY;
     else
         return -1;

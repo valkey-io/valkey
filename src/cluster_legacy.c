@@ -527,9 +527,9 @@ int clusterLoadConfig(char *filename) {
                 serverAssert(server.cluster->myself == NULL);
                 myself = server.cluster->myself = n;
                 n->flags |= CLUSTER_NODE_MYSELF;
-            } else if (!strcasecmp(s, "master")) {
+            } else if (!strcasecmp(s, "master") || !strcasecmp(s, "primary")) {
                 n->flags |= CLUSTER_NODE_PRIMARY;
-            } else if (!strcasecmp(s, "slave")) {
+            } else if (!strcasecmp(s, "slave") || !strcasecmp(s, "replica")) {
                 n->flags |= CLUSTER_NODE_REPLICA;
             } else if (!strcasecmp(s, "fail?")) {
                 n->flags |= CLUSTER_NODE_PFAIL;
@@ -1899,7 +1899,7 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
      * node again. */
     if (nodeIsReplica(node) || node->numslots == 0) {
         serverLog(LL_NOTICE, "Clear FAIL state for node %.40s (%s):%s is reachable again.", node->name,
-                  node->human_nodename, nodeIsReplica(node) ? "replica" : "master without slots");
+                  node->human_nodename, nodeIsReplica(node) ? "replica" : "primary without slots");
         node->flags &= ~CLUSTER_NODE_FAIL;
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
     }
@@ -4162,7 +4162,7 @@ void clusterLogCantFailover(int reason) {
 
     switch (reason) {
     case CLUSTER_CANT_FAILOVER_DATA_AGE:
-        msg = "Disconnected from master for longer than allowed. "
+        msg = "Disconnected from primary for longer than allowed. "
               "Please check the 'cluster-replica-validity-factor' configuration "
               "option.";
         break;

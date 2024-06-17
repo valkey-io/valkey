@@ -1713,7 +1713,7 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
      * mentioned in the command arguments. */
     if (!(selector->flags & SELECTOR_FLAG_ALLKEYS) && doesCommandHaveKeys(cmd)) {
         if (!(cache->keys_init)) {
-            cache->keys = (getKeysResult)GETKEYS_RESULT_INIT;
+            initGetKeysResult(&(cache->keys));
             getKeysFromCommandWithSpecs(cmd, argv, argc, GET_KEYSPEC_DEFAULT, &(cache->keys));
             cache->keys_init = 1;
         }
@@ -1733,7 +1733,8 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
      * mentioned in the command arguments */
     const int channel_flags = CMD_CHANNEL_PUBLISH | CMD_CHANNEL_SUBSCRIBE;
     if (!(selector->flags & SELECTOR_FLAG_ALLCHANNELS) && doesCommandHaveChannelsWithFlags(cmd, channel_flags)) {
-        getKeysResult channels = (getKeysResult)GETKEYS_RESULT_INIT;
+        getKeysResult channels;
+        initGetKeysResult(&channels);
         getChannelsFromCommand(cmd, argv, argc, &channels);
         keyReference *channelref = channels.keys;
         for (int j = 0; j < channels.numkeys; j++) {

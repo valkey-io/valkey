@@ -1017,7 +1017,8 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         margc = ms->commands[i].argc;
         margv = ms->commands[i].argv;
 
-        getKeysResult result = GETKEYS_RESULT_INIT;
+        getKeysResult result;
+        initGetKeysResult(&result);
         numkeys = getKeysFromCommand(mcmd, margv, margc, &result);
         keyindex = result.keys;
 

@@ -45,7 +45,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.version }}
-      
+
       - name: Make Valkey
         uses: uraimo/run-on-arch-action@v2
         with:
@@ -53,7 +53,7 @@ jobs:
           distro: ${{matrix.distro.target}}
           install: apt-get update && apt-get install -y build-essential libssl-dev
           run: make -C src all BUILD_TLS=yes
-      
+
       - name: Create Tarball and SHA256sums
         run: |
           TAR_FILE_NAME=valkey-${{inputs.version}}-${{matrix.distro.platform}}-${{ matrix.distro.arch}}
@@ -64,7 +64,7 @@ jobs:
           sha256sum $TAR_FILE_NAME.tar.gz > $TAR_FILE_NAME.tar.gz.sha256
           mkdir -p packages-files
           cp -rfv $TAR_FILE_NAME.tar* packages-files/
-      
+
       - name: Install AWS cli.
         run: |
           sudo apt-get install -y awscli

@@ -1761,10 +1761,8 @@ void clusterHandleConfigEpochCollision(clusterNode *sender) {
     server.cluster->currentEpoch++;
     myself->configEpoch = server.cluster->currentEpoch;
     clusterSaveConfigOrDie(1);
-    serverLog(LL_VERBOSE,
-              "WARNING: configEpoch collision with node %.40s (%s)."
-              " configEpoch set to %llu",
-              sender->name, sender->human_nodename, (unsigned long long)myself->configEpoch);
+    serverLog(LL_NOTICE, "configEpoch collision with node %.40s (%s). configEpoch set to %llu", sender->name,
+              sender->human_nodename, (unsigned long long)myself->configEpoch);
 }
 
 /* -----------------------------------------------------------------------------
@@ -2100,13 +2098,13 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
             if (sender && clusterNodeIsVotingPrimary(sender)) {
                 if (flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) {
                     if (clusterNodeAddFailureReport(node, sender)) {
-                        serverLog(LL_VERBOSE, "Node %.40s (%s) reported node %.40s (%s) as not reachable.",
-                                  sender->name, sender->human_nodename, node->name, node->human_nodename);
+                        serverLog(LL_NOTICE, "Node %.40s (%s) reported node %.40s (%s) as not reachable.", sender->name,
+                                  sender->human_nodename, node->name, node->human_nodename);
                     }
                     markNodeAsFailingIfNeeded(node);
                 } else {
                     if (clusterNodeDelFailureReport(node, sender)) {
-                        serverLog(LL_VERBOSE, "Node %.40s (%s) reported node %.40s (%s) is back online.", sender->name,
+                        serverLog(LL_NOTICE, "Node %.40s (%s) reported node %.40s (%s) is back online.", sender->name,
                                   sender->human_nodename, node->name, node->human_nodename);
                     }
                 }
@@ -2993,7 +2991,7 @@ int clusterProcessPacket(clusterLink *link) {
                 /* If the reply has a non matching node ID we
                  * disconnect this node and set it as not having an associated
                  * address. */
-                serverLog(LL_DEBUG,
+                serverLog(LL_NOTICE,
                           "PONG contains mismatching sender ID. About node %.40s (%s) in shard %.40s added %d ms ago, "
                           "having flags %d",
                           link->node->name, link->node->human_nodename, link->node->shard_id,
@@ -4776,7 +4774,7 @@ void clusterCron(void) {
                 if (server.cluster->size == 1 && clusterNodeIsVotingPrimary(myself)) {
                     markNodeAsFailingIfNeeded(node);
                 } else {
-                    serverLog(LL_DEBUG, "*** NODE %.40s possibly failing", node->name);
+                    serverLog(LL_NOTICE, "NODE %.40s (%s) possibly failing.", node->name, node->human_nodename);
                 }
             }
         }

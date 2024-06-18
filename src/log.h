@@ -61,7 +61,8 @@ void valkeyLog(int level,
                const char *logfile,
                const char *fmt,
                ...) __attribute__((format(printf, 9, 10)));
-void valkeyLogFromHandler(int level, int daemonize, const char *logfile, const char *fmt, ...) __attribute__((format(printf, 4, 5)));
+void valkeyLogFromHandler(int level, int daemonize, const char *logfile, const char *fmt, ...)
+    __attribute__((format(printf, 4, 5)));
 #else
 void valkeyLog(int level,
                int syslog_enabled,

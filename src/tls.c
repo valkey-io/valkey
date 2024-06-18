@@ -774,13 +774,13 @@ static void tlsAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) 
     UNUSED(privdata);
 
     while (max--) {
-        cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
+        cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport, NULL);
         if (cfd == ANET_ERR) {
             if (errno != EWOULDBLOCK) serverLog(LL_WARNING, "Accepting client connection: %s", server.neterr);
             return;
         }
         serverLog(LL_VERBOSE, "Accepted %s:%d", cip, cport);
-        acceptCommonHandler(connCreateAcceptedTLS(cfd, &server.tls_auth_clients), flags, cip);
+        acceptCommonHandler(connCreateAcceptedTLS(cfd, &server.tls_auth_clients), flags, cip, NULL);
     }
 }
 

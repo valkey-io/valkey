@@ -1,6 +1,6 @@
 {
     "SHOW": {
-        "summary": "Show server-side lua script in the script cache.",
+        "summary": "Show server-side Lua script in the script cache.",
         "complexity": "O(1).",
         "group": "scripting",
         "since": "8.0.0",
@@ -20,7 +20,7 @@
             }
         ],
         "reply_schema": {
-            "description": "lua script if sha1 hash exists in script cache.",
+            "description": "Lua script if sha1 hash exists in script cache.",
             "type": "string"
         }
     }

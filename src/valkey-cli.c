@@ -2603,9 +2603,7 @@ static int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--lru-test") && !lastarg) {
             config.lru_test_mode = 1;
             config.lru_test_sample_size = strtoll(argv[++i], NULL, 10);
-        } else if (!strcmp(argv[i], "--slave")) {
-            config.replica_mode = 1;
-        } else if (!strcmp(argv[i], "--replica")) {
+        } else if (!strcmp(argv[i], "--slave") || !strcmp(argv[i], "--replica")) {
             config.replica_mode = 1;
         } else if (!strcmp(argv[i], "--stat")) {
             config.stat_mode = 1;
@@ -3148,11 +3146,11 @@ void cliLoadPreferences(void) {
  * history file. Currently these commands are include:
  * - AUTH
  * - ACL DELUSER, ACL SETUSER, ACL GETUSER
- * - CONFIG SET masterauth/masteruser/tls-key-file-pass/tls-client-key-file-pass/requirepass
+ * - CONFIG SET primaryauth/primaryuser/tls-key-file-pass/tls-client-key-file-pass/requirepass
  * - HELLO with [AUTH username password]
  * - MIGRATE with [AUTH password] or [AUTH2 username password]
  * - SENTINEL CONFIG SET sentinel-pass password, SENTINEL CONFIG SET sentinel-user username
- * - SENTINEL SET <mastername> auth-pass password, SENTINEL SET <mastername> auth-user username */
+ * - SENTINEL SET <primaryname> auth-pass password, SENTINEL SET <primaryname> auth-user username */
 static int isSensitiveCommand(int argc, char **argv) {
     if (!strcasecmp(argv[0], "auth")) {
         return 1;
@@ -3202,8 +3200,8 @@ static int isSensitiveCommand(int argc, char **argv) {
             (!strcasecmp(argv[3], "sentinel-pass") || !strcasecmp(argv[3], "sentinel-user"))) {
             return 1;
         }
-        /* SENTINEL SET <mastername> auth-pass password
-         * SENTINEL SET <mastername> auth-user username */
+        /* SENTINEL SET <primaryname> auth-pass password
+         * SENTINEL SET <primaryname> auth-user username */
         if (!strcasecmp(argv[1], "set") && (!strcasecmp(argv[3], "auth-pass") || !strcasecmp(argv[3], "auth-user"))) {
             return 1;
         }
@@ -4165,7 +4163,7 @@ static void clusterManagerOptimizeAntiAffinity(clusterManagerNodeArray *ipnodes,
     clusterManagerNode **offenders = NULL;
     int score = clusterManagerGetAntiAffinityScore(ipnodes, ip_count, NULL, NULL);
     if (score == 0) goto cleanup;
-    clusterManagerLogInfo(">>> Trying to optimize slaves allocation "
+    clusterManagerLogInfo(">>> Trying to optimize replicas allocation "
                           "for anti-affinity\n");
     int node_len = cluster_manager.nodes->len;
     int maxiter = 500 * node_len; // Effort is proportional to cluster size...
@@ -4219,9 +4217,9 @@ static void clusterManagerOptimizeAntiAffinity(clusterManagerNodeArray *ipnodes,
     if (perfect)
         msg = "[OK] Perfect anti-affinity obtained!";
     else if (score >= 10000)
-        msg = ("[WARNING] Some slaves are in the same host as their master");
+        msg = ("[WARNING] Some replicsa are in the same host as their primary");
     else
-        msg = ("[WARNING] Some slaves of the same master are in the same host");
+        msg = ("[WARNING] Some replicas of the same primary are in the same host");
     clusterManagerLog(log_level, "%s\n", msg);
 cleanup:
     zfree(offenders);
@@ -4447,13 +4445,13 @@ static void clusterManagerShowClusterInfo(void) {
                 return;
             };
             if (reply != NULL) freeReplyObject(reply);
-            printf("%s:%d (%s...) -> %lld keys | %d slots | %d slaves.\n", node->ip, node->port, name, dbsize,
+            printf("%s:%d (%s...) -> %lld keys | %d slots | %d replicas.\n", node->ip, node->port, name, dbsize,
                    node->slots_count, replicas);
             primaries++;
             keys += dbsize;
         }
     }
-    clusterManagerLogOk("[OK] %lld keys in %d masters.\n", keys, primaries);
+    clusterManagerLogOk("[OK] %lld keys in %d primaries.\n", keys, primaries);
     float keys_per_slot = keys / (float)CLUSTER_MANAGER_SLOTS;
     printf("%.2f keys per slot on average.\n", keys_per_slot);
 }
@@ -4993,7 +4991,8 @@ clusterManagerMoveSlot(clusterManagerNode *source, clusterManagerNode *target, i
          * unblocked with the role change error. */
         success = clusterManagerSetSlot(source, target, slot, "node", err);
         if (!success && err) {
-            const char *acceptable[] = {"ERR Please use SETSLOT only with masters.", "UNBLOCKED"};
+            const char *acceptable[] = {"ERR Please use SETSLOT only with masters.",
+                                        "ERR Please use SETSLOT only with primaries.", "UNBLOCKED"};
             for (size_t i = 0; i < sizeof(acceptable) / sizeof(acceptable[0]); i++) {
                 if (!strncmp(*err, acceptable[i], strlen(acceptable[i]))) {
                     zfree(*err);
@@ -5264,7 +5263,7 @@ static int clusterManagerNodeLoadInfo(clusterManagerNode *node, int opts, char *
                 currentNode->flags |= CLUSTER_MANAGER_FLAG_DISCONNECT;
             else if (strcmp(flag, "fail") == 0)
                 currentNode->flags |= CLUSTER_MANAGER_FLAG_FAIL;
-            else if (strcmp(flag, "slave") == 0) {
+            else if ((strcmp(flag, "slave") == 0) || (strcmp(flag, "replica") == 0)) {
                 currentNode->flags |= CLUSTER_MANAGER_FLAG_REPLICA;
                 if (primary_id != NULL) {
                     if (currentNode->replicate) sdsfree(currentNode->replicate);
@@ -5352,7 +5351,7 @@ static int clusterManagerLoadInfoFromNode(clusterManagerNode *node) {
             clusterManagerNode *primary = clusterManagerNodeByName(n->replicate);
             if (primary == NULL) {
                 clusterManagerLogWarn("*** WARNING: %s:%d claims to be "
-                                      "slave of unknown node ID %s.\n",
+                                      "replica of unknown node ID %s.\n",
                                       n->ip, n->port, n->replicate);
             } else
                 primary->replicas_count++;
@@ -5712,10 +5711,10 @@ static int clusterManagerFixSlotsCoverage(char *all_slots) {
 
     if (cluster_manager.unreachable_primaries > 0 && !force_fix) {
         clusterManagerLogWarn(
-            "*** Fixing slots coverage with %d unreachable masters is dangerous: valkey-cli will assume that slots "
-            "about masters that are not reachable are not covered, and will try to reassign them to the reachable "
+            "*** Fixing slots coverage with %d unreachable primaries is dangerous: valkey-cli will assume that slots "
+            "about primaries that are not reachable are not covered, and will try to reassign them to the reachable "
             "nodes. This can cause data loss and is rarely what you want to do. If you really want to proceed use the "
-            "--cluster-fix-with-unreachable-masters option.\n",
+            "--cluster-fix-with-unreachable-primaries option.\n",
             cluster_manager.unreachable_primaries);
         exit(1);
     }
@@ -5906,10 +5905,10 @@ static int clusterManagerFixOpenSlot(int slot) {
 
     if (cluster_manager.unreachable_primaries > 0 && !force_fix) {
         clusterManagerLogWarn(
-            "*** Fixing open slots with %d unreachable masters is dangerous: valkey-cli will assume that slots about "
-            "masters that are not reachable are not covered, and will try to reassign them to the reachable nodes. "
+            "*** Fixing open slots with %d unreachable primaries is dangerous: valkey-cli will assume that slots about "
+            "primaries that are not reachable are not covered, and will try to reassign them to the reachable nodes. "
             "This can cause data loss and is rarely what you want to do. If you really want to proceed use the "
-            "--cluster-fix-with-unreachable-masters option.\n",
+            "--cluster-fix-with-unreachable-primaries option.\n",
             cluster_manager.unreachable_primaries);
         exit(1);
     }
@@ -6420,7 +6419,7 @@ static int clusterManagerCheckCluster(int quiet) {
 static clusterManagerNode *clusterNodeForResharding(char *id, clusterManagerNode *target, int *raise_err) {
     clusterManagerNode *node = NULL;
     const char *invalid_node_msg = "*** The specified node (%s) is not known "
-                                   "or not a master, please retry.\n";
+                                   "or not a primary, please retry.\n";
     node = clusterManagerNodeByName(id);
     *raise_err = 0;
     if (!node || node->flags & CLUSTER_MANAGER_FLAG_REPLICA) {
@@ -6642,7 +6641,7 @@ static int clusterManagerCommandCreate(int argc, char **argv) {
     int primaries_count = CLUSTER_MANAGER_PRIMARIES_COUNT(node_len, replicas);
     if (primaries_count < 3) {
         clusterManagerLogErr("*** ERROR: Invalid configuration for cluster creation.\n"
-                             "*** Valkey Cluster requires at least 3 master nodes.\n"
+                             "*** Valkey Cluster requires at least 3 primary nodes.\n"
                              "*** This is not possible with %d nodes and %d replicas per node.",
                              node_len, replicas);
         clusterManagerLogErr("\n*** At least %d nodes are required.\n", 3 * (replicas + 1));
@@ -6696,7 +6695,7 @@ static int clusterManagerCommandCreate(int argc, char **argv) {
         long last = lround(cursor + slots_per_node - 1);
         if (last > CLUSTER_MANAGER_SLOTS || i == (primaries_count - 1)) last = CLUSTER_MANAGER_SLOTS - 1;
         if (last < first) last = first;
-        printf("Master[%d] -> Slots %ld - %ld\n", i, first, last);
+        printf("Primary[%d] -> Slots %ld - %ld\n", i, first, last);
         primary->slots_count = 0;
         for (j = first; j <= last; j++) {
             primary->slots[j] = 1;
@@ -6907,13 +6906,13 @@ static int clusterManagerCommandAddNode(int argc, char **argv) {
         if (primary_id != NULL) {
             primary_node = clusterManagerNodeByName(primary_id);
             if (primary_node == NULL) {
-                clusterManagerLogErr("[ERR] No such master ID %s\n", primary_id);
+                clusterManagerLogErr("[ERR] No such primary ID %s\n", primary_id);
                 return 0;
             }
         } else {
             primary_node = clusterManagerNodeWithLeastReplicas();
             assert(primary_node != NULL);
-            printf("Automatically selected master %s:%d\n", primary_node->ip, primary_node->port);
+            printf("Automatically selected primary %s:%d\n", primary_node->ip, primary_node->port);
         }
     }
 
@@ -7336,7 +7335,7 @@ static int clusterManagerCommandRebalance(int argc, char **argv) {
             float w = atof(++p);
             clusterManagerNode *n = clusterManagerNodeByAbbreviatedName(name);
             if (n == NULL) {
-                clusterManagerLogErr("*** No such master node %s\n", name);
+                clusterManagerLogErr("*** No such primary node %s\n", name);
                 result = 0;
                 goto cleanup;
             }
@@ -8130,13 +8129,13 @@ unsigned long long sendSync(redisContext *c, int send_sync, char *out_eof, int *
     if (send_sync) {
         /* Send the SYNC command. */
         if (cliWriteConn(c, "SYNC\r\n", 6) != 6) {
-            fprintf(stderr, "Error writing to master\n");
+            fprintf(stderr, "Error writing to primary\n");
             exit(1);
         }
     } else {
         /* We have written the command into c->obuf before. */
         if (cliWriteConn(c, "", 0) != 0) {
-            fprintf(stderr, "Error writing to master\n");
+            fprintf(stderr, "Error writing to primary\n");
             exit(1);
         }
     }
@@ -8155,7 +8154,7 @@ unsigned long long sendSync(redisContext *c, int send_sync, char *out_eof, int *
     }
     *p = '\0';
     if (buf[0] == '-') {
-        fprintf(stderr, "SYNC with master failed: %s\n", buf);
+        fprintf(stderr, "SYNC with primary failed: %s\n", buf);
         exit(1);
     }
 
@@ -8207,18 +8206,18 @@ static void replicaMode(int send_sync) {
         memset(lastbytes, 0, RDB_EOF_MARK_SIZE);
         usemark = 1;
         fprintf(stderr,
-                "%s with master, discarding "
+                "%s with primary, discarding "
                 "bytes of bulk transfer until EOF marker...\n",
                 info);
     } else if (out_full_mode == 1 && payload != 0) {
         /* SYNC without EOF marker or PSYNC +FULLRESYNC. */
         fprintf(stderr,
-                "%s with master, discarding %llu "
+                "%s with primary, discarding %llu "
                 "bytes of bulk transfer...\n",
                 info, payload);
     } else if (out_full_mode == 0 && payload == 0) {
         /* PSYNC +CONTINUE (no RDB payload). */
-        fprintf(stderr, "%s with master...\n", info);
+        fprintf(stderr, "%s with primary...\n", info);
     }
 
     /* Discard the payload. */
@@ -8247,12 +8246,12 @@ static void replicaMode(int send_sync) {
 
     if (usemark) {
         unsigned long long offset = ULLONG_MAX - payload;
-        fprintf(stderr, "%s done after %llu bytes. Logging commands from master.\n", info, offset);
+        fprintf(stderr, "%s done after %llu bytes. Logging commands from primary.\n", info, offset);
         /* put the replica online */
         sleep(1);
         sendReplconf("ACK", "0");
     } else
-        fprintf(stderr, "%s done. Logging commands from master.\n", info);
+        fprintf(stderr, "%s done. Logging commands from primary.\n", info);
 
     /* Now we can use hiredis to read the incoming protocol. */
     config.output = OUTPUT_CSV;
@@ -8289,11 +8288,11 @@ static void getRDB(clusterManagerNode *node) {
         memset(lastbytes, 0, RDB_EOF_MARK_SIZE);
         usemark = 1;
         fprintf(stderr,
-                "SYNC sent to master, writing bytes of bulk transfer "
+                "SYNC sent to primary, writing bytes of bulk transfer "
                 "until EOF marker to '%s'\n",
                 filename);
     } else {
-        fprintf(stderr, "SYNC sent to master, writing %llu bytes to '%s'\n", payload, filename);
+        fprintf(stderr, "SYNC sent to primary, writing %llu bytes to '%s'\n", payload, filename);
     }
 
     int write_to_stdout = !strcmp(filename, "-");

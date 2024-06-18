@@ -3149,7 +3149,11 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                     if (de != NULL) {
                         handled = 1;
                         rdbAuxFieldCodec *codec = (rdbAuxFieldCodec *)dictGetVal(de);
-                        if (codec->decoder(rdbflags, auxval->ptr) < 0) goto eoferr;
+                        if (codec->decoder(rdbflags, auxval->ptr) == C_ERR) {
+                            decrRefCount(auxkey);
+                            decrRefCount(auxval);
+                            goto eoferr;
+                        }
                     }
                 }
 

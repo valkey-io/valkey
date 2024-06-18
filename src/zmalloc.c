@@ -362,12 +362,13 @@ size_t zmalloc_usable_size(void *ptr) {
 }
 #endif
 
-/* Frees the memory buffer pointed by ptr and updates statistics. When using
+/* Frees the memory buffer pointed to by ptr and updates statistics. When using
  * jemalloc it uses the fast track by specifying the buffer size.
  *
- * ptr must point to the start of the buffer. It must have been returned by a
- * previous call to the system allocator. ptr must not be NULL. The caller is
- * responsible to provide the real allocaction size. */
+ * ptr must have been returned by a previous call to the system allocator which
+ * returned the usable size, such as zmalloc_usable. ptr must not be NULL. The
+ * caller is responsible to provide the actual allocation size, which may be
+ * different from the requested size */
 static inline void zfree_internal(void *ptr, size_t size) {
     assert(ptr != NULL);
     update_zmalloc_stat_free(size);

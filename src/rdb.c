@@ -1349,15 +1349,16 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
         int curr_slot = kvstoreIteratorGetCurrentDictIndex(kvs_it);
         /* Save slot info. */
         if (server.cluster_enabled && curr_slot != last_slot) {
-            if ((res = rdbSaveType(rdb, RDB_OPCODE_SLOT_INFO)) < 0) goto werr;
-            written += res;
-            if ((res = rdbSaveLen(rdb, curr_slot)) < 0) goto werr;
-            written += res;
-            if ((res = rdbSaveLen(rdb, kvstoreDictSize(db->keys, curr_slot))) < 0) goto werr;
-            written += res;
-            if ((res = rdbSaveLen(rdb, kvstoreDictSize(db->expires, curr_slot))) < 0) goto werr;
-            written += res;
+            sds slot_info = sdscatprintf(sdsempty(), "%i,%lu,%lu",
+                                         curr_slot,
+                                         kvstoreDictSize(db->keys, curr_slot),
+                                         kvstoreDictSize(db->expires, curr_slot));
+            if ((res = rdbSaveAuxFieldStrStr(rdb, "slot-info", slot_info)) < 0) {
+                sdsfree(slot_info);
+                goto werr;
+            }
             last_slot = curr_slot;
+            sdsfree(slot_info);
         }
         sds keystr = dictGetKey(de);
         robj key, *o = dictGetVal(de);
@@ -3078,20 +3079,6 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             if ((expires_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             should_expand_db = 1;
             continue; /* Read next opcode. */
-        } else if (type == RDB_OPCODE_SLOT_INFO) {
-            uint64_t slot_id, slot_size, expires_slot_size;
-            if ((slot_id = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
-            if ((slot_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
-            if ((expires_slot_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
-            if (!server.cluster_enabled) {
-                continue; /* Ignore gracefully. */
-            }
-            /* In cluster mode we resize individual slot specific dictionaries based on the number of keys that slot
-             * holds. */
-            kvstoreDictExpand(db->keys, slot_id, slot_size);
-            kvstoreDictExpand(db->expires, slot_id, expires_slot_size);
-            should_expand_db = 0;
-            continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB
              * which is backward compatible. Implementations of RDB loading
@@ -3141,6 +3128,24 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 if (isbase) serverLog(LL_NOTICE, "RDB is base AOF");
             } else if (!strcasecmp(auxkey->ptr, "redis-bits")) {
                 /* Just ignored. */
+            } else if (!strcasecmp(auxkey->ptr, "slot-info")) {
+                int slot_id;
+                unsigned long slot_size, expires_slot_size;
+                /* Try to parse the slot information. in case the number of parsed arguments is smaller than expected
+                 * Will fail the RDB load */
+                if (sscanf(auxval->ptr, "%i,%lu,%lu", &slot_id, &slot_size, &expires_slot_size) < 3) {
+                    decrRefCount(auxkey);
+                    decrRefCount(auxval);
+                    goto eoferr;
+                }
+
+                if (server.cluster_enabled) {
+                    /* In cluster mode we resize individual slot specific dictionaries based on the number of keys that slot
+                    * holds. */
+                    kvstoreDictExpand(db->keys, slot_id, slot_size);
+                    kvstoreDictExpand(db->expires, slot_id, expires_slot_size);
+                    should_expand_db = 0;
+                }
             } else {
                 /* Check if this is a dynamic aux field */
                 int handled = 0;

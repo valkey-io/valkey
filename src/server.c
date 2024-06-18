@@ -3869,12 +3869,12 @@ int processCommand(client *c) {
 
     if (!server.cluster_enabled &&
         c->capa & CLIENT_CAPA_REDIRECT &&
-        server.masterhost &&
+        server.primary_host &&
         !mustObeyClient(c) &&
         (is_write_command ||
          (is_read_command && !(c->flags & CLIENT_READONLY)))) {
         addReplyErrorSds(c,sdscatprintf(sdsempty(), "-REDIRECT %s:%d",
-                                                    server.masterhost, server.masterport));
+                                                    server.primary_host, server.primary_port));
         return C_OK;
     }
 

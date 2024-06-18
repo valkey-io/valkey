@@ -86,7 +86,6 @@ sudo apt-get install clang-format-18 -y
 [Clang Format Check/clang-format-check] Cleaning up container for job clang-format-check
 [Clang Format Check/clang-format-check] 🏁  Job succeeded
 ```
-```
 
 ## Developer Certificate of Origin
 

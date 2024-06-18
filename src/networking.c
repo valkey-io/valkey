@@ -1342,7 +1342,7 @@ void clientAcceptHandler(connection *conn) {
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);
 }
 
-void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
+void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip, const struct sockaddr_storage *sa) {
     client *c;
     UNUSED(ip);
 
@@ -1356,13 +1356,45 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
         connClose(conn);
         return;
     }
+    in_addr_t ip_addr = 0;
+    if (sa != NULL && sa->ss_family == AF_INET)
+        ip_addr = ((struct sockaddr_in *)sa)->sin_addr.s_addr;
+
+    if (server.trustedIPCount && ip_addr) {
+        if (/*!isTrustedNetwork(c) &&*/ !checkTrustedIP(ip_addr)) {
+            serverLog(LL_VERBOSE, "Access denied as connection is not from trusted source");
+
+            char *err = "-ERR client's IP is not found in trusted-addresses list, access denied\r\n";
+
+            /* That's a best effort error message, don't check write errors */
+            if (connWrite(conn,err,strlen(err)) == -1) {
+                /* Nothing to do, Just to avoid the warning... */
+            }
+            server.stat_rejected_conn++;
+            connClose(conn);
+            return;
+        }
+    } else if (server.trustedIPCount) {
+        serverLog(LL_VERBOSE, "Source address is not valid, client id");
+
+        char *err = "-ERR unable to retrieve valid IP address\r\n";
+
+        /* That's a best effort error message, don't check write errors */
+        if (connWrite(conn,err,strlen(err)) == -1) {
+            /* Nothing to do, Just to avoid the warning... */
+        }
+        server.stat_rejected_conn++;
+        connClose(conn);
+        return;
+    }
 
     /* Limit the number of connections we take at the same time.
      *
      * Admission control will happen before a client is created and connAccept()
      * called, because we don't want to even start transport-level negotiation
      * if rejected. */
-    if (listLength(server.clients) + getClusterConnectionsCount() >= server.maxclients) {
+    if (!checkTrustedIP(ip_addr) &&
+        (listLength(server.clients) + getClusterConnectionsCount() >= server.maxclients)) {
         char *err;
         if (server.cluster_enabled)
             err = "-ERR max number of clients + cluster "

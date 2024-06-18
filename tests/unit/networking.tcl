@@ -169,4 +169,26 @@ start_server {config "minimal.conf" tags {"external:skip"}} {
             assert_equal {PONG} [$r2 ping]
         }
     }
+
+    test {Set IPs to trusted-addresses config and returns expected IPs} {
+        assert_equal {OK} [r config set trusted-addresses 127.0.0.1]
+        assert_match {*127.0.0.1*} [r config get trusted-addresses]
+        assert_equal {OK} [r config set trusted-addresses 198.162.1.1]
+        assert_match {*127.0.0.1**198.162.1.1*} [r config get trusted-addresses]
+        r ping
+    } {PONG}
+
+    test {Non loopback client connection should be denied if IP is not in trusted-addresses list} {
+        set r2 [get_nonloopback_client]
+        catch {$r2 ping} err
+        assert_match {*client's IP is not found in trusted-addresses list*} $err
+    }
+
+    test {Non loopback client connection should be allowed if IP added to trusted-addresses list} {
+        set myaddr [get_nonloopback_addr]
+        assert_equal {OK} [r config set trusted-addresses $myaddr]
+        set r2 [get_nonloopback_client]
+        catch {$r2 ping} result
+        assert_match {*PONG*} $result
+    }
 }

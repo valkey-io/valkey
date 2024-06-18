@@ -1987,6 +1987,8 @@ void initServerConfig(void) {
     server.bindaddr_count = CONFIG_DEFAULT_BINDADDR_COUNT;
     for (j = 0; j < CONFIG_DEFAULT_BINDADDR_COUNT; j++) server.bindaddr[j] = zstrdup(default_bindaddr[j]);
     memset(server.listeners, 0x00, sizeof(server.listeners));
+    server.host_machine_ip = 0;
+    server.host_machine_netmask = 0;
     server.active_expire_enabled = 1;
     server.lazy_expire_disabled = 0;
     server.skip_checksum_validation = 0;
@@ -2580,6 +2582,25 @@ void initServer(void) {
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;
     resetReplicationBuffer();
+    char *default_bindaddr[CONFIG_DEFAULT_BINDADDR_COUNT] = CONFIG_DEFAULT_BINDADDR;
+    if (server.bindaddr_count > 0 && strcmp(server.bindaddr[0],default_bindaddr[0])) {
+        serverLog(LL_WARNING, "bind adrs.%d  : %s",server.bindaddr_count, server.bindaddr[0]);
+        server.host_machine_ip = inet_addr(server.bindaddr[0]);
+    } else {
+        serverLog(LL_WARNING, "local loopback.");
+        server.host_machine_ip = inet_addr("127.0.0.1");
+    }
+
+    if (server.host_machine_ip <= 0) {
+        serverLog(LL_WARNING, "Can not get host machine network ip, exiting.");
+        exit(1);
+    }
+
+    server.host_machine_netmask = getIPv4Netmask(server.host_machine_ip);
+    if (server.host_machine_netmask <= 0) {
+        serverLog(LL_WARNING, "Can not get host machine network netmask, exiting.");
+        exit(1);
+    }
 
     /* Make sure the locale is set on startup based on the config file. */
     if (setlocale(LC_COLLATE, server.locale_collate) == NULL) {

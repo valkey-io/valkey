@@ -312,13 +312,14 @@ static void connSocketAcceptHandler(aeEventLoop *el, int fd, void *privdata, int
     UNUSED(privdata);
 
     while (max--) {
-        cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
+        struct sockaddr_storage sa;
+        cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport, &sa);
         if (cfd == ANET_ERR) {
             if (errno != EWOULDBLOCK) serverLog(LL_WARNING, "Accepting client connection: %s", server.neterr);
             return;
         }
         serverLog(LL_VERBOSE, "Accepted %s:%d", cip, cport);
-        acceptCommonHandler(connCreateAcceptedSocket(cfd, NULL), flags, cip);
+        acceptCommonHandler(connCreateAcceptedSocket(cfd, NULL), flags, cip, &sa);
     }
 }
 

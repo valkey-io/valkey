@@ -51,13 +51,15 @@
 #undef ip_len
 #endif
 
+struct sockaddr_storage;
+
 int anetTcpNonBlockConnect(char *err, const char *addr, int port);
 int anetTcpNonBlockBestEffortBindConnect(char *err, const char *addr, int port, const char *source_addr);
 int anetResolve(char *err, char *host, char *ipbuf, size_t ipbuf_len, int flags);
 int anetTcpServer(char *err, int port, char *bindaddr, int backlog);
 int anetTcp6Server(char *err, int port, char *bindaddr, int backlog);
 int anetUnixServer(char *err, char *path, mode_t perm, int backlog);
-int anetTcpAccept(char *err, int serversock, char *ip, size_t ip_len, int *port);
+int anetTcpAccept(char *err, int serversock, char *ip, size_t ip_len, int *port, struct sockaddr_storage *client_addr);
 int anetUnixAccept(char *err, int serversock);
 int anetNonBlock(char *err, int fd);
 int anetBlock(char *err, int fd);

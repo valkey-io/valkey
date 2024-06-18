@@ -39,6 +39,7 @@
 #include <string.h>
 #include <locale.h>
 #include <ctype.h>
+#include <arpa/inet.h>
 
 /*-----------------------------------------------------------------------------
  * Config file name-value maps.
@@ -2857,6 +2858,84 @@ static sds getConfigNotifyKeyspaceEventsOption(standardConfig *config) {
     return keyspaceEventsFlagsToString(server.notify_keyspace_events);
 }
 
+static int setConfigTrustedAddresses(standardConfig *config, sds* argv, int argc, const char **err) {
+    UNUSED(config);
+    int j;
+    int skip = 0;
+
+    if ((unsigned int)argc > server.maxclients || server.trustedIPCount > server.maxclients) {
+        *err = "Too many addresses specified.";
+        return 0;
+    }
+
+    /* A single empty argument is treated as a zero address count */
+    if (argc == 1 && sdslen(argv[0]) == 0) argc = 0;
+
+    for (j = 0; j < argc; j++) {
+        const char* ip = zstrdup(argv[j]);
+        in_addr_t addr = inet_addr(ip);
+        if (addr == 0 || addr == INADDR_NONE) {
+            if(!ip) sds_free((void *)ip);
+            *err = "Invalid adress is specified.";
+            return 0;
+        }
+        if (server.trustedIPCount && checkTrustedIP(addr)) {
+            serverLog(LL_NOTICE, "Do not add, IP is exist in the list");
+            skip++;
+            continue;
+        }
+        server.trustedIPList = zrealloc(server.trustedIPList,
+                                        sizeof(in_addr_t) * (server.trustedIPCount + j - skip + 1));
+        server.trustedIPList[j + server.trustedIPCount - skip] = addr;
+        sds_free((void *)ip);
+    }
+    server.trustedIPCount = server.trustedIPCount + j - skip;
+    valkeySortIP(server.trustedIPList, server.trustedIPCount);
+
+    return 1;
+}
+
+static sds getConfigTrustedAddresses(standardConfig *config) {
+    UNUSED(config);
+
+    unsigned int i;
+    sds reply = sdsempty();
+
+    for (i = 0; i < server.trustedIPCount; i++) {
+        struct in_addr addr = { 0 };
+        addr.s_addr = server.trustedIPList[i];
+        reply = sdscat(reply, inet_ntoa(addr));
+        if (i != (server.trustedIPCount - 1)) {
+            reply = sdscat(reply," ");
+        }
+    }
+    return reply;
+}
+
+/* Rewrite the trusted-addresses option. Rewrites trusted-addresses parameters,
+ * or simply return to avoid the defaults from being used.*/
+void rewriteConfigTrustedAdresses(standardConfig *config, const char *name, struct rewriteConfigState *state) {
+    UNUSED(config);
+    sds line = sdsempty();
+
+    if (!server.trustedIPCount) {
+        sdsfree(line);
+        return;
+    } else {
+        line = sdscat(line,name);
+        line = sdscat(line," ");
+        for (unsigned int j = 0; j < server.trustedIPCount; j++) {
+            struct in_addr addr = { 0 };
+            addr.s_addr = server.trustedIPList[j];
+            line = sdscat(line, inet_ntoa(addr));
+            if (j != (server.trustedIPCount - 1)) {
+                line = sdscat(line," ");
+            }
+        }
+    }
+    rewriteConfigRewriteLine(state, name, line, 1);
+}
+
 static int setConfigBindOption(standardConfig *config, sds *argv, int argc, const char **err) {
     UNUSED(config);
     int j;
@@ -3244,6 +3323,7 @@ standardConfig static_configs[] = {
     createSpecialConfig("bind", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigBindOption, getConfigBindOption, rewriteConfigBindOption, applyBind),
     createSpecialConfig("replicaof", "slaveof", IMMUTABLE_CONFIG | MULTI_ARG_CONFIG, setConfigReplicaOfOption, getConfigReplicaOfOption, rewriteConfigReplicaOfOption, NULL),
     createSpecialConfig("latency-tracking-info-percentiles", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigLatencyTrackingInfoPercentilesOutputOption, getConfigLatencyTrackingInfoPercentilesOutputOption, rewriteConfigLatencyTrackingInfoPercentilesOutputOption, NULL),
+    createSpecialConfig("trusted-addresses", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigTrustedAddresses, getConfigTrustedAddresses, rewriteConfigTrustedAdresses, NULL),
 
     /* NULL Terminator, this is dropped when we convert to the runtime array. */
     {NULL}

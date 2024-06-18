@@ -1650,6 +1650,10 @@ struct valkeyServer {
     list *replicas, *monitors;             /* List of replicas and MONITORs */
     client *current_client;                /* The client that triggered the command execution (External or AOF). */
     client *executing_client;              /* The client executing the current command (possibly script or module). */
+    in_addr_t host_machine_ip;             /*Listening ip for host machine network*/
+    in_addr_t host_machine_netmask;        /*Netmask for host_machine_ip*/
+    in_addr_t *trustedIPList;
+    unsigned int trustedIPCount;
 
 #ifdef LOG_REQ_RES
     char *req_res_logfile; /* Path of log file for logging all requests and their replies. If NULL, no logging will be
@@ -2639,6 +2643,7 @@ void dictVanillaFree(dict *d, void *val);
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)
 
 
+struct sockaddr_storage;
 client *createClient(connection *conn);
 void freeClient(client *c);
 void freeClientAsync(client *c);
@@ -2656,7 +2661,7 @@ void setDeferredSetLen(client *c, void *node, long length);
 void setDeferredAttributeLen(client *c, void *node, long length);
 void setDeferredPushLen(client *c, void *node, long length);
 int processInputBuffer(client *c);
-void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip);
+void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip, const struct sockaddr_storage *sa);
 void readQueryFromClient(connection *conn);
 int prepareClientToWrite(client *c);
 void addReplyNull(client *c);
@@ -2758,6 +2763,13 @@ void ioThreadWriteToClient(void *data);
 int canParseCommand(client *c);
 int processIOThreadsReadDone(void);
 int processIOThreadsWriteDone(void);
+void setTrustedNetworkFlag(client *c, const struct sockaddr_storage *sa);
+int isUnixNetwork(client *c);
+int checkConnFromTrustedNetwork(client *c);
+int isTrustedNetwork(client *c);
+in_addr_t getIPv4Netmask(in_addr_t ip);
+int checkTrustedIP(in_addr_t ip);
+void valkeySortIP(in_addr_t *IPlist, unsigned int IPcount);
 
 /* logreqres.c - logging of requests and responses */
 void reqresReset(client *c, int free_buf);

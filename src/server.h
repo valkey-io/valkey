@@ -704,11 +704,11 @@ typedef enum {
 #define serverPanic(...) _serverPanic(__FILE__, __LINE__, __VA_ARGS__), valkey_unreachable()
 
 /* The following macros provide a conditional assertion that is only executed
- * when the server config 'enable-debug-assert' is true. This is useful for adding
+ * when the server config 'debug-assert-enabled' is true. This is useful for adding
  * assertions that are too computationally expensive or risky to run in normal
  * operation, but are valuable for debugging or testing. */
-#define debugServerAssert(...) (server.enable_debug_assert ? serverAssert(__VA_ARGS__) : (void)0)
-#define debugServerAssertWithInfo(...) (server.enable_debug_assert ? serverAssertWithInfo(__VA_ARGS__) : (void)0)
+#define debugServerAssert(...) (server.debug_assert_enabled ? serverAssert(__VA_ARGS__) : (void)0)
+#define debugServerAssertWithInfo(...) (server.debug_assert_enabled ? serverAssertWithInfo(__VA_ARGS__) : (void)0)
 
 /* latency histogram per command init settings */
 #define LATENCY_HISTOGRAM_MIN_VALUE 1L          /* >= 1 nanosec */
@@ -1683,7 +1683,7 @@ struct valkeyServer {
     int enable_protected_configs; /* Enable the modification of protected configs, see PROTECTED_ACTION_ALLOWED_* */
     int enable_debug_cmd;         /* Enable DEBUG commands, see PROTECTED_ACTION_ALLOWED_* */
     int enable_module_cmd;        /* Enable MODULE commands, see PROTECTED_ACTION_ALLOWED_* */
-    int enable_debug_assert;      /* Enable debug asserts */
+    int debug_assert_enabled;     /* Enable debug asserts */
 
     /* RDB / AOF loading information */
     volatile sig_atomic_t loading;       /* We are loading data from disk if true */

@@ -3134,8 +3134,8 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
 
     if (!strncmp(reply, "-FULLSYNCNEEDED", 15)) {
         /* A response of -FULLSYNCNEEDED from the master implies that partial 
-         * synchronization is not possible. Full sync will continue on dedicated 
-         * RDB channel. */
+         * synchronization is not possible and that the primary supports full
+         * sync using dedicated RDB channel. Full sync will continue that way. */
         server.master_supports_rdb_channel = 1;
         serverLog(LL_NOTICE, "PSYNC is not possible, initialize RDB channel.");
         sdsfree(reply);

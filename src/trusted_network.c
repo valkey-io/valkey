@@ -23,7 +23,9 @@ void valkeySortIP(in_addr_t *IPlist, unsigned int IPcount) {
 }
 
 int checkTrustedIP(in_addr_t ip) {
-    return bsearch(&ip, server.trustedIPList, server.trustedIPCount, sizeof(server.trustedIPList[0]), compareIP) != NULL ? 1 : 0;
+    return bsearch(&ip, server.trustedIPList, server.trustedIPCount, sizeof(server.trustedIPList[0]), compareIP) != NULL
+                ? 1 
+                : 0;
 }
 
 int isUnixNetwork(client *c) {

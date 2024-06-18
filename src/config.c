@@ -2884,7 +2884,7 @@ static int setConfigTrustedAddresses(standardConfig *config, sds *argv, int argc
             skip++;
             continue;
         }
-        server.trustedIPList = 
+        server.trustedIPList =
             zrealloc(server.trustedIPList, sizeof(in_addr_t) * (server.trustedIPCount + j - skip + 1));
         server.trustedIPList[j + server.trustedIPCount - skip] = addr;
         sds_free((void *)ip);

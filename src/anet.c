@@ -647,7 +647,7 @@ int anetTcpAccept(char *err, int serversock, char *ip, size_t ip_len, int *port,
         if (port) *port = ntohs(s->sin6_port);
     }
     if (client_addr) {
-        memcpy(client_addr, &sa, sizeof(sa)); 
+        memcpy(client_addr, &sa, sizeof(sa));
     }
     return fd;
 }

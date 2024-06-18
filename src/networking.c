@@ -1379,7 +1379,7 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip, c
         char *err = "-ERR unable to retrieve valid IP address\r\n";
 
         /* That's a best effort error message, don't check write errors */
-        if (connWrite(conn,err,strlen(err)) == -1) {
+        if (connWrite(conn, err, strlen(err)) == -1) {
             /* Nothing to do, Just to avoid the warning... */
         }
         server.stat_rejected_conn++;

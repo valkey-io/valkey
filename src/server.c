@@ -2583,8 +2583,8 @@ void initServer(void) {
     server.client_mem_usage_buckets = NULL;
     resetReplicationBuffer();
     char *default_bindaddr[CONFIG_DEFAULT_BINDADDR_COUNT] = CONFIG_DEFAULT_BINDADDR;
-    if (server.bindaddr_count > 0 && strcmp(server.bindaddr[0],default_bindaddr[0])) {
-        serverLog(LL_WARNING, "bind adrs.%d  : %s",server.bindaddr_count, server.bindaddr[0]);
+    if (server.bindaddr_count > 0 && strcmp(server.bindaddr[0], default_bindaddr[0])) {
+        serverLog(LL_WARNING, "bind adrs.%d  : %s", server.bindaddr_count, server.bindaddr[0]);
         server.host_machine_ip = inet_addr(server.bindaddr[0]);
     } else {
         serverLog(LL_WARNING, "local loopback.");

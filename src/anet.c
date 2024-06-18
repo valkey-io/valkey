@@ -630,7 +630,7 @@ static int anetGenericAccept(char *err, int s, struct sockaddr *sa, socklen_t *l
 
 /* Accept a connection and also make sure the socket is non-blocking, and CLOEXEC.
  * returns the new socket FD, or -1 on error.
-  * If client_addr is not null, it will receive a copy of the client's sockaddr_storage structure. */
+ * If client_addr is not null, it will receive a copy of the client's sockaddr_storage structure. */
 int anetTcpAccept(char *err, int serversock, char *ip, size_t ip_len, int *port, struct sockaddr_storage *client_addr) {
     int fd;
     struct sockaddr_storage sa;
@@ -646,7 +646,9 @@ int anetTcpAccept(char *err, int serversock, char *ip, size_t ip_len, int *port,
         if (ip) inet_ntop(AF_INET6, (void *)&(s->sin6_addr), ip, ip_len);
         if (port) *port = ntohs(s->sin6_port);
     }
-    if (client_addr) { memcpy(client_addr, &sa, sizeof(sa)); }
+    if (client_addr) {
+        memcpy(client_addr, &sa, sizeof(sa)); 
+    }
     return fd;
 }
 

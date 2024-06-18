@@ -1357,8 +1357,7 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip, c
         return;
     }
     in_addr_t ip_addr = 0;
-    if (sa != NULL && sa->ss_family == AF_INET)
-        ip_addr = ((struct sockaddr_in *)sa)->sin_addr.s_addr;
+    if (sa != NULL && sa->ss_family == AF_INET) ip_addr = ((struct sockaddr_in *)sa)->sin_addr.s_addr;
 
     if (server.trustedIPCount && ip_addr) {
         if (/*!isTrustedNetwork(c) &&*/ !checkTrustedIP(ip_addr)) {
@@ -1367,7 +1366,7 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip, c
             char *err = "-ERR client's IP is not found in trusted-addresses list, access denied\r\n";
 
             /* That's a best effort error message, don't check write errors */
-            if (connWrite(conn,err,strlen(err)) == -1) {
+            if (connWrite(conn, err, strlen(err)) == -1) {
                 /* Nothing to do, Just to avoid the warning... */
             }
             server.stat_rejected_conn++;
@@ -1393,8 +1392,7 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip, c
      * Admission control will happen before a client is created and connAccept()
      * called, because we don't want to even start transport-level negotiation
      * if rejected. */
-    if (!checkTrustedIP(ip_addr) &&
-        (listLength(server.clients) + getClusterConnectionsCount() >= server.maxclients)) {
+    if (!checkTrustedIP(ip_addr) && (listLength(server.clients) + getClusterConnectionsCount() >= server.maxclients)) {
         char *err;
         if (server.cluster_enabled)
             err = "-ERR max number of clients + cluster "

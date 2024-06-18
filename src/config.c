@@ -2858,7 +2858,7 @@ static sds getConfigNotifyKeyspaceEventsOption(standardConfig *config) {
     return keyspaceEventsFlagsToString(server.notify_keyspace_events);
 }
 
-static int setConfigTrustedAddresses(standardConfig *config, sds* argv, int argc, const char **err) {
+static int setConfigTrustedAddresses(standardConfig *config, sds *argv, int argc, const char **err) {
     UNUSED(config);
     int j;
     int skip = 0;
@@ -2872,10 +2872,10 @@ static int setConfigTrustedAddresses(standardConfig *config, sds* argv, int argc
     if (argc == 1 && sdslen(argv[0]) == 0) argc = 0;
 
     for (j = 0; j < argc; j++) {
-        const char* ip = zstrdup(argv[j]);
+        const char *ip = zstrdup(argv[j]);
         in_addr_t addr = inet_addr(ip);
         if (addr == 0 || addr == INADDR_NONE) {
-            if(!ip) sds_free((void *)ip);
+            if (!ip) sds_free((void *)ip);
             *err = "Invalid address is specified.";
             return 0;
         }
@@ -2884,8 +2884,8 @@ static int setConfigTrustedAddresses(standardConfig *config, sds* argv, int argc
             skip++;
             continue;
         }
-        server.trustedIPList = zrealloc(server.trustedIPList,
-                                        sizeof(in_addr_t) * (server.trustedIPCount + j - skip + 1));
+        server.trustedIPList = 
+            zrealloc(server.trustedIPList, sizeof(in_addr_t) * (server.trustedIPCount + j - skip + 1));
         server.trustedIPList[j + server.trustedIPCount - skip] = addr;
         sds_free((void *)ip);
     }
@@ -2902,11 +2902,11 @@ static sds getConfigTrustedAddresses(standardConfig *config) {
     sds reply = sdsempty();
 
     for (i = 0; i < server.trustedIPCount; i++) {
-        struct in_addr addr = { 0 };
+        struct in_addr addr = {0};
         addr.s_addr = server.trustedIPList[i];
         reply = sdscat(reply, inet_ntoa(addr));
         if (i != (server.trustedIPCount - 1)) {
-            reply = sdscat(reply," ");
+            reply = sdscat(reply, " ");
         }
     }
     return reply;
@@ -2922,14 +2922,14 @@ void rewriteConfigTrustedAddresses(standardConfig *config, const char *name, str
         sdsfree(line);
         return;
     } else {
-        line = sdscat(line,name);
-        line = sdscat(line," ");
+        line = sdscat(line, name);
+        line = sdscat(line, " ");
         for (unsigned int j = 0; j < server.trustedIPCount; j++) {
-            struct in_addr addr = { 0 };
+            struct in_addr addr = {0};
             addr.s_addr = server.trustedIPList[j];
             line = sdscat(line, inet_ntoa(addr));
             if (j != (server.trustedIPCount - 1)) {
-                line = sdscat(line," ");
+                line = sdscat(line, " ");
             }
         }
     }

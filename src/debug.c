@@ -430,8 +430,8 @@ void debugCommand(client *c) {
             "DROP-CLUSTER-PACKET-FILTER <packet-type>",
             "    Drop all packets that match the filtered type. Set to -1 allow all packets.",
             "CLOSE-CLUSTER-LINK-ON-PACKET-DROP <0|1>",
-            "    This is valid only when DROP-CLUSTER-PACKET-FILTER is set to a valid packet type."
-            "    When set to 1, the cluster link is closed after dropping a packet based on the filter."
+            "    This is valid only when DROP-CLUSTER-PACKET-FILTER is set to a valid packet type.",
+            "    When set to 1, the cluster link is closed after dropping a packet based on the filter.",
             "OOM",
             "    Crash the server simulating an out-of-memory error.",
             "PANIC",

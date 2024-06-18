@@ -1,6 +1,6 @@
 {
-    "DUMP": {
-        "summary": "Dump server-side Lua script in the script cache.",
+    "SHOW": {
+        "summary": "Show server-side lua script in the script cache.",
         "complexity": "O(1).",
         "group": "scripting",
         "since": "8.0.0",

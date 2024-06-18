@@ -675,8 +675,8 @@ void scriptCommand(client *c) {
 "    Kill the currently executing Lua script.",
 "LOAD <script>",
 "    Load a script into the scripts cache without executing it.",
-"DUMP <sha1>",
-"    Dump a script from the scripts cache.",
+"SHOW <sha1>",
+"    Show a script from the scripts cache.",
 NULL
         };
         /* clang-format on */
@@ -730,7 +730,7 @@ NULL
             addReplyError(c, "Use SCRIPT DEBUG YES/SYNC/NO");
             return;
         }
-    } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr, "dump")) {
+    } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr, "show")) {
         dictEntry *de;
         luaScript *ls;
 

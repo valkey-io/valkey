@@ -638,19 +638,19 @@ start_server {tags {"scripting"}} {
             [r evalsha b534286061d4b9e4026607613b95c06c06015ae8 0]
     } {b534286061d4b9e4026607613b95c06c06015ae8 loaded}
 
-    test {SCRIPT DUMP - is able to dump scripts from the scripting cache} {
+    test {SCRIPT SHOW - is able to dump scripts from the scripting cache} {
         r script load "return 'dump'"
-        r script dump 4f5a49d7b18244a3b100d159b78b51474e23e081
+        r script show 4f5a49d7b18244a3b100d159b78b51474e23e081
     } {return 'dump'}
 
-    test {SCRIPT DUMP - wrong sha1 length or invalid sha1 char return noscript error} {
-        assert_error {NOSCRIPT*} {r script dump b534286061d4b06c06015ae8}
-        assert_error {NOSCRIPT*} {r script dump AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA}
+    test {SCRIPT SHOW - wrong sha1 length or invalid sha1 char return noscript error} {
+        assert_error {NOSCRIPT*} {r script show b534286061d4b06c06015ae8}
+        assert_error {NOSCRIPT*} {r script show AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA}
     }
 
-    test {SCRIPT DUMP - script not exist return noscript error} {
+    test {SCRIPT SHOW - script not exist return noscript error} {
         r script flush
-        assert_error {NOSCRIPT*} {r script dump 4f5a49d7b18244a3b100d159b78b51474e23e081}
+        assert_error {NOSCRIPT*} {r script show 4f5a49d7b18244a3b100d159b78b51474e23e081}
     }
 
     test "SORT is normally not alpha re-ordered for the scripting engine" {

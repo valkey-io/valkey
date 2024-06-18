@@ -4991,7 +4991,8 @@ clusterManagerMoveSlot(clusterManagerNode *source, clusterManagerNode *target, i
          * unblocked with the role change error. */
         success = clusterManagerSetSlot(source, target, slot, "node", err);
         if (!success && err) {
-            const char *acceptable[] = {"ERR Please use SETSLOT only with ", "UNBLOCKED"};
+            const char *acceptable[] = {"ERR Please use SETSLOT only with masters.",
+                                        "ERR Please use SETSLOT only with primaries.", "UNBLOCKED"};
             for (size_t i = 0; i < sizeof(acceptable) / sizeof(acceptable[0]); i++) {
                 if (!strncmp(*err, acceptable[i], strlen(acceptable[i]))) {
                     zfree(*err);

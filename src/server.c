@@ -3803,10 +3803,11 @@ int commandCheckArgTokenDuplicacy(client *c, sds *err) {
     if (c->argc <= 4) return 1;
     for (int iter = 0; iter < c->cmd->num_args; iter++) {
         if (c->cmd->args[iter].token && !(c->cmd->args[iter].flags & CMD_ARG_MULTIPLE_TOKEN)) {
-            if(!findDuplicatesOptions(c, c->cmd->args[iter].token)) {
+            if (!findDuplicatesOptions(c, c->cmd->args[iter].token)) {
                 if (err) {
                     *err = sdsnew(NULL);
-                    *err = sdscatprintf(*err, "duplicate '%s' option for '%s' command", c->cmd->args[iter].token, c->cmd->fullname);
+                    *err = sdscatprintf(*err, "duplicate '%s' option for '%s' command", c->cmd->args[iter].token,
+                                        c->cmd->fullname);
                 }
                 return 0;
             }

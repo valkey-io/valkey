@@ -1350,7 +1350,7 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
         /* Save slot info. */
         if (server.cluster_enabled && curr_slot != last_slot) {
             sds slot_info = sdscatprintf(sdsempty(), "%i,%lu,%lu", curr_slot, kvstoreDictSize(db->keys, curr_slot),
-                                kvstoreDictSize(db->expires, curr_slot));
+                                         kvstoreDictSize(db->expires, curr_slot));
             if ((res = rdbSaveAuxFieldStrStr(rdb, "slot-info", slot_info)) < 0) {
                 sdsfree(slot_info);
                 goto werr;
@@ -3138,7 +3138,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 }
 
                 if (server.cluster_enabled) {
-                    /* In cluster mode we resize individual slot specific dictionaries based on the number of keys that 
+                    /* In cluster mode we resize individual slot specific dictionaries based on the number of keys that
                      * slot holds. */
                     kvstoreDictExpand(db->keys, slot_id, slot_size);
                     kvstoreDictExpand(db->expires, slot_id, expires_slot_size);

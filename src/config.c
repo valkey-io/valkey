@@ -2876,7 +2876,7 @@ static int setConfigTrustedAddresses(standardConfig *config, sds* argv, int argc
         in_addr_t addr = inet_addr(ip);
         if (addr == 0 || addr == INADDR_NONE) {
             if(!ip) sds_free((void *)ip);
-            *err = "Invalid adress is specified.";
+            *err = "Invalid address is specified.";
             return 0;
         }
         if (server.trustedIPCount && checkTrustedIP(addr)) {
@@ -2914,7 +2914,7 @@ static sds getConfigTrustedAddresses(standardConfig *config) {
 
 /* Rewrite the trusted-addresses option. Rewrites trusted-addresses parameters,
  * or simply return to avoid the defaults from being used.*/
-void rewriteConfigTrustedAdresses(standardConfig *config, const char *name, struct rewriteConfigState *state) {
+void rewriteConfigTrustedAddresses(standardConfig *config, const char *name, struct rewriteConfigState *state) {
     UNUSED(config);
     sds line = sdsempty();
 
@@ -3323,7 +3323,7 @@ standardConfig static_configs[] = {
     createSpecialConfig("bind", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigBindOption, getConfigBindOption, rewriteConfigBindOption, applyBind),
     createSpecialConfig("replicaof", "slaveof", IMMUTABLE_CONFIG | MULTI_ARG_CONFIG, setConfigReplicaOfOption, getConfigReplicaOfOption, rewriteConfigReplicaOfOption, NULL),
     createSpecialConfig("latency-tracking-info-percentiles", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigLatencyTrackingInfoPercentilesOutputOption, getConfigLatencyTrackingInfoPercentilesOutputOption, rewriteConfigLatencyTrackingInfoPercentilesOutputOption, NULL),
-    createSpecialConfig("trusted-addresses", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigTrustedAddresses, getConfigTrustedAddresses, rewriteConfigTrustedAdresses, NULL),
+    createSpecialConfig("trusted-addresses", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigTrustedAddresses, getConfigTrustedAddresses, rewriteConfigTrustedAddresses, NULL),
 
     /* NULL Terminator, this is dropped when we convert to the runtime array. */
     {NULL}

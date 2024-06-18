@@ -35,6 +35,7 @@
 #include "solarisfixes.h"
 #include "rio.h"
 #include "commands.h"
+#include "log.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -122,7 +123,6 @@ struct hdr_histogram;
 #define OBJ_SHARED_INTEGERS 10000
 #define OBJ_SHARED_BULKHDR_LEN 32
 #define OBJ_SHARED_HDR_STRLEN(_len_) (((_len_) < 10) ? 4 : 5) /* see shared.mbulkhdr etc. */
-#define LOG_MAX_LEN 1024                                      /* Default maximum length of syslog messages.*/
 #define AOF_REWRITE_ITEMS_PER_CMD 64
 #define AOF_ANNOTATION_LINE_MAX_LEN 1024
 #define CONFIG_RUN_ID_SIZE 40
@@ -531,14 +531,6 @@ typedef enum {
 
 /* Sort operations */
 #define SORT_OP_GET 0
-
-/* Log levels */
-#define LL_DEBUG 0
-#define LL_VERBOSE 1
-#define LL_NOTICE 2
-#define LL_WARNING 3
-#define LL_NOTHING 4
-#define LL_RAW (1 << 10) /* Modifier to log without timestamp */
 
 /* Supervision options */
 #define SUPERVISED_NONE 0
@@ -3143,15 +3135,6 @@ void replyToClientsBlockedOnShutdown(void);
 int abortShutdown(void);
 void afterCommand(client *c);
 int mustObeyClient(client *c);
-#ifdef __GNUC__
-void _serverLog(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
-void serverLogFromHandler(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
-#else
-void serverLogFromHandler(int level, const char *fmt, ...);
-void _serverLog(int level, const char *fmt, ...);
-#endif
-void serverLogRaw(int level, const char *msg);
-void serverLogRawFromHandler(int level, const char *msg);
 void usage(void);
 void updateDictResizePolicy(void);
 void populateCommandTable(void);
@@ -3858,17 +3841,6 @@ void killThreads(void);
 void makeThreadKillable(void);
 void swapMainDbWithTempDb(serverDb *tempDb);
 sds getVersion(void);
-
-/* Use macro for checking log level to avoid evaluating arguments in cases log
- * should be ignored due to low level. */
-#define serverLog(level, ...)                                                                                          \
-    do {                                                                                                               \
-        if (((level) & 0xff) < server.verbosity) break;                                                                \
-        _serverLog(level, __VA_ARGS__);                                                                                \
-    } while (0)
-
-#define serverDebug(fmt, ...) printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)
-#define serverDebugMark() printf("-- MARK %s:%d --\n", __FILE__, __LINE__)
 
 int iAmPrimary(void);
 

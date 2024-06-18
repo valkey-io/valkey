@@ -30,9 +30,9 @@
 #include "server.h"
 #include "call_reply.h"
 
-#define REPLY_FLAG_ROOT (1<<0)
-#define REPLY_FLAG_PARSED (1<<1)
-#define REPLY_FLAG_RESP3 (1<<2)
+#define REPLY_FLAG_ROOT (1 << 0)
+#define REPLY_FLAG_PARSED (1 << 1)
+#define REPLY_FLAG_RESP3 (1 << 2)
 
 /* --------------------------------------------------------
  * An opaque struct used to parse a RESP protocol reply and
@@ -44,9 +44,9 @@ struct CallReply {
     sds original_proto; /* Available only for root reply. */
     const char *proto;
     size_t proto_len;
-    int type;       /* REPLY_... */
-    int flags;      /* REPLY_FLAG... */
-    size_t len;     /* Length of a string, or the number elements in an array. */
+    int type;   /* REPLY_... */
+    int flags;  /* REPLY_FLAG... */
+    size_t len; /* Length of a string, or the number elements in an array. */
     union {
         const char *str; /* String pointer for string and error replies. This
                           * does not need to be freed, always points inside
@@ -55,9 +55,9 @@ struct CallReply {
         struct {
             const char *str;
             const char *format;
-        } verbatim_str;  /* Reply value for verbatim string */
-        long long ll;    /* Reply value for integer reply. */
-        double d;        /* Reply value for double reply. */
+        } verbatim_str;          /* Reply value for verbatim string */
+        long long ll;            /* Reply value for integer reply. */
+        double d;                /* Reply value for double reply. */
         struct CallReply *array; /* Array of sub-reply elements. used for set, array, map, and attribute */
     } val;
     list *deferred_error_list;   /* list of errors in sds form or NULL */
@@ -119,7 +119,12 @@ static void callReplyDouble(void *ctx, double val, const char *proto, size_t pro
     rep->val.d = val;
 }
 
-static void callReplyVerbatimString(void *ctx, const char *format, const char *str, size_t len, const char *proto, size_t proto_len) {
+static void callReplyVerbatimString(void *ctx,
+                                    const char *format,
+                                    const char *str,
+                                    size_t len,
+                                    const char *proto,
+                                    size_t proto_len) {
     CallReply *rep = ctx;
     callReplySetSharedData(rep, VALKEYMODULE_REPLY_VERBATIM_STRING, proto, proto_len, REPLY_FLAG_RESP3);
     rep->len = len;
@@ -140,11 +145,15 @@ static void callReplyBool(void *ctx, int val, const char *proto, size_t proto_le
     rep->val.ll = val;
 }
 
-static void callReplyParseCollection(ReplyParser *parser, CallReply *rep, size_t len, const char *proto, size_t elements_per_entry) {
+static void callReplyParseCollection(ReplyParser *parser,
+                                     CallReply *rep,
+                                     size_t len,
+                                     const char *proto,
+                                     size_t elements_per_entry) {
     rep->len = len;
     rep->val.array = zcalloc(elements_per_entry * len * sizeof(CallReply));
     for (size_t i = 0; i < len * elements_per_entry; i += elements_per_entry) {
-        for (size_t j = 0 ; j < elements_per_entry ; ++j) {
+        for (size_t j = 0; j < elements_per_entry; ++j) {
             rep->val.array[i + j].private_data = rep->private_data;
             parseReply(parser, rep->val.array + i + j);
             rep->val.array[i + j].flags |= REPLY_FLAG_PARSED;
@@ -206,14 +215,14 @@ static void callReplyParseError(void *ctx) {
 /* Recursively free the current call reply and its sub-replies. */
 static void freeCallReplyInternal(CallReply *rep) {
     if (rep->type == VALKEYMODULE_REPLY_ARRAY || rep->type == VALKEYMODULE_REPLY_SET) {
-        for (size_t i = 0 ; i < rep->len ; ++i) {
+        for (size_t i = 0; i < rep->len; ++i) {
             freeCallReplyInternal(rep->val.array + i);
         }
         zfree(rep->val.array);
     }
 
     if (rep->type == VALKEYMODULE_REPLY_MAP || rep->type == VALKEYMODULE_REPLY_ATTRIBUTE) {
-        for (size_t i = 0 ; i < rep->len ; ++i) {
+        for (size_t i = 0; i < rep->len; ++i) {
             freeCallReplyInternal(rep->val.array + i * 2);
             freeCallReplyInternal(rep->val.array + i * 2 + 1);
         }
@@ -241,8 +250,7 @@ void freeCallReply(CallReply *rep) {
         freeCallReplyInternal(rep);
     }
     sdsfree(rep->original_proto);
-    if (rep->deferred_error_list)
-        listRelease(rep->deferred_error_list);
+    if (rep->deferred_error_list) listRelease(rep->deferred_error_list);
     zfree(rep);
 }
 
@@ -308,8 +316,7 @@ int callReplyType(CallReply *rep) {
  */
 const char *callReplyGetString(CallReply *rep, size_t *len) {
     callReplyParse(rep);
-    if (rep->type != VALKEYMODULE_REPLY_STRING &&
-        rep->type != VALKEYMODULE_REPLY_ERROR) return NULL;
+    if (rep->type != VALKEYMODULE_REPLY_STRING && rep->type != VALKEYMODULE_REPLY_ERROR) return NULL;
     if (len) *len = rep->len;
     return rep->val.str;
 }
@@ -351,22 +358,20 @@ int callReplyGetBool(CallReply *rep) {
  */
 size_t callReplyGetLen(CallReply *rep) {
     callReplyParse(rep);
-    switch(rep->type) {
-        case VALKEYMODULE_REPLY_STRING:
-        case VALKEYMODULE_REPLY_ERROR:
-        case VALKEYMODULE_REPLY_ARRAY:
-        case VALKEYMODULE_REPLY_SET:
-        case VALKEYMODULE_REPLY_MAP:
-        case VALKEYMODULE_REPLY_ATTRIBUTE:
-            return rep->len;
-        default:
-            return 0;
+    switch (rep->type) {
+    case VALKEYMODULE_REPLY_STRING:
+    case VALKEYMODULE_REPLY_ERROR:
+    case VALKEYMODULE_REPLY_ARRAY:
+    case VALKEYMODULE_REPLY_SET:
+    case VALKEYMODULE_REPLY_MAP:
+    case VALKEYMODULE_REPLY_ATTRIBUTE: return rep->len;
+    default: return 0;
     }
 }
 
 static CallReply *callReplyGetCollectionElement(CallReply *rep, size_t idx, int elements_per_entry) {
     if (idx >= rep->len * elements_per_entry) return NULL; // real len is rep->len * elements_per_entry
-    return rep->val.array+idx;
+    return rep->val.array + idx;
 }
 
 /* Return a reply array element at a given index. Applicable to:
@@ -476,7 +481,7 @@ const char *callReplyGetBigNumber(CallReply *rep, size_t *len) {
  * The returned value is not NULL terminated and its length is returned by
  * reference through len, which must not be NULL.
  */
-const char *callReplyGetVerbatim(CallReply *rep, size_t *len, const char **format){
+const char *callReplyGetVerbatim(CallReply *rep, size_t *len, const char **format) {
     callReplyParse(rep);
     if (rep->type != VALKEYMODULE_REPLY_VERBATIM_STRING) return NULL;
     *len = rep->len;
@@ -554,7 +559,7 @@ CallReply *callReplyCreateError(sds reply, void *private_data) {
         sdsfree(reply);
     }
     list *deferred_error_list = listCreate();
-    listSetFreeMethod(deferred_error_list, (void (*)(void*))sdsfree);
+    listSetFreeMethod(deferred_error_list, (void (*)(void *))sdsfree);
     listAddNodeTail(deferred_error_list, sdsnew(err_buff));
     return callReplyCreate(err_buff, deferred_error_list, private_data);
 }

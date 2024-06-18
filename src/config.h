@@ -77,9 +77,9 @@
 #endif
 
 /* Test for backtrace() */
-#if defined(__APPLE__) || (defined(__linux__) && defined(__GLIBC__)) || \
-    defined(__FreeBSD__) || ((defined(__OpenBSD__) || defined(__NetBSD__) || defined(__sun)) && defined(USE_BACKTRACE))\
- || defined(__DragonFly__) || (defined(__UCLIBC__) && defined(__UCLIBC_HAS_BACKTRACE__))
+#if defined(__APPLE__) || (defined(__linux__) && defined(__GLIBC__)) || defined(__FreeBSD__) ||                        \
+    ((defined(__OpenBSD__) || defined(__NetBSD__) || defined(__sun)) && defined(USE_BACKTRACE)) ||                     \
+    defined(__DragonFly__) || (defined(__UCLIBC__) && defined(__UCLIBC_HAS_BACKTRACE__))
 #define HAVE_BACKTRACE 1
 #endif
 
@@ -98,15 +98,22 @@
 #endif
 
 /* Test for accept4() */
-#if defined(__linux__) || \
-    defined(__FreeBSD__) || \
-    defined(OpenBSD5_7) || \
-    (defined(__DragonFly__) && __DragonFly_version >= 400305) || \
+#if defined(__linux__) || defined(__FreeBSD__) || defined(OpenBSD5_7) ||                                               \
+    (defined(__DragonFly__) && __DragonFly_version >= 400305) ||                                                       \
     (defined(__NetBSD__) && (defined(NetBSD8_0) || __NetBSD_Version__ >= 800000000))
 #define HAVE_ACCEPT4 1
 #endif
 
-#if (defined(__APPLE__) && defined(MAC_OS_10_6_DETECTED)) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined (__NetBSD__)
+/* Detect for pipe2() */
+#if defined(__linux__) || defined(__FreeBSD__) || defined(OpenBSD5_7) ||                                               \
+    (defined(__DragonFly__) && __DragonFly_version >= 400106) ||                                                       \
+    (defined(__NetBSD__) && (defined(NetBSD6_0) || __NetBSD_Version__ >= 600000000))
+#define HAVE_PIPE2 1
+#endif
+
+/* Detect for kqueue */
+#if (defined(__APPLE__) && defined(MAC_OS_10_6_DETECTED)) || defined(__DragonFly__) || defined(__FreeBSD__) ||         \
+    defined(__OpenBSD__) || defined(__NetBSD__)
 #define HAVE_KQUEUE 1
 #endif
 
@@ -169,11 +176,12 @@
  * the plain fsync() call. */
 #if (defined(__linux__) && defined(SYNC_FILE_RANGE_WAIT_BEFORE))
 #define HAVE_SYNC_FILE_RANGE 1
-#define rdb_fsync_range(fd,off,size) sync_file_range(fd,off,size,SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE)
+#define rdb_fsync_range(fd, off, size)                                                                                 \
+    sync_file_range(fd, off, size, SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE)
 #elif defined(__APPLE__)
-#define rdb_fsync_range(fd,off,size) fcntl(fd, F_FULLFSYNC)
+#define rdb_fsync_range(fd, off, size) fcntl(fd, F_FULLFSYNC)
 #else
-#define rdb_fsync_range(fd,off,size) fsync(fd)
+#define rdb_fsync_range(fd, off, size) fsync(fd)
 #endif
 
 /* Check if we can use setproctitle().
@@ -199,31 +207,27 @@ void setproctitle(const char *fmt, ...);
 
 #ifndef BYTE_ORDER
 #if (BSD >= 199103)
-# include <machine/endian.h>
+#include <machine/endian.h>
 #else
 #if defined(linux) || defined(__linux__)
-# include <endian.h>
+#include <endian.h>
 #else
-#define	LITTLE_ENDIAN	1234	/* least-significant byte first (vax, pc) */
-#define	BIG_ENDIAN	4321	/* most-significant byte first (IBM, net) */
-#define	PDP_ENDIAN	3412	/* LSB first in word, MSW first in long (pdp)*/
+#define LITTLE_ENDIAN 1234 /* least-significant byte first (vax, pc) */
+#define BIG_ENDIAN 4321    /* most-significant byte first (IBM, net) */
+#define PDP_ENDIAN 3412    /* LSB first in word, MSW first in long (pdp)*/
 
-#if defined(__i386__) || defined(__x86_64__) || defined(__amd64__) || \
-   defined(vax) || defined(ns32000) || defined(sun386) || \
-   defined(MIPSEL) || defined(_MIPSEL) || defined(BIT_ZERO_ON_RIGHT) || \
-   defined(__alpha__) || defined(__alpha)
-#define BYTE_ORDER    LITTLE_ENDIAN
+#if defined(__i386__) || defined(__x86_64__) || defined(__amd64__) || defined(vax) || defined(ns32000) ||              \
+    defined(sun386) || defined(MIPSEL) || defined(_MIPSEL) || defined(BIT_ZERO_ON_RIGHT) || defined(__alpha__) ||      \
+    defined(__alpha)
+#define BYTE_ORDER LITTLE_ENDIAN
 #endif
 
-#if defined(sel) || defined(pyr) || defined(mc68000) || defined(sparc) || \
-    defined(is68k) || defined(tahoe) || defined(ibm032) || defined(ibm370) || \
-    defined(MIPSEB) || defined(_MIPSEB) || defined(_IBMR2) || defined(DGUX) || \
-    defined(apollo) || defined(__convex__) || defined(_CRAY) || \
-    defined(__hppa) || defined(__hp9000) || \
-    defined(__hp9000s300) || defined(__hp9000s700) || \
-    defined (BIT_ZERO_ON_LEFT) || defined(m68k) || defined(__sparc) || \
-    (defined(__APPLE__) && defined(__POWERPC__))
-#define BYTE_ORDER    BIG_ENDIAN
+#if defined(sel) || defined(pyr) || defined(mc68000) || defined(sparc) || defined(is68k) || defined(tahoe) ||          \
+    defined(ibm032) || defined(ibm370) || defined(MIPSEB) || defined(_MIPSEB) || defined(_IBMR2) || defined(DGUX) ||   \
+    defined(apollo) || defined(__convex__) || defined(_CRAY) || defined(__hppa) || defined(__hp9000) ||                \
+    defined(__hp9000s300) || defined(__hp9000s700) || defined(BIT_ZERO_ON_LEFT) || defined(m68k) ||                    \
+    defined(__sparc) || (defined(__APPLE__) && defined(__POWERPC__))
+#define BYTE_ORDER BIG_ENDIAN
 #endif
 #endif /* linux */
 #endif /* BSD */
@@ -251,13 +255,12 @@ void setproctitle(const char *fmt, ...);
 #endif
 #endif
 
-#if !defined(BYTE_ORDER) || \
-    (BYTE_ORDER != BIG_ENDIAN && BYTE_ORDER != LITTLE_ENDIAN)
-	/* you must determine what the correct bit order is for
-	 * your compiler - the next line is an intentional error
-	 * which will force your compiles to bomb until you fix
-	 * the above macros.
-	 */
+#if !defined(BYTE_ORDER) || (BYTE_ORDER != BIG_ENDIAN && BYTE_ORDER != LITTLE_ENDIAN)
+/* you must determine what the correct bit order is for
+ * your compiler - the next line is an intentional error
+ * which will force your compiles to bomb until you fix
+ * the above macros.
+ */
 #error "Undefined or invalid BYTE_ORDER"
 #endif
 
@@ -278,7 +281,7 @@ void setproctitle(const char *fmt, ...);
 #if defined(__arm) && !defined(__arm__)
 #define __arm__
 #endif
-#if defined (__aarch64__) && !defined(__arm64__)
+#if defined(__aarch64__) && !defined(__arm64__)
 #define __arm64__
 #endif
 

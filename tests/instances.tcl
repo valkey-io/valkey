@@ -35,6 +35,7 @@ set ::leaked_fds_file [file normalize "tmp/leaked_fds.txt"]
 set ::pids {} ; # We kill everything at exit
 set ::dirs {} ; # We remove all the temp dirs at exit
 set ::run_matching {} ; # If non empty, only tests matching pattern are run.
+set ::exit_on_failure 0
 set ::stop_on_failure 0
 set ::loop 0
 
@@ -117,6 +118,8 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
         puts $cfg "repl-diskless-sync-delay 0"
         puts $cfg "dir ./$dirname"
         puts $cfg "logfile log.txt"
+        puts $cfg "enable-debug-assert yes"
+
         # Add additional config files
         foreach directive $conf {
             puts $cfg $directive
@@ -298,6 +301,8 @@ proc parse_options {} {
             set val2 [lindex $::argv [expr $j+2]]
             dict set ::global_config $val $val2
             incr j 2
+        } elseif {$opt eq {--fast-fail}} {
+            set ::exit_on_failure 1
         } elseif {$opt eq {--stop}} {
             set ::stop_on_failure 1
         } elseif {$opt eq {--loop}} {
@@ -316,6 +321,7 @@ proc parse_options {} {
             puts "--tls-module            Run tests in TLS mode with Valkey module."
             puts "--host <host>           Use hostname instead of 127.0.0.1."
             puts "--config <k> <v>        Extra config argument(s)."
+            puts "--fast-fail             Exit immediately once the first test fails."
             puts "--stop                  Blocks once the first test fails."
             puts "--loop                  Execute the specified set of tests forever."
             puts "--help                  Shows this help."
@@ -483,6 +489,11 @@ while 1 {
             incr ::failed
             # letting the tests resume, so we'll eventually reach the cleanup and report crashes
 
+            if {$::exit_on_failure} {
+                puts -nonewline "(Fast fail: test will exit now)"
+                flush stdout
+                exit 1
+            }
             if {$::stop_on_failure} {
                 puts -nonewline "(Test stopped, press enter to resume the tests)"
                 flush stdout

@@ -168,6 +168,21 @@ start_server {tags {"maxmemory external:skip"}} {
         r config set maxmemory 0
     }
 
+    test "Shared integers are unshared with maxmemory and LRU policy" {
+        r set a 1
+        r set b 1
+        assert_refcount_morethan a 1
+        assert_refcount_morethan b 1
+        r config set maxmemory 1073741824
+        r config set maxmemory-policy allkeys-lru
+        r get a
+        assert_refcount 1 a
+        r config set maxmemory-policy volatile-lru
+        r get b
+        assert_refcount 1 b
+        r config set maxmemory 0
+    }
+
     foreach policy {
         allkeys-random allkeys-lru allkeys-lfu volatile-lru volatile-lfu volatile-random volatile-ttl
     } {

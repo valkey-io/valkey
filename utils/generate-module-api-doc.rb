@@ -25,7 +25,7 @@ def markdown(s)
             # Add backquotes around macro and var names containing underscores.
             l = l.gsub(/(?<![`A-z\*])[A-Za-z]+_[A-Za-z0-9_]+/){|x| "`#{x}`"}
             # Link URLs preceded by space or newline (not already linked)
-            l = l.gsub(/(^| )(https?:\/\/[A-Za-z0-9_\/\.\-]+[A-Za-z0-9\/])/,
+            l = l.gsub(/(^| )(https?:\/\/[A-Za-z0-9_\/\.\?=&+\#\-]+[A-Za-z0-9\/])/,
                        '\1[\2](\2)')
             # Replace double-dash with unicode ndash
             l = l.gsub(/ -- /, ' – ')
@@ -140,7 +140,6 @@ end
 puts "---\n"
 puts "title: \"Modules API reference\"\n"
 puts "linkTitle: \"API reference\"\n"
-puts "weight: 1\n"
 puts "description: >\n"
 puts "    Reference for the Valkey Modules API\n"
 puts "---\n"

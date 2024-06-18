@@ -85,4 +85,4 @@ static inline int callHandler(connection *conn, ConnectionCallbackFunc handler) 
     return 1;
 }
 
-#endif  /* VALKEY_CONNHELPERS_H */
+#endif /* VALKEY_CONNHELPERS_H */

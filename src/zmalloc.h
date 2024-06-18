@@ -31,6 +31,8 @@
 #ifndef __ZMALLOC_H
 #define __ZMALLOC_H
 
+#include <stddef.h>
+
 /* Double expansion needed for stringification of macro values. */
 #define __xstr(s) __str(s)
 #define __str(s) #s
@@ -46,7 +48,8 @@
 #endif
 
 #elif defined(USE_JEMALLOC)
-#define ZMALLOC_LIB ("jemalloc-" __xstr(JEMALLOC_VERSION_MAJOR) "." __xstr(JEMALLOC_VERSION_MINOR) "." __xstr(JEMALLOC_VERSION_BUGFIX))
+#define ZMALLOC_LIB                                                                                                    \
+    ("jemalloc-" __xstr(JEMALLOC_VERSION_MAJOR) "." __xstr(JEMALLOC_VERSION_MINOR) "." __xstr(JEMALLOC_VERSION_BUGFIX))
 #include <jemalloc/jemalloc.h>
 #if (JEMALLOC_VERSION_MAJOR == 2 && JEMALLOC_VERSION_MINOR >= 1) || (JEMALLOC_VERSION_MAJOR > 2)
 #define HAVE_MALLOC_SIZE 1
@@ -73,10 +76,8 @@
 #define ZMALLOC_LIB "libc"
 #define USE_LIBC 1
 
-#if !defined(NO_MALLOC_USABLE_SIZE) && \
-    (defined(__GLIBC__) || defined(__FreeBSD__) || \
-     defined(__DragonFly__) || defined(__HAIKU__) || \
-     defined(USE_MALLOC_USABLE_SIZE))
+#if !defined(NO_MALLOC_USABLE_SIZE) && (defined(__GLIBC__) || defined(__FreeBSD__) || defined(__DragonFly__) ||        \
+                                        defined(__HAIKU__) || defined(USE_MALLOC_USABLE_SIZE))
 
 /* Includes for malloc_usable_size() */
 #ifdef __FreeBSD__
@@ -109,13 +110,13 @@
 /* 'noinline' attribute is intended to prevent the `-Wstringop-overread` warning
  * when using gcc-12 later with LTO enabled. It may be removed once the
  * bug[https://gcc.gnu.org/bugzilla/show_bug.cgi?id=96503] is fixed. */
-__attribute__((malloc,alloc_size(1),noinline)) void *zmalloc(size_t size);
-__attribute__((malloc,alloc_size(1),noinline)) void *zcalloc(size_t size);
-__attribute__((malloc,alloc_size(1,2),noinline)) void *zcalloc_num(size_t num, size_t size);
-__attribute__((alloc_size(2),noinline)) void *zrealloc(void *ptr, size_t size);
-__attribute__((malloc,alloc_size(1),noinline)) void *ztrymalloc(size_t size);
-__attribute__((malloc,alloc_size(1),noinline)) void *ztrycalloc(size_t size);
-__attribute__((alloc_size(2),noinline)) void *ztryrealloc(void *ptr, size_t size);
+__attribute__((malloc, alloc_size(1), noinline)) void *zmalloc(size_t size);
+__attribute__((malloc, alloc_size(1), noinline)) void *zcalloc(size_t size);
+__attribute__((malloc, alloc_size(1, 2), noinline)) void *zcalloc_num(size_t num, size_t size);
+__attribute__((alloc_size(2), noinline)) void *zrealloc(void *ptr, size_t size);
+__attribute__((malloc, alloc_size(1), noinline)) void *ztrymalloc(size_t size);
+__attribute__((malloc, alloc_size(1), noinline)) void *ztrycalloc(size_t size);
+__attribute__((alloc_size(2), noinline)) void *ztryrealloc(void *ptr, size_t size);
 void zfree(void *ptr);
 void *zmalloc_usable(size_t size, size_t *usable);
 void *zcalloc_usable(size_t size, size_t *usable);
@@ -123,13 +124,16 @@ void *zrealloc_usable(void *ptr, size_t size, size_t *usable);
 void *ztrymalloc_usable(size_t size, size_t *usable);
 void *ztrycalloc_usable(size_t size, size_t *usable);
 void *ztryrealloc_usable(void *ptr, size_t size, size_t *usable);
-void zfree_usable(void *ptr, size_t *usable);
 __attribute__((malloc)) char *zstrdup(const char *s);
 size_t zmalloc_used_memory(void);
 void zmalloc_set_oom_handler(void (*oom_handler)(size_t));
 size_t zmalloc_get_rss(void);
-int zmalloc_get_allocator_info(size_t *allocated, size_t *active, size_t *resident,
-                               size_t *retained, size_t *muzzy, size_t *frag_smallbins_bytes);
+int zmalloc_get_allocator_info(size_t *allocated,
+                               size_t *active,
+                               size_t *resident,
+                               size_t *retained,
+                               size_t *muzzy,
+                               size_t *frag_smallbins_bytes);
 void set_jemalloc_bg_thread(int enable);
 int jemalloc_purge(void);
 size_t zmalloc_get_private_dirty(long pid);
@@ -163,13 +167,9 @@ size_t zmalloc_usable_size(void *ptr);
  * The implementation returns the pointer as is; the only reason for its existence is as a conduit for the
  * alloc_size attribute. This cannot be a static inline because gcc then loses the attributes on the function.
  * See: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=96503 */
-__attribute__((alloc_size(2),noinline)) void *extend_to_usable(void *ptr, size_t size);
+__attribute__((alloc_size(2), noinline)) void *extend_to_usable(void *ptr, size_t size);
 #endif
 
 int get_proc_stat_ll(int i, long long *res);
-
-#ifdef SERVER_TEST
-int zmalloc_test(int argc, char **argv, int flags);
-#endif
 
 #endif /* __ZMALLOC_H */

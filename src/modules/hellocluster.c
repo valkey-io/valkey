@@ -44,7 +44,7 @@ int PingallCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
-    ValkeyModule_SendClusterMessage(ctx,NULL,MSGTYPE_PING,"Hey",3);
+    ValkeyModule_SendClusterMessage(ctx, NULL, MSGTYPE_PING, "Hey", 3);
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -54,36 +54,44 @@ int ListCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, i
     VALKEYMODULE_NOT_USED(argc);
 
     size_t numnodes;
-    char **ids = ValkeyModule_GetClusterNodesList(ctx,&numnodes);
+    char **ids = ValkeyModule_GetClusterNodesList(ctx, &numnodes);
     if (ids == NULL) {
-        return ValkeyModule_ReplyWithError(ctx,"Cluster not enabled");
+        return ValkeyModule_ReplyWithError(ctx, "Cluster not enabled");
     }
 
-    ValkeyModule_ReplyWithArray(ctx,numnodes);
+    ValkeyModule_ReplyWithArray(ctx, numnodes);
     for (size_t j = 0; j < numnodes; j++) {
         int port;
-        ValkeyModule_GetClusterNodeInfo(ctx,ids[j],NULL,NULL,&port,NULL);
-        ValkeyModule_ReplyWithArray(ctx,2);
-        ValkeyModule_ReplyWithStringBuffer(ctx,ids[j],VALKEYMODULE_NODE_ID_LEN);
-        ValkeyModule_ReplyWithLongLong(ctx,port);
+        ValkeyModule_GetClusterNodeInfo(ctx, ids[j], NULL, NULL, &port, NULL);
+        ValkeyModule_ReplyWithArray(ctx, 2);
+        ValkeyModule_ReplyWithStringBuffer(ctx, ids[j], VALKEYMODULE_NODE_ID_LEN);
+        ValkeyModule_ReplyWithLongLong(ctx, port);
     }
     ValkeyModule_FreeClusterNodesList(ids);
     return VALKEYMODULE_OK;
 }
 
 /* Callback for message MSGTYPE_PING */
-void PingReceiver(ValkeyModuleCtx *ctx, const char *sender_id, uint8_t type, const unsigned char *payload, uint32_t len) {
-    ValkeyModule_Log(ctx,"notice","PING (type %d) RECEIVED from %.*s: '%.*s'",
-        type,VALKEYMODULE_NODE_ID_LEN,sender_id,(int)len, payload);
-    ValkeyModule_SendClusterMessage(ctx,NULL,MSGTYPE_PONG,"Ohi!",4);
+void PingReceiver(ValkeyModuleCtx *ctx,
+                  const char *sender_id,
+                  uint8_t type,
+                  const unsigned char *payload,
+                  uint32_t len) {
+    ValkeyModule_Log(ctx, "notice", "PING (type %d) RECEIVED from %.*s: '%.*s'", type, VALKEYMODULE_NODE_ID_LEN,
+                     sender_id, (int)len, payload);
+    ValkeyModule_SendClusterMessage(ctx, NULL, MSGTYPE_PONG, "Ohi!", 4);
     ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, "INCR", "c", "pings_received");
     ValkeyModule_FreeCallReply(reply);
 }
 
 /* Callback for message MSGTYPE_PONG. */
-void PongReceiver(ValkeyModuleCtx *ctx, const char *sender_id, uint8_t type, const unsigned char *payload, uint32_t len) {
-    ValkeyModule_Log(ctx,"notice","PONG (type %d) RECEIVED from %.*s: '%.*s'",
-        type,VALKEYMODULE_NODE_ID_LEN,sender_id,(int)len, payload);
+void PongReceiver(ValkeyModuleCtx *ctx,
+                  const char *sender_id,
+                  uint8_t type,
+                  const unsigned char *payload,
+                  uint32_t len) {
+    ValkeyModule_Log(ctx, "notice", "PONG (type %d) RECEIVED from %.*s: '%.*s'", type, VALKEYMODULE_NODE_ID_LEN,
+                     sender_id, (int)len, payload);
 }
 
 /* This function must be present on each module. It is used in order to
@@ -92,15 +100,14 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
-    if (ValkeyModule_Init(ctx,"hellocluster",1,VALKEYMODULE_APIVER_1)
-        == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
+    if (ValkeyModule_Init(ctx, "hellocluster", 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx,"hellocluster.pingall",
-        PingallCommand_ValkeyCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "hellocluster.pingall", PingallCommand_ValkeyCommand, "readonly", 0, 0, 0) ==
+        VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx,"hellocluster.list",
-        ListCommand_ValkeyCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "hellocluster.list", ListCommand_ValkeyCommand, "readonly", 0, 0, 0) ==
+        VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     /* Disable Cluster sharding and redirections. This way every node
@@ -109,10 +116,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
      * variable. Normally you do that in order for the distributed system
      * you create as a module to have total freedom in the keyspace
      * manipulation. */
-    ValkeyModule_SetClusterFlags(ctx,VALKEYMODULE_CLUSTER_FLAG_NO_REDIRECTION);
+    ValkeyModule_SetClusterFlags(ctx, VALKEYMODULE_CLUSTER_FLAG_NO_REDIRECTION);
 
     /* Register our handlers for different message types. */
-    ValkeyModule_RegisterClusterMessageReceiver(ctx,MSGTYPE_PING,PingReceiver);
-    ValkeyModule_RegisterClusterMessageReceiver(ctx,MSGTYPE_PONG,PongReceiver);
+    ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_PING, PingReceiver);
+    ValkeyModule_RegisterClusterMessageReceiver(ctx, MSGTYPE_PONG, PongReceiver);
     return VALKEYMODULE_OK;
 }

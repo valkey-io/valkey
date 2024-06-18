@@ -37,8 +37,7 @@ int connTypeRegister(ConnectionType *ct) {
     /* find an empty slot to store the new connection type */
     for (type = 0; type < CONN_TYPE_MAX; type++) {
         tmpct = connTypes[type];
-        if (!tmpct)
-            break;
+        if (!tmpct) break;
 
         /* ignore case, we really don't care "tls"/"TLS" */
         if (!strcasecmp(typename, tmpct->get_type(NULL))) {
@@ -75,11 +74,9 @@ ConnectionType *connectionByType(const char *typename) {
 
     for (int type = 0; type < CONN_TYPE_MAX; type++) {
         ct = connTypes[type];
-        if (!ct)
-            break;
+        if (!ct) break;
 
-        if (!strcasecmp(typename, ct->get_type(NULL)))
-            return ct;
+        if (!strcasecmp(typename, ct->get_type(NULL))) return ct;
     }
 
     serverLog(LL_WARNING, "Missing implement of connection type %s", typename);
@@ -91,8 +88,7 @@ ConnectionType *connectionByType(const char *typename) {
 ConnectionType *connectionTypeTcp(void) {
     static ConnectionType *ct_tcp = NULL;
 
-    if (ct_tcp != NULL)
-        return ct_tcp;
+    if (ct_tcp != NULL) return ct_tcp;
 
     ct_tcp = connectionByType(CONN_TYPE_SOCKET);
     serverAssert(ct_tcp != NULL);
@@ -119,8 +115,7 @@ ConnectionType *connectionTypeTls(void) {
 ConnectionType *connectionTypeUnix(void) {
     static ConnectionType *ct_unix = NULL;
 
-    if (ct_unix != NULL)
-        return ct_unix;
+    if (ct_unix != NULL) return ct_unix;
 
     ct_unix = connectionByType(CONN_TYPE_UNIX);
     return ct_unix;
@@ -131,11 +126,9 @@ int connectionIndexByType(const char *typename) {
 
     for (int type = 0; type < CONN_TYPE_MAX; type++) {
         ct = connTypes[type];
-        if (!ct)
-            break;
+        if (!ct) break;
 
-        if (!strcasecmp(typename, ct->get_type(NULL)))
-            return type;
+        if (!strcasecmp(typename, ct->get_type(NULL))) return type;
     }
 
     return -1;
@@ -147,11 +140,9 @@ void connTypeCleanupAll(void) {
 
     for (type = 0; type < CONN_TYPE_MAX; type++) {
         ct = connTypes[type];
-        if (!ct)
-            break;
+        if (!ct) break;
 
-        if (ct->cleanup)
-            ct->cleanup();
+        if (ct->cleanup) ct->cleanup();
     }
 }
 
@@ -190,16 +181,14 @@ int connTypeProcessPendingData(void) {
 sds getListensInfoString(sds info) {
     for (int j = 0; j < CONN_TYPE_MAX; j++) {
         connListener *listener = &server.listeners[j];
-        if (listener->ct == NULL)
-            continue;
+        if (listener->ct == NULL) continue;
 
         info = sdscatfmt(info, "listener%i:name=%s", j, listener->ct->get_type(NULL));
         for (int i = 0; i < listener->count; i++) {
             info = sdscatfmt(info, ",bind=%s", listener->bindaddr[i]);
         }
 
-        if (listener->port)
-            info = sdscatfmt(info, ",port=%i", listener->port);
+        if (listener->port) info = sdscatfmt(info, ",port=%i", listener->port);
 
         info = sdscatfmt(info, "\r\n");
     }

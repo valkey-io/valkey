@@ -39,7 +39,6 @@
 #include "syscheck.h"
 #include "threads_mngr.h"
 #include "fmtargs.h"
-#include "io_uring.h"
 
 #include <time.h>
 #include <signal.h>
@@ -1678,10 +1677,16 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * just skip the client that has pending writes. */
     handleClientsWithPendingWritesUsingThreads(1);
 
-    if (canFsyncUsingIOUring()) {
-        io_uring *io_uring = getIOUring();
+    if (server.aof_state == AOF_ON && server.aof_fsync == AOF_FSYNC_ALWAYS && server.io_uring_enabled) {
         /* Wait io_uring_prep_fsync finished. */
-        ioUringWaitFsyncBarrier(io_uring);
+        int ret = ioUringWaitFsyncBarrier(server.io_uring);
+        if (ret < 0) {
+            serverLog(LL_WARNING,
+                      "Can't persist AOF through io_uring for fsync error when the "
+                      "AOF fsync policy is 'always': %s. Exiting...",
+                      strerror(ret));
+            exit(1);
+        }
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         server.aof_last_fsync = server.mstime;
         atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset, memory_order_relaxed);
@@ -2805,7 +2810,7 @@ void initListeners(void) {
 void InitServerLast(void) {
     bioInit();
     initThreadedIO();
-    if (server.io_uring_enabled) initIOUring();
+    if (server.io_uring_enabled) server.io_uring = createIOUring();
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
     server.initial_memory_usage = zmalloc_used_memory();
 }
@@ -6982,7 +6987,7 @@ int main(int argc, char **argv) {
 
     aeMain(server.el);
     aeDeleteEventLoop(server.el);
-    if (server.io_uring_enabled) freeIOUring();
+    if (server.io_uring_enabled) freeIOUring(server.io_uring);
     return 0;
 }
 

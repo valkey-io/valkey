@@ -32,7 +32,6 @@
 #include "script.h"
 #include "fpconv_dtoa.h"
 #include "fmtargs.h"
-#include "io_uring.h"
 
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -2031,7 +2030,7 @@ void sendReplyToClient(connection *conn) {
     writeToClient(c, 1);
 }
 
-int canFsyncUsingIOUring(void) {
+static inline int canFsyncUsingIOUring(void) {
     return server.aof_state == AOF_ON && server.aof_fsync == AOF_FSYNC_ALWAYS && server.io_uring_enabled;
 }
 

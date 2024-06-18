@@ -208,7 +208,7 @@ void rebaseReplicationBuffer(long long base_repl_offset) {
  * On COB overrun, association is deleted and the RDB connection 
  * is dropped.
  */
-void addSlaveToPsyncWaitingRax(client* slave) {
+void addReplicaToPsyncWaitingRax(client* replica) {
     listNode *ln = NULL;
     replBufBlock *tail = NULL;
     if (server.repl_backlog == NULL) {
@@ -220,52 +220,52 @@ void addSlaveToPsyncWaitingRax(client* slave) {
             tail->refcount++;
         }
     }
-    serverLog(LL_DEBUG, "Add slave %s to waiting psync rax, with cid %llu, %s ", replicationGetReplicaName(slave), (long long unsigned int)slave->id,
+    serverLog(LL_DEBUG, "Add replica %s to waiting psync rax, with cid %llu, %s ", replicationGetReplicaName(replica), (long long unsigned int)replica->id,
         tail? "with repl-backlog tail": "repl-backlog is empty");
-    slave->ref_repl_buf_node = tail? ln: NULL;
+    replica->ref_repl_buf_node = tail? ln: NULL;
     /* Prevent rdb client from being freed before psync is established. */
-    slave->flags |= CLIENT_PROTECTED_RDB_CHANNEL;
-    uint64_t id = htonu64(slave->id);
-    raxInsert(server.slaves_waiting_psync,(unsigned char*)&id,sizeof(id),slave,NULL);
+    replica->flags |= CLIENT_PROTECTED_RDB_CHANNEL;
+    uint64_t id = htonu64(replica->id);
+    raxInsert(server.replicas_waiting_psync,(unsigned char*)&id,sizeof(id),replica,NULL);
 }
 
 /* Attach waiting psync replicas with new replication backlog head. */
-void addSlaveToPsyncWaitingRaxRetrospect(void) {
+void addReplicaToPsyncWaitingRaxRetrospect(void) {
     listNode *ln = listFirst(server.repl_buffer_blocks);
     replBufBlock *head = ln ? listNodeValue(ln) : NULL;
     raxIterator iter;
 
     if (head == NULL) return;
-    /* Update waiting psync slaves to wait on new buffer block */
-    raxStart(&iter,server.slaves_waiting_psync);
+    /* Update waiting psync replicas to wait on new buffer block */
+    raxStart(&iter,server.replicas_waiting_psync);
     raxSeek(&iter, "^", NULL, 0);
     while(raxNext(&iter)) {
-        client* slave = iter.data;
-        if (slave->ref_repl_buf_node) continue;
-        slave->ref_repl_buf_node = ln;
+        client* replica = iter.data;
+        if (replica->ref_repl_buf_node) continue;
+        replica->ref_repl_buf_node = ln;
         head->refcount++;
-        serverLog(LL_DEBUG, "Retrospect attach slave %llu to repl buf block", (long long unsigned int)slave->id);
+        serverLog(LL_DEBUG, "Retrospect attach replica %llu to repl buf block", (long long unsigned int)replica->id);
     }
     raxStop(&iter);
 }
 
-void removeSlaveFromPsyncWaitingRax(client* slave) {
+void removeReplicaFromPsyncWaitingRax(client* replica) {
     listNode *ln;
     replBufBlock *o;
     /* Get replBufBlock pointed by this replica */ 
-    client *peer_slave = lookupRdbClientByID(slave->associated_rdb_client_id);
-    ln = peer_slave->ref_repl_buf_node;
+    client *peer_replica = lookupRdbClientByID(replica->associated_rdb_client_id);
+    ln = peer_replica->ref_repl_buf_node;
     o = ln ? listNodeValue(ln) : NULL;
     if (o != NULL) {
         serverAssert(o->refcount > 0);
         o->refcount--;
     }
-    peer_slave->ref_repl_buf_node = NULL;
-    peer_slave->flags &= ~CLIENT_PROTECTED_RDB_CHANNEL;
+    peer_replica->ref_repl_buf_node = NULL;
+    peer_replica->flags &= ~CLIENT_PROTECTED_RDB_CHANNEL;
     serverLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu, repl buffer block %s", 
-        replicationGetReplicaName(slave), (long long unsigned int)slave->associated_rdb_client_id, o? "ref count decreased": "doesn't exist");
-    uint64_t id = htonu64(peer_slave->id);
-    raxRemove(server.slaves_waiting_psync,(unsigned char*)&id,sizeof(id),NULL);
+        replicationGetReplicaName(replica), (long long unsigned int)replica->associated_rdb_client_id, o? "ref count decreased": "doesn't exist");
+    uint64_t id = htonu64(peer_replica->id);
+    raxRemove(server.replicas_waiting_psync,(unsigned char*)&id,sizeof(id),NULL);
 }
 
 void resetReplicationBuffer(void) {
@@ -379,8 +379,8 @@ void incrementalTrimReplicationBacklog(size_t max_blocks) {
 void freeReplicaReferencedReplBuffer(client *replica) {
     if (replica->flags & CLIENT_REPL_RDB_CHANNEL) {
         uint64_t id = htonu64(replica->id);
-        if(raxRemove(server.slaves_waiting_psync,(unsigned char*)&id,sizeof(id),NULL)) {
-            serverLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu from replicas rax.",
+        if(raxRemove(server.replicas_waiting_psync,(unsigned char*)&id,sizeof(id),NULL)) {
+            serverLog(LL_DEBUG, "Remove psync waiting slave %s with cid %llu from replicas rax.",
                 replicationGetReplicaName(replica), (long long unsigned int)replica->associated_rdb_client_id);
         }
     }
@@ -460,9 +460,9 @@ void feedReplicationBuffer(char *s, size_t len) {
             server.primary_repl_offset += copy;
             server.repl_backlog->histlen += copy;
         }
-        if (empty_backlog && raxSize(server.slaves_waiting_psync) > 0) {
+        if (empty_backlog && raxSize(server.replicas_waiting_psync) > 0) {
             /* Increase refcount for pending replicas. */
-            addSlaveToPsyncWaitingRaxRetrospect();
+            addReplicaToPsyncWaitingRaxRetrospect();
         }
 
         /* For output buffer of replicas. */
@@ -864,7 +864,7 @@ int primaryTryPartialResynchronization(client *c, long long psync_offset) {
     c->flags |= CLIENT_REPLICA;
     if (c->flags & CLIENT_REPL_MAIN_CHANNEL && lookupRdbClientByID(c->associated_rdb_client_id)) {
         c->repl_state = SLAVE_STATE_BG_RDB_LOAD;
-        removeSlaveFromPsyncWaitingRax(c);
+        removeReplicaFromPsyncWaitingRax(c);
     } else {
          c->repl_state = REPLICA_STATE_ONLINE;
     }
@@ -4628,7 +4628,8 @@ void replicationCron(void) {
      * replicas number + 1(replication backlog). */
     if (listLength(server.repl_buffer_blocks) > 0) {
         replBufBlock *o = listNodeValue(listFirst(server.repl_buffer_blocks));
-        serverAssert(o->refcount > 0 && o->refcount <= (int)listLength(server.replicas) + 1  + (int)raxSize(server.slaves_waiting_psync));
+        serverAssert(o->refcount > 0 &&
+            o->refcount <= (int)listLength(server.replicas) + 1 + (int)raxSize(server.replicas_waiting_psync));
     }
 
     /* Refresh the number of replicas with lag <= min-replicas-max-lag. */

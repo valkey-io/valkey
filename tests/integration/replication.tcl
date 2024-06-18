@@ -378,7 +378,7 @@ foreach mdl {no yes} rdbchannel {no yes} {
                             wait_for_ofs_sync $master [lindex $slaves 1]
                             wait_for_ofs_sync $master [lindex $slaves 2]
 
-                            assert [string match *slaves_waiting_psync:0* [$master info replication]]
+                            assert [string match *replicas_waiting_psync:0* [$master info replication]]
 
                             # Check digests
                             set digest [$master debug digest]

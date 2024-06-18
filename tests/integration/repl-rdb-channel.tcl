@@ -475,8 +475,8 @@ start_server {tags {"repl rdb-channel external:skip"}} {
             $replica2 debug sleep-after-fork [expr {2 * [expr {10 ** 6}]}]
             test "Test rdb-channel connection peering - start with empty backlog (retrospect)" {
                 $replica1 slaveof $master_host $master_port
-                set res [wait_for_log_messages 0 {"*Add slave * repl-backlog is empty*"} $loglines 2000 1]
-                set res [wait_for_log_messages 0 {"*Retrospect attach slave*"} $loglines 2000 1]
+                set res [wait_for_log_messages 0 {"*Add replica * repl-backlog is empty*"} $loglines 2000 1]
+                set res [wait_for_log_messages 0 {"*Retrospect attach replica*"} $loglines 2000 1]
                 set loglines [lindex $res 1]
                 incr $loglines 
                 verify_replica_online $master 0 700
@@ -486,12 +486,12 @@ start_server {tags {"repl rdb-channel external:skip"}} {
                     fail "Replica is not synced"
                 }
                 $replica1 slaveof no one
-                assert [string match *slaves_waiting_psync:0* [$master info replication]]
+                assert [string match *replicas_waiting_psync:0* [$master info replication]]
             }
 
             test "Test rdb-channel connection peering - start with backlog" {
                 $replica2 slaveof $master_host $master_port
-                set res [wait_for_log_messages 0 {"*Add slave * with repl-backlog tail*"} $loglines 2000 1]
+                set res [wait_for_log_messages 0 {"*Add replica * with repl-backlog tail*"} $loglines 2000 1]
                 set loglines [lindex $res 1]
                 incr $loglines 
                 verify_replica_online $master 0 700
@@ -500,7 +500,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
                 } else {
                     fail "Replica is not synced"
                 }
-                assert [string match *slaves_waiting_psync:0* [$master info replication]]
+                assert [string match *replicas_waiting_psync:0* [$master info replication]]
             }
 
             stop_write_load $load_handle0
@@ -555,14 +555,14 @@ start_server {tags {"repl rdb-channel external:skip"}} {
             # Force the replica to sleep for 3 seconds so the master main process will wake up, while the replica is unresponsive.
             set sleep_handle [start_bg_server_sleep $replica_host $replica_port 3]
             wait_for_condition 50 100 {
-                [string match {*slaves_waiting_psync:1*} [$master info replication]]
+                [string match {*replicas_waiting_psync:1*} [$master info replication]]
             } else {
                 fail "Master freed RDB client before psync was established"
             }
 
             verify_replica_online $master 0 500
             wait_for_condition 50 100 {
-                [string match {*slaves_waiting_psync:0*} [$master info replication]]
+                [string match {*replicas_waiting_psync:0*} [$master info replication]]
             } else {
                 fail "Master did not free repl buf block after psync establishment"
             }
@@ -594,7 +594,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
             # We expect the grace time to be over before the replica wake up, so sync will fail.
             set sleep_handle [start_bg_server_sleep $replica_host $replica_port 8]
             wait_for_condition 50 100 {
-                [string match {*slaves_waiting_psync:1*} [$master info replication]]
+                [string match {*replicas_waiting_psync:1*} [$master info replication]]
             } else {
                 fail "Master should wait before freeing repl block"
             }
@@ -605,7 +605,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
             # Should succeed on retry
             verify_replica_online $master 0 500
             wait_for_condition 50 100 {
-                [string match {*slaves_waiting_psync:0*} [$master info replication]]
+                [string match {*replicas_waiting_psync:0*} [$master info replication]]
             } else {
                 fail "Master did not free repl buf block after psync establishment"
             }
@@ -653,7 +653,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
             set sleep_handle [start_bg_server_sleep $replica_host $replica_port 5]
             wait_for_log_messages -1 {"*Client * closed * for overcoming of output buffer limits.*"} $loglines 2000 1
             wait_for_condition 50 100 {
-                [string match {*slaves_waiting_psync:0*} [$master info replication]]
+                [string match {*replicas_waiting_psync:0*} [$master info replication]]
             } else {
                 fail "Master did not free repl buf block after sync failure"
             }
@@ -675,7 +675,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
 
             wait_for_log_messages -1 {"*Client * closed * for overcoming of output buffer limits.*"} $loglines 2000 1
             wait_for_condition 50 100 {
-                [string match {*slaves_waiting_psync:0*} [$master info replication]]
+                [string match {*replicas_waiting_psync:0*} [$master info replication]]
             } else {
                 fail "Master did not free repl buf block after sync failure"
             }

@@ -1690,10 +1690,10 @@ struct valkeyServer {
     list *clients_pending_write;           /* There is to write or install handler. */
     list *clients_pending_read;            /* Client has pending read socket buffers. */
     list *replicas, *monitors;             /* List of replicas and MONITORs */
-    rax *slaves_waiting_psync;  /* Radix tree using rdb-client id as keys and rdb-client as values.
-                                * This rax contains slaves for the period from the beginning of 
-                                * their RDB connection to the end of their main connection's 
-                                * partial synchronization. */
+    rax *replicas_waiting_psync;/* Radix tree using rdb-client id as keys and rdb-client as values.
+                                 * This rax contains slaves for the period from the beginning of 
+                                 * their RDB connection to the end of their main connection's 
+                                 * partial synchronization. */
     client *current_client;                /* The client that triggered the command execution (External or AOF). */
     client *executing_client;              /* The client executing the current command (possibly script or module). */
 
@@ -2980,7 +2980,7 @@ void abortFailover(const char *err);
 const char *getFailoverStateString(void);
 void abortRdbConnectionSync(void);
 int sendCurrentOffsetToReplica(client* replica);
-void addSlaveToPsyncWaitingRax(client* slave);
+void addReplicaToPsyncWaitingRax(client* slave);
 
 /* Generic persistence functions */
 void startLoadingFile(size_t size, char *filename, int rdbflags);

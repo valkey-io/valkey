@@ -1835,11 +1835,11 @@ client *lookupClientByID(uint64_t id) {
 }
 
 /* Return a client by ID, or NULL if the client ID is not in the set
- * of slaves waiting psync clients. */
+ * of replicas waiting psync clients. */
 client *lookupRdbClientByID(uint64_t id) {
     id = htonu64(id);
     void *c = NULL;
-    raxFind(server.slaves_waiting_psync,(unsigned char*)&id,sizeof(id),&c);
+    raxFind(server.replicas_waiting_psync,(unsigned char*)&id,sizeof(id),&c);
     return c;
 }
 

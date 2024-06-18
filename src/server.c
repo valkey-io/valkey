@@ -2542,7 +2542,7 @@ void initServer(void) {
     server.clients_to_close = listCreate();
     server.replicas = listCreate();
     server.monitors = listCreate();
-    server.slaves_waiting_psync = raxNew();
+    server.replicas_waiting_psync = raxNew();
     server.wait_before_rdb_client_free = DEFAULT_WAIT_BEFORE_RDB_CLIENT_FREE;
     server.clients_pending_write = listCreate();
     server.clients_pending_read = listCreate();
@@ -5798,13 +5798,13 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                                     "offset=%lld,lag=%ld,type=%s\r\n",
                                     replica_id, replica_ip, replica->replica_listening_port, state,
                                     replica->repl_ack_off, lag, replica->flags & CLIENT_REPL_RDB_CHANNEL ? "rdb-conn": 
-                    replica->repl_state == SLAVE_STATE_BG_RDB_LOAD ? "main-conn": "normal-slave");
+                    replica->repl_state == SLAVE_STATE_BG_RDB_LOAD ? "main-conn": "replica");
                 replica_id++;
             }
         }
         /* clang-format off */
         info = sdscatprintf(info, FMTARGS(
-            "slaves_waiting_psync:%llu\r\n", (unsigned long long)raxSize(server.slaves_waiting_psync),
+            "replicas_waiting_psync:%llu\r\n", (unsigned long long)raxSize(server.replicas_waiting_psync),
             "master_failover_state:%s\r\n", getFailoverStateString(),
             "master_replid:%s\r\n", server.replid,
             "master_replid2:%s\r\n", server.replid2,

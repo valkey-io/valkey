@@ -340,15 +340,13 @@ static inline unsigned int zipEncodingLenSize(unsigned char encoding) {
 
 /* Return bytes needed to store integer encoded by 'encoding' */
 static inline unsigned int zipIntSize(unsigned char encoding) {
-    /* clang-format off */
-    switch(encoding) {
-    case ZIP_INT_8B:  return 1;
+    switch (encoding) {
+    case ZIP_INT_8B: return 1;
     case ZIP_INT_16B: return 2;
     case ZIP_INT_24B: return 3;
     case ZIP_INT_32B: return 4;
     case ZIP_INT_64B: return 8;
     }
-    /* clang-format on */
     if (encoding >= ZIP_INT_IMM_MIN && encoding <= ZIP_INT_IMM_MAX) return 0; /* 4 bit immediate */
     /* bad encoding, covered by a previous call to ZIP_ASSERT_ENCODING */
     valkey_unreachable();

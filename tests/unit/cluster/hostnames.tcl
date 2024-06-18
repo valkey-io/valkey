@@ -1,7 +1,3 @@
-proc get_slot_field {slot_output shard_id node_id attrib_id} {
-    return [lindex [lindex [lindex $slot_output $shard_id] $node_id] $attrib_id]
-}
-
 # Start a cluster with 3 masters and 4 replicas.
 # These tests rely on specific node ordering, so make sure no node fails over.
 start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-replica-no-failover yes}} {

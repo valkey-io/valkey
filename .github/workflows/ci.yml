@@ -6,30 +6,29 @@ permissions:
   contents: read
 
 jobs:
-
   test-ubuntu-latest:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-    - name: make
-      # Fail build if there are warnings
-      # build with TLS just for compilation coverage
-      run: make all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes
-    - name: test
-      run: |
-        sudo apt-get install tcl8.6 tclx
-        ./runtest --verbose --tags -slow --dump-logs
-    - name: module api test
-      run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
-    - name: validate commands.def up to date
-      run: |
-        touch src/commands/ping.json
-        make commands.def
-        dirty=$(git diff)
-        if [[ ! -z  $dirty ]]; then echo $dirty; exit 1; fi
-    - name: unit tests
-      run: |
-        ./src/valkey-unit-tests
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: make
+        # Fail build if there are warnings
+        # build with TLS just for compilation coverage
+        run: make all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes
+      - name: test
+        run: |
+          sudo apt-get install tcl8.6 tclx
+          ./runtest --verbose --tags -slow --dump-logs
+      - name: module api test
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
+      - name: validate commands.def up to date
+        run: |
+          touch src/commands/ping.json
+          make commands.def
+          dirty=$(git diff)
+          if [[ ! -z  $dirty ]]; then echo $dirty; exit 1; fi
+      - name: unit tests
+        run: |
+          ./src/valkey-unit-tests
 
   test-sanitizer-address:
     runs-on: ubuntu-latest
@@ -37,7 +36,7 @@ jobs:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: make
         # build with TLS module just for compilation coverage
-        run: make SANITIZER=address SERVER_CFLAGS='-Werror -DDEBUG_ASSERTIONS' BUILD_TLS=module
+        run: make SANITIZER=address SERVER_CFLAGS='-Werror' BUILD_TLS=module
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx -y
       - name: test
@@ -49,43 +48,79 @@ jobs:
     runs-on: ubuntu-latest
     container: debian:buster
     steps:
-    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-    - name: make
-      run: |
-        apt-get update && apt-get install -y build-essential
-        make SERVER_CFLAGS='-Werror'
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: make
+        run: |
+          apt-get update && apt-get install -y build-essential
+          make SERVER_CFLAGS='-Werror'
 
   build-macos-latest:
     runs-on: macos-latest
     steps:
-    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-    - name: make
-      run: make SERVER_CFLAGS='-Werror'
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: make
+        run: make SERVER_CFLAGS='-Werror'
 
   build-32bit:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-    - name: make
-      run: |
-        sudo apt-get update && sudo apt-get install libc6-dev-i386
-        make SERVER_CFLAGS='-Werror' 32bit
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: make
+        run: |
+          sudo apt-get update && sudo apt-get install libc6-dev-i386
+          make SERVER_CFLAGS='-Werror' 32bit
 
   build-libc-malloc:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-    - name: make
-      run: make SERVER_CFLAGS='-Werror' MALLOC=libc
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: make
+        run: make SERVER_CFLAGS='-Werror' MALLOC=libc
 
   build-almalinux8-jemalloc:
     runs-on: ubuntu-latest
     container: almalinux:8
     steps:
-    - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
-    - name: make
-      run: |
-        dnf -y install epel-release gcc make procps-ng which
-        make -j SERVER_CFLAGS='-Werror'
+      - name: make
+        run: |
+          dnf -y install epel-release gcc make procps-ng which
+          make -j SERVER_CFLAGS='-Werror'
 
+  format-yaml:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Set up Go
+        uses: actions/setup-go@cdcb36043654635271a94b9a6d1392de5bb323a7 # v5.0.1
+        with:
+          go-version: "1.22.4"
+
+      - name: Setup YAML formatter
+        run: |
+          go install github.com/google/yamlfmt/cmd/yamlfmt@latest
+
+      - name: Run yamlfmt
+        id: yamlfmt
+        run: |
+          yamlfmt -lint -conf .config/format.yml .
+          # Capture the diff output
+          DIFF=$(git diff)
+          if [ ! -z "$DIFF" ]; then
+            # Encode the diff in Base64 to ensure it's handled as a single line
+            ENCODED_DIFF=$(echo "$DIFF" | base64 -w 0)
+            echo "diff=$ENCODED_DIFF" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+      - name: Check for formatting changes
+        if: ${{ steps.yamlfmt.outputs.diff }}
+        run: |
+          echo "ERROR: YAML file is not formatted properly. Here is the diff: "
+          # Decode the Base64 diff to display it
+          echo "${{ steps.clang-format.outputs.diff }}" | base64 --decode
+          exit 1
+        shell: bash

@@ -4,6 +4,7 @@
 #include "test_help.h"
 
 #include "../sds.h"
+#include "../sdsalloc.h"
 
 static sds sdsTestTemplateCallback(sds varname, void *arg) {
     UNUSED(arg);
@@ -247,5 +248,83 @@ int test_sds(int argc, char **argv, int flags) {
     TEST_ASSERT_MESSAGE("sdsReszie() crop strlen", strlen(x) == 4);
     TEST_ASSERT_MESSAGE("sdsReszie() crop alloc", sdsalloc(x) >= 4);
     sdsfree(x);
+
+    return 0;
+}
+
+int test_typesAndAllocSize(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    sds x = sdsnewlen(NULL, 31);
+    TEST_ASSERT_MESSAGE("len 31 type", (x[-1] & SDS_TYPE_MASK) == SDS_TYPE_5);
+    sdsfree(x);
+
+    x = sdsnewlen(NULL, 32);
+    TEST_ASSERT_MESSAGE("len 32 type", (x[-1] & SDS_TYPE_MASK) >= SDS_TYPE_8);
+    TEST_ASSERT_MESSAGE("len 32 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    sdsfree(x);
+
+    x = sdsnewlen(NULL, 252);
+    TEST_ASSERT_MESSAGE("len 252 type", (x[-1] & SDS_TYPE_MASK) >= SDS_TYPE_8);
+    TEST_ASSERT_MESSAGE("len 252 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    sdsfree(x);
+
+    x = sdsnewlen(NULL, 253);
+    TEST_ASSERT_MESSAGE("len 253 type", (x[-1] & SDS_TYPE_MASK) == SDS_TYPE_16);
+    TEST_ASSERT_MESSAGE("len 253 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    sdsfree(x);
+
+    x = sdsnewlen(NULL, 65530);
+    TEST_ASSERT_MESSAGE("len 65530 type", (x[-1] & SDS_TYPE_MASK) >= SDS_TYPE_16);
+    TEST_ASSERT_MESSAGE("len 65530 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    sdsfree(x);
+
+    x = sdsnewlen(NULL, 65531);
+    TEST_ASSERT_MESSAGE("len 65531 type", (x[-1] & SDS_TYPE_MASK) >= SDS_TYPE_32);
+    TEST_ASSERT_MESSAGE("len 65531 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    sdsfree(x);
+
+#if (LONG_MAX == LLONG_MAX)
+    if (flags & UNIT_TEST_LARGE_MEMORY) {
+        x = sdsnewlen(NULL, 4294967286);
+        TEST_ASSERT_MESSAGE("len 4294967286 type", (x[-1] & SDS_TYPE_MASK) >= SDS_TYPE_32);
+        TEST_ASSERT_MESSAGE("len 4294967286 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+        sdsfree(x);
+
+        x = sdsnewlen(NULL, 4294967287);
+        TEST_ASSERT_MESSAGE("len 4294967287 type", (x[-1] & SDS_TYPE_MASK) == SDS_TYPE_64);
+        TEST_ASSERT_MESSAGE("len 4294967287 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+        sdsfree(x);
+    }
+#endif
+
+    return 0;
+}
+
+/* The test verifies that we can adjust SDS types if an allocator returned
+ * larger buffer. The maximum length for type SDS_TYPE_X is
+ * 2^X - header_size(SDS_TYPE_X) - 1. The maximum value to be stored in alloc
+ * field is 2^X - 1. When allocated buffer is larger than
+ * 2^X + header_size(SDS_TYPE_X), we "move" to a larger type SDS_TYPE_Y. To be
+ * sure SDS_TYPE_Y header fits into 2^X + header_size(SDS_TYPE_X) + 1 bytes, the
+ * difference between header sizes must be smaller than
+ * header_size(SDS_TYPE_X) + 1.
+ * We ignore SDS_TYPE_5 as it doesn't have alloc field. */
+int test_sdsHeaderSizes(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    TEST_ASSERT_MESSAGE("can't always adjust SDS_TYPE_8 with SDS_TYPE_16",
+                        sizeof(struct sdshdr16) <= 2 * sizeof(struct sdshdr8) + 1);
+    TEST_ASSERT_MESSAGE("can't always adjust SDS_TYPE_16 with SDS_TYPE_32",
+                        sizeof(struct sdshdr32) <= 2 * sizeof(struct sdshdr16) + 1);
+#if (LONG_MAX == LLONG_MAX)
+    TEST_ASSERT_MESSAGE("can't always adjust SDS_TYPE_32 with SDS_TYPE_64",
+                        sizeof(struct sdshdr64) <= 2 * sizeof(struct sdshdr32) + 1);
+#endif
+
     return 0;
 }

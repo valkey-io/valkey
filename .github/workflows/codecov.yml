@@ -9,16 +9,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Install lcov and run test
-      run: |
-        sudo apt-get install lcov
-        make lcov
+      - name: Install lcov and run test
+        run: |
+          sudo apt-get install lcov
+          make lcov
 
-    - name: Upload code coverage
-      uses: codecov/codecov-action@v4
-      with:
-        token: ${{ secrets.CODECOV_TOKEN }}
-        file: ./src/valkey.info
+      - name: Upload code coverage
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          file: ./src/valkey.info

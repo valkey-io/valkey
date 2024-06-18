@@ -87,7 +87,7 @@ void initClientBlockingState(client *c) {
  * and will be processed when the client is unblocked. */
 void blockClient(client *c, int btype) {
     /* Master client should never be blocked unless pause or module */
-    serverAssert(!(c->flags & CLIENT_MASTER && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE));
+    serverAssert(!(c->flags & CLIENT_PRIMARY && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE));
 
     c->flags |= CLIENT_BLOCKED;
     c->bstate.btype = btype;
@@ -183,8 +183,7 @@ void queueClientForReprocessing(client *c) {
 void unblockClient(client *c, int queue_for_reprocessing) {
     if (c->bstate.btype == BLOCKED_LIST || c->bstate.btype == BLOCKED_ZSET || c->bstate.btype == BLOCKED_STREAM) {
         unblockClientWaitingData(c);
-    } else if (c->bstate.btype == BLOCKED_WAIT || c->bstate.btype == BLOCKED_WAITAOF ||
-               c->bstate.btype == BLOCKED_WAIT_PREREPL) {
+    } else if (c->bstate.btype == BLOCKED_WAIT) {
         unblockClientWaitingReplicas(c);
     } else if (c->bstate.btype == BLOCKED_MODULE) {
         if (moduleClientIsBlockedOnKeys(c)) unblockClientWaitingData(c);
@@ -200,8 +199,7 @@ void unblockClient(client *c, int queue_for_reprocessing) {
 
     /* Reset the client for a new query, unless the client has pending command to process
      * or in case a shutdown operation was canceled and we are still in the processCommand sequence  */
-    if (!(c->flags & CLIENT_PENDING_COMMAND) && c->bstate.btype != BLOCKED_SHUTDOWN &&
-        c->bstate.btype != BLOCKED_WAIT_PREREPL) {
+    if (!(c->flags & CLIENT_PENDING_COMMAND) && c->bstate.btype != BLOCKED_SHUTDOWN) {
         freeClientOriginalArgv(c);
         /* Clients that are not blocked on keys are not reprocessed so we must
          * call reqresAppendResponse here (for clients blocked on key,
@@ -211,11 +209,11 @@ void unblockClient(client *c, int queue_for_reprocessing) {
         resetClient(c);
     }
 
+    /* We count blocked client stats on regular clients and not on module clients */
+    if (!(c->flags & CLIENT_MODULE)) server.blocked_clients--;
+    server.blocked_clients_by_type[c->bstate.btype]--;
     /* Clear the flags, and put the client in the unblocked list so that
      * we'll process new commands in its query buffer ASAP. */
-    if (!(c->flags & CLIENT_MODULE))
-        server.blocked_clients--; /* We count blocked client stats on regular clients and not on module clients */
-    server.blocked_clients_by_type[c->bstate.btype]--;
     c->flags &= ~CLIENT_BLOCKED;
     c->bstate.btype = BLOCKED_NONE;
     c->bstate.unblock_on_nokey = 0;
@@ -231,15 +229,19 @@ void replyToBlockedClientTimedOut(client *c) {
         addReplyNullArray(c);
         updateStatsOnUnblock(c, 0, 0, 0);
     } else if (c->bstate.btype == BLOCKED_WAIT) {
-        addReplyLongLong(c, replicationCountAcksByOffset(c->bstate.reploffset));
-    } else if (c->bstate.btype == BLOCKED_WAITAOF) {
-        addReplyArrayLen(c, 2);
-        addReplyLongLong(c, server.fsynced_reploff >= c->bstate.reploffset);
-        addReplyLongLong(c, replicationCountAOFAcksByOffset(c->bstate.reploffset));
+        if (c->cmd->proc == waitCommand) {
+            addReplyLongLong(c, replicationCountAcksByOffset(c->bstate.reploffset));
+        } else if (c->cmd->proc == waitaofCommand) {
+            addReplyArrayLen(c, 2);
+            addReplyLongLong(c, server.fsynced_reploff >= c->bstate.reploffset);
+            addReplyLongLong(c, replicationCountAOFAcksByOffset(c->bstate.reploffset));
+        } else if (c->cmd->proc == clusterCommand) {
+            addReplyErrorObject(c, shared.noreplicaserr);
+        } else {
+            serverPanic("Unknown wait command %s in replyToBlockedClientTimedOut().", c->cmd->declared_name);
+        }
     } else if (c->bstate.btype == BLOCKED_MODULE) {
         moduleBlockedClientTimedOut(c, 0);
-    } else if (c->bstate.btype == BLOCKED_WAIT_PREREPL) {
-        addReplyErrorObject(c, shared.noreplicaserr);
     } else {
         serverPanic("Unknown btype in replyToBlockedClientTimedOut().");
     }
@@ -263,8 +265,8 @@ void replyToClientsBlockedOnShutdown(void) {
 
 /* Mass-unblock clients because something changed in the instance that makes
  * blocking no longer safe. For example clients blocked in list operations
- * in an instance which turns from master to slave is unsafe, so this function
- * is called when a master turns into a slave.
+ * in an instance which turns from master to replica is unsafe, so this function
+ * is called when a master turns into a replica.
  *
  * The semantics is to send an -UNBLOCKED error to the client, disconnecting
  * it at the same time. */
@@ -585,29 +587,13 @@ static void handleClientsBlockedOnKey(readyList *rl) {
 }
 
 /* block a client for replica acknowledgement */
-void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, long numreplicas, int btype, int numlocal) {
+void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, long numreplicas, int numlocal) {
     c->bstate.timeout = timeout;
     c->bstate.reploffset = offset;
     c->bstate.numreplicas = numreplicas;
     c->bstate.numlocal = numlocal;
     listAddNodeHead(server.clients_waiting_acks, c);
-    blockClient(c, btype);
-}
-
-/* block a client due to pre-replication */
-void blockForPreReplication(client *c, mstime_t timeout, long long offset, long numreplicas) {
-    blockClientForReplicaAck(c, timeout, offset, numreplicas, BLOCKED_WAIT_PREREPL, 0);
-    c->flags |= CLIENT_PENDING_COMMAND;
-}
-
-/* block a client due to wait command */
-void blockForReplication(client *c, mstime_t timeout, long long offset, long numreplicas) {
-    blockClientForReplicaAck(c, timeout, offset, numreplicas, BLOCKED_WAIT, 0);
-}
-
-/* block a client due to waitaof command */
-void blockForAofFsync(client *c, mstime_t timeout, long long offset, int numlocal, long numreplicas) {
-    blockClientForReplicaAck(c, timeout, offset, numreplicas, BLOCKED_WAITAOF, numlocal);
+    blockClient(c, BLOCKED_WAIT);
 }
 
 /* Postpone client from executing a command. For example the server might be busy

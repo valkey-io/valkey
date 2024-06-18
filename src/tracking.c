@@ -216,7 +216,8 @@ void trackingRememberKeys(client *tracking, client *executing) {
     uint64_t caching_given = tracking->flags & CLIENT_TRACKING_CACHING;
     if ((optin && !caching_given) || (optout && caching_given)) return;
 
-    getKeysResult result = GETKEYS_RESULT_INIT;
+    getKeysResult result;
+    initGetKeysResult(&result);
     int numkeys = getKeysFromCommand(executing->cmd, executing->argv, executing->argc, &result);
     if (!numkeys) {
         getKeysFreeResult(&result);

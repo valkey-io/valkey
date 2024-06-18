@@ -3129,8 +3129,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             } else if (!strcasecmp(auxkey->ptr, "slot-info")) {
                 int slot_id;
                 unsigned long slot_size, expires_slot_size;
-                /* Try to parse the slot information. in case the number of parsed arguments is smaller than expected
-                 * Will fail the RDB load */
+                /* Try to parse the slot information. In case the number of parsed arguments is smaller than expected
+                 * we'll fail the RDB load. */
                 if (sscanf(auxval->ptr, "%i,%lu,%lu", &slot_id, &slot_size, &expires_slot_size) < 3) {
                     decrRefCount(auxkey);
                     decrRefCount(auxval);

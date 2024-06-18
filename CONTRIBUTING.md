@@ -33,7 +33,7 @@ sudo apt-get install clang-format-18 -y
 
 ## How to Run clang-format-check Action Locally
 
-1. Get `act`.
+1. Get [`act`](https://github.com/nektos/act).
 2. Commit the changes locally:
     ```sh
     git commit -a -s

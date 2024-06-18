@@ -3813,11 +3813,13 @@ int commandCheckArgTokenDuplicacy(client *c, sds *err) {
         }
         if (c->cmd->args[iter].subargs) {
             for (int subiter = 0; subiter < c->cmd->args[iter].num_args; subiter++) {
-                if (c->cmd->args[iter].subargs[subiter].token && !(c->cmd->args[iter].subargs[subiter].flags & CMD_ARG_MULTIPLE_TOKEN)) {
-                    if(!findDuplicatesOptions(c, c->cmd->args[iter].subargs[subiter].token)) {
+                if (c->cmd->args[iter].subargs[subiter].token &&
+                    !(c->cmd->args[iter].subargs[subiter].flags & CMD_ARG_MULTIPLE_TOKEN)) {
+                    if (!findDuplicatesOptions(c, c->cmd->args[iter].subargs[subiter].token)) {
                         if (err) {
                             *err = sdsnew(NULL);
-                            *err = sdscatprintf(*err, "duplicate '%s' option for '%s' command", c->cmd->args[iter].subargs[subiter].token, c->cmd->fullname);
+                            *err = sdscatprintf(*err, "duplicate '%s' option for '%s' command",
+                                                c->cmd->args[iter].subargs[subiter].token, c->cmd->fullname);
                         }
                         return 0;
                     }

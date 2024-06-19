@@ -3069,7 +3069,7 @@ standardConfig static_configs[] = {
     createBoolConfig("replica-ignore-disk-write-errors", NULL, MODIFIABLE_CONFIG, server.repl_ignore_disk_write_error, 0, NULL, NULL),
     createBoolConfig("extended-redis-compatibility", NULL, MODIFIABLE_CONFIG, server.extended_redis_compat, 0, NULL, updateExtendedRedisCompat),
     createBoolConfig("debug-assert-enabled", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, server.debug_assert_enabled, 0, NULL, NULL),
-    createBoolConfig("io_uring-enabled", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.io_uring_enabled, 0, NULL, NULL),
+    createBoolConfig("io-uring-enabled", NULL, IMMUTABLE_CONFIG, server.io_uring_enabled, 0, NULL, NULL),
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.acl_filename, "", NULL, NULL),

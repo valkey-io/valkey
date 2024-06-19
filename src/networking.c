@@ -3582,8 +3582,9 @@ NULL
         }
     } else if (!strcasecmp(c->argv[1]->ptr, "capa") && c->argc >= 3) {
         for (int i = 2; i < c->argc; i++) {
-            if (!strcasecmp(c->argv[i]->ptr, "redirect"))
+            if (!strcasecmp(c->argv[i]->ptr, "redirect")) {
                 c->capa |= CLIENT_CAPA_REDIRECT;
+            }
         }
         addReply(c, shared.ok);
     } else {

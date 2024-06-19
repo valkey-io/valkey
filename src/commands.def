@@ -1108,7 +1108,7 @@ struct COMMAND_ARG CLIENT_CACHING_Args[] = {
 
 /* CLIENT CAPA argument table */
 struct COMMAND_ARG CLIENT_CAPA_Args[] = {
-{MAKE_ARG("capability",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("capability",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
 /********** CLIENT GETNAME ********************/

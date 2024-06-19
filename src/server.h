@@ -2032,6 +2032,8 @@ struct valkeyServer {
     int cluster_replica_no_failover;                       /* Prevent replica from starting a failover
                                                             if the primary is in failure state. */
     char *cluster_announce_ip;                             /* IP address to announce on cluster bus. */
+    char *cluster_announce_client_ipv4;                    /* IPv4 for clients, to announce on cluster bus. */
+    char *cluster_announce_client_ipv6;                    /* IPv6 for clients, to announce on cluster bus. */
     char *cluster_announce_hostname;                       /* hostname to announce on cluster bus. */
     char *cluster_announce_human_nodename;                 /* Human readable node name assigned to a node. */
     int cluster_preferred_endpoint_type;                   /* Use the announced hostname when available. */

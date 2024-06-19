@@ -747,7 +747,7 @@ int verifyClusterNodeId(const char *name, int length) {
 }
 
 int isValidAuxChar(int c) {
-    return isalnum(c) || (strchr("!#$%&()*+:;<>?@[]^{|}~", c) == NULL);
+    return isalnum(c) || (strchr("!#$%&()*+.:;<>?@[]^{|}~", c) == NULL);
 }
 
 int isValidAuxString(char *s, unsigned int length) {
@@ -1267,6 +1267,7 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
     char *hostname = clusterNodeHostname(node);
     addReplyArrayLen(c, 4);
     if (server.cluster_preferred_endpoint_type == CLUSTER_ENDPOINT_TYPE_IP) {
+        // FIXME use client_ipv4 or client_ipv6 if available.
         addReplyBulkCString(c, clusterNodeIp(node));
     } else if (server.cluster_preferred_endpoint_type == CLUSTER_ENDPOINT_TYPE_HOSTNAME) {
         if (hostname != NULL && hostname[0] != '\0') {

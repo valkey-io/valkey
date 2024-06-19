@@ -2619,6 +2619,18 @@ static int updateClusterIp(const char **err) {
     return 1;
 }
 
+int updateClusterClientIpV4(const char **err) {
+    UNUSED(err);
+    clusterUpdateMyselfClientIpV4();
+    return 1;
+}
+
+int updateClusterClientIpV6(const char **err) {
+    UNUSED(err);
+    clusterUpdateMyselfClientIpV6();
+    return 1;
+}
+
 int updateClusterHostname(const char **err) {
     UNUSED(err);
     clusterUpdateMyselfHostname();
@@ -3077,6 +3089,8 @@ standardConfig static_configs[] = {
     createStringConfig("replica-announce-ip", "slave-announce-ip", MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.replica_announce_ip, NULL, NULL, NULL),
     createStringConfig("primaryuser", "masteruser", MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.primary_user, NULL, NULL, NULL),
     createStringConfig("cluster-announce-ip", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_ip, NULL, NULL, updateClusterIp),
+    createStringConfig("cluster-announce-client-ipv4", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_client_ipv4, NULL, NULL, updateClusterClientIpV4),
+    createStringConfig("cluster-announce-client-ipv6", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_client_ipv6, NULL, NULL, updateClusterClientIpV6),
     createStringConfig("cluster-config-file", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.cluster_configfile, "nodes.conf", isValidClusterConfigFile, NULL),
     createStringConfig("cluster-announce-hostname", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_hostname, NULL, isValidAnnouncedHostname, updateClusterHostname),
     createStringConfig("cluster-announce-human-nodename", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_human_nodename, NULL, isValidAnnouncedNodename, updateClusterHumanNodename),

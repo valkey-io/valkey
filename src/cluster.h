@@ -48,6 +48,8 @@ int clusterSendModuleMessageToTarget(const char *target,
 
 void clusterUpdateMyselfFlags(void);
 void clusterUpdateMyselfIp(void);
+void clusterUpdateMyselfClientIpV4(void);
+void clusterUpdateMyselfClientIpV6(void);
 void clusterUpdateMyselfHostname(void);
 void clusterUpdateMyselfAnnouncedPorts(void);
 void clusterUpdateMyselfHumanNodename(void);

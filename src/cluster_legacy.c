@@ -104,6 +104,12 @@ int auxShardIdPresent(clusterNode *n);
 int auxHumanNodenameSetter(clusterNode *n, void *value, int length);
 sds auxHumanNodenameGetter(clusterNode *n, sds s);
 int auxHumanNodenamePresent(clusterNode *n);
+int auxClientIpV4Setter(clusterNode *n, void *value, int length);
+sds auxClientIpV4Getter(clusterNode *n, sds s);
+int auxClientIpV4Present(clusterNode *n);
+int auxClientIpV6Setter(clusterNode *n, void *value, int length);
+sds auxClientIpV6Getter(clusterNode *n, sds s);
+int auxClientIpV6Present(clusterNode *n);
 int auxTcpPortSetter(clusterNode *n, void *value, int length);
 sds auxTcpPortGetter(clusterNode *n, sds s);
 int auxTcpPortPresent(clusterNode *n);
@@ -211,7 +217,9 @@ typedef enum {
     af_human_nodename,
     af_tcp_port,
     af_tls_port,
-    af_count,
+    af_client_ipv4,
+    af_client_ipv6,
+    af_count, /* must be the last field */
 } auxFieldIndex;
 
 /* Note that
@@ -223,6 +231,8 @@ auxFieldHandler auxFieldHandlers[] = {
     {"nodename", auxHumanNodenameSetter, auxHumanNodenameGetter, auxHumanNodenamePresent},
     {"tcp-port", auxTcpPortSetter, auxTcpPortGetter, auxTcpPortPresent},
     {"tls-port", auxTlsPortSetter, auxTlsPortGetter, auxTlsPortPresent},
+    {"client-ipv4", auxClientIpV4Setter, auxClientIpV4Getter, auxClientIpV4Present},
+    {"client-ipv6", auxClientIpV6Setter, auxClientIpV6Getter, auxClientIpV6Present},
 };
 
 int auxShardIdSetter(clusterNode *n, void *value, int length) {
@@ -271,6 +281,56 @@ sds auxHumanNodenameGetter(clusterNode *n, sds s) {
 
 int auxHumanNodenamePresent(clusterNode *n) {
     return sdslen(n->human_nodename);
+}
+
+int auxClientIpV4Setter(clusterNode *n, void *value, int length) {
+    if (n && !strncmp(value, n->client_ipv4, length)) {
+        return C_OK;
+    } else if (!n && (length == 0)) {
+        return C_OK;
+    }
+    if (n) {
+        n->client_ipv4 = sdscpylen(n->client_ipv4, value, length);
+    } else if (sdslen(n->client_ipv4) != 0) {
+        sdsclear(n->client_ipv4);
+    } else {
+        return C_ERR;
+    }
+    return C_OK;
+
+}
+
+sds auxClientIpV4Getter(clusterNode *n, sds s) {
+    return sdscatprintf(s, "%s", n->client_ipv4);
+}
+
+int auxClientIpV4Present(clusterNode *n) {
+    return sdslen(n->client_ipv4) != 0;
+}
+
+int auxClientIpV6Setter(clusterNode *n, void *value, int length) {
+    if (n && !strncmp(value, n->client_ipv6, length)) {
+        return C_OK;
+    } else if (!n && (length == 0)) {
+        return C_OK;
+    }
+    if (n) {
+        n->client_ipv6 = sdscpylen(n->client_ipv6, value, length);
+    } else if (sdslen(n->client_ipv6) != 0) {
+        sdsclear(n->client_ipv6);
+    } else {
+        return C_ERR;
+    }
+    return C_OK;
+
+}
+
+sds auxClientIpV6Getter(clusterNode *n, sds s) {
+    return sdscatprintf(s, "%s", n->client_ipv6);
+}
+
+int auxClientIpV6Present(clusterNode *n) {
+    return sdslen(n->client_ipv6) != 0;
 }
 
 int auxTcpPortSetter(clusterNode *n, void *value, int length) {
@@ -916,6 +976,35 @@ static void updateAnnouncedHumanNodename(clusterNode *node, char *new) {
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
+static void updateAnnouncedClientIpV4(clusterNode *node, char *new) {
+    if (new && !strcmp(new, node->client_ipv4)) {
+        return;
+    } else if (!new && (sdslen(node->client_ipv4) == 0)) {
+        return;
+    }
+
+    if (new) {
+        node->client_ipv4 = sdscpy(node->client_ipv4, new);
+    } else if (sdslen(node->client_ipv4) != 0) {
+        sdsclear(node->client_ipv4);
+    }
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+}
+
+static void updateAnnouncedClientIpV6(clusterNode *node, char *new) {
+    if (new && !strcmp(new, node->client_ipv6)) {
+        return;
+    } else if (!new && (sdslen(node->client_ipv6) == 0)) {
+        return;
+    }
+
+    if (new) {
+        node->client_ipv6 = sdscpy(node->client_ipv6, new);
+    } else if (sdslen(node->client_ipv6) != 0) {
+        sdsclear(node->client_ipv6);
+    }
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+}
 
 static void updateShardId(clusterNode *node, const char *shard_id) {
     if (shard_id && memcmp(node->shard_id, shard_id, CLUSTER_NAMELEN) != 0) {
@@ -953,6 +1042,16 @@ void clusterUpdateMyselfHostname(void) {
 void clusterUpdateMyselfHumanNodename(void) {
     if (!myself) return;
     updateAnnouncedHumanNodename(myself, server.cluster_announce_human_nodename);
+}
+
+void clusterUpdateMyselfClientIpV4(void) {
+    if (!myself) return;
+    updateAnnouncedClientIpV4(myself, server.cluster_announce_client_ipv4);
+}
+
+void clusterUpdateMyselfClientIpV6(void) {
+    if (!myself) return;
+    updateAnnouncedClientIpV6(myself, server.cluster_announce_client_ipv6);
 }
 
 void clusterInit(void) {
@@ -1040,6 +1139,8 @@ void clusterInit(void) {
     resetManualFailover();
     clusterUpdateMyselfFlags();
     clusterUpdateMyselfIp();
+    clusterUpdateMyselfClientIpV4();
+    clusterUpdateMyselfClientIpV6();
     clusterUpdateMyselfHostname();
     clusterUpdateMyselfHumanNodename();
 }
@@ -1343,6 +1444,8 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->link = NULL;
     node->inbound_link = NULL;
     memset(node->ip, 0, sizeof(node->ip));
+    node->client_ipv4 = sdsempty();
+    node->client_ipv6 = sdsempty();
     node->hostname = sdsempty();
     node->human_nodename = sdsempty();
     node->tcp_port = 0;
@@ -1514,6 +1617,8 @@ void freeClusterNode(clusterNode *n) {
     sdsfree(nodename);
     sdsfree(n->hostname);
     sdsfree(n->human_nodename);
+    sdsfree(n->client_ipv4);
+    sdsfree(n->client_ipv6);
 
     /* Release links and associated data structures. */
     if (n->link) freeClusterLink(n->link);
@@ -2572,6 +2677,20 @@ uint32_t getHumanNodenamePingExtSize(void) {
     return getAlignedPingExtSize(sdslen(myself->human_nodename) + 1);
 }
 
+uint32_t getClientIpV4PingExtSize(void) {
+    if (sdslen(myself->client_ipv4) == 0) {
+        return 0;
+    }
+    return getAlignedPingExtSize(sdslen(myself->client_ipv4) + 1);
+}
+
+uint32_t getClientIpV6PingExtSize(void) {
+    if (sdslen(myself->client_ipv6) == 0) {
+        return 0;
+    }
+    return getAlignedPingExtSize(sdslen(myself->client_ipv6) + 1);
+}
+
 uint32_t getShardIdPingExtSize(void) {
     return getAlignedPingExtSize(sizeof(clusterMsgPingExtShardId));
 }
@@ -2632,6 +2751,36 @@ uint32_t writePingExt(clusterMsg *hdr, int gossipcount) {
         extensions++;
     }
 
+    if (sdslen(myself->client_ipv4) != 0) {
+        if (cursor != NULL) {
+            /* Populate client_ipv4 */
+            clusterMsgPingExtClientIpV4 *ext =
+                preparePingExt(cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPv4, getClientIpV4PingExtSize());
+            memcpy(ext->client_ipv4, myself->client_ipv4, sdslen(myself->client_ipv4));
+
+            /* Move the write cursor */
+            cursor = getNextPingExt(cursor);
+        }
+
+        totlen += getClientIpV4PingExtSize();
+        extensions++;
+    }
+
+    if (sdslen(myself->client_ipv6) != 0) {
+        if (cursor != NULL) {
+            /* Populate client_ipv4 */
+            clusterMsgPingExtClientIpV6 *ext =
+                preparePingExt(cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPv6, getClientIpV6PingExtSize());
+            memcpy(ext->client_ipv6, myself->client_ipv6, sdslen(myself->client_ipv6));
+
+            /* Move the write cursor */
+            cursor = getNextPingExt(cursor);
+        }
+
+        totlen += getClientIpV6PingExtSize();
+        extensions++;
+    }
+
     /* Gossip forgotten nodes */
     if (dictSize(server.cluster->nodes_black_list) > 0) {
         dictIterator *di = dictGetIterator(server.cluster->nodes_black_list);
@@ -2680,6 +2829,8 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
     char *ext_hostname = NULL;
     char *ext_humannodename = NULL;
+    char *ext_clientipv4 = NULL;
+    char *ext_clientipv6 = NULL;
     char *ext_shardid = NULL;
     uint16_t extensions = ntohs(hdr->extensions);
     /* Loop through all the extensions and process them */
@@ -2693,6 +2844,12 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
             clusterMsgPingExtHumanNodename *humannodename_ext =
                 (clusterMsgPingExtHumanNodename *)&(ext->ext[0].human_nodename);
             ext_humannodename = humannodename_ext->human_nodename;
+        } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_IPv4) {
+            clusterMsgPingExtClientIpV4 *clientipv4_ext = (clusterMsgPingExtClientIpV4 *)&(ext->ext[0].client_ipv4);
+            ext_clientipv4 = clientipv4_ext->client_ipv4;
+        } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_IPv6) {
+            clusterMsgPingExtClientIpV6 *clientipv6_ext = (clusterMsgPingExtClientIpV6 *)&(ext->ext[0].client_ipv6);
+            ext_clientipv6 = clientipv6_ext->client_ipv6;
         } else if (type == CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE) {
             clusterMsgPingExtForgottenNode *forgotten_node_ext = &(ext->ext[0].forgotten_node);
             clusterNode *n = clusterLookupNode(forgotten_node_ext->name, CLUSTER_NAMELEN);
@@ -2721,6 +2878,8 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
      * set it now. */
     updateAnnouncedHostname(sender, ext_hostname);
     updateAnnouncedHumanNodename(sender, ext_humannodename);
+    updateAnnouncedClientIpV4(sender, ext_clientipv4);
+    updateAnnouncedClientIpV6(sender, ext_clientipv6);
     /* If the node did not send us a shard-id extension, it means the sender
      * does not support it (old version), node->shard_id is randomly generated.
      * A cluster-wide consensus for the node's shard_id is not necessary.
@@ -5252,6 +5411,7 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
     int j, start;
     sds ci;
     int port = clusterNodeClientPort(node, tls_primary);
+    // FIXME add parameter for preferred IP address family
 
     /* Node coordinates */
     ci = sdscatlen(sdsempty(), node->name, CLUSTER_NAMELEN);
@@ -6511,7 +6671,7 @@ long long clusterNodeReplOffset(clusterNode *node) {
 const char *clusterNodePreferredEndpoint(clusterNode *n) {
     char *hostname = clusterNodeHostname(n);
     switch (server.cluster_preferred_endpoint_type) {
-    case CLUSTER_ENDPOINT_TYPE_IP: return clusterNodeIp(n);
+    case CLUSTER_ENDPOINT_TYPE_IP: return clusterNodeIp(n); // FIXME Use client_ipv4 or v6 depending on client
     case CLUSTER_ENDPOINT_TYPE_HOSTNAME: return (hostname != NULL && hostname[0] != '\0') ? hostname : "?";
     case CLUSTER_ENDPOINT_TYPE_UNKNOWN_ENDPOINT: return "";
     }

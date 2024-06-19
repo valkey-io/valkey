@@ -345,6 +345,21 @@ proc are_hostnames_propagated {match_string} {
     return 1
 }
 
+# Check if cluster's announced IPs are consistent and match a pattern
+proc are_announced_client_ip_propagated {match_string} {
+    for {set j 0} {$j < [llength $::servers]} {incr j} {
+        set cfg [R $j cluster slots]
+        foreach node $cfg {
+            for {set i 2} {$i < [llength $node]} {incr i} {
+                if {! [string match $match_string [lindex [lindex $node $i] 0]] } {
+                    return 0
+                }
+            }
+        }
+    }
+    return 1
+}
+
 proc wait_node_marked_fail {ref_node_index instance_id_to_check} {
     wait_for_condition 1000 50 {
         [check_cluster_node_mark fail $ref_node_index $instance_id_to_check]

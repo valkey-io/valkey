@@ -5109,11 +5109,6 @@ void sentinelHandleRedisInstance(sentinelRedisInstance *ri) {
     /* Every kind of instance */
     sentinelCheckSubjectivelyDown(ri);
 
-    /* Primaries and replicas */
-    if (ri->flags & (SRI_PRIMARY | SRI_REPLICA)) {
-        /* Nothing so far. */
-    }
-
     /* Only primaries */
     if (ri->flags & SRI_PRIMARY) {
         sentinelCheckObjectivelyDown(ri);

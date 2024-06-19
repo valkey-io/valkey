@@ -31,6 +31,7 @@
 #include "fmacros.h"
 #include "config.h"
 #include "solarisfixes.h"
+#include "serverassert.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -87,10 +88,36 @@ void zlibc_free(void *ptr) {
 #define dallocx(ptr, flags) je_dallocx(ptr, flags)
 #endif
 
-#define update_zmalloc_stat_alloc(__n) atomic_fetch_add_explicit(&used_memory, (__n), memory_order_relaxed)
-#define update_zmalloc_stat_free(__n) atomic_fetch_sub_explicit(&used_memory, (__n), memory_order_relaxed)
+#if __STDC_NO_THREADS__
+#define thread_local __thread
+#else
+#include <threads.h>
+#endif
 
-static _Atomic size_t used_memory = 0;
+/* A thread-local storage which keep the current thread's index in the used_memory_thread array. */
+static thread_local int thread_index = -1;
+/* MAX_THREADS_NUM = IO_THREADS_MAX_NUM(128) + BIO threads(3) + main thread(1). */
+#define MAX_THREADS_NUM 132
+static unsigned long long used_memory_thread[MAX_THREADS_NUM];
+
+static atomic_int total_active_threads;
+
+/* Register the thread index in start_routine. */
+static inline void zmalloc_register_thread_index(void) {
+    thread_index = atomic_fetch_add_explicit(&total_active_threads, 1, memory_order_relaxed);
+    /* TODO: Handle the case when exceed the MAX_THREADS_NUM (may rarely happen). */
+    assert(total_active_threads < MAX_THREADS_NUM);
+}
+
+static inline void update_zmalloc_stat_alloc(size_t size) {
+    if (unlikely(thread_index == -1)) zmalloc_register_thread_index();
+    used_memory_thread[thread_index] += size;
+}
+
+static inline void update_zmalloc_stat_free(size_t size) {
+    if (unlikely(thread_index == -1)) zmalloc_register_thread_index();
+    used_memory_thread[thread_index] -= size;
+}
 
 static void zmalloc_default_oom(size_t size) {
     fprintf(stderr, "zmalloc: Out of memory trying to allocate %zu bytes\n", size);
@@ -388,7 +415,11 @@ char *zstrdup(const char *s) {
 }
 
 size_t zmalloc_used_memory(void) {
-    size_t um = atomic_load_explicit(&used_memory, memory_order_relaxed);
+    assert(total_active_threads < MAX_THREADS_NUM);
+    size_t um = 0;
+    for (int i = 0; i < total_active_threads; i++) {
+        um += used_memory_thread[i];
+    }
     return um;
 }
 

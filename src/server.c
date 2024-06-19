@@ -6610,7 +6610,6 @@ struct serverTest {
 } serverTests[] = {
     {"quicklist", quicklistTest},
     {"zipmap", zipmapTest},
-    {"dict", dictTest},
     {"listpack", listpackTest},
 };
 serverTestProc *getTestProcByName(const char *name) {

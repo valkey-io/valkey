@@ -9,6 +9,7 @@ typedef struct unitTest {
 
 int test_crc64(int argc, char **argv, int flags);
 int test_crc64combine(int argc, char **argv, int flags);
+int test_dict(int argc, char **argv, int flags);
 int test_endianconv(int argc, char *argv[], int flags);
 int test_intsetValueEncodings(int argc, char **argv, int flags);
 int test_intsetBasicAdding(int argc, char **argv, int flags);
@@ -76,6 +77,7 @@ int test_zmallocAllocZeroByteAndFree(int argc, char **argv, int flags);
 
 unitTest __test_crc64_c[] = {{"test_crc64", test_crc64}, {NULL, NULL}};
 unitTest __test_crc64combine_c[] = {{"test_crc64combine", test_crc64combine}, {NULL, NULL}};
+unitTest __test_dict_c[] = {{"test_dict", test_dict}, {NULL, NULL}};
 unitTest __test_endianconv_c[] = {{"test_endianconv", test_endianconv}, {NULL, NULL}};
 unitTest __test_intset_c[] = {{"test_intsetValueEncodings", test_intsetValueEncodings}, {"test_intsetBasicAdding", test_intsetBasicAdding}, {"test_intsetLargeNumberRandomAdd", test_intsetLargeNumberRandomAdd}, {"test_intsetUpgradeFromint16Toint32", test_intsetUpgradeFromint16Toint32}, {"test_intsetUpgradeFromint16Toint64", test_intsetUpgradeFromint16Toint64}, {"test_intsetUpgradeFromint32Toint64", test_intsetUpgradeFromint32Toint64}, {"test_intsetStressLookups", test_intsetStressLookups}, {"test_intsetStressAddDelete", test_intsetStressAddDelete}, {NULL, NULL}};
 unitTest __test_kvstore_c[] = {{"test_kvstoreAdd16Keys", test_kvstoreAdd16Keys}, {"test_kvstoreIteratorRemoveAllKeysNoDeleteEmptyDict", test_kvstoreIteratorRemoveAllKeysNoDeleteEmptyDict}, {"test_kvstoreIteratorRemoveAllKeysDeleteEmptyDict", test_kvstoreIteratorRemoveAllKeysDeleteEmptyDict}, {"test_kvstoreDictIteratorRemoveAllKeysNoDeleteEmptyDict", test_kvstoreDictIteratorRemoveAllKeysNoDeleteEmptyDict}, {"test_kvstoreDictIteratorRemoveAllKeysDeleteEmptyDict", test_kvstoreDictIteratorRemoveAllKeysDeleteEmptyDict}, {NULL, NULL}};
@@ -91,6 +93,7 @@ struct unitTestSuite {
 } unitTestSuite[] = {
     {"test_crc64.c", __test_crc64_c},
     {"test_crc64combine.c", __test_crc64combine_c},
+    {"test_dict.c", __test_dict_c},
     {"test_endianconv.c", __test_endianconv_c},
     {"test_intset.c", __test_intset_c},
     {"test_kvstore.c", __test_kvstore_c},

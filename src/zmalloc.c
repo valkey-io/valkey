@@ -368,7 +368,7 @@ size_t zmalloc_usable_size(void *ptr) {
  * ptr must have been returned by a previous call to the system allocator which
  * returned the usable size, such as zmalloc_usable. ptr must not be NULL. The
  * caller is responsible to provide the actual allocation size, which may be
- * different from the requested size */
+ * different from the requested size. */
 static inline void zfree_internal(void *ptr, size_t size) {
     assert(ptr != NULL);
     update_zmalloc_stat_free(size);

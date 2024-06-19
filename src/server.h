@@ -1206,9 +1206,9 @@ typedef struct {
 typedef struct client {
     uint64_t id;    /* Client incremental unique ID. */
     uint64_t flags; /* Client flags: CLIENT_* macros. */
-    uint64_t capa;  /* Client capabilities: CLIENT_CAPA* macros. */
     connection *conn;
     int resp;                            /* RESP protocol version. Can be 2 or 3. */
+    uint32_t capa;                       /* Client capabilities: CLIENT_CAPA* macros. */
     serverDb *db;                        /* Pointer to currently SELECTed DB. */
     robj *name;                          /* As set by CLIENT SETNAME. */
     robj *lib_name;                      /* The client library name as set by CLIENT SETINFO. */

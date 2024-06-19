@@ -3580,13 +3580,12 @@ NULL
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
         }
-    } else if (!strcasecmp(c->argv[1]->ptr, "capa") && c->argc == 3) {
-        if (!strcasecmp(c->argv[2]->ptr, "redirect")) {
-            c->capa |= CLIENT_CAPA_REDIRECT;
-            addReply(c, shared.ok);
-        } else {
-            addReplyErrorObject(c, shared.syntaxerr);
+    } else if (!strcasecmp(c->argv[1]->ptr, "capa") && c->argc >= 3) {
+        for (int i = 2; i < c->argc; i++) {
+            if (!strcasecmp(c->argv[i]->ptr, "redirect"))
+                c->capa |= CLIENT_CAPA_REDIRECT;
         }
+        addReply(c, shared.ok);
     } else {
         addReplySubcommandSyntaxError(c);
     }

@@ -39,6 +39,7 @@
 #include "syscheck.h"
 #include "threads_mngr.h"
 #include "fmtargs.h"
+#include "io_uring.h"
 
 #include <time.h>
 #include <signal.h>
@@ -2797,6 +2798,18 @@ void initListeners(void) {
 void InitServerLast(void) {
     bioInit();
     initThreadedIO();
+	if (server.io_uring_enabled) {
+#ifdef HAVE_IO_URING
+		if (0 == initAofIOUring())
+			serverLog(LL_NOTICE, "aof io_uring init successfully.");
+		else {
+			serverLog(LL_WARNING, "aof io_uring init failed.");
+			exit(1);
+		}
+#else
+		serverLog(LL_WARNING, "System doesn't support io_uring, not init aof io_uring.");
+#endif
+	}
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
     server.initial_memory_usage = zmalloc_used_memory();
 }
@@ -6984,6 +6997,10 @@ int main(int argc, char **argv) {
 
     aeMain(server.el);
     aeDeleteEventLoop(server.el);
+	if (server.io_uring_enabled) {
+		freeAofIOUring();
+		serverLog(LL_NOTICE, "aof io_uring free successfully.");
+	}
     return 0;
 }
 

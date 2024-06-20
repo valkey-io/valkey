@@ -97,6 +97,11 @@
 #define HAVE_EPOLL 1
 #endif
 
+/* Test for liburing API */
+#ifndef __linux__
+#define HAVE_IO_URING 0
+#endif
+
 /* Test for accept4() */
 #if defined(__linux__) || defined(__FreeBSD__) || defined(OpenBSD5_7) ||                                               \
     (defined(__DragonFly__) && __DragonFly_version >= 400305) ||                                                       \

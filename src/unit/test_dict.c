@@ -4,6 +4,7 @@
 #include "../dict.c"
 #include "test_help.h"
 
+
 #define UNUSED(V) ((void)V)
 #define TEST(name) printf("test — %s\n", name);
 
@@ -67,6 +68,8 @@ int test_dict(int argc, char **argv, int flags) {
     } else {
         count = 5000;
     }
+
+    monotonicInit(); // To prevent SIGSEV when calling dictRehashMicroseconds()
 
     TEST("Add 16 keys and verify dict resize is ok") {
         dictSetResizeEnabled(DICT_RESIZE_ENABLE);

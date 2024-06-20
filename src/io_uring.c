@@ -4,7 +4,6 @@
 #include <liburing.h>
 #include <string.h>
 
-#include "serverassert.h"
 #include "zmalloc.h"
 
 #define IO_URING_DEPTH 256 /* io_uring instance queue depth. */
@@ -22,7 +21,7 @@ io_uring_context *createIOUring(void) {
     /* On success, io_uring_queue_init_params(3) returns 0 and ring will
      * point to the shared memory containing the io_uring queues.
      * On failure -errno is returned. */
-    assert(io_uring_queue_init_params(IO_URING_DEPTH, ring, &params) == 0);
+    if (io_uring_queue_init_params(IO_URING_DEPTH, ring, &params) < 0) return NULL;
     uring_context->ring = ring;
     uring_context->queue_len = 0;
     return uring_context;

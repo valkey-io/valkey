@@ -2809,7 +2809,13 @@ void initListeners(void) {
 void InitServerLast(void) {
     bioInit();
     initThreadedIO();
-    if (server.io_uring_enabled) server.io_uring_context = createIOUring();
+    if (server.io_uring_enabled) {
+        server.io_uring_context = createIOUring();
+        if (server.io_uring_context == NULL) {
+            serverLog(LL_WARNING, "Failed to initialize io_uring.");
+            exit(1);
+        }
+    }
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
     server.initial_memory_usage = zmalloc_used_memory();
 }

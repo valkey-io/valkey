@@ -1570,7 +1570,6 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         r write $cmd
         r flush
         set ret [r read]
-        puts $ret
         assert_match {*PONG*} $ret
         reconnect 
         assert_equal [r ping] {PONG}
@@ -1634,7 +1633,7 @@ start_server {tags {"scripting external:skip"}} {
         # "return 1" is ok since it was moved to tail.
         assert_equal 1 [r evalsha e0e1f9fabfc9d4800c877a703b823ac0578ff8db 0]
         # "return 2" is ok since it was moved to tail.
-        assert_equal 1 [r evalsha e0e1f9fabfc9d4800c877a703b823ac0578ff8db 0]
+        assert_equal 2 [r evalsha 7f923f79fe76194c868d7e1d0820de36700eb649 0]
         # "return 3" was evicted.
         assert_error {NOSCRIPT*} {r evalsha 09d3822de862f46d784e6a36848b4f0736dda47a 0}
         # Others are ok.

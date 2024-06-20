@@ -1229,7 +1229,7 @@ try_fsync:
     if (server.aof_fsync == AOF_FSYNC_ALWAYS) {
         /* If user enable io_uring and system support it, give io_uring a chance? */
         if (server.io_uring_enabled) {
-            int ret = ioUringPrepFsyncAndSubmit(server.io_uring, server.aof_fd);
+            int ret = ioUringPrepFsyncAndSubmit(server.io_uring_context, server.aof_fd);
             if (ret < 0) {
                 serverLog(LL_WARNING,
                           "Can't persist AOF through io_uring for fsync error when the "

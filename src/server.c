@@ -1673,13 +1673,12 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     }
 
     /* Handle writes with pending output buffers.
-     * In the first phase, we will try to leverage io_uring to handle fsync asynchronously,
-     * just skip the client that has pending writes. */
-    handleClientsWithPendingWritesUsingThreads(1);
+     * We skip clients with commands pending for propagation if io_uring is enabled for AOF_FSYNC_ALWAYS. */
+    handleClientsWithPendingWritesUsingThreads(canUseIOUringForAlwaysFsync());
 
-    if (server.aof_state == AOF_ON && server.aof_fsync == AOF_FSYNC_ALWAYS && server.io_uring_enabled) {
-        /* Wait io_uring_prep_fsync finished. */
-        int ret = ioUringWaitFsyncBarrier(server.io_uring);
+    if (canUseIOUringForAlwaysFsync()) {
+        /* Wait for io_uring_prep_fsync to finish. */
+        int ret = ioUringWaitFsyncBarrier(server.io_uring_context);
         if (ret < 0) {
             serverLog(LL_WARNING,
                       "Can't persist AOF through io_uring for fsync error when the "
@@ -2810,7 +2809,7 @@ void initListeners(void) {
 void InitServerLast(void) {
     bioInit();
     initThreadedIO();
-    if (server.io_uring_enabled) server.io_uring = createIOUring();
+    if (server.io_uring_enabled) server.io_uring_context = createIOUring();
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
     server.initial_memory_usage = zmalloc_used_memory();
 }
@@ -6987,7 +6986,7 @@ int main(int argc, char **argv) {
 
     aeMain(server.el);
     aeDeleteEventLoop(server.el);
-    if (server.io_uring_enabled) freeIOUring(server.io_uring);
+    if (server.io_uring_enabled) freeIOUring(server.io_uring_context);
     return 0;
 }
 

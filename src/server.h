@@ -2124,8 +2124,8 @@ struct valkeyServer {
     /* Local environment */
     char *locale_collate;
     /* io_uring */
-    int io_uring_enabled; /* If io_uring enabled (0 by default) */
-    io_uring *io_uring;   /* Single io_uring instance for server. */
+    int io_uring_enabled;               /* If io_uring enabled (0 by default) */
+    io_uring_context *io_uring_context; /* Single io_uring_context instance for server. */
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -2957,6 +2957,9 @@ void aofOpenIfNeededOnServerStart(void);
 void aofManifestFree(aofManifest *am);
 int aofDelHistoryFiles(void);
 int aofRewriteLimited(void);
+static inline int canUseIOUringForAlwaysFsync(void) {
+    return server.aof_state == AOF_ON && server.aof_fsync == AOF_FSYNC_ALWAYS && server.io_uring_enabled;
+}
 
 /* Child info */
 void openChildInfoPipe(void);

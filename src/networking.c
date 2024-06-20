@@ -2030,13 +2030,9 @@ void sendReplyToClient(connection *conn) {
     writeToClient(c, 1);
 }
 
-static inline int canFsyncUsingIOUring(void) {
-    return server.aof_state == AOF_ON && server.aof_fsync == AOF_FSYNC_ALWAYS && server.io_uring_enabled;
-}
-
 /* Indicate the client that has propagate command to be written. */
 static inline int clientHasPendingPropagateCommand(client *c) {
-    return canFsyncUsingIOUring() && c->flags & CLIENT_PROPAGATING;
+    return canUseIOUringForAlwaysFsync() && c->flags & CLIENT_PROPAGATING;
 }
 
 /* This function is called just before entering the event loop, in the hope
@@ -2051,8 +2047,6 @@ int handleClientsWithPendingWrites(int skip_clients_with_propagating_writes) {
     listRewind(server.clients_pending_write, &li);
     while ((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
-        /* If client has pending propgate command and user set appendfsync always.
-         * Try to use io_uring to handle the fsync asynchronously. */
         if (skip_clients_with_propagating_writes && clientHasPendingPropagateCommand(c)) continue;
 
         c->flags &= ~CLIENT_PROPAGATING;

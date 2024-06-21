@@ -30,11 +30,14 @@ io_uring_context *createIOUring(void) {
 /* Submit fdatasync request to io_uring. */
 int ioUringPrepFsyncAndSubmit(io_uring_context *ring_context, int fd) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(ring_context->ring);
-    if (sqe == NULL) return IO_URING_ERR;
     io_uring_prep_fsync(sqe, fd, IORING_FSYNC_DATASYNC);
     ring_context->queue_len++;
     int ret = io_uring_submit(ring_context->ring);
-    return ret < 0 ? ret : IO_URING_OK;
+    if (ret < 0) {
+        errno = -ret;
+        return IO_URING_ERR;
+    }
+    return IO_URING_OK;
 }
 
 int ioUringWaitFsyncBarrier(io_uring_context *ring_context) {
@@ -43,12 +46,16 @@ int ioUringWaitFsyncBarrier(io_uring_context *ring_context) {
         int ret = io_uring_wait_cqe(ring_context->ring, &cqe);
         if (ret == 0) {
             if (cqe->res < 0) {
-                return cqe->res;
+                errno = -cqe->res;
+                return IO_URING_ERR;
             }
             io_uring_cqe_seen(ring_context->ring, cqe);
             ring_context->queue_len--;
         } else {
-            return ret;
+            if (ret < 0) {
+                errno = -ret;
+            }
+            return IO_URING_ERR;
         }
     }
     return IO_URING_OK;

@@ -1678,12 +1678,11 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     if (canUseIOUringForAlwaysFsync()) {
         /* Wait for io_uring_prep_fsync to finish. */
-        int ret = ioUringWaitFsyncBarrier(server.io_uring_context);
-        if (ret < 0) {
+        if (ioUringWaitFsyncBarrier(server.io_uring_context) != IO_URING_OK) {
             serverLog(LL_WARNING,
                       "Can't persist AOF through io_uring for fsync error when the "
                       "AOF fsync policy is 'always': %s. Exiting...",
-                      strerror(ret));
+                      strerror(errno));
             exit(1);
         }
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;

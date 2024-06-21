@@ -4,6 +4,7 @@
 typedef struct io_uring_context io_uring_context; /* opaque */
 
 #define IO_URING_OK 0
+#define IO_URING_ERR -1
 
 /* Initialize io_uring at server startup if have io_uring configured,
  * setup io_uring submission and completion. */

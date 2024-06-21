@@ -14,7 +14,7 @@ struct io_uring_context {
 };
 
 io_uring_context *createIOUring(void) {
-    struct io_uring_context *uring_context = zmalloc(sizeof(struct io_uring_context));
+    io_uring_context *uring_context = zmalloc(sizeof(struct io_uring_context));
     struct io_uring_params params;
     struct io_uring *ring = zmalloc(sizeof(struct io_uring));
     memset(&params, 0, sizeof(params));
@@ -30,10 +30,11 @@ io_uring_context *createIOUring(void) {
 /* Submit fdatasync request to io_uring. */
 int ioUringPrepFsyncAndSubmit(io_uring_context *ring_context, int fd) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(ring_context->ring);
+    if (sqe == NULL) return IO_URING_ERR;
     io_uring_prep_fsync(sqe, fd, IORING_FSYNC_DATASYNC);
     ring_context->queue_len++;
-    io_uring_submit(ring_context->ring);
-    return IO_URING_OK;
+    int ret = io_uring_submit(ring_context->ring);
+    return ret < 0 ? ret : IO_URING_OK;
 }
 
 int ioUringWaitFsyncBarrier(io_uring_context *ring_context) {

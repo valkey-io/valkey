@@ -51,7 +51,7 @@ start_server {tags {"repl network external:skip"}} {
 
         test {Slave is able to detect timeout during handshake} {
             wait_for_condition 50 1000 {
-                [log_file_matches $slave_log "*Timeout connecting to the MASTER*"]
+                [log_file_matches $slave_log "*Timeout connecting to the PRIMARY*"]
             } else {
                 fail "Replica is not able to detect timeout"
             }
@@ -574,12 +574,12 @@ foreach testType {Successful Aborted} {
 
             # Set a function value on replica to check status during loading, on failure and after swapping db
             $replica function load {#!lua name=test
-                redis.register_function('test', function() return 'hello1' end)
+                server.register_function('test', function() return 'hello1' end)
             }
 
             # Set a function value on master to check it reaches the replica when replication ends
             $master function load {#!lua name=test
-                redis.register_function('test', function() return 'hello2' end)
+                server.register_function('test', function() return 'hello2' end)
             }
 
             # Remember the sync_full stat before the client kill.
@@ -727,7 +727,7 @@ test {diskless loading short read} {
 
             # Set a function value to check short read handling on functions
             r function load {#!lua name=test
-                redis.register_function('test', function() return 'hello1' end)
+                server.register_function('test', function() return 'hello1' end)
             }
 
             for {set k 0} {$k < 3} {incr k} {
@@ -1390,7 +1390,7 @@ start_server {tags {"repl" "external:skip"}} {
 
         # Check we got the warning logs about the GET command.
         verify_log_message 0 "*Replica generated a reply to command 'get', disconnecting it: *" $lines
-        verify_log_message 0 "*== CRITICAL == This master is sending an error to its replica: *" $lines
+        verify_log_message 0 "*== CRITICAL == This primary is sending an error to its replica: *" $lines
         verify_log_message 0 "*Replica can't interact with the keyspace*" $lines
 
         $rd close

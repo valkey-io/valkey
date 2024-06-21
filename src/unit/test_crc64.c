@@ -16,13 +16,13 @@ int test_crc64(int argc, char **argv, int flags) {
     TEST_ASSERT_MESSAGE("[calcula]: CRC64 '123456789'", (uint64_t)crc64(0, numbers, 9) == 16845390139448941002ull);
 
     unsigned char li[] = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed "
-                "do eiusmod tempor incididunt ut labore et dolore magna "
-                "aliqua. Ut enim ad minim veniam, quis nostrud exercitation "
-                "ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis "
-                "aute irure dolor in reprehenderit in voluptate velit esse "
-                "cillum dolore eu fugiat nulla pariatur. Excepteur sint "
-                "occaecat cupidatat non proident, sunt in culpa qui officia "
-                "deserunt mollit anim id est laborum.";
+                         "do eiusmod tempor incididunt ut labore et dolore magna "
+                         "aliqua. Ut enim ad minim veniam, quis nostrud exercitation "
+                         "ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis "
+                         "aute irure dolor in reprehenderit in voluptate velit esse "
+                         "cillum dolore eu fugiat nulla pariatur. Excepteur sint "
+                         "occaecat cupidatat non proident, sunt in culpa qui officia "
+                         "deserunt mollit anim id est laborum.";
 
     TEST_ASSERT_MESSAGE("[calcula]: CRC64 TEXT'", (uint64_t)_crc64(0, li, sizeof(li)) == 14373597793578550195ull);
     TEST_ASSERT_MESSAGE("[calcula]: CRC64 TEXT", (uint64_t)crc64(0, li, sizeof(li)) == 14373597793578550195ull);

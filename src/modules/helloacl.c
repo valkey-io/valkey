@@ -39,7 +39,7 @@
 static ValkeyModuleUser *global;
 static uint64_t global_auth_client_id = 0;
 
-/* HELLOACL.REVOKE 
+/* HELLOACL.REVOKE
  * Synchronously revoke access from a user. */
 int RevokeCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
@@ -49,11 +49,11 @@ int RevokeCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
         ValkeyModule_DeauthenticateAndCloseClient(ctx, global_auth_client_id);
         return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
     } else {
-        return ValkeyModule_ReplyWithError(ctx, "Global user currently not used");    
+        return ValkeyModule_ReplyWithError(ctx, "Global user currently not used");
     }
 }
 
-/* HELLOACL.RESET 
+/* HELLOACL.RESET
  * Synchronously delete and re-create a module user. */
 int ResetCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
@@ -68,7 +68,7 @@ int ResetCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, 
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
-/* Callback handler for user changes, use this to notify a module of 
+/* Callback handler for user changes, use this to notify a module of
  * changes to users authenticated by the module */
 void HelloACL_UserChanged(uint64_t client_id, void *privdata) {
     VALKEYMODULE_NOT_USED(privdata);
@@ -76,14 +76,14 @@ void HelloACL_UserChanged(uint64_t client_id, void *privdata) {
     global_auth_client_id = 0;
 }
 
-/* HELLOACL.AUTHGLOBAL 
+/* HELLOACL.AUTHGLOBAL
  * Synchronously assigns a module user to the current context. */
 int AuthGlobalCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
     if (global_auth_client_id) {
-        return ValkeyModule_ReplyWithError(ctx, "Global user currently used");    
+        return ValkeyModule_ReplyWithError(ctx, "Global user currently used");
     }
 
     ValkeyModule_AuthenticateClientWithUser(ctx, global, HelloACL_UserChanged, NULL, &global_auth_client_id);
@@ -102,9 +102,8 @@ int HelloACL_Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     ValkeyModuleString *user_string = ValkeyModule_GetBlockedClientPrivateData(ctx);
     const char *name = ValkeyModule_StringPtrLen(user_string, &length);
 
-    if (ValkeyModule_AuthenticateClientWithACLUser(ctx, name, length, NULL, NULL, NULL) == 
-            VALKEYMODULE_ERR) {
-        return ValkeyModule_ReplyWithError(ctx, "Invalid Username or password");    
+    if (ValkeyModule_AuthenticateClientWithACLUser(ctx, name, length, NULL, NULL, NULL) == VALKEYMODULE_ERR) {
+        return ValkeyModule_ReplyWithError(ctx, "Invalid Username or password");
     }
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
@@ -129,20 +128,21 @@ void *HelloACL_ThreadMain(void *args) {
     ValkeyModuleString *user = targs[1];
     ValkeyModule_Free(targs);
 
-    ValkeyModule_UnblockClient(bc,user);
+    ValkeyModule_UnblockClient(bc, user);
     return NULL;
 }
 
-/* HELLOACL.AUTHASYNC 
+/* HELLOACL.AUTHASYNC
  * Asynchronously assigns an ACL user to the current context. */
 int AuthAsyncCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) return ValkeyModule_WrongArity(ctx);
 
     pthread_t tid;
-    ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(ctx, HelloACL_Reply, HelloACL_Timeout, HelloACL_FreeData, TIMEOUT_TIME);
-    
+    ValkeyModuleBlockedClient *bc =
+        ValkeyModule_BlockClient(ctx, HelloACL_Reply, HelloACL_Timeout, HelloACL_FreeData, TIMEOUT_TIME);
 
-    void **targs = ValkeyModule_Alloc(sizeof(void*)*2);
+
+    void **targs = ValkeyModule_Alloc(sizeof(void *) * 2);
     targs[0] = bc;
     targs[1] = ValkeyModule_CreateStringFromString(NULL, argv[1]);
 
@@ -160,23 +160,21 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
-    if (ValkeyModule_Init(ctx,"helloacl",1,VALKEYMODULE_APIVER_1)
-        == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
+    if (ValkeyModule_Init(ctx, "helloacl", 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx,"helloacl.reset",
-        ResetCommand_ValkeyCommand,"",0,0,0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "helloacl.reset", ResetCommand_ValkeyCommand, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx,"helloacl.revoke",
-        RevokeCommand_ValkeyCommand,"",0,0,0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "helloacl.revoke", RevokeCommand_ValkeyCommand, "", 0, 0, 0) ==
+        VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx,"helloacl.authglobal",
-        AuthGlobalCommand_ValkeyCommand,"no-auth",0,0,0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "helloacl.authglobal", AuthGlobalCommand_ValkeyCommand, "no-auth", 0, 0, 0) ==
+        VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx,"helloacl.authasync",
-        AuthAsyncCommand_ValkeyCommand,"no-auth",0,0,0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "helloacl.authasync", AuthAsyncCommand_ValkeyCommand, "no-auth", 0, 0, 0) ==
+        VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     global = ValkeyModule_CreateModuleUser("global");

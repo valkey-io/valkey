@@ -48,8 +48,8 @@ static void exitScriptTimedoutMode(scriptRunCtx *run_ctx) {
     serverAssert(scriptIsTimedout());
     run_ctx->flags &= ~SCRIPT_TIMEDOUT;
     blockingOperationEnds();
-    /* if we are a replica and we have an active master, set it for continue processing */
-    if (server.masterhost && server.master) queueClientForReprocessing(server.master);
+    /* if we are a replica and we have an active primary, set it for continue processing */
+    if (server.primary_host && server.primary) queueClientForReprocessing(server.primary);
 }
 
 static void enterScriptTimedoutMode(scriptRunCtx *run_ctx) {
@@ -64,12 +64,12 @@ int scriptIsTimedout(void) {
     return scriptIsRunning() && (curr_run_ctx->flags & SCRIPT_TIMEDOUT);
 }
 
-client* scriptGetClient(void) {
+client *scriptGetClient(void) {
     serverAssert(scriptIsRunning());
     return curr_run_ctx->c;
 }
 
-client* scriptGetCaller(void) {
+client *scriptGetCaller(void) {
     serverAssert(scriptIsRunning());
     return curr_run_ctx->original_client;
 }
@@ -91,9 +91,9 @@ int scriptInterrupt(scriptRunCtx *run_ctx) {
     }
 
     serverLog(LL_WARNING,
-            "Slow script detected: still in execution after %lld milliseconds. "
-                    "You can try killing the script using the %s command. Script name is: %s.",
-            elapsed, (run_ctx->flags & SCRIPT_EVAL_MODE) ? "SCRIPT KILL" : "FUNCTION KILL", run_ctx->funcname);
+              "Slow script detected: still in execution after %lld milliseconds. "
+              "You can try killing the script using the %s command. Script name is: %s.",
+              elapsed, (run_ctx->flags & SCRIPT_EVAL_MODE) ? "SCRIPT KILL" : "FUNCTION KILL", run_ctx->funcname);
 
     enterScriptTimedoutMode(run_ctx);
     /* Once the script timeouts we reenter the event loop to permit others
@@ -113,12 +113,9 @@ uint64_t scriptFlagsToCmdFlags(uint64_t cmd_flags, uint64_t script_flags) {
     cmd_flags &= ~(CMD_STALE | CMD_DENYOOM | CMD_WRITE);
 
     /* NO_WRITES implies ALLOW_OOM */
-    if (!(script_flags & (SCRIPT_FLAG_ALLOW_OOM | SCRIPT_FLAG_NO_WRITES)))
-        cmd_flags |= CMD_DENYOOM;
-    if (!(script_flags & SCRIPT_FLAG_NO_WRITES))
-        cmd_flags |= CMD_WRITE;
-    if (script_flags & SCRIPT_FLAG_ALLOW_STALE)
-        cmd_flags |= CMD_STALE;
+    if (!(script_flags & (SCRIPT_FLAG_ALLOW_OOM | SCRIPT_FLAG_NO_WRITES))) cmd_flags |= CMD_DENYOOM;
+    if (!(script_flags & SCRIPT_FLAG_NO_WRITES)) cmd_flags |= CMD_WRITE;
+    if (script_flags & SCRIPT_FLAG_ALLOW_STALE) cmd_flags |= CMD_STALE;
 
     /* In addition the MAY_REPLICATE flag is set for these commands, but
      * if we have flags we know if it's gonna do any writes or not. */
@@ -128,13 +125,17 @@ uint64_t scriptFlagsToCmdFlags(uint64_t cmd_flags, uint64_t script_flags) {
 }
 
 /* Prepare the given run ctx for execution */
-int scriptPrepareForRun(scriptRunCtx *run_ctx, client *engine_client, client *caller, const char *funcname, uint64_t script_flags, int ro) {
+int scriptPrepareForRun(scriptRunCtx *run_ctx,
+                        client *engine_client,
+                        client *caller,
+                        const char *funcname,
+                        uint64_t script_flags,
+                        int ro) {
     serverAssert(!curr_run_ctx);
     int client_allow_oom = !!(caller->flags & CLIENT_ALLOW_OOM);
 
-    int running_stale = server.masterhost &&
-            server.repl_state != REPL_STATE_CONNECTED &&
-            server.repl_serve_stale_data == 0;
+    int running_stale =
+        server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0;
     int obey_client = mustObeyClient(caller);
 
     if (!(script_flags & SCRIPT_FLAG_EVAL_COMPAT_MODE)) {
@@ -145,8 +146,8 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx, client *engine_client, client *ca
 
         if (running_stale && !(script_flags & SCRIPT_FLAG_ALLOW_STALE)) {
             addReplyError(caller, "-MASTERDOWN Link with MASTER is down, "
-                             "replica-serve-stale-data is set to 'no' "
-                             "and 'allow-stale' flag is not set on the script.");
+                                  "replica-serve-stale-data is set to 'no' "
+                                  "and 'allow-stale' flag is not set on the script.");
             return C_ERR;
         }
 
@@ -155,7 +156,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx, client *engine_client, client *ca
              * 1. we are not a readonly replica
              * 2. no disk error detected
              * 3. command is not `fcall_ro`/`eval[sha]_ro` */
-            if (server.masterhost && server.repl_slave_ro && !obey_client) {
+            if (server.primary_host && server.repl_replica_ro && !obey_client) {
                 addReplyError(caller, "-READONLY Can not run script with write flag on readonly replica");
                 return C_ERR;
             }
@@ -164,15 +165,17 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx, client *engine_client, client *ca
             int deny_write_type = writeCommandsDeniedByDiskError();
             if (deny_write_type != DISK_ERROR_TYPE_NONE && !obey_client) {
                 if (deny_write_type == DISK_ERROR_TYPE_RDB)
-                    addReplyErrorFormat(caller, "-MISCONF %s is configured to save RDB snapshots, "
-                                     "but it's currently unable to persist to disk. "
-                                     "Writable scripts are blocked. Use 'no-writes' flag for read only scripts.",
-                                     server.extended_redis_compat ? "Redis" : SERVER_TITLE);
+                    addReplyErrorFormat(caller,
+                                        "-MISCONF %s is configured to save RDB snapshots, "
+                                        "but it's currently unable to persist to disk. "
+                                        "Writable scripts are blocked. Use 'no-writes' flag for read only scripts.",
+                                        server.extended_redis_compat ? "Redis" : SERVER_TITLE);
                 else
-                    addReplyErrorFormat(caller, "-MISCONF %s is configured to persist data to AOF, "
-                                           "but it's currently unable to persist to disk. "
-                                           "Writable scripts are blocked. Use 'no-writes' flag for read only scripts. "
-                                           "AOF error: %s",
+                    addReplyErrorFormat(caller,
+                                        "-MISCONF %s is configured to persist data to AOF, "
+                                        "but it's currently unable to persist to disk. "
+                                        "Writable scripts are blocked. Use 'no-writes' flag for read only scripts. "
+                                        "AOF error: %s",
                                         server.extended_redis_compat ? "Redis" : SERVER_TITLE,
                                         strerror(server.aof_last_write_errno));
                 return C_ERR;
@@ -183,8 +186,8 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx, client *engine_client, client *ca
                 return C_ERR;
             }
 
-            /* Don't accept write commands if there are not enough good slaves and
-             * user configured the min-slaves-to-write option. */
+            /* Don't accept write commands if there are not enough good replicas and
+             * user configured the min-replicas-to-write option. */
             if (!checkGoodReplicasStatus()) {
                 addReplyErrorObject(caller, shared.noreplicaserr);
                 return C_ERR;
@@ -194,8 +197,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx, client *engine_client, client *ca
         /* Check OOM state. the no-writes flag imply allow-oom. we tested it
          * after the no-write error, so no need to mention it in the error reply. */
         if (!client_allow_oom && server.pre_command_oom_state && server.maxmemory &&
-            !(script_flags & (SCRIPT_FLAG_ALLOW_OOM|SCRIPT_FLAG_NO_WRITES)))
-        {
+            !(script_flags & (SCRIPT_FLAG_ALLOW_OOM | SCRIPT_FLAG_NO_WRITES))) {
             addReplyError(caller, "-OOM allow-oom flag is not set on the script, "
                                   "can not run it when used memory > 'maxmemory'");
             return C_ERR;
@@ -204,7 +206,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx, client *engine_client, client *ca
     } else {
         /* Special handling for backwards compatibility (no shebang eval[sha]) mode */
         if (running_stale) {
-            addReplyErrorObject(caller, shared.masterdownerr);
+            addReplyErrorObject(caller, shared.primarydownerr);
             return C_ERR;
         }
     }
@@ -236,7 +238,8 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx, client *engine_client, client *ca
          * flag, we will not allow write commands. */
         run_ctx->flags |= SCRIPT_READ_ONLY;
     }
-    if (client_allow_oom || (!(script_flags & SCRIPT_FLAG_EVAL_COMPAT_MODE) && (script_flags & SCRIPT_FLAG_ALLOW_OOM))) {
+    if (client_allow_oom ||
+        (!(script_flags & SCRIPT_FLAG_EVAL_COMPAT_MODE) && (script_flags & SCRIPT_FLAG_ALLOW_OOM))) {
         /* Note: we don't need to test the no-writes flag here and set this run_ctx flag,
          * since only write commands can are deny-oom. */
         run_ctx->flags |= SCRIPT_ALLOW_OOM;
@@ -279,7 +282,7 @@ int scriptIsRunning(void) {
     return curr_run_ctx != NULL;
 }
 
-const char* scriptCurrFunction(void) {
+const char *scriptCurrFunction(void) {
     serverAssert(scriptIsRunning());
     return curr_run_ctx->funcname;
 }
@@ -296,16 +299,15 @@ void scriptKill(client *c, int is_eval) {
         return;
     }
     if (mustObeyClient(curr_run_ctx->original_client)) {
-        addReplyError(c,
-                "-UNKILLABLE The busy script was sent by a master instance in the context of replication and cannot be killed.");
+        addReplyError(c, "-UNKILLABLE The busy script was sent by a master instance in the context of replication and "
+                         "cannot be killed.");
         return;
     }
     if (curr_run_ctx->flags & SCRIPT_WRITE_DIRTY) {
-        addReplyError(c,
-                "-UNKILLABLE Sorry the script already executed write "
-                        "commands against the dataset. You can either wait the "
-                        "script termination or kill the server in a hard way "
-                        "using the SHUTDOWN NOSAVE command.");
+        addReplyError(c, "-UNKILLABLE Sorry the script already executed write "
+                         "commands against the dataset. You can either wait the "
+                         "script termination or kill the server in a hard way "
+                         "using the SHUTDOWN NOSAVE command.");
         return;
     }
     if (is_eval && !(curr_run_ctx->flags & SCRIPT_EVAL_MODE)) {
@@ -338,7 +340,7 @@ static int scriptVerifyACL(client *c, sds *err) {
     int acl_errpos;
     int acl_retval = ACLCheckAllPerm(c, &acl_errpos);
     if (acl_retval != ACL_OK) {
-        addACLLogEntry(c,acl_retval,ACL_LOG_CTX_LUA,acl_errpos,NULL,NULL);
+        addACLLogEntry(c, acl_retval, ACL_LOG_CTX_LUA, acl_errpos, NULL, NULL);
         sds msg = getAclErrorMessage(acl_retval, c->user, c->cmd, c->argv[acl_errpos]->ptr, 0);
         *err = sdscatsds(sdsnew("ACL failure in script: "), msg);
         sdsfree(msg);
@@ -348,37 +350,30 @@ static int scriptVerifyACL(client *c, sds *err) {
 }
 
 static int scriptVerifyWriteCommandAllow(scriptRunCtx *run_ctx, char **err) {
-
     /* A write command, on an RO command or an RO script is rejected ASAP.
      * Note: For scripts, we consider may-replicate commands as write commands.
      * This also makes it possible to allow read-only scripts to be run during
      * CLIENT PAUSE WRITE. */
-    if (run_ctx->flags & SCRIPT_READ_ONLY &&
-        (run_ctx->c->cmd->flags & (CMD_WRITE|CMD_MAY_REPLICATE)))
-    {
+    if (run_ctx->flags & SCRIPT_READ_ONLY && (run_ctx->c->cmd->flags & (CMD_WRITE | CMD_MAY_REPLICATE))) {
         *err = sdsnew("Write commands are not allowed from read-only scripts.");
         return C_ERR;
     }
 
     /* The other checks below are on the server state and are only relevant for
      *  write commands, return if this is not a write command. */
-    if (!(run_ctx->c->cmd->flags & CMD_WRITE))
-        return C_OK;
+    if (!(run_ctx->c->cmd->flags & CMD_WRITE)) return C_OK;
 
     /* If the script already made a modification to the dataset, we can't
      * fail it on unpredictable error state. */
-    if ((run_ctx->flags & SCRIPT_WRITE_DIRTY))
-        return C_OK;
+    if ((run_ctx->flags & SCRIPT_WRITE_DIRTY)) return C_OK;
 
-    /* Write commands are forbidden against read-only slaves, or if a
+    /* Write commands are forbidden against read-only replicas, or if a
      * command marked as non-deterministic was already called in the context
      * of this script. */
     int deny_write_type = writeCommandsDeniedByDiskError();
 
-    if (server.masterhost && server.repl_slave_ro &&
-        !mustObeyClient(run_ctx->original_client))
-    {
-        *err = sdsdup(shared.roslaveerr->ptr);
+    if (server.primary_host && server.repl_replica_ro && !mustObeyClient(run_ctx->original_client)) {
+        *err = sdsdup(shared.roreplicaerr->ptr);
         return C_ERR;
     }
 
@@ -387,8 +382,8 @@ static int scriptVerifyWriteCommandAllow(scriptRunCtx *run_ctx, char **err) {
         return C_ERR;
     }
 
-    /* Don't accept write commands if there are not enough good slaves and
-     * user configured the min-slaves-to-write option. Note this only reachable
+    /* Don't accept write commands if there are not enough good replicas and
+     * user configured the min-replicas-to-write option. Note this only reachable
      * for Eval scripts that didn't declare flags, see the other check in
      * scriptPrepareForRun */
     if (!checkGoodReplicasStatus()) {
@@ -410,12 +405,11 @@ static int scriptVerifyOOM(scriptRunCtx *run_ctx, char **err) {
      * first write in the context of this script, otherwise we can't stop
      * in the middle. */
 
-    if (server.maxmemory &&                            /* Maxmemory is actually enabled. */
-        !mustObeyClient(run_ctx->original_client) &&   /* Don't care about mem for replicas or AOF. */
-        !(run_ctx->flags & SCRIPT_WRITE_DIRTY) &&      /* Script had no side effects so far. */
-        server.pre_command_oom_state &&                /* Detected OOM when script start. */
-        (run_ctx->c->cmd->flags & CMD_DENYOOM))
-    {
+    if (server.maxmemory &&                          /* Maxmemory is actually enabled. */
+        !mustObeyClient(run_ctx->original_client) && /* Don't care about mem for replicas or AOF. */
+        !(run_ctx->flags & SCRIPT_WRITE_DIRTY) &&    /* Script had no side effects so far. */
+        server.pre_command_oom_state &&              /* Detected OOM when script start. */
+        (run_ctx->c->cmd->flags & CMD_DENYOOM)) {
         *err = sdsdup(shared.oomerr->ptr);
         return C_ERR;
     }
@@ -429,7 +423,7 @@ static int scriptVerifyClusterState(scriptRunCtx *run_ctx, client *c, client *or
     }
     /* If this is a Cluster node, we need to make sure the script is not
      * trying to access non-local keys, with the exception of commands
-     * received from our master or when loading the AOF back in memory. */
+     * received from our primary or when loading the AOF back in memory. */
     int error_code;
     /* Duplicate relevant flags in the script client. */
     c->flags &= ~(CLIENT_READONLY | CLIENT_ASKING);
@@ -437,14 +431,13 @@ static int scriptVerifyClusterState(scriptRunCtx *run_ctx, client *c, client *or
     int hashslot = -1;
     if (getNodeByQuery(c, c->cmd, c->argv, c->argc, &hashslot, &error_code) != getMyClusterNode()) {
         if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {
-            *err = sdsnew(
-                    "Script attempted to execute a write command while the "
-                            "cluster is down and readonly");
+            *err = sdsnew("Script attempted to execute a write command while the "
+                          "cluster is down and readonly");
         } else if (error_code == CLUSTER_REDIR_DOWN_STATE) {
             *err = sdsnew("Script attempted to execute a command while the "
-                    "cluster is down");
+                          "cluster is down");
         } else if (error_code == CLUSTER_REDIR_CROSS_SLOT) {
-            *err = sdscatfmt(sdsempty(), 
+            *err = sdscatfmt(sdsempty(),
                              "Command '%S' in script attempted to access keys that don't hash to the same slot",
                              c->cmd->fullname);
         } else if (error_code == CLUSTER_REDIR_UNSTABLE) {
@@ -454,13 +447,13 @@ static int scriptVerifyClusterState(scriptRunCtx *run_ctx, client *c, client *or
             *err = sdscatfmt(sdsempty(),
                              "Unable to execute command '%S' in script "
                              "because undeclared keys were accessed during rehashing of the slot",
-                             c->cmd->fullname); 
+                             c->cmd->fullname);
         } else if (error_code == CLUSTER_REDIR_DOWN_UNBOUND) {
-            *err = sdsnew("Script attempted to access a slot not served"); 
+            *err = sdsnew("Script attempted to access a slot not served");
         } else {
             /* error_code == CLUSTER_REDIR_MOVED || error_code == CLUSTER_REDIR_ASK */
             *err = sdsnew("Script attempted to access a non local key in a "
-                    "cluster node");
+                          "cluster node");
         }
         return C_ERR;
     }
@@ -473,7 +466,7 @@ static int scriptVerifyClusterState(scriptRunCtx *run_ctx, client *c, client *or
             run_ctx->slot = hashslot;
         } else if (run_ctx->slot != hashslot) {
             *err = sdsnew("Script attempted to access keys that do not hash to "
-                    "the same slot");
+                          "the same slot");
             return C_ERR;
         }
     }
@@ -505,7 +498,7 @@ int scriptSetRepl(scriptRunCtx *run_ctx, int repl) {
 }
 
 static int scriptVerifyAllowStale(client *c, sds *err) {
-    if (!server.masterhost) {
+    if (!server.primary_host) {
         /* Not a replica, stale is irrelevant */
         return C_OK;
     }

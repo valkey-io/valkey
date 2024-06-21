@@ -5,12 +5,12 @@
  * Cluster exported API.
  *----------------------------------------------------------------------------*/
 
-#define CLUSTER_SLOT_MASK_BITS 14 /* Number of bits used for slot id. */
-#define CLUSTER_SLOTS (1<<CLUSTER_SLOT_MASK_BITS) /* Total number of slots in cluster mode, which is 16384. */
+#define CLUSTER_SLOT_MASK_BITS 14                   /* Number of bits used for slot id. */
+#define CLUSTER_SLOTS (1 << CLUSTER_SLOT_MASK_BITS) /* Total number of slots in cluster mode, which is 16384. */
 #define CLUSTER_SLOT_MASK ((unsigned long long)(CLUSTER_SLOTS - 1)) /* Bit mask for slot id stored in LSB. */
-#define CLUSTER_OK 0            /* Everything looks ok */
-#define CLUSTER_FAIL 1          /* The cluster can't work */
-#define CLUSTER_NAMELEN 40      /* sha1 hex length */
+#define CLUSTER_OK 0                                                /* Everything looks ok */
+#define CLUSTER_FAIL 1                                              /* The cluster can't work */
+#define CLUSTER_NAMELEN 40                                          /* sha1 hex length */
 
 /* Redirection errors returned by getNodeByQuery(). */
 #define CLUSTER_REDIR_NONE 0          /* Node can serve the request. */
@@ -29,8 +29,8 @@ struct clusterState;
  * features to be enabled. Useful when implementing a different distributed
  * system on top of Cluster message bus, using modules. */
 #define CLUSTER_MODULE_FLAG_NONE 0
-#define CLUSTER_MODULE_FLAG_NO_FAILOVER (1<<1)
-#define CLUSTER_MODULE_FLAG_NO_REDIRECTION (1<<2)
+#define CLUSTER_MODULE_FLAG_NO_FAILOVER (1 << 1)
+#define CLUSTER_MODULE_FLAG_NO_REDIRECTION (1 << 2)
 
 /* ---------------------- API exported outside cluster.c -------------------- */
 /* functions requiring mechanism specific implementations */
@@ -40,7 +40,11 @@ void clusterCron(void);
 void clusterBeforeSleep(void);
 int verifyClusterConfigWithData(void);
 
-int clusterSendModuleMessageToTarget(const char *target, uint64_t module_id, uint8_t type, const char *payload, uint32_t len);
+int clusterSendModuleMessageToTarget(const char *target,
+                                     uint64_t module_id,
+                                     uint8_t type,
+                                     const char *payload,
+                                     uint32_t len);
 
 void clusterUpdateMyselfFlags(void);
 void clusterUpdateMyselfIp(void);
@@ -63,7 +67,7 @@ int clusterCommandSpecial(client *c);
 const char **clusterCommandExtendedHelp(void);
 
 int clusterAllowFailoverCmd(client *c);
-void clusterPromoteSelfToMaster(void);
+void clusterPromoteSelfToPrimary(void);
 int clusterManualFailoverTimeLimit(void);
 
 void clusterCommandSlots(client *c);
@@ -79,18 +83,18 @@ int getClusterSize(void);
 int getMyShardSlotCount(void);
 int handleDebugClusterCommand(client *c);
 int clusterNodePending(clusterNode *node);
-int clusterNodeIsMaster(clusterNode *n);
+int clusterNodeIsPrimary(clusterNode *n);
 char **getClusterNodesList(size_t *numnodes);
 char *clusterNodeIp(clusterNode *node);
-int clusterNodeIsSlave(clusterNode *node);
-clusterNode *clusterNodeGetMaster(clusterNode *node);
+int clusterNodeIsReplica(clusterNode *node);
+clusterNode *clusterNodeGetPrimary(clusterNode *node);
 char *clusterNodeGetName(clusterNode *node);
 int clusterNodeTimedOut(clusterNode *node);
 int clusterNodeIsFailing(clusterNode *node);
 int clusterNodeIsNoFailover(clusterNode *node);
 char *clusterNodeGetShardId(clusterNode *node);
-int clusterNodeNumSlaves(clusterNode *node);
-clusterNode *clusterNodeGetSlave(clusterNode *node, int slave_idx);
+int clusterNodeNumReplicas(clusterNode *node);
+clusterNode *clusterNodeGetReplica(clusterNode *node, int slave_idx);
 clusterNode *getMigratingSlotDest(int slot);
 clusterNode *getImportingSlotSource(int slot);
 clusterNode *getNodeBySlot(int slot);
@@ -99,7 +103,10 @@ char *clusterNodeHostname(clusterNode *node);
 const char *clusterNodePreferredEndpoint(clusterNode *n);
 long long clusterNodeReplOffset(clusterNode *node);
 clusterNode *clusterLookupNode(const char *name, int length);
-void clusterReplicateOpenSlots(void);
+int detectAndUpdateCachedNodeHealth(void);
+client *createCachedResponseClient(void);
+void deleteCachedResponseClient(client *recording_client);
+void clearCachedClusterSlotsResponse(void);
 
 /* functions with shared implementations */
 int clusterNodeIsMyself(clusterNode *n);
@@ -113,4 +120,7 @@ int isValidAuxString(char *s, unsigned int length);
 void migrateCommand(client *c);
 void clusterCommand(client *c);
 ConnectionType *connTypeOfCluster(void);
+int isNodeAvailable(clusterNode *node);
+long long getNodeReplicationOffset(clusterNode *node);
+sds aggregateClientOutputBuffer(client *c);
 #endif /* __CLUSTER_H */

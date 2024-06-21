@@ -51,8 +51,8 @@ int TimerCommand_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, 
     for (int j = 0; j < 10; j++) {
         int delay = rand() % 5000;
         char *buf = ValkeyModule_Alloc(256);
-        snprintf(buf,256,"After %d", delay);
-        ValkeyModuleTimerID tid = ValkeyModule_CreateTimer(ctx,delay,timerHandler,buf);
+        snprintf(buf, 256, "After %d", delay);
+        ValkeyModuleTimerID tid = ValkeyModule_CreateTimer(ctx, delay, timerHandler, buf);
         VALKEYMODULE_NOT_USED(tid);
     }
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
@@ -64,11 +64,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
-    if (ValkeyModule_Init(ctx,"hellotimer",1,VALKEYMODULE_APIVER_1)
-        == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
+    if (ValkeyModule_Init(ctx, "hellotimer", 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx,"hellotimer.timer",
-        TimerCommand_ValkeyCommand,"readonly",0,0,0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "hellotimer.timer", TimerCommand_ValkeyCommand, "readonly", 0, 0, 0) ==
+        VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

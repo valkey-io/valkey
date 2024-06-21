@@ -39,12 +39,10 @@
  * listSetFreeMethod.
  *
  * On error, NULL is returned. Otherwise the pointer to the new list. */
-list *listCreate(void)
-{
+list *listCreate(void) {
     struct list *list;
 
-    if ((list = zmalloc(sizeof(*list))) == NULL)
-        return NULL;
+    if ((list = zmalloc(sizeof(*list))) == NULL) return NULL;
     list->head = list->tail = NULL;
     list->len = 0;
     list->dup = NULL;
@@ -54,14 +52,13 @@ list *listCreate(void)
 }
 
 /* Remove all the elements from the list without destroying the list itself. */
-void listEmpty(list *list)
-{
+void listEmpty(list *list) {
     unsigned long len;
     listNode *current, *next;
 
     current = list->head;
     len = list->len;
-    while(len--) {
+    while (len--) {
         next = current->next;
         if (list->free) list->free(current->value);
         zfree(current);
@@ -74,10 +71,8 @@ void listEmpty(list *list)
 /* Free the whole list.
  *
  * This function can't fail. */
-void listRelease(list *list)
-{
-    if (!list)
-        return;
+void listRelease(list *list) {
+    if (!list) return;
     listEmpty(list);
     zfree(list);
 }
@@ -88,12 +83,10 @@ void listRelease(list *list)
  * On error, NULL is returned and no operation is performed (i.e. the
  * list remains unaltered).
  * On success the 'list' pointer you pass to the function is returned. */
-list *listAddNodeHead(list *list, void *value)
-{
+list *listAddNodeHead(list *list, void *value) {
     listNode *node;
 
-    if ((node = zmalloc(sizeof(*node))) == NULL)
-        return NULL;
+    if ((node = zmalloc(sizeof(*node))) == NULL) return NULL;
     node->value = value;
     listLinkNodeHead(list, node);
     return list;
@@ -102,7 +95,7 @@ list *listAddNodeHead(list *list, void *value)
 /*
  * Add a node that has already been allocated to the head of list
  */
-void listLinkNodeHead(list* list, listNode *node) {
+void listLinkNodeHead(list *list, listNode *node) {
     if (list->len == 0) {
         list->head = list->tail = node;
         node->prev = node->next = NULL;
@@ -121,12 +114,10 @@ void listLinkNodeHead(list* list, listNode *node) {
  * On error, NULL is returned and no operation is performed (i.e. the
  * list remains unaltered).
  * On success the 'list' pointer you pass to the function is returned. */
-list *listAddNodeTail(list *list, void *value)
-{
+list *listAddNodeTail(list *list, void *value) {
     listNode *node;
 
-    if ((node = zmalloc(sizeof(*node))) == NULL)
-        return NULL;
+    if ((node = zmalloc(sizeof(*node))) == NULL) return NULL;
     node->value = value;
     listLinkNodeTail(list, node);
     return list;
@@ -151,8 +142,7 @@ void listLinkNodeTail(list *list, listNode *node) {
 list *listInsertNode(list *list, listNode *old_node, void *value, int after) {
     listNode *node;
 
-    if ((node = zmalloc(sizeof(*node))) == NULL)
-        return NULL;
+    if ((node = zmalloc(sizeof(*node))) == NULL) return NULL;
     node->value = value;
     if (after) {
         node->prev = old_node;
@@ -181,8 +171,7 @@ list *listInsertNode(list *list, listNode *old_node, void *value, int after) {
  * The node is freed. If free callback is provided the value is freed as well.
  *
  * This function can't fail. */
-void listDelNode(list *list, listNode *node)
-{
+void listDelNode(list *list, listNode *node) {
     listUnlinkNode(list, node);
     if (list->free) list->free(node->value);
     zfree(node);
@@ -211,8 +200,7 @@ void listUnlinkNode(list *list, listNode *node) {
  * call to listNext() will return the next element of the list.
  *
  * This function can't fail. */
-listIter *listGetIterator(list *list, int direction)
-{
+listIter *listGetIterator(list *list, int direction) {
     listIter *iter;
 
     if ((iter = zmalloc(sizeof(*iter))) == NULL) return NULL;
@@ -254,8 +242,7 @@ void listRewindTail(list *list, listIter *li) {
  * }
  *
  * */
-listNode *listNext(listIter *iter)
-{
+listNode *listNext(listIter *iter) {
     listNode *current = iter->next;
 
     if (current != NULL) {
@@ -275,19 +262,17 @@ listNode *listNext(listIter *iter)
  * the original node is used as value of the copied node.
  *
  * The original list both on success or error is never modified. */
-list *listDup(list *orig)
-{
+list *listDup(list *orig) {
     list *copy;
     listIter iter;
     listNode *node;
 
-    if ((copy = listCreate()) == NULL)
-        return NULL;
+    if ((copy = listCreate()) == NULL) return NULL;
     copy->dup = orig->dup;
     copy->free = orig->free;
     copy->match = orig->match;
     listRewind(orig, &iter);
-    while((node = listNext(&iter)) != NULL) {
+    while ((node = listNext(&iter)) != NULL) {
         void *value;
 
         if (copy->dup) {
@@ -299,7 +284,7 @@ list *listDup(list *orig)
         } else {
             value = node->value;
         }
-        
+
         if (listAddNodeTail(copy, value) == NULL) {
             /* Free value if dup succeed but listAddNodeTail failed. */
             if (copy->free) copy->free(value);
@@ -320,13 +305,12 @@ list *listDup(list *orig)
  * On success the first matching node pointer is returned
  * (search starts from head). If no matching node exists
  * NULL is returned. */
-listNode *listSearchKey(list *list, void *key)
-{
+listNode *listSearchKey(list *list, void *key) {
     listIter iter;
     listNode *node;
 
     listRewind(list, &iter);
-    while((node = listNext(&iter)) != NULL) {
+    while ((node = listNext(&iter)) != NULL) {
         if (list->match) {
             if (list->match(node->value, key)) {
                 return node;
@@ -349,12 +333,12 @@ listNode *listIndex(list *list, long index) {
     listNode *n;
 
     if (index < 0) {
-        index = (-index)-1;
+        index = (-index) - 1;
         n = list->tail;
-        while(index-- && n) n = n->prev;
+        while (index-- && n) n = n->prev;
     } else {
         n = list->head;
-        while(index-- && n) n = n->next;
+        while (index-- && n) n = n->next;
     }
     return n;
 }

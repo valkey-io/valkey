@@ -15,9 +15,6 @@ proc get_cluster_role {srv_idx} {
 }
 
 proc wait_for_role {srv_idx role} {
-    set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
-    # wait for a gossip cycle for states to be propagated throughout the cluster
-    after $node_timeout
     wait_for_condition 100 100 {
         [lindex [split [R $srv_idx ROLE] " "] 0] eq $role
     } else {
@@ -46,20 +43,11 @@ proc check_server_response {server_id} {
 }
 
 # restart a server and wait for it to come back online
-proc restart_server_and_wait {server_id} {
+proc fail_server {server_id} {
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
-    set result [catch {R $server_id DEBUG RESTART [expr 3*$node_timeout]} err]
-
-    # Check if the error is the expected "I/O error reading reply"
-    if {$result != 0 && $err ne "I/O error reading reply"} {
-        fail "Unexpected error restarting server $server_id: $err"
-    }
-
-    wait_for_condition 100 100 {
-        [check_server_response $server_id] eq 1
-    } else {
-        fail "Server $server_id didn't come back online in time"
-    }
+    pause_process [srv [expr -1*$server_id] pid]
+    after [expr 3*$node_timeout]
+    resume_process [srv [expr -1*$server_id] pid]
 }
 
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
@@ -71,6 +59,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     set R3_id [R 3 CLUSTER MYID]
     set R4_id [R 4 CLUSTER MYID]
     set R5_id [R 5 CLUSTER MYID]
+    R 0 SET "{aga}2" banana
 
     test "Slot migration states are replicated" {
         # Validate initial states
@@ -93,8 +82,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Migration target is auto-updated after failover in target shard" {
-        # Restart R1 to trigger an auto-failover to R4
-        restart_server_and_wait 1
+        # Trigger an auto-failover from R1 to R4
+        fail_server 1
         # Wait for R1 to become a replica
         wait_for_role 1 slave
         # Validate final states
@@ -113,8 +102,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Migration source is auto-updated after failover in source shard" {
-        # Restart R0 to trigger an auto-failover to R3
-        restart_server_and_wait 0
+        # Trigger an auto-failover from R0 to R3
+        fail_server 0
         # Wait for R0 to become a replica
         wait_for_role 0 slave
         # Validate final states
@@ -139,8 +128,51 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
         assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
         catch {[R 3 get aga]} e
-        assert_equal {MOVED} [lindex [split $e] 0]
-        assert_equal {609} [lindex [split $e] 1]
+        set port0 [srv 0 port]
+        assert_equal "MOVED 609 127.0.0.1:$port0" $e
+    }
+
+    test "Replica of migrating node returns ASK redirect after READONLY" {
+        # Validate initial states
+        assert_equal [get_open_slots 0] "\[609->-$R1_id\]"
+        assert_equal [get_open_slots 1] "\[609-<-$R0_id\]"
+        assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
+        assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
+        # Read missing key in readonly replica in migrating state.
+        assert_equal OK [R 3 READONLY]
+        set port1 [srv -1 port]
+        catch {[R 3 get aga]} e
+        assert_equal "ASK 609 127.0.0.1:$port1" $e
+        assert_equal OK [R 3 READWRITE]
+    }
+
+    test "Replica of migrating node returns TRYAGAIN after READONLY" {
+        # Validate initial states
+        assert_equal [get_open_slots 0] "\[609->-$R1_id\]"
+        assert_equal [get_open_slots 1] "\[609-<-$R0_id\]"
+        assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
+        assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
+        # Read some existing and some missing keys in readonly replica in
+        # migrating state results in TRYAGAIN, just like its primary would do.
+        assert_equal OK [R 3 READONLY]
+        catch {[R 3 mget "{aga}1" "{aga}2"]} e
+        assert_match "TRYAGAIN *" $e
+        assert_equal OK [R 3 READWRITE]
+    }
+
+    test "Replica of importing node returns TRYAGAIN after READONLY and ASKING" {
+        # Validate initial states
+        assert_equal [get_open_slots 0] "\[609->-$R1_id\]"
+        assert_equal [get_open_slots 1] "\[609-<-$R0_id\]"
+        assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
+        assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
+        # A client follows an ASK redirect to a primary, but wants to read from a replica.
+        # The replica returns TRYAGAIN just like a primary would do for two missing keys.
+        assert_equal OK [R 4 READONLY]
+        assert_equal OK [R 4 ASKING]
+        catch {R 4 MGET "{aga}1" "{aga}2"} e
+        assert_match "TRYAGAIN *" $e
+        assert_equal OK [R 4 READWRITE]
     }
 
     test "New replica inherits migrating slot" {
@@ -154,7 +186,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_equal {OK} [R 3 CLUSTER REPLICATE $R0_id]
         wait_for_role 3 slave
         # Validate that R3 now sees slot 609 open
-        assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
+        wait_for_slot_state 3 "\[609->-$R1_id\]"
     }
 
     test "New replica inherits importing slot" {
@@ -168,7 +200,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_equal {OK} [R 4 CLUSTER REPLICATE $R1_id]
         wait_for_role 4 slave
         # Validate that R4 now sees slot 609 open
-        assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
+        wait_for_slot_state 4 "\[609-<-$R0_id\]"
     }
 }
 
@@ -220,8 +252,8 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
 
     test "Empty-shard migration target is auto-updated after faiover in target shard" {
         wait_for_role 6 master
-        # Restart R6 to trigger an auto-failover to R7
-        restart_server_and_wait 6
+        # Trigger an auto-failover from R6 to R7
+        fail_server 6
         # Wait for R6 to become a replica
         wait_for_role 6 slave
         # Validate final states
@@ -241,8 +273,8 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
 
     test "Empty-shard migration source is auto-updated after faiover in source shard" {
         wait_for_role 0 master
-        # Restart R0 to trigger an auto-failover to R3
-        restart_server_and_wait 0
+        # Trigger an auto-failover from R0 to R3
+        fail_server 0
         # Wait for R0 to become a replica
         wait_for_role 0 slave
         # Validate final states
@@ -335,12 +367,33 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 }
 
-start_cluster 3 3 {tags {external:skip cluster} overrides {crash-memcheck-enabled no cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+    set R1_id [R 1 CLUSTER MYID]
+
+    test "CLUSTER SETSLOT with invalid timeouts" {
+        catch {R 0 CLUSTER SETSLOT 609 MIGRATING $R1_id TIMEOUT} e
+        assert_equal $e "ERR Missing timeout value"
+
+        catch {R 0 CLUSTER SETSLOT 609 MIGRATING $R1_id TIMEOUT -1} e
+        assert_equal $e "ERR timeout is negative"
+
+        catch {R 0 CLUSTER SETSLOT 609 MIGRATING $R1_id TIMEOUT 99999999999999999999} e
+        assert_equal $e "ERR timeout is not an integer or out of range"
+
+        catch {R 0 CLUSTER SETSLOT 609 MIGRATING $R1_id TIMEOUT abc} e
+        assert_equal $e "ERR timeout is not an integer or out of range"
+
+        catch {R 0 CLUSTER SETSLOT 609 TIMEOUT 100 MIGRATING $R1_id} e
+        assert_equal $e "ERR Invalid CLUSTER SETSLOT action or number of arguments. Try CLUSTER HELP"
+    }
+}
+
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
     set R1_id [R 1 CLUSTER MYID]
 
     test "CLUSTER SETSLOT with an explicit timeout" {
-        # Simulate a replica crash
-        catch {R 3 DEBUG SEGFAULT} e
+        # Pause the replica to simulate a failure
+        pause_process [srv -3 pid]
 
         # Setslot with an explicit 1ms timeoout
         set start_time [clock milliseconds]
@@ -353,5 +406,28 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {crash-memcheck-enable
 
         # Setslot should fail with not enough good replicas to write after the timeout
         assert_equal {NOREPLICAS Not enough good replicas to write.} $e
+
+        resume_process [srv -3 pid]
+    }
+}
+
+start_cluster 2 0 {tags {tls:skip external:skip cluster regression} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+    # Issue #563 regression test
+    test "Client blocked on XREADGROUP while stream's slot is migrated" {
+        set stream_name aga
+        set slot 609
+
+        # Start a deferring client to simulate a blocked client on XREADGROUP
+        R 0 XGROUP CREATE $stream_name mygroup $ MKSTREAM
+        set rd [valkey_deferring_client]
+        $rd xreadgroup GROUP mygroup consumer BLOCK 0 streams $stream_name >
+        wait_for_blocked_client
+
+        # Migrate the slot to the target node
+        R 0 CLUSTER SETSLOT $slot MIGRATING [dict get [cluster_get_myself 1] id]
+        R 1 CLUSTER SETSLOT $slot IMPORTING [dict get [cluster_get_myself 0] id]
+
+        # This line should cause the crash
+        R 0 MIGRATE 127.0.0.1 [lindex [R 1 CONFIG GET port] 1] $stream_name 0 5000
     }
 }

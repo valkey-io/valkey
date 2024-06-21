@@ -46,10 +46,10 @@ static ValkeyModuleDict *Keyspace;
  * Set the specified key to the specified value. */
 int cmd_SET(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 3) return ValkeyModule_WrongArity(ctx);
-    ValkeyModule_DictSet(Keyspace,argv[1],argv[2]);
+    ValkeyModule_DictSet(Keyspace, argv[1], argv[2]);
     /* We need to keep a reference to the value stored at the key, otherwise
      * it would be freed when this callback returns. */
-    ValkeyModule_RetainString(NULL,argv[2]);
+    ValkeyModule_RetainString(NULL, argv[2]);
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -59,7 +59,7 @@ int cmd_SET(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
  * is not defined. */
 int cmd_GET(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) return ValkeyModule_WrongArity(ctx);
-    ValkeyModuleString *val = ValkeyModule_DictGet(Keyspace,argv[1],NULL);
+    ValkeyModuleString *val = ValkeyModule_DictGet(Keyspace, argv[1], NULL);
     if (val == NULL) {
         return ValkeyModule_ReplyWithNull(ctx);
     } else {
@@ -76,27 +76,25 @@ int cmd_KEYRANGE(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 
     /* Parse the count argument. */
     long long count;
-    if (ValkeyModule_StringToLongLong(argv[3],&count) != VALKEYMODULE_OK) {
-        return ValkeyModule_ReplyWithError(ctx,"ERR invalid count");
+    if (ValkeyModule_StringToLongLong(argv[3], &count) != VALKEYMODULE_OK) {
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid count");
     }
 
     /* Seek the iterator. */
-    ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStart(
-        Keyspace, ">=", argv[1]);
+    ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStart(Keyspace, ">=", argv[1]);
 
     /* Reply with the matching items. */
     char *key;
     size_t keylen;
     long long replylen = 0; /* Keep track of the emitted array len. */
-    ValkeyModule_ReplyWithArray(ctx,VALKEYMODULE_POSTPONED_LEN);
-    while((key = ValkeyModule_DictNextC(iter,&keylen,NULL)) != NULL) {
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
+    while ((key = ValkeyModule_DictNextC(iter, &keylen, NULL)) != NULL) {
         if (replylen >= count) break;
-        if (ValkeyModule_DictCompare(iter,"<=",argv[2]) == VALKEYMODULE_ERR)
-            break;
-        ValkeyModule_ReplyWithStringBuffer(ctx,key,keylen);
+        if (ValkeyModule_DictCompare(iter, "<=", argv[2]) == VALKEYMODULE_ERR) break;
+        ValkeyModule_ReplyWithStringBuffer(ctx, key, keylen);
         replylen++;
     }
-    ValkeyModule_ReplySetArrayLength(ctx,replylen);
+    ValkeyModule_ReplySetArrayLength(ctx, replylen);
 
     /* Cleanup. */
     ValkeyModule_DictIteratorStop(iter);
@@ -109,19 +107,15 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
-    if (ValkeyModule_Init(ctx,"hellodict",1,VALKEYMODULE_APIVER_1)
-        == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
+    if (ValkeyModule_Init(ctx, "hellodict", 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx,"hellodict.set",
-        cmd_SET,"write deny-oom",1,1,0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "hellodict.set", cmd_SET, "write deny-oom", 1, 1, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx,"hellodict.get",
-        cmd_GET,"readonly",1,1,0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "hellodict.get", cmd_GET, "readonly", 1, 1, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx,"hellodict.keyrange",
-        cmd_KEYRANGE,"readonly",1,1,0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "hellodict.keyrange", cmd_KEYRANGE, "readonly", 1, 1, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     /* Create our global dictionary. Here we'll set our keys and values. */

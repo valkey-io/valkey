@@ -151,8 +151,7 @@
  * ----------------------------------------------------------------------------
  *
  * Copyright (c) 2009-2012, Pieter Noordhuis <pcnoordhuis at gmail dot com>
- * Copyright (c) 2009-2017, Redis Ltd.
- * Copyright (c) 2020, Redis Ltd.
+ * Copyright (c) 2009-2017, 2020, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without

@@ -13247,7 +13247,8 @@ int *VM_GetCommandKeysWithFlags(ValkeyModuleCtx *ctx,
         return NULL;
     }
 
-    getKeysResult result = GETKEYS_RESULT_INIT;
+    getKeysResult result;
+    initGetKeysResult(&result);
     getKeysFromCommand(cmd, argv, argc, &result);
 
     *num_keys = result.numkeys;

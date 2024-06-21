@@ -447,6 +447,13 @@ sds luaCreateFunction(client *c, robj *body, int evalsha) {
     sha1hex(funcname + 2, body->ptr, sdslen(body->ptr));
 
     if ((de = dictFind(lctx.lua_scripts, funcname + 2)) != NULL) {
+        /* If the script was previously added via EVAL, we promote it to
+         * SCRIPT LOAD, prevent it from being evicted later. */
+        luaScript *l = dictGetVal(de);
+        if (evalsha && l->node) {
+            listDelNode(lctx.lua_scripts_lru_list, l->node);
+            l->node = NULL;
+        }
         return dictGetKey(de);
     }
 
@@ -675,6 +682,8 @@ void scriptCommand(client *c) {
 "    Kill the currently executing Lua script.",
 "LOAD <script>",
 "    Load a script into the scripts cache without executing it.",
+"SHOW <sha1>",
+"    Show a script from the scripts cache.",
 NULL
         };
         /* clang-format on */
@@ -727,6 +736,16 @@ NULL
         } else {
             addReplyError(c, "Use SCRIPT DEBUG YES/SYNC/NO");
             return;
+        }
+    } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr, "show")) {
+        dictEntry *de;
+        luaScript *ls;
+
+        if (sdslen(c->argv[2]->ptr) == 40 && (de = dictFind(lctx.lua_scripts, c->argv[2]->ptr))) {
+            ls = dictGetVal(de);
+            addReplyBulk(c, ls->body);
+        } else {
+            addReplyErrorObject(c, shared.noscripterr);
         }
     } else {
         addReplySubcommandSyntaxError(c);

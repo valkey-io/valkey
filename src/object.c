@@ -1385,7 +1385,7 @@ sds getMemoryDoctorReport(void) {
                        " * Big replica buffers: The replica output buffers in this instance are greater than 10MB for "
                        "each replica (on average). This likely means that there is some replica instance that is "
                        "struggling receiving data, either because it is too slow or because of networking issues. As a "
-                       "result, data piles on the master output buffers. Please try to identify what replica is not "
+                       "result, data piles on the primary output buffers. Please try to identify what replica is not "
                        "receiving data correctly and why. You can use the INFO output in order to check the replicas "
                        "delays and the CLIENT LIST command to check the output buffers of each replica.\n\n");
         }

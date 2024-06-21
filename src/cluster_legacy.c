@@ -116,6 +116,12 @@ int verifyClusterNodeId(const char *name, int length);
 sds clusterEncodeOpenSlotsAuxField(int rdbflags);
 int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 
+/* Only primaries that own slots have voting rights.
+ * Returns 1 if the node has voting rights, otherwise returns 0. */
+static inline int clusterNodeIsVotingPrimary(clusterNode *n) {
+    return (n->flags & CLUSTER_NODE_PRIMARY) && n->numslots;
+}
+
 int getNodeDefaultClientPort(clusterNode *n) {
     return server.tls_cluster ? n->tls_port : n->tcp_port;
 }
@@ -527,9 +533,9 @@ int clusterLoadConfig(char *filename) {
                 serverAssert(server.cluster->myself == NULL);
                 myself = server.cluster->myself = n;
                 n->flags |= CLUSTER_NODE_MYSELF;
-            } else if (!strcasecmp(s, "master")) {
+            } else if (!strcasecmp(s, "master") || !strcasecmp(s, "primary")) {
                 n->flags |= CLUSTER_NODE_PRIMARY;
-            } else if (!strcasecmp(s, "slave")) {
+            } else if (!strcasecmp(s, "slave") || !strcasecmp(s, "replica")) {
                 n->flags |= CLUSTER_NODE_REPLICA;
             } else if (!strcasecmp(s, "fail?")) {
                 n->flags |= CLUSTER_NODE_PFAIL;
@@ -1755,10 +1761,8 @@ void clusterHandleConfigEpochCollision(clusterNode *sender) {
     server.cluster->currentEpoch++;
     myself->configEpoch = server.cluster->currentEpoch;
     clusterSaveConfigOrDie(1);
-    serverLog(LL_VERBOSE,
-              "WARNING: configEpoch collision with node %.40s (%s)."
-              " configEpoch set to %llu",
-              sender->name, sender->human_nodename, (unsigned long long)myself->configEpoch);
+    serverLog(LL_NOTICE, "configEpoch collision with node %.40s (%s). configEpoch set to %llu", sender->name,
+              sender->human_nodename, (unsigned long long)myself->configEpoch);
 }
 
 /* -----------------------------------------------------------------------------
@@ -1867,8 +1871,8 @@ void markNodeAsFailingIfNeeded(clusterNode *node) {
     if (nodeFailed(node)) return;    /* Already FAILing. */
 
     failures = clusterNodeFailureReportsCount(node);
-    /* Also count myself as a voter if I'm a primary. */
-    if (clusterNodeIsPrimary(myself)) failures++;
+    /* Also count myself as a voter if I'm a voting primary. */
+    if (clusterNodeIsVotingPrimary(myself)) failures++;
     if (failures < needed_quorum) return; /* No weak agreement from primaries. */
 
     serverLog(LL_NOTICE, "Marking node %.40s (%s) as failing (quorum reached).", node->name, node->human_nodename);
@@ -1899,7 +1903,7 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
      * node again. */
     if (nodeIsReplica(node) || node->numslots == 0) {
         serverLog(LL_NOTICE, "Clear FAIL state for node %.40s (%s):%s is reachable again.", node->name,
-                  node->human_nodename, nodeIsReplica(node) ? "replica" : "master without slots");
+                  node->human_nodename, nodeIsReplica(node) ? "replica" : "primary without slots");
         node->flags &= ~CLUSTER_NODE_FAIL;
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
     }
@@ -1908,7 +1912,7 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
      * 1) The FAIL state is old enough.
      * 2) It is yet serving slots from our point of view (not failed over).
      * Apparently no one is going to fix these slots, clear the FAIL flag. */
-    if (clusterNodeIsPrimary(node) && node->numslots > 0 &&
+    if (clusterNodeIsVotingPrimary(node) &&
         (now - node->fail_time) > (server.cluster_node_timeout * CLUSTER_FAIL_UNDO_TIME_MULT)) {
         serverLog(
             LL_NOTICE,
@@ -2090,17 +2094,17 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
         /* Ignore gossips about self. */
         if (node && node != myself) {
             /* We already know this node.
-               Handle failure reports, only when the sender is a primary. */
-            if (sender && clusterNodeIsPrimary(sender)) {
+               Handle failure reports, only when the sender is a voting primary. */
+            if (sender && clusterNodeIsVotingPrimary(sender)) {
                 if (flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) {
                     if (clusterNodeAddFailureReport(node, sender)) {
-                        serverLog(LL_VERBOSE, "Node %.40s (%s) reported node %.40s (%s) as not reachable.",
-                                  sender->name, sender->human_nodename, node->name, node->human_nodename);
+                        serverLog(LL_NOTICE, "Node %.40s (%s) reported node %.40s (%s) as not reachable.", sender->name,
+                                  sender->human_nodename, node->name, node->human_nodename);
                     }
                     markNodeAsFailingIfNeeded(node);
                 } else {
                     if (clusterNodeDelFailureReport(node, sender)) {
-                        serverLog(LL_VERBOSE, "Node %.40s (%s) reported node %.40s (%s) is back online.", sender->name,
+                        serverLog(LL_NOTICE, "Node %.40s (%s) reported node %.40s (%s) is back online.", sender->name,
                                   sender->human_nodename, node->name, node->human_nodename);
                     }
                 }
@@ -2844,7 +2848,16 @@ int clusterIsValidPacket(clusterLink *link) {
  * received from the wrong sender ID). */
 int clusterProcessPacket(clusterLink *link) {
     /* Validate that the packet is well-formed */
-    if (!clusterIsValidPacket(link)) return 1;
+    if (!clusterIsValidPacket(link)) {
+        clusterMsg *hdr = (clusterMsg *)link->rcvbuf;
+        uint16_t type = ntohs(hdr->type);
+        if (server.debug_cluster_close_link_on_packet_drop && type == server.cluster_drop_packet_filter) {
+            freeClusterLink(link);
+            serverLog(LL_WARNING, "Closing link for matching packet type %hu", type);
+            return 0;
+        }
+        return 1;
+    }
 
     clusterMsg *hdr = (clusterMsg *)link->rcvbuf;
     uint16_t type = ntohs(hdr->type);
@@ -2942,6 +2955,13 @@ int clusterProcessPacket(clusterLink *link) {
     if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_PONG || type == CLUSTERMSG_TYPE_MEET) {
         serverLog(LL_DEBUG, "%s packet received: %.40s", clusterGetMessageTypeString(type),
                   link->node ? link->node->name : "NULL");
+
+        if (sender && (sender->flags & CLUSTER_NODE_MEET)) {
+            /* Once we get a response for MEET from the sender, we can stop sending more MEET. */
+            sender->flags &= ~CLUSTER_NODE_MEET;
+            serverLog(LL_NOTICE, "Successfully completed handshake with %.40s (%s)", sender->name,
+                      sender->human_nodename);
+        }
         if (!link->inbound) {
             if (nodeInHandshake(link->node)) {
                 /* If we already have this node, try to change the
@@ -2971,7 +2991,7 @@ int clusterProcessPacket(clusterLink *link) {
                 /* If the reply has a non matching node ID we
                  * disconnect this node and set it as not having an associated
                  * address. */
-                serverLog(LL_DEBUG,
+                serverLog(LL_NOTICE,
                           "PONG contains mismatching sender ID. About node %.40s (%s) in shard %.40s added %d ms ago, "
                           "having flags %d",
                           link->node->name, link->node->human_nodename, link->node->shard_id,
@@ -3128,39 +3148,7 @@ int clusterProcessPacket(clusterLink *link) {
             clusterUpdateSlotsConfigWith(sender_primary, senderConfigEpoch, hdr->myslots);
 
         /* Explicitly check for a replication loop before attempting the replication
-         * chain folding logic.
-         *
-         * In some rare case, slot config updates (via either PING/PONG or UPDATE)
-         * can be delivered out of order as illustrated below.
-         *
-         * 1. To keep the discussion simple, let's assume we have 2 shards, shard a
-         *    and shard b. Let's also assume there are two slots in total with shard
-         *    a owning slot 1 and shard b owning slot 2.
-         * 2. Shard a has two nodes: primary A and replica A*; shard b has primary
-         *    B and replica B*.
-         * 3. A manual failover was initiated on A* and A* just wins the election.
-         * 4. A* announces to the world that it now owns slot 1 using PING messages.
-         *    These PING messages are queued in the outgoing buffer to every other
-         *    node in the cluster, namely, A, B, and B*.
-         * 5. Keep in mind that there is no ordering in the delivery of these PING
-         *    messages. For the stale PING message to appear, we need the following
-         *    events in the exact order as they are laid out.
-         * a. An old PING message before A* becomes the new primary is still queued
-         *    in A*'s outgoing buffer to A. This later becomes the stale message,
-         *    which says A* is a replica of A. It is followed by A*'s election
-         *    winning announcement PING message.
-         * b. B or B* processes A's election winning announcement PING message
-         *    and sets slots[1]=A*.
-         * c. A sends a PING message to B (or B*). Since A hasn't learnt that A*
-         *    wins the election, it claims that it owns slot 1 but with a lower
-         *    epoch than B has on slot 1. This leads to B sending an UPDATE to
-         *    A directly saying A* is the new owner of slot 1 with a higher epoch.
-         * d. A receives the UPDATE from B and executes clusterUpdateSlotsConfigWith.
-         *    A now realizes that it is a replica of A* hence setting myself->replicaof
-         *    to A*.
-         * e. Finally, the pre-failover PING message queued up in A*'s outgoing
-         *    buffer to A is delivered and processed, out of order though, to A.
-         * f. This stale PING message creates the replication loop */
+         * chain folding logic. */
         if (myself->replicaof && myself->replicaof->replicaof && myself->replicaof->replicaof != myself) {
             /* Safeguard against sub-replicas. A replica's primary can turn itself
              * into a replica if its last slot is removed. If no other node takes
@@ -3266,8 +3254,7 @@ int clusterProcessPacket(clusterLink *link) {
         /* We consider this vote only if the sender is a primary serving
          * a non zero number of slots, and its currentEpoch is greater or
          * equal to epoch where this node started the election. */
-        if (clusterNodeIsPrimary(sender) && sender->numslots > 0 &&
-            senderCurrentEpoch >= server.cluster->failover_auth_epoch) {
+        if (clusterNodeIsVotingPrimary(sender) && senderCurrentEpoch >= server.cluster->failover_auth_epoch) {
             server.cluster->failover_auth_count++;
             /* Maybe we reached a quorum here, set a flag to make sure
              * we check ASAP. */
@@ -3408,12 +3395,17 @@ void clusterLinkConnectHandler(connection *conn) {
          * replaced by the clusterSendPing() call. */
         node->ping_sent = old_ping_sent;
     }
-    /* We can clear the flag after the first packet is sent.
-     * If we'll never receive a PONG, we'll never send new packets
-     * to this node. Instead after the PONG is received and we
-     * are no longer in meet/handshake status, we want to send
-     * normal PING packets. */
-    node->flags &= ~CLUSTER_NODE_MEET;
+    /* NOTE: Assume the current node is A and is asked to MEET another node B.
+     * Once A sends MEET to B, it cannot clear the MEET flag for B until it
+     * gets a response from B. If the MEET packet is not accepted by B due to
+     * link failure, A must continue sending MEET. If A doesn't continue sending
+     * MEET, A will know about B, but B will never add A. Every node always
+     * responds to PINGs from unknown nodes with a PONG, so A will know about B
+     * and continue sending PINGs. But B won't add A until it sees a MEET (or it
+     * gets to know about A from a trusted third node C). In this case, clearing
+     * the MEET flag here leads to asymmetry in the cluster membership. So, we
+     * clear the MEET flag in clusterProcessPacket.
+     */
 
     serverLog(LL_DEBUG, "Connecting with Node %.40s at %s:%d", node->name, node->ip, node->cport);
 }
@@ -4162,7 +4154,7 @@ void clusterLogCantFailover(int reason) {
 
     switch (reason) {
     case CLUSTER_CANT_FAILOVER_DATA_AGE:
-        msg = "Disconnected from master for longer than allowed. "
+        msg = "Disconnected from primary for longer than allowed. "
               "Please check the 'cluster-replica-validity-factor' configuration "
               "option.";
         break;
@@ -4779,10 +4771,10 @@ void clusterCron(void) {
             if (!(node->flags & (CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL))) {
                 node->flags |= CLUSTER_NODE_PFAIL;
                 update_state = 1;
-                if (clusterNodeIsPrimary(myself) && server.cluster->size == 1) {
+                if (server.cluster->size == 1 && clusterNodeIsVotingPrimary(myself)) {
                     markNodeAsFailingIfNeeded(node);
                 } else {
-                    serverLog(LL_DEBUG, "*** NODE %.40s possibly failing", node->name);
+                    serverLog(LL_NOTICE, "NODE %.40s (%s) possibly failing.", node->name, node->human_nodename);
                 }
             }
         }
@@ -5049,7 +5041,7 @@ void clusterUpdateState(void) {
         while ((de = dictNext(di)) != NULL) {
             clusterNode *node = dictGetVal(de);
 
-            if (clusterNodeIsPrimary(node) && node->numslots) {
+            if (clusterNodeIsVotingPrimary(node)) {
                 server.cluster->size++;
                 if ((node->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) == 0) reachable_primaries++;
             }
@@ -5853,8 +5845,14 @@ int clusterNodeIsReplica(clusterNode *node) {
 }
 
 clusterNode *clusterNodeGetPrimary(clusterNode *node) {
-    while (node->replicaof != NULL) node = node->replicaof;
-    return node;
+    clusterNode *primary = node;
+    while (primary->replicaof != NULL) {
+        primary = primary->replicaof;
+        if (primary == node) break;
+    }
+    /* Assert that a node's replicaof/primary chain does not form a cycle. */
+    debugServerAssert(primary->replicaof == NULL);
+    return primary;
 }
 
 char *clusterNodeGetName(clusterNode *node) {

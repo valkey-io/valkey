@@ -2891,7 +2891,7 @@ static int setConfigReplicaOfOption(standardConfig *config, sds *argv, int argc,
     char *ptr;
     server.primary_port = strtol(argv[1], &ptr, 10);
     if (server.primary_port < 0 || server.primary_port > 65535 || *ptr != '\0') {
-        *err = "Invalid master port";
+        *err = "Invalid primary port";
         return 0;
     }
     server.primary_host = sdsnew(argv[0]);

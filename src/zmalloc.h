@@ -118,6 +118,7 @@ __attribute__((malloc, alloc_size(1), noinline)) void *ztrymalloc(size_t size);
 __attribute__((malloc, alloc_size(1), noinline)) void *ztrycalloc(size_t size);
 __attribute__((alloc_size(2), noinline)) void *ztryrealloc(void *ptr, size_t size);
 void zfree(void *ptr);
+void zfree_with_size(void *ptr, size_t size);
 void *zmalloc_usable(size_t size, size_t *usable);
 void *zcalloc_usable(size_t size, size_t *usable);
 void *zrealloc_usable(void *ptr, size_t size, size_t *usable);

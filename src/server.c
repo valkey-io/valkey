@@ -4039,7 +4039,7 @@ int processCommand(client *c) {
 /* ====================== Error lookup and execution ===================== */
 
 void incrementErrorCount(const char *fullerr, size_t namelen) {
-    void *result
+    void *result;
     if (!raxFind(server.errors,(unsigned char*)fullerr,namelen,&result)) {
         struct serverError *error = zmalloc(sizeof(*error));
         error->count = 1;

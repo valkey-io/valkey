@@ -24,15 +24,13 @@ start_server {} {
             wait_for_condition 1000 50 {
                 [string match {*replica_last_sync_type:disk*} [$replica info replication]] &&
                 [string match {*connected_clients:1*} [$master info clients]]
-            }
-            else {
+            } else {
                 fail "Replica didn't try disk based load to begin with"
             }
 
             wait_for_condition 1000 50 {
                 [string match {*loading:1*} [$replica info persistence]] 
-            } 
-            else {
+            } else {
                 fail "Replica isn't loading"
             }
 
@@ -43,8 +41,7 @@ start_server {} {
 
             wait_for_condition 1000 50 {
                 [string match {*last_sync_aborted:1*} [$replica info replication]]
-            }
-            else {
+            } else {
                 fail "Primary didn't disconnect replica as expected"
             }
             
@@ -52,8 +49,7 @@ start_server {} {
 
             wait_for_condition 1000 50 {
                 [string match {*master_link_status:up*} [$replica info replication]]
-            }
-            else {
+            } else {
                 fail "Second sync attempt didn't succeeded from socket"
             }
 

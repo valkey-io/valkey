@@ -192,7 +192,7 @@ rax *raxNew(void) {
     rax->numele = 0;
     rax->numnodes = 1;
     rax->head = raxNewNode(0, 0);
-    rax->alloc = sizeof(rax) + rax_alloc_size(rax->head);
+    rax->alloc = rax_alloc_size(rax) + rax_alloc_size(rax->head);
     if (rax->head == NULL) {
         rax_free(rax);
         return NULL;
@@ -515,7 +515,10 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
         if (!h->iskey || (h->isnull && overwrite)) {
             oldalloc = rax_alloc_size(h);
             h = raxReallocForData(h, data);
-            if (h) memcpy(parentlink, &h, sizeof(h));
+            if (h) {
+                memcpy(parentlink, &h, sizeof(h));
+                rax->alloc = rax->alloc - oldalloc + rax_alloc_size(h);
+            }
         }
         if (h == NULL) {
             errno = ENOMEM;
@@ -534,7 +537,6 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
          * will set h->iskey. */
         raxSetData(h, data);
         rax->numele++;
-        rax->alloc = rax->alloc - oldalloc + rax_alloc_size(h);
         return 1; /* Element inserted. */
     }
 
@@ -1064,7 +1066,6 @@ int raxRemove(rax *rax, unsigned char *s, size_t len, void **old) {
                 }
                 memcpy(parentlink, &new, sizeof(new));
             }
-
 
             /* If after the removal the node has just a single child
              * and is not a key, we need to try to compress it. */

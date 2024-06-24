@@ -1,10 +1,10 @@
 {
     "SLOT-STATS": {
         "summary": "Return array of slot usage statistics for slots assigned to the current node",
-        "complexity": "O(N) where N is the total number of slots based on arguments. O(N log N) with ORDERBY subcommand.",
+        "complexity": "O(N) where N is the total number of slots based on arguments. O(N*log(N)) with ORDERBY subcommand.",
         "group": "cluster",
         "since": "8.0.0",
-        "arity": -2,
+        "arity": -4,
         "container": "CLUSTER",
         "function": "clusterSlotStatsCommand",
         "command_flags": [
@@ -13,7 +13,7 @@
         ],
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT",
-            "ALL_SHARDS"
+            "REQUEST_POLICY:ALL_SHARDS"
         ],
         "reply_schema": {
             "type": "object",

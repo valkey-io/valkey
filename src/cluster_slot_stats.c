@@ -49,20 +49,20 @@ static uint64_t getSlotStat(int slot, int stat_type) {
 }
 
 static int slotStatEntryAscCmp(const void *a, const void *b) {
-    slotStatEntry entry_a = *((slotStatEntry *) a);
-    slotStatEntry entry_b = *((slotStatEntry *) b);
+    slotStatEntry entry_a = *((slotStatEntry *)a);
+    slotStatEntry entry_b = *((slotStatEntry *)b);
     return entry_a.stat - entry_b.stat;
 }
 
 static int slotStatEntryDescCmp(const void *a, const void *b) {
-    slotStatEntry entry_a = *((slotStatEntry *) a);
-    slotStatEntry entry_b = *((slotStatEntry *) b);
+    slotStatEntry entry_a = *((slotStatEntry *)a);
+    slotStatEntry entry_b = *((slotStatEntry *)b);
     return entry_b.stat - entry_a.stat;
 }
 
 static void collectAndSortSlotStats(slotStatEntry slot_stats[], int order_by, int desc) {
     int i = 0;
-    
+
     for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
         if (doesSlotBelongToMyShard(slot)) {
             slot_stats[i].slot = slot;
@@ -114,8 +114,8 @@ void clusterSlotStatsCommand(client *c) {
     if (c->argc == 5 && !strcasecmp(c->argv[2]->ptr, "slotsrange")) {
         /* CLUSTER SLOT-STATS SLOTSRANGE start-slot end-slot */
         int startslot, endslot;
-        if ((startslot = getSlotOrReply(c,c->argv[3])) == C_ERR ||
-            (endslot = getSlotOrReply(c,c->argv[4])) == C_ERR) {
+        if ((startslot = getSlotOrReply(c, c->argv[3])) == C_ERR ||
+            (endslot = getSlotOrReply(c, c->argv[4])) == C_ERR) {
             return;
         }
         if (startslot > endslot) {
@@ -123,7 +123,7 @@ void clusterSlotStatsCommand(client *c) {
             return;
         }
         /* Initialize slot assignment array. */
-        unsigned char assigned_slots[CLUSTER_SLOTS]= {UNASSIGNED_SLOT};
+        unsigned char assigned_slots[CLUSTER_SLOTS] = {UNASSIGNED_SLOT};
         int len = 0;
         markSlotsAssignedToMyShard(assigned_slots, startslot, endslot, &len);
         addReplySlotStats(c, assigned_slots, startslot, endslot, len);
@@ -140,12 +140,12 @@ void clusterSlotStatsCommand(client *c) {
         int i = 4; /* Next argument index, following ORDERBY */
         int limit_counter = 0, asc_desc_counter = 0;
         long limit;
-        while(i < c->argc) {
-            int moreargs = c->argc > i+1;
+        while (i < c->argc) {
+            int moreargs = c->argc > i + 1;
             if (!strcasecmp(c->argv[i]->ptr, "limit") && moreargs) {
                 if (getRangeLongFromObjectOrReply(
-                    c, c->argv[i+1], 1, CLUSTER_SLOTS, &limit,
-                    "Limit has to lie in between 1 and 16384 (maximum number of slots).") != C_OK)
+                        c, c->argv[i + 1], 1, CLUSTER_SLOTS, &limit,
+                        "Limit has to lie in between 1 and 16384 (maximum number of slots).") != C_OK)
                     return;
                 i++;
                 limit_counter++;
@@ -156,7 +156,7 @@ void clusterSlotStatsCommand(client *c) {
                 desc = 1;
                 asc_desc_counter++;
             } else {
-                addReplyErrorObject(c,shared.syntaxerr);
+                addReplyErrorObject(c, shared.syntaxerr);
                 return;
             }
             if (limit_counter > 1 || asc_desc_counter > 1) {

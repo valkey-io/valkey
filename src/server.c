@@ -1678,6 +1678,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     if (canUseIOUringForAlwaysFsync()) {
         /* Wait for io_uring_prep_fsync to finish. */
+        mstime_t latency;
+        latencyStartMonitor(latency);
         if (ioUringWaitFsyncBarrier(server.io_uring_context) != IO_URING_OK) {
             serverLog(LL_WARNING,
                       "Can't persist AOF through io_uring for fsync error when the "
@@ -1685,6 +1687,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
                       strerror(errno));
             exit(1);
         }
+        latencyEndMonitor(latency);
+        latencyAddSampleIfNeeded("aof-fsync-always", latency);
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         server.aof_last_fsync = server.mstime;
         atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset, memory_order_relaxed);

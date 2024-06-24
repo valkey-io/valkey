@@ -15,6 +15,13 @@
             "NONDETERMINISTIC_OUTPUT",
             "ALL_SHARDS"
         ],
+        "reply_schema": {
+            "type": "object",
+            "description": "Map of slots and their respective usage statistics.",
+            "additionalProperties": {
+                "type": "string"
+            }
+        },
         "arguments": [
             {
                 "name": "filter",

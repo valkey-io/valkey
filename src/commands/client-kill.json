@@ -31,6 +31,10 @@
             [
                 "8.0.0",
                 "`MAXAGE` option."
+            ],
+            [
+                "8.0.0",
+                "Replaced `master` `TYPE` with `primary`. `master` still supported for backward compatibility."
             ]
         ],
         "command_flags": [
@@ -83,6 +87,12 @@
                                         "type": "pure-token",
                                         "token": "master",
                                         "since": "3.2.0"
+                                    },
+                                    {
+                                        "name": "primary",
+                                        "type": "pure-token",
+                                        "token": "primary",
+                                        "since": "8.0.0"
                                     },
                                     {
                                         "name": "slave",

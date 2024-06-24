@@ -7,11 +7,6 @@
         "arity": 2,
         "container": "CLUSTER",
         "function": "clusterCommand",
-        "deprecated_since": "7.0.0",
-        "replaced_by": "`CLUSTER SHARDS`",
-        "doc_flags": [
-            "DEPRECATED"
-        ],
         "history": [
             [
                 "4.0.0",
@@ -47,7 +42,7 @@
                     },
                     {
                         "type": "array",
-                        "description": "Master node for the slot range.",
+                        "description": "Primary node for the slot range.",
                         "minItems": 4,
                         "maxItems": 4,
                         "items": [

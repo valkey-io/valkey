@@ -42,14 +42,14 @@ int HelloBlock_Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) 
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
     int *myint = ValkeyModule_GetBlockedClientPrivateData(ctx);
-    return ValkeyModule_ReplyWithLongLong(ctx,*myint);
+    return ValkeyModule_ReplyWithLongLong(ctx, *myint);
 }
 
 /* Timeout callback for blocking command HELLO.BLOCK */
 int HelloBlock_Timeout(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
-    return ValkeyModule_ReplyWithSimpleString(ctx,"Request timedout");
+    return ValkeyModule_ReplyWithSimpleString(ctx, "Request timedout");
 }
 
 /* Private data freeing callback for HELLO.BLOCK command. */
@@ -69,7 +69,7 @@ void *HelloBlock_ThreadMain(void *arg) {
     sleep(delay);
     int *r = ValkeyModule_Alloc(sizeof(int));
     *r = rand();
-    ValkeyModule_UnblockClient(bc,r);
+    ValkeyModule_UnblockClient(bc, r);
     return NULL;
 }
 
@@ -82,8 +82,7 @@ void *HelloBlock_ThreadMain(void *arg) {
  * amount of seconds with a while loop calling sleep(1), so that once we
  * detect the client disconnection, we can terminate the thread ASAP. */
 void HelloBlock_Disconnected(ValkeyModuleCtx *ctx, ValkeyModuleBlockedClient *bc) {
-    ValkeyModule_Log(ctx,"warning","Blocked client %p disconnected!",
-        (void*)bc);
+    ValkeyModule_Log(ctx, "warning", "Blocked client %p disconnected!", (void *)bc);
 
     /* Here you should cleanup your state / threads, and if possible
      * call ValkeyModule_UnblockClient(), or notify the thread that will
@@ -93,37 +92,38 @@ void HelloBlock_Disconnected(ValkeyModuleCtx *ctx, ValkeyModuleBlockedClient *bc
 /* HELLO.BLOCK <delay> <timeout> -- Block for <count> seconds, then reply with
  * a random number. Timeout is the command timeout, so that you can test
  * what happens when the delay is greater than the timeout. */
-int HelloBlock_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloBlock_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 3) return ValkeyModule_WrongArity(ctx);
     long long delay;
     long long timeout;
 
-    if (ValkeyModule_StringToLongLong(argv[1],&delay) != VALKEYMODULE_OK) {
-        return ValkeyModule_ReplyWithError(ctx,"ERR invalid count");
+    if (ValkeyModule_StringToLongLong(argv[1], &delay) != VALKEYMODULE_OK) {
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid count");
     }
 
-    if (ValkeyModule_StringToLongLong(argv[2],&timeout) != VALKEYMODULE_OK) {
-        return ValkeyModule_ReplyWithError(ctx,"ERR invalid count");
+    if (ValkeyModule_StringToLongLong(argv[2], &timeout) != VALKEYMODULE_OK) {
+        return ValkeyModule_ReplyWithError(ctx, "ERR invalid count");
     }
 
     pthread_t tid;
-    ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(ctx,HelloBlock_Reply,HelloBlock_Timeout,HelloBlock_FreeData,timeout);
+    ValkeyModuleBlockedClient *bc =
+        ValkeyModule_BlockClient(ctx, HelloBlock_Reply, HelloBlock_Timeout, HelloBlock_FreeData, timeout);
 
     /* Here we set a disconnection handler, however since this module will
      * block in sleep() in a thread, there is not much we can do in the
      * callback, so this is just to show you the API. */
-    ValkeyModule_SetDisconnectCallback(bc,HelloBlock_Disconnected);
+    ValkeyModule_SetDisconnectCallback(bc, HelloBlock_Disconnected);
 
     /* Now that we setup a blocking client, we need to pass the control
      * to the thread. However we need to pass arguments to the thread:
      * the delay and a reference to the blocked client handle. */
-    void **targ = ValkeyModule_Alloc(sizeof(void*)*2);
+    void **targ = ValkeyModule_Alloc(sizeof(void *) * 2);
     targ[0] = bc;
-    targ[1] = (void*)(unsigned long) delay;
+    targ[1] = (void *)(unsigned long)delay;
 
-    if (pthread_create(&tid,NULL,HelloBlock_ThreadMain,targ) != 0) {
+    if (pthread_create(&tid, NULL, HelloBlock_ThreadMain, targ) != 0) {
         ValkeyModule_AbortBlock(bc);
-        return ValkeyModule_ReplyWithError(ctx,"-ERR Can't start thread");
+        return ValkeyModule_ReplyWithError(ctx, "-ERR Can't start thread");
     }
     return VALKEYMODULE_OK;
 }
@@ -141,35 +141,31 @@ void *HelloKeys_ThreadMain(void *arg) {
     long long cursor = 0;
     size_t replylen = 0;
 
-    ValkeyModule_ReplyWithArray(ctx,VALKEYMODULE_POSTPONED_LEN);
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
     do {
         ValkeyModule_ThreadSafeContextLock(ctx);
-        ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx,
-            "SCAN","l",(long long)cursor);
+        ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, "SCAN", "l", (long long)cursor);
         ValkeyModule_ThreadSafeContextUnlock(ctx);
 
-        ValkeyModuleCallReply *cr_cursor =
-            ValkeyModule_CallReplyArrayElement(reply,0);
-        ValkeyModuleCallReply *cr_keys =
-            ValkeyModule_CallReplyArrayElement(reply,1);
+        ValkeyModuleCallReply *cr_cursor = ValkeyModule_CallReplyArrayElement(reply, 0);
+        ValkeyModuleCallReply *cr_keys = ValkeyModule_CallReplyArrayElement(reply, 1);
 
         ValkeyModuleString *s = ValkeyModule_CreateStringFromCallReply(cr_cursor);
-        ValkeyModule_StringToLongLong(s,&cursor);
-        ValkeyModule_FreeString(ctx,s);
+        ValkeyModule_StringToLongLong(s, &cursor);
+        ValkeyModule_FreeString(ctx, s);
 
         size_t items = ValkeyModule_CallReplyLength(cr_keys);
         for (size_t j = 0; j < items; j++) {
-            ValkeyModuleCallReply *ele =
-                ValkeyModule_CallReplyArrayElement(cr_keys,j);
-            ValkeyModule_ReplyWithCallReply(ctx,ele);
+            ValkeyModuleCallReply *ele = ValkeyModule_CallReplyArrayElement(cr_keys, j);
+            ValkeyModule_ReplyWithCallReply(ctx, ele);
             replylen++;
         }
         ValkeyModule_FreeCallReply(reply);
     } while (cursor != 0);
-    ValkeyModule_ReplySetArrayLength(ctx,replylen);
+    ValkeyModule_ReplySetArrayLength(ctx, replylen);
 
     ValkeyModule_FreeThreadSafeContext(ctx);
-    ValkeyModule_UnblockClient(bc,NULL);
+    ValkeyModule_UnblockClient(bc, NULL);
     return NULL;
 }
 
@@ -177,7 +173,7 @@ void *HelloKeys_ThreadMain(void *arg) {
  * the server. The keys do not represent a point-in-time state so only the keys
  * that were in the database from the start to the end are guaranteed to be
  * there. */
-int HelloKeys_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int HelloKeys_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     if (argc != 1) return ValkeyModule_WrongArity(ctx);
 
@@ -186,14 +182,14 @@ int HelloKeys_RedisCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int 
     /* Note that when blocking the client we do not set any callback: no
      * timeout is possible since we passed '0', nor we need a reply callback
      * because we'll use the thread safe context to accumulate a reply. */
-    ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(ctx,NULL,NULL,NULL,0);
+    ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClient(ctx, NULL, NULL, NULL, 0);
 
     /* Now that we setup a blocking client, we need to pass the control
      * to the thread. However we need to pass arguments to the thread:
      * the reference to the blocked client handle. */
-    if (pthread_create(&tid,NULL,HelloKeys_ThreadMain,bc) != 0) {
+    if (pthread_create(&tid, NULL, HelloKeys_ThreadMain, bc) != 0) {
         ValkeyModule_AbortBlock(bc);
-        return ValkeyModule_ReplyWithError(ctx,"-ERR Can't start thread");
+        return ValkeyModule_ReplyWithError(ctx, "-ERR Can't start thread");
     }
     return VALKEYMODULE_OK;
 }
@@ -204,14 +200,11 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
-    if (ValkeyModule_Init(ctx,"helloblock",1,VALKEYMODULE_APIVER_1)
-        == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
+    if (ValkeyModule_Init(ctx, "helloblock", 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx,"hello.block",
-        HelloBlock_RedisCommand,"",0,0,0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "hello.block", HelloBlock_ValkeyCommand, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
-    if (ValkeyModule_CreateCommand(ctx,"hello.keys",
-        HelloKeys_RedisCommand,"",0,0,0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "hello.keys", HelloKeys_ValkeyCommand, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

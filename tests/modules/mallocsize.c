@@ -1,4 +1,4 @@
-#include "redismodule.h"
+#include "valkeymodule.h"
 #include <string.h>
 #include <assert.h>
 #include <unistd.h>
@@ -6,7 +6,7 @@
 #define UNUSED(V) ((void) V)
 
 /* Registered type */
-RedisModuleType *mallocsize_type = NULL;
+ValkeyModuleType *mallocsize_type = NULL;
 
 typedef enum {
     UDT_RAW,
@@ -23,8 +23,8 @@ typedef struct {
     udt_type_t type;
     union {
         raw_t raw;
-        RedisModuleString *str;
-        RedisModuleDict *dict;
+        ValkeyModuleString *str;
+        ValkeyModuleDict *dict;
     } data;
 } udt_t;
 
@@ -32,76 +32,76 @@ void udt_free(void *value) {
     udt_t *udt = value;
     switch (udt->type) {
         case (UDT_RAW): {
-            RedisModule_Free(udt->data.raw.ptr);
+            ValkeyModule_Free(udt->data.raw.ptr);
             break;
         }
         case (UDT_STRING): {
-            RedisModule_FreeString(NULL, udt->data.str);
+            ValkeyModule_FreeString(NULL, udt->data.str);
             break;
         }
         case (UDT_DICT): {
-            RedisModuleString *dk, *dv;
-            RedisModuleDictIter *iter = RedisModule_DictIteratorStartC(udt->data.dict, "^", NULL, 0);
-            while((dk = RedisModule_DictNext(NULL, iter, (void **)&dv)) != NULL) {
-                RedisModule_FreeString(NULL, dk);
-                RedisModule_FreeString(NULL, dv);
+            ValkeyModuleString *dk, *dv;
+            ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStartC(udt->data.dict, "^", NULL, 0);
+            while((dk = ValkeyModule_DictNext(NULL, iter, (void **)&dv)) != NULL) {
+                ValkeyModule_FreeString(NULL, dk);
+                ValkeyModule_FreeString(NULL, dv);
             }
-            RedisModule_DictIteratorStop(iter);
-            RedisModule_FreeDict(NULL, udt->data.dict);
+            ValkeyModule_DictIteratorStop(iter);
+            ValkeyModule_FreeDict(NULL, udt->data.dict);
             break;
         }
     }
-    RedisModule_Free(udt);
+    ValkeyModule_Free(udt);
 }
 
-void udt_rdb_save(RedisModuleIO *rdb, void *value) {
+void udt_rdb_save(ValkeyModuleIO *rdb, void *value) {
     udt_t *udt = value;
-    RedisModule_SaveUnsigned(rdb, udt->type);
+    ValkeyModule_SaveUnsigned(rdb, udt->type);
     switch (udt->type) {
         case (UDT_RAW): {
-            RedisModule_SaveStringBuffer(rdb, udt->data.raw.ptr, udt->data.raw.len);
+            ValkeyModule_SaveStringBuffer(rdb, udt->data.raw.ptr, udt->data.raw.len);
             break;
         }
         case (UDT_STRING): {
-            RedisModule_SaveString(rdb, udt->data.str);
+            ValkeyModule_SaveString(rdb, udt->data.str);
             break;
         }
         case (UDT_DICT): {
-            RedisModule_SaveUnsigned(rdb, RedisModule_DictSize(udt->data.dict));
-            RedisModuleString *dk, *dv;
-            RedisModuleDictIter *iter = RedisModule_DictIteratorStartC(udt->data.dict, "^", NULL, 0);
-            while((dk = RedisModule_DictNext(NULL, iter, (void **)&dv)) != NULL) {
-                RedisModule_SaveString(rdb, dk);
-                RedisModule_SaveString(rdb, dv);
-                RedisModule_FreeString(NULL, dk); /* Allocated by RedisModule_DictNext */
+            ValkeyModule_SaveUnsigned(rdb, ValkeyModule_DictSize(udt->data.dict));
+            ValkeyModuleString *dk, *dv;
+            ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStartC(udt->data.dict, "^", NULL, 0);
+            while((dk = ValkeyModule_DictNext(NULL, iter, (void **)&dv)) != NULL) {
+                ValkeyModule_SaveString(rdb, dk);
+                ValkeyModule_SaveString(rdb, dv);
+                ValkeyModule_FreeString(NULL, dk); /* Allocated by ValkeyModule_DictNext */
             }
-            RedisModule_DictIteratorStop(iter);
+            ValkeyModule_DictIteratorStop(iter);
             break;
         }
     }
 }
 
-void *udt_rdb_load(RedisModuleIO *rdb, int encver) {
+void *udt_rdb_load(ValkeyModuleIO *rdb, int encver) {
     if (encver != 0)
         return NULL;
-    udt_t *udt = RedisModule_Alloc(sizeof(*udt));
-    udt->type = RedisModule_LoadUnsigned(rdb);
+    udt_t *udt = ValkeyModule_Alloc(sizeof(*udt));
+    udt->type = ValkeyModule_LoadUnsigned(rdb);
     switch (udt->type) {
         case (UDT_RAW): {
-            udt->data.raw.ptr = RedisModule_LoadStringBuffer(rdb, &udt->data.raw.len);
+            udt->data.raw.ptr = ValkeyModule_LoadStringBuffer(rdb, &udt->data.raw.len);
             break;
         }
         case (UDT_STRING): {
-            udt->data.str = RedisModule_LoadString(rdb);
+            udt->data.str = ValkeyModule_LoadString(rdb);
             break;
         }
         case (UDT_DICT): {
-            long long dict_len = RedisModule_LoadUnsigned(rdb);
-            udt->data.dict = RedisModule_CreateDict(NULL);
+            long long dict_len = ValkeyModule_LoadUnsigned(rdb);
+            udt->data.dict = ValkeyModule_CreateDict(NULL);
             for (int i = 0; i < dict_len; i += 2) {
-                RedisModuleString *key = RedisModule_LoadString(rdb);
-                RedisModuleString *val = RedisModule_LoadString(rdb);
-                RedisModule_DictSet(udt->data.dict, key, val);
+                ValkeyModuleString *key = ValkeyModule_LoadString(rdb);
+                ValkeyModuleString *val = ValkeyModule_LoadString(rdb);
+                ValkeyModule_DictSet(udt->data.dict, key, val);
             }
             break;
         }
@@ -110,7 +110,7 @@ void *udt_rdb_load(RedisModuleIO *rdb, int encver) {
     return udt;
 }
 
-size_t udt_mem_usage(RedisModuleKeyOptCtx *ctx, const void *value, size_t sample_size) {
+size_t udt_mem_usage(ValkeyModuleKeyOptCtx *ctx, const void *value, size_t sample_size) {
     UNUSED(ctx);
     UNUSED(sample_size);
     
@@ -119,23 +119,23 @@ size_t udt_mem_usage(RedisModuleKeyOptCtx *ctx, const void *value, size_t sample
     
     switch (udt->type) {
         case (UDT_RAW): {
-            size += RedisModule_MallocSize(udt->data.raw.ptr);
+            size += ValkeyModule_MallocSize(udt->data.raw.ptr);
             break;
         }
         case (UDT_STRING): {
-            size += RedisModule_MallocSizeString(udt->data.str);
+            size += ValkeyModule_MallocSizeString(udt->data.str);
             break;
         }
         case (UDT_DICT): {
             void *dk;
             size_t keylen;
-            RedisModuleString *dv;
-            RedisModuleDictIter *iter = RedisModule_DictIteratorStartC(udt->data.dict, "^", NULL, 0);
-            while((dk = RedisModule_DictNextC(iter, &keylen, (void **)&dv)) != NULL) {
+            ValkeyModuleString *dv;
+            ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStartC(udt->data.dict, "^", NULL, 0);
+            while((dk = ValkeyModule_DictNextC(iter, &keylen, (void **)&dv)) != NULL) {
                 size += keylen;
-                size += RedisModule_MallocSizeString(dv);
+                size += ValkeyModule_MallocSizeString(dv);
             }
-            RedisModule_DictIteratorStop(iter);
+            ValkeyModule_DictIteratorStop(iter);
             break;
         }
     }
@@ -144,94 +144,94 @@ size_t udt_mem_usage(RedisModuleKeyOptCtx *ctx, const void *value, size_t sample
 }
 
 /* MALLOCSIZE.SETRAW key len */
-int cmd_setraw(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int cmd_setraw(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 3)
-        return RedisModule_WrongArity(ctx);
+        return ValkeyModule_WrongArity(ctx);
         
-    RedisModuleKey *key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_WRITE);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_WRITE);
 
-    udt_t *udt = RedisModule_Alloc(sizeof(*udt));
+    udt_t *udt = ValkeyModule_Alloc(sizeof(*udt));
     udt->type = UDT_RAW;
     
     long long raw_len;
-    RedisModule_StringToLongLong(argv[2], &raw_len);
-    udt->data.raw.ptr = RedisModule_Alloc(raw_len);
+    ValkeyModule_StringToLongLong(argv[2], &raw_len);
+    udt->data.raw.ptr = ValkeyModule_Alloc(raw_len);
     udt->data.raw.len = raw_len;
     
-    RedisModule_ModuleTypeSetValue(key, mallocsize_type, udt);
-    RedisModule_CloseKey(key);
+    ValkeyModule_ModuleTypeSetValue(key, mallocsize_type, udt);
+    ValkeyModule_CloseKey(key);
 
-    return RedisModule_ReplyWithSimpleString(ctx, "OK");
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
 /* MALLOCSIZE.SETSTR key string */
-int cmd_setstr(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int cmd_setstr(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 3)
-        return RedisModule_WrongArity(ctx);
+        return ValkeyModule_WrongArity(ctx);
         
-    RedisModuleKey *key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_WRITE);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_WRITE);
 
-    udt_t *udt = RedisModule_Alloc(sizeof(*udt));
+    udt_t *udt = ValkeyModule_Alloc(sizeof(*udt));
     udt->type = UDT_STRING;
     
     udt->data.str = argv[2];
-    RedisModule_RetainString(ctx, argv[2]);
+    ValkeyModule_RetainString(ctx, argv[2]);
     
-    RedisModule_ModuleTypeSetValue(key, mallocsize_type, udt);
-    RedisModule_CloseKey(key);
+    ValkeyModule_ModuleTypeSetValue(key, mallocsize_type, udt);
+    ValkeyModule_CloseKey(key);
 
-    return RedisModule_ReplyWithSimpleString(ctx, "OK");
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
 /* MALLOCSIZE.SETDICT key field value [field value ...] */
-int cmd_setdict(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int cmd_setdict(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc < 4 || argc % 2)
-        return RedisModule_WrongArity(ctx);
+        return ValkeyModule_WrongArity(ctx);
         
-    RedisModuleKey *key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_WRITE);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_WRITE);
 
-    udt_t *udt = RedisModule_Alloc(sizeof(*udt));
+    udt_t *udt = ValkeyModule_Alloc(sizeof(*udt));
     udt->type = UDT_DICT;
     
-    udt->data.dict = RedisModule_CreateDict(ctx);
+    udt->data.dict = ValkeyModule_CreateDict(ctx);
     for (int i = 2; i < argc; i += 2) {
-        RedisModule_DictSet(udt->data.dict, argv[i], argv[i+1]);
+        ValkeyModule_DictSet(udt->data.dict, argv[i], argv[i+1]);
         /* No need to retain argv[i], it is copied as the rax key */
-        RedisModule_RetainString(ctx, argv[i+1]);   
+        ValkeyModule_RetainString(ctx, argv[i+1]);   
     }
     
-    RedisModule_ModuleTypeSetValue(key, mallocsize_type, udt);
-    RedisModule_CloseKey(key);
+    ValkeyModule_ModuleTypeSetValue(key, mallocsize_type, udt);
+    ValkeyModule_CloseKey(key);
 
-    return RedisModule_ReplyWithSimpleString(ctx, "OK");
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
-int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argv);
     UNUSED(argc);
-    if (RedisModule_Init(ctx,"mallocsize",1,REDISMODULE_APIVER_1)== REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_Init(ctx,"mallocsize",1,VALKEYMODULE_APIVER_1)== VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
         
-    RedisModuleTypeMethods tm = {
-        .version = REDISMODULE_TYPE_METHOD_VERSION,
+    ValkeyModuleTypeMethods tm = {
+        .version = VALKEYMODULE_TYPE_METHOD_VERSION,
         .rdb_load = udt_rdb_load,
         .rdb_save = udt_rdb_save,
         .free = udt_free,
         .mem_usage2 = udt_mem_usage,
     };
 
-    mallocsize_type = RedisModule_CreateDataType(ctx, "allocsize", 0, &tm);
+    mallocsize_type = ValkeyModule_CreateDataType(ctx, "allocsize", 0, &tm);
     if (mallocsize_type == NULL)
-        return REDISMODULE_ERR;
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx, "mallocsize.setraw", cmd_setraw, "", 1, 1, 1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "mallocsize.setraw", cmd_setraw, "", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
         
-    if (RedisModule_CreateCommand(ctx, "mallocsize.setstr", cmd_setstr, "", 1, 1, 1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "mallocsize.setstr", cmd_setstr, "", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
         
-    if (RedisModule_CreateCommand(ctx, "mallocsize.setdict", cmd_setdict, "", 1, 1, 1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "mallocsize.setdict", cmd_setdict, "", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }

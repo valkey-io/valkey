@@ -286,7 +286,7 @@ start_server {tags {"modules"}} {
         assert_match {*calls=2,*,rejected_calls=0,failed_calls=1} [cmdstat auth]
     }
 
-    test {Disabling Redis User during blocking module auth} {
+    test {Disabling Valkey User during blocking module auth} {
         r config resetstat
         r acl setuser foo >pwd on ~* &* +@all
         set rd [valkey_deferring_client]

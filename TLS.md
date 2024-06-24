@@ -37,12 +37,14 @@ To manually run a Valkey server with TLS mode (assuming `gen-test-certs.sh` was
 invoked so sample certificates/keys are available):
 
 For TLS built-in mode:
+
     ./src/valkey-server --tls-port 6379 --port 0 \
         --tls-cert-file ./tests/tls/valkey.crt \
         --tls-key-file ./tests/tls/valkey.key \
         --tls-ca-cert-file ./tests/tls/ca.crt
 
 For TLS module mode:
+
     ./src/valkey-server --tls-port 6379 --port 0 \
         --tls-cert-file ./tests/tls/valkey.crt \
         --tls-key-file ./tests/tls/valkey.key \
@@ -56,7 +58,7 @@ To connect to this Valkey server with `valkey-cli`:
         --key ./tests/tls/valkey.key \
         --cacert ./tests/tls/ca.crt
 
-This will disable TCP and enable TLS on port 6379. It's also possible to have
+Specifying `port 0` will disable TCP. It's also possible to have
 both TCP and TLS available, but you'll need to assign different ports.
 
 To make a Replica connect to the master using TLS, use `--tls-replication yes`,

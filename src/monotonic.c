@@ -85,8 +85,7 @@ static void monotonicInit_x86linux(void) {
         return;
     }
 
-    snprintf(monotonic_info_string, sizeof(monotonic_info_string),
-            "X86 TSC @ %ld ticks/us", mono_ticksPerMicrosecond);
+    snprintf(monotonic_info_string, sizeof(monotonic_info_string), "X86 TSC @ %ld ticks/us", mono_ticksPerMicrosecond);
     getMonotonicUs = getMonotonicUs_x86;
 }
 #endif
@@ -106,7 +105,7 @@ static inline uint64_t __cntvct(void) {
 static inline uint32_t cntfrq_hz(void) {
     uint64_t virtual_freq_value;
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(virtual_freq_value));
-    return (uint32_t)virtual_freq_value;    /* top 32 bits are reserved */
+    return (uint32_t)virtual_freq_value; /* top 32 bits are reserved */
 }
 
 static monotime getMonotonicUs_aarch64(void) {
@@ -120,8 +119,8 @@ static void monotonicInit_aarch64(void) {
         return;
     }
 
-    snprintf(monotonic_info_string, sizeof(monotonic_info_string),
-            "ARM CNTVCT @ %ld ticks/us", mono_ticksPerMicrosecond);
+    snprintf(monotonic_info_string, sizeof(monotonic_info_string), "ARM CNTVCT @ %ld ticks/us",
+             mono_ticksPerMicrosecond);
     getMonotonicUs = getMonotonicUs_aarch64;
 }
 #endif
@@ -145,21 +144,19 @@ static void monotonicInit_posix(void) {
     int rc = clock_gettime(CLOCK_MONOTONIC, &ts);
     assert(rc == 0);
 
-    snprintf(monotonic_info_string, sizeof(monotonic_info_string),
-            "POSIX clock_gettime");
+    snprintf(monotonic_info_string, sizeof(monotonic_info_string), "POSIX clock_gettime");
     getMonotonicUs = getMonotonicUs_posix;
 }
 
 
-
-const char * monotonicInit(void) {
-    #if defined(USE_PROCESSOR_CLOCK) && defined(__x86_64__) && defined(__linux__)
+const char *monotonicInit(void) {
+#if defined(USE_PROCESSOR_CLOCK) && defined(__x86_64__) && defined(__linux__)
     if (getMonotonicUs == NULL) monotonicInit_x86linux();
-    #endif
+#endif
 
-    #if defined(USE_PROCESSOR_CLOCK) && defined(__aarch64__)
+#if defined(USE_PROCESSOR_CLOCK) && defined(__aarch64__)
     if (getMonotonicUs == NULL) monotonicInit_aarch64();
-    #endif
+#endif
 
     if (getMonotonicUs == NULL) monotonicInit_posix();
 
@@ -171,7 +168,6 @@ const char *monotonicInfoString(void) {
 }
 
 monotonic_clock_type monotonicGetType(void) {
-    if (getMonotonicUs == getMonotonicUs_posix)
-        return MONOTONIC_CLOCK_POSIX;
+    if (getMonotonicUs == getMonotonicUs_posix) return MONOTONIC_CLOCK_POSIX;
     return MONOTONIC_CLOCK_HW;
 }

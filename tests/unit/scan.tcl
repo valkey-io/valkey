@@ -100,7 +100,8 @@ proc test_scan {type} {
 
     test "{$type} SCAN unknown type" {
         r flushdb
-        # make sure that passive expiration is triggered by the scan
+        # Check that passive expiration is not triggered by the scan on an
+        # unknown key type
         r debug set-active-expire 0
 
         populate 1000
@@ -109,25 +110,10 @@ proc test_scan {type} {
 
         after 2
 
-        # TODO: remove this in server version 8.0
-        set cur 0
-        set keys {}
-        while 1 {
-            set res [r scan $cur type "string1"]
-            set cur [lindex $res 0]
-            set k [lindex $res 1]
-            lappend keys {*}$k
-            if {$cur == 0} break
-        }
+        assert_error "*unknown type name*" {r scan 0 type "string1"}
 
-        assert_equal 0 [llength $keys]
-        # make sure that expired key have been removed by scan command
-        assert_equal 1000 [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
-
-        # TODO: uncomment in server version 8.0
-        #assert_error "*unknown type name*" {r scan 0 type "string1"}
-        # expired key will be no touched by scan command
-        #assert_equal 1001 [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+        # expired key is not touched by scan command
+        assert_equal 1001 [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
         r debug set-active-expire 1
     } {OK} {needs:debug}
 
@@ -191,11 +177,8 @@ proc test_scan {type} {
 
         assert_equal 1000 [llength $keys]
 
-        # make sure that expired key have been removed by scan command
-        assert_equal 1000 [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
-        # TODO: uncomment in server version 8.0
         # make sure that only the expired key in the type match will been removed by scan command
-        #assert_equal 1001 [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+        assert_equal 1001 [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
 
         r debug set-active-expire 1
     } {OK} {needs:debug}
@@ -316,6 +299,10 @@ proc test_scan {type} {
 
             set keys2 [lsort -unique $keys2]
             assert_equal $count [llength $keys2]
+
+            # Test NOSCORES 
+            set res [r zscan zset 0 count 1000 noscores]
+            assert_equal [lsort $keys2] [lsort [lindex $res 1]]
         }
     }
 
@@ -385,6 +372,13 @@ proc test_scan {type} {
         set res [r zscan mykey 0 MATCH foo* COUNT 10000]
         lsort -unique [lindex $res 1]
     }
+
+    test "{$type} ZSCAN with NOSCORES" {
+        r del mykey
+        r zadd mykey 1 foo 2 fab 3 fiz 10 foobar
+        set res [r zscan mykey 0 NOSCORES]
+        lsort -unique [lindex $res 1]
+    } {fab fiz foo foobar}
 
     test "{$type} ZSCAN scores: regression test for issue #2175" {
         r del mykey

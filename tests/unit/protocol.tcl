@@ -94,7 +94,7 @@ start_server {tags {"protocol network"}} {
                     set elapsed [expr {[clock seconds]-$test_start}]
                     if {$elapsed > $test_time_limit} {
                         close $s
-                        error "assertion:Redis did not closed connection after protocol desync"
+                        error "assertion:Valkey did not closed connection after protocol desync"
                     }
                 }
             }

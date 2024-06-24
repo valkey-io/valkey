@@ -7,10 +7,17 @@
         "arity": -4,
         "container": "CLUSTER",
         "function": "clusterCommand",
-        "command_flags": [
+        "history": [
+            [
+                "8.0.0",
+                "Added the `TIMEOUT` option."
+            ]
+        ],
+         "command_flags": [
             "NO_ASYNC_LOADING",
             "ADMIN",
-            "STALE"
+            "STALE",
+            "MAY_REPLICATE"
         ],
         "arguments": [
             {
@@ -45,6 +52,14 @@
                         "token": "STABLE"
                     }
                 ]
+            },
+            {
+                "name": "timeout",
+                "display": "timeout",
+                "type": "integer",
+                "token": "TIMEOUT",
+                "optional": true,
+                "since": "8.0.0"
             }
         ],
         "reply_schema": {

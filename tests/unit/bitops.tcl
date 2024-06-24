@@ -128,13 +128,26 @@ start_server {tags {"bitops"}} {
         }
     }
 
+    test {BITCOUNT with just start} {
+        set s "foobar"
+        r set s $s
+        assert_equal [r bitcount s 0] [count_bits "foobar"]
+        assert_equal [r bitcount s 1] [count_bits "oobar"]
+        assert_equal [r bitcount s 1000] 0
+        assert_equal [r bitcount s -1] [count_bits "r"]
+        assert_equal [r bitcount s -2] [count_bits "ar"]
+        assert_equal [r bitcount s -1000] [count_bits "foobar"]
+    }
+
     test {BITCOUNT with start, end} {
         set s "foobar"
         r set s $s
         assert_equal [r bitcount s 0 -1] [count_bits "foobar"]
         assert_equal [r bitcount s 1 -2] [count_bits "ooba"]
-        assert_equal [r bitcount s -2 1] [count_bits ""]
+        assert_equal [r bitcount s -2 1] 0
+        assert_equal [r bitcount s -1000 0] [count_bits "f"]
         assert_equal [r bitcount s 0 1000] [count_bits "foobar"]
+        assert_equal [r bitcount s -1000 1000] [count_bits "foobar"]
 
         assert_equal [r bitcount s 0 -1 bit] [count_bits $s]
         assert_equal [r bitcount s 10 14 bit] [count_bits_start_end $s 10 14]
@@ -144,18 +157,18 @@ start_server {tags {"bitops"}} {
         assert_equal [r bitcount s 3 -34 bit] [count_bits_start_end $s 3 14]
         assert_equal [r bitcount s 3 -19 bit] [count_bits_start_end $s 3 29]
         assert_equal [r bitcount s -2 1 bit] 0
+        assert_equal [r bitcount s -1000 14 bit] [count_bits_start_end $s 0 14]
         assert_equal [r bitcount s 0 1000 bit] [count_bits $s]
+        assert_equal [r bitcount s -1000 1000 bit] [count_bits $s]
     }
 
     test {BITCOUNT with illegal arguments} {
         # Used to return 0 for non-existing key instead of errors
         r del s
-        assert_error {ERR *syntax*} {r bitcount s 0}
         assert_error {ERR *syntax*} {r bitcount s 0 1 hello}
         assert_error {ERR *syntax*} {r bitcount s 0 1 hello hello2}
 
         r set s 1
-        assert_error {ERR *syntax*} {r bitcount s 0}
         assert_error {ERR *syntax*} {r bitcount s 0 1 hello}
         assert_error {ERR *syntax*} {r bitcount s 0 1 hello hello2}
     }

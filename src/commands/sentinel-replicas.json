@@ -14,7 +14,7 @@
         ],
         "reply_schema": {
             "type": "array",
-            "description": "List of replicas for this master, and their state.",
+            "description": "List of replicas for this primary, and their state.",
             "items": {
                 "type": "object",
                 "additionalProperties": {
@@ -24,7 +24,7 @@
         },
         "arguments": [
             {
-                "name": "master-name",
+                "name": "primary-name",
                 "type": "string"
             }
         ]

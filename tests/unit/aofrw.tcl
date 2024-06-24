@@ -194,7 +194,7 @@ start_server {tags {"aofrw external:skip"} overrides {aof-use-rdb-preamble no}} 
     test "AOF rewrite functions" {
         r flushall
         r FUNCTION LOAD {#!lua name=test
-            redis.register_function('test', function() return 1 end)
+            server.register_function('test', function() return 1 end)
         }
         r bgrewriteaof
         waitForBgrewriteaof r

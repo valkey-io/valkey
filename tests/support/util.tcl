@@ -653,6 +653,11 @@ proc process_is_alive pid {
     }
 }
 
+# Return true if the specified process is paused by pause_process.
+proc process_is_paused pid {
+    return [string match {*T*} [lindex [exec ps j $pid] 16]]
+}
+
 proc pause_process pid {
     exec kill -SIGSTOP $pid
     wait_for_condition 50 100 {

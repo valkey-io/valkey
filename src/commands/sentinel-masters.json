@@ -1,7 +1,7 @@
 {
     "MASTERS": {
-        "summary": "Returns a list of monitored masters.",
-        "complexity": "O(N) where N is the number of masters",
+        "summary": "Returns a list of monitored primaries.",
+        "complexity": "O(N) where N is the number of primaries",
         "group": "sentinel",
         "since": "2.8.4",
         "arity": 2,
@@ -14,7 +14,7 @@
         ],
         "reply_schema": {
             "type": "array",
-            "description": "List of monitored masters, and their state.",
+            "description": "List of monitored primaries, and their state.",
             "items": {
                 "type": "object",
                 "additionalProperties": {

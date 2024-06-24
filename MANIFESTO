@@ -1,5 +1,5 @@
-[Note: this is the Redis manifesto, for general information about
-       installing and running Redis read the README file instead.]
+[Note: This was the manifesto of Redis. It does not represent the ideals of Valkey, but is
+       kept in remembrance for the ideals that Salvatore had for the project.] 
 
 Redis Manifesto
 ===============

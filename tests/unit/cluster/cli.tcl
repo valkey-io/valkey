@@ -181,7 +181,7 @@ start_multiple_servers 5 [list overrides $base_conf] {
         # upload a function to all the cluster
         exec src/valkey-cli --cluster-yes --cluster call 127.0.0.1:[srv 0 port] \
                            FUNCTION LOAD {#!lua name=TEST
-                               redis.register_function('test', function() return 'hello' end)
+                               server.register_function('test', function() return 'hello' end)
                            }
 
         # adding node to the cluster
@@ -205,7 +205,7 @@ start_multiple_servers 5 [list overrides $base_conf] {
 
         # add function to node 5
         assert_equal {TEST} [$node5_rd FUNCTION LOAD {#!lua name=TEST
-            redis.register_function('test', function() return 'hello' end)
+            server.register_function('test', function() return 'hello' end)
         }]
 
         # make sure functions was added to node 5
@@ -317,13 +317,10 @@ test {Migrate the last slot away from a node using valkey-cli} {
         catch { $newnode_r get foo } e
         assert_equal "MOVED $slot $owner_host:$owner_port" $e
 
-        # Check that the empty node has turned itself into a replica of the new
-        # owner and that the new owner knows that.
-        wait_for_condition 1000 50 {
-            [string match "*slave*" [$owner_r CLUSTER REPLICAS $owner_id]]
-        } else {
-            fail "Empty node didn't turn itself into a replica."
-        }
+        # Check that the now empty primary node doesn't turn itself into
+        # a replica of any other nodes
+        wait_for_cluster_propagation
+        assert_match *master* [$owner_r role]
     }
 }
 

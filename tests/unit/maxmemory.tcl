@@ -168,6 +168,21 @@ start_server {tags {"maxmemory external:skip"}} {
         r config set maxmemory 0
     }
 
+    test "Shared integers are unshared with maxmemory and LRU policy" {
+        r set a 1
+        r set b 1
+        assert_refcount_morethan a 1
+        assert_refcount_morethan b 1
+        r config set maxmemory 1073741824
+        r config set maxmemory-policy allkeys-lru
+        r get a
+        assert_refcount 1 a
+        r config set maxmemory-policy volatile-lru
+        r get b
+        assert_refcount 1 b
+        r config set maxmemory 0
+    }
+
     foreach policy {
         allkeys-random allkeys-lru allkeys-lfu volatile-lru volatile-lfu volatile-random volatile-ttl
     } {
@@ -225,7 +240,7 @@ start_server {tags {"maxmemory external:skip"}} {
             }
             # If we add the same number of keys already added again and
             # the policy is allkeys-* we should still be under the limit.
-            # Otherwise we should see an error reported by Redis.
+            # Otherwise we should see an error reported by Server.
             set err 0
             for {set j 0} {$j < $numkeys} {incr j} {
                 if {[catch {r set [randomKey] x} e]} {

@@ -1,4 +1,4 @@
-source tests/support/redis.tcl
+source tests/support/valkey.tcl
 source tests/support/util.tcl
 
 set ::tlsdir "tests/tls"

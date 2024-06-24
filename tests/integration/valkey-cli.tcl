@@ -375,7 +375,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
             [catch {close [socket "127.0.0.1" $port1]}] == 0 && \
             [catch {close [socket "127.0.0.1" $port2]}] == 0
         } else {
-            fail "Failed to start fake Redis nodes"
+            fail "Failed to start fake Valkey nodes"
         }
         # Run the cli
         assert_equal "OK" [run_cli_host_port_db "127.0.0.1" $port1 0 -c SET foo bar]
@@ -444,14 +444,14 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         r acl deluser clitest
     }
     
-    proc test_redis_cli_rdb_dump {functions_only} {
+    proc test_valkey_cli_rdb_dump {functions_only} {
         r flushdb
         r function flush
 
         set dir [lindex [r config get dir] 1]
 
         assert_equal "OK" [r debug populate 100000 key 1000]
-        assert_equal "lib1" [r function load "#!lua name=lib1\nredis.register_function('func1', function() return 123 end)"]
+        assert_equal "lib1" [r function load "#!lua name=lib1\nserver.register_function('func1', function() return 123 end)"]
         if {$functions_only} {
             set args "--functions-rdb $dir/cli.rdb"
         } else {
@@ -464,7 +464,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         file rename "$dir/cli.rdb" "$dir/dump.rdb"
 
         assert_equal "OK" [r set should-not-exist 1]
-        assert_equal "should_not_exist_func" [r function load "#!lua name=should_not_exist_func\nredis.register_function('should_not_exist_func', function() return 456 end)"]
+        assert_equal "should_not_exist_func" [r function load "#!lua name=should_not_exist_func\nserver.register_function('should_not_exist_func', function() return 456 end)"]
         assert_equal "OK" [r debug reload nosave]
         assert_equal {} [r get should-not-exist]
         assert_equal {{library_name lib1 engine LUA functions {{name func1 description {} flags {}}}}} [r function list]
@@ -480,12 +480,12 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
     test "Dumping an RDB - functions only: $functions_only" {
         # Disk-based master
         assert_match "OK" [r config set repl-diskless-sync no]
-        test_redis_cli_rdb_dump $functions_only
+        test_valkey_cli_rdb_dump $functions_only
 
         # Disk-less master
         assert_match "OK" [r config set repl-diskless-sync yes]
         assert_match "OK" [r config set repl-diskless-sync-delay 0]
-        test_redis_cli_rdb_dump $functions_only
+        test_valkey_cli_rdb_dump $functions_only
     } {} {needs:repl needs:debug}
 
     } ;# foreach functions_only
@@ -504,12 +504,12 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         assert_equal {key:2} [run_cli --scan --quoted-pattern {"*:\x32"}]
     }
 
-    proc test_redis_cli_repl {} {
+    proc test_valkey_cli_repl {} {
         set fd [open_cli "--replica"]
         wait_for_condition 500 100 {
             [string match {*slave0:*state=online*} [r info]]
         } else {
-            fail "redis-cli --replica did not connect"
+            fail "valkey-cli --replica did not connect"
         }
 
         for {set i 0} {$i < 100} {incr i} {
@@ -519,7 +519,7 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
         wait_for_condition 500 100 {
             [string match {*test-value-99*} [read_cli $fd]]
         } else {
-            fail "redis-cli --replica didn't read commands"
+            fail "valkey-cli --replica didn't read commands"
         }
 
         fconfigure $fd -blocking true
@@ -531,12 +531,12 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
     test "Connecting as a replica" {
         # Disk-based master
         assert_match "OK" [r config set repl-diskless-sync no]
-        test_redis_cli_repl
+        test_valkey_cli_repl
 
         # Disk-less master
         assert_match "OK" [r config set repl-diskless-sync yes]
         assert_match "OK" [r config set repl-diskless-sync-delay 0]
-        test_redis_cli_repl
+        test_valkey_cli_repl
     } {} {needs:repl}
 
     test "Piping raw protocol" {

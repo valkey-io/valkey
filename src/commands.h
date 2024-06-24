@@ -11,13 +11,13 @@ typedef enum {
     ARG_TYPE_UNIX_TIME,
     ARG_TYPE_PURE_TOKEN,
     ARG_TYPE_ONEOF, /* Has subargs */
-    ARG_TYPE_BLOCK /* Has subargs */
+    ARG_TYPE_BLOCK  /* Has subargs */
 } serverCommandArgType;
 
-#define CMD_ARG_NONE            (0)
-#define CMD_ARG_OPTIONAL        (1<<0)
-#define CMD_ARG_MULTIPLE        (1<<1)
-#define CMD_ARG_MULTIPLE_TOKEN  (1<<2)
+#define CMD_ARG_NONE (0)
+#define CMD_ARG_OPTIONAL (1 << 0)
+#define CMD_ARG_MULTIPLE (1 << 1)
+#define CMD_ARG_MULTIPLE_TOKEN (1 << 2)
 
 /* Must be compatible with RedisModuleCommandArg. See moduleCopyCommandArgs. */
 typedef struct serverCommandArg {

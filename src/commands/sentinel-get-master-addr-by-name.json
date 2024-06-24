@@ -1,6 +1,6 @@
 {
     "GET-MASTER-ADDR-BY-NAME": {
-        "summary": "Returns the port and address of a master instance.",
+        "summary": "Returns the port and address of a primary instance.",
         "complexity": "O(1)",
         "group": "sentinel",
         "since": "2.8.4",
@@ -30,7 +30,7 @@
         },
         "arguments": [
             {
-                "name": "master-name",
+                "name": "primary-name",
                 "type": "string"
             }
         ]

@@ -94,12 +94,12 @@
  *
  */
 
-#define RAX_NODE_MAX_SIZE ((1<<29)-1)
+#define RAX_NODE_MAX_SIZE ((1 << 29) - 1)
 typedef struct raxNode {
-    uint32_t iskey:1;     /* Does this node contain a key? */
-    uint32_t isnull:1;    /* Associated value is NULL (don't store it). */
-    uint32_t iscompr:1;   /* Node is compressed. */
-    uint32_t size:29;     /* Number of children, or compressed string len. */
+    uint32_t iskey : 1;   /* Does this node contain a key? */
+    uint32_t isnull : 1;  /* Associated value is NULL (don't store it). */
+    uint32_t iscompr : 1; /* Node is compressed. */
+    uint32_t size : 29;   /* Number of children, or compressed string len. */
     /* Data layout is as follows:
      *
      * If node is not compressed we have 'size' bytes, one for each children
@@ -141,7 +141,7 @@ typedef struct rax {
  * field for space concerns, so we use the auxiliary stack when needed. */
 #define RAX_STACK_STATIC_ITEMS 32
 typedef struct raxStack {
-    void **stack; /* Points to static_items or an heap allocated array. */
+    void **stack;           /* Points to static_items or an heap allocated array. */
     size_t items, maxitems; /* Number of items contained and total space. */
     /* Up to RAXSTACK_STACK_ITEMS items we avoid to allocate on the heap
      * and use this static array of pointers instead. */
@@ -166,22 +166,24 @@ typedef int (*raxNodeCallback)(raxNode **noderef);
 
 /* Radix tree iterator state is encapsulated into this data structure. */
 #define RAX_ITER_STATIC_LEN 128
-#define RAX_ITER_JUST_SEEKED (1<<0) /* Iterator was just seeked. Return current
-                                       element for the first iteration and
-                                       clear the flag. */
-#define RAX_ITER_EOF (1<<1)    /* End of iteration reached. */
-#define RAX_ITER_SAFE (1<<2)   /* Safe iterator, allows operations while
-                                  iterating. But it is slower. */
+#define RAX_ITER_JUST_SEEKED                                                                                           \
+    (1 << 0)                  /* Iterator was just seeked. Return current                                              \
+                                 element for the first iteration and                                                   \
+                                 clear the flag. */
+#define RAX_ITER_EOF (1 << 1) /* End of iteration reached. */
+#define RAX_ITER_SAFE                                                                                                  \
+    (1 << 2) /* Safe iterator, allows operations while                                                                 \
+                iterating. But it is slower. */
 typedef struct raxIterator {
     int flags;
-    rax *rt;                /* Radix tree we are iterating. */
-    unsigned char *key;     /* The current string. */
-    void *data;             /* Data associated to this key. */
-    size_t key_len;         /* Current key length. */
-    size_t key_max;         /* Max key len the current key buffer can hold. */
+    rax *rt;            /* Radix tree we are iterating. */
+    unsigned char *key; /* The current string. */
+    void *data;         /* Data associated to this key. */
+    size_t key_len;     /* Current key length. */
+    size_t key_max;     /* Max key len the current key buffer can hold. */
     unsigned char key_static_string[RAX_ITER_STATIC_LEN];
-    raxNode *node;          /* Current node. Only for unsafe iteration. */
-    raxStack stack;         /* Stack used for unsafe iteration. */
+    raxNode *node;           /* Current node. Only for unsafe iteration. */
+    raxStack stack;          /* Stack used for unsafe iteration. */
     raxNodeCallback node_cb; /* Optional node callback. Normally set to NULL. */
 } raxIterator;
 
@@ -192,7 +194,7 @@ int raxTryInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old)
 int raxRemove(rax *rax, unsigned char *s, size_t len, void **old);
 int raxFind(rax *rax, unsigned char *s, size_t len, void **value);
 void raxFree(rax *rax);
-void raxFreeWithCallback(rax *rax, void (*free_callback)(void*));
+void raxFreeWithCallback(rax *rax, void (*free_callback)(void *));
 void raxStart(raxIterator *it, rax *rt);
 int raxSeek(raxIterator *it, const char *op, unsigned char *ele, size_t len);
 int raxNext(raxIterator *it);

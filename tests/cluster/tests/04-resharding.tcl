@@ -55,11 +55,11 @@ proc process_is_running {pid} {
 set numkeys 50000
 set numops 200000
 set start_node_port [get_instance_attrib valkey 0 port]
-set cluster [redis_cluster 127.0.0.1:$start_node_port]
+set cluster [valkey_cluster 127.0.0.1:$start_node_port]
 if {$::tls} {
     # setup a non-TLS cluster client to the TLS cluster
     set plaintext_port [get_instance_attrib valkey 0 plaintext-port]
-    set cluster_plaintext [redis_cluster 127.0.0.1:$plaintext_port 0]
+    set cluster_plaintext [valkey_cluster 127.0.0.1:$plaintext_port 0]
     puts "Testing TLS cluster on start node 127.0.0.1:$start_node_port, plaintext port $plaintext_port"
 } else {
     set cluster_plaintext $cluster
@@ -125,7 +125,7 @@ test "Cluster consistency during live resharding" {
     } else {
         fail "Resharding is not terminating after some time."
     }
-
+    wait_for_cluster_propagation
 }
 
 test "Verify $numkeys keys for consistency with logical content" {

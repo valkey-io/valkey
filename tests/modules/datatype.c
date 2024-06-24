@@ -7,9 +7,9 @@
 #define _DEFAULT_SOURCE
 #include <unistd.h>
 
-#include "redismodule.h"
+#include "valkeymodule.h"
 
-static RedisModuleType *datatype = NULL;
+static ValkeyModuleType *datatype = NULL;
 static int load_encver = 0;
 
 /* used to test processing events during slow loading */
@@ -20,26 +20,26 @@ static volatile int is_in_slow_loading = 0;
 
 typedef struct {
     long long intval;
-    RedisModuleString *strval;
+    ValkeyModuleString *strval;
 } DataType;
 
-static void *datatype_load(RedisModuleIO *io, int encver) {
+static void *datatype_load(ValkeyModuleIO *io, int encver) {
     load_encver = encver;
-    int intval = RedisModule_LoadSigned(io);
-    if (RedisModule_IsIOError(io)) return NULL;
+    int intval = ValkeyModule_LoadSigned(io);
+    if (ValkeyModule_IsIOError(io)) return NULL;
 
-    RedisModuleString *strval = RedisModule_LoadString(io);
-    if (RedisModule_IsIOError(io)) return NULL;
+    ValkeyModuleString *strval = ValkeyModule_LoadString(io);
+    if (ValkeyModule_IsIOError(io)) return NULL;
 
-    DataType *dt = (DataType *) RedisModule_Alloc(sizeof(DataType));
+    DataType *dt = (DataType *) ValkeyModule_Alloc(sizeof(DataType));
     dt->intval = intval;
     dt->strval = strval;
 
     if (slow_loading) {
-        RedisModuleCtx *ctx = RedisModule_GetContextFromIO(io);
+        ValkeyModuleCtx *ctx = ValkeyModule_GetContextFromIO(io);
         is_in_slow_loading = 1;
         while (slow_loading) {
-            RedisModule_Yield(ctx, REDISMODULE_YIELD_FLAG_CLIENTS, "Slow module operation");
+            ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, "Slow module operation");
             usleep(1000);
         }
         is_in_slow_loading = 0;
@@ -48,267 +48,267 @@ static void *datatype_load(RedisModuleIO *io, int encver) {
     return dt;
 }
 
-static void datatype_save(RedisModuleIO *io, void *value) {
+static void datatype_save(ValkeyModuleIO *io, void *value) {
     DataType *dt = (DataType *) value;
-    RedisModule_SaveSigned(io, dt->intval);
-    RedisModule_SaveString(io, dt->strval);
+    ValkeyModule_SaveSigned(io, dt->intval);
+    ValkeyModule_SaveString(io, dt->strval);
 }
 
 static void datatype_free(void *value) {
     if (value) {
         DataType *dt = (DataType *) value;
 
-        if (dt->strval) RedisModule_FreeString(NULL, dt->strval);
-        RedisModule_Free(dt);
+        if (dt->strval) ValkeyModule_FreeString(NULL, dt->strval);
+        ValkeyModule_Free(dt);
     }
 }
 
-static void *datatype_copy(RedisModuleString *fromkey, RedisModuleString *tokey, const void *value) {
+static void *datatype_copy(ValkeyModuleString *fromkey, ValkeyModuleString *tokey, const void *value) {
     const DataType *old = value;
 
     /* Answers to ultimate questions cannot be copied! */
     if (old->intval == 42)
         return NULL;
 
-    DataType *new = (DataType *) RedisModule_Alloc(sizeof(DataType));
+    DataType *new = (DataType *) ValkeyModule_Alloc(sizeof(DataType));
 
     new->intval = old->intval;
-    new->strval = RedisModule_CreateStringFromString(NULL, old->strval);
+    new->strval = ValkeyModule_CreateStringFromString(NULL, old->strval);
 
     /* Breaking the rules here! We return a copy that also includes traces
      * of fromkey/tokey to confirm we get what we expect.
      */
     size_t len;
-    const char *str = RedisModule_StringPtrLen(fromkey, &len);
-    RedisModule_StringAppendBuffer(NULL, new->strval, "/", 1);
-    RedisModule_StringAppendBuffer(NULL, new->strval, str, len);
-    RedisModule_StringAppendBuffer(NULL, new->strval, "/", 1);
-    str = RedisModule_StringPtrLen(tokey, &len);
-    RedisModule_StringAppendBuffer(NULL, new->strval, str, len);
+    const char *str = ValkeyModule_StringPtrLen(fromkey, &len);
+    ValkeyModule_StringAppendBuffer(NULL, new->strval, "/", 1);
+    ValkeyModule_StringAppendBuffer(NULL, new->strval, str, len);
+    ValkeyModule_StringAppendBuffer(NULL, new->strval, "/", 1);
+    str = ValkeyModule_StringPtrLen(tokey, &len);
+    ValkeyModule_StringAppendBuffer(NULL, new->strval, str, len);
 
     return new;
 }
 
-static int datatype_set(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+static int datatype_set(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 4) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
 
     long long intval;
 
-    if (RedisModule_StringToLongLong(argv[2], &intval) != REDISMODULE_OK) {
-        RedisModule_ReplyWithError(ctx, "Invalid integer value");
-        return REDISMODULE_OK;
+    if (ValkeyModule_StringToLongLong(argv[2], &intval) != VALKEYMODULE_OK) {
+        ValkeyModule_ReplyWithError(ctx, "Invalid integer value");
+        return VALKEYMODULE_OK;
     }
 
-    RedisModuleKey *key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_WRITE);
-    DataType *dt = RedisModule_Calloc(sizeof(DataType), 1);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_WRITE);
+    DataType *dt = ValkeyModule_Calloc(sizeof(DataType), 1);
     dt->intval = intval;
     dt->strval = argv[3];
-    RedisModule_RetainString(ctx, dt->strval);
+    ValkeyModule_RetainString(ctx, dt->strval);
 
-    RedisModule_ModuleTypeSetValue(key, datatype, dt);
-    RedisModule_CloseKey(key);
-    RedisModule_ReplyWithSimpleString(ctx, "OK");
+    ValkeyModule_ModuleTypeSetValue(key, datatype, dt);
+    ValkeyModule_CloseKey(key);
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-static int datatype_restore(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+static int datatype_restore(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 4) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
 
     long long encver;
-    if (RedisModule_StringToLongLong(argv[3], &encver) != REDISMODULE_OK) {
-        RedisModule_ReplyWithError(ctx, "Invalid integer value");
-        return REDISMODULE_OK;
+    if (ValkeyModule_StringToLongLong(argv[3], &encver) != VALKEYMODULE_OK) {
+        ValkeyModule_ReplyWithError(ctx, "Invalid integer value");
+        return VALKEYMODULE_OK;
     }
 
-    DataType *dt = RedisModule_LoadDataTypeFromStringEncver(argv[2], datatype, encver);
+    DataType *dt = ValkeyModule_LoadDataTypeFromStringEncver(argv[2], datatype, encver);
     if (!dt) {
-        RedisModule_ReplyWithError(ctx, "Invalid data");
-        return REDISMODULE_OK;
+        ValkeyModule_ReplyWithError(ctx, "Invalid data");
+        return VALKEYMODULE_OK;
     }
 
-    RedisModuleKey *key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_WRITE);
-    RedisModule_ModuleTypeSetValue(key, datatype, dt);
-    RedisModule_CloseKey(key);
-    RedisModule_ReplyWithLongLong(ctx, load_encver);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_WRITE);
+    ValkeyModule_ModuleTypeSetValue(key, datatype, dt);
+    ValkeyModule_CloseKey(key);
+    ValkeyModule_ReplyWithLongLong(ctx, load_encver);
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-static int datatype_get(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+static int datatype_get(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
 
-    RedisModuleKey *key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ);
-    DataType *dt = RedisModule_ModuleTypeGetValue(key);
-    RedisModule_CloseKey(key);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ);
+    DataType *dt = ValkeyModule_ModuleTypeGetValue(key);
+    ValkeyModule_CloseKey(key);
 
     if (!dt) {
-        RedisModule_ReplyWithNullArray(ctx);
+        ValkeyModule_ReplyWithNullArray(ctx);
     } else {
-        RedisModule_ReplyWithArray(ctx, 2);
-        RedisModule_ReplyWithLongLong(ctx, dt->intval);
-        RedisModule_ReplyWithString(ctx, dt->strval);
+        ValkeyModule_ReplyWithArray(ctx, 2);
+        ValkeyModule_ReplyWithLongLong(ctx, dt->intval);
+        ValkeyModule_ReplyWithString(ctx, dt->strval);
     }
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-static int datatype_dump(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+static int datatype_dump(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
 
-    RedisModuleKey *key = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ);
-    DataType *dt = RedisModule_ModuleTypeGetValue(key);
-    RedisModule_CloseKey(key);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ);
+    DataType *dt = ValkeyModule_ModuleTypeGetValue(key);
+    ValkeyModule_CloseKey(key);
 
-    RedisModuleString *reply = RedisModule_SaveDataTypeToString(ctx, dt, datatype);
+    ValkeyModuleString *reply = ValkeyModule_SaveDataTypeToString(ctx, dt, datatype);
     if (!reply) {
-        RedisModule_ReplyWithError(ctx, "Failed to save");
-        return REDISMODULE_OK;
+        ValkeyModule_ReplyWithError(ctx, "Failed to save");
+        return VALKEYMODULE_OK;
     }
 
-    RedisModule_ReplyWithString(ctx, reply);
-    RedisModule_FreeString(ctx, reply);
-    return REDISMODULE_OK;
+    ValkeyModule_ReplyWithString(ctx, reply);
+    ValkeyModule_FreeString(ctx, reply);
+    return VALKEYMODULE_OK;
 }
 
-static int datatype_swap(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+static int datatype_swap(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 3) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
 
-    RedisModuleKey *a = RedisModule_OpenKey(ctx, argv[1], REDISMODULE_WRITE);
-    RedisModuleKey *b = RedisModule_OpenKey(ctx, argv[2], REDISMODULE_WRITE);
-    void *val = RedisModule_ModuleTypeGetValue(a);
+    ValkeyModuleKey *a = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_WRITE);
+    ValkeyModuleKey *b = ValkeyModule_OpenKey(ctx, argv[2], VALKEYMODULE_WRITE);
+    void *val = ValkeyModule_ModuleTypeGetValue(a);
 
-    int error = (RedisModule_ModuleTypeReplaceValue(b, datatype, val, &val) == REDISMODULE_ERR ||
-                 RedisModule_ModuleTypeReplaceValue(a, datatype, val, NULL) == REDISMODULE_ERR);
+    int error = (ValkeyModule_ModuleTypeReplaceValue(b, datatype, val, &val) == VALKEYMODULE_ERR ||
+                 ValkeyModule_ModuleTypeReplaceValue(a, datatype, val, NULL) == VALKEYMODULE_ERR);
     if (!error)
-        RedisModule_ReplyWithSimpleString(ctx, "OK");
+        ValkeyModule_ReplyWithSimpleString(ctx, "OK");
     else
-        RedisModule_ReplyWithError(ctx, "ERR failed");
+        ValkeyModule_ReplyWithError(ctx, "ERR failed");
 
-    RedisModule_CloseKey(a);
-    RedisModule_CloseKey(b);
+    ValkeyModule_CloseKey(a);
+    ValkeyModule_CloseKey(b);
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
 /* used to enable or disable slow loading */
-static int datatype_slow_loading(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+static int datatype_slow_loading(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
 
     long long ll;
-    if (RedisModule_StringToLongLong(argv[1], &ll) != REDISMODULE_OK) {
-        RedisModule_ReplyWithError(ctx, "Invalid integer value");
-        return REDISMODULE_OK;
+    if (ValkeyModule_StringToLongLong(argv[1], &ll) != VALKEYMODULE_OK) {
+        ValkeyModule_ReplyWithError(ctx, "Invalid integer value");
+        return VALKEYMODULE_OK;
     }
     slow_loading = ll;
-    RedisModule_ReplyWithSimpleString(ctx, "OK");
-    return REDISMODULE_OK;
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
 }
 
 /* used to test if we reached the slow loading code */
-static int datatype_is_in_slow_loading(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
+static int datatype_is_in_slow_loading(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
     if (argc != 1) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
 
-    RedisModule_ReplyWithLongLong(ctx, is_in_slow_loading);
-    return REDISMODULE_OK;
+    ValkeyModule_ReplyWithLongLong(ctx, is_in_slow_loading);
+    return VALKEYMODULE_OK;
 }
 
-int createDataTypeBlockCheck(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
-    static RedisModuleType *datatype_outside_onload = NULL;
+int createDataTypeBlockCheck(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    static ValkeyModuleType *datatype_outside_onload = NULL;
 
-    RedisModuleTypeMethods datatype_methods = {
-        .version = REDISMODULE_TYPE_METHOD_VERSION,
+    ValkeyModuleTypeMethods datatype_methods = {
+        .version = VALKEYMODULE_TYPE_METHOD_VERSION,
         .rdb_load = datatype_load,
         .rdb_save = datatype_save,
         .free = datatype_free,
         .copy = datatype_copy
     };
 
-    datatype_outside_onload = RedisModule_CreateDataType(ctx, "test_dt_outside_onload", 1, &datatype_methods);
+    datatype_outside_onload = ValkeyModule_CreateDataType(ctx, "test_dt_outside_onload", 1, &datatype_methods);
 
     /* This validates that it's not possible to create datatype outside OnLoad,
      * thus returns an error if it succeeds. */
     if (datatype_outside_onload == NULL) {
-        RedisModule_ReplyWithSimpleString(ctx, "OK");
+        ValkeyModule_ReplyWithSimpleString(ctx, "OK");
     } else {
-        RedisModule_ReplyWithError(ctx, "UNEXPECTEDOK");
+        ValkeyModule_ReplyWithError(ctx, "UNEXPECTEDOK");
     }
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
 
-    if (RedisModule_Init(ctx,"datatype",DATATYPE_ENC_VER,REDISMODULE_APIVER_1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_Init(ctx,"datatype",DATATYPE_ENC_VER,VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
     /* Creates a command which creates a datatype outside OnLoad() function. */
-    if (RedisModule_CreateCommand(ctx,"block.create.datatype.outside.onload", createDataTypeBlockCheck, "write", 0, 0, 0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"block.create.datatype.outside.onload", createDataTypeBlockCheck, "write", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    RedisModule_SetModuleOptions(ctx, REDISMODULE_OPTIONS_HANDLE_IO_ERRORS);
+    ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS);
 
-    RedisModuleTypeMethods datatype_methods = {
-        .version = REDISMODULE_TYPE_METHOD_VERSION,
+    ValkeyModuleTypeMethods datatype_methods = {
+        .version = VALKEYMODULE_TYPE_METHOD_VERSION,
         .rdb_load = datatype_load,
         .rdb_save = datatype_save,
         .free = datatype_free,
         .copy = datatype_copy
     };
 
-    datatype = RedisModule_CreateDataType(ctx, "test___dt", 1, &datatype_methods);
+    datatype = ValkeyModule_CreateDataType(ctx, "test___dt", 1, &datatype_methods);
     if (datatype == NULL)
-        return REDISMODULE_ERR;
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"datatype.set", datatype_set,
-                                  "write deny-oom", 1, 1, 1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"datatype.set", datatype_set,
+                                  "write deny-oom", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"datatype.get", datatype_get,"",1,1,1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"datatype.get", datatype_get,"",1,1,1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"datatype.restore", datatype_restore,
-                                  "write deny-oom", 1, 1, 1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"datatype.restore", datatype_restore,
+                                  "write deny-oom", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"datatype.dump", datatype_dump,"",1,1,1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"datatype.dump", datatype_dump,"",1,1,1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx, "datatype.swap", datatype_swap,
-                                  "write", 1, 1, 1) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "datatype.swap", datatype_swap,
+                                  "write", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx, "datatype.slow_loading", datatype_slow_loading,
-                                  "allow-loading", 0, 0, 0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "datatype.slow_loading", datatype_slow_loading,
+                                  "allow-loading", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx, "datatype.is_in_slow_loading", datatype_is_in_slow_loading,
-                                  "allow-loading", 0, 0, 0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "datatype.is_in_slow_loading", datatype_is_in_slow_loading,
+                                  "allow-loading", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }

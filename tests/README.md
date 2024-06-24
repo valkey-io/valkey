@@ -1,8 +1,8 @@
-Redis Test Suite
-================
+Valkey Test Suite
+=================
 
 The normal execution mode of the test suite involves starting and manipulating
-local `redis-server` instances, inspecting process state, log files, etc.
+local `valkey-server` instances, inspecting process state, log files, etc.
 
 The test suite also supports execution against an external server, which is
 enabled using the `--host` and `--port` parameters. When executing against an
@@ -16,7 +16,7 @@ match different external server configurations:
 | `--singledb`         | Only use database 0, don't assume others are supported. |
 | `--ignore-encoding`  | Skip all checks for specific encoding.  |
 | `--ignore-digest`    | Skip key value digest validations. |
-| `--cluster-mode`     | Run in strict Redis Cluster compatibility mode. |
+| `--cluster-mode`     | Run in strict Valkey Cluster compatibility mode. |
 | `--large-memory`     | Enables tests that consume more than 100mb |
 
 Tags

@@ -25,7 +25,7 @@ typedef struct {
 
 static int doesSlotBelongToMyShard(int slot) {
     clusterNode *myself = getMyClusterNode();
-    clusterNode *master = clusterNodeGetMaster(myself);
+    clusterNode *master = clusterNodeGetPrimary(myself);
 
     return clusterNodeCoversSlot(master, slot);
 }

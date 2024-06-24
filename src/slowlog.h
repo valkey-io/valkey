@@ -30,6 +30,8 @@
 #ifndef __SLOWLOG_H__
 #define __SLOWLOG_H__
 
+#include "server.h"
+
 #define SLOWLOG_ENTRY_MAX_ARGC 32
 #define SLOWLOG_ENTRY_MAX_STRING 128
 

@@ -104,7 +104,7 @@ test "All the other slaves now point to the new master" {
             wait_for_condition 1000 50 {
                 [RI $id master_port] == [lindex $addr 1]
             } else {
-                fail "Redis ID $id not configured to replicate with new master"
+                fail "Valkey ID $id not configured to replicate with new master"
             }
         }
     }

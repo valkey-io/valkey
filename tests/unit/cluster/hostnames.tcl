@@ -1,7 +1,3 @@
-proc get_slot_field {slot_output shard_id node_id attrib_id} {
-    return [lindex [lindex [lindex $slot_output $shard_id] $node_id] $attrib_id]
-}
-
 # Start a cluster with 3 masters and 4 replicas.
 # These tests rely on specific node ordering, so make sure no node fails over.
 start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-replica-no-failover yes}} {
@@ -72,6 +68,20 @@ test "Verify cluster-preferred-endpoint-type behavior for redirects and info" {
 
     # Verify prefer hostname behavior
     R 0 config set cluster-preferred-endpoint-type hostname
+
+    # Make sure the cache is cleared when updating hostname.
+    R 0 multi
+    R 0 cluster slots
+    R 0 config set cluster-announce-hostname "new-me.com"
+    R 0 cluster slots
+    set multi_result [R 0 exec]
+    set slot_result1 [lindex $multi_result 0]
+    set slot_result2 [lindex $multi_result 2]
+    assert_equal "me.com" [get_slot_field $slot_result1 0 2 0]
+    assert_equal "new-me.com" [get_slot_field $slot_result2 0 2 0]
+
+    # Set it back to its original value.
+    R 0 config set cluster-announce-hostname "me.com"
 
     set slot_result [R 0 cluster slots]
     assert_equal "me.com" [get_slot_field $slot_result 0 2 0]
@@ -146,18 +156,18 @@ test "Verify the nodes configured with prefer hostname only show hostname for ne
     # to accept our isolated nodes connections. At this point they will
     # start showing up in cluster slots. 
     wait_for_condition 50 100 {
-        [llength [R 6 CLUSTER SLOTS]] eq 2
+        [llength [R 6 CLUSTER SLOTS]] eq 3
     } else {
         fail "Node did not learn about the 2 shards it can talk to"
     }
     wait_for_condition 50 100 {
-        [lindex [get_slot_field [R 6 CLUSTER SLOTS] 0 2 3] 1] eq "shard-1.com"
+        [lindex [get_slot_field [R 6 CLUSTER SLOTS] 1 2 3] 1] eq "shard-1.com"
     } else {
         fail "hostname for shard-1 didn't reach node 6"
     }
 
     wait_for_condition 50 100 {
-        [lindex [get_slot_field [R 6 CLUSTER SLOTS] 1 2 3] 1] eq "shard-2.com"
+        [lindex [get_slot_field [R 6 CLUSTER SLOTS] 2 2 3] 1] eq "shard-2.com"
     } else {
         fail "hostname for shard-2 didn't reach node 6"
     }

@@ -10,7 +10,7 @@
 package require Tcl 8.5
 
 set tcl_precision 17
-source ../support/redis.tcl
+source ../support/valkey.tcl
 source ../support/util.tcl
 source ../support/aofmanifest.tcl
 source ../support/server.tcl
@@ -35,12 +35,13 @@ set ::leaked_fds_file [file normalize "tmp/leaked_fds.txt"]
 set ::pids {} ; # We kill everything at exit
 set ::dirs {} ; # We remove all the temp dirs at exit
 set ::run_matching {} ; # If non empty, only tests matching pattern are run.
+set ::exit_on_failure 0
 set ::stop_on_failure 0
 set ::loop 0
 
 if {[catch {cd tmp}]} {
     puts "tmp directory not found."
-    puts "Please run this test from the Redis source root."
+    puts "Please run this test from the Valkey source root."
     exit 1
 }
 
@@ -117,6 +118,8 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
         puts $cfg "repl-diskless-sync-delay 0"
         puts $cfg "dir ./$dirname"
         puts $cfg "logfile log.txt"
+        puts $cfg "enable-debug-assert yes"
+
         # Add additional config files
         foreach directive $conf {
             puts $cfg $directive
@@ -298,6 +301,8 @@ proc parse_options {} {
             set val2 [lindex $::argv [expr $j+2]]
             dict set ::global_config $val $val2
             incr j 2
+        } elseif {$opt eq {--fast-fail}} {
+            set ::exit_on_failure 1
         } elseif {$opt eq {--stop}} {
             set ::stop_on_failure 1
         } elseif {$opt eq {--loop}} {
@@ -313,9 +318,10 @@ proc parse_options {} {
             puts "--fail                  Simulate a test failure."
             puts "--valgrind              Run with valgrind."
             puts "--tls                   Run tests in TLS mode."
-            puts "--tls-module            Run tests in TLS mode with Redis module."
+            puts "--tls-module            Run tests in TLS mode with Valkey module."
             puts "--host <host>           Use hostname instead of 127.0.0.1."
             puts "--config <k> <v>        Extra config argument(s)."
+            puts "--fast-fail             Exit immediately once the first test fails."
             puts "--stop                  Blocks once the first test fails."
             puts "--loop                  Execute the specified set of tests forever."
             puts "--help                  Shows this help."
@@ -342,12 +348,12 @@ proc pause_on_error {} {
         set cmd [lindex $argv 0]
         if {$cmd eq {continue}} {
             break
-        } elseif {$cmd eq {show-redis-logs}} {
+        } elseif {$cmd eq {show-valkey-logs}} {
             set count 10
             if {[lindex $argv 1] ne {}} {set count [lindex $argv 1]}
             foreach_valkey_id id {
-                puts "=== REDIS $id ===="
-                puts [exec tail -$count redis_$id/log.txt]
+                puts "=== VALKEY $id ===="
+                puts [exec tail -$count valkey_$id/log.txt]
                 puts "---------------------\n"
             }
         } elseif {$cmd eq {show-sentinel-logs}} {
@@ -360,7 +366,7 @@ proc pause_on_error {} {
             }
         } elseif {$cmd eq {ls}} {
             foreach_valkey_id id {
-                puts -nonewline "Redis $id"
+                puts -nonewline "Valkey $id"
                 set errcode [catch {
                     set str {}
                     append str "@[RI $id tcp_port]: "
@@ -391,13 +397,13 @@ proc pause_on_error {} {
                 }
             }
         } elseif {$cmd eq {help}} {
-            puts "ls                     List Sentinel and Redis instances."
+            puts "ls                     List Sentinel and Valkey instances."
             puts "show-sentinel-logs \[N\] Show latest N lines of logs."
-            puts "show-redis-logs \[N\]    Show latest N lines of logs."
+            puts "show-valkey-logs \[N\]    Show latest N lines of logs."
             puts "S <id> cmd ... arg     Call command in Sentinel <id>."
-            puts "R <id> cmd ... arg     Call command in Redis <id>."
+            puts "R <id> cmd ... arg     Call command in Valkey <id>."
             puts "SI <id> <field>        Show Sentinel <id> INFO <field>."
-            puts "RI <id> <field>        Show Redis <id> INFO <field>."
+            puts "RI <id> <field>        Show Valkey <id> INFO <field>."
             puts "continue               Resume test."
         } else {
             set errcode [catch {eval $line} retval]
@@ -483,6 +489,11 @@ while 1 {
             incr ::failed
             # letting the tests resume, so we'll eventually reach the cleanup and report crashes
 
+            if {$::exit_on_failure} {
+                puts -nonewline "(Fast fail: test will exit now)"
+                flush stdout
+                exit 1
+            }
             if {$::stop_on_failure} {
                 puts -nonewline "(Test stopped, press enter to resume the tests)"
                 flush stdout

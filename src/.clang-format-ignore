@@ -1,0 +1,16 @@
+# Don't format files copied from other sources.
+lzf*
+crccombine.*
+crc16.c
+crc16_slottable.h
+crc64.c
+crcspeed.*
+fmtargs.h
+mt19937-64.*
+pqsort.*
+setcpuaffinity.c
+setproctitle.c
+sha1.*
+sha256.*
+siphash.c
+strl.c

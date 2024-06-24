@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2024, Valkey contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,6 +28,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+/* clang-format off */
 const char *ascii_logo =
 "                .+^+.                                                \n"
 "            .+#########+.                                            \n"
@@ -47,3 +49,4 @@ const char *ascii_logo =
 "        '|   |####+########+'                                        \n"
 "             +#########+'                                            \n"
 "                '+v+'                                                \n\n";
+/* clang-format off */

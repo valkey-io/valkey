@@ -4,7 +4,7 @@ set ::valgrind_errors {}
 
 proc start_server_error {config_file error} {
     set err {}
-    append err "Can't start the Redis server\n"
+    append err "Can't start the Valkey server\n"
     append err "CONFIGURATION:\n"
     append err [exec cat $config_file]
     append err "\nERROR:\n"
@@ -304,7 +304,7 @@ proc spawn_server {config_file stdout stderr args} {
 }
 
 # Wait for actual startup, return 1 if port is busy, 0 otherwise
-proc wait_server_started {config_file stdout pid} {
+proc wait_server_started {config_file stdout stderr pid} {
     set checkperiod 100; # Milliseconds
     set maxiter [expr {120*1000/$checkperiod}] ; # Wait up to 2 minutes.
     set port_busy 0
@@ -326,6 +326,13 @@ proc wait_server_started {config_file stdout pid} {
         # for this reason.
         if {[regexp {Failed listening on port} [exec cat $stdout]]} {
             set port_busy 1
+            break
+        }
+
+        # Configuration errors are unexpected, but it's helpful to fail fast
+        # to give the feedback to the test runner.
+        if {[regexp {FATAL CONFIG FILE ERROR} [exec cat $stderr]]} {
+            start_server_error $config_file "Configuration issue prevented Valkey startup"
             break
         }
     }
@@ -568,7 +575,7 @@ proc start_server {options {code undefined}} {
         set pid [spawn_server $config_file $stdout $stderr $args]
 
         # check that the server actually started
-        set port_busy [wait_server_started $config_file $stdout $pid]
+        set port_busy [wait_server_started $config_file $stdout $stderr $pid]
 
         # Sometimes we have to try a different port, even if we checked
         # for availability. Other test clients may grab the port before we
@@ -778,7 +785,7 @@ proc restart_server {level wait_ready rotate_logs {reconnect 1} {shutdown sigter
     set pid [spawn_server $config_file $stdout $stderr {}]
 
     # check that the server actually started
-    wait_server_started $config_file $stdout $pid
+    wait_server_started $config_file $stdout $stderr $pid
 
     # update the pid in the servers list
     dict set srv "pid" $pid

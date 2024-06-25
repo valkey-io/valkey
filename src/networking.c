@@ -962,7 +962,7 @@ void addReplyHumanLongDouble(client *c, long double d) {
 
 /* Add a long long as integer reply or bulk len / multi bulk count.
  * Basically this is used to output <prefix><long long><crlf>. */
-void _addReplyLongLongWithPrefix(client *c, long long ll, char prefix) {
+static void _addReplyLongLongWithPrefix(client *c, long long ll, char prefix) {
     char buf[128];
     int len;
 
@@ -1087,10 +1087,14 @@ void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
 
 /* Add sds to reply (takes ownership of sds and frees it) */
 void addReplyBulkSds(client *c, sds s) {
-    if (prepareClientToWrite(c) != C_OK) return;
+    if (prepareClientToWrite(c) != C_OK) {
+        sdsfree(s);
+        return;
+    }
     _addReplyLongLongWithPrefix(c, sdslen(s), '$');
-    addReplySds(c, s);
-    addReplyProto(c, "\r\n", 2);
+    _addReplyToBufferOrList(c, s, sdslen(s));
+    sdsfree(s);
+    _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
 /* Set sds to a deferred reply (for symmetry with addReplyBulkSds it also frees the sds) */

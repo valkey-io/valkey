@@ -118,7 +118,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
         puts $cfg "repl-diskless-sync-delay 0"
         puts $cfg "dir ./$dirname"
         puts $cfg "logfile log.txt"
-        puts $cfg "enable-debug-assert yes"
+        puts $cfg "debug-assert-enabled yes"
 
         # Add additional config files
         foreach directive $conf {

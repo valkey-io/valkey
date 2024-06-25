@@ -45,7 +45,7 @@ bp 1
 The `bp 1` will give back the tcl interpreter to the developer, and allow you to interactively print local variables (through `puts`), run functions and so forth [[source](https://wiki.tcl-lang.org/page/A+minimal+debugger)]. 
 `bp` takes a single argument, which is `1` for the case above, and is used to label a breakpoint with a string.
 Labels are printed out when breakpoints are hit, so you can identify which breakpoint was triggered.
-Breakpoints can be skipped by setting the global variable `::bp_skip`, and by providing the labels you want to skip
+Breakpoints can be skipped by setting the global variable `::bp_skip`, and by providing the labels you want to skip.
 
 The minimal debugger comes with the following predefined functions.
 * Press `c` to continue past the breakpoint.

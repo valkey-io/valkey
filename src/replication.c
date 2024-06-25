@@ -1096,7 +1096,7 @@ void syncCommand(client *c) {
                 c->flags |= CLIENT_REPL_MAIN_CHANNEL;                
                 serverLog(LL_NOTICE,"Replica %s is capable of rdb-channel synchronization, and partial sync isn't possible. "
                     "Full sync will continue with dedicated RDB connection.", replicationGetReplicaName(c));
-                if (connWrite(c->conn,"-FULLSYNCNEEDED\r\n",17) != 17) {
+                if (connWrite(c->conn,"+FULLSYNCNEEDED\r\n",17) != 17) {
                     freeClientAsync(c);
                 }
                 return;
@@ -3132,8 +3132,8 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
         return PSYNC_TRY_LATER;
     }
 
-    if (!strncmp(reply, "-FULLSYNCNEEDED", 15)) {
-        /* A response of -FULLSYNCNEEDED from the master implies that partial 
+    if (!strncmp(reply, "+FULLSYNCNEEDED", 15)) {
+        /* A response of +FULLSYNCNEEDED from the master implies that partial 
          * synchronization is not possible and that the primary supports full
          * sync using dedicated RDB channel. Full sync will continue that way. */
         server.master_supports_rdb_channel = 1;
@@ -3229,7 +3229,7 @@ void setupMainConnForPsync(connection *conn) {
  *  - RDB-Channel sync begins when the replica sends a REPLCONF MAINCONN to the master during initial 
  *    handshake. This allows the replica to verify whether the master supports rdb-channel sync and, if 
  *    so, state that this is the replica's main connection, which is not used for snapshot transfer. 
- *  - When replica lacks sufficient data for PSYNC, the master will send -FULLSYNCNEEDED response instead 
+ *  - When replica lacks sufficient data for PSYNC, the master will send +FULLSYNCNEEDED response instead 
  *    of RDB data. As a next step, the replica creates a new connection (rdb-channel) and configures it against 
  *    the master with the appropriate capabilities and requirements. The replica then requests a sync 
  *    using the RDB connection. 
@@ -3282,7 +3282,7 @@ void setupMainConnForPsync(connection *conn) {
  * ┌─▼─────────────────┐        │                           │                                          
  * │RECEIVE_PSYNC_REPLY│        │                           │                                          
  * └────────┬─┬────────┘        │                           │                                          
- * +CONTINUE│ │-FULLSYNCNEEDED  │                           │                                          
+ * +CONTINUE│ │+FULLSYNCNEEDED  │                           │                                          
  *   │      │ └─────────────────┘                           │                                          
  *   │      │+FULLRESYNC                                    │                                          
  *   │    ┌─▼─────────────────┐                   ┌─────────▼─────────┐                                
@@ -3599,7 +3599,7 @@ void syncWithMaster(connection *conn) {
         server.repl_transfer_fd = dfd;
     }
 
-    /* Using rdb-channel sync, the master responded -FULLSYNCNEEDED. We need to 
+    /* Using rdb-channel sync, the master responded +FULLSYNCNEEDED. We need to 
      * initialize the RDB channel. */
     if (psync_result == PSYNC_FULLRESYNC_RDB_CONN) {
         /* Create a full sync connection */

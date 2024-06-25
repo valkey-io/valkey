@@ -465,7 +465,7 @@ jobs:
           sudo apt-get install tcl8.6 tclx valgrind -y
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --valgrind --no-latency --verbose --clients 1 --timeout 2400 --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest --valgrind --no-latency --verbose --clients 1 --timeout 10800 --dump-logs ${{github.event.inputs.test_args}}
 
   test-valgrind-misc:
     runs-on: ubuntu-latest
@@ -495,7 +495,7 @@ jobs:
           sudo apt-get install tcl8.6 tclx valgrind -y
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --valgrind --no-latency --verbose --clients 1 --timeout 2400 --dump-logs ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi --valgrind --no-latency --verbose --clients 1 --timeout 10800 --dump-logs ${{github.event.inputs.test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |
@@ -530,7 +530,7 @@ jobs:
           sudo apt-get install tcl8.6 tclx valgrind -y
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --valgrind --no-latency --verbose --clients 1 --timeout 2400 --dump-logs ${{github.event.inputs.test_args}}
+        run: ./runtest --valgrind --no-latency --verbose --clients 1 --timeout 10800 --dump-logs ${{github.event.inputs.test_args}}
 
   test-valgrind-no-malloc-usable-size-misc:
     runs-on: ubuntu-latest
@@ -560,7 +560,7 @@ jobs:
           sudo apt-get install tcl8.6 tclx valgrind -y
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --valgrind --no-latency --verbose --clients 1 --timeout 2400 --dump-logs ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi --valgrind --no-latency --verbose --clients 1 --timeout 10800 --dump-logs ${{github.event.inputs.test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: |

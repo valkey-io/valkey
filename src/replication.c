@@ -1377,7 +1377,7 @@ void replconfCommand(client *c) {
                 c->flags &= ~CLIENT_REPL_RDB_CHANNEL;
                 c->replica_req &= ~REPLICA_REQ_RDB_CHANNEL;
             }
-        } else if (!strcasecmp(c->argv[j]->ptr, "set-rdb-conn-id")) {
+        } else if (!strcasecmp(c->argv[j]->ptr, "set-rdb-client-id")) {
             /* REPLCONF identify <client-id> is used to identify the current replica main connection with existing
              * rdb-connection with the given id. */
             long long client_id = 0;
@@ -3165,7 +3165,7 @@ void setupMainConnForPsync(connection *conn) {
     if (server.repl_state == REPL_STATE_SEND_HANDSHAKE) {
         /* We already have an initialized connection at master side, we only need to associate it with RDB connection */
         ll2string(llstr,sizeof(llstr), server.rdb_client_id);
-        err = sendCommand(conn, "REPLCONF", "set-rdb-conn-id", llstr, NULL);
+        err = sendCommand(conn, "REPLCONF", "set-rdb-client-id", llstr, NULL);
         if (err) goto error;
         server.repl_state = REPL_STATE_RECEIVE_CAPA_REPLY;
         return;
@@ -3249,7 +3249,7 @@ void setupMainConnForPsync(connection *conn) {
  *          │+PONG                │     ┌────────────────────────────┐   ┌───────────────────┐   │     
  * ┌────────▼──────────┐        ┌─┼─────►REPL_RDB_CONN_SEND_HANDSHAKE│ ┌─►SEND_HANDSHAKE     │   │     
  * │SEND_HANDSHAKE     │        │ │     └────┬───────────────────────┘ │ └──┬────────────────┘   │     
- * └────────┬──────────┘        │ │          │                         │    │REPLCONF set-rdb-conn-id  
+ * └────────┬──────────┘        │ │          │                         │    │REPLCONF set-rdb-client-id  
  *          │                   │ │  ┌───────▼───────────────────────┐ │ ┌──▼────────────────┐   │     
  * ┌────────▼──────────┐        │ │  │RDB_CONN_RECEIVE_AUTH_REPLY    │ │ │RECEIVE_CAPA_REPLY │   │     
  * │RECEIVE_AUTH_REPLY │        │ │  └───────┬───────────────────────┘ │ └──┬────────────────┘   │     

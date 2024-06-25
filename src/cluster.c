@@ -1213,9 +1213,10 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
  * returns 1. Otherwise 0 is returned and no operation is performed. */
 int clusterRedirectBlockedClientIfNeeded(client *c) {
     clusterNode *myself = getMyClusterNode();
-    if (c->flags & CLIENT_BLOCKED && (c->bstate.btype == BLOCKED_LIST || c->bstate.btype == BLOCKED_ZSET ||
-                                      c->bstate.btype == BLOCKED_STREAM || c->bstate.btype == BLOCKED_MODULE)
-                                      && !clientHasModuleAuthInProgress(c)) {
+    if (c->flags & CLIENT_BLOCKED &&
+        (c->bstate.btype == BLOCKED_LIST || c->bstate.btype == BLOCKED_ZSET || c->bstate.btype == BLOCKED_STREAM ||
+         c->bstate.btype == BLOCKED_MODULE) &&
+        !clientHasModuleAuthInProgress(c)) {
         dictEntry *de;
         dictIterator *di;
 

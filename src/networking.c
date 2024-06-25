@@ -964,7 +964,7 @@ void addReplyHumanLongDouble(client *c, long double d) {
 
 /* Add a long long as integer reply or bulk len / multi bulk count.
  * Basically this is used to output <prefix><long long><crlf>. */
-void addReplyLongLongWithPrefix(client *c, long long ll, char prefix) {
+static void _addReplyLongLongWithPrefix(client *c, long long ll, char prefix) {
     char buf[128];
     int len;
 
@@ -974,16 +974,16 @@ void addReplyLongLongWithPrefix(client *c, long long ll, char prefix) {
     const int opt_hdr = ll < OBJ_SHARED_BULKHDR_LEN && ll >= 0;
     const size_t hdr_len = OBJ_SHARED_HDR_STRLEN(ll);
     if (prefix == '*' && opt_hdr) {
-        addReplyProto(c, shared.mbulkhdr[ll]->ptr, hdr_len);
+        _addReplyToBufferOrList(c, shared.mbulkhdr[ll]->ptr, hdr_len);
         return;
     } else if (prefix == '$' && opt_hdr) {
-        addReplyProto(c, shared.bulkhdr[ll]->ptr, hdr_len);
+        _addReplyToBufferOrList(c, shared.bulkhdr[ll]->ptr, hdr_len);
         return;
     } else if (prefix == '%' && opt_hdr) {
-        addReplyProto(c, shared.maphdr[ll]->ptr, hdr_len);
+        _addReplyToBufferOrList(c, shared.maphdr[ll]->ptr, hdr_len);
         return;
     } else if (prefix == '~' && opt_hdr) {
-        addReplyProto(c, shared.sethdr[ll]->ptr, hdr_len);
+        _addReplyToBufferOrList(c, shared.sethdr[ll]->ptr, hdr_len);
         return;
     }
 
@@ -991,7 +991,7 @@ void addReplyLongLongWithPrefix(client *c, long long ll, char prefix) {
     len = ll2string(buf + 1, sizeof(buf) - 1, ll);
     buf[len + 1] = '\r';
     buf[len + 2] = '\n';
-    addReplyProto(c, buf, len + 3);
+    _addReplyToBufferOrList(c, buf, len + 3);
 }
 
 void addReplyLongLong(client *c, long long ll) {
@@ -999,13 +999,16 @@ void addReplyLongLong(client *c, long long ll) {
         addReply(c, shared.czero);
     else if (ll == 1)
         addReply(c, shared.cone);
-    else
-        addReplyLongLongWithPrefix(c, ll, ':');
+    else {
+        if (prepareClientToWrite(c) != C_OK) return;
+        _addReplyLongLongWithPrefix(c, ll, ':');
+    }
 }
 
 void addReplyAggregateLen(client *c, long length, int prefix) {
     serverAssert(length >= 0);
-    addReplyLongLongWithPrefix(c, length, prefix);
+    if (prepareClientToWrite(c) != C_OK) return;
+    _addReplyLongLongWithPrefix(c, length, prefix);
 }
 
 void addReplyArrayLen(client *c, long length) {
@@ -1065,8 +1068,8 @@ void addReplyNullArray(client *c) {
 /* Create the length prefix of a bulk reply, example: $2234 */
 void addReplyBulkLen(client *c, robj *obj) {
     size_t len = stringObjectLen(obj);
-
-    addReplyLongLongWithPrefix(c, len, '$');
+    if (prepareClientToWrite(c) != C_OK) return;
+    _addReplyLongLongWithPrefix(c, len, '$');
 }
 
 /* Add an Object as a bulk reply */
@@ -1078,16 +1081,22 @@ void addReplyBulk(client *c, robj *obj) {
 
 /* Add a C buffer as bulk reply */
 void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
-    addReplyLongLongWithPrefix(c, len, '$');
-    addReplyProto(c, p, len);
-    addReplyProto(c, "\r\n", 2);
+    if (prepareClientToWrite(c) != C_OK) return;
+    _addReplyLongLongWithPrefix(c, len, '$');
+    _addReplyToBufferOrList(c, p, len);
+    _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
 /* Add sds to reply (takes ownership of sds and frees it) */
 void addReplyBulkSds(client *c, sds s) {
-    addReplyLongLongWithPrefix(c, sdslen(s), '$');
-    addReplySds(c, s);
-    addReplyProto(c, "\r\n", 2);
+    if (prepareClientToWrite(c) != C_OK) {
+        sdsfree(s);
+        return;
+    }
+    _addReplyLongLongWithPrefix(c, sdslen(s), '$');
+    _addReplyToBufferOrList(c, s, sdslen(s));
+    sdsfree(s);
+    _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
 /* Set sds to a deferred reply (for symmetry with addReplyBulkSds it also frees the sds) */

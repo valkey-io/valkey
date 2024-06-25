@@ -1,7 +1,7 @@
 {
     "RESET": {
-        "summary": "Resets masters by name matching a pattern.",
-        "complexity": "O(N) where N is the number of monitored masters",
+        "summary": "Resets primaries by name matching a pattern.",
+        "complexity": "O(N) where N is the number of monitored primaries",
         "group": "sentinel",
         "since": "2.8.4",
         "arity": 3,
@@ -14,7 +14,7 @@
         ],
         "reply_schema": {
             "type": "integer",
-            "description": "The number of masters that were reset."
+            "description": "The number of primaries that were reset."
         },
         "arguments": [
             {

@@ -161,6 +161,7 @@ start_cluster 3 0 [list config_lines $modules] {
 
     test "Verify Module Auth Succeeds when cluster is down" {
         r acl setuser foo >pwd on ~* &* +@all
+        assert_error "*cluster is down*" {$node1 set x 1}
         # Non Blocking Module Auth
         assert_equal {OK} [r testmoduleone.rm_register_auth_cb]
         assert_equal {OK} [r AUTH foo allow]

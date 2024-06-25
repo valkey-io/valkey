@@ -54,7 +54,6 @@ typedef struct dictType {
     /* Callbacks */
     uint64_t (*hashFunction)(const void *key);
     void *(*keyDup)(dict *d, const void *key);
-    void *(*valDup)(dict *d, const void *obj);
     int (*keyCompare)(dict *d, const void *key1, const void *key2);
     void (*keyDestructor)(dict *d, void *key);
     void (*valDestructor)(dict *d, void *obj);

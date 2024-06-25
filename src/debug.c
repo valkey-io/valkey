@@ -429,6 +429,9 @@ void debugCommand(client *c) {
             "    Show low level info about `key` and associated value.",
             "DROP-CLUSTER-PACKET-FILTER <packet-type>",
             "    Drop all packets that match the filtered type. Set to -1 allow all packets.",
+            "CLOSE-CLUSTER-LINK-ON-PACKET-DROP <0|1>",
+            "    This is effective only when DROP-CLUSTER-PACKET-FILTER is set to a valid packet type.",
+            "    When set to 1, the cluster link is closed after dropping a packet based on the filter.",
             "OOM",
             "    Crash the server simulating an out-of-memory error.",
             "PANIC",
@@ -552,7 +555,7 @@ void debugCommand(client *c) {
         if (save) {
             rdbSaveInfo rsi, *rsiptr;
             rsiptr = rdbPopulateSaveInfo(&rsi);
-            if (rdbSave(SLAVE_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) != C_OK) {
+            if (rdbSave(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) != C_OK) {
                 addReplyErrorObject(c, shared.err);
                 return;
             }
@@ -591,7 +594,10 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "drop-cluster-packet-filter") && c->argc == 3) {
         long packet_type;
         if (getLongFromObjectOrReply(c, c->argv[2], &packet_type, NULL) != C_OK) return;
-        server.cluster_drop_packet_filter = packet_type;
+        server.debug_cluster_drop_packet_filter = packet_type;
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "close-cluster-link-on-packet-drop") && c->argc == 3) {
+        server.debug_cluster_close_link_on_packet_drop = atoi(c->argv[2]->ptr) != 0;
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "object") && c->argc == 3) {
         dictEntry *de;
@@ -845,7 +851,7 @@ void debugCommand(client *c) {
         server.aof_flush_sleep = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "replicate") && c->argc >= 3) {
-        replicationFeedSlaves(-1, c->argv + 2, c->argc - 2);
+        replicationFeedReplicas(-1, c->argv + 2, c->argc - 2);
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "error") && c->argc == 3) {
         sds errstr = sdsnewlen("-", 1);
@@ -925,7 +931,7 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "stringmatch-test") && c->argc == 2) {
         stringmatchlen_fuzz_test();
-        addReplyStatus(c, "Apparently Redis did not crash: test passed");
+        addReplyStatus(c, "Apparently the server did not crash: test passed");
     } else if (!strcasecmp(c->argv[1]->ptr, "set-disable-deny-scripts") && c->argc == 3) {
         server.script_disable_deny_script = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
@@ -966,7 +972,7 @@ void debugCommand(client *c) {
         return;
 #endif
     } else if (!strcasecmp(c->argv[1]->ptr, "pause-cron") && c->argc == 3) {
-        server.pause_cron = atoi(c->argv[2]->ptr);
+        server.debug_pause_cron = atoi(c->argv[2]->ptr) != 0;
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "replybuffer") && c->argc == 4) {
         if (!strcasecmp(c->argv[2]->ptr, "peak-reset-time")) {

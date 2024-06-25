@@ -10,7 +10,7 @@ For example, to run a single test;
 
 ```shell
 ./runtest --single unit/your_test_name
-# For additional arguments, you may refer to the `runtest.sh` script itself.
+# For additional arguments, you may refer to the `runtest` script itself.
 ```
 
 The normal execution mode of the test suite involves starting and manipulating

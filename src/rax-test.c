@@ -28,7 +28,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifdef REDIS_TEST
+#ifdef SERVER_TEST
 
 #include <stdio.h>
 #include <stdint.h>
@@ -278,8 +278,6 @@ int fuzzTest(int keymode, size_t count, double addprob, double remprob) {
                 printf("Fuzz: key deletion of '%.*s' reported mismatching "
                        "value in HT=%d RAX=%d\n",
                        (int)keylen,(char*)key,retval1, retval2);
-                printf("%p\n", raxFind(rax,key,keylen));
-                printf("%p\n", raxNotFound);
                 return 1;
             }
         }
@@ -302,7 +300,8 @@ int fuzzTest(int keymode, size_t count, double addprob, double remprob) {
     size_t numkeys = 0;
     while(raxNext(&iter)) {
         void *val1 = htFind(ht,iter.key,iter.key_len);
-        void *val2 = raxFind(rax,iter.key,iter.key_len);
+        void *val2 = NULL;
+        raxFind(rax,iter.key,iter.key_len,&val2);
         if (val1 != val2) {
             printf("Fuzz: HT=%p, RAX=%p value do not match "
                    "for key %.*s\n",
@@ -666,14 +665,16 @@ int tryInsertUnitTests(void) {
         return 1;
     }
 
-    val = raxFind(t,(unsigned char*)"FOO",3);
+    val = NULL;
+    raxFind(t,(unsigned char*)"FOO",3,&val);
     if (val != (void*)(long)1) {
         printf("FOO value mismatch: is %p intead of 1", val);
         return 1;
     }
 
     raxInsert(t,(unsigned char*)"FOO",3,(void*)(long)2,NULL);
-    val = raxFind(t,(unsigned char*)"FOO",3);
+    val = NULL;
+    raxFind(t,(unsigned char*)"FOO",3,&val);
     if (val != (void*)(long)2) {
         printf("FOO value mismatch: is %p intead of 2", val);
         return 1;
@@ -748,7 +749,9 @@ int regtest4(void) {
     rax *rt = raxNew();
     raxIterator iter;
     raxInsert(rt, (unsigned char*)"", 0, (void *)-1, NULL);
-    if (raxFind(rt, (unsigned char*)"", 0) != (void *)-1) {
+    void *val = NULL;
+    raxFind(rt, (unsigned char*)"", 0, &val);
+    if (val != (void *)-1) {
         printf("Regression test 4 failed. Key value mismatch in raxFind()\n");
         return 1;
     }
@@ -835,8 +838,8 @@ void benchmark(void) {
         for (int i = 0; i < 5000000; i++) {
             char buf[64];
             int len = int2key(buf,sizeof(buf),i,mode);
-            void *data = raxFind(t,(unsigned char*)buf,len);
-            if (data != (void*)(long)i) {
+            void *data;
+            if (!raxFind(t,(unsigned char*)buf,len,&data) || data != (void*)(long)i) {
                 printf("Issue with %s: %p instead of %p\n", buf,
                     data, (void*)(long)i);
             }
@@ -848,8 +851,8 @@ void benchmark(void) {
             char buf[64];
             int r = genrand64_int64() % 5000000;
             int len = int2key(buf,sizeof(buf),r,mode);
-            void *data = raxFind(t,(unsigned char*)buf,len);
-            if (data != (void*)(long)r) {
+            void *data;
+            if (!raxFind(t,(unsigned char*)buf,len,&data) || data != (void*)(long)r) {
                 printf("Issue with %s: %p instead of %p\n", buf,
                     data, (void*)(long)r);
             }
@@ -861,8 +864,7 @@ void benchmark(void) {
             char buf[64];
             int len = int2key(buf,sizeof(buf),i,mode);
             buf[i%len] = '!'; /* "!" is never set into keys. */
-            void *data = raxFind(t,(unsigned char*) buf,len);
-            if (data != raxNotFound) {
+            if (!raxFind(t,(unsigned char*) buf,len,NULL)) {
                 printf("** Failed lookup did not reported NOT FOUND!\n");
             }
         }
@@ -911,8 +913,13 @@ int testHugeKey(void) {
     if (retval == 0 && errno == ENOMEM) goto oom;
     retval = raxInsert(rax,key,max_keylen,(void*)1234L,NULL);
     if (retval == 0 && errno == ENOMEM) goto oom;
-    void *value1 = raxFind(rax,(unsigned char*)"aaabbb",6);
-    void *value2 = raxFind(rax,key,max_keylen);
+    void *value1, *value2;
+    int found1 = raxFind(rax,(unsigned char*)"aaabbb",6,&value1);
+    int found2 = raxFind(rax,key,max_keylen,&value2);
+    if (!found1 || !found2) {
+        printf("Huge key test failed on elementhood\n");
+        return 1;
+    }
     if (value1 != (void*)5678L || value2 != (void*)1234L) {
         printf("Huge key test failed\n");
         return 1;
@@ -941,10 +948,9 @@ int raxTest(int argc, char **argv, int flags) {
     int do_regression = 1;
     int do_hugekey = 0;
 
-    if (flags & REDIS_TEST_BENCHMARK) do_benchmark = 1;
-    if (flags & REDIS_TEST_FUZZ_CLUSTER) do_fuzz_cluster = 1;
-    if (flags & REDIS_TEST_HUGE_KEY) do_hugekey = 1;
-
+    if (flags & TEST_BENCHMARK) do_benchmark = 1;
+    if (flags & TEST_FUZZ_CLUSTER) do_fuzz_cluster = 1;
+    if (flags & TEST_HUGE_KEY) do_hugekey = 1;
 
     int errors = 0;
 
@@ -1031,4 +1037,4 @@ int raxTest(int argc, char **argv, int flags) {
     return errors;
 }
 
-#endif // REDIS_TEST
+#endif // SERVER_TEST

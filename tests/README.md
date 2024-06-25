@@ -2,10 +2,11 @@ Valkey Test Suite
 =================
 
 Overview
-----
+--------
 
 Integration tests are written in Tcl, a high-level, general-purpose, interpreted, dynamic programming language [[source](https://wiki.tcl-lang.org/page/What+is+Tcl)].
-`runtest.sh` is the main entrance point for running integration tests. For example, to run a single test;
+`runtest` is the main entrance point for running integration tests.
+For example, to run a single test;
 
 ```shell
 ./runtest --single unit/your_test_name
@@ -31,7 +32,7 @@ match different external server configurations:
 | `--large-memory`     | Enables tests that consume more than 100mb |
 
 Debugging
-----
+---------
 
 You can set a breakpoint and invoke a minimal debugger using the `bp` function.
 
@@ -42,7 +43,9 @@ bp 1
 ```
 
 The `bp 1` will give back the tcl interpreter to the developer, and allow you to interactively print local variables (through `puts`), run functions and so forth [[source](https://wiki.tcl-lang.org/page/A+minimal+debugger)]. 
-The argument following `bp` (which is `1` for the case above) is used to distinguish between multiple breakpoints placed throughout the test suite. 
+`bp` takes a single argument, which is `1` for the case above, and is used to label a breakpoint with a string.
+Labels are printed out when breakpoints are hit, so you can identify which breakpoint was triggered.
+Breakpoints can be skipped by setting the global variable `::bp_skip`, and by providing the labels you want to skip
 
 The minimal debugger comes with the following predefined functions.
 * Press `c` to continue past the breakpoint.

@@ -1610,15 +1610,12 @@ void freeClient(client *c) {
         }
     }
 
-    /* Log link disconnection with replica */
+    /* Log link disconnection with slave */
     if (getClientType(c) == CLIENT_TYPE_REPLICA) {
-        if (c->flags & CLIENT_REPL_RDB_CHANNEL) {
-            serverLog(LL_NOTICE,"Replica %s rdb channel disconnected.",
+            serverLog(LL_NOTICE, c->flags & CLIENT_REPL_RDB_CHANNEL ? 
+                "Replica %s rdb channel disconnected.":
+                "Connection with replica %s lost.",
                 replicationGetReplicaName(c));
-        } else {
-            serverLog(LL_NOTICE,"Connection with replica %s lost.",
-                replicationGetReplicaName(c));
-        }
     }
 
     /* Free the query buffer */
@@ -1806,6 +1803,8 @@ int freeClientsInAsyncFreeQueue(void) {
             /* Check if we can remove RDB connection protection. */
             if (!c->rdb_client_disconnect_time) {
                 c->rdb_client_disconnect_time = server.unixtime;
+                serverLog(LL_VERBOSE, "Postpone RDB client id=%llu (%s) free for %d seconds", 
+                    (unsigned long long)c->id, replicationGetReplicaName(c), server.wait_before_rdb_client_free);
                 continue;
             }
             if (server.unixtime - c->rdb_client_disconnect_time > server.wait_before_rdb_client_free) {
@@ -2697,7 +2696,7 @@ void readQueryFromClient(connection *conn) {
     size_t qblen, readlen;
 
     /* If the replica RDB client is marked as closed ASAP, do not try to read from it */
-    if ((c->flags & CLIENT_CLOSE_ASAP) && (c->flags & CLIENT_PROTECTED_RDB_CHANNEL)) return;
+    if (c->flags & CLIENT_CLOSE_ASAP) return;
 
     /* Check if we want to read from the client later when exiting from
      * the event loop. This is the case if threaded I/O is enabled. */
@@ -2764,9 +2763,6 @@ void readQueryFromClient(connection *conn) {
         if (server.verbosity <= LL_VERBOSE) {
             sds info = catClientInfoString(sdsempty(), c);
             serverLog(LL_VERBOSE, "Client closed connection %s", info);
-            if (c->flags & CLIENT_PROTECTED_RDB_CHANNEL) {
-                serverLog(LL_VERBOSE, "Postpone RDB client id=%llu (%s) free for %d seconds", (unsigned long long)c->id, replicationGetReplicaName(c), server.wait_before_rdb_client_free);
-            }
             sdsfree(info);
         }
         freeClientAsync(c);

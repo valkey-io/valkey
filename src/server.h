@@ -490,8 +490,8 @@ typedef enum {
     REPL_STATE_CONNECTED, /* Connected to primary */
 } repl_state;
 
-/* Slave rdb-channel replication state. Used in server.repl_rdb_conn_state for 
- * slaves to remember what to do next. */
+/* Replica rdb-channel replication state. Used in server.repl_rdb_conn_state for 
+ * replicas to remember what to do next. */
 typedef enum {
     REPL_RDB_CONN_STATE_NONE = 0,            /* No active replication */
     REPL_RDB_CONN_SEND_HANDSHAKE,            /* Send handshake sequence to master */
@@ -1691,7 +1691,7 @@ struct valkeyServer {
     list *clients_pending_read;            /* Client has pending read socket buffers. */
     list *replicas, *monitors;             /* List of replicas and MONITORs */
     rax *replicas_waiting_psync;/* Radix tree using rdb-client id as keys and rdb-client as values.
-                                 * This rax contains slaves for the period from the beginning of 
+                                 * This rax contains replicas for the period from the beginning of 
                                  * their RDB connection to the end of their main connection's 
                                  * partial synchronization. */
     client *current_client;                /* The client that triggered the command execution (External or AOF). */

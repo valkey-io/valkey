@@ -74,7 +74,7 @@ struct dictEntry {
     struct dictEntry *next; /* Next entry in the same hash bucket. */
 };
 
-typedef struct {
+typedef struct __attribute__((packed)) {
     union {
         void *val;
         uint64_t u64;
@@ -82,7 +82,8 @@ typedef struct {
         double d;
     } v;
     struct dictEntry *next; /* Next entry in the same hash bucket. */
-    unsigned char data[];
+    uint8_t key_header_size; /* offset into key_buf where the key is located at. */
+    unsigned char key_buf[]; /* buffer to embed the key. */
 } embeddedDictEntry;
 
 typedef struct {
@@ -160,23 +161,6 @@ static inline int entryIsEmbedded(const dictEntry *de) {
     return ((uintptr_t)(void *)de & ENTRY_PTR_MASK) == ENTRY_PTR_EMBEDDED;
 }
 
-/* Creates an entry without a value field. */
-static inline dictEntry *createEntryNoValue(void *key, dictEntry *next) {
-    dictEntryNoValue *entry = zmalloc(sizeof(*entry));
-    entry->key = key;
-    entry->next = next;
-    return (dictEntry *)(void *)((uintptr_t)(void *)entry | ENTRY_PTR_NO_VALUE);
-}
-
-static inline dictEntry *createEmbeddedEntry(void *key, dictEntry *next, dictType *dt) {
-    size_t keylen = dt->keyLen(key);
-    embeddedDictEntry *entry = zmalloc(sizeof(*entry) + keylen + ENTRY_METADATA_BYTES);
-    size_t bytes_written = dt->keyToBytes(entry->data + ENTRY_METADATA_BYTES, key, &entry->data[0]);
-    assert(bytes_written == keylen);
-    entry->next = next;
-    return (dictEntry *)(void *)((uintptr_t)(void *)entry | ENTRY_PTR_EMBEDDED);
-}
-
 static inline dictEntry *encodeMaskedPtr(const void *ptr, unsigned int bits) {
     assert(((uintptr_t)ptr & ENTRY_PTR_MASK) == 0);
     return (dictEntry *)(void *)((uintptr_t)ptr | bits);
@@ -187,9 +171,25 @@ static inline void *decodeMaskedPtr(const dictEntry *de) {
     return (void *)((uintptr_t)(void *)de & ~ENTRY_PTR_MASK);
 }
 
+/* Creates an entry without a value field. */
+static inline dictEntry *createEntryNoValue(void *key, dictEntry *next) {
+    dictEntryNoValue *entry = zmalloc(sizeof(*entry));
+    entry->key = key;
+    entry->next = next;
+    return encodeMaskedPtr(entry, ENTRY_PTR_NO_VALUE);
+}
+
+static inline dictEntry *createEmbeddedEntry(void *key, dictEntry *next, dictType *dt) {
+    size_t key_len = dt->embedKey(NULL, 0, key, NULL);
+    embeddedDictEntry *entry = zmalloc(sizeof(*entry) + key_len);
+    dt->embedKey(entry->key_buf, key_len, key, &entry->key_header_size);
+    entry->next = next;
+    return encodeMaskedPtr(entry, ENTRY_PTR_EMBEDDED);
+}
+
 static inline void *getEmbeddedKey(const dictEntry *de) {
     embeddedDictEntry *entry = (embeddedDictEntry *)decodeMaskedPtr(de);
-    return &entry->data[ENTRY_METADATA_BYTES + entry->data[0]];
+    return &entry->key_buf[entry->key_header_size];
 }
 
 /* Decodes the pointer to an entry without value, when you know it is an entry
@@ -204,7 +204,7 @@ static inline embeddedDictEntry *decodeEmbeddedEntry(const dictEntry *de) {
 
 /* Returns 1 if the entry has a value field and 0 otherwise. */
 static inline int entryHasValue(const dictEntry *de) {
-    return entryIsNormal(de) || entryIsEmbedded(de);
+    return !entryIsNoValue(de);
 }
 
 /* ----------------------------- API implementation ------------------------- */
@@ -693,8 +693,6 @@ void dictFreeUnlinkedEntry(dict *d, dictEntry *he) {
     if (he == NULL) return;
     dictFreeKey(d, he);
     dictFreeVal(d, he);
-    /* Clear the embedded data */
-    if (entryIsEmbedded(he)) zfree(decodeEmbeddedEntry(he)->data);
     /* Clear the dictEntry */
     if (!entryIsKey(he)) zfree(decodeMaskedPtr(he));
 }

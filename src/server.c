@@ -290,16 +290,25 @@ int dictSdsKeyCompare(dict *d, const void *key1, const void *key2) {
     return memcmp(key1, key2, l1) == 0;
 }
 
-size_t dictSdsKeyLen(const void *key) { 
-    return sdsAllocSize((sds)key);
+/*
+ * This method returns the minimum amount of bytes required to store the sds (header + data + NULL terminator).
+*/
+static inline size_t sdsKeyLen(const void *key) { 
+    sds keysds = ((sds)key);
+    return sdslen(keysds) + sdsHdrSize(keysds[-1]) + 1;
 }
 
-size_t dictSdsKeyToBytes(unsigned char *buf, const void *key, unsigned char *header_size) {
+size_t dictSdsEmbedKey(unsigned char *buf, size_t buf_len, const void *key, uint8_t *key_offset) {
+    size_t keylen = sdsKeyLen(key);
+    if (buf == NULL) {
+        return keylen;
+    }
     sds keysds = (sds)key;
-    size_t n_bytes = sdsAllocSize(keysds);
-    memcpy(buf, sdsAllocPtr(keysds), n_bytes);
-    *header_size = sdsHdrSize(keysds[-1]);
-    return n_bytes;
+    size_t reqd_keylen = sdsKeyLen(key);
+    serverAssert(reqd_keylen <= buf_len);
+    memcpy(buf, sdsAllocPtr(keysds), reqd_keylen);
+    *key_offset = sdsHdrSize(keysds[-1]);
+    return reqd_keylen;
 }
 
 /* A case insensitive version used for the command lookup table and other
@@ -489,8 +498,7 @@ dictType dbDictType = {
     NULL,                 /* key is embedded in the dictEntry and freed internally */
     dictObjectDestructor, /* val destructor */
     dictResizeAllowed,    /* allow to resize */
-    .keyLen = dictSdsKeyLen,
-    .keyToBytes = dictSdsKeyToBytes,
+    .embedKey = dictSdsEmbedKey,
     .embedded_entry = 1
 };
 

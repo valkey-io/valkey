@@ -67,8 +67,7 @@ typedef struct dictType {
     /* Allow a dict to carry extra caller-defined metadata. The
      * extra memory is initialized to 0 when a dict is allocated. */
     size_t (*dictMetadataBytes)(dict *d);
-    size_t (*keyLen)(const void *key);
-    size_t (*keyToBytes)(unsigned char *buf, const void *key, unsigned char *header_size);
+    size_t (*embedKey)(unsigned char *buf, size_t buf_len, const void *key, unsigned char *header_size);
 
 
     /* Data */
@@ -84,8 +83,8 @@ typedef struct dictType {
      * enables one more optimization: to store a key without an allocated
      * dictEntry. */
     unsigned int keys_are_odd : 1;
-    /* TODO: Add a 'keys_are_even' flag and use a similar optimization if that
-     * flag is set. */
+    /* If embedded_entry flag is set, it indicates that the key is embedded as part of
+     * the dict entry. */
     unsigned int embedded_entry : 1;
 } dictType;
 
@@ -140,8 +139,6 @@ typedef struct {
     dictDefragEntryCb *defragEntryStartCb;  /* Callback invoked prior to the start of defrag of dictEntry. */
     dictDefragEntryCb *defragEntryFinishCb; /* Callback invoked after the defrag of dictEntry is tried. */
 } dictDefragFunctions;
-
-static const int ENTRY_METADATA_BYTES = 1;
 
 /* This is the initial size of every hash table */
 #define DICT_HT_INITIAL_EXP 2

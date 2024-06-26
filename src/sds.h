@@ -177,7 +177,7 @@ static inline void sdssetalloc(sds s, size_t newlen) {
     }
 }
 
-static inline int sdsHdrSize(char type) {
+static inline uint8_t sdsHdrSize(char type) {
     switch (type & SDS_TYPE_MASK) {
     case SDS_TYPE_5: return sizeof(struct sdshdr5);
     case SDS_TYPE_8: return sizeof(struct sdshdr8);

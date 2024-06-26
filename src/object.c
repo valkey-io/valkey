@@ -1559,8 +1559,7 @@ NULL
             return;
         }
         size_t usage = objectComputeSize(c->argv[2], dictGetVal(de), samples, c->db->id);
-        usage += sdsAllocSize((sds)dictGetKey(de));
-        usage += dictEntryMemUsage();
+        usage += zmalloc_size(de);
         addReplyLongLong(c, usage);
     } else if (!strcasecmp(c->argv[1]->ptr, "stats") && c->argc == 2) {
         struct serverMemOverhead *mh = getMemoryOverheadData();

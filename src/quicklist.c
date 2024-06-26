@@ -394,8 +394,7 @@ static void __quicklistCompress(const quicklist *quicklist, quicklistNode *node)
  * Insert 'new_node' before 'old_node' if 'after' is 0.
  * Note: 'new_node' is *always* uncompressed, so if we assign it to
  *       head or tail, we do not need to uncompress it. */
-static void
-__quicklistInsertNode(quicklist *quicklist, quicklistNode *old_node, quicklistNode *new_node, int after) {
+static void __quicklistInsertNode(quicklist *quicklist, quicklistNode *old_node, quicklistNode *new_node, int after) {
     if (after) {
         new_node->prev = old_node;
         if (old_node) {
@@ -958,8 +957,7 @@ static quicklistNode *_quicklistSplitNode(quicklistNode *node, int offset, int a
  *
  * If after==1, the new value is inserted after 'entry', otherwise
  * the new value is inserted before 'entry'. */
-static void
-_quicklistInsert(quicklistIter *iter, quicklistEntry *entry, void *value, const size_t sz, int after) {
+static void _quicklistInsert(quicklistIter *iter, quicklistEntry *entry, void *value, const size_t sz, int after) {
     quicklist *quicklist = iter->quicklist;
     int full = 0, at_tail = 0, at_head = 0, avail_next = 0, avail_prev = 0;
     int fill = quicklist->fill;

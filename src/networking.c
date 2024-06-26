@@ -32,7 +32,6 @@
 #include "script.h"
 #include "fpconv_dtoa.h"
 #include "fmtargs.h"
-#include "os.h"
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/uio.h>

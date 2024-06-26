@@ -32,7 +32,6 @@
 #include "config.h"
 #include "solarisfixes.h"
 #include "serverassert.h"
-#include "os.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -97,8 +96,12 @@ void zlibc_free(void *ptr) {
 
 /* A thread-local storage which keep the current thread's index in the used_memory_thread array. */
 static thread_local int thread_index = -1;
-static size_t used_memory_thread[MAX_THREADS_NUM];
-
+#if defined(__i386__) || defined(__x86_64__) || defined(__amd64__) || defined(__POWERPC__) || defined(__arm__) ||      \
+    defined(__arm64__)
+static __attribute__((aligned(sizeof(size_t)))) size_t used_memory_thread[MAX_THREADS_NUM];
+#else
+static _Atomic size_t used_memory_thread[MAX_THREADS_NUM];
+#endif
 static atomic_int total_active_threads;
 
 /* Register the thread index in start_routine. */

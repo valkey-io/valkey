@@ -4111,7 +4111,7 @@ void replicationDiscardCachedMaster(void) {
 /* Replication: Replica side.
  * This method performs the necessary steps to establish a connection with the master server.
   * It sets private data, updates flags, and fires an event to notify modules about the master link change. */
-void establishMasterConnection(void) {
+void establishPrimaryConnection(void) {
     connSetPrivateData(server.primary->conn, server.primary);
     server.primary->flags &= ~(CLIENT_CLOSE_AFTER_REPLY|CLIENT_CLOSE_ASAP);
     server.primary->flags |= CLIENT_AUTHENTICATED;
@@ -4133,10 +4133,10 @@ void establishMasterConnection(void) {
  * primary left. */
 void replicationResurrectCachedMaster(connection *conn) {
     server.primary = server.cached_primary;
-    server.primary = NULL;
+    server.cached_primary = NULL;
     server.primary->conn = conn;
     
-    establishMasterConnection();
+    establishPrimaryConnection();
     /* Re-add to the list of clients. */
     linkClient(server.primary);
     replicationSteadyStateInit();
@@ -4172,7 +4172,7 @@ void replicationResurrectProvisionalMaster(void) {
     memcpy(server.primary->replid, server.repl_provisional_master.replid, CONFIG_RUN_ID_SIZE);
     server.primary->reploff = server.repl_provisional_master.reploff;
     server.primary->read_reploff = server.repl_provisional_master.read_reploff;
-    establishMasterConnection();
+    establishPrimaryConnection();
 }
 
 /* ------------------------- MIN-REPLICAS-TO-WRITE  --------------------------- */

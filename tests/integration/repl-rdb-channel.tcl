@@ -50,12 +50,12 @@ start_server {tags {"repl rdb-channel external:skip"}} {
             } else {
                 fail "Replica rdb connection is still open"
             }
-            $master set foo 1
-            # wait for value to propegate to replica
-            wait_for_condition 50 1000 {
-                [$replica get foo] == 1
+            set offset [status $master master_repl_offset]
+            wait_for_condition 500 100 {
+                [string match "*slave0:*,offset=$offset,*" [$master info replication]] &&
+                $offset == [status $replica master_repl_offset]
             } else {
-                fail "Replica isn't connected"
+                fail "Replicas and master offsets were unable to match."
             }
         }
     }

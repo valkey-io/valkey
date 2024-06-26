@@ -1,6 +1,6 @@
 {
     "SLOT-STATS": {
-        "summary": "Return array of slot usage statistics for slots assigned to the current node",
+        "summary": "Return an array of slot usage statistics for slots assigned to the current node.",
         "complexity": "O(N) where N is the total number of slots based on arguments. O(N*log(N)) with ORDERBY subcommand.",
         "group": "cluster",
         "since": "8.0.0",
@@ -16,10 +16,14 @@
             "REQUEST_POLICY:ALL_SHARDS"
         ],
         "reply_schema": {
-            "type": "object",
-            "description": "Map of slots and their respective usage statistics.",
-            "additionalProperties": {
-                "type": "string"
+            "type": "array",
+            "description": "Array of nested maps, where each map represents a slot and its respective usage statistics.",
+            "items": {
+                "type": "object",
+                "description": "Map of a slot and its respective usage statistics.",
+                "additionalProperties": {
+                    "type": "string"
+                }
             }
         },
         "arguments": [

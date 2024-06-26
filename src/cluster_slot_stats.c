@@ -18,10 +18,11 @@ typedef enum {
  * CLUSTER SLOT-STATS command
  * -------------------------------------------------------------------------- */
 
+/* Struct used to temporarily hold slot statistics for sorting. */
 typedef struct {
     int slot;
     uint64_t stat;
-} slotStatEntry;
+} slotStatForSort;
 
 static int doesSlotBelongToMyShard(int slot) {
     clusterNode *myself = getMyClusterNode();
@@ -48,19 +49,19 @@ static uint64_t getSlotStat(int slot, int stat_type) {
     return slot_stat;
 }
 
-static int slotStatEntryAscCmp(const void *a, const void *b) {
-    slotStatEntry entry_a = *((slotStatEntry *)a);
-    slotStatEntry entry_b = *((slotStatEntry *)b);
+static int slotStatForSortAscCmp(const void *a, const void *b) {
+    slotStatForSort entry_a = *((slotStatForSort *)a);
+    slotStatForSort entry_b = *((slotStatForSort *)b);
     return entry_a.stat - entry_b.stat;
 }
 
-static int slotStatEntryDescCmp(const void *a, const void *b) {
-    slotStatEntry entry_a = *((slotStatEntry *)a);
-    slotStatEntry entry_b = *((slotStatEntry *)b);
+static int slotStatForSortDescCmp(const void *a, const void *b) {
+    slotStatForSort entry_a = *((slotStatForSort *)a);
+    slotStatForSort entry_b = *((slotStatForSort *)b);
     return entry_b.stat - entry_a.stat;
 }
 
-static void collectAndSortSlotStats(slotStatEntry slot_stats[], int order_by, int desc) {
+static void collectAndSortSlotStats(slotStatForSort slot_stats[], int order_by, int desc) {
     int i = 0;
 
     for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
@@ -70,36 +71,41 @@ static void collectAndSortSlotStats(slotStatEntry slot_stats[], int order_by, in
             i++;
         }
     }
-    qsort(slot_stats, i, sizeof(slotStatEntry), (desc) ? slotStatEntryDescCmp : slotStatEntryAscCmp);
+    qsort(slot_stats, i, sizeof(slotStatForSort), (desc) ? slotStatForSortDescCmp : slotStatForSortAscCmp);
 }
 
 static void addReplySlotStat(client *c, int slot) {
+    addReplyMapLen(c, 1); /* Map for (int) slot to (map) usage statistics. */
     addReplyLongLong(c, slot);
-    addReplyMapLen(c, 1);
+    addReplyMapLen(c, 1); /* Nested map representing slot usage statistics. */
     addReplyBulkCString(c, "key-count");
     addReplyLongLong(c, countKeysInSlot(slot));
 }
 
-static void addReplySlotStats(client *c, unsigned char *assigned_slots, int startslot, int endslot, int len) {
-    addReplyMapLen(c, len);
+/* Adds reply for the SLOTSRANGE variant.
+ * Response is ordered in ascending slot number. */
+static void addReplySlotsRange(client *c, unsigned char *assigned_slots, int startslot, int endslot, int len) {
+    addReplyArrayLen(c, len); /* Top level RESP reply format is defined as an array, due to ordering invariance. */
 
     for (int slot = startslot; slot <= endslot; slot++) {
         if (assigned_slots[slot]) addReplySlotStat(c, slot);
     }
 }
 
-static void addReplySortedSlotStats(client *c, slotStatEntry slot_stats[], long limit) {
+static void addReplySortedSlotStats(client *c, slotStatForSort slot_stats[], long limit) {
     int num_slots_assigned = getMyShardSlotCount();
     int len = min(limit, num_slots_assigned);
-    addReplyMapLen(c, len);
+    addReplyArrayLen(c, len); /* Top level RESP reply format is defined as an array, due to ordering invariance. */
 
     for (int i = 0; i < len; i++) {
         addReplySlotStat(c, slot_stats[i].slot);
     }
 }
 
-static void sortAndAddReplySlotStats(client *c, int order_by, long limit, int desc) {
-    slotStatEntry slot_stats[CLUSTER_SLOTS];
+/* Adds reply for the ORDERBY variant.
+ * Response is ordered based on the sort result. */
+static void addReplyOrderBy(client *c, int order_by, long limit, int desc) {
+    slotStatForSort slot_stats[CLUSTER_SLOTS];
     collectAndSortSlotStats(slot_stats, order_by, desc);
     addReplySortedSlotStats(c, slot_stats, limit);
 }
@@ -126,7 +132,7 @@ void clusterSlotStatsCommand(client *c) {
         unsigned char assigned_slots[CLUSTER_SLOTS] = {UNASSIGNED_SLOT};
         int len = 0;
         markSlotsAssignedToMyShard(assigned_slots, startslot, endslot, &len);
-        addReplySlotStats(c, assigned_slots, startslot, endslot, len);
+        addReplySlotsRange(c, assigned_slots, startslot, endslot, len);
 
     } else if (c->argc >= 4 && !strcasecmp(c->argv[2]->ptr, "orderby")) {
         /* CLUSTER SLOT-STATS ORDERBY metric [LIMIT limit] [ASC | DESC] */
@@ -165,7 +171,7 @@ void clusterSlotStatsCommand(client *c) {
             }
             i++;
         }
-        sortAndAddReplySlotStats(c, order_by, limit, desc);
+        addReplyOrderBy(c, order_by, limit, desc);
 
     } else {
         addReplySubcommandSyntaxError(c);

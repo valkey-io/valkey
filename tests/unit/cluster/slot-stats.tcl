@@ -4,6 +4,19 @@
 # Helper functions for CLUSTER SLOT-STATS test cases.
 # -----------------------------------------------------------------------------
 
+# Converts array RESP response into a dict.
+# This is useful for many test cases, where unnecessary nesting is removed.
+proc convert_array_into_dict {slot_stats} {
+    set res [dict create]
+    foreach slot_stat $slot_stats {
+        # slot_stat is a map of (int) slot to (map) usage statistics.
+        dict for {slot stat} $slot_stat {
+            dict set res $slot $stat
+        }
+    }
+    return $res
+}
+
 proc initialize_expected_slots_dict {} {
     set expected_slots [dict create]
     for {set i 0} {$i < 16384} {incr i 1} {
@@ -22,12 +35,14 @@ proc initialize_expected_slots_dict_with_range {start_slot end_slot} {
 }
 
 proc assert_empty_slot_stats {slot_stats} {
+    set slot_stats [convert_array_into_dict $slot_stats]
     dict for {slot stats} $slot_stats {
         assert {[dict get $stats key-count] == 0}
     }
 }
 
 proc assert_empty_slot_stats_with_exception {slot_stats exception_slots} {
+    set slot_stats [convert_array_into_dict $slot_stats]
     dict for {slot stats} $slot_stats {
         if {[dict exists $exception_slots $slot]} {
             set expected_key_count [dict get $exception_slots $slot]
@@ -45,6 +60,7 @@ proc assert_all_slots_have_been_seen {expected_slots} {
 }
 
 proc assert_slot_visibility {slot_stats expected_slots} {
+    set slot_stats [convert_array_into_dict $slot_stats]
     dict for {slot _} $slot_stats {
         assert {[dict exists $expected_slots $slot]}
         dict set expected_slots $slot 1
@@ -54,6 +70,7 @@ proc assert_slot_visibility {slot_stats expected_slots} {
 }
 
 proc assert_slot_stats_key_count {slot_stats expected_slots_key_count} {
+    set slot_stats [convert_array_into_dict $slot_stats]
     dict for {slot stats} $slot_stats {
         if {[dict exists $expected_slots_key_count $slot]} {
             set key_count [dict get $stats key-count]
@@ -64,8 +81,11 @@ proc assert_slot_stats_key_count {slot_stats expected_slots_key_count} {
 }
 
 proc assert_slot_stats_monotonic_order {slot_stats orderby is_desc} {
+    # For Tcl dict, the order of iteration is the order in which the keys were inserted into the dictionary
+    # Thus, the response ordering is preserved upon calling 'convert_array_into_dict()'.
+    # Source: https://www.tcl.tk/man/tcl8.6.11/TclCmd/dict.htm
+    set slot_stats [convert_array_into_dict $slot_stats]
     set prev_metric -1
-
     dict for {_ stats} $slot_stats {
         set curr_metric [dict get $stats $orderby]
         if {$prev_metric != -1} {
@@ -217,8 +237,8 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         set limit 5
         set slot_stats_desc [R 0 CLUSTER SLOT-STATS ORDERBY key-count LIMIT $limit DESC]
         set slot_stats_asc [R 0 CLUSTER SLOT-STATS ORDERBY key-count LIMIT $limit ASC]
-        set slot_stats_desc_length [dict size $slot_stats_desc]
-        set slot_stats_asc_length [dict size $slot_stats_asc]
+        set slot_stats_desc_length [llength $slot_stats_desc]
+        set slot_stats_asc_length [llength $slot_stats_asc]
         assert {$limit == $slot_stats_desc_length && $limit == $slot_stats_asc_length}
         
         set expected_slots [dict create 0 0 1 0 2 0 3 0 4 0]
@@ -236,8 +256,8 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         set limit 5
         set slot_stats_desc [R 0 CLUSTER SLOT-STATS ORDERBY key-count LIMIT $limit DESC]
         set slot_stats_asc [R 0 CLUSTER SLOT-STATS ORDERBY key-count LIMIT $limit ASC]
-        set slot_stats_desc_length [dict size $slot_stats_desc]
-        set slot_stats_asc_length [dict size $slot_stats_asc]
+        set slot_stats_desc_length [llength $slot_stats_desc]
+        set slot_stats_asc_length [llength $slot_stats_asc]
         set expected_response_length [expr min($num_assigned_slots, $limit)]
         assert {$expected_response_length == $slot_stats_desc_length && $expected_response_length == $slot_stats_asc_length}
 

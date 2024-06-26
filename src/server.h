@@ -435,7 +435,18 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
                                                  which is used for online replication data */
 #define CLIENT_REPL_RDB_CHANNEL (1ULL<<53) /* RDB Channel: track a connection
                                                  which is used for rdb snapshot */
-#define CLIENT_PROTECTED_RDB_CHANNEL (1ULL<<54) /* Client should kept until PSYNC establishment. */
+#define CLIENT_PROTECTED_RDB_CHANNEL (1ULL<<54) /* RDB Channel: Protects the RDB client from premature 
+                    * release during full sync. This flag is used to ensure that the RDB client, which 
+                    * references the first replication data block required by the replica, is not 
+                    * released prematurely. Protecting the client is crucial for prevention of 
+                    * synchronization failures:
+                    * If the RDB client is released before the replica initiates PSYNC, the master 
+                    * will reduce the reference count (o->refcount) of the block needed by the replica. 
+                    * This could potentially lead to the removal of the required data block, resulting 
+                    * in synchronization failures. Such failures could occur even in scenarios where
+                    * the replica only needs an additional 4KB beyond the minimum size of the repl_backlog.
+                    * By using this flag, we ensure that the RDB client remains intact until the replica 
+                    * has successfully initiated PSYNC. */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */

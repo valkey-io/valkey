@@ -1800,7 +1800,10 @@ int freeClientsInAsyncFreeQueue(void) {
         client *c = listNodeValue(ln);
 
         if (c->flags & CLIENT_PROTECTED_RDB_CHANNEL) {
-            /* Check if we can remove RDB connection protection. */
+            /* Check if it's safe to remove RDB channel protection during synchronization
+             * The primary gives a grace period before freeing this client because
+             * it serves as a reference to the first required replication data block for 
+             * this replica */
             if (!c->rdb_client_disconnect_time) {
                 c->rdb_client_disconnect_time = server.unixtime;
                 serverLog(LL_VERBOSE, "Postpone RDB client id=%llu (%s) free for %d seconds", 

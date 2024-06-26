@@ -35,7 +35,7 @@ DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram fpconv
 NODEPS:=clean distclean
 
 # Default settings
-STD=-pedantic -DSERVER_STATIC=''
+STD=-pedantic
 
 # Use -Wno-c11-extensions on clang, either where explicitly used or on
 # platforms we can assume it's being used.

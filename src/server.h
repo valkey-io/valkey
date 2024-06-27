@@ -440,7 +440,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
                     * references the first replication data block required by the replica, is not 
                     * released prematurely. Protecting the client is crucial for prevention of 
                     * synchronization failures:
-                    * If the RDB client is released before the replica initiates PSYNC, the master 
+                    * If the RDB client is released before the replica initiates PSYNC, the primary 
                     * will reduce the reference count (o->refcount) of the block needed by the replica. 
                     * This could potentially lead to the removal of the required data block, resulting 
                     * in synchronization failures. Such failures could occur even in scenarios where
@@ -505,7 +505,7 @@ typedef enum {
  * replicas to remember what to do next. */
 typedef enum {
     REPL_RDB_CONN_STATE_NONE = 0,            /* No active replication */
-    REPL_RDB_CONN_SEND_HANDSHAKE,            /* Send handshake sequence to master */
+    REPL_RDB_CONN_SEND_HANDSHAKE,            /* Send handshake sequence to primary */
     REPL_RDB_CONN_RECEIVE_AUTH_REPLY,        /* Wait for AUTH reply */
     REPL_RDB_CONN_RECEIVE_REPLCONF_REPLY,    /* Wait for REPLCONF reply */
     REPL_RDB_CONN_RECEIVE_ENDOFF,            /* Wait for $ENDOFF reply */
@@ -532,7 +532,7 @@ typedef enum {
 #define REPLICA_STATE_RDB_TRANSMITTED                                                                                  \
     10 /* RDB file transmitted - This state is used only for                                                           \
         * a replica that only wants RDB without replication buffer  */
-#define SLAVE_STATE_BG_RDB_LOAD 11 /* Main connection of a replica which uses rdb-channel-sync. */
+#define REPLICA_STATE_BG_RDB_LOAD 11 /* Main connection of a replica which uses rdb-channel-sync. */
 
 /* Replica capabilities. */
 #define REPLICA_CAPA_NONE 0
@@ -1928,7 +1928,7 @@ struct valkeyServer {
     int rdb_bgsave_scheduled;             /* BGSAVE when possible if true. */
     int rdb_child_type;                   /* Type of save by active child. */
     int lastbgsave_status;                /* C_OK or C_ERR */
-    int master_supports_rdb_channel;/* Track whether the master is able to sync using rdb channel.
+    int primary_supports_rdb_channel;/* Track whether the primary is able to sync using rdb channel.
                                     * -1 = unknown, 0 = no, 1 = yes. */
     int stop_writes_on_bgsave_err;        /* Don't allow writes if can't BGSAVE */
     int rdb_pipe_read;                    /* RDB pipe used to transfer the rdb data */
@@ -2010,14 +2010,14 @@ struct valkeyServer {
     int primary_port;                   /* Port of primary */
     int repl_timeout;                   /* Timeout after N seconds of primary idle */
     client *primary;                    /* Client that is primary for this replica */
-    uint64_t rdb_client_id;         /* Rdb client id as it defined at master side */
+    uint64_t rdb_client_id;         /* Rdb client id as it defined at primary side */
     struct {
         connection* conn;
         char replid[CONFIG_RUN_ID_SIZE+1];
         long long reploff;
         long long read_reploff;
         int dbid;
-    } repl_provisional_master;
+    } repl_provisional_primary;
     client *cached_primary;             /* Cached primary to be reused for PSYNC. */
     int repl_syncio_timeout;            /* Timeout for synchronous I/O calls */
     int repl_state;                     /* Replication status if the instance is a replica */
@@ -2026,7 +2026,7 @@ struct valkeyServer {
     off_t repl_transfer_read;           /* Amount of RDB read from primary during sync. */
     off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */
     connection *repl_transfer_s;        /* Replica -> Primary SYNC connection */
-    connection *repl_rdb_transfer_s;    /* Master FULL SYNC connection (RDB download) */
+    connection *repl_rdb_transfer_s;    /* Primary FULL SYNC connection (RDB download) */
     int repl_transfer_fd;               /* Replica -> Primary SYNC temp file descriptor */
     char *repl_transfer_tmpfile;        /* Replica-> Primary SYNC temp file name */
     time_t repl_transfer_lastio;        /* Unix time of the latest read, for timeout */
@@ -2997,7 +2997,7 @@ void abortFailover(const char *err);
 const char *getFailoverStateString(void);
 void abortRdbConnectionSync(void);
 int sendCurrentOffsetToReplica(client* replica);
-void addReplicaToPsyncWaitingRax(client* slave);
+void addReplicaToPsyncWaitingRax(client* replica);
 
 /* Generic persistence functions */
 void startLoadingFile(size_t size, char *filename, int rdbflags);

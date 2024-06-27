@@ -35,6 +35,7 @@
 
 #include "fmacros.h"
 
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -47,6 +48,10 @@
 #include "zmalloc.h"
 #include "serverassert.h"
 #include "monotonic.h"
+
+#ifndef static_assert
+#define static_assert(expr, lit) extern char __static_assert_failure[(expr) ? 1 : -1]
+#endif
 
 /* Using dictSetResizeEnabled() we make possible to disable
  * resizing and rehashing of the hash table as needed. This is very important
@@ -74,7 +79,7 @@ struct dictEntry {
     struct dictEntry *next; /* Next entry in the same hash bucket. */
 };
 
-typedef struct __attribute__((packed)) {
+typedef struct {
     union {
         void *val;
         uint64_t u64;
@@ -86,10 +91,23 @@ typedef struct __attribute__((packed)) {
     unsigned char key_buf[]; /* buffer to embed the key. */
 } embeddedDictEntry;
 
+static_assert(sizeof(embeddedDictEntry) == 24, "unexpected total size of embeddedDictEntry");
+static_assert(offsetof(embeddedDictEntry, v) == 0, "unexpected field offset");
+static_assert(offsetof(embeddedDictEntry, next) == 8, "unexpected field offset");
+static_assert(offsetof(embeddedDictEntry, key_header_size) == 16, "unexpected field offset");
+static_assert(offsetof(embeddedDictEntry, key_buf) == 17, "unexpected field offset");
+
+/* The minimum amount of bytes required for embedded dict entry. */
+static inline size_t compactSizeEmbeddedDictEntry(void) {
+    return offsetof(embeddedDictEntry, key_buf);
+}
+
 typedef struct {
     void *key;
     dictEntry *next;
 } dictEntryNoValue;
+
+/* Helper and validation for `embeddedDictEntry` */
 
 /* -------------------------- private prototypes ---------------------------- */
 
@@ -182,7 +200,7 @@ static inline dictEntry *createEntryNoValue(void *key, dictEntry *next) {
 
 static inline dictEntry *createEmbeddedEntry(void *key, dictEntry *next, dictType *dt) {
     size_t key_len = dt->embedKey(NULL, 0, key, NULL);
-    embeddedDictEntry *entry = zmalloc(sizeof(*entry) + key_len);
+    embeddedDictEntry *entry = zmalloc(compactSizeEmbeddedDictEntry() + key_len);
     dt->embedKey(entry->key_buf, key_len, key, &entry->key_header_size);
     entry->next = next;
     return encodeMaskedPtr(entry, ENTRY_PTR_EMBEDDED);

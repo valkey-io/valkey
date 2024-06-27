@@ -5,7 +5,7 @@ start_server {tags {needs:repl external:skip}} {
 
         r replicaof $primary_host $primary_port
         wait_for_condition 50 100 {
-            [s 0 primary_link_status] eq {up}
+            [s 0 master_link_status] eq {up}
         } else {
             fail "Replicas not replicating from primary"
         }

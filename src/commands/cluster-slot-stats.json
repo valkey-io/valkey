@@ -20,14 +20,22 @@
             "description": "Array of nested arrays, where the inner array element represents a slot and its respective usage statistics.",
             "items": {
                 "type": "array",
-                "description": "Array of size 2, where 0th index represents (int) slot, and 1st index represents (map) usage statistics.",
-                "items": {
-                    "type": "object",
-                    "description": "Map of slot usage statistics.",
-                    "additionalProperties": {
-                        "type": "string"
+                "description": "Array of size 2, where 0th index represents (int) slot and 1st index represents (map) usage statistics.",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": [
+                    {
+                        "description": "Slot Number.",
+                        "type": "integer"
+                    },
+                    {
+                        "type": "object",
+                        "description": "Map of slot usage statistics.",
+                        "additionalProperties": {
+                            "type": "string"
+                        }
                     }
-                }
+                ]
             }
         },
         "arguments": [

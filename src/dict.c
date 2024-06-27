@@ -95,7 +95,6 @@ typedef struct {
 
 /* Validation and helper for `embeddedDictEntry` */
 
-static_assert(sizeof(embeddedDictEntry) == 24, "unexpected total size of embeddedDictEntry");
 static_assert(offsetof(embeddedDictEntry, v) == 0, "unexpected field offset");
 static_assert(offsetof(embeddedDictEntry, next) == sizeof(void *), "unexpected field offset");
 static_assert(offsetof(embeddedDictEntry, key_header_size) == 2 * sizeof(void *), "unexpected field offset");

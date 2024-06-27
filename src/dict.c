@@ -224,7 +224,7 @@ static inline embeddedDictEntry *decodeEmbeddedEntry(const dictEntry *de) {
 
 /* Returns 1 if the entry has a value field and 0 otherwise. */
 static inline int entryHasValue(const dictEntry *de) {
-    return !entryIsNoValue(de);
+    return entryIsNormal(de) || entryIsEmbedded(de);
 }
 
 /* ----------------------------- API implementation ------------------------- */

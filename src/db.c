@@ -240,15 +240,14 @@ int getKeySlot(sds key) {
 
 /* This is a special version of dbAdd() that is used only when loading
  * keys from the RDB file: the key is passed as an SDS string that is
- * retained by the function (and not freed by the caller).
+ * copied by the function and freed by the caller.
  *
  * Moreover this function will not abort if the key is already busy, to
  * give more control to the caller, nor will signal the key as ready
  * since it is not useful in this context.
  *
- * The function returns 1 if the key was added to the database, taking
- * ownership of the SDS string, otherwise 0 is returned, and is up to the
- * caller to free the SDS string. */
+ * The function returns 1 if the key was added to the database, making a
+ * copy of the SDS string, otherwise 0 is returned, The caller should free the SDS string. */
 int dbAddRDBLoad(serverDb *db, sds key, robj *val) {
     int slot = getKeySlot(key);
     dictEntry *de = kvstoreDictAddRaw(db->keys, slot, key, NULL);

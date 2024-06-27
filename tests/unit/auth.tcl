@@ -76,7 +76,7 @@ start_server {tags {"auth_binary_password external:skip"}} {
             $slave slaveof $master_host $master_port
 
             # Verify replica is not able to sync with master
-            wait_for_log_messages 0 {"*Unable to AUTH to MASTER*"} $loglines 1000 10
+            wait_for_log_messages 0 {"*Unable to AUTH to PRIMARY*"} $loglines 1000 10
             assert_equal {down} [s 0 master_link_status]
             
             # Test replica with the correct primaryauth

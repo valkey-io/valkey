@@ -2143,6 +2143,8 @@ struct valkeyServer {
     unsigned long long cluster_link_msg_queue_limit_bytes; /* Memory usage limit on individual link msg queue */
     int cluster_drop_packet_filter;                        /* Debug config that allows tactically
                                                             * dropping packets of a specific type */
+    /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
+    uint32_t debug_cluster_close_link_on_packet_drop : 1;
     sds cached_cluster_slot_info[CACHE_CONN_TYPE_MAX];
     /* Scripting */
     mstime_t busy_reply_threshold;  /* Script / module timeout in milliseconds */
@@ -2210,12 +2212,17 @@ typedef struct {
  * for returning channel information.
  */
 typedef struct {
-    keyReference keysbuf[MAX_KEYS_BUFFER]; /* Pre-allocated buffer, to save heap allocations */
-    keyReference *keys;                    /* Key indices array, points to keysbuf or heap */
     int numkeys;                           /* Number of key indices return */
     int size;                              /* Available array size */
+    keyReference *keys;                    /* Key indices array, points to keysbuf or heap */
+    keyReference keysbuf[MAX_KEYS_BUFFER]; /* Pre-allocated buffer, to save heap allocations */
 } getKeysResult;
-#define GETKEYS_RESULT_INIT {{{0}}, NULL, 0, MAX_KEYS_BUFFER}
+
+static inline void initGetKeysResult(getKeysResult *result) {
+    result->numkeys = 0;
+    result->size = MAX_KEYS_BUFFER;
+    result->keys = NULL;
+}
 
 /* Key specs definitions.
  *
@@ -2734,7 +2741,6 @@ void addReplyErrorArity(client *c);
 void addReplyErrorExpireTime(client *c);
 void addReplyStatus(client *c, const char *status);
 void addReplyDouble(client *c, double d);
-void addReplyLongLongWithPrefix(client *c, long long ll, char prefix);
 void addReplyBigNum(client *c, const char *num, size_t len);
 void addReplyHumanLongDouble(client *c, long double d);
 void addReplyLongLong(client *c, long long ll);

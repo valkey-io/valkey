@@ -195,7 +195,7 @@ sds sdsdup(const sds s) {
 /* Free an sds string. No operation is performed if 's' is NULL. */
 void sdsfree(sds s) {
     if (s == NULL) return;
-    s_free((char *)s - sdsHdrSize(s[-1]));
+    s_free_with_size(sdsAllocPtr(s), sdsAllocSize(s));
 }
 
 /* Set the sds string length to the length as obtained with strlen(), so
@@ -369,7 +369,7 @@ sds sdsResize(sds s, size_t size, int would_regrow) {
          * We aim to avoid calling realloc() when using Jemalloc if there is no
          * change in the allocation size, as it incurs a cost even if the
          * allocation size stays the same. */
-        bufsize = zmalloc_size(sh);
+        bufsize = sdsAllocSize(s);
         alloc_already_optimal = (je_nallocx(newlen, 0) == bufsize);
 #endif
         if (!alloc_already_optimal) {
@@ -412,8 +412,13 @@ sds sdsResize(sds s, size_t size, int would_regrow) {
  * 4) The implicit null term.
  */
 size_t sdsAllocSize(sds s) {
-    size_t alloc = sdsalloc(s);
-    return sdsHdrSize(s[-1]) + alloc + 1;
+    char type = s[-1] & SDS_TYPE_MASK;
+    /* SDS_TYPE_5 header doesn't contain the size of the allocation */
+    if (type == SDS_TYPE_5) {
+        return s_malloc_usable_size(sdsAllocPtr(s));
+    } else {
+        return sdsHdrSize(type) + sdsalloc(s) + 1;
+    }
 }
 
 /* Return the pointer of the actual SDS allocation (normally SDS strings
@@ -986,8 +991,7 @@ int is_hex_digit(char c) {
 /* Helper function for sdssplitargs() that converts a hex digit into an
  * integer from 0 to 15 */
 int hex_digit_to_int(char c) {
-    /* clang-format off */
-    switch(c) {
+    switch (c) {
     case '0': return 0;
     case '1': return 1;
     case '2': return 2;
@@ -998,15 +1002,20 @@ int hex_digit_to_int(char c) {
     case '7': return 7;
     case '8': return 8;
     case '9': return 9;
-    case 'a': case 'A': return 10;
-    case 'b': case 'B': return 11;
-    case 'c': case 'C': return 12;
-    case 'd': case 'D': return 13;
-    case 'e': case 'E': return 14;
-    case 'f': case 'F': return 15;
+    case 'a':
+    case 'A': return 10;
+    case 'b':
+    case 'B': return 11;
+    case 'c':
+    case 'C': return 12;
+    case 'd':
+    case 'D': return 13;
+    case 'e':
+    case 'E': return 14;
+    case 'f':
+    case 'F': return 15;
     default: return 0;
     }
-    /* clang-format on */
 }
 
 /* Split a line into arguments, where every argument can be in the

@@ -3015,15 +3015,13 @@ static void populateDict(dict *options_dict, char **options) {
 }
 
 const char *getLogLevel(void) {
-    /* clang-format off */
-   switch (server.verbosity) {
+    switch (server.verbosity) {
     case LL_DEBUG: return "debug";
     case LL_VERBOSE: return "verbose";
     case LL_NOTICE: return "notice";
     case LL_WARNING: return "warning";
     case LL_NOTHING: return "nothing";
     }
-    /* clang-format on */
     return "unknown";
 }
 
@@ -3203,8 +3201,7 @@ void sentinelConfigGetCommand(client *c) {
 }
 
 const char *sentinelFailoverStateStr(int state) {
-    /* clang-format off */
-    switch(state) {
+    switch (state) {
     case SENTINEL_FAILOVER_STATE_NONE: return "none";
     case SENTINEL_FAILOVER_STATE_WAIT_START: return "wait_start";
     case SENTINEL_FAILOVER_STATE_SELECT_REPLICA: return "select_slave";
@@ -3214,7 +3211,6 @@ const char *sentinelFailoverStateStr(int state) {
     case SENTINEL_FAILOVER_STATE_UPDATE_CONFIG: return "update_config";
     default: return "unknown";
     }
-    /* clang-format on */
 }
 
 /* Server instance to RESP representation. */
@@ -3242,23 +3238,21 @@ void addReplySentinelRedisInstance(client *c, sentinelRedisInstance *ri) {
     fields++;
 
     addReplyBulkCString(c, "flags");
-    /* clang-format off */
-    if (ri->flags & SRI_S_DOWN) flags = sdscat(flags,"s_down,");
-    if (ri->flags & SRI_O_DOWN) flags = sdscat(flags,"o_down,");
-    if (ri->flags & SRI_PRIMARY) flags = sdscat(flags,"master,");
-    if (ri->flags & SRI_REPLICA) flags = sdscat(flags,"slave,");
-    if (ri->flags & SRI_SENTINEL) flags = sdscat(flags,"sentinel,");
-    if (ri->link->disconnected) flags = sdscat(flags,"disconnected,");
-    if (ri->flags & SRI_PRIMARY_DOWN) flags = sdscat(flags,"master_down,");
-    if (ri->flags & SRI_FAILOVER_IN_PROGRESS) flags = sdscat(flags,"failover_in_progress,");
-    if (ri->flags & SRI_PROMOTED) flags = sdscat(flags,"promoted,");
-    if (ri->flags & SRI_RECONF_SENT) flags = sdscat(flags,"reconf_sent,");
-    if (ri->flags & SRI_RECONF_INPROG) flags = sdscat(flags,"reconf_inprog,");
-    if (ri->flags & SRI_RECONF_DONE) flags = sdscat(flags,"reconf_done,");
-    if (ri->flags & SRI_FORCE_FAILOVER) flags = sdscat(flags,"force_failover,");
-    if (ri->flags & SRI_SCRIPT_KILL_SENT) flags = sdscat(flags,"script_kill_sent,");
-    if (ri->flags & SRI_PRIMARY_REBOOT) flags = sdscat(flags,"master_reboot,");
-    /* clang-format on */
+    if (ri->flags & SRI_S_DOWN) flags = sdscat(flags, "s_down,");
+    if (ri->flags & SRI_O_DOWN) flags = sdscat(flags, "o_down,");
+    if (ri->flags & SRI_PRIMARY) flags = sdscat(flags, "master,");
+    if (ri->flags & SRI_REPLICA) flags = sdscat(flags, "slave,");
+    if (ri->flags & SRI_SENTINEL) flags = sdscat(flags, "sentinel,");
+    if (ri->link->disconnected) flags = sdscat(flags, "disconnected,");
+    if (ri->flags & SRI_PRIMARY_DOWN) flags = sdscat(flags, "master_down,");
+    if (ri->flags & SRI_FAILOVER_IN_PROGRESS) flags = sdscat(flags, "failover_in_progress,");
+    if (ri->flags & SRI_PROMOTED) flags = sdscat(flags, "promoted,");
+    if (ri->flags & SRI_RECONF_SENT) flags = sdscat(flags, "reconf_sent,");
+    if (ri->flags & SRI_RECONF_INPROG) flags = sdscat(flags, "reconf_inprog,");
+    if (ri->flags & SRI_RECONF_DONE) flags = sdscat(flags, "reconf_done,");
+    if (ri->flags & SRI_FORCE_FAILOVER) flags = sdscat(flags, "force_failover,");
+    if (ri->flags & SRI_SCRIPT_KILL_SENT) flags = sdscat(flags, "script_kill_sent,");
+    if (ri->flags & SRI_PRIMARY_REBOOT) flags = sdscat(flags, "master_reboot,");
 
     if (sdslen(flags) != 0) sdsrange(flags, 0, -2); /* remove last "," */
     addReplyBulkCString(c, flags);
@@ -3681,9 +3675,9 @@ void sentinelCommand(client *c) {
     if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
         /* clang-format off */
         const char *help[] = {
-"CKQUORUM <master-name>",
+"CKQUORUM <primary-name>",
 "    Check if the current Sentinel configuration is able to reach the quorum",
-"    needed to failover a master and the majority needed to authorize the",
+"    needed to failover a primary and the majority needed to authorize the",
 "    failover.",
 "CONFIG SET param value [param value ...]",
 "    Set a global Sentinel configuration parameter.",
@@ -3692,39 +3686,39 @@ void sentinelCommand(client *c) {
 "DEBUG [<param> <value> ...]",
 "    Show a list of configurable time parameters and their values (milliseconds).",
 "    Or update current configurable parameters values (one or more).",
-"GET-MASTER-ADDR-BY-NAME <master-name>",
-"    Return the ip and port number of the master with that name.",
-"FAILOVER <master-name>",
-"    Manually failover a master node without asking for agreement from other",
+"GET-MASTER-ADDR-BY-NAME <primary-name>",
+"    Return the ip and port number of the primary with that name.",
+"FAILOVER <primary-name>",
+"    Manually failover a primary node without asking for agreement from other",
 "    Sentinels",
 "FLUSHCONFIG",
 "    Force Sentinel to rewrite its configuration on disk, including the current",
 "    Sentinel state.",
-"INFO-CACHE <master-name>",
-"    Return last cached INFO output from masters and all its replicas.",
+"INFO-CACHE <primary-name>",
+"    Return last cached INFO output from primaries and all its replicas.",
 "IS-MASTER-DOWN-BY-ADDR <ip> <port> <current-epoch> <runid>",
-"    Check if the master specified by ip:port is down from current Sentinel's",
+"    Check if the primary specified by ip:port is down from current Sentinel's",
 "    point of view.",
-"MASTER <master-name>",
-"    Show the state and info of the specified master.",
+"MASTER <primary-name>",
+"    Show the state and info of the specified primary.",
 "MASTERS",
-"    Show a list of monitored masters and their state.",
+"    Show a list of monitored primaries and their state.",
 "MONITOR <name> <ip> <port> <quorum>",
-"    Start monitoring a new master with the specified name, ip, port and quorum.",
+"    Start monitoring a new primary with the specified name, ip, port and quorum.",
 "MYID",
 "    Return the ID of the Sentinel instance.",
 "PENDING-SCRIPTS",
 "    Get pending scripts information.",
-"REMOVE <master-name>",
-"    Remove master from Sentinel's monitor list.",
-"REPLICAS <master-name>",
-"    Show a list of replicas for this master and their state.",
+"REMOVE <primary-name>",
+"    Remove primary from Sentinel's monitor list.",
+"REPLICAS <primary-name>",
+"    Show a list of replicas for this primary and their states.",
 "RESET <pattern>",
-"    Reset masters for specific master name matching this pattern.",
-"SENTINELS <master-name>",
-"    Show a list of Sentinel instances for this master and their state.",
-"SET <master-name> <option> <value> [<option> <value> ...]",
-"    Set configuration parameters for certain masters.",
+"    Reset primaries for specific primary name matching this pattern.",
+"SENTINELS <primary-name>",
+"    Show a list of Sentinel instances for this primary and their state.",
+"SET <primary-name> <option> <value> [<option> <value> ...]",
+"    Set configuration parameters for certain primaries.",
 "SIMULATE-FAILURE [CRASH-AFTER-ELECTION] [CRASH-AFTER-PROMOTION] [HELP]",
 "    Simulate a Sentinel crash.",
 NULL
@@ -5114,11 +5108,6 @@ void sentinelHandleRedisInstance(sentinelRedisInstance *ri) {
 
     /* Every kind of instance */
     sentinelCheckSubjectivelyDown(ri);
-
-    /* Primaries and replicas */
-    if (ri->flags & (SRI_PRIMARY | SRI_REPLICA)) {
-        /* Nothing so far. */
-    }
 
     /* Only primaries */
     if (ri->flags & SRI_PRIMARY) {

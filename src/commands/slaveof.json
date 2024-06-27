@@ -1,6 +1,6 @@
 {
     "SLAVEOF": {
-        "summary": "Sets a server as a replica of another, or promotes it to being a master.",
+        "summary": "Sets a server as a replica of another, or promotes it to being a primary.",
         "complexity": "O(1)",
         "group": "server",
         "since": "1.0.0",

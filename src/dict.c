@@ -943,6 +943,8 @@ unsigned long long dictFingerprint(dict *d) {
     return hash;
 }
 
+/* Initiaize a normal iterator. This function should be called when initializing
+ * an iterator on the stack. */
 void dictInitIterator(dictIterator *iter, dict *d) {
     iter->d = d;
     iter->table = 0;
@@ -952,6 +954,8 @@ void dictInitIterator(dictIterator *iter, dict *d) {
     iter->nextEntry = NULL;
 }
 
+/* Initialize a safe iterator, which is allowed to modify the dictionary while iterating.
+ * You must call dictResetIterator when you are done with a safe iterator. */
 void dictInitSafeIterator(dictIterator *iter, dict *d) {
     dictInitIterator(iter, d);
     iter->safe = 1;
@@ -959,9 +963,10 @@ void dictInitSafeIterator(dictIterator *iter, dict *d) {
 
 void dictResetIterator(dictIterator *iter) {
     if (!(iter->index == -1 && iter->table == 0)) {
-        if (iter->safe)
+        if (iter->safe) {
             dictResumeRehashing(iter->d);
-        else
+            assert(iter->d->pauserehash >= 0);
+        } else
             assert(iter->fingerprint == dictFingerprint(iter->d));
     }
 }

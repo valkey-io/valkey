@@ -32,6 +32,7 @@
 #include "script.h"
 #include "fpconv_dtoa.h"
 #include "fmtargs.h"
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <math.h>
@@ -588,11 +589,11 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
             to = "AOF-loading-client";
             from = "server";
         } else if (ctype == CLIENT_TYPE_PRIMARY) {
-            to = "master";
+            to = "primary";
             from = "replica";
         } else {
             to = "replica";
-            from = "master";
+            from = "primary";
         }
 
         if (len > 4096) len = 4096;
@@ -964,7 +965,7 @@ void addReplyHumanLongDouble(client *c, long double d) {
 
 /* Add a long long as integer reply or bulk len / multi bulk count.
  * Basically this is used to output <prefix><long long><crlf>. */
-void addReplyLongLongWithPrefix(client *c, long long ll, char prefix) {
+static void _addReplyLongLongWithPrefix(client *c, long long ll, char prefix) {
     char buf[128];
     int len;
 
@@ -974,16 +975,16 @@ void addReplyLongLongWithPrefix(client *c, long long ll, char prefix) {
     const int opt_hdr = ll < OBJ_SHARED_BULKHDR_LEN && ll >= 0;
     const size_t hdr_len = OBJ_SHARED_HDR_STRLEN(ll);
     if (prefix == '*' && opt_hdr) {
-        addReplyProto(c, shared.mbulkhdr[ll]->ptr, hdr_len);
+        _addReplyToBufferOrList(c, shared.mbulkhdr[ll]->ptr, hdr_len);
         return;
     } else if (prefix == '$' && opt_hdr) {
-        addReplyProto(c, shared.bulkhdr[ll]->ptr, hdr_len);
+        _addReplyToBufferOrList(c, shared.bulkhdr[ll]->ptr, hdr_len);
         return;
     } else if (prefix == '%' && opt_hdr) {
-        addReplyProto(c, shared.maphdr[ll]->ptr, hdr_len);
+        _addReplyToBufferOrList(c, shared.maphdr[ll]->ptr, hdr_len);
         return;
     } else if (prefix == '~' && opt_hdr) {
-        addReplyProto(c, shared.sethdr[ll]->ptr, hdr_len);
+        _addReplyToBufferOrList(c, shared.sethdr[ll]->ptr, hdr_len);
         return;
     }
 
@@ -991,7 +992,7 @@ void addReplyLongLongWithPrefix(client *c, long long ll, char prefix) {
     len = ll2string(buf + 1, sizeof(buf) - 1, ll);
     buf[len + 1] = '\r';
     buf[len + 2] = '\n';
-    addReplyProto(c, buf, len + 3);
+    _addReplyToBufferOrList(c, buf, len + 3);
 }
 
 void addReplyLongLong(client *c, long long ll) {
@@ -999,13 +1000,16 @@ void addReplyLongLong(client *c, long long ll) {
         addReply(c, shared.czero);
     else if (ll == 1)
         addReply(c, shared.cone);
-    else
-        addReplyLongLongWithPrefix(c, ll, ':');
+    else {
+        if (prepareClientToWrite(c) != C_OK) return;
+        _addReplyLongLongWithPrefix(c, ll, ':');
+    }
 }
 
 void addReplyAggregateLen(client *c, long length, int prefix) {
     serverAssert(length >= 0);
-    addReplyLongLongWithPrefix(c, length, prefix);
+    if (prepareClientToWrite(c) != C_OK) return;
+    _addReplyLongLongWithPrefix(c, length, prefix);
 }
 
 void addReplyArrayLen(client *c, long length) {
@@ -1065,8 +1069,8 @@ void addReplyNullArray(client *c) {
 /* Create the length prefix of a bulk reply, example: $2234 */
 void addReplyBulkLen(client *c, robj *obj) {
     size_t len = stringObjectLen(obj);
-
-    addReplyLongLongWithPrefix(c, len, '$');
+    if (prepareClientToWrite(c) != C_OK) return;
+    _addReplyLongLongWithPrefix(c, len, '$');
 }
 
 /* Add an Object as a bulk reply */
@@ -1078,16 +1082,22 @@ void addReplyBulk(client *c, robj *obj) {
 
 /* Add a C buffer as bulk reply */
 void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
-    addReplyLongLongWithPrefix(c, len, '$');
-    addReplyProto(c, p, len);
-    addReplyProto(c, "\r\n", 2);
+    if (prepareClientToWrite(c) != C_OK) return;
+    _addReplyLongLongWithPrefix(c, len, '$');
+    _addReplyToBufferOrList(c, p, len);
+    _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
 /* Add sds to reply (takes ownership of sds and frees it) */
 void addReplyBulkSds(client *c, sds s) {
-    addReplyLongLongWithPrefix(c, sdslen(s), '$');
-    addReplySds(c, s);
-    addReplyProto(c, "\r\n", 2);
+    if (prepareClientToWrite(c) != C_OK) {
+        sdsfree(s);
+        return;
+    }
+    _addReplyLongLongWithPrefix(c, sdslen(s), '$');
+    _addReplyToBufferOrList(c, s, sdslen(s));
+    sdsfree(s);
+    _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
 /* Set sds to a deferred reply (for symmetry with addReplyBulkSds it also frees the sds) */
@@ -2263,7 +2273,7 @@ int processInlineBuffer(client *c) {
         sdsfreesplitres(argv, argc);
         serverLog(LL_WARNING, "WARNING: Receiving inline protocol from primary, primary stream corruption? Closing the "
                               "primary connection and discarding the cached primary.");
-        setProtocolError("Master using the inline protocol. Desync?", c);
+        setProtocolError("Primary using the inline protocol. Desync?", c);
         return C_ERR;
     }
 
@@ -2877,7 +2887,6 @@ sds catClientInfoString(sds s, client *client) {
         else
             *p++ = 'S';
     }
-    /* clang-format off */
     if (client->flags & CLIENT_PRIMARY) *p++ = 'M';
     if (client->flags & CLIENT_PUBSUB) *p++ = 'P';
     if (client->flags & CLIENT_MULTI) *p++ = 'x';
@@ -2894,7 +2903,6 @@ sds catClientInfoString(sds s, client *client) {
     if (client->flags & CLIENT_NO_EVICT) *p++ = 'e';
     if (client->flags & CLIENT_NO_TOUCH) *p++ = 'T';
     if (p == flags) *p++ = 'N';
-    /* clang-format on */
     *p++ = '\0';
 
     p = events;
@@ -3111,7 +3119,7 @@ void clientCommand(client *c) {
 "      Kill connections made from the specified address",
 "    * LADDR (<ip:port>|<unixsocket>:0)",
 "      Kill connections made to specified local address",
-"    * TYPE (NORMAL|MASTER|REPLICA|PUBSUB)",
+"    * TYPE (NORMAL|PRIMARY|REPLICA|PUBSUB)",
 "      Kill connections by type.",
 "    * USER <username>",
 "      Kill connections authenticated by <username>.",
@@ -3123,7 +3131,7 @@ void clientCommand(client *c) {
 "      Kill connections older than the specified age.",
 "LIST [options ...]",
 "    Return information about client connections. Options:",
-"    * TYPE (NORMAL|MASTER|REPLICA|PUBSUB)",
+"    * TYPE (NORMAL|PRIMARY|REPLICA|PUBSUB)",
 "      Return clients of specified type.",
 "UNPAUSE",
 "    Stop the current client pause, resuming traffic.",
@@ -3303,15 +3311,13 @@ NULL
         listRewind(server.clients, &li);
         while ((ln = listNext(&li)) != NULL) {
             client *client = listNodeValue(ln);
-            /* clang-format off */
-            if (addr && strcmp(getClientPeerId(client),addr) != 0) continue;
-            if (laddr && strcmp(getClientSockname(client),laddr) != 0) continue;
+            if (addr && strcmp(getClientPeerId(client), addr) != 0) continue;
+            if (laddr && strcmp(getClientSockname(client), laddr) != 0) continue;
             if (type != -1 && getClientType(client) != type) continue;
             if (id != 0 && client->id != id) continue;
             if (user && client->user != user) continue;
             if (c == client && skipme) continue;
             if (max_age != 0 && (long long)(commandTimeSnapshot() / 1000 - client->ctime) < max_age) continue;
-            /* clang-format on */
 
             /* Kill it. */
             if (c == client) {
@@ -3936,7 +3942,7 @@ int getClientTypeByName(char *name) {
         return CLIENT_TYPE_REPLICA;
     else if (!strcasecmp(name, "pubsub"))
         return CLIENT_TYPE_PUBSUB;
-    else if (!strcasecmp(name, "master"))
+    else if (!strcasecmp(name, "master") || !strcasecmp(name, "primary"))
         return CLIENT_TYPE_PRIMARY;
     else
         return -1;

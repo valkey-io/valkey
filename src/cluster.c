@@ -813,12 +813,12 @@ void clusterCommandHelp(client *c) {
         "    Return the node's shard id.",
         "NODES",
         "    Return cluster configuration seen by node. Output format:",
-        "    <id> <ip:port@bus-port[,hostname]> <flags> <master> <pings> <pongs> <epoch> <link> <slot> ...",
+        "    <id> <ip:port@bus-port[,hostname]> <flags> <primary> <pings> <pongs> <epoch> <link> <slot> ...",
         "REPLICAS <node-id>",
         "    Return <node-id> replicas.",
         "SLOTS",
         "    Return information about slots range mappings. Each range is made of:",
-        "    start, end, master and replicas IP addresses, ports and ids",
+        "    start, end, primary and replicas IP addresses, ports and ids",
         "SHARDS",
         "    Return information about slot range mappings and the nodes associated with them.",
         NULL};
@@ -1017,7 +1017,8 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         margc = ms->commands[i].argc;
         margv = ms->commands[i].argv;
 
-        getKeysResult result = GETKEYS_RESULT_INIT;
+        getKeysResult result;
+        initGetKeysResult(&result);
         numkeys = getKeysFromCommand(mcmd, margv, margc, &result);
         keyindex = result.keys;
 

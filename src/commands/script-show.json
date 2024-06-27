@@ -1,0 +1,27 @@
+{
+    "SHOW": {
+        "summary": "Show server-side Lua script in the script cache.",
+        "complexity": "O(1).",
+        "group": "scripting",
+        "since": "8.0.0",
+        "arity": 3,
+        "container": "SCRIPT",
+        "function": "scriptCommand",
+        "command_flags": [
+            "NOSCRIPT"
+        ],
+        "acl_categories": [
+            "SCRIPTING"
+        ],
+        "arguments": [
+            {
+                "name": "sha1",
+                "type": "string"
+            }
+        ],
+        "reply_schema": {
+            "description": "Lua script if sha1 hash exists in script cache.",
+            "type": "string"
+        }
+    }
+}

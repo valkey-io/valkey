@@ -837,7 +837,7 @@ static void showLatencyReport(void) {
         printf("  %d bytes payload\n", config.datasize);
         printf("  keep alive: %d\n", config.keepalive);
         if (config.cluster_mode) {
-            printf("  cluster mode: yes (%d masters)\n", config.cluster_node_count);
+            printf("  cluster mode: yes (%d primaries)\n", config.cluster_node_count);
             int m;
             for (m = 0; m < config.cluster_node_count; m++) {
                 clusterNode *node = config.cluster_nodes[m];
@@ -1098,14 +1098,12 @@ static int fetchClusterConfiguration(void) {
             *p = '\0';
             char *token = line;
             line = p + 1;
-            /* clang-format off */
-            switch(i++){
+            switch (i++) {
             case 0: name = token; break;
             case 1: addr = token; break;
             case 2: flags = token; break;
             case 3: primary_id = token; break;
             }
-            /* clang-format on */
             if (i == 8) break; // Slots
         }
         if (!flags) {
@@ -1204,7 +1202,7 @@ static int fetchClusterConfiguration(void) {
             }
         }
         if (node->slots_count == 0) {
-            fprintf(stderr, "WARNING: Master node %s:%d has no slots, skipping...\n", node->ip, node->port);
+            fprintf(stderr, "WARNING: Primary node %s:%d has no slots, skipping...\n", node->ip, node->port);
             continue;
         }
         if (!addClusterNode(node)) {
@@ -1749,7 +1747,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "Invalid cluster: %d node(s).\n", config.cluster_node_count);
             exit(1);
         }
-        printf("Cluster has %d master nodes:\n\n", config.cluster_node_count);
+        printf("Cluster has %d primary nodes:\n\n", config.cluster_node_count);
         int i = 0;
         for (; i < config.cluster_node_count; i++) {
             clusterNode *node = config.cluster_nodes[i];
@@ -1757,7 +1755,7 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "Invalid cluster node #%d\n", i);
                 exit(1);
             }
-            printf("Master %d: ", i);
+            printf("Primary %d: ", i);
             if (node->name) printf("%s ", node->name);
             printf("%s:%d\n", node->ip, node->port);
             node->redis_config = getServerConfig(node->ip, node->port, NULL);

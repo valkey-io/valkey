@@ -51,7 +51,7 @@ start_server {tags {"repl network external:skip"}} {
 
         test {Slave is able to detect timeout during handshake} {
             wait_for_condition 50 1000 {
-                [log_file_matches $slave_log "*Timeout connecting to the MASTER*"]
+                [log_file_matches $slave_log "*Timeout connecting to the PRIMARY*"]
             } else {
                 fail "Replica is not able to detect timeout"
             }
@@ -1412,7 +1412,7 @@ start_server {tags {"repl" "external:skip"}} {
 
         # Check we got the warning logs about the GET command.
         verify_log_message 0 "*Replica generated a reply to command 'get', disconnecting it: *" $lines
-        verify_log_message 0 "*== CRITICAL == This master is sending an error to its replica: *" $lines
+        verify_log_message 0 "*== CRITICAL == This primary is sending an error to its replica: *" $lines
         verify_log_message 0 "*Replica can't interact with the keyspace*" $lines
 
         $rd close

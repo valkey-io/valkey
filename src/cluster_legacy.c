@@ -4738,7 +4738,7 @@ void clusterCron(void) {
          * a new ping now, to ensure all the nodes are pinged without
          * a too big delay. */
         mstime_t ping_interval =
-            server.cluster_ping_interval ? server.cluster_ping_interval : server.cluster_node_timeout / 2;
+            server.debug_cluster_ping_interval ? server.debug_cluster_ping_interval : server.cluster_node_timeout / 2;
         if (node->link && node->ping_sent == 0 && (now - node->pong_received) > ping_interval) {
             clusterSendPing(node->link, CLUSTERMSG_TYPE_PING);
             continue;

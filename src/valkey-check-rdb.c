@@ -395,7 +395,7 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
      * integer objects, however since this function may be called from
      * an already initialized server instance, check if we really need to. */
     if (shared.integers[0] == NULL) createSharedObjects();
-    server.loading_process_events_interval_bytes = 0;
+    server.debug_loading_process_events_interval_bytes = 0;
     server.sanitize_dump_payload = SANITIZE_DUMP_YES;
     rdbCheckMode = 1;
     rdbCheckInfo("Checking RDB file %s", argv[1]);

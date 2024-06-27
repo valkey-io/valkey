@@ -75,7 +75,7 @@
 /* ----- Helpers ----- */
 
 static int reqresShouldLog(client *c) {
-    if (!server.req_res_logfile) return 0;
+    if (!server.debug_req_res_logfile) return 0;
 
     /* Ignore client with streaming non-standard response */
     if (c->flags & (CLIENT_PUBSUB | CLIENT_MONITOR | CLIENT_REPLICA)) return 0;
@@ -263,7 +263,7 @@ size_t reqresAppendResponse(client *c) {
     serverAssert(ret);
 
     /* Flush both request and response to file */
-    FILE *fp = fopen(server.req_res_logfile, "a");
+    FILE *fp = fopen(server.debug_req_res_logfile, "a");
     serverAssert(fp);
     fwrite(c->reqres.buf, c->reqres.used, 1, fp);
     fclose(fp);

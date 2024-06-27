@@ -1654,12 +1654,6 @@ struct valkeyServer {
     client *current_client;                /* The client that triggered the command execution (External or AOF). */
     client *executing_client;              /* The client executing the current command (possibly script or module). */
 
-#ifdef LOG_REQ_RES
-    char *req_res_logfile; /* Path of log file for logging all requests and their replies. If NULL, no logging will be
-                              performed */
-    unsigned int client_default_resp;
-#endif
-
     /* Stuff for client mem eviction */
     clientMemUsageBucket *client_mem_usage_buckets;
 
@@ -1690,7 +1684,6 @@ struct valkeyServer {
     off_t loading_rdb_used_mem;
     off_t loading_loaded_bytes;
     time_t loading_start_time;
-    off_t loading_process_events_interval_bytes;
     /* Fields used only for stats */
     time_t stat_starttime;                         /* Server start time */
     long long stat_numcommands;                    /* Number of processed commands */
@@ -1849,8 +1842,6 @@ struct valkeyServer {
     _Atomic int aof_bio_fsync_status;   /* Status of AOF fsync in bio job. */
     _Atomic int aof_bio_fsync_errno;    /* Errno of AOF fsync in bio job. */
     aofManifest *aof_manifest;          /* Used to track AOFs. */
-    int aof_disable_auto_gc;            /* If disable automatically deleting HISTORY type AOFs?
-                                           default no. (for testings). */
 
     /* RDB persistence */
     long long dirty;                      /* Changes to DB from the last save */
@@ -1880,12 +1871,6 @@ struct valkeyServer {
     int rdb_pipe_numconns_writing;        /* Number of rdb conns with pending writes. */
     char *rdb_pipe_buff;                  /* In diskless replication, this buffer holds data */
     int rdb_pipe_bufflen;                 /* that was read from the rdb pipe. */
-    int rdb_key_save_delay;               /* Delay in microseconds between keys while
-                                           * writing aof or rdb. (for testings). negative
-                                           * value means fractions of microseconds (on average). */
-    int key_load_delay;                   /* Delay in microseconds between keys while
-                                           * loading aof or rdb. (for testings). negative
-                                           * value means fractions of microseconds (on average). */
     /* Pipe and data structures for child -> parent info sharing. */
     int child_info_pipe[2]; /* Pipe used to write the child_info_data. */
     int child_info_nread;   /* Num of bytes of the last read from pipe */
@@ -1893,15 +1878,13 @@ struct valkeyServer {
     serverOpArray also_propagate; /* Additional command to propagate. */
     int replication_allowed;      /* Are we allowed to replicate? */
     /* Logging */
-    char *logfile;         /* Path of log file */
-    int syslog_enabled;    /* Is syslog enabled? */
-    char *syslog_ident;    /* Syslog ident */
-    int syslog_facility;   /* Syslog facility */
-    int crashlog_enabled;  /* Enable signal handler for crashlog.
-                            * disable for clean core dumps. */
-    int memcheck_enabled;  /* Enable memory check on crash. */
-    int use_exit_on_panic; /* Use exit() on panic and assert rather than
-                            * abort(). useful for Valgrind. */
+    char *logfile;        /* Path of log file */
+    int syslog_enabled;   /* Is syslog enabled? */
+    char *syslog_ident;   /* Syslog ident */
+    int syslog_facility;  /* Syslog facility */
+    int crashlog_enabled; /* Enable signal handler for crashlog.
+                           * disable for clean core dumps. */
+    int memcheck_enabled; /* Enable memory check on crash. */
     /* Shutdown */
     int shutdown_timeout;    /* Graceful shutdown time limit in seconds. */
     int shutdown_on_sigint;  /* Shutdown flags configured for SIGINT. */
@@ -2037,13 +2020,12 @@ struct valkeyServer {
     unsigned int pubsub_clients;   /* # of clients in Pub/Sub mode */
     unsigned int watching_clients; /* # of clients are watching keys */
     /* Cluster */
-    int cluster_enabled;            /* Is cluster enabled? */
-    int cluster_port;               /* Set the cluster port for a node. */
-    mstime_t cluster_node_timeout;  /* Cluster node timeout. */
-    mstime_t cluster_ping_interval; /* A debug configuration for setting how often cluster nodes send ping messages. */
-    char *cluster_configfile;       /* Cluster auto-generated config file name. */
-    struct clusterState *cluster;   /* State of the cluster */
-    int cluster_migration_barrier;  /* Cluster replicas migration barrier. */
+    int cluster_enabled;                 /* Is cluster enabled? */
+    int cluster_port;                    /* Set the cluster port for a node. */
+    mstime_t cluster_node_timeout;       /* Cluster node timeout. */
+    char *cluster_configfile;            /* Cluster auto-generated config file name. */
+    struct clusterState *cluster;        /* State of the cluster */
+    int cluster_migration_barrier;       /* Cluster replicas migration barrier. */
     int cluster_allow_replica_migration; /* Automatic replica migrations to orphaned primaries and from empty primaries */
     int cluster_replica_validity_factor;                   /* Replica max data age for failover. */
     int cluster_require_full_coverage;                     /* If true, put the cluster down if
@@ -2065,12 +2047,6 @@ struct valkeyServer {
                                                             is down? */
     int cluster_config_file_lock_fd;                       /* cluster config fd, will be flocked. */
     unsigned long long cluster_link_msg_queue_limit_bytes; /* Memory usage limit on individual link msg queue */
-
-    /* Debug settings */
-    int debug_cluster_drop_packet_filter;                 /* Debug flag to enable dropping specific packet types. */
-    uint32_t debug_cluster_close_link_on_packet_drop : 1; /* Debug flag: close link on packet drop */
-    uint32_t debug_pause_cron : 1;                        /* Debug flag: pause cron tasks */
-    int debug_assert_enabled;                             /* Is debug assert enabled? */
 
     sds cached_cluster_slot_info[CACHE_CONN_TYPE_MAX];
     /* Scripting */
@@ -2094,8 +2070,6 @@ struct valkeyServer {
                                      backward compatibility with Redis <= 5. */
     int acl_pubsub_default;       /* Default ACL pub/sub channels flag */
     aclInfo acl_info;             /* ACL info */
-    /* Assert & bug reporting */
-    int watchdog_period; /* Software watchdog period in ms. 0 = off */
     /* System hardware info */
     size_t system_memory_size; /* Total memory in system as reported by OS */
     /* TLS Configuration */
@@ -2124,6 +2098,32 @@ struct valkeyServer {
     int reply_buffer_resizing_enabled; /* Is reply buffer resizing enabled (1 by default) */
     /* Local environment */
     char *locale_collate;
+
+    /* Debug settings */
+#ifdef LOG_REQ_RES
+    char *debug_req_res_logfile; /* Path of log file for logging all requests and their replies.
+                                  * If NULL, no logging will be performed */
+    unsigned int debug_client_default_resp;
+#endif
+    int debug_assert_enabled;             /* Is debug assert enabled? */
+    int debug_rdb_key_save_delay;         /* Delay in microseconds between keys while
+                                           * writing aof or rdb. (for testings). negative
+                                           * value means fractions of microseconds (on average). */
+    int debug_key_load_delay;             /* Delay in microseconds between keys while
+                                           * loading aof or rdb. (for testings). negative
+                                           * value means fractions of microseconds (on average). */
+    int debug_aof_disable_auto_gc;        /* If disable automatically deleting HISTORY type AOFs?
+                                           * default no. (for testings). */
+    int debug_use_exit_on_panic;          /* Use exit() on panic and assert rather than
+                                           * abort(). useful for Valgrind. */
+    int debug_cluster_drop_packet_filter; /* Debug flag to enable dropping specific packet types. */
+    int debug_watchdog_period;            /* Software watchdog period in ms. 0 = off */
+    mstime_t debug_cluster_ping_interval; /* Debug config for setting how often cluster nodes send ping messages. */
+    off_t debug_loading_process_events_interval_bytes;
+    struct {
+        uint32_t debug_cluster_close_link_on_packet_drop : 1; /* Debug flag: close link on packet drop */
+        uint32_t debug_pause_cron : 1;                        /* Debug flag: pause cron tasks */
+    };
 };
 
 #define MAX_KEYS_BUFFER 256

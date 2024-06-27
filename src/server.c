@@ -1230,7 +1230,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* Software watchdog: deliver the SIGALRM that will reach the signal
      * handler if we don't return here fast enough. */
-    if (server.watchdog_period) watchdogScheduleSignal(server.watchdog_period);
+    if (server.debug_watchdog_period) watchdogScheduleSignal(server.debug_watchdog_period);
 
     server.hz = server.config_hz;
     /* Adapt the server.hz value to the number of configured clients. If we have
@@ -2067,7 +2067,7 @@ void initServerConfig(void) {
     populateCommandTable();
 
     /* Debugging */
-    server.watchdog_period = 0;
+    server.debug_watchdog_period = 0;
 }
 
 extern char **environ;

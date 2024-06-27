@@ -2194,7 +2194,7 @@ void bugReportEnd(int killViaSignal, int sig) {
 
     if (!killViaSignal) {
         /* To avoid issues with valgrind, we may wanna exit rather than generate a signal */
-        if (server.use_exit_on_panic) {
+        if (server.debug_use_exit_on_panic) {
             /* Using _exit to bypass false leak reports by gcc ASAN */
             fflush(stdout);
             _exit(1);
@@ -2277,15 +2277,15 @@ void watchdogScheduleSignal(int period) {
 }
 void applyWatchdogPeriod(void) {
     /* Disable watchdog when period is 0 */
-    if (server.watchdog_period == 0) {
+    if (server.debug_watchdog_period == 0) {
         watchdogScheduleSignal(0); /* Stop the current timer. */
     } else {
         /* If the configured period is smaller than twice the timer period, it is
          * too short for the software watchdog to work reliably. Fix it now
          * if needed. */
         int min_period = (1000 / server.hz) * 2;
-        if (server.watchdog_period < min_period) server.watchdog_period = min_period;
-        watchdogScheduleSignal(server.watchdog_period); /* Adjust the current timer. */
+        if (server.debug_watchdog_period < min_period) server.debug_watchdog_period = min_period;
+        watchdogScheduleSignal(server.debug_watchdog_period); /* Adjust the current timer. */
     }
 }
 

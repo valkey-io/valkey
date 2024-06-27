@@ -88,7 +88,7 @@ typedef struct {
         int64_t s64;
         double d;
     } v;
-    struct dictEntry *next; /* Next entry in the same hash bucket. */
+    struct dictEntry *next;  /* Next entry in the same hash bucket. */
     uint8_t key_header_size; /* offset into key_buf where the key is located at. */
     unsigned char key_buf[]; /* buffer to embed the key. */
 } embeddedDictEntry;
@@ -971,11 +971,16 @@ size_t dictMemUsage(const dict *d) {
 /* Returns the memory usage in bytes of dictEntry based on the type. if `de` is NULL, return the size of
  * regular dict entry else return based on the type. */
 size_t dictEntryMemUsage(dictEntry *de) {
-    if (de == NULL || entryIsNormal(de)) return sizeof(dictEntry);
-    else if (entryIsKey(de)) return 0;
-    else if (entryIsNoValue(de)) return sizeof(dictEntryNoValue);
-    else if (entryIsEmbedded(de)) return zmalloc_size(decodeEmbeddedEntry(de));
-    else assert("Entry type not supported");
+    if (de == NULL || entryIsNormal(de))
+        return sizeof(dictEntry);
+    else if (entryIsKey(de))
+        return 0;
+    else if (entryIsNoValue(de))
+        return sizeof(dictEntryNoValue);
+    else if (entryIsEmbedded(de))
+        return zmalloc_size(decodeEmbeddedEntry(de));
+    else
+        assert("Entry type not supported");
     return 0;
 }
 

@@ -107,6 +107,8 @@ int detectAndUpdateCachedNodeHealth(void);
 client *createCachedResponseClient(void);
 void deleteCachedResponseClient(client *recording_client);
 void clearCachedClusterSlotsResponse(void);
+unsigned int countKeysInSlot(unsigned int hashslot);
+int getSlotOrReply(client *c, robj *o);
 
 /* functions with shared implementations */
 int clusterNodeIsMyself(clusterNode *n);

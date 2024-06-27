@@ -94,11 +94,13 @@ typedef struct {
 } embeddedDictEntry;
 
 /* Validation and helper for `embeddedDictEntry` */
+
 static_assert(sizeof(embeddedDictEntry) == 24, "unexpected total size of embeddedDictEntry");
 static_assert(offsetof(embeddedDictEntry, v) == 0, "unexpected field offset");
-static_assert(offsetof(embeddedDictEntry, next) == 8, "unexpected field offset");
-static_assert(offsetof(embeddedDictEntry, key_header_size) == 16, "unexpected field offset");
-static_assert(offsetof(embeddedDictEntry, key_buf) == 17, "unexpected field offset");
+static_assert(offsetof(embeddedDictEntry, next) == sizeof(void *), "unexpected field offset");
+static_assert(offsetof(embeddedDictEntry, key_header_size) == 2 * sizeof(void *), "unexpected field offset");
+/* key_buf is located after two pointers `v.val`, `next` and uint8_t field `key_header_size` */
+static_assert(offsetof(embeddedDictEntry, key_buf) == (2 * sizeof(void *)) + sizeof(uint8_t), "unexpected field offset");
 
 /* The minimum amount of bytes required for embedded dict entry. */
 static inline size_t compactSizeEmbeddedDictEntry(void) {

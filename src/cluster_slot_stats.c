@@ -26,18 +26,20 @@ typedef struct {
 
 static int doesSlotBelongToMyShard(int slot) {
     clusterNode *myself = getMyClusterNode();
-    clusterNode *master = clusterNodeGetPrimary(myself);
+    clusterNode *primary = clusterNodeGetPrimary(myself);
 
-    return clusterNodeCoversSlot(master, slot);
+    return clusterNodeCoversSlot(primary, slot);
 }
 
-static void markSlotsAssignedToMyShard(unsigned char *assigned_slots, int start_slot, int end_slot, int *len) {
+static int markSlotsAssignedToMyShard(unsigned char *assigned_slots, int start_slot, int end_slot) {
+    int assigned_slots_count = 0;
     for (int slot = start_slot; slot <= end_slot; slot++) {
         if (doesSlotBelongToMyShard(slot)) {
             assigned_slots[slot]++;
-            (*len)++;
+            assigned_slots_count++;
         }
     }
+    return assigned_slots_count;
 }
 
 static uint64_t getSlotStat(int slot, int stat_type) {
@@ -131,9 +133,8 @@ void clusterSlotStatsCommand(client *c) {
         }
         /* Initialize slot assignment array. */
         unsigned char assigned_slots[CLUSTER_SLOTS] = {UNASSIGNED_SLOT};
-        int len = 0;
-        markSlotsAssignedToMyShard(assigned_slots, startslot, endslot, &len);
-        addReplySlotsRange(c, assigned_slots, startslot, endslot, len);
+        int assigned_slots_count = markSlotsAssignedToMyShard(assigned_slots, startslot, endslot);
+        addReplySlotsRange(c, assigned_slots, startslot, endslot, assigned_slots_count);
 
     } else if (c->argc >= 4 && !strcasecmp(c->argv[2]->ptr, "orderby")) {
         /* CLUSTER SLOT-STATS ORDERBY metric [LIMIT limit] [ASC | DESC] */
@@ -152,8 +153,9 @@ void clusterSlotStatsCommand(client *c) {
             if (!strcasecmp(c->argv[i]->ptr, "limit") && moreargs) {
                 if (getRangeLongFromObjectOrReply(
                         c, c->argv[i + 1], 1, CLUSTER_SLOTS, &limit,
-                        "Limit has to lie in between 1 and 16384 (maximum number of slots).") != C_OK)
+                        "Limit has to lie in between 1 and 16384 (maximum number of slots).") != C_OK) {
                     return;
+                }
                 i++;
                 limit_counter++;
             } else if (!strcasecmp(c->argv[i]->ptr, "asc")) {

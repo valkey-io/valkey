@@ -6595,7 +6595,6 @@ int iAmPrimary(void) {
 #ifdef SERVER_TEST
 #include "testhelp.h"
 #include "intset.h" /* Compact integer set structure */
-#include "rax-test.c"
 
 int __failed_tests = 0;
 int __test_num = 0;
@@ -6613,7 +6612,6 @@ struct serverTest {
     {"zipmap", zipmapTest},
     {"dict", dictTest},
     {"listpack", listpackTest},
-    {"rax", raxTest},
 };
 serverTestProc *getTestProcByName(const char *name) {
     int numtests = sizeof(serverTests) / sizeof(struct serverTest);
@@ -6643,12 +6641,6 @@ int main(int argc, char **argv) {
                 flags |= TEST_LARGE_MEMORY;
             else if (!strcasecmp(arg, "--valgrind"))
                 flags |= TEST_VALGRIND;
-            else if (!strcasecmp(arg, "--benchmark"))
-                flags |= TEST_BENCHMARK;
-            else if (!strcasecmp(arg, "--fuzz-cluster"))
-                flags |= TEST_FUZZ_CLUSTER;
-            else if (!strcasecmp(arg, "--huge-key"))
-                flags |= TEST_HUGE_KEY;
         }
 
         if (!strcasecmp(argv[2], "all")) {

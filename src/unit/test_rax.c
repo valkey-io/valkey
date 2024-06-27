@@ -28,21 +28,19 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifdef SERVER_TEST
-
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
-#include <assert.h>
 #include <errno.h>
 
-#include "rax.h"
-#include "mt19937-64.h"
-#include "zmalloc.h"
+#include "../rax.c"
+#include "../mt19937-64.c"
+#include "test_help.h"
 
 uint16_t crc16(const char *buf, int len); /* From crc16.c */
+long long _ustime(void); /* From test_crc64combine.c */
 
 /* ---------------------------------------------------------------------------
  * Simple hash table implementation, no rehashing, just chaining. This is
@@ -542,7 +540,11 @@ int iteratorFuzzTest(int keymode, size_t count) {
 }
 
 /* Test the random walk function. */
-int randomWalkTest(void) {
+int test_randomWalkTest(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
     rax *t = raxNew();
     char *toadd[] = {"alligator","alien","baloon","chromodynamic","romane","romanus","romulus","rubens","ruber","rubicon","rubicundus","all","rub","ba",NULL};
 
@@ -582,7 +584,11 @@ int randomWalkTest(void) {
     return 0;
 }
 
-int iteratorUnitTests(void) {
+int test_iteratorUnitTests(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
     rax *t = raxNew();
     char *toadd[] = {"alligator","alien","baloon","chromodynamic","romane","romanus","romulus","rubens","ruber","rubicon","rubicundus","all","rub","ba",NULL};
 
@@ -654,7 +660,11 @@ int iteratorUnitTests(void) {
 
 /* Test that raxInsert() / raxTryInsert() overwrite semantic
  * works as expected. */
-int tryInsertUnitTests(void) {
+int test_tryInsertUnitTests(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
     rax *t = raxNew();
     raxInsert(t,(unsigned char*)"FOO",3,(void*)(long)1,NULL);
     void *old, *val;
@@ -685,7 +695,11 @@ int tryInsertUnitTests(void) {
 }
 
 /* Regression test #1: Iterator wrong element returned after seek. */
-int regtest1(void) {
+int test_regtest1(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
     rax *rax = raxNew();
     raxInsert(rax,(unsigned char*)"LKE",3,(void*)(long)1,NULL);
     raxInsert(rax,(unsigned char*)"TQ",2,(void*)(long)2,NULL);
@@ -712,7 +726,11 @@ int regtest1(void) {
 }
 
 /* Regression test #2: Crash when mixing NULL and not NULL values. */
-int regtest2(void) {
+int test_regtest2(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
     rax *rt = raxNew();
     raxInsert(rt,(unsigned char *)"a",1,(void *)100,NULL);
     raxInsert(rt,(unsigned char *)"ab",2,(void *)101,NULL);
@@ -729,7 +747,11 @@ int regtest2(void) {
  *
  * Note that this test always returns success but will trigger a
  * Valgrind error. */
-int regtest3(void) {
+int test_regtest3(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
     rax *rt = raxNew();
     raxInsert(rt, (unsigned char *)"D",1,(void*)1,NULL);
     raxInsert(rt, (unsigned char *)"",0,NULL,NULL);
@@ -745,7 +767,11 @@ int regtest3(void) {
  * however we are using the original one from the bug report, since this
  * is quite odd and may later protect against different bugs related to
  * storing and fetching the empty string key. */
-int regtest4(void) {
+int test_regtest4(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
     rax *rt = raxNew();
     raxIterator iter;
     raxInsert(rt, (unsigned char*)"", 0, (void *)-1, NULL);
@@ -768,7 +794,11 @@ int regtest4(void) {
 }
 
 /* Less than seek bug when stopping in the middle of a compressed node. */
-int regtest5(void) {
+int test_regtest5(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
     rax *rax = raxNew();
 
     raxInsert(rax,(unsigned char*)"b",1,(void*)(long)1,NULL);
@@ -795,7 +825,11 @@ int regtest5(void) {
 }
 
 /* Seek may not populate iterator data. See issue #25. */
-int regtest6(void) {
+int test_regtest6(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
     rax *rax = raxNew();
 
     char *key1 = "172.17.141.2/adminguide/v5.0/";
@@ -819,22 +853,28 @@ int regtest6(void) {
     return 0;
 }
 
-void benchmark(void) {
+int test_benchmark(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+
+    if (!(flags & UNIT_TEST_SINGLE))
+        return 0;
+
     for (int mode = 0; mode < 2; mode++) {
         printf("Benchmark with %s keys:\n",
             (mode == 0) ? "integer" : "alphanumerical");
         rax *t = raxNew();
-        long long start = ustime();
+        long long start = _ustime();
         for (int i = 0; i < 5000000; i++) {
             char buf[64];
             int len = int2key(buf,sizeof(buf),i,mode);
             raxInsert(t,(unsigned char*)buf,len,(void*)(long)i,NULL);
         }
-        printf("Insert: %f\n", (double)(ustime()-start)/1000000);
+        printf("Insert: %f\n", (double)(_ustime()-start)/1000000);
         printf("%llu total nodes\n", (unsigned long long)t->numnodes);
         printf("%llu total elements\n", (unsigned long long)t->numele);
 
-        start = ustime();
+        start = _ustime();
         for (int i = 0; i < 5000000; i++) {
             char buf[64];
             int len = int2key(buf,sizeof(buf),i,mode);
@@ -844,9 +884,9 @@ void benchmark(void) {
                     data, (void*)(long)i);
             }
         }
-        printf("Linear lookup: %f\n", (double)(ustime()-start)/1000000);
+        printf("Linear lookup: %f\n", (double)(_ustime()-start)/1000000);
 
-        start = ustime();
+        start = _ustime();
         for (int i = 0; i < 5000000; i++) {
             char buf[64];
             int r = genrand64_int64() % 5000000;
@@ -857,9 +897,9 @@ void benchmark(void) {
                     data, (void*)(long)r);
             }
         }
-        printf("Random lookup: %f\n", (double)(ustime()-start)/1000000);
+        printf("Random lookup: %f\n", (double)(_ustime()-start)/1000000);
 
-        start = ustime();
+        start = _ustime();
         for (int i = 0; i < 5000000; i++) {
             char buf[64];
             int len = int2key(buf,sizeof(buf),i,mode);
@@ -868,9 +908,9 @@ void benchmark(void) {
                 printf("** Failed lookup did not reported NOT FOUND!\n");
             }
         }
-        printf("Failed lookup: %f\n", (double)(ustime()-start)/1000000);
+        printf("Failed lookup: %f\n", (double)(_ustime()-start)/1000000);
 
-        start = ustime();
+        start = _ustime();
         raxIterator ri;
         raxStart(&ri,t);
         raxSeek(&ri,"^",NULL,0);
@@ -878,21 +918,23 @@ void benchmark(void) {
         while (raxNext(&ri)) iter++;
         if (iter != 5000000) printf("** Warning iteration is incomplete\n");
         raxStop(&ri);
-        printf("Full iteration: %f\n", (double)(ustime()-start)/1000000);
+        printf("Full iteration: %f\n", (double)(_ustime()-start)/1000000);
 
-        start = ustime();
+        start = _ustime();
         for (int i = 0; i < 5000000; i++) {
             char buf[64];
             int len = int2key(buf,sizeof(buf),i,mode);
             int retval = raxRemove(t,(unsigned char*)buf,len,NULL);
             assert(retval == 1);
         }
-        printf("Deletion: %f\n", (double)(ustime()-start)/1000000);
+        printf("Deletion: %f\n", (double)(_ustime()-start)/1000000);
 
         printf("%llu total nodes\n", (unsigned long long)t->numnodes);
         printf("%llu total elements\n", (unsigned long long)t->numele);
         raxFree(t);
     }
+
+    return 0;
 }
 
 /* Compressed nodes can only hold (2^29)-1 characters, so it is important
@@ -900,7 +942,13 @@ void benchmark(void) {
  * the code to handle this edge case works as expected.
  *
  * This test is disabled by default because it uses a lot of memory. */
-int testHugeKey(void) {
+int test_hugeKey(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+
+    if (!(flags & UNIT_TEST_LARGE_MEMORY))
+        return 0;
+
     size_t max_keylen = ((1<<29)-1) + 100;
     unsigned char *key = zmalloc(max_keylen);
     if (key == NULL) goto oom;
@@ -932,109 +980,64 @@ oom:
     exit(1);
 }
 
-int raxTest(int argc, char **argv, int flags) {
-    /* If an argument is given, use it as the random seed. */
-    if (argc >= 4) {
-        init_genrand64(atoi(argv[3]));
-    } else {
-        init_genrand64(1234);
-    }
+int test_fuzz(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
 
-    /* Tests to run by default are set here. */
-    int do_benchmark = 0;
-    int do_units = 1;
-    int do_fuzz_cluster = 0;
-    int do_fuzz = 1;
-    int do_regression = 1;
-    int do_hugekey = 0;
-
-    if (flags & TEST_BENCHMARK) do_benchmark = 1;
-    if (flags & TEST_FUZZ_CLUSTER) do_fuzz_cluster = 1;
-    if (flags & TEST_HUGE_KEY) do_hugekey = 1;
+    if (!(flags & UNIT_TEST_ACCURATE))
+        return 0;
 
     int errors = 0;
 
-    if (do_units) {
-        printf("Unit tests: "); fflush(stdout);
-        if (randomWalkTest()) errors++;
-        if (iteratorUnitTests()) errors++;
-        if (tryInsertUnitTests()) errors++;
-        if (errors == 0) printf("OK\n");
+    init_genrand64(1234);
+
+    for (int i = 0; i < 10; i++) {
+        double alpha = (double)genrand64_int64() / RAND_MAX;
+        double beta = 1-alpha;
+        if (fuzzTestCluster(genrand64_int64()%100000000,alpha,beta)) errors++;
     }
 
-    if (do_regression) {
-        printf("Performing regression tests: "); fflush(stdout);
-        if (regtest1()) errors++;
-        if (regtest2()) errors++;
-        if (regtest3()) errors++;
-        if (regtest4()) errors++;
-        if (regtest5()) errors++;
-        if (regtest6()) errors++;
-        if (errors == 0) printf("OK\n");
+    for (int i = 0; i < 10; i++) {
+        double alpha = (double)genrand64_int64() / RAND_MAX;
+        double beta = 1-alpha;
+        if (fuzzTest(KEY_INT,genrand64_int64()%10000,alpha,beta)) errors++;
+        if (fuzzTest(KEY_UNIQUE_ALPHA,genrand64_int64()%10000,alpha,beta)) errors++;
+        if (fuzzTest(KEY_RANDOM,genrand64_int64()%10000,alpha,beta)) errors++;
+        if (fuzzTest(KEY_RANDOM_ALPHA,genrand64_int64()%10000,alpha,beta)) errors++;
+        if (fuzzTest(KEY_RANDOM_SMALL_CSET,genrand64_int64()%10000,alpha,beta)) errors++;
     }
 
-    if (do_hugekey) {
-        printf("Performing huge key tests: "); fflush(stdout);
-        if (testHugeKey()) errors++;
+    size_t numops = 100000, cycles = 3;
+    while(cycles--) {
+        if (fuzzTest(KEY_INT,numops,.7,.3)) errors++;
+        if (fuzzTest(KEY_UNIQUE_ALPHA,numops,.7,.3)) errors++;
+        if (fuzzTest(KEY_RANDOM,numops,.7,.3)) errors++;
+        if (fuzzTest(KEY_RANDOM_ALPHA,numops,.7,.3)) errors++;
+        if (fuzzTest(KEY_RANDOM_SMALL_CSET,numops,.7,.3)) errors++;
+        numops *= 10;
     }
 
-    if (do_fuzz_cluster) {
-        for (int i = 0; i < 10; i++) {
-            double alpha = (double)genrand64_int64() / RAND_MAX;
-            double beta = 1-alpha;
-            if (fuzzTestCluster(genrand64_int64()%100000000,alpha,beta)) errors++;
-        }
-    }
-
-    if (do_fuzz) {
-        for (int i = 0; i < 10; i++) {
-            double alpha = (double)genrand64_int64() / RAND_MAX;
-            double beta = 1-alpha;
-            if (fuzzTest(KEY_INT,genrand64_int64()%10000,alpha,beta)) errors++;
-            if (fuzzTest(KEY_UNIQUE_ALPHA,genrand64_int64()%10000,alpha,beta)) errors++;
-            if (fuzzTest(KEY_RANDOM,genrand64_int64()%10000,alpha,beta)) errors++;
-            if (fuzzTest(KEY_RANDOM_ALPHA,genrand64_int64()%10000,alpha,beta)) errors++;
-            if (fuzzTest(KEY_RANDOM_SMALL_CSET,genrand64_int64()%10000,alpha,beta)) errors++;
-        }
-
-        size_t numops = 100000, cycles = 3;
-        while(cycles--) {
-            if (fuzzTest(KEY_INT,numops,.7,.3)) errors++;
-            if (fuzzTest(KEY_UNIQUE_ALPHA,numops,.7,.3)) errors++;
-            if (fuzzTest(KEY_RANDOM,numops,.7,.3)) errors++;
-            if (fuzzTest(KEY_RANDOM_ALPHA,numops,.7,.3)) errors++;
-            if (fuzzTest(KEY_RANDOM_SMALL_CSET,numops,.7,.3)) errors++;
-            numops *= 10;
-        }
-
-        if (fuzzTest(KEY_CHAIN,1000,.7,.3)) errors++;
-        printf("Iterator fuzz test: "); fflush(stdout);
-        for (int i = 0; i < 100000; i++) {
-            if (iteratorFuzzTest(KEY_INT,100)) errors++;
-            if (iteratorFuzzTest(KEY_UNIQUE_ALPHA,100)) errors++;
-            if (iteratorFuzzTest(KEY_RANDOM_ALPHA,1000)) errors++;
-            if (iteratorFuzzTest(KEY_RANDOM,1000)) errors++;
-            if (i && !(i % 100)) {
-                printf(".");
-                if (!(i % 1000)) {
-                    printf("%d%% done",i/1000);
-                }
-                fflush(stdout);
+    if (fuzzTest(KEY_CHAIN,1000,.7,.3)) errors++;
+    printf("Iterator fuzz test: "); fflush(stdout);
+    for (int i = 0; i < 100000; i++) {
+        if (iteratorFuzzTest(KEY_INT,100)) errors++;
+        if (iteratorFuzzTest(KEY_UNIQUE_ALPHA,100)) errors++;
+        if (iteratorFuzzTest(KEY_RANDOM_ALPHA,1000)) errors++;
+        if (iteratorFuzzTest(KEY_RANDOM,1000)) errors++;
+        if (i && !(i % 100)) {
+            printf(".");
+            if (!(i % 1000)) {
+                printf("%d%% done",i/1000);
             }
+            fflush(stdout);
         }
-        printf("\n");
     }
-
-    if (do_benchmark) {
-        benchmark();
-    }
+    printf("\n");
 
     if (errors) {
         printf("!!! WARNING !!!: %d errors found\n", errors);
     } else {
         printf("OK! \\o/\n");
     }
-    return errors;
+    return !!errors;
 }
-
-#endif // SERVER_TEST

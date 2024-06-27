@@ -2040,11 +2040,16 @@ void sendReplyToClient(connection *conn) {
     writeToClient(c, 1);
 }
 
+/* Indicate the client that has propagate command to be written. */
+static inline int clientHasPendingPropagateCommand(client *c) {
+    return canUseIOUringForAlwaysFsync() && c->flags & CLIENT_PROPAGATING;
+}
+
 /* This function is called just before entering the event loop, in the hope
  * we can just write the replies to the client output buffer without any
  * need to use a syscall in order to install the writable event handler,
  * get it called, and so forth. */
-int handleClientsWithPendingWrites(void) {
+int handleClientsWithPendingWrites(int skip_clients_with_propagating_writes) {
     listIter li;
     listNode *ln;
     int processed = listLength(server.clients_pending_write);
@@ -2052,6 +2057,9 @@ int handleClientsWithPendingWrites(void) {
     listRewind(server.clients_pending_write, &li);
     while ((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
+        if (skip_clients_with_propagating_writes && clientHasPendingPropagateCommand(c)) continue;
+
+        c->flags &= ~CLIENT_PROPAGATING;
         c->flags &= ~CLIENT_PENDING_WRITE;
         listUnlinkNode(server.clients_pending_write, ln);
 
@@ -2071,7 +2079,7 @@ int handleClientsWithPendingWrites(void) {
             installClientWriteHandler(c);
         }
     }
-    return processed;
+    return processed - listLength(server.clients_pending_write);
 }
 
 /* resetClient prepare the client to process the next command */
@@ -4389,14 +4397,14 @@ int stopThreadedIOIfNeeded(void) {
  * Fan in: The main thread waits until getIOPendingCount() returns 0. Then
  * it can safely perform post-processing and return to normal synchronous
  * work. */
-int handleClientsWithPendingWritesUsingThreads(void) {
+int handleClientsWithPendingWritesUsingThreads(int skip_clients_with_propagating_writes) {
     int processed = listLength(server.clients_pending_write);
     if (processed == 0) return 0; /* Return ASAP if there are no clients. */
 
     /* If I/O threads are disabled or we have few clients to serve, don't
      * use I/O threads, but the boring synchronous code. */
     if (server.io_threads_num == 1 || stopThreadedIOIfNeeded()) {
-        return handleClientsWithPendingWrites();
+        return handleClientsWithPendingWrites(skip_clients_with_propagating_writes);
     }
 
     /* Start threads if needed. */
@@ -4409,6 +4417,9 @@ int handleClientsWithPendingWritesUsingThreads(void) {
     int item_id = 0;
     while ((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
+        if (skip_clients_with_propagating_writes && clientHasPendingPropagateCommand(c)) continue;
+
+        c->flags &= ~CLIENT_PROPAGATING;
         c->flags &= ~CLIENT_PENDING_WRITE;
 
         /* Remove clients from the list of pending writes since

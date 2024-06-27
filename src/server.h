@@ -35,6 +35,7 @@
 #include "solarisfixes.h"
 #include "rio.h"
 #include "commands.h"
+#include "io_uring.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -428,6 +429,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_REPROCESSING_COMMAND (1ULL << 50)     /* The client is re-processing the command. */
 #define CLIENT_REPLICATION_DONE (1ULL << 51)         /* Indicate that replication has been done on the client */
 #define CLIENT_AUTHENTICATED (1ULL << 52)            /* Indicate a client has successfully authenticated */
+#define CLIENT_PROPAGATING (1ULL << 53)              /* Indicate that a client has propagated command. */
 
 /* Client capabilities */
 #define CLIENT_CAPA_REDIRECT (1 << 0) /* Indicate that the client can handle redirection */
@@ -706,11 +708,11 @@ typedef enum {
 #define serverPanic(...) _serverPanic(__FILE__, __LINE__, __VA_ARGS__), valkey_unreachable()
 
 /* The following macros provide a conditional assertion that is only executed
- * when the server config 'enable-debug-assert' is true. This is useful for adding
+ * when the server config 'debug-assert-enabled' is true. This is useful for adding
  * assertions that are too computationally expensive or risky to run in normal
  * operation, but are valuable for debugging or testing. */
-#define debugServerAssert(...) (server.enable_debug_assert ? serverAssert(__VA_ARGS__) : (void)0)
-#define debugServerAssertWithInfo(...) (server.enable_debug_assert ? serverAssertWithInfo(__VA_ARGS__) : (void)0)
+#define debugServerAssert(...) (server.debug_assert_enabled ? serverAssert(__VA_ARGS__) : (void)0)
+#define debugServerAssertWithInfo(...) (server.debug_assert_enabled ? serverAssertWithInfo(__VA_ARGS__) : (void)0)
 
 /* latency histogram per command init settings */
 #define LATENCY_HISTOGRAM_MIN_VALUE 1L          /* >= 1 nanosec */
@@ -1686,7 +1688,7 @@ struct valkeyServer {
     int enable_protected_configs; /* Enable the modification of protected configs, see PROTECTED_ACTION_ALLOWED_* */
     int enable_debug_cmd;         /* Enable DEBUG commands, see PROTECTED_ACTION_ALLOWED_* */
     int enable_module_cmd;        /* Enable MODULE commands, see PROTECTED_ACTION_ALLOWED_* */
-    int enable_debug_assert;      /* Enable debug asserts */
+    int debug_assert_enabled;     /* Enable debug asserts */
 
     /* RDB / AOF loading information */
     volatile sig_atomic_t loading;       /* We are loading data from disk if true */
@@ -2127,6 +2129,9 @@ struct valkeyServer {
     int reply_buffer_resizing_enabled; /* Is reply buffer resizing enabled (1 by default) */
     /* Local environment */
     char *locale_collate;
+    /* io_uring */
+    int io_uring_enabled;               /* If io_uring enabled (0 by default) */
+    io_uring_context *io_uring_context; /* Single io_uring_context instance for server. */
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -2720,8 +2725,8 @@ void processEventsWhileBlocked(void);
 void whileBlockedCron(void);
 void blockingOperationStarts(void);
 void blockingOperationEnds(void);
-int handleClientsWithPendingWrites(void);
-int handleClientsWithPendingWritesUsingThreads(void);
+int handleClientsWithPendingWrites(int skip_clients_with_propagating_writes);
+int handleClientsWithPendingWritesUsingThreads(int skip_clients_with_propagating_writes);
 int handleClientsWithPendingReadsUsingThreads(void);
 int stopThreadedIOIfNeeded(void);
 int clientHasPendingReplies(client *c);
@@ -2962,6 +2967,9 @@ void aofOpenIfNeededOnServerStart(void);
 void aofManifestFree(aofManifest *am);
 int aofDelHistoryFiles(void);
 int aofRewriteLimited(void);
+static inline int canUseIOUringForAlwaysFsync(void) {
+    return server.aof_state == AOF_ON && server.aof_fsync == AOF_FSYNC_ALWAYS && server.io_uring_enabled;
+}
 
 /* Child info */
 void openChildInfoPipe(void);

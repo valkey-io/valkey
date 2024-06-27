@@ -1033,7 +1033,7 @@ void addReplyAttributeLen(client *c, long length) {
 
 void addReplyPushLen(client *c, long length) {
     serverAssert(c->resp >= 3);
-    serverAssertWithInfo(c, NULL, c->flags & CLIENT_PUSHING);
+    serverAssertWithInfo(c, NULL, c->flags & CLIENT_PUSHING || c != server.current_client);
     addReplyAggregateLen(c, length, '>');
 }
 

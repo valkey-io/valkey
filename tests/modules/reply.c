@@ -133,6 +133,37 @@ int rw_attribute(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return VALKEYMODULE_OK;
 }
 
+/* RW.PUSH target_client_id length */
+int rw_push(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 3) return ValkeyModule_WrongArity(ctx);
+
+    unsigned long long target_client_id;
+    if (ValkeyModule_StringToULongLong(argv[1], &target_client_id) != VALKEYMODULE_OK) {
+        return ValkeyModule_ReplyWithError(ctx, "Target client id cannot be parsed as a integer");
+    }
+
+    long long len;
+    if (ValkeyModule_StringToLongLong(argv[2], &len) != VALKEYMODULE_OK) {
+        return ValkeyModule_ReplyWithError(ctx, "Length argument cannot be parsed as a integer");
+    }
+
+    unsigned long long old_client_id = ValkeyModule_GetClientId(ctx);
+    if (ValkeyModule_SetClientId(ctx, target_client_id) != VALKEYMODULE_OK) {
+        return ValkeyModule_ReplyWithError(ctx, "Target client does not exist");
+    }
+
+    if (ValkeyModule_ReplyWithPush(ctx, len) != VALKEYMODULE_OK) {
+        ValkeyModule_SetClientId(ctx, old_client_id);
+        return ValkeyModule_ReplyWithError(ctx, "Push failed");
+    }
+    for (int i = 0; i < len; ++i) {
+        ValkeyModule_ReplyWithLongLong(ctx, i);
+    }
+    ValkeyModule_SetClientId(ctx, old_client_id);
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
+}
+
 int rw_bool(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     if (argc != 1) return ValkeyModule_WrongArity(ctx);
@@ -196,6 +227,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx,"rw.map",rw_map,"",0,0,0) != VALKEYMODULE_OK)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx,"rw.attribute",rw_attribute,"",0,0,0) != VALKEYMODULE_OK)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"rw.push",rw_push,"",0,0,0) != VALKEYMODULE_OK)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx,"rw.set",rw_set,"",0,0,0) != VALKEYMODULE_OK)
         return VALKEYMODULE_ERR;

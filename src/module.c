@@ -2990,11 +2990,11 @@ void VM_TrimStringAllocation(ValkeyModuleString *str) {
  *
  * After starting a collection reply, the module must make calls to other
  * `ReplyWith*` style functions in order to emit the elements of the collection.
- * Collection types include: Array, Map, Set and Attribute.
+ * Collection types include: Array, Map, Set, Attribute and Push.
  *
  * When producing collections with a number of elements that is not known
  * beforehand, the function can be called with a special flag
- * VALKEYMODULE_POSTPONED_LEN (VALKEYMODULE_POSTPONED_ARRAY_LEN in the past),
+ * VALKEYMODULE_POSTPONED_LEN,
  * and the actual number of elements can be later set with VM_ReplySet*Length()
  * call (which will set the latest "open" count if there are multiple ones).
  * -------------------------------------------------------------------------- */
@@ -3120,6 +3120,7 @@ int VM_ReplyWithSimpleString(ValkeyModuleCtx *ctx, const char *msg) {
 #define COLLECTION_REPLY_MAP 2
 #define COLLECTION_REPLY_SET 3
 #define COLLECTION_REPLY_ATTRIBUTE 4
+#define COLLECTION_REPLY_PUSH 5
 
 int moduleReplyWithCollection(ValkeyModuleCtx *ctx, long len, int type) {
     client *c = moduleGetReplyClient(ctx);
@@ -3134,6 +3135,7 @@ int moduleReplyWithCollection(ValkeyModuleCtx *ctx, long len, int type) {
         case COLLECTION_REPLY_MAP: addReply(c, shared.emptymap[c->resp]); break;
         case COLLECTION_REPLY_SET: addReply(c, shared.emptyset[c->resp]); break;
         case COLLECTION_REPLY_ATTRIBUTE: addReplyAttributeLen(c, len); break;
+        case COLLECTION_REPLY_PUSH: addReplyPushLen(c, len); break;
         default: serverPanic("Invalid module empty reply type %d", type);
         }
     } else {
@@ -3142,6 +3144,7 @@ int moduleReplyWithCollection(ValkeyModuleCtx *ctx, long len, int type) {
         case COLLECTION_REPLY_MAP: addReplyMapLen(c, len); break;
         case COLLECTION_REPLY_SET: addReplySetLen(c, len); break;
         case COLLECTION_REPLY_ATTRIBUTE: addReplyAttributeLen(c, len); break;
+        case COLLECTION_REPLY_PUSH: addReplyPushLen(c, len); break;
         default: serverPanic("Invalid module reply type %d", type);
         }
     }
@@ -3211,6 +3214,26 @@ int VM_ReplyWithAttribute(ValkeyModuleCtx *ctx, long len) {
     if (ctx->client->resp == 2) return VALKEYMODULE_ERR;
 
     return moduleReplyWithCollection(ctx, len, COLLECTION_REPLY_ATTRIBUTE);
+}
+
+/* Send a push (out-of-band) reply of `len` elements to the client in the
+ * context. Use VM_SetClientId() to set the client in the context. It's
+ * currently not possible to send a push message to the client currently
+ * executing a command.
+ *
+ * A push reply has the same structure as an array. After starting a push reply,
+ * the module must make `len` calls to other `ReplyWith*` style functions in
+ * order to emit the elements of the push reply.
+ *
+ * Use VM_ReplySetPushLength() to set deferred length.
+ *
+ * Returns VALKEYMODULE_ERR if the client is not using RESP3 or if trying to
+ * send a push message to the client currently executing a command. Otherwise
+ * the function returns VALKEYMODULE_OK. */
+int VM_ReplyWithPush(ValkeyModuleCtx *ctx, long len) {
+    if (ctx->client->resp == 2) return VALKEYMODULE_ERR;
+    if (ctx->client == server.current_client) return VALKEYMODULE_ERR;
+    return moduleReplyWithCollection(ctx, len, COLLECTION_REPLY_PUSH);
 }
 
 /* Reply to the client with a null array, simply null in RESP3,
@@ -3317,6 +3340,17 @@ void VM_ReplySetSetLength(ValkeyModuleCtx *ctx, long len) {
 void VM_ReplySetAttributeLength(ValkeyModuleCtx *ctx, long len) {
     if (ctx->client->resp == 2) return;
     moduleReplySetCollectionLength(ctx, len, COLLECTION_REPLY_ATTRIBUTE);
+}
+
+/* When ValkeyModule_ReplyWithPush() is used with the argument
+ * VALKEYMODULE_POSTPONED_LEN, in situations where the number of items of the
+ * push reply is not known beforehand, this function is used for setting the
+ * number of elements.
+ *
+ * See the similar function ValkeyModule_ReplySetArrayLength() for details. */
+void VM_ReplySetPushLength(ValkeyModuleCtx *ctx, long len) {
+    if (ctx->client->resp == 2) return;
+    moduleReplySetCollectionLength(ctx, len, COLLECTION_REPLY_PUSH);
 }
 
 /* Reply with a bulk string, taking in input a C buffer pointer and length.
@@ -3602,6 +3636,26 @@ int VM_ReplicateVerbatim(ValkeyModuleCtx *ctx) {
 unsigned long long VM_GetClientId(ValkeyModuleCtx *ctx) {
     if (ctx->client == NULL) return 0;
     return ctx->client->id;
+}
+
+/* Sets the client in the current context. Returns VALKEYMODULE_OK on success
+ * and VALKEYMODULE_ERR if there is no client with the provided id.
+ *
+ * This is useful for sending push messages to clients using VM_ReplyWithPush().
+ * It is recommended to restore the client id afterwards as illustrated in the
+ * following example. (Error handling is omitted for brevity.)
+ *
+ *     uint64_t old_id = ValkeyModule_GetClientId(ctx);
+ *     ValkeyModule_SetClientId(ctx, another_client_id);
+ *     ValkeyModule_ReplyWithPush(ctx, 1);
+ *     ValkeyModule_ReplyWithLongLong(ctx, 42);
+ *     ValkeyModule_SetClientId(ctx, old_id);
+ */
+int VM_SetClientId(ValkeyModuleCtx *ctx, uint64_t id) {
+    client *client = lookupClientByID(id);
+    if (client == NULL) return VALKEYMODULE_ERR;
+    ctx->client = client;
+    return VALKEYMODULE_OK;
 }
 
 /* Return the ACL user name used by the client with the specified client ID.
@@ -13514,12 +13568,14 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ReplyWithMap);
     REGISTER_API(ReplyWithSet);
     REGISTER_API(ReplyWithAttribute);
+    REGISTER_API(ReplyWithPush);
     REGISTER_API(ReplyWithNullArray);
     REGISTER_API(ReplyWithEmptyArray);
     REGISTER_API(ReplySetArrayLength);
     REGISTER_API(ReplySetMapLength);
     REGISTER_API(ReplySetSetLength);
     REGISTER_API(ReplySetAttributeLength);
+    REGISTER_API(ReplySetPushLength);
     REGISTER_API(ReplyWithString);
     REGISTER_API(ReplyWithEmptyString);
     REGISTER_API(ReplyWithVerbatimString);
@@ -13625,6 +13681,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(IsChannelsPositionRequest);
     REGISTER_API(ChannelAtPosWithFlags);
     REGISTER_API(GetClientId);
+    REGISTER_API(SetClientId);
     REGISTER_API(GetClientUserNameById);
     REGISTER_API(GetContextFlags);
     REGISTER_API(AvoidReplicaTraffic);

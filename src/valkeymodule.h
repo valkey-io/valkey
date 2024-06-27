@@ -1055,6 +1055,7 @@ VALKEYMODULE_API int (*ValkeyModule_ReplyWithArray)(ValkeyModuleCtx *ctx, long l
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithMap)(ValkeyModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithSet)(ValkeyModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithAttribute)(ValkeyModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithPush)(ValkeyModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithNullArray)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithEmptyArray)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_ReplySetArrayLength)(ValkeyModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
@@ -1179,6 +1180,7 @@ VALKEYMODULE_API void (*ValkeyModule_KeyAtPosWithFlags)(ValkeyModuleCtx *ctx, in
 VALKEYMODULE_API int (*ValkeyModule_IsChannelsPositionRequest)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_ChannelAtPosWithFlags)(ValkeyModuleCtx *ctx, int pos, int flags) VALKEYMODULE_ATTR;
 VALKEYMODULE_API unsigned long long (*ValkeyModule_GetClientId)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_SetClientId)(ValkeyModuleCtx *ctx, uint64_t id) VALKEYMODULE_ATTR;
 VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_GetClientUserNameById)(ValkeyModuleCtx *ctx,
                                                                            uint64_t id)VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_GetClientInfoById)(void *ci, uint64_t id) VALKEYMODULE_ATTR;
@@ -1677,6 +1679,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(ReplyWithMap);
     VALKEYMODULE_GET_API(ReplyWithSet);
     VALKEYMODULE_GET_API(ReplyWithAttribute);
+    VALKEYMODULE_GET_API(ReplyWithPush);
     VALKEYMODULE_GET_API(ReplyWithNullArray);
     VALKEYMODULE_GET_API(ReplyWithEmptyArray);
     VALKEYMODULE_GET_API(ReplySetArrayLength);
@@ -1789,6 +1792,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(IsChannelsPositionRequest);
     VALKEYMODULE_GET_API(ChannelAtPosWithFlags);
     VALKEYMODULE_GET_API(GetClientId);
+    VALKEYMODULE_GET_API(SetClientId);
     VALKEYMODULE_GET_API(GetClientUserNameById);
     VALKEYMODULE_GET_API(GetContextFlags);
     VALKEYMODULE_GET_API(AvoidReplicaTraffic);

@@ -82,7 +82,7 @@ start_server {tags {"modules"}} {
             assert_equal {0 1 2 3 4} [r rw.array 5]
         }
 
-        test "RESP$proto: RM_ReplyWithMap: an map reply" {
+        test "RESP$proto: RM_ReplyWithMap: a map reply" {
             set res [r rw.map 3]
             if {$proto == 2} {
                 assert_equal {0 0 1 1.5 2 3} $res
@@ -91,11 +91,11 @@ start_server {tags {"modules"}} {
             }
         }
 
-        test "RESP$proto: RM_ReplyWithSet: an set reply" {
+        test "RESP$proto: RM_ReplyWithSet: a set reply" {
             assert_equal {0 1 2} [r rw.set 3]
         }
 
-        test "RESP$proto: RM_ReplyWithAttribute: an set reply" {
+        test "RESP$proto: RM_ReplyWithAttribute: an +OK reply with attributes" {
             if {$proto == 2} {
                 catch {[r rw.attribute 3]} e
                 assert_match "Attributes aren't supported by RESP 2" $e
@@ -111,6 +111,30 @@ start_server {tags {"modules"}} {
                 assert_equal [r read] {+OK}
                 r readraw 0
             }
+        }
+
+        test "RESP$proto: RM_ReplyWithPush: can't push to myself" {
+            set myid [r client id]
+            catch {[r rw.push $myid 3]} e
+            assert_match "Push failed*" $e
+        }
+
+        test "RESP$proto: RM_ReplyWithPush: push from another client" {
+            set myid [r client id]
+            set r2 [valkey_client]
+            if {$proto == 2} {
+                catch {[$r2 rw.push $myid 3]} e
+                assert_match "Push failed*" $e
+            } else {
+                assert_equal OK [$r2 rw.push $myid 3]
+                r readraw 1
+                assert_equal [r read] {>3}
+                assert_equal [r read] {:0}
+                assert_equal [r read] {:1}
+                assert_equal [r read] {:2}
+                r readraw 0
+            }
+            $r2 close
         }
 
         test "RESP$proto: RM_ReplyWithBool: a boolean reply" {

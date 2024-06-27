@@ -5387,7 +5387,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "lru_clock:%u\r\n", server.lruclock,
             "executable:%s\r\n", server.executable ? server.executable : "",
             "config_file:%s\r\n", server.configfile ? server.configfile : "",
-            "io_threads_active:%i\r\n", server.io_threads_active));
+            "io_threads_active:%i\r\n", server.io_threads_active,
+            "availability_zone:%s\r\n", server.availability_zone));
         /* clang-format on */
 
         /* Conditional properties */

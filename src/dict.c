@@ -53,6 +53,8 @@
 #define static_assert(expr, lit) _Static_assert(expr, lit)
 #endif
 
+#define UNUSED(V) ((void)V)
+
 /* Using dictSetResizeEnabled() we make possible to disable
  * resizing and rehashing of the hash table as needed. This is very important
  * for us, as we use copy-on-write and don't want to move too much memory
@@ -856,12 +858,12 @@ void dictSetKey(dict *d, dictEntry *de, void *key) {
 }
 
 void dictSetVal(dict *d, dictEntry *de, void *val) {
+    UNUSED(d);
     assert(entryHasValue(de));
-    void *v = d->type->valDup ? d->type->valDup(d, val) : val;
     if (entryIsEmbedded(de)) {
-        decodeEmbeddedEntry(de)->v.val = v;
+        decodeEmbeddedEntry(de)->v.val = val;
     } else {
-        de->v.val = v;
+        de->v.val = val;
     }
 }
 
@@ -1008,6 +1010,8 @@ unsigned long long dictFingerprint(dict *d) {
     return hash;
 }
 
+/* Initiaize a normal iterator. This function should be called when initializing
+ * an iterator on the stack. */
 void dictInitIterator(dictIterator *iter, dict *d) {
     iter->d = d;
     iter->table = 0;
@@ -1017,6 +1021,8 @@ void dictInitIterator(dictIterator *iter, dict *d) {
     iter->nextEntry = NULL;
 }
 
+/* Initialize a safe iterator, which is allowed to modify the dictionary while iterating.
+ * You must call dictResetIterator when you are done with a safe iterator. */
 void dictInitSafeIterator(dictIterator *iter, dict *d) {
     dictInitIterator(iter, d);
     iter->safe = 1;
@@ -1024,9 +1030,10 @@ void dictInitSafeIterator(dictIterator *iter, dict *d) {
 
 void dictResetIterator(dictIterator *iter) {
     if (!(iter->index == -1 && iter->table == 0)) {
-        if (iter->safe)
+        if (iter->safe) {
             dictResumeRehashing(iter->d);
-        else
+            assert(iter->d->pauserehash >= 0);
+        } else
             assert(iter->fingerprint == dictFingerprint(iter->d));
     }
 }
@@ -1801,7 +1808,7 @@ char *stringFromLongLong(long long value) {
     return s;
 }
 
-dictType BenchmarkDictType = {hashCallback, NULL, NULL, compareCallback, freeCallback, NULL, NULL};
+dictType BenchmarkDictType = {hashCallback, NULL, compareCallback, freeCallback, NULL, NULL};
 
 #define start_benchmark() start = timeInMilliseconds()
 #define end_benchmark(msg)                                                                                             \

@@ -13,11 +13,11 @@
         ],
         "reply_schema": {
             "const": "OK",
-            "description": "Force a fail over as if the master was not reachable, and without asking for agreement to other Sentinels."
+            "description": "Force a fail over as if the primary was not reachable, and without asking for agreement to other Sentinels."
         },
         "arguments": [
             {
-                "name": "master-name",
+                "name": "primary-name",
                 "type": "string"
             }
         ]

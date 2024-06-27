@@ -31,6 +31,7 @@
 #include "fmacros.h"
 #include "config.h"
 #include "solarisfixes.h"
+#include "serverassert.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,7 +52,7 @@ void zlibc_free(void *ptr) {
 
 #include <string.h>
 #include "zmalloc.h"
-#include "atomicvar.h"
+#include <stdatomic.h>
 
 #define UNUSED(x) ((void)(x))
 
@@ -87,10 +88,10 @@ void zlibc_free(void *ptr) {
 #define dallocx(ptr, flags) je_dallocx(ptr, flags)
 #endif
 
-#define update_zmalloc_stat_alloc(__n) atomicIncr(used_memory, (__n))
-#define update_zmalloc_stat_free(__n) atomicDecr(used_memory, (__n))
+#define update_zmalloc_stat_alloc(__n) atomic_fetch_add_explicit(&used_memory, (__n), memory_order_relaxed)
+#define update_zmalloc_stat_free(__n) atomic_fetch_sub_explicit(&used_memory, (__n), memory_order_relaxed)
 
-static serverAtomic size_t used_memory = 0;
+static _Atomic size_t used_memory = 0;
 
 static void zmalloc_default_oom(size_t size) {
     fprintf(stderr, "zmalloc: Out of memory trying to allocate %zu bytes\n", size);
@@ -361,22 +362,48 @@ size_t zmalloc_usable_size(void *ptr) {
 }
 #endif
 
+/* Frees the memory buffer pointed to by ptr and updates statistics. When using
+ * jemalloc it uses the fast track by specifying the buffer size.
+ *
+ * ptr must have been returned by a previous call to the system allocator which
+ * returned the usable size, such as zmalloc_usable. ptr must not be NULL. The
+ * caller is responsible to provide the actual allocation size, which may be
+ * different from the requested size. */
+static inline void zfree_internal(void *ptr, size_t size) {
+    assert(ptr != NULL);
+    update_zmalloc_stat_free(size);
+
+#ifdef USE_JEMALLOC
+    je_sdallocx(ptr, size, 0);
+#else
+    free(ptr);
+#endif
+}
+
 void zfree(void *ptr) {
-#ifndef HAVE_MALLOC_SIZE
-    void *realptr;
-    size_t oldsize;
+    if (ptr == NULL) return;
+
+#ifdef HAVE_MALLOC_SIZE
+    size_t size = zmalloc_size(ptr);
+#else
+    ptr = (char *)ptr - PREFIX_SIZE;
+    size_t data_size = *((size_t *)ptr);
+    size_t size = data_size + PREFIX_SIZE;
 #endif
 
+    zfree_internal(ptr, size);
+}
+
+/* Like zfree(), but doesn't call zmalloc_size(). */
+void zfree_with_size(void *ptr, size_t size) {
     if (ptr == NULL) return;
-#ifdef HAVE_MALLOC_SIZE
-    update_zmalloc_stat_free(zmalloc_size(ptr));
-    free(ptr);
-#else
-    realptr = (char *)ptr - PREFIX_SIZE;
-    oldsize = *((size_t *)realptr);
-    update_zmalloc_stat_free(oldsize + PREFIX_SIZE);
-    free(realptr);
+
+#ifndef HAVE_MALLOC_SIZE
+    ptr = (char *)ptr - PREFIX_SIZE;
+    size += PREFIX_SIZE;
 #endif
+
+    zfree_internal(ptr, size);
 }
 
 char *zstrdup(const char *s) {
@@ -388,8 +415,7 @@ char *zstrdup(const char *s) {
 }
 
 size_t zmalloc_used_memory(void) {
-    size_t um;
-    atomicGet(used_memory, um);
+    size_t um = atomic_load_explicit(&used_memory, memory_order_relaxed);
     return um;
 }
 
@@ -604,8 +630,6 @@ size_t zmalloc_get_rss(void) {
 #endif
 
 #if defined(USE_JEMALLOC)
-
-#include "serverassert.h"
 
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)

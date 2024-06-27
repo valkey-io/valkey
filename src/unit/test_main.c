@@ -33,8 +33,7 @@ int runTestSuite(struct unitTestSuite *test, int argc, char **argv, int flags) {
     }
 
     printf("[" KBLUE "END" KRESET "] - %s: ", test->filename);
-    printf("%d tests, %d passed, %d failed\n", test_num,
-        test_num - failed_tests, failed_tests);
+    printf("%d tests, %d passed, %d failed\n", test_num, test_num - failed_tests, failed_tests);
     return !failed_tests;
 }
 
@@ -43,15 +42,17 @@ int main(int argc, char **argv) {
     char *file = NULL;
     for (int j = 1; j < argc; j++) {
         char *arg = argv[j];
-        if (!strcasecmp(arg, "--accurate")) flags |= UNIT_TEST_ACCURATE;
-        else if (!strcasecmp(arg, "--large-memory")) flags |= UNIT_TEST_LARGE_MEMORY;
+        if (!strcasecmp(arg, "--accurate"))
+            flags |= UNIT_TEST_ACCURATE;
+        else if (!strcasecmp(arg, "--large-memory"))
+            flags |= UNIT_TEST_LARGE_MEMORY;
         else if (!strcasecmp(arg, "--single") && (j + 1 < argc)) {
             flags |= UNIT_TEST_SINGLE;
             file = argv[j + 1];
         }
     }
 
-    int numtests = sizeof(unitTestSuite)/sizeof(struct unitTestSuite);
+    int numtests = sizeof(unitTestSuite) / sizeof(struct unitTestSuite);
     int failed_num = 0, suites_executed = 0;
     for (int j = 0; j < numtests; j++) {
         if (file && strcasecmp(file, unitTestSuite[j].filename)) continue;
@@ -60,8 +61,8 @@ int main(int argc, char **argv) {
         }
         suites_executed++;
     }
-    printf("%d test suites executed, %d passed, %d failed\n", suites_executed,
-            suites_executed-failed_num, failed_num);
+    printf("%d test suites executed, %d passed, %d failed\n", suites_executed, suites_executed - failed_num,
+           failed_num);
 
     return failed_num == 0 ? 0 : 1;
 }

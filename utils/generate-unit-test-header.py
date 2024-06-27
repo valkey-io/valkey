@@ -26,6 +26,7 @@ if __name__ == '__main__':
                     test_suites.append({'file': file, 'tests': tests})
         test_suites.sort(key=lambda test_suite: test_suite['file'])
         output.write("""/* Do not modify this file, it's automatically generated from utils/generate-unit-test-header.py */
+/* clang-format off */
 typedef int unitTestProc(int argc, char **argv, int flags);
 
 typedef struct unitTest {

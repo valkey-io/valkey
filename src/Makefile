@@ -35,7 +35,7 @@ DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram fpconv
 NODEPS:=clean distclean
 
 # Default settings
-STD=-pedantic -DSERVER_STATIC=''
+STD=-pedantic
 
 # Use -Wno-c11-extensions on clang, either where explicitly used or on
 # platforms we can assume it's being used.
@@ -150,6 +150,11 @@ DEBUG=-g -ggdb
 # Linux ARM32 needs -latomic at linking time
 ifneq (,$(findstring armv,$(uname_M)))
         FINAL_LIBS+=-latomic
+else
+# Linux POWER needs -latomic at linking time
+ifneq (,$(findstring ppc,$(uname_M)))
+        FINAL_LIBS+=-latomic
+endif
 endif
 
 ifeq ($(uname_S),SunOS)

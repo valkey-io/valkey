@@ -36,9 +36,11 @@
 #include "functions.h"
 #include "intset.h" /* Compact integer set structure */
 #include "bio.h"
+#include "zmalloc.h"
 
 #include <math.h>
 #include <fcntl.h>
+#include <stdatomic.h>
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -104,6 +106,30 @@ void rdbReportError(int corruption_error, int linenum, char *reason, ...) {
     }
     serverLog(LL_WARNING, "Terminating server after rdb file reading failure.");
     exit(1);
+}
+
+typedef struct {
+    rdbAuxFieldEncoder encoder;
+    rdbAuxFieldDecoder decoder;
+} rdbAuxFieldCodec;
+
+dictType rdbAuxFieldDictType = {
+    dictSdsCaseHash,       /* hash function */
+    NULL,                  /* key dup */
+    dictSdsKeyCaseCompare, /* key compare */
+    dictSdsDestructor,     /* key destructor */
+    dictVanillaFree,       /* val destructor */
+    NULL                   /* allow to expand */
+};
+
+dict *rdbAuxFields = NULL;
+
+int rdbRegisterAuxField(char *auxfield, rdbAuxFieldEncoder encoder, rdbAuxFieldDecoder decoder) {
+    if (rdbAuxFields == NULL) rdbAuxFields = dictCreate(&rdbAuxFieldDictType);
+    rdbAuxFieldCodec *codec = zmalloc(sizeof(rdbAuxFieldCodec));
+    codec->encoder = encoder;
+    codec->decoder = decoder;
+    return dictAdd(rdbAuxFields, sdsnew(auxfield), (void *)codec) == DICT_OK ? C_OK : C_ERR;
 }
 
 ssize_t rdbWriteRaw(rio *rdb, void *p, size_t len) {
@@ -1182,9 +1208,27 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     if (rsi) {
         if (rdbSaveAuxFieldStrInt(rdb, "repl-stream-db", rsi->repl_stream_db) == -1) return -1;
         if (rdbSaveAuxFieldStrStr(rdb, "repl-id", server.replid) == -1) return -1;
-        if (rdbSaveAuxFieldStrInt(rdb, "repl-offset", server.master_repl_offset) == -1) return -1;
+        if (rdbSaveAuxFieldStrInt(rdb, "repl-offset", server.primary_repl_offset) == -1) return -1;
     }
     if (rdbSaveAuxFieldStrInt(rdb, "aof-base", aof_base) == -1) return -1;
+
+    /* Handle additional dynamic aux fields */
+    if (rdbAuxFields != NULL) {
+        dictIterator di;
+        dictInitIterator(&di, rdbAuxFields);
+        dictEntry *de;
+        while ((de = dictNext(&di)) != NULL) {
+            rdbAuxFieldCodec *codec = (rdbAuxFieldCodec *)dictGetVal(de);
+            sds s = codec->encoder(rdbflags);
+            if (s == NULL) continue;
+            if (rdbSaveAuxFieldStrStr(rdb, dictGetKey(de), s) == -1) {
+                sdsfree(s);
+                return -1;
+            }
+            sdsfree(s);
+        }
+    }
+
     return 1;
 }
 
@@ -1305,15 +1349,14 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
         int curr_slot = kvstoreIteratorGetCurrentDictIndex(kvs_it);
         /* Save slot info. */
         if (server.cluster_enabled && curr_slot != last_slot) {
-            if ((res = rdbSaveType(rdb, RDB_OPCODE_SLOT_INFO)) < 0) goto werr;
-            written += res;
-            if ((res = rdbSaveLen(rdb, curr_slot)) < 0) goto werr;
-            written += res;
-            if ((res = rdbSaveLen(rdb, kvstoreDictSize(db->keys, curr_slot))) < 0) goto werr;
-            written += res;
-            if ((res = rdbSaveLen(rdb, kvstoreDictSize(db->expires, curr_slot))) < 0) goto werr;
-            written += res;
+            sds slot_info = sdscatprintf(sdsempty(), "%i,%lu,%lu", curr_slot, kvstoreDictSize(db->keys, curr_slot),
+                                         kvstoreDictSize(db->expires, curr_slot));
+            if ((res = rdbSaveAuxFieldStrStr(rdb, "slot-info", slot_info)) < 0) {
+                sdsfree(slot_info);
+                goto werr;
+            }
             last_slot = curr_slot;
+            sdsfree(slot_info);
         }
         sds keystr = dictGetKey(de);
         robj key, *o = dictGetVal(de);
@@ -1368,19 +1411,19 @@ int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     snprintf(magic, sizeof(magic), "REDIS%04d", RDB_VERSION);
     if (rdbWriteRaw(rdb, magic, 9) == -1) goto werr;
     if (rdbSaveInfoAuxFields(rdb, rdbflags, rsi) == -1) goto werr;
-    if (!(req & SLAVE_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, VALKEYMODULE_AUX_BEFORE_RDB) == -1) goto werr;
+    if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, VALKEYMODULE_AUX_BEFORE_RDB) == -1) goto werr;
 
     /* save functions */
-    if (!(req & SLAVE_REQ_RDB_EXCLUDE_FUNCTIONS) && rdbSaveFunctions(rdb) == -1) goto werr;
+    if (!(req & REPLICA_REQ_RDB_EXCLUDE_FUNCTIONS) && rdbSaveFunctions(rdb) == -1) goto werr;
 
     /* save all databases, skip this if we're in functions-only mode */
-    if (!(req & SLAVE_REQ_RDB_EXCLUDE_DATA)) {
+    if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA)) {
         for (j = 0; j < server.dbnum; j++) {
             if (rdbSaveDb(rdb, j, rdbflags, &key_counter) == -1) goto werr;
         }
     }
 
-    if (!(req & SLAVE_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, VALKEYMODULE_AUX_AFTER_RDB) == -1) goto werr;
+    if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, VALKEYMODULE_AUX_AFTER_RDB) == -1) goto werr;
 
     /* EOF opcode */
     if (rdbSaveType(rdb, RDB_OPCODE_EOF) == -1) goto werr;
@@ -1494,7 +1537,7 @@ werr:
 int rdbSaveToFile(const char *filename) {
     startSaving(RDBFLAGS_NONE);
 
-    if (rdbSaveInternal(SLAVE_REQ_NONE, filename, NULL, RDBFLAGS_NONE) != C_OK) {
+    if (rdbSaveInternal(REPLICA_REQ_NONE, filename, NULL, RDBFLAGS_NONE) != C_OK) {
         int saved_errno = errno;
         stopSaving(0);
         errno = saved_errno;
@@ -1815,8 +1858,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
     int deep_integrity_validation = server.sanitize_dump_payload == SANITIZE_DUMP_YES;
     if (server.sanitize_dump_payload == SANITIZE_DUMP_CLIENTS) {
         /* Skip sanitization when loading (an RDB), or getting a RESTORE command
-         * from either the master or a client using an ACL user with the skip-sanitize-payload flag. */
-        int skip = server.loading || (server.current_client && (server.current_client->flags & CLIENT_MASTER));
+         * from either the primary or a client using an ACL user with the skip-sanitize-payload flag. */
+        int skip = server.loading || (server.current_client && (server.current_client->flags & CLIENT_PRIMARY));
         if (!skip && server.current_client && server.current_client->user)
             skip = !!(server.current_client->user->flags & USER_FLAG_SANITIZE_PAYLOAD_SKIP);
         deep_integrity_validation = !skip;
@@ -2433,12 +2476,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
         }
 
         while (listpacks--) {
-            /* Get the master ID, the one we'll use as key of the radix tree
+            /* Get the primary ID, the one we'll use as key of the radix tree
              * node: the entries inside the listpack itself are delta-encoded
              * relatively to this ID. */
             sds nodekey = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
             if (nodekey == NULL) {
-                rdbReportReadError("Stream master ID loading failed: invalid encoding or I/O error.");
+                rdbReportReadError("Stream primary ID loading failed: invalid encoding or I/O error.");
                 decrRefCount(o);
                 return NULL;
             }
@@ -2882,13 +2925,13 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
     if (server.loading_process_events_interval_bytes &&
         (r->processed_bytes + len) / server.loading_process_events_interval_bytes >
             r->processed_bytes / server.loading_process_events_interval_bytes) {
-        if (server.masterhost && server.repl_state == REPL_STATE_TRANSFER) replicationSendNewlineToMaster();
+        if (server.primary_host && server.repl_state == REPL_STATE_TRANSFER) replicationSendNewlineToPrimary();
         loadingAbsProgress(r->processed_bytes);
         processEventsWhileBlocked();
         processModuleLoadingProgressEvent(0);
     }
     if (server.repl_state == REPL_STATE_TRANSFER && rioCheckType(r) == RIO_TYPE_CONN) {
-        atomicIncr(server.stat_net_repl_input_bytes, len);
+        atomic_fetch_add_explicit(&server.stat_net_repl_input_bytes, len, memory_order_relaxed);
     }
 }
 
@@ -3020,10 +3063,9 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             if ((dbid = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             if (dbid >= (unsigned)server.dbnum) {
                 serverLog(LL_WARNING,
-                          "FATAL: Data file was created with a Redis "
-                          "server configured to handle more than %d "
-                          "databases. Exiting\n",
-                          server.dbnum);
+                          "FATAL: Data file was created with a %s server configured to handle "
+                          "more than %d databases. Exiting\n",
+                          SERVER_TITLE, server.dbnum);
                 exit(1);
             }
             db = rdb_loading_ctx->dbarray + dbid;
@@ -3034,20 +3076,6 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             if ((db_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             if ((expires_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             should_expand_db = 1;
-            continue; /* Read next opcode. */
-        } else if (type == RDB_OPCODE_SLOT_INFO) {
-            uint64_t slot_id, slot_size, expires_slot_size;
-            if ((slot_id = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
-            if ((slot_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
-            if ((expires_slot_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
-            if (!server.cluster_enabled) {
-                continue; /* Ignore gracefully. */
-            }
-            /* In cluster mode we resize individual slot specific dictionaries based on the number of keys that slot
-             * holds. */
-            kvstoreDictExpand(db->keys, slot_id, slot_size);
-            kvstoreDictExpand(db->expires, slot_id, expires_slot_size);
-            should_expand_db = 0;
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB
@@ -3081,7 +3109,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             } else if (!strcasecmp(auxkey->ptr, "redis-ver")) {
                 serverLog(LL_NOTICE, "Loading RDB produced by Redis version %s", (char *)auxval->ptr);
             } else if (!strcasecmp(auxkey->ptr, "valkey-ver")) {
-                serverLog(LL_NOTICE, "Loading RDB produced by valkey version %s", (char *)auxval->ptr);
+                serverLog(LL_NOTICE, "Loading RDB produced by Valkey version %s", (char *)auxval->ptr);
             } else if (!strcasecmp(auxkey->ptr, "ctime")) {
                 time_t age = time(NULL) - strtol(auxval->ptr, NULL, 10);
                 if (age < 0) age = 0;
@@ -3098,10 +3126,45 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 if (isbase) serverLog(LL_NOTICE, "RDB is base AOF");
             } else if (!strcasecmp(auxkey->ptr, "redis-bits")) {
                 /* Just ignored. */
+            } else if (!strcasecmp(auxkey->ptr, "slot-info")) {
+                int slot_id;
+                unsigned long slot_size, expires_slot_size;
+                /* Try to parse the slot information. In case the number of parsed arguments is smaller than expected
+                 * we'll fail the RDB load. */
+                if (sscanf(auxval->ptr, "%i,%lu,%lu", &slot_id, &slot_size, &expires_slot_size) < 3) {
+                    decrRefCount(auxkey);
+                    decrRefCount(auxval);
+                    goto eoferr;
+                }
+
+                if (server.cluster_enabled) {
+                    /* In cluster mode we resize individual slot specific dictionaries based on the number of keys that
+                     * slot holds. */
+                    kvstoreDictExpand(db->keys, slot_id, slot_size);
+                    kvstoreDictExpand(db->expires, slot_id, expires_slot_size);
+                    should_expand_db = 0;
+                }
             } else {
-                /* We ignore fields we don't understand, as by AUX field
-                 * contract. */
-                serverLog(LL_DEBUG, "Unrecognized RDB AUX field: '%s'", (char *)auxkey->ptr);
+                /* Check if this is a dynamic aux field */
+                int handled = 0;
+                if (rdbAuxFields != NULL) {
+                    dictEntry *de = dictFind(rdbAuxFields, auxkey->ptr);
+                    if (de != NULL) {
+                        handled = 1;
+                        rdbAuxFieldCodec *codec = (rdbAuxFieldCodec *)dictGetVal(de);
+                        if (codec->decoder(rdbflags, auxval->ptr) == C_ERR) {
+                            decrRefCount(auxkey);
+                            decrRefCount(auxval);
+                            goto eoferr;
+                        }
+                    }
+                }
+
+                if (!handled) {
+                    /* We ignore fields we don't understand, as by AUX field
+                     * contract. */
+                    serverLog(LL_DEBUG, "Unrecognized RDB AUX field: '%s'", (char *)auxkey->ptr);
+                }
             }
 
             decrRefCount(auxkey);
@@ -3197,9 +3260,9 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
 
         /* Check if the key already expired. This function is used when loading
          * an RDB file from disk, either at startup, or when an RDB was
-         * received from the master. In the latter case, the master is
+         * received from the primary. In the latter case, the primary is
          * responsible for key expiry. If we would expire keys here, the
-         * snapshot taken by the master may not be reflected on the slave.
+         * snapshot taken by the primary may not be reflected on the replica.
          * Similarly, if the base AOF is RDB format, we want to load all
          * the keys they are, since the log of operations in the incr AOF
          * is assumed to work in the exact keyspace state. */
@@ -3215,18 +3278,18 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 sdsfree(key);
                 goto eoferr;
             }
-        } else if (iAmMaster() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now) {
+        } else if (iAmPrimary() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now) {
             if (rdbflags & RDBFLAGS_FEED_REPL) {
                 /* Caller should have created replication backlog,
                  * and now this path only works when rebooting,
                  * so we don't have replicas yet. */
-                serverAssert(server.repl_backlog != NULL && listLength(server.slaves) == 0);
+                serverAssert(server.repl_backlog != NULL && listLength(server.replicas) == 0);
                 robj keyobj;
                 initStaticStringObject(keyobj, key);
                 robj *argv[2];
                 argv[0] = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
                 argv[1] = &keyobj;
-                replicationFeedSlaves(dbid, argv, 2);
+                replicationFeedReplicas(dbid, argv, 2);
             }
             sdsfree(key);
             decrRefCount(val);
@@ -3381,7 +3444,7 @@ static void backgroundSaveDoneHandlerDisk(int exitcode, int bysignal, time_t sav
 }
 
 /* A background saving child (BGSAVE) terminated its work. Handle this.
- * This function covers the case of RDB -> Slaves socket transfers for
+ * This function covers the case of RDB -> Replicas socket transfers for
  * diskless replication. */
 static void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
     if (!bysignal && exitcode == 0) {
@@ -3419,9 +3482,9 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
     server.rdb_child_type = RDB_CHILD_TYPE_NONE;
     server.rdb_save_time_last = save_end - server.rdb_save_time_start;
     server.rdb_save_time_start = -1;
-    /* Possibly there are slaves waiting for a BGSAVE in order to be served
+    /* Possibly there are replicas waiting for a BGSAVE in order to be served
      * (the first stage of SYNC is a bulk transfer of dump.rdb) */
-    updateSlavesWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, type);
+    updateReplicasWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, type);
 }
 
 /* Kill the RDB saving child using SIGUSR1 (so that the parent will know
@@ -3437,9 +3500,9 @@ void killRDBChild(void) {
      * - rdbRemoveTempFile */
 }
 
-/* Spawn an RDB child that writes the RDB to the sockets of the slaves
- * that are currently in SLAVE_STATE_WAIT_BGSAVE_START state. */
-int rdbSaveToSlavesSockets(int req, rdbSaveInfo *rsi) {
+/* Spawn an RDB child that writes the RDB to the sockets of the replicas
+ * that are currently in REPLICA_STATE_WAIT_BGSAVE_START state. */
+int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
     listNode *ln;
     listIter li;
     pid_t childpid;
@@ -3471,17 +3534,17 @@ int rdbSaveToSlavesSockets(int req, rdbSaveInfo *rsi) {
 
     /* Collect the connections of the replicas we want to transfer
      * the RDB to, which are i WAIT_BGSAVE_START state. */
-    server.rdb_pipe_conns = zmalloc(sizeof(connection *) * listLength(server.slaves));
+    server.rdb_pipe_conns = zmalloc(sizeof(connection *) * listLength(server.replicas));
     server.rdb_pipe_numconns = 0;
     server.rdb_pipe_numconns_writing = 0;
-    listRewind(server.slaves, &li);
+    listRewind(server.replicas, &li);
     while ((ln = listNext(&li))) {
-        client *slave = ln->value;
-        if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
-            /* Check slave has the exact requirements */
-            if (slave->slave_req != req) continue;
-            server.rdb_pipe_conns[server.rdb_pipe_numconns++] = slave->conn;
-            replicationSetupSlaveForFullResync(slave, getPsyncInitialOffset());
+        client *replica = ln->value;
+        if (replica->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
+            /* Check replica has the exact requirements */
+            if (replica->replica_req != req) continue;
+            server.rdb_pipe_conns[server.rdb_pipe_numconns++] = replica->conn;
+            replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset());
         }
     }
 
@@ -3525,13 +3588,13 @@ int rdbSaveToSlavesSockets(int req, rdbSaveInfo *rsi) {
             serverLog(LL_WARNING, "Can't save in background: fork: %s", strerror(errno));
 
             /* Undo the state change. The caller will perform cleanup on
-             * all the slaves in BGSAVE_START state, but an early call to
-             * replicationSetupSlaveForFullResync() turned it into BGSAVE_END */
-            listRewind(server.slaves, &li);
+             * all the replicas in BGSAVE_START state, but an early call to
+             * replicationSetupReplicaForFullResync() turned it into BGSAVE_END */
+            listRewind(server.replicas, &li);
             while ((ln = listNext(&li))) {
-                client *slave = ln->value;
-                if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_END) {
-                    slave->replstate = SLAVE_STATE_WAIT_BGSAVE_START;
+                client *replica = ln->value;
+                if (replica->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) {
+                    replica->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
                 }
             }
             close(rdb_pipe_write);
@@ -3566,7 +3629,7 @@ void saveCommand(client *c) {
 
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);
-    if (rdbSave(SLAVE_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) == C_OK) {
+    if (rdbSave(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) == C_OK) {
         addReply(c, shared.ok);
     } else {
         addReplyErrorObject(c, shared.err);
@@ -3602,7 +3665,7 @@ void bgsaveCommand(client *c) {
                              "Use BGSAVE SCHEDULE in order to schedule a BGSAVE whenever "
                              "possible.");
         }
-    } else if (rdbSaveBackground(SLAVE_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) == C_OK) {
+    } else if (rdbSaveBackground(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE) == C_OK) {
         addReplyStatus(c, "Background saving started");
     } else {
         addReplyErrorObject(c, shared.err);
@@ -3611,48 +3674,48 @@ void bgsaveCommand(client *c) {
 
 /* Populate the rdbSaveInfo structure used to persist the replication
  * information inside the RDB file. Currently the structure explicitly
- * contains just the currently selected DB from the master stream, however
+ * contains just the currently selected DB from the primary stream, however
  * if the rdbSave*() family functions receive a NULL rsi structure also
  * the Replication ID/offset is not saved. The function populates 'rsi'
  * that is normally stack-allocated in the caller, returns the populated
- * pointer if the instance has a valid master client, otherwise NULL
+ * pointer if the instance has a valid primary client, otherwise NULL
  * is returned, and the RDB saving will not persist any replication related
  * information. */
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
     rdbSaveInfo rsi_init = RDB_SAVE_INFO_INIT;
     *rsi = rsi_init;
 
-    /* If the instance is a master, we can populate the replication info
+    /* If the instance is a primary, we can populate the replication info
      * only when repl_backlog is not NULL. If the repl_backlog is NULL,
      * it means that the instance isn't in any replication chains. In this
-     * scenario the replication info is useless, because when a slave
+     * scenario the replication info is useless, because when a replica
      * connects to us, the NULL repl_backlog will trigger a full
      * synchronization, at the same time we will use a new replid and clear
      * replid2. */
-    if (!server.masterhost && server.repl_backlog) {
-        /* Note that when server.slaveseldb is -1, it means that this master
+    if (!server.primary_host && server.repl_backlog) {
+        /* Note that when server.replicas_eldb is -1, it means that this primary
          * didn't apply any write commands after a full synchronization.
-         * So we can let repl_stream_db be 0, this allows a restarted slave
+         * So we can let repl_stream_db be 0, this allows a restarted replica
          * to reload replication ID/offset, it's safe because the next write
          * command must generate a SELECT statement. */
-        rsi->repl_stream_db = server.slaveseldb == -1 ? 0 : server.slaveseldb;
+        rsi->repl_stream_db = server.replicas_eldb == -1 ? 0 : server.replicas_eldb;
         return rsi;
     }
 
-    /* If the instance is a slave we need a connected master
+    /* If the instance is a replica we need a connected primary
      * in order to fetch the currently selected DB. */
-    if (server.master) {
-        rsi->repl_stream_db = server.master->db->id;
+    if (server.primary) {
+        rsi->repl_stream_db = server.primary->db->id;
         return rsi;
     }
 
-    /* If we have a cached master we can use it in order to populate the
-     * replication selected DB info inside the RDB file: the slave can
-     * increment the master_repl_offset only from data arriving from the
-     * master, so if we are disconnected the offset in the cached master
+    /* If we have a cached primary we can use it in order to populate the
+     * replication selected DB info inside the RDB file: the replica can
+     * increment the primary_repl_offset only from data arriving from the
+     * primary, so if we are disconnected the offset in the cached primary
      * is valid. */
-    if (server.cached_master) {
-        rsi->repl_stream_db = server.cached_master->db->id;
+    if (server.cached_primary) {
+        rsi->repl_stream_db = server.cached_primary->db->id;
         return rsi;
     }
     return NULL;

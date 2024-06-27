@@ -31,7 +31,6 @@
 #include "sds.h"
 #include "dict.h"
 #include "adlist.h"
-#include "atomicvar.h"
 
 #define LOAD_TIMEOUT_MS 500
 
@@ -66,7 +65,6 @@ typedef struct functionsLibMetaData {
 dictType engineDictType = {
     dictSdsCaseHash,       /* hash function */
     dictSdsDup,            /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     NULL,                  /* val destructor */
@@ -76,7 +74,6 @@ dictType engineDictType = {
 dictType functionDictType = {
     dictSdsCaseHash,       /* hash function */
     dictSdsDup,            /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     NULL,                  /* val destructor */
@@ -86,7 +83,6 @@ dictType functionDictType = {
 dictType engineStatsDictType = {
     dictSdsCaseHash,       /* hash function */
     dictSdsDup,            /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     engineStatsDispose,    /* val destructor */
@@ -96,7 +92,6 @@ dictType engineStatsDictType = {
 dictType libraryFunctionDictType = {
     dictSdsHash,           /* hash function */
     dictSdsDup,            /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCompare,     /* key compare */
     dictSdsDestructor,     /* key destructor */
     engineFunctionDispose, /* val destructor */
@@ -106,7 +101,6 @@ dictType libraryFunctionDictType = {
 dictType librariesDictType = {
     dictSdsHash,          /* hash function */
     dictSdsDup,           /* key dup */
-    NULL,                 /* val dup */
     dictSdsKeyCompare,    /* key compare */
     dictSdsDestructor,    /* key destructor */
     engineLibraryDispose, /* val destructor */

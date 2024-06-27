@@ -371,3 +371,7 @@ proc check_cluster_node_mark {flag ref_node_index instance_id_to_check} {
     }
     fail "Unable to find instance id in cluster nodes. ID: $instance_id_to_check"
 }
+
+proc get_slot_field {slot_output shard_id node_id attrib_id} {
+    return [lindex [lindex [lindex $slot_output $shard_id] $node_id] $attrib_id]
+}

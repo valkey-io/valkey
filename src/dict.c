@@ -968,8 +968,15 @@ size_t dictMemUsage(const dict *d) {
     return dictSize(d) * sizeof(dictEntry) + dictBuckets(d) * sizeof(dictEntry *);
 }
 
-size_t dictEntryMemUsage(void) {
-    return sizeof(dictEntry);
+/* Returns the memory usage in bytes of dictEntry based on the type. if `de` is NULL, return the size of
+ * regular dict entry else return based on the type. */
+size_t dictEntryMemUsage(dictEntry *de) {
+    if (de == NULL || entryIsNormal(de)) return sizeof(dictEntry);
+    else if (entryIsKey(de)) return 0;
+    else if (entryIsNoValue(de)) return sizeof(dictEntryNoValue);
+    else if (entryIsEmbedded(de)) return zmalloc_size(decodeEmbeddedEntry(de));
+    else assert("Entry type not supported");
+    return 0;
 }
 
 /* A fingerprint is a 64 bit number that represents the state of the dictionary

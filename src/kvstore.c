@@ -340,7 +340,7 @@ size_t kvstoreMemUsage(kvstore *kvs) {
     size_t mem = sizeof(*kvs);
 
     unsigned long long keys_count = kvstoreSize(kvs);
-    mem += keys_count * dictEntryMemUsage() + kvstoreBuckets(kvs) * sizeof(dictEntry *) +
+    mem += keys_count * dictEntryMemUsage(NULL) + kvstoreBuckets(kvs) * sizeof(dictEntry *) +
            kvs->allocated_dicts * (sizeof(dict) + kvstoreDictMetadataSize(NULL));
 
     /* Values are dict* shared with kvs->dicts */

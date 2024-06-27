@@ -220,7 +220,7 @@ uint64_t dictGetUnsignedIntegerVal(const dictEntry *de);
 double dictGetDoubleVal(const dictEntry *de);
 double *dictGetDoubleValPtr(dictEntry *de);
 size_t dictMemUsage(const dict *d);
-size_t dictEntryMemUsage(void);
+size_t dictEntryMemUsage(dictEntry *de);
 dictIterator *dictGetIterator(dict *d);
 dictIterator *dictGetSafeIterator(dict *d);
 void dictInitIterator(dictIterator *iter, dict *d);

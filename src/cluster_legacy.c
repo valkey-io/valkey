@@ -2772,7 +2772,7 @@ int clusterIsValidPacket(clusterLink *link) {
         return 0;
     }
 
-    if (type == server.cluster_drop_packet_filter) {
+    if (type == server.debug_cluster_drop_packet_filter) {
         serverLog(LL_WARNING, "Dropping packet that matches debug drop filter");
         return 0;
     }
@@ -2852,7 +2852,7 @@ int clusterProcessPacket(clusterLink *link) {
     if (!clusterIsValidPacket(link)) {
         clusterMsg *hdr = (clusterMsg *)link->rcvbuf;
         uint16_t type = ntohs(hdr->type);
-        if (server.debug_cluster_close_link_on_packet_drop && type == server.cluster_drop_packet_filter) {
+        if (server.debug_cluster_close_link_on_packet_drop && type == server.debug_cluster_drop_packet_filter) {
             freeClusterLink(link);
             serverLog(LL_WARNING, "Closing link for matching packet type %hu", type);
             return 0;
@@ -4739,7 +4739,7 @@ void clusterCron(void) {
          * a new ping now, to ensure all the nodes are pinged without
          * a too big delay. */
         mstime_t ping_interval =
-            server.cluster_ping_interval ? server.cluster_ping_interval : server.cluster_node_timeout / 2;
+            server.debug_cluster_ping_interval ? server.debug_cluster_ping_interval : server.cluster_node_timeout / 2;
         if (node->link && node->ping_sent == 0 && (now - node->pong_received) > ping_interval) {
             clusterSendPing(node->link, CLUSTERMSG_TYPE_PING);
             continue;

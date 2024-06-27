@@ -1230,7 +1230,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* Software watchdog: deliver the SIGALRM that will reach the signal
      * handler if we don't return here fast enough. */
-    if (server.watchdog_period) watchdogScheduleSignal(server.watchdog_period);
+    if (server.debug_watchdog_period) watchdogScheduleSignal(server.debug_watchdog_period);
 
     server.hz = server.config_hz;
     /* Adapt the server.hz value to the number of configured clients. If we have
@@ -1246,7 +1246,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* for debug purposes: skip actual cron work if pause_cron is on */
-    if (server.pause_cron) return 1000 / server.hz;
+    if (server.debug_pause_cron) return 1000 / server.hz;
 
     monotime cron_start = getMonotonicUs();
 
@@ -2005,7 +2005,7 @@ void initServerConfig(void) {
     server.next_client_id = 1; /* Client IDs, start from 1 .*/
     server.page_size = sysconf(_SC_PAGESIZE);
     server.extended_redis_compat = 0;
-    server.pause_cron = 0;
+    server.debug_pause_cron = 0;
     server.dict_resizing = 1;
 
     server.latency_tracking_info_percentiles_len = 3;
@@ -2067,7 +2067,7 @@ void initServerConfig(void) {
     populateCommandTable();
 
     /* Debugging */
-    server.watchdog_period = 0;
+    server.debug_watchdog_period = 0;
 }
 
 extern char **environ;
@@ -2557,7 +2557,7 @@ void initServer(void) {
     server.blocked_last_cron = 0;
     server.blocking_op_nesting = 0;
     server.thp_enabled = 0;
-    server.cluster_drop_packet_filter = -1;
+    server.debug_cluster_drop_packet_filter = -1;
     server.reply_buffer_peak_reset_time = REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME;
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;

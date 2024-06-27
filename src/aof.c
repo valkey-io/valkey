@@ -655,7 +655,7 @@ void aofUpgradePrepare(aofManifest *am) {
  * the delete task to the bio thread.
  */
 int aofDelHistoryFiles(void) {
-    if (server.aof_manifest == NULL || server.aof_disable_auto_gc == 1 ||
+    if (server.aof_manifest == NULL || server.debug_aof_disable_auto_gc == 1 ||
         !listLength(server.aof_manifest->history_aof_list)) {
         return C_OK;
     }
@@ -1555,7 +1555,7 @@ int loadSingleAppendOnlyFile(char *filename) {
          * argv/argc of the client instead of the local variables. */
         freeClientArgv(fakeClient);
         if (server.aof_load_truncated) valid_up_to = ftello(fp);
-        if (server.key_load_delay) debugDelay(server.key_load_delay);
+        if (server.debug_key_load_delay) debugDelay(server.debug_key_load_delay);
     }
 
     /* This point can only be reached when EOF is reached without errors.
@@ -2274,7 +2274,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
             }
 
             /* Delay before next key if required (for testing) */
-            if (server.rdb_key_save_delay) debugDelay(server.rdb_key_save_delay);
+            if (server.debug_rdb_key_save_delay) debugDelay(server.debug_rdb_key_save_delay);
         }
         kvstoreIteratorRelease(kvs_it);
     }

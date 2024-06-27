@@ -1163,7 +1163,7 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime, in
     if (rdbSaveObject(rdb, val, key, dbid) == -1) return -1;
 
     /* Delay return if required (for testing) */
-    if (server.rdb_key_save_delay) debugDelay(server.rdb_key_save_delay);
+    if (server.debug_rdb_key_save_delay) debugDelay(server.debug_rdb_key_save_delay);
 
     return 1;
 }
@@ -2922,9 +2922,9 @@ void stopSaving(int success) {
    and if needed calculate rdb checksum  */
 void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
     if (server.rdb_checksum) rioGenericUpdateChecksum(r, buf, len);
-    if (server.loading_process_events_interval_bytes &&
-        (r->processed_bytes + len) / server.loading_process_events_interval_bytes >
-            r->processed_bytes / server.loading_process_events_interval_bytes) {
+    if (server.debug_loading_process_events_interval_bytes &&
+        (r->processed_bytes + len) / server.debug_loading_process_events_interval_bytes >
+            r->processed_bytes / server.debug_loading_process_events_interval_bytes) {
         if (server.primary_host && server.repl_state == REPL_STATE_TRANSFER) replicationSendNewlineToPrimary();
         loadingAbsProgress(r->processed_bytes);
         processEventsWhileBlocked();
@@ -3004,7 +3004,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     long long empty_keys_skipped = 0;
 
     rdb->update_cksum = rdbLoadProgressCallback;
-    rdb->max_processing_chunk = server.loading_process_events_interval_bytes;
+    rdb->max_processing_chunk = server.debug_loading_process_events_interval_bytes;
     if (rioRead(rdb, buf, 9) == 0) goto eoferr;
     buf[9] = '\0';
     if (memcmp(buf, "REDIS", 5) != 0) {
@@ -3328,7 +3328,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
 
         /* Loading the database more slowly is useful in order to test
          * certain edge cases. */
-        if (server.key_load_delay) debugDelay(server.key_load_delay);
+        if (server.debug_key_load_delay) debugDelay(server.debug_key_load_delay);
 
         /* Reset the state that is key-specified and is populated by
          * opcodes before the key, so that we start from scratch again. */

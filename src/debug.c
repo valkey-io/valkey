@@ -430,7 +430,7 @@ void debugCommand(client *c) {
             "DROP-CLUSTER-PACKET-FILTER <packet-type>",
             "    Drop all packets that match the filtered type. Set to -1 allow all packets.",
             "CLOSE-CLUSTER-LINK-ON-PACKET-DROP <0|1>",
-            "    This is valid only when DROP-CLUSTER-PACKET-FILTER is set to a valid packet type.",
+            "    This is effective only when DROP-CLUSTER-PACKET-FILTER is set to a valid packet type.",
             "    When set to 1, the cluster link is closed after dropping a packet based on the filter.",
             "OOM",
             "    Crash the server simulating an out-of-memory error.",
@@ -594,10 +594,10 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "drop-cluster-packet-filter") && c->argc == 3) {
         long packet_type;
         if (getLongFromObjectOrReply(c, c->argv[2], &packet_type, NULL) != C_OK) return;
-        server.cluster_drop_packet_filter = packet_type;
+        server.debug_cluster_drop_packet_filter = packet_type;
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "close-cluster-link-on-packet-drop") && c->argc == 3) {
-        server.debug_cluster_close_link_on_packet_drop = atoi(c->argv[2]->ptr);
+        server.debug_cluster_close_link_on_packet_drop = atoi(c->argv[2]->ptr) != 0;
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "object") && c->argc == 3) {
         dictEntry *de;
@@ -972,7 +972,7 @@ void debugCommand(client *c) {
         return;
 #endif
     } else if (!strcasecmp(c->argv[1]->ptr, "pause-cron") && c->argc == 3) {
-        server.pause_cron = atoi(c->argv[2]->ptr);
+        server.debug_pause_cron = atoi(c->argv[2]->ptr) != 0;
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "replybuffer") && c->argc == 4) {
         if (!strcasecmp(c->argv[2]->ptr, "peak-reset-time")) {
@@ -2194,7 +2194,7 @@ void bugReportEnd(int killViaSignal, int sig) {
 
     if (!killViaSignal) {
         /* To avoid issues with valgrind, we may wanna exit rather than generate a signal */
-        if (server.use_exit_on_panic) {
+        if (server.debug_use_exit_on_panic) {
             /* Using _exit to bypass false leak reports by gcc ASAN */
             fflush(stdout);
             _exit(1);
@@ -2277,15 +2277,15 @@ void watchdogScheduleSignal(int period) {
 }
 void applyWatchdogPeriod(void) {
     /* Disable watchdog when period is 0 */
-    if (server.watchdog_period == 0) {
+    if (server.debug_watchdog_period == 0) {
         watchdogScheduleSignal(0); /* Stop the current timer. */
     } else {
         /* If the configured period is smaller than twice the timer period, it is
          * too short for the software watchdog to work reliably. Fix it now
          * if needed. */
         int min_period = (1000 / server.hz) * 2;
-        if (server.watchdog_period < min_period) server.watchdog_period = min_period;
-        watchdogScheduleSignal(server.watchdog_period); /* Adjust the current timer. */
+        if (server.debug_watchdog_period < min_period) server.debug_watchdog_period = min_period;
+        watchdogScheduleSignal(server.debug_watchdog_period); /* Adjust the current timer. */
     }
 }
 

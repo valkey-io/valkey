@@ -139,7 +139,7 @@ client *createClient(connection *conn) {
     c->id = client_id;
 #ifdef LOG_REQ_RES
     reqresReset(c, 0);
-    c->resp = server.client_default_resp;
+    c->resp = server.debug_client_default_resp;
 #else
     c->resp = 2;
 #endif
@@ -1547,7 +1547,7 @@ void clearClientConnectionState(client *c) {
     if (c->flags & CLIENT_TRACKING) disableTracking(c);
     selectDb(c, 0);
 #ifdef LOG_REQ_RES
-    c->resp = server.client_default_resp;
+    c->resp = server.debug_client_default_resp;
 #else
     c->resp = 2;
 #endif

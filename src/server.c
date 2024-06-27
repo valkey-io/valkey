@@ -290,25 +290,8 @@ int dictSdsKeyCompare(dict *d, const void *key1, const void *key2) {
     return memcmp(key1, key2, l1) == 0;
 }
 
-/*
- * This method returns the minimum amount of bytes required to store the sds (header + data + NULL terminator).
-*/
-static inline size_t sdsKeyLen(const void *key) { 
-    sds keysds = ((sds)key);
-    return sdslen(keysds) + sdsHdrSize(keysds[-1]) + 1;
-}
-
 size_t dictSdsEmbedKey(unsigned char *buf, size_t buf_len, const void *key, uint8_t *key_offset) {
-    size_t keylen = sdsKeyLen(key);
-    if (buf == NULL) {
-        return keylen;
-    }
-    sds keysds = (sds)key;
-    size_t reqd_keylen = sdsKeyLen(key);
-    serverAssert(reqd_keylen <= buf_len);
-    memcpy(buf, sdsAllocPtr(keysds), reqd_keylen);
-    *key_offset = sdsHdrSize(keysds[-1]);
-    return reqd_keylen;
+    return sdscopytobuffer(buf, buf_len, (sds)key, key_offset);
 }
 
 /* A case insensitive version used for the command lookup table and other

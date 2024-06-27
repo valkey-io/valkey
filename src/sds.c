@@ -42,6 +42,17 @@
 
 const char *SDS_NOINIT = "SDS_NOINIT";
 
+static inline int sdsHdrSize(char type) {
+    switch (type & SDS_TYPE_MASK) {
+    case SDS_TYPE_5: return sizeof(struct sdshdr5);
+    case SDS_TYPE_8: return sizeof(struct sdshdr8);
+    case SDS_TYPE_16: return sizeof(struct sdshdr16);
+    case SDS_TYPE_32: return sizeof(struct sdshdr32);
+    case SDS_TYPE_64: return sizeof(struct sdshdr64);
+    }
+    return 0;
+}
+
 static inline char sdsReqType(size_t string_size) {
     if (string_size < 1 << 5) return SDS_TYPE_5;
     if (string_size < 1 << 8) return SDS_TYPE_8;
@@ -161,6 +172,25 @@ sds sdsnew(const char *init) {
 /* Duplicate an sds string. */
 sds sdsdup(const sds s) {
     return sdsnewlen(s, sdslen(s));
+}
+
+/*
+ * This method returns the minimum amount of bytes required to store the sds (header + data + NULL terminator).
+ */
+static inline size_t sdsminlen(sds s) {
+    return sdslen(s) + sdsHdrSize(s[-1]) + 1;
+}
+
+/* This method copies the sds `s` into `buf` which is the target character buffer. */
+size_t sdscopytobuffer(unsigned char *buf, size_t buf_len, sds s, uint8_t *hdr_size) {
+    size_t reqd_keylen = sdsminlen(s);
+    if (buf == NULL) {
+        return reqd_keylen;
+    }
+    assert(buf_len >= reqd_keylen);
+    memcpy(buf, sdsAllocPtr(s), reqd_keylen);
+    *hdr_size = sdsHdrSize(s[-1]);
+    return reqd_keylen;
 }
 
 /* Free an sds string. No operation is performed if 's' is NULL. */

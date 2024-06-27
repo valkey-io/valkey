@@ -177,22 +177,12 @@ static inline void sdssetalloc(sds s, size_t newlen) {
     }
 }
 
-static inline uint8_t sdsHdrSize(char type) {
-    switch (type & SDS_TYPE_MASK) {
-    case SDS_TYPE_5: return sizeof(struct sdshdr5);
-    case SDS_TYPE_8: return sizeof(struct sdshdr8);
-    case SDS_TYPE_16: return sizeof(struct sdshdr16);
-    case SDS_TYPE_32: return sizeof(struct sdshdr32);
-    case SDS_TYPE_64: return sizeof(struct sdshdr64);
-    }
-    return 0;
-}
-
 sds sdsnewlen(const void *init, size_t initlen);
 sds sdstrynewlen(const void *init, size_t initlen);
 sds sdsnew(const char *init);
 sds sdsempty(void);
 sds sdsdup(const sds s);
+size_t sdscopytobuffer(unsigned char *buf, size_t buf_len, sds s, uint8_t *hdr_size);
 void sdsfree(sds s);
 sds sdsgrowzero(sds s, size_t len);
 sds sdscatlen(sds s, const void *t, size_t len);

@@ -680,7 +680,7 @@ void defragModule(serverDb *db, dictEntry *kde) {
 
 /* for each key we scan in the main dict, this function will attempt to defrag
  * all the various pointers it has. */
-void defragItem(defragCtx *ctx, dictEntry *de) {
+void defragKey(defragCtx *ctx, dictEntry *de) {
     serverDb *db = ctx->privdata;
     int slot = ctx->slot;
     robj *newob, *ob;
@@ -740,7 +740,7 @@ void defragItem(defragCtx *ctx, dictEntry *de) {
 /* Defrag scan callback for the main db dictionary. */
 void defragScanCallback(void *privdata, const dictEntry *de) {
     long long hits_before = server.stat_active_defrag_hits;
-    defragItem((defragCtx *)privdata, (dictEntry *)de);
+    defragKey((defragCtx *)privdata, (dictEntry *)de);
     if (server.stat_active_defrag_hits != hits_before)
         server.stat_active_defrag_key_hits++;
     else

@@ -50,7 +50,7 @@
 #include "monotonic.h"
 
 #ifndef static_assert
-#define static_assert(expr, lit) extern char __static_assert_failure[(expr) ? 1 : -1]
+#define static_assert(expr, lit) _Static_assert(expr, lit)
 #endif
 
 /* Using dictSetResizeEnabled() we make possible to disable

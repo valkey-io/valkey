@@ -429,6 +429,9 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_REPLICATION_DONE (1ULL << 51)         /* Indicate that replication has been done on the client */
 #define CLIENT_AUTHENTICATED (1ULL << 52)            /* Indicate a client has successfully authenticated */
 
+/* Client capabilities */
+#define CLIENT_CAPA_REDIRECT (1 << 0) /* Indicate that the client can handle redirection */
+
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
 typedef enum blocking_type {
@@ -1205,6 +1208,7 @@ typedef struct client {
     uint64_t flags; /* Client flags: CLIENT_* macros. */
     connection *conn;
     int resp;                            /* RESP protocol version. Can be 2 or 3. */
+    uint32_t capa;                       /* Client capabilities: CLIENT_CAPA* macros. */
     serverDb *db;                        /* Pointer to currently SELECTed DB. */
     robj *name;                          /* As set by CLIENT SETNAME. */
     robj *lib_name;                      /* The client library name as set by CLIENT SETINFO. */

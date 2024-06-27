@@ -250,7 +250,7 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
         wait_for_slot_state 7 "\[609-<-$R0_id\]"
     }
 
-    test "Empty-shard migration target is auto-updated after faiover in target shard" {
+    test "Empty-shard migration target is auto-updated after failover in target shard" {
         wait_for_role 6 master
         # Trigger an auto-failover from R6 to R7
         fail_server 6
@@ -271,7 +271,7 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
         wait_for_slot_state 7 "\[609-<-$R0_id\]"
     }
 
-    test "Empty-shard migration source is auto-updated after faiover in source shard" {
+    test "Empty-shard migration source is auto-updated after failover in source shard" {
         wait_for_role 0 master
         # Trigger an auto-failover from R0 to R3
         fail_server 0

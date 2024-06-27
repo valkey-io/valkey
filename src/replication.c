@@ -46,7 +46,7 @@
 
 void replicationDiscardCachedPrimary(void);
 void replicationResurrectCachedPrimary(connection *conn);
-void replicationResurrectProvisionalMaster(void);
+void replicationResurrectProvisionalPrimary(void);
 void replicationSendAck(void);
 int replicaPutOnline(client *replica);
 void replicaStartCommandStream(client *replica);
@@ -1852,7 +1852,7 @@ void replicationEmptyDbCallback(dict *d) {
 /* Once we have a link with the primary and the synchronization was
  * performed, this function materializes the primary client we store
  * at server.primary, starting from the specified file descriptor. */
-void replicationCreateMasterClientWithHandler(connection *conn, int dbid, ConnectionCallbackFunc handler) {
+void replicationCreatePrimaryClientWithHandler(connection *conn, int dbid, ConnectionCallbackFunc handler) {
     server.primary = createClient(conn);
     if (conn)
         connSetReadHandler(server.primary->conn, handler);
@@ -1883,10 +1883,10 @@ void replicationCreateMasterClientWithHandler(connection *conn, int dbid, Connec
     if (dbid != -1) selectDb(server.primary, dbid);
 }
 
-/* Wrapper for replicationCreateMasterClientWithHandler, init master connection handler
+/* Wrapper for replicationCreatePrimaryClientWithHandler, init master connection handler
  * with ordinary client connection handler */
-void replicationCreateMasterClient(connection *conn, int dbid) {
-    replicationCreateMasterClientWithHandler(conn, dbid, readQueryFromClient);
+void replicationCreatePrimaryClient(connection *conn, int dbid) {
+    replicationCreatePrimaryClientWithHandler(conn, dbid, readQueryFromClient);
 }
 
 /* This function will try to re-enable the AOF file after the
@@ -2855,9 +2855,9 @@ int streamReplDataBufToDb(client *c) {
  * initializing the master client, amd stream local increamental buffer into memory. */
 void rdbChannelSyncSuccess(void) {
     server.primary_initial_offset = server.repl_provisional_master.reploff;
-    replicationResurrectProvisionalMaster();
+    replicationResurrectProvisionalPrimary();
     /* Wait for the accumulated buffer to be processed before reading any more replication updates */
-    if (streamReplDataBufToDb(server.primary)) {
+    if (streamReplDataBufToDb(server.primary) == C_ERR) {
         /* Sync session aborted during repl data streaming. */
         return;
     }
@@ -2877,7 +2877,7 @@ void completeTaskRDBChannelSyncMainConn(connection *conn) {
     serverAssert(conn == server.repl_transfer_s && server.repl_state == REPL_STATE_RECEIVE_PSYNC_REPLY);
     if (server.repl_rdb_conn_state < REPL_RDB_CONN_RDB_LOADED) {
         /* RDB is still loading */
-        if (connSetReadHandler(server.repl_provisional_master.conn, bufferReplData)) {
+        if (connSetReadHandler(server.repl_provisional_master.conn, bufferReplData) == C_ERR) {
             serverLog(LL_WARNING,"Error while setting readable handler: %s", strerror(errno));
             cancelReplicationHandshake(1);
         }
@@ -4129,7 +4129,7 @@ void establishPrimaryConnection(void) {
  * This function is called when successfully setup a partial resynchronization
  * so the stream of data that we'll receive will start from where this
  * primary left. */
-void replicationResurrectCachedMaster(connection *conn) {
+void replicationResurrectCachedPrimary(connection *conn) {
     server.primary = server.cached_primary;
     server.cached_primary = NULL;
     server.primary->conn = conn;
@@ -4164,9 +4164,9 @@ void replicationSteadyStateInit(void) {
 /* Replication: Replica side.
  * Turn the provisional master into the current master.
  * This function is called after rdb-channel sync is finished successfully. */
-void replicationResurrectProvisionalMaster(void) {
+void replicationResurrectProvisionalPrimary(void) {
     /* Create a master client, but do not initialize the read handler yet, as this replica still has a local buffer to drain. */
-    replicationCreateMasterClientWithHandler(server.repl_transfer_s, server.repl_provisional_master.dbid, NULL);
+    replicationCreatePrimaryClientWithHandler(server.repl_transfer_s, server.repl_provisional_master.dbid, NULL);
     memcpy(server.primary->replid, server.repl_provisional_master.replid, CONFIG_RUN_ID_SIZE);
     server.primary->reploff = server.repl_provisional_master.reploff;
     server.primary->read_reploff = server.repl_provisional_master.read_reploff;

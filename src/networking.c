@@ -1620,7 +1620,7 @@ void freeClient(client *c) {
         }
     }
 
-    /* Log link disconnection with slave */
+    /* Log link disconnection with replica */
     if (getClientType(c) == CLIENT_TYPE_REPLICA) {
             serverLog(LL_NOTICE, c->flags & CLIENT_REPL_RDB_CHANNEL ? 
                 "Replica %s rdb channel disconnected.":

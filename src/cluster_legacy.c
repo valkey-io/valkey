@@ -1185,6 +1185,7 @@ clusterLink *createClusterLink(clusterNode *node) {
  * This function will just make sure that the original node associated
  * with this link will have the 'link' field set to NULL. */
 void freeClusterLink(clusterLink *link) {
+    serverAssert(link != NULL);
     if (link->conn) {
         connClose(link->conn);
         link->conn = NULL;
@@ -5813,6 +5814,10 @@ int handleDebugClusterCommand(client *c) {
     clusterNode *n = clusterLookupNode(c->argv[4]->ptr, sdslen(c->argv[4]->ptr));
     if (!n) {
         addReplyErrorFormat(c, "Unknown node %s", (char *)c->argv[4]->ptr);
+        return 1;
+    }
+    if (n == server.cluster->myself) {
+        addReplyErrorFormat(c, "Cannot free cluster link(s) to myself");
         return 1;
     }
 

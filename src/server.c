@@ -3867,6 +3867,12 @@ int processCommand(client *c) {
         }
     }
 
+    if (!server.cluster_enabled && c->capa & CLIENT_CAPA_REDIRECT && server.primary_host && !mustObeyClient(c) &&
+        (is_write_command || (is_read_command && !(c->flags & CLIENT_READONLY)))) {
+        addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
+        return C_OK;
+    }
+
     /* Disconnect some clients if total clients memory is too high. We do this
      * before key eviction, after the last command was executed and consumed
      * some client output buffer memory. */
@@ -5381,7 +5387,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "lru_clock:%u\r\n", server.lruclock,
             "executable:%s\r\n", server.executable ? server.executable : "",
             "config_file:%s\r\n", server.configfile ? server.configfile : "",
-            "io_threads_active:%i\r\n", server.io_threads_active));
+            "io_threads_active:%i\r\n", server.io_threads_active,
+            "availability_zone:%s\r\n", server.availability_zone));
         /* clang-format on */
 
         /* Conditional properties */

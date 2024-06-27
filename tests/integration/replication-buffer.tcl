@@ -9,9 +9,9 @@ start_server {} {
     set replica1 [srv -3 client]
     set replica2 [srv -2 client]
     set replica3 [srv -1 client]
-    $replica1 config set repl-rdb-channel $rdbchann
-    $replica2 config set repl-rdb-channel $rdbchann
-    $replica3 config set repl-rdb-channel $rdbchann
+    $replica1 config set repl-rdb-connection $rdbchann
+    $replica2 config set repl-rdb-connection $rdbchann
+    $replica3 config set repl-rdb-connection $rdbchann
 
     set master [srv 0 client]
     set master_host [srv 0 host]
@@ -22,7 +22,7 @@ start_server {} {
     $master config set repl-diskless-sync-delay 5
     $master config set repl-diskless-sync-max-replicas 1
     $master config set client-output-buffer-limit "replica 0 0 0"
-    $master config set repl-rdb-channel $rdbchann
+    $master config set repl-rdb-connection $rdbchann
 
     # Make sure replica3 is synchronized with master
     $replica3 replicaof $master_host $master_port
@@ -53,7 +53,7 @@ start_server {} {
         set repl_buf_mem [s mem_total_replication_buffers]
         set extra_mem [expr {[s used_memory]-$before_used-1024*1024}]
         if {$rdbchann == "yes"} {
-            # master's replication buffers should not grow during rdb-channel-sync
+            # master's replication buffers should not grow during rdb-connection-sync
             assert {$extra_mem < 1024*1024}
             assert {$repl_buf_mem < 1024*1024}
         } else {
@@ -87,7 +87,7 @@ start_server {} {
             fail "replica2 doesn't disconnect with master"
         }
         if {$rdbchann == "yes"} {
-            # master's replication buffers should not grow during rdb-channel-sync
+            # master's replication buffers should not grow during rdb-connection-sync
              assert {1024*512 > [s mem_total_replication_buffers]}
         } else {
             assert {[expr $repl_buf_mem - 1024*1024] > [s mem_total_replication_buffers]}
@@ -113,7 +113,7 @@ start_server {} {
     set replica1_pid [s -2 process_id]
     set replica2 [srv -1 client]
     set replica2_pid [s -1 process_id]
-    $replica1 config set repl-rdb-channel $rdbchannel
+    $replica1 config set repl-rdb-connection $rdbchannel
 
     set master [srv 0 client]
     set master_host [srv 0 host]
@@ -122,7 +122,7 @@ start_server {} {
     $master config set save ""
     $master config set repl-backlog-size 16384
     $master config set client-output-buffer-limit "replica 0 0 0"
-    $master config set repl-rdb-channel $rdbchannel
+    $master config set repl-rdb-connection $rdbchannel
 
     # Executing 'debug digest' on master which has many keys costs much time
     # (especially in valgrind), this causes that replica1 and replica2 disconnect
@@ -131,7 +131,7 @@ start_server {} {
     $replica1 config set repl-timeout 1000
     $replica2 config set repl-timeout 1000
     $replica2 config set client-output-buffer-limit "replica 0 0 0"
-    $replica2 config set repl-rdb-channel $rdbchannel
+    $replica2 config set repl-rdb-connection $rdbchannel
 
     $replica1 replicaof $master_host $master_port
     wait_for_sync $replica1
@@ -234,10 +234,10 @@ test "Partial resynchronization is successful even client-output-buffer-limit is
             r config set save ""
             r config set repl-backlog-size 100mb
             r config set client-output-buffer-limit "replica 512k 0 0"
-            r config set repl-rdb-channel $rdbchann
+            r config set repl-rdb-connection $rdbchann
 
             set replica [srv -1 client]
-            $replica config set repl-rdb-channel $rdbchann
+            $replica config set repl-rdb-connection $rdbchann
             $replica replicaof [srv 0 host] [srv 0 port]
             wait_for_sync $replica
 
@@ -301,8 +301,8 @@ test "Replica client-output-buffer size is limited to backlog_limit/16 when no r
 
             $master config set repl-backlog-size 16384
             $master config set client-output-buffer-limit "replica 32768 32768 60"
-            $master config set repl-rdb-channel $rdbchann
-            $replica config set repl-rdb-channel $rdbchann
+            $master config set repl-rdb-connection $rdbchann
+            $replica config set repl-rdb-connection $rdbchann
             # Key has has to be larger than replica client-output-buffer limit.
             set keysize [expr 256*1024]
 

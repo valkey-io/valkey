@@ -1580,7 +1580,7 @@ void freeClient(client *c) {
 
     /* If a client is protected, yet we need to free it right now, make sure
      * to at least use asynchronous freeing. */
-    if ((c->flags & CLIENT_PROTECTED) || (c->flags & CLIENT_PROTECTED_RDB_CHANNEL)) {
+    if ((c->flags & CLIENT_PROTECTED) || (c->flags & CLIENT_PROTECTED_RDB_CONN)) {
         freeClientAsync(c);
         return;
     }
@@ -1622,8 +1622,8 @@ void freeClient(client *c) {
 
     /* Log link disconnection with replica */
     if (getClientType(c) == CLIENT_TYPE_REPLICA) {
-            serverLog(LL_NOTICE, c->flags & CLIENT_REPL_RDB_CHANNEL ? 
-                "Replica %s rdb channel disconnected.":
+            serverLog(LL_NOTICE, c->flags & CLIENT_REPL_RDB_CONN ? 
+                "Replica %s rdb connection disconnected.":
                 "Connection with replica %s lost.",
                 replicationGetReplicaName(c));
     }
@@ -1809,8 +1809,8 @@ int freeClientsInAsyncFreeQueue(void) {
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
 
-        if (c->flags & CLIENT_PROTECTED_RDB_CHANNEL) {
-            /* Check if it's safe to remove RDB channel protection during synchronization
+        if (c->flags & CLIENT_PROTECTED_RDB_CONN) {
+            /* Check if it's safe to remove RDB connection protection during synchronization
              * The primary gives a grace period before freeing this client because
              * it serves as a reference to the first required replication data block for 
              * this replica */
@@ -1822,7 +1822,7 @@ int freeClientsInAsyncFreeQueue(void) {
             }
             if (server.unixtime - c->rdb_client_disconnect_time > server.wait_before_rdb_client_free) {
                 serverLog(LL_NOTICE, "Replica main connection failed to establish PSYNC within the grace period (%ld seconds). Freeing RDB client %llu.", (long int)(server.unixtime - c->rdb_client_disconnect_time), (unsigned long long)c->id);
-                c->flags &= ~CLIENT_PROTECTED_RDB_CHANNEL;
+                c->flags &= ~CLIENT_PROTECTED_RDB_CONN;
             }
         }
 
@@ -4024,11 +4024,11 @@ int closeClientOnOutputBufferLimitReached(client *c, int async) {
     serverAssert(c->reply_bytes < SIZE_MAX - (1024 * 64));
     /* Note that c->reply_bytes is irrelevant for replica clients
      * (they use the global repl buffers). */
-    if ((c->reply_bytes == 0 && getClientType(c) != CLIENT_TYPE_REPLICA) || (c->flags & CLIENT_CLOSE_ASAP && !(c->flags & CLIENT_PROTECTED_RDB_CHANNEL))) return 0;
+    if ((c->reply_bytes == 0 && getClientType(c) != CLIENT_TYPE_REPLICA) || (c->flags & CLIENT_CLOSE_ASAP && !(c->flags & CLIENT_PROTECTED_RDB_CONN))) return 0;
     if (checkClientOutputBufferLimits(c)) {
         sds client = catClientInfoString(sdsempty(), c);
         /* Remove RDB connection protection on COB overrun */
-        c->flags &= ~CLIENT_PROTECTED_RDB_CHANNEL;
+        c->flags &= ~CLIENT_PROTECTED_RDB_CONN;
 
         if (async) {
             freeClientAsync(c);

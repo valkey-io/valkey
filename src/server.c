@@ -2660,7 +2660,7 @@ void initServer(void) {
     server.cron_malloc_stats.allocator_active = 0;
     server.cron_malloc_stats.allocator_resident = 0;
     server.lastbgsave_status = C_OK;
-    server.primary_supports_rdb_channel = -1;
+    server.primary_supports_rdb_connection = -1;
     server.aof_last_write_status = C_OK;
     server.aof_last_write_errno = 0;
     server.repl_good_replicas_count = 0;
@@ -5796,7 +5796,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                                     "slave%d:ip=%s,port=%d,state=%s,"
                                     "offset=%lld,lag=%ld,type=%s\r\n",
                                     replica_id, replica_ip, replica->replica_listening_port, state,
-                                    replica->repl_ack_off, lag, replica->flags & CLIENT_REPL_RDB_CHANNEL ? "rdb-conn": 
+                                    replica->repl_ack_off, lag, replica->flags & CLIENT_REPL_RDB_CONN ? "rdb-conn": 
                     replica->repl_state == REPLICA_STATE_BG_RDB_LOAD ? "main-conn": "replica");
                 replica_id++;
             }

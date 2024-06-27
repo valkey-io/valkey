@@ -316,7 +316,7 @@ foreach mdl {no yes} rdbchannel {no yes} {
                     lappend slaves [srv 0 client]
                     start_server {overrides {save {}}} {
                         lappend slaves [srv 0 client]
-                        test "Connect multiple replicas at the same time (issue #141), master diskless=$mdl, replica diskless=$sdl repl-rdb-channel=$rdbchannel" {
+                        test "Connect multiple replicas at the same time (issue #141), master diskless=$mdl, replica diskless=$sdl repl-rdb-connection=$rdbchannel" {
                             # start load handles only inside the test, so that the test can be skipped
                             set load_handle0 [start_bg_complex_data $master_host $master_port 9 100000000]
                             set load_handle1 [start_bg_complex_data $master_host $master_port 11 100000000]
@@ -325,11 +325,11 @@ foreach mdl {no yes} rdbchannel {no yes} {
                             set load_handle4 [start_write_load $master_host $master_port 4]
                             after 5000 ;# wait for some data to accumulate so that we have RDB part for the fork
 
-                            $master config set repl-rdb-channel $rdbchannel
+                            $master config set repl-rdb-connection $rdbchannel
                             # Send SLAVEOF commands to slaves
-                            [lindex $slaves 0] config set repl-rdb-channel $rdbchannel
-                            [lindex $slaves 1] config set repl-rdb-channel $rdbchannel
-                            [lindex $slaves 2] config set repl-rdb-channel $rdbchannel
+                            [lindex $slaves 0] config set repl-rdb-connection $rdbchannel
+                            [lindex $slaves 1] config set repl-rdb-connection $rdbchannel
+                            [lindex $slaves 2] config set repl-rdb-connection $rdbchannel
                             [lindex $slaves 0] config set repl-diskless-load $sdl
                             [lindex $slaves 1] config set repl-diskless-load $sdl
                             [lindex $slaves 2] config set repl-diskless-load $sdl
@@ -456,10 +456,10 @@ foreach testType {Successful Aborted} rdbchannel {yes no} {
             $master config set repl-diskless-sync yes
             $master config set repl-diskless-sync-delay 0
             $master config set save ""
-            $master config set repl-rdb-channel $rdbchannel
+            $master config set repl-rdb-connection $rdbchannel
             $replica config set repl-diskless-load swapdb
             $replica config set save ""
-            $replica config set repl-rdb-channel $rdbchannel
+            $replica config set repl-rdb-connection $rdbchannel
 
             # Put different data sets on the master and replica
             # We need to put large keys on the master since the replica replies to info only once in 2mb
@@ -479,7 +479,7 @@ foreach testType {Successful Aborted} rdbchannel {yes no} {
                     # Start the replication process
                     $replica replicaof $master_host $master_port
 
-                    test "Diskless load swapdb (different replid): replica enter loading repl-rdb-channel=$rdbchannel" {
+                    test "Diskless load swapdb (different replid): replica enter loading repl-rdb-connection=$rdbchannel" {
                         # Wait for the replica to start reading the rdb
                         wait_for_condition 100 100 {
                             [s -1 loading] eq 1
@@ -503,7 +503,7 @@ foreach testType {Successful Aborted} rdbchannel {yes no} {
                         fail "Replica didn't disconnect"
                     }
 
-                    test "Diskless load swapdb (different replid): old database is exposed after replication fails rdb-channel=$rdbchannel" {
+                    test "Diskless load swapdb (different replid): old database is exposed after replication fails rdb-connection=$rdbchannel" {
                         # Ensure we see old values from replica
                         assert_equal [$replica get mykey] "myvalue"
 
@@ -525,7 +525,7 @@ foreach testType {Successful Aborted} rdbchannel {yes no} {
                         fail "Master <-> Replica didn't finish sync"
                     }
 
-                    test "Diskless load swapdb (different replid): new database is exposed after swapping rdb-channel=$rdbchannel" {
+                    test "Diskless load swapdb (different replid): new database is exposed after swapping rdb-connection=$rdbchannel" {
                         # Ensure we don't see anymore the key that was stored only to replica and also that we don't get LOADING status
                         assert_equal [$replica GET mykey] ""
 
@@ -556,7 +556,7 @@ foreach testType {Successful Aborted} {
             $master config set save ""
             $replica config set repl-diskless-load swapdb
             $replica config set save ""
-            $replica config set repl-rdb-channel no; # Doesn't work with swapdb
+            $replica config set repl-rdb-connection no; # Doesn't work with swapdb
 
             # Set replica writable so we can check that a key we manually added is served
             # during replication and after failure, but disappears on success
@@ -861,7 +861,7 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
     $master config set repl-diskless-sync yes
     $master config set repl-diskless-sync-delay 5
     $master config set repl-diskless-sync-max-replicas 2
-    $master config set repl-rdb-channel "no"; # rdb-channel doesn't use pipe
+    $master config set repl-rdb-connection "no"; # rdb-connection doesn't use pipe
     set master_host [srv 0 host]
     set master_port [srv 0 port]
     set master_pid [srv 0 pid]
@@ -1052,7 +1052,7 @@ test "diskless replication child being killed is collected" {
 } {} {external:skip}
 
 foreach mdl {yes no} rdbchannel {yes no} {
-    test "replication child dies when parent is killed - diskless: $mdl repl-rdb-channel: $rdbchannel" {
+    test "replication child dies when parent is killed - diskless: $mdl repl-rdb-connection: $rdbchannel" {
         # when master is killed, make sure the fork child can detect that and exit
         start_server {tags {"repl"} overrides {save ""}} {
             set master [srv 0 client]
@@ -1066,7 +1066,7 @@ foreach mdl {yes no} rdbchannel {yes no} {
             $master debug populate 10000
             start_server {overrides {save ""}} {
                 set replica [srv 0 client]
-                $replica config set repl-rdb-channel $rdbchannel
+                $replica config set repl-rdb-connection $rdbchannel
                 $replica replicaof $master_host $master_port
 
                 # wait for rdb child to start
@@ -1251,7 +1251,7 @@ foreach rdbchannel {yes no} {
         set master1 [srv 0 client]
         set master1_host [srv 0 host]
         set master1_port [srv 0 port]
-        $master1 config set repl-rdb-channel $rdbchannel
+        $master1 config set repl-rdb-connection $rdbchannel
         r set a b
 
         start_server {} {
@@ -1261,16 +1261,16 @@ foreach rdbchannel {yes no} {
             # Take 10s for dumping RDB
             $master2 debug populate 10 master2 10
             $master2 config set rdb-key-save-delay 1000000
-            $master2 config set repl-rdb-channel $rdbchannel
+            $master2 config set repl-rdb-connection $rdbchannel
 
             start_server {} {
                 set sub_replica [srv 0 client]
-                $sub_replica config set repl-rdb-channel $rdbchannel
+                $sub_replica config set repl-rdb-connection $rdbchannel
 
                 start_server {} {
                     # Full sync with master1
                     set replica [srv 0 client]
-                    $replica config set repl-rdb-channel $rdbchannel
+                    $replica config set repl-rdb-connection $rdbchannel
                     r slaveof $master1_host $master1_port
                     wait_for_sync r
                     assert_equal "b" [r get a]
@@ -1290,14 +1290,14 @@ foreach rdbchannel {yes no} {
                     }
                     catch {$master2 shutdown nosave}
 
-                    test "Don't disconnect with replicas before loading transferred RDB when full sync with rdb-channel $rdbchannel" {
+                    test "Don't disconnect with replicas before loading transferred RDB when full sync with rdb-connection $rdbchannel" {
                         assert ![log_file_matches [srv -1 stdout] "*Connection with master lost*"]
                         # The replication id is not changed in entire replication chain
                         assert_equal [s master_replid] [s -3 master_replid]
                         assert_equal [s master_replid] [s -1 master_replid]
                     }
 
-                    test "Discard cache master before loading transferred RDB when full sync with rdb-channel $rdbchannel" {
+                    test "Discard cache master before loading transferred RDB when full sync with rdb-connection $rdbchannel" {
                         set full_sync [s -3 sync_full]
                         set partial_sync [s -3 sync_partial_ok]
                         # Partial sync with master1

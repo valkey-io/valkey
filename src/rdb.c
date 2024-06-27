@@ -3504,7 +3504,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
     listIter li;
     pid_t childpid;
     int pipefds[2], rdb_pipe_write, safe_to_exit_pipe;
-    int direct = (req & REPLICA_REQ_RDB_CHANNEL);
+    int direct = (req & REPLICA_REQ_RDB_CONN);
 
     if (hasActiveChildProcess()) return C_ERR;
 
@@ -3553,7 +3553,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
                 /* Put the socket in blocking mode to simplify RDB transfer. */
                 connBlock(replica->conn);
                 connSendTimeout(replica->conn, server.repl_timeout * 1000);
-                /* This replica uses diskless rdb channel sync, hence we need
+                /* This replica uses diskless rdb connection sync, hence we need
                  * to inform it with the save end offset.*/
                 sendCurrentOffsetToReplica(replica);
                 /* Make sure repl traffic is appended to the replication backlog */                

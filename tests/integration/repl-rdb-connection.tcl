@@ -5,7 +5,7 @@ proc log_file_matches {log pattern} {
     string match $pattern $content
 }
 
-start_server {tags {"repl rdb-channel external:skip"}} {
+start_server {tags {"repl rdb-connection external:skip"}} {
     set replica [srv 0 client]
     set replica_host [srv 0 host]
     set replica_port [srv 0 port]
@@ -19,13 +19,13 @@ start_server {tags {"repl rdb-channel external:skip"}} {
         # operation, so that the replica remains in the handshake state.
         $master config set repl-diskless-sync yes
         $master config set repl-diskless-sync-delay 1000
-        $master config set repl-rdb-channel yes
+        $master config set repl-rdb-connection yes
 
         # Start the replication process...
-        $replica config set repl-rdb-channel yes
+        $replica config set repl-rdb-connection yes
         $replica slaveof $master_host $master_port
 
-        test {Test repl-rdb-channel replica enters handshake} {
+        test {Test repl-rdb-connection replica enters handshake} {
             wait_for_condition 50 1000 {
                 [string match *handshake* [$replica role]]
             } else {
@@ -33,7 +33,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
             }
         }
 
-        test {Test repl-rdb-channel enters wait_bgsave} {
+        test {Test repl-rdb-connection enters wait_bgsave} {
             wait_for_condition 50 1000 {
                 [string match *state=wait_bgsave* [$master info replication]]
             } else {
@@ -43,7 +43,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
 
         $master config set repl-diskless-sync-delay 0
 
-        test {Test repl-rdb-channel replica is able to sync} {
+        test {Test repl-rdb-connection replica is able to sync} {
             verify_replica_online $master 0 500
             wait_for_condition 50 1000 {
                 [string match *connected_slaves:1* [$master info]]
@@ -61,7 +61,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
     }
 }
 
-start_server {tags {"repl rdb-channel external:skip"}} {
+start_server {tags {"repl rdb-connection external:skip"}} {
     set replica [srv 0 client]
     set replica_host [srv 0 host]
     set replica_port [srv 0 port]
@@ -72,8 +72,8 @@ start_server {tags {"repl rdb-channel external:skip"}} {
         set master_port [srv 0 port]
 
         $master config set rdb-key-save-delay 200
-        $master config set repl-rdb-channel yes
-        $replica config set repl-rdb-channel yes
+        $master config set repl-rdb-connection yes
+        $replica config set repl-rdb-connection yes
         $replica config set repl-diskless-sync no
 
         populate 1000 master 10000
@@ -92,7 +92,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
 
         set before_used [s 0 used_memory]
 
-        test {Primary memory usage does not increase during rdb-channel sync} {        
+        test {Primary memory usage does not increase during rdb-connection sync} {        
             $replica slaveof $master_host $master_port
 
             # Verify used_memory stays low through all the sync
@@ -135,7 +135,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
 
         test {Rollback to nornal sync} {
             $replica slaveof no one
-            $replica config set repl-rdb-channel no
+            $replica config set repl-rdb-connection no
             $master set newkey newval
 
             set sync_full [s 0 sync_full]
@@ -149,7 +149,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
     }
 }
 
-start_server {tags {"repl rdb-channel external:skip"}} {
+start_server {tags {"repl rdb-connection external:skip"}} {
     foreach start_with_rdb_sync_enabled {yes no} {
         set replica [srv 0 client]
         set replica_host [srv 0 host]
@@ -162,9 +162,9 @@ start_server {tags {"repl rdb-channel external:skip"}} {
 
             $master config set repl-diskless-sync yes
             $master config set client-output-buffer-limit "replica 1100k 0 0"
-            $replica config set repl-rdb-channel $start_with_rdb_sync_enabled
+            $replica config set repl-rdb-connection $start_with_rdb_sync_enabled
 
-            test "Test enable disable repl-rdb-channel start with $start_with_rdb_sync_enabled" {
+            test "Test enable disable repl-rdb-connection start with $start_with_rdb_sync_enabled" {
                 # Set master shared replication buffer size to a bit more then the size of 
                 # a replication buffer block.
                 
@@ -179,9 +179,9 @@ start_server {tags {"repl rdb-channel external:skip"}} {
                 $replica slaveof no one
                 if {$start_with_rdb_sync_enabled == "yes"} {
                     # disable rdb channel sync
-                    $replica config set repl-rdb-channel no
+                    $replica config set repl-rdb-connection no
                 } else {
-                    $replica config set repl-rdb-channel yes
+                    $replica config set repl-rdb-connection yes
                 }
 
                 # Force replica to full sync next time
@@ -201,7 +201,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
     }
 }
 
-start_server {tags {"repl rdb-channel external:skip"}} {
+start_server {tags {"repl rdb-connection external:skip"}} {
     set replica1 [srv 0 client]
     set replica1_host [srv 0 host]
     set replica1_port [srv 0 port]
@@ -222,16 +222,16 @@ start_server {tags {"repl rdb-channel external:skip"}} {
 
             $master config set repl-diskless-sync yes
             $master config set repl-diskless-sync-delay 5; # allow both replicas to ask for sync
-            $master config set repl-rdb-channel yes
+            $master config set repl-rdb-connection yes
 
-            $replica1 config set repl-rdb-channel yes
-            $replica2 config set repl-rdb-channel yes
+            $replica1 config set repl-rdb-connection yes
+            $replica2 config set repl-rdb-connection yes
             $replica1 config set repl-diskless-sync no
             $replica2 config set repl-diskless-sync no
             $replica1 config set loglevel debug
             $replica2 config set loglevel debug
 
-            test "Two replicas in one sync session with repl-rdb-channel" {
+            test "Two replicas in one sync session with repl-rdb-connection" {
                 $replica1 slaveof $master_host $master_port
                 $replica2 slaveof $master_host $master_port
 
@@ -256,12 +256,12 @@ start_server {tags {"repl rdb-channel external:skip"}} {
             $replica1 slaveof no one
             $replica2 slaveof no one
 
-            $replica1 config set repl-rdb-channel yes
-            $replica2 config set repl-rdb-channel no
+            $replica1 config set repl-rdb-connection yes
+            $replica2 config set repl-rdb-connection no
 
             $master set key2 val2
 
-            test "Test one replica with repl-rdb-channel enabled one with disabled" {
+            test "Test one replica with repl-rdb-connection enabled one with disabled" {
                 $replica1 slaveof $master_host $master_port
                 $replica2 slaveof $master_host $master_port
 
@@ -286,14 +286,14 @@ start_server {tags {"repl rdb-channel external:skip"}} {
                 # At this point we have about 10k keys in the db, 
                 # We expect that the next full sync will take 5 seconds (10k*500)ms
                 # It will give us enough time to fill the replica buffer.
-                $replica1 config set repl-rdb-channel yes
+                $replica1 config set repl-rdb-connection yes
                 $replica1 config set client-output-buffer-limit "replica 16383 16383 0"
                 $replica1 config set loglevel debug
 
                 $replica1 slaveof $master_host $master_port
                 # Wait for replica to establish psync using main connection
                 wait_for_condition 50 1000 {
-                    [log_file_matches $replica1_log "*Master accepted a Partial Resynchronization, RDB load in background.*"]
+                    [log_file_matches $replica1_log "*Primary accepted a Partial Resynchronization, RDB load in background.*"]
                 } else {
                     fail "Psync hasn't been established"
                 }
@@ -325,7 +325,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
                 set cur_psync [status $master sync_partial_ok]
                 $master config set repl-diskless-sync no
 
-                $replica1 config set repl-rdb-channel yes
+                $replica1 config set repl-rdb-connection yes
                 $replica1 slaveof $master_host $master_port
 
                 # Wait for mitigation and resync
@@ -337,14 +337,14 @@ start_server {tags {"repl rdb-channel external:skip"}} {
                     fail "Replica is not synced"
                 }
 
-                # Verify that we did not use rdb-channel sync
+                # Verify that we did not use rdb-connection sync
                 assert {[status $master sync_partial_ok] == $cur_psync}
             }
         }
     }
 }
 
-start_server {tags {"repl rdb-channel external:skip"}} {
+start_server {tags {"repl rdb-connection external:skip"}} {
     set replica [srv 0 client]
     set replica_host [srv 0 host]
     set replica_port [srv 0 port]
@@ -359,12 +359,12 @@ start_server {tags {"repl rdb-channel external:skip"}} {
 
         $master config set repl-diskless-sync yes
         $master debug sleep-after-fork [expr {5 * [expr {10 ** 6}]}];# Stop master after fork for 5 seconds
-        $master config set repl-rdb-channel yes
+        $master config set repl-rdb-connection yes
 
-        $replica config set repl-rdb-channel yes
+        $replica config set repl-rdb-connection yes
         $replica config set loglevel debug
 
-        test "Test rdb-channel psync established after rdb load" {
+        test "Test rdb-connection psync established after rdb load" {
             $replica slaveof $master_host $master_port
 
             verify_replica_online $master 0 500
@@ -375,14 +375,14 @@ start_server {tags {"repl rdb-channel external:skip"}} {
             }
             wait_for_value_to_propegate_to_replica $master $replica "key1"
             # Confirm the occurrence of a race condition.
-            set res [wait_for_log_messages -1 {"*RDB channel sync - psync established after rdb load*"} $loglines 2000 1]
+            set res [wait_for_log_messages -1 {"*RDB connection sync - psync established after rdb load*"} $loglines 2000 1]
             set loglines [lindex $res 1]
             incr $loglines                
         }
     }
 }
 
-start_server {tags {"repl rdb-channel external:skip"}} {
+start_server {tags {"repl rdb-connection external:skip"}} {
     set replica [srv 0 client]
     set replica_host [srv 0 host]
     set replica_port [srv 0 port]
@@ -395,7 +395,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
         set loglines [count_log_lines -1]
 
         $master config set repl-diskless-sync yes
-        $master config set repl-rdb-channel yes
+        $master config set repl-rdb-connection yes
         $master config set repl-backlog-size $backlog_size
         $master config set loglevel debug
         $master config set repl-timeout 10
@@ -406,19 +406,19 @@ start_server {tags {"repl rdb-channel external:skip"}} {
         set load_handle2 [start_one_key_write_load $master_host $master_port 100 "mykey2"]
         set load_handle3 [start_one_key_write_load $master_host $master_port 100 "mykey3"]
 
-        $replica config set repl-rdb-channel yes
+        $replica config set repl-rdb-connection yes
         $replica config set loglevel debug
         $replica config set repl-timeout 10
         # Stop replica after master fork for 5 seconds
         $replica debug sleep-after-fork [expr {5 * [expr {10 ** 6}]}]
 
-        test "Test rdb-channel connection peering - replica able to establish psync" {
+        test "Test rdb-connection connection peering - replica able to establish psync" {
             $replica slaveof $master_host $master_port
             # Verify repl backlog can grow
             wait_for_condition 1000 10 {
                 [s 0 mem_total_replication_buffers] > [expr {2 * $backlog_size}]
             } else {
-                fail "Master should allow backlog to grow beyond its limits during rdb-channel sync handshake"
+                fail "Master should allow backlog to grow beyond its limits during rdb-connection sync handshake"
             }
 
             verify_replica_online $master 0 500
@@ -436,7 +436,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
     }
 }
 
-start_server {tags {"repl rdb-channel external:skip"}} {
+start_server {tags {"repl rdb-connection external:skip"}} {
     set replica1 [srv 0 client]
     set replica1_host [srv 0 host]
     set replica1_port [srv 0 port]
@@ -454,7 +454,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
             set loglines [count_log_lines -1]
 
             $master config set repl-diskless-sync yes
-            $master config set repl-rdb-channel yes
+            $master config set repl-rdb-connection yes
             $master config set repl-backlog-size $backlog_size
             $master config set loglevel debug
             $master config set repl-timeout 10
@@ -463,8 +463,8 @@ start_server {tags {"repl rdb-channel external:skip"}} {
             
             set load_handle0 [start_write_load $master_host $master_port 20]
 
-            $replica1 config set repl-rdb-channel yes
-            $replica2 config set repl-rdb-channel yes
+            $replica1 config set repl-rdb-connection yes
+            $replica2 config set repl-rdb-connection yes
             $replica1 config set loglevel debug
             $replica2 config set loglevel debug
             $replica1 config set repl-timeout 10
@@ -473,7 +473,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
             # Stop replica after master fork for 2 seconds
             $replica1 debug sleep-after-fork [expr {2 * [expr {10 ** 6}]}]
             $replica2 debug sleep-after-fork [expr {2 * [expr {10 ** 6}]}]
-            test "Test rdb-channel connection peering - start with empty backlog (retrospect)" {
+            test "Test rdb-connection connection peering - start with empty backlog (retrospect)" {
                 $replica1 slaveof $master_host $master_port
                 set res [wait_for_log_messages 0 {"*Add replica * repl-backlog is empty*"} $loglines 2000 1]
                 set res [wait_for_log_messages 0 {"*Retrospect attach replica*"} $loglines 2000 1]
@@ -489,7 +489,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
                 assert [string match *replicas_waiting_psync:0* [$master info replication]]
             }
 
-            test "Test rdb-channel connection peering - start with backlog" {
+            test "Test rdb-connection connection peering - start with backlog" {
                 $replica2 slaveof $master_host $master_port
                 set res [wait_for_log_messages 0 {"*Add replica * with repl-backlog tail*"} $loglines 2000 1]
                 set loglines [lindex $res 1]
@@ -517,13 +517,13 @@ proc stop_bg_server_sleep {handle} {
     catch {exec /bin/kill -9 $handle}
 }
 
-start_server {tags {"repl rdb-channel external:skip"}} {
+start_server {tags {"repl rdb-connection external:skip"}} {
     set master [srv 0 client]
     set master_host [srv 0 host]
     set master_port [srv 0 port]
     
     $master config set repl-diskless-sync yes
-    $master config set repl-rdb-channel yes
+    $master config set repl-rdb-connection yes
     $master config set repl-backlog-size [expr {10 ** 6}]
     $master config set loglevel debug
     $master config set repl-timeout 10
@@ -542,11 +542,11 @@ start_server {tags {"repl rdb-channel external:skip"}} {
         
         set load_handle0 [start_write_load $master_host $master_port 20]
 
-        $replica config set repl-rdb-channel yes
+        $replica config set repl-rdb-connection yes
         $replica config set loglevel debug
         $replica config set repl-timeout 10
 
-        test "Test rdb-channel psync established after rdb load, master keep repl-block" {
+        test "Test rdb-connection psync established after rdb load, master keep repl-block" {
             $replica slaveof $master_host $master_port
             set res [wait_for_log_messages 0 {"*Done loading RDB*"} $loglines 2000 1]
             set loglines [lindex $res 1]
@@ -580,11 +580,11 @@ start_server {tags {"repl rdb-channel external:skip"}} {
         
         set load_handle0 [start_write_load $master_host $master_port 20]
 
-        $replica config set repl-rdb-channel yes
+        $replica config set repl-rdb-connection yes
         $replica config set loglevel debug
         $replica config set repl-timeout 10
 
-        test "Test rdb-channel psync established after rdb load, master dismiss repl-block" {
+        test "Test rdb-connection psync established after rdb load, master dismiss repl-block" {
             $replica slaveof $master_host $master_port
             set res [wait_for_log_messages 0 {"*Done loading RDB*"} $loglines 2000 1]
             set loglines [lindex $res 1]
@@ -615,14 +615,14 @@ start_server {tags {"repl rdb-channel external:skip"}} {
     }
 }
 
-start_server {tags {"repl rdb-channel external:skip"}} {
+start_server {tags {"repl rdb-connection external:skip"}} {
     set master [srv 0 client]
     set master_host [srv 0 host]
     set master_port [srv 0 port]
     set loglines [count_log_lines 0]
 
     $master config set repl-diskless-sync yes
-    $master config set repl-rdb-channel yes
+    $master config set repl-rdb-connection yes
     $master config set client-output-buffer-limit "replica 1100k 0 0"
     $master config set loglevel debug
     # generate small db
@@ -639,11 +639,11 @@ start_server {tags {"repl rdb-channel external:skip"}} {
         set load_handle1 [start_write_load $master_host $master_port 20]
         set load_handle2 [start_write_load $master_host $master_port 20]
 
-        $replica config set repl-rdb-channel yes
+        $replica config set repl-rdb-connection yes
         $replica config set loglevel debug
         $replica config set repl-timeout 10
 
-        test "Test rdb-channel master gets cob overrun before established psync" {
+        test "Test rdb-connection master gets cob overrun before established psync" {
             $replica slaveof $master_host $master_port
             wait_for_log_messages 0 {"*Done loading RDB*"} 0 2000 1
 
@@ -670,7 +670,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
         $master config set rdb-key-save-delay 10000
         $master debug sleep-after-fork 0
 
-        test "Test rdb-channel master gets cob overrun during replica rdb load" {
+        test "Test rdb-connection master gets cob overrun during replica rdb load" {
             $replica slaveof $master_host $master_port
 
             wait_for_log_messages -1 {"*Client * closed * for overcoming of output buffer limits.*"} $loglines 2000 1
@@ -689,14 +689,14 @@ start_server {tags {"repl rdb-channel external:skip"}} {
 }
 
 foreach rdbchan {yes no} {
-start_server {tags {"repl rdb-channel external:skip"}} {
+start_server {tags {"repl rdb-connection external:skip"}} {
     set master [srv 0 client]
     set master_host [srv 0 host]
     set master_port [srv 0 port]
     set loglines [count_log_lines 0]
 
     $master config set repl-diskless-sync yes
-    $master config set repl-rdb-channel yes
+    $master config set repl-rdb-connection yes
     $master config set loglevel debug
     $master config set repl-diskless-sync-delay 5
     
@@ -704,20 +704,20 @@ start_server {tags {"repl rdb-channel external:skip"}} {
     $master debug populate 10000 master 1
     $master config set rdb-key-save-delay 500
 
-    $master config set repl-rdb-channel $rdbchan
+    $master config set repl-rdb-connection $rdbchan
 
     start_server {} {
         set replica1 [srv 0 client]
-        $replica1 config set repl-rdb-channel $rdbchan
+        $replica1 config set repl-rdb-connection $rdbchan
         $replica1 config set loglevel debug
         start_server {} {
             set replica2 [srv 0 client]
-            $replica2 config set repl-rdb-channel $rdbchan
+            $replica2 config set repl-rdb-connection $rdbchan
             $replica2 config set loglevel debug
             $replica2 config set repl-timeout 60
 
             set load_handle [start_one_key_write_load $master_host $master_port 100 "mykey1"]
-            test "Sync should continue if not all slaves dropped rdb-channel $rdbchan" {
+            test "Sync should continue if not all slaves dropped rdb-connection $rdbchan" {
                 $replica1 slaveof $master_host $master_port
                 $replica2 slaveof $master_host $master_port
 
@@ -753,7 +753,7 @@ start_server {tags {"repl rdb-channel external:skip"}} {
             $master debug populate 1000000 master 1
             $master config set rdb-key-save-delay 100
     
-            test "Master abort sync if all slaves dropped rdb-channel $rdbchan" {
+            test "Master abort sync if all slaves dropped rdb-connection $rdbchan" {
                 set cur_psync [status $master sync_partial_ok]
                 $replica2 slaveof $master_host $master_port
 

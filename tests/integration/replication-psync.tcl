@@ -21,9 +21,9 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl rdbc
             $master config set repl-backlog-ttl $backlog_ttl
             $master config set repl-diskless-sync $mdl
             $master config set repl-diskless-sync-delay 1
-            $master config set repl-rdb-channel $rdbchann
+            $master config set repl-rdb-connection $rdbchann
             $slave config set repl-diskless-load $sdl
-            $slave config set repl-rdb-channel $rdbchann
+            $slave config set repl-rdb-connection $rdbchann
 
             set load_handle0 [start_bg_complex_data $master_host $master_port 9 100000]
             set load_handle1 [start_bg_complex_data $master_host $master_port 11 100000]
@@ -48,7 +48,7 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl rdbc
                 }
             }
 
-            test "Test replication partial resync: $descr (diskless: $mdl, $sdl, rdb-channel: $rdbchann, reconnect: $reconnect)" {
+            test "Test replication partial resync: $descr (diskless: $mdl, $sdl, rdb-connection: $rdbchann, reconnect: $reconnect)" {
                 # Now while the clients are writing data, break the master-slave
                 # link multiple times.
                 if ($reconnect) {

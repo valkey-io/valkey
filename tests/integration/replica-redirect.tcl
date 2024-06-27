@@ -1,13 +1,13 @@
 start_server {tags {needs:repl external:skip}} {
     start_server {} {
-        set master_host [srv -1 host]
-        set master_port [srv -1 port]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
 
-        r replicaof $master_host $master_port
+        r replicaof $primary_host $primary_port
         wait_for_condition 50 100 {
-            [s 0 master_link_status] eq {up}
+            [s 0 primary_link_status] eq {up}
         } else {
-            fail "Replicas not replicating from master"
+            fail "Replicas not replicating from primary"
         }
 
         test {replica allow read command by default} {
@@ -20,8 +20,8 @@ start_server {tags {needs:repl external:skip}} {
 
         test {replica redirect read and write command after CLIENT CAPA REDIRECT} {
             r client capa redirect
-            assert_error "REDIRECT $master_host:$master_port" {r set foo bar}
-            assert_error "REDIRECT $master_host:$master_port" {r get foo}
+            assert_error "REDIRECT $primary_host:$primary_port" {r set foo bar}
+            assert_error "REDIRECT $primary_host:$primary_port" {r get foo}
         }
 
         test {non-data access commands are not redirected} {

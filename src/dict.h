@@ -66,6 +66,8 @@ typedef struct dictType {
     /* Allow a dict to carry extra caller-defined metadata. The
      * extra memory is initialized to 0 when a dict is allocated. */
     size_t (*dictMetadataBytes)(dict *d);
+    /* Method for copying a given key into a buffer of buf_len. Also used for
+     * computing the length of the key + header when buf is NULL. */
     size_t (*embedKey)(unsigned char *buf, size_t buf_len, const void *key, unsigned char *header_size);
 
 

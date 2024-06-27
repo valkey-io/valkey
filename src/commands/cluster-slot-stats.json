@@ -31,8 +31,11 @@
                     {
                         "type": "object",
                         "description": "Map of slot usage statistics.",
-                        "additionalProperties": {
-                            "type": "string"
+                        "additionalProperties": false,
+                        "properties": {
+                            "key-count": {
+                                "type": "integer"
+                            }
                         }
                     }
                 ]

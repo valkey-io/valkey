@@ -9,10 +9,9 @@
 proc convert_array_into_dict {slot_stats} {
     set res [dict create]
     foreach slot_stat $slot_stats {
-        # slot_stat is a map of (int) slot to (map) usage statistics.
-        dict for {slot stat} $slot_stat {
-            dict set res $slot $stat
-        }
+        # slot_stat is an array of size 2, where 0th index represents (int) slot, 
+        # and 1st index represents (map) usage statistics.
+        dict set res [lindex $slot_stat 0] [lindex $slot_stat 1]
     }
     return $res
 }

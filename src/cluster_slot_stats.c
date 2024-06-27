@@ -75,7 +75,8 @@ static void collectAndSortSlotStats(slotStatForSort slot_stats[], int order_by, 
 }
 
 static void addReplySlotStat(client *c, int slot) {
-    addReplyMapLen(c, 1); /* Map for (int) slot to (map) usage statistics. */
+    addReplyArrayLen(c, 2); /* Array of size 2, where 0th index represents (int) slot,
+                             * and 1st index represents (map) usage statistics. */
     addReplyLongLong(c, slot);
     addReplyMapLen(c, 1); /* Nested map representing slot usage statistics. */
     addReplyBulkCString(c, "key-count");

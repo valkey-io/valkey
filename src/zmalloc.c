@@ -108,23 +108,31 @@ static __attribute__((aligned(sizeof(size_t)))) size_t used_memory_thread[MAX_TH
 #else
 static _Atomic size_t used_memory_thread[MAX_THREADS_NUM];
 #endif
-static atomic_int total_active_threads;
+static atomic_int total_active_threads = 0;
+/* This is a simple protection. It's used only if some modules create a lot of threads. */
+static atomic_size_t used_memory_for_additional_threads = 0;
 
 /* Register the thread index in start_routine. */
 static inline void zmalloc_register_thread_index(void) {
     thread_index = atomic_fetch_add_explicit(&total_active_threads, 1, memory_order_relaxed);
-    /* TODO: Handle the case when exceed the MAX_THREADS_NUM (may rarely happen). */
-    assert(total_active_threads < MAX_THREADS_NUM);
 }
 
 static inline void update_zmalloc_stat_alloc(size_t size) {
     if (unlikely(thread_index == -1)) zmalloc_register_thread_index();
-    used_memory_thread[thread_index] += size;
+    if (unlikely(total_active_threads) > MAX_THREADS_NUM) {
+        atomic_fetch_add_explicit(&used_memory_for_additional_threads, size, memory_order_relaxed);
+    } else {
+        used_memory_thread[thread_index] += size;
+    }
 }
 
 static inline void update_zmalloc_stat_free(size_t size) {
     if (unlikely(thread_index == -1)) zmalloc_register_thread_index();
-    used_memory_thread[thread_index] -= size;
+    if (unlikely(total_active_threads) > MAX_THREADS_NUM) {
+        atomic_fetch_sub_explicit(&used_memory_for_additional_threads, size, memory_order_relaxed);
+    } else {
+        used_memory_thread[thread_index] -= size;
+    }
 }
 
 static void zmalloc_default_oom(size_t size) {
@@ -449,10 +457,12 @@ char *zstrdup(const char *s) {
 }
 
 size_t zmalloc_used_memory(void) {
-    assert(total_active_threads < MAX_THREADS_NUM);
     size_t um = 0;
     for (int i = 0; i < total_active_threads; i++) {
         um += used_memory_thread[i];
+    }
+    if (unlikely(total_active_threads) > MAX_THREADS_NUM) {
+        um += atomic_load_explicit(&used_memory_for_additional_threads, memory_order_relaxed);
     }
     return um;
 }

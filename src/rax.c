@@ -1053,8 +1053,8 @@ int raxRemove(rax *rax, unsigned char *s, size_t len, void **old) {
         }
         if (child) {
             debugf("Unlinking child %p from parent %p\n", (void *)child, (void *)h);
-            raxNode *new = raxRemoveChild(h, child);
             size_t oldalloc = rax_alloc_size(h);
+            raxNode *new = raxRemoveChild(h, child);
             rax->alloc_size = rax->alloc_size - oldalloc + rax_alloc_size(new);
             if (new != h) {
                 raxNode *parent = raxStackPeek(&ts);

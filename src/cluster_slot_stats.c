@@ -147,7 +147,7 @@ void clusterSlotStatsCommand(client *c) {
         }
         int i = 4; /* Next argument index, following ORDERBY */
         int limit_counter = 0, asc_desc_counter = 0;
-        long limit;
+        long limit = CLUSTER_SLOTS;
         while (i < c->argc) {
             int moreargs = c->argc > i + 1;
             if (!strcasecmp(c->argv[i]->ptr, "limit") && moreargs) {

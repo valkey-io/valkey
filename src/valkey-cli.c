@@ -2273,7 +2273,7 @@ static void cliWaitForMessagesOrStdin(void) {
             /* Ctrl-C pressed */
             config.blocking_state_aborted = 0;
             config.pubsub_mode = 0;
-            printf("Exiting current connection, ready to reconnect to Valkey server... \n");
+            printf("Closing current connection. Ready to reconnect to Valkey server... \n");
             fflush(stdout);
             if (cliConnect(CC_FORCE) != REDIS_OK) {
                 cliPrintContextError();

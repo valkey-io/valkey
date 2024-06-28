@@ -104,7 +104,7 @@ const char *clusterNodePreferredEndpoint(clusterNode *n);
 long long clusterNodeReplOffset(clusterNode *node);
 clusterNode *clusterLookupNode(const char *name, int length);
 int detectAndUpdateCachedNodeHealth(void);
-client *createCachedResponseClient(void);
+client *createCachedResponseClient(int resp);
 void deleteCachedResponseClient(client *recording_client);
 void clearCachedClusterSlotsResponse(void);
 unsigned int countKeysInSlot(unsigned int hashslot);

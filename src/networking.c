@@ -339,8 +339,9 @@ sds aggregateClientOutputBuffer(client *c) {
  * to initiate caching of any command response.
  *
  * It needs be paired with `deleteCachedResponseClient` function to stop caching. */
-client *createCachedResponseClient(void) {
+client *createCachedResponseClient(int resp) {
     struct client *recording_client = createClient(NULL);
+    recording_client->resp = resp;
     /* Allocating the `conn` allows to prepare the caching client before adding
      * data to the clients output buffer by `prepareClientToWrite`. */
     recording_client->conn = zcalloc(sizeof(connection));

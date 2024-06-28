@@ -1354,15 +1354,17 @@ void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, in
 
 void clearCachedClusterSlotsResponse(void) {
     for (connTypeForCaching conn_type = CACHE_CONN_TCP; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
-        if (server.cached_cluster_slot_info[conn_type]) {
-            sdsfree(server.cached_cluster_slot_info[conn_type]);
-            server.cached_cluster_slot_info[conn_type] = NULL;
+        for (int resp = 0; resp <= 3; resp++) {
+            if (server.cached_cluster_slot_info[conn_type][resp]) {
+                sdsfree(server.cached_cluster_slot_info[conn_type][resp]);
+                server.cached_cluster_slot_info[conn_type][resp] = NULL;
+            }
         }
     }
 }
 
-sds generateClusterSlotResponse(void) {
-    client *recording_client = createCachedResponseClient();
+sds generateClusterSlotResponse(int resp) {
+    client *recording_client = createCachedResponseClient(resp);
     clusterNode *n = NULL;
     int num_primaries = 0, start = -1;
     void *slot_replylen = addReplyDeferredLen(recording_client);
@@ -1392,8 +1394,8 @@ sds generateClusterSlotResponse(void) {
     return cluster_slot_response;
 }
 
-int verifyCachedClusterSlotsResponse(sds cached_response) {
-    sds generated_response = generateClusterSlotResponse();
+int verifyCachedClusterSlotsResponse(sds cached_response, int resp) {
+    sds generated_response = generateClusterSlotResponse(resp);
     int is_equal = !sdscmp(generated_response, cached_response);
     /* Here, we use LL_WARNING so this gets printed when debug assertions are enabled and the system is about to crash. */
     if (!is_equal)
@@ -1413,16 +1415,16 @@ void clusterCommandSlots(client *c) {
      *               3) node ID
      *           ... continued until done
      */
-    connTypeForCaching conn_type = connIsTLS(c->conn);
+    connTypeForCaching conn_type = shouldReturnTlsInfo();
 
     if (detectAndUpdateCachedNodeHealth()) clearCachedClusterSlotsResponse();
 
-    sds cached_reply = server.cached_cluster_slot_info[conn_type];
+    sds cached_reply = server.cached_cluster_slot_info[conn_type][c->resp];
     if (!cached_reply) {
-        cached_reply = generateClusterSlotResponse();
-        server.cached_cluster_slot_info[conn_type] = cached_reply;
+        cached_reply = generateClusterSlotResponse(c->resp);
+        server.cached_cluster_slot_info[conn_type][c->resp] = cached_reply;
     } else {
-        debugServerAssertWithInfo(c, NULL, verifyCachedClusterSlotsResponse(cached_reply) == 1);
+        debugServerAssertWithInfo(c, NULL, verifyCachedClusterSlotsResponse(cached_reply, c->resp) == 1);
     }
 
     addReplyProto(c, cached_reply, sdslen(cached_reply));

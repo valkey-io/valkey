@@ -2075,7 +2075,7 @@ struct valkeyServer {
                                                             * dropping packets of a specific type */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
-    sds cached_cluster_slot_info[CACHE_CONN_TYPE_MAX];
+    sds cached_cluster_slot_info[CACHE_CONN_TYPE_MAX][4]; /* Align to RESP3 */
     /* Scripting */
     mstime_t busy_reply_threshold;  /* Script / module timeout in milliseconds */
     int pre_command_oom_state;      /* OOM before command (script?) was started */
@@ -2738,7 +2738,7 @@ void initSharedQueryBuf(void);
 client *lookupClientByID(uint64_t id);
 int authRequired(client *c);
 void putClientInPendingWriteQueue(client *c);
-client *createCachedResponseClient(void);
+client *createCachedResponseClient(int resp);
 void deleteCachedResponseClient(client *recording_client);
 
 /* logreqres.c - logging of requests and responses */

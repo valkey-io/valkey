@@ -3,6 +3,8 @@
 
 #define CLUSTER_PORT_INCR 10000 /* Cluster port = baseport + PORT_INCR */
 
+#define CLUSTER_DEFAULT_BLACKLIST_TTL 60 /* 1 minute. */
+
 /* The following defines are amount of time, sometimes expressed as
  * multiplicators of the node timeout value (when ending with MULT). */
 #define CLUSTER_FAIL_REPORT_VALIDITY_MULT 2  /* Fail report validity. */

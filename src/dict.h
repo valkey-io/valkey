@@ -84,8 +84,8 @@ typedef struct dictType {
      * enables one more optimization: to store a key without an allocated
      * dictEntry. */
     unsigned int keys_are_odd : 1;
-    /* If embedded_entry flag is set, it indicates that the key is embedded as part of
-     * the dict entry. */
+    /* If embedded_entry flag is set, it indicates that a copy of the key is created and the key is embedded
+     * as part of the dict entry. */
     unsigned int embedded_entry : 1;
 } dictType;
 

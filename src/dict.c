@@ -90,7 +90,7 @@ typedef struct {
     } v;
     struct dictEntry *next;  /* Next entry in the same hash bucket. */
     uint8_t key_header_size; /* offset into key_buf where the key is located at. */
-    unsigned char key_buf[]; /* buffer to embed the key. */
+    unsigned char key_buf[]; /* buffer with embedded key. */
 } embeddedDictEntry;
 
 /* Validation and helper for `embeddedDictEntry` */

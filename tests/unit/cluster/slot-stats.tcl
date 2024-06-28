@@ -240,7 +240,8 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         set slot_stats_desc_length [llength $slot_stats_desc]
         set slot_stats_asc_length [llength $slot_stats_asc]
         assert {$limit == $slot_stats_desc_length && $limit == $slot_stats_asc_length}
-        
+
+        # The key count of all slots is 0, so we will order by slot in ascending order.
         set expected_slots [dict create 0 0 1 0 2 0 3 0 4 0]
         assert_slot_visibility $slot_stats_desc $expected_slots
         assert_slot_visibility $slot_stats_asc $expected_slots

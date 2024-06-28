@@ -119,7 +119,7 @@ static inline void zmalloc_register_thread_index(void) {
 
 static inline void update_zmalloc_stat_alloc(size_t size) {
     if (unlikely(thread_index == -1)) zmalloc_register_thread_index();
-    if (unlikely(total_active_threads) > MAX_THREADS_NUM) {
+    if (unlikely(thread_index) >= MAX_THREADS_NUM) {
         atomic_fetch_add_explicit(&used_memory_for_additional_threads, size, memory_order_relaxed);
     } else {
         used_memory_thread[thread_index] += size;
@@ -128,7 +128,7 @@ static inline void update_zmalloc_stat_alloc(size_t size) {
 
 static inline void update_zmalloc_stat_free(size_t size) {
     if (unlikely(thread_index == -1)) zmalloc_register_thread_index();
-    if (unlikely(total_active_threads) > MAX_THREADS_NUM) {
+    if (unlikely(thread_index) >= MAX_THREADS_NUM) {
         atomic_fetch_sub_explicit(&used_memory_for_additional_threads, size, memory_order_relaxed);
     } else {
         used_memory_thread[thread_index] -= size;

@@ -5388,7 +5388,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "executable:%s\r\n", server.executable ? server.executable : "",
             "config_file:%s\r\n", server.configfile ? server.configfile : "",
             "io_threads_active:%i\r\n", server.io_threads_active,
-            "availability_zone:%s\r\n", server.availability_zone));
+            "availability_zone:%s\r\n", server.availability_zone,
+            "features:%s\r\n", "cluster_mget"));
         /* clang-format on */
 
         /* Conditional properties */

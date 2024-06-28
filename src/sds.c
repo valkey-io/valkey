@@ -201,14 +201,14 @@ static inline size_t sdsminlen(sds s) {
 
 /* This method copies the sds `s` into `buf` which is the target character buffer. */
 size_t sdscopytobuffer(unsigned char *buf, size_t buf_len, sds s, uint8_t *hdr_size) {
-    size_t reqd_keylen = sdsminlen(s);
+    size_t required_keylen = sdsminlen(s);
     if (buf == NULL) {
-        return reqd_keylen;
+        return required_keylen;
     }
-    assert(buf_len >= reqd_keylen);
-    memcpy(buf, sdsAllocPtr(s), reqd_keylen);
+    assert(buf_len >= required_keylen);
+    memcpy(buf, sdsAllocPtr(s), required_keylen);
     *hdr_size = sdsHdrSize(s[-1]);
-    return reqd_keylen;
+    return required_keylen;
 }
 
 /* Free an sds string. No operation is performed if 's' is NULL. */

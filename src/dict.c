@@ -529,6 +529,10 @@ int dictAdd(dict *d, void *key, void *val) {
  * with the existing entry if existing is not NULL.
  *
  * If key was added, the hash entry is returned to be manipulated by the caller.
+ *
+ * The dict handles `key` based on `dictType` during initialization:
+ * - If `dictType.embedded-entry` is 1, it clones the `key`.
+ * - Otherwise, it assumes ownership of the `key`.
  */
 dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing) {
     /* Get the position for the new key or NULL if the key already exists. */

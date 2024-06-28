@@ -1354,12 +1354,10 @@ void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, in
 }
 
 void clearCachedClusterSlotsResponse(void) {
-    for (connTypeForCaching conn_type = CACHE_CONN_TCP; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
-        for (int resp = 0; resp <= 3; resp++) {
-            if (server.cached_cluster_slot_info[conn_type][resp]) {
-                sdsfree(server.cached_cluster_slot_info[conn_type][resp]);
-                server.cached_cluster_slot_info[conn_type][resp] = NULL;
-            }
+    for (int conn_type = 0; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
+        if (server.cached_cluster_slot_info[conn_type]) {
+            sdsfree(server.cached_cluster_slot_info[conn_type]);
+            server.cached_cluster_slot_info[conn_type] = NULL;
         }
     }
 }
@@ -1416,14 +1414,17 @@ void clusterCommandSlots(client *c) {
      *               3) node ID
      *           ... continued until done
      */
-    connTypeForCaching conn_type = shouldReturnTlsInfo();
+    int conn_type = 0;
+    if (connIsTLS(c->conn)) conn_type |= CACHE_CONN_TYPE_TLS;
+    if (getClientPeerId(c)[0] == '[') conn_type |= CACHE_CONN_TYPE_IPv6; /* [::1]:6379 */
+    if (c->resp == 3) conn_type |= CACHE_CONN_TYPE_RESP3;
 
     if (detectAndUpdateCachedNodeHealth()) clearCachedClusterSlotsResponse();
 
-    sds cached_reply = server.cached_cluster_slot_info[conn_type][c->resp];
+    sds cached_reply = server.cached_cluster_slot_info[conn_type];
     if (!cached_reply) {
         cached_reply = generateClusterSlotResponse(c->resp);
-        server.cached_cluster_slot_info[conn_type][c->resp] = cached_reply;
+        server.cached_cluster_slot_info[conn_type] = cached_reply;
     } else {
         debugServerAssertWithInfo(c, NULL, verifyCachedClusterSlotsResponse(cached_reply, c->resp) == 1);
     }

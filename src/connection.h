@@ -62,8 +62,6 @@ typedef enum {
 #define CONN_TYPE_TLS "tls"
 #define CONN_TYPE_MAX 8 /* 8 is enough to be extendable */
 
-typedef enum connTypeForCaching { CACHE_CONN_TCP, CACHE_CONN_TLS, CACHE_CONN_TYPE_MAX } connTypeForCaching;
-
 typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 
 typedef struct ConnectionType {

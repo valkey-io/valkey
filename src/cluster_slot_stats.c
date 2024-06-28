@@ -4,14 +4,14 @@
  * SPDX-License-Identifier: BSD 3-Clause
  */
 
-#include "server.h"
-#include "cluster.h"
+#include "cluster_slot_stats.h"
 
 #define UNASSIGNED_SLOT 0
 
 typedef enum {
-    KEY_COUNT,
     INVALID,
+    KEY_COUNT,
+    CPU_USEC,
 } slotStatTypes;
 
 /* -----------------------------------------------------------------------------
@@ -23,6 +23,14 @@ typedef struct {
     int slot;
     uint64_t stat;
 } slotStatForSort;
+
+/* Struct used for storing slot statistics. */
+typedef struct slotStat {
+    uint64_t cpu;
+} slotStat;
+
+/* Struct used for storing slot statistics, for all slots owned by the current shard. */
+struct slotStat cluster_slot_stats[CLUSTER_SLOTS];
 
 static int doesSlotBelongToMyShard(int slot) {
     clusterNode *myself = getMyClusterNode();
@@ -47,6 +55,8 @@ static uint64_t getSlotStat(int slot, int stat_type) {
     uint64_t slot_stat = 0;
     if (stat_type == KEY_COUNT) {
         slot_stat = countKeysInSlot(slot);
+    } else if (stat_type == CPU_USEC) {
+        slot_stat = cluster_slot_stats[slot].cpu;
     }
     return slot_stat;
 }
@@ -80,9 +90,11 @@ static void addReplySlotStat(client *c, int slot) {
     addReplyArrayLen(c, 2); /* Array of size 2, where 0th index represents (int) slot,
                              * and 1st index represents (map) usage statistics. */
     addReplyLongLong(c, slot);
-    addReplyMapLen(c, 1); /* Nested map representing slot usage statistics. */
+    addReplyMapLen(c, 2); /* Nested map representing slot usage statistics. */
     addReplyBulkCString(c, "key-count");
     addReplyLongLong(c, countKeysInSlot(slot));
+    addReplyBulkCString(c, "cpu-usec");
+    addReplyLongLong(c, cluster_slot_stats[slot].cpu);
 }
 
 /* Adds reply for the SLOTSRANGE variant.
@@ -113,6 +125,22 @@ static void addReplyOrderBy(client *c, int order_by, long limit, int desc) {
     addReplySortedSlotStats(c, slot_stats, limit);
 }
 
+/* Resets applicable slot statistics. */
+void clusterSlotStatReset(int slot) {
+    /* key-count is exempt, as it is queried separately through `countKeysInSlot()`. */
+    cluster_slot_stats[slot].cpu = 0;
+}
+
+void clusterSlotStatsReset(void) {
+    memset(cluster_slot_stats, 0, sizeof(cluster_slot_stats));
+}
+
+void clusterSlotStatsAddCpuDuration(int slot, long duration) {
+    if (!server.execution_nesting && server.cluster_enabled && slot != -1) {
+        cluster_slot_stats[slot].cpu += duration;
+    }
+}
+
 void clusterSlotStatsCommand(client *c) {
     if (server.cluster_enabled == 0) {
         addReplyError(c, "This instance has cluster support disabled");
@@ -141,8 +169,11 @@ void clusterSlotStatsCommand(client *c) {
         int desc = 1, order_by = INVALID;
         if (!strcasecmp(c->argv[3]->ptr, "key-count")) {
             order_by = KEY_COUNT;
+        } else if (!strcasecmp(c->argv[3]->ptr, "cpu-usec")) {
+            order_by = CPU_USEC;
         } else {
-            addReplyError(c, "Unrecognized sort metric for ORDER BY. The supported metrics are: key-count.");
+            addReplyError(c, "Unrecognized sort metric for ORDER BY. The supported "
+                             "metrics are: key-count and cpu-usec.");
             return;
         }
         int i = 4; /* Next argument index, following ORDERBY */

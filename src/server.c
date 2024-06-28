@@ -30,6 +30,7 @@
 #include "server.h"
 #include "monotonic.h"
 #include "cluster.h"
+#include "cluster_slot_stats.h"
 #include "slowlog.h"
 #include "bio.h"
 #include "latency.h"
@@ -2499,6 +2500,7 @@ void resetServerStats(void) {
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
     lazyfreeResetStats();
+    clusterSlotStatsReset();
 }
 
 /* Make the thread killable at any time, so that kill threads functions
@@ -3522,6 +3524,9 @@ void call(client *c, int flags) {
         if (server.latency_tracking_enabled && !(c->flags & CLIENT_BLOCKED))
             updateCommandLatencyHistogram(&(real_cmd->latency_histogram), c->duration * 1000);
     }
+
+    /* Populate per-slot statistics for cpu time. */
+    clusterSlotStatsAddCpuDuration(c->slot, c->duration);
 
     /* The duration needs to be reset after each call except for a blocked command,
      * which is expected to record and reset the duration after unblocking. */

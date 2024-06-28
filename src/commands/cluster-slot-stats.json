@@ -35,6 +35,9 @@
                         "properties": {
                             "key-count": {
                                 "type": "integer"
+                            },
+                            "cpu-usec": {
+                                "type": "integer"
                             }
                         }
                     }

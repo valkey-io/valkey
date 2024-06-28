@@ -64,6 +64,7 @@
 #include "slowlog.h"
 #include "latency.h"
 #include "monotonic.h"
+#include "cluster_slot_stats.h"
 
 /* forward declarations */
 static void unblockClientWaitingData(client *c);
@@ -105,6 +106,8 @@ void blockClient(client *c, int btype) {
 void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int had_errors) {
     const ustime_t total_cmd_duration = c->duration + blocked_us + reply_us;
     c->lastcmd->microseconds += total_cmd_duration;
+    /* Populate per-slot statistics for cpu time. */
+    clusterSlotStatsAddCpuDuration(c->slot, total_cmd_duration);
     c->lastcmd->calls++;
     c->commands_processed++;
     server.stat_numcommands++;

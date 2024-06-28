@@ -964,6 +964,7 @@ int test_hugeKey(int argc, char **argv, int flags) {
     void *value1, *value2;
     int found1 = raxFind(rax,(unsigned char*)"aaabbb",6,&value1);
     int found2 = raxFind(rax,key,max_keylen,&value2);
+    zfree(key);
     if (!found1 || !found2) {
         printf("Huge key test failed on elementhood\n");
         return 1;

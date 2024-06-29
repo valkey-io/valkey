@@ -330,7 +330,6 @@ void setcpuaffinity(const char *cpulist);
 #endif
 
 #define IO_THREADS_MAX_NUM 128
-#define MAX_THREADS_NUM (IO_THREADS_MAX_NUM + 3 + 1)
 
 #ifndef CACHE_LINE_SIZE
 #if defined(__aarch64__) && defined(__APPLE__)

@@ -86,6 +86,10 @@ set ::force_resp3 0
 set ::client 0
 set ::numclients 16
 
+proc current_time {} {
+    return [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"]
+}
+
 # This function is called by one of the test clients when it receives
 # a "run" command from the server, with a filename as data.
 # It will run the specified test source file and signal it to the
@@ -314,7 +318,7 @@ proc test_server_cron {} {
     set elapsed [expr {[clock seconds]-$::last_progress}]
 
     if {$elapsed > $::timeout} {
-        set err "\[[colorstr red TIMEOUT]\]: clients state report follows."
+        set err "\[[current_time]\] \[[colorstr red TIMEOUT]\]: clients state report follows."
         puts $err
         lappend ::failed_tests $err
         show_clients_state
@@ -354,7 +358,7 @@ proc read_from_test_client fd {
 
     if {$status eq {ready}} {
         if {!$::quiet} {
-            puts "\[$status\]: $data"
+            puts "\[[current_time]\] \[$status\]: $data"
         }
         signal_idle_client $fd
     } elseif {$status eq {done}} {
@@ -362,25 +366,25 @@ proc read_from_test_client fd {
         set all_tests_count [llength $::all_tests]
         set running_tests_count [expr {[llength $::active_clients]-1}]
         set completed_tests_count [expr {$::next_test-$running_tests_count}]
-        puts "\[$completed_tests_count/$all_tests_count [colorstr yellow $status]\]: $data ($elapsed seconds)"
+        puts "\[[current_time]\] \[$completed_tests_count/$all_tests_count [colorstr yellow $status]\]: $data ($elapsed seconds)"
         lappend ::clients_time_history $elapsed $data
         signal_idle_client $fd
         set ::active_clients_task($fd) "(DONE) $data"
     } elseif {$status eq {ok}} {
         if {!$::quiet} {
-            puts "\[[colorstr green $status]\]: $data ($elapsed ms)"
+            puts "\[[current_time]\] \[[colorstr green $status]\]: $data ($elapsed ms)"
         }
         set ::active_clients_task($fd) "(OK) $data"
     } elseif {$status eq {skip}} {
         if {!$::quiet} {
-            puts "\[[colorstr yellow $status]\]: $data"
+            puts "\[[current_time]\] \[[colorstr yellow $status]\]: $data"
         }
     } elseif {$status eq {ignore}} {
         if {!$::quiet} {
-            puts "\[[colorstr cyan $status]\]: $data"
+            puts "\[[current_time]\] \[[colorstr cyan $status]\]: $data"
         }
     } elseif {$status eq {err}} {
-        set err "\[[colorstr red $status]\]: $data"
+        set err "\[[current_time]\] \[[colorstr red $status]\]: $data"
         puts $err
         lappend ::failed_tests $err
         set ::active_clients_task($fd) "(ERR) $data"
@@ -395,7 +399,7 @@ proc read_from_test_client fd {
             gets stdin
         }
     } elseif {$status eq {exception}} {
-        puts "\[[colorstr red $status]\]: $data"
+        puts "\[[current_time]\] \[[colorstr red $status]\]: $data"
         kill_clients
         force_kill_all_servers
         exit 1
@@ -415,7 +419,7 @@ proc read_from_test_client fd {
         lappend ::run_solo_tests $data
     } else {
         if {!$::quiet} {
-            puts "\[$status\]: $data"
+            puts "\[[current_time]\] \[$status\]: $data"
         }
     }
 }
@@ -468,7 +472,7 @@ proc signal_idle_client fd {
     # New unit to process?
     if {$::next_test != [llength $::all_tests]} {
         if {!$::quiet} {
-            puts [colorstr bold-white "Testing [lindex $::all_tests $::next_test]"]
+            puts [colorstr bold-white "\[[current_time]\] Testing [lindex $::all_tests $::next_test]"]
             set ::active_clients_task($fd) "ASSIGNED: $fd ([lindex $::all_tests $::next_test])"
         }
         set ::clients_start_time($fd) [clock seconds]

@@ -135,7 +135,7 @@ struct hdr_histogram;
 #define NET_HOST_STR_LEN 256                          /* Longest valid hostname */
 #define NET_IP_STR_LEN 46                             /* INET6_ADDRSTRLEN is 46, but we need to be sure */
 #define NET_ADDR_STR_LEN (NET_IP_STR_LEN + 32)        /* Must be enough for ip:port */
-#define NET_HOST_PORT_STR_LEN (NET_HOST_STR_LEN + 64) /* Must be enough for hostname:port */
+#define NET_HOST_PORT_STR_LEN (NET_HOST_STR_LEN + 32) /* Must be enough for hostname:port */
 #define CONFIG_BINDADDR_MAX 16
 #define CONFIG_MIN_RESERVED_FDS 32
 #define CONFIG_DEFAULT_PROC_TITLE_TEMPLATE "{title} {listen-addr} {server-mode}"

@@ -208,7 +208,7 @@ void rebaseReplicationBuffer(long long base_repl_offset) {
  * On COB overrun, association is deleted and the RDB connection 
  * is dropped.
  */
-void addReplicaToPsyncWaitingRax(client* replica) {
+void addReplicaToPsyncWait(client* replica) {
     listNode *ln = NULL;
     replBufBlock *tail = NULL;
     if (server.repl_backlog == NULL) {
@@ -230,7 +230,7 @@ void addReplicaToPsyncWaitingRax(client* replica) {
 }
 
 /* Attach waiting psync replicas with new replication backlog head. */
-void addReplicaToPsyncWaitingRaxRetrospect(void) {
+void addReplicaToPsyncWaitRetrospect(void) {
     listNode *ln = listFirst(server.repl_buffer_blocks);
     replBufBlock *head = ln ? listNodeValue(ln) : NULL;
     raxIterator iter;
@@ -249,7 +249,7 @@ void addReplicaToPsyncWaitingRaxRetrospect(void) {
     raxStop(&iter);
 }
 
-void removeReplicaFromPsyncWaitingRax(client* replica) {
+void removeReplicaFromPsyncWait(client* replica) {
     listNode *ln;
     replBufBlock *o;
     /* Get replBufBlock pointed by this replica */ 
@@ -462,7 +462,7 @@ void feedReplicationBuffer(char *s, size_t len) {
         }
         if (empty_backlog && raxSize(server.replicas_waiting_psync) > 0) {
             /* Increase refcount for pending replicas. */
-            addReplicaToPsyncWaitingRaxRetrospect();
+            addReplicaToPsyncWaitRetrospect();
         }
 
         /* For output buffer of replicas. */
@@ -864,7 +864,7 @@ int primaryTryPartialResynchronization(client *c, long long psync_offset) {
     c->flags |= CLIENT_REPLICA;
     if (c->flags & CLIENT_REPL_MAIN_CONN && lookupRdbClientByID(c->associated_rdb_client_id)) {
         c->repl_state = REPLICA_STATE_BG_RDB_LOAD;
-        removeReplicaFromPsyncWaitingRax(c);
+        removeReplicaFromPsyncWait(c);
     } else {
          c->repl_state = REPLICA_STATE_ONLINE;
     }

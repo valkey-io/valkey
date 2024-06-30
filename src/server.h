@@ -2997,7 +2997,7 @@ void abortFailover(const char *err);
 const char *getFailoverStateString(void);
 void abortRdbConnectionSync(void);
 int sendCurrentOffsetToReplica(client* replica);
-void addReplicaToPsyncWaitingRax(client* replica);
+void addReplicaToPsyncWait(client* replica);
 
 /* Generic persistence functions */
 void startLoadingFile(size_t size, char *filename, int rdbflags);

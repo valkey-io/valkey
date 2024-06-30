@@ -246,8 +246,8 @@ void putClientInPendingWriteQueue(client *c) {
     /* Schedule the client to write the output buffers to the socket only
      * if not already done and, for replicas, if the replica can actually receive
      * writes at this stage. */
-    if (!(c->flag.pending_write) && (c->repl_state == REPL_STATE_NONE ||
-                                     (c->repl_state == REPLICA_STATE_ONLINE && !c->repl_start_cmd_stream_on_ack))) {
+    if (!c->flag.pending_write && (c->repl_state == REPL_STATE_NONE ||
+                                   (c->repl_state == REPLICA_STATE_ONLINE && !c->repl_start_cmd_stream_on_ack))) {
         /* Here instead of installing the write handler, we just flag the
          * client and put it into a list of clients that have something
          * to write to the socket. This way before re-entering the event
@@ -291,11 +291,11 @@ int prepareClientToWrite(client *c) {
 
     /* CLIENT REPLY OFF / SKIP handling: don't send replies.
      * CLIENT_PUSHING handling: disables the reply silencing flags. */
-    if ((c->flag.reply_off || c->flag.reply_skip) && !(c->flag.pushing)) return C_ERR;
+    if ((c->flag.reply_off || c->flag.reply_skip) && !c->flag.pushing) return C_ERR;
 
     /* Primaries don't receive replies, unless CLIENT_PRIMARY_FORCE_REPLY flag
      * is set. */
-    if ((c->flag.primary) && !(c->flag.primary_force_reply)) return C_ERR;
+    if (c->flag.primary && !c->flag.primary_force_reply) return C_ERR;
 
     if (!c->conn) return C_ERR; /* Fake client for AOF loading. */
 
@@ -448,7 +448,7 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
      * the SUBSCRIBE command family, which (currently) have a push message instead of a proper reply.
      * The check for executing_client also avoids affecting push messages that are part of eviction.
      * Check CLIENT_PUSHING first to avoid race conditions, as it's absent in module's fake client. */
-    if ((c->flag.pushing) && c == server.current_client && server.executing_client &&
+    if (c->flag.pushing && c == server.current_client && server.executing_client &&
         !cmdHasPushAsReply(server.executing_client->cmd)) {
         _addReplyProtoToList(c, server.pending_push_messages, s, len);
         return;
@@ -1987,7 +1987,7 @@ int writeToClient(client *c, int handler_installed) {
          * a replica or a monitor (otherwise, on high-speed traffic, the
          * replication/output buffer will grow indefinitely) */
         if (totwritten > NET_MAX_WRITES_PER_EVENT &&
-            (server.maxmemory == 0 || zmalloc_used_memory() < server.maxmemory) && !(c->flag.replica))
+            (server.maxmemory == 0 || zmalloc_used_memory() < server.maxmemory) && !c->flag.replica)
             break;
     }
 
@@ -2010,7 +2010,7 @@ int writeToClient(client *c, int handler_installed) {
          * as an interaction, since we always send REPLCONF ACK commands
          * that take some time to just fill the socket output buffer.
          * We just rely on data / pings received for timeout detection. */
-        if (!(c->flag.primary)) c->last_interaction = server.unixtime;
+        if (!c->flag.primary) c->last_interaction = server.unixtime;
     }
     if (!clientHasPendingReplies(c)) {
         c->sentlen = 0;
@@ -2100,12 +2100,12 @@ void resetClient(client *c) {
 
     /* We clear the ASKING flag as well if we are not inside a MULTI, and
      * if what we just executed is not the ASKING command itself. */
-    if (!(c->flag.multi) && prevcmd != askingCommand) c->flag.asking = 0;
+    if (!c->flag.multi && prevcmd != askingCommand) c->flag.asking = 0;
 
     /* We do the same for the CACHING command as well. It also affects
      * the next command or transaction executed, in a way very similar
      * to ASKING. */
-    if (!(c->flag.multi) && prevcmd != clientCommand) c->flag.tracking_caching = 0;
+    if (!c->flag.multi && prevcmd != clientCommand) c->flag.tracking_caching = 0;
 
     /* Remove the CLIENT_REPLY_SKIP flag if any so that the reply
      * to the next command will be sent, but set the flag if the command
@@ -2389,7 +2389,7 @@ int processMultibulkBuffer(client *c) {
             }
 
             ok = string2ll(c->querybuf + c->qb_pos + 1, newline - (c->querybuf + c->qb_pos + 1), &ll);
-            if (!ok || ll < 0 || (!(c->flag.primary) && ll > server.proto_max_bulk_len)) {
+            if (!ok || ll < 0 || (!c->flag.primary && ll > server.proto_max_bulk_len)) {
                 addReplyError(c, "Protocol error: invalid bulk length");
                 setProtocolError("invalid bulk length", c);
                 return C_ERR;
@@ -2400,7 +2400,7 @@ int processMultibulkBuffer(client *c) {
             }
 
             c->qb_pos = newline - c->querybuf + 2;
-            if (!(c->flag.primary) && ll >= PROTO_MBULK_BIG_ARG) {
+            if (!c->flag.primary && ll >= PROTO_MBULK_BIG_ARG) {
                 /* When the client is not a primary client (because primary
                  * client's querybuf can only be trimmed after data applied
                  * and sent to replicas).
@@ -2446,7 +2446,7 @@ int processMultibulkBuffer(client *c) {
             /* Optimization: if a non-primary client's buffer contains JUST our bulk element
              * instead of creating a new object by *copying* the sds we
              * just use the current sds string. */
-            if (!(c->flag.primary) && c->qb_pos == 0 && c->bulklen >= PROTO_MBULK_BIG_ARG &&
+            if (!c->flag.primary && c->qb_pos == 0 && c->bulklen >= PROTO_MBULK_BIG_ARG &&
                 sdslen(c->querybuf) == (size_t)(c->bulklen + 2)) {
                 c->argv[c->argc++] = createObject(OBJ_STRING, c->querybuf);
                 c->argv_len_sum += c->bulklen;
@@ -2491,7 +2491,7 @@ void commandProcessed(client *c) {
     resetClient(c);
 
     long long prev_offset = c->reploff;
-    if (c->flag.primary && !(c->flag.multi)) {
+    if (c->flag.primary && !c->flag.multi) {
         /* Update the applied replication offset of our primary. */
         c->reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
     }
@@ -2717,7 +2717,7 @@ void readQueryFromClient(connection *conn) {
         qblen = sdslen(c->querybuf);
     }
 
-    if (!(c->flag.primary) && // primary client's querybuf can grow greedy.
+    if (!c->flag.primary && // primary client's querybuf can grow greedy.
         (big_arg || sdsalloc(c->querybuf) < PROTO_IOBUF_LEN)) {
         /* When reading a BIG_ARG we won't be reading more than that one arg
          * into the query buffer, so we don't need to pre-allocate more than we
@@ -2766,7 +2766,7 @@ void readQueryFromClient(connection *conn) {
     }
     c->net_input_bytes += nread;
 
-    if (!(c->flag.primary) &&
+    if (!c->flag.primary &&
         /* The commands cached in the MULTI/EXEC queue have not been executed yet,
          * so they are also considered a part of the query buffer in a broader sense.
          *
@@ -3187,7 +3187,7 @@ NULL
         } else if (!strcasecmp(c->argv[2]->ptr, "off")) {
             c->flag.reply_off = 1;
         } else if (!strcasecmp(c->argv[2]->ptr, "skip")) {
-            if (!(c->flag.reply_off)) c->flag.reply_skip_next = 1;
+            if (!c->flag.reply_off) c->flag.reply_skip_next = 1;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
@@ -3442,7 +3442,7 @@ NULL
             }
 
             if (c->flag.tracking) {
-                int oldbcast = !!(c->flag.tracking_bcast);
+                int oldbcast = !!c->flag.tracking_bcast;
                 int newbcast = !!(options.tracking_bcast);
                 if (oldbcast != newbcast) {
                     addReplyError(c, "You can't switch BCAST mode on/off before disabling "
@@ -3492,7 +3492,7 @@ NULL
         zfree(prefix);
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "caching") && c->argc >= 3) {
-        if (!(c->flag.tracking)) {
+        if (!c->flag.tracking) {
             addReplyError(c, "CLIENT CACHING can be called only when the "
                              "client is in tracking mode with OPTIN or "
                              "OPTOUT mode enabled");
@@ -3912,7 +3912,7 @@ int getClientType(client *c) {
     if (c->flag.primary) return CLIENT_TYPE_PRIMARY;
     /* Even though MONITOR clients are marked as replicas, we
      * want the expose them as normal clients. */
-    if ((c->flag.replica) && !(c->flag.monitor)) return CLIENT_TYPE_REPLICA;
+    if (c->flag.replica && !c->flag.monitor) return CLIENT_TYPE_REPLICA;
     if (c->flag.pubsub) return CLIENT_TYPE_PUBSUB;
     return CLIENT_TYPE_NORMAL;
 }
@@ -4568,7 +4568,7 @@ int handleClientsWithPendingReadsUsingThreads(void) {
         listDelNode(server.clients_pending_read, ln);
         c->pending_read_list_node = NULL;
 
-        serverAssert(!(c->flag.blocked));
+        serverAssert(!c->flag.blocked);
 
         if (beforeNextClient(c) == C_ERR) {
             /* If the client is no longer valid, we avoid
@@ -4590,7 +4590,7 @@ int handleClientsWithPendingReadsUsingThreads(void) {
         /* We may have pending replies if a thread readQueryFromClient() produced
          * replies and did not put the client in pending write queue (it can't).
          */
-        if (!(c->flag.pending_write) && clientHasPendingReplies(c)) putClientInPendingWriteQueue(c);
+        if (!c->flag.pending_write && clientHasPendingReplies(c)) putClientInPendingWriteQueue(c);
     }
 
     /* Update processed count on server */

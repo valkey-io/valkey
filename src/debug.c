@@ -809,7 +809,7 @@ void debugCommand(client *c) {
             addReplyPushLen(c, 2);
             addReplyBulkCString(c, "server-cpu-usage");
             addReplyLongLong(c, 42);
-            if (!(old_flags.pushing)) c->flag.pushing = 0;
+            if (!old_flags.pushing) c->flag.pushing = 0;
             /* Push replies are not synchronous replies, so we emit also a
              * normal reply in order for blocking clients just discarding the
              * push reply, to actually consume the reply and continue. */

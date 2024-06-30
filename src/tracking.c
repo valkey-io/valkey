@@ -179,7 +179,7 @@ void enableBcastTrackingForPrefix(client *c, char *prefix, size_t plen) {
  * inform it of the condition. Multiple clients can redirect the invalidation
  * messages to the same client ID. */
 void enableTracking(client *c, uint64_t redirect_to, struct ClientFlags options, robj **prefix, size_t numprefix) {
-    if (!(c->flag.tracking)) server.tracking_clients++;
+    if (!c->flag.tracking) server.tracking_clients++;
     c->flag.tracking = 1;
     c->flag.tracking_broken_redir = 0;
     c->flag.tracking_bcast = 0;
@@ -289,10 +289,10 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
                 addReplyBulkCBuffer(c, "tracking-redir-broken", 21);
                 addReplyLongLong(c, c->client_tracking_redirection);
             }
-            if (!(old_flags.pushing)) c->flag.pushing = 0;
+            if (!old_flags.pushing) c->flag.pushing = 0;
             return;
         }
-        if (!(old_flags.pushing)) c->flag.pushing = 0;
+        if (!old_flags.pushing) c->flag.pushing = 0;
         c = redir;
         using_redirection = 1;
         old_flags = c->flag;
@@ -315,7 +315,7 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
          * redirecting to another client. We can't send anything to
          * it since RESP2 does not support push messages in the same
          * connection. */
-        if (!(old_flags.pushing)) c->flag.pushing = 0;
+        if (!old_flags.pushing) c->flag.pushing = 0;
         return;
     }
 
@@ -327,7 +327,7 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
         addReplyBulkCBuffer(c, keyname, keylen);
     }
     updateClientMemUsageAndBucket(c);
-    if (!(old_flags.pushing)) c->flag.pushing = 0;
+    if (!old_flags.pushing) c->flag.pushing = 0;
 }
 
 /* This function is called when a key is modified in the server and in the case

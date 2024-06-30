@@ -55,10 +55,10 @@ int clientsCronHandleTimeout(client *c, mstime_t now_ms) {
 
     if (server.maxidletime &&
         /* This handles the idle clients connection timeout if set. */
-        !(c->flag.replica) && /* No timeout for replicas and monitors */
+        !c->flag.replica &&   /* No timeout for replicas and monitors */
         !mustObeyClient(c) && /* No timeout for primaries and AOF */
-        !(c->flag.blocked) && /* No timeout for BLPOP */
-        !(c->flag.pubsub) &&  /* No timeout for Pub/Sub clients */
+        !c->flag.blocked &&   /* No timeout for BLPOP */
+        !c->flag.pubsub &&    /* No timeout for Pub/Sub clients */
         (now - c->last_interaction > server.maxidletime)) {
         serverLog(LL_VERBOSE, "Closing idle client");
         freeClient(c);
@@ -118,7 +118,7 @@ void addClientToTimeoutTable(client *c) {
 /* Remove the client from the table when it is unblocked for reasons
  * different than timing out. */
 void removeClientFromTimeoutTable(client *c) {
-    if (!(c->flag.in_to_table)) return;
+    if (!c->flag.in_to_table) return;
     c->flag.in_to_table = 0;
     uint64_t timeout = c->bstate.timeout;
     unsigned char buf[CLIENT_ST_KEYLEN];

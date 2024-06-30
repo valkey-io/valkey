@@ -91,7 +91,7 @@ void blockClient(client *c, int btype) {
 
     c->flag.blocked = 1;
     c->bstate.btype = btype;
-    if (!(c->flag.module))
+    if (!c->flag.module)
         server.blocked_clients++; /* We count blocked client stats on regular clients and not on module clients */
     server.blocked_clients_by_type[btype]++;
     addClientToTimeoutTable(c);
@@ -133,7 +133,7 @@ void processUnblockedClients(void) {
         c->flag.unblocked = 0;
 
         if (c->flag.module) {
-            if (!(c->flag.blocked)) {
+            if (!c->flag.blocked) {
                 moduleCallCommandUnblockedHandler(c);
             }
             continue;
@@ -143,7 +143,7 @@ void processUnblockedClients(void) {
          * is blocked again. Actually processInputBuffer() checks that the
          * client is not blocked before to proceed, but things may change and
          * the code is conceptually more correct this way. */
-        if (!(c->flag.blocked)) {
+        if (!c->flag.blocked) {
             /* If we have a queued command, execute it now. */
             if (processPendingCommandAndInputBuffer(c) == C_ERR) {
                 c = NULL;
@@ -172,7 +172,7 @@ void processUnblockedClients(void) {
 void queueClientForReprocessing(client *c) {
     /* The client may already be into the unblocked list because of a previous
      * blocking operation, don't add back it into the list multiple times. */
-    if (!(c->flag.unblocked)) {
+    if (!c->flag.unblocked) {
         c->flag.unblocked = 1;
         listAddNodeTail(server.unblocked_clients, c);
     }
@@ -199,7 +199,7 @@ void unblockClient(client *c, int queue_for_reprocessing) {
 
     /* Reset the client for a new query, unless the client has pending command to process
      * or in case a shutdown operation was canceled and we are still in the processCommand sequence  */
-    if (!(c->flag.pending_command) && c->bstate.btype != BLOCKED_SHUTDOWN) {
+    if (!c->flag.pending_command && c->bstate.btype != BLOCKED_SHUTDOWN) {
         freeClientOriginalArgv(c);
         /* Clients that are not blocked on keys are not reprocessed so we must
          * call reqresAppendResponse here (for clients blocked on key,
@@ -210,7 +210,7 @@ void unblockClient(client *c, int queue_for_reprocessing) {
     }
 
     /* We count blocked client stats on regular clients and not on module clients */
-    if (!(c->flag.module)) server.blocked_clients--;
+    if (!c->flag.module) server.blocked_clients--;
     server.blocked_clients_by_type[c->bstate.btype]--;
     /* Clear the flags, and put the client in the unblocked list so that
      * we'll process new commands in its query buffer ASAP. */
@@ -368,7 +368,7 @@ void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeo
     list *l;
     int j;
 
-    if (!(c->flag.reprocessing_command)) {
+    if (!c->flag.reprocessing_command) {
         /* If the client is re-processing the command, we do not set the timeout
          * because we need to retain the client's original timeout. */
         c->bstate.timeout = timeout;
@@ -644,7 +644,7 @@ static void unblockClientOnKey(client *c, robj *key) {
         server.current_client = c;
         enterExecutionUnit(1, 0);
         processCommandAndResetClient(c);
-        if (!(c->flag.blocked)) {
+        if (!c->flag.blocked) {
             if (c->flag.module) {
                 moduleCallCommandUnblockedHandler(c);
             } else {

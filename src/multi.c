@@ -119,7 +119,7 @@ void multiCommand(client *c) {
 }
 
 void discardCommand(client *c) {
-    if (!(c->flag.multi)) {
+    if (!c->flag.multi) {
         addReplyError(c, "DISCARD without MULTI");
         return;
     }
@@ -150,7 +150,7 @@ void execCommand(client *c) {
     int orig_argc, orig_argv_len;
     struct serverCommand *orig_cmd;
 
-    if (!(c->flag.multi)) {
+    if (!c->flag.multi) {
         addReplyError(c, "EXEC without MULTI");
         return;
     }
@@ -226,7 +226,7 @@ void execCommand(client *c) {
             else
                 call(c, CMD_CALL_FULL);
 
-            serverAssert((c->flag.blocked) == 0);
+            serverAssert(c->flag.blocked == 0);
         }
 
         /* Commands may alter argc/argv, restore mstate. */

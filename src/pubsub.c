@@ -114,7 +114,7 @@ void addReplyPubsubMessage(client *c, robj *channel, robj *msg, robj *message_bu
     addReply(c, message_bulk);
     addReplyBulk(c, channel);
     if (msg) addReplyBulk(c, msg);
-    if (!(old_flags.pushing)) c->flag.pushing = 0;
+    if (!old_flags.pushing) c->flag.pushing = 0;
 }
 
 /* Send a pubsub message of type "pmessage" to the client. The difference
@@ -131,7 +131,7 @@ void addReplyPubsubPatMessage(client *c, robj *pat, robj *channel, robj *msg) {
     addReplyBulk(c, pat);
     addReplyBulk(c, channel);
     addReplyBulk(c, msg);
-    if (!(old_flags.pushing)) c->flag.pushing = 0;
+    if (!old_flags.pushing) c->flag.pushing = 0;
 }
 
 /* Send the pubsub subscription notification to the client. */
@@ -145,7 +145,7 @@ void addReplyPubsubSubscribed(client *c, robj *channel, pubsubtype type) {
     addReply(c, *type.subscribeMsg);
     addReplyBulk(c, channel);
     addReplyLongLong(c, type.subscriptionCount(c));
-    if (!(old_flags.pushing)) c->flag.pushing = 0;
+    if (!old_flags.pushing) c->flag.pushing = 0;
 }
 
 /* Send the pubsub unsubscription notification to the client.
@@ -165,7 +165,7 @@ void addReplyPubsubUnsubscribed(client *c, robj *channel, pubsubtype type) {
     else
         addReplyNull(c);
     addReplyLongLong(c, type.subscriptionCount(c));
-    if (!(old_flags.pushing)) c->flag.pushing = 0;
+    if (!old_flags.pushing) c->flag.pushing = 0;
 }
 
 /* Send the pubsub pattern subscription notification to the client. */
@@ -179,7 +179,7 @@ void addReplyPubsubPatSubscribed(client *c, robj *pattern) {
     addReply(c, shared.psubscribebulk);
     addReplyBulk(c, pattern);
     addReplyLongLong(c, clientSubscriptionsCount(c));
-    if (!(old_flags.pushing)) c->flag.pushing = 0;
+    if (!old_flags.pushing) c->flag.pushing = 0;
 }
 
 /* Send the pubsub pattern unsubscription notification to the client.
@@ -199,7 +199,7 @@ void addReplyPubsubPatUnsubscribed(client *c, robj *pattern) {
     else
         addReplyNull(c);
     addReplyLongLong(c, clientSubscriptionsCount(c));
-    if (!(old_flags.pushing)) c->flag.pushing = 0;
+    if (!old_flags.pushing) c->flag.pushing = 0;
 }
 
 /*-----------------------------------------------------------------------------
@@ -241,7 +241,7 @@ int clientTotalPubSubSubscriptionCount(client *c) {
 }
 
 void markClientAsPubSub(client *c) {
-    if (!(c->flag.pubsub)) {
+    if (!c->flag.pubsub) {
         c->flag.pubsub = 1;
         server.pubsub_clients++;
     }
@@ -539,7 +539,7 @@ int pubsubPublishMessage(robj *channel, robj *message, int sharded) {
 /* SUBSCRIBE channel [channel ...] */
 void subscribeCommand(client *c) {
     int j;
-    if ((c->flag.deny_blocking) && !(c->flag.multi)) {
+    if (c->flag.deny_blocking && !c->flag.multi) {
         /**
          * A client that has CLIENT_DENY_BLOCKING flag on
          * expect a reply per command and so can not execute subscribe.
@@ -571,7 +571,7 @@ void unsubscribeCommand(client *c) {
 /* PSUBSCRIBE pattern [pattern ...] */
 void psubscribeCommand(client *c) {
     int j;
-    if ((c->flag.deny_blocking) && !(c->flag.multi)) {
+    if (c->flag.deny_blocking && !c->flag.multi) {
         /**
          * A client that has CLIENT_DENY_BLOCKING flag on
          * expect a reply per command and so can not execute subscribe.

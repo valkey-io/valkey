@@ -1666,7 +1666,7 @@ void setExpire(client *c, serverDb *db, robj *key, long long when) {
     }
 
     int writable_replica = server.primary_host && server.repl_replica_ro == 0;
-    if (c && writable_replica && !(c->flag.primary)) rememberReplicaKeyWithExpire(db, key);
+    if (c && writable_replica && !c->flag.primary) rememberReplicaKeyWithExpire(db, key);
 }
 
 /* Return the expire time of the specified key, or -1 if no expire

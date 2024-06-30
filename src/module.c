@@ -8299,8 +8299,7 @@ void moduleHandleBlockedClients(void) {
             /* Put the client in the list of clients that need to write
              * if there are pending replies here. This is needed since
              * during a non blocking command the client may receive output. */
-            if (!clientHasModuleAuthInProgress(c) && clientHasPendingReplies(c) && !(c->flag.pending_write) &&
-                c->conn) {
+            if (!clientHasModuleAuthInProgress(c) && clientHasPendingReplies(c) && !c->flag.pending_write && c->conn) {
                 c->flag.pending_write = 1;
                 listLinkNodeHead(server.clients_pending_write, &c->clients_pending_write_node);
             }

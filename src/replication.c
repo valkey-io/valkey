@@ -1052,7 +1052,7 @@ void syncCommand(client *c) {
             /* Perfect, the server is already registering differences for
              * another replica. Set the right state, and copy the buffer.
              * We don't copy buffer if clients don't want. */
-            if (!(c->flag.repl_rdbonly)) copyReplicaOutputBuffer(c, replica);
+            if (!c->flag.repl_rdbonly) copyReplicaOutputBuffer(c, replica);
             replicationSetupReplicaForFullResync(c, replica->psync_initial_offset);
             serverLog(LL_NOTICE, "Waiting for end of BGSAVE for SYNC");
         } else {
@@ -1168,7 +1168,7 @@ void replconfCommand(client *c) {
              * internal only command that normal clients should never use. */
             long long offset;
 
-            if (!(c->flag.replica)) return;
+            if (!c->flag.replica) return;
             if ((getLongLongFromObject(c->argv[j + 1], &offset) != C_OK)) return;
             if (offset > c->repl_ack_off) c->repl_ack_off = offset;
             if (c->argc > j + 3 && !strcasecmp(c->argv[j + 2]->ptr, "fack")) {

@@ -1550,7 +1550,7 @@ int loadSingleAppendOnlyFile(char *filename) {
         serverAssert(fakeClient->bufpos == 0 && listLength(fakeClient->reply) == 0);
 
         /* The fake client should never get blocked */
-        serverAssert((fakeClient->flag.blocked) == 0);
+        serverAssert(fakeClient->flag.blocked == 0);
 
         /* Clean up. Command code may have changed argv/argc so we use the
          * argv/argc of the client instead of the local variables. */

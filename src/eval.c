@@ -630,7 +630,7 @@ void evalCommand(client *c) {
     /* Explicitly feed monitor here so that lua commands appear after their
      * script command. */
     replicationFeedMonitors(c, server.monitors, c->db->id, c->argv, c->argc);
-    if (!(c->flag.lua_debug))
+    if (!c->flag.lua_debug)
         evalGenericCommand(c, 0);
     else
         evalGenericCommandWithDebugging(c, 0);
@@ -652,7 +652,7 @@ void evalShaCommand(client *c) {
         addReplyErrorObject(c, shared.noscripterr);
         return;
     }
-    if (!(c->flag.lua_debug))
+    if (!c->flag.lua_debug)
         evalGenericCommand(c, 1);
     else {
         addReplyError(c, "Please use EVAL instead of EVALSHA for debugging");
@@ -872,7 +872,7 @@ void ldbSendLogs(void) {
  * The caller should call ldbEndSession() only if ldbStartSession()
  * returned 1. */
 int ldbStartSession(client *c) {
-    ldb.forked = (c->flag.lua_debug_sync) == 0;
+    ldb.forked = !c->flag.lua_debug_sync;
     if (ldb.forked) {
         pid_t cp = serverFork(CHILD_TYPE_LDB);
         if (cp == -1) {

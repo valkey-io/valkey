@@ -985,7 +985,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
     if (cmd->proc == execCommand) {
         /* If CLIENT_MULTI flag is not set EXEC is just going to return an
          * error. */
-        if (!(c->flag.multi)) return myself;
+        if (!c->flag.multi) return myself;
         ms = &c->mstate;
     } else {
         /* In order to have a single codepath create a fake Multi State
@@ -1157,7 +1157,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
      * is serving, we can reply without redirection. */
     int is_write_command =
         (cmd_flags & CMD_WRITE) || (c->cmd->proc == execCommand && (c->mstate.cmd_flags & CMD_WRITE));
-    if (((c->flag.readonly) || pubsubshard_included) && !is_write_command && clusterNodeIsReplica(myself) &&
+    if ((c->flag.readonly || pubsubshard_included) && !is_write_command && clusterNodeIsReplica(myself) &&
         clusterNodeGetPrimary(myself) == n) {
         return myself;
     }
@@ -1240,7 +1240,7 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
 
             /* if the client is read-only and attempting to access key that our
              * replica can handle, allow it. */
-            if ((c->flag.readonly) && !(c->lastcmd->flags & CMD_WRITE) && clusterNodeIsReplica(myself) &&
+            if (c->flag.readonly && !(c->lastcmd->flags & CMD_WRITE) && clusterNodeIsReplica(myself) &&
                 clusterNodeGetPrimary(myself) == node) {
                 node = myself;
             }

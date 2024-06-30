@@ -582,7 +582,7 @@ void scriptCall(scriptRunCtx *run_ctx, sds *err) {
         call_flags |= CMD_CALL_PROPAGATE_REPL;
     }
     call(c, call_flags);
-    serverAssert((c->flag.blocked) == 0);
+    serverAssert(c->flag.blocked == 0);
     return;
 
 error:

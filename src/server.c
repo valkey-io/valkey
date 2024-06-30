@@ -707,7 +707,7 @@ int clientsCronResizeQueryBuffer(client *c) {
         if (idletime > 2) {
             /* 1) Query is idle for a long time. */
             size_t remaining = sdslen(c->querybuf) - c->qb_pos;
-            if (!(c->flag.primary) && !remaining) {
+            if (!c->flag.primary && !remaining) {
                 /* If the client is not a primary and no data is pending,
                  * The client can safely use the shared query buffer in the next read - free the client's querybuf. */
                 sdsfree(c->querybuf);
@@ -3455,7 +3455,7 @@ void call(client *c, int flags) {
 
     /* In case client is blocked after trying to execute the command,
      * it means the execution is not yet completed and we MIGHT reprocess the command in the future. */
-    if (!(c->flag.blocked)) c->flag.executing_command = 0;
+    if (!c->flag.blocked) c->flag.executing_command = 0;
 
     /* In order to avoid performance implication due to querying the clock using a system call 3 times,
      * we use a monotonic clock, when we are sure its cost is very low, and fall back to non-monotonic call otherwise. */
@@ -3501,7 +3501,7 @@ void call(client *c, int flags) {
 
     /* Log the command into the Slow log if needed.
      * If the client is blocked we will handle slowlog when it is unblocked. */
-    if (update_command_stats && !(c->flag.blocked)) slowlogPushCurrentCommand(c, real_cmd, c->duration);
+    if (update_command_stats && !c->flag.blocked) slowlogPushCurrentCommand(c, real_cmd, c->duration);
 
     /* Send the command to clients in MONITOR mode if applicable,
      * since some administrative commands are considered too dangerous to be shown.
@@ -3515,20 +3515,20 @@ void call(client *c, int flags) {
 
     /* Clear the original argv.
      * If the client is blocked we will handle slowlog when it is unblocked. */
-    if (!(c->flag.blocked)) freeClientOriginalArgv(c);
+    if (!c->flag.blocked) freeClientOriginalArgv(c);
 
     /* populate the per-command statistics that we show in INFO commandstats.
      * If the client is blocked we will handle latency stats and duration when it is unblocked. */
-    if (update_command_stats && !(c->flag.blocked)) {
+    if (update_command_stats && !c->flag.blocked) {
         real_cmd->calls++;
         real_cmd->microseconds += c->duration;
-        if (server.latency_tracking_enabled && !(c->flag.blocked))
+        if (server.latency_tracking_enabled && !c->flag.blocked)
             updateCommandLatencyHistogram(&(real_cmd->latency_histogram), c->duration * 1000);
     }
 
     /* The duration needs to be reset after each call except for a blocked command,
      * which is expected to record and reset the duration after unblocking. */
-    if (!(c->flag.blocked)) {
+    if (!c->flag.blocked) {
         c->duration = 0;
     }
 
@@ -3536,7 +3536,7 @@ void call(client *c, int flags) {
      * We never propagate EXEC explicitly, it will be implicitly
      * propagated if needed (see propagatePendingCommands).
      * Also, module commands take care of themselves */
-    if (flags & CMD_CALL_PROPAGATE && !(c->flag.prevent_prop) && c->cmd->proc != execCommand &&
+    if (flags & CMD_CALL_PROPAGATE && !c->flag.prevent_prop && c->cmd->proc != execCommand &&
         !(c->cmd->flags & CMD_MODULE)) {
         int propagate_flags = PROPAGATE_NONE;
 
@@ -3582,7 +3582,7 @@ void call(client *c, int flags) {
         }
     }
 
-    if (!(c->flag.blocked)) {
+    if (!c->flag.blocked) {
         /* Modules may call commands in cron, in which case server.current_client
          * is not set. */
         if (server.current_client) {
@@ -3870,7 +3870,7 @@ int processCommand(client *c) {
     }
 
     if (!server.cluster_enabled && c->capa & CLIENT_CAPA_REDIRECT && server.primary_host && !mustObeyClient(c) &&
-        (is_write_command || (is_read_command && !(c->flag.readonly)))) {
+        (is_write_command || (is_read_command && !c->flag.readonly))) {
         addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
         return C_OK;
     }
@@ -4018,15 +4018,15 @@ int processCommand(client *c) {
     /* Prevent a replica from sending commands that access the keyspace.
      * The main objective here is to prevent abuse of client pause check
      * from which replicas are exempt. */
-    if ((c->flag.replica) && (is_may_replicate_command || is_write_command || is_read_command)) {
+    if (c->flag.replica && (is_may_replicate_command || is_write_command || is_read_command)) {
         rejectCommandFormat(c, "Replica can't interact with the keyspace");
         return C_OK;
     }
 
     /* If the server is paused, block the client until
      * the pause has ended. Replicas are never paused. */
-    if (!(c->flag.replica) && ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) ||
-                               ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command))) {
+    if (!c->flag.replica && ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) ||
+                             ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command))) {
         blockPostponeClient(c);
         return C_OK;
     }

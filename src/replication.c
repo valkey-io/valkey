@@ -3623,7 +3623,7 @@ void syncWithPrimary(connection *conn) {
         return;
     }
     /* Setup the non blocking download of the bulk file. */
-    else if (connSetReadHandler(conn, readSyncBulkPayload) == C_ERR)
+    if (connSetReadHandler(conn, readSyncBulkPayload) == C_ERR)
     {
         char conninfo[CONN_INFO_LEN];
         serverLog(LL_WARNING, "Can't create readable event for SYNC: %s (%s)", strerror(errno),

@@ -468,14 +468,16 @@ dictType zsetDictType = {
 };
 
 /* Db->dict, keys are sds strings, vals are Objects. */
-dictType dbDictType = {dictSdsHash,          /* hash function */
-                       NULL,                 /* key dup */
-                       dictSdsKeyCompare,    /* key compare */
-                       NULL,                 /* key is embedded in the dictEntry and freed internally */
-                       dictObjectDestructor, /* val destructor */
-                       dictResizeAllowed,    /* allow to resize */
-                       .embedKey = dictSdsEmbedKey,
-                       .embedded_entry = 1};
+dictType dbDictType = {
+    dictSdsHash,          /* hash function */
+    NULL,                 /* key dup */
+    dictSdsKeyCompare,    /* key compare */
+    NULL,                 /* key is embedded in the dictEntry and freed internally */
+    dictObjectDestructor, /* val destructor */
+    dictResizeAllowed,    /* allow to resize */
+    .embedKey = dictSdsEmbedKey,
+    .embedded_entry = 1,
+};
 
 /* Db->expires */
 dictType dbExpiresDictType = {

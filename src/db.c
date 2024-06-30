@@ -118,7 +118,7 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         /* Update the access time for the ageing algorithm.
          * Don't do it if we have a saving child, as this will trigger
          * a copy on write madness. */
-        if (server.current_client && server.current_client->flags & CLIENT_NO_TOUCH &&
+        if (server.current_client && server.current_client->flag.no_touch &&
             server.current_client->cmd->proc != touchCommand)
             flags |= LOOKUP_NOTOUCH;
         if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)) {
@@ -231,8 +231,7 @@ int getKeySlot(sds key) {
      * It only gets set during the execution of command under `call` method. Other flows requesting
      * the key slot would fallback to calculateKeySlot.
      */
-    if (server.current_client && server.current_client->slot >= 0 &&
-        server.current_client->flags & CLIENT_EXECUTING_COMMAND) {
+    if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command) {
         debugServerAssertWithInfo(server.current_client, NULL, calculateKeySlot(key) == server.current_client->slot);
         return server.current_client->slot;
     }
@@ -822,7 +821,7 @@ void keysCommand(client *c) {
                 numkeys++;
             }
         }
-        if (c->flags & CLIENT_CLOSE_ASAP) break;
+        if (c->flag.close_asap) break;
     }
     if (kvs_di) kvstoreReleaseDictIterator(kvs_di);
     if (kvs_it) kvstoreIteratorRelease(kvs_it);
@@ -1238,7 +1237,7 @@ void shutdownCommand(client *c) {
         return;
     }
 
-    if (!(flags & SHUTDOWN_NOW) && c->flags & CLIENT_DENY_BLOCKING) {
+    if (!(flags & SHUTDOWN_NOW) && c->flag.deny_blocking) {
         addReplyError(c, "SHUTDOWN without NOW or ABORT isn't allowed for DENY BLOCKING client");
         return;
     }
@@ -1667,7 +1666,7 @@ void setExpire(client *c, serverDb *db, robj *key, long long when) {
     }
 
     int writable_replica = server.primary_host && server.repl_replica_ro == 0;
-    if (c && writable_replica && !(c->flags & CLIENT_PRIMARY)) rememberReplicaKeyWithExpire(db, key);
+    if (c && writable_replica && !c->flag.primary) rememberReplicaKeyWithExpire(db, key);
 }
 
 /* Return the expire time of the specified key, or -1 if no expire
@@ -1796,7 +1795,7 @@ keyStatus expireIfNeeded(serverDb *db, robj *key, int flags) {
      * When replicating commands from the primary, keys are never considered
      * expired. */
     if (server.primary_host != NULL) {
-        if (server.current_client && (server.current_client->flags & CLIENT_PRIMARY)) return KEY_VALID;
+        if (server.current_client && (server.current_client->flag.primary)) return KEY_VALID;
         if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return KEY_EXPIRED;
     }
 

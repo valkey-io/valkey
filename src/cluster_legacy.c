@@ -5904,7 +5904,7 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
     int optarg_pos = 0;
 
     /* Allow primaries to replicate "CLUSTER SETSLOT" */
-    if (!(c->flags & CLIENT_PRIMARY) && nodeIsReplica(myself)) {
+    if (!c->flag.primary && nodeIsReplica(myself)) {
         addReplyError(c, "Please use SETSLOT only with masters.");
         return 0;
     }
@@ -6028,7 +6028,7 @@ void clusterCommandSetSlot(client *c) {
      * This ensures that all replicas have the latest topology information, enabling
      * a reliable slot ownership transfer even if the primary node went down during
      * the process. */
-    if (nodeIsPrimary(myself) && myself->num_replicas != 0 && (c->flags & CLIENT_REPLICATION_DONE) == 0) {
+    if (nodeIsPrimary(myself) && myself->num_replicas != 0 && !c->flag.replication_done) {
         /* Iterate through the list of replicas to check if there are any running
          * a version older than 8.0.0. Replicas with versions older than 8.0.0 do
          * not support the CLUSTER SETSLOT command on replicas. If such a replica
@@ -6058,7 +6058,7 @@ void clusterCommandSetSlot(client *c) {
              *    ack the repl offset at the command boundary. */
             blockClientForReplicaAck(c, timeout_ms, server.primary_repl_offset + 1, myself->num_replicas, 0);
             /* Mark client as pending command for execution after replication to replicas. */
-            c->flags |= CLIENT_PENDING_COMMAND;
+            c->flag.pending_command = 1;
             replicationRequestAckFromReplicas();
             return;
         }

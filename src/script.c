@@ -132,7 +132,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
                         uint64_t script_flags,
                         int ro) {
     serverAssert(!curr_run_ctx);
-    int client_allow_oom = !!(caller->flags & CLIENT_ALLOW_OOM);
+    int client_allow_oom = !!(caller->flag.allow_oom);
 
     int running_stale =
         server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0;
@@ -224,8 +224,8 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
     script_client->resp = 2; /* Default is RESP2, scripts can change it. */
 
     /* If we are in MULTI context, flag Lua client as CLIENT_MULTI. */
-    if (curr_client->flags & CLIENT_MULTI) {
-        script_client->flags |= CLIENT_MULTI;
+    if (curr_client->flag.multi) {
+        script_client->flag.multi = 1;
     }
 
     run_ctx->start_time = getMonotonicUs();
@@ -260,7 +260,7 @@ void scriptResetRun(scriptRunCtx *run_ctx) {
     serverAssert(curr_run_ctx);
 
     /* After the script done, remove the MULTI state. */
-    run_ctx->c->flags &= ~CLIENT_MULTI;
+    run_ctx->c->flag.multi = 0;
 
     if (scriptIsTimedout()) {
         exitScriptTimedoutMode(run_ctx);
@@ -426,8 +426,8 @@ static int scriptVerifyClusterState(scriptRunCtx *run_ctx, client *c, client *or
      * received from our primary or when loading the AOF back in memory. */
     int error_code;
     /* Duplicate relevant flags in the script client. */
-    c->flags &= ~(CLIENT_READONLY | CLIENT_ASKING);
-    c->flags |= original_c->flags & (CLIENT_READONLY | CLIENT_ASKING);
+    c->flag.readonly = original_c->flag.readonly;
+    c->flag.asking = original_c->flag.asking;
     int hashslot = -1;
     if (getNodeByQuery(c, c->cmd, c->argv, c->argc, &hashslot, &error_code) != getMyClusterNode()) {
         if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {
@@ -582,7 +582,7 @@ void scriptCall(scriptRunCtx *run_ctx, sds *err) {
         call_flags |= CMD_CALL_PROPAGATE_REPL;
     }
     call(c, call_flags);
-    serverAssert((c->flags & CLIENT_BLOCKED) == 0);
+    serverAssert(c->flag.blocked == 0);
     return;
 
 error:

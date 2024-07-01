@@ -192,10 +192,7 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
 
 /* Add the key to the DB.
  *
- * The kvstore handles `key` based on `dictType` during initialization:
- * - If `dictType.embedded-entry` is 1, it clones the `key`.
- * - Otherwise, it assumes ownership of the `key`.
- * In this case a copy of `key` is made in kvstore, the caller must ensure the `key` is properly freed.
+ * In this case a copy of `key` is copied in kvstore, the caller must ensure the `key` is properly freed.
  *
  * It's up to the caller to increment the reference
  * counter of the value if needed.
@@ -255,10 +252,7 @@ int getKeySlot(sds key) {
  *
  * The function returns 1 if the key was added to the database, otherwise 0 is returned.
  *
- * The kvstore handles `key` based on `dictType` during initialization:
- * - If `dictType.embedded-entry` is 1, it clones the `key`.
- * - Otherwise, it assumes ownership of the `key`.
- * In this case a copy of `key` is made in kvstore, the caller must ensure the `key` is properly freed.
+ * In this case a copy of `key` is copied in kvstore, the caller must ensure the `key` is properly freed.
  */
 int dbAddRDBLoad(serverDb *db, sds key, robj *val) {
     int slot = getKeySlot(key);

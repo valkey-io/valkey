@@ -70,12 +70,6 @@ typedef dict *(kvstoreDictLUTDefragFunction)(dict *d);
 void kvstoreDictLUTDefrag(kvstore *kvs, kvstoreDictLUTDefragFunction *defragfn);
 void *kvstoreDictFetchValue(kvstore *kvs, int didx, const void *key);
 dictEntry *kvstoreDictFind(kvstore *kvs, int didx, void *key);
-/*
- * The kvstore handles `key` based on `dictType` during initialization:
- * - If `dictType.embedded-entry` is 1, it clones the `key`.
- * - Otherwise, it assumes ownership of the `key`.
- * The caller must ensure the `key` is properly freed.
- */
 dictEntry *kvstoreDictAddRaw(kvstore *kvs, int didx, void *key, dictEntry **existing);
 void kvstoreDictSetKey(kvstore *kvs, int didx, dictEntry *de, void *key);
 void kvstoreDictSetVal(kvstore *kvs, int didx, dictEntry *de, void *val);

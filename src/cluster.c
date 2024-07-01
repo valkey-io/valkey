@@ -1194,7 +1194,7 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
         int port = clusterNodeClientPort(n, shouldReturnTlsInfo());
         addReplyErrorSds(c,
                          sdscatprintf(sdsempty(), "-%s %d %s:%d", (error_code == CLUSTER_REDIR_ASK) ? "ASK" : "MOVED",
-                                      hashslot, clusterNodePreferredEndpoint(n), port));
+                                      hashslot, clusterNodePreferredEndpoint(n, c), port));
     } else {
         serverPanic("getNodeByQuery() unknown error.");
     }
@@ -1267,8 +1267,7 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
     char *hostname = clusterNodeHostname(node);
     addReplyArrayLen(c, 4);
     if (server.cluster_preferred_endpoint_type == CLUSTER_ENDPOINT_TYPE_IP) {
-        // FIXME use client_ipv4 or client_ipv6 if available.
-        addReplyBulkCString(c, clusterNodeIp(node));
+        addReplyBulkCString(c, clusterNodeIp(node, c));
     } else if (server.cluster_preferred_endpoint_type == CLUSTER_ENDPOINT_TYPE_HOSTNAME) {
         if (hostname != NULL && hostname[0] != '\0') {
             addReplyBulkCString(c, hostname);
@@ -1301,7 +1300,7 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
 
     if (server.cluster_preferred_endpoint_type != CLUSTER_ENDPOINT_TYPE_IP) {
         addReplyBulkCString(c, "ip");
-        addReplyBulkCString(c, clusterNodeIp(node));
+        addReplyBulkCString(c, clusterNodeIp(node, c));
         length--;
     }
     if (server.cluster_preferred_endpoint_type != CLUSTER_ENDPOINT_TYPE_HOSTNAME && hostname != NULL &&
@@ -1416,7 +1415,7 @@ void clusterCommandSlots(client *c) {
      */
     int conn_type = 0;
     if (connIsTLS(c->conn)) conn_type |= CACHE_CONN_TYPE_TLS;
-    if (getClientPeerId(c)[0] == '[') conn_type |= CACHE_CONN_TYPE_IPv6; /* [::1]:6379 */
+    if (isClientConnIpV6(c)) conn_type |= CACHE_CONN_TYPE_IPv6;
     if (c->resp == 3) conn_type |= CACHE_CONN_TYPE_RESP3;
 
     if (detectAndUpdateCachedNodeHealth()) clearCachedClusterSlotsResponse();

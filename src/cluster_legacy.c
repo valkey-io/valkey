@@ -5404,16 +5404,19 @@ sds representSlotInfo(sds ci, uint16_t *slot_info_pairs, int slot_info_pairs_cou
 /* Generate a csv-alike representation of the specified cluster node.
  * See clusterGenNodesDescription() top comment for more information.
  *
+ * If a client is provided, we're creating a reply to the CLUSTER NODES command.
+ * If client is NULL, we are creating the content of nodes.conf.
+ *
  * The function returns the string representation as an SDS string. */
 sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
     int j, start;
     sds ci;
     int port = clusterNodeClientPort(node, tls_primary);
-    // FIXME add parameter for preferred IP address family
+    char *ip = clusterNodeIp(node, c);
 
     /* Node coordinates */
     ci = sdscatlen(sdsempty(), node->name, CLUSTER_NAMELEN);
-    ci = sdscatfmt(ci, " %s:%i@%i", node->ip, port, node->cport);
+    ci = sdscatfmt(ci, " %s:%i@%i", ip, port, node->cport);
     if (sdslen(node->hostname) != 0) {
         ci = sdscatfmt(ci, ",%s", node->hostname);
     }
@@ -5732,7 +5735,7 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
     reply_count++;
 
     addReplyBulkCString(c, "endpoint");
-    addReplyBulkCString(c, clusterNodePreferredEndpoint(node));
+    addReplyBulkCString(c, clusterNodePreferredEndpoint(node, c));
     reply_count++;
 
     if (sdslen(node->hostname) != 0) {
@@ -6001,7 +6004,16 @@ int clusterNodePending(clusterNode *node) {
     return node->flags & (CLUSTER_NODE_NOADDR | CLUSTER_NODE_HANDSHAKE);
 }
 
-char *clusterNodeIp(clusterNode *node) {
+/* Returns the IP of the node as seen by the given client, or by the cluster node if c is NULL. */
+char *clusterNodeIp(clusterNode *node, client *c) {
+    if (c == NULL) {
+        return node->ip;
+    }
+    if (isClientConnIpV6(c)) {
+        if (sdslen(node->client_ipv6) != 0) return node->client_ipv6;
+    } else {
+        if (sdslen(node->client_ipv4) != 0) return node->client_ipv4;
+    }
     return node->ip;
 }
 
@@ -6666,10 +6678,10 @@ long long clusterNodeReplOffset(clusterNode *node) {
     return node->repl_offset;
 }
 
-const char *clusterNodePreferredEndpoint(clusterNode *n) {
+ const char *clusterNodePreferredEndpoint(clusterNode *n, client *c) {
     char *hostname = clusterNodeHostname(n);
     switch (server.cluster_preferred_endpoint_type) {
-    case CLUSTER_ENDPOINT_TYPE_IP: return clusterNodeIp(n); // FIXME Use client_ipv4 or v6 depending on client
+    case CLUSTER_ENDPOINT_TYPE_IP: return clusterNodeIp(n, c);
     case CLUSTER_ENDPOINT_TYPE_HOSTNAME: return (hostname != NULL && hostname[0] != '\0') ? hostname : "?";
     case CLUSTER_ENDPOINT_TYPE_UNKNOWN_ENDPOINT: return "";
     }

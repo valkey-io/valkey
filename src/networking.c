@@ -2846,6 +2846,12 @@ char *getClientSockname(client *c) {
     return c->sockname;
 }
 
+int isClientConnIpV6(client *c) {
+     /* The cached client peer id is on the form "[IPv6]:port" for IPv6
+      * addresses, so we just check for '[' here. */
+    return getClientPeerId(c)[0] == '[';
+}
+
 /* Concatenate a string representing the state of a client in a human
  * readable format, into the sds string 's'. */
 sds catClientInfoString(sds s, client *client) {

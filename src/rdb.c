@@ -3623,6 +3623,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
             }
             close(rdb_pipe_write);
             close(server.rdb_pipe_read);
+            close(server.rdb_child_exit_pipe);
             zfree(conns);
             if (dual_conn) {
                 closeChildInfoPipe();

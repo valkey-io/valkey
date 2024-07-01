@@ -2895,19 +2895,16 @@ int clusterIsValidPacket(clusterLink *link) {
         explen += sizeof(clusterMsgDataPublish) - 8 + ntohl(hdr->data.publish.msg.channel_len) +
                   ntohl(hdr->data.publish.msg.message_len);
     } else if (type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT) {
-        clusterNode *sender = getNodeFromLinkAndMsg(link, hdr);
-        if (sender && nodeSupportsLightMsgHdr(sender)) {
-            clusterMsgLight *hdr_pubsub = (clusterMsgLight *)link->rcvbuf;
-            explen = sizeof(clusterMsgLight) - sizeof(union clusterMsgDataLight);
-            explen += sizeof(clusterMsgDataPublishMulti);
-            uint64_t data_count = ntohu64(hdr_pubsub->data.publish.msg.data_count);
-            explen += ((data_count) * (sizeof(clusterMsgDataPublishMessage) - 8));
-            clusterMsgDataPublishMessage *msg_data = getInitialBulkData(&hdr_pubsub->data.publish.msg);
-            while(data_count--){
-                uint32_t msglen = getPublishMsgLength(msg_data);
-                explen += msglen;
-                msg_data = getNextCursorBulkData(msg_data);
-            }
+        clusterMsgLight *hdr_pubsub = (clusterMsgLight *)link->rcvbuf;
+        explen = sizeof(clusterMsgLight) - sizeof(union clusterMsgDataLight);
+        explen += sizeof(clusterMsgDataPublishMulti);
+        uint64_t data_count = ntohu64(hdr_pubsub->data.publish.msg.data_count);
+        explen += ((data_count) * (sizeof(clusterMsgDataPublishMessage) - 8));
+        clusterMsgDataPublishMessage *msg_data = getInitialBulkData(&hdr_pubsub->data.publish.msg);
+        while(data_count--){
+            uint32_t msglen = getPublishMsgLength(msg_data);
+            explen += msglen;
+            msg_data = getNextCursorBulkData(msg_data);
         }
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST || type == CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK ||
                type == CLUSTERMSG_TYPE_MFSTART) {

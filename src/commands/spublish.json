@@ -4,7 +4,7 @@
         "complexity": "O(N) where N is the number of clients subscribed to the receiving shard channel.",
         "group": "pubsub",
         "since": "7.0.0",
-        "arity": 3,
+        "arity": -3,
         "function": "spublishCommand",
         "command_flags": [
             "PUBSUB",
@@ -20,7 +20,8 @@
             },
             {
                 "name": "message",
-                "type": "string"
+                "type": "string",
+                "multiple": true
             }
         ],
         "key_specs": [

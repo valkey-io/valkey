@@ -147,12 +147,10 @@ start_cluster 3 0 [list config_lines $modules] {
         assert_error {*CLUSTERDOWN*} {$node1_rd read}
     }
 
-    test "Verify command (no keys) got unblocked after cluster failure" {
-        assert_error {*CLUSTERDOWN*} {$node2_rd read}
-
-        # verify there are no blocked clients
-        assert_equal [s 0 blocked_clients]  {0}
-        assert_equal [s -1 blocked_clients]  {0}
+    test "Verify command (with no keys) is not unblocked after cluster failure" {
+        assert_no_match {*CLUSTERDOWN*} {$node2_rd read}
+        # verify there are blocked clients
+        assert_equal [s -1 blocked_clients]  {1}
     }
 
     test "Verify command RM_Call is rejected when cluster is down" {

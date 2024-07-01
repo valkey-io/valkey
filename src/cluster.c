@@ -1213,12 +1213,11 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
  * returns 1. Otherwise 0 is returned and no operation is performed. */
 int clusterRedirectBlockedClientIfNeeded(client *c) {
     clusterNode *myself = getMyClusterNode();
-    if (c->flags & CLIENT_BLOCKED &&
-        (c->bstate.btype == BLOCKED_LIST || c->bstate.btype == BLOCKED_ZSET || c->bstate.btype == BLOCKED_STREAM ||
-         c->bstate.btype == BLOCKED_MODULE) &&
-        !clientHasModuleAuthInProgress(c)) {
-        dictEntry *de;
-        dictIterator *di;
+    if (c->flags & CLIENT_BLOCKED && (c->bstate.btype == BLOCKED_LIST || c->bstate.btype == BLOCKED_ZSET ||
+                                      c->bstate.btype == BLOCKED_STREAM || c->bstate.btype == BLOCKED_MODULE)) {
+        /* If the client is blocked on module, but not on a specific key,
+         * don't unblock it. */
+        if (c->bstate.btype == BLOCKED_MODULE && !moduleClientIsBlockedOnKeys(c)) return 0;
 
         /* If the cluster is down, unblock the client with the right error.
          * If the cluster is configured to allow reads on cluster down, we
@@ -1229,10 +1228,8 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
             return 1;
         }
 
-        /* If the client is blocked on module, but not on a specific key,
-         * don't unblock it (except for the CLUSTER_FAIL case above). */
-        if (c->bstate.btype == BLOCKED_MODULE && !moduleClientIsBlockedOnKeys(c)) return 0;
-
+        dictEntry *de;
+        dictIterator *di;
         /* All keys must belong to the same slot, so check first key only. */
         di = dictGetIterator(c->bstate.keys);
         if ((de = dictNext(di)) != NULL) {

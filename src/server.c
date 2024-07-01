@@ -4048,7 +4048,7 @@ int processCommand(client *c) {
 
 void incrementErrorCount(const char *fullerr, size_t namelen) {
     void *result;
-    if (!raxFind(server.errors,(unsigned char*)fullerr,namelen,&result)) {
+    if (!raxFind(server.errors, (unsigned char *)fullerr, namelen, &result)) {
         struct serverError *error = zmalloc(sizeof(*error));
         error->count = 1;
         raxInsert(server.errors, (unsigned char *)fullerr, namelen, error, NULL);

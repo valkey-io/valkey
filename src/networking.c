@@ -548,9 +548,9 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
          * custom LUA errors, we track the error under `error_LUA` */
         if (flags & ERR_REPLY_FLAG_LUA && raxSize(server.errors) >= ERROR_STATS_LUA_LIMIT) {
             incrementErrorCount(LUA_ERRORSTATS_OVERFLOW_ERR, strlen(LUA_ERRORSTATS_OVERFLOW_ERR));
-        /* If the string already starts with "-..." then the error prefix
-        * is provided by the caller ( we limit the search to 32 chars). Otherwise we use "-ERR". */ 
         } else if (s[0] != '-') {
+            /* If the string already starts with "-..." then the error prefix
+             * is provided by the caller ( we limit the search to 32 chars). Otherwise we use "-ERR". */
             incrementErrorCount("ERR", 3);
         } else {
             char *spaceloc = memchr(s, ' ', len < 32 ? len : 32);

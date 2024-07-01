@@ -220,7 +220,7 @@ void addReplicaToPsyncWait(client* replica) {
             tail->refcount++;
         }
     }
-    serverLog(LL_DEBUG, "Add replica %s to waiting psync rax, with cid %llu, %s ", replicationGetReplicaName(replica), (long long unsigned int)replica->id,
+    serverLog(LL_DEBUG, "Add replica %s to waiting psync rax, with cid %llu, %s ", replicationGetReplicaName(replica), (unsigned long long)replica->id,
         tail? "with repl-backlog tail": "repl-backlog is empty");
     replica->ref_repl_buf_node = tail? ln: NULL;
     /* Prevent rdb client from being freed before psync is established. */

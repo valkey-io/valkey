@@ -8,8 +8,9 @@ tags {tls:skip external:skip cluster modules} {
 set testmodule_nokey [file normalize tests/modules/blockonbackground.so]
 set testmodule_blockedclient [file normalize tests/modules/blockedclient.so]
 set testmodule [file normalize tests/modules/blockonkeys.so]
+set testmodule_auth [file normalize tests/modules/auth.so]
 
-set modules [list loadmodule $testmodule loadmodule $testmodule_nokey loadmodule $testmodule_blockedclient]
+set modules [list loadmodule $testmodule loadmodule $testmodule_nokey loadmodule $testmodule_blockedclient loadmodule $testmodule_auth]
 start_cluster 3 0 [list config_lines $modules] {
 
     set node1 [srv 0 client]
@@ -146,16 +147,25 @@ start_cluster 3 0 [list config_lines $modules] {
         assert_error {*CLUSTERDOWN*} {$node1_rd read}
     }
 
-    test "Verify command (no keys) got unblocked after cluster failure" {
-        assert_error {*CLUSTERDOWN*} {$node2_rd read}
-
-        # verify there are no blocked clients
-        assert_equal [s 0 blocked_clients]  {0}
-        assert_equal [s -1 blocked_clients]  {0}
+    test "Verify command (with no keys) is not unblocked after cluster failure" {
+        assert_no_match {*CLUSTERDOWN*} {$node2_rd read}
+        # verify there are blocked clients
+        assert_equal [s -1 blocked_clients]  {1}
     }
 
     test "Verify command RM_Call is rejected when cluster is down" {
         assert_error "ERR Can not execute a command 'set' while the cluster is down" {$node1 do_rm_call set x 1}
+    }
+
+    test "Verify Module Auth Succeeds when cluster is down" {
+        r acl setuser foo >pwd on ~* &* +@all
+        assert_error "*CLUSTERDOWN*" {r set x 1}
+        # Non Blocking Module Auth
+        assert_equal {OK} [r testmoduleone.rm_register_auth_cb]
+        assert_equal {OK} [r AUTH foo allow]
+        # Blocking Module Auth
+        assert_equal {OK} [r testmoduleone.rm_register_blocking_auth_cb]
+        assert_equal {OK} [r AUTH foo block_allow]
     }
 
     resume_process $node3_pid

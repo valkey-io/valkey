@@ -1364,7 +1364,8 @@ struct client *createAOFClient(void) {
      * background processing there is a chance that the
      * command execution order will be violated.
      */
-    c->flags = CLIENT_DENY_BLOCKING;
+    c->raw_flag = 0;
+    c->flag.deny_blocking = 1;
 
     /* We set the fake client as a replica waiting for the synchronization
      * so that the server will not try to send replies to this client. */
@@ -1536,7 +1537,7 @@ int loadSingleAppendOnlyFile(char *filename) {
 
         /* Run the command in the context of a fake client */
         fakeClient->cmd = fakeClient->lastcmd = cmd;
-        if (fakeClient->flags & CLIENT_MULTI && fakeClient->cmd->proc != execCommand) {
+        if (fakeClient->flag.multi && fakeClient->cmd->proc != execCommand) {
             /* Note: we don't have to attempt calling evalGetCommandFlags,
              * since this is AOF, the checks in processCommand are not made
              * anyway.*/
@@ -1549,7 +1550,7 @@ int loadSingleAppendOnlyFile(char *filename) {
         serverAssert(fakeClient->bufpos == 0 && listLength(fakeClient->reply) == 0);
 
         /* The fake client should never get blocked */
-        serverAssert((fakeClient->flags & CLIENT_BLOCKED) == 0);
+        serverAssert(fakeClient->flag.blocked == 0);
 
         /* Clean up. Command code may have changed argv/argc so we use the
          * argv/argc of the client instead of the local variables. */
@@ -1562,7 +1563,7 @@ int loadSingleAppendOnlyFile(char *filename) {
      * If the client is in the middle of a MULTI/EXEC, handle it as it was
      * a short read, even if technically the protocol is correct: we want
      * to remove the unprocessed tail and continue. */
-    if (fakeClient->flags & CLIENT_MULTI) {
+    if (fakeClient->flag.multi) {
         serverLog(LL_WARNING, "Revert incomplete MULTI/EXEC transaction in AOF file %s", filename);
         valid_up_to = valid_before_multi;
         goto uxeof;

@@ -2891,7 +2891,7 @@ static int setConfigReplicaOfOption(standardConfig *config, sds *argv, int argc,
     char *ptr;
     server.primary_port = strtol(argv[1], &ptr, 10);
     if (server.primary_port < 0 || server.primary_port > 65535 || *ptr != '\0') {
-        *err = "Invalid master port";
+        *err = "Invalid primary port";
         return 0;
     }
     server.primary_host = sdsnew(argv[0]);
@@ -3100,6 +3100,7 @@ standardConfig static_configs[] = {
     /* SDS Configs */
     createSDSConfig("primaryauth", "masterauth", MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.primary_auth, NULL, NULL, NULL),
     createSDSConfig("requirepass", NULL, MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.requirepass, NULL, NULL, updateRequirePass),
+    createSDSConfig("availability-zone", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, server.availability_zone, "", NULL, NULL),
 
     /* Enum Configs */
     createEnumConfig("supervised", NULL, IMMUTABLE_CONFIG, supervised_mode_enum, server.supervised_mode, SUPERVISED_NONE, NULL, NULL),

@@ -63,7 +63,7 @@ void queueMultiCommand(client *c, uint64_t cmd_flags) {
      * this is useful in case client sends these in a pipeline, or doesn't
      * bother to read previous responses and didn't notice the multi was already
      * aborted. */
-    if (c->flags & (CLIENT_DIRTY_CAS | CLIENT_DIRTY_EXEC)) return;
+    if (c->flag.dirty_cas || c->flag.dirty_exec) return;
     if (c->mstate.count == 0) {
         /* If a client is using multi/exec, assuming it is used to execute at least
          * two commands. Hence, creating by default size of 2. */
@@ -96,28 +96,30 @@ void queueMultiCommand(client *c, uint64_t cmd_flags) {
 void discardTransaction(client *c) {
     freeClientMultiState(c);
     initClientMultiState(c);
-    c->flags &= ~(CLIENT_MULTI | CLIENT_DIRTY_CAS | CLIENT_DIRTY_EXEC);
+    c->flag.multi = 0;
+    c->flag.dirty_cas = 0;
+    c->flag.dirty_exec = 0;
     unwatchAllKeys(c);
 }
 
 /* Flag the transaction as DIRTY_EXEC so that EXEC will fail.
  * Should be called every time there is an error while queueing a command. */
 void flagTransaction(client *c) {
-    if (c->flags & CLIENT_MULTI) c->flags |= CLIENT_DIRTY_EXEC;
+    if (c->flag.multi) c->flag.dirty_exec = 1;
 }
 
 void multiCommand(client *c) {
-    if (c->flags & CLIENT_MULTI) {
+    if (c->flag.multi) {
         addReplyError(c, "MULTI calls can not be nested");
         return;
     }
-    c->flags |= CLIENT_MULTI;
+    c->flag.multi = 1;
 
     addReply(c, shared.ok);
 }
 
 void discardCommand(client *c) {
-    if (!(c->flags & CLIENT_MULTI)) {
+    if (!c->flag.multi) {
         addReplyError(c, "DISCARD without MULTI");
         return;
     }
@@ -148,14 +150,14 @@ void execCommand(client *c) {
     int orig_argc, orig_argv_len;
     struct serverCommand *orig_cmd;
 
-    if (!(c->flags & CLIENT_MULTI)) {
+    if (!c->flag.multi) {
         addReplyError(c, "EXEC without MULTI");
         return;
     }
 
     /* EXEC with expired watched key is disallowed*/
     if (isWatchedKeyExpired(c)) {
-        c->flags |= (CLIENT_DIRTY_CAS);
+        c->flag.dirty_cas = 1;
     }
 
     /* Check if we need to abort the EXEC because:
@@ -164,8 +166,8 @@ void execCommand(client *c) {
      * A failed EXEC in the first case returns a multi bulk nil object
      * (technically it is not an error but a special behavior), while
      * in the second an EXECABORT error is returned. */
-    if (c->flags & (CLIENT_DIRTY_CAS | CLIENT_DIRTY_EXEC)) {
-        if (c->flags & CLIENT_DIRTY_EXEC) {
+    if (c->flag.dirty_cas || c->flag.dirty_exec) {
+        if (c->flag.dirty_exec) {
             addReplyErrorObject(c, shared.execaborterr);
         } else {
             addReply(c, shared.nullarray[c->resp]);
@@ -175,10 +177,10 @@ void execCommand(client *c) {
         return;
     }
 
-    uint64_t old_flags = c->flags;
+    struct ClientFlags old_flags = c->flag;
 
     /* we do not want to allow blocking commands inside multi */
-    c->flags |= CLIENT_DENY_BLOCKING;
+    c->flag.deny_blocking = 1;
 
     /* Exec all the queued commands */
     unwatchAllKeys(c); /* Unwatch ASAP otherwise we'll waste CPU cycles */
@@ -224,7 +226,7 @@ void execCommand(client *c) {
             else
                 call(c, CMD_CALL_FULL);
 
-            serverAssert((c->flags & CLIENT_BLOCKED) == 0);
+            serverAssert(c->flag.blocked == 0);
         }
 
         /* Commands may alter argc/argv, restore mstate. */
@@ -235,7 +237,7 @@ void execCommand(client *c) {
     }
 
     // restore old DENY_BLOCKING value
-    if (!(old_flags & CLIENT_DENY_BLOCKING)) c->flags &= ~CLIENT_DENY_BLOCKING;
+    if (!(old_flags.deny_blocking)) c->flag.deny_blocking = 0;
 
     c->argv = orig_argv;
     c->argv_len = orig_argv_len;
@@ -393,7 +395,7 @@ void touchWatchedKey(serverDb *db, robj *key) {
             break;
         }
 
-        c->flags |= CLIENT_DIRTY_CAS;
+        c->flag.dirty_cas = 1;
         /* As the client is marked as dirty, there is no point in getting here
          * again in case that key (or others) are modified again (or keep the
          * memory overhead till EXEC). */
@@ -444,7 +446,7 @@ void touchAllWatchedKeysInDb(serverDb *emptied, serverDb *replaced_with) {
                     continue;
                 }
                 client *c = wk->client;
-                c->flags |= CLIENT_DIRTY_CAS;
+                c->flag.dirty_cas = 1;
                 /* Note - we could potentially call unwatchAllKeys for this specific client in order to reduce
                  * the total number of iterations. BUT this could also free the current next entry pointer
                  * held by the iterator and can lead to use-after-free. */
@@ -457,12 +459,12 @@ void touchAllWatchedKeysInDb(serverDb *emptied, serverDb *replaced_with) {
 void watchCommand(client *c) {
     int j;
 
-    if (c->flags & CLIENT_MULTI) {
+    if (c->flag.multi) {
         addReplyError(c, "WATCH inside MULTI is not allowed");
         return;
     }
     /* No point in watching if the client is already dirty. */
-    if (c->flags & CLIENT_DIRTY_CAS) {
+    if (c->flag.dirty_cas) {
         addReply(c, shared.ok);
         return;
     }
@@ -472,7 +474,7 @@ void watchCommand(client *c) {
 
 void unwatchCommand(client *c) {
     unwatchAllKeys(c);
-    c->flags &= (~CLIENT_DIRTY_CAS);
+    c->flag.dirty_cas = 0;
     addReply(c, shared.ok);
 }
 

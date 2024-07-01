@@ -605,7 +605,7 @@ void trimStringObjectIfNeeded(robj *o, int trim_small_values) {
      * 3. When calling from RM_TrimStringAllocation (trim_small_values is true). */
     size_t len = sdslen(o->ptr);
     if (len >= PROTO_MBULK_BIG_ARG || trim_small_values ||
-        (server.executing_client && server.executing_client->flags & CLIENT_SCRIPT && len < LUA_CMD_OBJCACHE_MAX_LEN)) {
+        (server.executing_client && server.executing_client->flag.script && len < LUA_CMD_OBJCACHE_MAX_LEN)) {
         if (sdsavail(o->ptr) > len / 10) {
             o->ptr = sdsRemoveFreeSpace(o->ptr, 0);
         }
@@ -1385,7 +1385,7 @@ sds getMemoryDoctorReport(void) {
                        " * Big replica buffers: The replica output buffers in this instance are greater than 10MB for "
                        "each replica (on average). This likely means that there is some replica instance that is "
                        "struggling receiving data, either because it is too slow or because of networking issues. As a "
-                       "result, data piles on the master output buffers. Please try to identify what replica is not "
+                       "result, data piles on the primary output buffers. Please try to identify what replica is not "
                        "receiving data correctly and why. You can use the INFO output in order to check the replicas "
                        "delays and the CLIENT LIST command to check the output buffers of each replica.\n\n");
         }

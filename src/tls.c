@@ -745,6 +745,7 @@ static void tlsAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) 
     int cport, cfd;
     int max = server.max_new_tls_conns_per_cycle;
     char cip[NET_IP_STR_LEN];
+    struct ClientFlags flags = {0};
     UNUSED(el);
     UNUSED(mask);
     UNUSED(privdata);
@@ -756,7 +757,7 @@ static void tlsAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) 
             return;
         }
         serverLog(LL_VERBOSE, "Accepted %s:%d", cip, cport);
-        acceptCommonHandler(connCreateAcceptedTLS(cfd, &server.tls_auth_clients), 0, cip);
+        acceptCommonHandler(connCreateAcceptedTLS(cfd, &server.tls_auth_clients), flags, cip);
     }
 }
 

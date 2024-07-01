@@ -2388,7 +2388,7 @@ void xreadCommand(client *c) {
     if (timeout != -1) {
         /* If we are not allowed to block the client, the only thing
          * we can do is treating it as a timeout (even with timeout 0). */
-        if (c->flags & CLIENT_DENY_BLOCKING) {
+        if (c->flag.deny_blocking) {
             addReplyNullArray(c);
             goto cleanup;
         }

@@ -305,6 +305,7 @@ static void connSocketEventHandler(struct aeEventLoop *el, int fd, void *clientD
 static void connSocketAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     int cport, cfd;
     int max = server.max_new_conns_per_cycle;
+    struct ClientFlags flags = {0};
     char cip[NET_IP_STR_LEN];
     UNUSED(el);
     UNUSED(mask);
@@ -317,7 +318,7 @@ static void connSocketAcceptHandler(aeEventLoop *el, int fd, void *privdata, int
             return;
         }
         serverLog(LL_VERBOSE, "Accepted %s:%d", cip, cport);
-        acceptCommonHandler(connCreateAcceptedSocket(cfd, NULL), 0, cip);
+        acceptCommonHandler(connCreateAcceptedSocket(cfd, NULL), flags, cip);
     }
 }
 

@@ -1045,7 +1045,7 @@ void srandmemberWithCountCommand(client *c) {
                     else
                         addReplyBulkLongLong(c, entries[i].lval);
                 }
-                if (c->flags & CLIENT_CLOSE_ASAP) break;
+                if (c->flag.close_asap) break;
             }
             zfree(entries);
             return;
@@ -1058,7 +1058,7 @@ void srandmemberWithCountCommand(client *c) {
             } else {
                 addReplyBulkCBuffer(c, str, len);
             }
-            if (c->flags & CLIENT_CLOSE_ASAP) break;
+            if (c->flag.close_asap) break;
         }
         return;
     }

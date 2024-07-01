@@ -506,11 +506,11 @@ void ACLFreeUserAndKillClients(user *u) {
              * more defensive to set the default user and put
              * it in non authenticated mode. */
             c->user = DefaultUser;
-            c->flags &= ~CLIENT_AUTHENTICATED;
+            c->flag.authenticated = 0;
             /* We will write replies to this client later, so we can't
              * close it directly even if async. */
             if (c == server.current_client) {
-                c->flags |= CLIENT_CLOSE_AFTER_COMMAND;
+                c->flag.close_after_command = 1;
             } else {
                 freeClientAsync(c);
             }
@@ -1494,13 +1494,13 @@ void addAuthErrReply(client *c, robj *err) {
  * The return value is AUTH_OK on success (valid username / password pair) & AUTH_ERR otherwise. */
 int checkPasswordBasedAuth(client *c, robj *username, robj *password) {
     if (ACLCheckUserCredentials(username, password) == C_OK) {
-        c->flags |= CLIENT_AUTHENTICATED;
+        c->flag.authenticated = 1;
         c->user = ACLGetUserByName(username->ptr, sdslen(username->ptr));
         moduleNotifyUserChanged(c);
         return AUTH_OK;
     } else {
-        addACLLogEntry(c, ACL_DENIED_AUTH, (c->flags & CLIENT_MULTI) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, 0,
-                       username->ptr, NULL);
+        addACLLogEntry(c, ACL_DENIED_AUTH, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, 0, username->ptr,
+                       NULL);
         return AUTH_ERR;
     }
 }
@@ -1713,7 +1713,7 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
      * mentioned in the command arguments. */
     if (!(selector->flags & SELECTOR_FLAG_ALLKEYS) && doesCommandHaveKeys(cmd)) {
         if (!(cache->keys_init)) {
-            cache->keys = (getKeysResult)GETKEYS_RESULT_INIT;
+            initGetKeysResult(&(cache->keys));
             getKeysFromCommandWithSpecs(cmd, argv, argc, GET_KEYSPEC_DEFAULT, &(cache->keys));
             cache->keys_init = 1;
         }
@@ -1733,7 +1733,8 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
      * mentioned in the command arguments */
     const int channel_flags = CMD_CHANNEL_PUBLISH | CMD_CHANNEL_SUBSCRIBE;
     if (!(selector->flags & SELECTOR_FLAG_ALLCHANNELS) && doesCommandHaveChannelsWithFlags(cmd, channel_flags)) {
-        getKeysResult channels = (getKeysResult)GETKEYS_RESULT_INIT;
+        getKeysResult channels;
+        initGetKeysResult(&channels);
         getChannelsFromCommand(cmd, argv, argc, &channels);
         keyReference *channelref = channels.keys;
         for (int j = 0; j < channels.numkeys; j++) {

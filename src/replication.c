@@ -43,8 +43,8 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 
-void replicationDiscardCachedMaster(void);
-void replicationResurrectCachedMaster(connection *conn);
+void replicationDiscardCachedPrimary(void);
+void replicationResurrectCachedPrimary(connection *conn);
 void replicationSendAck(void);
 int replicaPutOnline(client *replica);
 void replicaStartCommandStream(client *replica);
@@ -114,7 +114,7 @@ int bg_unlink(const char *filename) {
     }
 }
 
-/* ---------------------------------- MASTER -------------------------------- */
+/* ---------------------------------- PRIMARY -------------------------------- */
 
 void createReplicationBacklog(void) {
     serverAssert(server.repl_backlog == NULL);
@@ -198,7 +198,7 @@ void resetReplicationBuffer(void) {
 
 int canFeedReplicaReplBuffer(client *replica) {
     /* Don't feed replicas that only want the RDB. */
-    if (replica->flags & CLIENT_REPL_RDBONLY) return 0;
+    if (replica->flag.repl_rdbonly) return 0;
 
     /* Don't feed replicas that are still waiting for BGSAVE to start. */
     if (replica->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) return 0;
@@ -420,7 +420,7 @@ void feedReplicationBuffer(char *s, size_t len) {
  * This function is used if the instance is a primary: we use the commands
  * received by our clients in order to create the replication stream.
  * Instead if the instance is a replica and has sub-replicas attached, we use
- * replicationFeedStreamFromMasterStream() */
+ * replicationFeedStreamFromPrimaryStream() */
 void replicationFeedReplicas(int dictid, robj **argv, int argc) {
     int j, len;
     char llstr[LONG_STR_SIZE];
@@ -568,9 +568,9 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
 
     gettimeofday(&tv, NULL);
     cmdrepr = sdscatprintf(cmdrepr, "%ld.%06ld ", (long)tv.tv_sec, (long)tv.tv_usec);
-    if (c->flags & CLIENT_SCRIPT) {
+    if (c->flag.script) {
         cmdrepr = sdscatprintf(cmdrepr, "[%d lua] ", dictid);
-    } else if (c->flags & CLIENT_UNIX_SOCKET) {
+    } else if (c->flag.unix_socket) {
         cmdrepr = sdscatprintf(cmdrepr, "[%d unix:%s] ", dictid, server.unixsocket);
     } else {
         cmdrepr = sdscatprintf(cmdrepr, "[%d %s] ", dictid, getClientPeerId(c));
@@ -699,7 +699,7 @@ int replicationSetupReplicaForFullResync(client *replica, long long offset) {
 
     /* Don't send this reply to replicas that approached us with
      * the old SYNC command. */
-    if (!(replica->flags & CLIENT_PRE_PSYNC)) {
+    if (!(replica->flag.pre_psync)) {
         buflen = snprintf(buf, sizeof(buf), "+FULLRESYNC %s %lld\r\n", server.replid, offset);
         if (connWrite(replica->conn, buf, buflen) != buflen) {
             freeClientAsync(replica);
@@ -768,7 +768,7 @@ int primaryTryPartialResynchronization(client *c, long long psync_offset) {
      * 1) Set client state to make it a replica.
      * 2) Inform the client we can continue with +CONTINUE
      * 3) Send the backlog data (from the offset to the end) to the replica. */
-    c->flags |= CLIENT_REPLICA;
+    c->flag.replica = 1;
     c->repl_state = REPLICA_STATE_ONLINE;
     c->repl_ack_time = server.unixtime;
     c->repl_start_cmd_stream_on_ack = 0;
@@ -877,10 +877,10 @@ int startBgsaveForReplication(int mincapa, int req) {
 
             if (replica->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
                 replica->repl_state = REPL_STATE_NONE;
-                replica->flags &= ~CLIENT_REPLICA;
+                replica->flag.replica = 0;
                 listDelNode(server.replicas, ln);
                 addReplyError(replica, "BGSAVE failed, replication can't continue");
-                replica->flags |= CLIENT_CLOSE_AFTER_REPLY;
+                replica->flag.close_after_reply = 1;
             }
         }
         return retval;
@@ -907,7 +907,7 @@ int startBgsaveForReplication(int mincapa, int req) {
 /* SYNC and PSYNC command implementation. */
 void syncCommand(client *c) {
     /* ignore SYNC if already replica or in monitor mode */
-    if (c->flags & CLIENT_REPLICA) return;
+    if (c->flag.replica) return;
 
     /* Check if this is a failover request to a replica with the same replid and
      * become a primary if so. */
@@ -925,7 +925,7 @@ void syncCommand(client *c) {
                 replicationUnsetPrimary();
             }
             sds client = catClientInfoString(sdsempty(), c);
-            serverLog(LL_NOTICE, "MASTER MODE enabled (failover request from '%s')", client);
+            serverLog(LL_NOTICE, "PRIMARY MODE enabled (failover request from '%s')", client);
             sdsfree(client);
         } else {
             addReplyError(c, "PSYNC FAILOVER replid must match my replid.");
@@ -998,7 +998,7 @@ void syncCommand(client *c) {
         /* If a replica uses SYNC, we are dealing with an old implementation
          * of the replication protocol (like valkey-cli --replica). Flag the client
          * so that we don't expect to receive REPLCONF ACK feedbacks. */
-        c->flags |= CLIENT_PRE_PSYNC;
+        c->flag.pre_psync = 1;
     }
 
     /* Full resynchronization. */
@@ -1009,7 +1009,7 @@ void syncCommand(client *c) {
     c->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
     if (server.repl_disable_tcp_nodelay) connDisableTcpNoDelay(c->conn); /* Non critical if it fails. */
     c->repldbfd = -1;
-    c->flags |= CLIENT_REPLICA;
+    c->flag.replica = 1;
     listAddNodeTail(server.replicas, c);
 
     /* Create the replication backlog if needed. */
@@ -1041,7 +1041,7 @@ void syncCommand(client *c) {
             /* If the client needs a buffer of commands, we can't use
              * a replica without replication buffer. */
             if (replica->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
-                (!(replica->flags & CLIENT_REPL_RDBONLY) || (c->flags & CLIENT_REPL_RDBONLY)))
+                (!(replica->flag.repl_rdbonly) || (c->flag.repl_rdbonly)))
                 break;
         }
         /* To attach this replica, we check that it has at least all the
@@ -1052,7 +1052,7 @@ void syncCommand(client *c) {
             /* Perfect, the server is already registering differences for
              * another replica. Set the right state, and copy the buffer.
              * We don't copy buffer if clients don't want. */
-            if (!(c->flags & CLIENT_REPL_RDBONLY)) copyReplicaOutputBuffer(c, replica);
+            if (!c->flag.repl_rdbonly) copyReplicaOutputBuffer(c, replica);
             replicationSetupReplicaForFullResync(c, replica->psync_initial_offset);
             serverLog(LL_NOTICE, "Waiting for end of BGSAVE for SYNC");
         } else {
@@ -1168,7 +1168,7 @@ void replconfCommand(client *c) {
              * internal only command that normal clients should never use. */
             long long offset;
 
-            if (!(c->flags & CLIENT_REPLICA)) return;
+            if (!c->flag.replica) return;
             if ((getLongLongFromObject(c->argv[j + 1], &offset) != C_OK)) return;
             if (offset > c->repl_ack_off) c->repl_ack_off = offset;
             if (c->argc > j + 3 && !strcasecmp(c->argv[j + 2]->ptr, "fack")) {
@@ -1200,9 +1200,9 @@ void replconfCommand(client *c) {
             long rdb_only = 0;
             if (getRangeLongFromObjectOrReply(c, c->argv[j + 1], 0, 1, &rdb_only, NULL) != C_OK) return;
             if (rdb_only == 1)
-                c->flags |= CLIENT_REPL_RDBONLY;
+                c->flag.repl_rdbonly = 1;
             else
-                c->flags &= ~CLIENT_REPL_RDBONLY;
+                c->flag.repl_rdbonly = 0;
         } else if (!strcasecmp(c->argv[j]->ptr, "rdb-filter-only")) {
             /* REPLCONFG RDB-FILTER-ONLY is used to define "include" filters
              * for the RDB snapshot. Currently we only support a single
@@ -1258,7 +1258,7 @@ void replconfCommand(client *c) {
  * the return value indicates that the replica should be disconnected.
  * */
 int replicaPutOnline(client *replica) {
-    if (replica->flags & CLIENT_REPL_RDBONLY) {
+    if (replica->flag.repl_rdbonly) {
         replica->repl_state = REPLICA_STATE_RDB_TRANSMITTED;
         /* The client asked for RDB only so we should close it ASAP */
         serverLog(LL_NOTICE, "RDB transfer completed, rdb only replica (%s) should be disconnected asap",
@@ -1288,7 +1288,7 @@ int replicaPutOnline(client *replica) {
  *    accumulate output buffer data without sending it to the replica so it
  *    won't get mixed with the RDB stream. */
 void replicaStartCommandStream(client *replica) {
-    serverAssert(!(replica->flags & CLIENT_REPL_RDBONLY));
+    serverAssert(!(replica->flag.repl_rdbonly));
     replica->repl_start_cmd_stream_on_ack = 0;
 
     putClientInPendingWriteQueue(replica);
@@ -1706,7 +1706,7 @@ void replicationEmptyDbCallback(dict *d) {
 /* Once we have a link with the primary and the synchronization was
  * performed, this function materializes the primary client we store
  * at server.primary, starting from the specified file descriptor. */
-void replicationCreateMasterClient(connection *conn, int dbid) {
+void replicationCreatePrimaryClient(connection *conn, int dbid) {
     server.primary = createClient(conn);
     if (conn) connSetReadHandler(server.primary->conn, readQueryFromClient);
 
@@ -1721,7 +1721,8 @@ void replicationCreateMasterClient(connection *conn, int dbid) {
      * to pass the execution to a background thread and unblock after the
      * execution is done. This is the reason why we allow blocking the replication
      * connection. */
-    server.primary->flags |= (CLIENT_PRIMARY | CLIENT_AUTHENTICATED);
+    server.primary->flag.primary = 1;
+    server.primary->flag.authenticated = 1;
 
     /* Allocate a private query buffer for the primary client instead of using the shared query buffer.
      * This is done because the primary's query buffer data needs to be preserved for my sub-replicas to use. */
@@ -1732,7 +1733,7 @@ void replicationCreateMasterClient(connection *conn, int dbid) {
     memcpy(server.primary->replid, server.primary_replid, sizeof(server.primary_replid));
     /* If primary offset is set to -1, this primary is old and is not
      * PSYNC capable, so we flag it accordingly. */
-    if (server.primary->reploff == -1) server.primary->flags |= CLIENT_PRE_PSYNC;
+    if (server.primary->reploff == -1) server.primary->flag.pre_psync = 1;
     if (dbid != -1) selectDb(server.primary, dbid);
 }
 
@@ -1793,11 +1794,11 @@ void disklessLoadDiscardTempDb(serverDb *tempDb) {
  * we have no way to incrementally feed our replicas after that.
  * We want our replicas to resync with us as well, if we have any sub-replicas.
  * This is useful on readSyncBulkPayload in places where we just finished transferring db. */
-void replicationAttachToNewMaster(void) {
+void replicationAttachToNewPrimary(void) {
     /* Replica starts to apply data from new primary, we must discard the cached
      * primary structure. */
     serverAssert(server.primary == NULL);
-    replicationDiscardCachedMaster();
+    replicationDiscardCachedPrimary();
 
     disconnectReplicas();     /* Force our replicas to resync with us as well. */
     freeReplicationBacklog(); /* Don't allow our chained replicas to PSYNC. */
@@ -1825,7 +1826,7 @@ void readSyncBulkPayload(connection *conn) {
     if (server.repl_transfer_size == -1) {
         nread = connSyncReadLine(conn, buf, 1024, server.repl_syncio_timeout * 1000);
         if (nread == -1) {
-            serverLog(LL_WARNING, "I/O error reading bulk count from MASTER: %s", connGetLastError(conn));
+            serverLog(LL_WARNING, "I/O error reading bulk count from PRIMARY: %s", connGetLastError(conn));
             goto error;
         } else {
             /* nread here is returned by connSyncReadLine(), which calls syncReadLine() and
@@ -1834,7 +1835,7 @@ void readSyncBulkPayload(connection *conn) {
         }
 
         if (buf[0] == '-') {
-            serverLog(LL_WARNING, "MASTER aborted replication with an error: %s", buf + 1);
+            serverLog(LL_WARNING, "PRIMARY aborted replication with an error: %s", buf + 1);
             goto error;
         } else if (buf[0] == '\0') {
             /* At this stage just a newline works as a PING in order to take
@@ -1844,7 +1845,7 @@ void readSyncBulkPayload(connection *conn) {
             return;
         } else if (buf[0] != '$') {
             serverLog(LL_WARNING,
-                      "Bad protocol from MASTER, the first byte is not '$' (we received '%s'), are you sure the host "
+                      "Bad protocol from PRIMARY, the first byte is not '$' (we received '%s'), are you sure the host "
                       "and port are right?",
                       buf);
             goto error;
@@ -1867,12 +1868,12 @@ void readSyncBulkPayload(connection *conn) {
             /* Set any repl_transfer_size to avoid entering this code path
              * at the next call. */
             server.repl_transfer_size = 0;
-            serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: receiving streamed RDB from primary with EOF %s",
+            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: receiving streamed RDB from primary with EOF %s",
                       use_diskless_load ? "to parser" : "to disk");
         } else {
             usemark = 0;
             server.repl_transfer_size = strtol(buf + 1, NULL, 10);
-            serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: receiving %lld bytes from primary %s",
+            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: receiving %lld bytes from primary %s",
                       (long long)server.repl_transfer_size, use_diskless_load ? "to parser" : "to disk");
         }
         return;
@@ -1894,7 +1895,7 @@ void readSyncBulkPayload(connection *conn) {
                 /* equivalent to EAGAIN */
                 return;
             }
-            serverLog(LL_WARNING, "I/O error trying to sync with MASTER: %s",
+            serverLog(LL_WARNING, "I/O error trying to sync with PRIMARY: %s",
                       (nread == -1) ? connGetLastError(conn) : "connection lost");
             cancelReplicationHandshake(1);
             return;
@@ -1925,7 +1926,7 @@ void readSyncBulkPayload(connection *conn) {
         if ((nwritten = write(server.repl_transfer_fd, buf, nread)) != nread) {
             serverLog(LL_WARNING,
                       "Write error or short write writing to the DB dump file "
-                      "needed for MASTER <-> REPLICA synchronization: %s",
+                      "needed for PRIMARY <-> REPLICA synchronization: %s",
                       (nwritten == -1) ? strerror(errno) : "short write");
             goto error;
         }
@@ -1996,9 +1997,9 @@ void readSyncBulkPayload(connection *conn) {
 
         moduleFireServerEvent(VALKEYMODULE_EVENT_REPL_ASYNC_LOAD, VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_STARTED, NULL);
     } else {
-        replicationAttachToNewMaster();
+        replicationAttachToNewPrimary();
 
-        serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Flushing old data");
+        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
         emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
     }
 
@@ -2008,7 +2009,7 @@ void readSyncBulkPayload(connection *conn) {
      * time for non blocking loading. */
     connSetReadHandler(conn, NULL);
 
-    serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Loading DB in memory");
+    serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
     rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
     if (use_diskless_load) {
         rio rdb;
@@ -2045,7 +2046,7 @@ void readSyncBulkPayload(connection *conn) {
         rdbLoadingCtx loadingCtx = {.dbarray = dbarray, .functions_lib_ctx = functions_lib_ctx};
         if (rdbLoadRioWithLoadingCtx(&rdb, RDBFLAGS_REPLICATION, &rsi, &loadingCtx) != C_OK) {
             /* RDB loading failed. */
-            serverLog(LL_WARNING, "Failed trying to load the MASTER synchronization DB "
+            serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization DB "
                                   "from socket, check server logs.");
             loadingFailed = 1;
         } else if (usemark) {
@@ -2068,7 +2069,7 @@ void readSyncBulkPayload(connection *conn) {
 
                 disklessLoadDiscardTempDb(diskless_load_tempDb);
                 functionsLibCtxFree(temp_functions_lib_ctx);
-                serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Discarding temporary DB in background");
+                serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding temporary DB in background");
             } else {
                 /* Remove the half-loaded data in case we started with an empty replica. */
                 emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
@@ -2085,9 +2086,9 @@ void readSyncBulkPayload(connection *conn) {
             /* We will soon swap main db with tempDb and replicas will start
              * to apply data from new primary, we must discard the cached
              * primary structure and force resync of sub-replicas. */
-            replicationAttachToNewMaster();
+            replicationAttachToNewPrimary();
 
-            serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Swapping active DB with loaded DB");
+            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Swapping active DB with loaded DB");
             swapMainDbWithTempDb(diskless_load_tempDb);
 
             /* swap existing functions ctx with the temporary one */
@@ -2098,7 +2099,7 @@ void readSyncBulkPayload(connection *conn) {
 
             /* Delete the old db as it's useless now. */
             disklessLoadDiscardTempDb(diskless_load_tempDb);
-            serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Discarding old DB in background");
+            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding old DB in background");
         }
 
         /* Inform about db change, as replication was diskless and didn't cause a save. */
@@ -2117,7 +2118,7 @@ void readSyncBulkPayload(connection *conn) {
         if (fsync(server.repl_transfer_fd) == -1) {
             serverLog(LL_WARNING,
                       "Failed trying to sync the temp DB to disk in "
-                      "MASTER <-> REPLICA synchronization: %s",
+                      "PRIMARY <-> REPLICA synchronization: %s",
                       strerror(errno));
             cancelReplicationHandshake(1);
             return;
@@ -2128,7 +2129,7 @@ void readSyncBulkPayload(connection *conn) {
         if (rename(server.repl_transfer_tmpfile, server.rdb_filename) == -1) {
             serverLog(LL_WARNING,
                       "Failed trying to rename the temp DB into %s in "
-                      "MASTER <-> REPLICA synchronization: %s",
+                      "PRIMARY <-> REPLICA synchronization: %s",
                       server.rdb_filename, strerror(errno));
             cancelReplicationHandshake(1);
             if (old_rdb_fd != -1) close(old_rdb_fd);
@@ -2141,14 +2142,14 @@ void readSyncBulkPayload(connection *conn) {
         if (fsyncFileDir(server.rdb_filename) == -1) {
             serverLog(LL_WARNING,
                       "Failed trying to sync DB directory %s in "
-                      "MASTER <-> REPLICA synchronization: %s",
+                      "PRIMARY <-> REPLICA synchronization: %s",
                       server.rdb_filename, strerror(errno));
             cancelReplicationHandshake(1);
             return;
         }
 
         if (rdbLoad(server.rdb_filename, &rsi, RDBFLAGS_REPLICATION) != RDB_OK) {
-            serverLog(LL_WARNING, "Failed trying to load the MASTER synchronization "
+            serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization "
                                   "DB from disk, check server logs.");
             cancelReplicationHandshake(1);
             if (server.rdb_del_sync_files && allPersistenceDisabled()) {
@@ -2181,7 +2182,7 @@ void readSyncBulkPayload(connection *conn) {
     }
 
     /* Final setup of the connected replica <- primary link */
-    replicationCreateMasterClient(server.repl_transfer_s, rsi.repl_stream_db);
+    replicationCreatePrimaryClient(server.repl_transfer_s, rsi.repl_stream_db);
     server.repl_state = REPL_STATE_CONNECTED;
     server.repl_down_since = 0;
 
@@ -2200,11 +2201,11 @@ void readSyncBulkPayload(connection *conn) {
      * or not, in order to behave correctly if they are promoted to
      * primaries after a failover. */
     if (server.repl_backlog == NULL) createReplicationBacklog();
-    serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Finished with success");
+    serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Finished with success");
 
     if (server.supervised_mode == SUPERVISED_SYSTEMD) {
-        serverCommunicateSystemd(
-            "STATUS=MASTER <-> REPLICA sync: Finished with success. Ready to accept connections in read-write mode.\n");
+        serverCommunicateSystemd("STATUS=PRIMARY <-> REPLICA sync: Finished with success. Ready to accept connections "
+                                 "in read-write mode.\n");
     }
 
     /* Send the initial ACK immediately to put this replica in online state. */
@@ -2314,7 +2315,7 @@ char *sendCommandArgv(connection *conn, int argc, char **argv, size_t *argv_lens
  * command in order to obtain the primary replid and the primary replication
  * global offset.
  *
- * This function is designed to be called from syncWithMaster(), so the
+ * This function is designed to be called from syncWithPrimary(), so the
  * following assumptions are made:
  *
  * 1) We pass the function an already connected socket "fd".
@@ -2345,7 +2346,7 @@ char *sendCommandArgv(connection *conn, int argc, char **argv, size_t *argv_lens
  *                      the caller should fall back to SYNC.
  * PSYNC_WRITE_ERROR: There was an error writing the command to the socket.
  * PSYNC_WAIT_REPLY: Call again the function with read_reply set to 1.
- * PSYNC_TRY_LATER: Master is currently in a transient error condition.
+ * PSYNC_TRY_LATER: Primary is currently in a transient error condition.
  *
  * Notable side effects:
  *
@@ -2406,10 +2407,10 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
 
     /* Reading half */
     reply = receiveSynchronousResponse(conn);
-    /* Master did not reply to PSYNC */
+    /* Primary did not reply to PSYNC */
     if (reply == NULL) {
         connSetReadHandler(conn, NULL);
-        serverLog(LL_WARNING, "Master did not reply to PSYNC, will try later");
+        serverLog(LL_WARNING, "Primary did not reply to PSYNC, will try later");
         return PSYNC_TRY_LATER;
     }
 
@@ -2434,7 +2435,7 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
             if (offset) offset++;
         }
         if (!replid || !offset || (offset - replid - 1) != CONFIG_RUN_ID_SIZE) {
-            serverLog(LL_WARNING, "Master replied with wrong +FULLRESYNC syntax.");
+            serverLog(LL_WARNING, "Primary replied with wrong +FULLRESYNC syntax.");
             /* This is an unexpected condition, actually the +FULLRESYNC
              * reply means that the primary supports PSYNC, but the reply
              * format seems wrong. To stay safe we blank the primary
@@ -2469,8 +2470,8 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
             new[CONFIG_RUN_ID_SIZE] = '\0';
 
             if (strcmp(new, server.cached_primary->replid)) {
-                /* Master ID changed. */
-                serverLog(LL_NOTICE, "Master replication ID changed to %s", new);
+                /* Primary ID changed. */
+                serverLog(LL_NOTICE, "Primary replication ID changed to %s", new);
 
                 /* Set the old ID as our ID2, up to the current offset+1. */
                 memcpy(server.replid2, server.cached_primary->replid, sizeof(server.replid2));
@@ -2488,7 +2489,7 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
 
         /* Setup the replication to continue. */
         sdsfree(reply);
-        replicationResurrectCachedMaster(conn);
+        replicationResurrectCachedPrimary(conn);
 
         /* If this instance was restarted and we read the metadata to
          * PSYNC from the persistence file, our replication backlog could
@@ -2506,7 +2507,7 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
 
     if (!strncmp(reply, "-NOMASTERLINK", 13) || !strncmp(reply, "-LOADING", 8)) {
         serverLog(LL_NOTICE,
-                  "Master is currently unable to PSYNC "
+                  "Primary is currently unable to PSYNC "
                   "but should be in the future: %s",
                   reply);
         sdsfree(reply);
@@ -2518,7 +2519,7 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
         serverLog(LL_WARNING, "Unexpected reply to PSYNC from primary: %s", reply);
     } else {
         serverLog(LL_NOTICE,
-                  "Master does not support PSYNC or is in "
+                  "Primary does not support PSYNC or is in "
                   "error state (reply: %s)",
                   reply);
     }
@@ -2528,7 +2529,7 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
 
 /* This handler fires when the non blocking connect was able to
  * establish a connection with the primary. */
-void syncWithMaster(connection *conn) {
+void syncWithPrimary(connection *conn) {
     char tmpfile[256], *err = NULL;
     int dfd = -1, maxtries = 5;
     int psync_result;
@@ -2552,7 +2553,7 @@ void syncWithMaster(connection *conn) {
         serverLog(LL_NOTICE, "Non blocking connect for SYNC fired the event.");
         /* Delete the writable event so that the readable event remains
          * registered and we can wait for the PONG reply. */
-        connSetReadHandler(conn, syncWithMaster);
+        connSetReadHandler(conn, syncWithPrimary);
         connSetWriteHandler(conn, NULL);
         server.repl_state = REPL_STATE_RECEIVE_PING_REPLY;
         /* Send the PING, don't check for errors at all, we have the timeout
@@ -2580,7 +2581,7 @@ void syncWithMaster(connection *conn) {
             sdsfree(err);
             goto error;
         } else {
-            serverLog(LL_NOTICE, "Master replied to PING, replication can continue...");
+            serverLog(LL_NOTICE, "Primary replied to PING, replication can continue...");
         }
         sdsfree(err);
         err = NULL;
@@ -2605,7 +2606,7 @@ void syncWithMaster(connection *conn) {
             if (err) goto write_error;
         }
 
-        /* Set the replica port, so that Master's INFO command can list the
+        /* Set the replica port, so that primary's INFO command can list the
          * replica listening port correctly. */
         {
             int port;
@@ -2621,7 +2622,7 @@ void syncWithMaster(connection *conn) {
             if (err) goto write_error;
         }
 
-        /* Set the replica ip, so that Master's INFO command can list the
+        /* Set the replica ip, so that primary's INFO command can list the
          * replica IP address port correctly in case of port forwarding or NAT.
          * Skip REPLCONF ip-address if there is no replica-announce-ip option set. */
         if (server.replica_announce_ip) {
@@ -2654,7 +2655,7 @@ void syncWithMaster(connection *conn) {
         err = receiveSynchronousResponse(conn);
         if (err == NULL) goto no_response_error;
         if (err[0] == '-') {
-            serverLog(LL_WARNING, "Unable to AUTH to MASTER: %s", err);
+            serverLog(LL_WARNING, "Unable to AUTH to PRIMARY: %s", err);
             sdsfree(err);
             goto error;
         }
@@ -2672,7 +2673,7 @@ void syncWithMaster(connection *conn) {
          * REPLCONF listening-port. */
         if (err[0] == '-') {
             serverLog(LL_NOTICE,
-                      "(Non critical) Master does not understand "
+                      "(Non critical) Primary does not understand "
                       "REPLCONF listening-port: %s",
                       err);
         }
@@ -2692,7 +2693,7 @@ void syncWithMaster(connection *conn) {
          * REPLCONF ip-address. */
         if (err[0] == '-') {
             serverLog(LL_NOTICE,
-                      "(Non critical) Master does not understand "
+                      "(Non critical) Primary does not understand "
                       "REPLCONF ip-address: %s",
                       err);
         }
@@ -2709,7 +2710,7 @@ void syncWithMaster(connection *conn) {
          * REPLCONF capa. */
         if (err[0] == '-') {
             serverLog(LL_NOTICE,
-                      "(Non critical) Master does not understand "
+                      "(Non critical) Primary does not understand "
                       "REPLCONF capa: %s",
                       err);
         }
@@ -2752,7 +2753,7 @@ void syncWithMaster(connection *conn) {
     /* If reached this point, we should be in REPL_STATE_RECEIVE_PSYNC_REPLY. */
     if (server.repl_state != REPL_STATE_RECEIVE_PSYNC_REPLY) {
         serverLog(LL_WARNING,
-                  "syncWithMaster(): state machine error, "
+                  "syncWithPrimary(): state machine error, "
                   "state should be RECEIVE_PSYNC but is %d",
                   server.repl_state);
         goto error;
@@ -2783,9 +2784,9 @@ void syncWithMaster(connection *conn) {
      * uninstalling the read handler from the file descriptor. */
 
     if (psync_result == PSYNC_CONTINUE) {
-        serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Master accepted a Partial Resynchronization.");
+        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Primary accepted a Partial Resynchronization.");
         if (server.supervised_mode == SUPERVISED_SYSTEMD) {
-            serverCommunicateSystemd("STATUS=MASTER <-> REPLICA sync: Partial Resynchronization accepted. Ready to "
+            serverCommunicateSystemd("STATUS=PRIMARY <-> REPLICA sync: Partial Resynchronization accepted. Ready to "
                                      "accept connections in read-write mode.\n");
         }
         return;
@@ -2797,7 +2798,7 @@ void syncWithMaster(connection *conn) {
     if (psync_result == PSYNC_NOT_SUPPORTED) {
         serverLog(LL_NOTICE, "Retrying with SYNC...");
         if (connSyncWrite(conn, "SYNC\r\n", 6, server.repl_syncio_timeout * 1000) == -1) {
-            serverLog(LL_WARNING, "I/O error writing to MASTER: %s", connGetLastError(conn));
+            serverLog(LL_WARNING, "I/O error writing to PRIMARY: %s", connGetLastError(conn));
             goto error;
         }
     }
@@ -2811,7 +2812,7 @@ void syncWithMaster(connection *conn) {
             sleep(1);
         }
         if (dfd == -1) {
-            serverLog(LL_WARNING, "Opening the temp file needed for MASTER <-> REPLICA synchronization: %s",
+            serverLog(LL_WARNING, "Opening the temp file needed for PRIMARY <-> REPLICA synchronization: %s",
                       strerror(errno));
             goto error;
         }
@@ -2835,7 +2836,7 @@ void syncWithMaster(connection *conn) {
     return;
 
 no_response_error: /* Handle receiveSynchronousResponse() error when primary has no reply */
-    serverLog(LL_WARNING, "Master did not respond to command during SYNC handshake");
+    serverLog(LL_WARNING, "Primary did not respond to command during SYNC handshake");
     /* Fall through to regular error handling */
 
 error:
@@ -2855,11 +2856,11 @@ write_error: /* Handle sendCommand() errors. */
     goto error;
 }
 
-int connectWithMaster(void) {
+int connectWithPrimary(void) {
     server.repl_transfer_s = connCreate(connTypeOfReplication());
     if (connConnect(server.repl_transfer_s, server.primary_host, server.primary_port, server.bind_source_addr,
-                    syncWithMaster) == C_ERR) {
-        serverLog(LL_WARNING, "Unable to connect to MASTER: %s", connGetLastError(server.repl_transfer_s));
+                    syncWithPrimary) == C_ERR) {
+        serverLog(LL_WARNING, "Unable to connect to PRIMARY: %s", connGetLastError(server.repl_transfer_s));
         connClose(server.repl_transfer_s);
         server.repl_transfer_s = NULL;
         return C_ERR;
@@ -2868,7 +2869,7 @@ int connectWithMaster(void) {
 
     server.repl_transfer_lastio = server.unixtime;
     server.repl_state = REPL_STATE_CONNECTING;
-    serverLog(LL_NOTICE, "MASTER <-> REPLICA sync started");
+    serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync started");
     return C_OK;
 }
 
@@ -2876,7 +2877,7 @@ int connectWithMaster(void) {
  * in progress to undo it.
  * Never call this function directly, use cancelReplicationHandshake() instead.
  */
-void undoConnectWithMaster(void) {
+void undoConnectWithPrimary(void) {
     connClose(server.repl_transfer_s);
     server.repl_transfer_s = NULL;
 }
@@ -2886,7 +2887,7 @@ void undoConnectWithMaster(void) {
  */
 void replicationAbortSyncTransfer(void) {
     serverAssert(server.repl_state == REPL_STATE_TRANSFER);
-    undoConnectWithMaster();
+    undoConnectWithPrimary();
     if (server.repl_transfer_fd != -1) {
         close(server.repl_transfer_fd);
         bg_unlink(server.repl_transfer_tmpfile);
@@ -2909,7 +2910,7 @@ int cancelReplicationHandshake(int reconnect) {
         replicationAbortSyncTransfer();
         server.repl_state = REPL_STATE_CONNECT;
     } else if (server.repl_state == REPL_STATE_CONNECTING || replicaIsInHandshakeState()) {
-        undoConnectWithMaster();
+        undoConnectWithPrimary();
         server.repl_state = REPL_STATE_CONNECT;
     } else {
         return 0;
@@ -2919,8 +2920,8 @@ int cancelReplicationHandshake(int reconnect) {
 
     /* try to re-connect without waiting for replicationCron, this is needed
      * for the "diskless loading short read" test. */
-    serverLog(LL_NOTICE, "Reconnecting to MASTER %s:%d after failure", server.primary_host, server.primary_port);
-    connectWithMaster();
+    serverLog(LL_NOTICE, "Reconnecting to PRIMARY %s:%d after failure", server.primary_host, server.primary_port);
+    connectWithPrimary();
 
     return 1;
 }
@@ -2937,7 +2938,7 @@ void replicationSetPrimary(char *ip, int port) {
     disconnectAllBlockedClients(); /* Clients blocked in primary, now replica. */
 
     /* Setting primary_host only after the call to freeClient since it calls
-     * replicationHandleMasterDisconnection which can trigger a re-connect
+     * replicationHandlePrimaryDisconnection which can trigger a re-connect
      * directly from within that call. */
     server.primary_host = sdsnew(ip);
     server.primary_port = port;
@@ -2955,7 +2956,7 @@ void replicationSetPrimary(char *ip, int port) {
     /* Before destroying our primary state, create a cached primary using
      * our own parameters, to later PSYNC with the new primary. */
     if (was_primary) {
-        replicationDiscardCachedMaster();
+        replicationDiscardCachedPrimary();
         replicationCachePrimaryUsingMyself();
     }
 
@@ -2968,8 +2969,8 @@ void replicationSetPrimary(char *ip, int port) {
         moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE, VALKEYMODULE_SUBEVENT_PRIMARY_LINK_DOWN, NULL);
 
     server.repl_state = REPL_STATE_CONNECT;
-    serverLog(LL_NOTICE, "Connecting to MASTER %s:%d", server.primary_host, server.primary_port);
-    connectWithMaster();
+    serverLog(LL_NOTICE, "Connecting to PRIMARY %s:%d", server.primary_host, server.primary_port);
+    connectWithPrimary();
 }
 
 /* Cancel replication, setting the instance as a primary itself. */
@@ -2981,11 +2982,11 @@ void replicationUnsetPrimary(void) {
         moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE, VALKEYMODULE_SUBEVENT_PRIMARY_LINK_DOWN, NULL);
 
     /* Clear primary_host first, since the freeClient calls
-     * replicationHandleMasterDisconnection which can attempt to re-connect. */
+     * replicationHandlePrimaryDisconnection which can attempt to re-connect. */
     sdsfree(server.primary_host);
     server.primary_host = NULL;
     if (server.primary) freeClient(server.primary);
-    replicationDiscardCachedMaster();
+    replicationDiscardCachedPrimary();
     cancelReplicationHandshake(0);
     /* When a replica is turned into a primary, the current replication ID
      * (that was inherited from the primary at synchronization time) is
@@ -3043,8 +3044,8 @@ void replicationHandlePrimaryDisconnection(void) {
     /* Try to re-connect immediately rather than wait for replicationCron
      * waiting 1 second may risk backlog being recycled. */
     if (server.primary_host) {
-        serverLog(LL_NOTICE, "Reconnecting to MASTER %s:%d", server.primary_host, server.primary_port);
-        connectWithMaster();
+        serverLog(LL_NOTICE, "Reconnecting to PRIMARY %s:%d", server.primary_host, server.primary_port);
+        connectWithPrimary();
     }
 }
 
@@ -3067,13 +3068,13 @@ void replicaofCommand(client *c) {
         if (server.primary_host) {
             replicationUnsetPrimary();
             sds client = catClientInfoString(sdsempty(), c);
-            serverLog(LL_NOTICE, "MASTER MODE enabled (user request from '%s')", client);
+            serverLog(LL_NOTICE, "PRIMARY MODE enabled (user request from '%s')", client);
             sdsfree(client);
         }
     } else {
         long port;
 
-        if (c->flags & CLIENT_REPLICA) {
+        if (c->flag.replica) {
             /* If a client is already a replica they cannot run this command,
              * because it involves flushing all replicas (including this
              * client) */
@@ -3171,7 +3172,7 @@ void replicationSendAck(void) {
 
     if (c != NULL) {
         int send_fack = server.fsynced_reploff != -1;
-        c->flags |= CLIENT_PRIMARY_FORCE_REPLY;
+        c->flag.primary_force_reply = 1;
         addReplyArrayLen(c, send_fack ? 5 : 3);
         addReplyBulkCString(c, "REPLCONF");
         addReplyBulkCString(c, "ACK");
@@ -3180,11 +3181,11 @@ void replicationSendAck(void) {
             addReplyBulkCString(c, "FACK");
             addReplyBulkLongLong(c, server.fsynced_reploff);
         }
-        c->flags &= ~CLIENT_PRIMARY_FORCE_REPLY;
+        c->flag.primary_force_reply = 0;
     }
 }
 
-/* ---------------------- MASTER CACHING FOR PSYNC -------------------------- */
+/* ---------------------- PRIMARY CACHING FOR PSYNC -------------------------- */
 
 /* In order to implement partial synchronization we need to be able to cache
  * our primary's client structure after a transient disconnection.
@@ -3198,10 +3199,10 @@ void replicationSendAck(void) {
  *
  * The other functions that will deal with the cached primary are:
  *
- * replicationDiscardCachedMaster() that will make sure to kill the client
+ * replicationDiscardCachedPrimary() that will make sure to kill the client
  * as for some reason we don't want to use it in the future.
  *
- * replicationResurrectCachedMaster() that is used after a successful PSYNC
+ * replicationResurrectCachedPrimary() that is used after a successful PSYNC
  * handshake in order to reactivate the cached primary.
  */
 void replicationCachePrimary(client *c) {
@@ -3219,7 +3220,7 @@ void replicationCachePrimary(client *c) {
     server.primary->qb_pos = 0;
     server.primary->repl_applied = 0;
     server.primary->read_reploff = server.primary->reploff;
-    if (c->flags & CLIENT_MULTI) discardTransaction(c);
+    if (c->flag.multi) discardTransaction(c);
     listEmpty(c->reply);
     c->sentlen = 0;
     c->reply_bytes = 0;
@@ -3227,7 +3228,7 @@ void replicationCachePrimary(client *c) {
     resetClient(c);
 
     /* Save the primary. Server.primary will be set to null later by
-     * replicationHandleMasterDisconnection(). */
+     * replicationHandlePrimaryDisconnection(). */
     server.cached_primary = server.primary;
 
     /* Invalidate the Peer ID cache. */
@@ -3262,14 +3263,14 @@ void replicationCachePrimaryUsingMyself(void) {
                          "the new primary with just a partial transfer.");
 
     /* This will be used to populate the field server.primary->reploff
-     * by replicationCreateMasterClient(). We'll later set the created
+     * by replicationCreatePrimaryClient(). We'll later set the created
      * primary as server.cached_primary, so the replica will use such
      * offset for PSYNC. */
     server.primary_initial_offset = server.primary_repl_offset;
 
     /* The primary client we create can be set to any DBID, because
      * the new primary will start its replication stream with SELECT. */
-    replicationCreateMasterClient(NULL, -1);
+    replicationCreatePrimaryClient(NULL, -1);
 
     /* Use our own ID / offset. */
     memcpy(server.primary->replid, server.replid, sizeof(server.replid));
@@ -3282,11 +3283,11 @@ void replicationCachePrimaryUsingMyself(void) {
 
 /* Free a cached primary, called when there are no longer the conditions for
  * a partial resync on reconnection. */
-void replicationDiscardCachedMaster(void) {
+void replicationDiscardCachedPrimary(void) {
     if (server.cached_primary == NULL) return;
 
     serverLog(LL_NOTICE, "Discarding previously cached primary state.");
-    server.cached_primary->flags &= ~CLIENT_PRIMARY;
+    server.cached_primary->flag.primary = 0;
     freeClient(server.cached_primary);
     server.cached_primary = NULL;
 }
@@ -3297,13 +3298,14 @@ void replicationDiscardCachedMaster(void) {
  * This function is called when successfully setup a partial resynchronization
  * so the stream of data that we'll receive will start from where this
  * primary left. */
-void replicationResurrectCachedMaster(connection *conn) {
+void replicationResurrectCachedPrimary(connection *conn) {
     server.primary = server.cached_primary;
     server.cached_primary = NULL;
     server.primary->conn = conn;
     connSetPrivateData(server.primary->conn, server.primary);
-    server.primary->flags &= ~(CLIENT_CLOSE_AFTER_REPLY | CLIENT_CLOSE_ASAP);
-    server.primary->flags |= CLIENT_AUTHENTICATED;
+    server.primary->flag.close_after_reply = 0;
+    server.primary->flag.close_asap = 0;
+    server.primary->flag.authenticated = 1;
     server.primary->last_interaction = server.unixtime;
     server.repl_state = REPL_STATE_CONNECTED;
     server.repl_down_since = 0;
@@ -3363,8 +3365,8 @@ int checkGoodReplicasStatus(void) {
 /* ----------------------- SYNCHRONOUS REPLICATION --------------------------
  * Synchronous replication design can be summarized in points:
  *
- * - Masters have a global replication offset, used by PSYNC.
- * - Master increment the offset every time new commands are sent to replicas.
+ * - Primary have a global replication offset, used by PSYNC.
+ * - Primary increment the offset every time new commands are sent to replicas.
  * - Replicas ping back primary with the offset processed so far.
  *
  * So synchronous replication adds a new WAIT command in the form:
@@ -3448,7 +3450,7 @@ void waitCommand(client *c) {
 
     /* First try without blocking at all. */
     ackreplicas = replicationCountAcksByOffset(c->woff);
-    if (ackreplicas >= numreplicas || c->flags & CLIENT_DENY_BLOCKING) {
+    if (ackreplicas >= numreplicas || c->flag.deny_blocking) {
         addReplyLongLong(c, ackreplicas);
         return;
     }
@@ -3486,7 +3488,7 @@ void waitaofCommand(client *c) {
     /* First try without blocking at all. */
     ackreplicas = replicationCountAOFAcksByOffset(c->woff);
     acklocal = server.fsynced_reploff >= c->woff;
-    if ((ackreplicas >= numreplicas && acklocal >= numlocal) || c->flags & CLIENT_DENY_BLOCKING) {
+    if ((ackreplicas >= numreplicas && acklocal >= numlocal) || c->flag.deny_blocking) {
         addReplyArrayLen(c, 2);
         addReplyLongLong(c, acklocal);
         addReplyLongLong(c, ackreplicas);
@@ -3577,8 +3579,8 @@ void processClientsWaitingReplicas(void) {
             addReplyArrayLen(c, 2);
             addReplyLongLong(c, numlocal);
             addReplyLongLong(c, numreplicas);
-        } else if (c->flags & CLIENT_PENDING_COMMAND) {
-            c->flags |= CLIENT_REPLICATION_DONE;
+        } else if (c->flag.pending_command) {
+            c->flag.replication_done = 1;
         } else {
             addReplyLongLong(c, numreplicas);
         }
@@ -3620,14 +3622,14 @@ void replicationCron(void) {
     /* Non blocking connection timeout? */
     if (server.primary_host && (server.repl_state == REPL_STATE_CONNECTING || replicaIsInHandshakeState()) &&
         (time(NULL) - server.repl_transfer_lastio) > server.repl_timeout) {
-        serverLog(LL_WARNING, "Timeout connecting to the MASTER...");
+        serverLog(LL_WARNING, "Timeout connecting to the PRIMARY...");
         cancelReplicationHandshake(1);
     }
 
     /* Bulk transfer I/O timeout? */
     if (server.primary_host && server.repl_state == REPL_STATE_TRANSFER &&
         (time(NULL) - server.repl_transfer_lastio) > server.repl_timeout) {
-        serverLog(LL_WARNING, "Timeout receiving bulk data from MASTER... If the problem persists try to set the "
+        serverLog(LL_WARNING, "Timeout receiving bulk data from PRIMARY... If the problem persists try to set the "
                               "'repl-timeout' parameter in redis.conf to a larger value.");
         cancelReplicationHandshake(1);
     }
@@ -3635,20 +3637,20 @@ void replicationCron(void) {
     /* Timed out primary when we are an already connected replica? */
     if (server.primary_host && server.repl_state == REPL_STATE_CONNECTED &&
         (time(NULL) - server.primary->last_interaction) > server.repl_timeout) {
-        serverLog(LL_WARNING, "MASTER timeout: no data nor PING received...");
+        serverLog(LL_WARNING, "PRIMARY timeout: no data nor PING received...");
         freeClient(server.primary);
     }
 
-    /* Check if we should connect to a MASTER */
+    /* Check if we should connect to a PRIMARY */
     if (server.repl_state == REPL_STATE_CONNECT) {
-        serverLog(LL_NOTICE, "Connecting to MASTER %s:%d", server.primary_host, server.primary_port);
-        connectWithMaster();
+        serverLog(LL_NOTICE, "Connecting to PRIMARY %s:%d", server.primary_host, server.primary_port);
+        connectWithPrimary();
     }
 
     /* Send ACK to primary from time to time.
      * Note that we do not send periodic acks to primary that don't
      * support PSYNC and replication offsets. */
-    if (server.primary_host && server.primary && !(server.primary->flags & CLIENT_PRE_PSYNC)) replicationSendAck();
+    if (server.primary_host && server.primary && !(server.primary->flag.pre_psync)) replicationSendAck();
 
     /* If we have attached replicas, PING them from time to time.
      * So replicas can implement an explicit timeout to primaries, and will
@@ -3711,7 +3713,7 @@ void replicationCron(void) {
             client *replica = ln->value;
 
             if (replica->repl_state == REPLICA_STATE_ONLINE) {
-                if (replica->flags & CLIENT_PRE_PSYNC) continue;
+                if (replica->flag.pre_psync) continue;
                 if ((server.unixtime - replica->repl_ack_time) > server.repl_timeout) {
                     serverLog(LL_WARNING, "Disconnecting timedout replica (streaming sync): %s",
                               replicationGetReplicaName(replica));
@@ -4039,7 +4041,7 @@ void failoverCommand(client *c) {
 
 /* Failover cron function, checks coordinated failover state.
  *
- * Implementation note: The current implementation calls replicationSetMaster()
+ * Implementation note: The current implementation calls replicationSetPrimary()
  * to start the failover request, this has some unintended side effects if the
  * failover doesn't work like blocked clients will be unblocked and replicas will
  * be disconnected. This could be optimized further.

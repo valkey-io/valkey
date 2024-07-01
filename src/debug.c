@@ -428,6 +428,9 @@ void debugCommand(client *c) {
             "    Show low level info about `key` and associated value.",
             "DROP-CLUSTER-PACKET-FILTER <packet-type>",
             "    Drop all packets that match the filtered type. Set to -1 allow all packets.",
+            "CLOSE-CLUSTER-LINK-ON-PACKET-DROP <0|1>",
+            "    This is valid only when DROP-CLUSTER-PACKET-FILTER is set to a valid packet type.",
+            "    When set to 1, the cluster link is closed after dropping a packet based on the filter.",
             "OOM",
             "    Crash the server simulating an out-of-memory error.",
             "PANIC",
@@ -591,6 +594,9 @@ void debugCommand(client *c) {
         long packet_type;
         if (getLongFromObjectOrReply(c, c->argv[2], &packet_type, NULL) != C_OK) return;
         server.cluster_drop_packet_filter = packet_type;
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "close-cluster-link-on-packet-drop") && c->argc == 3) {
+        server.debug_cluster_close_link_on_packet_drop = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "object") && c->argc == 3) {
         dictEntry *de;
@@ -797,12 +803,12 @@ void debugCommand(client *c) {
                 addReplyError(c, "RESP2 is not supported by this command");
                 return;
             }
-            uint64_t old_flags = c->flags;
-            c->flags |= CLIENT_PUSHING;
+            struct ClientFlags old_flags = c->flag;
+            c->flag.pushing = 1;
             addReplyPushLen(c, 2);
             addReplyBulkCString(c, "server-cpu-usage");
             addReplyLongLong(c, 42);
-            if (!(old_flags & CLIENT_PUSHING)) c->flags &= ~CLIENT_PUSHING;
+            if (!old_flags.pushing) c->flag.pushing = 0;
             /* Push replies are not synchronous replies, so we emit also a
              * normal reply in order for blocking clients just discarding the
              * push reply, to actually consume the reply and continue. */
@@ -1019,7 +1025,7 @@ void _serverAssertPrintClientInfo(const client *c) {
 
     bugReportStart();
     serverLog(LL_WARNING, "=== ASSERTION FAILED CLIENT CONTEXT ===");
-    serverLog(LL_WARNING, "client->flags = %llu", (unsigned long long)c->flags);
+    serverLog(LL_WARNING, "client->flags = %llu", (unsigned long long)c->raw_flag);
     serverLog(LL_WARNING, "client->conn = %s", connGetInfo(c->conn, conninfo, sizeof(conninfo)));
     serverLog(LL_WARNING, "client->argc = %d", c->argc);
     for (j = 0; j < c->argc; j++) {

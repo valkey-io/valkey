@@ -3504,7 +3504,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
     listIter li;
     pid_t childpid;
     int pipefds[2], rdb_pipe_write, safe_to_exit_pipe;
-    int direct = (req & REPLICA_REQ_RDB_CONN);
+    int dual_conn = (req & REPLICA_REQ_RDB_CONN);
 
     if (hasActiveChildProcess()) return C_ERR;
 
@@ -3535,7 +3535,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
     int connsnum = 0;
     connection **conns = zmalloc(sizeof(connection *) * listLength(server.replicas));
     server.rdb_pipe_conns = NULL;
-    if (!direct) {
+    if (!dual_conn) {
         server.rdb_pipe_conns = conns;
         server.rdb_pipe_numconns = 0;
         server.rdb_pipe_numconns_writing = 0;
@@ -3549,7 +3549,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
             if (replica->replica_req != req) continue;
 
             conns[connsnum++] = replica->conn;
-            if (direct) {
+            if (dual_conn) {
                 /* Put the socket in blocking mode to simplify RDB transfer. */
                 connBlock(replica->conn);
                 connSendTimeout(replica->conn, server.repl_timeout * 1000);
@@ -3570,7 +3570,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
         /* Child */
         int retval, dummy;
         rio rdb;
-        if (direct) {
+        if (dual_conn) {
             rioInitWithConnset(&rdb, conns, connsnum);
         } else {
             rioInitWithFd(&rdb, rdb_pipe_write);
@@ -3592,7 +3592,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
         if (retval == C_OK) {
             sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
         }
-        if (direct) {
+        if (dual_conn) {
             rioFreeConnset(&rdb);
         } else {
             rioFreeFd(&rdb);
@@ -3624,7 +3624,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
             close(rdb_pipe_write);
             close(server.rdb_pipe_read);
             zfree(conns);
-            if (direct) {
+            if (dual_conn) {
                 closeChildInfoPipe();
             } else {
                 server.rdb_pipe_conns = NULL;
@@ -3633,14 +3633,14 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
             }
         } else {
             serverLog(LL_NOTICE, "Background RDB transfer started by pid %ld to %s",
-                (long) childpid, direct? "replica socket" : "pipe");
+                (long) childpid, dual_conn? "replica socket" : "pipe");
             server.rdb_save_time_start = time(NULL);
             server.rdb_child_type = RDB_CHILD_TYPE_SOCKET;
             close(rdb_pipe_write); /* close write in parent so that it can detect the close on the child. */
             if (aeCreateFileEvent(server.el, server.rdb_pipe_read, AE_READABLE, rdbPipeReadHandler, NULL) == AE_ERR) {
                 serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
             }
-            if (direct) zfree(conns);
+            if (dual_conn) zfree(conns);
         }
         close(safe_to_exit_pipe);
         return (childpid == -1) ? C_ERR : C_OK;

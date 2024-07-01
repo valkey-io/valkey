@@ -37,6 +37,11 @@
 #include <stddef.h>
 
 #ifdef HAVE_DEFRAG
+#include "allocator_defrag.h"
+
+#define defraged_alloc defrag_jemalloc_alloc
+#define defraged_free defrag_jemalloc_free
+#define defrag_should_defrag_multi defrag_jemalloc_should_defrag_multi
 
 typedef struct defragCtx {
     void *privdata;
@@ -48,10 +53,6 @@ typedef struct defragPubSubCtx {
     dict *(*clientPubSubChannels)(client *);
 } defragPubSubCtx;
 
-/* this method was added to jemalloc in order to help us understand which
- * pointers are worthwhile moving and which aren't */
-int je_get_defrag_hint(void *ptr);
-
 /* Defrag helper for generic allocations.
  *
  * returns NULL in case the allocation wasn't moved.
@@ -60,7 +61,9 @@ int je_get_defrag_hint(void *ptr);
 void *activeDefragAlloc(void *ptr) {
     size_t size;
     void *newptr;
-    if (!je_get_defrag_hint(ptr)) {
+    void *ptr_arr = ptr;
+    defrag_should_defrag_multi(&ptr_arr, 1);
+    if (!ptr_arr) {
         server.stat_active_defrag_misses++;
         return NULL;
     }
@@ -68,9 +71,9 @@ void *activeDefragAlloc(void *ptr) {
      * make sure not to use the thread cache. so that we don't get back the same
      * pointers we try to free */
     size = zmalloc_size(ptr);
-    newptr = zmalloc_no_tcache(size);
+    newptr = defraged_alloc(size);
     memcpy(newptr, ptr, size);
-    zfree_no_tcache(ptr);
+    defraged_free(ptr, size);
     server.stat_active_defrag_hits++;
     return newptr;
 }
@@ -740,8 +743,8 @@ void defragScanCallback(void *privdata, const dictEntry *de) {
  * without the possibility of getting any results. */
 float getAllocatorFragmentation(size_t *out_frag_bytes) {
     size_t resident, active, allocated, frag_smallbins_bytes;
-    zmalloc_get_allocator_info(&allocated, &active, &resident, NULL, NULL, &frag_smallbins_bytes);
-
+    zmalloc_get_allocator_info(&allocated, &active, &resident, NULL, NULL);
+    frag_smallbins_bytes = defrag_jemalloc_get_frag_smallbins();
     /* Calculate the fragmentation ratio as the proportion of wasted memory in small
      * bins (which are defraggable) relative to the total allocated memory (including large bins).
      * This is because otherwise, if most of the memory usage is large bins, we may show high percentage,

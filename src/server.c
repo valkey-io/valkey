@@ -60,6 +60,7 @@
 #include <sys/utsname.h>
 #include <locale.h>
 #include <sys/socket.h>
+#include "allocator_defrag.h"
 
 #ifdef __linux__
 #include <sys/mman.h>
@@ -1185,8 +1186,8 @@ void cronUpdateMemoryStats(void) {
          * allocations, and allocator reserved pages that can be pursed (all not actual frag) */
         zmalloc_get_allocator_info(
             &server.cron_malloc_stats.allocator_allocated, &server.cron_malloc_stats.allocator_active,
-            &server.cron_malloc_stats.allocator_resident, NULL, &server.cron_malloc_stats.allocator_muzzy,
-            &server.cron_malloc_stats.allocator_frag_smallbins_bytes);
+            &server.cron_malloc_stats.allocator_resident, NULL, &server.cron_malloc_stats.allocator_muzzy);
+        server.cron_malloc_stats.allocator_frag_smallbins_bytes = defrag_jemalloc_get_frag_smallbins();
         /* in case the allocator isn't providing these stats, fake them so that
          * fragmentation info still shows some (inaccurate metrics) */
         if (!server.cron_malloc_stats.allocator_resident) {
@@ -5523,6 +5524,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         /* clang-format on */
         freeMemoryOverheadData(mh);
     }
+    if (all_sections || (dictFind(section_dict, "defrag") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        /* clang-format off */
+        info = sdscatprintf(info, "# Defrag\r\n");
+        info = defrag_jemalloc_get_fragmentation_info(info);
+    }
 
     /* Persistence */
     if (all_sections || (dictFind(section_dict, "persistence") != NULL)) {
@@ -6689,7 +6696,10 @@ int main(int argc, char **argv) {
 #endif
     tzset(); /* Populates 'timezone' global. */
     zmalloc_set_oom_handler(serverOutOfMemoryHandler);
-
+#if defined(USE_JEMALLOC)
+    // we assume jemalloc version in use supports defragmentation api
+    serverAssert(!defrag_jemalloc_init());
+#endif
     /* To achieve entropy, in case of containers, their time() and getpid() can
      * be the same. But value of tv_usec is fast enough to make the difference */
     gettimeofday(&tv, NULL);

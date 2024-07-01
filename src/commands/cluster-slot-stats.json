@@ -35,6 +35,9 @@
                         "properties": {
                             "key-count": {
                                 "type": "integer"
+                            },
+                            "memory-bytes-in": {
+                                "type": "integer"
                             }
                         }
                     }

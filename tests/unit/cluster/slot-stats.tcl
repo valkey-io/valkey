@@ -44,10 +44,13 @@ proc assert_empty_slot_stats_with_exception {slot_stats exception_slots} {
     set slot_stats [convert_array_into_dict $slot_stats]
     dict for {slot stats} $slot_stats {
         if {[dict exists $exception_slots $slot]} {
-            set expected_key_count [dict get $exception_slots $slot]
+            set expected_key_count [dict get $exception_slots $slot key-count]
+            set expected_network_bytes_in [dict get $exception_slots $slot network-bytes-in]
             assert {[dict get $stats key-count] == $expected_key_count}
+            assert {[dict get $stats network-bytes-in] == $expected_network_bytes_in}
         } else {
             assert {[dict get $stats key-count] == 0}
+            assert {[dict get $stats network-bytes-in] == 0}
         }
     }
 }
@@ -111,6 +114,51 @@ proc wait_for_replica_key_exists {key key_count} {
         [R 1 exists $key] eq "$key_count"
     } else {
         fail "Test key was not replicated"
+    }
+}
+
+# -----------------------------------------------------------------------------
+# Test cases for CLUSTER SLOT-STATS network-bytes-in.
+# -----------------------------------------------------------------------------
+
+start_cluster 1 0 {tags {external:skip cluster}} {
+
+    # Define shared variables.
+    set key "key"
+    set key_slot [R 0 cluster keyslot $key]
+
+    test "CLUSTER SLOT-STATS network-bytes-in, multi bulk buffer processing." {
+        # Command) SET key value
+        # RESP) *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n
+        R 0 SET $key value
+
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create key-count 1 network-bytes-in 33
+            ]
+        ]
+
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS network-bytes-in, in-line buffer processing." {
+        # Command) SET key value
+        # Inline) SET key value\r\n
+        set rd [valkey_deferring_client]
+        $rd write "SET $key value\r\n"
+        $rd flush
+
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create key-count 1 network-bytes-in 15
+            ]
+        ]
+
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats
     }
 }
 

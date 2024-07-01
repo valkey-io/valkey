@@ -4,14 +4,14 @@
  * SPDX-License-Identifier: BSD 3-Clause
  */
 
-#include "server.h"
-#include "cluster.h"
+#include "cluster_slot_stats.h"
 
 #define UNASSIGNED_SLOT 0
 
 typedef enum {
-    KEY_COUNT,
     INVALID,
+    KEY_COUNT,
+    NETWORK_BYTES_IN,
 } slotStatTypes;
 
 /* -----------------------------------------------------------------------------
@@ -23,6 +23,14 @@ typedef struct {
     int slot;
     uint64_t stat;
 } slotStatForSort;
+
+/* Struct used for storing slot statistics. */
+typedef struct slotStat {
+    uint64_t network_bytes_in;
+} slotStat;
+
+/* Struct used for storing slot statistics, for all slots owned by the current shard. */
+struct slotStat cluster_slot_stats[CLUSTER_SLOTS];
 
 static int doesSlotBelongToMyShard(int slot) {
     clusterNode *myself = getMyClusterNode();
@@ -47,6 +55,8 @@ static uint64_t getSlotStat(int slot, int stat_type) {
     uint64_t slot_stat = 0;
     if (stat_type == KEY_COUNT) {
         slot_stat = countKeysInSlot(slot);
+    } else if (stat_type == NETWORK_BYTES_IN) {
+        slot_stat = cluster_slot_stats[slot].network_bytes_in;
     }
     return slot_stat;
 }
@@ -88,9 +98,11 @@ static void addReplySlotStat(client *c, int slot) {
     addReplyArrayLen(c, 2); /* Array of size 2, where 0th index represents (int) slot,
                              * and 1st index represents (map) usage statistics. */
     addReplyLongLong(c, slot);
-    addReplyMapLen(c, 1); /* Nested map representing slot usage statistics. */
+    addReplyMapLen(c, 2); /* Nested map representing slot usage statistics. */
     addReplyBulkCString(c, "key-count");
     addReplyLongLong(c, countKeysInSlot(slot));
+    addReplyBulkCString(c, "network-bytes-in");
+    addReplyLongLong(c, cluster_slot_stats[slot].network_bytes_in);
 }
 
 /* Adds reply for the SLOTSRANGE variant.
@@ -121,6 +133,35 @@ static void addReplyOrderBy(client *c, int order_by, long limit, int desc) {
     addReplySortedSlotStats(c, slot_stats, limit);
 }
 
+static int canAddNetworkBytes(client *c) {
+    /* First, cluster mode must be enabled.
+     * Second, command should target a specific slot.
+     * Third, blocked client is not aggregated, to avoid duplicate aggregation upon unblocking. */
+    return server.cluster_enabled && c->slot != -1 && !(c->flag.blocked);
+}
+
+/* Resets applicable slot statistics. */
+void clusterSlotStatReset(int slot) {
+    /* key-count is exempt, as it is queried separately through countKeysInSlot(). */
+    cluster_slot_stats[slot].network_bytes_in = 0;
+}
+
+void clusterSlotStatsReset(void) {
+    memset(cluster_slot_stats, 0, sizeof(cluster_slot_stats));
+}
+
+/* Adds network ingress bytes of the current command in execution,
+ * calculated earlier within networking.c layer.
+ *
+ * Note: Below function should only be called once c->slot is parsed.
+ * Otherwise, the aggregation will be skipped due to canAddNetworkBytes() check failure.
+ * */
+void clusterSlotStatsAddNetworkBytesIn(client *c) {
+    if (!canAddNetworkBytes(c)) return;
+
+    cluster_slot_stats[c->slot].network_bytes_in += c->net_input_bytes_curr_cmd;
+}
+
 void clusterSlotStatsCommand(client *c) {
     if (server.cluster_enabled == 0) {
         addReplyError(c, "This instance has cluster support disabled");
@@ -149,8 +190,11 @@ void clusterSlotStatsCommand(client *c) {
         int desc = 1, order_by = INVALID;
         if (!strcasecmp(c->argv[3]->ptr, "key-count")) {
             order_by = KEY_COUNT;
+        } else if (!strcasecmp(c->argv[3]->ptr, "network-bytes-in")) {
+            order_by = NETWORK_BYTES_IN;
         } else {
-            addReplyError(c, "Unrecognized sort metric for ORDER BY. The supported metrics are: key-count.");
+            addReplyError(c, "Unrecognized sort metric for ORDER BY. The supported "
+                             "metrics are: key-count and cpu-usec.");
             return;
         }
         int i = 4; /* Next argument index, following ORDERBY */

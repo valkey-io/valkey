@@ -29,6 +29,7 @@
 
 #include "server.h"
 #include "cluster.h"
+#include "cluster_slot_stats.h"
 #include "script.h"
 #include "fpconv_dtoa.h"
 #include "fmtargs.h"
@@ -215,6 +216,7 @@ client *createClient(connection *conn) {
     if (conn) linkClient(c);
     initClientMultiState(c);
     c->net_input_bytes = 0;
+    c->net_input_bytes_curr_cmd = 0;
     c->net_output_bytes = 0;
     c->commands_processed = 0;
     return c;
@@ -2084,6 +2086,7 @@ void resetClient(client *c) {
     c->cur_script = NULL;
     c->reqtype = 0;
     c->multibulklen = 0;
+    c->net_input_bytes_curr_cmd = 0;
     c->bulklen = -1;
     c->slot = -1;
     c->flag.executing_command = 0;
@@ -2268,6 +2271,21 @@ int processInlineBuffer(client *c) {
         c->argv_len_sum += sdslen(argv[j]);
     }
     zfree(argv);
+
+    /* Per-slot network bytes-in calculation.
+     *
+     * Within networking.c, we calculate and store the current command's ingress bytes
+     * under c->net_input_bytes_curr_cmd, for which its per-slot aggregation is deferred
+     * until c->slot is parsed later within processCommand().
+     *
+     * Calculation: For inline buffer, every whitespace is of length 1,
+     * with the exception of the trailing '\r\n' being length 2.
+     *
+     * For example;
+     * Command) SET key value
+     * Inline) SET key value\r\n
+     * */
+    c->net_input_bytes_curr_cmd = (c->argv_len_sum + (c->argc - 1) + 2);
     return C_OK;
 }
 
@@ -2341,7 +2359,8 @@ int processMultibulkBuffer(client *c) {
         /* We know for sure there is a whole line since newline != NULL,
          * so go ahead and find out the multi bulk length. */
         serverAssertWithInfo(c, NULL, c->querybuf[c->qb_pos] == '*');
-        ok = string2ll(c->querybuf + 1 + c->qb_pos, newline - (c->querybuf + 1 + c->qb_pos), &ll);
+        size_t multibulklen_slen = newline - (c->querybuf + 1 + c->qb_pos);
+        ok = string2ll(c->querybuf + 1 + c->qb_pos, multibulklen_slen, &ll);
         if (!ok || ll > INT_MAX) {
             addReplyError(c, "Protocol error: invalid multibulk length");
             setProtocolError("invalid mbulk count", c);
@@ -2363,6 +2382,39 @@ int processMultibulkBuffer(client *c) {
         c->argv_len = min(c->multibulklen, 1024);
         c->argv = zmalloc(sizeof(robj *) * c->argv_len);
         c->argv_len_sum = 0;
+
+        /* Per-slot network bytes-in calculation.
+         *
+         * Within networking.c, we calculate and store the current command's ingress bytes
+         * under c->net_input_bytes_curr_cmd, for which its per-slot aggregation is deferred
+         * until c->slot is parsed later within processCommand().
+         *
+         * Calculation: For multi bulk buffer, we accumulate four factors, namely;
+         *
+         * 1) multibulklen_slen + 1
+         *    Cumulative string length (and not the value of) of multibulklen,
+         *    including +1 from RESP first byte.
+         * 2) bulklen_slen + c->argc
+         *    Cumulative string length (and not the value of) of bulklen,
+         *    including +1 from RESP first byte per argument count.
+         * 3) c->argv_len_sum
+         *    Cumulative string length of all argument vectors.
+         * 4) c->argc * 4 + 2
+         *    Cumulative string length of all white-spaces, for which there exists a total of
+         *    4 bytes per argument, plus 2 bytes from the leading '\r\n' from multibulklen.
+         *
+         * For example;
+         * Command) SET key value
+         * RESP) *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n
+         *
+         * 1) String length of "*3" is 2, obtained from (multibulklen_slen + 1).
+         * 2) String length of "$3" "$3" "$5" is 6, obtained from (bulklen_slen + c->argc).
+         * 3) String length of "SET" "key" "value" is 11, obtained from (c->argv_len_sum).
+         * 4) String length of all white-spaces "\r\n" is 14, obtained from (c->argc * 4 + 2).
+         *
+         * The 1st component is calculated within the below line.
+         * */
+        c->net_input_bytes_curr_cmd += (multibulklen_slen + 1);
     }
 
     serverAssertWithInfo(c, NULL, c->multibulklen > 0);
@@ -2388,7 +2440,8 @@ int processMultibulkBuffer(client *c) {
                 return C_ERR;
             }
 
-            ok = string2ll(c->querybuf + c->qb_pos + 1, newline - (c->querybuf + c->qb_pos + 1), &ll);
+            size_t bulklen_slen = newline - (c->querybuf + c->qb_pos + 1);
+            ok = string2ll(c->querybuf + c->qb_pos + 1, bulklen_slen, &ll);
             if (!ok || ll < 0 || (!c->flag.primary && ll > server.proto_max_bulk_len)) {
                 addReplyError(c, "Protocol error: invalid bulk length");
                 setProtocolError("invalid bulk length", c);
@@ -2430,6 +2483,8 @@ int processMultibulkBuffer(client *c) {
                 }
             }
             c->bulklen = ll;
+            /* Per-slot network bytes-in calculation, 2nd component. */
+            c->net_input_bytes_curr_cmd += (bulklen_slen + c->argc);
         }
 
         /* Read bulk argument */
@@ -2466,7 +2521,11 @@ int processMultibulkBuffer(client *c) {
     }
 
     /* We're done when c->multibulk == 0 */
-    if (c->multibulklen == 0) return C_OK;
+    if (c->multibulklen == 0) {
+        /* Per-slot network bytes-in calculation, 3rd and 4th components. */
+        c->net_input_bytes_curr_cmd += (c->argv_len_sum + (c->argc * 4 + 2));
+        return C_OK;
+    }
 
     /* Still not ready to process the command */
     return C_ERR;

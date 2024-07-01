@@ -299,19 +299,19 @@ static_assert(offsetof(clusterMsg, data) == 2256, "unexpected field offset");
 #define CLUSTERMSG_FLAG0_EXT_DATA (1 << 2) /* Message contains extension data */
 
 typedef struct {
-    char sig[4];                  /* Signature "RCmb" (Cluster message bus). */
-    uint32_t totlen;              /* Total length of this message */
-    uint16_t ver;                 /* Protocol version, currently set to CLUSTER_PROTO_VER. */
-    uint16_t port;                /* Primary port number (TCP or TLS). */
-    uint16_t type;                /* Message type */
+    char sig[4];     /* Signature "RCmb" (Cluster message bus). */
+    uint32_t totlen; /* Total length of this message */
+    uint16_t ver;    /* Protocol version, currently set to CLUSTER_PROTO_VER. */
+    uint16_t port;   /* Primary port number (TCP or TLS). */
+    uint16_t type;   /* Message type */
     union clusterMsgDataLight data;
 } clusterMsgLight;
 
 static_assert(offsetof(clusterMsgLight, sig) == offsetof(clusterMsg, sig), "unexpected field offset");
-static_assert(offsetof(clusterMsgLight, totlen) == offsetof(clusterMsg, totlen),"unexpected field offset");
-static_assert(offsetof(clusterMsgLight, ver) == offsetof(clusterMsg, ver) , "unexpected field offset");
-static_assert(offsetof(clusterMsgLight, port) == offsetof(clusterMsg, port) , "unexpected field offset");
-static_assert(offsetof(clusterMsgLight, type) == offsetof(clusterMsg, type) , "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, totlen) == offsetof(clusterMsg, totlen), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, ver) == offsetof(clusterMsg, ver), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, port) == offsetof(clusterMsg, port), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, type) == offsetof(clusterMsg, type), "unexpected field offset");
 static_assert(offsetof(clusterMsgLight, data) == 16, "unexpected field offset");
 
 #define CLUSTERMSG_LIGHT_MIN_LEN (sizeof(clusterMsgLight) - sizeof(union clusterMsgDataLight))

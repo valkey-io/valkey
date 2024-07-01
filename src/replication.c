@@ -1096,7 +1096,8 @@ void syncCommand(client *c) {
                 c->flags |= CLIENT_REPL_MAIN_CONN;                
                 serverLog(LL_NOTICE,"Replica %s is capable of rdb-connection synchronization, and partial sync isn't possible. "
                     "Full sync will continue with dedicated RDB connection.", replicationGetReplicaName(c));
-                if (connWrite(c->conn,"+FULLSYNCNEEDED\r\n",17) != 17) {
+                const char *buf = "+DUALCONNECTIONSYNC\r\n";
+                if (connWrite(c->conn,buf,strlen(buf)) != (int)strlen(buf)) {
                     freeClientAsync(c);
                 }
                 return;
@@ -3132,8 +3133,8 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
         return PSYNC_TRY_LATER;
     }
 
-    if (!strncmp(reply, "+FULLSYNCNEEDED", 15)) {
-        /* A response of +FULLSYNCNEEDED from the primary implies that partial 
+    if (!strncmp(reply, "+DUALCONNECTIONSYNC", 15)) {
+        /* A response of +DUALCONNECTIONSYNC from the primary implies that partial 
          * synchronization is not possible and that the primary supports full
          * sync using dedicated RDB connection. Full sync will continue that way. */
         server.primary_supports_rdb_connection = 1;
@@ -3229,7 +3230,7 @@ void setupMainConnForPsync(connection *conn) {
  *  - RDB-connection sync begins when the replica sends a REPLCONF MAINCONN to the primary during initial 
  *    handshake. This allows the replica to verify whether the primary supports rdb-connection sync and, if 
  *    so, state that this is the replica's main connection, which is not used for snapshot transfer. 
- *  - When replica lacks sufficient data for PSYNC, the primary will send +FULLSYNCNEEDED response instead 
+ *  - When replica lacks sufficient data for PSYNC, the primary will send +DUALCONNECTIONSYNC response instead 
  *    of RDB data. As a next step, the replica creates a new connection (rdb-connection) and configures it against 
  *    the primary with the appropriate capabilities and requirements. The replica then requests a sync 
  *    using the RDB connection. 
@@ -3282,7 +3283,7 @@ void setupMainConnForPsync(connection *conn) {
  * ┌─▼─────────────────┐        │                           │                                          
  * │RECEIVE_PSYNC_REPLY│        │                           │                                          
  * └────────┬─┬────────┘        │                           │                                          
- * +CONTINUE│ │+FULLSYNCNEEDED  │                           │                                          
+ * +CONTINUE│ │+DUALCONNECTIONSYNC                          │                                          
  *   │      │ └─────────────────┘                           │                                          
  *   │      │+FULLRESYNC                                    │                                          
  *   │    ┌─▼─────────────────┐                   ┌─────────▼─────────┐                                
@@ -3599,7 +3600,7 @@ void syncWithPrimary(connection *conn) {
         server.repl_transfer_fd = dfd;
     }
 
-    /* Using rdb-connection sync, the primary responded +FULLSYNCNEEDED. We need to 
+    /* Using rdb-connection sync, the primary responded +DUALCONNECTIONSYNC. We need to 
      * initialize the RDB connection. */
     if (psync_result == PSYNC_FULLRESYNC_RDB_CONN) {
         /* Create a full sync connection */

@@ -3239,7 +3239,7 @@ void preventCommandReplication(client *c) {
 
 /* Log the last command a client executed into the slowlog. */
 void slowlogPushCurrentCommand(client *c, struct serverCommand *cmd, ustime_t duration) {
-   /* Some commands should not be available in the slowlog and the fatlog. */
+    /* Some commands should not be available in the slowlog and the fatlog. */
     if (cmd->flags & CMD_SKIP_SLOWLOG) return;
 
     /* If command argument vector was rewritten, use the original

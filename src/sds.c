@@ -415,7 +415,7 @@ size_t sdsAllocSize(sds s) {
     char type = s[-1] & SDS_TYPE_MASK;
     /* SDS_TYPE_5 header doesn't contain the size of the allocation */
     if (type == SDS_TYPE_5) {
-        return s_malloc_size(sdsAllocPtr(s));
+        return s_malloc_usable_size(sdsAllocPtr(s));
     } else {
         return sdsHdrSize(type) + sdsalloc(s) + 1;
     }

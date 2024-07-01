@@ -940,7 +940,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
                 if (withvalues && c->resp > 2) addReplyArrayLen(c, 2);
                 addReplyBulkCBuffer(c, key, sdslen(key));
                 if (withvalues) addReplyBulkCBuffer(c, value, sdslen(value));
-                if (c->flags & CLIENT_CLOSE_ASAP) break;
+                if (c->flag.close_asap) break;
             }
         } else if (hash->encoding == OBJ_ENCODING_LISTPACK) {
             listpackEntry *keys, *vals = NULL;
@@ -954,7 +954,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
                 count -= sample_count;
                 lpRandomPairs(hash->ptr, sample_count, keys, vals);
                 hrandfieldReplyWithListpack(c, sample_count, keys, vals);
-                if (c->flags & CLIENT_CLOSE_ASAP) break;
+                if (c->flag.close_asap) break;
             }
             zfree(keys);
             zfree(vals);

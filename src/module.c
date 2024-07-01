@@ -654,7 +654,7 @@ client *moduleAllocTempClient(void) {
         if (moduleTempClientCount < moduleTempClientMinCount) moduleTempClientMinCount = moduleTempClientCount;
     } else {
         c = createClient(NULL);
-        c->flags |= CLIENT_MODULE;
+        c->flag.module = 1;
         c->user = NULL; /* Root user */
     }
     return c;
@@ -681,7 +681,8 @@ void moduleReleaseTempClient(client *c) {
     c->duration = 0;
     resetClient(c);
     c->bufpos = 0;
-    c->flags = CLIENT_MODULE;
+    c->raw_flag = 0;
+    c->flag.module = 1;
     c->user = NULL; /* Root user */
     c->cmd = c->lastcmd = c->realcmd = NULL;
     if (c->bstate.async_rm_call_handle) {
@@ -3638,11 +3639,11 @@ int modulePopulateClientInfoStructure(void *ci, client *client, int structver) {
     ValkeyModuleClientInfoV1 *ci1 = ci;
     memset(ci1, 0, sizeof(*ci1));
     ci1->version = structver;
-    if (client->flags & CLIENT_MULTI) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_MULTI;
-    if (client->flags & CLIENT_PUBSUB) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_PUBSUB;
-    if (client->flags & CLIENT_UNIX_SOCKET) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET;
-    if (client->flags & CLIENT_TRACKING) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_TRACKING;
-    if (client->flags & CLIENT_BLOCKED) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_BLOCKED;
+    if (client->flag.multi) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_MULTI;
+    if (client->flag.pubsub) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_PUBSUB;
+    if (client->flag.unix_socket) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET;
+    if (client->flag.tracking) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_TRACKING;
+    if (client->flag.blocked) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_BLOCKED;
     if (client->conn->type == connectionTypeTls()) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_SSL;
 
     int port;
@@ -3853,9 +3854,9 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
     /* Client specific flags */
     if (ctx) {
         if (ctx->client) {
-            if (ctx->client->flags & CLIENT_DENY_BLOCKING) flags |= VALKEYMODULE_CTX_FLAGS_DENY_BLOCKING;
+            if (ctx->client->flag.deny_blocking) flags |= VALKEYMODULE_CTX_FLAGS_DENY_BLOCKING;
             /* Module command received from PRIMARY, is replicated. */
-            if (ctx->client->flags & CLIENT_PRIMARY) flags |= VALKEYMODULE_CTX_FLAGS_REPLICATED;
+            if (ctx->client->flag.primary) flags |= VALKEYMODULE_CTX_FLAGS_REPLICATED;
             if (ctx->client->resp == 3) {
                 flags |= VALKEYMODULE_CTX_FLAGS_RESP3;
             }
@@ -3863,7 +3864,7 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
 
         /* For DIRTY flags, we need the blocked client if used */
         client *c = ctx->blocked_client ? ctx->blocked_client->client : ctx->client;
-        if (c && (c->flags & (CLIENT_DIRTY_CAS | CLIENT_DIRTY_EXEC))) {
+        if (c && (c->flag.dirty_cas || c->flag.dirty_exec)) {
             flags |= VALKEYMODULE_CTX_FLAGS_MULTI_DIRTY;
         }
     }
@@ -5955,8 +5956,7 @@ int VM_CallReplyPromiseAbort(ValkeyModuleCallReply *reply, void **private_data) 
     ValkeyModuleAsyncRMCallPromise *promise = callReplyGetPrivateData(reply);
     if (!promise->c)
         return VALKEYMODULE_ERR; /* Promise can not be aborted, either already aborted or already finished. */
-    if (!(promise->c->flags & CLIENT_BLOCKED))
-        return VALKEYMODULE_ERR; /* Client is not blocked anymore, can not abort it. */
+    if (!(promise->c->flag.blocked)) return VALKEYMODULE_ERR; /* Client is not blocked anymore, can not abort it. */
 
     /* Client is still blocked, remove it from any blocking state and release it. */
     if (private_data) *private_data = promise->private_data;
@@ -6227,7 +6227,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
 
     if (!(flags & VALKEYMODULE_ARGV_ALLOW_BLOCK)) {
         /* We do not want to allow block, the module do not expect it */
-        c->flags |= CLIENT_DENY_BLOCKING;
+        c->flag.deny_blocking = 1;
     }
     c->db = ctx->client->db;
     c->argv = argv;
@@ -6324,7 +6324,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         }
     } else {
         /* if we aren't OOM checking in VM_Call, we want further executions from this client to also not fail on OOM */
-        c->flags |= CLIENT_ALLOW_OOM;
+        c->flag.allow_oom = 1;
     }
 
     if (flags & VALKEYMODULE_ARGV_NO_WRITES) {
@@ -6422,8 +6422,8 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     if (server.cluster_enabled && !mustObeyClient(ctx->client)) {
         int error_code;
         /* Duplicate relevant flags in the module client. */
-        c->flags &= ~(CLIENT_READONLY | CLIENT_ASKING);
-        c->flags |= ctx->client->flags & (CLIENT_READONLY | CLIENT_ASKING);
+        c->flag.readonly = ctx->client->flag.readonly;
+        c->flag.asking = ctx->client->flag.asking;
         if (getNodeByQuery(c, c->cmd, c->argv, c->argc, NULL, &error_code) != getMyClusterNode()) {
             sds msg = NULL;
             if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {
@@ -6474,7 +6474,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     call(c, call_flags);
     server.replication_allowed = prev_replication_allowed;
 
-    if (c->flags & CLIENT_BLOCKED) {
+    if (c->flag.blocked) {
         serverAssert(flags & VALKEYMODULE_ARGV_ALLOW_BLOCK);
         serverAssert(ctx->module);
         ValkeyModuleAsyncRMCallPromise *promise = zmalloc(sizeof(ValkeyModuleAsyncRMCallPromise));
@@ -6492,11 +6492,11 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         c->bstate.async_rm_call_handle = promise;
         if (!(call_flags & CMD_CALL_PROPAGATE_AOF)) {
             /* No need for AOF propagation, set the relevant flags of the client */
-            c->flags |= CLIENT_MODULE_PREVENT_AOF_PROP;
+            c->flag.module_prevent_aof_prop = 1;
         }
         if (!(call_flags & CMD_CALL_PROPAGATE_REPL)) {
             /* No need for replication propagation, set the relevant flags of the client */
-            c->flags |= CLIENT_MODULE_PREVENT_REPL_PROP;
+            c->flag.module_prevent_repl_prop = 1;
         }
         c = NULL; /* Make sure not to free the client */
     } else {
@@ -7847,7 +7847,7 @@ int attemptNextAuthCb(client *c, robj *username, robj *password, robj **err) {
             continue;
         }
         /* Remove the module auth complete flag before we attempt the next cb. */
-        c->flags &= ~CLIENT_MODULE_AUTH_HAS_RESULT;
+        c->flag.module_auth_has_result = 0;
         ValkeyModuleCtx ctx;
         moduleCreateContext(&ctx, cur_auth_ctx->module, VALKEYMODULE_CTX_NONE);
         ctx.client = c;
@@ -7905,19 +7905,20 @@ int checkModuleAuthentication(client *c, robj *username, robj *password, robj **
     if (result == VALKEYMODULE_AUTH_NOT_HANDLED) {
         result = attemptNextAuthCb(c, username, password, err);
     }
-    if (c->flags & CLIENT_BLOCKED) {
+    if (c->flag.blocked) {
         /* Modules are expected to return VALKEYMODULE_AUTH_HANDLED when blocking clients. */
         serverAssert(result == VALKEYMODULE_AUTH_HANDLED);
         return AUTH_BLOCKED;
     }
     c->module_auth_ctx = NULL;
     if (result == VALKEYMODULE_AUTH_NOT_HANDLED) {
-        c->flags &= ~CLIENT_MODULE_AUTH_HAS_RESULT;
+        c->flag.module_auth_has_result = 0;
         return AUTH_NOT_HANDLED;
     }
-    if (c->flags & CLIENT_MODULE_AUTH_HAS_RESULT) {
-        c->flags &= ~CLIENT_MODULE_AUTH_HAS_RESULT;
-        if (c->flags & CLIENT_AUTHENTICATED) return AUTH_OK;
+
+    if (c->flag.module_auth_has_result) {
+        c->flag.module_auth_has_result = 0;
+        if (c->flag.authenticated) return AUTH_OK;
     }
     return AUTH_ERR;
 }
@@ -8010,8 +8011,8 @@ ValkeyModuleBlockedClient *VM_BlockClientOnAuth(ValkeyModuleCtx *ctx,
     }
     ValkeyModuleBlockedClient *bc =
         moduleBlockClient(ctx, NULL, reply_callback, NULL, free_privdata, 0, NULL, 0, NULL, 0);
-    if (ctx->client->flags & CLIENT_BLOCKED) {
-        ctx->client->flags |= CLIENT_PENDING_COMMAND;
+    if (ctx->client->flag.blocked) {
+        ctx->client->flag.pending_command = 1;
     }
     return bc;
 }
@@ -8298,9 +8299,8 @@ void moduleHandleBlockedClients(void) {
             /* Put the client in the list of clients that need to write
              * if there are pending replies here. This is needed since
              * during a non blocking command the client may receive output. */
-            if (!clientHasModuleAuthInProgress(c) && clientHasPendingReplies(c) && !(c->flags & CLIENT_PENDING_WRITE) &&
-                c->conn) {
-                c->flags |= CLIENT_PENDING_WRITE;
+            if (!clientHasModuleAuthInProgress(c) && clientHasPendingReplies(c) && !c->flag.pending_write && c->conn) {
+                c->flag.pending_write = 1;
                 listLinkNodeHead(server.clients_pending_write, &c->clients_pending_write_node);
             }
         }
@@ -9465,11 +9465,11 @@ void revokeClientAuthentication(client *c) {
     moduleNotifyUserChanged(c);
 
     c->user = DefaultUser;
-    c->flags &= ~CLIENT_AUTHENTICATED;
+    c->flag.authenticated = 0;
     /* We will write replies to this client later, so we can't close it
      * directly even if async. */
     if (c == server.current_client) {
-        c->flags |= CLIENT_CLOSE_AFTER_COMMAND;
+        c->flag.close_after_command = 1;
     } else {
         freeClientAsync(c);
     }
@@ -9780,17 +9780,17 @@ static int authenticateClientWithUser(ValkeyModuleCtx *ctx,
     }
 
     /* Avoid settings which are meaningless and will be lost */
-    if (!ctx->client || (ctx->client->flags & CLIENT_MODULE)) {
+    if (!ctx->client || (ctx->client->flag.module)) {
         return VALKEYMODULE_ERR;
     }
 
     moduleNotifyUserChanged(ctx->client);
 
     ctx->client->user = user;
-    ctx->client->flags |= CLIENT_AUTHENTICATED;
+    ctx->client->flag.authenticated = 1;
 
     if (clientHasModuleAuthInProgress(ctx->client)) {
-        ctx->client->flags |= CLIENT_MODULE_AUTH_HAS_RESULT;
+        ctx->client->flag.module_auth_has_result = 1;
     }
 
     if (callback) {

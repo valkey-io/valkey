@@ -37,7 +37,7 @@
  * not blocked right now). If so send a reply, unblock it, and return 1.
  * Otherwise 0 is returned and no operation is performed. */
 int checkBlockedClientTimeout(client *c, mstime_t now) {
-    if (c->flags & CLIENT_BLOCKED && c->bstate.timeout != 0 && c->bstate.timeout < now) {
+    if (c->flag.blocked && c->bstate.timeout != 0 && c->bstate.timeout < now) {
         /* Handle blocking operation specific timeout. */
         unblockClientOnTimeout(c);
         return 1;
@@ -55,15 +55,15 @@ int clientsCronHandleTimeout(client *c, mstime_t now_ms) {
 
     if (server.maxidletime &&
         /* This handles the idle clients connection timeout if set. */
-        !(c->flags & CLIENT_REPLICA) && /* No timeout for replicas and monitors */
-        !mustObeyClient(c) &&           /* No timeout for primaries and AOF */
-        !(c->flags & CLIENT_BLOCKED) && /* No timeout for BLPOP */
-        !(c->flags & CLIENT_PUBSUB) &&  /* No timeout for Pub/Sub clients */
+        !c->flag.replica &&   /* No timeout for replicas and monitors */
+        !mustObeyClient(c) && /* No timeout for primaries and AOF */
+        !c->flag.blocked &&   /* No timeout for BLPOP */
+        !c->flag.pubsub &&    /* No timeout for Pub/Sub clients */
         (now - c->last_interaction > server.maxidletime)) {
         serverLog(LL_VERBOSE, "Closing idle client");
         freeClient(c);
         return 1;
-    } else if (c->flags & CLIENT_BLOCKED) {
+    } else if (c->flag.blocked) {
         /* Cluster: handle unblock & redirect of clients blocked
          * into keys no longer served by this server. */
         if (server.cluster_enabled) {
@@ -112,14 +112,14 @@ void addClientToTimeoutTable(client *c) {
     uint64_t timeout = c->bstate.timeout;
     unsigned char buf[CLIENT_ST_KEYLEN];
     encodeTimeoutKey(buf, timeout, c);
-    if (raxTryInsert(server.clients_timeout_table, buf, sizeof(buf), NULL, NULL)) c->flags |= CLIENT_IN_TO_TABLE;
+    if (raxTryInsert(server.clients_timeout_table, buf, sizeof(buf), NULL, NULL)) c->flag.in_to_table = 1;
 }
 
 /* Remove the client from the table when it is unblocked for reasons
  * different than timing out. */
 void removeClientFromTimeoutTable(client *c) {
-    if (!(c->flags & CLIENT_IN_TO_TABLE)) return;
-    c->flags &= ~CLIENT_IN_TO_TABLE;
+    if (!c->flag.in_to_table) return;
+    c->flag.in_to_table = 0;
     uint64_t timeout = c->bstate.timeout;
     unsigned char buf[CLIENT_ST_KEYLEN];
     encodeTimeoutKey(buf, timeout, c);
@@ -140,7 +140,7 @@ void handleBlockedClientsTimeout(void) {
         client *c;
         decodeTimeoutKey(ri.key, &timeout, &c);
         if (timeout >= now) break; /* All the timeouts are in the future. */
-        c->flags &= ~CLIENT_IN_TO_TABLE;
+        c->flag.in_to_table = 0;
         checkBlockedClientTimeout(c, now);
         raxRemove(server.clients_timeout_table, ri.key, ri.key_len, NULL);
         raxSeek(&ri, "^", NULL, 0);

@@ -56,7 +56,7 @@ test "SENTINEL PENDING-SCRIPTS returns the information about pending scripts" {
     assert_morethan_equal [llength [S 0 SENTINEL PENDING-SCRIPTS]] 0
 }
 
-test "SENTINEL MASTERS returns a list of monitored masters" {
+test "SENTINEL PRIMARYS returns a list of monitored primarys" {
     assert_match "*mymaster*" [S 0 SENTINEL MASTERS]
     assert_morethan_equal [llength [S 0 SENTINEL MASTERS]] 1
 }

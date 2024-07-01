@@ -64,7 +64,7 @@ test "SDOWN is triggered by crashed instance" {
     ensure_master_up
 }
 
-test "SDOWN is triggered by masters advertising as slaves" {
+test "SDOWN is triggered by primarys advertising as slaves" {
     ensure_master_up
     R 0 slaveof 127.0.0.1 34567
     ensure_master_down

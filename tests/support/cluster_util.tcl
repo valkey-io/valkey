@@ -346,9 +346,14 @@ proc are_hostnames_propagated {match_string} {
 }
 
 # Check if cluster's announced IPs are consistent and match a pattern
-proc are_announced_client_ip_propagated {match_string} {
+proc are_cluster_announced_ips_propagated {match_string, {clients {}}} {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
-        set cfg [R $j cluster slots]
+        if {[expr $clients == {}]} {
+            set client [srv [expr -1*$n] "client"]
+        } else {
+            set client [lindex $clients $j]
+        }
+        set cfg [$client cluster slots]
         foreach node $cfg {
             for {set i 2} {$i < [llength $node]} {incr i} {
                 if {! [string match $match_string [lindex [lindex $node $i] 0]] } {

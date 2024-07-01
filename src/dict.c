@@ -123,6 +123,19 @@ static dictEntry *dictGetNext(const dictEntry *de);
 static dictEntry **dictGetNextRef(dictEntry *de);
 static void dictSetNext(dictEntry *de, dictEntry *next);
 
+/* -------------------------- Utility functions -------------------------------- */
+
+/* Validates dict type members dependencies. */
+static inline void validateDictType(dictType *type) {
+    if (type->embedded_entry) {
+        assert(type->embedKey);
+        assert(!type->keyDup);
+        assert(!type->keyDestructor);
+    } else {
+        assert(!type->embedKey);
+    }
+}
+
 /* -------------------------- hash functions -------------------------------- */
 
 static uint8_t dict_hash_function_seed[16];
@@ -241,6 +254,7 @@ static void _dictReset(dict *d, int htidx) {
 
 /* Create a new hash table */
 dict *dictCreate(dictType *type) {
+    validateDictType(type);
     size_t metasize = type->dictMetadataBytes ? type->dictMetadataBytes(NULL) : 0;
     dict *d = zmalloc(sizeof(*d) + metasize);
     if (metasize > 0) {

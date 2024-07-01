@@ -1033,7 +1033,9 @@ void clusterInit(void) {
     server.cluster->mf_end = 0;
     server.cluster->mf_replica = NULL;
     for (connTypeForCaching conn_type = CACHE_CONN_TCP; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
-        server.cached_cluster_slot_info[conn_type] = NULL;
+        for (int resp = 0; resp <= 3; resp++) {
+            server.cached_cluster_slot_info[conn_type][resp] = NULL;
+        }
     }
     resetManualFailover();
     clusterUpdateMyselfFlags();
@@ -1185,6 +1187,7 @@ clusterLink *createClusterLink(clusterNode *node) {
  * This function will just make sure that the original node associated
  * with this link will have the 'link' field set to NULL. */
 void freeClusterLink(clusterLink *link) {
+    serverAssert(link != NULL);
     if (link->conn) {
         connClose(link->conn);
         link->conn = NULL;
@@ -5815,6 +5818,10 @@ int handleDebugClusterCommand(client *c) {
         addReplyErrorFormat(c, "Unknown node %s", (char *)c->argv[4]->ptr);
         return 1;
     }
+    if (n == server.cluster->myself) {
+        addReplyErrorFormat(c, "Cannot free cluster link(s) to myself");
+        return 1;
+    }
 
     /* Terminate the link based on the direction or all. */
     if (!strcasecmp(c->argv[3]->ptr, "from")) {
@@ -5897,7 +5904,7 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
     int optarg_pos = 0;
 
     /* Allow primaries to replicate "CLUSTER SETSLOT" */
-    if (!(c->flags & CLIENT_PRIMARY) && nodeIsReplica(myself)) {
+    if (!c->flag.primary && nodeIsReplica(myself)) {
         addReplyError(c, "Please use SETSLOT only with masters.");
         return 0;
     }
@@ -6021,24 +6028,43 @@ void clusterCommandSetSlot(client *c) {
      * This ensures that all replicas have the latest topology information, enabling
      * a reliable slot ownership transfer even if the primary node went down during
      * the process. */
-    if (nodeIsPrimary(myself) && myself->num_replicas != 0 && (c->flags & CLIENT_REPLICATION_DONE) == 0) {
-        forceCommandPropagation(c, PROPAGATE_REPL);
-        /* We are a primary and this is the first time we see this `SETSLOT`
-         * command. Force-replicate the command to all of our replicas
-         * first and only on success will we handle the command.
-         * Note that
-         * 1. All replicas are expected to ack the replication within the given timeout
-         * 2. The repl offset target is set to the primary's current repl offset + 1.
-         *    There is no concern of partial replication because replicas always
-         *    ack the repl offset at the command boundary. */
-        blockClientForReplicaAck(c, timeout_ms, server.primary_repl_offset + 1, myself->num_replicas, 0);
-        /* Mark client as pending command for execution after replication to replicas. */
-        c->flags |= CLIENT_PENDING_COMMAND;
-        replicationRequestAckFromReplicas();
-        return;
+    if (nodeIsPrimary(myself) && myself->num_replicas != 0 && !c->flag.replication_done) {
+        /* Iterate through the list of replicas to check if there are any running
+         * a version older than 8.0.0. Replicas with versions older than 8.0.0 do
+         * not support the CLUSTER SETSLOT command on replicas. If such a replica
+         * is found, we should skip the replication and fall back to the old
+         * non-replicated behavior.*/
+        listIter li;
+        listNode *ln;
+        int legacy_replica_found = 0;
+        listRewind(server.replicas, &li);
+        while ((ln = listNext(&li))) {
+            client *r = ln->value;
+            if (r->replica_version < 0x80000 /* 8.0.0 */) {
+                legacy_replica_found++;
+                break;
+            }
+        }
+
+        if (!legacy_replica_found) {
+            forceCommandPropagation(c, PROPAGATE_REPL);
+            /* We are a primary and this is the first time we see this `SETSLOT`
+             * command. Force-replicate the command to all of our replicas
+             * first and only on success will we handle the command.
+             * Note that
+             * 1. All replicas are expected to ack the replication within the given timeout
+             * 2. The repl offset target is set to the primary's current repl offset + 1.
+             *    There is no concern of partial replication because replicas always
+             *    ack the repl offset at the command boundary. */
+            blockClientForReplicaAck(c, timeout_ms, server.primary_repl_offset + 1, myself->num_replicas, 0);
+            /* Mark client as pending command for execution after replication to replicas. */
+            c->flag.pending_command = 1;
+            replicationRequestAckFromReplicas();
+            return;
+        }
     }
 
-    /* Slot states have been updated on the replicas (if any).
+    /* Slot states have been updated on the compatible replicas (if any).
      * Now exuecte the command on the primary. */
     if (!strcasecmp(c->argv[3]->ptr, "migrating")) {
         serverLog(LL_NOTICE, "Migrating slot %d to node %.40s (%s)", slot, n->name, n->human_nodename);

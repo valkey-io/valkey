@@ -258,10 +258,10 @@ void scriptingInit(int setup) {
      * by scriptingReset(). */
     if (lctx.lua_client == NULL) {
         lctx.lua_client = createClient(NULL);
-        lctx.lua_client->flags |= CLIENT_SCRIPT;
+        lctx.lua_client->flag.script = 1;
 
         /* We do not want to allow blocking commands inside Lua */
-        lctx.lua_client->flags |= CLIENT_DENY_BLOCKING;
+        lctx.lua_client->flag.deny_blocking = 1;
     }
 
     /* Lock the global table from any changes */
@@ -630,7 +630,7 @@ void evalCommand(client *c) {
     /* Explicitly feed monitor here so that lua commands appear after their
      * script command. */
     replicationFeedMonitors(c, server.monitors, c->db->id, c->argv, c->argc);
-    if (!(c->flags & CLIENT_LUA_DEBUG))
+    if (!c->flag.lua_debug)
         evalGenericCommand(c, 0);
     else
         evalGenericCommandWithDebugging(c, 0);
@@ -652,7 +652,7 @@ void evalShaCommand(client *c) {
         addReplyErrorObject(c, shared.noscripterr);
         return;
     }
-    if (!(c->flags & CLIENT_LUA_DEBUG))
+    if (!c->flag.lua_debug)
         evalGenericCommand(c, 1);
     else {
         addReplyError(c, "Please use EVAL instead of EVALSHA for debugging");
@@ -732,7 +732,7 @@ NULL
         } else if (!strcasecmp(c->argv[2]->ptr, "sync")) {
             ldbEnable(c);
             addReply(c, shared.ok);
-            c->flags |= CLIENT_LUA_DEBUG_SYNC;
+            c->flag.lua_debug_sync = 1;
         } else {
             addReplyError(c, "Use SCRIPT DEBUG YES/SYNC/NO");
             return;
@@ -794,7 +794,7 @@ int ldbIsEnabled(void) {
 
 /* Enable debug mode of Lua scripts for this client. */
 void ldbEnable(client *c) {
-    c->flags |= CLIENT_LUA_DEBUG;
+    c->flag.lua_debug = 1;
     ldbFlushLog(ldb.logs);
     ldb.conn = c->conn;
     ldb.step = 1;
@@ -810,7 +810,8 @@ void ldbEnable(client *c) {
  * to properly shut down a client debugging session, see ldbEndSession()
  * for more information. */
 void ldbDisable(client *c) {
-    c->flags &= ~(CLIENT_LUA_DEBUG | CLIENT_LUA_DEBUG_SYNC);
+    c->flag.lua_debug = 0;
+    c->flag.lua_debug_sync = 0;
 }
 
 /* Append a log entry to the specified LDB log. */
@@ -871,7 +872,7 @@ void ldbSendLogs(void) {
  * The caller should call ldbEndSession() only if ldbStartSession()
  * returned 1. */
 int ldbStartSession(client *c) {
-    ldb.forked = (c->flags & CLIENT_LUA_DEBUG_SYNC) == 0;
+    ldb.forked = !c->flag.lua_debug_sync;
     if (ldb.forked) {
         pid_t cp = serverFork(CHILD_TYPE_LDB);
         if (cp == -1) {
@@ -940,7 +941,7 @@ void ldbEndSession(client *c) {
 
     /* Close the client connection after sending the final EVAL reply
      * in order to signal the end of the debugging session. */
-    c->flags |= CLIENT_CLOSE_AFTER_REPLY;
+    c->flag.close_after_reply = 1;
 
     /* Cleanup. */
     sdsfreesplitres(ldb.src, ldb.lines);

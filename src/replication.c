@@ -198,7 +198,7 @@ void resetReplicationBuffer(void) {
 
 int canFeedReplicaReplBuffer(client *replica) {
     /* Don't feed replicas that only want the RDB. */
-    if (replica->flags & CLIENT_REPL_RDBONLY) return 0;
+    if (replica->flag.repl_rdbonly) return 0;
 
     /* Don't feed replicas that are still waiting for BGSAVE to start. */
     if (replica->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) return 0;
@@ -568,9 +568,9 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
 
     gettimeofday(&tv, NULL);
     cmdrepr = sdscatprintf(cmdrepr, "%ld.%06ld ", (long)tv.tv_sec, (long)tv.tv_usec);
-    if (c->flags & CLIENT_SCRIPT) {
+    if (c->flag.script) {
         cmdrepr = sdscatprintf(cmdrepr, "[%d lua] ", dictid);
-    } else if (c->flags & CLIENT_UNIX_SOCKET) {
+    } else if (c->flag.unix_socket) {
         cmdrepr = sdscatprintf(cmdrepr, "[%d unix:%s] ", dictid, server.unixsocket);
     } else {
         cmdrepr = sdscatprintf(cmdrepr, "[%d %s] ", dictid, getClientPeerId(c));
@@ -699,7 +699,7 @@ int replicationSetupReplicaForFullResync(client *replica, long long offset) {
 
     /* Don't send this reply to replicas that approached us with
      * the old SYNC command. */
-    if (!(replica->flags & CLIENT_PRE_PSYNC)) {
+    if (!(replica->flag.pre_psync)) {
         buflen = snprintf(buf, sizeof(buf), "+FULLRESYNC %s %lld\r\n", server.replid, offset);
         if (connWrite(replica->conn, buf, buflen) != buflen) {
             freeClientAsync(replica);
@@ -768,7 +768,7 @@ int primaryTryPartialResynchronization(client *c, long long psync_offset) {
      * 1) Set client state to make it a replica.
      * 2) Inform the client we can continue with +CONTINUE
      * 3) Send the backlog data (from the offset to the end) to the replica. */
-    c->flags |= CLIENT_REPLICA;
+    c->flag.replica = 1;
     c->repl_state = REPLICA_STATE_ONLINE;
     c->repl_ack_time = server.unixtime;
     c->repl_start_cmd_stream_on_ack = 0;
@@ -877,10 +877,10 @@ int startBgsaveForReplication(int mincapa, int req) {
 
             if (replica->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
                 replica->repl_state = REPL_STATE_NONE;
-                replica->flags &= ~CLIENT_REPLICA;
+                replica->flag.replica = 0;
                 listDelNode(server.replicas, ln);
                 addReplyError(replica, "BGSAVE failed, replication can't continue");
-                replica->flags |= CLIENT_CLOSE_AFTER_REPLY;
+                replica->flag.close_after_reply = 1;
             }
         }
         return retval;
@@ -907,7 +907,7 @@ int startBgsaveForReplication(int mincapa, int req) {
 /* SYNC and PSYNC command implementation. */
 void syncCommand(client *c) {
     /* ignore SYNC if already replica or in monitor mode */
-    if (c->flags & CLIENT_REPLICA) return;
+    if (c->flag.replica) return;
 
     /* Check if this is a failover request to a replica with the same replid and
      * become a primary if so. */
@@ -998,7 +998,7 @@ void syncCommand(client *c) {
         /* If a replica uses SYNC, we are dealing with an old implementation
          * of the replication protocol (like valkey-cli --replica). Flag the client
          * so that we don't expect to receive REPLCONF ACK feedbacks. */
-        c->flags |= CLIENT_PRE_PSYNC;
+        c->flag.pre_psync = 1;
     }
 
     /* Full resynchronization. */
@@ -1009,7 +1009,7 @@ void syncCommand(client *c) {
     c->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
     if (server.repl_disable_tcp_nodelay) connDisableTcpNoDelay(c->conn); /* Non critical if it fails. */
     c->repldbfd = -1;
-    c->flags |= CLIENT_REPLICA;
+    c->flag.replica = 1;
     listAddNodeTail(server.replicas, c);
 
     /* Create the replication backlog if needed. */
@@ -1041,7 +1041,7 @@ void syncCommand(client *c) {
             /* If the client needs a buffer of commands, we can't use
              * a replica without replication buffer. */
             if (replica->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
-                (!(replica->flags & CLIENT_REPL_RDBONLY) || (c->flags & CLIENT_REPL_RDBONLY)))
+                (!(replica->flag.repl_rdbonly) || (c->flag.repl_rdbonly)))
                 break;
         }
         /* To attach this replica, we check that it has at least all the
@@ -1052,7 +1052,7 @@ void syncCommand(client *c) {
             /* Perfect, the server is already registering differences for
              * another replica. Set the right state, and copy the buffer.
              * We don't copy buffer if clients don't want. */
-            if (!(c->flags & CLIENT_REPL_RDBONLY)) copyReplicaOutputBuffer(c, replica);
+            if (!c->flag.repl_rdbonly) copyReplicaOutputBuffer(c, replica);
             replicationSetupReplicaForFullResync(c, replica->psync_initial_offset);
             serverLog(LL_NOTICE, "Waiting for end of BGSAVE for SYNC");
         } else {
@@ -1168,7 +1168,7 @@ void replconfCommand(client *c) {
              * internal only command that normal clients should never use. */
             long long offset;
 
-            if (!(c->flags & CLIENT_REPLICA)) return;
+            if (!c->flag.replica) return;
             if ((getLongLongFromObject(c->argv[j + 1], &offset) != C_OK)) return;
             if (offset > c->repl_ack_off) c->repl_ack_off = offset;
             if (c->argc > j + 3 && !strcasecmp(c->argv[j + 2]->ptr, "fack")) {
@@ -1200,9 +1200,9 @@ void replconfCommand(client *c) {
             long rdb_only = 0;
             if (getRangeLongFromObjectOrReply(c, c->argv[j + 1], 0, 1, &rdb_only, NULL) != C_OK) return;
             if (rdb_only == 1)
-                c->flags |= CLIENT_REPL_RDBONLY;
+                c->flag.repl_rdbonly = 1;
             else
-                c->flags &= ~CLIENT_REPL_RDBONLY;
+                c->flag.repl_rdbonly = 0;
         } else if (!strcasecmp(c->argv[j]->ptr, "rdb-filter-only")) {
             /* REPLCONFG RDB-FILTER-ONLY is used to define "include" filters
              * for the RDB snapshot. Currently we only support a single
@@ -1258,7 +1258,7 @@ void replconfCommand(client *c) {
  * the return value indicates that the replica should be disconnected.
  * */
 int replicaPutOnline(client *replica) {
-    if (replica->flags & CLIENT_REPL_RDBONLY) {
+    if (replica->flag.repl_rdbonly) {
         replica->repl_state = REPLICA_STATE_RDB_TRANSMITTED;
         /* The client asked for RDB only so we should close it ASAP */
         serverLog(LL_NOTICE, "RDB transfer completed, rdb only replica (%s) should be disconnected asap",
@@ -1288,7 +1288,7 @@ int replicaPutOnline(client *replica) {
  *    accumulate output buffer data without sending it to the replica so it
  *    won't get mixed with the RDB stream. */
 void replicaStartCommandStream(client *replica) {
-    serverAssert(!(replica->flags & CLIENT_REPL_RDBONLY));
+    serverAssert(!(replica->flag.repl_rdbonly));
     replica->repl_start_cmd_stream_on_ack = 0;
 
     putClientInPendingWriteQueue(replica);
@@ -1721,7 +1721,8 @@ void replicationCreatePrimaryClient(connection *conn, int dbid) {
      * to pass the execution to a background thread and unblock after the
      * execution is done. This is the reason why we allow blocking the replication
      * connection. */
-    server.primary->flags |= (CLIENT_PRIMARY | CLIENT_AUTHENTICATED);
+    server.primary->flag.primary = 1;
+    server.primary->flag.authenticated = 1;
 
     /* Allocate a private query buffer for the primary client instead of using the shared query buffer.
      * This is done because the primary's query buffer data needs to be preserved for my sub-replicas to use. */
@@ -1732,7 +1733,7 @@ void replicationCreatePrimaryClient(connection *conn, int dbid) {
     memcpy(server.primary->replid, server.primary_replid, sizeof(server.primary_replid));
     /* If primary offset is set to -1, this primary is old and is not
      * PSYNC capable, so we flag it accordingly. */
-    if (server.primary->reploff == -1) server.primary->flags |= CLIENT_PRE_PSYNC;
+    if (server.primary->reploff == -1) server.primary->flag.pre_psync = 1;
     if (dbid != -1) selectDb(server.primary, dbid);
 }
 
@@ -3073,7 +3074,7 @@ void replicaofCommand(client *c) {
     } else {
         long port;
 
-        if (c->flags & CLIENT_REPLICA) {
+        if (c->flag.replica) {
             /* If a client is already a replica they cannot run this command,
              * because it involves flushing all replicas (including this
              * client) */
@@ -3171,7 +3172,7 @@ void replicationSendAck(void) {
 
     if (c != NULL) {
         int send_fack = server.fsynced_reploff != -1;
-        c->flags |= CLIENT_PRIMARY_FORCE_REPLY;
+        c->flag.primary_force_reply = 1;
         addReplyArrayLen(c, send_fack ? 5 : 3);
         addReplyBulkCString(c, "REPLCONF");
         addReplyBulkCString(c, "ACK");
@@ -3180,7 +3181,7 @@ void replicationSendAck(void) {
             addReplyBulkCString(c, "FACK");
             addReplyBulkLongLong(c, server.fsynced_reploff);
         }
-        c->flags &= ~CLIENT_PRIMARY_FORCE_REPLY;
+        c->flag.primary_force_reply = 0;
     }
 }
 
@@ -3219,7 +3220,7 @@ void replicationCachePrimary(client *c) {
     server.primary->qb_pos = 0;
     server.primary->repl_applied = 0;
     server.primary->read_reploff = server.primary->reploff;
-    if (c->flags & CLIENT_MULTI) discardTransaction(c);
+    if (c->flag.multi) discardTransaction(c);
     listEmpty(c->reply);
     c->sentlen = 0;
     c->reply_bytes = 0;
@@ -3286,7 +3287,7 @@ void replicationDiscardCachedPrimary(void) {
     if (server.cached_primary == NULL) return;
 
     serverLog(LL_NOTICE, "Discarding previously cached primary state.");
-    server.cached_primary->flags &= ~CLIENT_PRIMARY;
+    server.cached_primary->flag.primary = 0;
     freeClient(server.cached_primary);
     server.cached_primary = NULL;
 }
@@ -3302,8 +3303,9 @@ void replicationResurrectCachedPrimary(connection *conn) {
     server.cached_primary = NULL;
     server.primary->conn = conn;
     connSetPrivateData(server.primary->conn, server.primary);
-    server.primary->flags &= ~(CLIENT_CLOSE_AFTER_REPLY | CLIENT_CLOSE_ASAP);
-    server.primary->flags |= CLIENT_AUTHENTICATED;
+    server.primary->flag.close_after_reply = 0;
+    server.primary->flag.close_asap = 0;
+    server.primary->flag.authenticated = 1;
     server.primary->last_interaction = server.unixtime;
     server.repl_state = REPL_STATE_CONNECTED;
     server.repl_down_since = 0;
@@ -3448,7 +3450,7 @@ void waitCommand(client *c) {
 
     /* First try without blocking at all. */
     ackreplicas = replicationCountAcksByOffset(c->woff);
-    if (ackreplicas >= numreplicas || c->flags & CLIENT_DENY_BLOCKING) {
+    if (ackreplicas >= numreplicas || c->flag.deny_blocking) {
         addReplyLongLong(c, ackreplicas);
         return;
     }
@@ -3486,7 +3488,7 @@ void waitaofCommand(client *c) {
     /* First try without blocking at all. */
     ackreplicas = replicationCountAOFAcksByOffset(c->woff);
     acklocal = server.fsynced_reploff >= c->woff;
-    if ((ackreplicas >= numreplicas && acklocal >= numlocal) || c->flags & CLIENT_DENY_BLOCKING) {
+    if ((ackreplicas >= numreplicas && acklocal >= numlocal) || c->flag.deny_blocking) {
         addReplyArrayLen(c, 2);
         addReplyLongLong(c, acklocal);
         addReplyLongLong(c, ackreplicas);
@@ -3577,8 +3579,8 @@ void processClientsWaitingReplicas(void) {
             addReplyArrayLen(c, 2);
             addReplyLongLong(c, numlocal);
             addReplyLongLong(c, numreplicas);
-        } else if (c->flags & CLIENT_PENDING_COMMAND) {
-            c->flags |= CLIENT_REPLICATION_DONE;
+        } else if (c->flag.pending_command) {
+            c->flag.replication_done = 1;
         } else {
             addReplyLongLong(c, numreplicas);
         }
@@ -3648,7 +3650,7 @@ void replicationCron(void) {
     /* Send ACK to primary from time to time.
      * Note that we do not send periodic acks to primary that don't
      * support PSYNC and replication offsets. */
-    if (server.primary_host && server.primary && !(server.primary->flags & CLIENT_PRE_PSYNC)) replicationSendAck();
+    if (server.primary_host && server.primary && !(server.primary->flag.pre_psync)) replicationSendAck();
 
     /* If we have attached replicas, PING them from time to time.
      * So replicas can implement an explicit timeout to primaries, and will
@@ -3711,7 +3713,7 @@ void replicationCron(void) {
             client *replica = ln->value;
 
             if (replica->repl_state == REPLICA_STATE_ONLINE) {
-                if (replica->flags & CLIENT_PRE_PSYNC) continue;
+                if (replica->flag.pre_psync) continue;
                 if ((server.unixtime - replica->repl_ack_time) > server.repl_timeout) {
                     serverLog(LL_WARNING, "Disconnecting timedout replica (streaming sync): %s",
                               replicationGetReplicaName(replica));

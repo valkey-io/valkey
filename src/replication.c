@@ -1092,7 +1092,7 @@ void syncCommand(client *c) {
              * resync on purpose when they are not able to partially
              * resync. */
             if (primary_replid[0] != '?') server.stat_sync_partial_err++;
-            if (c->replica_capa & REPLICA_CAPA_RDB_CONN) {
+            if (c->replica_capa & REPLICA_CAPA_DUAL_CONN) {
                 c->flags |= CLIENT_REPL_MAIN_CONN;                
                 serverLog(LL_NOTICE,"Replica %s is capable of rdb-connection synchronization, and partial sync isn't possible. "
                     "Full sync will continue with dedicated RDB connection.", replicationGetReplicaName(c));
@@ -1281,7 +1281,7 @@ void replconfCommand(client *c) {
                 server.rdb_conn_enabled && server.repl_diskless_sync) {
                 /* If rdb-connection is disable on this primary, treat this command as unrecognized 
                  * replconf option. */
-                c->replica_capa |= REPLICA_CAPA_RDB_CONN;
+                c->replica_capa |= REPLICA_CAPA_DUAL_CONN;
             }
         } else if (!strcasecmp(c->argv[j]->ptr, "ack")) {
             /* REPLCONF ACK is used by replica to inform the primary the amount

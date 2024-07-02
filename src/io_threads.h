@@ -9,5 +9,6 @@ int inMainThread(void);
 int trySendReadToIOThreads(client *c);
 int trySendWriteToIOThreads(client *c);
 void adjustIOThreadsByEventLoad(int numevents, int increase_only);
+void drainIOThreadsQueue(void);
 
 #endif /* IO_THREADS_H */

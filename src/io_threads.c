@@ -124,6 +124,18 @@ int inMainThread(void) {
     return thread_id == 0;
 }
 
+/* Drains the I/O threads queue by waiting for all jobs to be processed.
+ * This function must be called from the main thread. */
+void drainIOThreadsQueue(void) {
+    serverAssert(inMainThread());
+    for (int i = 1; i < IO_THREADS_MAX_NUM; i++) { /* No need to drain thread 0, which is the main thread. */
+        while (!IOJobQueue_isEmpty(&io_jobs[i])) {
+            /* memory barrier acquire to get the latest job queue state */
+            atomic_thread_fence(memory_order_acquire);
+        }
+    }
+}
+
 /* Wait until the IO-thread is done with the client */
 void waitForClientIO(client *c) {
     /* No need to wait if the client was not offloaded to the IO thread. */

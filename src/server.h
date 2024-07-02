@@ -1216,6 +1216,7 @@ typedef struct client {
     struct serverCommand *realcmd;       /* The original command that was executed by the client,
                                            Used to update error stats in case the c->cmd was modified
                                            during the command invocation (like on GEOADD for example). */
+    struct serverCommand *io_parsed_cmd; /* The command that was parsed by the IO thread. */
     user *user;                          /* User associated with this connection. If the
                                             user is set to NULL the connection can do
                                             anything (admin). */
@@ -3147,7 +3148,7 @@ struct serverCommand *lookupCommandByCStringLogic(dict *commands, const char *s)
 struct serverCommand *lookupCommandByCString(const char *s);
 struct serverCommand *lookupCommandOrOriginal(robj **argv, int argc);
 int commandCheckExistence(client *c, sds *err);
-int commandCheckArity(client *c, sds *err);
+int commandCheckArity(struct serverCommand *cmd, int argc, sds *err);
 void startCommandExecution(void);
 int incrCommandStatsOnError(struct serverCommand *cmd, int flags);
 void call(client *c, int flags);

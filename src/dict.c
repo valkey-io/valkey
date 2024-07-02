@@ -329,6 +329,12 @@ int _dictResize(dict *d, unsigned long size, int *malloc_failed) {
         return DICT_OK;
     }
 
+    if (d->type->no_incremental_rehash) {
+        /* If the dict type does not support incremental rehashing, we need to
+         * rehash the whole table immediately. */
+        while (dictRehash(d, 1000));
+    }
+
     return DICT_OK;
 }
 

@@ -164,7 +164,7 @@ client *createClient(connection *conn) {
     c->nread = 0;
     c->read_flags = 0;
     c->write_flags = 0;
-    c->cmd = c->lastcmd = c->realcmd = NULL;
+    c->cmd = c->lastcmd = c->realcmd = c->io_parsed_cmd = NULL;
     c->cur_script = NULL;
     c->multibulklen = 0;
     c->bulklen = -1;
@@ -1428,6 +1428,7 @@ void freeClientArgv(client *c) {
     for (j = 0; j < c->argc; j++) decrRefCount(c->argv[j]);
     c->argc = 0;
     c->cmd = NULL;
+    c->io_parsed_cmd = NULL;
     c->argv_len_sum = 0;
     c->argv_len = 0;
     zfree(c->argv);
@@ -4634,6 +4635,24 @@ void ioThreadReadQueryFromClient(void *data) {
     }
 
     parseCommand(c);
+
+    /* Parsing was not completed - let the main-thread handle it. */
+    if (!(c->read_flags & READ_FLAGS_PARSING_COMPLETED)) {
+        goto done;
+    }
+
+    /* Empty command - Multibulk processing could see a <= 0 length. */
+    if (c->argc == 0) {
+        goto done;
+    }
+
+    /* Lookup command offload */
+    c->io_parsed_cmd = lookupCommand(c->argv, c->argc);
+    if (c->io_parsed_cmd && commandCheckArity(c->io_parsed_cmd, c->argc, NULL) == 0) {
+        /* The command was found, but the arity is invalid.
+         * In this case, we reset the parsed_cmd and will let the main thread handle it. */
+        c->io_parsed_cmd = NULL;
+    }
 
 done:
     trimClientQueryBuffer(c);

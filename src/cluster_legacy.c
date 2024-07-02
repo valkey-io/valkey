@@ -1902,10 +1902,10 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
 
     serverAssert(nodeFailed(node));
 
-    /* For replicas we always clear the FAIL flag if we can contact the
-     * node again. */
+    /* For replicas or primaries without slots, we always clear the FAIL flag
+     * if we can contact the node again. */
     if (nodeIsReplica(node) || node->numslots == 0) {
-        serverLog(LL_NOTICE, "Clear FAIL state for node %.40s (%s):%s is reachable again.", node->name,
+        serverLog(LL_NOTICE, "Clear FAIL state for node %.40s (%s): %s is reachable again.", node->name,
                   node->human_nodename, nodeIsReplica(node) ? "replica" : "primary without slots");
         node->flags &= ~CLUSTER_NODE_FAIL;
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
@@ -4006,9 +4006,9 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
 
     /* IF we are not a primary serving at least 1 slot, we don't have the
      * right to vote, as the cluster size is the number
-     * of primariies serving at least one slot, and quorum is the cluster
+     * of primaries serving at least one slot, and quorum is the cluster
      * size + 1 */
-    if (nodeIsReplica(myself) || myself->numslots == 0) return;
+    if (!clusterNodeIsVotingPrimary(myself)) return;
 
     /* Request epoch must be >= our currentEpoch.
      * Note that it is impossible for it to actually be greater since

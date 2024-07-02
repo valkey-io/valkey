@@ -302,15 +302,15 @@ typedef struct {
     char sig[4];     /* Signature "RCmb" (Cluster message bus). */
     uint32_t totlen; /* Total length of this message */
     uint16_t ver;    /* Protocol version, currently set to CLUSTER_PROTO_VER. */
-    uint16_t port;   /* Primary port number (TCP or TLS). */
-    uint16_t type;   /* Message type */
+    uint16_t notused1;
+    uint16_t type; /* Message type */
     union clusterMsgDataLight data;
 } clusterMsgLight;
 
 static_assert(offsetof(clusterMsgLight, sig) == offsetof(clusterMsg, sig), "unexpected field offset");
 static_assert(offsetof(clusterMsgLight, totlen) == offsetof(clusterMsg, totlen), "unexpected field offset");
 static_assert(offsetof(clusterMsgLight, ver) == offsetof(clusterMsg, ver), "unexpected field offset");
-static_assert(offsetof(clusterMsgLight, port) == offsetof(clusterMsg, port), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, notused1) == offsetof(clusterMsg, port), "unexpected field offset");
 static_assert(offsetof(clusterMsgLight, type) == offsetof(clusterMsg, type), "unexpected field offset");
 static_assert(offsetof(clusterMsgLight, data) == 16, "unexpected field offset");
 

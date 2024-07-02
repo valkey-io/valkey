@@ -111,7 +111,6 @@ int auxTlsPortSetter(clusterNode *n, void *value, int length);
 sds auxTlsPortGetter(clusterNode *n, sds s);
 int auxTlsPortPresent(clusterNode *n);
 static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen);
-static void clusterBuildPubsubMessageHdr(clusterMsgLight *hdr, int type, size_t msglen);
 void freeClusterLink(clusterLink *link);
 int verifyClusterNodeId(const char *name, int length);
 sds clusterEncodeOpenSlotsAuxField(int rdbflags);
@@ -1145,38 +1144,23 @@ void clusterReset(int hard) {
 /* -----------------------------------------------------------------------------
  * CLUSTER communication link
  * -------------------------------------------------------------------------- */
-static clusterMsgSendBlock *createClusterMsgSendBlock(int type, uint32_t msglen) {
-    uint32_t blocklen = msglen + sizeof(clusterMsgSendBlock) - sizeof(clusterMsg);
+static void *createClusterMsgSendBlock(int type, uint32_t msglen) {
+    uint32_t blocklen;
+    if (type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT) {
+        blocklen = msglen + sizeof(clusterMsgSendBlockLight) - sizeof(clusterMsgLight);
+    } else {
+        blocklen = msglen + sizeof(clusterMsgSendBlock) - sizeof(clusterMsg);
+    }
     clusterMsgSendBlock *msgblock = zcalloc(blocklen);
     msgblock->refcount = 1;
     msgblock->totlen = blocklen;
     server.stat_cluster_links_memory += blocklen;
     clusterBuildMessageHdr(&msgblock->msg, type, msglen);
-    return msgblock;
-}
-
-static clusterMsgSendBlockLight *createPubsubClusterMsgSendBlock(int type, uint32_t msglen) {
-    uint32_t blocklen = msglen + sizeof(clusterMsgSendBlockLight) - sizeof(clusterMsgLight);
-    clusterMsgSendBlockLight *msgblock = zcalloc(blocklen);
-    msgblock->refcount = 1;
-    msgblock->totlen = blocklen;
-    server.stat_cluster_links_memory += blocklen;
-    clusterBuildPubsubMessageHdr(&msgblock->msg, type, msglen);
-    return msgblock;
+    return (void *)msgblock;
 }
 
 static void clusterMsgSendBlockDecrRefCount(void *node) {
     clusterMsgSendBlock *msgblock = (clusterMsgSendBlock *)node;
-    msgblock->refcount--;
-    serverAssert(msgblock->refcount >= 0);
-    if (msgblock->refcount == 0) {
-        server.stat_cluster_links_memory -= msgblock->totlen;
-        zfree(msgblock);
-    }
-}
-
-static void clusterMsgSendBlockDecrRefCountPublish(void *light_block) {
-    clusterMsgSendBlockLight *msgblock = (clusterMsgSendBlockLight *)light_block;
     msgblock->refcount--;
     serverAssert(msgblock->refcount >= 0);
     if (msgblock->refcount == 0) {
@@ -2810,7 +2794,7 @@ static uint32_t getPublishMsgLength(clusterMsgDataPublishMessage *cursor) {
 
 int pubsubProcessLightPacket(clusterLink *link, uint16_t type) {
     clusterMsgLight *hdr = (clusterMsgLight *)link->rcvbuf;
-    robj *channel;
+    robj *channel, *message;
     uint64_t data_count;
 
     /* Don't bother creating useless objects if there are no
@@ -2822,7 +2806,9 @@ int pubsubProcessLightPacket(clusterLink *link, uint16_t type) {
         channel = readBulkDataFromCursor(cursor);
         while (--data_count) {
             cursor = getNextCursorBulkData(cursor);
-            pubsubPublishMessage(channel, readBulkDataFromCursor(cursor), type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT);
+            message = readBulkDataFromCursor(cursor);
+            pubsubPublishMessage(channel, message, type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT);
+            decrRefCount(message);
         }
         decrRefCount(channel);
     }
@@ -3682,6 +3668,20 @@ void clusterBroadcastPublishLightMessage(clusterMsgSendBlockLight *msgblock_ligh
 /* Build the message header. hdr must point to a buffer at least
  * sizeof(clusterMsg) in bytes. */
 static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen) {
+    hdr->ver = htons(CLUSTER_PROTO_VER);
+    hdr->sig[0] = 'R';
+    hdr->sig[1] = 'C';
+    hdr->sig[2] = 'm';
+    hdr->sig[3] = 'b';
+    hdr->type = htons(type);
+    hdr->totlen = htonl(msglen);
+
+    if (type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT) {
+        clusterMsgLight *hdr_light = (clusterMsgLight *)(void *)hdr;
+        hdr_light->notused1 = 0;
+        return;
+    }
+
     uint64_t offset;
     clusterNode *primary;
 
@@ -3691,12 +3691,6 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen) {
      * in charge for this slots. */
     primary = (nodeIsReplica(myself) && myself->replicaof) ? myself->replicaof : myself;
 
-    hdr->ver = htons(CLUSTER_PROTO_VER);
-    hdr->sig[0] = 'R';
-    hdr->sig[1] = 'C';
-    hdr->sig[2] = 'm';
-    hdr->sig[3] = 'b';
-    hdr->type = htons(type);
     memcpy(hdr->sender, myself->name, CLUSTER_NAMELEN);
 
     /* If cluster-announce-ip option is enabled, force the receivers of our
@@ -3738,27 +3732,6 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen) {
 
     /* Set the message flags. */
     if (clusterNodeIsPrimary(myself) && server.cluster->mf_end) hdr->mflags[0] |= CLUSTERMSG_FLAG0_PAUSED;
-
-    hdr->totlen = htonl(msglen);
-}
-
-static void clusterBuildPubsubMessageHdr(clusterMsgLight *hdr, int type, size_t msglen) {
-    hdr->ver = htons(CLUSTER_PROTO_VER);
-    hdr->sig[0] = 'R';
-    hdr->sig[1] = 'C';
-    hdr->sig[2] = 'm';
-    hdr->sig[3] = 'b';
-    hdr->type = htons(type);
-
-    /* Handle cluster-announce-[tls-|bus-]port. */
-    int announced_tcp_port, announced_tls_port, announced_cport;
-    deriveAnnouncedPorts(&announced_tcp_port, &announced_tls_port, &announced_cport);
-    if (server.tls_cluster) {
-        hdr->port = htons(announced_tls_port);
-    } else {
-        hdr->port = htons(announced_tcp_port);
-    }
-    hdr->totlen = htonl(msglen);
 }
 
 /* Set the i-th entry of the gossip section in the message pointed by 'hdr'
@@ -3841,7 +3814,7 @@ void clusterSendPing(clusterLink *link, int type) {
     /* Note: clusterBuildMessageHdr() expects the buffer to be always at least
      * sizeof(clusterMsg) or more. */
     if (estlen < (int)sizeof(clusterMsg)) estlen = sizeof(clusterMsg);
-    clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(type, estlen);
+    clusterMsgSendBlock *msgblock = (clusterMsgSendBlock *)createClusterMsgSendBlock(type, estlen);
     clusterMsg *hdr = &msgblock->msg;
 
     if (!link->inbound && type == CLUSTERMSG_TYPE_PING) link->node->ping_sent = mstime();
@@ -3975,7 +3948,7 @@ clusterMsgSendBlock *clusterCreatePublishMsgBlock(robj *channel, robj *message, 
 
     size_t msglen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
     msglen += sizeof(clusterMsgDataPublish) - 8 + channel_len + message_len;
-    clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(type, msglen);
+    clusterMsgSendBlock *msgblock = (clusterMsgSendBlock *)createClusterMsgSendBlock(type, msglen);
 
     clusterMsg *hdr = &msgblock->msg;
     hdr->data.publish.msg.channel_len = htonl(channel_len);
@@ -4008,7 +3981,7 @@ clusterMsgSendBlockLight *clusterCreatePublishLightMsgBlock(robj *channel, robj 
     msglen += sizeof(clusterMsgDataPublishMulti);
     msglen += ((count + 1) * (sizeof(clusterMsgDataPublishMessage) - 8));
     msglen += aggregated_msg_len;
-    clusterMsgSendBlockLight *msgblock = createPubsubClusterMsgSendBlock(type, msglen);
+    clusterMsgSendBlockLight *msgblock = (clusterMsgSendBlockLight *)createClusterMsgSendBlock(type, msglen);
 
     clusterMsgLight *hdr = &msgblock->msg;
     hdr->data.publish.msg.data_count = htonu64(count + 1);
@@ -4031,7 +4004,7 @@ clusterMsgSendBlockLight *clusterCreatePublishLightMsgBlock(robj *channel, robj 
  * nodes to do the same ASAP. */
 void clusterSendFail(char *nodename) {
     uint32_t msglen = sizeof(clusterMsg) - sizeof(union clusterMsgData) + sizeof(clusterMsgDataFail);
-    clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_FAIL, msglen);
+    clusterMsgSendBlock *msgblock = (clusterMsgSendBlock *)createClusterMsgSendBlock(CLUSTERMSG_TYPE_FAIL, msglen);
 
     clusterMsg *hdr = &msgblock->msg;
     memcpy(hdr->data.fail.about.nodename, nodename, CLUSTER_NAMELEN);
@@ -4047,7 +4020,7 @@ void clusterSendUpdate(clusterLink *link, clusterNode *node) {
     if (link == NULL) return;
 
     uint32_t msglen = sizeof(clusterMsg) - sizeof(union clusterMsgData) + sizeof(clusterMsgDataUpdate);
-    clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_UPDATE, msglen);
+    clusterMsgSendBlock *msgblock = (clusterMsgSendBlock *)createClusterMsgSendBlock(CLUSTERMSG_TYPE_UPDATE, msglen);
 
     clusterMsg *hdr = &msgblock->msg;
     memcpy(hdr->data.update.nodecfg.nodename, node->name, CLUSTER_NAMELEN);
@@ -4069,7 +4042,7 @@ void clusterSendUpdate(clusterLink *link, clusterNode *node) {
 void clusterSendModule(clusterLink *link, uint64_t module_id, uint8_t type, const char *payload, uint32_t len) {
     uint32_t msglen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
     msglen += sizeof(clusterMsgModule) - 3 + len;
-    clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_MODULE, msglen);
+    clusterMsgSendBlock *msgblock = (clusterMsgSendBlock *)createClusterMsgSendBlock(CLUSTERMSG_TYPE_MODULE, msglen);
 
     clusterMsg *hdr = &msgblock->msg;
     hdr->data.module.msg.module_id = module_id; /* Already endian adjusted. */
@@ -4125,7 +4098,7 @@ void clusterPropagatePublish(robj *channel, robj **message, int count, int shard
         channel, message, count, sharded ? CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT : CLUSTERMSG_TYPE_PUBLISH_LIGHT);
     if (!sharded) {
         clusterBroadcastPublishLightMessage(msgblock_light);
-        clusterMsgSendBlockDecrRefCountPublish(msgblock_light);
+        clusterMsgSendBlockDecrRefCount(msgblock_light);
         for (i = 0; i < count; i++) {
             msgblock = clusterCreatePublishMsgBlock(channel, message[i], CLUSTERMSG_TYPE_PUBLISH);
             clusterBroadcastPublishMessage(msgblock);
@@ -4148,7 +4121,7 @@ void clusterPropagatePublish(robj *channel, robj **message, int count, int shard
         else
             continue;
     }
-    clusterMsgSendBlockDecrRefCountPublish(msgblock_light);
+    clusterMsgSendBlockDecrRefCount(msgblock_light);
 
     for (i = 0; i < count; i++) {
         listRewind(nodes_for_slot, &li);
@@ -4177,7 +4150,8 @@ void clusterPropagatePublish(robj *channel, robj **message, int count, int shard
  * but only the primaries are supposed to reply to our query. */
 void clusterRequestFailoverAuth(void) {
     uint32_t msglen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
-    clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST, msglen);
+    clusterMsgSendBlock *msgblock =
+        (clusterMsgSendBlock *)createClusterMsgSendBlock(CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST, msglen);
 
     clusterMsg *hdr = &msgblock->msg;
     /* If this is a manual failover, set the CLUSTERMSG_FLAG0_FORCEACK bit
@@ -4193,7 +4167,8 @@ void clusterSendFailoverAuth(clusterNode *node) {
     if (!node->link) return;
 
     uint32_t msglen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
-    clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK, msglen);
+    clusterMsgSendBlock *msgblock =
+        (clusterMsgSendBlock *)createClusterMsgSendBlock(CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK, msglen);
 
     clusterSendMessage(node->link, msgblock);
     clusterMsgSendBlockDecrRefCount(msgblock);
@@ -4204,7 +4179,7 @@ void clusterSendMFStart(clusterNode *node) {
     if (!node->link) return;
 
     uint32_t msglen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
-    clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_MFSTART, msglen);
+    clusterMsgSendBlock *msgblock = (clusterMsgSendBlock *)createClusterMsgSendBlock(CLUSTERMSG_TYPE_MFSTART, msglen);
 
     clusterSendMessage(node->link, msgblock);
     clusterMsgSendBlockDecrRefCount(msgblock);

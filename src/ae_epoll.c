@@ -87,12 +87,12 @@ static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
     return 0;
 }
 
-static void aeApiDelEvent(aeEventLoop *eventLoop, int fd, int delmask) {
+static void aeApiDelEvent(aeEventLoop *eventLoop, int fd, int mask) {
     aeApiState *state = eventLoop->apidata;
     struct epoll_event ee = {0}; /* avoid valgrind warning */
 
     /* We rely on the fact that our caller has already updated the mask in the eventLoop. */
-    int mask = eventLoop->events[fd].mask;
+    mask = eventLoop->events[fd].mask;
 
     ee.events = 0;
     if (mask & AE_READABLE) ee.events |= EPOLLIN;

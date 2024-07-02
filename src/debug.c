@@ -994,9 +994,14 @@ void debugCommand(client *c) {
             return;
         }
         addReply(c, shared.ok);
-    } else if(!strcasecmp(c->argv[1]->ptr,"SLEEP-AFTER-FORK") &&
+    } else if(!strcasecmp(c->argv[1]->ptr,"sleep-after-fork-seconds") &&
         c->argc == 3) {
-        server.debug_sleep_after_fork_seconds = atoi(c->argv[2]->ptr);
+        double sleep_after_fork_seconds;
+        if (getDoubleFromObjectOrReply(c, c->argv[2], &sleep_after_fork_seconds, NULL) != C_OK) {
+            addReply(c, shared.err);
+            return;
+        }
+        server.debug_sleep_after_fork_ms = (int)(sleep_after_fork_seconds * 1e6);
         addReply(c,shared.ok);
     } else if(!strcasecmp(c->argv[1]->ptr,"WAIT-BEFORE-RDB-CLIENT-FREE") &&
         c->argc == 3) {

@@ -358,7 +358,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         $master set key1 val1
 
         $master config set repl-diskless-sync yes
-        $master debug sleep-after-fork 5;# Stop master after fork for 5 seconds
+        $master debug sleep-after-fork-seconds 5;# Stop master after fork for 5 seconds
         $master config set repl-rdb-connection yes
 
         $replica config set repl-rdb-connection yes
@@ -410,7 +410,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         $replica config set loglevel debug
         $replica config set repl-timeout 10
         # Stop replica after master fork for 5 seconds
-        $replica debug sleep-after-fork 5
+        $replica debug sleep-after-fork-seconds 5
 
         test "Test rdb-connection connection peering - replica able to establish psync" {
             $replica slaveof $master_host $master_port
@@ -471,8 +471,8 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             $replica2 config set repl-timeout 10
 
             # Stop replica after master fork for 2 seconds
-            $replica1 debug sleep-after-fork 2
-            $replica2 debug sleep-after-fork 2
+            $replica1 debug sleep-after-fork-seconds 2
+            $replica2 debug sleep-after-fork-seconds 2
             test "Test rdb-connection connection peering - start with empty backlog (retrospect)" {
                 $replica1 slaveof $master_host $master_port
                 set res [wait_for_log_messages 0 {"*Add replica * repl-backlog is empty*"} $loglines 2000 1]
@@ -530,7 +530,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
     # generate small db
     populate 10 master 10
     # Stop master main process after fork for 2 seconds
-    $master debug sleep-after-fork 2
+    $master debug sleep-after-fork-seconds 2
     $master debug wait-before-rdb-client-free 5
 
     start_server {} {
@@ -628,7 +628,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
     # generate small db
     populate 10 master 10
     # Stop master main process after fork for 1 seconds
-    $master debug sleep-after-fork 2
+    $master debug sleep-after-fork-seconds 2
     start_server {} {
         set replica [srv 0 client]
         set replica_host [srv 0 host]
@@ -662,13 +662,13 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         }
 
         $replica slaveof no one
-        $replica debug sleep-after-fork 2
+        $replica debug sleep-after-fork-seconds 2
 
         $master debug populate 1000 master 100000
         # Set master with a slow rdb generation, so that we can easily intercept loading
         # 10ms per key, with 1000 keys is 10 seconds
         $master config set rdb-key-save-delay 10000
-        $master debug sleep-after-fork 0
+        $master debug sleep-after-fork-seconds 0
 
         test "Test rdb-connection master gets cob overrun during replica rdb load" {
             $replica slaveof $master_host $master_port

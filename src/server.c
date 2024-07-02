@@ -2661,7 +2661,7 @@ void initServer(void) {
     server.cron_malloc_stats.allocator_active = 0;
     server.cron_malloc_stats.allocator_resident = 0;
     server.lastbgsave_status = C_OK;
-    server.primary_supports_rdb_connection = -1;
+    server.primary_supports_dual_connection_sync = -1;
     server.aof_last_write_status = C_OK;
     server.aof_last_write_errno = 0;
     server.repl_good_replicas_count = 0;

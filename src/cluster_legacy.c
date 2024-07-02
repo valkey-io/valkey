@@ -139,6 +139,8 @@ static inline int defaultClientPort(void) {
 #define RCVBUF_MIN_READ_LEN 16
 #define RCVBUF_MAX_PREALLOC (1 << 20) /* 1MB */
 
+#define PLACEHOLDER_LEN 8
+
 /* Fixed timeout value for cluster operations (milliseconds) */
 #define CLUSTER_OPERATION_TIMEOUT 2000
 
@@ -3979,7 +3981,8 @@ clusterMsgSendBlockLight *clusterCreatePublishLightMsgBlock(robj *channel, robj 
 
     size_t msglen = sizeof(clusterMsgLight) - sizeof(union clusterMsgDataLight);
     msglen += sizeof(clusterMsgDataPublishMulti);
-    msglen += ((count + 1) * (sizeof(clusterMsgDataPublishMessage) - 8));
+    msglen += ((count + 1) *
+               (sizeof(clusterMsgDataPublishMessage) - (sizeof(((clusterMsgDataPublishMessage *)0)->message_data))));
     msglen += aggregated_msg_len;
     clusterMsgSendBlockLight *msgblock = (clusterMsgSendBlockLight *)createClusterMsgSendBlock(type, msglen);
 
@@ -4090,17 +4093,17 @@ int clusterSendModuleMessageToTarget(const char *target,
  * Otherwise:
  * Publish this message across the slot (primary/replica).
  * -------------------------------------------------------------------------- */
-void clusterPropagatePublish(robj *channel, robj **message, int count, int sharded) {
+void clusterPropagatePublish(robj *channel, robj **messages, int count, int sharded) {
     clusterMsgSendBlockLight *msgblock_light;
     clusterMsgSendBlock *msgblock;
     int i;
     msgblock_light = clusterCreatePublishLightMsgBlock(
-        channel, message, count, sharded ? CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT : CLUSTERMSG_TYPE_PUBLISH_LIGHT);
+        channel, messages, count, sharded ? CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT : CLUSTERMSG_TYPE_PUBLISH_LIGHT);
     if (!sharded) {
         clusterBroadcastPublishLightMessage(msgblock_light);
         clusterMsgSendBlockDecrRefCount(msgblock_light);
         for (i = 0; i < count; i++) {
-            msgblock = clusterCreatePublishMsgBlock(channel, message[i], CLUSTERMSG_TYPE_PUBLISH);
+            msgblock = clusterCreatePublishMsgBlock(channel, messages[i], CLUSTERMSG_TYPE_PUBLISH);
             clusterBroadcastPublishMessage(msgblock);
             clusterMsgSendBlockDecrRefCount(msgblock);
         }
@@ -4125,7 +4128,7 @@ void clusterPropagatePublish(robj *channel, robj **message, int count, int shard
 
     for (i = 0; i < count; i++) {
         listRewind(nodes_for_slot, &li);
-        msgblock = clusterCreatePublishMsgBlock(channel, message[i], CLUSTERMSG_TYPE_PUBLISHSHARD);
+        msgblock = clusterCreatePublishMsgBlock(channel, messages[i], CLUSTERMSG_TYPE_PUBLISHSHARD);
         while ((ln = listNext(&li))) {
             node = listNodeValue(ln);
             if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;

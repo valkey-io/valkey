@@ -346,10 +346,11 @@ proc are_hostnames_propagated {match_string} {
 }
 
 # Check if cluster's announced IPs are consistent and match a pattern
-proc are_cluster_announced_ips_propagated {match_string, {clients {}}} {
+# Optionally, a list of clients can be supplied.
+proc are_cluster_announced_ips_propagated {match_string {clients {}}} {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
-        if {[expr $clients == {}]} {
-            set client [srv [expr -1*$n] "client"]
+        if {$clients eq {}} {
+            set client [srv [expr -1*$j] "client"]
         } else {
             set client [lindex $clients $j]
         }

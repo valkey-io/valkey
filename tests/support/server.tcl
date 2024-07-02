@@ -622,7 +622,7 @@ proc start_server {options {code undefined}} {
     # setup properties to be able to initialize a client object
     set port_param [expr $::tls ? {"tls-port"} : {"port"}]
     set host $::host
-    if {[dict exists $config bind]} { set host [dict get $config bind] }
+    if {[dict exists $config bind]} { set host [lindex [dict get $config bind] 0] }
     if {[dict exists $config $port_param]} { set port [dict get $config $port_param] }
 
     # setup config dict

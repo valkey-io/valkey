@@ -1173,7 +1173,7 @@ typedef struct ClientFlags {
     uint64_t reprocessing_command : 1;     /* The client is re-processing the command. */
     uint64_t replication_done : 1;         /* Indicate that replication has been done on the client */
     uint64_t authenticated : 1;            /* Indicate a client has successfully authenticated */
-    uint64_t reserved : 11;                /* Reserved for future use */
+    uint64_t reserved : 10;                /* Reserved for future use */
 } ClientFlags;
 
 typedef struct client {

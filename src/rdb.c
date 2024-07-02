@@ -3452,8 +3452,10 @@ static void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
         serverLog(LL_WARNING, "Background transfer terminated by signal %d", bysignal);
     }
     if (server.rdb_child_exit_pipe != -1) close(server.rdb_child_exit_pipe);
-    aeDeleteFileEvent(server.el, server.rdb_pipe_read, AE_READABLE);
-    close(server.rdb_pipe_read);
+    if (server.rdb_pipe_read > 0) {
+        aeDeleteFileEvent(server.el, server.rdb_pipe_read, AE_READABLE);
+        close(server.rdb_pipe_read);
+    }
     server.rdb_child_exit_pipe = -1;
     server.rdb_pipe_read = -1;
     zfree(server.rdb_pipe_conns);
@@ -3507,29 +3509,31 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
     int dual_conn = (req & REPLICA_REQ_RDB_CONN);
 
     if (hasActiveChildProcess()) return C_ERR;
+    serverAssert(server.rdb_pipe_read == -1 && server.rdb_child_exit_pipe == -1);
 
     /* Even if the previous fork child exited, don't start a new one until we
      * drained the pipe. */
     if (server.rdb_pipe_conns) return C_ERR;
 
-    /* Before to fork, create a pipe that is used to transfer the rdb bytes to
-     * the parent, we can't let it write directly to the sockets, since in case
-     * of TLS we must let the parent handle a continuous TLS state when the
-     * child terminates and parent takes over. */
-    if (anetPipe(pipefds, O_NONBLOCK, 0) == -1) return C_ERR;
-    server.rdb_pipe_read = pipefds[0]; /* read end */
-    rdb_pipe_write = pipefds[1];       /* write end */
+    if (!dual_conn) {
+        /* Before to fork, create a pipe that is used to transfer the rdb bytes to
+         * the parent, we can't let it write directly to the sockets, since in case
+         * of TLS we must let the parent handle a continuous TLS state when the
+         * child terminates and parent takes over. */
+        if (anetPipe(pipefds, O_NONBLOCK, 0) == -1) return C_ERR;
+        server.rdb_pipe_read = pipefds[0]; /* read end */
+        rdb_pipe_write = pipefds[1];       /* write end */
 
-    /* create another pipe that is used by the parent to signal to the child
-     * that it can exit. */
-    if (anetPipe(pipefds, 0, 0) == -1) {
-        close(rdb_pipe_write);
-        close(server.rdb_pipe_read);
-        return C_ERR;
+        /* create another pipe that is used by the parent to signal to the child
+        * that it can exit. */
+        if (anetPipe(pipefds, 0, 0) == -1) {
+            close(rdb_pipe_write);
+            close(server.rdb_pipe_read);
+            return C_ERR;
+        }
+        safe_to_exit_pipe = pipefds[0];          /* read end */
+        server.rdb_child_exit_pipe = pipefds[1]; /* write end */
     }
-    safe_to_exit_pipe = pipefds[0];          /* read end */
-    server.rdb_child_exit_pipe = pipefds[1]; /* write end */
-
     /* Collect the connections of the replicas we want to transfer
      * the RDB to, which are i WAIT_BGSAVE_START state. */
     int connsnum = 0;
@@ -3578,7 +3582,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
 
         /* Close the reading part, so that if the parent crashes, the child will
          * get a write error and exit. */
-        close(server.rdb_pipe_read);
+        if (!dual_conn) close(server.rdb_pipe_read);
         if (strstr(server.exec_argv[0], "redis-server") != NULL) {
             serverSetProcTitle("redis-rdb-to-slaves");
         } else {
@@ -3596,14 +3600,14 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
             rioFreeConnset(&rdb);
         } else {
             rioFreeFd(&rdb);
+            close(rdb_pipe_write);
         }
         zfree(conns);
         /* wake up the reader, tell it we're done. */
-        close(rdb_pipe_write);
         close(server.rdb_child_exit_pipe); /* close write end so that we can detect the close on the parent. */
         /* hold exit until the parent tells us it's safe. we're not expecting
          * to read anything, just get the error when the pipe is closed. */
-        dummy = read(safe_to_exit_pipe, pipefds, 1);
+        if (!dual_conn) dummy = read(safe_to_exit_pipe, pipefds, 1);
         UNUSED(dummy);
         exitFromChild((retval == C_OK) ? 0 : 1);
     } else {
@@ -3621,8 +3625,10 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
                     replica->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
                 }
             }
-            close(rdb_pipe_write);
-            close(server.rdb_pipe_read);
+            if (!dual_conn) {
+                close(rdb_pipe_write);
+                close(server.rdb_pipe_read);
+            }
             close(server.rdb_child_exit_pipe);
             zfree(conns);
             if (dual_conn) {
@@ -3637,13 +3643,18 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
                       dual_conn ? "replica socket" : "pipe");
             server.rdb_save_time_start = time(NULL);
             server.rdb_child_type = RDB_CHILD_TYPE_SOCKET;
-            close(rdb_pipe_write); /* close write in parent so that it can detect the close on the child. */
-            if (aeCreateFileEvent(server.el, server.rdb_pipe_read, AE_READABLE, rdbPipeReadHandler, NULL) == AE_ERR) {
-                serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
+            if (dual_conn) {
+                /* For dual connection sync, the main process no longer requires these RDB connections. */
+                zfree(conns);
             }
-            if (dual_conn) zfree(conns);
+            else {
+                close(rdb_pipe_write); /* close write in parent so that it can detect the close on the child. */
+                if (aeCreateFileEvent(server.el, server.rdb_pipe_read, AE_READABLE, rdbPipeReadHandler, NULL) == AE_ERR) {
+                    serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
+                }
+            }
         }
-        close(safe_to_exit_pipe);
+        if (!dual_conn) close(safe_to_exit_pipe);
         return (childpid == -1) ? C_ERR : C_OK;
     }
     return C_OK; /* Unreached. */

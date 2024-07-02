@@ -2531,6 +2531,8 @@ void initServer(void) {
     server.hz = server.config_hz;
     server.pid = getpid();
     server.in_fork_child = CHILD_TYPE_NONE;
+    server.rdb_pipe_read = -1;
+    server.rdb_child_exit_pipe = -1;
     server.main_thread_id = pthread_self();
     server.current_client = NULL;
     server.errors = raxNew();

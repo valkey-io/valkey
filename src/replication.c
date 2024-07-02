@@ -2731,7 +2731,7 @@ void replStreamProgressCallback(size_t offset, int readlen, time_t *last_progres
     time_t now = mstime();
     if (server.loading_process_events_interval_bytes &&
         (offset + readlen) / server.loading_process_events_interval_bytes > offset / server.loading_process_events_interval_bytes &&
-        now - *last_progress_callback > server.loading_process_events_interval_ms)
+        now - *last_progress_callback > server.loading_process_events_interval_miliseconds)
     {
         replicationSendNewlineToPrimary();
         processEventsWhileBlocked();

@@ -50,7 +50,13 @@ tags {tls:skip external:skip cluster} {
             }
 
             # Make sure the nodes still don't know about each other
-            assert {[llength [get_cluster_nodes 1 connected]] == 1}
+            # Using a wait condition here as an assert can be flaky - especially
+            # when cluster nodes is processed when the link is established to send MEET.
+            wait_for_condition 1000 50 {
+                [llength [get_cluster_nodes 1 connected]] == 1
+            } else {
+                fail "Node 1 recognizes node 0 even though node 0 drops MEETs from node 1"
+            }
             assert {[llength [get_cluster_nodes 0 connected]] == 1}
 
             R 0 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_NONE

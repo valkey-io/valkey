@@ -32,6 +32,7 @@
 #include "latency.h"
 #include "script.h"
 #include "functions.h"
+#include "io_threads.h"
 
 #include <signal.h>
 #include <ctype.h>
@@ -297,7 +298,10 @@ static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEn
         old = dictGetVal(de);
     }
     kvstoreDictSetVal(db->keys, slot, de, val);
-    if (server.lazyfree_lazy_server_del) {
+    /* For efficiency, let the I/O thread that allocated an object also deallocate it. */
+    if (tryOffloadFreeObjToIOThreads(old) == C_OK) {
+        /* OK */
+    } else if (server.lazyfree_lazy_server_del) {
         freeObjAsync(key, old, db->id);
     } else {
         decrRefCount(old);

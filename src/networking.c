@@ -1424,14 +1424,15 @@ void freeClientOriginalArgv(client *c) {
 }
 
 void freeClientArgv(client *c) {
-    int j;
-    for (j = 0; j < c->argc; j++) decrRefCount(c->argv[j]);
+    if (tryOffloadFreeArgvToIOThreads(c) == C_ERR) {
+        for (int j = 0; j < c->argc; j++) decrRefCount(c->argv[j]);
+        zfree(c->argv);
+    }
     c->argc = 0;
     c->cmd = NULL;
     c->io_parsed_cmd = NULL;
     c->argv_len_sum = 0;
     c->argv_len = 0;
-    zfree(c->argv);
     c->argv = NULL;
 }
 

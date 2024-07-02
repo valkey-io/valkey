@@ -2492,6 +2492,7 @@ void resetServerStats(void) {
     server.stat_io_reads_processed = 0;
     server.stat_total_reads_processed = 0;
     server.stat_io_writes_processed = 0;
+    server.stat_io_freed_objects = 0;
     server.stat_total_writes_processed = 0;
     server.stat_client_qbuf_limit_disconnections = 0;
     server.stat_client_outbuf_limit_disconnections = 0;
@@ -5702,6 +5703,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "total_writes_processed:%lld\r\n", server.stat_total_writes_processed,
             "io_threaded_reads_processed:%lld\r\n", server.stat_io_reads_processed,
             "io_threaded_writes_processed:%lld\r\n", server.stat_io_writes_processed,
+            "io_threaded_freed_objects:%lld\r\n", server.stat_io_freed_objects,
             "client_query_buffer_limit_disconnections:%lld\r\n", server.stat_client_qbuf_limit_disconnections,
             "client_output_buffer_limit_disconnections:%lld\r\n", server.stat_client_outbuf_limit_disconnections,
             "reply_buffer_shrinks:%lld\r\n", server.stat_reply_buffer_shrinks,

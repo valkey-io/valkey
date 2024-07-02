@@ -1751,6 +1751,7 @@ struct valkeyServer {
     long long stat_dump_payload_sanitizations;         /* Number deep dump payloads integrity validations. */
     long long stat_io_reads_processed;                 /* Number of read events processed by IO threads */
     long long stat_io_writes_processed;                /* Number of write events processed by IO threads */
+    long long stat_io_freed_objects;                   /* Number of objects freed by IO threads */
     long long stat_total_reads_processed;              /* Total number of read events processed */
     long long stat_total_writes_processed;             /* Total number of write events processed */
     long long stat_client_qbuf_limit_disconnections;   /* Total number of clients reached query buf length limit */

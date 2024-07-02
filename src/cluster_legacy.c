@@ -5731,7 +5731,7 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
     }
 
     addReplyBulkCString(c, "ip");
-    addReplyBulkCString(c, node->ip);
+    addReplyBulkCString(c, clusterNodeIp(node, c));
     reply_count++;
 
     addReplyBulkCString(c, "endpoint");

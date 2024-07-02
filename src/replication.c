@@ -1239,7 +1239,7 @@ void syncCommand(client *c) {
  * The replica reports its version.
  * 
  * - rdb-conn <1|0>
- * Used to identify the client as a replica's rdb connection in an rdb connection 
+ * Used to identify the client as a replica's rdb connection in an dual connection 
  * sync session. 
  * */
 void replconfCommand(client *c) {
@@ -2336,7 +2336,7 @@ void readSyncBulkPayload(connection *conn) {
 
     /* Final setup of the connected replica <- primary link */
     if (conn == server.repl_rdb_transfer_s) {
-        /* In case of full-sync using rdb connection, the primary client was already created for psync purposes
+        /* In case of full-sync using dual connection, the primary client was already created for psync purposes
          * Instead of creating a new client we will use the one created for partial sync */
         rdbConnectionSyncRdbLoaded(conn);
     } else {
@@ -2377,7 +2377,7 @@ void readSyncBulkPayload(connection *conn) {
      * to the new file. */
     if (server.aof_enabled) restartAOFAfterSYNC();
     
-    /* In case of RDB Connection Sync we want to close the RDB connection
+    /* In case of dual connection sync we want to close the RDB connection
      * once the connection is established */
     if (conn == server.repl_rdb_transfer_s) {
         connClose(conn);
@@ -2507,7 +2507,7 @@ void freePendingReplDataBuf(void) {
  * provisional primary struct, and free local replication buffer. */
 void abortRdbConnectionSync(void) {
     serverAssert(server.repl_rdb_conn_state != REPL_RDB_CONN_STATE_NONE);
-    serverLog(LL_WARNING, "Aborting RDB connection sync");
+    serverLog(LL_WARNING, "Aborting dual connection sync");
     if (server.repl_rdb_transfer_s) {
         connClose(server.repl_rdb_transfer_s);
         server.repl_rdb_transfer_s = NULL;
@@ -2625,7 +2625,7 @@ void fullSyncWithPrimary(connection* conn) {
         if (err == NULL) goto no_response_error;
 
         if (err[0] == '-') {
-            serverLog(LL_NOTICE, "Server does not support sync with offset, RDB connection sync approach cannot be used: %s", err);
+            serverLog(LL_NOTICE, "Server does not support sync with offset, dual connection sync approach cannot be used: %s", err);
             goto error;
         }
         sdsfree(err);
@@ -2709,7 +2709,7 @@ void fullSyncWithPrimary(connection* conn) {
         return;
 
     write_error: /* Handle sendCommand() errors. */
-        serverLog(LL_WARNING, "Sending command to primary in rdb connection replication handshake: %s", err);
+        serverLog(LL_WARNING, "Sending command to primary in dual connection replication handshake: %s", err);
         sdsfree(err);
         goto error;
 }
@@ -2888,19 +2888,18 @@ void rdbConnectionSyncPsyncEstablished(connection *conn) {
     }
     if (server.repl_rdb_conn_state == REPL_RDB_CONN_RDB_LOADED) {
         /* RDB is loaded */
-        serverLog(LL_DEBUG, "RDB connection sync - psync established after rdb load");
+        serverLog(LL_DEBUG, "Dual connection sync - psync established after rdb load");
         rdbConnectionSyncSuccess();
         return;
     }
-    serverPanic("Unrecognized rdb connection replication state %d", server.repl_rdb_conn_state);
+    serverPanic("Unrecognized dual connection replication state %d", server.repl_rdb_conn_state);
 }
 
 /* Replication: Replica side.
- * Rdb connection done loading rdb. The 'conn' argument must be the rdb connection. Check whether the
+ * RDB connection done loading the RDB. The 'conn' argument must be the rdb connection. Check whether the
  * main connection has completed its part and act accordingly. */
 void rdbConnectionSyncRdbLoaded(connection *conn) {
     serverAssert(conn == server.repl_rdb_transfer_s && server.repl_rdb_conn_state == REPL_RDB_CONN_RDB_LOAD);
-    /* RDB connection */
     if (server.repl_state < REPL_STATE_TRANSFER) {
         /* Main psync connection hasn't been established yet */
         server.repl_rdb_conn_state = REPL_RDB_CONN_RDB_LOADED;
@@ -3187,7 +3186,7 @@ void setupMainConnForPsync(connection *conn) {
     if (server.repl_state == REPL_STATE_SEND_PSYNC) {
         if (server.debug_sleep_after_fork_ms) usleep(server.debug_sleep_after_fork_ms);
         if (replicaTryPartialResynchronization(conn,0) == PSYNC_WRITE_ERROR) {
-            serverLog(LL_WARNING, "Aborting RDB connection sync. Write error.");
+            serverLog(LL_WARNING, "Aborting dual connection sync. Write error.");
             cancelReplicationHandshake(1);
         }
         server.repl_state = REPL_STATE_RECEIVE_PSYNC_REPLY;
@@ -3208,12 +3207,12 @@ void setupMainConnForPsync(connection *conn) {
 
     error:
     /* The rdb-conn-sync session must be aborted for any psync_result other than PSYNC_CONTINUE or PSYNC_WAIT_REPLY. */
-    serverLog(LL_WARNING, "Aborting RDB connection sync. Main connection psync result %d", psync_result);
+    serverLog(LL_WARNING, "Aborting dual connection sync. Main connection psync result %d", psync_result);
     cancelReplicationHandshake(1);
 }
 
 /*
- * RDB connection for full sync
+ * Dual connection for full sync
  *
  * * Motivation *
  *  - Reduce primary memory load. We do that by moving the COB tracking to the replica side. This also decrease 
@@ -3244,7 +3243,7 @@ void setupMainConnForPsync(connection *conn) {
  *    changes into memory. Repl steady state continues normally.
  * 
  * * Replica state machine *                                                                        
- * ┌───────────────────┐             RDB connection sync                                                  
+ * ┌───────────────────┐             Dual connection sync                                                  
  * │RECEIVE_PING_REPLY │          ┌──────────────────────────────────────────────────────────────┐     
  * └────────┬──────────┘          │   RDB connection states              Main connection state   │     
  *          │+PONG                │     ┌────────────────────────────┐   ┌───────────────────┐   │     
@@ -3390,7 +3389,7 @@ void syncWithPrimary(connection *conn) {
         }
 
         /* When using rdb-connection for sync, announce that the replica is capable
-         * of rdb connection sync. */
+         * of dual connection sync. */
         if (server.dual_conn_enabled) {
            err = sendCommand(conn,"REPLCONF", "capa" ,"dual-conn", NULL);
         }

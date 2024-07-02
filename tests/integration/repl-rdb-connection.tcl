@@ -375,7 +375,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             }
             wait_for_value_to_propegate_to_replica $master $replica "key1"
             # Confirm the occurrence of a race condition.
-            set res [wait_for_log_messages -1 {"*RDB connection sync - psync established after rdb load*"} $loglines 2000 1]
+            set res [wait_for_log_messages -1 {"*Dual connection sync - psync established after rdb load*"} $loglines 2000 1]
             set loglines [lindex $res 1]
             incr $loglines                
         }

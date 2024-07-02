@@ -3553,7 +3553,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
                 /* Put the socket in blocking mode to simplify RDB transfer. */
                 connBlock(replica->conn);
                 connSendTimeout(replica->conn, server.repl_timeout * 1000);
-                /* This replica uses diskless rdb connection sync, hence we need
+                /* This replica uses diskless dual connection sync, hence we need
                  * to inform it with the save end offset.*/
                 sendCurrentOffsetToReplica(replica);
                 /* Make sure repl traffic is appended to the replication backlog */                

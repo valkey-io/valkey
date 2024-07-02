@@ -289,6 +289,10 @@ int dictSdsKeyCompare(dict *d, const void *key1, const void *key2) {
     return memcmp(key1, key2, l1) == 0;
 }
 
+size_t dictSdsEmbedKey(unsigned char *buf, size_t buf_len, const void *key, uint8_t *key_offset) {
+    return sdscopytobuffer(buf, buf_len, (sds)key, key_offset);
+}
+
 /* A case insensitive version used for the command lookup table and other
  * places where case insensitive non binary-safe comparison is needed. */
 int dictSdsKeyCaseCompare(dict *d, const void *key1, const void *key2) {
@@ -468,9 +472,11 @@ dictType dbDictType = {
     dictSdsHash,          /* hash function */
     NULL,                 /* key dup */
     dictSdsKeyCompare,    /* key compare */
-    dictSdsDestructor,    /* key destructor */
+    NULL,                 /* key is embedded in the dictEntry and freed internally */
     dictObjectDestructor, /* val destructor */
     dictResizeAllowed,    /* allow to resize */
+    .embedKey = dictSdsEmbedKey,
+    .embedded_entry = 1,
 };
 
 /* Db->expires */

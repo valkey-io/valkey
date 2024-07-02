@@ -4086,7 +4086,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
 }
 
 /* This function returns the "rank" of this instance, a replica, in the context
- * of its primar-replicas ring. The rank of the replica is given by the number of
+ * of its primary-replicas ring. The rank of the replica is given by the number of
  * other replicas for the same primary that have a better replication offset
  * compared to the local one (better means, greater, so they claim more data).
  *
@@ -6022,7 +6022,7 @@ void clusterCommandSetSlot(client *c) {
      * 3. Upon replication completion, primary B executes `SETSLOT n NODE B` and
      *    returns success to client C.
      * 4. The following steps can happen in parallel:
-     *   a. Client C issues `SETSLOT n NODE B` against parimary A.
+     *   a. Client C issues `SETSLOT n NODE B` against primary A.
      *   b. Primary B gossips its new slot ownership to the cluster (including A, A', etc.).
      *
      * This ensures that all replicas have the latest topology information, enabling

@@ -297,7 +297,6 @@ int auxClientIpV4Setter(clusterNode *n, void *value, int length) {
         return C_ERR;
     }
     return C_OK;
-
 }
 
 sds auxClientIpV4Getter(clusterNode *n, sds s) {
@@ -322,7 +321,6 @@ int auxClientIpV6Setter(clusterNode *n, void *value, int length) {
         return C_ERR;
     }
     return C_OK;
-
 }
 
 sds auxClientIpV6Getter(clusterNode *n, sds s) {
@@ -6678,7 +6676,7 @@ long long clusterNodeReplOffset(clusterNode *node) {
     return node->repl_offset;
 }
 
- const char *clusterNodePreferredEndpoint(clusterNode *n, client *c) {
+const char *clusterNodePreferredEndpoint(clusterNode *n, client *c) {
     char *hostname = clusterNodeHostname(n);
     switch (server.cluster_preferred_endpoint_type) {
     case CLUSTER_ENDPOINT_TYPE_IP: return clusterNodeIp(n, c);

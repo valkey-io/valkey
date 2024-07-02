@@ -2849,6 +2849,10 @@ char *getClientSockname(client *c) {
 int isClientConnIpV6(client *c) {
      /* The cached client peer id is on the form "[IPv6]:port" for IPv6
       * addresses, so we just check for '[' here. */
+    if (c->conn->type == NULL && server.current_client) {
+        /* Fake client? Use current client instead. */
+        c = server.current_client;
+    }
     return getClientPeerId(c)[0] == '[';
 }
 

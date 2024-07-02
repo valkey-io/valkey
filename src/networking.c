@@ -253,7 +253,8 @@ void putClientInPendingWriteQueue(client *c) {
      * writes at this stage. */
     if (!(c->flags & CLIENT_PENDING_WRITE) &&
         (c->repl_state == REPL_STATE_NONE ||
-         ((c->repl_state == REPLICA_STATE_ONLINE || c->repl_state == REPLICA_STATE_BG_RDB_LOAD) && !c->repl_start_cmd_stream_on_ack))) {
+         ((c->repl_state == REPLICA_STATE_ONLINE || c->repl_state == REPLICA_STATE_BG_RDB_LOAD) &&
+          !c->repl_start_cmd_stream_on_ack))) {
         /* Here instead of installing the write handler, we just flag the
          * client and put it into a list of clients that have something
          * to write to the socket. This way before re-entering the event
@@ -1622,10 +1623,10 @@ void freeClient(client *c) {
 
     /* Log link disconnection with replica */
     if (getClientType(c) == CLIENT_TYPE_REPLICA) {
-            serverLog(LL_NOTICE, c->flags & CLIENT_REPL_RDB_CONN ? 
-                "Replica %s rdb connection disconnected.":
-                "Connection with replica %s lost.",
-                replicationGetReplicaName(c));
+        serverLog(LL_NOTICE,
+                  c->flags & CLIENT_REPL_RDB_CONN ? "Replica %s rdb connection disconnected."
+                                                  : "Connection with replica %s lost.",
+                  replicationGetReplicaName(c));
     }
 
     /* Free the query buffer */
@@ -1812,16 +1813,19 @@ int freeClientsInAsyncFreeQueue(void) {
         if (c->flags & CLIENT_PROTECTED_RDB_CONN) {
             /* Check if it's safe to remove RDB connection protection during synchronization
              * The primary gives a grace period before freeing this client because
-             * it serves as a reference to the first required replication data block for 
+             * it serves as a reference to the first required replication data block for
              * this replica */
             if (!c->rdb_client_disconnect_time) {
                 c->rdb_client_disconnect_time = server.unixtime;
-                serverLog(LL_VERBOSE, "Postpone RDB client id=%llu (%s) free for %d seconds", 
-                    (unsigned long long)c->id, replicationGetReplicaName(c), server.wait_before_rdb_client_free);
+                serverLog(LL_VERBOSE, "Postpone RDB client id=%llu (%s) free for %d seconds", (unsigned long long)c->id,
+                          replicationGetReplicaName(c), server.wait_before_rdb_client_free);
                 continue;
             }
             if (server.unixtime - c->rdb_client_disconnect_time > server.wait_before_rdb_client_free) {
-                serverLog(LL_NOTICE, "Replica main connection failed to establish PSYNC within the grace period (%ld seconds). Freeing RDB client %llu.", (long int)(server.unixtime - c->rdb_client_disconnect_time), (unsigned long long)c->id);
+                serverLog(LL_NOTICE,
+                          "Replica main connection failed to establish PSYNC within the grace period (%ld seconds). "
+                          "Freeing RDB client %llu.",
+                          (long int)(server.unixtime - c->rdb_client_disconnect_time), (unsigned long long)c->id);
                 c->flags &= ~CLIENT_PROTECTED_RDB_CONN;
             }
         }
@@ -1851,7 +1855,7 @@ client *lookupClientByID(uint64_t id) {
 client *lookupRdbClientByID(uint64_t id) {
     id = htonu64(id);
     void *c = NULL;
-    raxFind(server.replicas_waiting_psync,(unsigned char*)&id,sizeof(id),&c);
+    raxFind(server.replicas_waiting_psync, (unsigned char *)&id, sizeof(id), &c);
     return c;
 }
 
@@ -4024,7 +4028,9 @@ int closeClientOnOutputBufferLimitReached(client *c, int async) {
     serverAssert(c->reply_bytes < SIZE_MAX - (1024 * 64));
     /* Note that c->reply_bytes is irrelevant for replica clients
      * (they use the global repl buffers). */
-    if ((c->reply_bytes == 0 && getClientType(c) != CLIENT_TYPE_REPLICA) || (c->flags & CLIENT_CLOSE_ASAP && !(c->flags & CLIENT_PROTECTED_RDB_CONN))) return 0;
+    if ((c->reply_bytes == 0 && getClientType(c) != CLIENT_TYPE_REPLICA) ||
+        (c->flags & CLIENT_CLOSE_ASAP && !(c->flags & CLIENT_PROTECTED_RDB_CONN)))
+        return 0;
     if (checkClientOutputBufferLimits(c)) {
         sds client = catClientInfoString(sdsempty(), c);
         /* Remove RDB connection protection on COB overrun */
@@ -4072,9 +4078,9 @@ void flushReplicasOutputBuffers(void) {
          *
          * 3. Obviously if the replica is not ONLINE.
          */
-        if ((replica->repl_state == REPLICA_STATE_ONLINE || replica->repl_state == REPLICA_STATE_BG_RDB_LOAD)
-         && !(replica->flags & CLIENT_CLOSE_ASAP) &&
-            can_receive_writes && !replica->repl_start_cmd_stream_on_ack && clientHasPendingReplies(replica)) {
+        if ((replica->repl_state == REPLICA_STATE_ONLINE || replica->repl_state == REPLICA_STATE_BG_RDB_LOAD) &&
+            !(replica->flags & CLIENT_CLOSE_ASAP) && can_receive_writes && !replica->repl_start_cmd_stream_on_ack &&
+            clientHasPendingReplies(replica)) {
             writeToClient(replica, 0);
         }
     }

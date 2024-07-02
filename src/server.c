@@ -5160,8 +5160,7 @@ const char *replstateToString(int replstate) {
     switch (replstate) {
     case REPLICA_STATE_WAIT_BGSAVE_START:
     case REPLICA_STATE_WAIT_BGSAVE_END: return "wait_bgsave";
-    case REPLICA_STATE_BG_RDB_LOAD:
-        return "bg_transfer";
+    case REPLICA_STATE_BG_RDB_LOAD: return "bg_transfer";
     case REPLICA_STATE_SEND_BULK: return "send_bulk";
     case REPLICA_STATE_ONLINE: return "online";
     default: return "";
@@ -5797,8 +5796,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                                     "slave%d:ip=%s,port=%d,state=%s,"
                                     "offset=%lld,lag=%ld,type=%s\r\n",
                                     replica_id, replica_ip, replica->replica_listening_port, state,
-                                    replica->repl_ack_off, lag, replica->flags & CLIENT_REPL_RDB_CONN ? "rdb-conn": 
-                    replica->repl_state == REPLICA_STATE_BG_RDB_LOAD ? "main-conn": "replica");
+                                    replica->repl_ack_off, lag,
+                                    replica->flags & CLIENT_REPL_RDB_CONN              ? "rdb-conn"
+                                    : replica->repl_state == REPLICA_STATE_BG_RDB_LOAD ? "main-conn"
+                                                                                       : "replica");
                 replica_id++;
             }
         }

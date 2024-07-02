@@ -55,7 +55,7 @@
 #include "crc64.h"
 #include "config.h"
 #include "server.h"
- #include "connhelpers.h"
+#include "connhelpers.h"
 
 /* ------------------------- Buffer I/O implementation ----------------------- */
 
@@ -508,26 +508,26 @@ size_t rioWriteBulkDouble(rio *r, double d) {
 static size_t rioConnsetWrite(rio *r, const void *buf, size_t len) {
     ssize_t retval;
     int j;
-    unsigned char *p = (unsigned char*) buf;
+    unsigned char *p = (unsigned char *)buf;
     int doflush = (buf == NULL && len == 0);
 
     /* To start we always append to our buffer. If it gets larger than
      * a given size, we actually write to the sockets. */
     if (len) {
-        r->io.connset.buf = sdscatlen(r->io.connset.buf,buf,len);
+        r->io.connset.buf = sdscatlen(r->io.connset.buf, buf, len);
         len = 0; /* Prevent entering the while below if we don't flush. */
         if (sdslen(r->io.connset.buf) > PROTO_IOBUF_LEN) doflush = 1;
     }
 
     if (doflush) {
-        p = (unsigned char*) r->io.connset.buf;
+        p = (unsigned char *)r->io.connset.buf;
         len = sdslen(r->io.connset.buf);
     }
 
     /* Write in little chunchs so that when there are big writes we
      * parallelize while the kernel is sending data in background to
      * the TCP socket. */
-    while(len) {
+    while (len) {
         size_t count = len < 1024 ? len : 1024;
         int broken = 0;
         for (j = 0; j < r->io.connset.numconns; j++) {
@@ -540,8 +540,8 @@ static size_t rioConnsetWrite(rio *r, const void *buf, size_t len) {
             /* Make sure to write 'count' bytes to the socket regardless
              * of short writes. */
             size_t nwritten = 0;
-            while(nwritten != count) {
-                retval = connWrite(r->io.connset.conns[j],p+nwritten,count-nwritten);
+            while (nwritten != count) {
+                retval = connWrite(r->io.connset.conns[j], p + nwritten, count - nwritten);
                 if (retval <= 0) {
                     /* With blocking sockets, which is the sole user of this
                      * rio target, EWOULDBLOCK is returned only because of
@@ -587,7 +587,7 @@ static off_t rioConnsetTell(rio *r) {
 static int rioConnsetFlush(rio *r) {
     /* Our flush is implemented by the write method, that recognizes a
      * buffer set to NULL with a count of zero as a flush request. */
-    return rioConnsetWrite(r,NULL,0);
+    return rioConnsetWrite(r, NULL, 0);
 }
 
 static const rio rioConnsetIO = {
@@ -595,21 +595,21 @@ static const rio rioConnsetIO = {
     rioConnsetWrite,
     rioConnsetTell,
     rioConnsetFlush,
-    NULL,           /* update_checksum */
-    0,              /* current checksum */
-    0,              /* flags */
-    0,              /* bytes read or written */
-    0,              /* read/write chunk size */
-    { { NULL, 0 } } /* union for io-specific vars */
+    NULL,       /* update_checksum */
+    0,          /* current checksum */
+    0,          /* flags */
+    0,          /* bytes read or written */
+    0,          /* read/write chunk size */
+    {{NULL, 0}} /* union for io-specific vars */
 };
 
 
 void rioInitWithConnset(rio *r, connection **conns, int numconns) {
     *r = rioConnsetIO;
-    r->io.connset.conns = zmalloc(sizeof(connection*) * numconns);
+    r->io.connset.conns = zmalloc(sizeof(connection *) * numconns);
     r->io.connset.state = zmalloc(sizeof(int) * numconns);
 
-    for (int i = 0;  i < numconns;  i++) {
+    for (int i = 0; i < numconns; i++) {
         connIncrRefs(conns[i]);
         r->io.connset.conns[i] = conns[i];
         r->io.connset.state[i] = 0;
@@ -622,10 +622,10 @@ void rioInitWithConnset(rio *r, connection **conns, int numconns) {
 
 /* release the rio stream. */
 void rioFreeConnset(rio *r) {
-    for (int i = 0;  i < r->io.connset.numconns;  i++) {
+    for (int i = 0; i < r->io.connset.numconns; i++) {
         connection *conn = r->io.connset.conns[i];
         connDecrRefs(conn);
-        callHandler(conn, NULL);    // trigger close/free if necessary
+        callHandler(conn, NULL); // trigger close/free if necessary
     }
 
     zfree(r->io.connset.conns);

@@ -994,19 +994,17 @@ void debugCommand(client *c) {
             return;
         }
         addReply(c, shared.ok);
-    } else if(!strcasecmp(c->argv[1]->ptr,"sleep-after-fork-seconds") &&
-        c->argc == 3) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "sleep-after-fork-seconds") && c->argc == 3) {
         double sleep_after_fork_seconds;
         if (getDoubleFromObjectOrReply(c, c->argv[2], &sleep_after_fork_seconds, NULL) != C_OK) {
             addReply(c, shared.err);
             return;
         }
         server.debug_sleep_after_fork_ms = (int)(sleep_after_fork_seconds * 1e6);
-        addReply(c,shared.ok);
-    } else if(!strcasecmp(c->argv[1]->ptr,"WAIT-BEFORE-RDB-CLIENT-FREE") &&
-        c->argc == 3) {
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "WAIT-BEFORE-RDB-CLIENT-FREE") && c->argc == 3) {
         server.wait_before_rdb_client_free = atoi(c->argv[2]->ptr);
-        addReply(c,shared.ok);
+        addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "dict-resizing") && c->argc == 3) {
         server.dict_resizing = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);

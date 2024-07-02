@@ -3542,7 +3542,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
     }
     /* Filter replica connections pending full sync (ie. in WAIT_BGSAVE_START state). */
     listRewind(server.replicas, &li);
-    while((ln = listNext(&li))) {
+    while ((ln = listNext(&li))) {
         client *replica = ln->value;
         if (replica->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
             /* Check replica has the exact requirements */
@@ -3556,7 +3556,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
                 /* This replica uses diskless dual connection sync, hence we need
                  * to inform it with the save end offset.*/
                 sendCurrentOffsetToReplica(replica);
-                /* Make sure repl traffic is appended to the replication backlog */                
+                /* Make sure repl traffic is appended to the replication backlog */
                 addReplicaToPsyncWait(replica);
             } else {
                 server.rdb_pipe_numconns++;
@@ -3633,8 +3633,8 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
                 server.rdb_pipe_numconns_writing = 0;
             }
         } else {
-            serverLog(LL_NOTICE, "Background RDB transfer started by pid %ld to %s",
-                (long) childpid, dual_conn? "replica socket" : "pipe");
+            serverLog(LL_NOTICE, "Background RDB transfer started by pid %ld to %s", (long)childpid,
+                      dual_conn ? "replica socket" : "pipe");
             server.rdb_save_time_start = time(NULL);
             server.rdb_child_type = RDB_CHILD_TYPE_SOCKET;
             close(rdb_pipe_write); /* close write in parent so that it can detect the close on the child. */

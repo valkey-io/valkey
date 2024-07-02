@@ -99,7 +99,7 @@ struct _rio {
         } fd;
         /* Multiple connections target (used to write to N sockets). */
         struct {
-            connection **conns;  /* Connections */
+            connection **conns; /* Connections */
             int *state;         /* Error state of each fd. 0 (if ok) or errno. */
             int numconns;
             off_t pos;

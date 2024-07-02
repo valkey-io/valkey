@@ -1849,7 +1849,7 @@ void clusterHandleConfigEpochCollision(clusterNode *sender) {
  * that even if we receive gossip messages from other nodes that still remember
  * about the node we want to remove, we don't re-add it before some time.
  *
- * The CLUSTER_DEFAULT_BLACKLIST_TTL is set to 1 minute which means
+ * The default blacklist ttl is set to 1 minute which means
  * that valkey-cli has 60 seconds to send CLUSTER FORGET messages to nodes
  * in the cluster without dealing with the problem of other nodes re-adding
  * back the node to nodes we already sent the FORGET command to.

@@ -5,6 +5,15 @@ proc log_file_matches {log pattern} {
     string match $pattern $content
 }
 
+proc start_bg_server_sleep {host port sec} {
+    set tclsh [info nameofexecutable]
+    exec $tclsh tests/helpers/bg_server_sleep.tcl $host $port $sec &
+}
+
+proc stop_bg_server_sleep {handle} {
+    catch {exec /bin/kill -9 $handle}
+}
+
 start_server {tags {"repl rdb-connection external:skip"}} {
     set replica [srv 0 client]
     set replica_host [srv 0 host]
@@ -508,15 +517,6 @@ start_server {tags {"repl rdb-connection external:skip"}} {
     }
 }
 
-proc start_bg_server_sleep {host port sec} {
-    set tclsh [info nameofexecutable]
-    exec $tclsh tests/helpers/bg_server_sleep.tcl $host $port $sec &
-}
-
-proc stop_bg_server_sleep {handle} {
-    catch {exec /bin/kill -9 $handle}
-}
-
 start_server {tags {"repl rdb-connection external:skip"}} {
     set master [srv 0 client]
     set master_host [srv 0 host]
@@ -671,9 +671,14 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         $master debug sleep-after-fork-seconds 0
 
         test "Test rdb-connection master gets cob overrun during replica rdb load" {
+            set cur_client_closed_count [s -1 client_output_buffer_limit_disconnections]
             $replica slaveof $master_host $master_port
+            wait_for_condition 50 10000 {
+                [s -1 client_output_buffer_limit_disconnections] > $cur_client_closed_count
+            } else {
+                fail "Master should disconnect replica due to COB overrun"
+            }
 
-            wait_for_log_messages -1 {"*Client * closed * for overcoming of output buffer limits.*"} $loglines 2000 1
             wait_for_condition 50 100 {
                 [string match {*replicas_waiting_psync:0*} [$master info replication]]
             } else {

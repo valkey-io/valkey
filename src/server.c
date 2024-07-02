@@ -3455,8 +3455,9 @@ void call(client *c, int flags) {
      * re-processed. */
     if (reprocessing_command) c->flag.reprocessing_command = 1;
 
+    /* Log the query into the Fat log if needed. */
     if (update_command_stats) {
-        fatlogPushCurrentCommand(c, real_cmd, c->argv_len_sum);
+        fatlogPushCurrentCommand(c, real_cmd, c->cmd_query_length);
     }
 
     /* To record how many reply bytes generated in this command. */
@@ -3518,7 +3519,7 @@ void call(client *c, int flags) {
         if (server.execution_nesting == 0) durationAddSample(EL_DURATION_TYPE_CMD, duration);
     }
 
-    /* Log the command into the Slow log if needed.
+    /* Log the command into the Slow log and Fat log if needed.
      * If the client is blocked we will handle slowlog when it is unblocked. */
     if (update_command_stats && !c->flag.blocked) {
         slowlogPushCurrentCommand(c, real_cmd, c->duration);

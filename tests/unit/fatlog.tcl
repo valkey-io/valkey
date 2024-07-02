@@ -8,7 +8,7 @@ start_server {tags {"fatlog"}} {
     } {0}
 
     test {FATLOG - only logs commands having bigger response than threshold} {
-        r config set fatlog-log-bigger-than 25
+        r config set fatlog-log-bigger-than 30
         r set a abc
         r get a
         assert_equal [r fatlog len] 0
@@ -40,7 +40,7 @@ start_server {tags {"fatlog"}} {
     } {0}
 
     test {FATLOG - logged entry sanity check} {
-        r config set fatlog-log-bigger-than 25
+        r config set fatlog-log-bigger-than 30
         r client setname foobar
         r get a
         set e [lindex [r fatlog get] 0]
@@ -167,7 +167,7 @@ start_server {tags {"fatlog"}} {
         r multi
         r get a
         r exec
-        r config set fatlog-log-bigger-than 10
+        r config set fatlog-log-bigger-than 30
         assert_equal [r fatlog len] 6
         assert_equal [lindex [lindex [r fatlog get] 1] 3] {get a}
     }

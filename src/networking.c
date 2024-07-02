@@ -151,6 +151,7 @@ client *createClient(connection *conn) {
     c->qb_pos = 0;
     c->querybuf = NULL;
     c->querybuf_peak = 0;
+    c->cmd_query_length = 0;
     c->reqtype = 0;
     c->argc = 0;
     c->argv = NULL;
@@ -2088,6 +2089,7 @@ void resetClient(client *c) {
     serverCommandProc *prevcmd = c->cmd ? c->cmd->proc : NULL;
 
     freeClientArgv(c);
+    c->cmd_query_length = 0;
     c->cur_script = NULL;
     c->reqtype = 0;
     c->multibulklen = 0;
@@ -2260,6 +2262,9 @@ int processInlineBuffer(client *c) {
     /* Move querybuffer position to the next query in the buffer. */
     c->qb_pos += querylen + linefeed_chars;
 
+    /* Record query length for fatlog. */
+    c->cmd_query_length = querylen;
+
     /* Setup argv array on client structure */
     if (argc) {
         if (c->argv) zfree(c->argv);
@@ -2327,6 +2332,8 @@ int processMultibulkBuffer(client *c) {
     char *newline = NULL;
     int ok;
     long long ll;
+
+    size_t qb_pos_start = c->qb_pos;
 
     if (c->multibulklen == 0) {
         /* The client should have been reset */
@@ -2471,6 +2478,9 @@ int processMultibulkBuffer(client *c) {
             c->multibulklen--;
         }
     }
+
+    /* Record query length for fatlog. */
+    c->cmd_query_length += c->qb_pos - qb_pos_start;
 
     /* We're done when c->multibulk == 0 */
     if (c->multibulklen == 0) return C_OK;

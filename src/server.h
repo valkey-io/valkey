@@ -1191,6 +1191,7 @@ typedef struct client {
     sds querybuf;                        /* Buffer we use to accumulate client queries. */
     size_t qb_pos;                       /* The position we have read in querybuf. */
     size_t querybuf_peak;                /* Recent (100ms or more) peak of querybuf size. */
+    size_t cmd_query_length;             /* Query length in bytes for one command. */
     int argc;                            /* Num of arguments of current command. */
     robj **argv;                         /* Arguments of current command. */
     int argv_len;                        /* Size of argv array (may be more than argc) */

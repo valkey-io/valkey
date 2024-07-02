@@ -2003,7 +2003,7 @@ struct valkeyServer {
     int repl_diskless_sync_delay;              /* Delay to start a diskless repl BGSAVE. */
     int repl_diskless_sync_max_replicas;       /* Max replicas for diskless repl BGSAVE
                                                 * delay (start sooner if they all connect). */
-    int rdb_conn_enabled;                      /* Config used to determine if the replica should
+    int dual_conn_enabled;                      /* Config used to determine if the replica should
                                                 * use rdb connection for full syncs. */
     int wait_before_rdb_client_free;           /* Grace period in seconds for replica main connection
                                                 * to establish psync. */

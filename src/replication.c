@@ -1278,7 +1278,7 @@ void replconfCommand(client *c) {
             else if (!strcasecmp(c->argv[j + 1]->ptr, "psync2"))
                 c->replica_capa |= REPLICA_CAPA_PSYNC2;
             else if (!strcasecmp(c->argv[j+1]->ptr,"dual-conn") && 
-                server.rdb_conn_enabled && server.repl_diskless_sync) {
+                server.dual_conn_enabled && server.repl_diskless_sync) {
                 /* If rdb-connection is disable on this primary, treat this command as unrecognized 
                  * replconf option. */
                 c->replica_capa |= REPLICA_CAPA_DUAL_CONN;
@@ -2547,7 +2547,7 @@ int sendCurrentOffsetToReplica(client* replica) {
 }
 
 /* Replication: Replica side.
- * This connection handler is used to initialize the RDB connection (repl-rdb-connection sync). 
+ * This connection handler is used to initialize the RDB connection (dual-connection-sync-enabled sync). 
  * Once a replica with repl rdb-connection enabled, denied from PSYNC with its primary, 
  * fullSyncWithPrimary begins its role. The connection handler prepare server.repl_rdb_transfer_s
  * for a rdb stream, and server.repl_transfer_s for increamental replication data stream. */
@@ -3036,7 +3036,7 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
 
     if (!strncmp(reply, "+FULLRESYNC", 11)) {
         char *replid = NULL, *offset = NULL;
-        if (server.rdb_conn_enabled) {
+        if (server.dual_conn_enabled) {
             server.primary_supports_rdb_connection = 0;
         }
 
@@ -3391,7 +3391,7 @@ void syncWithPrimary(connection *conn) {
 
         /* When using rdb-connection for sync, announce that the replica is capable
          * of rdb connection sync. */
-        if (server.rdb_conn_enabled) {
+        if (server.dual_conn_enabled) {
            err = sendCommand(conn,"REPLCONF", "capa" ,"dual-conn", NULL);
         }
 
@@ -3467,7 +3467,7 @@ void syncWithPrimary(connection *conn) {
         return;
     }
 
-    if (server.repl_state == REPL_STATE_RECEIVE_NO_FULLSYNC_REPLY && !server.rdb_conn_enabled) {
+    if (server.repl_state == REPL_STATE_RECEIVE_NO_FULLSYNC_REPLY && !server.dual_conn_enabled) {
         server.repl_state = REPL_STATE_RECEIVE_CAPA_REPLY;
     }
 

@@ -109,12 +109,7 @@ void flagTransaction(client *c) {
 }
 
 void multiCommand(client *c) {
-    if (c->flag.multi) {
-        addReplyError(c, "MULTI calls can not be nested");
-        return;
-    }
     c->flag.multi = 1;
-
     addReply(c, shared.ok);
 }
 
@@ -459,10 +454,6 @@ void touchAllWatchedKeysInDb(serverDb *emptied, serverDb *replaced_with) {
 void watchCommand(client *c) {
     int j;
 
-    if (c->flag.multi) {
-        addReplyError(c, "WATCH inside MULTI is not allowed");
-        return;
-    }
     /* No point in watching if the client is already dirty. */
     if (c->flag.dirty_cas) {
         addReply(c, shared.ok);

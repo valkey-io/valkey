@@ -5,19 +5,19 @@ test "(init) Restart killed instances" {
     restart_killed_instances
 }
 
-test "(init) Remove old master entry from sentinels" {
+test "(init) Remove old primary entry from sentinels" {
     foreach_sentinel_id id {
         catch {S $id SENTINEL REMOVE mymaster}
     }
 }
 
 set redis_slaves [expr $::instances_count - 1]
-test "(init) Create a master-slaves cluster of [expr $redis_slaves+1] instances" {
+test "(init) Create a primary-slaves cluster of [expr $redis_slaves+1] instances" {
     create_valkey_master_slave_cluster [expr {$redis_slaves+1}]
 }
 set master_id 0
 
-test "(init) Sentinels can start monitoring a master" {
+test "(init) Sentinels can start monitoring a primary" {
     set sentinels [llength $::sentinel_instances]
     set quorum [expr {$sentinels/2+1}]
     foreach_sentinel_id id {
@@ -38,7 +38,7 @@ test "(init) Sentinels can start monitoring a master" {
     }
 }
 
-test "(init) Sentinels can talk with the master" {
+test "(init) Sentinels can talk with the primary" {
     foreach_sentinel_id id {
         wait_for_condition 1000 50 {
             [catch {S $id SENTINEL GET-MASTER-ADDR-BY-NAME mymaster}] == 0

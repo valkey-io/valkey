@@ -34,7 +34,7 @@ test "After Sentinel 1 is restarted, its config gets updated" {
     }
 }
 
-test "New master [join $addr {:}] role matches" {
+test "New primary [join $addr {:}] role matches" {
     assert {[RI $master_id role] eq {master}}
 }
 

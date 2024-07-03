@@ -3598,9 +3598,9 @@ void clusterSendMessage(clusterLink *link, clusterMsgSendBlock *msgblock) {
 /* Helper function to send message to node depending on
  * the header type supported by the node. */
 void clusterSendPublishMessage(clusterNode *node, int type, clusterMsgSendBlock *msgblock) {
-    if ((type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) & !nodeSupportsLightMsgHdr(node)) {
+    if ((type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) && !nodeSupportsLightMsgHdr(node)) {
         clusterSendMessage(node->link, msgblock);
-    } else if ((type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT) &
+    } else if ((type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT) &&
                nodeSupportsLightMsgHdr(node)) {
         clusterSendMessage(node->link, msgblock);
     }

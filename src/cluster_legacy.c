@@ -1902,9 +1902,9 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
 
     serverAssert(nodeFailed(node));
 
-    /* For replicas or primaries without slots, we always clear the FAIL flag
-     * if we can contact the node again. */
-    if (nodeIsReplica(node) || node->numslots == 0) {
+    /* For replicas or primaries without slots, that is, nodes without voting
+     * right, we always clear the FAIL flag if we can contact the node again. */
+    if (!clusterNodeIsVotingPrimary(node)) {
         serverLog(LL_NOTICE, "Clear FAIL state for node %.40s (%s): %s is reachable again.", node->name,
                   node->human_nodename, nodeIsReplica(node) ? "replica" : "primary without slots");
         node->flags &= ~CLUSTER_NODE_FAIL;

@@ -289,6 +289,10 @@ int dictSdsKeyCompare(dict *d, const void *key1, const void *key2) {
     return memcmp(key1, key2, l1) == 0;
 }
 
+size_t dictSdsEmbedKey(unsigned char *buf, size_t buf_len, const void *key, uint8_t *key_offset) {
+    return sdscopytobuffer(buf, buf_len, (sds)key, key_offset);
+}
+
 /* A case insensitive version used for the command lookup table and other
  * places where case insensitive non binary-safe comparison is needed. */
 int dictSdsKeyCaseCompare(dict *d, const void *key1, const void *key2) {
@@ -468,9 +472,11 @@ dictType dbDictType = {
     dictSdsHash,          /* hash function */
     NULL,                 /* key dup */
     dictSdsKeyCompare,    /* key compare */
-    dictSdsDestructor,    /* key destructor */
+    NULL,                 /* key is embedded in the dictEntry and freed internally */
     dictObjectDestructor, /* val destructor */
     dictResizeAllowed,    /* allow to resize */
+    .embedKey = dictSdsEmbedKey,
+    .embedded_entry = 1,
 };
 
 /* Db->expires */
@@ -6402,6 +6408,9 @@ void memtest(size_t megabytes, int passes);
  * executable name contains "valkey-sentinel". */
 int checkForSentinelMode(int argc, char **argv, char *exec_name) {
     if (strstr(exec_name, "valkey-sentinel") != NULL) return 1;
+
+    /* valkey may install symlinks like redis-sentinel -> valkey-sentinel. */
+    if (strstr(exec_name, "redis-sentinel") != NULL) return 1;
 
     for (int j = 1; j < argc; j++)
         if (!strcmp(argv[j], "--sentinel")) return 1;

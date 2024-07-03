@@ -1118,61 +1118,62 @@ typedef struct {
 #endif
 
 typedef struct ClientFlags {
-    uint64_t primary : 1;
-    uint64_t replica : 1;
-    uint64_t monitor : 1;
-    uint64_t multi : 1;
-    uint64_t blocked : 1;
-    uint64_t dirty_cas : 1;
-    uint64_t close_after_reply : 1;
-    uint64_t unblocked : 1;
-    uint64_t script : 1;
-    uint64_t asking : 1;
-    uint64_t close_asap : 1;
-    uint64_t unix_socket : 1;
-    uint64_t dirty_exec : 1;
-    uint64_t primary_force_reply : 1;
-    uint64_t force_aof : 1;
-    uint64_t force_repl : 1;
-    uint64_t pre_psync : 1;
-    uint64_t readonly : 1;
-    uint64_t pubsub : 1;
-    uint64_t prevent_aof_prop : 1;
-    uint64_t prevent_repl_prop : 1;
-    uint64_t prevent_prop : 1;
-    uint64_t pending_write : 1;
-    uint64_t reply_off : 1;
-    uint64_t reply_skip_next : 1;
-    uint64_t reply_skip : 1;
-    uint64_t lua_debug : 1;
-    uint64_t lua_debug_sync : 1;
-    uint64_t module : 1;
-    uint64_t protected : 1;
-    uint64_t executing_command : 1;
-    uint64_t pending_command : 1;
-    uint64_t tracking : 1;
-    uint64_t tracking_broken_redir : 1;
-    uint64_t tracking_bcast : 1;
-    uint64_t tracking_optin : 1;
-    uint64_t tracking_optout : 1;
-    uint64_t tracking_caching : 1;
-    uint64_t tracking_noloop : 1;
-    uint64_t in_to_table : 1;
-    uint64_t protocol_error : 1;
-    uint64_t close_after_command : 1;
-    uint64_t deny_blocking : 1;
-    uint64_t repl_rdbonly : 1;
-    uint64_t no_evict : 1;
-    uint64_t allow_oom : 1;
-    uint64_t no_touch : 1;
-    uint64_t pushing : 1;
-    uint64_t module_auth_has_result : 1;
-    uint64_t module_prevent_aof_prop : 1;
-    uint64_t module_prevent_repl_prop : 1;
-    uint64_t reprocessing_command : 1;
-    uint64_t replication_done : 1;
-    uint64_t authenticated : 1;
-    uint64_t reserved : 11;
+    uint64_t primary : 1;             /* This client is a primary */
+    uint64_t replica : 1;             /* This client is a replica */
+    uint64_t monitor : 1;             /* This client is a replica monitor, see MONITOR */
+    uint64_t multi : 1;               /* This client is in a MULTI context */
+    uint64_t blocked : 1;             /* The client is waiting in a blocking operation */
+    uint64_t dirty_cas : 1;           /* Watched keys modified. EXEC will fail. */
+    uint64_t close_after_reply : 1;   /* Close after writing entire reply. */
+    uint64_t unblocked : 1;           /* This client was unblocked and is stored in server.unblocked_clients */
+    uint64_t script : 1;              /* This is a non connected client used by Lua */
+    uint64_t asking : 1;              /* Client issued the ASKING command */
+    uint64_t close_asap : 1;          /* Close this client ASAP */
+    uint64_t unix_socket : 1;         /* Client connected via Unix domain socket */
+    uint64_t dirty_exec : 1;          /* EXEC will fail for errors while queueing */
+    uint64_t primary_force_reply : 1; /* Queue replies even if is primary */
+    uint64_t force_aof : 1;           /* Force AOF propagation of current cmd. */
+    uint64_t force_repl : 1;          /* Force replication of current cmd. */
+    uint64_t pre_psync : 1;           /* Instance don't understand PSYNC. */
+    uint64_t readonly : 1;            /* Cluster client is in read-only state. */
+    uint64_t pubsub : 1;              /* Client is in Pub/Sub mode. */
+    uint64_t prevent_aof_prop : 1;    /* Don't propagate to AOF. */
+    uint64_t prevent_repl_prop : 1;   /* Don't propagate to replicas. */
+    uint64_t prevent_prop : 1;        /* Don't propagate to AOF or replicas. */
+    uint64_t pending_write : 1;       /* Client has output to send but a write handler is yet not installed. */
+    uint64_t reply_off : 1;           /* Don't send replies to client. */
+    uint64_t reply_skip_next : 1;     /* Set CLIENT_REPLY_SKIP for next cmd */
+    uint64_t reply_skip : 1;          /* Don't send just this reply. */
+    uint64_t lua_debug : 1;           /* Run EVAL in debug mode. */
+    uint64_t lua_debug_sync : 1;      /* EVAL debugging without fork() */
+    uint64_t module : 1;              /* Non connected client used by some module. */
+    uint64_t protected : 1;           /* Client should not be freed for now. */
+    uint64_t executing_command : 1;   /* Indicates that the client is currently in the process of handling a command. */
+    uint64_t pending_command : 1;     /* Indicates the client has a fully parsed command ready for execution. */
+    uint64_t tracking : 1;            /* Client enabled keys tracking in order to perform client side caching. */
+    uint64_t tracking_broken_redir : 1; /* Target client is invalid. */
+    uint64_t tracking_bcast : 1;        /* Tracking in BCAST mode. */
+    uint64_t tracking_optin : 1;        /* Tracking in opt-in mode. */
+    uint64_t tracking_optout : 1;       /* Tracking in opt-out mode. */
+    uint64_t tracking_caching : 1;      /* CACHING yes/no was given, depending on optin/optout mode. */
+    uint64_t tracking_noloop : 1;       /* Don't send invalidation messages about writes performed by myself. */
+    uint64_t in_to_table : 1;           /* This client is in the timeout table. */
+    uint64_t protocol_error : 1;        /* Protocol error chatting with it. */
+    uint64_t close_after_command : 1;   /* Close after executing commands and writing entire reply. */
+    uint64_t deny_blocking : 1;         /* Indicate that the client should not be blocked. */
+    uint64_t repl_rdbonly : 1;          /* This client is a replica that only wants RDB without replication buffer. */
+    uint64_t no_evict : 1;              /* This client is protected against client memory eviction. */
+    uint64_t allow_oom : 1; /* Client used by RM_Call is allowed to fully execute scripts even when in OOM */
+    uint64_t no_touch : 1;  /* This client will not touch LFU/LRU stats. */
+    uint64_t pushing : 1;   /* This client is pushing notifications. */
+    uint64_t module_auth_has_result : 1; /* Indicates a client in the middle of module based auth had been authenticated
+                                            from the Module. */
+    uint64_t module_prevent_aof_prop : 1;  /* Module client do not want to propagate to AOF */
+    uint64_t module_prevent_repl_prop : 1; /* Module client do not want to propagate to replica */
+    uint64_t reprocessing_command : 1;     /* The client is re-processing the command. */
+    uint64_t replication_done : 1;         /* Indicate that replication has been done on the client */
+    uint64_t authenticated : 1;            /* Indicate a client has successfully authenticated */
+    uint64_t reserved : 10;                /* Reserved for future use */
 } ClientFlags;
 
 typedef struct client {

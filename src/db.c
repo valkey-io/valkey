@@ -190,7 +190,11 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
     return o;
 }
 
-/* Add the key to the DB. It's up to the caller to increment the reference
+/* Add the key to the DB.
+ *
+ * In this case a copy of `key` is copied in kvstore, the caller must ensure the `key` is properly freed.
+ *
+ * It's up to the caller to increment the reference
  * counter of the value if needed.
  *
  * If the update_if_existing argument is false, the program is aborted
@@ -204,7 +208,6 @@ static void dbAddInternal(serverDb *db, robj *key, robj *val, int update_if_exis
         return;
     }
     serverAssertWithInfo(NULL, key, de != NULL);
-    kvstoreDictSetKey(db->keys, slot, de, sdsdup(key->ptr));
     initObjectLRUOrLFU(val);
     kvstoreDictSetVal(db->keys, slot, de, val);
     signalKeyAsReady(db, key, val->type);
@@ -240,15 +243,16 @@ int getKeySlot(sds key) {
 
 /* This is a special version of dbAdd() that is used only when loading
  * keys from the RDB file: the key is passed as an SDS string that is
- * retained by the function (and not freed by the caller).
+ * copied by the function and freed by the caller.
  *
  * Moreover this function will not abort if the key is already busy, to
  * give more control to the caller, nor will signal the key as ready
  * since it is not useful in this context.
  *
- * The function returns 1 if the key was added to the database, taking
- * ownership of the SDS string, otherwise 0 is returned, and is up to the
- * caller to free the SDS string. */
+ * The function returns 1 if the key was added to the database, otherwise 0 is returned.
+ *
+ * In this case a copy of `key` is copied in kvstore, the caller must ensure the `key` is properly freed.
+ */
 int dbAddRDBLoad(serverDb *db, sds key, robj *val) {
     int slot = getKeySlot(key);
     dictEntry *de = kvstoreDictAddRaw(db->keys, slot, key, NULL);

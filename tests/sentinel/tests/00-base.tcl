@@ -56,7 +56,7 @@ test "SENTINEL PENDING-SCRIPTS returns the information about pending scripts" {
     assert_morethan_equal [llength [S 0 SENTINEL PENDING-SCRIPTS]] 0
 }
 
-test "SENTINEL PRIMARYS returns a list of monitored primarys" {
+test "SENTINEL PRIMARIES returns a list of monitored primaries" {
     assert_match "*mymaster*" [S 0 SENTINEL MASTERS]
     assert_morethan_equal [llength [S 0 SENTINEL MASTERS]] 1
 }
@@ -195,7 +195,7 @@ test "New primary [join $addr {:}] role matches" {
 }
 
 test "SENTINEL RESET can resets the primary" {
-    # After SENTINEL RESET, sometimes the sentinel can sense the master again,
+    # After SENTINEL RESET, sometimes the sentinel can sense the primary again,
     # causing the test to fail. Here we give it a few more chances.
     for {set j 0} {$j < 10} {incr j} {
         assert_equal 1 [S 0 SENTINEL RESET mymaster]

@@ -1,7 +1,7 @@
 /* hyperloglog.c - HyperLogLog probabilistic cardinality approximation.
  * This file implements the algorithm and the exported commands.
  *
- * Copyright (c) 2014, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2014, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without

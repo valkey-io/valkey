@@ -508,12 +508,10 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
      * our key. We have just to reallocate the node and make space for the
      * data pointer. */
     if (i == len && (!h->iscompr || j == 0 /* not in the middle if j is 0 */)) {
-        size_t oldalloc = 0;
-
         debugf("### Insert: node representing key exists\n");
         /* Make space for the value pointer if needed. */
         if (!h->iskey || (h->isnull && overwrite)) {
-            oldalloc = rax_alloc_size(h);
+            size_t oldalloc = rax_alloc_size(h);
             h = raxReallocForData(h, data);
             if (h) {
                 memcpy(parentlink, &h, sizeof(h));

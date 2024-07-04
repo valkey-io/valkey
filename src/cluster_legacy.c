@@ -578,6 +578,7 @@ int clusterLoadConfig(char *filename) {
                        memcmp(primary->shard_id, n->shard_id, CLUSTER_NAMELEN) != 0) {
                 /* If the primary has been added to a shard, make sure this
                  * node has the same persisted shard id as the primary. */
+                sdsfreesplitres(argv, argc);
                 goto fmterr;
             }
             n->replicaof = primary;

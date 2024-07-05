@@ -34,7 +34,7 @@
 #include "zmalloc.h"
 
 /* AOF io_uring max QD and blocksize */
-#define AOF_IOURING_MAX_ENTRIES   (64)
+#define AOF_IOURING_MAX_ENTRIES (64)
 #define AOF_IOURING_MAX_BLOCKSIZE (32 * 1024)
 
 static struct io_uring *_aof_io_uring;
@@ -131,7 +131,7 @@ int aofWriteByIOUring(int fd, const char *buf, size_t len) {
         while (inflight >= depth) {
             if (0 != reapCompletions()) {
                 fprintf(stderr, "## reapCompletions failed when persist AOF file by io_uring...\n");
-				return totwritten;
+                return totwritten;
             }
         }
         totwritten = writing;

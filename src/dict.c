@@ -212,7 +212,7 @@ static inline dictEntry *createEntryNormal(void *key, dictEntry *next) {
     entry->key = key;
     entry->next = next;
     return encodeMaskedPtr(entry, ENTRY_PTR_NORMAL);
- }
+}
 
 /* Creates an entry without a value field. */
 static inline dictEntry *createEntryNoValue(void *key, dictEntry *next) {
@@ -581,7 +581,7 @@ dictEntry *dictInsertAtPosition(dict *d, void *key, void *position) {
      * Insert the element in top, with the assumption that in a database
      * system it is more likely that recently added entries are accessed
      * more frequently. */
-     if (d->type->no_value) {
+    if (d->type->no_value) {
         if (d->type->keys_are_odd && !*bucket) {
             /* We can store the key directly in the destination bucket without the
              * allocated entry. */

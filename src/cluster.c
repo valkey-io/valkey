@@ -1218,6 +1218,10 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
         dictEntry *de;
         dictIterator *di;
 
+        /* If the client is blocked on module, but not on a specific key,
+         * don't unblock it. */
+        if (c->bstate.btype == BLOCKED_MODULE && !moduleClientIsBlockedOnKeys(c)) return 0;
+
         /* If the cluster is down, unblock the client with the right error.
          * If the cluster is configured to allow reads on cluster down, we
          * still want to emit this error since a write will be required
@@ -1226,10 +1230,6 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
             clusterRedirectClient(c, NULL, 0, CLUSTER_REDIR_DOWN_STATE);
             return 1;
         }
-
-        /* If the client is blocked on module, but not on a specific key,
-         * don't unblock it (except for the CLUSTER_FAIL case above). */
-        if (c->bstate.btype == BLOCKED_MODULE && !moduleClientIsBlockedOnKeys(c)) return 0;
 
         /* All keys must belong to the same slot, so check first key only. */
         di = dictGetIterator(c->bstate.keys);

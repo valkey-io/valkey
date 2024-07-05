@@ -287,18 +287,18 @@ struct _clusterNode {
     uint16_t *slot_info_pairs;              /* Slots info represented as (start/end) pair (consecutive index). */
     int slot_info_pairs_count;              /* Used number of slots in slot_info_pairs */
     int numslots;                           /* Number of slots handled by this node */
-    int num_replicas;                       /* Number of replica nodes, if this is a primar */
+    int num_replicas;                       /* Number of replica nodes, if this is a primary */
     clusterNode **replicas;                 /* pointers to replica nodes */
     clusterNode *replicaof;                 /* pointer to the primary node. Note that it
                                              may be NULL even if the node is a replica
-                                             if we don't have the parimary node in our
+                                             if we don't have the primary node in our
                                              tables. */
     unsigned long long last_in_ping_gossip; /* The number of the last carried in the ping gossip section */
     mstime_t ping_sent;                     /* Unix time we sent latest ping */
     mstime_t pong_received;                 /* Unix time we received the pong */
     mstime_t data_received;                 /* Unix time we received any data */
     mstime_t fail_time;                     /* Unix time when FAIL flag was set */
-    mstime_t voted_time;                    /* Last time we voted for a replica of this parimary */
+    mstime_t voted_time;                    /* Last time we voted for a replica of this primary */
     mstime_t repl_offset_time;              /* Unix time we received offset for this node */
     mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
     long long repl_offset;                  /* Last known repl offset for this node. */

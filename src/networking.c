@@ -4222,15 +4222,6 @@ void processEventsWhileBlocked(void) {
  * Threaded I/O
  * ========================================================================== */
 
-#define IO_THREADS_MAX_NUM 128
-#ifndef CACHE_LINE_SIZE
-#if defined(__aarch64__) && defined(__APPLE__)
-#define CACHE_LINE_SIZE 128
-#else
-#define CACHE_LINE_SIZE 64
-#endif
-#endif
-
 typedef struct __attribute__((aligned(CACHE_LINE_SIZE))) threads_pending {
     _Atomic unsigned long value;
 } threads_pending;

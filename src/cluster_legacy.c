@@ -578,6 +578,7 @@ int clusterLoadConfig(char *filename) {
                        memcmp(primary->shard_id, n->shard_id, CLUSTER_NAMELEN) != 0) {
                 /* If the primary has been added to a shard, make sure this
                  * node has the same persisted shard id as the primary. */
+                sdsfreesplitres(argv, argc);
                 goto fmterr;
             }
             n->replicaof = primary;
@@ -1902,10 +1903,10 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
 
     serverAssert(nodeFailed(node));
 
-    /* For replicas we always clear the FAIL flag if we can contact the
-     * node again. */
-    if (nodeIsReplica(node) || node->numslots == 0) {
-        serverLog(LL_NOTICE, "Clear FAIL state for node %.40s (%s):%s is reachable again.", node->name,
+    /* For replicas or primaries without slots, that is, nodes without voting
+     * right, we always clear the FAIL flag if we can contact the node again. */
+    if (!clusterNodeIsVotingPrimary(node)) {
+        serverLog(LL_NOTICE, "Clear FAIL state for node %.40s (%s): %s is reachable again.", node->name,
                   node->human_nodename, nodeIsReplica(node) ? "replica" : "primary without slots");
         node->flags &= ~CLUSTER_NODE_FAIL;
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
@@ -4006,9 +4007,9 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
 
     /* IF we are not a primary serving at least 1 slot, we don't have the
      * right to vote, as the cluster size is the number
-     * of primariies serving at least one slot, and quorum is the cluster
+     * of primaries serving at least one slot, and quorum is the cluster
      * size + 1 */
-    if (nodeIsReplica(myself) || myself->numslots == 0) return;
+    if (!clusterNodeIsVotingPrimary(myself)) return;
 
     /* Request epoch must be >= our currentEpoch.
      * Note that it is impossible for it to actually be greater since
@@ -4086,7 +4087,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
 }
 
 /* This function returns the "rank" of this instance, a replica, in the context
- * of its primar-replicas ring. The rank of the replica is given by the number of
+ * of its primary-replicas ring. The rank of the replica is given by the number of
  * other replicas for the same primary that have a better replication offset
  * compared to the local one (better means, greater, so they claim more data).
  *
@@ -6022,7 +6023,7 @@ void clusterCommandSetSlot(client *c) {
      * 3. Upon replication completion, primary B executes `SETSLOT n NODE B` and
      *    returns success to client C.
      * 4. The following steps can happen in parallel:
-     *   a. Client C issues `SETSLOT n NODE B` against parimary A.
+     *   a. Client C issues `SETSLOT n NODE B` against primary A.
      *   b. Primary B gossips its new slot ownership to the cluster (including A, A', etc.).
      *
      * This ensures that all replicas have the latest topology information, enabling

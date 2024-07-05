@@ -35,7 +35,7 @@ proc reboot_instance {type id} {
 }
 
 
-test "Master reboot in very short time" {
+test "Primary reboot in very short time" {
     set old_port [RPort $master_id]
     set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
     assert {[lindex $addr 1] == $old_port}
@@ -78,11 +78,11 @@ test "Master reboot in very short time" {
     }
 }
 
-test "New master [join $addr {:}] role matches" {
+test "New primary [join $addr {:}] role matches" {
     assert {[RI $master_id role] eq {master}}
 }
 
-test "All the other slaves now point to the new master" {
+test "All the other slaves now point to the new primary" {
     foreach_valkey_id id {
         if {$id != $master_id && $id != 0} {
             wait_for_condition 1000 50 {
@@ -94,7 +94,7 @@ test "All the other slaves now point to the new master" {
     }
 }
 
-test "The old master eventually gets reconfigured as a slave" {
+test "The old primary eventually gets reconfigured as a slave" {
     wait_for_condition 1000 50 {
         [RI 0 master_port] == [lindex $addr 1]
     } else {

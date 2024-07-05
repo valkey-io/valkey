@@ -66,6 +66,10 @@ typedef struct dictType {
     /* Allow a dict to carry extra caller-defined metadata. The
      * extra memory is initialized to 0 when a dict is allocated. */
     size_t (*dictMetadataBytes)(dict *d);
+    /* Method for copying a given key into a buffer of buf_len. Also used for
+     * computing the length of the key + header when buf is NULL. */
+    size_t (*embedKey)(unsigned char *buf, size_t buf_len, const void *key, unsigned char *header_size);
+
 
     /* Data */
     void *userdata;
@@ -80,8 +84,9 @@ typedef struct dictType {
      * enables one more optimization: to store a key without an allocated
      * dictEntry. */
     unsigned int keys_are_odd : 1;
-    /* TODO: Add a 'keys_are_even' flag and use a similar optimization if that
-     * flag is set. */
+    /* If embedded_entry flag is set, it indicates that a copy of the key is created and the key is embedded
+     * as part of the dict entry. */
+    unsigned int embedded_entry : 1;
 } dictType;
 
 #define DICTHT_SIZE(exp) ((exp) == -1 ? 0 : (unsigned long)1 << (exp))
@@ -127,10 +132,13 @@ typedef struct dictStats {
 
 typedef void(dictScanFunction)(void *privdata, const dictEntry *de);
 typedef void *(dictDefragAllocFunction)(void *ptr);
+typedef void(dictDefragEntryCb)(void *privdata, void *ptr);
 typedef struct {
-    dictDefragAllocFunction *defragAlloc; /* Used for entries etc. */
-    dictDefragAllocFunction *defragKey;   /* Defrag-realloc keys (optional) */
-    dictDefragAllocFunction *defragVal;   /* Defrag-realloc values (optional) */
+    dictDefragAllocFunction *defragAlloc;   /* Used for entries etc. */
+    dictDefragAllocFunction *defragKey;     /* Defrag-realloc keys (optional) */
+    dictDefragAllocFunction *defragVal;     /* Defrag-realloc values (optional) */
+    dictDefragEntryCb *defragEntryStartCb;  /* Callback invoked prior to the start of defrag of dictEntry. */
+    dictDefragEntryCb *defragEntryFinishCb; /* Callback invoked after the defrag of dictEntry is tried. */
 } dictDefragFunctions;
 
 /* This is the initial size of every hash table */
@@ -212,7 +220,7 @@ uint64_t dictGetUnsignedIntegerVal(const dictEntry *de);
 double dictGetDoubleVal(const dictEntry *de);
 double *dictGetDoubleValPtr(dictEntry *de);
 size_t dictMemUsage(const dict *d);
-size_t dictEntryMemUsage(void);
+size_t dictEntryMemUsage(dictEntry *de);
 dictIterator *dictGetIterator(dict *d);
 dictIterator *dictGetSafeIterator(dict *d);
 void dictInitIterator(dictIterator *iter, dict *d);
@@ -236,7 +244,6 @@ unsigned long dictScan(dict *d, unsigned long v, dictScanFunction *fn, void *pri
 unsigned long
 dictScanDefrag(dict *d, unsigned long v, dictScanFunction *fn, dictDefragFunctions *defragfns, void *privdata);
 uint64_t dictGetHash(dict *d, const void *key);
-dictEntry *dictFindEntryByPtrAndHash(dict *d, const void *oldptr, uint64_t hash);
 void dictRehashingInfo(dict *d, unsigned long long *from_size, unsigned long long *to_size);
 
 size_t dictGetStatsMsg(char *buf, size_t bufsize, dictStats *stats, int full);

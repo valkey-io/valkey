@@ -98,22 +98,22 @@ unsigned int delKeysInSlot(unsigned int hashslot);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
 list *clusterLookupNodeListByShardId(const char *shard_id);
 void clusterRemoveNodeFromShard(clusterNode *node);
-int auxShardIdSetter(clusterNode *n, void *value, int length);
+int auxShardIdSetter(clusterNode *n, void *value, size_t length);
 sds auxShardIdGetter(clusterNode *n, sds s);
 int auxShardIdPresent(clusterNode *n);
-int auxHumanNodenameSetter(clusterNode *n, void *value, int length);
+int auxHumanNodenameSetter(clusterNode *n, void *value, size_t length);
 sds auxHumanNodenameGetter(clusterNode *n, sds s);
 int auxHumanNodenamePresent(clusterNode *n);
-int auxClientIpV4Setter(clusterNode *n, void *value, int length);
+int auxClientIpV4Setter(clusterNode *n, void *value, size_t length);
 sds auxClientIpV4Getter(clusterNode *n, sds s);
 int auxClientIpV4Present(clusterNode *n);
-int auxClientIpV6Setter(clusterNode *n, void *value, int length);
+int auxClientIpV6Setter(clusterNode *n, void *value, size_t length);
 sds auxClientIpV6Getter(clusterNode *n, sds s);
 int auxClientIpV6Present(clusterNode *n);
-int auxTcpPortSetter(clusterNode *n, void *value, int length);
+int auxTcpPortSetter(clusterNode *n, void *value, size_t length);
 sds auxTcpPortGetter(clusterNode *n, sds s);
 int auxTcpPortPresent(clusterNode *n);
-int auxTlsPortSetter(clusterNode *n, void *value, int length);
+int auxTlsPortSetter(clusterNode *n, void *value, size_t length);
 sds auxTlsPortGetter(clusterNode *n, sds s);
 int auxTlsPortPresent(clusterNode *n);
 static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen);
@@ -196,7 +196,7 @@ dictType clusterSdsToListType = {
 
 /* Aux field setter function prototype
  * return C_OK when the update is successful; C_ERR otherwise */
-typedef int(aux_value_setter)(clusterNode *n, void *value, int length);
+typedef int(aux_value_setter)(clusterNode *n, void *value, size_t length);
 /* Aux field getter function prototype
  * return an sds that is a concatenation of the input sds string and
  * the aux value */
@@ -235,7 +235,7 @@ auxFieldHandler auxFieldHandlers[] = {
     {"client-ipv6", auxClientIpV6Setter, auxClientIpV6Getter, auxClientIpV6Present},
 };
 
-int auxShardIdSetter(clusterNode *n, void *value, int length) {
+int auxShardIdSetter(clusterNode *n, void *value, size_t length) {
     if (verifyClusterNodeId(value, length) == C_ERR) {
         return C_ERR;
     }
@@ -259,19 +259,12 @@ int auxShardIdPresent(clusterNode *n) {
     return strlen(n->shard_id);
 }
 
-int auxHumanNodenameSetter(clusterNode *n, void *value, int length) {
-    if (n && !strncmp(value, n->human_nodename, length)) {
-        return C_OK;
-    } else if (!n && (length == 0)) {
+int auxHumanNodenameSetter(clusterNode *n, void *value, size_t length) {
+    if (sdslen(n->human_nodename) == length && !strncmp(value, n->human_nodename, length)) {
         return C_OK;
     }
-    if (n) {
-        n->human_nodename = sdscpylen(n->human_nodename, value, length);
-    } else if (sdslen(n->human_nodename) != 0) {
-        sdsclear(n->human_nodename);
-    } else {
-        return C_ERR;
-    }
+
+    n->human_nodename = sdscpylen(n->human_nodename, value, length);
     return C_OK;
 }
 
@@ -283,19 +276,21 @@ int auxHumanNodenamePresent(clusterNode *n) {
     return sdslen(n->human_nodename);
 }
 
-int auxClientIpV4Setter(clusterNode *n, void *value, int length) {
-    if (n && !strncmp(value, n->client_ipv4, length)) {
-        return C_OK;
-    } else if (!n && (length == 0)) {
+int auxClientIpV4Setter(clusterNode *n, void *value, size_t length) {
+    if (sdslen(n->client_ipv4) == length && !strncmp(value, n->client_ipv4, length)) {
+        /* Unchanged value */
         return C_OK;
     }
-    if (n) {
-        n->client_ipv4 = sdscpylen(n->client_ipv4, value, length);
-    } else if (sdslen(n->client_ipv4) != 0) {
-        sdsclear(n->client_ipv4);
-    } else {
-        return C_ERR;
+
+    if (length != 0) {
+        /* Validate IPv4 address */
+        struct sockaddr_in sa;
+        if (inet_pton(AF_INET, (const char *)value, &(sa.sin_addr)) == 0) {
+            return C_ERR;
+        }
     }
+
+    n->client_ipv4 = sdscpylen(n->client_ipv4, value, length);
     return C_OK;
 }
 
@@ -307,19 +302,21 @@ int auxClientIpV4Present(clusterNode *n) {
     return sdslen(n->client_ipv4) != 0;
 }
 
-int auxClientIpV6Setter(clusterNode *n, void *value, int length) {
-    if (n && !strncmp(value, n->client_ipv6, length)) {
-        return C_OK;
-    } else if (!n && (length == 0)) {
+int auxClientIpV6Setter(clusterNode *n, void *value, size_t length) {
+    if (sdslen(n->client_ipv6) == length && !strncmp(value, n->client_ipv6, length)) {
+        /* Unchanged value */
         return C_OK;
     }
-    if (n) {
-        n->client_ipv6 = sdscpylen(n->client_ipv6, value, length);
-    } else if (sdslen(n->client_ipv6) != 0) {
-        sdsclear(n->client_ipv6);
-    } else {
-        return C_ERR;
+
+    if (length != 0) {
+        /* Validate IPv6 address */
+        struct sockaddr_in6 sa;
+        if (inet_pton(AF_INET6, (const char *)value, &(sa.sin6_addr)) == 0) {
+            return C_ERR;
+        }
     }
+
+    n->client_ipv6 = sdscpylen(n->client_ipv6, value, length);
     return C_OK;
 }
 
@@ -331,7 +328,7 @@ int auxClientIpV6Present(clusterNode *n) {
     return sdslen(n->client_ipv6) != 0;
 }
 
-int auxTcpPortSetter(clusterNode *n, void *value, int length) {
+int auxTcpPortSetter(clusterNode *n, void *value, size_t length) {
     if (length > 5 || length < 1) {
         return C_ERR;
     }
@@ -350,7 +347,7 @@ int auxTcpPortPresent(clusterNode *n) {
     return n->tcp_port >= 0 && n->tcp_port < 65536;
 }
 
-int auxTlsPortSetter(clusterNode *n, void *value, int length) {
+int auxTlsPortSetter(clusterNode *n, void *value, size_t length) {
     if (length > 5 || length < 1) {
         return C_ERR;
     }
@@ -943,62 +940,62 @@ void clusterUpdateMyselfIp(void) {
 }
 
 /* Update the hostname for the specified node with the provided C string. */
-static void updateAnnouncedHostname(clusterNode *node, char *new) {
+static void updateAnnouncedHostname(clusterNode *node, char *value) {
     /* Previous and new hostname are the same, no need to update. */
-    if (new && !strcmp(new, node->hostname)) {
+    if (value != NULL && !strcmp(value, node->hostname)) {
         return;
-    } else if (!new && (sdslen(node->hostname) == 0)) {
+    } else if (value == NULL && sdslen(node->hostname) == 0) {
         return;
     }
 
-    if (new) {
-        node->hostname = sdscpy(node->hostname, new);
-    } else if (sdslen(node->hostname) != 0) {
+    if (value != NULL) {
+        node->hostname = sdscpy(node->hostname, value);
+    } else {
         sdsclear(node->hostname);
     }
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
-static void updateAnnouncedHumanNodename(clusterNode *node, char *new) {
-    if (new && !strcmp(new, node->human_nodename)) {
+static void updateAnnouncedHumanNodename(clusterNode *node, char *value) {
+    if (value != NULL && !strcmp(value, node->human_nodename)) {
         return;
-    } else if (!new && (sdslen(node->human_nodename) == 0)) {
+    } else if (value == NULL && sdslen(node->human_nodename) == 0) {
         return;
     }
 
-    if (new) {
-        node->human_nodename = sdscpy(node->human_nodename, new);
-    } else if (sdslen(node->human_nodename) != 0) {
+    if (value != NULL) {
+        node->human_nodename = sdscpy(node->human_nodename, value);
+    } else {
         sdsclear(node->human_nodename);
     }
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
-static void updateAnnouncedClientIpV4(clusterNode *node, char *new) {
-    if (new && !strcmp(new, node->client_ipv4)) {
+static void updateAnnouncedClientIpV4(clusterNode *node, char *value) {
+    if (value != NULL && !strcmp(value, node->client_ipv4)) {
         return;
-    } else if (!new && (sdslen(node->client_ipv4) == 0)) {
+    } else if (value == NULL && sdslen(node->client_ipv4) == 0) {
         return;
     }
 
-    if (new) {
-        node->client_ipv4 = sdscpy(node->client_ipv4, new);
-    } else if (sdslen(node->client_ipv4) != 0) {
+    if (value != NULL) {
+        node->client_ipv4 = sdscpy(node->client_ipv4, value);
+    } else {
         sdsclear(node->client_ipv4);
     }
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
-static void updateAnnouncedClientIpV6(clusterNode *node, char *new) {
-    if (new && !strcmp(new, node->client_ipv6)) {
+static void updateAnnouncedClientIpV6(clusterNode *node, char *value) {
+    if (value != NULL && !strcmp(value, node->client_ipv6)) {
         return;
-    } else if (!new && (sdslen(node->client_ipv6) == 0)) {
+    } else if (value == NULL && sdslen(node->client_ipv6) == 0) {
         return;
     }
 
-    if (new) {
-        node->client_ipv6 = sdscpy(node->client_ipv6, new);
-    } else if (sdslen(node->client_ipv6) != 0) {
+    if (value != NULL) {
+        node->client_ipv6 = sdscpy(node->client_ipv6, value);
+    } else {
         sdsclear(node->client_ipv6);
     }
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);

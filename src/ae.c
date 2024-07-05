@@ -195,9 +195,15 @@ void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask) {
             if (eventLoop->events[j].mask != AE_NONE) break;
         eventLoop->maxfd = j;
     }
-    /* Must be invoked after the eventLoop mask is modified,
-     * which is required by evport and epoll */
-    aeApiDelEvent(eventLoop, fd, mask);
+
+    /* Check whether there are events to be removed.
+     * Note: user may remove the AE_BARRIER without
+     * touching the actual events. */
+    if (mask & (AE_READABLE | AE_WRITABLE)) {
+        /* Must be invoked after the eventLoop mask is modified,
+         * which is required by evport and epoll */
+        aeApiDelEvent(eventLoop, fd, mask);
+    }
 }
 
 void *aeGetFileClientData(aeEventLoop *eventLoop, int fd) {

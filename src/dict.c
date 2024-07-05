@@ -878,7 +878,7 @@ void dictTwoPhaseUnlinkFree(dict *d, dictEntry *he, dictEntry **plink, int table
             _dictEntryNoValue *_de = decodeEntryNoValue(e);                                                            \
             _de->key = k;                                                                                              \
         } else {                                                                                                       \
-            assert(0);                                                                                             \
+            assert(0);                                                                                                 \
         }                                                                                                              \
     }
 
@@ -891,7 +891,7 @@ void dictTwoPhaseUnlinkFree(dict *d, dictEntry *he, dictEntry **plink, int table
             _dictEntryEmbedded *_de = decodeEntryEmbedded(e);                                                          \
             _de->f = v;                                                                                                \
         } else {                                                                                                       \
-            assert(0);                                                                                             \
+            assert(0);                                                                                                 \
         }                                                                                                              \
     }
 
@@ -904,7 +904,7 @@ void dictTwoPhaseUnlinkFree(dict *d, dictEntry *he, dictEntry **plink, int table
             _dictEntryEmbedded *_de = decodeEntryEmbedded(e);                                                          \
             _de->f += v;                                                                                               \
         } else {                                                                                                       \
-            assert(0);                                                                                             \
+            assert(0);                                                                                                 \
         }                                                                                                              \
     }
 

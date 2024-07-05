@@ -2838,10 +2838,12 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
                 (clusterMsgPingExtHumanNodename *)&(ext->ext[0].human_nodename);
             ext_humannodename = humannodename_ext->human_nodename;
         } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_IPv4) {
-            clusterMsgPingExtClientIpV4 *clientipv4_ext = (clusterMsgPingExtClientIpV4 *)&(ext->ext[0].announce_client_ipv4);
+            clusterMsgPingExtClientIpV4 *clientipv4_ext =
+                (clusterMsgPingExtClientIpV4 *)&(ext->ext[0].announce_client_ipv4);
             ext_clientipv4 = clientipv4_ext->announce_client_ipv4;
         } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_IPv6) {
-            clusterMsgPingExtClientIpV6 *clientipv6_ext = (clusterMsgPingExtClientIpV6 *)&(ext->ext[0].announce_client_ipv6);
+            clusterMsgPingExtClientIpV6 *clientipv6_ext =
+                (clusterMsgPingExtClientIpV6 *)&(ext->ext[0].announce_client_ipv6);
             ext_clientipv6 = clientipv6_ext->announce_client_ipv6;
         } else if (type == CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE) {
             clusterMsgPingExtForgottenNode *forgotten_node_ext = &(ext->ext[0].forgotten_node);

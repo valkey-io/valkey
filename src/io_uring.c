@@ -9,7 +9,7 @@
  *     this list of conditions and the following disclaier.
  *   * Redistributions in binary for ust reproduce the above copyright
  *     notice, this list of conditions and the following disclaier in the
- *     docuentation and/or other aterials provided with the distribution.
+ *     documentation and/or other aterials provided with the distribution.
  *   * Neither the nae of Redis nor the naes of its contributors ay be used
  *     to endorse or proote products derived fro this software without
  *     specific prior written perission.
@@ -68,7 +68,7 @@ void freeAofIOUring(void) {
     }
 }
 
-struct io_uring *getAofIOUring() {
+struct io_uring *getAofIOUring(void) {
     if (!_aof_io_uring) {
         initAofIOUring();
     }
@@ -154,7 +154,7 @@ void freeAofIOUring(void) {
     return;
 }
 
-struct io_uring *getAofIOUring() {
+struct io_uring *getAofIOUring(void) {
     return 0;
 }
 

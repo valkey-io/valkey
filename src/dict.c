@@ -70,7 +70,7 @@ static dictResizeEnable dict_can_resize = DICT_RESIZE_ENABLE;
 static unsigned int dict_force_resize_ratio = 4;
 
 /* -------------------------- types ----------------------------------------- */
-struct dictEntry {
+typedef struct {
     void *key;
     union {
         void *val;
@@ -79,7 +79,7 @@ struct dictEntry {
         double d;
     } v;
     struct dictEntry *next; /* Next entry in the same hash bucket. */
-};
+} _dictEntryNormal;
 
 typedef struct {
     union {
@@ -91,27 +91,27 @@ typedef struct {
     struct dictEntry *next;  /* Next entry in the same hash bucket. */
     uint8_t key_header_size; /* offset into key_buf where the key is located at. */
     unsigned char key_buf[]; /* buffer with embedded key. */
-} embeddedDictEntry;
+} _dictEntryEmbedded;
 
-/* Validation and helper for `embeddedDictEntry` */
+/* Validation and helper for `_dictEntryEmbedded` */
 
-static_assert(offsetof(embeddedDictEntry, v) == 0, "unexpected field offset");
-static_assert(offsetof(embeddedDictEntry, next) == sizeof(double), "unexpected field offset");
-static_assert(offsetof(embeddedDictEntry, key_header_size) == sizeof(double) + sizeof(void *),
+static_assert(offsetof(_dictEntryEmbedded, v) == 0, "unexpected field offset");
+static_assert(offsetof(_dictEntryEmbedded, next) == sizeof(double), "unexpected field offset");
+static_assert(offsetof(_dictEntryEmbedded, key_header_size) == sizeof(double) + sizeof(void *),
               "unexpected field offset");
 /* key_buf is located after a union with a double value  `v.d`, a pointer `next` and uint8_t field `key_header_size` */
-static_assert(offsetof(embeddedDictEntry, key_buf) == sizeof(double) + sizeof(void *) + sizeof(uint8_t),
+static_assert(offsetof(_dictEntryEmbedded, key_buf) == sizeof(double) + sizeof(void *) + sizeof(uint8_t),
               "unexpected field offset");
 
 /* The minimum amount of bytes required for embedded dict entry. */
 static inline size_t compactSizeEmbeddedDictEntry(void) {
-    return offsetof(embeddedDictEntry, key_buf);
+    return offsetof(_dictEntryEmbedded, key_buf);
 }
 
 typedef struct {
     void *key;
     dictEntry *next;
-} dictEntryNoValue;
+} _dictEntryNoValue;
 
 /* -------------------------- private prototypes ---------------------------- */
 
@@ -172,28 +172,27 @@ uint64_t dictGenCaseHashFunction(const unsigned char *buf, size_t len) {
 #define ENTRY_PTR_NORMAL 0   /* 000 */
 #define ENTRY_PTR_NO_VALUE 2 /* 010 */
 #define ENTRY_PTR_EMBEDDED 4 /* 100 */
-/*      ENTRY_PTR_IS_KEY        xx1 */
+#define ENTRY_PTR_IS_KEY 1   /* 001 */
 
 /* Returns 1 if the entry pointer is a pointer to a key, rather than to an
  * allocated entry. Returns 0 otherwise. */
-static inline int entryIsKey(const dictEntry *de) {
-    return (uintptr_t)(void *)de & 1;
+static inline int entryIsKey(const void *de) {
+    return (uintptr_t)(void *)de & ENTRY_PTR_IS_KEY;
 }
 
 /* Returns 1 if the pointer is actually a pointer to a dictEntry struct. Returns
  * 0 otherwise. */
-static inline int entryIsNormal(const dictEntry *de) {
+static inline int entryIsNormal(const void *de) {
     return ((uintptr_t)(void *)de & ENTRY_PTR_MASK) == ENTRY_PTR_NORMAL;
 }
 
 /* Returns 1 if the entry is a special entry with key and next, but without
  * value. Returns 0 otherwise. */
-static inline int entryIsNoValue(const dictEntry *de) {
+static inline int entryIsNoValue(const void *de) {
     return ((uintptr_t)(void *)de & ENTRY_PTR_MASK) == ENTRY_PTR_NO_VALUE;
 }
 
-
-static inline int entryIsEmbedded(const dictEntry *de) {
+static inline int entryIsEmbedded(const void *de) {
     return ((uintptr_t)(void *)de & ENTRY_PTR_MASK) == ENTRY_PTR_EMBEDDED;
 }
 
@@ -207,9 +206,17 @@ static inline void *decodeMaskedPtr(const dictEntry *de) {
     return (void *)((uintptr_t)(void *)de & ~ENTRY_PTR_MASK);
 }
 
+static inline dictEntry *createEntryNormal(void *key, dictEntry *next) {
+    _dictEntryNormal *entry = zmalloc(sizeof(_dictEntryNormal));
+    assert(entryIsNormal(entry)); /* Check alignment of allocation */
+    entry->key = key;
+    entry->next = next;
+    return encodeMaskedPtr(entry, ENTRY_PTR_NORMAL);
+ }
+
 /* Creates an entry without a value field. */
 static inline dictEntry *createEntryNoValue(void *key, dictEntry *next) {
-    dictEntryNoValue *entry = zmalloc(sizeof(*entry));
+    _dictEntryNoValue *entry = zmalloc(sizeof(*entry));
     entry->key = key;
     entry->next = next;
     return encodeMaskedPtr(entry, ENTRY_PTR_NO_VALUE);
@@ -217,24 +224,28 @@ static inline dictEntry *createEntryNoValue(void *key, dictEntry *next) {
 
 static inline dictEntry *createEmbeddedEntry(void *key, dictEntry *next, dictType *dt) {
     size_t key_len = dt->embedKey(NULL, 0, key, NULL);
-    embeddedDictEntry *entry = zmalloc(compactSizeEmbeddedDictEntry() + key_len);
+    _dictEntryEmbedded *entry = zmalloc(compactSizeEmbeddedDictEntry() + key_len);
     dt->embedKey(entry->key_buf, key_len, key, &entry->key_header_size);
     entry->next = next;
     return encodeMaskedPtr(entry, ENTRY_PTR_EMBEDDED);
 }
 
 static inline void *getEmbeddedKey(const dictEntry *de) {
-    embeddedDictEntry *entry = (embeddedDictEntry *)decodeMaskedPtr(de);
+    _dictEntryEmbedded *entry = (_dictEntryEmbedded *)decodeMaskedPtr(de);
     return &entry->key_buf[entry->key_header_size];
 }
 
 /* Decodes the pointer to an entry without value, when you know it is an entry
  * without value. Hint: Use entryIsNoValue to check. */
-static inline dictEntryNoValue *decodeEntryNoValue(const dictEntry *de) {
+static inline _dictEntryNoValue *decodeEntryNoValue(const dictEntry *de) {
     return decodeMaskedPtr(de);
 }
 
-static inline embeddedDictEntry *decodeEmbeddedEntry(const dictEntry *de) {
+static inline _dictEntryEmbedded *decodeEntryEmbedded(const dictEntry *de) {
+    return decodeMaskedPtr(de);
+}
+
+static inline _dictEntryNormal *decodeEntryNormal(const dictEntry *de) {
     return decodeMaskedPtr(de);
 }
 
@@ -301,8 +312,9 @@ int _dictResize(dict *d, unsigned long size, int *malloc_failed) {
         new_ht_table = ztrycalloc(newsize * sizeof(dictEntry *));
         *malloc_failed = new_ht_table == NULL;
         if (*malloc_failed) return DICT_ERR;
-    } else
+    } else {
         new_ht_table = zcalloc(newsize * sizeof(dictEntry *));
+    }
 
     new_ht_used = 0;
 
@@ -381,12 +393,7 @@ static void rehashEntriesInBucketAtIndex(dict *d, uint64_t idx) {
             if (d->type->keys_are_odd && !d->ht_table[1][h]) {
                 /* Destination bucket is empty and we can store the key
                  * directly without an allocated entry. Free the old entry
-                 * if it's an allocated entry.
-                 *
-                 * TODO: Add a flag 'keys_are_even' and if set, we can use
-                 * this optimization for these dicts too. We can set the LSB
-                 * bit when stored as a dict entry and clear it again when
-                 * we need the key back. */
+                 * if it's an allocated entry. */
                 assert(entryIsKey(key));
                 if (!entryIsKey(de)) zfree(decodeMaskedPtr(de));
                 de = key;
@@ -570,15 +577,14 @@ dictEntry *dictInsertAtPosition(dict *d, void *key, void *position) {
      * Assert that the provided bucket is the right table. */
     int htidx = dictIsRehashing(d) ? 1 : 0;
     assert(bucket >= &d->ht_table[htidx][0] && bucket <= &d->ht_table[htidx][DICTHT_SIZE_MASK(d->ht_size_exp[htidx])]);
-    if (d->type->no_value) {
+    /* Allocate the memory and store the new entry.
+     * Insert the element in top, with the assumption that in a database
+     * system it is more likely that recently added entries are accessed
+     * more frequently. */
+     if (d->type->no_value) {
         if (d->type->keys_are_odd && !*bucket) {
             /* We can store the key directly in the destination bucket without the
-             * allocated entry.
-             *
-             * TODO: Add a flag 'keys_are_even' and if set, we can use this
-             * optimization for these dicts too. We can set the LSB bit when
-             * stored as a dict entry and clear it again when we need the key
-             * back. */
+             * allocated entry. */
             entry = key;
             assert(entryIsKey(entry));
         } else {
@@ -588,14 +594,7 @@ dictEntry *dictInsertAtPosition(dict *d, void *key, void *position) {
     } else if (d->type->embedded_entry) {
         entry = createEmbeddedEntry(key, *bucket, d->type);
     } else {
-        /* Allocate the memory and store the new entry.
-         * Insert the element in top, with the assumption that in a database
-         * system it is more likely that recently added entries are accessed
-         * more frequently. */
-        entry = zmalloc(sizeof(*entry));
-        assert(entryIsNormal(entry)); /* Check alignment of allocation */
-        entry->key = key;
-        entry->next = *bucket;
+        entry = createEntryNormal(key, *bucket);
     }
     *bucket = entry;
     d->ht_used[htidx]++;
@@ -870,88 +869,114 @@ void dictTwoPhaseUnlinkFree(dict *d, dictEntry *he, dictEntry **plink, int table
     dictResumeRehashing(d);
 }
 
+#define DICT_SET_KEY(e, k)                                                                                             \
+    {                                                                                                                  \
+        if (entryIsNormal(e)) {                                                                                        \
+            _dictEntryNormal *_de = decodeEntryNormal(e);                                                              \
+            _de->key = k;                                                                                              \
+        } else if (entryIsNoValue(e)) {                                                                                \
+            _dictEntryNoValue *_de = decodeEntryNoValue(e);                                                            \
+            _de->key = k;                                                                                              \
+        } else {                                                                                                       \
+            assert(false);                                                                                             \
+        }                                                                                                              \
+    }
+
+#define DICT_SET_VALUE(e, f, v)                                                                                        \
+    {                                                                                                                  \
+        if (entryIsNormal(e)) {                                                                                        \
+            _dictEntryNormal *_de = decodeEntryNormal(e);                                                              \
+            _de->f = v;                                                                                                \
+        } else if (entryIsEmbedded(e)) {                                                                               \
+            _dictEntryEmbedded *_de = decodeEntryEmbedded(e);                                                          \
+            _de->f = v;                                                                                                \
+        } else {                                                                                                       \
+            assert(false);                                                                                             \
+        }                                                                                                              \
+    }
+
+#define DICT_INCR_VALUE(e, f, v)                                                                                       \
+    {                                                                                                                  \
+        if (entryIsNormal(e)) {                                                                                        \
+            _dictEntryNormal *_de = decodeEntryNormal(e);                                                              \
+            _de->f += v;                                                                                               \
+        } else if (entryIsEmbedded(e)) {                                                                               \
+            _dictEntryEmbedded *_de = decodeEntryEmbedded(e);                                                          \
+            _de->f += v;                                                                                               \
+        } else {                                                                                                       \
+            assert(false);                                                                                             \
+        }                                                                                                              \
+    }
+
+#define DICT_GET_VALUE(e, f)                                                                                           \
+    (assert(entryHasValue(e)), entryIsNormal(e) ? decodeEntryNormal(e)->f : decodeEntryEmbedded(e)->f)
+
+#define DICT_GET_VALUE_PTR(e, f)                                                                                       \
+    (assert(entryHasValue(e)), entryIsNormal(e) ? &decodeEntryNormal(e)->f : &decodeEntryEmbedded(e)->f)
+
 void dictSetKey(dict *d, dictEntry *de, void *key) {
-    assert(!d->type->no_value);
-    if (d->type->keyDup)
-        de->key = d->type->keyDup(d, key);
-    else
-        de->key = key;
+    void *k = d->type->keyDup ? d->type->keyDup(d, key) : key;
+    DICT_SET_KEY(de, k);
 }
 
 void dictSetVal(dict *d, dictEntry *de, void *val) {
     UNUSED(d);
-    assert(entryHasValue(de));
-    if (entryIsEmbedded(de)) {
-        decodeEmbeddedEntry(de)->v.val = val;
-    } else {
-        de->v.val = val;
-    }
+    DICT_SET_VALUE(de, v.val, val);
 }
 
 void dictSetSignedIntegerVal(dictEntry *de, int64_t val) {
-    assert(entryHasValue(de));
-    de->v.s64 = val;
+    DICT_SET_VALUE(de, v.s64, val);
 }
 
 void dictSetUnsignedIntegerVal(dictEntry *de, uint64_t val) {
-    assert(entryHasValue(de));
-    de->v.u64 = val;
+    DICT_SET_VALUE(de, v.u64, val);
 }
 
 void dictSetDoubleVal(dictEntry *de, double val) {
-    assert(entryHasValue(de));
-    de->v.d = val;
+    DICT_SET_VALUE(de, v.d, val);
 }
 
 int64_t dictIncrSignedIntegerVal(dictEntry *de, int64_t val) {
-    assert(entryHasValue(de));
-    return de->v.s64 += val;
+    DICT_INCR_VALUE(de, v.s64, val);
+    return DICT_GET_VALUE(de, v.s64);
 }
 
 uint64_t dictIncrUnsignedIntegerVal(dictEntry *de, uint64_t val) {
-    assert(entryHasValue(de));
-    return de->v.u64 += val;
+    DICT_INCR_VALUE(de, v.u64, val);
+    return DICT_GET_VALUE(de, v.u64);
 }
 
 double dictIncrDoubleVal(dictEntry *de, double val) {
-    assert(entryHasValue(de));
-    return de->v.d += val;
+    DICT_INCR_VALUE(de, v.d, val);
+    return DICT_GET_VALUE(de, v.d);
 }
 
 void *dictGetKey(const dictEntry *de) {
     if (entryIsKey(de)) return (void *)de;
     if (entryIsNoValue(de)) return decodeEntryNoValue(de)->key;
     if (entryIsEmbedded(de)) return getEmbeddedKey(de);
-    return de->key;
+    return decodeEntryNormal(de)->key;
 }
 
 void *dictGetVal(const dictEntry *de) {
-    assert(entryHasValue(de));
-    if (entryIsEmbedded(de)) {
-        return decodeEmbeddedEntry(de)->v.val;
-    }
-    return de->v.val;
+    return DICT_GET_VALUE(de, v.val);
 }
 
 int64_t dictGetSignedIntegerVal(const dictEntry *de) {
-    assert(entryHasValue(de));
-    return de->v.s64;
+    return DICT_GET_VALUE(de, v.s64);
 }
 
 uint64_t dictGetUnsignedIntegerVal(const dictEntry *de) {
-    assert(entryHasValue(de));
-    return de->v.u64;
+    return DICT_GET_VALUE(de, v.u64);
 }
 
 double dictGetDoubleVal(const dictEntry *de) {
-    assert(entryHasValue(de));
-    return de->v.d;
+    return DICT_GET_VALUE(de, v.d);
 }
 
 /* Returns a mutable reference to the value as a double within the entry. */
 double *dictGetDoubleValPtr(dictEntry *de) {
-    assert(entryHasValue(de));
-    return &de->v.d;
+    return DICT_GET_VALUE_PTR(de, v.d);
 }
 
 /* Returns the 'next' field of the entry or NULL if the entry doesn't have a
@@ -959,8 +984,8 @@ double *dictGetDoubleValPtr(dictEntry *de) {
 static dictEntry *dictGetNext(const dictEntry *de) {
     if (entryIsKey(de)) return NULL; /* there's no next */
     if (entryIsNoValue(de)) return decodeEntryNoValue(de)->next;
-    if (entryIsEmbedded(de)) return decodeEmbeddedEntry(de)->next;
-    return de->next;
+    if (entryIsEmbedded(de)) return decodeEntryEmbedded(de)->next;
+    return decodeEntryNormal(de)->next;
 }
 
 /* Returns a pointer to the 'next' field in the entry or NULL if the entry
@@ -968,8 +993,8 @@ static dictEntry *dictGetNext(const dictEntry *de) {
 static dictEntry **dictGetNextRef(dictEntry *de) {
     if (entryIsKey(de)) return NULL;
     if (entryIsNoValue(de)) return &decodeEntryNoValue(de)->next;
-    if (entryIsEmbedded(de)) return &decodeEmbeddedEntry(de)->next;
-    return &de->next;
+    if (entryIsEmbedded(de)) return &decodeEntryEmbedded(de)->next;
+    return &decodeEntryNormal(de)->next;
 }
 
 static void dictSetNext(dictEntry *de, dictEntry *next) {
@@ -977,29 +1002,30 @@ static void dictSetNext(dictEntry *de, dictEntry *next) {
     if (entryIsNoValue(de)) {
         decodeEntryNoValue(de)->next = next;
     } else if (entryIsEmbedded(de)) {
-        decodeEmbeddedEntry(de)->next = next;
+        decodeEntryEmbedded(de)->next = next;
     } else {
-        de->next = next;
+        assert(entryIsNormal(de));
+        decodeEntryNormal(de)->next = next;
     }
 }
 
 /* Returns the memory usage in bytes of the dict, excluding the size of the keys
  * and values. */
 size_t dictMemUsage(const dict *d) {
-    return dictSize(d) * sizeof(dictEntry) + dictBuckets(d) * sizeof(dictEntry *);
+    return dictSize(d) * sizeof(_dictEntryNormal) + dictBuckets(d) * sizeof(dictEntry *);
 }
 
 /* Returns the memory usage in bytes of dictEntry based on the type. if `de` is NULL, return the size of
  * regular dict entry else return based on the type. */
 size_t dictEntryMemUsage(dictEntry *de) {
     if (de == NULL || entryIsNormal(de))
-        return sizeof(dictEntry);
+        return sizeof(_dictEntryNormal);
     else if (entryIsKey(de))
         return 0;
     else if (entryIsNoValue(de))
-        return sizeof(dictEntryNoValue);
+        return sizeof(_dictEntryNoValue);
     else if (entryIsEmbedded(de))
-        return zmalloc_size(decodeEmbeddedEntry(de));
+        return zmalloc_size(decodeEntryEmbedded(de));
     else
         assert("Entry type not supported");
     return 0;
@@ -1284,7 +1310,7 @@ static void dictDefragBucket(dictEntry **bucketref, dictDefragFunctions *defragf
             if (newkey) *bucketref = newkey;
             assert(entryIsKey(*bucketref));
         } else if (entryIsNoValue(de)) {
-            dictEntryNoValue *entry = decodeEntryNoValue(de), *newentry;
+            _dictEntryNoValue *entry = decodeEntryNoValue(de), *newentry;
             if ((newentry = defragalloc(entry))) {
                 newde = encodeMaskedPtr(newentry, ENTRY_PTR_NO_VALUE);
                 entry = newentry;
@@ -1292,7 +1318,7 @@ static void dictDefragBucket(dictEntry **bucketref, dictDefragFunctions *defragf
             if (newkey) entry->key = newkey;
         } else if (entryIsEmbedded(de)) {
             defragfns->defragEntryStartCb(privdata, de);
-            embeddedDictEntry *entry = decodeEmbeddedEntry(de), *newentry;
+            _dictEntryEmbedded *entry = decodeEntryEmbedded(de), *newentry;
             if ((newentry = defragalloc(entry))) {
                 newde = encodeMaskedPtr(newentry, ENTRY_PTR_EMBEDDED);
                 entry = newentry;
@@ -1303,10 +1329,12 @@ static void dictDefragBucket(dictEntry **bucketref, dictDefragFunctions *defragf
             if (newval) entry->v.val = newval;
         } else {
             assert(entryIsNormal(de));
-            newde = defragalloc(de);
-            if (newde) de = newde;
-            if (newkey) de->key = newkey;
-            if (newval) de->v.val = newval;
+            _dictEntryNormal *entry = decodeEntryNormal(de), *newentry;
+            newentry = defragalloc(entry);
+            newde = encodeMaskedPtr(newentry, ENTRY_PTR_NORMAL);
+            if (newde) entry = newentry;
+            if (newkey) entry->key = newkey;
+            if (newval) entry->v.val = newval;
         }
         if (newde) {
             *bucketref = newde;

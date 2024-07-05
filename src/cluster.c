@@ -849,10 +849,10 @@ void clusterCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "slots") && c->argc == 2) {
         /* CLUSTER SLOTS */
         clusterCommandSlots(c);
-    } else if (!strcasecmp(c->argv[1]->ptr,"shards") && c->argc == 2) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "shards") && c->argc == 2) {
         /* CLUSTER SHARDS */
         clusterCommandShards(c);
-    } else if (!strcasecmp(c->argv[1]->ptr,"info") && c->argc == 2) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "info") && c->argc == 2) {
         /* CLUSTER INFO */
 
         sds info = genClusterInfoString();

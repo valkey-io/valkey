@@ -320,10 +320,8 @@ struct clusterState {
     uint64_t currentEpoch;
     int state;              /* CLUSTER_OK, CLUSTER_FAIL, ... */
     int size;               /* Num of primary nodes with at least one slot */
-    dict *nodes;            /* Hash table of name -> clusterNode structures */
+    rax *nodes;             /* Table mapping of name -> clusterNode structures */
     dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
-    clusterNode **masters; /* pointers to master nodes */
-    int nummasters;        /* Number of master nodes */
     clusterNode *migrating_slots_to[CLUSTER_SLOTS];
     clusterNode *importing_slots_from[CLUSTER_SLOTS];
     clusterNode *slots[CLUSTER_SLOTS];

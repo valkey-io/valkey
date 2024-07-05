@@ -165,11 +165,11 @@ typedef struct {
 } clusterMsgPingExtShardId;
 
 typedef struct {
-    char client_ipv4[1]; /* Announced client IPv4, ends with \0. */
+    char announce_client_ipv4[1]; /* Announced client IPv4, ends with \0. */
 } clusterMsgPingExtClientIpV4;
 
 typedef struct {
-    char client_ipv6[1]; /* Announced client IPv6, ends with \0. */
+    char announce_client_ipv6[1]; /* Announced client IPv6, ends with \0. */
 } clusterMsgPingExtClientIpV6;
 
 typedef struct {
@@ -181,8 +181,8 @@ typedef struct {
         clusterMsgPingExtHumanNodename human_nodename;
         clusterMsgPingExtForgottenNode forgotten_node;
         clusterMsgPingExtShardId shard_id;
-        clusterMsgPingExtClientIpV4 client_ipv4;
-        clusterMsgPingExtClientIpV6 client_ipv6;
+        clusterMsgPingExtClientIpV4 announce_client_ipv4;
+        clusterMsgPingExtClientIpV6 announce_client_ipv6;
     } ext[]; /* Actual extension information, formatted so that the data is 8
               * byte aligned, regardless of its content. */
 } clusterMsgPingExt;
@@ -315,8 +315,8 @@ struct _clusterNode {
     mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
     long long repl_offset;                  /* Last known repl offset for this node. */
     char ip[NET_IP_STR_LEN];                /* Latest known IP address of this node */
-    sds client_ipv4;                        /* IPv4 for clients only. */
-    sds client_ipv6;                        /* IPv6 for clients only. */
+    sds announce_client_ipv4;               /* IPv4 for clients only. */
+    sds announce_client_ipv6;               /* IPv6 for clients only. */
     sds hostname;                           /* The known hostname for this node */
     sds human_nodename;                     /* The known human readable nodename for this node */
     int tcp_port;                           /* Latest known clients TCP port. */

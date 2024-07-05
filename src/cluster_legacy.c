@@ -277,7 +277,7 @@ int auxHumanNodenamePresent(clusterNode *n) {
 }
 
 int auxClientIpV4Setter(clusterNode *n, void *value, size_t length) {
-    if (sdslen(n->client_ipv4) == length && !strncmp(value, n->client_ipv4, length)) {
+    if (sdslen(n->announce_client_ipv4) == length && !strncmp(value, n->announce_client_ipv4, length)) {
         /* Unchanged value */
         return C_OK;
     }
@@ -290,20 +290,20 @@ int auxClientIpV4Setter(clusterNode *n, void *value, size_t length) {
         }
     }
 
-    n->client_ipv4 = sdscpylen(n->client_ipv4, value, length);
+    n->announce_client_ipv4 = sdscpylen(n->announce_client_ipv4, value, length);
     return C_OK;
 }
 
 sds auxClientIpV4Getter(clusterNode *n, sds s) {
-    return sdscatprintf(s, "%s", n->client_ipv4);
+    return sdscatprintf(s, "%s", n->announce_client_ipv4);
 }
 
 int auxClientIpV4Present(clusterNode *n) {
-    return sdslen(n->client_ipv4) != 0;
+    return sdslen(n->announce_client_ipv4) != 0;
 }
 
 int auxClientIpV6Setter(clusterNode *n, void *value, size_t length) {
-    if (sdslen(n->client_ipv6) == length && !strncmp(value, n->client_ipv6, length)) {
+    if (sdslen(n->announce_client_ipv6) == length && !strncmp(value, n->announce_client_ipv6, length)) {
         /* Unchanged value */
         return C_OK;
     }
@@ -316,16 +316,16 @@ int auxClientIpV6Setter(clusterNode *n, void *value, size_t length) {
         }
     }
 
-    n->client_ipv6 = sdscpylen(n->client_ipv6, value, length);
+    n->announce_client_ipv6 = sdscpylen(n->announce_client_ipv6, value, length);
     return C_OK;
 }
 
 sds auxClientIpV6Getter(clusterNode *n, sds s) {
-    return sdscatprintf(s, "%s", n->client_ipv6);
+    return sdscatprintf(s, "%s", n->announce_client_ipv6);
 }
 
 int auxClientIpV6Present(clusterNode *n) {
-    return sdslen(n->client_ipv6) != 0;
+    return sdslen(n->announce_client_ipv6) != 0;
 }
 
 int auxTcpPortSetter(clusterNode *n, void *value, size_t length) {
@@ -972,31 +972,31 @@ static void updateAnnouncedHumanNodename(clusterNode *node, char *value) {
 }
 
 static void updateAnnouncedClientIpV4(clusterNode *node, char *value) {
-    if (value != NULL && !strcmp(value, node->client_ipv4)) {
+    if (value != NULL && !strcmp(value, node->announce_client_ipv4)) {
         return;
-    } else if (value == NULL && sdslen(node->client_ipv4) == 0) {
+    } else if (value == NULL && sdslen(node->announce_client_ipv4) == 0) {
         return;
     }
 
     if (value != NULL) {
-        node->client_ipv4 = sdscpy(node->client_ipv4, value);
+        node->announce_client_ipv4 = sdscpy(node->announce_client_ipv4, value);
     } else {
-        sdsclear(node->client_ipv4);
+        sdsclear(node->announce_client_ipv4);
     }
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
 static void updateAnnouncedClientIpV6(clusterNode *node, char *value) {
-    if (value != NULL && !strcmp(value, node->client_ipv6)) {
+    if (value != NULL && !strcmp(value, node->announce_client_ipv6)) {
         return;
-    } else if (value == NULL && sdslen(node->client_ipv6) == 0) {
+    } else if (value == NULL && sdslen(node->announce_client_ipv6) == 0) {
         return;
     }
 
     if (value != NULL) {
-        node->client_ipv6 = sdscpy(node->client_ipv6, value);
+        node->announce_client_ipv6 = sdscpy(node->announce_client_ipv6, value);
     } else {
-        sdsclear(node->client_ipv6);
+        sdsclear(node->announce_client_ipv6);
     }
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
@@ -1437,8 +1437,8 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->link = NULL;
     node->inbound_link = NULL;
     memset(node->ip, 0, sizeof(node->ip));
-    node->client_ipv4 = sdsempty();
-    node->client_ipv6 = sdsempty();
+    node->announce_client_ipv4 = sdsempty();
+    node->announce_client_ipv6 = sdsempty();
     node->hostname = sdsempty();
     node->human_nodename = sdsempty();
     node->tcp_port = 0;
@@ -1610,8 +1610,8 @@ void freeClusterNode(clusterNode *n) {
     sdsfree(nodename);
     sdsfree(n->hostname);
     sdsfree(n->human_nodename);
-    sdsfree(n->client_ipv4);
-    sdsfree(n->client_ipv6);
+    sdsfree(n->announce_client_ipv4);
+    sdsfree(n->announce_client_ipv6);
 
     /* Release links and associated data structures. */
     if (n->link) freeClusterLink(n->link);
@@ -2671,17 +2671,17 @@ uint32_t getHumanNodenamePingExtSize(void) {
 }
 
 uint32_t getClientIpV4PingExtSize(void) {
-    if (sdslen(myself->client_ipv4) == 0) {
+    if (sdslen(myself->announce_client_ipv4) == 0) {
         return 0;
     }
-    return getAlignedPingExtSize(sdslen(myself->client_ipv4) + 1);
+    return getAlignedPingExtSize(sdslen(myself->announce_client_ipv4) + 1);
 }
 
 uint32_t getClientIpV6PingExtSize(void) {
-    if (sdslen(myself->client_ipv6) == 0) {
+    if (sdslen(myself->announce_client_ipv6) == 0) {
         return 0;
     }
-    return getAlignedPingExtSize(sdslen(myself->client_ipv6) + 1);
+    return getAlignedPingExtSize(sdslen(myself->announce_client_ipv6) + 1);
 }
 
 uint32_t getShardIdPingExtSize(void) {
@@ -2744,12 +2744,12 @@ uint32_t writePingExt(clusterMsg *hdr, int gossipcount) {
         extensions++;
     }
 
-    if (sdslen(myself->client_ipv4) != 0) {
+    if (sdslen(myself->announce_client_ipv4) != 0) {
         if (cursor != NULL) {
-            /* Populate client_ipv4 */
+            /* Populate announce_client_ipv4 */
             clusterMsgPingExtClientIpV4 *ext =
                 preparePingExt(cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPv4, getClientIpV4PingExtSize());
-            memcpy(ext->client_ipv4, myself->client_ipv4, sdslen(myself->client_ipv4));
+            memcpy(ext->announce_client_ipv4, myself->announce_client_ipv4, sdslen(myself->announce_client_ipv4));
 
             /* Move the write cursor */
             cursor = getNextPingExt(cursor);
@@ -2759,12 +2759,12 @@ uint32_t writePingExt(clusterMsg *hdr, int gossipcount) {
         extensions++;
     }
 
-    if (sdslen(myself->client_ipv6) != 0) {
+    if (sdslen(myself->announce_client_ipv6) != 0) {
         if (cursor != NULL) {
-            /* Populate client_ipv4 */
+            /* Populate announce_client_ipv4 */
             clusterMsgPingExtClientIpV6 *ext =
                 preparePingExt(cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPv6, getClientIpV6PingExtSize());
-            memcpy(ext->client_ipv6, myself->client_ipv6, sdslen(myself->client_ipv6));
+            memcpy(ext->announce_client_ipv6, myself->announce_client_ipv6, sdslen(myself->announce_client_ipv6));
 
             /* Move the write cursor */
             cursor = getNextPingExt(cursor);
@@ -2838,11 +2838,11 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
                 (clusterMsgPingExtHumanNodename *)&(ext->ext[0].human_nodename);
             ext_humannodename = humannodename_ext->human_nodename;
         } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_IPv4) {
-            clusterMsgPingExtClientIpV4 *clientipv4_ext = (clusterMsgPingExtClientIpV4 *)&(ext->ext[0].client_ipv4);
-            ext_clientipv4 = clientipv4_ext->client_ipv4;
+            clusterMsgPingExtClientIpV4 *clientipv4_ext = (clusterMsgPingExtClientIpV4 *)&(ext->ext[0].announce_client_ipv4);
+            ext_clientipv4 = clientipv4_ext->announce_client_ipv4;
         } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_IPv6) {
-            clusterMsgPingExtClientIpV6 *clientipv6_ext = (clusterMsgPingExtClientIpV6 *)&(ext->ext[0].client_ipv6);
-            ext_clientipv6 = clientipv6_ext->client_ipv6;
+            clusterMsgPingExtClientIpV6 *clientipv6_ext = (clusterMsgPingExtClientIpV6 *)&(ext->ext[0].announce_client_ipv6);
+            ext_clientipv6 = clientipv6_ext->announce_client_ipv6;
         } else if (type == CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE) {
             clusterMsgPingExtForgottenNode *forgotten_node_ext = &(ext->ext[0].forgotten_node);
             clusterNode *n = clusterLookupNode(forgotten_node_ext->name, CLUSTER_NAMELEN);
@@ -6005,9 +6005,9 @@ char *clusterNodeIp(clusterNode *node, client *c) {
         return node->ip;
     }
     if (isClientConnIpV6(c)) {
-        if (sdslen(node->client_ipv6) != 0) return node->client_ipv6;
+        if (sdslen(node->announce_client_ipv6) != 0) return node->announce_client_ipv6;
     } else {
-        if (sdslen(node->client_ipv4) != 0) return node->client_ipv4;
+        if (sdslen(node->announce_client_ipv4) != 0) return node->announce_client_ipv4;
     }
     return node->ip;
 }

@@ -1,6 +1,11 @@
 # Small cluster. No need for failovers.
 start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-replica-no-failover yes}} {
 
+    test "Set cluster announced IPv4 to invalid IP" {
+        catch {R 0 config set cluster-announce-client-ipv4 banana} e
+        assert_match "*Invalid IPv4 address*" $e
+    }
+
     test "Set cluster announced IPv4 and check that it propagates" {
         for {set j 0} {$j < [llength $::servers]} {incr j} {
             set res [R $j config set cluster-announce-client-ipv4 "111.222.111.$j"]
@@ -69,6 +74,11 @@ start_cluster 2 2 {tags {external:skip cluster ipv6} overrides {cluster-replica-
     for {set j 0} {$j < [llength $::servers]} {incr j} {
         set level [expr -1 * $j]
         lappend clients [valkey ::1 [srv $level port] 0 $::tls]
+    }
+
+    test "Set cluster announced IPv6 to invalid IP" {
+        catch {R 0 config set cluster-announce-client-ipv6 banana} e
+        assert_match "*Invalid IPv6 address*" $e
     }
 
     test "Set cluster announced IPv6 and check that it propagates" {

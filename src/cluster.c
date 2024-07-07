@@ -1057,8 +1057,18 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
                 }
             } else {
                 /* If it is not the first key/channel, make sure it is exactly
-                 * the same key/channel as the first we saw. */
-                if (slot != thisslot) {
+                 * the same key/channel as the first we saw or an allowed crossslot situation. */
+                int prevent_crossslot =
+                    (cmd_flags & CMD_WRITE)        // eliminate issues with client->current_slot
+                    || pubsubshard_included        // pubsub does not benefit and too many edge cases
+                    || c->cmd->proc == execCommand // We do not permit crossslot transactions to prevent client code
+                                                   // which will break when cluster topology changes
+                    // finally, if any key is migrating we cannot permit the crossslot since we don't check if the
+                    // specific keys are affected
+                    //  this could potentially be relaxed in the future.
+                    || migrating_slot || importing_slot || getMigratingSlotDest(slot) != NULL ||
+                    getImportingSlotSource(slot) != NULL;
+                if (slot != thisslot && prevent_crossslot) {
                     /* Error: multiple keys from different slots. */
                     getKeysFreeResult(&result);
                     if (error_code) *error_code = CLUSTER_REDIR_CROSS_SLOT;

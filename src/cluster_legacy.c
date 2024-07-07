@@ -2622,59 +2622,49 @@ static clusterMsgPingExt *getNextPingExt(clusterMsgPingExt *ext) {
 }
 
 /* All PING extensions must be 8-byte aligned */
-uint32_t getAlignedPingExtSize(uint32_t dataSize) {
+static uint32_t getAlignedPingExtSize(uint32_t dataSize) {
     return sizeof(clusterMsgPingExt) + EIGHT_BYTE_ALIGN(dataSize);
 }
 
-uint32_t getHostnamePingExtSize(void) {
-    if (sdslen(myself->hostname) == 0) {
-        return 0;
-    }
-    return getAlignedPingExtSize(sdslen(myself->hostname) + 1);
-}
-
-uint32_t getHumanNodenamePingExtSize(void) {
-    if (sdslen(myself->human_nodename) == 0) {
-        return 0;
-    }
-    return getAlignedPingExtSize(sdslen(myself->human_nodename) + 1);
-}
-
-uint32_t getClientIpV4PingExtSize(void) {
-    if (sdslen(myself->announce_client_ipv4) == 0) {
-        return 0;
-    }
-    return getAlignedPingExtSize(sdslen(myself->announce_client_ipv4) + 1);
-}
-
-uint32_t getClientIpV6PingExtSize(void) {
-    if (sdslen(myself->announce_client_ipv6) == 0) {
-        return 0;
-    }
-    return getAlignedPingExtSize(sdslen(myself->announce_client_ipv6) + 1);
-}
-
-uint32_t getShardIdPingExtSize(void) {
+static uint32_t getShardIdPingExtSize(void) {
     return getAlignedPingExtSize(sizeof(clusterMsgPingExtShardId));
 }
 
-uint32_t getForgottenNodeExtSize(void) {
+static uint32_t getForgottenNodeExtSize(void) {
     return getAlignedPingExtSize(sizeof(clusterMsgPingExtForgottenNode));
 }
 
-void *preparePingExt(clusterMsgPingExt *ext, uint16_t type, uint32_t length) {
+static void *preparePingExt(clusterMsgPingExt *ext, uint16_t type, uint32_t length) {
     ext->type = htons(type);
     ext->length = htonl(length);
     return &ext->ext[0];
 }
 
+/* If value is nonempty and cursor_ptr points to a non-NULL cursor, writes a
+ * ping extension at the cursor, advances the cursor, increments totlen and
+ * returns 1. If value is nonempty and cursor_ptr points to NULL, just computes
+ * the size, increments totlen and returns 1. If value is empty, returns 0. */
+static uint32_t writeSdsPingExtIfNonempty(uint32_t *totlen_ptr, clusterMsgPingExt **cursor_ptr,
+                                          clusterMsgPingtypes type, sds value) {
+    size_t len = sdslen(value);
+    if (len == 0) return 0;
+    size_t size = getAlignedPingExtSize(len + 1);
+    if (*cursor_ptr != NULL) {
+        void *ext = preparePingExt(*cursor_ptr, type, size);
+        memcpy(ext, value, len);
+        *cursor_ptr = getNextPingExt(*cursor_ptr);
+    }
+    *totlen_ptr += size;
+    return 1;
+}
+
 /* 1. If a NULL hdr is provided, compute the extension size;
- * 2. If a non-NULL hdr is provided, write the hostname ping
- *    extension at the start of the cursor. This function
+ * 2. If a non-NULL hdr is provided, write the ping
+ *    extensions at the start of the cursor. This function
  *    will update the cursor to point to the end of the
  *    written extension and will return the amount of bytes
  *    written. */
-uint32_t writePingExt(clusterMsg *hdr, int gossipcount) {
+static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
     uint16_t extensions = 0;
     uint32_t totlen = 0;
     clusterMsgPingExt *cursor = NULL;
@@ -2683,66 +2673,14 @@ uint32_t writePingExt(clusterMsg *hdr, int gossipcount) {
         cursor = getInitialPingExt(hdr, gossipcount);
     }
 
-    /* hostname is optional */
-    if (sdslen(myself->hostname) != 0) {
-        if (cursor != NULL) {
-            /* Populate hostname */
-            clusterMsgPingExtHostname *ext =
-                preparePingExt(cursor, CLUSTERMSG_EXT_TYPE_HOSTNAME, getHostnamePingExtSize());
-            memcpy(ext->hostname, myself->hostname, sdslen(myself->hostname));
-
-            /* Move the write cursor */
-            cursor = getNextPingExt(cursor);
-        }
-
-        totlen += getHostnamePingExtSize();
-        extensions++;
-    }
-
-    if (sdslen(myself->human_nodename) != 0) {
-        if (cursor != NULL) {
-            /* Populate human_nodename */
-            clusterMsgPingExtHumanNodename *ext =
-                preparePingExt(cursor, CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME, getHumanNodenamePingExtSize());
-            memcpy(ext->human_nodename, myself->human_nodename, sdslen(myself->human_nodename));
-
-            /* Move the write cursor */
-            cursor = getNextPingExt(cursor);
-        }
-
-        totlen += getHumanNodenamePingExtSize();
-        extensions++;
-    }
-
-    if (sdslen(myself->announce_client_ipv4) != 0) {
-        if (cursor != NULL) {
-            /* Populate announce_client_ipv4 */
-            clusterMsgPingExtClientIpV4 *ext =
-                preparePingExt(cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPv4, getClientIpV4PingExtSize());
-            memcpy(ext->announce_client_ipv4, myself->announce_client_ipv4, sdslen(myself->announce_client_ipv4));
-
-            /* Move the write cursor */
-            cursor = getNextPingExt(cursor);
-        }
-
-        totlen += getClientIpV4PingExtSize();
-        extensions++;
-    }
-
-    if (sdslen(myself->announce_client_ipv6) != 0) {
-        if (cursor != NULL) {
-            /* Populate announce_client_ipv4 */
-            clusterMsgPingExtClientIpV6 *ext =
-                preparePingExt(cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPv6, getClientIpV6PingExtSize());
-            memcpy(ext->announce_client_ipv6, myself->announce_client_ipv6, sdslen(myself->announce_client_ipv6));
-
-            /* Move the write cursor */
-            cursor = getNextPingExt(cursor);
-        }
-
-        totlen += getClientIpV6PingExtSize();
-        extensions++;
-    }
+    /* Write simple optional SDS ping extensions. */
+    extensions += writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_HOSTNAME, myself->hostname);
+    extensions += writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME,
+                                            myself->human_nodename);
+    extensions += writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPv4,
+                                            myself->announce_client_ipv4);
+    extensions += writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPv6,
+                                            myself->announce_client_ipv6);
 
     /* Gossip forgotten nodes */
     if (dictSize(server.cluster->nodes_black_list) > 0) {
@@ -3804,7 +3742,7 @@ void clusterSendPing(clusterLink *link, int type) {
     estlen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
     estlen += (sizeof(clusterMsgDataGossip) * (wanted + pfail_wanted));
     if (link->node && nodeSupportsExtensions(link->node)) {
-        estlen += writePingExt(NULL, 0);
+        estlen += writePingExtensions(NULL, 0);
     }
     /* Note: clusterBuildMessageHdr() expects the buffer to be always at least
      * sizeof(clusterMsg) or more. */
@@ -3875,7 +3813,7 @@ void clusterSendPing(clusterLink *link, int type) {
     uint32_t totlen = 0;
 
     if (link->node && nodeSupportsExtensions(link->node)) {
-        totlen += writePingExt(hdr, gossipcount);
+        totlen += writePingExtensions(hdr, gossipcount);
     } else {
         serverLog(LL_DEBUG, "Unable to send extensions data, however setting ext data flag to true");
         hdr->mflags[0] |= CLUSTERMSG_FLAG0_EXT_DATA;

@@ -9,9 +9,9 @@ start_server {} {
     set replica1 [srv -3 client]
     set replica2 [srv -2 client]
     set replica3 [srv -1 client]
-    $replica1 config set dual-connection-sync-enabled $rdbchann
-    $replica2 config set dual-connection-sync-enabled $rdbchann
-    $replica3 config set dual-connection-sync-enabled $rdbchann
+    $replica1 config set dual-conn-sync-enabled $rdbchann
+    $replica2 config set dual-conn-sync-enabled $rdbchann
+    $replica3 config set dual-conn-sync-enabled $rdbchann
 
     set master [srv 0 client]
     set master_host [srv 0 host]
@@ -22,7 +22,7 @@ start_server {} {
     $master config set repl-diskless-sync-delay 5
     $master config set repl-diskless-sync-max-replicas 1
     $master config set client-output-buffer-limit "replica 0 0 0"
-    $master config set dual-connection-sync-enabled $rdbchann
+    $master config set dual-conn-sync-enabled $rdbchann
 
     # Make sure replica3 is synchronized with master
     $replica3 replicaof $master_host $master_port
@@ -113,7 +113,7 @@ start_server {} {
     set replica1_pid [s -2 process_id]
     set replica2 [srv -1 client]
     set replica2_pid [s -1 process_id]
-    $replica1 config set dual-connection-sync-enabled $rdbchannel
+    $replica1 config set dual-conn-sync-enabled $rdbchannel
 
     set master [srv 0 client]
     set master_host [srv 0 host]
@@ -122,7 +122,7 @@ start_server {} {
     $master config set save ""
     $master config set repl-backlog-size 16384
     $master config set client-output-buffer-limit "replica 0 0 0"
-    $master config set dual-connection-sync-enabled $rdbchannel
+    $master config set dual-conn-sync-enabled $rdbchannel
 
     # Executing 'debug digest' on master which has many keys costs much time
     # (especially in valgrind), this causes that replica1 and replica2 disconnect
@@ -131,7 +131,7 @@ start_server {} {
     $replica1 config set repl-timeout 1000
     $replica2 config set repl-timeout 1000
     $replica2 config set client-output-buffer-limit "replica 0 0 0"
-    $replica2 config set dual-connection-sync-enabled $rdbchannel
+    $replica2 config set dual-conn-sync-enabled $rdbchannel
 
     $replica1 replicaof $master_host $master_port
     wait_for_sync $replica1
@@ -234,10 +234,10 @@ test "Partial resynchronization is successful even client-output-buffer-limit is
             r config set save ""
             r config set repl-backlog-size 100mb
             r config set client-output-buffer-limit "replica 512k 0 0"
-            r config set dual-connection-sync-enabled $rdbchann
+            r config set dual-conn-sync-enabled $rdbchann
 
             set replica [srv -1 client]
-            $replica config set dual-connection-sync-enabled $rdbchann
+            $replica config set dual-conn-sync-enabled $rdbchann
             $replica replicaof [srv 0 host] [srv 0 port]
             wait_for_sync $replica
 
@@ -301,8 +301,8 @@ test "Replica client-output-buffer size is limited to backlog_limit/16 when no r
 
             $master config set repl-backlog-size 16384
             $master config set client-output-buffer-limit "replica 32768 32768 60"
-            $master config set dual-connection-sync-enabled $rdbchann
-            $replica config set dual-connection-sync-enabled $rdbchann
+            $master config set dual-conn-sync-enabled $rdbchann
+            $replica config set dual-conn-sync-enabled $rdbchann
             # Key has has to be larger than replica client-output-buffer limit.
             set keysize [expr 256*1024]
 

@@ -68,11 +68,11 @@ start_server {tags {"auth_binary_password external:skip"}} {
 
         test "primaryauth test with binary password rdbchannel = $rdbchann" {
             $master config set requirepass "abc\x00def"
-            $master config set dual-connection-sync-enabled $rdbchann
+            $master config set dual-conn-sync-enabled $rdbchann
             # Configure the replica with masterauth
             set loglines [count_log_lines 0]
             $slave config set primaryauth "abc"
-            $slave config set dual-connection-sync-enabled $rdbchann
+            $slave config set dual-conn-sync-enabled
             $slave slaveof $master_host $master_port
 
             # Verify replica is not able to sync with master

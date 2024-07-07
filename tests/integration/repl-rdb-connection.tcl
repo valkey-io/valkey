@@ -28,13 +28,13 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         # operation, so that the replica remains in the handshake state.
         $master config set repl-diskless-sync yes
         $master config set repl-diskless-sync-delay 1000
-        $master config set dual-connection-sync-enabled yes
+        $master config set dual-conn-sync-enabled yes
 
         # Start the replication process...
-        $replica config set dual-connection-sync-enabled yes
+        $replica config set dual-conn-sync-enabled yes
         $replica slaveof $master_host $master_port
 
-        test {Test dual-connection-sync-enabled replica enters handshake} {
+        test {Test dual-conn-sync-enabled replica enters handshake} {
             wait_for_condition 50 1000 {
                 [string match *handshake* [$replica role]]
             } else {
@@ -42,7 +42,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             }
         }
 
-        test {Test dual-connection-sync-enabled enters wait_bgsave} {
+        test {Test dual-conn-sync-enabled enters wait_bgsave} {
             wait_for_condition 50 1000 {
                 [string match *state=wait_bgsave* [$master info replication]]
             } else {
@@ -52,7 +52,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
 
         $master config set repl-diskless-sync-delay 0
 
-        test {Test dual-connection-sync-enabled replica is able to sync} {
+        test {Test dual-conn-sync-enabled replica is able to sync} {
             verify_replica_online $master 0 500
             wait_for_condition 50 1000 {
                 [string match *connected_slaves:1* [$master info]]
@@ -81,8 +81,8 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         set master_port [srv 0 port]
 
         $master config set rdb-key-save-delay 200
-        $master config set dual-connection-sync-enabled yes
-        $replica config set dual-connection-sync-enabled yes
+        $master config set dual-conn-sync-enabled yes
+        $replica config set dual-conn-sync-enabled yes
         $replica config set repl-diskless-sync no
 
         populate 1000 master 10000
@@ -144,7 +144,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
 
         test {Rollback to nornal sync} {
             $replica slaveof no one
-            $replica config set dual-connection-sync-enabled no
+            $replica config set dual-conn-sync-enabled no
             $master set newkey newval
 
             set sync_full [s 0 sync_full]
@@ -171,9 +171,9 @@ start_server {tags {"repl rdb-connection external:skip"}} {
 
             $master config set repl-diskless-sync yes
             $master config set client-output-buffer-limit "replica 1100k 0 0"
-            $replica config set dual-connection-sync-enabled $start_with_rdb_sync_enabled
+            $replica config set dual-conn-sync-enabled $start_with_rdb_sync_enabled
 
-            test "Test enable disable dual-connection-sync-enabled start with $start_with_rdb_sync_enabled" {
+            test "Test enable disable dual-conn-sync-enabled start with $start_with_rdb_sync_enabled" {
                 # Set master shared replication buffer size to a bit more then the size of 
                 # a replication buffer block.
                 
@@ -188,9 +188,9 @@ start_server {tags {"repl rdb-connection external:skip"}} {
                 $replica slaveof no one
                 if {$start_with_rdb_sync_enabled == "yes"} {
                     # disable rdb channel sync
-                    $replica config set dual-connection-sync-enabled no
+                    $replica config set dual-conn-sync-enabled no
                 } else {
-                    $replica config set dual-connection-sync-enabled yes
+                    $replica config set dual-conn-sync-enabled yes
                 }
 
                 # Force replica to full sync next time
@@ -231,16 +231,16 @@ start_server {tags {"repl rdb-connection external:skip"}} {
 
             $master config set repl-diskless-sync yes
             $master config set repl-diskless-sync-delay 5; # allow both replicas to ask for sync
-            $master config set dual-connection-sync-enabled yes
+            $master config set dual-conn-sync-enabled yes
 
-            $replica1 config set dual-connection-sync-enabled yes
-            $replica2 config set dual-connection-sync-enabled yes
+            $replica1 config set dual-conn-sync-enabled yes
+            $replica2 config set dual-conn-sync-enabled yes
             $replica1 config set repl-diskless-sync no
             $replica2 config set repl-diskless-sync no
             $replica1 config set loglevel debug
             $replica2 config set loglevel debug
 
-            test "Two replicas in one sync session with dual-connection-sync-enabled" {
+            test "Two replicas in one sync session with dual-conn-sync-enabled" {
                 $replica1 slaveof $master_host $master_port
                 $replica2 slaveof $master_host $master_port
 
@@ -265,12 +265,12 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             $replica1 slaveof no one
             $replica2 slaveof no one
 
-            $replica1 config set dual-connection-sync-enabled yes
-            $replica2 config set dual-connection-sync-enabled no
+            $replica1 config set dual-conn-sync-enabled yes
+            $replica2 config set dual-conn-sync-enabled no
 
             $master set key2 val2
 
-            test "Test one replica with dual-connection-sync-enabled enabled one with disabled" {
+            test "Test one replica with dual-conn-sync-enabled enabled one with disabled" {
                 $replica1 slaveof $master_host $master_port
                 $replica2 slaveof $master_host $master_port
 
@@ -295,7 +295,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
                 # At this point we have about 10k keys in the db, 
                 # We expect that the next full sync will take 5 seconds (10k*500)ms
                 # It will give us enough time to fill the replica buffer.
-                $replica1 config set dual-connection-sync-enabled yes
+                $replica1 config set dual-conn-sync-enabled yes
                 $replica1 config set client-output-buffer-limit "replica 16383 16383 0"
                 $replica1 config set loglevel debug
 
@@ -334,7 +334,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
                 set cur_psync [status $master sync_partial_ok]
                 $master config set repl-diskless-sync no
 
-                $replica1 config set dual-connection-sync-enabled yes
+                $replica1 config set dual-conn-sync-enabled yes
                 $replica1 slaveof $master_host $master_port
 
                 # Wait for mitigation and resync
@@ -368,9 +368,9 @@ start_server {tags {"repl rdb-connection external:skip"}} {
 
         $master config set repl-diskless-sync yes
         $master debug sleep-after-fork-seconds 5;# Stop master after fork for 5 seconds
-        $master config set dual-connection-sync-enabled yes
+        $master config set dual-conn-sync-enabled yes
 
-        $replica config set dual-connection-sync-enabled yes
+        $replica config set dual-conn-sync-enabled yes
         $replica config set loglevel debug
 
         test "Test rdb-connection psync established after rdb load" {
@@ -404,7 +404,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         set loglines [count_log_lines -1]
 
         $master config set repl-diskless-sync yes
-        $master config set dual-connection-sync-enabled yes
+        $master config set dual-conn-sync-enabled yes
         $master config set repl-backlog-size $backlog_size
         $master config set loglevel debug
         $master config set repl-timeout 10
@@ -415,7 +415,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         set load_handle2 [start_one_key_write_load $master_host $master_port 100 "mykey2"]
         set load_handle3 [start_one_key_write_load $master_host $master_port 100 "mykey3"]
 
-        $replica config set dual-connection-sync-enabled yes
+        $replica config set dual-conn-sync-enabled yes
         $replica config set loglevel debug
         $replica config set repl-timeout 10
         # Stop replica after master fork for 5 seconds
@@ -463,7 +463,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             set loglines [count_log_lines -1]
 
             $master config set repl-diskless-sync yes
-            $master config set dual-connection-sync-enabled yes
+            $master config set dual-conn-sync-enabled yes
             $master config set repl-backlog-size $backlog_size
             $master config set loglevel debug
             $master config set repl-timeout 10
@@ -472,8 +472,8 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             
             set load_handle0 [start_write_load $master_host $master_port 20]
 
-            $replica1 config set dual-connection-sync-enabled yes
-            $replica2 config set dual-connection-sync-enabled yes
+            $replica1 config set dual-conn-sync-enabled yes
+            $replica2 config set dual-conn-sync-enabled yes
             $replica1 config set loglevel debug
             $replica2 config set loglevel debug
             $replica1 config set repl-timeout 10
@@ -523,7 +523,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
     set master_port [srv 0 port]
     
     $master config set repl-diskless-sync yes
-    $master config set dual-connection-sync-enabled yes
+    $master config set dual-conn-sync-enabled yes
     $master config set repl-backlog-size [expr {10 ** 6}]
     $master config set loglevel debug
     $master config set repl-timeout 10
@@ -542,7 +542,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         
         set load_handle0 [start_write_load $master_host $master_port 20]
 
-        $replica config set dual-connection-sync-enabled yes
+        $replica config set dual-conn-sync-enabled yes
         $replica config set loglevel debug
         $replica config set repl-timeout 10
 
@@ -580,7 +580,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         
         set load_handle0 [start_write_load $master_host $master_port 20]
 
-        $replica config set dual-connection-sync-enabled yes
+        $replica config set dual-conn-sync-enabled yes
         $replica config set loglevel debug
         $replica config set repl-timeout 10
 
@@ -622,7 +622,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
     set loglines [count_log_lines 0]
 
     $master config set repl-diskless-sync yes
-    $master config set dual-connection-sync-enabled yes
+    $master config set dual-conn-sync-enabled yes
     $master config set client-output-buffer-limit "replica 1100k 0 0"
     $master config set loglevel debug
     # generate small db
@@ -639,7 +639,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         set load_handle1 [start_write_load $master_host $master_port 20]
         set load_handle2 [start_write_load $master_host $master_port 20]
 
-        $replica config set dual-connection-sync-enabled yes
+        $replica config set dual-conn-sync-enabled yes
         $replica config set loglevel debug
         $replica config set repl-timeout 10
 
@@ -701,7 +701,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
     set loglines [count_log_lines 0]
 
     $master config set repl-diskless-sync yes
-    $master config set dual-connection-sync-enabled yes
+    $master config set dual-conn-sync-enabled yes
     $master config set loglevel debug
     $master config set repl-diskless-sync-delay 5
     
@@ -709,15 +709,15 @@ start_server {tags {"repl rdb-connection external:skip"}} {
     $master debug populate 10000 master 1
     $master config set rdb-key-save-delay 500
 
-    $master config set dual-connection-sync-enabled $rdbchan
+    $master config set dual-conn-sync-enabled $rdbchan
 
     start_server {} {
         set replica1 [srv 0 client]
-        $replica1 config set dual-connection-sync-enabled $rdbchan
+        $replica1 config set dual-conn-sync-enabled $rdbchan
         $replica1 config set loglevel debug
         start_server {} {
             set replica2 [srv 0 client]
-            $replica2 config set dual-connection-sync-enabled $rdbchan
+            $replica2 config set dual-conn-sync-enabled $rdbchan
             $replica2 config set loglevel debug
             $replica2 config set repl-timeout 60
 

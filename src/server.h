@@ -510,7 +510,7 @@ typedef enum {
 /* Replica rdb-connection replication state. Used in server.repl_rdb_conn_state for
  * replicas to remember what to do next. */
 typedef enum {
-    REPL_RDB_CONN_STATE_NONE = 0,         /* No active replication */
+    REPL_RDB_CONN_STATE_NONE = 0,         /* No active rdb connection sync */
     REPL_RDB_CONN_SEND_HANDSHAKE,         /* Send handshake sequence to primary */
     REPL_RDB_CONN_RECEIVE_AUTH_REPLY,     /* Wait for AUTH reply */
     REPL_RDB_CONN_RECEIVE_REPLCONF_REPLY, /* Wait for REPLCONF reply */
@@ -1937,7 +1937,7 @@ struct valkeyServer {
     int rdb_bgsave_scheduled;                  /* BGSAVE when possible if true. */
     int rdb_child_type;                        /* Type of save by active child. */
     int lastbgsave_status;                     /* C_OK or C_ERR */
-    int primary_supports_dual_connection_sync; /* Track whether the primary is able to sync using rdb connection.
+    int primary_supports_dual_conn_sync; /* Track whether the primary is able to sync using rdb connection.
                                                 * -1 = unknown, 0 = no, 1 = yes. */
     int stop_writes_on_bgsave_err;             /* Don't allow writes if can't BGSAVE */
     int rdb_pipe_read;                         /* RDB pipe used to transfer the rdb data */

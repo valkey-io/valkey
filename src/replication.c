@@ -1098,7 +1098,7 @@ void syncCommand(client *c) {
                           "Replica %s is capable of rdb-connection synchronization, and partial sync isn't possible. "
                           "Full sync will continue with dedicated RDB connection.",
                           replicationGetReplicaName(c));
-                const char *buf = "+DUALCONNECTIONSYNC\r\n";
+                const char *buf = "+DUALCONNSYNC\r\n";
                 if (connWrite(c->conn, buf, strlen(buf)) != (int)strlen(buf)) {
                     freeClientAsync(c);
                 }
@@ -2545,7 +2545,7 @@ int sendCurrentOffsetToReplica(client *replica) {
 }
 
 /* Replication: Replica side.
- * This connection handler is used to initialize the RDB connection (dual-connection-sync-enabled sync).
+ * This connection handler is used to initialize the RDB connection (dual-conn-sync-enabled sync).
  * Once a replica with repl rdb-connection enabled, denied from PSYNC with its primary,
  * fullSyncWithPrimary begins its role. The connection handler prepare server.repl_rdb_transfer_s
  * for a rdb stream, and server.repl_transfer_s for increamental replication data stream. */
@@ -3033,7 +3033,7 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
     if (!strncmp(reply, "+FULLRESYNC", 11)) {
         char *replid = NULL, *offset = NULL;
         if (server.dual_conn_enabled) {
-            server.primary_supports_dual_connection_sync = 0;
+            server.primary_supports_dual_conn_sync = 0;
         }
 
         /* FULL RESYNC, parse the reply in order to extract the replid
@@ -3133,7 +3133,7 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
         /* A response of +DUALCONNSYNC from the primary implies that partial
          * synchronization is not possible and that the primary supports full
          * sync using dedicated RDB connection. Full sync will continue that way. */
-        server.primary_supports_dual_connection_sync = 1;
+        server.primary_supports_dual_conn_sync = 1;
         serverLog(LL_NOTICE, "PSYNC is not possible, initialize RDB connection.");
         sdsfree(reply);
         return PSYNC_FULLRESYNC_RDB_CONN;
@@ -3227,7 +3227,7 @@ error:
  *  - RDB-connection sync begins when the replica sends a REPLCONF MAINCONN to the primary during initial
  *    handshake. This allows the replica to verify whether the primary supports rdb-connection sync and, if
  *    so, state that this is the replica's main connection, which is not used for snapshot transfer.
- *  - When replica lacks sufficient data for PSYNC, the primary will send +DUALCONNECTIONSYNC response instead
+ *  - When replica lacks sufficient data for PSYNC, the primary will send +DUALCONNSYNC response instead
  *    of RDB data. As a next step, the replica creates a new connection (rdb-connection) and configures it against
  *    the primary with the appropriate capabilities and requirements. The replica then requests a sync
  *    using the RDB connection.
@@ -3280,7 +3280,7 @@ error:
  * ┌─▼─────────────────┐        │                           │
  * │RECEIVE_PSYNC_REPLY│        │                           │
  * └────────┬─┬────────┘        │                           │
- * +CONTINUE│ │+DUALCONNECTIONSYNC                          │
+ * +CONTINUE│ │+DUALCONNSYNC    |                           │
  *   │      │ └─────────────────┘                           │
  *   │      │+FULLRESYNC                                    │
  *   │    ┌─▼─────────────────┐                   ┌─────────▼─────────┐
@@ -3597,7 +3597,7 @@ void syncWithPrimary(connection *conn) {
         server.repl_transfer_fd = dfd;
     }
 
-    /* Using rdb-connection sync, the primary responded +DUALCONNECTIONSYNC. We need to
+    /* Using rdb-connection sync, the primary responded +DUALCONNSYNC. We need to
      * initialize the RDB connection. */
     if (psync_result == PSYNC_FULLRESYNC_RDB_CONN) {
         /* Create a full sync connection */
@@ -3776,7 +3776,7 @@ void replicationSetPrimary(char *ip, int port) {
     server.repl_state = REPL_STATE_CONNECT;
     /* Allow trying rdb-connection sync with the new primary. If newprimaryr doesn't
      * support rdb-connection sync, we will set to 0 afterwards. */
-    server.primary_supports_dual_connection_sync = -1;
+    server.primary_supports_dual_conn_sync = -1;
     serverLog(LL_NOTICE, "Connecting to Primary %s:%d", server.primary_host, server.primary_port);
     connectWithPrimary();
 }

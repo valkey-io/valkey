@@ -316,7 +316,7 @@ foreach mdl {no yes} rdbchannel {no yes} {
                     lappend slaves [srv 0 client]
                     start_server {overrides {save {}}} {
                         lappend slaves [srv 0 client]
-                        test "Connect multiple replicas at the same time (issue #141), master diskless=$mdl, replica diskless=$sdl dual-connection-sync-enabled=$rdbchannel" {
+                        test "Connect multiple replicas at the same time (issue #141), master diskless=$mdl, replica diskless=$sdl dual-conn-sync-enabled=$rdbchannel" {
                             # start load handles only inside the test, so that the test can be skipped
                             set load_handle0 [start_bg_complex_data $master_host $master_port 9 100000000]
                             set load_handle1 [start_bg_complex_data $master_host $master_port 11 100000000]
@@ -325,11 +325,11 @@ foreach mdl {no yes} rdbchannel {no yes} {
                             set load_handle4 [start_write_load $master_host $master_port 4]
                             after 5000 ;# wait for some data to accumulate so that we have RDB part for the fork
 
-                            $master config set dual-connection-sync-enabled $rdbchannel
+                            $master config set dual-conn-sync-enabled $rdbchannel
                             # Send SLAVEOF commands to slaves
-                            [lindex $slaves 0] config set dual-connection-sync-enabled $rdbchannel
-                            [lindex $slaves 1] config set dual-connection-sync-enabled $rdbchannel
-                            [lindex $slaves 2] config set dual-connection-sync-enabled $rdbchannel
+                            [lindex $slaves 0] config set dual-conn-sync-enabled $rdbchannel
+                            [lindex $slaves 1] config set dual-conn-sync-enabled $rdbchannel
+                            [lindex $slaves 2] config set dual-conn-sync-enabled $rdbchannel
                             [lindex $slaves 0] config set repl-diskless-load $sdl
                             [lindex $slaves 1] config set repl-diskless-load $sdl
                             [lindex $slaves 2] config set repl-diskless-load $sdl
@@ -456,10 +456,10 @@ foreach testType {Successful Aborted} rdbchannel {yes no} {
             $master config set repl-diskless-sync yes
             $master config set repl-diskless-sync-delay 0
             $master config set save ""
-            $master config set dual-connection-sync-enabled $rdbchannel
+            $master config set dual-conn-sync-enabled $rdbchannel
             $replica config set repl-diskless-load swapdb
             $replica config set save ""
-            $replica config set dual-connection-sync-enabled $rdbchannel
+            $replica config set dual-conn-sync-enabled $rdbchannel
 
             # Put different data sets on the master and replica
             # We need to put large keys on the master since the replica replies to info only once in 2mb
@@ -479,7 +479,7 @@ foreach testType {Successful Aborted} rdbchannel {yes no} {
                     # Start the replication process
                     $replica replicaof $master_host $master_port
 
-                    test "Diskless load swapdb (different replid): replica enter loading dual-connection-sync-enabled=$rdbchannel" {
+                    test "Diskless load swapdb (different replid): replica enter loading dual-conn-sync-enabled=$rdbchannel" {
                         # Wait for the replica to start reading the rdb
                         wait_for_condition 100 100 {
                             [s -1 loading] eq 1
@@ -556,7 +556,7 @@ foreach testType {Successful Aborted} {
             $master config set save ""
             $replica config set repl-diskless-load swapdb
             $replica config set save ""
-            $replica config set dual-connection-sync-enabled no; # Doesn't work with swapdb
+            $replica config set dual-conn-sync-enabled no; # Doesn't work with swapdb
 
             # Set replica writable so we can check that a key we manually added is served
             # during replication and after failure, but disappears on success
@@ -861,7 +861,7 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
     $master config set repl-diskless-sync yes
     $master config set repl-diskless-sync-delay 5
     $master config set repl-diskless-sync-max-replicas 2
-    $master config set dual-connection-sync-enabled "no"; # rdb-connection doesn't use pipe
+    $master config set dual-conn-sync-enabled "no"; # rdb-connection doesn't use pipe
     set master_host [srv 0 host]
     set master_port [srv 0 port]
     set master_pid [srv 0 pid]
@@ -1052,7 +1052,7 @@ test "diskless replication child being killed is collected" {
 } {} {external:skip}
 
 foreach mdl {yes no} rdbchannel {yes no} {
-    test "replication child dies when parent is killed - diskless: $mdl dual-connection-sync-enabled: $rdbchannel" {
+    test "replication child dies when parent is killed - diskless: $mdl dual-conn-sync-enabled: $rdbchannel" {
         # when master is killed, make sure the fork child can detect that and exit
         start_server {tags {"repl"} overrides {save ""}} {
             set master [srv 0 client]
@@ -1066,7 +1066,7 @@ foreach mdl {yes no} rdbchannel {yes no} {
             $master debug populate 10000
             start_server {overrides {save ""}} {
                 set replica [srv 0 client]
-                $replica config set dual-connection-sync-enabled $rdbchannel
+                $replica config set dual-conn-sync-enabled $rdbchannel
                 $replica replicaof $master_host $master_port
 
                 # wait for rdb child to start
@@ -1251,7 +1251,7 @@ foreach rdbchannel {yes no} {
         set master1 [srv 0 client]
         set master1_host [srv 0 host]
         set master1_port [srv 0 port]
-        $master1 config set dual-connection-sync-enabled $rdbchannel
+        $master1 config set dual-conn-sync-enabled $rdbchannel
         r set a b
 
         start_server {} {
@@ -1261,16 +1261,16 @@ foreach rdbchannel {yes no} {
             # Take 10s for dumping RDB
             $master2 debug populate 10 master2 10
             $master2 config set rdb-key-save-delay 1000000
-            $master2 config set dual-connection-sync-enabled $rdbchannel
+            $master2 config set dual-conn-sync-enabled $rdbchannel
 
             start_server {} {
                 set sub_replica [srv 0 client]
-                $sub_replica config set dual-connection-sync-enabled $rdbchannel
+                $sub_replica config set dual-conn-sync-enabled $rdbchannel
 
                 start_server {} {
                     # Full sync with master1
                     set replica [srv 0 client]
-                    $replica config set dual-connection-sync-enabled $rdbchannel
+                    $replica config set dual-conn-sync-enabled $rdbchannel
                     r slaveof $master1_host $master1_port
                     wait_for_sync r
                     assert_equal "b" [r get a]

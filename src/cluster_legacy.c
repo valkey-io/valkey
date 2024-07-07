@@ -104,12 +104,12 @@ int auxShardIdPresent(clusterNode *n);
 int auxHumanNodenameSetter(clusterNode *n, void *value, size_t length);
 sds auxHumanNodenameGetter(clusterNode *n, sds s);
 int auxHumanNodenamePresent(clusterNode *n);
-int auxClientIpV4Setter(clusterNode *n, void *value, size_t length);
-sds auxClientIpV4Getter(clusterNode *n, sds s);
-int auxClientIpV4Present(clusterNode *n);
-int auxClientIpV6Setter(clusterNode *n, void *value, size_t length);
-sds auxClientIpV6Getter(clusterNode *n, sds s);
-int auxClientIpV6Present(clusterNode *n);
+int auxAnnounceClientIpV4Setter(clusterNode *n, void *value, size_t length);
+sds auxAnnounceClientIpV4Getter(clusterNode *n, sds s);
+int auxAnnounceClientIpV4Present(clusterNode *n);
+int auxAnnounceClientIpV6Setter(clusterNode *n, void *value, size_t length);
+sds auxAnnounceClientIpV6Getter(clusterNode *n, sds s);
+int auxAnnounceClientIpV6Present(clusterNode *n);
 int auxTcpPortSetter(clusterNode *n, void *value, size_t length);
 sds auxTcpPortGetter(clusterNode *n, sds s);
 int auxTcpPortPresent(clusterNode *n);
@@ -217,8 +217,8 @@ typedef enum {
     af_human_nodename,
     af_tcp_port,
     af_tls_port,
-    af_client_ipv4,
-    af_client_ipv6,
+    af_announce_client_ipv4,
+    af_announce_client_ipv6,
     af_count, /* must be the last field */
 } auxFieldIndex;
 
@@ -231,8 +231,8 @@ auxFieldHandler auxFieldHandlers[] = {
     {"nodename", auxHumanNodenameSetter, auxHumanNodenameGetter, auxHumanNodenamePresent},
     {"tcp-port", auxTcpPortSetter, auxTcpPortGetter, auxTcpPortPresent},
     {"tls-port", auxTlsPortSetter, auxTlsPortGetter, auxTlsPortPresent},
-    {"client-ipv4", auxClientIpV4Setter, auxClientIpV4Getter, auxClientIpV4Present},
-    {"client-ipv6", auxClientIpV6Setter, auxClientIpV6Getter, auxClientIpV6Present},
+    {"client-ipv4", auxAnnounceClientIpV4Setter, auxAnnounceClientIpV4Getter, auxAnnounceClientIpV4Present},
+    {"client-ipv6", auxAnnounceClientIpV6Setter, auxAnnounceClientIpV6Getter, auxAnnounceClientIpV6Present},
 };
 
 int auxShardIdSetter(clusterNode *n, void *value, size_t length) {
@@ -276,7 +276,7 @@ int auxHumanNodenamePresent(clusterNode *n) {
     return sdslen(n->human_nodename);
 }
 
-int auxClientIpV4Setter(clusterNode *n, void *value, size_t length) {
+int auxAnnounceClientIpV4Setter(clusterNode *n, void *value, size_t length) {
     if (sdslen(n->announce_client_ipv4) == length && !strncmp(value, n->announce_client_ipv4, length)) {
         /* Unchanged value */
         return C_OK;
@@ -294,15 +294,15 @@ int auxClientIpV4Setter(clusterNode *n, void *value, size_t length) {
     return C_OK;
 }
 
-sds auxClientIpV4Getter(clusterNode *n, sds s) {
+sds auxAnnounceClientIpV4Getter(clusterNode *n, sds s) {
     return sdscatprintf(s, "%s", n->announce_client_ipv4);
 }
 
-int auxClientIpV4Present(clusterNode *n) {
+int auxAnnounceClientIpV4Present(clusterNode *n) {
     return sdslen(n->announce_client_ipv4) != 0;
 }
 
-int auxClientIpV6Setter(clusterNode *n, void *value, size_t length) {
+int auxAnnounceClientIpV6Setter(clusterNode *n, void *value, size_t length) {
     if (sdslen(n->announce_client_ipv6) == length && !strncmp(value, n->announce_client_ipv6, length)) {
         /* Unchanged value */
         return C_OK;
@@ -320,11 +320,11 @@ int auxClientIpV6Setter(clusterNode *n, void *value, size_t length) {
     return C_OK;
 }
 
-sds auxClientIpV6Getter(clusterNode *n, sds s) {
+sds auxAnnounceClientIpV6Getter(clusterNode *n, sds s) {
     return sdscatprintf(s, "%s", n->announce_client_ipv6);
 }
 
-int auxClientIpV6Present(clusterNode *n) {
+int auxAnnounceClientIpV6Present(clusterNode *n) {
     return sdslen(n->announce_client_ipv6) != 0;
 }
 

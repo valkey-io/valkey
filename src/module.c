@@ -8979,7 +8979,7 @@ int moduleGetClusterNodeInfoForClient(ValkeyModuleCtx *ctx,
  * * VALKEYMODULE_NODE_NOFAILOVER:   The replica is configured to never failover
  */
 int VM_GetClusterNodeInfo(ValkeyModuleCtx *ctx, const char *id, char *ip, char *primary_id, int *port, int *flags) {
-    return VM_GetClusterNodeInfoForClient(ctx, NULL, id, ip, primary_id, port, flags);
+    return moduleGetClusterNodeInfoForClient(ctx, NULL, id, ip, primary_id, port, flags);
 }
 
 /* Like VM_GetClusterNodeInfo(), but returns IP address specifically for the given
@@ -9008,7 +9008,7 @@ int moduleGetClusterNodeInfoForClient(ValkeyModuleCtx *ctx,
                                       int *flags) {
     UNUSED(ctx);
 
-    clusterNode *node = clusterLookupNode(id, strlen(id));
+    clusterNode *node = clusterLookupNode(node_id, strlen(node_id));
     if (node == NULL || clusterNodePending(node)) {
         return VALKEYMODULE_ERR;
     }

@@ -3129,7 +3129,7 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
         return PSYNC_TRY_LATER;
     }
 
-    if (!strncmp(reply, "+DUALCONNECTIONSYNC", 15)) {
+    if (!strncmp(reply, "+DUALCONNECTIONSYNC", strlen("+DUALCONNECTIONSYNC")) {
         /* A response of +DUALCONNECTIONSYNC from the primary implies that partial
          * synchronization is not possible and that the primary supports full
          * sync using dedicated RDB connection. Full sync will continue that way. */

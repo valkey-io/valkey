@@ -1000,7 +1000,7 @@ void debugCommand(client *c) {
             addReply(c, shared.err);
             return;
         }
-        server.debug_sleep_after_fork_ms = (int)(sleep_after_fork_seconds * 1e6);
+        server.debug_sleep_after_fork_us = (int)(sleep_after_fork_seconds * 1e6);
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "WAIT-BEFORE-RDB-CLIENT-FREE") && c->argc == 3) {
         server.wait_before_rdb_client_free = atoi(c->argv[2]->ptr);

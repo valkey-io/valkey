@@ -951,7 +951,7 @@ int startBgsaveForReplication(int mincapa, int req) {
             /* Keep the page cache since it'll get used soon */
             retval = rdbSaveBackground(req, server.rdb_filename, rsiptr, RDBFLAGS_REPLICATION | RDBFLAGS_KEEP_CACHE);
         }
-        if (server.debug_sleep_after_fork_ms) usleep(server.debug_sleep_after_fork_ms);
+        if (server.debug_sleep_after_fork_us) usleep(server.debug_sleep_after_fork_us);
     } else {
         serverLog(LL_WARNING, "BGSAVE for replication: replication information not available, can't generate the RDB "
                               "file right now. Try later.");
@@ -3129,8 +3129,8 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
         return PSYNC_TRY_LATER;
     }
 
-    if (!strncmp(reply, "+DUALCONNECTIONSYNC", strlen("+DUALCONNECTIONSYNC")) {
-        /* A response of +DUALCONNECTIONSYNC from the primary implies that partial
+    if (!strncmp(reply, "+DUALCONNSYNC", strlen("+DUALCONNSYNC"))) {
+        /* A response of +DUALCONNSYNC from the primary implies that partial
          * synchronization is not possible and that the primary supports full
          * sync using dedicated RDB connection. Full sync will continue that way. */
         server.primary_supports_dual_connection_sync = 1;
@@ -3181,7 +3181,7 @@ void setupMainConnForPsync(connection *conn) {
     }
 
     if (server.repl_state == REPL_STATE_SEND_PSYNC) {
-        if (server.debug_sleep_after_fork_ms) usleep(server.debug_sleep_after_fork_ms);
+        if (server.debug_sleep_after_fork_us) usleep(server.debug_sleep_after_fork_us);
         if (replicaTryPartialResynchronization(conn, 0) == PSYNC_WRITE_ERROR) {
             serverLog(LL_WARNING, "Aborting dual connection sync. Write error.");
             cancelReplicationHandshake(1);

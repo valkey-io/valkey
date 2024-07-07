@@ -939,66 +939,36 @@ void clusterUpdateMyselfIp(void) {
     }
 }
 
-/* Update the hostname for the specified node with the provided C string. */
-static void updateAnnouncedHostname(clusterNode *node, char *value) {
-    /* Previous and new hostname are the same, no need to update. */
-    if (value != NULL && !strcmp(value, node->hostname)) {
+static void updateSdsExtensionField(char **field,  const char *value) {
+    if (value != NULL && !strcmp(value, *field)) {
         return;
-    } else if (value == NULL && sdslen(node->hostname) == 0) {
+    } else if (value == NULL && sdslen(*field) == 0) {
         return;
     }
 
     if (value != NULL) {
-        node->hostname = sdscpy(node->hostname, value);
+        *field = sdscpy(*field, value);
     } else {
-        sdsclear(node->hostname);
+        sdsclear(*field);
     }
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+}
+
+/* Update the hostname for the specified node with the provided C string. */
+static void updateAnnouncedHostname(clusterNode *node, char *value) {
+    updateSdsExtensionField(&node->hostname, value);
 }
 
 static void updateAnnouncedHumanNodename(clusterNode *node, char *value) {
-    if (value != NULL && !strcmp(value, node->human_nodename)) {
-        return;
-    } else if (value == NULL && sdslen(node->human_nodename) == 0) {
-        return;
-    }
-
-    if (value != NULL) {
-        node->human_nodename = sdscpy(node->human_nodename, value);
-    } else {
-        sdsclear(node->human_nodename);
-    }
-    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+    updateSdsExtensionField(&node->human_nodename, value);
 }
 
 static void updateAnnouncedClientIpV4(clusterNode *node, char *value) {
-    if (value != NULL && !strcmp(value, node->announce_client_ipv4)) {
-        return;
-    } else if (value == NULL && sdslen(node->announce_client_ipv4) == 0) {
-        return;
-    }
-
-    if (value != NULL) {
-        node->announce_client_ipv4 = sdscpy(node->announce_client_ipv4, value);
-    } else {
-        sdsclear(node->announce_client_ipv4);
-    }
-    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+    updateSdsExtensionField(&node->announce_client_ipv4, value);
 }
 
 static void updateAnnouncedClientIpV6(clusterNode *node, char *value) {
-    if (value != NULL && !strcmp(value, node->announce_client_ipv6)) {
-        return;
-    } else if (value == NULL && sdslen(node->announce_client_ipv6) == 0) {
-        return;
-    }
-
-    if (value != NULL) {
-        node->announce_client_ipv6 = sdscpy(node->announce_client_ipv6, value);
-    } else {
-        sdsclear(node->announce_client_ipv6);
-    }
-    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+    updateSdsExtensionField(&node->announce_client_ipv6, value);
 }
 
 static void updateShardId(clusterNode *node, const char *shard_id) {

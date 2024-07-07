@@ -2678,9 +2678,9 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
     extensions +=
         writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME, myself->human_nodename);
     extensions +=
-        writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPv4, myself->announce_client_ipv4);
+        writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPV4, myself->announce_client_ipv4);
     extensions +=
-        writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPv6, myself->announce_client_ipv6);
+        writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPV6, myself->announce_client_ipv6);
 
     /* Gossip forgotten nodes */
     if (dictSize(server.cluster->nodes_black_list) > 0) {
@@ -2745,11 +2745,11 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
             clusterMsgPingExtHumanNodename *humannodename_ext =
                 (clusterMsgPingExtHumanNodename *)&(ext->ext[0].human_nodename);
             ext_humannodename = humannodename_ext->human_nodename;
-        } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_IPv4) {
+        } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_IPV4) {
             clusterMsgPingExtClientIpV4 *clientipv4_ext =
                 (clusterMsgPingExtClientIpV4 *)&(ext->ext[0].announce_client_ipv4);
             ext_clientipv4 = clientipv4_ext->announce_client_ipv4;
-        } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_IPv6) {
+        } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_IPV6) {
             clusterMsgPingExtClientIpV6 *clientipv6_ext =
                 (clusterMsgPingExtClientIpV6 *)&(ext->ext[0].announce_client_ipv6);
             ext_clientipv6 = clientipv6_ext->announce_client_ipv6;

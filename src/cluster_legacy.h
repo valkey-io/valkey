@@ -138,8 +138,8 @@ typedef enum {
     CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME,
     CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE,
     CLUSTERMSG_EXT_TYPE_SHARDID,
-    CLUSTERMSG_EXT_TYPE_CLIENT_IPv4,
-    CLUSTERMSG_EXT_TYPE_CLIENT_IPv6,
+    CLUSTERMSG_EXT_TYPE_CLIENT_IPV4,
+    CLUSTERMSG_EXT_TYPE_CLIENT_IPV6,
 } clusterMsgPingtypes;
 
 /* Helper function for making sure extensions are eight byte aligned. */

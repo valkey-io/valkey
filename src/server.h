@@ -1753,7 +1753,7 @@ struct valkeyServer {
     off_t loading_loaded_bytes;
     time_t loading_start_time;
     off_t loading_process_events_interval_bytes;
-    time_t loading_process_events_interval_miliseconds;
+    time_t loading_process_events_interval_milliseconds;
     /* Fields used only for stats */
     time_t stat_starttime;                         /* Server start time */
     long long stat_numcommands;                    /* Number of processed commands */

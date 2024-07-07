@@ -939,7 +939,7 @@ void clusterUpdateMyselfIp(void) {
     }
 }
 
-static void updateSdsExtensionField(char **field,  const char *value) {
+static void updateSdsExtensionField(char **field, const char *value) {
     if (value != NULL && !strcmp(value, *field)) {
         return;
     } else if (value == NULL && sdslen(*field) == 0) {
@@ -2644,8 +2644,8 @@ static void *preparePingExt(clusterMsgPingExt *ext, uint16_t type, uint32_t leng
  * ping extension at the cursor, advances the cursor, increments totlen and
  * returns 1. If value is nonempty and cursor_ptr points to NULL, just computes
  * the size, increments totlen and returns 1. If value is empty, returns 0. */
-static uint32_t writeSdsPingExtIfNonempty(uint32_t *totlen_ptr, clusterMsgPingExt **cursor_ptr,
-                                          clusterMsgPingtypes type, sds value) {
+static uint32_t
+writeSdsPingExtIfNonempty(uint32_t *totlen_ptr, clusterMsgPingExt **cursor_ptr, clusterMsgPingtypes type, sds value) {
     size_t len = sdslen(value);
     if (len == 0) return 0;
     size_t size = getAlignedPingExtSize(len + 1);
@@ -2675,12 +2675,12 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
 
     /* Write simple optional SDS ping extensions. */
     extensions += writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_HOSTNAME, myself->hostname);
-    extensions += writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME,
-                                            myself->human_nodename);
-    extensions += writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPv4,
-                                            myself->announce_client_ipv4);
-    extensions += writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPv6,
-                                            myself->announce_client_ipv6);
+    extensions +=
+        writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME, myself->human_nodename);
+    extensions +=
+        writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPv4, myself->announce_client_ipv4);
+    extensions +=
+        writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPv6, myself->announce_client_ipv6);
 
     /* Gossip forgotten nodes */
     if (dictSize(server.cluster->nodes_black_list) > 0) {

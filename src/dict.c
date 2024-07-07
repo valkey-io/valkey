@@ -1806,7 +1806,6 @@ void dictGetStats(char *buf, size_t bufsize, dict *d, int full) {
 #ifdef SERVER_TEST
 #include "testhelp.h"
 
-#define UNUSED(V) ((void)V)
 #define TEST(name) printf("test — %s\n", name);
 
 uint64_t hashCallback(const void *key) {

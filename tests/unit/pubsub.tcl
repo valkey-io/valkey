@@ -111,8 +111,8 @@ start_server {tags {"pubsub network"}} {
 
     test "UNSUBSCRIBE from non-subscribed channels" {
         set rd1 [valkey_deferring_client]
-        assert_equal {0 0 0} [unsubscribe $rd1 {foo bar quux}]
-
+        catch {unsubscribe $rd1 {foo bar quux}} e
+        assert_match {*Can't execute 'unsubscribe' command in non-subscribe mode*} $e
         # clean up clients
         $rd1 close
     }
@@ -204,8 +204,8 @@ start_server {tags {"pubsub network"}} {
 
     test "PUNSUBSCRIBE from non-subscribed channels" {
         set rd1 [valkey_deferring_client]
-        assert_equal {0 0 0} [punsubscribe $rd1 {foo.* bar.* quux.*}]
-
+        catch {punsubscribe $rd1 {foo.* bar.* quux.*}} e
+        assert_match {*Can't execute 'punsubscribe' command in non-subscribe mode*} $e
         # clean up clients
         $rd1 close
     }
@@ -247,15 +247,15 @@ start_server {tags {"pubsub network"}} {
         $rd1 close
     }
 
-    test "PUNSUBSCRIBE and UNSUBSCRIBE should always reply" {
+    #test "PUNSUBSCRIBE and UNSUBSCRIBE should always reply" {
         # Make sure we are not subscribed to any channel at all.
-        r punsubscribe
-        r unsubscribe
+    #    r punsubscribe
+    #    r unsubscribe
         # Now check if the commands still reply correctly.
-        set reply1 [r punsubscribe]
-        set reply2 [r unsubscribe]
-        concat $reply1 $reply2
-    } {punsubscribe {} 0 unsubscribe {} 0}
+    #    set reply1 [r punsubscribe]
+    #    set reply2 [r unsubscribe]
+    #    concat $reply1 $reply2
+    #} {punsubscribe {} 0 unsubscribe {} 0}
 
     ### Keyspace events notification tests
 

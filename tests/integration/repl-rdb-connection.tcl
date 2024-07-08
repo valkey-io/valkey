@@ -485,7 +485,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             test "Test rdb-connection connection peering - start with empty backlog (retrospect)" {
                 $replica1 slaveof $master_host $master_port
                 set res [wait_for_log_messages 0 {"*Add replica * repl-backlog is empty*"} $loglines 2000 1]
-                set res [wait_for_log_messages 0 {"*Retrospect attach replica*"} $loglines 2000 1]
+                set res [wait_for_log_messages 0 {"*Attach rdb replica*"} $loglines 2000 1]
                 set loglines [lindex $res 1]
                 incr $loglines 
                 verify_replica_online $master 0 700

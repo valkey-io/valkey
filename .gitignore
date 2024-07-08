@@ -6,6 +6,7 @@
 *.d
 *.log
 dump.rdb
+dump-*.rdb
 *-benchmark
 *-check-aof
 *-check-rdb
@@ -20,6 +21,7 @@ misc/*
 src/release.h
 appendonly.aof*
 appendonlydir
+appendonlydir-*
 SHORT_TERM_TODO
 release.h
 src/transfer.sh
@@ -46,4 +48,5 @@ redis.code-workspace
 .cscope*
 .swp
 nodes.conf
+nodes-*.conf
 tests/cluster/tmp/*

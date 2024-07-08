@@ -2008,7 +2008,7 @@ struct valkeyServer {
     int wait_before_rdb_client_free;           /* Grace period in seconds for replica main connection
                                                 * to establish psync. */
     int debug_sleep_after_fork_us;             /* Debug param that force the main connection to
-                                                * sleep for N וs after fork() in repl. */
+                                                * sleep for N microseconds after fork() in repl. */
     size_t repl_buffer_mem;                    /* The memory of replication buffer. */
     list *repl_buffer_blocks;                  /* Replication buffers blocks list
                                                 * (serving replica clients and repl backlog) */

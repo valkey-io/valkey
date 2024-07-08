@@ -170,6 +170,46 @@ start_server {} {
         }
         assert_equal [s rdb_changes_since_last_save] 0
     }
+
+    test {bgsave cancel aborts save} {
+        r config set save ""
+        # Generating RDB will take some 100 seconds
+        r config set rdb-key-save-delay 1000000
+        populate 100 "" 16
+
+        r bgsave
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "bgsave not done"
+        }
+        set fork_child_pid [get_child_pid 0]
+        
+        assert {[r bgsave cancel] eq {OK}}
+        set temp_rdb [file join [lindex [r config get dir] 1] temp-${fork_child_pid}.rdb]
+        # Temp rdb must be existed
+        wait_for_condition 50 100 {
+            ![file exists $temp_rdb]
+        } else {
+            fail "bgsave temp file was not deleted after cancel"
+        }
+    }
+
+    test {bgsave cancel response with error when no ongoing save} {
+        r config set save ""
+        # Generating RDB will take some 100 seconds
+        r config set rdb-key-save-delay 0
+
+        # Make sure no save is running and that bgsave return an error
+         wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 0
+        } else {
+            fail "bgsave is currently running"
+        }
+        assert_error "ERR background save is currently not in progress" {r bgsave cancel}
+    }
+
+
 }
 
 test {client freed during loading} {

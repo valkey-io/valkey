@@ -3645,6 +3645,18 @@ void bgsaveCommand(client *c) {
     if (c->argc > 1) {
         if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "schedule")) {
             schedule = 1;
+        } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "cancel")) {
+            /* BGSAVE CANCEL
+            * Terminates an in progress BGSAVE */
+            if (server.child_type == CHILD_TYPE_RDB) {
+                /* There is an ongoing save */
+                serverLog(LL_NOTICE, "Background save requested to be canceled by user");
+                killRDBChild();
+                addReply(c, shared.ok);
+            } else {
+                addReplyError(c, "background save is currently not in progress");
+            }
+            return;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;

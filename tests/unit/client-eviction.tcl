@@ -91,17 +91,31 @@ start_server {} {
         lassign [gen_client] rr cname
         # Attempt to fill the query buff with only half the percentage threshold verify we're not disconnected
         set n [expr $maxmemory_clients_actual / 2]
-        $rr write [join [list "*1\r\n\$$n\r\n" [string repeat v $n]] ""]
+        # send incomplete command (n - 1) to make sure we don't use the shared qb
+        $rr write [join [list "*1\r\n\$$n\r\n" [string repeat v [expr {$n - 1}]]] ""]
         $rr flush
+        # Wait for the client to start using a private query buffer. 
+        wait_for_condition 10 10 {
+            [client_field $cname qbuf] > 0
+        } else {
+            fail "client should start using a private query buffer"
+        }
         set tot_mem [client_field $cname tot-mem]
         assert {$tot_mem >= $n && $tot_mem < $maxmemory_clients_actual}
 
         # Attempt to fill the query buff with the percentage threshold of maxmemory and verify we're evicted
         $rr close
         lassign [gen_client] rr cname
+        # send incomplete command (maxmemory_clients_actual - 1) to make sure we don't use the shared qb
         catch {
-            $rr write [join [list "*1\r\n\$$maxmemory_clients_actual\r\n" [string repeat v $maxmemory_clients_actual]] ""]
+            $rr write [join [list "*1\r\n\$$maxmemory_clients_actual\r\n" [string repeat v [expr {$maxmemory_clients_actual - 1}]]] ""]
             $rr flush
+            # Wait for the client to start using a private query buffer. 
+            wait_for_condition 10 10 {
+                [client_field $cname qbuf] > 0
+            } else {
+                fail "client should start using a private query buffer"
+            }
         } e
         assert {![client_exists $cname]}
         $rr close
@@ -399,6 +413,11 @@ start_server {} {
 
         # Decrease maxmemory_clients and expect client eviction
         r config set maxmemory-clients [expr $maxmemory_clients / 2]
+        wait_for_condition 50 10 {
+            [llength [lsearch -all [split [string trim [r client list]] "\r\n"] *name=client*]] < $client_count
+        } else {
+            fail "Failed to evict clients"
+        }
         set connected_clients [llength [lsearch -all [split [string trim [r client list]] "\r\n"] *name=client*]]
         assert {$connected_clients > 0 && $connected_clients < $client_count}
 

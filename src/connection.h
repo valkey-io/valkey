@@ -112,6 +112,12 @@ typedef struct ConnectionType {
     int (*has_pending_data)(void);
     int (*process_pending_data)(void);
 
+    /* Postpone update state - with IO threads & TLS we don't want the IO threads to update the event loop events - let
+     * the main-thread do it */
+    void (*postpone_update_state)(struct connection *conn, int);
+    /* Called by the main-thread */
+    void (*update_state)(struct connection *conn);
+
     /* TLS specified methods */
     sds (*get_peer_cert)(struct connection *conn);
 } ConnectionType;
@@ -454,6 +460,18 @@ int RedisRegisterConnectionTypeTLS(void);
 /* Return 1 if connection is using TLS protocol, 0 if otherwise. */
 static inline int connIsTLS(connection *conn) {
     return conn && conn->type == connectionTypeTls();
+}
+
+static inline void connUpdateState(connection *conn) {
+    if (conn->type->update_state) {
+        conn->type->update_state(conn);
+    }
+}
+
+static inline void connSetPostponeUpdateState(connection *conn, int on) {
+    if (conn->type->postpone_update_state) {
+        conn->type->postpone_update_state(conn, on);
+    }
 }
 
 #endif /* __REDIS_CONNECTION_H */

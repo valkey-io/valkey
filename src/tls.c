@@ -442,6 +442,7 @@ typedef enum { WANT_READ = 1, WANT_WRITE } WantIOType;
 #define TLS_CONN_FLAG_READ_WANT_WRITE (1 << 0)
 #define TLS_CONN_FLAG_WRITE_WANT_READ (1 << 1)
 #define TLS_CONN_FLAG_FD_SET (1 << 2)
+#define TLS_CONN_FLAG_POSTPONE_UPDATE_STATE (1 << 3)
 
 typedef struct tls_connection {
     connection c;
@@ -596,7 +597,34 @@ static void registerSSLEvent(tls_connection *conn, WantIOType want) {
     }
 }
 
+static void postPoneUpdateSSLState(connection *conn_, int postpone) {
+    tls_connection *conn = (tls_connection *)conn_;
+    if (postpone) {
+        conn->flags |= TLS_CONN_FLAG_POSTPONE_UPDATE_STATE;
+    } else {
+        conn->flags &= ~TLS_CONN_FLAG_POSTPONE_UPDATE_STATE;
+    }
+}
+
+static void updatePendingData(tls_connection *conn) {
+    if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) return;
+
+    /* If SSL has pending data, already read from the socket, we're at risk of not calling the read handler again, make
+     * sure to add it to a list of pending connection that should be handled anyway. */
+    if (SSL_pending(conn->ssl) > 0) {
+        if (!conn->pending_list_node) {
+            listAddNodeTail(pending_list, conn);
+            conn->pending_list_node = listLast(pending_list);
+        }
+    } else if (conn->pending_list_node) {
+        listDelNode(pending_list, conn->pending_list_node);
+        conn->pending_list_node = NULL;
+    }
+}
+
 static void updateSSLEvent(tls_connection *conn) {
+    if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) return;
+
     int mask = aeGetFileEvents(server.el, conn->c.fd);
     int need_read = conn->c.read_handler || (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ);
     int need_write = conn->c.write_handler || (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE);
@@ -608,6 +636,12 @@ static void updateSSLEvent(tls_connection *conn) {
     if (need_write && !(mask & AE_WRITABLE))
         aeCreateFileEvent(server.el, conn->c.fd, AE_WRITABLE, tlsEventHandler, conn);
     if (!need_write && (mask & AE_WRITABLE)) aeDeleteFileEvent(server.el, conn->c.fd, AE_WRITABLE);
+}
+
+static void updateSSLState(connection *conn_) {
+    tls_connection *conn = (tls_connection *)conn_;
+    updateSSLEvent(conn);
+    updatePendingData(conn);
 }
 
 static void tlsHandleEvent(tls_connection *conn, int mask) {
@@ -711,19 +745,8 @@ static void tlsHandleEvent(tls_connection *conn, int mask) {
             if (!callHandler((connection *)conn, conn->c.read_handler)) return;
         }
 
-        /* If SSL has pending that, already read from the socket, we're at
-         * risk of not calling the read handler again, make sure to add it
-         * to a list of pending connection that should be handled anyway. */
-        if ((mask & AE_READABLE)) {
-            if (SSL_pending(conn->ssl) > 0) {
-                if (!conn->pending_list_node) {
-                    listAddNodeTail(pending_list, conn);
-                    conn->pending_list_node = listLast(pending_list);
-                }
-            } else if (conn->pending_list_node) {
-                listDelNode(pending_list, conn->pending_list_node);
-                conn->pending_list_node = NULL;
-            }
+        if (mask & AE_READABLE) {
+            updatePendingData(conn);
         }
 
         break;
@@ -1051,11 +1074,13 @@ static int tlsProcessPendingData(void) {
     listIter li;
     listNode *ln;
 
-    int processed = listLength(pending_list);
+    int processed = 0;
     listRewind(pending_list, &li);
     while ((ln = listNext(&li))) {
         tls_connection *conn = listNodeValue(ln);
+        if (conn->flags & TLS_CONN_FLAG_POSTPONE_UPDATE_STATE) continue;
         tlsHandleEvent(conn, AE_READABLE);
+        processed++;
     }
     return processed;
 }
@@ -1125,6 +1150,8 @@ static ConnectionType CT_TLS = {
     /* pending data */
     .has_pending_data = tlsHasPendingData,
     .process_pending_data = tlsProcessPendingData,
+    .postpone_update_state = postPoneUpdateSSLState,
+    .update_state = updateSSLState,
 
     /* TLS specified methods */
     .get_peer_cert = connTLSGetPeerCert,

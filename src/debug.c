@@ -37,6 +37,7 @@
 #include "fpconv_dtoa.h"
 #include "cluster.h"
 #include "threads_mngr.h"
+#include "io_threads.h"
 
 #include <arpa/inet.h>
 #include <signal.h>
@@ -2159,6 +2160,7 @@ void removeSigSegvHandlers(void) {
 }
 
 void printCrashReport(void) {
+    server.crashed = 1;
     /* Log INFO and CLIENT LIST */
     logServerInfo();
 

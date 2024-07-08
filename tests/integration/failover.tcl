@@ -257,6 +257,12 @@ start_server {overrides {save {}}} {
         # during the pause. This write will not be interrupted.
         pause_process [srv -1 pid]
         set rd [valkey_deferring_client]
+        # wait for the client creation
+        wait_for_condition 50 100 {
+            [s connected_clients] == 2
+        } else {
+            fail "Client creation failed"
+        }
         $rd SET FOO BAR
         $node_0 failover to $node_1_host $node_1_port
         resume_process [srv -1 pid]

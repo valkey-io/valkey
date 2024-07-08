@@ -167,6 +167,7 @@ start_server {tags {"repl external:skip"}} {
         test {BLPOP followed by role change, issue #2473} {
             set rd [valkey_deferring_client]
             $rd blpop foo 0 ; # Block while B is a master
+            wait_for_blocked_clients_count 1
 
             # Turn B into master of A
             $A slaveof no one

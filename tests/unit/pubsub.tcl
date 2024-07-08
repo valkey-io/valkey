@@ -247,15 +247,17 @@ start_server {tags {"pubsub network"}} {
         $rd1 close
     }
 
-    #test "PUNSUBSCRIBE and UNSUBSCRIBE should always reply" {
+    test "PUNSUBSCRIBE and UNSUBSCRIBE should always reply when they are executed in subscribe mode" {
         # Make sure we are not subscribed to any channel at all.
-    #    r punsubscribe
-    #    r unsubscribe
-        # Now check if the commands still reply correctly.
-    #    set reply1 [r punsubscribe]
-    #    set reply2 [r unsubscribe]
-    #    concat $reply1 $reply2
-    #} {punsubscribe {} 0 unsubscribe {} 0}
+        set rd1 [valkey_deferring_client]
+        assert_equal {1} [subscribe $rd1 {foo}]
+        assert_equal {2} [psubscribe $rd1 {foo.*}]
+        set reply1 [punsubscribe $rd1]
+        set reply2 [unsubscribe $rd1]
+        concat $reply1 $reply2
+        # clean up clients
+        $rd1 close
+    } {0}
 
     ### Keyspace events notification tests
 

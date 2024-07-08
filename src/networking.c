@@ -120,6 +120,11 @@ int authRequired(client *c) {
     return auth_required;
 }
 
+static inline int isReplicaReadyForReplData(client *replica) {
+    return (replica->repl_state == REPLICA_STATE_ONLINE || 
+            replica->repl_state == REPLICA_STATE_BG_RDB_LOAD) && !(replica->flags & CLIENT_CLOSE_ASAP);
+}
+
 client *createClient(connection *conn) {
     client *c = zmalloc(sizeof(client));
 
@@ -253,7 +258,7 @@ void putClientInPendingWriteQueue(client *c) {
      * writes at this stage. */
     if (!(c->flags & CLIENT_PENDING_WRITE) &&
         (c->repl_state == REPL_STATE_NONE ||
-         ((c->repl_state == REPLICA_STATE_ONLINE || c->repl_state == REPLICA_STATE_BG_RDB_LOAD) &&
+         (isReplicaReadyForReplData(c) &&
           !c->repl_start_cmd_stream_on_ack))) {
         /* Here instead of installing the write handler, we just flag the
          * client and put it into a list of clients that have something
@@ -4069,7 +4074,7 @@ void flushReplicasOutputBuffers(void) {
          *
          * 3. Obviously if the replica is not ONLINE.
          */
-        if ((replica->repl_state == REPLICA_STATE_ONLINE || replica->repl_state == REPLICA_STATE_BG_RDB_LOAD) &&
+        if (isReplicaReadyForReplData(replica) &&
             !(replica->flags & CLIENT_CLOSE_ASAP) && can_receive_writes && !replica->repl_start_cmd_stream_on_ack &&
             clientHasPendingReplies(replica)) {
             writeToClient(replica, 0);

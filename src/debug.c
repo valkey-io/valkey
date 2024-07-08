@@ -496,7 +496,7 @@ void debugCommand(client *c) {
             "    Enable or disable the reply buffer resize cron job",
             "SLEEP-AFTER-FORK-SECONDS <seconds>",
             "    Stop the server's main process for <seconds> after forking.",
-            "WAIT-BEFORE-RDB-CLIENT-FREE <seconds>",
+            "DELAY-RDB-CLIENT-FREE-SECOND <seconds>",
             "    Grace period in seconds for replica main connection to establish psync.",
             "DICT-RESIZING <0|1>",
             "    Enable or disable the main dict and expire dict resizing.",
@@ -1002,7 +1002,7 @@ void debugCommand(client *c) {
         }
         server.debug_sleep_after_fork_us = (int)(sleep_after_fork_seconds * 1e6);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "WAIT-BEFORE-RDB-CLIENT-FREE") && c->argc == 3) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "delay-rdb-client-free-seconds") && c->argc == 3) {
         server.wait_before_rdb_client_free = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "dict-resizing") && c->argc == 3) {

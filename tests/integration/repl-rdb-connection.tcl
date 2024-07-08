@@ -531,7 +531,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
     populate 10 master 10
     # Stop master main process after fork for 2 seconds
     $master debug sleep-after-fork-seconds 2
-    $master debug wait-before-rdb-client-free 5
+    $master debug delay-rdb-client-free-seconds 5
 
     start_server {} {
         set replica [srv 0 client]

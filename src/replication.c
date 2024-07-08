@@ -198,6 +198,15 @@ void rebaseReplicationBuffer(long long base_repl_offset) {
     }
 }
 
+/* Return a client by ID, or NULL if the client ID is not in the set
+ * of replicas waiting psync clients. */
+static inline client *lookupRdbClientByID(uint64_t id) {
+    id = htonu64(id);
+    void *c = NULL;
+    raxFind(server.replicas_waiting_psync, (unsigned char *)&id, sizeof(id), &c);
+    return c;
+}
+
 /* Replication: Primary side - connections association.
  * During RDB connection sync, association is used to keep replication data
  * in the backlog until the replica requests PSYNC. 

@@ -1850,15 +1850,6 @@ client *lookupClientByID(uint64_t id) {
     return c;
 }
 
-/* Return a client by ID, or NULL if the client ID is not in the set
- * of replicas waiting psync clients. */
-client *lookupRdbClientByID(uint64_t id) {
-    id = htonu64(id);
-    void *c = NULL;
-    raxFind(server.replicas_waiting_psync, (unsigned char *)&id, sizeof(id), &c);
-    return c;
-}
-
 /* This function should be called from _writeToClient when the reply list is not empty,
  * it gathers the scattered buffers from reply list and sends them away with connWritev.
  * If we write successfully, it returns C_OK, otherwise, C_ERR is returned,

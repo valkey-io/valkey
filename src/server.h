@@ -2815,7 +2815,6 @@ void unprotectClient(client *c);
 void initThreadedIO(void);
 void initSharedQueryBuf(void);
 client *lookupClientByID(uint64_t id);
-client *lookupRdbClientByID(uint64_t id);
 int authRequired(client *c);
 void putClientInPendingWriteQueue(client *c);
 client *createCachedResponseClient(void);

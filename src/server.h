@@ -2595,15 +2595,14 @@ void serverSetCpuAffinity(const char *cpulist);
 void dictVanillaFree(dict *d, void *val);
 
 /* ERROR STATS constants */
-#define ERROR_STATS_LUA_LIMIT 128 /* After the errors RAX reaches this limit, instead of tracking 
-                                    custom LUA errors, we track the error under the symbol below. */
-#define LUA_ERRORSTATS_OVERFLOW_ERR "LUA_ERRORSTATS_OVERFLOW"
+#define ERROR_STATS_LIMIT 128 /* Once the errors RAX reaches this limit, instead of tracking custom \
+                                    errors (e.g. LUA), we track the error under the prefix below. */
+#define ERRORSTATS_OVERFLOW_ERR "ERRORSTATS_OVERFLOW"
 
 /* afterErrorReply flags */
-#define ERR_REPLY_FLAG_NO_STATS_UPDATE (1ULL<<0) /* Indicating that we should not update
+#define ERR_REPLY_FLAG_NO_STATS_UPDATE (1ULL<<0) /* Indicating that we should not update            \
                                                     error stats after sending error reply */
-#define ERR_REPLY_FLAG_LUA (1ULL<<1) /* Indicating that the error message is from LUA replying
-                                        to a client */
+#define ERR_REPLY_FLAG_CUSTOM (1ULL<<1) /* Indicates the error message is custom (e.g. from LUA). */
 
 /* networking.c -- Networking and Client related operations */
 client *createClient(connection *conn);

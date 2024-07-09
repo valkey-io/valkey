@@ -544,24 +544,26 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         /* Increment the global error counter */
         server.stat_total_error_replies++;
         /* Increment the error stats */
-        /* After the errors RAX reaches this limit, instead of tracking
-         * custom LUA errors, we track the error under `error_LUA` */
-        if (flags & ERR_REPLY_FLAG_LUA && raxSize(server.errors) >= ERROR_STATS_LUA_LIMIT) {
-            incrementErrorCount(LUA_ERRORSTATS_OVERFLOW_ERR, strlen(LUA_ERRORSTATS_OVERFLOW_ERR));
-        } else if (s[0] != '-') {
-            /* If the string already starts with "-..." then the error prefix
-             * is provided by the caller ( we limit the search to 32 chars). Otherwise we use "-ERR". */
-            incrementErrorCount("ERR", 3);
-        } else {
+        /* If the string already starts with "-..." then the error prefix
+         * is provided by the caller (we limit the search to 32 chars). Otherwise we use "-ERR". */
+        char *err_prefix = "ERR";
+        size_t prefix_len = 3;
+        if (s[0] == '-') {
             char *spaceloc = memchr(s, ' ', len < 32 ? len : 32);
+            /* If we cannot retrieve the error prefix, use the default: "ERR". */
             if (spaceloc) {
                 const size_t errEndPos = (size_t)(spaceloc - s);
-                incrementErrorCount(s + 1, errEndPos - 1);
-            } else {
-                /* Fallback to ERR if we can't retrieve the error prefix */
-                incrementErrorCount("ERR", 3);
+                err_prefix = (char *)s + 1;
+                prefix_len = errEndPos - 1;
             }
         }
+        /* After the errors RAX reaches its limit, instead of tracking
+         * custom errors (e.g. LUA), we track the error under `errorstat_ERRORSTATS_OVERFLOW` */
+        if (flags & ERR_REPLY_FLAG_CUSTOM && !raxFind(server.errors, (unsigned char *)err_prefix, prefix_len, NULL) && raxSize(server.errors) >= ERROR_STATS_LIMIT) {
+            err_prefix = ERRORSTATS_OVERFLOW_ERR;
+            prefix_len = strlen(ERRORSTATS_OVERFLOW_ERR);
+        }
+        incrementErrorCount(err_prefix, prefix_len);
     } else {
         /* stat_total_error_replies will not be updated, which means that
          * the cmd stats will not be updated as well, we still want this command

@@ -368,11 +368,13 @@ int fuzzTestCluster(size_t count, double addprob, double remprob) {
         /* Insert element. */
         if ((double)genrand64_int64()/RAND_MAX < addprob) {
             raxInsert(rax,key,keylen,NULL,NULL);
+            TEST_ASSERT(raxAllocSize(rax) == zmalloc_used_memory());
         }
 
         /* Remove element. */
         if ((double)genrand64_int64()/RAND_MAX < remprob) {
             raxRemove(rax,key,keylen,NULL);
+            TEST_ASSERT(raxAllocSize(rax) == zmalloc_used_memory());
         }
     }
     size_t finalkeys = raxSize(rax);
@@ -552,8 +554,8 @@ int test_randomWalkTest(int argc, char **argv, int flags) {
     for (numele = 0; toadd[numele] != NULL; numele++) {
         raxInsert(t,(unsigned char*)toadd[numele],
                     strlen(toadd[numele]),(void*)numele,NULL);
+        TEST_ASSERT(raxAllocSize(t) == zmalloc_used_memory());
     }
-    TEST_ASSERT(raxAllocSize(t) == zmalloc_used_memory());
 
     raxIterator iter;
     raxStart(&iter,t);
@@ -598,8 +600,10 @@ int test_iteratorUnitTests(int argc, char **argv, int flags) {
     long items = 0;
     while(toadd[items] != NULL) items++;
 
-    for (long i = 0; i < items; i++)
+    for (long i = 0; i < items; i++) {
         raxInsert(t,(unsigned char*)toadd[i],strlen(toadd[i]),(void*)i,NULL);
+        TEST_ASSERT(raxAllocSize(t) == zmalloc_used_memory());
+    }
 
     raxIterator iter;
     raxStart(&iter,t);
@@ -870,6 +874,7 @@ int test_benchmark(int argc, char **argv, int flags) {
             char buf[64];
             int len = int2key(buf,sizeof(buf),i,mode);
             raxInsert(t,(unsigned char*)buf,len,(void*)(long)i,NULL);
+            TEST_ASSERT(raxAllocSize(t) == zmalloc_used_memory());
         }
         printf("Insert: %f\n", (double)(_ustime()-start)/1000000);
         printf("%llu total nodes\n", (unsigned long long)t->numnodes);
@@ -926,7 +931,8 @@ int test_benchmark(int argc, char **argv, int flags) {
             char buf[64];
             int len = int2key(buf,sizeof(buf),i,mode);
             int retval = raxRemove(t,(unsigned char*)buf,len,NULL);
-            assert(retval == 1);
+            TEST_ASSERT(retval == 1);
+            TEST_ASSERT(raxAllocSize(t) == zmalloc_used_memory());
         }
         printf("Deletion: %f\n", (double)(_ustime()-start)/1000000);
 

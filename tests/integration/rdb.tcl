@@ -187,7 +187,7 @@ start_server {} {
         
         assert {[r bgsave cancel] eq {OK}}
         set temp_rdb [file join [lindex [r config get dir] 1] temp-${fork_child_pid}.rdb]
-        # Temp rdb must be existed
+        # Temp rdb must be deleted
         wait_for_condition 50 100 {
             ![file exists $temp_rdb]
         } else {

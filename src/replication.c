@@ -54,8 +54,8 @@ int cancelReplicationHandshake(int reconnect);
 static void syncWithPrimary(connection *conn);
 void replicationSteadyStateInit(void);
 void setupMainConnForPsync(connection *conn);
-void rdbConnectionSyncPsyncEstablished(connection *conn);
-void rdbConnectionSyncRdbLoaded(connection *conn);
+void rdbConnectionSyncHandlePsync(connection *conn);
+void rdbConnectionSyncHandleRdbLoadCompletion(connection *conn);
 void replicationAbortSyncTransfer(void);
 
 /* We take a global flag to remember if this instance generated an RDB
@@ -2345,7 +2345,7 @@ void readSyncBulkPayload(connection *conn) {
     if (conn == server.repl_rdb_transfer_s) {
         /* In case of full-sync using dual connection, the primary client was already created for psync purposes
          * Instead of creating a new client we will use the one created for partial sync */
-        rdbConnectionSyncRdbLoaded(conn);
+        rdbConnectionSyncHandleRdbLoadCompletion(conn);
     } else {
         replicationCreatePrimaryClient(server.repl_transfer_s, rsi.repl_stream_db);
         server.repl_state = REPL_STATE_CONNECTED;
@@ -2863,7 +2863,7 @@ void rdbConnectionSyncSuccess(void) {
 /* Replication: Replica side.
  * Main connection successfully established psync with primary. The 'conn' argument must be the main
  * connection. Check whether the rdb connection has completed its part and act accordingly. */
-void rdbConnectionSyncPsyncEstablished(connection *conn) {
+void rdbConnectionSyncHandlePsync(connection *conn) {
     serverAssert(conn == server.repl_transfer_s && server.repl_state == REPL_STATE_RECEIVE_PSYNC_REPLY);
     if (server.repl_rdb_conn_state < REPL_RDB_CONN_RDB_LOADED) {
         /* RDB is still loading */
@@ -2887,7 +2887,7 @@ void rdbConnectionSyncPsyncEstablished(connection *conn) {
 /* Replication: Replica side.
  * RDB connection done loading the RDB. The 'conn' argument must be the rdb connection. Check whether the
  * main connection has completed its part and act accordingly. */
-void rdbConnectionSyncRdbLoaded(connection *conn) {
+void rdbConnectionSyncHandleRdbLoadCompletion(connection *conn) {
     serverAssert(conn == server.repl_rdb_transfer_s && server.repl_rdb_conn_state == REPL_RDB_CONN_RDB_LOAD);
     if (server.repl_state < REPL_STATE_TRANSFER) {
         /* Main psync connection hasn't been established yet */
@@ -3192,7 +3192,7 @@ void setupMainConnForPsync(connection *conn) {
             serverCommunicateSystemd("STATUS=Primary <-> REPLICA sync: Partial Resynchronization accepted. Ready to "
                                      "accept connections in read-write mode.\n");
         }
-        rdbConnectionSyncPsyncEstablished(conn);
+        rdbConnectionSyncHandlePsync(conn);
         return;
     }
 

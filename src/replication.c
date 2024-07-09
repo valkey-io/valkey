@@ -2737,8 +2737,8 @@ void replStreamProgressCallback(size_t offset, int readlen, time_t *last_progres
 
 /* Replication: Replica side.
  * Reads replication data from primary into specified repl buffer block */
-int readIntoReplDataBlock(connection *conn, replDataBufBlock *o, size_t read) {
-    int nread = connRead(conn, o->buf + o->used, read);
+int readIntoReplDataBlock(connection *conn, replDataBufBlock *data_block, size_t read) {
+    int nread = connRead(conn, data_block->buf + data_block->used, read);
     if (nread == -1) {
         if (connGetState(conn) != CONN_STATE_CONNECTED) {
             serverLog(LL_NOTICE, "Error reading from primary: %s", connGetLastError(conn));
@@ -2747,13 +2747,11 @@ int readIntoReplDataBlock(connection *conn, replDataBufBlock *o, size_t read) {
         return C_ERR;
     }
     if (nread == 0) {
-        if (server.verbosity <= LL_VERBOSE) {
-            serverLog(LL_VERBOSE, "Provisional primary closed connection");
-        }
+        serverLog(LL_VERBOSE, "Provisional primary closed connection");
         cancelReplicationHandshake(1);
         return C_ERR;
     }
-    o->used += nread;
+    data_block->used += nread;
     server.stat_total_reads_processed += nread;
     return read - nread;
 }

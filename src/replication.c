@@ -2608,7 +2608,10 @@ static void fullSyncWithPrimary(connection *conn) {
     /* Receive AUTH reply. */
     if (server.repl_rdb_conn_state == REPL_RDB_CONN_RECEIVE_AUTH_REPLY) {
         err = receiveSynchronousResponse(conn);
-        if (err == NULL) goto no_response_error;
+        if (err == NULL) {
+            serverLog(LL_WARNING, "Primary did not respond to auth command during SYNC handshake");
+            goto error;
+        }
         if (err[0] == '-') {
             serverLog(LL_WARNING, "Unable to AUTH to Primary: %s", err);
             goto error;
@@ -2620,7 +2623,10 @@ static void fullSyncWithPrimary(connection *conn) {
     /* Receive replconf response */
     if (server.repl_rdb_conn_state == REPL_RDB_CONN_RECEIVE_REPLCONF_REPLY) {
         err = receiveSynchronousResponse(conn);
-        if (err == NULL) goto no_response_error;
+        if (err == NULL) {
+            serverLog(LL_WARNING, "Primary did not respond to replconf command during SYNC handshake");
+            goto error;
+        }
 
         if (err[0] == '-') {
             serverLog(LL_NOTICE,
@@ -2684,11 +2690,6 @@ static void fullSyncWithPrimary(connection *conn) {
         server.repl_rdb_conn_state = REPL_RDB_CONN_RDB_LOAD;
         return;
     }
-
-no_response_error:
-    /* Handle receiveSynchronousResponse() error when primary has no reply */
-    serverLog(LL_WARNING, "Primary did not respond to command during SYNC handshake");
-    /* Fall through to regular error handling */
 
 error:
     sdsfree(err);

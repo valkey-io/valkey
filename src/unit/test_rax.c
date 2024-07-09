@@ -910,9 +910,8 @@ int test_benchmark(int argc, char **argv, int flags) {
             char buf[64];
             int len = int2key(buf,sizeof(buf),i,mode);
             buf[i%len] = '!'; /* "!" is never set into keys. */
-            if (!raxFind(t,(unsigned char*) buf,len,NULL)) {
-                printf("** Failed lookup did not reported NOT FOUND!\n");
-            }
+            TEST_ASSERT_MESSAGE("Lookup should have failed",
+                raxFind(t,(unsigned char*) buf,len,NULL));
         }
         printf("Failed lookup: %f\n", (double)(_ustime()-start)/1000000);
 
@@ -922,7 +921,7 @@ int test_benchmark(int argc, char **argv, int flags) {
         raxSeek(&ri,"^",NULL,0);
         int iter = 0;
         while (raxNext(&ri)) iter++;
-        if (iter != 5000000) printf("** Warning iteration is incomplete\n");
+        TEST_ASSERT_MESSAGE("Iteration is incomplete", iter == 5000000);
         raxStop(&ri);
         printf("Full iteration: %f\n", (double)(_ustime()-start)/1000000);
 

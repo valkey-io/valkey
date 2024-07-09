@@ -3494,8 +3494,7 @@ void clusterReadHandler(connection *conn) {
                  * and length.
                  * The minimum length for PUBLISH and  PUBLISHSHARD will be clusterMsgLight_MIN_LEN
                  * as we are using the `clusterMsgLight` hdr. */
-                if (memcmp(hdr->sig, "RCmb", 4) != 0 ||
-                    (!is_msg_light && (ntohl(hdr->totlen) < CLUSTERMSG_MIN_LEN)) ||
+                if (memcmp(hdr->sig, "RCmb", 4) != 0 || (!is_msg_light && (ntohl(hdr->totlen) < CLUSTERMSG_MIN_LEN)) ||
                     (is_msg_light && (ntohl(hdr->totlen) < CLUSTERMSG_LIGHT_MIN_LEN))) {
                     char ip[NET_IP_STR_LEN];
                     int port;

@@ -6331,7 +6331,7 @@ struct COMMAND_STRUCT ACL_Subcommands[] = {
 
 /* BGSAVE command table */
 struct COMMAND_STRUCT BGSAVE_Subcommands[] = {
-{MAKE_CMD("cancel","Terminates a running bgsave child process.","O(1)","8.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,BGSAVE_CANCEL_History,0,BGSAVE_CANCEL_Tips,0,bgsaveCancelCommand,-1,CMD_ADMIN,ACL_CATEGORY_CONNECTION,BGSAVE_CANCEL_Keyspecs,0,NULL,0)},
+{MAKE_CMD("cancel","Terminates a running bgsave child process.","O(1)","8.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,BGSAVE_CANCEL_History,0,BGSAVE_CANCEL_Tips,0,bgsaveCancelCommand,-1,CMD_ADMIN,0,BGSAVE_CANCEL_Keyspecs,0,NULL,0)},
 {0}
 };
 

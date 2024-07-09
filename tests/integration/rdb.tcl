@@ -206,7 +206,7 @@ start_server {} {
         } else {
             fail "bgsave is currently running"
         }
-        assert_error "ERR Background save is currently not in progress" {r bgsave cancel}
+        assert_error "ERR Background bgsave is currently not in progress" {r bgsave cancel}
     }
 
 

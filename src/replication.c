@@ -51,7 +51,7 @@ void replicationSendAck(void);
 int replicaPutOnline(client *replica);
 void replicaStartCommandStream(client *replica);
 int cancelReplicationHandshake(int reconnect);
-void syncWithPrimary(connection *conn);
+static void syncWithPrimary(connection *conn);
 void replicationSteadyStateInit(void);
 void setupMainConnForPsync(connection *conn);
 void rdbConnectionSyncPsyncEstablished(connection *conn);
@@ -387,8 +387,8 @@ void incrementalTrimReplicationBacklog(size_t max_blocks) {
 /* Free replication buffer blocks that are referenced by this client. */
 void freeReplicaReferencedReplBuffer(client *replica) {
     if (replica->flags & CLIENT_REPL_RDB_CONN) {
-        uint64_t id = htonu64(replica->id);
-        if (raxRemove(server.replicas_waiting_psync, (unsigned char *)&id, sizeof(id), NULL)) {
+        uint64_t rdb_cid = htonu64(replica->id);
+        if (raxRemove(server.replicas_waiting_psync, (unsigned char *)&rdb_cid, sizeof(rdb_cid), NULL)) {
             serverLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu from replicas rax.",
                       replicationGetReplicaName(replica), (long long unsigned int)replica->associated_rdb_client_id);
         }
@@ -2553,7 +2553,7 @@ int sendCurrentOffsetToReplica(client *replica) {
  * Once a replica with repl rdb-connection is enabled and denied from PSYNC with its primary,
  * fullSyncWithPrimary begins its role. The connection handler prepares server.repl_rdb_transfer_s
  * for a rdb stream, and server.repl_transfer_s for increamental replication data stream. */
-void fullSyncWithPrimary(connection *conn) {
+static void fullSyncWithPrimary(connection *conn) {
     char *err = NULL;
     serverAssert(conn == server.repl_rdb_transfer_s);
     /* If this event fired after the user turned the instance into a primary

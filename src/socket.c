@@ -423,6 +423,8 @@ static ConnectionType CT_Socket = {
     /* pending data */
     .has_pending_data = NULL,
     .process_pending_data = NULL,
+    .postpone_update_state = NULL,
+    .update_state = NULL,
 };
 
 int connBlock(connection *conn) {

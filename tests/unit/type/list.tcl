@@ -1100,6 +1100,13 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         $watching_client get somekey{t}
         $watching_client read
         $watching_client exec
+        # wait for exec to be called.
+        wait_for_condition 50 10 {
+            [llength [lsearch -all [split [string trim [r client list]] "\r\n"] *cmd=exec*]] == 1
+        } else {
+            fail "$cmd was not called"
+        }
+
         # Blocked BLPOPLPUSH may create problems, unblock it.
         r lpush srclist{t} element
         set res [$watching_client read]

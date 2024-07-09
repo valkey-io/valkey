@@ -183,7 +183,9 @@ void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask) {
      * is removed. */
     if (mask & AE_WRITABLE) mask |= AE_BARRIER;
 
-    aeApiDelEvent(eventLoop, fd, mask);
+    /* Only remove attached events */
+    mask = mask & fe->mask;
+
     fe->mask = fe->mask & (~mask);
     if (fd == eventLoop->maxfd && fe->mask == AE_NONE) {
         /* Update the max fd */
@@ -192,6 +194,15 @@ void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask) {
         for (j = eventLoop->maxfd - 1; j >= 0; j--)
             if (eventLoop->events[j].mask != AE_NONE) break;
         eventLoop->maxfd = j;
+    }
+
+    /* Check whether there are events to be removed.
+     * Note: user may remove the AE_BARRIER without
+     * touching the actual events. */
+    if (mask & (AE_READABLE | AE_WRITABLE)) {
+        /* Must be invoked after the eventLoop mask is modified,
+         * which is required by evport and epoll */
+        aeApiDelEvent(eventLoop, fd, mask);
     }
 }
 

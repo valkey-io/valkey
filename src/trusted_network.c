@@ -29,7 +29,7 @@ int checkTrustedIP(in_addr_t ip) {
 }
 
 int isUnixNetwork(client *c) {
-    return c->flags & CLIENT_UNIX_SOCKET;
+    return c->flag.unix_socket;
 }
 
 

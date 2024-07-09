@@ -27,31 +27,3 @@ int checkTrustedIP(in_addr_t ip) {
                ? 1
                : 0;
 }
-
-int isUnixNetwork(client *c) {
-    return c->flag.unix_socket;
-}
-
-
-in_addr_t getIPv4Netmask(in_addr_t ip) {
-    struct ifaddrs *addrs = NULL;
-    in_addr_t netmask = 0;
-
-    if (getifaddrs(&addrs) == -1) return 0;
-
-    for (struct ifaddrs *addr = addrs; addr != NULL; addr = addr->ifa_next) {
-        if (addr->ifa_addr == NULL || addr->ifa_netmask == NULL) continue;
-
-        if (addr->ifa_addr->sa_family != AF_INET || addr->ifa_netmask->sa_family != AF_INET) continue;
-
-        struct sockaddr_in *in_addr = (struct sockaddr_in *)addr->ifa_addr;
-        if (in_addr->sin_addr.s_addr == ip) {
-            struct sockaddr_in *mask = (struct sockaddr_in *)addr->ifa_netmask;
-            netmask = mask->sin_addr.s_addr;
-            break;
-        }
-    }
-
-    freeifaddrs(addrs);
-    return netmask;
-}

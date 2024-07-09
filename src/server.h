@@ -1650,8 +1650,6 @@ struct valkeyServer {
     list *replicas, *monitors;             /* List of replicas and MONITORs */
     client *current_client;                /* The client that triggered the command execution (External or AOF). */
     client *executing_client;              /* The client executing the current command (possibly script or module). */
-    in_addr_t host_machine_ip;             /*Listening ip for host machine network*/
-    in_addr_t host_machine_netmask;        /*Netmask for host_machine_ip*/
     in_addr_t *trustedIPList;
     unsigned int trustedIPCount;
 
@@ -2763,11 +2761,6 @@ void ioThreadWriteToClient(void *data);
 int canParseCommand(client *c);
 int processIOThreadsReadDone(void);
 int processIOThreadsWriteDone(void);
-void setTrustedNetworkFlag(client *c, const struct sockaddr_storage *sa);
-int isUnixNetwork(client *c);
-int checkConnFromTrustedNetwork(client *c);
-int isTrustedNetwork(client *c);
-in_addr_t getIPv4Netmask(in_addr_t ip);
 int checkTrustedIP(in_addr_t ip);
 void valkeySortIP(in_addr_t *IPlist, unsigned int IPcount);
 

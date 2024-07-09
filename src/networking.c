@@ -1360,10 +1360,10 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip, c
     if (sa != NULL && sa->ss_family == AF_INET) ip_addr = ((struct sockaddr_in *)sa)->sin_addr.s_addr;
 
     if (server.trustedIPCount && ip_addr) {
-        if (/*!isTrustedNetwork(c) &&*/ !checkTrustedIP(ip_addr)) {
+        if (!checkTrustedIP(ip_addr)) {
             serverLog(LL_VERBOSE, "Access denied as connection is not from trusted source");
 
-            char *err = "-ERR client's IP is not found in trusted-addresses list, access denied\r\n";
+            char *err = "-ERR client's IP address is not found in trusted-addresses list, access denied\r\n";
 
             /* That's a best effort error message, don't check write errors */
             if (connWrite(conn, err, strlen(err)) == -1) {

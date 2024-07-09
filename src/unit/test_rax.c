@@ -553,6 +553,7 @@ int test_randomWalkTest(int argc, char **argv, int flags) {
         raxInsert(t,(unsigned char*)toadd[numele],
                     strlen(toadd[numele]),(void*)numele,NULL);
     }
+    TEST_ASSERT(raxAllocSize(t) == zmalloc_used_memory());
 
     raxIterator iter;
     raxStart(&iter,t);

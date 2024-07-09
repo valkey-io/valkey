@@ -36,7 +36,7 @@
                             "key-count": {
                                 "type": "integer"
                             },
-                            "memory-bytes-in": {
+                            "network-bytes-in": {
                                 "type": "integer"
                             }
                         }

@@ -2483,8 +2483,9 @@ int processMultibulkBuffer(client *c) {
                 }
             }
             c->bulklen = ll;
-            /* Per-slot network bytes-in calculation, 2nd component. */
-            c->net_input_bytes_curr_cmd += (bulklen_slen + c->argc);
+            /* Per-slot network bytes-in calculation, 2nd component.
+             * c->argc portion is deferred, as it may not have been fully populated at this point. */
+            c->net_input_bytes_curr_cmd += bulklen_slen;
         }
 
         /* Read bulk argument */
@@ -2522,8 +2523,9 @@ int processMultibulkBuffer(client *c) {
 
     /* We're done when c->multibulk == 0 */
     if (c->multibulklen == 0) {
-        /* Per-slot network bytes-in calculation, 3rd and 4th components. */
-        c->net_input_bytes_curr_cmd += (c->argv_len_sum + (c->argc * 4 + 2));
+        /* Per-slot network bytes-in calculation, 3rd and 4th components.
+         * Here, the deferred c->argc from 2nd component is added, resulting in c->argc * 5 instead of * 4. */
+        c->net_input_bytes_curr_cmd += (c->argv_len_sum + (c->argc * 5 + 2));
         return C_OK;
     }
 

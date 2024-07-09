@@ -24,14 +24,6 @@ typedef struct {
     uint64_t stat;
 } slotStatForSort;
 
-/* Struct used for storing slot statistics. */
-typedef struct slotStat {
-    uint64_t network_bytes_in;
-} slotStat;
-
-/* Struct used for storing slot statistics, for all slots owned by the current shard. */
-struct slotStat cluster_slot_stats[CLUSTER_SLOTS];
-
 static int doesSlotBelongToMyShard(int slot) {
     clusterNode *myself = getMyClusterNode();
     clusterNode *primary = clusterNodeGetPrimary(myself);
@@ -56,7 +48,7 @@ static uint64_t getSlotStat(int slot, int stat_type) {
     if (stat_type == KEY_COUNT) {
         slot_stat = countKeysInSlot(slot);
     } else if (stat_type == NETWORK_BYTES_IN) {
-        slot_stat = cluster_slot_stats[slot].network_bytes_in;
+        slot_stat = server.cluster->slot_stats[slot].network_bytes_in;
     }
     return slot_stat;
 }
@@ -102,7 +94,7 @@ static void addReplySlotStat(client *c, int slot) {
     addReplyBulkCString(c, "key-count");
     addReplyLongLong(c, countKeysInSlot(slot));
     addReplyBulkCString(c, "network-bytes-in");
-    addReplyLongLong(c, cluster_slot_stats[slot].network_bytes_in);
+    addReplyLongLong(c, server.cluster->slot_stats[slot].network_bytes_in);
 }
 
 /* Adds reply for the SLOTSRANGE variant.
@@ -137,17 +129,19 @@ static int canAddNetworkBytes(client *c) {
     /* First, cluster mode must be enabled.
      * Second, command should target a specific slot.
      * Third, blocked client is not aggregated, to avoid duplicate aggregation upon unblocking. */
-    return server.cluster_enabled && c->slot != -1 && !(c->flag.blocked);
+    return server.cluster_enabled && server.cluster_slot_stats_enabled && c->slot != -1 && !(c->flag.blocked);
 }
 
 /* Resets applicable slot statistics. */
 void clusterSlotStatReset(int slot) {
     /* key-count is exempt, as it is queried separately through countKeysInSlot(). */
-    cluster_slot_stats[slot].network_bytes_in = 0;
+    server.cluster->slot_stats[slot].network_bytes_in = 0;
 }
 
-void clusterSlotStatsReset(void) {
-    memset(cluster_slot_stats, 0, sizeof(cluster_slot_stats));
+void clusterSlotStatResetAll(void) {
+    if (server.cluster == NULL) return;
+
+    memset(server.cluster->slot_stats, 0, sizeof(server.cluster->slot_stats));
 }
 
 /* Adds network ingress bytes of the current command in execution,
@@ -159,12 +153,29 @@ void clusterSlotStatsReset(void) {
 void clusterSlotStatsAddNetworkBytesIn(client *c) {
     if (!canAddNetworkBytes(c)) return;
 
-    cluster_slot_stats[c->slot].network_bytes_in += c->net_input_bytes_curr_cmd;
+    if (c->cmd->proc == execCommand) {
+        /* Accumulate its corresponding MULTI RESP; *1\r\n$5\r\nmulti\r\n */
+        c->net_input_bytes_curr_cmd += 15;
+    }
+
+    server.cluster->slot_stats[c->slot].network_bytes_in += c->net_input_bytes_curr_cmd;
+}
+
+/* Adds network ingress bytes from sharded pubsub subscription.
+ * Since sharded pubsub targets a specific slot, we are able to aggregate its ingress bytes under per-slot context. */
+void clusterSlotStatsAddNetworkBytesInForShardedPubSub(robj *channel, robj *message) {
+    int slot = keyHashSlot(channel->ptr, sdslen(channel->ptr));
+    server.cluster->slot_stats[slot].network_bytes_in += (sdslen(channel->ptr) + sdslen(message->ptr));
 }
 
 void clusterSlotStatsCommand(client *c) {
-    if (server.cluster_enabled == 0) {
+    if (!server.cluster_enabled) {
         addReplyError(c, "This instance has cluster support disabled");
+        return;
+    }
+
+    if (!server.cluster_slot_stats_enabled) {
+        addReplyError(c, "Slot usage statistics configuration is disabled");
         return;
     }
 
@@ -193,8 +204,7 @@ void clusterSlotStatsCommand(client *c) {
         } else if (!strcasecmp(c->argv[3]->ptr, "network-bytes-in")) {
             order_by = NETWORK_BYTES_IN;
         } else {
-            addReplyError(c, "Unrecognized sort metric for ORDER BY. The supported "
-                             "metrics are: key-count and cpu-usec.");
+            addReplyError(c, "Unrecognized sort metric for ORDERBY.");
             return;
         }
         int i = 4; /* Next argument index, following ORDERBY */

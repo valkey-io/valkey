@@ -1043,7 +1043,7 @@ void clusterInit(void) {
     clusterUpdateMyselfIp();
     clusterUpdateMyselfHostname();
     clusterUpdateMyselfHumanNodename();
-    clusterSlotStatsReset();
+    clusterSlotStatResetAll();
 }
 
 void clusterInitLast(void) {
@@ -3247,6 +3247,7 @@ int clusterProcessPacket(clusterLink *link) {
             message_len = ntohl(hdr->data.publish.msg.message_len);
             channel = createStringObject((char *)hdr->data.publish.msg.bulk_data, channel_len);
             message = createStringObject((char *)hdr->data.publish.msg.bulk_data + channel_len, message_len);
+            clusterSlotStatsAddNetworkBytesInForShardedPubSub(channel, message);
             pubsubPublishMessage(channel, message, type == CLUSTERMSG_TYPE_PUBLISHSHARD);
             decrRefCount(channel);
             decrRefCount(message);

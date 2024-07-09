@@ -235,7 +235,14 @@ int getKeySlot(sds key) {
         debugServerAssertWithInfo(server.current_client, NULL, calculateKeySlot(key) == server.current_client->slot);
         return server.current_client->slot;
     }
-    return calculateKeySlot(key);
+    int slot = calculateKeySlot(key);
+    /* For the case of replicated commands from primary, getNodeByQuery() never gets called,
+     * and thus c->slot never gets populated. That said, if this command ends up accessing a key,
+     * we are able to backfill c->slot here, where the key's hash calculation is made. */
+    if (server.current_client && server.current_client->flag.primary) {
+        server.current_client->slot = slot;
+    }
+    return slot;
 }
 
 /* This is a special version of dbAdd() that is used only when loading

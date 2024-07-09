@@ -2500,7 +2500,7 @@ void resetServerStats(void) {
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
     lazyfreeResetStats();
-    clusterSlotStatsReset();
+    clusterSlotStatResetAll();
 }
 
 /* Make the thread killable at any time, so that kill threads functions
@@ -3871,9 +3871,6 @@ int processCommand(client *c) {
         }
     }
 
-    /* Now that c->slot has been parsed, accumulate the buffered network bytes-in. */
-    clusterSlotStatsAddNetworkBytesIn(c);
-
     if (!server.cluster_enabled && c->capa & CLIENT_CAPA_REDIRECT && server.primary_host && !mustObeyClient(c) &&
         (is_write_command || (is_read_command && !c->flag.readonly))) {
         addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
@@ -4048,6 +4045,10 @@ int processCommand(client *c) {
         call(c, flags);
         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand()) handleClientsBlockedOnKeys();
     }
+
+    /* Now that c->slot has been parsed, and command has been executed,
+     * accumulate the buffered network bytes-in. */
+    clusterSlotStatsAddNetworkBytesIn(c);
     return C_OK;
 }
 

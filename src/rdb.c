@@ -3448,6 +3448,7 @@ static void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
         serverLog(LL_NOTICE, "Background RDB transfer terminated with success");
     } else if (!bysignal && exitcode != 0) {
         serverLog(LL_WARNING, "Background transfer error");
+        server.lastbgsave_status = C_ERR;
     } else {
         serverLog(LL_WARNING, "Background transfer terminated by signal %d", bysignal);
     }

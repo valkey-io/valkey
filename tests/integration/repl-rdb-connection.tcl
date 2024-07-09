@@ -14,6 +14,24 @@ proc stop_bg_server_sleep {handle} {
     catch {exec /bin/kill -9 $handle}
 }
 
+proc get_client_id_by_last_cmd {r cmd} {
+    set client_list [$r client list]
+    set client_id ""
+    set lines [split $client_list "\n"]
+    foreach line $lines {
+        if {[string match *cmd=$cmd* $line]} {
+            set parts [split $line " "]
+            foreach part $parts {
+                if {[string match id=* $part]} {
+                    set client_id [lindex [split $part "="] 1]
+                    return $client_id
+                }
+            }
+        }
+    }
+    return $client_id
+}
+
 start_server {tags {"repl rdb-connection external:skip"}} {
     set replica [srv 0 client]
     set replica_host [srv 0 host]
@@ -787,4 +805,94 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         }
     }
 }
+}
+
+start_server {tags {"repl rdb-connection external:skip"}} {
+    set master [srv 0 client]
+    set master_host [srv 0 host]
+    set master_port [srv 0 port]
+    set loglines [count_log_lines 0]
+
+    $master config set repl-diskless-sync yes
+    $master config set dual-conn-sync-enabled yes
+    $master config set loglevel debug
+    $master config set repl-diskless-sync-delay 5; # allow catch failed sync before retry
+
+    # Generating RDB will cost 500s(1000000 * 0.0001s)
+    $master debug populate 1000000 master 1
+    $master config set rdb-key-save-delay 100
+    
+    start_server {} {
+        set replica [srv 0 client]
+        set replica_host [srv 0 host]
+        set replica_port [srv 0 port]
+        set replica_log [srv 0 stdout]
+        
+        set load_handle [start_write_load $master_host $master_port 20]
+
+        $replica config set dual-conn-sync-enabled yes
+        $replica config set loglevel debug
+        $replica config set repl-timeout 10
+        test "Test rdb-connection replica main connection disconnected" {
+            $replica slaveof $master_host $master_port
+            # Wait for sync session to start
+            wait_for_condition 50 10000 {
+                [string match "*slave*,state=wait_bgsave*,type=rdb-conn*" [$master info replication]] &&
+                [string match "*slave*,state=bg_transfer*,type=main-conn*" [$master info replication]] &&
+                [s -1 rdb_bgsave_in_progress] eq 1
+            } else {
+                fail "replica didn't start sync session in time"
+            }            
+
+            $master debug log "killing replica main connection"
+            set replica_main_conn_id [get_client_id_by_last_cmd $master "psync"]
+            assert {$replica_main_conn_id != ""}
+            $master client kill id $replica_main_conn_id
+            # Wait for master to abort the sync
+            wait_for_condition 50 1000 {
+                [string match {*replicas_waiting_psync:0*} [$master info replication]]
+            } else {
+                fail "Master did not free repl buf block after sync failure"
+            }
+            wait_for_condition 1000 10 {
+                [s -1 rdb_last_bgsave_status] eq "err"
+            } else {
+                fail "bgsave did not stop in time"
+            }
+        }
+
+        test "Test rdb-channel slave of no one" {
+            $replica slaveof no one
+            wait_for_condition 50 10000 {
+                [s -1 rdb_bgsave_in_progress] eq 0
+            } else {
+                fail "Master should abort sync"
+            }
+        }
+
+        test "Test rdb-connection replica rdb connection disconnected" {
+            $replica slaveof $master_host $master_port
+            # Wait for sync session to start
+            wait_for_condition 50 10000 {
+                [string match "*slave*,state=wait_bgsave*,type=rdb-conn*" [$master info replication]] &&
+                [string match "*slave*,state=bg_transfer*,type=main-conn*" [$master info replication]] &&
+                [s -1 rdb_bgsave_in_progress] eq 1
+            } else {
+                fail "replica didn't start sync session in time"
+            }            
+
+            $master debug log "killing replica rdb connection"
+            set replica_main_conn_id [get_client_id_by_last_cmd $master "sync"]
+            assert {$replica_main_conn_id != ""}
+            $master client kill id $replica_main_conn_id
+            # Wait for master to abort the sync
+            wait_for_condition 1000 10 {
+                [s -1 rdb_bgsave_in_progress] eq 0 &&
+                [s -1 rdb_last_bgsave_status] eq "err" 
+            } else {
+                fail "Master should abort sync"
+            }
+        }
+        stop_write_load $load_handle
+    }
 }

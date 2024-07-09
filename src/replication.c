@@ -2611,7 +2611,6 @@ static void fullSyncWithPrimary(connection *conn) {
         if (err == NULL) goto no_response_error;
         if (err[0] == '-') {
             serverLog(LL_WARNING, "Unable to AUTH to Primary: %s", err);
-            sdsfree(err);
             goto error;
         }
         sdsfree(err);
@@ -2629,13 +2628,11 @@ static void fullSyncWithPrimary(connection *conn) {
                       err);
             goto error;
         }
-        sdsfree(err);
-
         if (connSyncWrite(conn, "SYNC\r\n", 6, server.repl_syncio_timeout * 1000) == -1) {
             serverLog(LL_WARNING, "I/O error writing to Primary: %s", connGetLastError(conn));
             goto error;
         }
-
+        sdsfree(err);
         server.repl_rdb_conn_state = REPL_RDB_CONN_RECEIVE_ENDOFF;
         return;
     }
@@ -2694,6 +2691,7 @@ no_response_error:
     /* Fall through to regular error handling */
 
 error:
+    sdsfree(err);
     connClose(conn);
     server.repl_transfer_s = NULL;
     if (server.repl_rdb_transfer_s) {
@@ -2708,7 +2706,6 @@ error:
 
 write_error: /* Handle sendCommand() errors. */
     serverLog(LL_WARNING, "Sending command to primary in dual connection replication handshake: %s", err);
-    sdsfree(err);
     goto error;
 }
 

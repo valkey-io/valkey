@@ -4095,6 +4095,9 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
  * replication offset, and so forth. Note that because how the rank is computed
  * multiple replicas may have the same rank, in case they have the same offset.
  *
+ * If the replication offsets are the same, the one with the smaller node id
+ * will have a better ranking to avoid simultaneous elections of replicas.
+ *
  * The replica rank is used to add a delay to start an election in order to
  * get voted and replace a failing primary. Replicas with better replication
  * offsets are more likely to win. */
@@ -4108,10 +4111,17 @@ int clusterGetReplicaRank(void) {
     if (primary == NULL) return 0; /* Never called by replicas without primary. */
 
     myoffset = replicationGetReplicaOffset();
-    for (j = 0; j < primary->num_replicas; j++)
-        if (primary->replicas[j] != myself && !nodeCantFailover(primary->replicas[j]) &&
-            primary->replicas[j]->repl_offset > myoffset)
+    for (j = 0; j < primary->num_replicas; j++) {
+        if (primary->replicas[j] == myself) continue;
+        if (nodeCantFailover(primary->replicas[j])) continue;
+
+        if (primary->replicas[j]->repl_offset > myoffset) {
             rank++;
+        } else if (primary->replicas[j]->repl_offset == myoffset &&
+                   memcmp(primary->replicas[j]->name, myself->name, CLUSTER_NAMELEN) < 0) {
+            rank++;
+        }
+    }
     return rank;
 }
 
@@ -4321,7 +4331,7 @@ void clusterHandleReplicaFailover(void) {
      * Not performed if this is a manual failover. */
     if (server.cluster->failover_auth_sent == 0 && server.cluster->mf_end == 0) {
         int newrank = clusterGetReplicaRank();
-        if (newrank > server.cluster->failover_auth_rank) {
+        if (newrank != server.cluster->failover_auth_rank) {
             long long added_delay = (newrank - server.cluster->failover_auth_rank) * 1000;
             server.cluster->failover_auth_time += added_delay;
             server.cluster->failover_auth_rank = newrank;

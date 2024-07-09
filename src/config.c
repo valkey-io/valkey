@@ -2054,6 +2054,7 @@ static void numericConfigInit(standardConfig *config) {
 
 static int numericBoundaryCheck(standardConfig *config, long long ll, const char **err) {
     if (config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG_LONG ||
+        config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG ||
         config->data.numeric.numeric_type == NUMERIC_TYPE_UINT ||
         config->data.numeric.numeric_type == NUMERIC_TYPE_SIZE_T) {
         /* Boundary check for unsigned types */

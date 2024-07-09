@@ -54,8 +54,8 @@ int cancelReplicationHandshake(int reconnect);
 static void syncWithPrimary(connection *conn);
 void replicationSteadyStateInit(void);
 void setupMainConnForPsync(connection *conn);
-void rdbConnectionSyncHandlePsync(connection *conn);
-void rdbConnectionSyncHandleRdbLoadCompletion(connection *conn);
+void rdbConnectionSyncHandlePsync(void);
+void rdbConnectionSyncHandleRdbLoadCompletion(void);
 void replicationAbortSyncTransfer(void);
 
 /* We take a global flag to remember if this instance generated an RDB
@@ -2345,7 +2345,7 @@ void readSyncBulkPayload(connection *conn) {
     if (conn == server.repl_rdb_transfer_s) {
         /* In case of full-sync using dual connection, the primary client was already created for psync purposes
          * Instead of creating a new client we will use the one created for partial sync */
-        rdbConnectionSyncHandleRdbLoadCompletion(conn);
+        rdbConnectionSyncHandleRdbLoadCompletion();
     } else {
         replicationCreatePrimaryClient(server.repl_transfer_s, rsi.repl_stream_db);
         server.repl_state = REPL_STATE_CONNECTED;
@@ -2863,8 +2863,8 @@ void rdbConnectionSyncSuccess(void) {
 /* Replication: Replica side.
  * Main connection successfully established psync with primary. The 'conn' argument must be the main
  * connection. Check whether the rdb connection has completed its part and act accordingly. */
-void rdbConnectionSyncHandlePsync(connection *conn) {
-    serverAssert(conn == server.repl_transfer_s && server.repl_state == REPL_STATE_RECEIVE_PSYNC_REPLY);
+void rdbConnectionSyncHandlePsync(void) {
+    serverAssert(server.repl_state == REPL_STATE_RECEIVE_PSYNC_REPLY);
     if (server.repl_rdb_conn_state < REPL_RDB_CONN_RDB_LOADED) {
         /* RDB is still loading */
         if (connSetReadHandler(server.repl_provisional_primary.conn, bufferReplData) == C_ERR) {
@@ -2876,31 +2876,27 @@ void rdbConnectionSyncHandlePsync(connection *conn) {
         server.repl_state = REPL_STATE_TRANSFER;
         return;
     }
-    if (server.repl_rdb_conn_state == REPL_RDB_CONN_RDB_LOADED) {
-        /* RDB is loaded */
-        serverLog(LL_DEBUG, "Dual connection sync - psync established after rdb load");
-        rdbConnectionSyncSuccess();
-        return;
-    }
-    serverPanic("Unrecognized dual connection replication state %d", server.repl_rdb_conn_state);
+    serverAssert(server.repl_rdb_conn_state == REPL_RDB_CONN_RDB_LOADED);
+    /* RDB is loaded */
+    serverLog(LL_DEBUG, "Dual connection sync - psync established after rdb load");
+    rdbConnectionSyncSuccess();
+    return;
 }
 
 /* Replication: Replica side.
  * RDB connection done loading the RDB. The 'conn' argument must be the rdb connection. Check whether the
  * main connection has completed its part and act accordingly. */
-void rdbConnectionSyncHandleRdbLoadCompletion(connection *conn) {
-    serverAssert(conn == server.repl_rdb_transfer_s && server.repl_rdb_conn_state == REPL_RDB_CONN_RDB_LOAD);
+void rdbConnectionSyncHandleRdbLoadCompletion(void) {
+    serverAssert(server.repl_rdb_conn_state == REPL_RDB_CONN_RDB_LOAD);
     if (server.repl_state < REPL_STATE_TRANSFER) {
         /* Main psync connection hasn't been established yet */
         server.repl_rdb_conn_state = REPL_RDB_CONN_RDB_LOADED;
         return;
     }
-    if (server.repl_state == REPL_STATE_TRANSFER) {
-        connSetReadHandler(server.repl_transfer_s, NULL);
-        rdbConnectionSyncSuccess();
-        return;
-    }
-    serverPanic("Unrecognized replication state %d using rdb connection", server.repl_state);
+    serverAssert(server.repl_state == REPL_STATE_TRANSFER);
+    connSetReadHandler(server.repl_transfer_s, NULL);
+    rdbConnectionSyncSuccess();
+    return;
 }
 
 /* Try a partial resynchronization with the primary if we are about to reconnect.
@@ -3193,7 +3189,7 @@ void setupMainConnForPsync(connection *conn) {
             serverCommunicateSystemd("STATUS=Primary <-> REPLICA sync: Partial Resynchronization accepted. Ready to "
                                      "accept connections in read-write mode.\n");
         }
-        rdbConnectionSyncHandlePsync(conn);
+        rdbConnectionSyncHandlePsync();
         return;
     }
 

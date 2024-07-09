@@ -2870,6 +2870,7 @@ void rdbConnectionSyncHandlePsync(connection *conn) {
         if (connSetReadHandler(server.repl_provisional_primary.conn, bufferReplData) == C_ERR) {
             serverLog(LL_WARNING, "Error while setting readable handler: %s", strerror(errno));
             cancelReplicationHandshake(1);
+            return;
         }
         replDataBufInit();
         server.repl_state = REPL_STATE_TRANSFER;

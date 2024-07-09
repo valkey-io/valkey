@@ -2752,7 +2752,7 @@ int readIntoReplDataBlock(connection *conn, replDataBufBlock *data_block, size_t
         return C_ERR;
     }
     data_block->used += nread;
-    server.stat_total_reads_processed += nread;
+    atomic_fetch_add_explicit(&server.stat_total_reads_processed, 1, memory_order_relaxed);
     return read - nread;
 }
 

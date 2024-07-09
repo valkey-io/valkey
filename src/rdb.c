@@ -3654,7 +3654,7 @@ void bgsaveCommand(client *c) {
                 killRDBChild();
                 addReply(c, shared.ok);
             } else {
-                addReplyError(c, "background save is currently not in progress");
+                addReplyError(c, "Background save is currently not in progress");
             }
             return;
         } else {

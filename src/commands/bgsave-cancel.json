@@ -12,9 +12,6 @@
         "command_flags": [
             "ADMIN"
         ],
-        "acl_categories": [
-            "CONNECTION"
-        ],
         "arguments": [
         ],
         "reply_schema": {

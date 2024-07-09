@@ -3642,7 +3642,7 @@ void bgsaveCancelCommand(client *c) {
      * Terminates an in progress BGSAVE */
     if (server.child_type == CHILD_TYPE_RDB) {
         /* There is an ongoing save */
-        serverLog(LL_NOTICE, "Background save requested to be canceled by user");
+        serverLog(LL_NOTICE, "Background bgsave requested to be canceled by user");
         killRDBChild();
         addReply(c, shared.ok);
     } else {

@@ -226,3 +226,16 @@ proc check_cluster_node_mark {flag ref_node_index instance_id_to_check} {
     }
     fail "Unable to find instance id in cluster nodes. ID: $instance_id_to_check"
 }
+
+proc cluster_allocate_slots {masters replicas} {
+    set slot 16383
+    while {$slot >= 0} {
+        # Allocate successive slots to random nodes.
+        set node [randomInt $masters]
+        lappend slots_$node $slot
+        incr slot -1
+    }
+    for {set j 0} {$j < $masters} {incr j} {
+        R $j cluster addslots {*}[set slots_${j}]
+    }
+}

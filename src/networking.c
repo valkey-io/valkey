@@ -543,8 +543,8 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
     if (!(flags & ERR_REPLY_FLAG_NO_STATS_UPDATE)) {
         /* Increment the global error counter */
         server.stat_total_error_replies++;
-        /* Increment the error stats */
-        /* If the string already starts with "-..." then the error prefix
+        /* Increment the error stats
+         * If the string already starts with "-..." then the error prefix
          * is provided by the caller (we limit the search to 32 chars). Otherwise we use "-ERR". */
         char *err_prefix = "ERR";
         size_t prefix_len = 3;
@@ -559,7 +559,8 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         }
         /* After the errors RAX reaches its limit, instead of tracking
          * custom errors (e.g. LUA), we track the error under `errorstat_ERRORSTATS_OVERFLOW` */
-        if (flags & ERR_REPLY_FLAG_CUSTOM && !raxFind(server.errors, (unsigned char *)err_prefix, prefix_len, NULL) && raxSize(server.errors) >= ERROR_STATS_LIMIT) {
+        if (flags & ERR_REPLY_FLAG_CUSTOM && !raxFind(server.errors, (unsigned char *)err_prefix, prefix_len, NULL) &&
+            raxSize(server.errors) >= ERROR_STATS_LIMIT) {
             err_prefix = ERRORSTATS_OVERFLOW_ERR;
             prefix_len = strlen(ERRORSTATS_OVERFLOW_ERR);
         }

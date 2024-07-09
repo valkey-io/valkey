@@ -1,0 +1,24 @@
+{
+    "CANCEL": {
+        "summary": "Terminates a running bgsave child process.",
+        "complexity": "O(1)",
+        "group": "server",
+        "since": "8.0.0",
+        "arity": -1,
+        "container": "BGSAVE",
+        "function": "bgsaveCancelCommand",
+        "history": [
+        ],
+        "command_flags": [
+            "ADMIN"
+        ],
+        "acl_categories": [
+            "CONNECTION"
+        ],
+        "arguments": [
+        ],
+        "reply_schema": {
+            "const": "OK"
+        }
+    }
+}

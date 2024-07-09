@@ -3636,6 +3636,20 @@ void saveCommand(client *c) {
     }
 }
 
+/* BGSAVE CANCEL */
+void bgsaveCancelCommand(client *c) {
+    /* BGSAVE CANCEL
+     * Terminates an in progress BGSAVE */
+    if (server.child_type == CHILD_TYPE_RDB) {
+        /* There is an ongoing save */
+        serverLog(LL_NOTICE, "Background save requested to be canceled by user");
+        killRDBChild();
+        addReply(c, shared.ok);
+    } else {
+        addReplyError(c, "background save is currently not in progress");
+    }
+}
+
 /* BGSAVE [SCHEDULE] */
 void bgsaveCommand(client *c) {
     int schedule = 0;
@@ -3645,6 +3659,7 @@ void bgsaveCommand(client *c) {
     if (c->argc > 1) {
         if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "schedule")) {
             schedule = 1;
+<<<<<<< Updated upstream
         } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "cancel")) {
             /* BGSAVE CANCEL
              * Terminates an in progress BGSAVE */
@@ -3657,6 +3672,8 @@ void bgsaveCommand(client *c) {
                 addReplyError(c, "Background save is currently not in progress");
             }
             return;
+=======
+>>>>>>> Stashed changes
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;

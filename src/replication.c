@@ -2757,16 +2757,10 @@ int readIntoReplDataBlock(connection *conn, replDataBufBlock *data_block, size_t
 }
 
 /* Replication: Replica side.
- * Returns true in case the replica's local repl-baffer used all of its space */
-int isReplicaBufferLimitReached(void) {
-    return server.pending_repl_data.len > server.client_obuf_limits[CLIENT_REPLICA].hard_limit_bytes;
-}
-
-/* Replication: Replica side.
  * Read handler for buffering incoming repl data during RDB download/loading. */
 void bufferReplData(connection *conn) {
     size_t readlen = PROTO_IOBUF_LEN;
-    int read = 0;
+    int remaining_bytes = 0;
 
     while (readlen > 0) {
         listNode *ln = listLast(server.pending_repl_data.blocks);
@@ -2775,12 +2769,12 @@ void bufferReplData(connection *conn) {
         /* Append to tail string when possible */
         if (tail && tail->used < tail->size) {
             size_t avail = tail->size - tail->used;
-            read = min(readlen, avail);
-            readlen -= read;
-            read = readIntoReplDataBlock(conn, tail, read);
+            remaining_bytes = min(readlen, avail);
+            readlen -= remaining_bytes;
+            remaining_bytes = readIntoReplDataBlock(conn, tail, remaining_bytes);
         }
-        if (readlen && read == 0) {
-            if (isReplicaBufferLimitReached()) {
+        if (readlen && remaining_bytes == 0) {
+            if (server.pending_repl_data.len > server.client_obuf_limits[CLIENT_REPLICA].hard_limit_bytes) {
                 serverLog(LL_NOTICE, "Replication buffer limit reached, stopping buffering.");
                 /* Stop accumulating primary commands. */
                 connSetReadHandler(conn, NULL);
@@ -2801,15 +2795,15 @@ void bufferReplData(connection *conn) {
             if (server.pending_repl_data.peak < server.pending_repl_data.len)
                 server.pending_repl_data.peak = server.pending_repl_data.len;
 
-            read = min(readlen, tail->size);
-            readlen -= read;
-            read = readIntoReplDataBlock(conn, tail, read);
+            remaining_bytes = min(readlen, tail->size);
+            readlen -= remaining_bytes;
+            remaining_bytes = readIntoReplDataBlock(conn, tail, remaining_bytes);
         }
-        if (read > 0) {
+        if (remaining_bytes > 0) {
             /* Stop reading in case we read less than we anticipated */
             break;
         }
-        if (read == C_ERR) {
+        if (remaining_bytes == C_ERR) {
             return;
         }
     }
@@ -2854,6 +2848,7 @@ void rdbConnectionSyncSuccess(void) {
     /* Wait for the accumulated buffer to be processed before reading any more replication updates */
     if (streamReplDataBufToDb(server.primary) == C_ERR) {
         /* Sync session aborted during repl data streaming. */
+        serverLog(LL_WARNING, "Failed to stream local replication buffer into memory");
         return;
     }
     freePendingReplDataBuf();

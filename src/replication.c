@@ -3194,6 +3194,7 @@ void setupMainConnForPsync(connection *conn) {
     }
 
 error:
+    sdsfree(err);
     /* The rdb-conn-sync session must be aborted for any psync_result other than PSYNC_CONTINUE or PSYNC_WAIT_REPLY. */
     serverLog(LL_WARNING, "Aborting dual connection sync. Main connection psync result %d", psync_result);
     cancelReplicationHandshake(1);

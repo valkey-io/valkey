@@ -3640,14 +3640,13 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
             }
         } else {
             serverLog(LL_NOTICE, "Background RDB transfer started by pid %ld to %s", (long)childpid,
-                      dual_conn ? "replica socket" : "pipe");
+                      dual_conn ? "direct socket to replica" : "pipe through parent process");
             server.rdb_save_time_start = time(NULL);
             server.rdb_child_type = RDB_CHILD_TYPE_SOCKET;
             if (dual_conn) {
                 /* For dual connection sync, the main process no longer requires these RDB connections. */
                 zfree(conns);
-            }
-            else {
+            } else {
                 close(rdb_pipe_write); /* close write in parent so that it can detect the close on the child. */
                 if (aeCreateFileEvent(server.el, server.rdb_pipe_read, AE_READABLE, rdbPipeReadHandler, NULL) == AE_ERR) {
                     serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");

@@ -29,6 +29,7 @@
 
 #include "server.h"
 #include "cluster.h"
+#include "cluster_slot_stats.h"
 #include "script.h"
 #include "fpconv_dtoa.h"
 #include "fmtargs.h"
@@ -225,6 +226,7 @@ client *createClient(connection *conn) {
     initClientMultiState(c);
     c->net_input_bytes = 0;
     c->net_output_bytes = 0;
+    c->net_output_bytes_curr_cmd = 0;
     c->commands_processed = 0;
     return c;
 }
@@ -441,6 +443,8 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
                                         cmdname ? cmdname : "<unknown>");
         return;
     }
+
+    c->net_output_bytes_curr_cmd += len;
 
     /* We call it here because this function may affect the reply
      * buffer offset (see function comment) */
@@ -2443,6 +2447,7 @@ void resetClient(client *c) {
     c->slot = -1;
     c->flag.executing_command = 0;
     c->flag.replication_done = 0;
+    c->net_output_bytes_curr_cmd = 0;
 
     /* Make sure the duration has been recorded to some command. */
     serverAssert(c->duration == 0);
@@ -2833,6 +2838,7 @@ int processCommandAndResetClient(client *c) {
     client *old_client = server.current_client;
     server.current_client = c;
     if (processCommand(c) == C_OK) {
+        clusterSlotStatsAddNetworkBytesOut(c);
         commandProcessed(c);
         /* Update the client's memory to include output buffer growth following the
          * processed command. */

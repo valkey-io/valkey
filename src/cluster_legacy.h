@@ -329,6 +329,10 @@ struct _clusterNode {
                                                Update with updateAndCountChangedNodeHealth(). */
 };
 
+typedef struct slotStat {
+    uint64_t network_bytes_out;
+} slotStat;
+
 struct clusterState {
     clusterNode *myself; /* This node */
     uint64_t currentEpoch;
@@ -376,6 +380,7 @@ struct clusterState {
      * stops claiming the slot. This prevents spreading incorrect information (that
      * source still owns the slot) using UPDATE messages. */
     unsigned char owner_not_claiming_slot[CLUSTER_SLOTS / 8];
+    slotStat slot_stats[CLUSTER_SLOTS];
 };
 
 

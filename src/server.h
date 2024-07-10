@@ -1506,6 +1506,15 @@ struct malloc_stats {
 };
 
 /*-----------------------------------------------------------------------------
+ * Cached state per client connection type flags (bitwise or)
+ *-----------------------------------------------------------------------------*/
+
+#define CACHE_CONN_TYPE_TLS (1 << 0)
+#define CACHE_CONN_TYPE_IPv6 (1 << 1)
+#define CACHE_CONN_TYPE_RESP3 (1 << 2)
+#define CACHE_CONN_TYPE_MAX (1 << 3)
+
+/*-----------------------------------------------------------------------------
  * TLS Context Configuration
  *----------------------------------------------------------------------------*/
 
@@ -2052,6 +2061,8 @@ struct valkeyServer {
     int cluster_replica_no_failover;                       /* Prevent replica from starting a failover
                                                             if the primary is in failure state. */
     char *cluster_announce_ip;                             /* IP address to announce on cluster bus. */
+    char *cluster_announce_client_ipv4;                    /* IPv4 for clients, to announce on cluster bus. */
+    char *cluster_announce_client_ipv6;                    /* IPv6 for clients, to announce on cluster bus. */
     char *cluster_announce_hostname;                       /* hostname to announce on cluster bus. */
     char *cluster_announce_human_nodename;                 /* Human readable node name assigned to a node. */
     int cluster_preferred_endpoint_type;                   /* Use the announced hostname when available. */
@@ -2070,7 +2081,7 @@ struct valkeyServer {
                                                             * dropping packets of a specific type */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
-    sds cached_cluster_slot_info[CACHE_CONN_TYPE_MAX][4]; /* Align to RESP3 */
+    sds cached_cluster_slot_info[CACHE_CONN_TYPE_MAX]; /* Index in array is a bitwise or of CACHE_CONN_TYPE_* */
     /* Scripting */
     mstime_t busy_reply_threshold;  /* Script / module timeout in milliseconds */
     int pre_command_oom_state;      /* OOM before command (script?) was started */
@@ -2707,6 +2718,7 @@ void freeClientReplyValue(void *o);
 void *dupClientReplyValue(void *o);
 char *getClientPeerId(client *client);
 char *getClientSockName(client *client);
+int isClientConnIpV6(client *c);
 sds catClientInfoString(sds s, client *client);
 sds getAllClientsInfoString(int type);
 int clientSetName(client *c, robj *name, const char **err);

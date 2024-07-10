@@ -1472,6 +1472,13 @@ VALKEYMODULE_API int (*ValkeyModule_GetClusterNodeInfo)(ValkeyModuleCtx *ctx,
                                                         char *primary_id,
                                                         int *port,
                                                         int *flags) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetClusterNodeInfoForClient)(ValkeyModuleCtx *ctx,
+                                                                 uint64_t client_id,
+                                                                 const char *node_id,
+                                                                 char *ip,
+                                                                 char *primary_id,
+                                                                 int *port,
+                                                                 int *flags) VALKEYMODULE_ATTR;
 VALKEYMODULE_API char **(*ValkeyModule_GetClusterNodesList)(ValkeyModuleCtx *ctx, size_t *numnodes)VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_FreeClusterNodesList)(char **ids) VALKEYMODULE_ATTR;
 VALKEYMODULE_API ValkeyModuleTimerID (*ValkeyModule_CreateTimer)(ValkeyModuleCtx *ctx,
@@ -1938,6 +1945,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(RegisterClusterMessageReceiver);
     VALKEYMODULE_GET_API(SendClusterMessage);
     VALKEYMODULE_GET_API(GetClusterNodeInfo);
+    VALKEYMODULE_GET_API(GetClusterNodeInfoForClient);
     VALKEYMODULE_GET_API(GetClusterNodesList);
     VALKEYMODULE_GET_API(FreeClusterNodesList);
     VALKEYMODULE_GET_API(CreateTimer);

@@ -48,6 +48,8 @@ int clusterSendModuleMessageToTarget(const char *target,
 
 void clusterUpdateMyselfFlags(void);
 void clusterUpdateMyselfIp(void);
+void clusterUpdateMyselfClientIpV4(void);
+void clusterUpdateMyselfClientIpV6(void);
 void clusterUpdateMyselfHostname(void);
 void clusterUpdateMyselfAnnouncedPorts(void);
 void clusterUpdateMyselfHumanNodename(void);
@@ -85,7 +87,7 @@ int handleDebugClusterCommand(client *c);
 int clusterNodePending(clusterNode *node);
 int clusterNodeIsPrimary(clusterNode *n);
 char **getClusterNodesList(size_t *numnodes);
-char *clusterNodeIp(clusterNode *node);
+char *clusterNodeIp(clusterNode *node, client *c);
 int clusterNodeIsReplica(clusterNode *node);
 clusterNode *clusterNodeGetPrimary(clusterNode *node);
 char *clusterNodeGetName(clusterNode *node);
@@ -100,7 +102,7 @@ clusterNode *getImportingSlotSource(int slot);
 clusterNode *getNodeBySlot(int slot);
 int clusterNodeClientPort(clusterNode *n, int use_tls);
 char *clusterNodeHostname(clusterNode *node);
-const char *clusterNodePreferredEndpoint(clusterNode *n);
+const char *clusterNodePreferredEndpoint(clusterNode *n, client *c);
 long long clusterNodeReplOffset(clusterNode *node);
 clusterNode *clusterLookupNode(const char *name, int length);
 int detectAndUpdateCachedNodeHealth(void);

@@ -747,7 +747,7 @@ int verifyClusterNodeId(const char *name, int length) {
 }
 
 int isValidAuxChar(int c) {
-    return isalnum(c) || (strchr("!#$%&()*+:;<>?@[]^{|}~", c) == NULL);
+    return isalnum(c) || (strchr("!#$%&()*+.:;<>?@[]^{|}~", c) == NULL);
 }
 
 int isValidAuxString(char *s, unsigned int length) {
@@ -1194,7 +1194,7 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
         int port = clusterNodeClientPort(n, shouldReturnTlsInfo());
         addReplyErrorSds(c,
                          sdscatprintf(sdsempty(), "-%s %d %s:%d", (error_code == CLUSTER_REDIR_ASK) ? "ASK" : "MOVED",
-                                      hashslot, clusterNodePreferredEndpoint(n), port));
+                                      hashslot, clusterNodePreferredEndpoint(n, c), port));
     } else {
         serverPanic("getNodeByQuery() unknown error.");
     }
@@ -1267,7 +1267,7 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
     char *hostname = clusterNodeHostname(node);
     addReplyArrayLen(c, 4);
     if (server.cluster_preferred_endpoint_type == CLUSTER_ENDPOINT_TYPE_IP) {
-        addReplyBulkCString(c, clusterNodeIp(node));
+        addReplyBulkCString(c, clusterNodeIp(node, c));
     } else if (server.cluster_preferred_endpoint_type == CLUSTER_ENDPOINT_TYPE_HOSTNAME) {
         if (hostname != NULL && hostname[0] != '\0') {
             addReplyBulkCString(c, hostname);
@@ -1300,7 +1300,7 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
 
     if (server.cluster_preferred_endpoint_type != CLUSTER_ENDPOINT_TYPE_IP) {
         addReplyBulkCString(c, "ip");
-        addReplyBulkCString(c, clusterNodeIp(node));
+        addReplyBulkCString(c, clusterNodeIp(node, c));
         length--;
     }
     if (server.cluster_preferred_endpoint_type != CLUSTER_ENDPOINT_TYPE_HOSTNAME && hostname != NULL &&
@@ -1353,12 +1353,10 @@ void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, in
 }
 
 void clearCachedClusterSlotsResponse(void) {
-    for (connTypeForCaching conn_type = CACHE_CONN_TCP; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
-        for (int resp = 0; resp <= 3; resp++) {
-            if (server.cached_cluster_slot_info[conn_type][resp]) {
-                sdsfree(server.cached_cluster_slot_info[conn_type][resp]);
-                server.cached_cluster_slot_info[conn_type][resp] = NULL;
-            }
+    for (int conn_type = 0; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
+        if (server.cached_cluster_slot_info[conn_type]) {
+            sdsfree(server.cached_cluster_slot_info[conn_type]);
+            server.cached_cluster_slot_info[conn_type] = NULL;
         }
     }
 }
@@ -1415,14 +1413,17 @@ void clusterCommandSlots(client *c) {
      *               3) node ID
      *           ... continued until done
      */
-    connTypeForCaching conn_type = shouldReturnTlsInfo();
+    int conn_type = 0;
+    if (connIsTLS(c->conn)) conn_type |= CACHE_CONN_TYPE_TLS;
+    if (isClientConnIpV6(c)) conn_type |= CACHE_CONN_TYPE_IPv6;
+    if (c->resp == 3) conn_type |= CACHE_CONN_TYPE_RESP3;
 
     if (detectAndUpdateCachedNodeHealth()) clearCachedClusterSlotsResponse();
 
-    sds cached_reply = server.cached_cluster_slot_info[conn_type][c->resp];
+    sds cached_reply = server.cached_cluster_slot_info[conn_type];
     if (!cached_reply) {
         cached_reply = generateClusterSlotResponse(c->resp);
-        server.cached_cluster_slot_info[conn_type][c->resp] = cached_reply;
+        server.cached_cluster_slot_info[conn_type] = cached_reply;
     } else {
         debugServerAssertWithInfo(c, NULL, verifyCachedClusterSlotsResponse(cached_reply, c->resp) == 1);
     }

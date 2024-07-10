@@ -35,6 +35,7 @@
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <arpa/inet.h>
 #include <glob.h>
 #include <string.h>
 #include <locale.h>
@@ -2382,6 +2383,24 @@ static int isValidAnnouncedHostname(char *val, const char **err) {
     return 1;
 }
 
+static int isValidIpV4(char *val, const char **err) {
+    struct sockaddr_in sa;
+    if (val[0] != '\0' && inet_pton(AF_INET, val, &(sa.sin_addr)) == 0) {
+        *err = "Invalid IPv4 address";
+        return 0;
+    }
+    return 1;
+}
+
+static int isValidIpV6(char *val, const char **err) {
+    struct sockaddr_in6 sa;
+    if (val[0] != '\0' && inet_pton(AF_INET6, val, &(sa.sin6_addr)) == 0) {
+        *err = "Invalid IPv6 address";
+        return 0;
+    }
+    return 1;
+}
+
 /* Validate specified string is a valid proc-title-template */
 static int isValidProcTitleTemplate(char *val, const char **err) {
     if (!validateProcTitleTemplate(val)) {
@@ -2620,6 +2639,18 @@ static int updateClusterAnnouncedPort(const char **err) {
 static int updateClusterIp(const char **err) {
     UNUSED(err);
     clusterUpdateMyselfIp();
+    return 1;
+}
+
+int updateClusterClientIpV4(const char **err) {
+    UNUSED(err);
+    clusterUpdateMyselfClientIpV4();
+    return 1;
+}
+
+int updateClusterClientIpV6(const char **err) {
+    UNUSED(err);
+    clusterUpdateMyselfClientIpV6();
     return 1;
 }
 
@@ -3081,6 +3112,8 @@ standardConfig static_configs[] = {
     createStringConfig("replica-announce-ip", "slave-announce-ip", MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.replica_announce_ip, NULL, NULL, NULL),
     createStringConfig("primaryuser", "masteruser", MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.primary_user, NULL, NULL, NULL),
     createStringConfig("cluster-announce-ip", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_ip, NULL, NULL, updateClusterIp),
+    createStringConfig("cluster-announce-client-ipv4", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_client_ipv4, NULL, isValidIpV4, updateClusterClientIpV4),
+    createStringConfig("cluster-announce-client-ipv6", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_client_ipv6, NULL, isValidIpV6, updateClusterClientIpV6),
     createStringConfig("cluster-config-file", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.cluster_configfile, "nodes.conf", isValidClusterConfigFile, NULL),
     createStringConfig("cluster-announce-hostname", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_hostname, NULL, isValidAnnouncedHostname, updateClusterHostname),
     createStringConfig("cluster-announce-human-nodename", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_human_nodename, NULL, isValidAnnouncedNodename, updateClusterHumanNodename),

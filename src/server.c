@@ -5813,7 +5813,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                                     "offset=%lld,lag=%ld,type=%s\r\n",
                                     replica_id, replica_ip, replica->replica_listening_port, state,
                                     replica->repl_ack_off, lag,
-                                    replica->flags & CLIENT_REPL_RDB_CONN              ? "rdb-conn"
+                                    replica->flag.repl_rdb_conn                        ? "rdb-conn"
                                     : replica->repl_state == REPLICA_STATE_BG_RDB_LOAD ? "main-conn"
                                                                                        : "replica");
                 replica_id++;

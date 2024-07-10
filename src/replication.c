@@ -232,7 +232,7 @@ void addRdbReplicaToPsyncWait(client *rdb_replica) {
               (unsigned long long)rdb_replica->id, tail ? "tracking repl-backlog tail" : "no repl-backlog to track");
     rdb_replica->ref_repl_buf_node = tail ? ln : NULL;
     /* Prevent rdb client from being freed before psync is established. */
-    rdb_replica->flags |= CLIENT_PROTECTED_RDB_CONN;
+    rdb_replica->flag.protected_rdb_conn = 1;
     uint64_t id = htonu64(rdb_replica->id);
     raxInsert(server.replicas_waiting_psync, (unsigned char *)&id, sizeof(id), rdb_replica, NULL);
 }
@@ -269,7 +269,7 @@ void removeReplicaFromPsyncWait(client *replica) {
         o->refcount--;
     }
     rdb_replica->ref_repl_buf_node = NULL;
-    rdb_replica->flags &= ~CLIENT_PROTECTED_RDB_CONN;
+    rdb_replica->flag.protected_rdb_conn = 0;
     serverLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu, repl buffer block %s",
               replicationGetReplicaName(replica), (long long unsigned int)replica->associated_rdb_client_id,
               o ? "ref count decreased" : "doesn't exist");
@@ -386,7 +386,7 @@ void incrementalTrimReplicationBacklog(size_t max_blocks) {
 
 /* Free replication buffer blocks that are referenced by this client. */
 void freeReplicaReferencedReplBuffer(client *replica) {
-    if (replica->flags & CLIENT_REPL_RDB_CONN) {
+    if (replica->flag.repl_rdb_conn) {
         uint64_t rdb_cid = htonu64(replica->id);
         if (raxRemove(server.replicas_waiting_psync, (unsigned char *)&rdb_cid, sizeof(rdb_cid), NULL)) {
             serverLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu from replicas rax.",
@@ -479,7 +479,7 @@ void feedReplicationBuffer(char *s, size_t len) {
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
             client *replica = ln->value;
-            if (!canFeedReplicaReplBuffer(replica) && !(replica->flags & CLIENT_PROTECTED_RDB_CONN)) continue;
+            if (!canFeedReplicaReplBuffer(replica) && !(replica->flag.protected_rdb_conn)) continue;
             /* Update shared replication buffer start position. */
             if (replica->ref_repl_buf_node == NULL) {
                 replica->ref_repl_buf_node = start_node;
@@ -1382,10 +1382,10 @@ void replconfCommand(client *c) {
                 return;
             }
             if (start_with_offset == 1) {
-                c->flags |= CLIENT_REPL_RDB_CONN;
+                c->flag.repl_rdb_conn = 1;
                 c->replica_req |= REPLICA_REQ_RDB_CONN;
             } else {
-                c->flags &= ~CLIENT_REPL_RDB_CONN;
+                c->flag.repl_rdb_conn = 0;
                 c->replica_req &= ~REPLICA_REQ_RDB_CONN;
             }
         } else if (!strcasecmp(c->argv[j]->ptr, "set-rdb-client-id")) {
@@ -2777,7 +2777,7 @@ void bufferReplData(connection *conn) {
             remaining_bytes = readIntoReplDataBlock(conn, tail, remaining_bytes);
         }
         if (readlen && remaining_bytes == 0) {
-            if (server.pending_repl_data.len > server.client_obuf_limits[CLIENT_REPLICA].hard_limit_bytes) {
+            if (server.pending_repl_data.len > server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes) {
                 serverLog(LL_NOTICE, "Replication buffer limit reached, stopping buffering.");
                 /* Stop accumulating primary commands. */
                 connSetReadHandler(conn, NULL);
@@ -2815,7 +2815,7 @@ void bufferReplData(connection *conn) {
 /* Replication: Replica side.
  * Streams accumulated replication data into the database while freeing read nodes */
 int streamReplDataBufToDb(client *c) {
-    serverAssert(c->flags & CLIENT_PRIMARY);
+    serverAssert(c->flag.primary);
     blockingOperationStarts();
     size_t used, offset = 0;
     listNode *cur = NULL;

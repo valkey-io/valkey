@@ -999,7 +999,7 @@ void clusterInit(void) {
          * by the createClusterNode() function. */
         myself = server.cluster->myself = createClusterNode(NULL, CLUSTER_NODE_MYSELF | CLUSTER_NODE_PRIMARY);
         serverLog(LL_NOTICE, "No cluster configuration found, I'm %.40s", myself->name);
-        myself->flags |= CLUSTER_NODE_LIGHT_HDR_SUPPORTED;
+        clusterUpdateMyselfFlags();
         clusterAddNode(myself);
         clusterAddNodeToShard(myself->shard_id, myself);
         saveconf = 1;

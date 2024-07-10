@@ -911,7 +911,7 @@ int test_benchmark(int argc, char **argv, int flags) {
             int len = int2key(buf,sizeof(buf),i,mode);
             buf[i%len] = '!'; /* "!" is never set into keys. */
             TEST_ASSERT_MESSAGE("Lookup should have failed",
-                raxFind(t,(unsigned char*) buf,len,NULL));
+                !raxFind(t,(unsigned char*) buf,len,NULL));
         }
         printf("Failed lookup: %f\n", (double)(_ustime()-start)/1000000);
 

@@ -216,7 +216,7 @@ static inline client *lookupRdbClientByID(uint64_t id) {
  *    (see the Retrospect function below).
  * The replica RDB client ID is used as a unique key for this association.
  * If a COB overrun occurs, the association is deleted and the RDB connection is dropped. */
-void addReplicaToPsyncWait(client *rdb_replica) {
+void addRdbReplicaToPsyncWait(client *rdb_replica) {
     listNode *ln = NULL;
     replBufBlock *tail = NULL;
     if (server.repl_backlog == NULL) {

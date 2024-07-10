@@ -3155,6 +3155,7 @@ void setupMainConnForPsync(connection *conn) {
         err = sendCommand(conn, "REPLCONF", "set-rdb-client-id", llstr, NULL);
         if (err) goto error;
         server.repl_state = REPL_STATE_RECEIVE_CAPA_REPLY;
+        sdsfree(err);
         return;
     }
 

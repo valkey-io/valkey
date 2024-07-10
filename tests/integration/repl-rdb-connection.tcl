@@ -896,3 +896,59 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         stop_write_load $load_handle
     }
 }
+
+start_server {tags {"repl rdb-connection external:skip"}} {
+    set master [srv 0 client]
+    set master_host [srv 0 host]
+    set master_port [srv 0 port]
+    set loglines [count_log_lines 0]
+
+    $master config set repl-diskless-sync yes
+    $master config set dual-conn-sync-enabled yes
+    $master config set loglevel debug
+    $master config set repl-diskless-sync-delay 0; # don't wait for other replicas
+
+    # Generating RDB will cost 5s(10000 * 0.0001s)
+    $master debug populate 10000 master 1
+    $master config set rdb-key-save-delay 100
+    
+    start_server {} {
+        set replica_1 [srv 0 client]
+        set replica_host_1 [srv 0 host]
+        set replica_port_1 [srv 0 port]
+        set replica_log_1 [srv 0 stdout]
+        
+        $replica_1 config set dual-conn-sync-enabled yes
+        $replica_1 config set loglevel debug
+        $replica_1 config set repl-timeout 10
+        start_server {} {
+            set replica_2 [srv 0 client]
+            set replica_host_2 [srv 0 host]
+            set replica_port_2 [srv 0 port]
+            set replica_log_2 [srv 0 stdout]
+            
+            set load_handle [start_write_load $master_host $master_port 20]
+
+            $replica_2 config set dual-conn-sync-enabled yes
+            $replica_2 config set loglevel debug
+            $replica_2 config set repl-timeout 10
+            test "Test replica unable to join rdb connection sync after started" {
+                $replica_1 slaveof $master_host $master_port
+                # Wait for sync session to start
+                wait_for_condition 50 100 {
+                    [s -2 rdb_bgsave_in_progress] eq 1
+                } else {
+                    fail "replica didn't start sync session in time1"
+                }
+                $replica_2 slaveof $master_host $master_port
+                wait_for_log_messages -2 {"*Current BGSAVE has socket target. Waiting for next BGSAVE for SYNC*"} $loglines 100 1000
+                $master config set rdb-key-save-delay 0
+                # Verify second replica needed new session
+                wait_for_sync $replica_2
+                assert {[s -2 sync_partial_ok] eq 2}
+                assert {[s -2 sync_full] eq 2}
+            }
+            stop_write_load $load_handle
+        }
+    }
+}

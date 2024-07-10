@@ -3178,7 +3178,7 @@ void setupMainConnForPsync(connection *conn) {
     if (psync_result == PSYNC_WAIT_REPLY) return; /* Try again later... */
 
     if (psync_result == PSYNC_CONTINUE) {
-        serverLog(LL_NOTICE, "Primary <-> REPLICA sync: Primary accepted a partial re-synchronization%s",
+        serverLog(LL_NOTICE, "Primary <-> REPLICA sync: Primary accepted a Partial Resynchronization%s",
                   server.repl_rdb_transfer_s != NULL ? ", RDB load in background." : ".");
         if (server.supervised_mode == SUPERVISED_SYSTEMD) {
             serverCommunicateSystemd("STATUS=Primary <-> REPLICA sync: Partial Resynchronization accepted. Ready to "

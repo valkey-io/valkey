@@ -559,7 +559,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         }
         /* After the errors RAX reaches its limit, instead of tracking
          * custom errors (e.g. LUA), we track the error under `errorstat_ERRORSTATS_OVERFLOW` */
-        if (flags & ERR_REPLY_FLAG_CUSTOM && raxSize(server.errors) >= ERROR_STATS_LIMIT &&
+        if (flags & ERR_REPLY_FLAG_CUSTOM && raxSize(server.errors) >= ERRORSTATS_LIMIT &&
             !raxFind(server.errors, (unsigned char *)err_prefix, prefix_len, NULL)) {
             err_prefix = ERRORSTATS_OVERFLOW_ERR;
             prefix_len = strlen(ERRORSTATS_OVERFLOW_ERR);

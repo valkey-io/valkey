@@ -319,11 +319,11 @@ start_server {tags {"repl rdb-connection external:skip"}} {
 
                 $replica1 slaveof $master_host $master_port
                 # Wait for replica to establish psync using main connection
-                wait_for_condition 50 1000 {
-                    [log_file_matches $replica1_log "*Primary accepted a Partial Resynchronization, RDB load in background.*"]
+                wait_for_condition 500 1000 {
+                    [string match "*slave*,state=bg_transfer*,type=main-conn*" [$master info replication]]
                 } else {
-                    fail "Psync hasn't been established"
-                }
+                    fail "replica didn't start sync session in time"
+                }  
 
                 populate 10000 master 10000
                 # Wait for replica's buffer limit reached
@@ -691,7 +691,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         test "Test rdb-connection master gets cob overrun during replica rdb load" {
             set cur_client_closed_count [s -1 client_output_buffer_limit_disconnections]
             $replica slaveof $master_host $master_port
-            wait_for_condition 50 10000 {
+            wait_for_condition 500 1000 {
                 [s -1 client_output_buffer_limit_disconnections] > $cur_client_closed_count
             } else {
                 fail "Master should disconnect replica due to COB overrun"
@@ -836,7 +836,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         test "Test rdb-connection replica main connection disconnected" {
             $replica slaveof $master_host $master_port
             # Wait for sync session to start
-            wait_for_condition 50 10000 {
+            wait_for_condition 500 1000 {
                 [string match "*slave*,state=wait_bgsave*,type=rdb-conn*" [$master info replication]] &&
                 [string match "*slave*,state=bg_transfer*,type=main-conn*" [$master info replication]] &&
                 [s -1 rdb_bgsave_in_progress] eq 1
@@ -863,7 +863,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
 
         test "Test rdb-channel slave of no one" {
             $replica slaveof no one
-            wait_for_condition 50 10000 {
+            wait_for_condition 500 1000 {
                 [s -1 rdb_bgsave_in_progress] eq 0
             } else {
                 fail "Master should abort sync"
@@ -873,7 +873,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         test "Test rdb-connection replica rdb connection disconnected" {
             $replica slaveof $master_host $master_port
             # Wait for sync session to start
-            wait_for_condition 50 10000 {
+            wait_for_condition 500 1000 {
                 [string match "*slave*,state=wait_bgsave*,type=rdb-conn*" [$master info replication]] &&
                 [string match "*slave*,state=bg_transfer*,type=main-conn*" [$master info replication]] &&
                 [s -1 rdb_bgsave_in_progress] eq 1

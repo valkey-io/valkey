@@ -870,7 +870,7 @@ int primaryTryPartialResynchronization(client *c, long long psync_offset) {
      * 2) Inform the client we can continue with +CONTINUE
      * 3) Send the backlog data (from the offset to the end) to the replica. */
     c->flags |= CLIENT_REPLICA;
-    if (c->flags & CLIENT_REPL_MAIN_CONN && lookupRdbClientByID(c->associated_rdb_client_id)) {
+    if (c->associated_rdb_client_id && lookupRdbClientByID(c->associated_rdb_client_id)) {
         c->repl_state = REPLICA_STATE_BG_RDB_LOAD;
         removeReplicaFromPsyncWait(c);
     } else {
@@ -1101,7 +1101,6 @@ void syncCommand(client *c) {
              * resync. */
             if (primary_replid[0] != '?') server.stat_sync_partial_err++;
             if (c->replica_capa & REPLICA_CAPA_DUAL_CONN) {
-                c->flags |= CLIENT_REPL_MAIN_CONN;
                 serverLog(LL_NOTICE,
                           "Replica %s is capable of rdb-connection synchronization, and partial sync isn't possible. "
                           "Full sync will continue with dedicated RDB connection.",
@@ -1319,7 +1318,6 @@ void replconfCommand(client *c) {
                 checkChildrenDone();
             if (c->repl_start_cmd_stream_on_ack && c->repl_state == REPLICA_STATE_ONLINE) replicaStartCommandStream(c);
             if (c->repl_state == REPLICA_STATE_BG_RDB_LOAD) {
-                c->flags &= ~CLIENT_REPL_MAIN_CONN;
                 replicaPutOnline(c);
             }
             /* Note: this command does not reply anything! */

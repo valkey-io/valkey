@@ -434,9 +434,6 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_REPLICATION_DONE (1ULL << 51)         /* Indicate that replication has been done on the client */
 #define CLIENT_AUTHENTICATED (1ULL << 52)            /* Indicate a client has successfully authenticated */
 
-#define CLIENT_REPL_MAIN_CONN                                                                                          \
-    (1ULL << 52) /* Dual connection sync: track a connection                                                           \
-                         which is used for online replication data */
 #define CLIENT_REPL_RDB_CONN                                                                                           \
     (1ULL << 53) /* Dual connection sync: track a connection                                                           \
                           which is used for rdb snapshot */

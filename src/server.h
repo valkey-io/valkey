@@ -1937,8 +1937,6 @@ struct valkeyServer {
     int rdb_bgsave_scheduled;                  /* BGSAVE when possible if true. */
     int rdb_child_type;                        /* Type of save by active child. */
     int lastbgsave_status;                     /* C_OK or C_ERR */
-    int primary_supports_dual_conn_sync; /* Track whether the primary is able to sync using rdb connection.
-                                                * -1 = unknown, 0 = no, 1 = yes. */
     int stop_writes_on_bgsave_err;             /* Don't allow writes if can't BGSAVE */
     int rdb_pipe_read;                         /* RDB pipe used to transfer the rdb data */
                                                /* to the parent process in diskless repl. */

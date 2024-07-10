@@ -3022,9 +3022,6 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
 
     if (!strncmp(reply, "+FULLRESYNC", 11)) {
         char *replid = NULL, *offset = NULL;
-        if (server.dual_conn_enabled) {
-            server.primary_supports_dual_conn_sync = 0;
-        }
 
         /* FULL RESYNC, parse the reply in order to extract the replid
          * and the replication offset. */
@@ -3123,7 +3120,6 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
         /* A response of +DUALCONNSYNC from the primary implies that partial
          * synchronization is not possible and that the primary supports full
          * sync using dedicated RDB connection. Full sync will continue that way. */
-        server.primary_supports_dual_conn_sync = 1;
         serverLog(LL_NOTICE, "PSYNC is not possible, initialize RDB connection.");
         sdsfree(reply);
         return PSYNC_FULLRESYNC_RDB_CONN;
@@ -3767,7 +3763,6 @@ void replicationSetPrimary(char *ip, int port) {
     server.repl_state = REPL_STATE_CONNECT;
     /* Allow trying rdb-connection sync with the new primary. If newprimaryr doesn't
      * support rdb-connection sync, we will set to 0 afterwards. */
-    server.primary_supports_dual_conn_sync = -1;
     serverLog(LL_NOTICE, "Connecting to Primary %s:%d", server.primary_host, server.primary_port);
     connectWithPrimary();
 }

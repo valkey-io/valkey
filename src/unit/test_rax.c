@@ -90,7 +90,7 @@ htNode *htRawLookup(hashtable *t, unsigned char *s, size_t len, uint32_t *hash, 
     return NULL;
 }
 
-/* Add an elmenet to the hash table, return 1 if the element is new,
+/* Add an element to the hash table, return 1 if the element is new,
  * 0 if it existed and the value was updated to the new one. */
 int htAdd(hashtable *t, unsigned char *s, size_t len, void *data) {
     uint32_t hash;
@@ -540,8 +540,8 @@ int test_randomWalkTest(int argc, char **argv, int flags) {
     UNUSED(flags);
 
     rax *t = raxNew();
-    char *toadd[] = {"alligator", "alien",   "baloon",     "chromodynamic", "romane", "romanus", "romulus", "rubens",
-                     "ruber",     "rubicon", "rubicundus", "all",           "rub",    "ba",      NULL};
+    char *toadd[] = {"alligator", "alien",   "byword",     "chromodynamic", "romane", "romanus", "romulus", "rubens",
+                     "ruber",     "rubicon", "rubicundus", "all",           "rub",    "by",      NULL};
 
     long numele;
     for (numele = 0; toadd[numele] != NULL; numele++) {
@@ -583,8 +583,8 @@ int test_iteratorUnitTests(int argc, char **argv, int flags) {
     UNUSED(flags);
 
     rax *t = raxNew();
-    char *toadd[] = {"alligator", "alien",   "baloon",     "chromodynamic", "romane", "romanus", "romulus", "rubens",
-                     "ruber",     "rubicon", "rubicundus", "all",           "rub",    "ba",      NULL};
+    char *toadd[] = {"alligator", "alien",   "byword",     "chromodynamic", "romane", "romanus", "romulus", "rubens",
+                     "ruber",     "rubicon", "rubicundus", "all",           "rub",    "by",      NULL};
 
     for (int x = 0; x < 10000; x++) genrand64_int64();
 
@@ -612,7 +612,7 @@ int test_iteratorUnitTests(int argc, char **argv, int flags) {
                  {"rub", 3, "<", "romulus"},
                  {"rom", 3, ">", "romane"},
                  {"chro", 4, ">", "chromodynamic"},
-                 {"chro", 4, "<", "baloon"},
+                 {"chro", 4, "<", "byword"},
                  {"chromz", 6, "<", "chromodynamic"},
                  {"", 0, "^", "alien"},
                  {"zorro", 5, "<=", "rubicundus"},
@@ -668,7 +668,7 @@ int test_tryInsertUnitTests(int argc, char **argv, int flags) {
     val = NULL;
     raxFind(t, (unsigned char *)"FOO", 3, &val);
     if (val != (void *)(long)1) {
-        printf("FOO value mismatch: is %p intead of 1", val);
+        printf("FOO value mismatch: is %p instead of 1", val);
         return 1;
     }
 
@@ -676,7 +676,7 @@ int test_tryInsertUnitTests(int argc, char **argv, int flags) {
     val = NULL;
     raxFind(t, (unsigned char *)"FOO", 3, &val);
     if (val != (void *)(long)2) {
-        printf("FOO value mismatch: is %p intead of 2", val);
+        printf("FOO value mismatch: is %p instead of 2", val);
         return 1;
     }
 
@@ -789,8 +789,8 @@ int test_regtest5(int argc, char **argv, int flags) {
     rax *rax = raxNew();
 
     raxInsert(rax, (unsigned char *)"b", 1, (void *)(long)1, NULL);
-    raxInsert(rax, (unsigned char *)"ba", 2, (void *)(long)2, NULL);
-    raxInsert(rax, (unsigned char *)"banana", 6, (void *)(long)3, NULL);
+    raxInsert(rax, (unsigned char *)"by", 2, (void *)(long)2, NULL);
+    raxInsert(rax, (unsigned char *)"byword", 6, (void *)(long)3, NULL);
 
     raxInsert(rax, (unsigned char *)"f", 1, (void *)(long)4, NULL);
     raxInsert(rax, (unsigned char *)"foobar", 6, (void *)(long)5, NULL);

@@ -8,7 +8,7 @@
 
 #define UNASSIGNED_SLOT 0
 
-typedef enum { KEY_COUNT, CPU_USEC, NETWORK_BYTES_IN, SLOT_STAT_COUNT, INVALID } slotStatTypes;
+typedef enum { KEY_COUNT, CPU_USEC, NETWORK_BYTES_IN, NETWORK_BYTES_OUT, SLOT_STAT_COUNT, INVALID } slotStatTypes;
 
 /* -----------------------------------------------------------------------------
  * CLUSTER SLOT-STATS command
@@ -106,6 +106,8 @@ static void addReplySlotStat(client *c, int slot) {
         addReplyLongLong(c, server.cluster->slot_stats[slot].cpu_usec);
         addReplyBulkCString(c, "network-bytes-in");
         addReplyLongLong(c, server.cluster->slot_stats[slot].network_bytes_in);
+        addReplyBulkCString(c, "network-bytes-out");
+        addReplyLongLong(c, server.cluster->slot_stats[slot].network_bytes_out);
     }
 }
 
@@ -127,6 +129,63 @@ static void addReplySortedSlotStats(client *c, slotStatForSort slot_stats[], lon
     for (int i = 0; i < len; i++) {
         addReplySlotStat(c, slot_stats[i].slot);
     }
+}
+
+static int canAddNetworkBytesOut(client *c) {
+    return server.cluster_slot_stats_enabled && server.cluster_enabled && c->slot != -1;
+}
+
+/* Accumulates egress bytes upon sending RESP responses back to user clients. */
+void clusterSlotStatsAddNetworkBytesOutForUserClient(client *c) {
+    if (!canAddNetworkBytesOut(c)) return;
+
+    serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
+    server.cluster->slot_stats[c->slot].network_bytes_out += c->net_output_bytes_curr_cmd;
+}
+
+/* Accumulates egress bytes upon sending replication stream. This only applies for primary nodes. */
+void clusterSlotStatsAddNetworkBytesOutForReplication(int len) {
+    client *c = server.current_client;
+    if (c == NULL || !canAddNetworkBytesOut(c)) return;
+
+    serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
+    server.cluster->slot_stats[c->slot].network_bytes_out += (len * listLength(server.replicas));
+}
+
+/* Upon SPUBLISH, two egress events are triggered.
+ * 1) Internal propagation, for clients that are subscribed to the current node.
+ * 2) External propagation, for other nodes within the same shard (could either be a primary or replica).
+ * This function covers the internal propagation component. */
+void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(client *c, int slot) {
+    /* For a blocked client, c->slot could be pre-filled.
+     * Thus c->slot is backed-up for restoration after aggregation is completed. */
+    int _slot = c->slot;
+    c->slot = slot;
+    if (!canAddNetworkBytesOut(c)) {
+        /* c->slot should be kept idempotent, regardless of the function's early return condition. */
+        c->slot = _slot;
+        return;
+    }
+
+    serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
+    server.cluster->slot_stats[c->slot].network_bytes_out += c->net_output_bytes_curr_cmd;
+
+    /* For sharded pubsub, the client's network bytes metrics must be reset here,
+     * as resetClient() is not called until subscription ends. */
+    c->net_output_bytes_curr_cmd = 0;
+    c->slot = _slot;
+}
+
+/* Upon SPUBLISH, two egress events are triggered.
+ * 1) Internal propagation, for clients that are subscribed to the current node.
+ * 2) External propagation, for other nodes within the same shard (could either be a primary or replica).
+ * This function covers the external propagation component. */
+void clusterSlotStatsAddNetworkBytesOutForShardedPubSubExternalPropagation(size_t len) {
+    client *c = server.current_client;
+    if (c == NULL || !canAddNetworkBytesOut(c)) return;
+
+    serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
+    server.cluster->slot_stats[c->slot].network_bytes_out += len;
 }
 
 /* Adds reply for the ORDERBY variant.
@@ -177,21 +236,24 @@ void clusterSlotStatsInvalidateSlotIfApplicable(scriptRunCtx *ctx) {
     ctx->original_client->slot = -1;
 }
 
-static int canAddNetworkBytes(client *c) {
+static int canAddNetworkBytesIn(client *c) {
     /* First, cluster mode must be enabled.
      * Second, command should target a specific slot.
-     * Third, blocked client is not aggregated, to avoid duplicate aggregation upon unblocking. */
-    return server.cluster_enabled && server.cluster_slot_stats_enabled && c->slot != -1 && !(c->flag.blocked);
+     * Third, blocked client is not aggregated, to avoid duplicate aggregation upon unblocking.
+     * Fourth, the server is not under a MULTI/EXEC transaction, to avoid duplicate aggregation of
+     * EXEC's 14 bytes RESP upon nested call()'s afterCommand(). */
+    return server.cluster_enabled && server.cluster_slot_stats_enabled && c->slot != -1 && !(c->flag.blocked) &&
+           !server.in_exec;
 }
 
 /* Adds network ingress bytes of the current command in execution,
  * calculated earlier within networking.c layer.
  *
  * Note: Below function should only be called once c->slot is parsed.
- * Otherwise, the aggregation will be skipped due to canAddNetworkBytes() check failure.
+ * Otherwise, the aggregation will be skipped due to canAddNetworkBytesIn() check failure.
  * */
-void clusterSlotStatsAddNetworkBytesIn(client *c) {
-    if (!canAddNetworkBytes(c)) return;
+void clusterSlotStatsAddNetworkBytesInForUserClient(client *c) {
+    if (!canAddNetworkBytesIn(c)) return;
 
     if (c->cmd->proc == execCommand) {
         /* Accumulate its corresponding MULTI RESP; *1\r\n$5\r\nmulti\r\n */
@@ -201,20 +263,24 @@ void clusterSlotStatsAddNetworkBytesIn(client *c) {
     server.cluster->slot_stats[c->slot].network_bytes_in += c->net_input_bytes_curr_cmd;
 }
 
-void clusterSlotStatsSetClusterMsgLength(uint32_t len) {
-    pubsub_state.len = len;
-}
-
-void clusterSlotStatsResetClusterMsgLength() {
-    pubsub_state.len = 0;
-}
-
 /* Adds network ingress bytes from sharded pubsub subscription.
  * Since sharded pubsub targets a specific slot, we are able to aggregate its ingress bytes under per-slot context. */
 void clusterSlotStatsAddNetworkBytesInForShardedPubSub(int slot) {
     serverAssert(slot >= 0 && slot < CLUSTER_SLOTS);
 
     server.cluster->slot_stats[slot].network_bytes_in += pubsub_state.len;
+}
+
+/* To avoid redundant keyHashSlot(), network-bytes-in accumulation for sharded pubsub employs a stateful design pattern.
+ * The total length of the clusterMsg is first recorded under a state, called pubsub_state.
+ * This recorded value is then accumulated later upon keyHashSlot() within the call-stack.
+ * After its accumulation, the state is reset back to 0. */
+void clusterSlotStatsSetClusterMsgLength(uint32_t len) {
+    pubsub_state.len = len;
+}
+
+void clusterSlotStatsResetClusterMsgLength(void) {
+    pubsub_state.len = 0;
 }
 
 void clusterSlotStatsCommand(client *c) {
@@ -249,6 +315,8 @@ void clusterSlotStatsCommand(client *c) {
             order_by = CPU_USEC;
         } else if (!strcasecmp(c->argv[3]->ptr, "network-bytes-in") && server.cluster_slot_stats_enabled) {
             order_by = NETWORK_BYTES_IN;
+        } else if (!strcasecmp(c->argv[3]->ptr, "network-bytes-out") && server.cluster_slot_stats_enabled) {
+            order_by = NETWORK_BYTES_OUT;
         } else {
             addReplyError(c, "Unrecognized sort metric for ORDERBY.");
             return;

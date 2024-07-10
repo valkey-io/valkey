@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "cluster_slot_stats.h"
 
 /* ================================ MULTI/EXEC ============================== */
 
@@ -91,6 +92,10 @@ void queueMultiCommand(client *c, uint64_t cmd_flags) {
     c->argc = 0;
     c->argv_len_sum = 0;
     c->argv_len = 0;
+
+    /* Since afterCommand() is not reached upon queuing a command,
+     * below call is made explicitly to accumulate its network ingress bytes. */
+    clusterSlotStatsAddNetworkBytesInForUserClient(c);
 }
 
 void discardTransaction(client *c) {

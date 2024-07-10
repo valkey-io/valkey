@@ -4000,6 +4000,7 @@ void clusterPropagatePublish(robj *channel, robj *message, int sharded) {
         clusterNode *node = listNodeValue(ln);
         if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
         clusterSendMessage(node->link, msgblock);
+        clusterSlotStatsAddNetworkBytesOutForShardedPubSubExternalPropagation(msgblock->totlen);
     }
     clusterMsgSendBlockDecrRefCount(msgblock);
 }

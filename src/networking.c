@@ -234,6 +234,7 @@ client *createClient(connection *conn) {
     c->net_input_bytes = 0;
     c->net_input_bytes_curr_cmd = 0;
     c->net_output_bytes = 0;
+    c->net_output_bytes_curr_cmd = 0;
     c->commands_processed = 0;
     return c;
 }
@@ -450,6 +451,8 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
                                         cmdname ? cmdname : "<unknown>");
         return;
     }
+
+    c->net_output_bytes_curr_cmd += len;
 
     /* We call it here because this function may affect the reply
      * buffer offset (see function comment) */
@@ -2486,6 +2489,7 @@ void resetClient(client *c) {
     c->slot = -1;
     c->flag.executing_command = 0;
     c->flag.replication_done = 0;
+    c->net_output_bytes_curr_cmd = 0;
 
     /* Make sure the duration has been recorded to some command. */
     serverAssert(c->duration == 0);
@@ -2631,7 +2635,7 @@ void processInlineBuffer(client *c) {
 
     /* Per-slot network bytes-in calculation.
      *
-     * We calculate and store the current command's ingress bytes under 
+     * We calculate and store the current command's ingress bytes under
      * c->net_input_bytes_curr_cmd, for which its per-slot aggregation is deferred
      * until c->slot is parsed later within processCommand().
      *

@@ -235,7 +235,8 @@ int getKeySlot(sds key) {
      * It only gets set during the execution of command under `call` method. Other flows requesting
      * the key slot would fallback to calculateKeySlot.
      */
-    if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command) {
+    if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command &&
+        !server.current_client->flag.primary) {
         debugServerAssertWithInfo(server.current_client, NULL, calculateKeySlot(key) == server.current_client->slot);
         return server.current_client->slot;
     }

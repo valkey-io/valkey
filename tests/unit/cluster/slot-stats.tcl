@@ -488,6 +488,190 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-en
 }
 
 # -----------------------------------------------------------------------------
+# Test cases for CLUSTER SLOT-STATS network-bytes-out correctness.
+# -----------------------------------------------------------------------------
+
+start_cluster 1 0 {tags {external:skip cluster}} {
+    # Define shared variables.
+    set key "FOO"
+    set key_slot [R 0 cluster keyslot $key]
+    set expected_slots_to_key_count [dict create $key_slot 1]
+    set metrics_to_assert [list network-bytes-out]
+    R 0 CONFIG SET cluster-slot-stats-enabled yes
+
+    test "CLUSTER SLOT-STATS network-bytes-out, for non-slot specific commands." {
+        R 0 INFO
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS network-bytes-out, for slot specific commands." {
+        R 0 SET $key value
+        # +OK\r\n --> 5 bytes
+
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create network-bytes-out 5
+            ]
+        ]
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS network-bytes-out, blocking commands." {
+        set rd [valkey_deferring_client]
+        $rd BLPOP $key 0
+        wait_for_blocked_clients_count 1
+
+        # Assert empty slot stats here, since COB is yet to be flushed due to the block.
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
+
+        # Unblock the command.
+        # LPUSH client) :1\r\n --> 4 bytes.
+        # BLPOP client) *2\r\n$3\r\nkey\r\n$5\r\nvalue\r\n --> 24 bytes, upon unblocking.
+        R 0 LPUSH $key value
+        wait_for_blocked_clients_count 0
+
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create network-bytes-out 28 ;# 4 + 24 bytes.
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+}
+
+start_cluster 1 1 {tags {external:skip cluster}} {
+
+    # Define shared variables.
+    set key "FOO"
+    set key_slot [R 0 CLUSTER KEYSLOT $key]
+    set metrics_to_assert [list network-bytes-out]
+    R 0 CONFIG SET cluster-slot-stats-enabled yes
+
+    # Setup replication.
+    assert {[s -1 role] eq {slave}}
+    wait_for_condition 1000 50 {
+        [s -1 master_link_status] eq {up}
+    } else {
+        fail "Instance #1 master link status is not up"
+    }
+    R 1 readonly
+
+    test "CLUSTER SLOT-STATS network-bytes-out, replication stream egress." {
+        assert_equal [R 0 SET $key VALUE] {OK}
+        # Local client) +OK\r\n --> 5 bytes.
+        # Replication stream) *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n --> 33 bytes.
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create network-bytes-out 38 ;# 5 + 33 bytes.
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+}
+
+start_cluster 1 1 {tags {external:skip cluster}} {
+
+    # Define shared variables.
+    set channel "channel"
+    set key_slot [R 0 cluster keyslot $channel]
+    set channel_secondary "channel2"
+    set key_slot_secondary [R 0 cluster keyslot $channel_secondary]
+    set metrics_to_assert [list network-bytes-out]
+    R 0 CONFIG SET cluster-slot-stats-enabled yes
+
+    test "CLUSTER SLOT-STATS network-bytes-out, sharded pub/sub, single channel." {
+        set slot [R 0 cluster keyslot $channel]
+        set publisher [Rn 0]
+        set subscriber [valkey_client]
+        set replica [valkey_deferring_client -1]
+
+        # Subscriber client) *3\r\n$10\r\nssubscribe\r\n$7\r\nchannel\r\n:1\r\n --> 38 bytes
+        $subscriber SSUBSCRIBE $channel 
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create network-bytes-out 38
+            ]
+        ]
+        R 0 CONFIG RESETSTAT
+
+        # Publisher client) :1\r\n --> 4 bytes.
+        # Subscriber client) *3\r\n$8\r\nsmessage\r\n$7\r\nchannel\r\n$5\r\nhello\r\n --> 42 bytes.
+        # Cluster propagation) sdslen(channel) + sdslen(hello) --> 12 bytes.
+        assert_equal 1 [$publisher SPUBLISH $channel hello]
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create network-bytes-out 2338 ;# 4 + 42 + 12 + 2280 bytes from clusterMsgSendBlock.
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    $subscriber QUIT
+    R 0 FLUSHALL
+    R 0 CONFIG RESETSTAT
+
+    test "CLUSTER SLOT-STATS network-bytes-out, sharded pub/sub, cross-slot channels." {
+        set slot [R 0 cluster keyslot $channel]
+        set publisher [Rn 0]
+        set subscriber [valkey_client]
+        set replica [valkey_deferring_client -1]
+
+        # Stack multi-slot subscriptions against a single client.
+        # For primary channel;
+        # Subscriber client) *3\r\n$10\r\nssubscribe\r\n$7\r\nchannel\r\n:1\r\n --> 38 bytes
+        # For secondary channel;
+        # Subscriber client) *3\r\n$10\r\nssubscribe\r\n$8\r\nchannel2\r\n:1\r\n --> 39 bytes
+        $subscriber SSUBSCRIBE $channel
+        $subscriber SSUBSCRIBE $channel_secondary
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create \
+                $key_slot [ \
+                    dict create network-bytes-out 38
+                ] \
+                $key_slot_secondary [ \
+                    dict create network-bytes-out 39
+                ]
+        ]
+        R 0 CONFIG RESETSTAT
+
+        # For primary channel;
+        # Publisher client) :1\r\n --> 4 bytes.
+        # Subscriber client) *3\r\n$8\r\nsmessage\r\n$7\r\nchannel\r\n$5\r\nhello\r\n --> 42 bytes.
+        # Cluster propagation) sdslen(channel) + sdslen(hello) --> 12 bytes.
+        # For secondary channel;
+        # Publisher client) :1\r\n --> 4 bytes.
+        # Subscriber client) *3\r\n$8\r\nsmessage\r\n$8\r\nchannel2\r\n$5\r\nhello\r\n --> 43 bytes.
+        # Cluster propagation) sdslen(channel2) + sdslen(hello) --> 13 bytes.
+        assert_equal 1 [$publisher SPUBLISH $channel hello]
+        assert_equal 1 [$publisher SPUBLISH $channel_secondary hello]
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create \
+                $key_slot [ \
+                    dict create network-bytes-out 2338 ;# 4 + 42 + 12 + 2280 bytes from clusterMsgSendBlock.
+                ] \
+                $key_slot_secondary [ \
+                    dict create network-bytes-out 2340 ;# 4 + 43 + 13 + 2280 bytes from clusterMsgSendBlock.
+                ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+}
+
+# -----------------------------------------------------------------------------
 # Test cases for CLUSTER SLOT-STATS key-count metric correctness.
 # -----------------------------------------------------------------------------
 
@@ -651,6 +835,10 @@ start_cluster 1 0 {tags {external:skip cluster}} {
 
         # When cluster-slot-stats-enabled config is disabled, you cannot sort using advanced metrics.
         set orderby "cpu-usec"
+        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
+        set orderby "network-bytes-in"
+        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
+        set orderby "network-bytes-out"
         assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
     }
 }

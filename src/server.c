@@ -3694,6 +3694,9 @@ void afterCommand(client *c) {
     /* Flush pending tracking invalidations. */
     trackingHandlePendingKeyInvalidations();
 
+    clusterSlotStatsAddNetworkBytesInForUserClient(c);
+    clusterSlotStatsAddNetworkBytesOutForUserClient(c);
+
     /* Flush other pending push messages. only when we are not in nested call.
      * So the messages are not interleaved with transaction response. */
     if (!server.execution_nesting) listJoin(c->reply, server.pending_push_messages);
@@ -4074,10 +4077,6 @@ int processCommand(client *c) {
         call(c, flags);
         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand()) handleClientsBlockedOnKeys();
     }
-
-    /* Now that c->slot has been parsed, and command has been executed,
-     * accumulate the buffered network bytes-in. */
-    clusterSlotStatsAddNetworkBytesIn(c);
     return C_OK;
 }
 

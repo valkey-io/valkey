@@ -3529,7 +3529,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
         rdb_pipe_write = pipefds[1];       /* write end */
 
         /* create another pipe that is used by the parent to signal to the child
-        * that it can exit. */
+         * that it can exit. */
         if (anetPipe(pipefds, 0, 0) == -1) {
             close(rdb_pipe_write);
             close(server.rdb_pipe_read);
@@ -3652,7 +3652,8 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
                 zfree(conns);
             } else {
                 close(rdb_pipe_write); /* close write in parent so that it can detect the close on the child. */
-                if (aeCreateFileEvent(server.el, server.rdb_pipe_read, AE_READABLE, rdbPipeReadHandler, NULL) == AE_ERR) {
+                if (aeCreateFileEvent(server.el, server.rdb_pipe_read, AE_READABLE, rdbPipeReadHandler, NULL) ==
+                    AE_ERR) {
                     serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
                 }
             }

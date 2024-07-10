@@ -209,10 +209,10 @@ static inline client *lookupRdbClientByID(uint64_t id) {
 
 /* Replication: Primary side - connections association.
  * During RDB connection sync, association is used to keep replication data
- * in the backlog until the replica requests PSYNC. 
+ * in the backlog until the replica requests PSYNC.
  * Association occurs in two forms:
  * 1. If there's an existing buffer block at fork time, the replica is attached to the tail.
- * 2. If there's no tail, the replica is attached when a new buffer block is created 
+ * 2. If there's no tail, the replica is attached when a new buffer block is created
  *    (see the Retrospect function below).
  * The replica RDB client ID is used as a unique key for this association.
  * If a COB overrun occurs, the association is deleted and the RDB connection is dropped. */
@@ -228,8 +228,9 @@ void addRdbReplicaToPsyncWait(client *rdb_replica) {
             tail->refcount++;
         }
     }
-    serverLog(LL_DEBUG, "Add rdb replica %s to waiting psync, with cid %llu, %s ", replicationGetReplicaName(rdb_replica),
-              (unsigned long long)rdb_replica->id, tail ? "tracking repl-backlog tail" : "no repl-backlog to track");
+    serverLog(LL_DEBUG, "Add rdb replica %s to waiting psync, with cid %llu, %s ",
+              replicationGetReplicaName(rdb_replica), (unsigned long long)rdb_replica->id,
+              tail ? "tracking repl-backlog tail" : "no repl-backlog to track");
     rdb_replica->ref_repl_buf_node = tail ? ln : NULL;
     /* Prevent rdb client from being freed before psync is established. */
     rdb_replica->flag.protected_rdb_conn = 1;
@@ -2730,7 +2731,7 @@ void replStreamProgressCallback(size_t offset, int readlen, time_t *last_progres
     time_t now = mstime();
     if (server.loading_process_events_interval_bytes &&
         ((offset + readlen) / server.loading_process_events_interval_bytes >
-            offset / server.loading_process_events_interval_bytes) &&
+         offset / server.loading_process_events_interval_bytes) &&
         (now - *last_progress_callback > server.loading_process_events_interval_ms)) {
         replicationSendNewlineToPrimary();
         processEventsWhileBlocked();

@@ -1214,20 +1214,21 @@ typedef struct ClientFlags {
     uint64_t reprocessing_command : 1;     /* The client is re-processing the command. */
     uint64_t replication_done : 1;         /* Indicate that replication has been done on the client */
     uint64_t authenticated : 1;            /* Indicate a client has successfully authenticated */
-    uint64_t protected_rdb_conn : 1;       /* Dual connection sync: Protects the RDB client from premature                                       \
-                                            * release during full sync. This flag is used to ensure that the RDB client, which                   \
-                                            * references the first replication data block required by the replica, is not                        \
-                                            * released prematurely. Protecting the client is crucial for prevention of                           \
-                                            * synchronization failures:                                                                          \
-                                            * If the RDB client is released before the replica initiates PSYNC, the primary                      \
-                                            * will reduce the reference count (o->refcount) of the block needed by the replica.                  \
-                                            * This could potentially lead to the removal of the required data block, resulting                   \
-                                            * in synchronization failures. Such failures could occur even in scenarios where                     \
-                                            * the replica only needs an additional 4KB beyond the minimum size of the repl_backlog.              \
-                                            * By using this flag, we ensure that the RDB client remains intact until the replica                 \
-                                            * has successfully initiated PSYNC. */
-    uint64_t repl_rdb_conn : 1;             /* Dual connection sync: track a connection which is used for rdb snapshot */
-    uint64_t reserved : 7;                  /* Reserved for future use */
+    uint64_t
+        protected_rdb_conn : 1; /* Dual connection sync: Protects the RDB client from premature \
+                                 * release during full sync. This flag is used to ensure that the RDB client, which \
+                                 * references the first replication data block required by the replica, is not \
+                                 * released prematurely. Protecting the client is crucial for prevention of \
+                                 * synchronization failures: \
+                                 * If the RDB client is released before the replica initiates PSYNC, the primary \
+                                 * will reduce the reference count (o->refcount) of the block needed by the replica. \
+                                 * This could potentially lead to the removal of the required data block, resulting \
+                                 * in synchronization failures. Such failures could occur even in scenarios where \
+                                 * the replica only needs an additional 4KB beyond the minimum size of the repl_backlog.
+                                 * By using this flag, we ensure that the RDB client remains intact until the replica \
+                                 * has successfully initiated PSYNC. */
+    uint64_t repl_rdb_conn : 1; /* Dual connection sync: track a connection which is used for rdb snapshot */
+    uint64_t reserved : 7;      /* Reserved for future use */
 } ClientFlags;
 
 typedef struct client {
@@ -1917,39 +1918,39 @@ struct valkeyServer {
                                            default no. (for testings). */
 
     /* RDB persistence */
-    long long dirty;                           /* Changes to DB from the last save */
-    long long dirty_before_bgsave;             /* Used to restore dirty on failed BGSAVE */
-    long long rdb_last_load_keys_expired;      /* number of expired keys when loading RDB */
-    long long rdb_last_load_keys_loaded;       /* number of loaded keys when loading RDB */
-    struct saveparam *saveparams;              /* Save points array for RDB */
-    int saveparamslen;                         /* Number of saving points */
-    char *rdb_filename;                        /* Name of RDB file */
-    int rdb_compression;                       /* Use compression in RDB? */
-    int rdb_checksum;                          /* Use RDB checksum? */
-    int rdb_del_sync_files;                    /* Remove RDB files used only for SYNC if
-                                                  the instance does not use persistence. */
-    time_t lastsave;                           /* Unix time of last successful save */
-    time_t lastbgsave_try;                     /* Unix time of last attempted bgsave */
-    time_t rdb_save_time_last;                 /* Time used by last RDB save run. */
-    time_t rdb_save_time_start;                /* Current RDB save start time. */
-    int rdb_bgsave_scheduled;                  /* BGSAVE when possible if true. */
-    int rdb_child_type;                        /* Type of save by active child. */
-    int lastbgsave_status;                     /* C_OK or C_ERR */
-    int stop_writes_on_bgsave_err;             /* Don't allow writes if can't BGSAVE */
-    int rdb_pipe_read;                         /* RDB pipe used to transfer the rdb data */
-                                               /* to the parent process in diskless repl. */
-    int rdb_child_exit_pipe;                   /* Used by the diskless parent allow child exit. */
-    connection **rdb_pipe_conns;               /* Connections which are currently the */
-    int rdb_pipe_numconns;                     /* target of diskless rdb fork child. */
-    int rdb_pipe_numconns_writing;             /* Number of rdb conns with pending writes. */
-    char *rdb_pipe_buff;                       /* In diskless replication, this buffer holds data */
-    int rdb_pipe_bufflen;                      /* that was read from the rdb pipe. */
-    int rdb_key_save_delay;                    /* Delay in microseconds between keys while
-                                                * writing aof or rdb. (for testings). negative
-                                                * value means fractions of microseconds (on average). */
-    int key_load_delay;                        /* Delay in microseconds between keys while
-                                                * loading aof or rdb. (for testings). negative
-                                                * value means fractions of microseconds (on average). */
+    long long dirty;                      /* Changes to DB from the last save */
+    long long dirty_before_bgsave;        /* Used to restore dirty on failed BGSAVE */
+    long long rdb_last_load_keys_expired; /* number of expired keys when loading RDB */
+    long long rdb_last_load_keys_loaded;  /* number of loaded keys when loading RDB */
+    struct saveparam *saveparams;         /* Save points array for RDB */
+    int saveparamslen;                    /* Number of saving points */
+    char *rdb_filename;                   /* Name of RDB file */
+    int rdb_compression;                  /* Use compression in RDB? */
+    int rdb_checksum;                     /* Use RDB checksum? */
+    int rdb_del_sync_files;               /* Remove RDB files used only for SYNC if
+                                             the instance does not use persistence. */
+    time_t lastsave;                      /* Unix time of last successful save */
+    time_t lastbgsave_try;                /* Unix time of last attempted bgsave */
+    time_t rdb_save_time_last;            /* Time used by last RDB save run. */
+    time_t rdb_save_time_start;           /* Current RDB save start time. */
+    int rdb_bgsave_scheduled;             /* BGSAVE when possible if true. */
+    int rdb_child_type;                   /* Type of save by active child. */
+    int lastbgsave_status;                /* C_OK or C_ERR */
+    int stop_writes_on_bgsave_err;        /* Don't allow writes if can't BGSAVE */
+    int rdb_pipe_read;                    /* RDB pipe used to transfer the rdb data */
+                                          /* to the parent process in diskless repl. */
+    int rdb_child_exit_pipe;              /* Used by the diskless parent allow child exit. */
+    connection **rdb_pipe_conns;          /* Connections which are currently the */
+    int rdb_pipe_numconns;                /* target of diskless rdb fork child. */
+    int rdb_pipe_numconns_writing;        /* Number of rdb conns with pending writes. */
+    char *rdb_pipe_buff;                  /* In diskless replication, this buffer holds data */
+    int rdb_pipe_bufflen;                 /* that was read from the rdb pipe. */
+    int rdb_key_save_delay;               /* Delay in microseconds between keys while
+                                           * writing aof or rdb. (for testings). negative
+                                           * value means fractions of microseconds (on average). */
+    int key_load_delay;                   /* Delay in microseconds between keys while
+                                           * loading aof or rdb. (for testings). negative
+                                           * value means fractions of microseconds (on average). */
     /* Pipe and data structures for child -> parent info sharing. */
     int child_info_pipe[2]; /* Pipe used to write the child_info_data. */
     int child_info_nread;   /* Num of bytes of the last read from pipe */

@@ -120,8 +120,8 @@ int authRequired(client *c) {
 }
 
 static inline int isReplicaReadyForReplData(client *replica) {
-    return (replica->repl_state == REPLICA_STATE_ONLINE || 
-            replica->repl_state == REPLICA_STATE_BG_RDB_LOAD) && !(replica->flag.close_asap);
+    return (replica->repl_state == REPLICA_STATE_ONLINE || replica->repl_state == REPLICA_STATE_BG_RDB_LOAD) &&
+           !(replica->flag.close_asap);
 }
 
 client *createClient(connection *conn) {
@@ -262,8 +262,8 @@ void putClientInPendingWriteQueue(client *c) {
     /* Schedule the client to write the output buffers to the socket only
      * if not already done and, for replicas, if the replica can actually receive
      * writes at this stage. */
-    if (!c->flag.pending_write && (c->repl_state == REPL_STATE_NONE ||
-                                    (isReplicaReadyForReplData(c) && !c->repl_start_cmd_stream_on_ack))) {
+    if (!c->flag.pending_write &&
+        (c->repl_state == REPL_STATE_NONE || (isReplicaReadyForReplData(c) && !c->repl_start_cmd_stream_on_ack))) {
         /* Here instead of installing the write handler, we just flag the
          * client and put it into a list of clients that have something
          * to write to the socket. This way before re-entering the event
@@ -1646,7 +1646,7 @@ void freeClient(client *c) {
     if (getClientType(c) == CLIENT_TYPE_REPLICA) {
         serverLog(LL_NOTICE,
                   c->flag.repl_rdb_conn ? "Replica %s rdb connection disconnected."
-                                                  : "Connection with replica %s lost.",
+                                        : "Connection with replica %s lost.",
                   replicationGetReplicaName(c));
     }
 
@@ -4366,9 +4366,8 @@ void flushReplicasOutputBuffers(void) {
          *
          * 3. Obviously if the replica is not ONLINE.
          */
-        if (isReplicaReadyForReplData(replica) &&
-            !(replica->flag.close_asap) && can_receive_writes && !replica->repl_start_cmd_stream_on_ack &&
-            clientHasPendingReplies(replica)) {
+        if (isReplicaReadyForReplData(replica) && !(replica->flag.close_asap) && can_receive_writes &&
+            !replica->repl_start_cmd_stream_on_ack && clientHasPendingReplies(replica)) {
             writeToClient(replica);
         }
     }

@@ -40,15 +40,16 @@
 #include "test_help.h"
 
 uint16_t crc16(const char *buf, int len); /* From crc16.c */
-long long _ustime(void); /* From test_crc64combine.c */
+long long _ustime(void);                  /* From test_crc64combine.c */
 
 /* ---------------------------------------------------------------------------
  * Simple hash table implementation, no rehashing, just chaining. This is
  * used in order to test the radix tree implementation against something that
  * will always "tell the truth" :-) */
 
-#define HT_TABLE_SIZE 100000 /* This is huge but we want it fast enough without
-                              * reahshing needed. */
+#define HT_TABLE_SIZE                                                                                                  \
+    100000 /* This is huge but we want it fast enough without                                                          \
+            * reahshing needed. */
 typedef struct htNode {
     uint64_t keylen;
     unsigned char *key;
@@ -71,19 +72,18 @@ hashtable *htNew(void) {
 /* djb2 hash function. */
 uint32_t htHash(unsigned char *s, size_t len) {
     uint32_t hash = 5381;
-    for (size_t i = 0; i < len; i++)
-  hash = hash * 33 + s[i];
+    for (size_t i = 0; i < len; i++) hash = hash * 33 + s[i];
     return hash % HT_TABLE_SIZE;
 }
 
 /* Low level hash table lookup function. */
 htNode *htRawLookup(hashtable *t, unsigned char *s, size_t len, uint32_t *hash, htNode ***parentlink) {
-    uint32_t h = htHash(s,len);
+    uint32_t h = htHash(s, len);
     if (hash) *hash = h;
     htNode *n = t->table[h];
     if (parentlink) *parentlink = &t->table[h];
-    while(n) {
-        if (n->keylen == len && memcmp(n->key,s,len) == 0) return n;
+    while (n) {
+        if (n->keylen == len && memcmp(n->key, s, len) == 0) return n;
         if (parentlink) *parentlink = &n->next;
         n = n->next;
     }
@@ -94,12 +94,12 @@ htNode *htRawLookup(hashtable *t, unsigned char *s, size_t len, uint32_t *hash, 
  * 0 if it existed and the value was updated to the new one. */
 int htAdd(hashtable *t, unsigned char *s, size_t len, void *data) {
     uint32_t hash;
-    htNode *n = htRawLookup(t,s,len,&hash,NULL);
+    htNode *n = htRawLookup(t, s, len, &hash, NULL);
 
     if (!n) {
         n = zmalloc(sizeof(*n));
         n->key = zmalloc(len);
-        memcpy(n->key,s,len);
+        memcpy(n->key, s, len);
         n->keylen = len;
         n->data = data;
         n->next = t->table[hash];
@@ -116,7 +116,7 @@ int htAdd(hashtable *t, unsigned char *s, size_t len, void *data) {
  * was not there already. */
 int htRem(hashtable *t, unsigned char *s, size_t len) {
     htNode **parentlink;
-    htNode *n = htRawLookup(t,s,len,NULL,&parentlink);
+    htNode *n = htRawLookup(t, s, len, NULL, &parentlink);
 
     if (!n) return 0;
     *parentlink = n->next;
@@ -126,12 +126,12 @@ int htRem(hashtable *t, unsigned char *s, size_t len) {
     return 1;
 }
 
-void *htNotFound = (void*)"ht-not-found";
+void *htNotFound = (void *)"ht-not-found";
 
 /* Find an element inside the hash table. Returns htNotFound if the
  * element is not there, otherwise returns the associated value. */
 void *htFind(hashtable *t, unsigned char *s, size_t len) {
-    htNode *n = htRawLookup(t,s,len,NULL,NULL);
+    htNode *n = htRawLookup(t, s, len, NULL, NULL);
     if (!n) return htNotFound;
     return n->data;
 }
@@ -140,7 +140,7 @@ void *htFind(hashtable *t, unsigned char *s, size_t len) {
 void htFree(hashtable *ht) {
     for (int j = 0; j < HT_TABLE_SIZE; j++) {
         htNode *next = ht->table[j];
-        while(next) {
+        while (next) {
             htNode *this = next;
             next = this->next;
             zfree(this->key);
@@ -166,7 +166,7 @@ static uint32_t int2int(uint32_t input) {
         r = l ^ F;
         l = nl;
     }
-    return (r<<16)|l;
+    return (r << 16) | l;
 }
 
 /* Turn an uint32_t integer into an alphanumerical key and return its
@@ -182,8 +182,8 @@ static size_t int2alphakey(char *s, size_t maxlen, uint32_t i) {
     if (maxlen == 0) return 0;
     maxlen--; /* Space for null term char. */
     size_t len = 0;
-    while(len < maxlen) {
-        s[len++] = set[i%setlen];
+    while (len < maxlen) {
+        s[len++] = set[i % setlen];
         i /= setlen;
         if (i == 0) break;
     }
@@ -209,29 +209,29 @@ static size_t int2alphakey(char *s, size_t maxlen, uint32_t i) {
 #define KEY_CHAIN 5
 static size_t int2key(char *s, size_t maxlen, uint32_t i, int mode) {
     if (mode == KEY_INT) {
-        return snprintf(s,maxlen,"%lu",(unsigned long)i);
+        return snprintf(s, maxlen, "%lu", (unsigned long)i);
     } else if (mode == KEY_UNIQUE_ALPHA) {
         if (maxlen > 16) maxlen = 16;
         i = int2int(i);
-        return int2alphakey(s,maxlen,i);
+        return int2alphakey(s, maxlen, i);
     } else if (mode == KEY_RANDOM) {
         if (maxlen > 16) maxlen = 16;
         int r = genrand64_int64() % maxlen;
-        for (int i = 0; i < r; i++) s[i] = genrand64_int64()&0xff;
+        for (int i = 0; i < r; i++) s[i] = genrand64_int64() & 0xff;
         return r;
     } else if (mode == KEY_RANDOM_ALPHA) {
         if (maxlen > 16) maxlen = 16;
         int r = genrand64_int64() % maxlen;
-        for (int i = 0; i < r; i++) s[i] = 'A'+genrand64_int64()%('z'-'A'+1);
+        for (int i = 0; i < r; i++) s[i] = 'A' + genrand64_int64() % ('z' - 'A' + 1);
         return r;
     } else if (mode == KEY_RANDOM_SMALL_CSET) {
         if (maxlen > 16) maxlen = 16;
         int r = genrand64_int64() % maxlen;
-        for (int i = 0; i < r; i++) s[i] = 'A'+genrand64_int64()%4;
+        for (int i = 0; i < r; i++) s[i] = 'A' + genrand64_int64() % 4;
         return r;
     } else if (mode == KEY_CHAIN) {
         if (i > maxlen) i = maxlen;
-        memset(s,'A',i);
+        memset(s, 'A', i);
         return i;
     } else {
         return 0;
@@ -254,13 +254,13 @@ int fuzzTest(int keymode, size_t count, double addprob, double remprob) {
         uint32_t keylen;
 
         /* Insert element. */
-        if ((double)genrand64_int64()/RAND_MAX < addprob) {
-            keylen = int2key((char*)key,sizeof(key),i,keymode);
-            void *val = (void*)(unsigned long)genrand64_int64();
+        if ((double)genrand64_int64() / RAND_MAX < addprob) {
+            keylen = int2key((char *)key, sizeof(key), i, keymode);
+            void *val = (void *)(unsigned long)genrand64_int64();
             /* Stress NULL values more often, they use a special encoding. */
             if (!(genrand64_int64() % 100)) val = NULL;
-            int retval1 = htAdd(ht,key,keylen,val);
-            int retval2 = raxInsert(rax,key,keylen,val,NULL);
+            int retval1 = htAdd(ht, key, keylen, val);
+            int retval2 = raxInsert(rax, key, keylen, val, NULL);
             if (retval1 != retval2) {
                 printf("Fuzz: key insertion reported mismatching value in HT/RAX\n");
                 return 1;
@@ -268,14 +268,14 @@ int fuzzTest(int keymode, size_t count, double addprob, double remprob) {
         }
 
         /* Remove element. */
-        if ((double)genrand64_int64()/RAND_MAX < remprob) {
-            keylen = int2key((char*)key,sizeof(key),i,keymode);
-            int retval1 = htRem(ht,key,keylen);
-            int retval2 = raxRemove(rax,key,keylen,NULL);
+        if ((double)genrand64_int64() / RAND_MAX < remprob) {
+            keylen = int2key((char *)key, sizeof(key), i, keymode);
+            int retval1 = htRem(ht, key, keylen);
+            int retval2 = raxRemove(rax, key, keylen, NULL);
             if (retval1 != retval2) {
                 printf("Fuzz: key deletion of '%.*s' reported mismatching "
                        "value in HT=%d RAX=%d\n",
-                       (int)keylen,(char*)key,retval1, retval2);
+                       (int)keylen, (char *)key, retval1, retval2);
                 return 1;
             }
         }
@@ -283,27 +283,26 @@ int fuzzTest(int keymode, size_t count, double addprob, double remprob) {
 
     /* Check that count matches. */
     if (ht->numele != raxSize(rax)) {
-        printf("Fuzz: HT / RAX keys count mismatch: %lu vs %lu\n",
-            (unsigned long) ht->numele,
-            (unsigned long) raxSize(rax));
+        printf("Fuzz: HT / RAX keys count mismatch: %lu vs %lu\n", (unsigned long)ht->numele,
+               (unsigned long)raxSize(rax));
         return 1;
     }
     printf("%lu elements inserted\n", (unsigned long)ht->numele);
 
     /* Check that elements match. */
     raxIterator iter;
-    raxStart(&iter,rax);
-    raxSeek(&iter,"^",NULL,0);
+    raxStart(&iter, rax);
+    raxSeek(&iter, "^", NULL, 0);
 
     size_t numkeys = 0;
-    while(raxNext(&iter)) {
-        void *val1 = htFind(ht,iter.key,iter.key_len);
+    while (raxNext(&iter)) {
+        void *val1 = htFind(ht, iter.key, iter.key_len);
         void *val2 = NULL;
-        raxFind(rax,iter.key,iter.key_len,&val2);
+        raxFind(rax, iter.key, iter.key_len, &val2);
         if (val1 != val2) {
             printf("Fuzz: HT=%p, RAX=%p value do not match "
                    "for key %.*s\n",
-                    val1, val2, (int)iter.key_len,(char*)iter.key);
+                   val1, val2, (int)iter.key_len, (char *)iter.key);
             return 1;
         }
         numkeys++;
@@ -311,9 +310,8 @@ int fuzzTest(int keymode, size_t count, double addprob, double remprob) {
 
     /* Check that the iterator reported all the elements. */
     if (ht->numele != numkeys) {
-        printf("Fuzz: the iterator reported %lu keys instead of %lu\n",
-            (unsigned long) numkeys,
-            (unsigned long) ht->numele);
+        printf("Fuzz: the iterator reported %lu keys instead of %lu\n", (unsigned long)numkeys,
+               (unsigned long)ht->numele);
         return 1;
     }
 
@@ -343,7 +341,7 @@ int fuzzTestCluster(size_t count, double addprob, double remprob) {
 
     /* This is our template to generate keys. The first two bytes will
      * be replaced with the binary redis cluster hash slot. */
-    keylen = snprintf((char*)key,sizeof(key),"__geocode:2e68e5df3624");
+    keylen = snprintf((char *)key, sizeof(key), "__geocode:2e68e5df3624");
     char *cset = "0123456789abcdef";
 
     for (unsigned long j = 0; j < count; j++) {
@@ -353,33 +351,33 @@ int fuzzTestCluster(size_t count, double addprob, double remprob) {
          * is a subset of keys that have an higher percentage of probability
          * of being hit again and again. */
         size_t commonprefix = genrand64_int64() & 0xf;
-        if (commonprefix == 0) memcpy(key+10,"2e68e5",6);
+        if (commonprefix == 0) memcpy(key + 10, "2e68e5", 6);
 
         /* Alter a random char in the key. */
-        int pos = 10+genrand64_int64()%12;
-        key[pos] = cset[genrand64_int64()%16];
+        int pos = 10 + genrand64_int64() % 12;
+        key[pos] = cset[genrand64_int64() % 16];
 
         /* Compute the Redis Cluster hash slot to set the first two
          * binary bytes of the key. */
-        int hashslot = crc16((char*)key,keylen) & 0x3FFF;
+        int hashslot = crc16((char *)key, keylen) & 0x3FFF;
         key[0] = (hashslot >> 8) & 0xff;
         key[1] = hashslot & 0xff;
 
         /* Insert element. */
-        if ((double)genrand64_int64()/RAND_MAX < addprob) {
-            raxInsert(rax,key,keylen,NULL,NULL);
+        if ((double)genrand64_int64() / RAND_MAX < addprob) {
+            raxInsert(rax, key, keylen, NULL, NULL);
             TEST_ASSERT(raxAllocSize(rax) == zmalloc_used_memory());
         }
 
         /* Remove element. */
-        if ((double)genrand64_int64()/RAND_MAX < remprob) {
-            raxRemove(rax,key,keylen,NULL);
+        if ((double)genrand64_int64() / RAND_MAX < remprob) {
+            raxRemove(rax, key, keylen, NULL);
             TEST_ASSERT(raxAllocSize(rax) == zmalloc_used_memory());
         }
     }
     size_t finalkeys = raxSize(rax);
     raxFree(rax);
-    printf("ok with %zu final keys\n",finalkeys);
+    printf("ok with %zu final keys\n", finalkeys);
     return 0;
 }
 
@@ -396,7 +394,7 @@ typedef struct arrayItem {
  * every byte an unsigned integer. */
 int compareAB(const unsigned char *keya, size_t lena, const unsigned char *keyb, size_t lenb) {
     size_t minlen = (lena <= lenb) ? lena : lenb;
-    int retval = memcmp(keya,keyb,minlen);
+    int retval = memcmp(keya, keyb, minlen);
     if (lena == lenb || retval != 0) return retval;
     return (lena > lenb) ? 1 : -1;
 }
@@ -404,7 +402,7 @@ int compareAB(const unsigned char *keya, size_t lena, const unsigned char *keyb,
 int compareArrayItems(const void *aptr, const void *bptr) {
     const arrayItem *a = aptr;
     const arrayItem *b = bptr;
-    return compareAB(a->key,a->key_len,b->key,b->key_len);
+    return compareAB(a->key, a->key_len, b->key, b->key_len);
 }
 
 /* Seek an element in the array, returning the seek index (the index inside the
@@ -413,7 +411,7 @@ int compareArrayItems(const void *aptr, const void *bptr) {
 int arraySeek(arrayItem *array, int count, unsigned char *key, size_t len, char *op) {
     if (count == 0) return -1;
     if (op[0] == '^') return 0;
-    if (op[0] == '$') return count-1;
+    if (op[0] == '$') return count - 1;
 
     int eq = 0, lt = 0, gt = 0;
     if (op[1] == '=') eq = 1;
@@ -422,7 +420,7 @@ int arraySeek(arrayItem *array, int count, unsigned char *key, size_t len, char 
 
     int i;
     for (i = 0; i < count; i++) {
-        int cmp = compareAB(array[i].key,array[i].key_len,key,len);
+        int cmp = compareAB(array[i].key, array[i].key_len, key, len);
         if (eq && !cmp) return i;
         if (cmp > 0 && gt) return i;
         if (cmp >= 0 && lt) {
@@ -430,48 +428,47 @@ int arraySeek(arrayItem *array, int count, unsigned char *key, size_t len, char 
             break;
         }
     }
-    if (lt && i == count) return count-1;
+    if (lt && i == count) return count - 1;
     if (i < 0 || i >= count) return -1;
     return i;
 }
 
 int iteratorFuzzTest(int keymode, size_t count) {
-    count = genrand64_int64()%count;
+    count = genrand64_int64() % count;
     rax *rax = raxNew();
-    arrayItem *array = zmalloc(sizeof(arrayItem)*count);
+    arrayItem *array = zmalloc(sizeof(arrayItem) * count);
 
     /* Fill a radix tree and a linear array with some data. */
     unsigned char key[1024];
     size_t j = 0;
     for (size_t i = 0; i < count; i++) {
-        uint32_t keylen = int2key((char*)key,sizeof(key),i,keymode);
-        void *val = (void*)(unsigned long)htHash(key,keylen);
+        uint32_t keylen = int2key((char *)key, sizeof(key), i, keymode);
+        void *val = (void *)(unsigned long)htHash(key, keylen);
 
-        if (raxInsert(rax,key,keylen,val,NULL)) {
+        if (raxInsert(rax, key, keylen, val, NULL)) {
             array[j].key = zmalloc(keylen);
             array[j].key_len = keylen;
-            memcpy(array[j].key,key,keylen);
+            memcpy(array[j].key, key, keylen);
             j++;
         }
     }
     count = raxSize(rax);
 
     /* Sort the array. */
-    qsort(array,count,sizeof(arrayItem),compareArrayItems);
+    qsort(array, count, sizeof(arrayItem), compareArrayItems);
 
     /* Perform a random seek operation. */
-    uint32_t keylen = int2key((char*)key,sizeof(key),
-        genrand64_int64()%(count ? count : 1),keymode);
+    uint32_t keylen = int2key((char *)key, sizeof(key), genrand64_int64() % (count ? count : 1), keymode);
     raxIterator iter;
-    raxStart(&iter,rax);
-    char *seekops[] = {"==",">=","<=",">","<","^","$"};
+    raxStart(&iter, rax);
+    char *seekops[] = {"==", ">=", "<=", ">", "<", "^", "$"};
     char *seekop = seekops[genrand64_int64() % 7];
-    raxSeek(&iter,seekop,key,keylen);
-    int seekidx = arraySeek(array,count,key,keylen,seekop);
+    raxSeek(&iter, seekop, key, keylen);
+    int seekidx = arraySeek(array, count, key, keylen, seekop);
 
     int next = genrand64_int64() % 2;
     int iteration = 0;
-    while(1) {
+    while (1) {
         int rax_res;
         int array_res;
         unsigned char *array_key = NULL;
@@ -506,25 +503,20 @@ int iteratorFuzzTest(int keymode, size_t count) {
         if (array_res == 0) break; /* End of iteration reached. */
 
         /* Check that the returned keys are the same. */
-        if (iter.key_len != array_key_len ||
-            memcmp(iter.key,array_key,iter.key_len))
-        {
+        if (iter.key_len != array_key_len || memcmp(iter.key, array_key, iter.key_len)) {
             printf("Iter fuzz: returned element %d mismatch\n", iteration);
-            printf("SEEKOP was %s\n",seekop);
+            printf("SEEKOP was %s\n", seekop);
             if (keymode != KEY_RANDOM) {
                 printf("\n");
-                printf("BUG SEEKING: %s %.*s\n",seekop,keylen,key);
+                printf("BUG SEEKING: %s %.*s\n", seekop, keylen, key);
                 printf("%.*s (iter) VS %.*s (array) next=%d idx=%d "
                        "count=%lu keymode=%d\n",
-                    (int)iter.key_len, (char*)iter.key,
-                    (int)array_key_len, (char*)array_key,
-                    next, seekidx, (unsigned long)count, keymode);
+                       (int)iter.key_len, (char *)iter.key, (int)array_key_len, (char *)array_key, next, seekidx,
+                       (unsigned long)count, keymode);
                 if (count < 500) {
                     printf("\n");
                     for (unsigned int j = 0; j < count; j++) {
-                        printf("%d) '%.*s'\n",j,
-                                            (int)array[j].key_len,
-                                            array[j].key);
+                        printf("%d) '%.*s'\n", j, (int)array[j].key_len, array[j].key);
                     }
                 }
                 exit(1);
@@ -548,29 +540,27 @@ int test_randomWalkTest(int argc, char **argv, int flags) {
     UNUSED(flags);
 
     rax *t = raxNew();
-    char *toadd[] = {"alligator","alien","baloon","chromodynamic","romane","romanus","romulus","rubens","ruber","rubicon","rubicundus","all","rub","ba",NULL};
+    char *toadd[] = {"alligator", "alien",   "baloon",     "chromodynamic", "romane", "romanus", "romulus", "rubens",
+                     "ruber",     "rubicon", "rubicundus", "all",           "rub",    "ba",      NULL};
 
     long numele;
     for (numele = 0; toadd[numele] != NULL; numele++) {
-        raxInsert(t,(unsigned char*)toadd[numele],
-                    strlen(toadd[numele]),(void*)numele,NULL);
+        raxInsert(t, (unsigned char *)toadd[numele], strlen(toadd[numele]), (void *)numele, NULL);
         TEST_ASSERT(raxAllocSize(t) == zmalloc_used_memory());
     }
 
     raxIterator iter;
-    raxStart(&iter,t);
-    raxSeek(&iter,"^",NULL,0);
+    raxStart(&iter, t);
+    raxSeek(&iter, "^", NULL, 0);
     int maxloops = 100000;
-    while(raxRandomWalk(&iter,0) && maxloops--) {
+    while (raxRandomWalk(&iter, 0) && maxloops--) {
         int nulls = 0;
         for (long i = 0; i < numele; i++) {
             if (toadd[i] == NULL) {
                 nulls++;
                 continue;
             }
-            if (strlen(toadd[i]) == iter.key_len &&
-                memcmp(toadd[i],iter.key,iter.key_len) == 0)
-            {
+            if (strlen(toadd[i]) == iter.key_len && memcmp(toadd[i], iter.key, iter.key_len) == 0) {
                 toadd[i] = NULL;
                 nulls++;
             }
@@ -593,67 +583,63 @@ int test_iteratorUnitTests(int argc, char **argv, int flags) {
     UNUSED(flags);
 
     rax *t = raxNew();
-    char *toadd[] = {"alligator","alien","baloon","chromodynamic","romane","romanus","romulus","rubens","ruber","rubicon","rubicundus","all","rub","ba",NULL};
+    char *toadd[] = {"alligator", "alien",   "baloon",     "chromodynamic", "romane", "romanus", "romulus", "rubens",
+                     "ruber",     "rubicon", "rubicundus", "all",           "rub",    "ba",      NULL};
 
     for (int x = 0; x < 10000; x++) genrand64_int64();
 
     long items = 0;
-    while(toadd[items] != NULL) items++;
+    while (toadd[items] != NULL) items++;
 
     for (long i = 0; i < items; i++) {
-        raxInsert(t,(unsigned char*)toadd[i],strlen(toadd[i]),(void*)i,NULL);
+        raxInsert(t, (unsigned char *)toadd[i], strlen(toadd[i]), (void *)i, NULL);
         TEST_ASSERT(raxAllocSize(t) == zmalloc_used_memory());
     }
 
     raxIterator iter;
-    raxStart(&iter,t);
+    raxStart(&iter, t);
 
     struct {
         char *seek;
         size_t seeklen;
         char *seekop;
         char *expected;
-    } tests[] = {
-        /* Seek value. */       /* Expected result. */
-        {"rpxxx",5,"<=",         "romulus"},
-        {"rom",3,">=",           "romane"},
-        {"rub",3,">=",           "rub"},
-        {"rub",3,">",            "rubens"},
-        {"rub",3,"<",            "romulus"},
-        {"rom",3,">",            "romane"},
-        {"chro",4,">",           "chromodynamic"},
-        {"chro",4,"<",           "baloon"},
-        {"chromz",6,"<",         "chromodynamic"},
-        {"",0,"^",               "alien"},
-        {"zorro",5,"<=",         "rubicundus"},
-        {"zorro",5,"<",          "rubicundus"},
-        {"zorro",5,"<",          "rubicundus"},
-        {"",0,"$",               "rubicundus"},
-        {"ro",2,">=",            "romane"},
-        {"zo",2,">",             NULL},
-        {"zo",2,"==",            NULL},
-        {"romane",6,"==",        "romane"}
-    };
+    } tests[] = {/* Seek value. */ /* Expected result. */
+                 {"rpxxx", 5, "<=", "romulus"},
+                 {"rom", 3, ">=", "romane"},
+                 {"rub", 3, ">=", "rub"},
+                 {"rub", 3, ">", "rubens"},
+                 {"rub", 3, "<", "romulus"},
+                 {"rom", 3, ">", "romane"},
+                 {"chro", 4, ">", "chromodynamic"},
+                 {"chro", 4, "<", "baloon"},
+                 {"chromz", 6, "<", "chromodynamic"},
+                 {"", 0, "^", "alien"},
+                 {"zorro", 5, "<=", "rubicundus"},
+                 {"zorro", 5, "<", "rubicundus"},
+                 {"zorro", 5, "<", "rubicundus"},
+                 {"", 0, "$", "rubicundus"},
+                 {"ro", 2, ">=", "romane"},
+                 {"zo", 2, ">", NULL},
+                 {"zo", 2, "==", NULL},
+                 {"romane", 6, "==", "romane"}};
 
     for (int i = 0; tests[i].expected != NULL; i++) {
-        raxSeek(&iter,tests[i].seekop,(unsigned char*)tests[i].seek,
-                tests[i].seeklen);
+        raxSeek(&iter, tests[i].seekop, (unsigned char *)tests[i].seek, tests[i].seeklen);
         int retval = raxNext(&iter);
 
         if (tests[i].expected != NULL) {
-            if (strlen(tests[i].expected) != iter.key_len ||
-                memcmp(tests[i].expected,iter.key,iter.key_len) != 0)
-            {
+            if (strlen(tests[i].expected) != iter.key_len || memcmp(tests[i].expected, iter.key, iter.key_len) != 0) {
                 printf("Iterator unit test error: "
                        "test %d, %s expected, %.*s reported\n",
-                       i, tests[i].expected, (int)iter.key_len,
-                       (char*)iter.key);
+                       i, tests[i].expected, (int)iter.key_len, (char *)iter.key);
                 return 1;
             }
         } else {
             if (retval != 0) {
                 printf("Iterator unit test error: "
-                       "EOF expected in test %d\n", i);
+                       "EOF expected in test %d\n",
+                       i);
                 return 1;
             }
         }
@@ -671,26 +657,25 @@ int test_tryInsertUnitTests(int argc, char **argv, int flags) {
     UNUSED(flags);
 
     rax *t = raxNew();
-    raxInsert(t,(unsigned char*)"FOO",3,(void*)(long)1,NULL);
+    raxInsert(t, (unsigned char *)"FOO", 3, (void *)(long)1, NULL);
     void *old, *val;
-    raxTryInsert(t,(unsigned char*)"FOO",3,(void*)(long)2,&old);
-    if (old != (void*)(long)1) {
-        printf("Old value not returned correctly by raxTryInsert(): %p",
-            old);
+    raxTryInsert(t, (unsigned char *)"FOO", 3, (void *)(long)2, &old);
+    if (old != (void *)(long)1) {
+        printf("Old value not returned correctly by raxTryInsert(): %p", old);
         return 1;
     }
 
     val = NULL;
-    raxFind(t,(unsigned char*)"FOO",3,&val);
-    if (val != (void*)(long)1) {
+    raxFind(t, (unsigned char *)"FOO", 3, &val);
+    if (val != (void *)(long)1) {
         printf("FOO value mismatch: is %p intead of 1", val);
         return 1;
     }
 
-    raxInsert(t,(unsigned char*)"FOO",3,(void*)(long)2,NULL);
+    raxInsert(t, (unsigned char *)"FOO", 3, (void *)(long)2, NULL);
     val = NULL;
-    raxFind(t,(unsigned char*)"FOO",3,&val);
-    if (val != (void*)(long)2) {
+    raxFind(t, (unsigned char *)"FOO", 3, &val);
+    if (val != (void *)(long)2) {
         printf("FOO value mismatch: is %p intead of 2", val);
         return 1;
     }
@@ -706,21 +691,18 @@ int test_regtest1(int argc, char **argv, int flags) {
     UNUSED(flags);
 
     rax *rax = raxNew();
-    raxInsert(rax,(unsigned char*)"LKE",3,(void*)(long)1,NULL);
-    raxInsert(rax,(unsigned char*)"TQ",2,(void*)(long)2,NULL);
-    raxInsert(rax,(unsigned char*)"B",1,(void*)(long)3,NULL);
-    raxInsert(rax,(unsigned char*)"FY",2,(void*)(long)4,NULL);
-    raxInsert(rax,(unsigned char*)"WI",2,(void*)(long)5,NULL);
+    raxInsert(rax, (unsigned char *)"LKE", 3, (void *)(long)1, NULL);
+    raxInsert(rax, (unsigned char *)"TQ", 2, (void *)(long)2, NULL);
+    raxInsert(rax, (unsigned char *)"B", 1, (void *)(long)3, NULL);
+    raxInsert(rax, (unsigned char *)"FY", 2, (void *)(long)4, NULL);
+    raxInsert(rax, (unsigned char *)"WI", 2, (void *)(long)5, NULL);
 
     raxIterator iter;
-    raxStart(&iter,rax);
-    raxSeek(&iter,">",(unsigned char*)"FMP",3);
+    raxStart(&iter, rax);
+    raxSeek(&iter, ">", (unsigned char *)"FMP", 3);
     if (raxNext(&iter)) {
-        if (iter.key_len != 2 ||
-            memcmp(iter.key,"FY",2))
-        {
-            printf("Regression test 1 failed: 'FY' expected, got: '%.*s'\n",
-                (int)iter.key_len, (char*)iter.key);
+        if (iter.key_len != 2 || memcmp(iter.key, "FY", 2)) {
+            printf("Regression test 1 failed: 'FY' expected, got: '%.*s'\n", (int)iter.key_len, (char *)iter.key);
             return 1;
         }
     }
@@ -737,11 +719,11 @@ int test_regtest2(int argc, char **argv, int flags) {
     UNUSED(flags);
 
     rax *rt = raxNew();
-    raxInsert(rt,(unsigned char *)"a",1,(void *)100,NULL);
-    raxInsert(rt,(unsigned char *)"ab",2,(void *)101,NULL);
-    raxInsert(rt,(unsigned char *)"abc",3,(void *)NULL,NULL);
-    raxInsert(rt,(unsigned char *)"abcd",4,(void *)NULL,NULL);
-    raxInsert(rt,(unsigned char *)"abc",3,(void *)102,NULL);
+    raxInsert(rt, (unsigned char *)"a", 1, (void *)100, NULL);
+    raxInsert(rt, (unsigned char *)"ab", 2, (void *)101, NULL);
+    raxInsert(rt, (unsigned char *)"abc", 3, (void *)NULL, NULL);
+    raxInsert(rt, (unsigned char *)"abcd", 4, (void *)NULL, NULL);
+    raxInsert(rt, (unsigned char *)"abc", 3, (void *)102, NULL);
     raxFree(rt);
     return 0;
 }
@@ -758,9 +740,9 @@ int test_regtest3(int argc, char **argv, int flags) {
     UNUSED(flags);
 
     rax *rt = raxNew();
-    raxInsert(rt, (unsigned char *)"D",1,(void*)1,NULL);
-    raxInsert(rt, (unsigned char *)"",0,NULL,NULL);
-    raxRemove(rt, (unsigned char *)"D",1,NULL);
+    raxInsert(rt, (unsigned char *)"D", 1, (void *)1, NULL);
+    raxInsert(rt, (unsigned char *)"", 0, NULL, NULL);
+    raxRemove(rt, (unsigned char *)"D", 1, NULL);
     raxFree(rt);
     return 0;
 }
@@ -779,14 +761,14 @@ int test_regtest4(int argc, char **argv, int flags) {
 
     rax *rt = raxNew();
     raxIterator iter;
-    raxInsert(rt, (unsigned char*)"", 0, (void *)-1, NULL);
+    raxInsert(rt, (unsigned char *)"", 0, (void *)-1, NULL);
     void *val = NULL;
-    raxFind(rt, (unsigned char*)"", 0, &val);
+    raxFind(rt, (unsigned char *)"", 0, &val);
     if (val != (void *)-1) {
         printf("Regression test 4 failed. Key value mismatch in raxFind()\n");
         return 1;
     }
-    raxStart(&iter,rt);
+    raxStart(&iter, rt);
     raxSeek(&iter, "^", NULL, 0);
     raxNext(&iter);
     if (iter.data != (void *)-1) {
@@ -806,18 +788,18 @@ int test_regtest5(int argc, char **argv, int flags) {
 
     rax *rax = raxNew();
 
-    raxInsert(rax,(unsigned char*)"b",1,(void*)(long)1,NULL);
-    raxInsert(rax,(unsigned char*)"ba",2,(void*)(long)2,NULL);
-    raxInsert(rax,(unsigned char*)"banana",6,(void*)(long)3,NULL);
+    raxInsert(rax, (unsigned char *)"b", 1, (void *)(long)1, NULL);
+    raxInsert(rax, (unsigned char *)"ba", 2, (void *)(long)2, NULL);
+    raxInsert(rax, (unsigned char *)"banana", 6, (void *)(long)3, NULL);
 
-    raxInsert(rax,(unsigned char*)"f",1,(void*)(long)4,NULL);
-    raxInsert(rax,(unsigned char*)"foobar",6,(void*)(long)5,NULL);
-    raxInsert(rax,(unsigned char*)"foobar123",9,(void*)(long)6,NULL);
+    raxInsert(rax, (unsigned char *)"f", 1, (void *)(long)4, NULL);
+    raxInsert(rax, (unsigned char *)"foobar", 6, (void *)(long)5, NULL);
+    raxInsert(rax, (unsigned char *)"foobar123", 9, (void *)(long)6, NULL);
 
     raxIterator ri;
-    raxStart(&ri,rax);
+    raxStart(&ri, rax);
 
-    raxSeek(&ri,"<",(unsigned char*)"foo",3);
+    raxSeek(&ri, "<", (unsigned char *)"foo", 3);
     raxNext(&ri);
     if (ri.key_len != 1 || ri.key[0] != 'f') {
         printf("Regression test 4 failed. Key value mismatch in raxNext()\n");
@@ -841,12 +823,12 @@ int test_regtest6(int argc, char **argv, int flags) {
     char *key2 = "172.17.141.2/adminguide/v5.0/entitlements-configure.html";
     char *seekpoint = "172.17.141.2/adminguide/v5.0/entitlements";
 
-    raxInsert(rax, (unsigned char*)key1,strlen(key1),(void*)(long)1234, NULL);
-    raxInsert(rax, (unsigned char*)key2,strlen(key2),(void*)(long)5678, NULL);
+    raxInsert(rax, (unsigned char *)key1, strlen(key1), (void *)(long)1234, NULL);
+    raxInsert(rax, (unsigned char *)key2, strlen(key2), (void *)(long)5678, NULL);
 
     raxIterator ri;
-    raxStart(&ri,rax);
-    raxSeek(&ri,"<=", (unsigned char*)seekpoint, strlen(seekpoint));
+    raxStart(&ri, rax);
+    raxSeek(&ri, "<=", (unsigned char *)seekpoint, strlen(seekpoint));
     raxPrev(&ri);
     if ((long)ri.data != 1234) {
         printf("Regression test 6 failed. Key data not populated.\n");
@@ -862,78 +844,73 @@ int test_benchmark(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
 
-    if (!(flags & UNIT_TEST_SINGLE))
-        return 0;
+    if (!(flags & UNIT_TEST_SINGLE)) return 0;
 
     for (int mode = 0; mode < 2; mode++) {
-        printf("Benchmark with %s keys:\n",
-            (mode == 0) ? "integer" : "alphanumerical");
+        printf("Benchmark with %s keys:\n", (mode == 0) ? "integer" : "alphanumerical");
         rax *t = raxNew();
         long long start = _ustime();
         for (int i = 0; i < 5000000; i++) {
             char buf[64];
-            int len = int2key(buf,sizeof(buf),i,mode);
-            raxInsert(t,(unsigned char*)buf,len,(void*)(long)i,NULL);
+            int len = int2key(buf, sizeof(buf), i, mode);
+            raxInsert(t, (unsigned char *)buf, len, (void *)(long)i, NULL);
             TEST_ASSERT(raxAllocSize(t) == zmalloc_used_memory());
         }
-        printf("Insert: %f\n", (double)(_ustime()-start)/1000000);
+        printf("Insert: %f\n", (double)(_ustime() - start) / 1000000);
         printf("%llu total nodes\n", (unsigned long long)t->numnodes);
         printf("%llu total elements\n", (unsigned long long)t->numele);
 
         start = _ustime();
         for (int i = 0; i < 5000000; i++) {
             char buf[64];
-            int len = int2key(buf,sizeof(buf),i,mode);
+            int len = int2key(buf, sizeof(buf), i, mode);
             void *data;
-            if (!raxFind(t,(unsigned char*)buf,len,&data) || data != (void*)(long)i) {
-                printf("Issue with %s: %p instead of %p\n", buf,
-                    data, (void*)(long)i);
+            if (!raxFind(t, (unsigned char *)buf, len, &data) || data != (void *)(long)i) {
+                printf("Issue with %s: %p instead of %p\n", buf, data, (void *)(long)i);
             }
         }
-        printf("Linear lookup: %f\n", (double)(_ustime()-start)/1000000);
+        printf("Linear lookup: %f\n", (double)(_ustime() - start) / 1000000);
 
         start = _ustime();
         for (int i = 0; i < 5000000; i++) {
             char buf[64];
             int r = genrand64_int64() % 5000000;
-            int len = int2key(buf,sizeof(buf),r,mode);
+            int len = int2key(buf, sizeof(buf), r, mode);
             void *data;
-            if (!raxFind(t,(unsigned char*)buf,len,&data) || data != (void*)(long)r) {
-                printf("Issue with %s: %p instead of %p\n", buf,
-                    data, (void*)(long)r);
+            if (!raxFind(t, (unsigned char *)buf, len, &data) || data != (void *)(long)r) {
+                printf("Issue with %s: %p instead of %p\n", buf, data, (void *)(long)r);
             }
         }
-        printf("Random lookup: %f\n", (double)(_ustime()-start)/1000000);
+        printf("Random lookup: %f\n", (double)(_ustime() - start) / 1000000);
 
         start = _ustime();
         for (int i = 0; i < 5000000; i++) {
             char buf[64];
-            int len = int2key(buf,sizeof(buf),i,mode);
-            buf[i%len] = '!'; /* "!" is never set into keys. */
-            TEST_ASSERT_MESSAGE("Lookup should have failed",
-                !raxFind(t,(unsigned char*) buf,len,NULL));
+            int len = int2key(buf, sizeof(buf), i, mode);
+            buf[i % len] = '!'; /* "!" is never set into keys. */
+            TEST_ASSERT_MESSAGE("Lookup should have failed", !raxFind(t, (unsigned char *)buf, len, NULL));
         }
-        printf("Failed lookup: %f\n", (double)(_ustime()-start)/1000000);
+        printf("Failed lookup: %f\n", (double)(_ustime() - start) / 1000000);
 
         start = _ustime();
         raxIterator ri;
-        raxStart(&ri,t);
-        raxSeek(&ri,"^",NULL,0);
+        raxStart(&ri, t);
+        raxSeek(&ri, "^", NULL, 0);
         int iter = 0;
         while (raxNext(&ri)) iter++;
         TEST_ASSERT_MESSAGE("Iteration is incomplete", iter == 5000000);
         raxStop(&ri);
-        printf("Full iteration: %f\n", (double)(_ustime()-start)/1000000);
+        printf("Full iteration: %f\n", (double)(_ustime() - start) / 1000000);
 
         start = _ustime();
         for (int i = 0; i < 5000000; i++) {
             char buf[64];
-            int len = int2key(buf,sizeof(buf),i,mode);
-            int retval = raxRemove(t,(unsigned char*)buf,len,NULL);
+            int len = int2key(buf, sizeof(buf), i, mode);
+            int retval = raxRemove(t, (unsigned char *)buf, len, NULL);
             TEST_ASSERT(retval == 1);
             TEST_ASSERT(raxAllocSize(t) == zmalloc_used_memory());
         }
-        printf("Deletion: %f\n", (double)(_ustime()-start)/1000000);
+        printf("Deletion: %f\n", (double)(_ustime() - start) / 1000000);
 
         printf("%llu total nodes\n", (unsigned long long)t->numnodes);
         printf("%llu total elements\n", (unsigned long long)t->numele);
@@ -952,30 +929,29 @@ int test_hugeKey(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
 
-    if (!(flags & UNIT_TEST_LARGE_MEMORY))
-        return 0;
+    if (!(flags & UNIT_TEST_LARGE_MEMORY)) return 0;
 
-    size_t max_keylen = ((1<<29)-1) + 100;
+    size_t max_keylen = ((1 << 29) - 1) + 100;
     unsigned char *key = zmalloc(max_keylen);
     if (key == NULL) goto oom;
 
-    memset(key,'a',max_keylen);
+    memset(key, 'a', max_keylen);
     key[10] = 'X';
-    key[max_keylen-1] = 'Y';
+    key[max_keylen - 1] = 'Y';
     rax *rax = raxNew();
-    int retval = raxInsert(rax,(unsigned char*)"aaabbb",6,(void*)5678L,NULL);
+    int retval = raxInsert(rax, (unsigned char *)"aaabbb", 6, (void *)5678L, NULL);
     if (retval == 0 && errno == ENOMEM) goto oom;
-    retval = raxInsert(rax,key,max_keylen,(void*)1234L,NULL);
+    retval = raxInsert(rax, key, max_keylen, (void *)1234L, NULL);
     if (retval == 0 && errno == ENOMEM) goto oom;
     void *value1, *value2;
-    int found1 = raxFind(rax,(unsigned char*)"aaabbb",6,&value1);
-    int found2 = raxFind(rax,key,max_keylen,&value2);
+    int found1 = raxFind(rax, (unsigned char *)"aaabbb", 6, &value1);
+    int found2 = raxFind(rax, key, max_keylen, &value2);
     zfree(key);
     if (!found1 || !found2) {
         printf("Huge key test failed on elementhood\n");
         return 1;
     }
-    if (value1 != (void*)5678L || value2 != (void*)1234L) {
+    if (value1 != (void *)5678L || value2 != (void *)1234L) {
         printf("Huge key test failed\n");
         return 1;
     }
@@ -983,7 +959,7 @@ int test_hugeKey(int argc, char **argv, int flags) {
     return 0;
 
 oom:
-    fprintf(stderr,"Sorry, not enough memory to execute --hugekey test.");
+    fprintf(stderr, "Sorry, not enough memory to execute --hugekey test.");
     exit(1);
 }
 
@@ -991,8 +967,7 @@ int test_fuzz(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
 
-    if (!(flags & UNIT_TEST_ACCURATE))
-        return 0;
+    if (!(flags & UNIT_TEST_ACCURATE)) return 0;
 
     int errors = 0;
 
@@ -1000,41 +975,42 @@ int test_fuzz(int argc, char **argv, int flags) {
 
     for (int i = 0; i < 10; i++) {
         double alpha = (double)genrand64_int64() / RAND_MAX;
-        double beta = 1-alpha;
-        if (fuzzTestCluster(genrand64_int64()%100000000,alpha,beta)) errors++;
+        double beta = 1 - alpha;
+        if (fuzzTestCluster(genrand64_int64() % 100000000, alpha, beta)) errors++;
     }
 
     for (int i = 0; i < 10; i++) {
         double alpha = (double)genrand64_int64() / RAND_MAX;
-        double beta = 1-alpha;
-        if (fuzzTest(KEY_INT,genrand64_int64()%10000,alpha,beta)) errors++;
-        if (fuzzTest(KEY_UNIQUE_ALPHA,genrand64_int64()%10000,alpha,beta)) errors++;
-        if (fuzzTest(KEY_RANDOM,genrand64_int64()%10000,alpha,beta)) errors++;
-        if (fuzzTest(KEY_RANDOM_ALPHA,genrand64_int64()%10000,alpha,beta)) errors++;
-        if (fuzzTest(KEY_RANDOM_SMALL_CSET,genrand64_int64()%10000,alpha,beta)) errors++;
+        double beta = 1 - alpha;
+        if (fuzzTest(KEY_INT, genrand64_int64() % 10000, alpha, beta)) errors++;
+        if (fuzzTest(KEY_UNIQUE_ALPHA, genrand64_int64() % 10000, alpha, beta)) errors++;
+        if (fuzzTest(KEY_RANDOM, genrand64_int64() % 10000, alpha, beta)) errors++;
+        if (fuzzTest(KEY_RANDOM_ALPHA, genrand64_int64() % 10000, alpha, beta)) errors++;
+        if (fuzzTest(KEY_RANDOM_SMALL_CSET, genrand64_int64() % 10000, alpha, beta)) errors++;
     }
 
     size_t numops = 100000, cycles = 3;
-    while(cycles--) {
-        if (fuzzTest(KEY_INT,numops,.7,.3)) errors++;
-        if (fuzzTest(KEY_UNIQUE_ALPHA,numops,.7,.3)) errors++;
-        if (fuzzTest(KEY_RANDOM,numops,.7,.3)) errors++;
-        if (fuzzTest(KEY_RANDOM_ALPHA,numops,.7,.3)) errors++;
-        if (fuzzTest(KEY_RANDOM_SMALL_CSET,numops,.7,.3)) errors++;
+    while (cycles--) {
+        if (fuzzTest(KEY_INT, numops, .7, .3)) errors++;
+        if (fuzzTest(KEY_UNIQUE_ALPHA, numops, .7, .3)) errors++;
+        if (fuzzTest(KEY_RANDOM, numops, .7, .3)) errors++;
+        if (fuzzTest(KEY_RANDOM_ALPHA, numops, .7, .3)) errors++;
+        if (fuzzTest(KEY_RANDOM_SMALL_CSET, numops, .7, .3)) errors++;
         numops *= 10;
     }
 
-    if (fuzzTest(KEY_CHAIN,1000,.7,.3)) errors++;
-    printf("Iterator fuzz test: "); fflush(stdout);
+    if (fuzzTest(KEY_CHAIN, 1000, .7, .3)) errors++;
+    printf("Iterator fuzz test: ");
+    fflush(stdout);
     for (int i = 0; i < 100000; i++) {
-        if (iteratorFuzzTest(KEY_INT,100)) errors++;
-        if (iteratorFuzzTest(KEY_UNIQUE_ALPHA,100)) errors++;
-        if (iteratorFuzzTest(KEY_RANDOM_ALPHA,1000)) errors++;
-        if (iteratorFuzzTest(KEY_RANDOM,1000)) errors++;
+        if (iteratorFuzzTest(KEY_INT, 100)) errors++;
+        if (iteratorFuzzTest(KEY_UNIQUE_ALPHA, 100)) errors++;
+        if (iteratorFuzzTest(KEY_RANDOM_ALPHA, 1000)) errors++;
+        if (iteratorFuzzTest(KEY_RANDOM, 1000)) errors++;
         if (i && !(i % 100)) {
             printf(".");
             if (!(i % 1000)) {
-                printf("%d%% done",i/1000);
+                printf("%d%% done", i / 1000);
             }
             fflush(stdout);
         }

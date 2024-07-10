@@ -241,7 +241,12 @@ static size_t kvstoreDictMetadataSize(dict *d) {
 
 /* Create an array of dictionaries
  * num_dicts_bits is the log2 of the amount of dictionaries needed (e.g. 0 for 1 dict,
- * 3 for 8 dicts, etc.) */
+ * 3 for 8 dicts, etc.)
+ *
+ * The kvstore handles `key` based on `dictType` during initialization:
+ * - If `dictType.embedded-entry` is 1, it clones the `key`.
+ * - Otherwise, it assumes ownership of the `key`.
+ */
 kvstore *kvstoreCreate(dictType *type, int num_dicts_bits, int flags) {
     /* We can't support more than 2^16 dicts because we want to save 48 bits
      * for the dict cursor, see kvstoreScan */
@@ -340,7 +345,7 @@ size_t kvstoreMemUsage(kvstore *kvs) {
     size_t mem = sizeof(*kvs);
 
     unsigned long long keys_count = kvstoreSize(kvs);
-    mem += keys_count * dictEntryMemUsage() + kvstoreBuckets(kvs) * sizeof(dictEntry *) +
+    mem += keys_count * dictEntryMemUsage(NULL) + kvstoreBuckets(kvs) * sizeof(dictEntry *) +
            kvs->allocated_dicts * (sizeof(dict) + kvstoreDictMetadataSize(NULL));
 
     /* Values are dict* shared with kvs->dicts */
@@ -717,12 +722,6 @@ dictEntry *kvstoreDictGetFairRandomKey(kvstore *kvs, int didx) {
     return dictGetFairRandomKey(d);
 }
 
-dictEntry *kvstoreDictFindEntryByPtrAndHash(kvstore *kvs, int didx, const void *oldptr, uint64_t hash) {
-    dict *d = kvstoreGetDict(kvs, didx);
-    if (!d) return NULL;
-    return dictFindEntryByPtrAndHash(d, oldptr, hash);
-}
-
 unsigned int kvstoreDictGetSomeKeys(kvstore *kvs, int didx, dictEntry **des, unsigned int count) {
     dict *d = kvstoreGetDict(kvs, didx);
     if (!d) return 0;
@@ -776,6 +775,17 @@ dictEntry *kvstoreDictFind(kvstore *kvs, int didx, void *key) {
     return dictFind(d, key);
 }
 
+/*
+ * The kvstore handles `key` based on `dictType` during initialization:
+ * - If `dictType.embedded-entry` is 1, it clones the `key`.
+ * - Otherwise, it assumes ownership of the `key`.
+ * The caller must ensure the `key` is properly freed.
+ *
+ * kvstore current usage:
+ *
+ * 1. keyspace (db.keys) kvstore - creates a copy of the key.
+ * 2. expiry (db.expires), pubsub_channels and pubsubshard_channels kvstore - takes ownership of the key.
+ */
 dictEntry *kvstoreDictAddRaw(kvstore *kvs, int didx, void *key, dictEntry **existing) {
     dict *d = createDictIfNeeded(kvs, didx);
     dictEntry *ret = dictAddRaw(d, key, existing);

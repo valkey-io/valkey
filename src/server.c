@@ -39,6 +39,7 @@
 #include "syscheck.h"
 #include "threads_mngr.h"
 #include "fmtargs.h"
+#include "io_threads.h"
 
 #include <time.h>
 #include <signal.h>
@@ -289,6 +290,10 @@ int dictSdsKeyCompare(dict *d, const void *key1, const void *key2) {
     return memcmp(key1, key2, l1) == 0;
 }
 
+size_t dictSdsEmbedKey(unsigned char *buf, size_t buf_len, const void *key, uint8_t *key_offset) {
+    return sdscopytobuffer(buf, buf_len, (sds)key, key_offset);
+}
+
 /* A case insensitive version used for the command lookup table and other
  * places where case insensitive non binary-safe comparison is needed. */
 int dictSdsKeyCaseCompare(dict *d, const void *key1, const void *key2) {
@@ -468,9 +473,11 @@ dictType dbDictType = {
     dictSdsHash,          /* hash function */
     NULL,                 /* key dup */
     dictSdsKeyCompare,    /* key compare */
-    dictSdsDestructor,    /* key destructor */
+    NULL,                 /* key is embedded in the dictEntry and freed internally */
     dictObjectDestructor, /* val destructor */
     dictResizeAllowed,    /* allow to resize */
+    .embedKey = dictSdsEmbedKey,
+    .embedded_entry = 1,
 };
 
 /* Db->expires */
@@ -707,7 +714,7 @@ int clientsCronResizeQueryBuffer(client *c) {
         if (idletime > 2) {
             /* 1) Query is idle for a long time. */
             size_t remaining = sdslen(c->querybuf) - c->qb_pos;
-            if (!(c->flags & CLIENT_PRIMARY) && !remaining) {
+            if (!c->flag.primary && !remaining) {
                 /* If the client is not a primary and no data is pending,
                  * The client can safely use the shared query buffer in the next read - free the client's querybuf. */
                 sdsfree(c->querybuf);
@@ -748,6 +755,8 @@ int clientsCronResizeQueryBuffer(client *c) {
  * The buffer peak will be reset back to the buffer position every server.reply_buffer_peak_reset_time milliseconds
  * The function always returns 0 as it never terminates the client. */
 int clientsCronResizeOutputBuffer(client *c, mstime_t now_ms) {
+    if (c->io_write_state != CLIENT_IDLE) return 0;
+
     size_t new_buffer_size = 0;
     char *oldbuf = NULL;
     const size_t buffer_target_shrink_size = c->buf_usable_size / 2;
@@ -858,7 +867,7 @@ void updateClientMemoryUsage(client *c) {
 }
 
 int clientEvictionAllowed(client *c) {
-    if (server.maxmemory_clients == 0 || c->flags & CLIENT_NO_EVICT || !c->conn) {
+    if (server.maxmemory_clients == 0 || c->flag.no_evict || !c->conn) {
         return 0;
     }
     int type = getClientType(c);
@@ -898,7 +907,6 @@ void removeClientFromMemUsageBucket(client *c, int allow_eviction) {
  * returns 1 if client eviction for this client is allowed, 0 otherwise.
  */
 int updateClientMemUsageAndBucket(client *c) {
-    serverAssert(io_threads_op == IO_THREADS_OP_IDLE && c->conn);
     int allow_eviction = clientEvictionAllowed(c);
     removeClientFromMemUsageBucket(c, allow_eviction);
 
@@ -991,6 +999,7 @@ void clientsCron(void) {
         head = listFirst(server.clients);
         c = listNodeValue(head);
         listRotateHeadToTail(server.clients);
+        if (c->io_read_state != CLIENT_IDLE || c->io_write_state != CLIENT_IDLE) continue;
         /* The following functions do different service checks on the client.
          * The protocol is that they return non-zero if the client was
          * terminated. */
@@ -1069,8 +1078,7 @@ void databasesCron(void) {
 static inline void updateCachedTimeWithUs(int update_daylight_info, const long long ustime) {
     server.ustime = ustime;
     server.mstime = server.ustime / 1000;
-    time_t unixtime = server.mstime / 1000;
-    atomic_store_explicit(&server.unixtime, unixtime, memory_order_relaxed);
+    server.unixtime = server.mstime / 1000;
 
     /* To get information about daylight saving time, we need to call
      * localtime_r and cache the result. However calling localtime_r in this
@@ -1251,23 +1259,18 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     monotime cron_start = getMonotonicUs();
 
     run_with_period(100) {
-        long long stat_net_input_bytes, stat_net_output_bytes;
-        long long stat_net_repl_input_bytes, stat_net_repl_output_bytes;
-
-        stat_net_input_bytes = atomic_load_explicit(&server.stat_net_input_bytes, memory_order_relaxed);
-        stat_net_output_bytes = atomic_load_explicit(&server.stat_net_output_bytes, memory_order_relaxed);
-        stat_net_repl_input_bytes = atomic_load_explicit(&server.stat_net_repl_input_bytes, memory_order_relaxed);
-        stat_net_repl_output_bytes = atomic_load_explicit(&server.stat_net_repl_output_bytes, memory_order_relaxed);
-
         monotime current_time = getMonotonicUs();
         long long factor = 1000000; // us
         trackInstantaneousMetric(STATS_METRIC_COMMAND, server.stat_numcommands, current_time, factor);
-        trackInstantaneousMetric(STATS_METRIC_NET_INPUT, stat_net_input_bytes + stat_net_repl_input_bytes, current_time,
-                                 factor);
-        trackInstantaneousMetric(STATS_METRIC_NET_OUTPUT, stat_net_output_bytes + stat_net_repl_output_bytes,
+        trackInstantaneousMetric(STATS_METRIC_NET_INPUT, server.stat_net_input_bytes + server.stat_net_repl_input_bytes,
                                  current_time, factor);
-        trackInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION, stat_net_repl_input_bytes, current_time, factor);
-        trackInstantaneousMetric(STATS_METRIC_NET_OUTPUT_REPLICATION, stat_net_repl_output_bytes, current_time, factor);
+        trackInstantaneousMetric(STATS_METRIC_NET_OUTPUT,
+                                 server.stat_net_output_bytes + server.stat_net_repl_output_bytes, current_time,
+                                 factor);
+        trackInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION, server.stat_net_repl_input_bytes, current_time,
+                                 factor);
+        trackInstantaneousMetric(STATS_METRIC_NET_OUTPUT_REPLICATION, server.stat_net_repl_output_bytes, current_time,
+                                 factor);
         trackInstantaneousMetric(STATS_METRIC_EL_CYCLE, server.duration_stats[EL_DURATION_TYPE_EL].cnt, current_time,
                                  factor);
         trackInstantaneousMetric(STATS_METRIC_EL_DURATION, server.duration_stats[EL_DURATION_TYPE_EL].sum,
@@ -1427,9 +1430,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         migrateCloseTimedoutSockets();
     }
 
-    /* Stop the I/O threads if we don't have enough pending work. */
-    stopThreadedIOIfNeeded();
-
     /* Resize tracking keys table if needed. This is also done at every
      * command execution, but we want to be sure that if the last command
      * executed changes the value via CONFIG SET, the server will perform
@@ -1574,23 +1574,31 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * events to handle. */
     if (ProcessingEventsWhileBlocked) {
         uint64_t processed = 0;
-        processed += handleClientsWithPendingReadsUsingThreads();
+        processed += processIOThreadsReadDone();
         processed += connTypeProcessPendingData();
         if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE) flushAppendOnlyFile(0);
         processed += handleClientsWithPendingWrites();
+        int last_procssed = 0;
+        do {
+            /* Try to process all the pending IO events. */
+            last_procssed = processIOThreadsReadDone() + processIOThreadsWriteDone();
+            processed += last_procssed;
+        } while (last_procssed != 0);
         processed += freeClientsInAsyncFreeQueue();
         server.events_processed_while_blocked += processed;
         return;
     }
 
     /* We should handle pending reads clients ASAP after event loop. */
-    handleClientsWithPendingReadsUsingThreads();
+    processIOThreadsReadDone();
 
     /* Handle pending data(typical TLS). (must be done before flushAppendOnlyFile) */
     connTypeProcessPendingData();
 
-    /* If any connection type(typical TLS) still has pending unread data don't sleep at all. */
-    int dont_sleep = connTypeHasPendingData();
+    /* If any connection type(typical TLS) still has pending unread data or if there are clients
+     * with pending IO reads/writes, don't sleep at all. */
+    int dont_sleep = connTypeHasPendingData() || listLength(server.clients_pending_io_read) > 0 ||
+                     listLength(server.clients_pending_io_write) > 0;
 
     /* Call the Cluster before sleep function. Note that this function
      * may change the state of Cluster (from ok to fail or vice versa),
@@ -1653,7 +1661,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     long long prev_fsynced_reploff = server.fsynced_reploff;
 
     /* Write the AOF buffer on disk,
-     * must be done before handleClientsWithPendingWritesUsingThreads,
+     * must be done before handleClientsWithPendingWrites,
      * in case of appendfsync=always. */
     if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE) flushAppendOnlyFile(0);
 
@@ -1673,7 +1681,14 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     }
 
     /* Handle writes with pending output buffers. */
-    handleClientsWithPendingWritesUsingThreads();
+    handleClientsWithPendingWrites();
+
+    /* Try to process more IO reads that are ready to be processed. */
+    if (server.aof_fsync != AOF_FSYNC_ALWAYS) {
+        processIOThreadsReadDone();
+    }
+
+    processIOThreadsWriteDone();
 
     /* Record cron time in beforeSleep. This does not include the time consumed by AOF writing and IO writing above. */
     monotime cron_start_time_after_write = getMonotonicUs();
@@ -1723,7 +1738,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 /* This function is called immediately after the event loop multiplexing
  * API returned, and the control is going to soon return to the server by invoking
  * the different events callbacks. */
-void afterSleep(struct aeEventLoop *eventLoop) {
+void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
     UNUSED(eventLoop);
     /********************* WARNING ********************
      * Do NOT add anything above moduleAcquireGIL !!! *
@@ -1755,6 +1770,8 @@ void afterSleep(struct aeEventLoop *eventLoop) {
     if (!ProcessingEventsWhileBlocked) {
         server.cmd_time_snapshot = server.mstime;
     }
+
+    adjustIOThreadsByEventLoad(numevents, 0);
 }
 
 /* =========================== Server initialization ======================== */
@@ -2475,10 +2492,10 @@ void resetServerStats(void) {
     server.stat_sync_partial_ok = 0;
     server.stat_sync_partial_err = 0;
     server.stat_io_reads_processed = 0;
-    atomic_store_explicit(&server.stat_total_reads_processed, 0, memory_order_relaxed);
+    server.stat_total_reads_processed = 0;
     server.stat_io_writes_processed = 0;
-    atomic_store_explicit(&server.stat_total_writes_processed, 0, memory_order_relaxed);
-    atomic_store_explicit(&server.stat_client_qbuf_limit_disconnections, 0, memory_order_relaxed);
+    server.stat_total_writes_processed = 0;
+    server.stat_client_qbuf_limit_disconnections = 0;
     server.stat_client_outbuf_limit_disconnections = 0;
     for (j = 0; j < STATS_METRIC_COUNT; j++) {
         server.inst_metric[j].idx = 0;
@@ -2489,10 +2506,10 @@ void resetServerStats(void) {
     server.stat_aof_rewrites = 0;
     server.stat_rdb_saves = 0;
     server.stat_aofrw_consecutive_failures = 0;
-    atomic_store_explicit(&server.stat_net_input_bytes, 0, memory_order_relaxed);
-    atomic_store_explicit(&server.stat_net_output_bytes, 0, memory_order_relaxed);
-    atomic_store_explicit(&server.stat_net_repl_input_bytes, 0, memory_order_relaxed);
-    atomic_store_explicit(&server.stat_net_repl_output_bytes, 0, memory_order_relaxed);
+    server.stat_net_input_bytes = 0;
+    server.stat_net_output_bytes = 0;
+    server.stat_net_repl_input_bytes = 0;
+    server.stat_net_repl_output_bytes = 0;
     server.stat_unexpected_error_replies = 0;
     server.stat_total_error_replies = 0;
     server.stat_dump_payload_sanitizations = 0;
@@ -2546,7 +2563,8 @@ void initServer(void) {
     server.replicas_waiting_psync = raxNew();
     server.wait_before_rdb_client_free = DEFAULT_WAIT_BEFORE_RDB_CLIENT_FREE;
     server.clients_pending_write = listCreate();
-    server.clients_pending_read = listCreate();
+    server.clients_pending_io_write = listCreate();
+    server.clients_pending_io_read = listCreate();
     server.clients_timeout_table = raxNew();
     server.replication_allowed = 1;
     server.replicas_eldb = -1; /* Force to emit the first SELECT command. */
@@ -2642,6 +2660,7 @@ void initServer(void) {
     server.rdb_last_load_keys_expired = 0;
     server.rdb_last_load_keys_loaded = 0;
     server.dirty = 0;
+    server.crashed = 0;
     resetServerStats();
     /* A few stats we don't want to reset: server startup time, and peak mem. */
     server.stat_starttime = time(NULL);
@@ -2797,7 +2816,7 @@ void initListeners(void) {
  * see: https://sourceware.org/bugzilla/show_bug.cgi?id=19329 */
 void InitServerLast(void) {
     bioInit();
-    initThreadedIO();
+    initIOThreads();
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
     server.initial_memory_usage = zmalloc_used_memory();
 }
@@ -3151,7 +3170,7 @@ struct serverCommand *lookupCommandOrOriginal(robj **argv, int argc) {
 
 /* Commands arriving from the primary client or AOF client, should never be rejected. */
 int mustObeyClient(client *c) {
-    return c->id == CLIENT_ID_AOF || c->flags & CLIENT_PRIMARY;
+    return c->id == CLIENT_ID_AOF || c->flag.primary;
 }
 
 static int shouldPropagate(int target) {
@@ -3223,25 +3242,25 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target) {
  * specific command execution into AOF / Replication. */
 void forceCommandPropagation(client *c, int flags) {
     serverAssert(c->cmd->flags & (CMD_WRITE | CMD_MAY_REPLICATE));
-    if (flags & PROPAGATE_REPL) c->flags |= CLIENT_FORCE_REPL;
-    if (flags & PROPAGATE_AOF) c->flags |= CLIENT_FORCE_AOF;
+    if (flags & PROPAGATE_REPL) c->flag.force_repl = 1;
+    if (flags & PROPAGATE_AOF) c->flag.force_aof = 1;
 }
 
 /* Avoid that the executed command is propagated at all. This way we
  * are free to just propagate what we want using the alsoPropagate()
  * API. */
 void preventCommandPropagation(client *c) {
-    c->flags |= CLIENT_PREVENT_PROP;
+    c->flag.prevent_prop = 1;
 }
 
 /* AOF specific version of preventCommandPropagation(). */
 void preventCommandAOF(client *c) {
-    c->flags |= CLIENT_PREVENT_AOF_PROP;
+    c->flag.prevent_aof_prop = 1;
 }
 
 /* Replication specific version of preventCommandPropagation(). */
 void preventCommandReplication(client *c) {
-    c->flags |= CLIENT_PREVENT_REPL_PROP;
+    c->flag.prevent_repl_prop = 1;
 }
 
 /* Log the last command a client executed into the slowlog. */
@@ -3402,7 +3421,8 @@ int incrCommandStatsOnError(struct serverCommand *cmd, int flags) {
  */
 void call(client *c, int flags) {
     long long dirty;
-    uint64_t client_old_flags = c->flags;
+    struct ClientFlags client_old_flags = c->flag;
+
     struct serverCommand *real_cmd = c->realcmd;
     client *prev_client = server.executing_client;
     server.executing_client = c;
@@ -3419,7 +3439,9 @@ void call(client *c, int flags) {
 
     /* Initialization: clear the flags that must be set by the command on
      * demand, and initialize the array for additional commands propagation. */
-    c->flags &= ~(CLIENT_FORCE_AOF | CLIENT_FORCE_REPL | CLIENT_PREVENT_PROP);
+    c->flag.force_aof = 0;
+    c->flag.force_repl = 0;
+    c->flag.prevent_prop = 0;
 
     /* The server core is in charge of propagation when the first entry point
      * of call() is processCommand().
@@ -3440,12 +3462,12 @@ void call(client *c, int flags) {
      * sending client side caching message in the middle of a command reply.
      * In case of blocking commands, the flag will be un-set only after successfully
      * re-processing and unblock the client.*/
-    c->flags |= CLIENT_EXECUTING_COMMAND;
+    c->flag.executing_command = 1;
 
     /* Setting the CLIENT_REPROCESSING_COMMAND flag so that during the actual
      * processing of the command proc, the client is aware that it is being
      * re-processed. */
-    if (reprocessing_command) c->flags |= CLIENT_REPROCESSING_COMMAND;
+    if (reprocessing_command) c->flag.reprocessing_command = 1;
 
     monotime monotonic_start = 0;
     if (monotonicGetType() == MONOTONIC_CLOCK_HW) monotonic_start = getMonotonicUs();
@@ -3453,13 +3475,13 @@ void call(client *c, int flags) {
     c->cmd->proc(c);
 
     /* Clear the CLIENT_REPROCESSING_COMMAND flag after the proc is executed. */
-    if (reprocessing_command) c->flags &= ~CLIENT_REPROCESSING_COMMAND;
+    if (reprocessing_command) c->flag.reprocessing_command = 0;
 
     exitExecutionUnit();
 
     /* In case client is blocked after trying to execute the command,
      * it means the execution is not yet completed and we MIGHT reprocess the command in the future. */
-    if (!(c->flags & CLIENT_BLOCKED)) c->flags &= ~(CLIENT_EXECUTING_COMMAND);
+    if (!c->flag.blocked) c->flag.executing_command = 0;
 
     /* In order to avoid performance implication due to querying the clock using a system call 3 times,
      * we use a monotonic clock, when we are sure its cost is very low, and fall back to non-monotonic call otherwise. */
@@ -3485,9 +3507,9 @@ void call(client *c, int flags) {
 
     /* After executing command, we will close the client after writing entire
      * reply if it is set 'CLIENT_CLOSE_AFTER_COMMAND' flag. */
-    if (c->flags & CLIENT_CLOSE_AFTER_COMMAND) {
-        c->flags &= ~CLIENT_CLOSE_AFTER_COMMAND;
-        c->flags |= CLIENT_CLOSE_AFTER_REPLY;
+    if (c->flag.close_after_command) {
+        c->flag.close_after_command = 0;
+        c->flag.close_after_reply = 1;
     }
 
     /* Note: the code below uses the real command that was executed
@@ -3505,7 +3527,7 @@ void call(client *c, int flags) {
 
     /* Log the command into the Slow log if needed.
      * If the client is blocked we will handle slowlog when it is unblocked. */
-    if (update_command_stats && !(c->flags & CLIENT_BLOCKED)) slowlogPushCurrentCommand(c, real_cmd, c->duration);
+    if (update_command_stats && !c->flag.blocked) slowlogPushCurrentCommand(c, real_cmd, c->duration);
 
     /* Send the command to clients in MONITOR mode if applicable,
      * since some administrative commands are considered too dangerous to be shown.
@@ -3519,20 +3541,20 @@ void call(client *c, int flags) {
 
     /* Clear the original argv.
      * If the client is blocked we will handle slowlog when it is unblocked. */
-    if (!(c->flags & CLIENT_BLOCKED)) freeClientOriginalArgv(c);
+    if (!c->flag.blocked) freeClientOriginalArgv(c);
 
     /* populate the per-command statistics that we show in INFO commandstats.
      * If the client is blocked we will handle latency stats and duration when it is unblocked. */
-    if (update_command_stats && !(c->flags & CLIENT_BLOCKED)) {
+    if (update_command_stats && !c->flag.blocked) {
         real_cmd->calls++;
         real_cmd->microseconds += c->duration;
-        if (server.latency_tracking_enabled && !(c->flags & CLIENT_BLOCKED))
+        if (server.latency_tracking_enabled && !c->flag.blocked)
             updateCommandLatencyHistogram(&(real_cmd->latency_histogram), c->duration * 1000);
     }
 
     /* The duration needs to be reset after each call except for a blocked command,
      * which is expected to record and reset the duration after unblocking. */
-    if (!(c->flags & CLIENT_BLOCKED)) {
+    if (!c->flag.blocked) {
         c->duration = 0;
     }
 
@@ -3540,8 +3562,8 @@ void call(client *c, int flags) {
      * We never propagate EXEC explicitly, it will be implicitly
      * propagated if needed (see propagatePendingCommands).
      * Also, module commands take care of themselves */
-    if (flags & CMD_CALL_PROPAGATE && (c->flags & CLIENT_PREVENT_PROP) != CLIENT_PREVENT_PROP &&
-        c->cmd->proc != execCommand && !(c->cmd->flags & CMD_MODULE)) {
+    if (flags & CMD_CALL_PROPAGATE && !c->flag.prevent_prop && c->cmd->proc != execCommand &&
+        !(c->cmd->flags & CMD_MODULE)) {
         int propagate_flags = PROPAGATE_NONE;
 
         /* Check if the command operated changes in the data set. If so
@@ -3550,17 +3572,15 @@ void call(client *c, int flags) {
 
         /* If the client forced AOF / replication of the command, set
          * the flags regardless of the command effects on the data set. */
-        if (c->flags & CLIENT_FORCE_REPL) propagate_flags |= PROPAGATE_REPL;
-        if (c->flags & CLIENT_FORCE_AOF) propagate_flags |= PROPAGATE_AOF;
+        if (c->flag.force_repl) propagate_flags |= PROPAGATE_REPL;
+        if (c->flag.force_aof) propagate_flags |= PROPAGATE_AOF;
 
         /* However prevent AOF / replication propagation if the command
          * implementation called preventCommandPropagation() or similar,
          * or if we don't have the call() flags to do so. */
-        if (c->flags & CLIENT_PREVENT_REPL_PROP || c->flags & CLIENT_MODULE_PREVENT_REPL_PROP ||
-            !(flags & CMD_CALL_PROPAGATE_REPL))
+        if (c->flag.prevent_repl_prop || c->flag.module_prevent_repl_prop || !(flags & CMD_CALL_PROPAGATE_REPL))
             propagate_flags &= ~PROPAGATE_REPL;
-        if (c->flags & CLIENT_PREVENT_AOF_PROP || c->flags & CLIENT_MODULE_PREVENT_AOF_PROP ||
-            !(flags & CMD_CALL_PROPAGATE_AOF))
+        if (c->flag.prevent_aof_prop || c->flag.module_prevent_aof_prop || !(flags & CMD_CALL_PROPAGATE_AOF))
             propagate_flags &= ~PROPAGATE_AOF;
 
         /* Call alsoPropagate() only if at least one of AOF / replication
@@ -3570,8 +3590,9 @@ void call(client *c, int flags) {
 
     /* Restore the old replication flags, since call() can be executed
      * recursively. */
-    c->flags &= ~(CLIENT_FORCE_AOF | CLIENT_FORCE_REPL | CLIENT_PREVENT_PROP);
-    c->flags |= client_old_flags & (CLIENT_FORCE_AOF | CLIENT_FORCE_REPL | CLIENT_PREVENT_PROP);
+    c->flag.force_aof = client_old_flags.force_aof;
+    c->flag.force_repl = client_old_flags.force_repl;
+    c->flag.prevent_prop = client_old_flags.prevent_prop;
 
     /* If the client has keys tracking enabled for client side caching,
      * make sure to remember the keys it fetched via this command. For read-only
@@ -3581,13 +3602,13 @@ void call(client *c, int flags) {
         /* We use the tracking flag of the original external client that
          * triggered the command, but we take the keys from the actual command
          * being executed. */
-        if (server.current_client && (server.current_client->flags & CLIENT_TRACKING) &&
-            !(server.current_client->flags & CLIENT_TRACKING_BCAST)) {
+        if (server.current_client && (server.current_client->flag.tracking) &&
+            !(server.current_client->flag.tracking_bcast)) {
             trackingRememberKeys(server.current_client, c);
         }
     }
 
-    if (!(c->flags & CLIENT_BLOCKED)) {
+    if (!c->flag.blocked) {
         /* Modules may call commands in cron, in which case server.current_client
          * is not set. */
         if (server.current_client) {
@@ -3835,7 +3856,7 @@ int processCommand(client *c) {
         }
     }
 
-    if (c->flags & CLIENT_MULTI && c->cmd->flags & CMD_NO_MULTI) {
+    if (c->flag.multi && c->cmd->flags & CMD_NO_MULTI) {
         rejectCommandFormat(c, "Command not allowed inside a transaction");
         return C_OK;
     }
@@ -3845,8 +3866,8 @@ int processCommand(client *c) {
     int acl_errpos;
     int acl_retval = ACLCheckAllPerm(c, &acl_errpos);
     if (acl_retval != ACL_OK) {
-        addACLLogEntry(c, acl_retval, (c->flags & CLIENT_MULTI) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, acl_errpos,
-                       NULL, NULL);
+        addACLLogEntry(c, acl_retval, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, acl_errpos, NULL,
+                       NULL);
         sds msg = getAclErrorMessage(acl_retval, c->user, c->cmd, c->argv[acl_errpos]->ptr, 0);
         rejectCommandFormat(c, "-NOPERM %s", msg);
         sdsfree(msg);
@@ -3872,6 +3893,12 @@ int processCommand(client *c) {
             c->cmd->rejected_calls++;
             return C_OK;
         }
+    }
+
+    if (!server.cluster_enabled && c->capa & CLIENT_CAPA_REDIRECT && server.primary_host && !mustObeyClient(c) &&
+        (is_write_command || (is_read_command && !c->flag.readonly))) {
+        addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
+        return C_OK;
     }
 
     /* Disconnect some clients if total clients memory is too high. We do this
@@ -3961,7 +3988,7 @@ int processCommand(client *c) {
 
     /* Only allow a subset of commands in the context of Pub/Sub if the
      * connection is in RESP2 mode. With RESP3 there are no limits. */
-    if ((c->flags & CLIENT_PUBSUB && c->resp == 2) && c->cmd->proc != pingCommand && c->cmd->proc != subscribeCommand &&
+    if ((c->flag.pubsub && c->resp == 2) && c->cmd->proc != pingCommand && c->cmd->proc != subscribeCommand &&
         c->cmd->proc != ssubscribeCommand && c->cmd->proc != unsubscribeCommand &&
         c->cmd->proc != sunsubscribeCommand && c->cmd->proc != psubscribeCommand &&
         c->cmd->proc != punsubscribeCommand && c->cmd->proc != quitCommand && c->cmd->proc != resetCommand) {
@@ -4017,21 +4044,21 @@ int processCommand(client *c) {
     /* Prevent a replica from sending commands that access the keyspace.
      * The main objective here is to prevent abuse of client pause check
      * from which replicas are exempt. */
-    if ((c->flags & CLIENT_REPLICA) && (is_may_replicate_command || is_write_command || is_read_command)) {
+    if (c->flag.replica && (is_may_replicate_command || is_write_command || is_read_command)) {
         rejectCommandFormat(c, "Replica can't interact with the keyspace");
         return C_OK;
     }
 
     /* If the server is paused, block the client until
      * the pause has ended. Replicas are never paused. */
-    if (!(c->flags & CLIENT_REPLICA) && ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) ||
-                                         ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command))) {
+    if (!c->flag.replica && ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) ||
+                             ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command))) {
         blockPostponeClient(c);
         return C_OK;
     }
 
     /* Exec the command */
-    if (c->flags & CLIENT_MULTI && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
+    if (c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
         c->cmd->proc != multiCommand && c->cmd->proc != watchCommand && c->cmd->proc != quitCommand &&
         c->cmd->proc != resetCommand) {
         queueMultiCommand(c, cmd_flags);
@@ -4411,7 +4438,7 @@ void pingCommand(client *c) {
         return;
     }
 
-    if (c->flags & CLIENT_PUBSUB && c->resp == 2) {
+    if (c->flag.pubsub && c->resp == 2) {
         addReply(c, shared.mbulkhdr[2]);
         addReplyBulkCBuffer(c, "pong", 4);
         if (c->argc == 1)
@@ -5389,7 +5416,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "lru_clock:%u\r\n", server.lruclock,
             "executable:%s\r\n", server.executable ? server.executable : "",
             "config_file:%s\r\n", server.configfile ? server.configfile : "",
-            "io_threads_active:%i\r\n", server.io_threads_active));
+            "io_threads_active:%i\r\n", server.active_io_threads_num > 1,
+            "availability_zone:%s\r\n", server.availability_zone));
         /* clang-format on */
 
         /* Conditional properties */
@@ -5623,23 +5651,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
 
     /* Stats */
     if (all_sections || (dictFind(section_dict, "stats") != NULL)) {
-        long long stat_total_reads_processed, stat_total_writes_processed;
-        long long stat_net_input_bytes, stat_net_output_bytes;
-        long long stat_net_repl_input_bytes, stat_net_repl_output_bytes;
         long long current_eviction_exceeded_time =
             server.stat_last_eviction_exceeded_time ? (long long)elapsedUs(server.stat_last_eviction_exceeded_time) : 0;
         long long current_active_defrag_time =
             server.stat_last_active_defrag_time ? (long long)elapsedUs(server.stat_last_active_defrag_time) : 0;
-        long long stat_client_qbuf_limit_disconnections;
-
-        stat_total_reads_processed = atomic_load_explicit(&server.stat_total_reads_processed, memory_order_relaxed);
-        stat_total_writes_processed = atomic_load_explicit(&server.stat_total_writes_processed, memory_order_relaxed);
-        stat_net_input_bytes = atomic_load_explicit(&server.stat_net_input_bytes, memory_order_relaxed);
-        stat_net_output_bytes = atomic_load_explicit(&server.stat_net_output_bytes, memory_order_relaxed);
-        stat_net_repl_input_bytes = atomic_load_explicit(&server.stat_net_repl_input_bytes, memory_order_relaxed);
-        stat_net_repl_output_bytes = atomic_load_explicit(&server.stat_net_repl_output_bytes, memory_order_relaxed);
-        stat_client_qbuf_limit_disconnections =
-            atomic_load_explicit(&server.stat_client_qbuf_limit_disconnections, memory_order_relaxed);
 
         if (sections++) info = sdscat(info, "\r\n");
         /* clang-format off */
@@ -5647,10 +5662,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "total_connections_received:%lld\r\n", server.stat_numconnections,
             "total_commands_processed:%lld\r\n", server.stat_numcommands,
             "instantaneous_ops_per_sec:%lld\r\n", getInstantaneousMetric(STATS_METRIC_COMMAND),
-            "total_net_input_bytes:%lld\r\n", stat_net_input_bytes + stat_net_repl_input_bytes,
-            "total_net_output_bytes:%lld\r\n", stat_net_output_bytes + stat_net_repl_output_bytes,
-            "total_net_repl_input_bytes:%lld\r\n", stat_net_repl_input_bytes,
-            "total_net_repl_output_bytes:%lld\r\n", stat_net_repl_output_bytes,
+            "total_net_input_bytes:%lld\r\n", server.stat_net_input_bytes + server.stat_net_repl_input_bytes,
+            "total_net_output_bytes:%lld\r\n", server.stat_net_output_bytes + server.stat_net_repl_output_bytes,
+            "total_net_repl_input_bytes:%lld\r\n", server.stat_net_repl_input_bytes,
+            "total_net_repl_output_bytes:%lld\r\n", server.stat_net_repl_output_bytes,
             "instantaneous_input_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT)/1024,
             "instantaneous_output_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_OUTPUT)/1024,
             "instantaneous_input_repl_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION)/1024,
@@ -5689,11 +5704,11 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "unexpected_error_replies:%lld\r\n", server.stat_unexpected_error_replies,
             "total_error_replies:%lld\r\n", server.stat_total_error_replies,
             "dump_payload_sanitizations:%lld\r\n", server.stat_dump_payload_sanitizations,
-            "total_reads_processed:%lld\r\n", stat_total_reads_processed,
-            "total_writes_processed:%lld\r\n", stat_total_writes_processed,
+            "total_reads_processed:%lld\r\n", server.stat_total_reads_processed,
+            "total_writes_processed:%lld\r\n", server.stat_total_writes_processed,
             "io_threaded_reads_processed:%lld\r\n", server.stat_io_reads_processed,
             "io_threaded_writes_processed:%lld\r\n", server.stat_io_writes_processed,
-            "client_query_buffer_limit_disconnections:%lld\r\n", stat_client_qbuf_limit_disconnections,
+            "client_query_buffer_limit_disconnections:%lld\r\n", server.stat_client_qbuf_limit_disconnections,
             "client_output_buffer_limit_disconnections:%lld\r\n", server.stat_client_outbuf_limit_disconnections,
             "reply_buffer_shrinks:%lld\r\n", server.stat_reply_buffer_shrinks,
             "reply_buffer_expands:%lld\r\n", server.stat_reply_buffer_expands,
@@ -5956,7 +5971,7 @@ void infoCommand(client *c) {
 }
 
 void monitorCommand(client *c) {
-    if (c->flags & CLIENT_DENY_BLOCKING) {
+    if (c->flag.deny_blocking) {
         /**
          * A client that has CLIENT_DENY_BLOCKING flag on
          * expects a reply per command and so can't execute MONITOR. */
@@ -5965,9 +5980,10 @@ void monitorCommand(client *c) {
     }
 
     /* ignore MONITOR if already replica or in monitor mode */
-    if (c->flags & CLIENT_REPLICA) return;
+    if (c->flag.replica) return;
 
-    c->flags |= (CLIENT_REPLICA | CLIENT_MONITOR);
+    c->flag.replica = 1;
+    c->flag.monitor = 1;
     listAddNodeTail(server.monitors, c);
     addReply(c, shared.ok);
 }
@@ -6383,6 +6399,9 @@ void memtest(size_t megabytes, int passes);
  * executable name contains "valkey-sentinel". */
 int checkForSentinelMode(int argc, char **argv, char *exec_name) {
     if (strstr(exec_name, "valkey-sentinel") != NULL) return 1;
+
+    /* valkey may install symlinks like redis-sentinel -> valkey-sentinel. */
+    if (strstr(exec_name, "redis-sentinel") != NULL) return 1;
 
     for (int j = 1; j < argc; j++)
         if (!strcmp(argv[j], "--sentinel")) return 1;

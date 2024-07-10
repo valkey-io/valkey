@@ -264,6 +264,15 @@ void setproctitle(const char *fmt, ...);
 #error "Undefined or invalid BYTE_ORDER"
 #endif
 
+/* Cache line alignment */
+#ifndef CACHE_LINE_SIZE
+#if defined(__aarch64__) && defined(__APPLE__)
+#define CACHE_LINE_SIZE 128
+#else
+#define CACHE_LINE_SIZE 64
+#endif /* __aarch64__ && __APPLE__ */
+#endif /* CACHE_LINE_SIZE */
+
 #if (__i386 || __amd64 || __powerpc__) && __GNUC__
 #define GNUC_VERSION (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)
 #if defined(__clang__)
@@ -327,6 +336,16 @@ void setcpuaffinity(const char *cpulist);
 /* Test for posix_fadvise() */
 #if defined(__linux__) || defined(__FreeBSD__)
 #define HAVE_FADVISE
+#endif
+
+#define IO_THREADS_MAX_NUM 16
+
+#ifndef CACHE_LINE_SIZE
+#if defined(__aarch64__) && defined(__APPLE__)
+#define CACHE_LINE_SIZE 128
+#else
+#define CACHE_LINE_SIZE 64
+#endif
 #endif
 
 #endif

@@ -37,6 +37,7 @@
 #include "fpconv_dtoa.h"
 #include "cluster.h"
 #include "threads_mngr.h"
+#include "io_threads.h"
 
 #include <arpa/inet.h>
 #include <signal.h>
@@ -808,12 +809,12 @@ void debugCommand(client *c) {
                 addReplyError(c, "RESP2 is not supported by this command");
                 return;
             }
-            uint64_t old_flags = c->flags;
-            c->flags |= CLIENT_PUSHING;
+            struct ClientFlags old_flags = c->flag;
+            c->flag.pushing = 1;
             addReplyPushLen(c, 2);
             addReplyBulkCString(c, "server-cpu-usage");
             addReplyLongLong(c, 42);
-            if (!(old_flags & CLIENT_PUSHING)) c->flags &= ~CLIENT_PUSHING;
+            if (!old_flags.pushing) c->flag.pushing = 0;
             /* Push replies are not synchronous replies, so we emit also a
              * normal reply in order for blocking clients just discarding the
              * push reply, to actually consume the reply and continue. */
@@ -868,7 +869,7 @@ void debugCommand(client *c) {
         sds sizes = sdsempty();
         sizes = sdscatprintf(sizes, "bits:%d ", (sizeof(void *) == 8) ? 64 : 32);
         sizes = sdscatprintf(sizes, "robj:%d ", (int)sizeof(robj));
-        sizes = sdscatprintf(sizes, "dictentry:%d ", (int)dictEntryMemUsage());
+        sizes = sdscatprintf(sizes, "dictentry:%d ", (int)dictEntryMemUsage(NULL));
         sizes = sdscatprintf(sizes, "sdshdr5:%d ", (int)sizeof(struct sdshdr5));
         sizes = sdscatprintf(sizes, "sdshdr8:%d ", (int)sizeof(struct sdshdr8));
         sizes = sdscatprintf(sizes, "sdshdr16:%d ", (int)sizeof(struct sdshdr16));
@@ -1041,7 +1042,7 @@ void _serverAssertPrintClientInfo(const client *c) {
 
     bugReportStart();
     serverLog(LL_WARNING, "=== ASSERTION FAILED CLIENT CONTEXT ===");
-    serverLog(LL_WARNING, "client->flags = %llu", (unsigned long long)c->flags);
+    serverLog(LL_WARNING, "client->flags = %llu", (unsigned long long)c->raw_flag);
     serverLog(LL_WARNING, "client->conn = %s", connGetInfo(c->conn, conninfo, sizeof(conninfo)));
     serverLog(LL_WARNING, "client->argc = %d", c->argc);
     for (j = 0; j < c->argc; j++) {
@@ -2174,6 +2175,7 @@ void removeSigSegvHandlers(void) {
 }
 
 void printCrashReport(void) {
+    server.crashed = 1;
     /* Log INFO and CLIENT LIST */
     logServerInfo();
 

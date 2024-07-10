@@ -4038,7 +4038,7 @@ void blockingGenericZpopCommand(client *c,
 
     /* If we are not allowed to block the client and the zset is empty the only thing
      * we can do is treating it as a timeout (even with timeout 0). */
-    if (c->flags & CLIENT_DENY_BLOCKING) {
+    if (c->flag.deny_blocking) {
         addReplyNullArray(c);
         return;
     }
@@ -4123,7 +4123,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
                 if (withscores && c->resp > 2) addReplyArrayLen(c, 2);
                 addReplyBulkCBuffer(c, key, sdslen(key));
                 if (withscores) addReplyDouble(c, *(double *)dictGetVal(de));
-                if (c->flags & CLIENT_CLOSE_ASAP) break;
+                if (c->flag.close_asap) break;
             }
         } else if (zsetobj->encoding == OBJ_ENCODING_LISTPACK) {
             listpackEntry *keys, *vals = NULL;
@@ -4136,7 +4136,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
                 count -= sample_count;
                 lpRandomPairs(zsetobj->ptr, sample_count, keys, vals);
                 zrandmemberReplyWithListpack(c, sample_count, keys, vals);
-                if (c->flags & CLIENT_CLOSE_ASAP) break;
+                if (c->flag.close_asap) break;
             }
             zfree(keys);
             zfree(vals);

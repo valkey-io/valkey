@@ -41,6 +41,7 @@
 typedef struct defragCtx {
     void *privdata;
     int slot;
+    void *aux;
 } defragCtx;
 
 typedef struct defragPubSubCtx {
@@ -73,6 +74,36 @@ void *activeDefragAlloc(void *ptr) {
     zfree_no_tcache(ptr);
     server.stat_active_defrag_hits++;
     return newptr;
+}
+
+/* This method captures the expiry db dict entry which refers to data stored in keys db dict entry. */
+void defragEntryStartCbForKeys(void *ctx, void *oldptr) {
+    defragCtx *defragctx = (defragCtx *)ctx;
+    serverDb *db = defragctx->privdata;
+    sds oldsds = (sds)dictGetKey((dictEntry *)oldptr);
+    int slot = defragctx->slot;
+    if (kvstoreDictSize(db->expires, slot)) {
+        dictEntry *expire_de = kvstoreDictFind(db->expires, slot, oldsds);
+        defragctx->aux = expire_de;
+    }
+}
+
+/* This method updates the key of expiry db dict entry. The key might be no longer valid
+ * as it could have been cleaned up during the defrag-realloc of the main dictionary. */
+void defragEntryFinishCbForKeys(void *ctx, void *newptr) {
+    defragCtx *defragctx = (defragCtx *)ctx;
+    dictEntry *expire_de = (dictEntry *)defragctx->aux;
+    /* Item doesn't have TTL associated to it. */
+    if (!expire_de) return;
+    /* No reallocation happened. */
+    if (!newptr) {
+        expire_de = NULL;
+        return;
+    }
+    serverDb *db = defragctx->privdata;
+    sds newsds = (sds)dictGetKey((dictEntry *)newptr);
+    int slot = defragctx->slot;
+    kvstoreDictSetKey(db->expires, slot, expire_de, newsds);
 }
 
 /*Defrag helper for sds strings
@@ -650,25 +681,10 @@ void defragModule(serverDb *db, dictEntry *kde) {
 /* for each key we scan in the main dict, this function will attempt to defrag
  * all the various pointers it has. */
 void defragKey(defragCtx *ctx, dictEntry *de) {
-    sds keysds = dictGetKey(de);
-    robj *newob, *ob;
-    unsigned char *newzl;
-    sds newsds;
     serverDb *db = ctx->privdata;
     int slot = ctx->slot;
-    /* Try to defrag the key name. */
-    newsds = activeDefragSds(keysds);
-    if (newsds) {
-        kvstoreDictSetKey(db->keys, slot, de, newsds);
-        if (kvstoreDictSize(db->expires, slot)) {
-            /* We can't search in db->expires for that key after we've released
-             * the pointer it holds, since it won't be able to do the string
-             * compare, but we can find the entry using key hash and pointer. */
-            uint64_t hash = kvstoreGetHash(db->expires, newsds);
-            dictEntry *expire_de = kvstoreDictFindEntryByPtrAndHash(db->expires, slot, keysds, hash);
-            if (expire_de) kvstoreDictSetKey(db->expires, slot, expire_de, newsds);
-        }
-    }
+    robj *newob, *ob;
+    unsigned char *newzl;
 
     /* Try to defrag robj and / or string value. */
     ob = dictGetVal(de);
@@ -984,7 +1000,9 @@ void activeDefragCycle(void) {
     endtime = start + timelimit;
     latencyStartMonitor(latency);
 
-    dictDefragFunctions defragfns = {.defragAlloc = activeDefragAlloc};
+    dictDefragFunctions defragfns = {.defragAlloc = activeDefragAlloc,
+                                     .defragEntryStartCb = defragEntryStartCbForKeys,
+                                     .defragEntryFinishCb = defragEntryFinishCbForKeys};
     do {
         /* if we're not continuing a scan from the last call or loop, start a new one */
         if (!defrag_stage && !defrag_cursor && (slot < 0)) {

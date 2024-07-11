@@ -2925,45 +2925,46 @@ int clusterProcessPacket(clusterLink *link) {
         return 1;
     }
 
-    clusterMsg *hdr = (clusterMsg *)link->rcvbuf;
-    uint16_t type = ntohs(hdr->type);
+    clusterMsg *sender_message = (clusterMsg *)link->rcvbuf;
+    uint16_t type = ntohs(sender_message->type);
     mstime_t now = mstime();
 
-    uint16_t flags = ntohs(hdr->flags);
-    uint64_t senderCurrentEpoch = 0, senderConfigEpoch = 0;
-    clusterNode *sender = getNodeFromLinkAndMsg(link, hdr);
-    int sender_claims_primary = !memcmp(hdr->replicaof, CLUSTER_NODE_NULL_NAME, CLUSTER_NAMELEN);
-    int sender_was_replica = sender && nodeIsReplica(sender);
-    int sender_was_primary = sender && nodeIsPrimary(sender);
+    uint16_t flags = ntohs(sender_message->flags);
+    uint64_t sender_claimed_current_epoch = 0, sender_claimed_config_epoch = 0;
+    clusterNode *sender_node = getNodeFromLinkAndMsg(link, sender_message);
+    int sender_claims_to_be_primary = !memcmp(sender_message->replicaof, CLUSTER_NODE_NULL_NAME, CLUSTER_NAMELEN);
+    int sender_was_replica = sender_node && nodeIsReplica(sender_node);
+    int sender_was_primary = sender_node && nodeIsPrimary(sender_node);
 
-    if (sender && (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA)) {
-        sender->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
+    if (sender_node && (sender_message->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA)) {
+        sender_node->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
     }
 
     /* Update the last time we saw any data from this node. We
      * use this in order to avoid detecting a timeout from a node that
      * is just sending a lot of data in the cluster bus, for instance
      * because of Pub/Sub. */
-    if (sender) sender->data_received = now;
+    if (sender_node) sender_node->data_received = now;
 
-    if (sender && !nodeInHandshake(sender)) {
+    if (sender_node && !nodeInHandshake(sender_node)) {
         /* Update our currentEpoch if we see a newer epoch in the cluster. */
-        senderCurrentEpoch = ntohu64(hdr->currentEpoch);
-        senderConfigEpoch = ntohu64(hdr->configEpoch);
-        if (senderCurrentEpoch > server.cluster->currentEpoch) server.cluster->currentEpoch = senderCurrentEpoch;
+        sender_claimed_current_epoch = ntohu64(sender_message->currentEpoch);
+        sender_claimed_config_epoch = ntohu64(sender_message->configEpoch);
+        if (sender_claimed_current_epoch > server.cluster->currentEpoch)
+            server.cluster->currentEpoch = sender_claimed_current_epoch;
         /* Update the sender configEpoch if it is a primary publishing a newer one. */
-        if (sender_claims_primary && senderConfigEpoch > sender->configEpoch) {
-            sender->configEpoch = senderConfigEpoch;
+        if (sender_claims_to_be_primary && sender_claimed_config_epoch > sender_node->configEpoch) {
+            sender_node->configEpoch = sender_claimed_config_epoch;
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
         }
         /* Update the replication offset info for this node. */
-        sender->repl_offset = ntohu64(hdr->offset);
-        sender->repl_offset_time = now;
+        sender_node->repl_offset = ntohu64(sender_message->offset);
+        sender_node->repl_offset_time = now;
         /* If we are a replica performing a manual failover and our primary
          * sent its offset while already paused, populate the MF state. */
-        if (server.cluster->mf_end && nodeIsReplica(myself) && myself->replicaof == sender &&
-            hdr->mflags[0] & CLUSTERMSG_FLAG0_PAUSED && server.cluster->mf_primary_offset == -1) {
-            server.cluster->mf_primary_offset = sender->repl_offset;
+        if (server.cluster->mf_end && nodeIsReplica(myself) && myself->replicaof == sender_node &&
+            sender_message->mflags[0] & CLUSTERMSG_FLAG0_PAUSED && server.cluster->mf_primary_offset == -1) {
+            server.cluster->mf_primary_offset = sender_node->repl_offset;
             clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_MANUALFAILOVER);
             serverLog(LL_NOTICE,
                       "Received replication offset for paused "
@@ -2999,21 +3000,21 @@ int clusterProcessPacket(clusterLink *link) {
          * In this stage we don't try to add the node with the right
          * flags, replicaof pointer, and so forth, as this details will be
          * resolved when we'll receive PONGs from the node. */
-        if (!sender && type == CLUSTERMSG_TYPE_MEET) {
-            clusterNode *node;
+        if (!sender_node && type == CLUSTERMSG_TYPE_MEET) {
+            clusterNode *new_sender_node;
 
-            node = createClusterNode(NULL, CLUSTER_NODE_HANDSHAKE);
-            serverAssert(nodeIp2String(node->ip, link, hdr->myip) == C_OK);
-            getClientPortFromClusterMsg(hdr, &node->tls_port, &node->tcp_port);
-            node->cport = ntohs(hdr->cport);
-            clusterAddNode(node);
+            new_sender_node = createClusterNode(NULL, CLUSTER_NODE_HANDSHAKE);
+            serverAssert(nodeIp2String(new_sender_node->ip, link, sender_message->myip) == C_OK);
+            getClientPortFromClusterMsg(sender_message, &new_sender_node->tls_port, &new_sender_node->tcp_port);
+            new_sender_node->cport = ntohs(sender_message->cport);
+            clusterAddNode(new_sender_node);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
         }
 
         /* If this is a MEET packet from an unknown node, we still process
          * the gossip section here since we have to trust the sender because
          * of the message type. */
-        if (!sender && type == CLUSTERMSG_TYPE_MEET) clusterProcessGossipSection(hdr, link);
+        if (!sender_node && type == CLUSTERMSG_TYPE_MEET) clusterProcessGossipSection(sender_message, link);
 
         /* Anyway reply with a PONG */
         clusterSendPing(link, CLUSTERMSG_TYPE_PONG);
@@ -3024,22 +3025,22 @@ int clusterProcessPacket(clusterLink *link) {
         serverLog(LL_DEBUG, "%s packet received: %.40s", clusterGetMessageTypeString(type),
                   link->node ? link->node->name : "NULL");
 
-        if (sender && (sender->flags & CLUSTER_NODE_MEET)) {
+        if (sender_node && (sender_node->flags & CLUSTER_NODE_MEET)) {
             /* Once we get a response for MEET from the sender, we can stop sending more MEET. */
-            sender->flags &= ~CLUSTER_NODE_MEET;
-            serverLog(LL_NOTICE, "Successfully completed handshake with %.40s (%s)", sender->name,
-                      sender->human_nodename);
+            sender_node->flags &= ~CLUSTER_NODE_MEET;
+            serverLog(LL_NOTICE, "Successfully completed handshake with %.40s (%s)", sender_node->name,
+                      sender_node->human_nodename);
         }
         if (!link->inbound) {
             if (nodeInHandshake(link->node)) {
                 /* If we already have this node, try to change the
                  * IP/port of the node with the new one. */
-                if (sender) {
+                if (sender_node) {
                     serverLog(LL_VERBOSE,
                               "Handshake: we already know node %.40s (%s), "
                               "updating the address if needed.",
-                              sender->name, sender->human_nodename);
-                    if (nodeUpdateAddressIfNeeded(sender, link, hdr)) {
+                              sender_node->name, sender_node->human_nodename);
+                    if (nodeUpdateAddressIfNeeded(sender_node, link, sender_message)) {
                         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
                     }
                     /* Free this node as we already have it. This will
@@ -3050,12 +3051,12 @@ int clusterProcessPacket(clusterLink *link) {
 
                 /* First thing to do is replacing the random name with the
                  * right node name if this was a handshake stage. */
-                clusterRenameNode(link->node, hdr->sender);
+                clusterRenameNode(link->node, sender_message->sender);
                 serverLog(LL_DEBUG, "Handshake with node %.40s completed.", link->node->name);
                 link->node->flags &= ~CLUSTER_NODE_HANDSHAKE;
                 link->node->flags |= flags & (CLUSTER_NODE_PRIMARY | CLUSTER_NODE_REPLICA);
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
-            } else if (memcmp(link->node->name, hdr->sender, CLUSTER_NAMELEN) != 0) {
+            } else if (memcmp(link->node->name, sender_message->sender, CLUSTER_NAMELEN) != 0) {
                 /* If the reply has a non matching node ID we
                  * disconnect this node and set it as not having an associated
                  * address. */
@@ -3081,15 +3082,15 @@ int clusterProcessPacket(clusterLink *link) {
          * be propagated because the replica ranking used to understand the
          * delay of each replica in the voting process, needs to know
          * what are the instances really competing. */
-        if (sender) {
+        if (sender_node) {
             int nofailover = flags & CLUSTER_NODE_NOFAILOVER;
-            sender->flags &= ~CLUSTER_NODE_NOFAILOVER;
-            sender->flags |= nofailover;
+            sender_node->flags &= ~CLUSTER_NODE_NOFAILOVER;
+            sender_node->flags |= nofailover;
         }
 
         /* Update the node address if it changed. */
-        if (sender && type == CLUSTERMSG_TYPE_PING && !nodeInHandshake(sender) &&
-            nodeUpdateAddressIfNeeded(sender, link, hdr)) {
+        if (sender_node && type == CLUSTERMSG_TYPE_PING && !nodeInHandshake(sender_node) &&
+            nodeUpdateAddressIfNeeded(sender_node, link, sender_message)) {
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
         }
 
@@ -3113,69 +3114,73 @@ int clusterProcessPacket(clusterLink *link) {
         }
 
         /* Check for role switch: replica -> primary or primary -> replica. */
-        if (sender) {
-            serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
-                      sender->human_nodename, sender_claims_primary ? "primary" : "replica", sender->shard_id);
-            if (sender_claims_primary) {
+        if (sender_node) {
+            serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender_node->name,
+                      sender_node->human_nodename, sender_claims_to_be_primary ? "primary" : "replica",
+                      sender_node->shard_id);
+            if (sender_claims_to_be_primary) {
                 /* Node is a primary. */
-                clusterSetNodeAsPrimary(sender);
+                clusterSetNodeAsPrimary(sender_node);
             } else {
                 /* Node is a replica. */
-                clusterNode *new_primary = clusterLookupNode(hdr->replicaof, CLUSTER_NAMELEN);
+                clusterNode *sender_claimed_primary_node =
+                    clusterLookupNode(sender_message->replicaof, CLUSTER_NAMELEN);
 
                 if (sender_was_primary) {
                     /* Primary turned into a replica! Reconfigure the node. */
-                    if (new_primary && areInSameShard(new_primary, sender)) {
+                    if (sender_claimed_primary_node && areInSameShard(sender_claimed_primary_node, sender_node)) {
                         /* `sender` was a primary and was in the same shard as its new primary */
-                        if (sender->configEpoch > senderConfigEpoch) {
+                        if (sender_node->configEpoch > sender_claimed_config_epoch) {
                             serverLog(LL_NOTICE,
                                       "Ignore stale message from %.40s (%s) in shard %.40s;"
                                       " gossip config epoch: %llu, current config epoch: %llu",
-                                      sender->name, sender->human_nodename, sender->shard_id,
-                                      (unsigned long long)senderConfigEpoch, (unsigned long long)sender->configEpoch);
+                                      sender_node->name, sender_node->human_nodename, sender_node->shard_id,
+                                      (unsigned long long)sender_claimed_config_epoch,
+                                      (unsigned long long)sender_node->configEpoch);
                         } else {
                             /* `primary` is still a `replica` in this observer node's view;
                              * update its role and configEpoch */
-                            clusterSetNodeAsPrimary(new_primary);
-                            new_primary->configEpoch = senderConfigEpoch;
+                            clusterSetNodeAsPrimary(sender_claimed_primary_node);
+                            sender_claimed_primary_node->configEpoch = sender_claimed_config_epoch;
                             serverLog(LL_NOTICE,
                                       "A failover occurred in shard %.40s; node %.40s (%s)"
                                       " failed over to node %.40s (%s) with a config epoch of %llu",
-                                      sender->shard_id, sender->name, sender->human_nodename, new_primary->name,
-                                      new_primary->human_nodename, (unsigned long long)new_primary->configEpoch);
+                                      sender_node->shard_id, sender_node->name, sender_node->human_nodename,
+                                      sender_claimed_primary_node->name, sender_claimed_primary_node->human_nodename,
+                                      (unsigned long long)sender_claimed_primary_node->configEpoch);
                         }
                     } else {
                         /* `sender` was moved to another shard and has become a replica, remove its slot assignment */
-                        int slots = clusterDelNodeSlots(sender);
+                        int slots = clusterDelNodeSlots(sender_node);
                         serverLog(LL_NOTICE,
                                   "Node %.40s (%s) is no longer primary of shard %.40s;"
                                   " removed all %d slot(s) it used to own",
-                                  sender->name, sender->human_nodename, sender->shard_id, slots);
-                        if (new_primary != NULL) {
-                            serverLog(LL_NOTICE, "Node %.40s (%s) is now part of shard %.40s", sender->name,
-                                      sender->human_nodename, new_primary->shard_id);
+                                  sender_node->name, sender_node->human_nodename, sender_node->shard_id, slots);
+                        if (sender_claimed_primary_node != NULL) {
+                            serverLog(LL_NOTICE, "Node %.40s (%s) is now part of shard %.40s", sender_node->name,
+                                      sender_node->human_nodename, sender_claimed_primary_node->shard_id);
                         }
                     }
 
-                    sender->flags &= ~(CLUSTER_NODE_PRIMARY | CLUSTER_NODE_MIGRATE_TO);
-                    sender->flags |= CLUSTER_NODE_REPLICA;
+                    sender_node->flags &= ~(CLUSTER_NODE_PRIMARY | CLUSTER_NODE_MIGRATE_TO);
+                    sender_node->flags |= CLUSTER_NODE_REPLICA;
 
                     /* Update config and state. */
                     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
                 }
 
                 /* Primary node changed for this replica? */
-                if (new_primary && sender->replicaof != new_primary) {
-                    if (sender->replicaof) clusterNodeRemoveReplica(sender->replicaof, sender);
+                if (sender_claimed_primary_node && sender_node->replicaof != sender_claimed_primary_node) {
+                    if (sender_node->replicaof) clusterNodeRemoveReplica(sender_node->replicaof, sender_node);
                     serverLog(LL_NOTICE, "Node %.40s (%s) is now a replica of node %.40s (%s) in shard %.40s",
-                              sender->name, sender->human_nodename, new_primary->name, new_primary->human_nodename,
-                              sender->shard_id);
-                    clusterNodeAddReplica(new_primary, sender);
-                    sender->replicaof = new_primary;
+                              sender_node->name, sender_node->human_nodename, sender_claimed_primary_node->name,
+                              sender_claimed_primary_node->human_nodename, sender_node->shard_id);
+                    clusterNodeAddReplica(sender_claimed_primary_node, sender_node);
+                    sender_node->replicaof = sender_claimed_primary_node;
 
                     /* Update the shard_id when a replica is connected to its
                      * primary in the very first time. */
-                    updateShardId(sender, new_primary->shard_id);
+                    updateShardId(sender_node, sender_claimed_primary_node->shard_id);
 
                     /* Update config. */
                     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
@@ -3193,15 +3198,16 @@ int clusterProcessPacket(clusterLink *link) {
          * for it or if there was a failover in the sender's shard. Check
          * this ASAP to avoid other computational expensive checks later.*/
 
-        if (sender && sender_claims_primary &&
-            (sender_was_replica || memcmp(sender->slots, hdr->myslots, sizeof(hdr->myslots)))) {
+        if (sender_node && sender_claims_to_be_primary &&
+            (sender_was_replica ||
+             memcmp(sender_node->slots, sender_message->myslots, sizeof(sender_message->myslots)))) {
             /* Make sure CLUSTER_NODE_PRIMARY has already been set by now on sender */
-            serverAssert(nodeIsPrimary(sender));
+            serverAssert(nodeIsPrimary(sender_node));
 
             /* 1) If the sender of the message is a primary, and we detected that
              *    the set of slots it claims changed, scan the slots to see if we
              *    need to update our configuration. */
-            clusterUpdateSlotsConfigWith(sender, senderConfigEpoch, hdr->myslots);
+            clusterUpdateSlotsConfigWith(sender_node, sender_claimed_config_epoch, sender_message->myslots);
 
             /* 2) We also check for the reverse condition, that is, the sender
              *    claims to serve slots we know are served by a primary with a
@@ -3222,14 +3228,14 @@ int clusterProcessPacket(clusterLink *link) {
              * do it. In this way A will stop to act as a primary (or can try to
              * failover if there are the conditions to win the election). */
             for (int j = 0; j < CLUSTER_SLOTS; j++) {
-                if (bitmapTestBit(hdr->myslots, j)) {
-                    if (server.cluster->slots[j] == sender || isSlotUnclaimed(j)) continue;
-                    if (server.cluster->slots[j]->configEpoch > senderConfigEpoch) {
+                if (bitmapTestBit(sender_message->myslots, j)) {
+                    if (server.cluster->slots[j] == sender_node || isSlotUnclaimed(j)) continue;
+                    if (server.cluster->slots[j]->configEpoch > sender_claimed_config_epoch) {
                         serverLog(LL_VERBOSE,
                                   "Node %.40s has old slots configuration, sending "
                                   "an UPDATE message about %.40s",
-                                  sender->name, server.cluster->slots[j]->name);
-                        clusterSendUpdate(sender->link, server.cluster->slots[j]);
+                                  sender_node->name, server.cluster->slots[j]->name);
+                        clusterSendUpdate(sender_node->link, server.cluster->slots[j]);
 
                         /* TODO: instead of exiting the loop send every other
                          * UPDATE packet for other nodes that are the new owner
@@ -3254,34 +3260,36 @@ int clusterProcessPacket(clusterLink *link) {
 
         /* If our config epoch collides with the sender's try to fix
          * the problem. */
-        if (sender && nodeIsPrimary(myself) && nodeIsPrimary(sender) && senderConfigEpoch == myself->configEpoch) {
-            clusterHandleConfigEpochCollision(sender);
+        if (sender_node && nodeIsPrimary(myself) && nodeIsPrimary(sender_node) &&
+            sender_claimed_config_epoch == myself->configEpoch) {
+            clusterHandleConfigEpochCollision(sender_node);
         }
 
         /* Get info from the gossip section */
-        if (sender) {
-            clusterProcessGossipSection(hdr, link);
-            clusterProcessPingExtensions(hdr, link);
+        if (sender_node) {
+            clusterProcessGossipSection(sender_message, link);
+            clusterProcessPingExtensions(sender_message, link);
         }
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;
 
-        if (sender) {
-            failing = clusterLookupNode(hdr->data.fail.about.nodename, CLUSTER_NAMELEN);
+        if (sender_node) {
+            failing = clusterLookupNode(sender_message->data.fail.about.nodename, CLUSTER_NAMELEN);
             if (failing && !(failing->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_MYSELF))) {
-                serverLog(LL_NOTICE, "FAIL message received from %.40s (%s) about %.40s (%s)", hdr->sender,
-                          sender->human_nodename, hdr->data.fail.about.nodename, failing->human_nodename);
+                serverLog(LL_NOTICE, "FAIL message received from %.40s (%s) about %.40s (%s)", sender_message->sender,
+                          sender_node->human_nodename, sender_message->data.fail.about.nodename,
+                          failing->human_nodename);
                 failing->flags |= CLUSTER_NODE_FAIL;
                 failing->fail_time = now;
                 failing->flags &= ~CLUSTER_NODE_PFAIL;
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
             }
         } else {
-            serverLog(LL_NOTICE, "Ignoring FAIL message from unknown node %.40s about %.40s", hdr->sender,
-                      hdr->data.fail.about.nodename);
+            serverLog(LL_NOTICE, "Ignoring FAIL message from unknown node %.40s about %.40s", sender_message->sender,
+                      sender_message->data.fail.about.nodename);
         }
     } else if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
-        if (!sender) return 1; /* We don't know that node. */
+        if (!sender_node) return 1; /* We don't know that node. */
 
         robj *channel, *message;
         uint32_t channel_len, message_len;
@@ -3290,23 +3298,24 @@ int clusterProcessPacket(clusterLink *link) {
          * Pub/Sub subscribers. */
         if ((type == CLUSTERMSG_TYPE_PUBLISH && serverPubsubSubscriptionCount() > 0) ||
             (type == CLUSTERMSG_TYPE_PUBLISHSHARD && serverPubsubShardSubscriptionCount() > 0)) {
-            channel_len = ntohl(hdr->data.publish.msg.channel_len);
-            message_len = ntohl(hdr->data.publish.msg.message_len);
-            channel = createStringObject((char *)hdr->data.publish.msg.bulk_data, channel_len);
-            message = createStringObject((char *)hdr->data.publish.msg.bulk_data + channel_len, message_len);
+            channel_len = ntohl(sender_message->data.publish.msg.channel_len);
+            message_len = ntohl(sender_message->data.publish.msg.message_len);
+            channel = createStringObject((char *)sender_message->data.publish.msg.bulk_data, channel_len);
+            message = createStringObject((char *)sender_message->data.publish.msg.bulk_data + channel_len, message_len);
             pubsubPublishMessage(channel, message, type == CLUSTERMSG_TYPE_PUBLISHSHARD);
             decrRefCount(channel);
             decrRefCount(message);
         }
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST) {
-        if (!sender) return 1; /* We don't know that node. */
-        clusterSendFailoverAuthIfNeeded(sender, hdr);
+        if (!sender_node) return 1; /* We don't know that node. */
+        clusterSendFailoverAuthIfNeeded(sender_node, sender_message);
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK) {
-        if (!sender) return 1; /* We don't know that node. */
+        if (!sender_node) return 1; /* We don't know that node. */
         /* We consider this vote only if the sender is a primary serving
          * a non zero number of slots, and its currentEpoch is greater or
          * equal to epoch where this node started the election. */
-        if (clusterNodeIsVotingPrimary(sender) && senderCurrentEpoch >= server.cluster->failover_auth_epoch) {
+        if (clusterNodeIsVotingPrimary(sender_node) &&
+            sender_claimed_current_epoch >= server.cluster->failover_auth_epoch) {
             server.cluster->failover_auth_count++;
             /* Maybe we reached a quorum here, set a flag to make sure
              * we check ASAP. */
@@ -3315,15 +3324,16 @@ int clusterProcessPacket(clusterLink *link) {
     } else if (type == CLUSTERMSG_TYPE_MFSTART) {
         /* This message is acceptable only if I'm a primary and the sender
          * is one of my replicas. */
-        if (!sender || sender->replicaof != myself) return 1;
+        if (!sender_node || sender_node->replicaof != myself) return 1;
         /* Manual failover requested from replicas. Initialize the state
          * accordingly. */
         resetManualFailover();
         server.cluster->mf_end = now + CLUSTER_MF_TIMEOUT;
-        server.cluster->mf_replica = sender;
+        server.cluster->mf_replica = sender_node;
         pauseActions(PAUSE_DURING_FAILOVER, now + (CLUSTER_MF_TIMEOUT * CLUSTER_MF_PAUSE_MULT),
                      PAUSE_ACTIONS_CLIENT_WRITE_SET);
-        serverLog(LL_NOTICE, "Manual failover requested by replica %.40s (%s).", sender->name, sender->human_nodename);
+        serverLog(LL_NOTICE, "Manual failover requested by replica %.40s (%s).", sender_node->name,
+                  sender_node->human_nodename);
         /* We need to send a ping message to the replica, as it would carry
          * `server.cluster->mf_primary_offset`, which means the primary paused clients
          * at offset `server.cluster->mf_primary_offset`, so that the replica would
@@ -3332,10 +3342,10 @@ int clusterProcessPacket(clusterLink *link) {
         clusterSendPing(link, CLUSTERMSG_TYPE_PING);
     } else if (type == CLUSTERMSG_TYPE_UPDATE) {
         clusterNode *n; /* The node the update is about. */
-        uint64_t reportedConfigEpoch = ntohu64(hdr->data.update.nodecfg.configEpoch);
+        uint64_t reportedConfigEpoch = ntohu64(sender_message->data.update.nodecfg.configEpoch);
 
-        if (!sender) return 1; /* We don't know the sender. */
-        n = clusterLookupNode(hdr->data.update.nodecfg.nodename, CLUSTER_NAMELEN);
+        if (!sender_node) return 1; /* We don't know the sender. */
+        n = clusterLookupNode(sender_message->data.update.nodecfg.nodename, CLUSTER_NAMELEN);
         if (!n) return 1;                                    /* We don't know the reported node. */
         if (n->configEpoch >= reportedConfigEpoch) return 1; /* Nothing new. */
 
@@ -3348,16 +3358,16 @@ int clusterProcessPacket(clusterLink *link) {
 
         /* Check the bitmap of served slots and update our
          * config accordingly. */
-        clusterUpdateSlotsConfigWith(n, reportedConfigEpoch, hdr->data.update.nodecfg.slots);
+        clusterUpdateSlotsConfigWith(n, reportedConfigEpoch, sender_message->data.update.nodecfg.slots);
     } else if (type == CLUSTERMSG_TYPE_MODULE) {
-        if (!sender) return 1; /* Protect the module from unknown nodes. */
+        if (!sender_node) return 1; /* Protect the module from unknown nodes. */
         /* We need to route this message back to the right module subscribed
          * for the right message type. */
-        uint64_t module_id = hdr->data.module.msg.module_id; /* Endian-safe ID */
-        uint32_t len = ntohl(hdr->data.module.msg.len);
-        uint8_t type = hdr->data.module.msg.type;
-        unsigned char *payload = hdr->data.module.msg.bulk_data;
-        moduleCallClusterReceivers(sender->name, module_id, type, payload, len);
+        uint64_t module_id = sender_message->data.module.msg.module_id; /* Endian-safe ID */
+        uint32_t len = ntohl(sender_message->data.module.msg.len);
+        uint8_t type = sender_message->data.module.msg.type;
+        unsigned char *payload = sender_message->data.module.msg.bulk_data;
+        moduleCallClusterReceivers(sender_node->name, module_id, type, payload, len);
     } else {
         serverLog(LL_WARNING, "Received unknown packet type: %d", type);
     }

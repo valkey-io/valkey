@@ -2281,10 +2281,8 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
     }
 
 #define createSpecialConfig(name, alias, modifiable, setfn, getfn, rewritefn, applyfn)                                 \
-    {                                                                                                                  \
-        .type = SPECIAL_CONFIG,                                                                                        \
-        embedCommonConfig(name, alias, modifiable) embedConfigInterface(NULL, setfn, getfn, rewritefn, applyfn)        \
-    }
+    {.type = SPECIAL_CONFIG,                                                                                           \
+     embedCommonConfig(name, alias, modifiable) embedConfigInterface(NULL, setfn, getfn, rewritefn, applyfn)}
 
 static int isValidActiveDefrag(int val, const char **err) {
 #ifndef HAVE_DEFRAG

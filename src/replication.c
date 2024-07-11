@@ -253,7 +253,8 @@ void backfillRdbReplicasToPsyncWait(void) {
         if (replica_rdb_client->ref_repl_buf_node) continue;
         replica_rdb_client->ref_repl_buf_node = ln;
         head->refcount++;
-        serverLog(LL_DEBUG, "Attach rdb replica %llu to repl buf block", (long long unsigned int)replica_rdb_client->id);
+        serverLog(LL_DEBUG, "Attach rdb replica %llu to repl buf block",
+                  (long long unsigned int)replica_rdb_client->id);
     }
     raxStop(&iter);
 }
@@ -272,7 +273,8 @@ void removeReplicaFromPsyncWait(client *replica_main_client) {
     replica_rdb_client->ref_repl_buf_node = NULL;
     replica_rdb_client->flag.protected_rdb_conn = 0;
     serverLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu, repl buffer block %s",
-              replicationGetReplicaName(replica_main_client), (long long unsigned int)replica_main_client->associated_rdb_client_id,
+              replicationGetReplicaName(replica_main_client),
+              (long long unsigned int)replica_main_client->associated_rdb_client_id,
               o ? "ref count decreased" : "doesn't exist");
     uint64_t id = htonu64(replica_rdb_client->id);
     raxRemove(server.replicas_waiting_psync, (unsigned char *)&id, sizeof(id), NULL);

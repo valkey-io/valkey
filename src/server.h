@@ -131,8 +131,7 @@ struct hdr_histogram;
 #define CONFIG_BGSAVE_RETRY_DELAY 5              /* Wait a few secs before trying again. */
 #define CONFIG_DEFAULT_PID_FILE "/var/run/valkey.pid"
 #define CONFIG_DEFAULT_BINDADDR_COUNT 2
-#define CONFIG_DEFAULT_BINDADDR                                                                                        \
-    { "*", "-::*" }
+#define CONFIG_DEFAULT_BINDADDR {"*", "-::*"}
 #define NET_HOST_STR_LEN 256                          /* Longest valid hostname */
 #define NET_IP_STR_LEN 46                             /* INET6_ADDRSTRLEN is 46, but we need to be sure */
 #define NET_ADDR_STR_LEN (NET_IP_STR_LEN + 32)        /* Must be enough for ip:port */
@@ -691,7 +690,7 @@ typedef enum {
 /* Extract encver / signature from a module type ID. */
 #define VALKEYMODULE_TYPE_ENCVER_BITS 10
 #define VALKEYMODULE_TYPE_ENCVER_MASK ((1 << VALKEYMODULE_TYPE_ENCVER_BITS) - 1)
-#define VALKEYMODULE_TYPE_ENCVER(id) ((id)&VALKEYMODULE_TYPE_ENCVER_MASK)
+#define VALKEYMODULE_TYPE_ENCVER(id) ((id) & VALKEYMODULE_TYPE_ENCVER_MASK)
 #define VALKEYMODULE_TYPE_SIGN(id)                                                                                     \
     (((id) & ~((uint64_t)VALKEYMODULE_TYPE_ENCVER_MASK)) >> VALKEYMODULE_TYPE_ENCVER_BITS)
 
@@ -1506,7 +1505,7 @@ struct serverMemOverhead {
         size_t dbid;
         size_t overhead_ht_main;
         size_t overhead_ht_expires;
-    } * db;
+    } *db;
 };
 
 /* Replication error behavior determines the replica behavior
@@ -1536,8 +1535,7 @@ typedef struct rdbSaveInfo {
     long long repl_offset;                /* Replication offset. */
 } rdbSaveInfo;
 
-#define RDB_SAVE_INFO_INIT                                                                                             \
-    { -1, 0, "0000000000000000000000000000000000000000", -1 }
+#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1}
 
 struct malloc_stats {
     size_t zmalloc_used;
@@ -1860,12 +1858,11 @@ struct valkeyServer {
     int set_proc_title;                          /* True if change proc title */
     char *proc_title_template;                   /* Process title template format */
     clientBufferLimitsConfig client_obuf_limits[CLIENT_TYPE_OBUF_COUNT];
-    int extended_redis_compat;    /* True if extended Redis OSS compatibility is enabled */
-    int pause_cron;               /* Don't run cron tasks (debug) */
-    int dict_resizing;            /* Whether to allow main dict and expired dict to be resized (debug) */
-    int latency_tracking_enabled; /* 1 if extended latency tracking is enabled, 0 otherwise. */
-    double
-        *latency_tracking_info_percentiles; /* Extended latency tracking info output percentile list configuration. */
+    int extended_redis_compat;                 /* True if extended Redis OSS compatibility is enabled */
+    int pause_cron;                            /* Don't run cron tasks (debug) */
+    int dict_resizing;                         /* Whether to allow main dict and expired dict to be resized (debug) */
+    int latency_tracking_enabled;              /* 1 if extended latency tracking is enabled, 0 otherwise. */
+    double *latency_tracking_info_percentiles; /* Extended latency tracking info output percentile list configuration. */
     int latency_tracking_info_percentiles_len;
     unsigned int max_new_tls_conns_per_cycle; /* The maximum number of tls connections that will be accepted during each
                                                  invocation of the event loop. */
@@ -3967,7 +3964,7 @@ sds getVersion(void);
  * should be ignored due to low level. */
 #define serverLog(level, ...)                                                                                          \
     do {                                                                                                               \
-        if (((level)&0xff) < server.verbosity) break;                                                                  \
+        if (((level) & 0xff) < server.verbosity) break;                                                                \
         _serverLog(level, __VA_ARGS__);                                                                                \
     } while (0)
 

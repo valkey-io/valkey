@@ -293,9 +293,10 @@ start_server {tags {"scripting"}} {
         run_script {return redis.pcall('wait','1','0')} 0
     } {0}
 
+    # Temporarily disable test for external until it is stabilized, see https://github.com/valkey-io/valkey/issues/770
     test {EVAL - Scripts do not block on waitaof} {
         run_script {redis.call('incr', 'x') return redis.pcall('waitaof','0','1','0')} 0
-    } {0 0}
+    } {0 0} {external:skip}
 
     test {EVAL - Scripts do not block on XREAD with BLOCK option} {
         r del s

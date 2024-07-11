@@ -940,13 +940,6 @@ typedef struct replBufBlock {
     char buf[];
 } replBufBlock;
 
-/* Link list block, used by replDataBuf during rdb-connection sync to store
- * replication data */
-typedef struct replDataBufBlock {
-    size_t size, used;
-    char buf[];
-} replDataBufBlock;
-
 /* Database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */

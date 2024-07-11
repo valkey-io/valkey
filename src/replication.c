@@ -2741,6 +2741,13 @@ void replStreamProgressCallback(size_t offset, int readlen, time_t *last_progres
     }
 }
 
+/* Link list block, used by replDataBuf during rdb-connection sync to store
+ * replication data */
+typedef struct replDataBufBlock {
+    size_t size, used;
+    char buf[];
+} replDataBufBlock;
+
 /* Replication: Replica side.
  * Reads replication data from primary into specified repl buffer block */
 int readIntoReplDataBlock(connection *conn, replDataBufBlock *data_block, size_t read) {

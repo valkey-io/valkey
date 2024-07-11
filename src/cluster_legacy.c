@@ -3116,15 +3116,13 @@ int clusterProcessPacket(clusterLink *link) {
         /* Check for role switch: replica -> primary or primary -> replica. */
         if (sender) {
             serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
-                      sender->human_nodename, sender_claims_to_be_primary ? "primary" : "replica",
-                      sender->shard_id);
+                      sender->human_nodename, sender_claims_to_be_primary ? "primary" : "replica", sender->shard_id);
             if (sender_claims_to_be_primary) {
                 /* Node is a primary. */
                 clusterSetNodeAsPrimary(sender);
             } else {
                 /* Node is a replica. */
-                clusterNode *sender_claimed_primary_node =
-                    clusterLookupNode(hdr->replicaof, CLUSTER_NAMELEN);
+                clusterNode *sender_claimed_primary_node = clusterLookupNode(hdr->replicaof, CLUSTER_NAMELEN);
 
                 if (sender_was_primary) {
                     /* Primary turned into a replica! Reconfigure the node. */
@@ -3199,8 +3197,7 @@ int clusterProcessPacket(clusterLink *link) {
          * this ASAP to avoid other computational expensive checks later.*/
 
         if (sender && sender_claims_to_be_primary &&
-            (sender_was_replica ||
-             memcmp(sender->slots, hdr->myslots, sizeof(hdr->myslots)))) {
+            (sender_was_replica || memcmp(sender->slots, hdr->myslots, sizeof(hdr->myslots)))) {
             /* Make sure CLUSTER_NODE_PRIMARY has already been set by now on sender */
             serverAssert(nodeIsPrimary(sender));
 
@@ -3277,8 +3274,7 @@ int clusterProcessPacket(clusterLink *link) {
             failing = clusterLookupNode(hdr->data.fail.about.nodename, CLUSTER_NAMELEN);
             if (failing && !(failing->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_MYSELF))) {
                 serverLog(LL_NOTICE, "FAIL message received from %.40s (%s) about %.40s (%s)", hdr->sender,
-                          sender->human_nodename, hdr->data.fail.about.nodename,
-                          failing->human_nodename);
+                          sender->human_nodename, hdr->data.fail.about.nodename, failing->human_nodename);
                 failing->flags |= CLUSTER_NODE_FAIL;
                 failing->fail_time = now;
                 failing->flags &= ~CLUSTER_NODE_PFAIL;
@@ -3314,8 +3310,7 @@ int clusterProcessPacket(clusterLink *link) {
         /* We consider this vote only if the sender is a primary serving
          * a non zero number of slots, and its currentEpoch is greater or
          * equal to epoch where this node started the election. */
-        if (clusterNodeIsVotingPrimary(sender) &&
-            sender_claimed_current_epoch >= server.cluster->failover_auth_epoch) {
+        if (clusterNodeIsVotingPrimary(sender) && sender_claimed_current_epoch >= server.cluster->failover_auth_epoch) {
             server.cluster->failover_auth_count++;
             /* Maybe we reached a quorum here, set a flag to make sure
              * we check ASAP. */
@@ -3332,8 +3327,7 @@ int clusterProcessPacket(clusterLink *link) {
         server.cluster->mf_replica = sender;
         pauseActions(PAUSE_DURING_FAILOVER, now + (CLUSTER_MF_TIMEOUT * CLUSTER_MF_PAUSE_MULT),
                      PAUSE_ACTIONS_CLIENT_WRITE_SET);
-        serverLog(LL_NOTICE, "Manual failover requested by replica %.40s (%s).", sender->name,
-                  sender->human_nodename);
+        serverLog(LL_NOTICE, "Manual failover requested by replica %.40s (%s).", sender->name, sender->human_nodename);
         /* We need to send a ping message to the replica, as it would carry
          * `server.cluster->mf_primary_offset`, which means the primary paused clients
          * at offset `server.cluster->mf_primary_offset`, so that the replica would

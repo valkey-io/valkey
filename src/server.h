@@ -2603,7 +2603,7 @@ void dictVanillaFree(dict *d, void *val);
 
 /* afterErrorReply flags */
 
-/* Indicating that we should not update error stats after sending error reply */
+/* Indicating that we should not update error stats after sending error reply. */
 #define ERR_REPLY_FLAG_NO_STATS_UPDATE (1ULL << 0)
 /* Indicates the error message is custom (e.g. from LUA). */
 #define ERR_REPLY_FLAG_CUSTOM (1ULL << 1)

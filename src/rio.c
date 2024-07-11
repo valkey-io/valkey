@@ -603,18 +603,14 @@ static const rio rioConnsetIO = {
     {{NULL, 0}} /* union for io-specific vars */
 };
 
-
 void rioInitWithConnset(rio *r, connection **conns, int numconns) {
     *r = rioConnsetIO;
     r->io.connset.conns = zmalloc(sizeof(connection *) * numconns);
     r->io.connset.state = zmalloc(sizeof(int) * numconns);
-
     for (int i = 0; i < numconns; i++) {
-        connIncrRefs(conns[i]);
         r->io.connset.conns[i] = conns[i];
         r->io.connset.state[i] = 0;
     }
-
     r->io.connset.numconns = numconns;
     r->io.connset.pos = 0;
     r->io.connset.buf = sdsempty();
@@ -622,12 +618,6 @@ void rioInitWithConnset(rio *r, connection **conns, int numconns) {
 
 /* release the rio stream. */
 void rioFreeConnset(rio *r) {
-    for (int i = 0; i < r->io.connset.numconns; i++) {
-        connection *conn = r->io.connset.conns[i];
-        connDecrRefs(conn);
-        callHandler(conn, NULL); // trigger close/free if necessary
-    }
-
     zfree(r->io.connset.conns);
     zfree(r->io.connset.state);
     sdsfree(r->io.connset.buf);

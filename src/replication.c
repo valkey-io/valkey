@@ -2588,14 +2588,20 @@ static void fullSyncWithPrimary(connection *conn) {
             lens[argc] = sdslen(server.primary_auth);
             argc++;
             err = sendCommandArgv(conn, argc, args, lens);
-            if (err) goto write_error;
+            if (err) {
+                serverLog(LL_WARNING, "Sending command to primary in dual connection replication handshake: %s", err);
+                return;
+            }
         }
         /* Send replica lisening port to primary for clarification */
         sds portstr = getReplicaPortString();
         err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-conn", "1", "listening-port", portstr,
                           NULL);
         sdsfree(portstr);
-        if (err) goto write_error;
+        if (err) {
+            serverLog(LL_WARNING, "Sending command to primary in dual connection replication handshake: %s", err);
+            return;
+        }
         server.repl_rdb_conn_state = REPL_RDB_CONN_RECEIVE_AUTH_REPLY;
 
         if (connSetReadHandler(conn, fullSyncWithPrimary) == C_ERR) {
@@ -2708,10 +2714,6 @@ error:
     server.repl_state = REPL_STATE_CONNECT;
     abortRdbConnectionSync();
     return;
-
-write_error: /* Handle sendCommand() errors. */
-    serverLog(LL_WARNING, "Sending command to primary in dual connection replication handshake: %s", err);
-    goto error;
 }
 
 /* Replication: Replica side.

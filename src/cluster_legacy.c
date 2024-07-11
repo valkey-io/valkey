@@ -3122,11 +3122,11 @@ int clusterProcessPacket(clusterLink *link) {
                 clusterSetNodeAsPrimary(sender);
             } else {
                 /* Node is a replica. */
-                clusterNode *sender_claimed_primary_node = clusterLookupNode(hdr->replicaof, CLUSTER_NAMELEN);
+                clusterNode *sender_claimed_primary = clusterLookupNode(hdr->replicaof, CLUSTER_NAMELEN);
 
                 if (sender_was_primary) {
                     /* Primary turned into a replica! Reconfigure the node. */
-                    if (sender_claimed_primary_node && areInSameShard(sender_claimed_primary_node, sender)) {
+                    if (sender_claimed_primary && areInSameShard(sender_claimed_primary, sender)) {
                         /* `sender` was a primary and was in the same shard as its new primary */
                         if (sender->configEpoch > sender_claimed_config_epoch) {
                             serverLog(LL_NOTICE,
@@ -3138,14 +3138,14 @@ int clusterProcessPacket(clusterLink *link) {
                         } else {
                             /* `primary` is still a `replica` in this observer node's view;
                              * update its role and configEpoch */
-                            clusterSetNodeAsPrimary(sender_claimed_primary_node);
-                            sender_claimed_primary_node->configEpoch = sender_claimed_config_epoch;
+                            clusterSetNodeAsPrimary(sender_claimed_primary);
+                            sender_claimed_primary->configEpoch = sender_claimed_config_epoch;
                             serverLog(LL_NOTICE,
                                       "A failover occurred in shard %.40s; node %.40s (%s)"
                                       " failed over to node %.40s (%s) with a config epoch of %llu",
                                       sender->shard_id, sender->name, sender->human_nodename,
-                                      sender_claimed_primary_node->name, sender_claimed_primary_node->human_nodename,
-                                      (unsigned long long)sender_claimed_primary_node->configEpoch);
+                                      sender_claimed_primary->name, sender_claimed_primary->human_nodename,
+                                      (unsigned long long)sender_claimed_primary->configEpoch);
                         }
                     } else {
                         /* `sender` was moved to another shard and has become a replica, remove its slot assignment */
@@ -3154,9 +3154,9 @@ int clusterProcessPacket(clusterLink *link) {
                                   "Node %.40s (%s) is no longer primary of shard %.40s;"
                                   " removed all %d slot(s) it used to own",
                                   sender->name, sender->human_nodename, sender->shard_id, slots);
-                        if (sender_claimed_primary_node != NULL) {
+                        if (sender_claimed_primary != NULL) {
                             serverLog(LL_NOTICE, "Node %.40s (%s) is now part of shard %.40s", sender->name,
-                                      sender->human_nodename, sender_claimed_primary_node->shard_id);
+                                      sender->human_nodename, sender_claimed_primary->shard_id);
                         }
                     }
 
@@ -3168,17 +3168,17 @@ int clusterProcessPacket(clusterLink *link) {
                 }
 
                 /* Primary node changed for this replica? */
-                if (sender_claimed_primary_node && sender->replicaof != sender_claimed_primary_node) {
+                if (sender_claimed_primary && sender->replicaof != sender_claimed_primary) {
                     if (sender->replicaof) clusterNodeRemoveReplica(sender->replicaof, sender);
                     serverLog(LL_NOTICE, "Node %.40s (%s) is now a replica of node %.40s (%s) in shard %.40s",
-                              sender->name, sender->human_nodename, sender_claimed_primary_node->name,
-                              sender_claimed_primary_node->human_nodename, sender->shard_id);
-                    clusterNodeAddReplica(sender_claimed_primary_node, sender);
-                    sender->replicaof = sender_claimed_primary_node;
+                              sender->name, sender->human_nodename, sender_claimed_primary->name,
+                              sender_claimed_primary->human_nodename, sender->shard_id);
+                    clusterNodeAddReplica(sender_claimed_primary, sender);
+                    sender->replicaof = sender_claimed_primary;
 
                     /* Update the shard_id when a replica is connected to its
                      * primary in the very first time. */
-                    updateShardId(sender, sender_claimed_primary_node->shard_id);
+                    updateShardId(sender, sender_claimed_primary->shard_id);
 
                     /* Update config. */
                     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);

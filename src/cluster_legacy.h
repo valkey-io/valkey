@@ -365,6 +365,7 @@ struct clusterState {
     clusterNode *migrating_slots_to[CLUSTER_SLOTS];
     clusterNode *importing_slots_from[CLUSTER_SLOTS];
     clusterNode *slots[CLUSTER_SLOTS];
+    int is_light_hdr_supported;
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;  /* Time of previous or next election. */
     int failover_auth_count;      /* Number of votes received so far. */

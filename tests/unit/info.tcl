@@ -295,47 +295,50 @@ start_server {tags {"info" "external:skip"}} {
             }
         }
 
-        test {stats: eventloop metrics} {
-            set info1 [r info stats]
-            set cycle1 [getInfoProperty $info1 eventloop_cycles]
-            set el_sum1 [getInfoProperty $info1 eventloop_duration_sum]
-            set cmd_sum1 [getInfoProperty $info1 eventloop_duration_cmd_sum]
-            assert_morethan $cycle1 0
-            assert_morethan $el_sum1 0
-            assert_morethan $cmd_sum1 0
-            after 110 ;# default hz is 10, wait for a cron tick. 
-            set info2 [r info stats]
-            set cycle2 [getInfoProperty $info2 eventloop_cycles]
-            set el_sum2 [getInfoProperty $info2 eventloop_duration_sum]
-            set cmd_sum2 [getInfoProperty $info2 eventloop_duration_cmd_sum]
-            if {$::verbose} { puts "eventloop metrics cycle1: $cycle1, cycle2: $cycle2" }
-            assert_morethan $cycle2 $cycle1
-            assert_lessthan $cycle2 [expr $cycle1+10] ;# we expect 2 or 3 cycles here, but allow some tolerance
-            if {$::verbose} { puts "eventloop metrics el_sum1: $el_sum1, el_sum2: $el_sum2" }
-            assert_morethan $el_sum2 $el_sum1
-            assert_lessthan $el_sum2 [expr $el_sum1+30000] ;# we expect roughly 100ms here, but allow some tolerance
-            if {$::verbose} { puts "eventloop metrics cmd_sum1: $cmd_sum1, cmd_sum2: $cmd_sum2" }
-            assert_morethan $cmd_sum2 $cmd_sum1
-            assert_lessthan $cmd_sum2 [expr $cmd_sum1+15000] ;# we expect about tens of ms here, but allow some tolerance
-        }
-
-        test {stats: instantaneous metrics} {
-            r config resetstat
-            set retries 0
-            for {set retries 1} {$retries < 4} {incr retries} {
-                after 1600 ;# hz is 10, wait for 16 cron tick so that sample array is fulfilled
-                set value [s instantaneous_eventloop_cycles_per_sec]
-                if {$value > 0} break
+        # skip the following 2 tests if we are running with io-threads as the eventloop metrics are different in that case.
+        if {[r config get io-threads] eq 0} {
+            test {stats: eventloop metrics} {
+                set info1 [r info stats]
+                set cycle1 [getInfoProperty $info1 eventloop_cycles]
+                set el_sum1 [getInfoProperty $info1 eventloop_duration_sum]
+                set cmd_sum1 [getInfoProperty $info1 eventloop_duration_cmd_sum]
+                assert_morethan $cycle1 0
+                assert_morethan $el_sum1 0
+                assert_morethan $cmd_sum1 0
+                after 110 ;# default hz is 10, wait for a cron tick. 
+                set info2 [r info stats]
+                set cycle2 [getInfoProperty $info2 eventloop_cycles]
+                set el_sum2 [getInfoProperty $info2 eventloop_duration_sum]
+                set cmd_sum2 [getInfoProperty $info2 eventloop_duration_cmd_sum]
+                if {$::verbose} { puts "eventloop metrics cycle1: $cycle1, cycle2: $cycle2" }
+                assert_morethan $cycle2 $cycle1
+                assert_lessthan $cycle2 [expr $cycle1+10] ;# we expect 2 or 3 cycles here, but allow some tolerance
+                if {$::verbose} { puts "eventloop metrics el_sum1: $el_sum1, el_sum2: $el_sum2" }
+                assert_morethan $el_sum2 $el_sum1
+                assert_lessthan $el_sum2 [expr $el_sum1+30000] ;# we expect roughly 100ms here, but allow some tolerance
+                if {$::verbose} { puts "eventloop metrics cmd_sum1: $cmd_sum1, cmd_sum2: $cmd_sum2" }
+                assert_morethan $cmd_sum2 $cmd_sum1
+                assert_lessthan $cmd_sum2 [expr $cmd_sum1+15000] ;# we expect about tens of ms here, but allow some tolerance
             }
-
-            assert_lessthan $retries 4
-            if {$::verbose} { puts "instantaneous metrics instantaneous_eventloop_cycles_per_sec: $value" }
-            assert_morethan $value 0
-            assert_lessthan $value [expr $retries*15] ;# default hz is 10
-            set value [s instantaneous_eventloop_duration_usec]
-            if {$::verbose} { puts "instantaneous metrics instantaneous_eventloop_duration_usec: $value" }
-            assert_morethan $value 0
-            assert_lessthan $value [expr $retries*22000] ;# default hz is 10, so duration < 1000 / 10, allow some tolerance
+    
+            test {stats: instantaneous metrics} {
+                r config resetstat
+                set retries 0
+                for {set retries 1} {$retries < 4} {incr retries} {
+                    after 1600 ;# hz is 10, wait for 16 cron tick so that sample array is fulfilled
+                    set value [s instantaneous_eventloop_cycles_per_sec]
+                    if {$value > 0} break
+                }
+    
+                assert_lessthan $retries 4
+                if {$::verbose} { puts "instantaneous metrics instantaneous_eventloop_cycles_per_sec: $value" }
+                assert_morethan $value 0
+                assert_lessthan $value [expr $retries*15] ;# default hz is 10
+                set value [s instantaneous_eventloop_duration_usec]
+                if {$::verbose} { puts "instantaneous metrics instantaneous_eventloop_duration_usec: $value" }
+                assert_morethan $value 0
+                assert_lessthan $value [expr $retries*22000] ;# default hz is 10, so duration < 1000 / 10, allow some tolerance
+            }
         }
 
         test {stats: debug metrics} {

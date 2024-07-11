@@ -404,6 +404,8 @@ run_solo {defrag} {
             r save ;# saving an rdb iterates over all the data / pointers
         } {OK}
 
+        # Skip the following two tests if we are running with IO threads, as the IO threads allocate the command arguments in a different arena. As a result, fragmentation is not as expected.
+        if {[r config get io-threads] eq 0} {
         test "Active defrag pubsub: $type" {
             r flushdb
             r config resetstat
@@ -502,6 +504,7 @@ run_solo {defrag} {
             }
             $rd_pubsub close
         }
+        } ;# io-threads
 
         if {$type eq "standalone"} { ;# skip in cluster mode
         test "Active defrag big list: $type" {

@@ -1349,15 +1349,14 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
         int curr_slot = kvstoreIteratorGetCurrentDictIndex(kvs_it);
         /* Save slot info. */
         if (server.cluster_enabled && curr_slot != last_slot) {
-            if ((res = rdbSaveType(rdb, RDB_OPCODE_SLOT_INFO)) < 0) goto werr;
-            written += res;
-            if ((res = rdbSaveLen(rdb, curr_slot)) < 0) goto werr;
-            written += res;
-            if ((res = rdbSaveLen(rdb, kvstoreDictSize(db->keys, curr_slot))) < 0) goto werr;
-            written += res;
-            if ((res = rdbSaveLen(rdb, kvstoreDictSize(db->expires, curr_slot))) < 0) goto werr;
-            written += res;
+            sds slot_info = sdscatprintf(sdsempty(), "%i,%lu,%lu", curr_slot, kvstoreDictSize(db->keys, curr_slot),
+                                         kvstoreDictSize(db->expires, curr_slot));
+            if ((res = rdbSaveAuxFieldStrStr(rdb, "slot-info", slot_info)) < 0) {
+                sdsfree(slot_info);
+                goto werr;
+            }
             last_slot = curr_slot;
+            sdsfree(slot_info);
         }
         sds keystr = dictGetKey(de);
         robj key, *o = dictGetVal(de);
@@ -1860,7 +1859,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
     if (server.sanitize_dump_payload == SANITIZE_DUMP_CLIENTS) {
         /* Skip sanitization when loading (an RDB), or getting a RESTORE command
          * from either the primary or a client using an ACL user with the skip-sanitize-payload flag. */
-        int skip = server.loading || (server.current_client && (server.current_client->flags & CLIENT_PRIMARY));
+        int skip = server.loading || (server.current_client && (server.current_client->flag.primary));
         if (!skip && server.current_client && server.current_client->user)
             skip = !!(server.current_client->user->flags & USER_FLAG_SANITIZE_PAYLOAD_SKIP);
         deep_integrity_validation = !skip;
@@ -2932,7 +2931,7 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         processModuleLoadingProgressEvent(0);
     }
     if (server.repl_state == REPL_STATE_TRANSFER && rioCheckType(r) == RIO_TYPE_CONN) {
-        atomic_fetch_add_explicit(&server.stat_net_repl_input_bytes, len, memory_order_relaxed);
+        server.stat_net_repl_input_bytes += len;
     }
 }
 
@@ -3078,20 +3077,6 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             if ((expires_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             should_expand_db = 1;
             continue; /* Read next opcode. */
-        } else if (type == RDB_OPCODE_SLOT_INFO) {
-            uint64_t slot_id, slot_size, expires_slot_size;
-            if ((slot_id = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
-            if ((slot_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
-            if ((expires_slot_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
-            if (!server.cluster_enabled) {
-                continue; /* Ignore gracefully. */
-            }
-            /* In cluster mode we resize individual slot specific dictionaries based on the number of keys that slot
-             * holds. */
-            kvstoreDictExpand(db->keys, slot_id, slot_size);
-            kvstoreDictExpand(db->expires, slot_id, expires_slot_size);
-            should_expand_db = 0;
-            continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB
              * which is backward compatible. Implementations of RDB loading
@@ -3141,6 +3126,24 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 if (isbase) serverLog(LL_NOTICE, "RDB is base AOF");
             } else if (!strcasecmp(auxkey->ptr, "redis-bits")) {
                 /* Just ignored. */
+            } else if (!strcasecmp(auxkey->ptr, "slot-info")) {
+                int slot_id;
+                unsigned long slot_size, expires_slot_size;
+                /* Try to parse the slot information. In case the number of parsed arguments is smaller than expected
+                 * we'll fail the RDB load. */
+                if (sscanf(auxval->ptr, "%i,%lu,%lu", &slot_id, &slot_size, &expires_slot_size) < 3) {
+                    decrRefCount(auxkey);
+                    decrRefCount(auxval);
+                    goto eoferr;
+                }
+
+                if (server.cluster_enabled) {
+                    /* In cluster mode we resize individual slot specific dictionaries based on the number of keys that
+                     * slot holds. */
+                    kvstoreDictExpand(db->keys, slot_id, slot_size);
+                    kvstoreDictExpand(db->expires, slot_id, expires_slot_size);
+                    should_expand_db = 0;
+                }
             } else {
                 /* Check if this is a dynamic aux field */
                 int handled = 0;
@@ -3149,7 +3152,11 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                     if (de != NULL) {
                         handled = 1;
                         rdbAuxFieldCodec *codec = (rdbAuxFieldCodec *)dictGetVal(de);
-                        if (codec->decoder(rdbflags, auxval->ptr) < 0) goto eoferr;
+                        if (codec->decoder(rdbflags, auxval->ptr) == C_ERR) {
+                            decrRefCount(auxkey);
+                            decrRefCount(auxval);
+                            goto eoferr;
+                        }
                     }
                 }
 
@@ -3317,6 +3324,9 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
 
             /* call key space notification on key loaded for modules only */
             moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", &keyobj, db->id);
+
+            /* Release key (sds), dictEntry stores a copy of it in embedded data */
+            sdsfree(key);
         }
 
         /* Loading the database more slowly is useful in order to test

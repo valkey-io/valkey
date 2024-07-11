@@ -747,7 +747,7 @@ int verifyClusterNodeId(const char *name, int length) {
 }
 
 int isValidAuxChar(int c) {
-    return isalnum(c) || (strchr("!#$%&()*+:;<>?@[]^{|}~", c) == NULL);
+    return isalnum(c) || (strchr("!#$%&()*+.:;<>?@[]^{|}~", c) == NULL);
 }
 
 int isValidAuxString(char *s, unsigned int length) {
@@ -813,12 +813,12 @@ void clusterCommandHelp(client *c) {
         "    Return the node's shard id.",
         "NODES",
         "    Return cluster configuration seen by node. Output format:",
-        "    <id> <ip:port@bus-port[,hostname]> <flags> <master> <pings> <pongs> <epoch> <link> <slot> ...",
+        "    <id> <ip:port@bus-port[,hostname]> <flags> <primary> <pings> <pongs> <epoch> <link> <slot> ...",
         "REPLICAS <node-id>",
         "    Return <node-id> replicas.",
         "SLOTS",
         "    Return information about slots range mappings. Each range is made of:",
-        "    start, end, master and replicas IP addresses, ports and ids",
+        "    start, end, primary and replicas IP addresses, ports and ids",
         "SHARDS",
         "    Return information about slot range mappings and the nodes associated with them.",
         NULL};
@@ -985,7 +985,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
     if (cmd->proc == execCommand) {
         /* If CLIENT_MULTI flag is not set EXEC is just going to return an
          * error. */
-        if (!(c->flags & CLIENT_MULTI)) return myself;
+        if (!c->flag.multi) return myself;
         ms = &c->mstate;
     } else {
         /* In order to have a single codepath create a fake Multi State
@@ -1048,7 +1048,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
                  * can safely serve the request, otherwise we return a TRYAGAIN
                  * error). To do so we set the importing/migrating state and
                  * increment a counter for every missing key. */
-                if (clusterNodeIsPrimary(myself) || c->flags & CLIENT_READONLY) {
+                if (clusterNodeIsPrimary(myself) || c->flag.readonly) {
                     if (n == clusterNodeGetPrimary(myself) && getMigratingSlotDest(slot) != NULL) {
                         migrating_slot = 1;
                     } else if (getImportingSlotSource(slot) != NULL) {
@@ -1143,7 +1143,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
      * request as "ASKING", we can serve the request. However if the request
      * involves multiple keys and we don't have them all, the only option is
      * to send a TRYAGAIN error. */
-    if (importing_slot && (c->flags & CLIENT_ASKING || cmd_flags & CMD_ASKING)) {
+    if (importing_slot && (c->flag.asking || cmd_flags & CMD_ASKING)) {
         if (multiple_keys && missing_keys) {
             if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
             return NULL;
@@ -1157,7 +1157,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
      * is serving, we can reply without redirection. */
     int is_write_command =
         (cmd_flags & CMD_WRITE) || (c->cmd->proc == execCommand && (c->mstate.cmd_flags & CMD_WRITE));
-    if (((c->flags & CLIENT_READONLY) || pubsubshard_included) && !is_write_command && clusterNodeIsReplica(myself) &&
+    if ((c->flag.readonly || pubsubshard_included) && !is_write_command && clusterNodeIsReplica(myself) &&
         clusterNodeGetPrimary(myself) == n) {
         return myself;
     }
@@ -1194,7 +1194,7 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
         int port = clusterNodeClientPort(n, shouldReturnTlsInfo());
         addReplyErrorSds(c,
                          sdscatprintf(sdsempty(), "-%s %d %s:%d", (error_code == CLUSTER_REDIR_ASK) ? "ASK" : "MOVED",
-                                      hashslot, clusterNodePreferredEndpoint(n), port));
+                                      hashslot, clusterNodePreferredEndpoint(n, c), port));
     } else {
         serverPanic("getNodeByQuery() unknown error.");
     }
@@ -1213,10 +1213,14 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
  * returns 1. Otherwise 0 is returned and no operation is performed. */
 int clusterRedirectBlockedClientIfNeeded(client *c) {
     clusterNode *myself = getMyClusterNode();
-    if (c->flags & CLIENT_BLOCKED && (c->bstate.btype == BLOCKED_LIST || c->bstate.btype == BLOCKED_ZSET ||
-                                      c->bstate.btype == BLOCKED_STREAM || c->bstate.btype == BLOCKED_MODULE)) {
+    if (c->flag.blocked && (c->bstate.btype == BLOCKED_LIST || c->bstate.btype == BLOCKED_ZSET ||
+                            c->bstate.btype == BLOCKED_STREAM || c->bstate.btype == BLOCKED_MODULE)) {
         dictEntry *de;
         dictIterator *di;
+
+        /* If the client is blocked on module, but not on a specific key,
+         * don't unblock it. */
+        if (c->bstate.btype == BLOCKED_MODULE && !moduleClientIsBlockedOnKeys(c)) return 0;
 
         /* If the cluster is down, unblock the client with the right error.
          * If the cluster is configured to allow reads on cluster down, we
@@ -1227,10 +1231,6 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
             return 1;
         }
 
-        /* If the client is blocked on module, but not on a specific key,
-         * don't unblock it (except for the CLUSTER_FAIL case above). */
-        if (c->bstate.btype == BLOCKED_MODULE && !moduleClientIsBlockedOnKeys(c)) return 0;
-
         /* All keys must belong to the same slot, so check first key only. */
         di = dictGetIterator(c->bstate.keys);
         if ((de = dictNext(di)) != NULL) {
@@ -1240,7 +1240,7 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
 
             /* if the client is read-only and attempting to access key that our
              * replica can handle, allow it. */
-            if ((c->flags & CLIENT_READONLY) && !(c->lastcmd->flags & CMD_WRITE) && clusterNodeIsReplica(myself) &&
+            if (c->flag.readonly && !(c->lastcmd->flags & CMD_WRITE) && clusterNodeIsReplica(myself) &&
                 clusterNodeGetPrimary(myself) == node) {
                 node = myself;
             }
@@ -1267,7 +1267,7 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
     char *hostname = clusterNodeHostname(node);
     addReplyArrayLen(c, 4);
     if (server.cluster_preferred_endpoint_type == CLUSTER_ENDPOINT_TYPE_IP) {
-        addReplyBulkCString(c, clusterNodeIp(node));
+        addReplyBulkCString(c, clusterNodeIp(node, c));
     } else if (server.cluster_preferred_endpoint_type == CLUSTER_ENDPOINT_TYPE_HOSTNAME) {
         if (hostname != NULL && hostname[0] != '\0') {
             addReplyBulkCString(c, hostname);
@@ -1300,7 +1300,7 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
 
     if (server.cluster_preferred_endpoint_type != CLUSTER_ENDPOINT_TYPE_IP) {
         addReplyBulkCString(c, "ip");
-        addReplyBulkCString(c, clusterNodeIp(node));
+        addReplyBulkCString(c, clusterNodeIp(node, c));
         length--;
     }
     if (server.cluster_preferred_endpoint_type != CLUSTER_ENDPOINT_TYPE_HOSTNAME && hostname != NULL &&
@@ -1353,7 +1353,7 @@ void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, in
 }
 
 void clearCachedClusterSlotsResponse(void) {
-    for (connTypeForCaching conn_type = CACHE_CONN_TCP; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
+    for (int conn_type = 0; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
         if (server.cached_cluster_slot_info[conn_type]) {
             sdsfree(server.cached_cluster_slot_info[conn_type]);
             server.cached_cluster_slot_info[conn_type] = NULL;
@@ -1361,8 +1361,8 @@ void clearCachedClusterSlotsResponse(void) {
     }
 }
 
-sds generateClusterSlotResponse(void) {
-    client *recording_client = createCachedResponseClient();
+sds generateClusterSlotResponse(int resp) {
+    client *recording_client = createCachedResponseClient(resp);
     clusterNode *n = NULL;
     int num_primaries = 0, start = -1;
     void *slot_replylen = addReplyDeferredLen(recording_client);
@@ -1392,8 +1392,8 @@ sds generateClusterSlotResponse(void) {
     return cluster_slot_response;
 }
 
-int verifyCachedClusterSlotsResponse(sds cached_response) {
-    sds generated_response = generateClusterSlotResponse();
+int verifyCachedClusterSlotsResponse(sds cached_response, int resp) {
+    sds generated_response = generateClusterSlotResponse(resp);
     int is_equal = !sdscmp(generated_response, cached_response);
     /* Here, we use LL_WARNING so this gets printed when debug assertions are enabled and the system is about to crash. */
     if (!is_equal)
@@ -1413,16 +1413,19 @@ void clusterCommandSlots(client *c) {
      *               3) node ID
      *           ... continued until done
      */
-    connTypeForCaching conn_type = connIsTLS(c->conn);
+    int conn_type = 0;
+    if (connIsTLS(c->conn)) conn_type |= CACHE_CONN_TYPE_TLS;
+    if (isClientConnIpV6(c)) conn_type |= CACHE_CONN_TYPE_IPv6;
+    if (c->resp == 3) conn_type |= CACHE_CONN_TYPE_RESP3;
 
     if (detectAndUpdateCachedNodeHealth()) clearCachedClusterSlotsResponse();
 
     sds cached_reply = server.cached_cluster_slot_info[conn_type];
     if (!cached_reply) {
-        cached_reply = generateClusterSlotResponse();
+        cached_reply = generateClusterSlotResponse(c->resp);
         server.cached_cluster_slot_info[conn_type] = cached_reply;
     } else {
-        debugServerAssertWithInfo(c, NULL, verifyCachedClusterSlotsResponse(cached_reply) == 1);
+        debugServerAssertWithInfo(c, NULL, verifyCachedClusterSlotsResponse(cached_reply, c->resp) == 1);
     }
 
     addReplyProto(c, cached_reply, sdslen(cached_reply));
@@ -1441,7 +1444,7 @@ void askingCommand(client *c) {
         addReplyError(c, "This instance has cluster support disabled");
         return;
     }
-    c->flags |= CLIENT_ASKING;
+    c->flag.asking = 1;
     addReply(c, shared.ok);
 }
 
@@ -1449,20 +1452,12 @@ void askingCommand(client *c) {
  * In this mode replica will not redirect clients as long as clients access
  * with read-only commands to keys that are served by the replica's primary. */
 void readonlyCommand(client *c) {
-    if (server.cluster_enabled == 0) {
-        addReplyError(c, "This instance has cluster support disabled");
-        return;
-    }
-    c->flags |= CLIENT_READONLY;
+    c->flag.readonly = 1;
     addReply(c, shared.ok);
 }
 
 /* The READWRITE command just clears the READONLY command state. */
 void readwriteCommand(client *c) {
-    if (server.cluster_enabled == 0) {
-        addReplyError(c, "This instance has cluster support disabled");
-        return;
-    }
-    c->flags &= ~CLIENT_READONLY;
+    c->flag.readonly = 0;
     addReply(c, shared.ok);
 }

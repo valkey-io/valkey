@@ -216,7 +216,7 @@ static inline client *lookupRdbClientByID(uint64_t id) {
  *    (see the Retrospect function below).
  * The replica RDB client ID is used as a unique key for this association.
  * If a COB overrun occurs, the association is deleted and the RDB connection is dropped. */
-void addRdbReplicaToPsyncWait(client *rdb_replica) {
+void addRdbReplicaToPsyncWait(client *replica_rdb_client) {
     listNode *ln = NULL;
     replBufBlock *tail = NULL;
     if (server.repl_backlog == NULL) {
@@ -229,13 +229,13 @@ void addRdbReplicaToPsyncWait(client *rdb_replica) {
         }
     }
     serverLog(LL_DEBUG, "Add rdb replica %s to waiting psync, with cid %llu, %s ",
-              replicationGetReplicaName(rdb_replica), (unsigned long long)rdb_replica->id,
+              replicationGetReplicaName(replica_rdb_client), (unsigned long long)replica_rdb_client->id,
               tail ? "tracking repl-backlog tail" : "no repl-backlog to track");
-    rdb_replica->ref_repl_buf_node = tail ? ln : NULL;
+    replica_rdb_client->ref_repl_buf_node = tail ? ln : NULL;
     /* Prevent rdb client from being freed before psync is established. */
-    rdb_replica->flag.protected_rdb_conn = 1;
-    uint64_t id = htonu64(rdb_replica->id);
-    raxInsert(server.replicas_waiting_psync, (unsigned char *)&id, sizeof(id), rdb_replica, NULL);
+    replica_rdb_client->flag.protected_rdb_conn = 1;
+    uint64_t id = htonu64(replica_rdb_client->id);
+    raxInsert(server.replicas_waiting_psync, (unsigned char *)&id, sizeof(id), replica_rdb_client, NULL);
 }
 
 /* Attach waiting psync replicas with new replication backlog head. */
@@ -249,32 +249,32 @@ void backfillRdbReplicasToPsyncWait(void) {
     raxStart(&iter, server.replicas_waiting_psync);
     raxSeek(&iter, "^", NULL, 0);
     while (raxNext(&iter)) {
-        client *replica = iter.data;
-        if (replica->ref_repl_buf_node) continue;
-        replica->ref_repl_buf_node = ln;
+        client *replica_rdb_client = iter.data;
+        if (replica_rdb_client->ref_repl_buf_node) continue;
+        replica_rdb_client->ref_repl_buf_node = ln;
         head->refcount++;
-        serverLog(LL_DEBUG, "Attach rdb replica %llu to repl buf block", (long long unsigned int)replica->id);
+        serverLog(LL_DEBUG, "Attach rdb replica %llu to repl buf block", (long long unsigned int)replica_rdb_client->id);
     }
     raxStop(&iter);
 }
 
-void removeReplicaFromPsyncWait(client *replica) {
+void removeReplicaFromPsyncWait(client *replica_main_client) {
     listNode *ln;
     replBufBlock *o;
     /* Get replBufBlock pointed by this replica */
-    client *rdb_replica = lookupRdbClientByID(replica->associated_rdb_client_id);
-    ln = rdb_replica->ref_repl_buf_node;
+    client *replica_rdb_client = lookupRdbClientByID(replica_main_client->associated_rdb_client_id);
+    ln = replica_rdb_client->ref_repl_buf_node;
     o = ln ? listNodeValue(ln) : NULL;
     if (o != NULL) {
         serverAssert(o->refcount > 0);
         o->refcount--;
     }
-    rdb_replica->ref_repl_buf_node = NULL;
-    rdb_replica->flag.protected_rdb_conn = 0;
+    replica_rdb_client->ref_repl_buf_node = NULL;
+    replica_rdb_client->flag.protected_rdb_conn = 0;
     serverLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu, repl buffer block %s",
-              replicationGetReplicaName(replica), (long long unsigned int)replica->associated_rdb_client_id,
+              replicationGetReplicaName(replica_main_client), (long long unsigned int)replica_main_client->associated_rdb_client_id,
               o ? "ref count decreased" : "doesn't exist");
-    uint64_t id = htonu64(rdb_replica->id);
+    uint64_t id = htonu64(replica_rdb_client->id);
     raxRemove(server.replicas_waiting_psync, (unsigned char *)&id, sizeof(id), NULL);
 }
 

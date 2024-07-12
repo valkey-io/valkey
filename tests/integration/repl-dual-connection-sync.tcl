@@ -50,9 +50,9 @@ start_server {tags {"repl rdb-connection external:skip"}} {
 
         # Start the replication process...
         $replica config set dual-conn-sync-enabled yes
-        $replica slaveof $primary_host $primary_port
+        $replica replicaof $primary_host $primary_port
 
-        test {Test dual-conn-sync-enabled replica enters handshake} {
+        test "Test dual-conn-sync-enabled replica enters handshake" {
             wait_for_condition 50 1000 {
                 [string match *handshake* [$replica role]]
             } else {
@@ -60,7 +60,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             }
         }
 
-        test {Test dual-conn-sync-enabled enters wait_bgsave} {
+        test "Test dual-conn-sync-enabled enters wait_bgsave" {
             wait_for_condition 50 1000 {
                 [string match *state=wait_bgsave* [$primary info replication]]
             } else {
@@ -70,7 +70,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
 
         $primary config set repl-diskless-sync-delay 0
 
-        test {Test dual-conn-sync-enabled replica is able to sync} {
+        test "Test dual-conn-sync-enabled replica is able to sync" {
             verify_replica_online $primary 0 500
             wait_for_condition 50 1000 {
                 [string match *connected_slaves:1* [$primary info]]
@@ -119,8 +119,8 @@ start_server {tags {"repl rdb-connection external:skip"}} {
 
         set before_used [s 0 used_memory]
 
-        test {Primary memory usage does not increase during rdb-connection sync} {        
-            $replica slaveof $primary_host $primary_port
+        test "Primary memory usage does not increase during rdb-connection sync" {        
+            $replica replicaof $primary_host $primary_port
 
             # Verify used_memory stays low through all the sync
             set max_retry 500
@@ -147,7 +147,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         stop_write_load $load_handle2
         stop_write_load $load_handle3
 
-        test {Steady state after rdb channel sync} {
+        test "Steady state after rdb channel sync" {
             set val1 [$primary get mykey1]
             set val2 [$primary get mykey2]
             set val3 [$primary get mykey3]
@@ -160,15 +160,15 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             }
         }
 
-        test {Rollback to nornal sync} {
-            $replica slaveof no one
+        test "Rollback to nornal sync" {
+            $replica replicaof no one
             $replica config set dual-conn-sync-enabled no
             $primary set newkey newval
 
             set sync_full [s 0 sync_full]
             assert {$sync_full > 0}
 
-            $replica slaveof $primary_host $primary_port
+            $replica replicaof $primary_host $primary_port
             verify_replica_online $primary 0 500
             assert_equal [expr $sync_full + 1] [s 0 sync_full]
             assert [string match *connected_slaves:1* [$primary info]]
@@ -197,13 +197,13 @@ start_server {tags {"repl rdb-connection external:skip"}} {
                 
                 populate 1000 primary 10000
 
-                $replica slaveof $primary_host $primary_port
+                $replica replicaof $primary_host $primary_port
                 verify_replica_online $primary 0 500
 
                 set sync_full [s 0 sync_full]
                 assert {$sync_full > 0}
 
-                $replica slaveof no one
+                $replica replicaof no one
                 if {$start_with_rdb_sync_enabled == "yes"} {
                     # disable rdb channel sync
                     $replica config set dual-conn-sync-enabled no
@@ -214,7 +214,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
                 # Force replica to full sync next time
                 populate 1000 primary 10000
 
-                $replica slaveof $primary_host $primary_port
+                $replica replicaof $primary_host $primary_port
                 verify_replica_online $primary 0 500
                 wait_for_sync $replica
 
@@ -259,8 +259,8 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             $replica2 config set loglevel debug
 
             test "Two replicas in one sync session with dual-conn-sync-enabled" {
-                $replica1 slaveof $primary_host $primary_port
-                $replica2 slaveof $primary_host $primary_port
+                $replica1 replicaof $primary_host $primary_port
+                $replica2 replicaof $primary_host $primary_port
 
                 wait_for_value_to_propegate_to_replica $primary $replica1 "key1"
                 wait_for_value_to_propegate_to_replica $primary $replica2 "key1"
@@ -280,8 +280,8 @@ start_server {tags {"repl rdb-connection external:skip"}} {
                 }           
             }
 
-            $replica1 slaveof no one
-            $replica2 slaveof no one
+            $replica1 replicaof no one
+            $replica2 replicaof no one
 
             $replica1 config set dual-conn-sync-enabled yes
             $replica2 config set dual-conn-sync-enabled no
@@ -289,8 +289,8 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             $primary set key2 val2
 
             test "Test one replica with dual-conn-sync-enabled enabled one with disabled" {
-                $replica1 slaveof $primary_host $primary_port
-                $replica2 slaveof $primary_host $primary_port
+                $replica1 replicaof $primary_host $primary_port
+                $replica2 replicaof $primary_host $primary_port
 
                 wait_for_value_to_propegate_to_replica $primary $replica1 "key2"
                 wait_for_value_to_propegate_to_replica $primary $replica2 "key2"
@@ -304,7 +304,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
                 }
             }
 
-            $replica1 slaveof no one
+            $replica1 replicaof no one
             $primary set key4 val4            
             
             test "Test replica's buffer limit reached" {
@@ -317,7 +317,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
                 $replica1 config set client-output-buffer-limit "replica 16383 16383 0"
                 $replica1 config set loglevel debug
 
-                $replica1 slaveof $primary_host $primary_port
+                $replica1 replicaof $primary_host $primary_port
                 # Wait for replica to establish psync using main connection
                 wait_for_condition 500 1000 {
                     [string match "*slave*,state=bg_transfer*,type=main-conn*" [$primary info replication]]
@@ -343,7 +343,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
                 }
             }
 
-            $replica1 slaveof no one
+            $replica1 replicaof no one
             $replica1 config set client-output-buffer-limit "replica 256mb 256mb 0"; # remove repl buffer limitation
 
             $primary set key5 val5
@@ -353,7 +353,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
                 $primary config set repl-diskless-sync no
 
                 $replica1 config set dual-conn-sync-enabled yes
-                $replica1 slaveof $primary_host $primary_port
+                $replica1 replicaof $primary_host $primary_port
 
                 # Wait for mitigation and resync
                 wait_for_value_to_propegate_to_replica $primary $replica1 "key5"
@@ -392,7 +392,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         $replica config set loglevel debug
 
         test "Test rdb-connection psync established after rdb load" {
-            $replica slaveof $primary_host $primary_port
+            $replica replicaof $primary_host $primary_port
 
             verify_replica_online $primary 0 500
             wait_for_condition 50 1000 {
@@ -440,7 +440,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         $replica debug sleep-after-fork-seconds 5
 
         test "Test rdb-connection connection peering - replica able to establish psync" {
-            $replica slaveof $primary_host $primary_port
+            $replica replicaof $primary_host $primary_port
             # Verify repl backlog can grow
             wait_for_condition 1000 10 {
                 [s 0 mem_total_replication_buffers] > [expr {2 * $backlog_size}]
@@ -501,7 +501,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             $replica1 debug sleep-after-fork-seconds 2
             $replica2 debug sleep-after-fork-seconds 2
             test "Test rdb-connection connection peering - start with empty backlog (retrospect)" {
-                $replica1 slaveof $primary_host $primary_port
+                $replica1 replicaof $primary_host $primary_port
                 set res [wait_for_log_messages 0 {"*Add rdb replica * no repl-backlog to track*"} $loglines 2000 1]
                 set res [wait_for_log_messages 0 {"*Attach rdb replica*"} $loglines 2000 1]
                 set loglines [lindex $res 1]
@@ -512,12 +512,12 @@ start_server {tags {"repl rdb-connection external:skip"}} {
                 } else {
                     fail "Replica is not synced"
                 }
-                $replica1 slaveof no one
+                $replica1 replicaof no one
                 assert [string match *replicas_waiting_psync:0* [$primary info replication]]
             }
 
             test "Test rdb-connection connection peering - start with backlog" {
-                $replica2 slaveof $primary_host $primary_port
+                $replica2 replicaof $primary_host $primary_port
                 set res [wait_for_log_messages 0 {"*Add rdb replica * tracking repl-backlog tail*"} $loglines 2000 1]
                 set loglines [lindex $res 1]
                 incr $loglines 
@@ -565,7 +565,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         $replica config set repl-timeout 10
 
         test "Test rdb-connection psync established after rdb load, primary keep repl-block" {
-            $replica slaveof $primary_host $primary_port
+            $replica replicaof $primary_host $primary_port
             set res [wait_for_log_messages 0 {"*Done loading RDB*"} $loglines 2000 1]
             set loglines [lindex $res 1]
             incr $loglines
@@ -584,7 +584,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             } else {
                 fail "Primary did not free repl buf block after psync establishment"
             }
-            $replica slaveof no one
+            $replica replicaof no one
         }
         stop_write_load $load_handle0
     }
@@ -603,7 +603,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         $replica config set repl-timeout 10
 
         test "Test rdb-connection psync established after rdb load, primary dismiss repl-block" {
-            $replica slaveof $primary_host $primary_port
+            $replica replicaof $primary_host $primary_port
             set res [wait_for_log_messages 0 {"*Done loading RDB*"} $loglines 2000 1]
             set loglines [lindex $res 1]
             incr $loglines
@@ -627,7 +627,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             } else {
                 fail "Primary did not free repl buf block after psync establishment"
             }
-            $replica slaveof no one
+            $replica replicaof no one
         }
         stop_write_load $load_handle0
     }
@@ -662,7 +662,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         $replica config set repl-timeout 10
 
         test "Test rdb-connection primary gets cob overrun before established psync" {
-            $replica slaveof $primary_host $primary_port
+            $replica replicaof $primary_host $primary_port
             wait_for_log_messages 0 {"*Done loading RDB*"} 0 2000 1
 
             # At this point rdb is loaded but psync hasn't been established yet. 
@@ -679,7 +679,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             set loglines [lindex $res 1]
         }
 
-        $replica slaveof no one
+        $replica replicaof no one
         $replica debug sleep-after-fork-seconds 2
 
         $primary debug populate 1000 primary 100000
@@ -690,7 +690,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
 
         test "Test rdb-connection primary gets cob overrun during replica rdb load" {
             set cur_client_closed_count [s -1 client_output_buffer_limit_disconnections]
-            $replica slaveof $primary_host $primary_port
+            $replica replicaof $primary_host $primary_port
             wait_for_condition 500 1000 {
                 [s -1 client_output_buffer_limit_disconnections] > $cur_client_closed_count
             } else {
@@ -741,8 +741,8 @@ start_server {tags {"repl rdb-connection external:skip"}} {
 
             set load_handle [start_one_key_write_load $primary_host $primary_port 100 "mykey1"]
             test "Sync should continue if not all slaves dropped rdb-connection $rdbchan" {
-                $replica1 slaveof $primary_host $primary_port
-                $replica2 slaveof $primary_host $primary_port
+                $replica1 replicaof $primary_host $primary_port
+                $replica2 replicaof $primary_host $primary_port
 
                 wait_for_condition 50 1000 {
                     [status $primary rdb_bgsave_in_progress] == 1
@@ -770,7 +770,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
                 }
             }
             
-            $replica2 slaveof no one
+            $replica2 replicaof no one
 
             # Generating RDB will cost 500s(1000000 * 0.0001s)
             $primary debug populate 1000000 primary 1
@@ -778,7 +778,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
     
             test "Primary abort sync if all slaves dropped rdb-connection $rdbchan" {
                 set cur_psync [status $primary sync_partial_ok]
-                $replica2 slaveof $primary_host $primary_port
+                $replica2 replicaof $primary_host $primary_port
 
                 wait_for_condition 50 1000 {
                     [status $primary rdb_bgsave_in_progress] == 1
@@ -834,7 +834,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         $replica config set loglevel debug
         $replica config set repl-timeout 10
         test "Test rdb-connection replica main connection disconnected" {
-            $replica slaveof $primary_host $primary_port
+            $replica replicaof $primary_host $primary_port
             # Wait for sync session to start
             wait_for_condition 500 1000 {
                 [string match "*slave*,state=wait_bgsave*,type=rdb-conn*" [$primary info replication]] &&
@@ -862,7 +862,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         }
 
         test "Test rdb-channel slave of no one" {
-            $replica slaveof no one
+            $replica replicaof no one
             wait_for_condition 500 1000 {
                 [s -1 rdb_bgsave_in_progress] eq 0
             } else {
@@ -871,7 +871,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         }
 
         test "Test rdb-connection replica rdb connection disconnected" {
-            $replica slaveof $primary_host $primary_port
+            $replica replicaof $primary_host $primary_port
             # Wait for sync session to start
             wait_for_condition 500 1000 {
                 [string match "*slave*,state=wait_bgsave*,type=rdb-conn*" [$primary info replication]] &&
@@ -933,14 +933,14 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             $replica_2 config set loglevel debug
             $replica_2 config set repl-timeout 10
             test "Test replica unable to join rdb connection sync after started" {
-                $replica_1 slaveof $primary_host $primary_port
+                $replica_1 replicaof $primary_host $primary_port
                 # Wait for sync session to start
                 wait_for_condition 50 100 {
                     [s -2 rdb_bgsave_in_progress] eq 1
                 } else {
                     fail "replica didn't start sync session in time1"
                 }
-                $replica_2 slaveof $primary_host $primary_port
+                $replica_2 replicaof $primary_host $primary_port
                 wait_for_log_messages -2 {"*Current BGSAVE has socket target. Waiting for next BGSAVE for SYNC*"} $loglines 100 1000
                 $primary config set rdb-key-save-delay 0
                 # Verify second replica needed new session

@@ -605,7 +605,7 @@ void trimStringObjectIfNeeded(robj *o, int trim_small_values) {
      * 3. When calling from RM_TrimStringAllocation (trim_small_values is true). */
     size_t len = sdslen(o->ptr);
     if (len >= PROTO_MBULK_BIG_ARG || trim_small_values ||
-        (server.executing_client && server.executing_client->flags & CLIENT_SCRIPT && len < LUA_CMD_OBJCACHE_MAX_LEN)) {
+        (server.executing_client && server.executing_client->flag.script && len < LUA_CMD_OBJCACHE_MAX_LEN)) {
         if (sdsavail(o->ptr) > len / 10) {
             o->ptr = sdsRemoveFreeSpace(o->ptr, 0);
         }
@@ -987,7 +987,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             asize = sizeof(*o) + sizeof(dict) + (sizeof(struct dictEntry *) * dictBuckets(d));
             while ((de = dictNext(di)) != NULL && samples < sample_size) {
                 ele = dictGetKey(de);
-                elesize += dictEntryMemUsage() + sdsZmallocSize(ele);
+                elesize += dictEntryMemUsage(de) + sdsZmallocSize(ele);
                 samples++;
             }
             dictReleaseIterator(di);
@@ -1010,7 +1010,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
                     (sizeof(struct dictEntry *) * dictBuckets(d)) + zmalloc_size(zsl->header);
             while (znode != NULL && samples < sample_size) {
                 elesize += sdsZmallocSize(znode->ele);
-                elesize += dictEntryMemUsage() + zmalloc_size(znode);
+                elesize += dictEntryMemUsage(NULL) + zmalloc_size(znode);
                 samples++;
                 znode = znode->level[0].forward;
             }
@@ -1029,7 +1029,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
                 ele = dictGetKey(de);
                 ele2 = dictGetVal(de);
                 elesize += sdsZmallocSize(ele) + sdsZmallocSize(ele2);
-                elesize += dictEntryMemUsage();
+                elesize += dictEntryMemUsage(de);
                 samples++;
             }
             dictReleaseIterator(di);
@@ -1529,8 +1529,7 @@ NULL
             return;
         }
         size_t usage = objectComputeSize(c->argv[2], dictGetVal(de), samples, c->db->id);
-        usage += sdsZmallocSize(dictGetKey(de));
-        usage += dictEntryMemUsage();
+        usage += dictEntryMemUsage(de);
         addReplyLongLong(c, usage);
     } else if (!strcasecmp(c->argv[1]->ptr, "stats") && c->argc == 2) {
         struct serverMemOverhead *mh = getMemoryOverheadData();

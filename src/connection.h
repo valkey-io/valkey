@@ -62,8 +62,6 @@ typedef enum {
 #define CONN_TYPE_TLS "tls"
 #define CONN_TYPE_MAX 8 /* 8 is enough to be extendable */
 
-typedef enum connTypeForCaching { CACHE_CONN_TCP, CACHE_CONN_TLS, CACHE_CONN_TYPE_MAX } connTypeForCaching;
-
 typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 
 typedef struct ConnectionType {
@@ -111,6 +109,12 @@ typedef struct ConnectionType {
     /* pending data */
     int (*has_pending_data)(void);
     int (*process_pending_data)(void);
+
+    /* Postpone update state - with IO threads & TLS we don't want the IO threads to update the event loop events - let
+     * the main-thread do it */
+    void (*postpone_update_state)(struct connection *conn, int);
+    /* Called by the main-thread */
+    void (*update_state)(struct connection *conn);
 
     /* TLS specified methods */
     sds (*get_peer_cert)(struct connection *conn);
@@ -454,6 +458,18 @@ int RedisRegisterConnectionTypeTLS(void);
 /* Return 1 if connection is using TLS protocol, 0 if otherwise. */
 static inline int connIsTLS(connection *conn) {
     return conn && conn->type == connectionTypeTls();
+}
+
+static inline void connUpdateState(connection *conn) {
+    if (conn->type->update_state) {
+        conn->type->update_state(conn);
+    }
+}
+
+static inline void connSetPostponeUpdateState(connection *conn, int on) {
+    if (conn->type->postpone_update_state) {
+        conn->type->postpone_update_state(conn, on);
+    }
 }
 
 #endif /* __REDIS_CONNECTION_H */

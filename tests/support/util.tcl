@@ -1162,3 +1162,25 @@ proc generate_largevalue_test_array {} {
     set largevalue(quicklist) [string repeat "x" 8192]
     return [array get largevalue]
 }
+
+# Breakpoint function, which invokes a minimal debugger.
+# This function can be placed within the desired Tcl tests for debugging purposes.
+# 
+# Arguments:
+# * 's': breakpoint label, which is printed when breakpoints are hit for unique identification.
+# 
+# Source: https://wiki.tcl-lang.org/page/A+minimal+debugger
+proc bp {{s {}}} {
+    if ![info exists ::bp_skip] {
+        set ::bp_skip [list]
+    } elseif {[lsearch -exact $::bp_skip $s]>=0} return
+    if [catch {info level -1} who] {set who ::}
+    while 1 {
+        puts -nonewline "$who/$s> "; flush stdout
+        gets stdin line
+        if {$line=="c"} {puts "continuing.."; break}
+        if {$line=="i"} {set line "info locals"}
+        catch {uplevel 1 $line} res
+        puts $res
+    }
+}

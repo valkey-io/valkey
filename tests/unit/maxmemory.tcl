@@ -98,6 +98,7 @@ start_server {tags {"maxmemory" "external:skip"}} {
                         $rr write "\r\n"
                         $rr flush
                     }
+                    after 100; # give the server some time to process the input buffer - this was added to make sure the test pass with io-threads active.
                 }]} {
                     lremove clients $rr
                 }

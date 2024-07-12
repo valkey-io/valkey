@@ -65,6 +65,7 @@ start_server {tags {"cli"}} {
 
     proc run_command {fd cmd} {
         write_cli $fd $cmd
+        after 50
         set _ [format_output [read_cli $fd]]
     }
 

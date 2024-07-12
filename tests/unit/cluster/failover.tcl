@@ -71,17 +71,7 @@ test "Instance #0 gets converted into a slave" {
 
 } ;# start_cluster
 
-# Add all replicas to the first primary node.
-proc cluster_allocate_replicas_to_one_primary {primaries replicas} {
-    set primary_id 0
-    for {set j 0} {$j < $replicas} {incr j} {
-        set replica_id [cluster_find_available_replica $primaries]
-        set primary_myself [cluster_get_myself $primary_id]
-        R $replica_id cluster replicate [dict get $primary_myself id]
-    }
-}
-
-start_cluster 5 10 {tags {external:skip cluster} overrides {cluster-node-timeout 5000}} {
+start_cluster 3 6 {tags {external:skip cluster}} {
 
 test "Cluster is up" {
     wait_for_cluster_state ok
@@ -130,4 +120,14 @@ test "Instance #0 gets converted into a replica" {
     wait_for_cluster_propagation
 }
 
-} continuous_slot_allocation cluster_allocate_replicas_to_one_primary ;# start_cluster
+test "Make sure the replicas always get the different ranks" {
+    if {[s -3 role] == "master"} {
+        verify_log_message -3 "*Start of election*rank #0*" 0
+        verify_log_message -6 "*Start of election*rank #1*" 0
+    } else {
+        verify_log_message -3 "*Start of election*rank #1*" 0
+        verify_log_message -6 "*Start of election*rank #0*" 0
+    }
+}
+
+} ;# start_cluster

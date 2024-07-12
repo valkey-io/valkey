@@ -171,7 +171,7 @@ proc count_log_message {srv_idx pattern} {
     return [count_message_lines $stdout $pattern]
 }
 
-# verify pattern exists in server's sdtout after a certain line number
+# verify pattern exists in server's stdout after a certain line number
 proc verify_log_message {srv_idx pattern from_line} {
     incr from_line
     set result [exec tail -n +$from_line < [srv $srv_idx stdout]]

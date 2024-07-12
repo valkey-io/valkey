@@ -116,8 +116,8 @@ start_server {} {
 
             # Wait for the new replica to report the acked offset to the primary.
             # Because the old replica is paused, so the WAIT can only return 1.
-            # In the old code it will return 2, because the fake client's woff is
-            # always 0 so WAIT will count all the replicas.
+            # In an earlier version it returned 2, because the fake client's woff
+            # is always 0 so WAIT counted all the replicas.
             wait_for_condition 50 100 {
                 [$master eval "return server.call('wait', '2', '0')" 0] eq 1
             } else {

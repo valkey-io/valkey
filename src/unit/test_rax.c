@@ -533,7 +533,7 @@ int iteratorFuzzTest(int keymode, size_t count) {
 }
 
 /* Test the random walk function. */
-int test_randomWalkTest(int argc, char **argv, int flags) {
+int test_raxRandomWalk(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -576,7 +576,7 @@ int test_randomWalkTest(int argc, char **argv, int flags) {
     return 0;
 }
 
-int test_iteratorUnitTests(int argc, char **argv, int flags) {
+int test_raxIteratorUnitTests(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -650,7 +650,7 @@ int test_iteratorUnitTests(int argc, char **argv, int flags) {
 
 /* Test that raxInsert() / raxTryInsert() overwrite semantic
  * works as expected. */
-int test_tryInsertUnitTests(int argc, char **argv, int flags) {
+int test_raxTryInsertUnitTests(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -684,7 +684,7 @@ int test_tryInsertUnitTests(int argc, char **argv, int flags) {
 }
 
 /* Regression test #1: Iterator wrong element returned after seek. */
-int test_regtest1(int argc, char **argv, int flags) {
+int test_raxRegressionTest1(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -712,7 +712,7 @@ int test_regtest1(int argc, char **argv, int flags) {
 }
 
 /* Regression test #2: Crash when mixing NULL and not NULL values. */
-int test_regtest2(int argc, char **argv, int flags) {
+int test_raxRegressionTest2(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -733,7 +733,7 @@ int test_regtest2(int argc, char **argv, int flags) {
  *
  * Note that this test always returns success but will trigger a
  * Valgrind error. */
-int test_regtest3(int argc, char **argv, int flags) {
+int test_raxRegressionTest3(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -753,7 +753,7 @@ int test_regtest3(int argc, char **argv, int flags) {
  * however we are using the original one from the bug report, since this
  * is quite odd and may later protect against different bugs related to
  * storing and fetching the empty string key. */
-int test_regtest4(int argc, char **argv, int flags) {
+int test_raxRegressionTest4(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -780,7 +780,7 @@ int test_regtest4(int argc, char **argv, int flags) {
 }
 
 /* Less than seek bug when stopping in the middle of a compressed node. */
-int test_regtest5(int argc, char **argv, int flags) {
+int test_raxRegressionTest5(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -811,7 +811,7 @@ int test_regtest5(int argc, char **argv, int flags) {
 }
 
 /* Seek may not populate iterator data. See issue #25. */
-int test_regtest6(int argc, char **argv, int flags) {
+int test_raxRegressionTest6(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -839,7 +839,7 @@ int test_regtest6(int argc, char **argv, int flags) {
     return 0;
 }
 
-int test_benchmark(int argc, char **argv, int flags) {
+int test_raxBenchmark(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
 
@@ -924,7 +924,7 @@ int test_benchmark(int argc, char **argv, int flags) {
  * the code to handle this edge case works as expected.
  *
  * This test is disabled by default because it uses a lot of memory. */
-int test_hugeKey(int argc, char **argv, int flags) {
+int test_raxHugeKey(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
 
@@ -962,7 +962,7 @@ oom:
     exit(1);
 }
 
-int test_fuzz(int argc, char **argv, int flags) {
+int test_raxFuzz(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
 

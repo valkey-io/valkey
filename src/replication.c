@@ -51,12 +51,9 @@ void replicationSendAck(void);
 int replicaPutOnline(client *replica);
 void replicaStartCommandStream(client *replica);
 int cancelReplicationHandshake(int reconnect);
-static void syncWithPrimary(connection *conn);
 void replicationSteadyStateInit(void);
 void setupMainConnForPsync(connection *conn);
-void rdbConnectionSyncHandlePsync(void);
 void rdbConnectionSyncHandleRdbLoadCompletion(void);
-void replicationAbortSyncTransfer(void);
 
 /* We take a global flag to remember if this instance generated an RDB
  * because of replication, so that we can remove the RDB file in case
@@ -2514,7 +2511,7 @@ void freePendingReplDataBuf(void) {
 /* Replication: Replica side.
  * Upon rdb-sync failure, close rdb-connection, reset repl-state, reset
  * provisional primary struct, and free local replication buffer. */
-void abortRdbConnectionSync(void) {
+void replicationAbortDualConnectionSyncTransfer(void) {
     serverAssert(server.repl_rdb_conn_state != REPL_RDB_CONN_STATE_NONE);
     serverLog(LL_NOTICE, "Aborting dual connection sync");
     if (server.repl_rdb_transfer_s) {
@@ -2714,7 +2711,7 @@ error:
     if (server.repl_transfer_fd != -1) close(server.repl_transfer_fd);
     server.repl_transfer_fd = -1;
     server.repl_state = REPL_STATE_CONNECT;
-    abortRdbConnectionSync();
+    replicationAbortDualConnectionSyncTransfer();
     return;
 }
 
@@ -3690,7 +3687,7 @@ void undoConnectWithPrimary(void) {
  * Never call this function directly, use cancelReplicationHandshake() instead.
  */
 void replicationAbortSyncTransfer(void) {
-    serverAssert(server.repl_state == REPL_STATE_TRANSFER || server.repl_rdb_conn_state != REPL_RDB_CONN_STATE_NONE);
+    serverAssert(server.repl_state == REPL_STATE_TRANSFER);
     undoConnectWithPrimary();
     if (server.repl_transfer_fd != -1) {
         close(server.repl_transfer_fd);
@@ -3711,7 +3708,7 @@ void replicationAbortSyncTransfer(void) {
  * Otherwise zero is returned and no operation is performed at all. */
 int cancelReplicationHandshake(int reconnect) {
     if (server.repl_rdb_conn_state != REPL_RDB_CONN_STATE_NONE) {
-        abortRdbConnectionSync();
+        replicationAbortDualConnectionSyncTransfer();
     }
     if (server.repl_state == REPL_STATE_TRANSFER) {
         replicationAbortSyncTransfer();

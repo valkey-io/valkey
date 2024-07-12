@@ -148,13 +148,10 @@ start_server {tags {"repl dual-connection external:skip"}} {
         stop_write_load $load_handle3
 
         test "Steady state after dual conn sync" {
-            set val1 [$primary get mykey1]
-            set val2 [$primary get mykey2]
-            set val3 [$primary get mykey3]
             wait_for_condition 50 1000 {
-                ([$replica get "mykey1"] eq $val1) &&
-                ([$replica get "mykey2"] eq $val2) &&
-                ([$replica get "mykey3"] eq $val3)
+                ([$replica get "mykey1"] eq [$primary get mykey1]) &&
+                ([$replica get "mykey2"] eq [$primary get mykey2]) &&
+                ([$replica get "mykey3"] eq [$primary get mykey3])
             } else {
                 fail "Can't set new keys"
             }

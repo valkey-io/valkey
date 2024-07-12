@@ -147,7 +147,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
         stop_write_load $load_handle2
         stop_write_load $load_handle3
 
-        test "Steady state after rdb channel sync" {
+        test "Steady state after dual conn sync" {
             set val1 [$primary get mykey1]
             set val2 [$primary get mykey2]
             set val3 [$primary get mykey3]
@@ -220,7 +220,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
 
                 $replica replicaof no one
                 if {$enable == "yes"} {
-                    # disable rdb channel sync
+                    # disable dual conn sync
                     $replica config set dual-conn-sync-enabled no
                     $primary config set dual-conn-sync-enabled no
                 } else {
@@ -374,7 +374,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
 
             $primary set key5 val5
             
-            test "Rdb-channel-sync fails when primary diskless disabled" {
+            test "Dual-conn-sync fails when primary diskless disabled" {
                 set cur_psync [status $primary sync_partial_ok]
                 $primary config set repl-diskless-sync no
 
@@ -643,7 +643,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
                 fail "Primary should wait before freeing repl block"
             }
 
-            # Sync should fail once the replica ask for PSYNC using main channel
+            # Sync should fail once the replica ask for PSYNC using main connection
             set res [wait_for_log_messages -1 {"*Replica main connection failed to establish PSYNC within the grace period*"} 0 4000 1]
 
             # Should succeed on retry
@@ -737,7 +737,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
     }
 }
 
-foreach rdbchan {yes no} {
+foreach dualconn {yes no} {
 start_server {tags {"repl rdb-connection external:skip"}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
@@ -753,20 +753,20 @@ start_server {tags {"repl rdb-connection external:skip"}} {
     $primary debug populate 10000 primary 1
     $primary config set rdb-key-save-delay 500
 
-    $primary config set dual-conn-sync-enabled $rdbchan
+    $primary config set dual-conn-sync-enabled $dualconn
 
     start_server {} {
         set replica1 [srv 0 client]
-        $replica1 config set dual-conn-sync-enabled $rdbchan
+        $replica1 config set dual-conn-sync-enabled $dualconn
         $replica1 config set loglevel debug
         start_server {} {
             set replica2 [srv 0 client]
-            $replica2 config set dual-conn-sync-enabled $rdbchan
+            $replica2 config set dual-conn-sync-enabled $dualconn
             $replica2 config set loglevel debug
             $replica2 config set repl-timeout 60
 
             set load_handle [start_one_key_write_load $primary_host $primary_port 100 "mykey1"]
-            test "Sync should continue if not all slaves dropped rdb-connection $rdbchan" {
+            test "Sync should continue if not all slaves dropped rdb-connection $dualconn" {
                 $replica1 replicaof $primary_host $primary_port
                 $replica2 replicaof $primary_host $primary_port
 
@@ -775,7 +775,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
                 } else {
                     fail "Sync did not start"
                 }
-                if {$rdbchan == "yes"} {
+                if {$dualconn == "yes"} {
                     # Wait for both replicas main conns to establish psync
                     wait_for_condition 50 1000 {
                         [status $primary sync_partial_ok] == 2
@@ -788,7 +788,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
                 wait_for_condition 50 2000 {
                     [status $replica2 master_link_status] == "up" &&
                     [status $primary sync_full] == 2 &&
-                    (($rdbchan == "yes" && [status $primary sync_partial_ok] == 2) || $rdbchan == "no")
+                    (($dualconn == "yes" && [status $primary sync_partial_ok] == 2) || $dualconn == "no")
                 } else {
                     fail "Sync session interapted\n
                         sync_full:[status $primary sync_full]\n
@@ -802,7 +802,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             $primary debug populate 1000000 primary 1
             $primary config set rdb-key-save-delay 100
     
-            test "Primary abort sync if all slaves dropped rdb-connection $rdbchan" {
+            test "Primary abort sync if all slaves dropped rdb-connection $dualconn" {
                 set cur_psync [status $primary sync_partial_ok]
                 $replica2 replicaof $primary_host $primary_port
 
@@ -811,7 +811,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
                 } else {
                     fail "Sync did not start"
                 }
-                if {$rdbchan == "yes"} {
+                if {$dualconn == "yes"} {
                     # Wait for both replicas main conns to establish psync
                     wait_for_condition 50 1000 {
                         [status $primary sync_partial_ok] == $cur_psync + 1
@@ -887,7 +887,7 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             }
         }
 
-        test "Test rdb-channel slave of no one" {
+        test "Test dual connection slave of no one" {
             $replica replicaof no one
             wait_for_condition 500 1000 {
                 [s -1 rdb_bgsave_in_progress] eq 0

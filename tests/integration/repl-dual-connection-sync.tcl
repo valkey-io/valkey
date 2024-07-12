@@ -179,52 +179,76 @@ start_server {tags {"repl rdb-connection external:skip"}} {
 }
 
 start_server {tags {"repl rdb-connection external:skip"}} {
-    foreach start_with_rdb_sync_enabled {yes no} {
-        set replica [srv 0 client]
-        set replica_host [srv 0 host]
-        set replica_port [srv 0 port]
-        set replica_log [srv 0 stdout]
-        start_server {} {
+    set replica [srv 0 client]
+    set replica_host [srv 0 host]
+    set replica_port [srv 0 port]
+    set replica_log [srv 0 stdout]
+    start_server {} {
+        foreach enable {yes no} {
             set primary [srv 0 client]
             set primary_host [srv 0 host]
             set primary_port [srv 0 port]
 
             $primary config set repl-diskless-sync yes
+            # Set primary shared replication buffer size to a bit more then the size of 
+            # a replication buffer block.
             $primary config set client-output-buffer-limit "replica 1100k 0 0"
-            $replica config set dual-conn-sync-enabled $start_with_rdb_sync_enabled
+            $primary config set dual-conn-sync-enabled $enable
+            $replica config set dual-conn-sync-enabled $enable
 
-            test "Test enable disable dual-conn-sync-enabled start with $start_with_rdb_sync_enabled" {
-                # Set primary shared replication buffer size to a bit more then the size of 
-                # a replication buffer block.
-                
+            test "Toggle dual-conn-sync-enabled: $enable start" {    
                 populate 1000 primary 10000
-
-                $replica replicaof $primary_host $primary_port
-                verify_replica_online $primary 0 500
-
-                set sync_full [s 0 sync_full]
-                assert {$sync_full > 0}
-
-                $replica replicaof no one
-                if {$start_with_rdb_sync_enabled == "yes"} {
-                    # disable rdb channel sync
-                    $replica config set dual-conn-sync-enabled no
-                } else {
-                    $replica config set dual-conn-sync-enabled yes
-                }
-
-                # Force replica to full sync next time
-                populate 1000 primary 10000
+                set prev_sync_full [s 0 sync_full]
+                set prev_sync_partial [s 0 sync_partial_ok]
 
                 $replica replicaof $primary_host $primary_port
                 verify_replica_online $primary 0 500
                 wait_for_sync $replica
 
-                wait_for_condition 100 100 {
-                    [s 0 sync_full] > $sync_full
+
+                set cur_sync_full [s 0 sync_full]
+                set cur_sync_partial [s 0 sync_partial_ok]
+                if {$enable == "yes"} {
+                    # Verify that dual connection sync was used
+                    assert {$cur_sync_full == [expr $prev_sync_full + 1]}
+                    assert {$cur_sync_partial == [expr $prev_sync_partial + 1]}
                 } else {
-                    fail "Primary <-> Replica didn't start the full sync"
+                    # Verify that normal sync was used
+                    assert {[s 0 sync_full] == [expr $prev_sync_full + 1]}
+                    assert {[s 0 sync_partial_ok] == $prev_sync_partial}
                 }
+
+                $replica replicaof no one
+                if {$enable == "yes"} {
+                    # disable rdb channel sync
+                    $replica config set dual-conn-sync-enabled no
+                    $primary config set dual-conn-sync-enabled no
+                } else {
+                    $replica config set dual-conn-sync-enabled yes
+                    $primary config set dual-conn-sync-enabled yes
+                }
+
+                # Force replica to full sync next time
+                populate 1000 primary 10000
+                set prev_sync_full [s 0 sync_full]
+                set prev_sync_partial [s 0 sync_partial_ok]
+
+                $replica replicaof $primary_host $primary_port
+                verify_replica_online $primary 0 500
+                wait_for_sync $replica
+
+                set cur_sync_full [s 0 sync_full]
+                set cur_sync_partial [s 0 sync_partial_ok]
+                if {$enable == "yes"} {
+                    # Verify that normal sync was used
+                    assert {$cur_sync_full == [expr $prev_sync_full + 1]}
+                    assert {$cur_sync_partial == $prev_sync_partial}
+                } else {
+                    # Verify that dual connection sync was used
+                    assert {$cur_sync_full == [expr $prev_sync_full + 1]}
+                    assert {$cur_sync_partial == [expr $prev_sync_partial + 1]}
+                }
+                $replica replicaof no one
             }
         }
     }

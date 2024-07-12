@@ -2999,7 +2999,7 @@ int clusterProcessPacket(clusterLink *link) {
          * resolved when we'll receive PONGs from the node. The exception 
          * to this is the flag that indicates extensions are supported, as 
          * we want to send extensions right away in the return PONG in order
-         * to reduce the amount of time needed to stabilize the shard ID */
+         * to reduce the amount of time needed to stabilize the shard ID. */
         if (!sender && type == CLUSTERMSG_TYPE_MEET) {
             clusterNode *node;
 

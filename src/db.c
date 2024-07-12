@@ -780,25 +780,12 @@ void selectCommand(client *c) {
     }
 }
 
-void randomkeyCommand(client *c) {
-    robj *key;
-
-    if ((key = dbRandomKey(c->db)) == NULL) {
-        addReplyNull(c);
-        return;
-    }
-
-    addReplyBulk(c, key);
-    decrRefCount(key);
-}
-
-void keysCommand(client *c) {
-    dictEntry *de;
-    sds pattern = c->argv[1]->ptr;
-    int plen = sdslen(pattern), allkeys, pslot = -1;
-    unsigned long numkeys = 0;
+/* The setGenericCommand() return to all keys complianted with pattern. */
+void keyGenericCommand(client *c, int allkeys, int plen, sds pattern) {
     void *replylen = addReplyDeferredLen(c);
-    allkeys = (pattern[0] == '*' && plen == 1);
+    dictEntry *de;
+    unsigned long numkeys = 0;
+    int pslot = -1;
     if (server.cluster_enabled && !allkeys) {
         pslot = patternHashSlot(pattern, plen);
     }
@@ -830,6 +817,192 @@ void keysCommand(client *c) {
     if (kvs_di) kvstoreReleaseDictIterator(kvs_di);
     if (kvs_it) kvstoreIteratorRelease(kvs_it);
     setDeferredArrayLen(c, replylen, numkeys);
+}
+
+dict *CreateDBFromServerDB(serverDb *db, int allkeys, int plen, sds pattern) {
+    dict *d = dictCreate(&sdsReplyDictType);
+    dictEntry *de;
+    int pslot = -1;
+    if (server.cluster_enabled && !allkeys) {
+        pslot = patternHashSlot(pattern, plen);
+    }
+    kvstoreDictIterator *kvs_di = NULL;
+    kvstoreIterator *kvs_it = NULL;
+    if (pslot != -1) {
+        if (!kvstoreDictSize(db->keys, pslot)) {
+            /* Requested slot is empty */
+            return NULL;
+        }
+        kvs_di = kvstoreGetDictSafeIterator(db->keys, pslot);
+    } else {
+        kvs_it = kvstoreIteratorInit(db->keys);
+    }
+    robj keyobj;
+    while ((de = kvs_di ? kvstoreDictIteratorNext(kvs_di) : kvstoreIteratorNext(kvs_it)) != NULL) {
+        sds key = dictGetKey(de);
+        if (allkeys || stringmatchlen(pattern, plen, key, sdslen(key), 0)) {
+            initStaticStringObject(keyobj, key);
+            if (!keyIsExpired(db, &keyobj)) {
+                int retval = DICT_ERR;
+                retval = dictAdd(d, key, NULL);
+                serverAssert(retval == DICT_OK);
+            }
+        }
+    }
+    if (kvs_di) kvstoreReleaseDictIterator(kvs_di);
+    if (kvs_it) kvstoreIteratorRelease(kvs_it);
+
+    return d;
+}
+
+/* How many times bigger should be the set compared to the requested size
+ * for us to don't use the "remove elements" strategy? Read later in the
+ * implementation for more info. */
+#define RANDOMKEY_SUB_STRATEGY_MUL 2
+/************************************************************
+RANDOMKEY [COUNT <count> [DUPLICATED] [PATTERN <pattern>]] (OR)
+RANDOMKEY [COUNT <count> [DUPLICATED]]
+******************************************************************/
+void randomkeyCommand(client *c) {
+    /* Command Argument Parsing section,
+       if command has invalid option return error.
+    */
+    unsigned long long int count = 1; // default count
+    sds pattern = "*"; // default pattern
+    int plen = 1, allkeys = 1;
+    int duplicated = 0; // default disabled duplication
+    int numkeys = 0;
+    const int numOfArgs = c->argc;
+    const unsigned long long int kvSize = kvstoreSize(c->db->keys);
+    dict *d;
+    int i;
+    for (i = 1; i < numOfArgs; i++) {
+        int lastarg = i == numOfArgs - 1;
+        if (strcasecmp(c->argv[i]->ptr,"count") && !lastarg) {
+            count = strtoll(c->argv[++i]->ptr, NULL, 10);
+            serverLog(LL_WARNING, "count=%lld", count); // to be deleted
+        } else if (strcasecmp(c->argv[i]->ptr,"pattern") && !lastarg) {
+            pattern = c->argv[++i]->ptr;
+            plen = sdslen(pattern);
+            allkeys = (pattern[0] == '*' && plen == 1);
+            serverLog(LL_WARNING, "pattern=%s", pattern); // to be deleted
+        } else if (strcasecmp(c->argv[i]->ptr,"duplicated")) {
+            duplicated = 1;
+            serverLog(LL_WARNING, "duplicated is enabled"); // to be deleted
+        } else {
+            addReplyErrorObject(c,shared.syntaxerr);
+            return; 
+        }
+    }
+    /* Check if count is less than or equal to 0, or db has no key, if no keys return  */
+    if (count <= 0 || kvSize == 0) {
+        addReplyNull(c);
+        return;
+    }
+
+    /* case1: duplicate is enabled, and no pattern, so the extraction method is just:
+     * "return N random elements" sampling the whole db every time.
+     * This case return the element in random order. */
+    if (duplicated && allkeys) { 
+        void *replylen = addReplyDeferredLen(c);
+        robj *keyobj;
+        int maxtries = 100;
+        while (((unsigned long long int)numkeys < count) && maxtries) {
+            if ((keyobj = dbRandomKey(c->db)) != NULL) {
+                addReplyBulk(c,keyobj);
+                decrRefCount(keyobj);
+                numkeys++;
+            } else {
+                maxtries--; // To be comfired, when will dbRandomKey return null?
+            }
+            if (c->flag.close_asap) break;
+        }
+        setDeferredArrayLen(c, replylen, numkeys);
+        return;
+    } else {
+        /* In the following case, we need to extract the key that meets the requirements.
+         * d has non repeating keys that conform to the pattern. */
+        d = CreateDBFromServerDB(c->db, allkeys, plen, pattern);
+        unsigned long dbsize = dictSize(d);
+        void *replylen = addReplyDeferredLen(c);
+
+        /* case2: duplicate is enabled and pattern has been set, we do a ramdom select in d. */
+        if (duplicated) {
+            dictEntry *de;
+            // void *replylen = addReplyDeferredLen(c);
+            while ((unsigned long long int)numkeys < count) {
+                de = dictGetFairRandomKey(d);
+                addReplyBulkSds(c, dictGetKey(de));
+                numkeys++;
+            }
+            // setDeferredArrayLen(c, replylen, numkeys);
+        }
+
+        /* case3: If the number of requested elements is greater than the complied dbsize, simply return all keys */
+        if (count >= dbsize) {
+            dictEntry *de;
+            // void *replylen = addReplyDeferredLen(c);
+
+            dictIterator *di = dictGetIterator(d);
+            while ((de = dictNext(di)) != NULL) addReplyBulkSds(c, dictGetKey(de));
+            dictReleaseIterator(di);
+
+            // setDeferredArrayLen(c, replylen, dbsize);
+        }
+
+        /* case4: The number of elements inside the db is not greater than RANDOMKEY_SUB_STRATEGY_MUL
+         * times the number of requested elements. This case we pop kvs out of dict randomly, and then
+         * reply with the remain kvs. */
+        else if (count * RANDOMKEY_SUB_STRATEGY_MUL >= dbsize) {
+            // void *replylen = addReplyDeferredLen(c);
+            dictEntry *de;
+
+            while (count) {
+                de = dictGetFairRandomKey(d);
+                dictUnlink(d, dictGetKey(de));
+                sdsfree(dictGetKey(de));
+                dictFreeUnlinkedEntry(d, de);
+                count--;
+                numkeys++;
+            }
+            dictIterator *di = dictGetIterator(d);
+            while ((de = dictNext(di)) != NULL) addReplyBulkSds(c, dictGetKey(de));
+
+            dictReleaseIterator(di);
+            // setDeferredArrayLen(c, replylen, numkeys);
+        }
+
+        /* case5: we have a big num of keys in db compared to the request number of elements.
+         * In this case we can simply get random elements from the db and add to the temporary kvstore,
+         * trying to eventually get enough unique elements to reach the specified count */
+        else if (count * RANDOMKEY_SUB_STRATEGY_MUL < dbsize) {
+            // void *replylen = addReplyDeferredLen(c);
+            dictEntry *de;
+            while(count) {
+                de = dictGetFairRandomKey(d);
+                addReplyBulkSds(c, dictGetKey(de));
+                dictUnlink(d, dictGetKey(de));
+                sdsfree(dictGetKey(de));
+                dictFreeUnlinkedEntry(d, de);
+                count--;
+                numkeys++;
+            }
+            // setDeferredArrayLen(c, replylen, numkeys);
+        }
+
+        setDeferredArrayLen(c, replylen, numkeys);
+    }
+
+    if (d) dictRelease(d);
+    return;
+}
+
+void keysCommand(client *c) {
+    sds pattern = c->argv[1]->ptr;
+    int plen = sdslen(pattern), allkeys = -1;
+    allkeys = (pattern[0] == '*' && plen == 1);
+
+    keyGenericCommand(c, allkeys, plen, pattern);
 }
 
 /* Data used by the dict scan callback. */

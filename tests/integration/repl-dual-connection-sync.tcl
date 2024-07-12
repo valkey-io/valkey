@@ -160,17 +160,19 @@ start_server {tags {"repl rdb-connection external:skip"}} {
             }
         }
 
-        test "Rollback to nornal sync" {
+        test "Dual connection sync doesn't impair subsequent normal syncs" {
             $replica replicaof no one
             $replica config set dual-conn-sync-enabled no
             $primary set newkey newval
 
             set sync_full [s 0 sync_full]
-            assert {$sync_full > 0}
+            set sync_partial [s 0 sync_partial_ok]
 
             $replica replicaof $primary_host $primary_port
             verify_replica_online $primary 0 500
+            # Verify replica used  normal sync this time
             assert_equal [expr $sync_full + 1] [s 0 sync_full]
+            assert_equal [expr $sync_partial] [s 0 sync_partial_ok]
             assert [string match *connected_slaves:1* [$primary info]]
         }
     }

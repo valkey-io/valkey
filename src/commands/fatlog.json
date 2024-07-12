@@ -1,0 +1,9 @@
+{
+    "FATLOG": {
+        "summary": "A container for fat log commands.",
+        "complexity": "Depends on subcommand.",
+        "group": "server",
+        "since": "8.0.0",
+        "arity": -2
+    }
+}

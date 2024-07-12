@@ -1,0 +1,26 @@
+{
+    "LEN": {
+        "summary": "Returns the number of entries in the fat log.",
+        "complexity": "O(1)",
+        "group": "server",
+        "since": "8.0.0",
+        "arity": 2,
+        "container": "FATLOG",
+        "function": "slowlogCommand",
+        "command_flags": [
+            "ADMIN",
+            "LOADING",
+            "STALE"
+        ],
+        "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:AGG_SUM",
+            "NONDETERMINISTIC_OUTPUT"
+        ],
+        "reply_schema": {
+            "type": "integer",
+            "description": "Number of entries in the fat log.",
+            "minimum": 0
+        }
+    }
+}

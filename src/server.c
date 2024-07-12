@@ -3258,7 +3258,7 @@ void preventCommandReplication(client *c) {
 
 /* Log the last command a client executed into the slowlog. */
 void slowlogPushCurrentCommand(client *c, struct serverCommand *cmd, ustime_t duration) {
-    /* Some commands may contain sensitive data that should not be available in the slowlog. */
+    /* Some commands should not be available in the slowlog and the fatlog. */
     if (cmd->flags & CMD_SKIP_SLOWLOG) return;
 
     /* If command argument vector was rewritten, use the original
@@ -3266,6 +3266,18 @@ void slowlogPushCurrentCommand(client *c, struct serverCommand *cmd, ustime_t du
     robj **argv = c->original_argv ? c->original_argv : c->argv;
     int argc = c->original_argv ? c->original_argc : c->argc;
     slowlogPushEntryIfNeeded(c, argv, argc, duration);
+}
+
+/* Log the last command a client executed into the fatlog. */
+void fatlogPushCurrentCommand(client *c, struct serverCommand *cmd, size_t size) {
+    /* Some commands should not be available in the slowlog and the fatlog. */
+    if (cmd->flags & CMD_SKIP_SLOWLOG) return;
+
+    /* If command argument vector was rewritten, use the original
+     * arguments. */
+    robj **argv = c->original_argv ? c->original_argv : c->argv;
+    int argc = c->original_argv ? c->original_argc : c->argc;
+    fatlogPushEntryIfNeeded(c, argv, argc, size);
 }
 
 /* This function is called in order to update the total command histogram duration.
@@ -3462,6 +3474,14 @@ void call(client *c, int flags) {
      * re-processed. */
     if (reprocessing_command) c->flag.reprocessing_command = 1;
 
+    /* Log the query into the Fat log if needed. */
+    if (update_command_stats) {
+        fatlogPushCurrentCommand(c, real_cmd, c->cmd_query_length);
+    }
+
+    /* To record how many reply bytes generated in this command. */
+    c->cmd_reply_length = 0;
+
     monotime monotonic_start = 0;
     if (monotonicGetType() == MONOTONIC_CLOCK_HW) monotonic_start = getMonotonicUs();
 
@@ -3518,9 +3538,12 @@ void call(client *c, int flags) {
         if (server.execution_nesting == 0) durationAddSample(EL_DURATION_TYPE_CMD, duration);
     }
 
-    /* Log the command into the Slow log if needed.
+    /* Log the command into the Slow log and Fat log if needed.
      * If the client is blocked we will handle slowlog when it is unblocked. */
-    if (update_command_stats && !c->flag.blocked) slowlogPushCurrentCommand(c, real_cmd, c->duration);
+    if (update_command_stats && !c->flag.blocked) {
+        slowlogPushCurrentCommand(c, real_cmd, c->duration);
+        fatlogPushCurrentCommand(c, real_cmd, c->cmd_reply_length);
+    }
 
     /* Send the command to clients in MONITOR mode if applicable,
      * since some administrative commands are considered too dangerous to be shown.

@@ -1199,6 +1199,7 @@ typedef struct client {
     sds querybuf;                        /* Buffer we use to accumulate client queries. */
     size_t qb_pos;                       /* The position we have read in querybuf. */
     size_t querybuf_peak;                /* Recent (100ms or more) peak of querybuf size. */
+    size_t cmd_query_length;             /* Query length in bytes for one command. */
     int argc;                            /* Num of arguments of current command. */
     robj **argv;                         /* Arguments of current command. */
     int argv_len;                        /* Size of argv array (may be more than argc) */
@@ -1225,6 +1226,7 @@ typedef struct client {
     list *reply;                         /* List of reply objects to send to the client. */
     listNode *io_last_reply_block;       /* Last client reply block when sent to IO thread */
     unsigned long long reply_bytes;      /* Tot bytes of objects in reply list. */
+    unsigned long long cmd_reply_length; /* Reply length in bytes for one command. */
     list *deferred_reply_errors;         /* Used for module thread safe contexts. */
     size_t sentlen;                      /* Amount of bytes already sent in the current
                                             buffer or object being sent. */
@@ -1736,6 +1738,10 @@ struct valkeyServer {
     long long slowlog_entry_id;                    /* SLOWLOG current entry ID */
     long long slowlog_log_slower_than;             /* SLOWLOG time limit (to get logged) */
     unsigned long slowlog_max_len;                 /* SLOWLOG max number of items logged */
+    list *fatlog;                                  /* FATLOG list of commands */
+    long long fatlog_entry_id;                     /* FATLOG current entry ID */
+    long long fatlog_log_bigger_than;              /* FATLOG size limit (to get logged) */
+    unsigned long fatlog_max_len;                  /* FATLOG max number of items logged */
     struct malloc_stats cron_malloc_stats;         /* sampled in serverCron(). */
     long long stat_net_input_bytes;                /* Bytes read from network. */
     long long stat_net_output_bytes;               /* Bytes written to network. */
@@ -2344,7 +2350,7 @@ typedef int serverGetKeysProc(struct serverCommand *cmd, robj **argv, int argc, 
  *
  * CMD_SKIP_MONITOR:  Do not automatically propagate the command on MONITOR.
  *
- * CMD_SKIP_SLOWLOG:  Do not automatically propagate the command to the slowlog.
+ * CMD_SKIP_SLOWLOG:  Do not automatically propagate the command to the slowlog and fatlog.
  *
  * CMD_ASKING:      Perform an implicit ASKING for this command, so the
  *                  command will be accepted in cluster mode if the slot is marked
@@ -3171,6 +3177,7 @@ void preventCommandPropagation(client *c);
 void preventCommandAOF(client *c);
 void preventCommandReplication(client *c);
 void slowlogPushCurrentCommand(client *c, struct serverCommand *cmd, ustime_t duration);
+void fatlogPushCurrentCommand(client *c, struct serverCommand *cmd, size_t size);
 void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int64_t duration_hist);
 int prepareForShutdown(int flags);
 void replyToClientsBlockedOnShutdown(void);

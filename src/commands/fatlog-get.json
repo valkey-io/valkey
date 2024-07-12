@@ -1,0 +1,69 @@
+{
+    "GET": {
+        "summary": "Returns the fat log's entries.",
+        "complexity": "O(N) where N is the number of entries returned",
+        "group": "server",
+        "since": "8.0.0",
+        "arity": -2,
+        "container": "FATLOG",
+        "function": "slowlogCommand",
+        "history": [],
+        "command_flags": [
+            "ADMIN",
+            "LOADING",
+            "STALE"
+        ],
+        "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "NONDETERMINISTIC_OUTPUT"
+        ],
+        "reply_schema": {
+            "type": "array",
+            "description": "Entries from the slow log in chronological order.",
+            "uniqueItems": true,
+            "items": {
+                "type": "array",
+                "minItems": 6,
+                "maxItems": 6,
+                "items": [
+                    {
+                        "type": "integer",
+                        "description": "Fat log entry ID."
+                    },
+                    {
+                        "type": "integer",
+                        "description": "The unix timestamp at which the logged command was processed.",
+                        "minimum": 0
+                    },
+                    {
+                        "type": "integer",
+                        "description": "The size of the response to the query in bytes.",
+                        "minimum": 0
+                    },
+                    {
+                        "type": "array",
+                        "description": "The arguments of the command.",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "type": "string",
+                        "description": "Client IP address and port."
+                    },
+                    {
+                        "type": "string",
+                        "description": "Client name if set via the CLIENT SETNAME command."
+                    }
+                ]
+            }
+        },
+        "arguments": [
+            {
+                "name": "count",
+                "type": "integer",
+                "optional": true
+            }
+        ]
+    }
+}

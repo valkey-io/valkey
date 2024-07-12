@@ -1,0 +1,23 @@
+{
+    "RESET": {
+        "summary": "Clears all entries from the fat log.",
+        "complexity": "O(N) where N is the number of entries in the fatlog",
+        "group": "server",
+        "since": "8.0.0",
+        "arity": 2,
+        "container": "FATLOG",
+        "function": "slowlogCommand",
+        "command_flags": [
+            "ADMIN",
+            "LOADING",
+            "STALE"
+        ],
+        "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+        ],
+        "reply_schema": {
+            "const": "OK"
+        }
+    }
+}

@@ -154,6 +154,7 @@ client *createClient(connection *conn) {
     c->qb_pos = 0;
     c->querybuf = NULL;
     c->querybuf_peak = 0;
+    c->cmd_query_length = 0;
     c->reqtype = 0;
     c->argc = 0;
     c->argv = NULL;
@@ -192,6 +193,7 @@ client *createClient(connection *conn) {
     c->reply = listCreate();
     c->deferred_reply_errors = NULL;
     c->reply_bytes = 0;
+    c->cmd_reply_length = 0;
     c->obuf_soft_limit_reached_time = 0;
     listSetFreeMethod(c->reply, freeClientReplyValue);
     listSetDupMethod(c->reply, dupClientReplyValue);
@@ -445,6 +447,9 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
     /* We call it here because this function may affect the reply
      * buffer offset (see function comment) */
     reqresSaveClientReplyOffset(c);
+
+    /* Record reply length. */
+    c->cmd_reply_length += len;
 
     /* If we're processing a push message into the current client (i.e. executing PUBLISH
      * to a channel which we are subscribed to, then we wanna postpone that message to be added
@@ -798,6 +803,9 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
      * we return NULL in addReplyDeferredLen() */
     if (node == NULL) return;
     serverAssert(!listNodeValue(ln));
+
+    /* Record reply length. */
+    c->cmd_reply_length += length;
 
     /* Normally we fill this dummy NULL node, added by addReplyDeferredLen(),
      * with a new buffer structure containing the protocol needed to specify
@@ -2436,6 +2444,7 @@ void resetClient(client *c) {
     serverCommandProc *prevcmd = c->cmd ? c->cmd->proc : NULL;
 
     freeClientArgv(c);
+    c->cmd_query_length = 0;
     c->cur_script = NULL;
     c->reqtype = 0;
     c->multibulklen = 0;
@@ -2570,6 +2579,9 @@ void processInlineBuffer(client *c) {
     /* Move querybuffer position to the next query in the buffer. */
     c->qb_pos += querylen + linefeed_chars;
 
+    /* Record query length for fatlog. */
+    c->cmd_query_length = querylen;
+
     /* Setup argv array on client structure */
     if (argc) {
         if (c->argv) zfree(c->argv);
@@ -2636,6 +2648,8 @@ void processMultibulkBuffer(client *c) {
     long long ll;
     int is_primary = c->read_flags & READ_FLAGS_PRIMARY;
     int auth_required = c->read_flags & READ_FLAGS_AUTH_REQUIRED;
+
+    size_t qb_pos_start = c->qb_pos;
 
     if (c->multibulklen == 0) {
         /* The client should have been reset */
@@ -2776,6 +2790,9 @@ void processMultibulkBuffer(client *c) {
             c->multibulklen--;
         }
     }
+
+    /* Record query length for fatlog. */
+    c->cmd_query_length += c->qb_pos - qb_pos_start;
 
     /* We're done when c->multibulk == 0 */
     if (c->multibulklen == 0) c->read_flags |= READ_FLAGS_PARSING_COMPLETED;

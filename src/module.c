@@ -10796,10 +10796,8 @@ size_t VM_MallocSizeString(ValkeyModuleString *str) {
  * it does not include the allocation size of the keys and values.
  */
 size_t VM_MallocSizeDict(ValkeyModuleDict *dict) {
-    size_t size = sizeof(ValkeyModuleDict) + sizeof(rax);
-    size += dict->rax->numnodes * sizeof(raxNode);
-    /* For more info about this weird line, see streamRadixTreeMemoryUsage */
-    size += dict->rax->numnodes * sizeof(long) * 30;
+    size_t size = sizeof(ValkeyModuleDict);
+    size += raxAllocSize(dict->rax);
     return size;
 }
 

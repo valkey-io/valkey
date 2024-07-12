@@ -2,7 +2,7 @@ source tests/support/valkey.tcl
 
 set ::tlsdir "tests/tls"
 
-# Continously sends SET commands to the node. If key is omitted, a random key is
+# Continuously sends SET commands to the node. If key is omitted, a random key is
 # used for every SET command. The value is always random.
 proc gen_write_load {host port seconds tls {key ""}} {
     set start_time [clock seconds]

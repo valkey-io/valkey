@@ -2996,8 +2996,8 @@ int clusterProcessPacket(clusterLink *link) {
         /* Add this node if it is new for us and the msg type is MEET.
          * In this stage we don't try to add the node with the right
          * flags, replicaof pointer, and so forth, as this details will be
-         * resolved when we'll receive PONGs from the node. The exception 
-         * to this is the flag that indicates extensions are supported, as 
+         * resolved when we'll receive PONGs from the node. The exception
+         * to this is the flag that indicates extensions are supported, as
          * we want to send extensions right away in the return PONG in order
          * to reduce the amount of time needed to stabilize the shard ID. */
         if (!sender && type == CLUSTERMSG_TYPE_MEET) {
@@ -3009,7 +3009,7 @@ int clusterProcessPacket(clusterLink *link) {
             node->cport = ntohs(hdr->cport);
             if (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
                 node->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
-            } 
+            }
             clusterAddNode(node);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
         }

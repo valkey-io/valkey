@@ -4945,7 +4945,6 @@ int clusterAddSlot(clusterNode *n, int slot) {
     clusterNodeSetSlotBit(n, slot);
     server.cluster->slots[slot] = n;
     bitmapClearBit(server.cluster->owner_not_claiming_slot, slot);
-    /* Clear per-slot statistics. */
     clusterSlotStatReset(slot);
     return C_OK;
 }
@@ -4965,7 +4964,6 @@ int clusterDelSlot(int slot) {
     server.cluster->slots[slot] = NULL;
     /* Make owner_not_claiming_slot flag consistent with slot ownership information. */
     bitmapClearBit(server.cluster->owner_not_claiming_slot, slot);
-    /* Clear per-slot statistics. */
     clusterSlotStatReset(slot);
     return C_OK;
 }

@@ -3523,10 +3523,8 @@ void call(client *c, int flags) {
         real_cmd->microseconds += c->duration;
         if (server.latency_tracking_enabled && !(c->flags & CLIENT_BLOCKED))
             updateCommandLatencyHistogram(&(real_cmd->latency_histogram), c->duration * 1000);
+        clusterSlotStatsAddCpuDuration(c, c->duration);
     }
-
-    /* Populate per-slot statistics for cpu time. */
-    clusterSlotStatsAddCpuDuration(c->slot, c->duration);
 
     /* The duration needs to be reset after each call except for a blocked command,
      * which is expected to record and reset the duration after unblocking. */

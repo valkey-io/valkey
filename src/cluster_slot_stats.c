@@ -26,7 +26,7 @@ typedef struct {
 
 /* Struct used for storing slot statistics. */
 typedef struct slotStat {
-    uint64_t cpu;
+    uint64_t cpu_usec;
 } slotStat;
 
 /* Struct used for storing slot statistics, for all slots owned by the current shard. */
@@ -56,7 +56,7 @@ static uint64_t getSlotStat(int slot, int stat_type) {
     if (stat_type == KEY_COUNT) {
         slot_stat = countKeysInSlot(slot);
     } else if (stat_type == CPU_USEC) {
-        slot_stat = cluster_slot_stats[slot].cpu;
+        slot_stat = cluster_slot_stats[slot].cpu_usec;
     }
     return slot_stat;
 }
@@ -94,7 +94,7 @@ static void addReplySlotStat(client *c, int slot) {
     addReplyBulkCString(c, "key-count");
     addReplyLongLong(c, countKeysInSlot(slot));
     addReplyBulkCString(c, "cpu-usec");
-    addReplyLongLong(c, cluster_slot_stats[slot].cpu);
+    addReplyLongLong(c, cluster_slot_stats[slot].cpu_usec);
 }
 
 /* Adds reply for the SLOTSRANGE variant.
@@ -128,17 +128,23 @@ static void addReplyOrderBy(client *c, int order_by, long limit, int desc) {
 /* Resets applicable slot statistics. */
 void clusterSlotStatReset(int slot) {
     /* key-count is exempt, as it is queried separately through `countKeysInSlot()`. */
-    cluster_slot_stats[slot].cpu = 0;
+    memset(&cluster_slot_stats[slot], 0, sizeof(slotStat));
 }
 
 void clusterSlotStatsReset(void) {
     memset(cluster_slot_stats, 0, sizeof(cluster_slot_stats));
 }
 
-void clusterSlotStatsAddCpuDuration(int slot, long duration) {
-    if (!server.execution_nesting && server.cluster_enabled && slot != -1) {
-        cluster_slot_stats[slot].cpu += duration;
-    }
+static int canAddCpuDuration(client *c) {
+    return server.cluster_enabled && c->slot != -1 && c->cmd->proc != execCommand && c->cmd->proc != fcallCommand &&
+           c->cmd->proc != evalCommand;
+}
+
+void clusterSlotStatsAddCpuDuration(client *c, ustime_t duration) {
+    if (!canAddCpuDuration(c)) return;
+
+    serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
+    cluster_slot_stats[c->slot].cpu_usec += duration;
 }
 
 void clusterSlotStatsCommand(client *c) {
@@ -172,7 +178,7 @@ void clusterSlotStatsCommand(client *c) {
         } else if (!strcasecmp(c->argv[3]->ptr, "cpu-usec")) {
             order_by = CPU_USEC;
         } else {
-            addReplyError(c, "Unrecognized sort metric for ORDER BY. The supported "
+            addReplyError(c, "Unrecognized sort metric for ORDERBY. The supported "
                              "metrics are: key-count and cpu-usec.");
             return;
         }

@@ -16,6 +16,12 @@ proc convert_array_into_dict {slot_stats} {
     return $res
 }
 
+proc get_cmdstat_usec {cmd r} {
+    set cmdstatline [cmdrstat $cmd r]
+    regexp "usec=(.*?),usec_per_call=(.*?),rejected_calls=0,failed_calls=0" $cmdstatline -> usec _
+    return $usec
+}
+
 proc initialize_expected_slots_dict {} {
     set expected_slots [dict create]
     for {set i 0} {$i < 16384} {incr i 1} {
@@ -36,18 +42,24 @@ proc initialize_expected_slots_dict_with_range {start_slot end_slot} {
 proc assert_empty_slot_stats {slot_stats} {
     set slot_stats [convert_array_into_dict $slot_stats]
     dict for {slot stats} $slot_stats {
-        assert {[dict get $stats key-count] == 0}
+        dict for {metric value} $stats {
+            assert {$value == 0}
+        }
     }
 }
 
-proc assert_empty_slot_stats_with_exception {slot_stats exception_slots} {
+proc assert_empty_slot_stats_with_exception {slot_stats exception_slots metrics_to_assert} {
     set slot_stats [convert_array_into_dict $slot_stats]
     dict for {slot stats} $slot_stats {
         if {[dict exists $exception_slots $slot]} {
-            set expected_key_count [dict get $exception_slots $slot]
-            assert {[dict get $stats key-count] == $expected_key_count}
+            foreach metric_name $metrics_to_assert {
+                set metric_value [dict get $exception_slots $slot $metric_name]
+                assert {[dict get $stats $metric_name] == $metric_value}
+            }
         } else {
-            assert {[dict get $stats key-count] == 0}
+            dict for {metric value} $stats {
+                assert {$value == 0}
+            }
         }
     }
 }
@@ -115,6 +127,167 @@ proc wait_for_replica_key_exists {key key_count} {
 }
 
 # -----------------------------------------------------------------------------
+# Test cases for CLUSTER SLOT-STATS cpu-usec metric correctness.
+# -----------------------------------------------------------------------------
+
+start_cluster 1 0 {tags {external:skip cluster}} {
+
+    # Define shared variables.
+    set key "FOO"
+    set key_slot [R 0 cluster keyslot $key]
+    set key_secondary "FOO2"
+    set key_secondary_slot [R 0 cluster keyslot $key_secondary]
+    set metrics_to_assert [list cpu-usec]
+
+    test "CLUSTER SLOT-STATS cpu-usec reset." {
+        R 0 SET $key VALUE
+        R 0 DEL $key
+        R 0 CONFIG RESETSTAT
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS cpu-usec for non-slot specific commands." {
+        R 0 INFO
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS cpu-usec for slot specific commands." {
+        R 0 SET $key VALUE
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set usec [get_cmdstat_usec set r]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create cpu-usec $usec
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS cpu-usec for blocking commands, unblocked on keyspace update." {
+        # Blocking command with no timeout. Only keyspace update can unblock this client.
+        set rd [valkey_deferring_client]
+        $rd BLPOP $key 0
+        wait_for_blocked_clients_count 1
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        # When the client is blocked, no accumulation is made. This behaviour is identical to INFO COMMANDSTATS.
+        assert_empty_slot_stats $slot_stats
+
+        # Unblocking command.
+        R 0 LPUSH $key value
+        wait_for_blocked_clients_count 0
+
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set lpush_usec [get_cmdstat_usec lpush r]
+        set blpop_usec [get_cmdstat_usec blpop r]
+
+        # Assert that both blocking and non-blocking command times have been accumulated.
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create cpu-usec [expr $lpush_usec + $blpop_usec]
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS cpu-usec for blocking commands, unblocked on timeout." {
+        # Blocking command with 1 second timeout.
+        set rd [valkey_deferring_client]
+        $rd BLPOP $key 1
+
+        # Confirm that the client is blocked, then unblocked after 1 second timeout.
+        wait_for_blocked_clients_count 1
+        wait_for_blocked_clients_count 0
+
+        # Assert that the blocking command time has been accumulated.
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set blpop_usec [get_cmdstat_usec blpop r]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create cpu-usec $blpop_usec
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS cpu-usec for transactions." {
+        set r1 [valkey_client]
+        $r1 MULTI
+        $r1 SET $key value
+        $r1 GET $key
+
+        # CPU metric is not accumulated until EXEC is reached. This behaviour is identical to INFO COMMANDSTATS.
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats
+
+        # Execute transaction, and assert that all nested command times have been accumulated.
+        $r1 EXEC
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set get_usec [get_cmdstat_usec set r]
+        set set_usec [get_cmdstat_usec get r]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create cpu-usec [expr $get_usec + $set_usec]
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS cpu-usec for lua-scripts, without cross-slot keys." {
+        r eval [format "redis.call('set', '%s', 'bar'); redis.call('get', '%s')" $key $key] 0
+
+        set get_usec [get_cmdstat_usec set r]
+        set set_usec [get_cmdstat_usec get r]
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create cpu-usec [expr $get_usec + $set_usec]
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS cpu-usec for lua-scripts, with cross-slot keys." {
+        r eval [format "#!lua flags=allow-cross-slot-keys
+            redis.call('set', '%s', 'bar'); redis.call('get', '%s');
+        " $key $key_secondary] 0
+
+        set set_usec [get_cmdstat_usec set r]
+        set get_usec [get_cmdstat_usec get r]
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+
+        set expected_slot_stats [
+            dict create \
+                $key_slot [
+                    dict create cpu-usec $set_usec
+                ] \
+                $key_secondary_slot [
+                    dict create cpu-usec $get_usec
+                ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+}
+
+# -----------------------------------------------------------------------------
 # Test cases for CLUSTER SLOT-STATS correctness, without additional arguments.
 # -----------------------------------------------------------------------------
 
@@ -123,7 +296,12 @@ start_cluster 1 0 {tags {external:skip cluster}} {
     # Define shared variables.
     set key "FOO"
     set key_slot [R 0 cluster keyslot $key]
-    set expected_slots_to_key_count [dict create $key_slot 1]
+    set metrics_to_assert [list key-count]
+    set expected_slot_stats [
+        dict create $key_slot [
+            dict create key-count 1
+        ]
+    ]
 
     test "CLUSTER SLOT-STATS contains default value upon valkey-server startup" {
         set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
@@ -133,13 +311,13 @@ start_cluster 1 0 {tags {external:skip cluster}} {
     test "CLUSTER SLOT-STATS contains correct metrics upon key introduction" {
         R 0 SET $key TEST
         set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
-        assert_empty_slot_stats_with_exception $slot_stats $expected_slots_to_key_count
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
     }
 
     test "CLUSTER SLOT-STATS contains correct metrics upon key mutation" {
         R 0 SET $key NEW_VALUE
         set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
-        assert_empty_slot_stats_with_exception $slot_stats $expected_slots_to_key_count
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
     }
 
     test "CLUSTER SLOT-STATS contains correct metrics upon key deletion" {

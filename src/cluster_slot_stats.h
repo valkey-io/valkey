@@ -9,4 +9,4 @@
 
 void clusterSlotStatReset(int slot);
 void clusterSlotStatsReset(void);
-void clusterSlotStatsAddCpuDuration(int slot, long duration);
+void clusterSlotStatsAddCpuDuration(client *c, ustime_t duration);

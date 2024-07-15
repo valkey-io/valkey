@@ -47,3 +47,4 @@ redis.code-workspace
 .swp
 nodes*.conf
 tests/cluster/tmp/*
+tests/rdma/rdma-test

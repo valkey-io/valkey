@@ -1842,14 +1842,14 @@ void clusterHandleConfigEpochCollision(clusterNode *sender) {
  *
  * The nodes blacklist is just a way to ensure that a given node with a given
  * Node ID is not re-added before some time elapsed (this time is specified
- * in seconds in CLUSTER_BLACKLIST_TTL).
+ * in seconds by the configurable cluster-blacklist-ttl).
  *
  * This is useful when we want to remove a node from the cluster completely:
  * when CLUSTER FORGET is called, it also puts the node into the blacklist so
  * that even if we receive gossip messages from other nodes that still remember
  * about the node we want to remove, we don't re-add it before some time.
  *
- * Currently the CLUSTER_BLACKLIST_TTL is set to 1 minute, this means
+ * The default blacklist ttl is 1 minute which means
  * that valkey-cli has 60 seconds to send CLUSTER FORGET messages to nodes
  * in the cluster without dealing with the problem of other nodes re-adding
  * back the node to nodes we already sent the FORGET command to.
@@ -1858,9 +1858,6 @@ void clusterHandleConfigEpochCollision(clusterNode *sender) {
  * the node ID as key, and the time when it is ok to re-add the node as
  * value.
  * -------------------------------------------------------------------------- */
-
-#define CLUSTER_BLACKLIST_TTL 60 /* 1 minute. */
-
 
 /* Before of the addNode() or Exists() operations we always remove expired
  * entries from the black list. This is an O(N) operation but it is not a
@@ -1893,7 +1890,7 @@ void clusterBlacklistAddNode(clusterNode *node) {
         id = sdsdup(id);
     }
     de = dictFind(server.cluster->nodes_black_list, id);
-    dictSetUnsignedIntegerVal(de, time(NULL) + CLUSTER_BLACKLIST_TTL);
+    dictSetUnsignedIntegerVal(de, time(NULL) + server.cluster_blacklist_ttl);
     sdsfree(id);
 }
 

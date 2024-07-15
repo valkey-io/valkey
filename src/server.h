@@ -1606,7 +1606,6 @@ struct valkeyServer {
     dict *orig_commands; /* Command table before command renaming. */
     aeEventLoop *el;
     rax *errors;                         /* Errors table */
-    int errors_enabled;                  /* If true, errorstats is enabled, and we will add new errors. */
     unsigned int lruclock;               /* Clock for LRU eviction */
     volatile sig_atomic_t shutdown_asap; /* Shutdown ordered by signal handler. */
     mstime_t shutdown_mstime;            /* Timestamp to limit graceful shutdown. */
@@ -2079,6 +2078,8 @@ struct valkeyServer {
     unsigned long long cluster_link_msg_queue_limit_bytes; /* Memory usage limit on individual link msg queue */
     int cluster_drop_packet_filter;                        /* Debug config that allows tactically
                                                             * dropping packets of a specific type */
+    unsigned long cluster_blacklist_ttl;                   /* Duration in seconds that a node is denied re-entry into
+                                                            * the cluster after it is forgotten with CLUSTER FORGET. */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     sds cached_cluster_slot_info[CACHE_CONN_TYPE_MAX]; /* Index in array is a bitwise or of CACHE_CONN_TYPE_* */
@@ -2621,10 +2622,20 @@ int serverCommunicateSystemd(const char *sd_notify_msg);
 void serverSetCpuAffinity(const char *cpulist);
 void dictVanillaFree(dict *d, void *val);
 
+/* ERROR STATS constants */
+
+/* Once the errors RAX reaches this limit, instead of tracking custom
+ * errors (e.g. LUA), we track the error under the prefix below. */
+#define ERRORSTATS_LIMIT 128
+#define ERRORSTATS_OVERFLOW_ERR "ERRORSTATS_OVERFLOW"
+
 /* afterErrorReply flags */
-#define ERR_REPLY_FLAG_NO_STATS_UPDATE                                                                                 \
-    (1ULL << 0) /* Indicating that we should not update                                                                \
-                   error stats after sending error reply */
+
+/* Indicating that we should not update error stats after sending error reply. */
+#define ERR_REPLY_FLAG_NO_STATS_UPDATE (1ULL << 0)
+/* Indicates the error message is custom (e.g. from LUA). */
+#define ERR_REPLY_FLAG_CUSTOM (1ULL << 1)
+
 /* networking.c -- Networking and Client related operations */
 
 /* Read flags for various read errors and states */

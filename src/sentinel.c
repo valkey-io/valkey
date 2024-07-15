@@ -2087,7 +2087,7 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
             ri = dictGetVal(de);
             replica_addr = ri->addr;
 
-            /* If primary_addr (obtained using sentinelGetCurrentMasterAddress()
+            /* If primary_addr (obtained using sentinelGetCurrentPrimaryAddress()
              * so it may be the address of the promoted replica) is equal to this
              * replica's address, a failover is in progress and the replica was
              * already successfully promoted. So as the address of this replica
@@ -3688,7 +3688,7 @@ void sentinelCommand(client *c) {
 "DEBUG [<param> <value> ...]",
 "    Show a list of configurable time parameters and their values (milliseconds).",
 "    Or update current configurable parameters values (one or more).",
-"GET-MASTER-ADDR-BY-NAME <primary-name>",
+"GET-PRIMARY-ADDR-BY-NAME <primary-name>",
 "    Return the ip and port number of the primary with that name.",
 "FAILOVER <primary-name>",
 "    Manually failover a primary node without asking for agreement from other",
@@ -3698,12 +3698,12 @@ void sentinelCommand(client *c) {
 "    Sentinel state.",
 "INFO-CACHE <primary-name>",
 "    Return last cached INFO output from primaries and all its replicas.",
-"IS-MASTER-DOWN-BY-ADDR <ip> <port> <current-epoch> <runid>",
+"IS-PRIMARY-DOWN-BY-ADDR <ip> <port> <current-epoch> <runid>",
 "    Check if the primary specified by ip:port is down from current Sentinel's",
 "    point of view.",
-"MASTER <primary-name>",
+"PRIMARY <primary-name>",
 "    Show the state and info of the specified primary.",
-"MASTERS",
+"PRIMARIES",
 "    Show a list of monitored primaries and their state.",
 "MONITOR <name> <ip> <port> <quorum>",
 "    Start monitoring a new primary with the specified name, ip, port and quorum.",
@@ -3727,11 +3727,11 @@ NULL
         };
         /* clang-format on */
         addReplyHelp(c, help);
-    } else if (!strcasecmp(c->argv[1]->ptr, "masters")) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "primaries")) {
         /* SENTINEL PRIMARIES */
         if (c->argc != 2) goto numargserr;
         addReplyDictOfValkeyInstances(c, sentinel.primaries);
-    } else if (!strcasecmp(c->argv[1]->ptr, "master")) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "primary")) {
         /* SENTINEL PRIMARY <name> */
         sentinelValkeyInstance *ri;
 
@@ -3755,7 +3755,7 @@ NULL
     } else if (!strcasecmp(c->argv[1]->ptr, "myid") && c->argc == 2) {
         /* SENTINEL MYID */
         addReplyBulkCBuffer(c, sentinel.myid, CONFIG_RUN_ID_SIZE);
-    } else if (!strcasecmp(c->argv[1]->ptr, "is-master-down-by-addr")) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "is-primary-down-by-addr")) {
         /* SENTINEL IS-PRIMARY-DOWN-BY-ADDR <ip> <port> <current-epoch> <runid>
          *
          * Arguments:
@@ -3807,7 +3807,7 @@ NULL
         /* SENTINEL RESET <pattern> */
         if (c->argc != 3) goto numargserr;
         addReplyLongLong(c, sentinelResetPrimariesByPattern(c->argv[2]->ptr, SENTINEL_GENERATE_EVENT));
-    } else if (!strcasecmp(c->argv[1]->ptr, "get-master-addr-by-name")) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "get-primary-addr-by-name")) {
         /* SENTINEL GET-PRIMARY-ADDR-BY-NAME <primary-name> */
         sentinelValkeyInstance *ri;
 

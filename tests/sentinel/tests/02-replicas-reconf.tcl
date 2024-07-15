@@ -29,18 +29,18 @@ proc 02_crash_and_failover {} {
     uplevel 1 {
         test "Crash the primary and force a failover" {
             set old_port [RPort $master_id]
-            set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
+            set addr [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
             assert {[lindex $addr 1] == $old_port}
             kill_instance valkey $master_id
             foreach_sentinel_id id {
                 wait_for_condition 1000 50 {
-                    [lindex [S $id SENTINEL GET-MASTER-ADDR-BY-NAME mymaster] 1] != $old_port
+                    [lindex [S $id SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster] 1] != $old_port
                 } else {
                     fail "At least one Sentinel did not receive failover info"
                 }
             }
             restart_instance valkey $master_id
-            set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
+            set addr [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
             set master_id [get_instance_id_by_port valkey [lindex $addr 1]]
         }
     }

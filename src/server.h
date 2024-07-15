@@ -1267,14 +1267,14 @@ typedef struct client {
     sds peerid;                          /* Cached peer ID. */
     sds sockname;                        /* Cached connection target address. */
     listNode *client_list_node;          /* list node in client list */
-    listNode *client_waiting_acks_list_node;  /* list node in client waiting acks list. */
-    listNode *postponed_list_node;       /* list node within the postponed list */
-    void *module_blocked_client;         /* Pointer to the ValkeyModuleBlockedClient associated with this
-                                          * client. This is set in case of module authentication before the
-                                          * unblocked client is reprocessed to handle reply callbacks. */
-    void *module_auth_ctx;               /* Ongoing / attempted module based auth callback's ctx.
-                                          * This is only tracked within the context of the command attempting
-                                          * authentication. If not NULL, it means module auth is in progress. */
+    listNode *client_waiting_acks_list_node;   /* list node in client waiting acks list. */
+    listNode *postponed_list_node;             /* list node within the postponed list */
+    void *module_blocked_client;               /* Pointer to the ValkeyModuleBlockedClient associated with this
+                                                * client. This is set in case of module authentication before the
+                                                * unblocked client is reprocessed to handle reply callbacks. */
+    void *module_auth_ctx;                     /* Ongoing / attempted module based auth callback's ctx.
+                                                * This is only tracked within the context of the command attempting
+                                                * authentication. If not NULL, it means module auth is in progress. */
     ValkeyModuleUserChangedFunc auth_callback; /* Module callback to execute
                                                 * when the authenticated user
                                                 * changes. */

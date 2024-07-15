@@ -884,7 +884,7 @@ start_server {tags {"repl dual-connection external:skip"}} {
             }
         }
 
-        test "Test dual connection slave of no one" {
+        test "Test dual connection slave of no one after main conn kill" {
             $replica replicaof no one
             wait_for_condition 500 1000 {
                 [s -1 rdb_bgsave_in_progress] eq 0
@@ -905,9 +905,9 @@ start_server {tags {"repl dual-connection external:skip"}} {
             }            
 
             $primary debug log "killing replica rdb connection"
-            set replica_main_conn_id [get_client_id_by_last_cmd $primary "sync"]
-            assert {$replica_main_conn_id != ""}
-            $primary client kill id $replica_main_conn_id
+            set replica_rdb_conn_id [get_client_id_by_last_cmd $primary "sync"]
+            assert {$replica_rdb_conn_id != ""}
+            $primary client kill id $replica_rdb_conn_id
             # Wait for primary to abort the sync
             wait_for_condition 1000 10 {
                 [s -1 rdb_bgsave_in_progress] eq 0 &&
@@ -915,6 +915,42 @@ start_server {tags {"repl dual-connection external:skip"}} {
             } else {
                 fail "Primary should abort sync"
             }
+        }
+
+        test "Test dual connection slave of no one after rdb conn kill" {
+            $replica replicaof no one
+            wait_for_condition 500 1000 {
+                [s -1 rdb_bgsave_in_progress] eq 0
+            } else {
+                fail "Primary should abort sync"
+            }
+        }
+
+        test "Test dual-connection primary reject set-rdb-client after client killed" {
+            # Ensure replica main connection will not handshake before rdb client is killed
+            $replica debug sleep-after-fork-seconds 10
+            $replica replicaof $primary_host $primary_port
+            # Wait for sync session to start
+            wait_for_condition 500 1000 {
+                [string match "*slave*,state=wait_bgsave*,type=rdb-conn*" [$primary info replication]] &&
+                [s -1 rdb_bgsave_in_progress] eq 1
+            } else {
+                fail "replica didn't start sync session in time"
+            }
+
+            set replica_rdb_conn_id [get_client_id_by_last_cmd $primary "sync"]
+            assert {$replica_rdb_conn_id != ""}
+            $primary debug log "killing replica rdb connection $replica_rdb_conn_id"
+            $primary client kill id $replica_rdb_conn_id
+            # Wait for primary to abort the sync
+            wait_for_condition 10000000 10 {
+                [s -1 rdb_bgsave_in_progress] eq 0
+            } else {
+                fail "Primary should abort sync"
+            }
+            # Verify primary reject replconf set-rdb-client-id
+            set res [catch {$primary replconf set-rdb-client-id $replica_rdb_conn_id} err]
+            assert [string match *ERR* $err]
         }
         stop_write_load $load_handle
     }

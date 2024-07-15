@@ -1395,6 +1395,10 @@ void replconfCommand(client *c) {
             if (getLongLongFromObjectOrReply(c, c->argv[j + 1], &client_id, NULL) != C_OK) {
                 return;
             }
+            if (!lookupRdbClientByID(client_id)) {
+                addReplyErrorFormat(c, "Unrecognized RDB client id %lld", client_id);
+                return;
+            }
             c->associated_rdb_client_id = (uint64_t)client_id;
         } else {
             addReplyErrorFormat(c, "Unrecognized REPLCONF option: %s", (char *)c->argv[j]->ptr);

@@ -2500,7 +2500,7 @@ void resetServerStats(void) {
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
     lazyfreeResetStats();
-    clusterSlotStatsReset();
+    clusterSlotStatResetAll();
 }
 
 /* Make the thread killable at any time, so that kill threads functions
@@ -3516,7 +3516,7 @@ void call(client *c, int flags) {
      * If the client is blocked we will handle slowlog when it is unblocked. */
     if (!(c->flags & CLIENT_BLOCKED)) freeClientOriginalArgv(c);
 
-    /* populate the per-command statistics that we show in INFO commandstats.
+    /* Populate the per-command and per-slot statistics that we show in INFO commandstats and CLUSTER SLOT-STATS, respectively.
      * If the client is blocked we will handle latency stats and duration when it is unblocked. */
     if (update_command_stats && !(c->flags & CLIENT_BLOCKED)) {
         real_cmd->calls++;

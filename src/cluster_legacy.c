@@ -1043,7 +1043,7 @@ void clusterInit(void) {
     clusterUpdateMyselfIp();
     clusterUpdateMyselfHostname();
     clusterUpdateMyselfHumanNodename();
-    clusterSlotStatsReset();
+    clusterSlotStatResetAll();
 }
 
 void clusterInitLast(void) {

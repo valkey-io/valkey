@@ -1,12 +1,7 @@
-/*
- * Copyright Valkey Contributors.
- * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
- */
-
 #include "server.h"
 #include "cluster.h"
+#include "cluster_legacy.h"
 
 void clusterSlotStatReset(int slot);
-void clusterSlotStatsReset(void);
+void clusterSlotStatResetAll(void);
 void clusterSlotStatsAddCpuDuration(client *c, ustime_t duration);

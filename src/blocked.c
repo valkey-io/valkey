@@ -102,11 +102,10 @@ void blockClient(client *c, int btype) {
  * he will attempt to reprocess the command which will update the statistics.
  * However in case the client was timed out or in case of module blocked client is being unblocked
  * the command will not be reprocessed and we need to make stats update.
- * This function will make updates to the commandstats, slowlog and monitors.*/
+ * This function will make updates to the commandstats, slot-stats, slowlog and monitors.*/
 void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int had_errors) {
     const ustime_t total_cmd_duration = c->duration + blocked_us + reply_us;
     c->lastcmd->microseconds += total_cmd_duration;
-    /* Populate per-slot statistics for cpu time. */
     clusterSlotStatsAddCpuDuration(c, total_cmd_duration);
     c->lastcmd->calls++;
     c->commands_processed++;

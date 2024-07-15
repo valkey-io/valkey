@@ -1011,3 +1011,106 @@ start_server {tags {"repl dual-connection external:skip"}} {
         }
     }
 }
+
+start_server {tags {"repl dual-connection external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    set loglines [count_log_lines 0]
+
+    $primary config set repl-diskless-sync yes
+    $primary config set dual-conn-sync-enabled yes
+    $primary config set loglevel debug
+    $primary config set repl-diskless-sync-delay 5; # allow catch failed sync before retry
+
+    # Generating RDB will cost 5s(10000 * 0.0001s)
+    $primary debug populate 10000 primary 1
+    $primary config set rdb-key-save-delay 100
+    
+    start_server {} {
+        set replica [srv 0 client]
+        set replica_host [srv 0 host]
+        set replica_port [srv 0 port]
+        set replica_log [srv 0 stdout]
+        
+        $replica config set dual-conn-sync-enabled yes
+        $replica config set loglevel debug
+        $replica config set repl-timeout 10
+        test "Replica recover rdb-connection killed" {
+            set load_handle [start_one_key_write_load $primary_host $primary_port 100 "mykey"]
+            $replica replicaof $primary_host $primary_port
+            # Wait for sync session to start
+            wait_for_condition 500 1000 {
+                [string match "*slave*,state=wait_bgsave*,type=rdb-conn*" [$primary info replication]] &&
+                [string match "*slave*,state=bg_transfer*,type=main-conn*" [$primary info replication]] &&
+                [s -1 rdb_bgsave_in_progress] eq 1
+            } else {
+                fail "replica didn't start sync session in time"
+            }            
+
+            $primary debug log "killing replica rdb connection"
+            set replica_rdb_conn_id [get_client_id_by_last_cmd $primary "sync"]
+            assert {$replica_rdb_conn_id != ""}
+            $primary client kill id $replica_rdb_conn_id
+            # Wait for primary to abort the sync
+            wait_for_condition 50 1000 {
+                [string match {*replicas_waiting_psync:0*} [$primary info replication]]
+            } else {
+                fail "Primary did not free repl buf block after sync failure"
+            }
+            wait_for_condition 1000 10 {
+                [s -1 rdb_last_bgsave_status] eq "err"
+            } else {
+                fail "bgsave did not stop in time"
+            }
+            # Replica should retry
+            verify_replica_online $primary 0 500
+            stop_write_load $load_handle
+            wait_for_condition 1000 100 {
+                [s -1 master_repl_offset] eq [s master_repl_offset]
+            } else {
+                fail "Replica offset didn't catch up with the primary after too long time"
+            }            
+        }
+        $replica replicaof no one
+
+        test "Replica recover main-connection killed" {
+            set load_handle [start_one_key_write_load $primary_host $primary_port 100 "mykey"]
+            $replica replicaof $primary_host $primary_port
+            # Wait for sync session to start
+            wait_for_condition 500 1000 {
+                [string match "*slave*,state=wait_bgsave*,type=rdb-conn*" [$primary info replication]] &&
+                [string match "*slave*,state=bg_transfer*,type=main-conn*" [$primary info replication]] &&
+                [s -1 rdb_bgsave_in_progress] eq 1
+            } else {
+                fail "replica didn't start sync session in time"
+            }            
+
+            $primary debug log "killing replica main connection"
+            set replica_main_conn_id [get_client_id_by_last_cmd $primary "sync"]
+            assert {$replica_main_conn_id != ""}
+            $primary client kill id $replica_main_conn_id
+            # Wait for primary to abort the sync
+            wait_for_condition 50 1000 {
+                [string match {*replicas_waiting_psync:0*} [$primary info replication]]
+            } else {
+                fail "Primary did not free repl buf block after sync failure"
+            }
+            wait_for_condition 1000 10 {
+                [s -1 rdb_last_bgsave_status] eq "err"
+            } else {
+                fail "bgsave did not stop in time"
+            }
+            # Replica should retry
+            verify_replica_online $primary 0 500
+            stop_write_load $load_handle
+            wait_for_condition 1000 100 {
+                [s -1 master_repl_offset] eq [s master_repl_offset]
+            } else {
+                fail "Replica offset didn't catch up with the primary after too long time"
+            }            
+        }
+
+      
+    }
+}

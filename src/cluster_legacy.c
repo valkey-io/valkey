@@ -2930,8 +2930,8 @@ int clusterProcessPacket(clusterLink *link) {
     uint64_t sender_claimed_current_epoch = 0, sender_claimed_config_epoch = 0;
     clusterNode *sender = getNodeFromLinkAndMsg(link, hdr);
     int sender_claims_to_be_primary = !memcmp(hdr->replicaof, CLUSTER_NODE_NULL_NAME, CLUSTER_NAMELEN);
-    int sender_was_replica = sender && nodeIsReplica(sender);
-    int sender_was_primary = sender && nodeIsPrimary(sender);
+    int sender_last_reported_as_replica = sender && nodeIsReplica(sender);
+    int sender_last_reported_as_primary = sender && nodeIsPrimary(sender);
 
     if (sender && (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA)) {
         sender->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
@@ -2998,13 +2998,13 @@ int clusterProcessPacket(clusterLink *link) {
          * flags, replicaof pointer, and so forth, as this details will be
          * resolved when we'll receive PONGs from the node. */
         if (!sender && type == CLUSTERMSG_TYPE_MEET) {
-            clusterNode *new_sender_node;
+            clusterNode *n;
 
-            new_sender_node = createClusterNode(NULL, CLUSTER_NODE_HANDSHAKE);
-            serverAssert(nodeIp2String(new_sender_node->ip, link, hdr->myip) == C_OK);
-            getClientPortFromClusterMsg(hdr, &new_sender_node->tls_port, &new_sender_node->tcp_port);
-            new_sender_node->cport = ntohs(hdr->cport);
-            clusterAddNode(new_sender_node);
+            n = createClusterNode(NULL, CLUSTER_NODE_HANDSHAKE);
+            serverAssert(nodeIp2String(n->ip, link, hdr->myip) == C_OK);
+            getClientPortFromClusterMsg(hdr, &n->tls_port, &n->tcp_port);
+            n->cport = ntohs(hdr->cport);
+            clusterAddNode(n);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
         }
 
@@ -3121,7 +3121,7 @@ int clusterProcessPacket(clusterLink *link) {
                 /* Node is a replica. */
                 clusterNode *sender_claimed_primary = clusterLookupNode(hdr->replicaof, CLUSTER_NAMELEN);
 
-                if (sender_was_primary) {
+                if (sender_last_reported_as_primary) {
                     /* Primary turned into a replica! Reconfigure the node. */
                     if (sender_claimed_primary && areInSameShard(sender_claimed_primary, sender)) {
                         /* `sender` was a primary and was in the same shard as its new primary */
@@ -3194,7 +3194,7 @@ int clusterProcessPacket(clusterLink *link) {
          * this ASAP to avoid other computational expensive checks later.*/
 
         if (sender && sender_claims_to_be_primary &&
-            (sender_was_replica || memcmp(sender->slots, hdr->myslots, sizeof(hdr->myslots)))) {
+            (sender_last_reported_as_replica || memcmp(sender->slots, hdr->myslots, sizeof(hdr->myslots)))) {
             /* Make sure CLUSTER_NODE_PRIMARY has already been set by now on sender */
             serverAssert(nodeIsPrimary(sender));
 

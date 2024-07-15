@@ -3513,9 +3513,9 @@ void waitaofCommand(client *c) {
  * waiting for replica acks. Never call it directly, call unblockClient()
  * instead. */
 void unblockClientWaitingReplicas(client *c) {
-    listNode *ln = listSearchKey(server.clients_waiting_acks, c);
-    serverAssert(ln != NULL);
-    listDelNode(server.clients_waiting_acks, ln);
+    serverAssert(c->client_waiting_acks_list_node);
+    listDelNode(server.clients_waiting_acks, c->client_waiting_acks_list_node);
+    c->client_waiting_acks_list_node = NULL;
     updateStatsOnUnblock(c, 0, 0, 0);
 }
 

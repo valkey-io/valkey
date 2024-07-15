@@ -593,6 +593,11 @@ void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, lon
     c->bstate.numreplicas = numreplicas;
     c->bstate.numlocal = numlocal;
     listAddNodeHead(server.clients_waiting_acks, c);
+    /* Note that we remember the linked list node where the client is stored,
+     * this way removing the client in unblockClientWaitingReplicas() will not
+     * require a linear scan, but just a constant time operation. */
+    serverAssert(c->client_waiting_acks_list_node == NULL);
+    c->client_waiting_acks_list_node = listFirst(server.clients_waiting_acks);
     blockClient(c, BLOCKED_WAIT);
 }
 

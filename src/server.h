@@ -141,7 +141,7 @@ struct hdr_histogram;
 #define CONFIG_DEFAULT_PROC_TITLE_TEMPLATE "{title} {listen-addr} {server-mode}"
 #define DEFAULT_WAIT_BEFORE_RDB_CLIENT_FREE                                                                            \
     60 /* Grace period in seconds for replica main                                                                     \
-          connection to establish psync. */
+          channel to establish psync. */
 #define INCREMENTAL_REHASHING_THRESHOLD_US 1000
 #define LOADING_PROCESS_EVENTS_INTERVAL_DEFAULT 100 /* Default: 0.1 seconds */
 
@@ -393,7 +393,7 @@ typedef enum {
     REPL_STATE_RECEIVE_AUTH_REPLY,        /* Wait for AUTH reply */
     REPL_STATE_RECEIVE_PORT_REPLY,        /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_IP_REPLY,          /* Wait for REPLCONF reply */
-    REPL_STATE_RECEIVE_NO_FULLSYNC_REPLY, /* If using rdb-connection for sync, mark main connection as psync conn */
+    REPL_STATE_RECEIVE_DUAL_CHANNEL_REPLY, /* If using dual-channel sync, mark main channel */
     REPL_STATE_RECEIVE_CAPA_REPLY,        /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_VERSION_REPLY,     /* Wait for REPLCONF reply */
     REPL_STATE_SEND_PSYNC,                /* Send PSYNC */
@@ -403,17 +403,17 @@ typedef enum {
     REPL_STATE_CONNECTED, /* Connected to primary */
 } repl_state;
 
-/* Replica rdb-connection replication state. Used in server.repl_rdb_conn_state for
+/* Replica rdb-channel replication state. Used in server.repl_rdb_chan_state for
  * replicas to remember what to do next. */
 typedef enum {
-    REPL_RDB_CONN_STATE_NONE = 0,         /* No active rdb connection sync */
-    REPL_RDB_CONN_SEND_HANDSHAKE,         /* Send handshake sequence to primary */
-    REPL_RDB_CONN_RECEIVE_AUTH_REPLY,     /* Wait for AUTH reply */
-    REPL_RDB_CONN_RECEIVE_REPLCONF_REPLY, /* Wait for REPLCONF reply */
-    REPL_RDB_CONN_RECEIVE_ENDOFF,         /* Wait for $ENDOFF reply */
-    REPL_RDB_CONN_RDB_LOAD,               /* Loading rdb using rdb connection */
-    REPL_RDB_CONN_RDB_LOADED,
-} repl_rdb_conn_state;
+    REPL_DUAL_CHAN_STATE_NONE = 0,         /* No active rdb channel sync */
+    REPL_DUAL_CHAN_SEND_HANDSHAKE,         /* Send handshake sequence to primary */
+    REPL_DUAL_CHAN_RECEIVE_AUTH_REPLY,     /* Wait for AUTH reply */
+    REPL_DUAL_CHAN_RECEIVE_REPLCONF_REPLY, /* Wait for REPLCONF reply */
+    REPL_DUAL_CHAN_RECEIVE_ENDOFF,         /* Wait for $ENDOFF reply */
+    REPL_DUAL_CHAN_RDB_LOAD,               /* Loading rdb using rdb channel */
+    REPL_DUAL_CHAN_RDB_LOADED,
+} repl_rdb_chan_state;
 
 /* The state of an in progress coordinated failover */
 typedef enum {
@@ -434,19 +434,19 @@ typedef enum {
 #define REPLICA_STATE_RDB_TRANSMITTED                                                                                  \
     10                               /* RDB file transmitted - This state is used only for                             \
                                       * a replica that only wants RDB without replication buffer  */
-#define REPLICA_STATE_BG_RDB_LOAD 11 /* Main connection of a replica which uses rdb-connection-sync. */
+#define REPLICA_STATE_BG_RDB_LOAD 11 /* Main channel of a replica which uses dual channel replication. */
 
 /* Replica capabilities. */
 #define REPLICA_CAPA_NONE 0
 #define REPLICA_CAPA_EOF (1 << 0)       /* Can parse the RDB EOF streaming format. */
 #define REPLICA_CAPA_PSYNC2 (1 << 1)    /* Supports PSYNC2 protocol. */
-#define REPLICA_CAPA_DUAL_CONN (1 << 2) /* Supports dual connection sync */
+#define REPLICA_CAPA_DUAL_CHANNEL (1 << 2) /* Supports dual channel replication sync */
 
 /* Replica requirements */
 #define REPLICA_REQ_NONE 0
 #define REPLICA_REQ_RDB_EXCLUDE_DATA (1 << 0)      /* Exclude data from RDB */
 #define REPLICA_REQ_RDB_EXCLUDE_FUNCTIONS (1 << 1) /* Exclude functions from RDB */
-#define REPLICA_REQ_RDB_CONN (1 << 2)              /* Use rdb-connection sync */
+#define REPLICA_REQ_RDB_CHAN (1 << 2)              /* Use dual-channel-replication */
 /* Mask of all bits in the replica requirements bitfield that represent non-standard (filtered) RDB requirements */
 #define REPLICA_REQ_RDB_MASK (REPLICA_REQ_RDB_EXCLUDE_DATA | REPLICA_REQ_RDB_EXCLUDE_FUNCTIONS)
 
@@ -1207,7 +1207,7 @@ typedef struct ClientFlags {
     uint64_t replication_done : 1;         /* Indicate that replication has been done on the client */
     uint64_t authenticated : 1;            /* Indicate a client has successfully authenticated */
     uint64_t
-        protected_rdb_conn : 1; /* Dual connection sync: Protects the RDB client from premature \
+        protected_rdb_chan : 1; /* Dual channel replication sync: Protects the RDB client from premature \
                                  * release during full sync. This flag is used to ensure that the RDB client, which \
                                  * references the first replication data block required by the replica, is not \
                                  * released prematurely. Protecting the client is crucial for prevention of \
@@ -1219,8 +1219,8 @@ typedef struct ClientFlags {
                                  * the replica only needs an additional 4KB beyond the minimum size of the repl_backlog.
                                  * By using this flag, we ensure that the RDB client remains intact until the replica \
                                  * has successfully initiated PSYNC. */
-    uint64_t repl_rdb_conn : 1; /* Dual connection sync: track a connection which is used for rdb snapshot */
-    uint64_t reserved : 7;      /* Reserved for future use */
+    uint64_t repl_rdb_chan : 1; /* Dual channel replication sync: track a connection which is used for rdb snapshot */
+    uint64_t reserved : 7;       /* Reserved for future use */
 } ClientFlags;
 
 typedef struct client {
@@ -1699,10 +1699,11 @@ struct valkeyServer {
     list *clients_pending_io_read;         /* List of clients with pending read to be process by I/O threads. */
     list *clients_pending_io_write;        /* List of clients with pending write to be process by I/O threads. */
     list *replicas, *monitors;             /* List of replicas and MONITORs */
-    rax *replicas_waiting_psync;           /* Radix tree using rdb-client id as keys and rdb-client as values.
-                                            * This rax contains replicas for the period from the beginning of
-                                            * their RDB connection to the end of their main connection's
-                                            * partial synchronization. */
+    rax *replicas_waiting_psync;          /* Radix tree for tracking replicas awaiting partial synchronization.
+                                            * Key: RDB client ID
+                                            * Value: RDB client object
+                                            * This structure holds dual-channel sync replicas from the start of their 
+                                            * RDB transfer until their main channel establishes partial synchronization. */
     client *current_client;                /* The client that triggered the command execution (External or AOF). */
     client *executing_client;              /* The client executing the current command (possibly script or module). */
 
@@ -1978,7 +1979,7 @@ struct valkeyServer {
     int repl_ping_replica_period;              /* Primary pings the replica every N seconds */
     replBacklog *repl_backlog;                 /* Replication backlog for partial syncs */
     long long repl_backlog_size;               /* Backlog circular buffer size */
-    replDataBuf pending_repl_data;             /* Replication data buffer for rdb-connection sync */
+    replDataBuf pending_repl_data;             /* Replication data buffer for dual-channel-replication */
     time_t repl_backlog_time_limit;            /* Time without replicas after the backlog
                                                   gets released. */
     time_t repl_no_replicas_since;             /* We have no replicas since that time.
@@ -1992,11 +1993,11 @@ struct valkeyServer {
     int repl_diskless_sync_delay;              /* Delay to start a diskless repl BGSAVE. */
     int repl_diskless_sync_max_replicas;       /* Max replicas for diskless repl BGSAVE
                                                 * delay (start sooner if they all connect). */
-    int dual_conn_enabled;                     /* Config used to determine if the replica should
-                                                * use dual connection for full syncs. */
-    int wait_before_rdb_client_free;           /* Grace period in seconds for replica main connection
+    int dual_channel_replication;              /* Config used to determine if the replica should
+                                                * use dual channel replication for full syncs. */
+    int wait_before_rdb_client_free;           /* Grace period in seconds for replica main channel
                                                 * to establish psync. */
-    int debug_sleep_after_fork_us;             /* Debug param that force the main connection to
+    int debug_sleep_after_fork_us;             /* Debug param that force the main process to
                                                 * sleep for N microseconds after fork() in repl. */
     size_t repl_buffer_mem;                    /* The memory of replication buffer. */
     list *repl_buffer_blocks;                  /* Replication buffers blocks list
@@ -2019,7 +2020,7 @@ struct valkeyServer {
     client *cached_primary;             /* Cached primary to be reused for PSYNC. */
     int repl_syncio_timeout;            /* Timeout for synchronous I/O calls */
     int repl_state;                     /* Replication status if the instance is a replica */
-    int repl_rdb_conn_state;            /* State of the replica's rdb connection during rdb-connection sync */
+    int repl_rdb_chan_state;            /* State of the replica's rdb channel during dual-channel-replication */
     off_t repl_transfer_size;           /* Size of RDB to read from primary during sync. */
     off_t repl_transfer_read;           /* Amount of RDB read from primary during sync. */
     off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */

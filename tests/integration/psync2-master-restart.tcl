@@ -203,9 +203,9 @@ start_server {} {
         } else {
             fail "Replicas didn't sync after master restart"
         }
-        set rdbchannel [lindex [r config get dual-conn-sync-enabled] 1]
+        set dualchan [lindex [r config get dual-channel-replication-enabled] 1]
         set psync_count 0
-        if {$rdbchannel == "yes"} {
+        if {$dualchan == "yes"} {
             # Expect one fake psync
             set psync_count 1
         }

@@ -47,7 +47,7 @@ start_server {tags {"auth external:skip"} overrides {requirepass foobar}} {
     }
 }
 
-foreach rdbchann {yes no} {
+foreach dualchan {yes no} {
 start_server {tags {"auth_binary_password external:skip"}} {
     test {AUTH fails when binary password is wrong} {
         r config set requirepass "abc\x00def"
@@ -66,13 +66,13 @@ start_server {tags {"auth_binary_password external:skip"}} {
         set master_port [srv -1 port]
         set slave [srv 0 client]
 
-        test "primaryauth test with binary password rdbchannel = $rdbchann" {
+        test "primaryauth test with binary password dualchan = $dualchan" {
             $master config set requirepass "abc\x00def"
-            $master config set dual-conn-sync-enabled $rdbchann
+            $master config set dual-channel-replication-enabled $dualchan
             # Configure the replica with masterauth
             set loglines [count_log_lines 0]
             $slave config set primaryauth "abc"
-            $slave config set dual-conn-sync-enabled $rdbchann
+            $slave config set dual-channel-replication-enabled $dualchan
             $slave slaveof $master_host $master_port
 
             # Verify replica is not able to sync with master

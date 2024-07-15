@@ -498,7 +498,7 @@ void debugCommand(client *c) {
             "SLEEP-AFTER-FORK-SECONDS <seconds>",
             "    Stop the server's main process for <seconds> after forking.",
             "DELAY-RDB-CLIENT-FREE-SECOND <seconds>",
-            "    Grace period in seconds for replica main connection to establish psync.",
+            "    Grace period in seconds for replica main channel to establish psync.",
             "DICT-RESIZING <0|1>",
             "    Enable or disable the main dict and expire dict resizing.",
             NULL};

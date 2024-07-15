@@ -1,7 +1,7 @@
 # This test group aims to test that all replicas share one global replication buffer,
 # two replicas don't make replication buffer size double, and when there is no replica,
 # replica buffer will shrink.
-foreach rdbchann {"yes" "no"} {
+foreach dualchan {"yes" "no"} {
 start_server {tags {"repl external:skip"}} {
 start_server {} {
 start_server {} {
@@ -9,9 +9,9 @@ start_server {} {
     set replica1 [srv -3 client]
     set replica2 [srv -2 client]
     set replica3 [srv -1 client]
-    $replica1 config set dual-conn-sync-enabled $rdbchann
-    $replica2 config set dual-conn-sync-enabled $rdbchann
-    $replica3 config set dual-conn-sync-enabled $rdbchann
+    $replica1 config set dual-channel-replication-enabled $dualchan
+    $replica2 config set dual-channel-replication-enabled $dualchan
+    $replica3 config set dual-channel-replication-enabled $dualchan
 
     set master [srv 0 client]
     set master_host [srv 0 host]
@@ -22,7 +22,7 @@ start_server {} {
     $master config set repl-diskless-sync-delay 5
     $master config set repl-diskless-sync-max-replicas 1
     $master config set client-output-buffer-limit "replica 0 0 0"
-    $master config set dual-conn-sync-enabled $rdbchann
+    $master config set dual-channel-replication-enabled $dualchan
 
     # Make sure replica3 is synchronized with master
     $replica3 replicaof $master_host $master_port
@@ -44,7 +44,7 @@ start_server {} {
         fail "fail to sync with replicas"
     }
 
-    test "All replicas share one global replication buffer rdbchannel $rdbchann" {
+    test "All replicas share one global replication buffer dualchan $dualchan" {
         set before_used [s used_memory]
         populate 1024 "" 1024 ; # Write extra 1M data
         # New data uses 1M memory, but all replicas use only one
@@ -52,8 +52,8 @@ start_server {} {
         # more than double of replication buffer.
         set repl_buf_mem [s mem_total_replication_buffers]
         set extra_mem [expr {[s used_memory]-$before_used-1024*1024}]
-        if {$rdbchann == "yes"} {
-            # master's replication buffers should not grow during rdb-connection-sync
+        if {$dualchan == "yes"} {
+            # master's replication buffers should not grow during dual channel replication
             assert {$extra_mem < 1024*1024}
             assert {$repl_buf_mem < 1024*1024}
         } else {
@@ -62,7 +62,7 @@ start_server {} {
         # Kill replica1, replication_buffer will not become smaller
         catch {$replica1 shutdown nosave}
         set cur_slave_count 2
-        if {$rdbchann == "yes"} {
+        if {$dualchan == "yes"} {
             # slave3 is connected, slave2 is syncing (has two connection)
             set cur_slave_count 3
         }
@@ -74,7 +74,7 @@ start_server {} {
         assert_equal $repl_buf_mem [s mem_total_replication_buffers]
     }
 
-    test "Replication buffer will become smaller when no replica uses rdbchannel $rdbchann" {
+    test "Replication buffer will become smaller when no replica uses dualchan $dualchan" {
         # Make sure replica3 catch up with the master
         wait_for_ofs_sync $master $replica3
 
@@ -86,8 +86,8 @@ start_server {} {
         } else {
             fail "replica2 doesn't disconnect with master"
         }
-        if {$rdbchann == "yes"} {
-            # master's replication buffers should not grow during rdb-connection-sync
+        if {$dualchan == "yes"} {
+            # master's replication buffers should not grow during dual channel replication
              assert {1024*512 > [s mem_total_replication_buffers]}
         } else {
             assert {[expr $repl_buf_mem - 1024*1024] > [s mem_total_replication_buffers]}
@@ -105,7 +105,7 @@ start_server {} {
 # partial re-synchronization. Of course, replication backlog memory also can
 # become smaller when master disconnects with slow replicas since output buffer
 # limit is reached.
-foreach rdbchannel {yes no} {
+foreach dualchan {yes no} {
 start_server {tags {"repl external:skip"}} {
 start_server {} {
 start_server {} {
@@ -113,7 +113,7 @@ start_server {} {
     set replica1_pid [s -2 process_id]
     set replica2 [srv -1 client]
     set replica2_pid [s -1 process_id]
-    $replica1 config set dual-conn-sync-enabled $rdbchannel
+    $replica1 config set dual-channel-replication-enabled $dualchan
 
     set master [srv 0 client]
     set master_host [srv 0 host]
@@ -122,7 +122,7 @@ start_server {} {
     $master config set save ""
     $master config set repl-backlog-size 16384
     $master config set client-output-buffer-limit "replica 0 0 0"
-    $master config set dual-conn-sync-enabled $rdbchannel
+    $master config set dual-channel-replication-enabled $dualchan
 
     # Executing 'debug digest' on master which has many keys costs much time
     # (especially in valgrind), this causes that replica1 and replica2 disconnect
@@ -131,12 +131,12 @@ start_server {} {
     $replica1 config set repl-timeout 1000
     $replica2 config set repl-timeout 1000
     $replica2 config set client-output-buffer-limit "replica 0 0 0"
-    $replica2 config set dual-conn-sync-enabled $rdbchannel
+    $replica2 config set dual-channel-replication-enabled $dualchan
 
     $replica1 replicaof $master_host $master_port
     wait_for_sync $replica1
 
-    test "Replication backlog size can outgrow the backlog limit config rdbchannel $rdbchannel" {
+    test "Replication backlog size can outgrow the backlog limit config dualchan $dualchan" {
         # Generating RDB will take 1000 seconds
         $master config set rdb-key-save-delay 1000000
         populate 1000 master 10000
@@ -161,7 +161,7 @@ start_server {} {
         fail "Replica offset didn't catch up with the master after too long time"
     }
 
-    test "Replica could use replication buffer (beyond backlog config) for partial resynchronization  rdbchannel $rdbchannel" {
+    test "Replica could use replication buffer (beyond backlog config) for partial resynchronization  dualchan $dualchan" {
         # replica1 disconnects with master
         $replica1 replicaof [srv -1 host] [srv -1 port]
         # Write a mass of data that exceeds repl-backlog-size
@@ -177,7 +177,7 @@ start_server {} {
         # replica2 still waits for bgsave ending
         assert {[s rdb_bgsave_in_progress] eq {1} && [lindex [$replica2 role] 3] eq {sync}}
         # master accepted replica1 partial resync
-        if { $rdbchannel == "yes" } {
+        if { $dualchan == "yes" } {
             # 2 psync using main channel
             # +1 "real" psync
             assert_equal [s sync_partial_ok] {3}
@@ -187,9 +187,9 @@ start_server {} {
         assert_equal [$master debug digest] [$replica1 debug digest]
     }
 
-    test "Replication backlog memory will become smaller if disconnecting with replica rdbchannel $rdbchannel" {
+    test "Replication backlog memory will become smaller if disconnecting with replica dualchan $dualchan" {
         assert {[s repl_backlog_histlen] > [expr 2*10000*10000]}
-        if {$rdbchannel == "yes"} {
+        if {$dualchan == "yes"} {
             # 1 connection of replica1 
             # +2 connections during sync of replica2
             assert_equal [s connected_slaves] {3}
@@ -206,7 +206,7 @@ start_server {} {
         wait_for_condition 100 100 {
             [s connected_slaves] eq {1} ||
             ([s connected_slaves] eq {2} &&
-            [string match {*slave*state=wait_bgsave*type=rdb-conn*} [$master info]])
+            [string match {*slave*state=wait_bgsave*type=rdb-chan*} [$master info]])
         } else {
             fail "master didn't disconnect with replica2"
         }
@@ -227,17 +227,17 @@ start_server {} {
 }
 }
 
-foreach rdbchann {"yes" "no"} {
-test "Partial resynchronization is successful even client-output-buffer-limit is less than repl-backlog-size. rdbchann $rdbchann" {
+foreach dualchan {"yes" "no"} {
+test "Partial resynchronization is successful even client-output-buffer-limit is less than repl-backlog-size. dualchan $dualchan" {
     start_server {tags {"repl external:skip"}} {
         start_server {} {
             r config set save ""
             r config set repl-backlog-size 100mb
             r config set client-output-buffer-limit "replica 512k 0 0"
-            r config set dual-conn-sync-enabled $rdbchann
+            r config set dual-channel-replication-enabled $dualchan
 
             set replica [srv -1 client]
-            $replica config set dual-conn-sync-enabled $rdbchann
+            $replica config set dual-channel-replication-enabled $dualchan
             $replica replicaof [srv 0 host] [srv 0 port]
             wait_for_sync $replica
 
@@ -255,7 +255,7 @@ test "Partial resynchronization is successful even client-output-buffer-limit is
             wait_for_ofs_sync r $replica
             # master accepted replica partial resync
             set psync_count 1
-            if {$rdbchann == "yes"} {
+            if {$dualchan == "yes"} {
                 # One fake and one real psync
                 set psync_count 2
             }
@@ -280,7 +280,7 @@ test "Partial resynchronization is successful even client-output-buffer-limit is
 }
 
 # This test was added to make sure big keys added to the backlog do not trigger psync loop.
-test "Replica client-output-buffer size is limited to backlog_limit/16 when no replication data is pending. rdbchann $rdbchann" {
+test "Replica client-output-buffer size is limited to backlog_limit/16 when no replication data is pending. dualchan $dualchan" {
     proc client_field {r type f} {
         set client [$r client list type $type]
         if {![regexp $f=(\[a-zA-Z0-9-\]+) $client - res]} {
@@ -301,8 +301,8 @@ test "Replica client-output-buffer size is limited to backlog_limit/16 when no r
 
             $master config set repl-backlog-size 16384
             $master config set client-output-buffer-limit "replica 32768 32768 60"
-            $master config set dual-conn-sync-enabled $rdbchann
-            $replica config set dual-conn-sync-enabled $rdbchann
+            $master config set dual-channel-replication-enabled $dualchan
+            $replica config set dual-channel-replication-enabled $dualchan
             # Key has has to be larger than replica client-output-buffer limit.
             set keysize [expr 256*1024]
 
@@ -341,7 +341,7 @@ test "Replica client-output-buffer size is limited to backlog_limit/16 when no r
 
             # now we expect the replica to re-connect but fail partial sync (it doesn't have large
             # enough COB limit and must result in a full-sync)
-            if {$rdbchann == "yes"} {
+            if {$dualchan == "yes"} {
                 assert {[status $master sync_partial_ok] == [status $master sync_full]}
             } else {
                 assert {[status $master sync_partial_ok] == 0}

@@ -3051,7 +3051,7 @@ int clusterProcessPacket(clusterLink *link) {
                 LL_WARNING,
                 "Closing link for node that sent a lightweight message of type %hu as its first message on the link",
                 type);
-           return 0;
+            return 0;
         }
         sender = link->node;
         sender->data_received = now;

@@ -3039,7 +3039,7 @@ int clusterProcessPacket(clusterLink *link) {
         }
         return 1;
     }
-    clusterNode *sender;
+
     clusterMsg *hdr = (clusterMsg *)link->rcvbuf;
     uint16_t type = ntohs(hdr->type);
     mstime_t now = mstime();
@@ -3053,27 +3053,17 @@ int clusterProcessPacket(clusterLink *link) {
                 type);
             return 0;
         }
-        sender = link->node;
+        clusterNode *sender = link->node;
         sender->data_received = now;
         return pubsubProcessLightPacket(link, type);
     }
 
-    sender = getNodeFromLinkAndMsg(link, hdr);
-    /* Update the last time we saw any data from this node. We
-     * use this in order to avoid detecting a timeout from a node that
-     * is just sending a lot of data in the cluster bus, for instance
-     * because of Pub/Sub. */
-    if (sender) sender->data_received = now;
-
     uint16_t flags = ntohs(hdr->flags);
     uint64_t sender_claimed_current_epoch = 0, sender_claimed_config_epoch = 0;
+    clusterNode *sender = getNodeFromLinkAndMsg(link, hdr);
     int sender_claims_to_be_primary = !memcmp(hdr->replicaof, CLUSTER_NODE_NULL_NAME, CLUSTER_NAMELEN);
     int sender_last_reported_as_replica = sender && nodeIsReplica(sender);
     int sender_last_reported_as_primary = sender && nodeIsPrimary(sender);
-
-    if (sender && (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA)) {
-        sender->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
-    }
 
     if (sender && (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA)) {
         sender->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
@@ -3083,6 +3073,12 @@ int clusterProcessPacket(clusterLink *link) {
     if (sender && (flags & CLUSTER_NODE_LIGHT_HDR_SUPPORTED)) {
         sender->flags |= CLUSTER_NODE_LIGHT_HDR_SUPPORTED;
     }
+
+    /* Update the last time we saw any data from this node. We
+     * use this in order to avoid detecting a timeout from a node that
+     * is just sending a lot of data in the cluster bus, for instance
+     * because of Pub/Sub. */
+    if (sender) sender->data_received = now;
 
     if (sender && !nodeInHandshake(sender)) {
         /* Update our currentEpoch if we see a newer epoch in the cluster. */

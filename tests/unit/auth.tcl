@@ -69,7 +69,7 @@ start_server {tags {"auth_binary_password external:skip"}} {
         test "primaryauth test with binary password dualchan = $dualchan" {
             $master config set requirepass "abc\x00def"
             $master config set dual-channel-replication-enabled $dualchan
-            # Configure the replica with masterauth
+            # Configure the replica with primaryauth
             set loglines [count_log_lines 0]
             $slave config set primaryauth "abc"
             $slave config set dual-channel-replication-enabled $dualchan

@@ -4,6 +4,7 @@
 
 void clusterSlotStatReset(int slot);
 void clusterSlotStatResetAll(void);
-void clusterSlotStatsAddNetworkBytesOut(client *c);
+void clusterSlotStatsAddNetworkBytesOutForUserClient(client *c);
 void clusterSlotStatsAddNetworkBytesOutForReplication(int len);
-void clusterSlotStatsAddNetworkBytesOutForShardedPubSub(client *c, int slot);
+void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(client *c, int slot);
+void clusterSlotStatsAddNetworkBytesOutForShardedPubSubExternalPropagation(size_t len);

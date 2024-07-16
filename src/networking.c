@@ -2838,7 +2838,7 @@ int processCommandAndResetClient(client *c) {
     client *old_client = server.current_client;
     server.current_client = c;
     if (processCommand(c) == C_OK) {
-        clusterSlotStatsAddNetworkBytesOut(c);
+        clusterSlotStatsAddNetworkBytesOutForUserClient(c);
         commandProcessed(c);
         /* Update the client's memory to include output buffer growth following the
          * processed command. */

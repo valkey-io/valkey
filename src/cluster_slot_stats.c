@@ -88,11 +88,16 @@ static void addReplySlotStat(client *c, int slot) {
     addReplyArrayLen(c, 2); /* Array of size 2, where 0th index represents (int) slot,
                              * and 1st index represents (map) usage statistics. */
     addReplyLongLong(c, slot);
-    addReplyMapLen(c, 2); /* Nested map representing slot usage statistics. */
+    addReplyMapLen(c, (server.cluster_slot_stats_enabled) ? 2 : 1); /* Nested map representing slot usage statistics. */
     addReplyBulkCString(c, "key-count");
     addReplyLongLong(c, countKeysInSlot(slot));
-    addReplyBulkCString(c, "network-bytes-out");
-    addReplyLongLong(c, server.cluster->slot_stats[slot].network_bytes_out);
+
+    /* Any additional metrics aside from key-count come with a performance trade-off,
+     * and are aggregated and returned based on its server config. */
+    if (server.cluster_slot_stats_enabled) {
+        addReplyBulkCString(c, "network-bytes-out");
+        addReplyLongLong(c, server.cluster->slot_stats[slot].network_bytes_out);
+    }
 }
 
 /* Adds reply for the SLOTSRANGE variant.
@@ -128,16 +133,18 @@ void clusterSlotStatResetAll(void) {
 }
 
 static int canAddNetworkBytesOut(client *c) {
-    return server.cluster_enabled && c->slot != -1;
+    return server.cluster_slot_stats_enabled && server.cluster_enabled && c->slot != -1;
 }
 
-void clusterSlotStatsAddNetworkBytesOut(client *c) {
+/* Accumulates egress bytes upon sending RESP responses back to user clients. */
+void clusterSlotStatsAddNetworkBytesOutForUserClient(client *c) {
     if (!canAddNetworkBytesOut(c)) return;
 
     serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
     server.cluster->slot_stats[c->slot].network_bytes_out += c->net_output_bytes_curr_cmd;
 }
 
+/* Accumulates egress bytes upon sending replication stream. This only applies for primary nodes. */
 void clusterSlotStatsAddNetworkBytesOutForReplication(int len) {
     client *c = server.current_client;
     if (c == NULL || !canAddNetworkBytesOut(c)) return;
@@ -146,7 +153,11 @@ void clusterSlotStatsAddNetworkBytesOutForReplication(int len) {
     server.cluster->slot_stats[c->slot].network_bytes_out += (len * listLength(server.replicas));
 }
 
-void clusterSlotStatsAddNetworkBytesOutForShardedPubSub(client *c, int slot) {
+/* Upon SPUBLISH, two egress events are triggerred.
+ * 1) Internal propagation, for clients that are subscribed to the current node.
+ * 2) External propagation, for other nodes within the same shard (could either be a primary or replica).
+ * This function covers the internal propagation component. */
+void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(client *c, int slot) {
     /* For a blocked client, c->slot could be pre-filled.
      * Thus c->slot is backed-up for restoration after aggregation is completed. */
     int _slot = c->slot;
@@ -160,6 +171,18 @@ void clusterSlotStatsAddNetworkBytesOutForShardedPubSub(client *c, int slot) {
      * as resetClient() is not called until subscription ends. */
     c->net_output_bytes_curr_cmd = 0;
     c->slot = _slot;
+}
+
+/* Upon SPUBLISH, two egress events are triggerred.
+ * 1) Internal propagation, for clients that are subscribed to the current node.
+ * 2) External propagation, for other nodes within the same shard (could either be a primary or replica).
+ * This function covers the external propagation component. */
+void clusterSlotStatsAddNetworkBytesOutForShardedPubSubExternalPropagation(size_t len) {
+    client *c = server.current_client;
+    if (c == NULL || !canAddNetworkBytesOut(c)) return;
+
+    serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
+    server.cluster->slot_stats[c->slot].network_bytes_out += len;
 }
 
 /* Adds reply for the ORDERBY variant.
@@ -201,7 +224,7 @@ void clusterSlotStatsCommand(client *c) {
         } else if (!strcasecmp(c->argv[3]->ptr, "network-bytes-out")) {
             order_by = NETWORK_BYTES_OUT;
         } else {
-            addReplyError(c, "Unrecognized sort metric for ORDER BY. The supported metrics are: key-count.");
+            addReplyError(c, "Unrecognized sort metric for ORDERBY.");
             return;
         }
         int i = 4; /* Next argument index, following ORDERBY */

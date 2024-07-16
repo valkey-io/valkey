@@ -35,6 +35,7 @@
 #include "server.h"
 #include "cluster.h"
 #include "cluster_legacy.h"
+#include "cluster_slot_stats.h"
 #include "endianconv.h"
 #include "connection.h"
 
@@ -4009,6 +4010,7 @@ void clusterPropagatePublish(robj *channel, robj *message, int sharded) {
         clusterNode *node = listNodeValue(ln);
         if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
         clusterSendMessage(node->link, msgblock);
+        clusterSlotStatsAddNetworkBytesOutForShardedPubSubExternalPropagation(sdslen(channel->ptr) + sdslen(message->ptr));
     }
     clusterMsgSendBlockDecrRefCount(msgblock);
 }

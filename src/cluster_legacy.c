@@ -3062,7 +3062,7 @@ int clusterProcessPacket(clusterLink *link) {
 
     /* Checks if the node supports light message hdr */
     if (sender && (flags & CLUSTER_NODE_LIGHT_HDR_SUPPORTED)) {
-            sender->flags |= CLUSTER_NODE_LIGHT_HDR_SUPPORTED;
+        sender->flags |= CLUSTER_NODE_LIGHT_HDR_SUPPORTED;
     }
 
     if (sender && !nodeInHandshake(sender)) {
@@ -3630,7 +3630,7 @@ void clusterReadHandler(connection *conn) {
             if (rcvbuflen == RCVBUF_MIN_READ_LEN) {
                 /* Perform some sanity check on the message signature
                  * and length. */
-                if (isHeaderValid(hdr)) {
+                if (!isHeaderValid(hdr)) {
                     char ip[NET_IP_STR_LEN];
                     int port;
                     if (connAddrPeerName(conn, ip, sizeof(ip), &port) == -1) {
@@ -4189,7 +4189,7 @@ void clusterPropagatePublish(robj *channel, robj **messages, int count, int shar
             clusterSendMessage(node->link, msgblock_light);
         } else {
             msgblock = clusterCreatePublishMsgBlock(channel, messages[0],
-                                            sharded ? CLUSTERMSG_TYPE_PUBLISHSHARD : CLUSTERMSG_TYPE_PUBLISH);
+                                                    sharded ? CLUSTERMSG_TYPE_PUBLISHSHARD : CLUSTERMSG_TYPE_PUBLISH);
             clusterSendMessage(node->link, msgblock);
             clusterMsgSendBlockDecrRefCount(msgblock);
         }

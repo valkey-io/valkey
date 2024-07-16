@@ -5571,6 +5571,21 @@ int getSlotOrReply(client *c, robj *o) {
     return (int)slot;
 }
 
+/* This method returns the primary node which is healthy/active. Returns NULL if there is none. */
+static clusterNode *clusterNodeGetHealthyPrimary(clusterNode *node) {
+    listIter li;
+    listNode *ln;
+    list *nodes = clusterGetNodesInMyShard(node);
+    listRewind(nodes, &li);
+    while ((ln = listNext(&li))) {
+        clusterNode *node = listNodeValue(ln);
+        if (clusterNodeIsPrimary(node) && !nodeFailed(node)) {
+            return node;
+        }
+    }
+    return NULL;
+}
+
 int checkSlotAssignmentsOrReply(client *c, unsigned char *slots, int del, int start_slot, int end_slot) {
     int slot;
     for (slot = start_slot; slot <= end_slot; slot++) {
@@ -5680,7 +5695,7 @@ void addShardReplyForClusterShards(client *c, list *nodes) {
     addReplyBulkCString(c, "slots");
 
     /* Use slot_info_pairs from the primary only */
-    n = clusterNodeGetPrimary(n);
+    n = clusterNodeGetHealthyPrimary(n);
 
     if (n->slot_info_pairs != NULL) {
         serverAssert((n->slot_info_pairs_count % 2) == 0);

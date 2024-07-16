@@ -151,8 +151,6 @@ static inline int defaultClientPort(void) {
 #define RCVBUF_MIN_READ_LEN 16
 #define RCVBUF_MAX_PREALLOC (1 << 20) /* 1MB */
 
-#define PLACEHOLDER_LEN 8
-
 /* Fixed timeout value for cluster operations (milliseconds) */
 #define CLUSTER_OPERATION_TIMEOUT 2000
 
@@ -188,6 +186,48 @@ dictType clusterSdsToListType = {
     dictListDestructor, /* val destructor */
     NULL                /* allow to expand */
 };
+
+typedef struct {
+    enum { ITER_DICT, ITER_LIST } type;
+    union {
+        dictIterator di;
+        listIter li;
+    };
+} DictOrListIterator;
+
+void iterInitForDict(DictOrListIterator *iter, dict *d) {
+    iter->type = ITER_DICT;
+    dictInitSafeIterator(&iter->di, d);
+}
+
+void iterInitForList(DictOrListIterator *iter, list *l) {
+    iter->type = ITER_LIST;
+    listRewind(l, &iter->li);
+}
+
+void *iterNext(DictOrListIterator *iter) {
+    switch (iter->type) {
+    case ITER_DICT: {
+        // Get the next entry in the dictionary
+        dictEntry *de = dictNext(&iter->di);
+        // Return the value associated with the entry, or NULL if no more entries
+        return de ? dictGetVal(de) : NULL;
+    }
+    case ITER_LIST: {
+        // Get the next node in the list
+        listNode *ln = listNext(&iter->li);
+        // Return the value associated with the node, or NULL if no more nodes
+        return ln ? listNodeValue(ln) : NULL;
+    }
+    default: serverPanic("bad type"); return NULL; // This line is unreachable but added to avoid compiler warnings
+    }
+}
+
+void iterReset(DictOrListIterator *iter) {
+    if (iter->type == ITER_DICT) {
+        dictResetIterator(&iter->di);
+    }
+}
 
 /* Aux fields were introduced in Redis OSS 7.2 to support the persistence
  * of various important node properties, such as shard id, in nodes.conf.
@@ -2824,7 +2864,7 @@ static clusterNode *getNodeFromLinkAndMsg(clusterLink *link, clusterMsg *hdr) {
     return sender;
 }
 
-static clusterMsgDataPublishMessage *getPublishMessageFirst(clusterMsgDataPublishMulti *msg) {
+static clusterMsgDataPublishMessage *getFirstPublishMessage(clusterMsgDataPublishMulti *msg) {
     clusterMsgDataPublishMessage *initial = (clusterMsgDataPublishMessage *)&(msg->bulk_data);
     return initial;
 }
@@ -2849,7 +2889,7 @@ static robj *readPublishMessageFromCursor(clusterMsgDataPublishMessage *cursor) 
     return data;
 }
 
-static uint32_t getPublishMsgLength(clusterMsgDataPublishMessage *cursor) {
+static uint32_t getPublishMessageLength(clusterMsgDataPublishMessage *cursor) {
     uint32_t msg_length = ntohl(cursor->message_len);
     return msg_length;
 }
@@ -2864,9 +2904,10 @@ int pubsubProcessLightPacket(clusterLink *link, uint16_t type) {
     if ((type == CLUSTERMSG_TYPE_PUBLISH_LIGHT && serverPubsubSubscriptionCount() > 0) ||
         (type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT && serverPubsubShardSubscriptionCount() > 0)) {
         data_count = ntohu64(hdr->data.publish.msg.data_count);
-        clusterMsgDataPublishMessage *cursor = getPublishMessageFirst(&hdr->data.publish.msg);
+        clusterMsgDataPublishMessage *cursor = getFirstPublishMessage(&hdr->data.publish.msg);
         channel = readPublishMessageFromCursor(cursor);
-        while (--data_count) {
+        data_count -= 1;
+        while (data_count--) {
             cursor = getPublishMessageNext(cursor);
             message = readPublishMessageFromCursor(cursor);
             pubsubPublishMessage(channel, message, type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT);
@@ -2946,9 +2987,9 @@ int clusterIsValidPacket(clusterLink *link) {
         explen += sizeof(clusterMsgDataPublishMulti);
         uint64_t data_count = ntohu64(hdr_pubsub->data.publish.msg.data_count);
         explen += ((data_count) * (sizeof(clusterMsgDataPublishMessage) - 8));
-        clusterMsgDataPublishMessage *msg_data = getPublishMessageFirst(&hdr_pubsub->data.publish.msg);
+        clusterMsgDataPublishMessage *msg_data = getFirstPublishMessage(&hdr_pubsub->data.publish.msg);
         while (data_count--) {
-            uint32_t msglen = getPublishMsgLength(msg_data);
+            uint32_t msglen = getPublishMessageLength(msg_data);
             explen += msglen;
             msg_data = getPublishMessageNext(msg_data);
         }
@@ -3019,8 +3060,13 @@ int clusterProcessPacket(clusterLink *link) {
         sender->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
     }
 
-    if (sender && (!nodeSupportsLightMsgHdr(link->node)) && (flags & CLUSTER_NODE_LIGHT_HDR_SUPPORTED)) {
-        sender->flags |= CLUSTER_NODE_LIGHT_HDR_SUPPORTED;
+    /* Checks if the node supports light message hdr */
+    if (sender) {
+        if (flags & CLUSTER_NODE_LIGHT_HDR_SUPPORTED) {
+            sender->flags |= CLUSTER_NODE_LIGHT_HDR_SUPPORTED;
+        } else {
+            server.cluster->is_light_hdr_supported = 0;
+        }
     }
 
     if (sender && !nodeInHandshake(sender)) {
@@ -3579,9 +3625,7 @@ void clusterReadHandler(connection *conn) {
             int is_msg_light = (type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT);
             if (rcvbuflen == RCVBUF_MIN_READ_LEN) {
                 /* Perform some sanity check on the message signature
-                 * and length.
-                 * The minimum length for PUBLISH and  PUBLISHSHARD will be clusterMsgLight_MIN_LEN
-                 * as we are using the `clusterMsgLight` hdr. */
+                 * and length. */
                 if (memcmp(hdr->sig, "RCmb", 4) != 0 || (!is_msg_light && (ntohl(hdr->totlen) < CLUSTERMSG_MIN_LEN)) ||
                     (is_msg_light && (ntohl(hdr->totlen) < CLUSTERMSG_LIGHT_MIN_LEN))) {
                     char ip[NET_IP_STR_LEN];
@@ -3670,18 +3714,6 @@ void clusterSendMessage(clusterLink *link, clusterMsgSendBlock *msgblock) {
     if (type < CLUSTERMSG_TYPE_COUNT) server.cluster->stats_bus_messages_sent[type]++;
 }
 
-/* Helper function to send message to node depending on
- * the header type supported by the node. */
-void clusterSendPublishMessage(clusterNode *node, int type, clusterMsgSendBlock *msgblock) {
-    if ((type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) && !nodeSupportsLightMsgHdr(node)) {
-        clusterSendMessage(node->link, msgblock);
-    } else if ((type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT) &&
-               nodeSupportsLightMsgHdr(node)) {
-        clusterSendMessage(node->link, msgblock);
-    }
-    return;
-}
-
 /* Send a message to all the nodes that are part of the cluster having
  * a connected link.
  *
@@ -3692,28 +3724,29 @@ void clusterBroadcastMessage(clusterMsgSendBlock *msgblock) {
     dictIterator *di;
     dictEntry *de;
 
-    uint16_t type = ntohs(msgblock->msg.type);
-    int is_msg_type_publish = (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD ||
-                               type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT);
-    int nodes_not_supporting_light_header = 0;
-
     di = dictGetSafeIterator(server.cluster->nodes);
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
-        if (!nodeSupportsLightMsgHdr(node)) nodes_not_supporting_light_header++;
+
         if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
-        if (!is_msg_type_publish) {
-            clusterSendMessage(node->link, msgblock);
-        } else {
-            clusterSendPublishMessage(node, type, msgblock);
-        }
+        clusterSendMessage(node->link, msgblock);
     }
     dictReleaseIterator(di);
+}
 
-    if (nodes_not_supporting_light_header) {
-        server.cluster->is_light_hdr_supported = 0;
-    } else {
-        server.cluster->is_light_hdr_supported = 1;
+/* Send a message to all the nodes in the shard */
+void clusterShardBroadcastMessage(clusterMsgSendBlock *msgblock) {
+    listIter li;
+    listNode *ln;
+
+    list *nodes_for_slot = clusterGetNodesInMyShard(server.cluster->myself);
+    serverAssert(nodes_for_slot != NULL);
+
+    listRewind(nodes_for_slot, &li);
+    while ((ln = listNext(&li))) {
+        clusterNode *node = listNodeValue(ln);
+        if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
+        clusterSendMessage(node->link, msgblock);
     }
 }
 
@@ -4038,7 +4071,7 @@ clusterMsgSendBlock *clusterCreatePublishLightMsgBlock(robj *channel, robj **mes
 
     clusterMsgLight *hdr = &msgblock->light_msg;
     hdr->data.publish.msg.data_count = htonu64(count + 1);
-    clusterMsgDataPublishMessage *cursor = getPublishMessageFirst(&hdr->data.publish.msg);
+    clusterMsgDataPublishMessage *cursor = getFirstPublishMessage(&hdr->data.publish.msg);
     writePublishMessageToCursor(cursor, channel);
     for (i = 0; i < count; i++) {
         cursor = getPublishMessageNext(cursor);
@@ -4144,63 +4177,52 @@ int clusterSendModuleMessageToTarget(const char *target,
  * Publish this message across the slot (primary/replica).
  * -------------------------------------------------------------------------- */
 void clusterPropagatePublish(robj *channel, robj **messages, int count, int sharded) {
+    /* Currently publish command does not support multiple payload. */
+    serverAssert(count == 1);
+
     clusterMsgSendBlock *msgblock, *msgblock_light;
-    int i;
+    int nodes_not_supporting_light_header = 0;
+
     msgblock_light = clusterCreatePublishLightMsgBlock(
         channel, messages, count, sharded ? CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT : CLUSTERMSG_TYPE_PUBLISH_LIGHT);
-    if (!sharded) {
-        clusterBroadcastMessage(msgblock_light);
-        clusterMsgSendBlockDecrRefCount(msgblock_light);
-        if (!server.cluster->is_light_hdr_supported) {
-            for (i = 0; i < count; i++) {
-                msgblock = clusterCreatePublishMsgBlock(channel, messages[i], CLUSTERMSG_TYPE_PUBLISH);
-                clusterBroadcastMessage(msgblock);
-                clusterMsgSendBlockDecrRefCount(msgblock);
-            }
-        }
-        return;
-    }
 
-    listIter li;
-    listNode *ln;
-    clusterNode *node;
-    list *nodes_for_slot = clusterGetNodesInMyShard(server.cluster->myself);
-    serverAssert(nodes_for_slot != NULL);
-    listRewind(nodes_for_slot, &li);
-    int nodes_not_supporting_light_header = 0;
-    while ((ln = listNext(&li))) {
-        node = listNodeValue(ln);
-        if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
-        if (nodeSupportsLightMsgHdr(node)) {
-            clusterSendMessage(node->link, msgblock_light);
+    if (server.cluster->is_light_hdr_supported) {
+        /* If the cluster is homogeneous broadcast to all nodes */
+        if (sharded) {
+            clusterShardBroadcastMessage(msgblock_light);
         } else {
-            nodes_not_supporting_light_header++;
-            continue;
+            clusterBroadcastMessage(msgblock_light);
         }
+    } else {
+        msgblock = clusterCreatePublishMsgBlock(channel, messages[0],
+                                                sharded ? CLUSTERMSG_TYPE_PUBLISHSHARD : CLUSTERMSG_TYPE_PUBLISH);
+        DictOrListIterator iter;
+        if (sharded) {
+            list *nodes_for_slot = clusterGetNodesInMyShard(server.cluster->myself);
+            serverAssert(nodes_for_slot != NULL);
+            iterInitForList(&iter, nodes_for_slot);
+        } else {
+            iterInitForDict(&iter, server.cluster->nodes);
+        }
+        clusterNode *node;
+        while ((node = iterNext(&iter)) != NULL) {
+            /* If the cluster is not marked as homogeneous send respective message blocks to all nodes. */
+            if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
+            if (!nodeSupportsLightMsgHdr(node)) {
+                clusterSendMessage(node->link, msgblock);
+                nodes_not_supporting_light_header++;
+                continue;
+            }
+            clusterSendMessage(node->link, msgblock_light);
+        }
+        iterReset(&iter);
+        /* If the cluster is not heterogeneous anymore, update the is_light_hdr_supported to 1 */
+        if (!nodes_not_supporting_light_header) {
+            server.cluster->is_light_hdr_supported = 1;
+        }
+        clusterMsgSendBlockDecrRefCount(msgblock);
     }
     clusterMsgSendBlockDecrRefCount(msgblock_light);
-
-    if (nodes_not_supporting_light_header) {
-        server.cluster->is_light_hdr_supported = 0;
-    } else {
-        server.cluster->is_light_hdr_supported = 1;
-    }
-
-    if (!server.cluster->is_light_hdr_supported) {
-        for (i = 0; i < count; i++) {
-            listRewind(nodes_for_slot, &li);
-            msgblock = clusterCreatePublishMsgBlock(channel, messages[i], CLUSTERMSG_TYPE_PUBLISHSHARD);
-            while ((ln = listNext(&li))) {
-                node = listNodeValue(ln);
-                if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
-                if (nodeSupportsLightMsgHdr(node))
-                    continue;
-                else
-                    clusterSendMessage(node->link, msgblock);
-            }
-            clusterMsgSendBlockDecrRefCount(msgblock);
-        }
-    }
 }
 
 /* -----------------------------------------------------------------------------

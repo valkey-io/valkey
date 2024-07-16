@@ -195,14 +195,16 @@ typedef struct {
     };
 } ClusterNodeIterator;
 
-void clusterNodeIterInitAllNodes(ClusterNodeIterator *iter, dict *d) {
+void clusterNodeIterInitAllNodes(ClusterNodeIterator *iter) {
     iter->type = ITER_DICT;
-    dictInitSafeIterator(&iter->di, d);
+    dictInitSafeIterator(&iter->di, server.cluster->nodes);
 }
 
-void clusterNodeIterInitMyShard(ClusterNodeIterator *iter, list *l) {
+void clusterNodeIterInitMyShard(ClusterNodeIterator *iter) {
+    list *nodes = clusterGetNodesInMyShard(server.cluster->myself);
+    serverAssert(nodes != NULL);
     iter->type = ITER_LIST;
-    listRewind(l, &iter->li);
+    listRewind(nodes, &iter->li);
 }
 
 clusterNode *clusterNodeIterNext(ClusterNodeIterator *iter) {
@@ -4167,14 +4169,13 @@ void clusterPropagatePublish(robj *channel, robj **messages, int count, int shar
 
     msgblock_light = clusterCreatePublishLightMsgBlock(
         channel, messages, count, sharded ? CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT : CLUSTERMSG_TYPE_PUBLISH_LIGHT);
-
+    /* We will only create msgblock with normal hdr if there are any nodes that do not support light hdr */
+    msgblock = NULL;
     ClusterNodeIterator iter;
     if (sharded) {
-        list *nodes_for_slot = clusterGetNodesInMyShard(server.cluster->myself);
-        serverAssert(nodes_for_slot != NULL);
-        clusterNodeIterInitMyShard(&iter, nodes_for_slot);
+        clusterNodeIterInitMyShard(&iter);
     } else {
-        clusterNodeIterInitAllNodes(&iter, server.cluster->nodes);
+        clusterNodeIterInitAllNodes(&iter);
     }
 
     clusterNode *node;
@@ -4184,13 +4185,15 @@ void clusterPropagatePublish(robj *channel, robj **messages, int count, int shar
         if (nodeSupportsLightMsgHdr(node)) {
             clusterSendMessage(node->link, msgblock_light);
         } else {
-            msgblock = clusterCreatePublishMsgBlock(channel, messages[0],
+            if (msgblock == NULL) {
+                msgblock = clusterCreatePublishMsgBlock(channel, messages[0],
                                                     sharded ? CLUSTERMSG_TYPE_PUBLISHSHARD : CLUSTERMSG_TYPE_PUBLISH);
+            }
             clusterSendMessage(node->link, msgblock);
-            clusterMsgSendBlockDecrRefCount(msgblock);
         }
     }
     clusterNodeIterReset(&iter);
+    if (msgblock != NULL) clusterMsgSendBlockDecrRefCount(msgblock);
     clusterMsgSendBlockDecrRefCount(msgblock_light);
 }
 

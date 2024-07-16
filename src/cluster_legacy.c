@@ -3041,19 +3041,9 @@ int clusterProcessPacket(clusterLink *link) {
     }
 
     clusterMsg *hdr = (clusterMsg *)link->rcvbuf;
+    clusterNode *sender = getNodeFromLinkAndMsg(link, hdr);
     uint16_t type = ntohs(hdr->type);
     mstime_t now = mstime();
-
-    uint16_t flags = ntohs(hdr->flags);
-    uint64_t sender_claimed_current_epoch = 0, sender_claimed_config_epoch = 0;
-    clusterNode *sender = getNodeFromLinkAndMsg(link, hdr);
-    int sender_claims_to_be_primary = !memcmp(hdr->replicaof, CLUSTER_NODE_NULL_NAME, CLUSTER_NAMELEN);
-    int sender_last_reported_as_replica = sender && nodeIsReplica(sender);
-    int sender_last_reported_as_primary = sender && nodeIsPrimary(sender);
-
-    if (sender && (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA)) {
-        sender->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
-    }
 
     /* Update the last time we saw any data from this node. We
      * use this in order to avoid detecting a timeout from a node that
@@ -3064,6 +3054,16 @@ int clusterProcessPacket(clusterLink *link) {
     if (sender && (type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT) &&
         nodeSupportsLightMsgHdr(sender)) {
         return pubsubProcessLightPacket(link, type);
+    }
+
+    uint16_t flags = ntohs(hdr->flags);
+    uint64_t sender_claimed_current_epoch = 0, sender_claimed_config_epoch = 0;
+    int sender_claims_to_be_primary = !memcmp(hdr->replicaof, CLUSTER_NODE_NULL_NAME, CLUSTER_NAMELEN);
+    int sender_last_reported_as_replica = sender && nodeIsReplica(sender);
+    int sender_last_reported_as_primary = sender && nodeIsPrimary(sender);
+
+    if (sender && (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA)) {
+        sender->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
     }
 
 

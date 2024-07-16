@@ -388,16 +388,16 @@ typedef enum {
     REPL_STATE_CONNECT,    /* Must connect to primary */
     REPL_STATE_CONNECTING, /* Connecting to primary */
     /* --- Handshake states, must be ordered --- */
-    REPL_STATE_RECEIVE_PING_REPLY,        /* Wait for PING reply */
-    REPL_STATE_SEND_HANDSHAKE,            /* Send handshake sequence to primary */
-    REPL_STATE_RECEIVE_AUTH_REPLY,        /* Wait for AUTH reply */
-    REPL_STATE_RECEIVE_PORT_REPLY,        /* Wait for REPLCONF reply */
-    REPL_STATE_RECEIVE_IP_REPLY,          /* Wait for REPLCONF reply */
+    REPL_STATE_RECEIVE_PING_REPLY,         /* Wait for PING reply */
+    REPL_STATE_SEND_HANDSHAKE,             /* Send handshake sequence to primary */
+    REPL_STATE_RECEIVE_AUTH_REPLY,         /* Wait for AUTH reply */
+    REPL_STATE_RECEIVE_PORT_REPLY,         /* Wait for REPLCONF reply */
+    REPL_STATE_RECEIVE_IP_REPLY,           /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_DUAL_CHANNEL_REPLY, /* If using dual-channel sync, mark main channel */
-    REPL_STATE_RECEIVE_CAPA_REPLY,        /* Wait for REPLCONF reply */
-    REPL_STATE_RECEIVE_VERSION_REPLY,     /* Wait for REPLCONF reply */
-    REPL_STATE_SEND_PSYNC,                /* Send PSYNC */
-    REPL_STATE_RECEIVE_PSYNC_REPLY,       /* Wait for PSYNC reply */
+    REPL_STATE_RECEIVE_CAPA_REPLY,         /* Wait for REPLCONF reply */
+    REPL_STATE_RECEIVE_VERSION_REPLY,      /* Wait for REPLCONF reply */
+    REPL_STATE_SEND_PSYNC,                 /* Send PSYNC */
+    REPL_STATE_RECEIVE_PSYNC_REPLY,        /* Wait for PSYNC reply */
     /* --- End of handshake states --- */
     REPL_STATE_TRANSFER,  /* Receiving .rdb from primary */
     REPL_STATE_CONNECTED, /* Connected to primary */
@@ -438,8 +438,8 @@ typedef enum {
 
 /* Replica capabilities. */
 #define REPLICA_CAPA_NONE 0
-#define REPLICA_CAPA_EOF (1 << 0)       /* Can parse the RDB EOF streaming format. */
-#define REPLICA_CAPA_PSYNC2 (1 << 1)    /* Supports PSYNC2 protocol. */
+#define REPLICA_CAPA_EOF (1 << 0)          /* Can parse the RDB EOF streaming format. */
+#define REPLICA_CAPA_PSYNC2 (1 << 1)       /* Supports PSYNC2 protocol. */
 #define REPLICA_CAPA_DUAL_CHANNEL (1 << 2) /* Supports dual channel replication sync */
 
 /* Replica requirements */
@@ -1220,7 +1220,7 @@ typedef struct ClientFlags {
                                  * By using this flag, we ensure that the RDB client remains intact until the replica \
                                  * has successfully initiated PSYNC. */
     uint64_t repl_rdb_chan : 1; /* Dual channel replication sync: track a connection which is used for rdb snapshot */
-    uint64_t reserved : 7;       /* Reserved for future use */
+    uint64_t reserved : 7;      /* Reserved for future use */
 } ClientFlags;
 
 typedef struct client {
@@ -1699,10 +1699,10 @@ struct valkeyServer {
     list *clients_pending_io_read;         /* List of clients with pending read to be process by I/O threads. */
     list *clients_pending_io_write;        /* List of clients with pending write to be process by I/O threads. */
     list *replicas, *monitors;             /* List of replicas and MONITORs */
-    rax *replicas_waiting_psync;          /* Radix tree for tracking replicas awaiting partial synchronization.
+    rax *replicas_waiting_psync;           /* Radix tree for tracking replicas awaiting partial synchronization.
                                             * Key: RDB client ID
                                             * Value: RDB client object
-                                            * This structure holds dual-channel sync replicas from the start of their 
+                                            * This structure holds dual-channel sync replicas from the start of their
                                             * RDB transfer until their main channel establishes partial synchronization. */
     client *current_client;                /* The client that triggered the command execution (External or AOF). */
     client *executing_client;              /* The client executing the current command (possibly script or module). */

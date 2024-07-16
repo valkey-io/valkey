@@ -2641,8 +2641,7 @@ static void fullSyncWithPrimary(connection *conn) {
 
         if (err[0] == '-') {
             serverLog(LL_NOTICE,
-                      "Server does not support sync with offset, dual channel sync approach cannot be used: %s",
-                      err);
+                      "Server does not support sync with offset, dual channel sync approach cannot be used: %s", err);
             goto error;
         }
         if (connSyncWrite(conn, "SYNC\r\n", 6, server.repl_syncio_timeout * 1000) == -1) {
@@ -2875,7 +2874,7 @@ void dualChannelSyncSuccess(void) {
 }
 
 /* Replication: Replica side.
- * Main channel successfully established psync with primary. Check whether the rdb channel 
+ * Main channel successfully established psync with primary. Check whether the rdb channel
  * has completed its part and act accordingly. */
 void dualChannelSyncHandlePsync(void) {
     serverAssert(server.repl_state == REPL_STATE_RECEIVE_PSYNC_REPLY);
@@ -2898,7 +2897,7 @@ void dualChannelSyncHandlePsync(void) {
 }
 
 /* Replication: Replica side.
- * RDB channel done loading the RDB. Check whether the main channel has completed its part 
+ * RDB channel done loading the RDB. Check whether the main channel has completed its part
  * and act accordingly. */
 void dualChannelSyncHandleRdbLoadCompletion(void) {
     serverAssert(server.repl_rdb_chan_state == REPL_DUAL_CHAN_RDB_LOAD);
@@ -2986,8 +2985,8 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
             /* While in dual channel replication, we should use our prepared repl id and offset. */
             psync_replid = server.repl_provisional_primary.replid;
             snprintf(psync_offset, sizeof(psync_offset), "%lld", server.repl_provisional_primary.reploff + 1);
-            serverLog(LL_NOTICE, "Trying a partial resynchronization using main channel (request %s:%s).",
-                      psync_replid, psync_offset);
+            serverLog(LL_NOTICE, "Trying a partial resynchronization using main channel (request %s:%s).", psync_replid,
+                      psync_offset);
         } else if (server.cached_primary) {
             psync_replid = server.cached_primary->replid;
             snprintf(psync_offset, sizeof(psync_offset), "%lld", server.cached_primary->reploff + 1);
@@ -3206,7 +3205,8 @@ void setupMainConnForPsync(connection *conn) {
 
 error:
     sdsfree(err);
-    /* The dual-channel sync session must be aborted for any psync_result other than PSYNC_CONTINUE or PSYNC_WAIT_REPLY. */
+    /* The dual-channel sync session must be aborted for any psync_result other than PSYNC_CONTINUE or PSYNC_WAIT_REPLY.
+     */
     serverLog(LL_WARNING, "Aborting dual channel sync. Main channel psync result %d", psync_result);
     cancelReplicationHandshake(1);
 }

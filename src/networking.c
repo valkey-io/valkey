@@ -1645,8 +1645,7 @@ void freeClient(client *c) {
     /* Log link disconnection with replica */
     if (getClientType(c) == CLIENT_TYPE_REPLICA) {
         serverLog(LL_NOTICE,
-                  c->flag.repl_rdb_chan ? "Replica %s rdb channel disconnected."
-                                        : "Connection with replica %s lost.",
+                  c->flag.repl_rdb_chan ? "Replica %s rdb channel disconnected." : "Connection with replica %s lost.",
                   replicationGetReplicaName(c));
     }
 

@@ -3039,22 +3039,28 @@ int clusterProcessPacket(clusterLink *link) {
         }
         return 1;
     }
-
+    clusterNode *sender;
     clusterMsg *hdr = (clusterMsg *)link->rcvbuf;
-    clusterNode *sender = getNodeFromLinkAndMsg(link, hdr);
     uint16_t type = ntohs(hdr->type);
     mstime_t now = mstime();
 
+    if (type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT) {
+        if (!link->node || nodeInHandshake(link->node)) {
+            freeClusterLink(link);
+            serverLog(LL_WARNING, "Closing link for node that sent a lightweight message of type %hu as its first message on the link", type);
+                return 0;
+        }
+        sender = link->node;
+        sender->data_received = now;
+        return pubsubProcessLightPacket(link, type);
+    }
+
+    sender = getNodeFromLinkAndMsg(link, hdr);
     /* Update the last time we saw any data from this node. We
      * use this in order to avoid detecting a timeout from a node that
      * is just sending a lot of data in the cluster bus, for instance
      * because of Pub/Sub. */
     if (sender) sender->data_received = now;
-
-    if (sender && (type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT) &&
-        nodeSupportsLightMsgHdr(sender)) {
-        return pubsubProcessLightPacket(link, type);
-    }
 
     uint16_t flags = ntohs(hdr->flags);
     uint64_t sender_claimed_current_epoch = 0, sender_claimed_config_epoch = 0;
@@ -3065,7 +3071,6 @@ int clusterProcessPacket(clusterLink *link) {
     if (sender && (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA)) {
         sender->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
     }
-
 
     if (sender && (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA)) {
         sender->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;

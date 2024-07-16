@@ -1085,7 +1085,7 @@ void clusterInit(void) {
     server.cluster->failover_auth_epoch = 0;
     server.cluster->cant_failover_reason = CLUSTER_CANT_FAILOVER_NONE;
     server.cluster->lastVoteEpoch = 0;
-    server.cluster->is_light_hdr_supported = 1;
+    server.cluster->all_nodes_are_known_to_support_light_hdr = 1;
 
     /* Initialize stats */
     for (int i = 0; i < CLUSTERMSG_TYPE_COUNT; i++) {
@@ -3065,7 +3065,7 @@ int clusterProcessPacket(clusterLink *link) {
         if (flags & CLUSTER_NODE_LIGHT_HDR_SUPPORTED) {
             sender->flags |= CLUSTER_NODE_LIGHT_HDR_SUPPORTED;
         } else {
-            server.cluster->is_light_hdr_supported = 0;
+            server.cluster->all_nodes_are_known_to_support_light_hdr = 0;
         }
     }
 
@@ -4186,7 +4186,7 @@ void clusterPropagatePublish(robj *channel, robj **messages, int count, int shar
     msgblock_light = clusterCreatePublishLightMsgBlock(
         channel, messages, count, sharded ? CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT : CLUSTERMSG_TYPE_PUBLISH_LIGHT);
 
-    if (server.cluster->is_light_hdr_supported) {
+    if (server.cluster->all_nodes_are_known_to_support_light_hdr) {
         /* If the cluster is homogeneous broadcast to all nodes */
         if (sharded) {
             clusterShardBroadcastMessage(msgblock_light);
@@ -4216,9 +4216,9 @@ void clusterPropagatePublish(robj *channel, robj **messages, int count, int shar
             clusterSendMessage(node->link, msgblock_light);
         }
         iterReset(&iter);
-        /* If the cluster is not heterogeneous anymore, update the is_light_hdr_supported to 1 */
+        /* If the cluster is not heterogeneous anymore, update the all_nodes_are_known_to_support_light_hdr to 1 */
         if (!nodes_not_supporting_light_header) {
-            server.cluster->is_light_hdr_supported = 1;
+            server.cluster->all_nodes_are_known_to_support_light_hdr = 1;
         }
         clusterMsgSendBlockDecrRefCount(msgblock);
     }

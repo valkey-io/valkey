@@ -20,7 +20,7 @@ proc get_node_info_from_shard {id reference {type node}} {
     return {}
 }
 
-start_cluster 3 3 {tags {cluster}} {
+start_cluster 3 3 {tags {external:skip cluster}} {
     set primary_node 0
     set replica_node 3
     set validation_node 4

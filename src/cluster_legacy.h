@@ -122,16 +122,6 @@ typedef struct {
 } clusterMsgDataPublish;
 
 typedef struct {
-    uint32_t message_len;
-    unsigned char message_data[8]; /* 8 bytes just as placeholder. */
-} clusterMsgDataPublishMessage;
-
-typedef struct {
-    uint64_t data_count;
-    clusterMsgDataPublishMessage *bulk_data;
-} clusterMsgDataPublishMulti;
-
-typedef struct {
     uint64_t configEpoch;                   /* Config epoch of the specified instance. */
     char nodename[CLUSTER_NAMELEN];         /* Name of the slots owner. */
     unsigned char slots[CLUSTER_SLOTS / 8]; /* Slots bitmap. */
@@ -231,6 +221,17 @@ union clusterMsgData {
         clusterMsgModule msg;
     } module;
 };
+
+/* Light message data and it's supported message types. */
+typedef struct {
+    uint32_t message_len;
+    unsigned char message_data[8]; /* 8 bytes just as placeholder. */
+} clusterMsgDataPublishMessage;
+
+typedef struct {
+    uint64_t data_count;
+    clusterMsgDataPublishMessage *bulk_data;
+} clusterMsgDataPublishMulti;
 
 union clusterMsgDataLight {
     /* PUBLISH */
@@ -379,7 +380,6 @@ struct clusterState {
     clusterNode *migrating_slots_to[CLUSTER_SLOTS];
     clusterNode *importing_slots_from[CLUSTER_SLOTS];
     clusterNode *slots[CLUSTER_SLOTS];
-    int all_nodes_are_known_to_support_light_hdr;
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;  /* Time of previous or next election. */
     int failover_auth_count;      /* Number of votes received so far. */

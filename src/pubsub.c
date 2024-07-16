@@ -629,7 +629,7 @@ void publishCommand(client *c) {
         return;
     }
 
-    int receivers = pubsubPublishMessagesAndPropagateToCluster(c->argv[1], &c->argv[2], c->argc - 2, 0);
+    int receivers = pubsubPublishMessagesAndPropagateToCluster(c->argv[1], &c->argv[2], 1, 0);
     if (!server.cluster_enabled) forceCommandPropagation(c, PROPAGATE_REPL);
     addReplyLongLong(c, receivers);
 }
@@ -715,7 +715,7 @@ void channelList(client *c, sds pat, kvstore *pubsub_channels) {
 
 /* SPUBLISH <shardchannel> <message> */
 void spublishCommand(client *c) {
-    int receivers = pubsubPublishMessagesAndPropagateToCluster(c->argv[1], &c->argv[2], c->argc - 2, 1);
+    int receivers = pubsubPublishMessagesAndPropagateToCluster(c->argv[1], &c->argv[2], 1, 1);
     if (!server.cluster_enabled) forceCommandPropagation(c, PROPAGATE_REPL);
     addReplyLongLong(c, receivers);
 }

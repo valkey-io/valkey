@@ -74,7 +74,7 @@ test "Wait for failover to end" {
     while {$inprogress} {
         set inprogress 0
         foreach_sentinel_id id {
-            if {[dict exists [S $id SENTINEL MASTER mymaster] failover-state]} {
+            if {[dict exists [S $id SENTINEL PRIMARY mymaster] failover-state]} {
                 incr inprogress
             }
         }

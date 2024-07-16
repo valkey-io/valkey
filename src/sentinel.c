@@ -3727,11 +3727,11 @@ NULL
         };
         /* clang-format on */
         addReplyHelp(c, help);
-    } else if (!strcasecmp(c->argv[1]->ptr, "primaries")) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "primaries") || !strcasecmp(c->argv[1]->ptr, "masters")) {
         /* SENTINEL PRIMARIES */
         if (c->argc != 2) goto numargserr;
         addReplyDictOfValkeyInstances(c, sentinel.primaries);
-    } else if (!strcasecmp(c->argv[1]->ptr, "primary")) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "primary") || !strcasecmp(c->argv[1]->ptr, "master")) {
         /* SENTINEL PRIMARY <name> */
         sentinelValkeyInstance *ri;
 
@@ -3755,7 +3755,8 @@ NULL
     } else if (!strcasecmp(c->argv[1]->ptr, "myid") && c->argc == 2) {
         /* SENTINEL MYID */
         addReplyBulkCBuffer(c, sentinel.myid, CONFIG_RUN_ID_SIZE);
-    } else if (!strcasecmp(c->argv[1]->ptr, "is-primary-down-by-addr")) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "is-primary-down-by-addr") ||
+               !strcasecmp(c->argv[1]->ptr, "is-master-down-by-addr")) {
         /* SENTINEL IS-PRIMARY-DOWN-BY-ADDR <ip> <port> <current-epoch> <runid>
          *
          * Arguments:
@@ -3807,7 +3808,8 @@ NULL
         /* SENTINEL RESET <pattern> */
         if (c->argc != 3) goto numargserr;
         addReplyLongLong(c, sentinelResetPrimariesByPattern(c->argv[2]->ptr, SENTINEL_GENERATE_EVENT));
-    } else if (!strcasecmp(c->argv[1]->ptr, "get-primary-addr-by-name")) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "get-primary-addr-by-name") ||
+               !strcasecmp(c->argv[1]->ptr, "get-master-addr-by-name")) {
         /* SENTINEL GET-PRIMARY-ADDR-BY-NAME <primary-name> */
         sentinelValkeyInstance *ri;
 
@@ -4483,7 +4485,7 @@ void sentinelAskPrimaryStateToOtherSentinels(sentinelValkeyInstance *primary, in
         /* Ask */
         ll2string(port, sizeof(port), primary->addr->port);
         retval = redisAsyncCommand(
-            ri->link->cc, sentinelReceiveIsPrimaryDownReply, ri, "%s is-master-down-by-addr %s %s %llu %s",
+            ri->link->cc, sentinelReceiveIsPrimaryDownReply, ri, "%s is-primary-down-by-addr %s %s %llu %s",
             sentinelInstanceMapCommand(ri, "SENTINEL"), announceSentinelAddr(primary->addr), port,
             sentinel.current_epoch, (primary->failover_state > SENTINEL_FAILOVER_STATE_NONE) ? sentinel.myid : "*");
         if (retval == C_OK) ri->link->pending_commands++;

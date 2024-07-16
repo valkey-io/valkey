@@ -4096,7 +4096,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
  * multiple replicas may have the same rank, in case they have the same offset.
  *
  * If the replication offsets are the same, the one with the lexicographically
- * smaller Node id  * will have a better ranking to avoid simultaneous elections
+ * smaller node id will have a lower rank to avoid simultaneous elections
  * of replicas.
  *
  * The replica rank is used to add a delay to start an election in order to

@@ -47,9 +47,11 @@ test "Primary reboot in very short time" {
     R $master_id config rewrite
 
     foreach_sentinel_id id {
-        S $id SENTINEL SET mymaster master-reboot-down-after-period 5000
-        S $id sentinel debug ping-period 500
-        S $id sentinel debug ask-period 500 
+	foreach role {master primary} {
+            S $id SENTINEL SET mymaster $role-reboot-down-after-period 5000
+            S $id sentinel debug ping-period 500
+            S $id sentinel debug ask-period 500 
+	}
     }
 
     kill_instance valkey $master_id

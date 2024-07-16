@@ -558,7 +558,7 @@ start_server {tags {"introspection"}} {
             socket-mark-id
             req-res-logfile
             client-default-resp
-            dual-conn-sync-enabled
+            dual-channel-replication-enabled
         }
 
         if {!$::tls} {

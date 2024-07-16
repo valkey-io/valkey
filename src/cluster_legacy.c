@@ -2998,13 +2998,13 @@ int clusterProcessPacket(clusterLink *link) {
          * flags, replicaof pointer, and so forth, as this details will be
          * resolved when we'll receive PONGs from the node. */
         if (!sender && type == CLUSTERMSG_TYPE_MEET) {
-            clusterNode *n;
+            clusterNode *node;
 
-            n = createClusterNode(NULL, CLUSTER_NODE_HANDSHAKE);
-            serverAssert(nodeIp2String(n->ip, link, hdr->myip) == C_OK);
-            getClientPortFromClusterMsg(hdr, &n->tls_port, &n->tcp_port);
-            n->cport = ntohs(hdr->cport);
-            clusterAddNode(n);
+            node = createClusterNode(NULL, CLUSTER_NODE_HANDSHAKE);
+            serverAssert(nodeIp2String(node->ip, link, hdr->myip) == C_OK);
+            getClientPortFromClusterMsg(hdr, &node->tls_port, &node->tcp_port);
+            node->cport = ntohs(hdr->cport);
+            clusterAddNode(node);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
         }
 

@@ -3047,8 +3047,11 @@ int clusterProcessPacket(clusterLink *link) {
     if (type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT) {
         if (!link->node || nodeInHandshake(link->node)) {
             freeClusterLink(link);
-            serverLog(LL_WARNING, "Closing link for node that sent a lightweight message of type %hu as its first message on the link", type);
-                return 0;
+            serverLog(
+                LL_WARNING,
+                "Closing link for node that sent a lightweight message of type %hu as its first message on the link",
+                type);
+           return 0;
         }
         sender = link->node;
         sender->data_received = now;

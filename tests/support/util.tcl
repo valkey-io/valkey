@@ -176,7 +176,7 @@ proc verify_log_message {srv_idx pattern from_line} {
     incr from_line
     set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
     if {![string match $pattern $result]} {
-        error "assertion:expected message not found in log file: $pattern"
+        fail "expected message not found in log file: $pattern"
     }
 }
 
@@ -185,7 +185,7 @@ proc verify_no_log_message {srv_idx pattern from_line} {
     incr from_line
     set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
     if {[string match $pattern $result]} {
-        error "assertion:expected message found in log file: $pattern"
+        fail "expected message found in log file: $pattern"
     }
 }
 

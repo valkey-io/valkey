@@ -45,7 +45,7 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
         }
     }
 
-    test "wait new failover" {
+    test "wait for new failover" {
         wait_for_condition 1000 50 {
             [s $replica_to_be_primary role] == "master"
         } else {

@@ -393,7 +393,6 @@ typedef enum {
     REPL_STATE_RECEIVE_AUTH_REPLY,         /* Wait for AUTH reply */
     REPL_STATE_RECEIVE_PORT_REPLY,         /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_IP_REPLY,           /* Wait for REPLCONF reply */
-    REPL_STATE_RECEIVE_DUAL_CHANNEL_REPLY, /* If using dual-channel sync, mark main channel */
     REPL_STATE_RECEIVE_CAPA_REPLY,         /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_VERSION_REPLY,      /* Wait for REPLCONF reply */
     REPL_STATE_SEND_PSYNC,                 /* Send PSYNC */

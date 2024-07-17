@@ -1259,7 +1259,7 @@ void clusterReset(int hard) {
 /* -----------------------------------------------------------------------------
  * CLUSTER communication link
  * -------------------------------------------------------------------------- */
-static void *createClusterMsgSendBlock(int type, uint32_t msglen) {
+static clusterMsgSendBlock *createClusterMsgSendBlock(int type, uint32_t msglen) {
     uint32_t blocklen = msglen + offsetof(clusterMsgSendBlock, msg);
     clusterMsgSendBlock *msgblock = zcalloc(blocklen);
     msgblock->refcount = 1;
@@ -3070,8 +3070,12 @@ int clusterProcessPacket(clusterLink *link) {
     }
 
     /* Checks if the node supports light message hdr */
-    if (sender && (flags & CLUSTER_NODE_LIGHT_HDR_SUPPORTED)) {
-        sender->flags |= CLUSTER_NODE_LIGHT_HDR_SUPPORTED;
+    if (sender) {
+        if (flags & CLUSTER_NODE_LIGHT_HDR_SUPPORTED) {
+            sender->flags |= CLUSTER_NODE_LIGHT_HDR_SUPPORTED;
+        } else {
+            sender->flags &= ~CLUSTER_NODE_LIGHT_HDR_SUPPORTED;
+        }
     }
 
     /* Update the last time we saw any data from this node. We
@@ -3600,7 +3604,7 @@ void clusterLinkConnectHandler(connection *conn) {
     serverLog(LL_DEBUG, "Connecting with Node %.40s at %s:%d", node->name, node->ip, node->cport);
 }
 
-static inline int isHeaderValid(clusterMsg *hdr) {
+static inline int isSigAndMsgLenValid(clusterMsg *hdr) {
     if (memcmp(hdr->sig, "RCmb", 4) != 0) return 0;
     uint16_t type = ntohs(hdr->type);
     int is_msg_light = (type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT);
@@ -3632,7 +3636,7 @@ void clusterReadHandler(connection *conn) {
             if (rcvbuflen == RCVBUF_MIN_READ_LEN) {
                 /* Perform some sanity check on the message signature
                  * and length. */
-                if (!isHeaderValid(hdr)) {
+                if (!isSigAndMsgLenValid(hdr)) {
                     char ip[NET_IP_STR_LEN];
                     int port;
                     if (connAddrPeerName(conn, ip, sizeof(ip), &port) == -1) {
@@ -4185,7 +4189,6 @@ void clusterPropagatePublish(robj *channel, robj **messages, int count, int shar
     clusterNode *node;
     while ((node = clusterNodeIterNext(&iter)) != NULL) {
         if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
-        /* If the cluster is not marked as homogeneous send respective message blocks to all nodes. */
         if (nodeSupportsLightMsgHdr(node)) {
             clusterSendMessage(node->link, msgblock_light);
         } else {

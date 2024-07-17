@@ -388,15 +388,15 @@ typedef enum {
     REPL_STATE_CONNECT,    /* Must connect to primary */
     REPL_STATE_CONNECTING, /* Connecting to primary */
     /* --- Handshake states, must be ordered --- */
-    REPL_STATE_RECEIVE_PING_REPLY,         /* Wait for PING reply */
-    REPL_STATE_SEND_HANDSHAKE,             /* Send handshake sequence to primary */
-    REPL_STATE_RECEIVE_AUTH_REPLY,         /* Wait for AUTH reply */
-    REPL_STATE_RECEIVE_PORT_REPLY,         /* Wait for REPLCONF reply */
-    REPL_STATE_RECEIVE_IP_REPLY,           /* Wait for REPLCONF reply */
-    REPL_STATE_RECEIVE_CAPA_REPLY,         /* Wait for REPLCONF reply */
-    REPL_STATE_RECEIVE_VERSION_REPLY,      /* Wait for REPLCONF reply */
-    REPL_STATE_SEND_PSYNC,                 /* Send PSYNC */
-    REPL_STATE_RECEIVE_PSYNC_REPLY,        /* Wait for PSYNC reply */
+    REPL_STATE_RECEIVE_PING_REPLY,    /* Wait for PING reply */
+    REPL_STATE_SEND_HANDSHAKE,        /* Send handshake sequence to primary */
+    REPL_STATE_RECEIVE_AUTH_REPLY,    /* Wait for AUTH reply */
+    REPL_STATE_RECEIVE_PORT_REPLY,    /* Wait for REPLCONF reply */
+    REPL_STATE_RECEIVE_IP_REPLY,      /* Wait for REPLCONF reply */
+    REPL_STATE_RECEIVE_CAPA_REPLY,    /* Wait for REPLCONF reply */
+    REPL_STATE_RECEIVE_VERSION_REPLY, /* Wait for REPLCONF reply */
+    REPL_STATE_SEND_PSYNC,            /* Send PSYNC */
+    REPL_STATE_RECEIVE_PSYNC_REPLY,   /* Wait for PSYNC reply */
     /* --- End of handshake states --- */
     REPL_STATE_TRANSFER,  /* Receiving .rdb from primary */
     REPL_STATE_CONNECTED, /* Connected to primary */

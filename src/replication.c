@@ -3242,50 +3242,50 @@ error:
  *  - Once the replica completes loading the rdb, it drops the rdb channel and streams the accumulated incremental
  *    changes into memory. Repl steady state continues normally.
  *
- * * Replica state machine *                                                                                
- * ┌───────────────────┐             Dual channel sync                                                      
- * │RECEIVE_PING_REPLY │          ┌──────────────────────────────────────────────────────────────┐          
- * └────────┬──────────┘          │     RDB channel states               Main channel state      │          
- *          │+PONG                │     ┌────────────────────────────┐   ┌───────────────────┐   │          
- * ┌────────▼──────────┐        ┌─┼─────►DUAL_CHANNEL_SEND_HANDSHAKE │ ┌─►SEND_HANDSHAKE     │   │          
- * │SEND_HANDSHAKE     │        │ │     └────┬───────────────────────┘ │ └──┬────────────────┘   │          
- * └────────┬──────────┘        │ │          │                         │    │REPLCONF set-rdb-client-id     
- *          │                   │ │  ┌───────▼───────────────────────┐ │ ┌──▼────────────────┐   │          
- * ┌────────▼──────────┐        │ │  │DUAL_CHANNEL_RECEIVE_AUTH_REPLY│ │ │RECEIVE_CAPA_REPLY │   │          
- * │RECEIVE_AUTH_REPLY │        │ │  └───────┬───────────────────────┘ │ └──┬────────────────┘   │          
- * └────────┬──────────┘        │ │          │+OK                      │    │+OK                 │          
- *          │+OK                │ │  ┌───────▼───────────────────────┐ │ ┌──▼────────────────┐   │          
- * ┌────────▼──────────┐        │ │  │DUAL_CHANNEL_RECEIVE_REPLCONF_.│ │ │SEND_PSYNC         │   │          
- * │RECEIVE_PORT_REPLY │        │ │  └───────┬───────────────────────┘ │ └──┬────────────────┘   │          
- * └────────┬──────────┘        │ │          │+OK                      │    │PSYNC use snapshot  │          
- *          │+OK                │ │  ┌───────▼────────────────┐        │    │end-offset provided │          
- * ┌────────▼──────────┐        │ │  │DUAL_CHANNEL_RECEIVE_EN.│        │    │by the primary      │          
- * │RECEIVE_IP_REPLY   │        │ │  └───────┬────────────────┘        │ ┌──▼────────────────┐   │          
- * └────────┬──────────┘        │ │          │$ENDOFF                  │ │RECEIVE_PSYNC_REPLY│   │          
- *          │+OK                │ │          ├─────────────────────────┘ └──┬────────────────┘   │          
- * ┌────────▼──────────┐        │ │          │                              │+CONTINUE           │          
- * │RECEIVE_IP_REPLY   │        │ │  ┌───────▼───────────────┐           ┌──▼────────────────┐   │          
- * └────────┬──────────┘        │ │  │DUAL_CHANNEL_RDB_LOAD  │           │TRANSFER           │   │          
- *          │+OK                │ │  └───────┬───────────────┘           └─────┬─────────────┘   │          
- * ┌────────▼──────────┐        │ │          │Done loading                     │                 │          
- * │RECEIVE_CAPA_REPLY │        │ │  ┌───────▼───────────────┐                 │                 │          
- * └────────┬──────────┘        │ │  │DUAL_CHANNEL_RDB_LOADE.│                 │                 │           
- *          │                   │ │  └───────┬───────────────┘                 │                 │          
- * ┌────────▼───┐               │ │          │                                 │                 │          
- * │SEND_PSYNC  │               │ │          │Replica loads local replication  │                 │          
- * └─┬──────────┘               │ │          │buffer into memory               │                 │          
- *   │PSYNC (use cached-primary)│ │          └─────────┬───────────────────────┘                 │          
- * ┌─▼─────────────────┐        │ │                    │                                         │          
- * │RECEIVE_PSYNC_REPLY│        │ └────────────────────┼─────────────────────────────────────────┘          
- * └────────┬─┬────────┘        │                      │                                                    
- * +CONTINUE│ │+DUALCHANNELSYNC │                      │                                                    
- *   │      │ └─────────────────┘                      │                                                    
- *   │      │+FULLRESYNC                               │                                                    
- *   │    ┌─▼─────────────────┐                   ┌────▼──────────────┐                                     
- *   │    │TRANSFER           ├───────────────────►CONNECTED          │                                     
- *   │    └───────────────────┘                   └────▲──────────────┘                                     
- *   │                                                 │                                                    
- *   └─────────────────────────────────────────────────┘                                                    
+ * * Replica state machine *
+ * ┌───────────────────┐             Dual channel sync
+ * │RECEIVE_PING_REPLY │          ┌──────────────────────────────────────────────────────────────┐
+ * └────────┬──────────┘          │     RDB channel states               Main channel state      │
+ *          │+PONG                │     ┌────────────────────────────┐   ┌───────────────────┐   │
+ * ┌────────▼──────────┐        ┌─┼─────►DUAL_CHANNEL_SEND_HANDSHAKE │ ┌─►SEND_HANDSHAKE     │   │
+ * │SEND_HANDSHAKE     │        │ │     └────┬───────────────────────┘ │ └──┬────────────────┘   │
+ * └────────┬──────────┘        │ │          │                         │    │REPLCONF set-rdb-client-id
+ *          │                   │ │  ┌───────▼───────────────────────┐ │ ┌──▼────────────────┐   │
+ * ┌────────▼──────────┐        │ │  │DUAL_CHANNEL_RECEIVE_AUTH_REPLY│ │ │RECEIVE_CAPA_REPLY │   │
+ * │RECEIVE_AUTH_REPLY │        │ │  └───────┬───────────────────────┘ │ └──┬────────────────┘   │
+ * └────────┬──────────┘        │ │          │+OK                      │    │+OK                 │
+ *          │+OK                │ │  ┌───────▼───────────────────────┐ │ ┌──▼────────────────┐   │
+ * ┌────────▼──────────┐        │ │  │DUAL_CHANNEL_RECEIVE_REPLCONF_.│ │ │SEND_PSYNC         │   │
+ * │RECEIVE_PORT_REPLY │        │ │  └───────┬───────────────────────┘ │ └──┬────────────────┘   │
+ * └────────┬──────────┘        │ │          │+OK                      │    │PSYNC use snapshot  │
+ *          │+OK                │ │  ┌───────▼────────────────┐        │    │end-offset provided │
+ * ┌────────▼──────────┐        │ │  │DUAL_CHANNEL_RECEIVE_EN.│        │    │by the primary      │
+ * │RECEIVE_IP_REPLY   │        │ │  └───────┬────────────────┘        │ ┌──▼────────────────┐   │
+ * └────────┬──────────┘        │ │          │$ENDOFF                  │ │RECEIVE_PSYNC_REPLY│   │
+ *          │+OK                │ │          ├─────────────────────────┘ └──┬────────────────┘   │
+ * ┌────────▼──────────┐        │ │          │                              │+CONTINUE           │
+ * │RECEIVE_IP_REPLY   │        │ │  ┌───────▼───────────────┐           ┌──▼────────────────┐   │
+ * └────────┬──────────┘        │ │  │DUAL_CHANNEL_RDB_LOAD  │           │TRANSFER           │   │
+ *          │+OK                │ │  └───────┬───────────────┘           └─────┬─────────────┘   │
+ * ┌────────▼──────────┐        │ │          │Done loading                     │                 │
+ * │RECEIVE_CAPA_REPLY │        │ │  ┌───────▼───────────────┐                 │                 │
+ * └────────┬──────────┘        │ │  │DUAL_CHANNEL_RDB_LOADE.│                 │                 │
+ *          │                   │ │  └───────┬───────────────┘                 │                 │
+ * ┌────────▼───┐               │ │          │                                 │                 │
+ * │SEND_PSYNC  │               │ │          │Replica loads local replication  │                 │
+ * └─┬──────────┘               │ │          │buffer into memory               │                 │
+ *   │PSYNC (use cached-primary)│ │          └─────────┬───────────────────────┘                 │
+ * ┌─▼─────────────────┐        │ │                    │                                         │
+ * │RECEIVE_PSYNC_REPLY│        │ └────────────────────┼─────────────────────────────────────────┘
+ * └────────┬─┬────────┘        │                      │
+ * +CONTINUE│ │+DUALCHANNELSYNC │                      │
+ *   │      │ └─────────────────┘                      │
+ *   │      │+FULLRESYNC                               │
+ *   │    ┌─▼─────────────────┐                   ┌────▼──────────────┐
+ *   │    │TRANSFER           ├───────────────────►CONNECTED          │
+ *   │    └───────────────────┘                   └────▲──────────────┘
+ *   │                                                 │
+ *   └─────────────────────────────────────────────────┘
  */
 /* This handler fires when the non blocking connect was able to
  * establish a connection with the primary. */
@@ -3389,7 +3389,9 @@ void syncWithPrimary(connection *conn) {
          * PSYNC2: supports PSYNC v2, so understands +CONTINUE <new repl ID>.
          *
          * The primary will ignore capabilities it does not understand. */
-        err = sendCommand(conn, "REPLCONF", "capa", "eof", "capa", "psync2", server.dual_channel_replication ? "capa" : NULL, server.dual_channel_replication ? "dual-channel" : NULL, NULL);
+        err = sendCommand(conn, "REPLCONF", "capa", "eof", "capa", "psync2",
+                          server.dual_channel_replication ? "capa" : NULL,
+                          server.dual_channel_replication ? "dual-channel" : NULL, NULL);
         if (err) goto write_error;
 
         /* Inform the primary of our (replica) version. */

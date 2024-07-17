@@ -119,6 +119,11 @@ int authRequired(client *c) {
     return auth_required;
 }
 
+static inline int isReplicaReadyForReplData(client *replica) {
+    return (replica->repl_state == REPLICA_STATE_ONLINE || replica->repl_state == REPLICA_STATE_BG_RDB_LOAD) &&
+           !(replica->flag.close_asap);
+}
+
 client *createClient(connection *conn) {
     client *c = zmalloc(sizeof(client));
 
@@ -189,6 +194,8 @@ client *createClient(connection *conn) {
     c->replica_version = 0;
     c->replica_capa = REPLICA_CAPA_NONE;
     c->replica_req = REPLICA_REQ_NONE;
+    c->associated_rdb_client_id = 0;
+    c->rdb_client_disconnect_time = 0;
     c->reply = listCreate();
     c->deferred_reply_errors = NULL;
     c->reply_bytes = 0;
@@ -255,8 +262,8 @@ void putClientInPendingWriteQueue(client *c) {
     /* Schedule the client to write the output buffers to the socket only
      * if not already done and, for replicas, if the replica can actually receive
      * writes at this stage. */
-    if (!c->flag.pending_write && (c->repl_state == REPL_STATE_NONE ||
-                                   (c->repl_state == REPLICA_STATE_ONLINE && !c->repl_start_cmd_stream_on_ack))) {
+    if (!c->flag.pending_write &&
+        (c->repl_state == REPL_STATE_NONE || (isReplicaReadyForReplData(c) && !c->repl_start_cmd_stream_on_ack))) {
         /* Here instead of installing the write handler, we just flag the
          * client and put it into a list of clients that have something
          * to write to the socket. This way before re-entering the event
@@ -1598,7 +1605,7 @@ void freeClient(client *c) {
 
     /* If a client is protected, yet we need to free it right now, make sure
      * to at least use asynchronous freeing. */
-    if (c->flag.protected) {
+    if (c->flag.protected || c->flag.protected_rdb_channel) {
         freeClientAsync(c);
         return;
     }
@@ -1644,7 +1651,10 @@ void freeClient(client *c) {
 
     /* Log link disconnection with replica */
     if (getClientType(c) == CLIENT_TYPE_REPLICA) {
-        serverLog(LL_NOTICE, "Connection with replica %s lost.", replicationGetReplicaName(c));
+        serverLog(LL_NOTICE,
+                  c->flag.repl_rdb_channel ? "Replica %s rdb channel disconnected."
+                                           : "Connection with replica %s lost.",
+                  replicationGetReplicaName(c));
     }
 
     /* Free the query buffer */
@@ -1873,6 +1883,26 @@ int freeClientsInAsyncFreeQueue(void) {
     listRewind(server.clients_to_close, &li);
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
+
+        if (c->flag.protected_rdb_channel) {
+            /* Check if it's safe to remove RDB connection protection during synchronization
+             * The primary gives a grace period before freeing this client because
+             * it serves as a reference to the first required replication data block for
+             * this replica */
+            if (!c->rdb_client_disconnect_time) {
+                c->rdb_client_disconnect_time = server.unixtime;
+                serverLog(LL_VERBOSE, "Postpone RDB client id=%llu (%s) free for %d seconds", (unsigned long long)c->id,
+                          replicationGetReplicaName(c), server.wait_before_rdb_client_free);
+                continue;
+            }
+            if (server.unixtime - c->rdb_client_disconnect_time > server.wait_before_rdb_client_free) {
+                serverLog(LL_NOTICE,
+                          "Replica main channel failed to establish PSYNC within the grace period (%ld seconds). "
+                          "Freeing RDB client %llu.",
+                          (long int)(server.unixtime - c->rdb_client_disconnect_time), (unsigned long long)c->id);
+                c->flag.protected_rdb_channel = 0;
+            }
+        }
 
         if (c->flag.protected) continue;
 
@@ -2984,6 +3014,10 @@ int processInputBuffer(client *c) {
 void readToQueryBuf(client *c) {
     int big_arg = 0;
     size_t qblen, readlen;
+
+    /* If the replica RDB client is marked as closed ASAP, do not try to read from it */
+    if (c->flag.close_asap) return;
+
     int is_primary = c->read_flags & READ_FLAGS_PRIMARY;
 
     readlen = PROTO_IOBUF_LEN;
@@ -4289,9 +4323,13 @@ int closeClientOnOutputBufferLimitReached(client *c, int async) {
     serverAssert(c->reply_bytes < SIZE_MAX - (1024 * 64));
     /* Note that c->reply_bytes is irrelevant for replica clients
      * (they use the global repl buffers). */
-    if ((c->reply_bytes == 0 && getClientType(c) != CLIENT_TYPE_REPLICA) || c->flag.close_asap) return 0;
+    if ((c->reply_bytes == 0 && getClientType(c) != CLIENT_TYPE_REPLICA) ||
+        (c->flag.close_asap && !(c->flag.protected_rdb_channel)))
+        return 0;
     if (checkClientOutputBufferLimits(c)) {
         sds client = catClientInfoString(sdsempty(), c);
+        /* Remove RDB connection protection on COB overrun */
+        c->flag.protected_rdb_channel = 0;
 
         if (async) {
             freeClientAsync(c);
@@ -4335,7 +4373,7 @@ void flushReplicasOutputBuffers(void) {
          *
          * 3. Obviously if the replica is not ONLINE.
          */
-        if (replica->repl_state == REPLICA_STATE_ONLINE && !(replica->flag.close_asap) && can_receive_writes &&
+        if (isReplicaReadyForReplData(replica) && !(replica->flag.close_asap) && can_receive_writes &&
             !replica->repl_start_cmd_stream_on_ack && clientHasPendingReplies(replica)) {
             writeToClient(replica);
         }

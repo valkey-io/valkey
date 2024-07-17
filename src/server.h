@@ -139,7 +139,11 @@ struct hdr_histogram;
 #define CONFIG_BINDADDR_MAX 16
 #define CONFIG_MIN_RESERVED_FDS 32
 #define CONFIG_DEFAULT_PROC_TITLE_TEMPLATE "{title} {listen-addr} {server-mode}"
+#define DEFAULT_WAIT_BEFORE_RDB_CLIENT_FREE                                                                            \
+    60 /* Grace period in seconds for replica main                                                                     \
+          channel to establish psync. */
 #define INCREMENTAL_REHASHING_THRESHOLD_US 1000
+#define LOADING_PROCESS_EVENTS_INTERVAL_DEFAULT 100 /* Default: 0.1 seconds */
 
 /* Bucket sizes for client eviction pools. Each bucket stores clients with
  * memory usage of up to twice the size of the bucket below it. */
@@ -398,6 +402,18 @@ typedef enum {
     REPL_STATE_CONNECTED, /* Connected to primary */
 } repl_state;
 
+/* Replica rdb-channel replication state. Used in server.repl_rdb_channel_state for
+ * replicas to remember what to do next. */
+typedef enum {
+    REPL_DUAL_CHANNEL_STATE_NONE = 0,         /* No active rdb channel sync */
+    REPL_DUAL_CHANNEL_SEND_HANDSHAKE,         /* Send handshake sequence to primary */
+    REPL_DUAL_CHANNEL_RECEIVE_AUTH_REPLY,     /* Wait for AUTH reply */
+    REPL_DUAL_CHANNEL_RECEIVE_REPLCONF_REPLY, /* Wait for REPLCONF reply */
+    REPL_DUAL_CHANNEL_RECEIVE_ENDOFF,         /* Wait for $ENDOFF reply */
+    REPL_DUAL_CHANNEL_RDB_LOAD,               /* Loading rdb using rdb channel */
+    REPL_DUAL_CHANNEL_RDB_LOADED,
+} repl_rdb_channel_state;
+
 /* The state of an in progress coordinated failover */
 typedef enum {
     NO_FAILOVER = 0,        /* No failover in progress */
@@ -415,18 +431,21 @@ typedef enum {
 #define REPLICA_STATE_SEND_BULK 8         /* Sending RDB file to replica. */
 #define REPLICA_STATE_ONLINE 9            /* RDB file transmitted, sending just updates. */
 #define REPLICA_STATE_RDB_TRANSMITTED                                                                                  \
-    10 /* RDB file transmitted - This state is used only for                                                           \
-        * a replica that only wants RDB without replication buffer  */
+    10                               /* RDB file transmitted - This state is used only for                             \
+                                      * a replica that only wants RDB without replication buffer  */
+#define REPLICA_STATE_BG_RDB_LOAD 11 /* Main channel of a replica which uses dual channel replication. */
 
 /* Replica capabilities. */
 #define REPLICA_CAPA_NONE 0
-#define REPLICA_CAPA_EOF (1 << 0)    /* Can parse the RDB EOF streaming format. */
-#define REPLICA_CAPA_PSYNC2 (1 << 1) /* Supports PSYNC2 protocol. */
+#define REPLICA_CAPA_EOF (1 << 0)          /* Can parse the RDB EOF streaming format. */
+#define REPLICA_CAPA_PSYNC2 (1 << 1)       /* Supports PSYNC2 protocol. */
+#define REPLICA_CAPA_DUAL_CHANNEL (1 << 2) /* Supports dual channel replication sync */
 
 /* Replica requirements */
 #define REPLICA_REQ_NONE 0
 #define REPLICA_REQ_RDB_EXCLUDE_DATA (1 << 0)      /* Exclude data from RDB */
 #define REPLICA_REQ_RDB_EXCLUDE_FUNCTIONS (1 << 1) /* Exclude functions from RDB */
+#define REPLICA_REQ_RDB_CHANNEL (1 << 2)           /* Use dual-channel-replication */
 /* Mask of all bits in the replica requirements bitfield that represent non-standard (filtered) RDB requirements */
 #define REPLICA_REQ_RDB_MASK (REPLICA_REQ_RDB_EXCLUDE_DATA | REPLICA_REQ_RDB_EXCLUDE_FUNCTIONS)
 
@@ -1087,6 +1106,12 @@ typedef struct replBacklog {
                                   * byte in the replication backlog buffer.*/
 } replBacklog;
 
+typedef struct replDataBuf {
+    list *blocks; /* List of replDataBufBlock */
+    size_t len;   /* Number of bytes stored in all blocks */
+    size_t peak;
+} replDataBuf;
+
 typedef struct {
     list *clients;
     size_t mem_usage_sum;
@@ -1180,7 +1205,23 @@ typedef struct ClientFlags {
     uint64_t reprocessing_command : 1;     /* The client is re-processing the command. */
     uint64_t replication_done : 1;         /* Indicate that replication has been done on the client */
     uint64_t authenticated : 1;            /* Indicate a client has successfully authenticated */
-    uint64_t reserved : 9;                 /* Reserved for future use */
+    uint64_t
+        protected_rdb_channel : 1; /* Dual channel replication sync: Protects the RDB client from premature \
+                                    * release during full sync. This flag is used to ensure that the RDB client, which \
+                                    * references the first replication data block required by the replica, is not \
+                                    * released prematurely. Protecting the client is crucial for prevention of \
+                                    * synchronization failures: \
+                                    * If the RDB client is released before the replica initiates PSYNC, the primary \
+                                    * will reduce the reference count (o->refcount) of the block needed by the replica.
+                                    * \
+                                    * This could potentially lead to the removal of the required data block, resulting \
+                                    * in synchronization failures. Such failures could occur even in scenarios where \
+                                    * the replica only needs an additional 4KB beyond the minimum size of the
+                                    * repl_backlog.
+                                    * By using this flag, we ensure that the RDB client remains intact until the replica
+                                    * \ has successfully initiated PSYNC. */
+    uint64_t repl_rdb_channel : 1; /* Dual channel replication sync: track a connection which is used for rdb snapshot */
+    uint64_t reserved : 7;         /* Reserved for future use */
 } ClientFlags;
 
 typedef struct client {
@@ -1257,6 +1298,8 @@ typedef struct client {
     int replica_version;                 /* Version on the form 0xMMmmpp. */
     short replica_capa;                  /* Replica capabilities: REPLICA_CAPA_* bitwise OR. */
     short replica_req;                   /* Replica requirements: REPLICA_REQ_* */
+    uint64_t associated_rdb_client_id;   /* The client id of this replica's rdb connection */
+    time_t rdb_client_disconnect_time;   /* Time of the first freeClient call on this client. Used for delaying free. */
     multiState mstate;                   /* MULTI/EXEC state */
     blockingState bstate;                /* blocking state */
     long long woff;                      /* Last write global replication offset. */
@@ -1656,6 +1699,11 @@ struct valkeyServer {
     list *clients_pending_io_read;         /* List of clients with pending read to be process by I/O threads. */
     list *clients_pending_io_write;        /* List of clients with pending write to be process by I/O threads. */
     list *replicas, *monitors;             /* List of replicas and MONITORs */
+    rax *replicas_waiting_psync;           /* Radix tree for tracking replicas awaiting partial synchronization.
+                                            * Key: RDB client ID
+                                            * Value: RDB client object
+                                            * This structure holds dual-channel sync replicas from the start of their
+                                            * RDB transfer until their main channel establishes partial synchronization. */
     client *current_client;                /* The client that triggered the command execution (External or AOF). */
     client *executing_client;              /* The client executing the current command (possibly script or module). */
 
@@ -1698,6 +1746,7 @@ struct valkeyServer {
     off_t loading_loaded_bytes;
     time_t loading_start_time;
     off_t loading_process_events_interval_bytes;
+    time_t loading_process_events_interval_ms;
     /* Fields used only for stats */
     time_t stat_starttime;                         /* Server start time */
     long long stat_numcommands;                    /* Number of processed commands */
@@ -1930,6 +1979,7 @@ struct valkeyServer {
     int repl_ping_replica_period;              /* Primary pings the replica every N seconds */
     replBacklog *repl_backlog;                 /* Replication backlog for partial syncs */
     long long repl_backlog_size;               /* Backlog circular buffer size */
+    replDataBuf pending_repl_data;             /* Replication data buffer for dual-channel-replication */
     time_t repl_backlog_time_limit;            /* Time without replicas after the backlog
                                                   gets released. */
     time_t repl_no_replicas_since;             /* We have no replicas since that time.
@@ -1943,23 +1993,39 @@ struct valkeyServer {
     int repl_diskless_sync_delay;              /* Delay to start a diskless repl BGSAVE. */
     int repl_diskless_sync_max_replicas;       /* Max replicas for diskless repl BGSAVE
                                                 * delay (start sooner if they all connect). */
+    int dual_channel_replication;              /* Config used to determine if the replica should
+                                                * use dual channel replication for full syncs. */
+    int wait_before_rdb_client_free;           /* Grace period in seconds for replica main channel
+                                                * to establish psync. */
+    int debug_sleep_after_fork_us;             /* Debug param that force the main process to
+                                                * sleep for N microseconds after fork() in repl. */
     size_t repl_buffer_mem;                    /* The memory of replication buffer. */
     list *repl_buffer_blocks;                  /* Replication buffers blocks list
                                                 * (serving replica clients and repl backlog) */
     /* Replication (replica) */
-    char *primary_user;                 /* AUTH with this user and primary_auth with primary */
-    sds primary_auth;                   /* AUTH with this password with primary */
-    char *primary_host;                 /* Hostname of primary */
-    int primary_port;                   /* Port of primary */
-    int repl_timeout;                   /* Timeout after N seconds of primary idle */
-    client *primary;                    /* Client that is primary for this replica */
+    char *primary_user;     /* AUTH with this user and primary_auth with primary */
+    sds primary_auth;       /* AUTH with this password with primary */
+    char *primary_host;     /* Hostname of primary */
+    int primary_port;       /* Port of primary */
+    int repl_timeout;       /* Timeout after N seconds of primary idle */
+    client *primary;        /* Client that is primary for this replica */
+    uint64_t rdb_client_id; /* Rdb client id as it defined at primary side */
+    struct {
+        connection *conn;
+        char replid[CONFIG_RUN_ID_SIZE + 1];
+        long long reploff;
+        long long read_reploff;
+        int dbid;
+    } repl_provisional_primary;
     client *cached_primary;             /* Cached primary to be reused for PSYNC. */
     int repl_syncio_timeout;            /* Timeout for synchronous I/O calls */
     int repl_state;                     /* Replication status if the instance is a replica */
+    int repl_rdb_channel_state;         /* State of the replica's rdb channel during dual-channel-replication */
     off_t repl_transfer_size;           /* Size of RDB to read from primary during sync. */
     off_t repl_transfer_read;           /* Amount of RDB read from primary during sync. */
     off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */
     connection *repl_transfer_s;        /* Replica -> Primary SYNC connection */
+    connection *repl_rdb_transfer_s;    /* Primary FULL SYNC connection (RDB download) */
     int repl_transfer_fd;               /* Replica -> Primary SYNC temp file descriptor */
     char *repl_transfer_tmpfile;        /* Replica-> Primary SYNC temp file name */
     time_t repl_transfer_lastio;        /* Unix time of the latest read, for timeout */
@@ -2764,6 +2830,7 @@ int clientHasPendingReplies(client *c);
 int updateClientMemUsageAndBucket(client *c);
 void removeClientFromMemUsageBucket(client *c, int allow_eviction);
 void unlinkClient(client *c);
+void removeFromServerClientList(client *c);
 int writeToClient(client *c);
 void linkClient(client *c);
 void protectClient(client *c);
@@ -2965,6 +3032,8 @@ void clearFailoverState(void);
 void updateFailoverStatus(void);
 void abortFailover(const char *err);
 const char *getFailoverStateString(void);
+int sendCurrentOffsetToReplica(client *replica);
+void addRdbReplicaToPsyncWait(client *replica);
 
 /* Generic persistence functions */
 void startLoadingFile(size_t size, char *filename, int rdbflags);

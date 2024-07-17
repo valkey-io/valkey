@@ -2045,6 +2045,7 @@ void initServerConfig(void) {
     server.cached_primary = NULL;
     server.primary_initial_offset = -1;
     server.repl_state = REPL_STATE_NONE;
+    server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
     server.repl_transfer_tmpfile = NULL;
     server.repl_transfer_fd = -1;
     server.repl_transfer_s = NULL;
@@ -2052,6 +2053,8 @@ void initServerConfig(void) {
     server.repl_down_since = 0; /* Never connected, repl is down since EVER. */
     server.primary_repl_offset = 0;
     server.fsynced_reploff_pending = 0;
+    server.rdb_client_id = -1;
+    server.loading_process_events_interval_ms = LOADING_PROCESS_EVENTS_INTERVAL_DEFAULT;
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;
@@ -2545,6 +2548,8 @@ void initServer(void) {
     server.hz = server.config_hz;
     server.pid = getpid();
     server.in_fork_child = CHILD_TYPE_NONE;
+    server.rdb_pipe_read = -1;
+    server.rdb_child_exit_pipe = -1;
     server.main_thread_id = pthread_self();
     server.current_client = NULL;
     server.errors = raxNew();
@@ -2554,6 +2559,8 @@ void initServer(void) {
     server.clients_to_close = listCreate();
     server.replicas = listCreate();
     server.monitors = listCreate();
+    server.replicas_waiting_psync = raxNew();
+    server.wait_before_rdb_client_free = DEFAULT_WAIT_BEFORE_RDB_CLIENT_FREE;
     server.clients_pending_write = listCreate();
     server.clients_pending_io_write = listCreate();
     server.clients_pending_io_read = listCreate();
@@ -5140,6 +5147,7 @@ const char *replstateToString(int replstate) {
     switch (replstate) {
     case REPLICA_STATE_WAIT_BGSAVE_START:
     case REPLICA_STATE_WAIT_BGSAVE_END: return "wait_bgsave";
+    case REPLICA_STATE_BG_RDB_LOAD: return "bg_transfer";
     case REPLICA_STATE_SEND_BULK: return "send_bulk";
     case REPLICA_STATE_ONLINE: return "online";
     default: return "";
@@ -5699,7 +5707,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "master_last_io_seconds_ago:%d\r\n", server.primary ? ((int)(server.unixtime-server.primary->last_interaction)) : -1,
                 "master_sync_in_progress:%d\r\n", server.repl_state == REPL_STATE_TRANSFER,
                 "slave_read_repl_offset:%lld\r\n", replica_read_repl_offset,
-                "slave_repl_offset:%lld\r\n", replica_repl_offset));
+                "slave_repl_offset:%lld\r\n", replica_repl_offset,
+                "replicas_repl_buffer_size:%zu\r\n", server.pending_repl_data.len,
+                "replicas_repl_buffer_peak:%zu\r\n", server.pending_repl_data.peak));
             /* clang-format on */
 
             if (server.repl_state == REPL_STATE_TRANSFER) {
@@ -5759,14 +5769,18 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
 
                 info = sdscatprintf(info,
                                     "slave%d:ip=%s,port=%d,state=%s,"
-                                    "offset=%lld,lag=%ld\r\n",
+                                    "offset=%lld,lag=%ld,type=%s\r\n",
                                     replica_id, replica_ip, replica->replica_listening_port, state,
-                                    replica->repl_ack_off, lag);
+                                    replica->repl_ack_off, lag,
+                                    replica->flag.repl_rdb_channel                     ? "rdb-channel"
+                                    : replica->repl_state == REPLICA_STATE_BG_RDB_LOAD ? "main-channel"
+                                                                                       : "replica");
                 replica_id++;
             }
         }
         /* clang-format off */
         info = sdscatprintf(info, FMTARGS(
+            "replicas_waiting_psync:%llu\r\n", (unsigned long long)raxSize(server.replicas_waiting_psync),
             "master_failover_state:%s\r\n", getFailoverStateString(),
             "master_replid:%s\r\n", server.replid,
             "master_replid2:%s\r\n", server.replid2,

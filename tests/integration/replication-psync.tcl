@@ -8,7 +8,7 @@
 # If reconnect is > 0, the test actually try to break the connection and
 # reconnect with the master, otherwise just the initial synchronization is
 # checked for consistency.
-proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl dualchan reconnect} {
+proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl dualchannel reconnect} {
     start_server {tags {"repl"} overrides {save {}}} {
         start_server {overrides {save {}}} {
 
@@ -21,9 +21,9 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl dual
             $master config set repl-backlog-ttl $backlog_ttl
             $master config set repl-diskless-sync $mdl
             $master config set repl-diskless-sync-delay 1
-            $master config set dual-channel-replication-enabled $dualchan
+            $master config set dual-channel-replication-enabled $dualchannel
             $slave config set repl-diskless-load $sdl
-            $slave config set dual-channel-replication-enabled $dualchan
+            $slave config set dual-channel-replication-enabled $dualchannel
 
             set load_handle0 [start_bg_complex_data $master_host $master_port 9 100000]
             set load_handle1 [start_bg_complex_data $master_host $master_port 11 100000]
@@ -48,7 +48,7 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl dual
                 }
             }
 
-            test "Test replication partial resync: $descr (diskless: $mdl, $sdl, dual-channel: $dualchan, reconnect: $reconnect)" {
+            test "Test replication partial resync: $descr (diskless: $mdl, $sdl, dual-channel: $dualchannel, reconnect: $reconnect)" {
                 # Now while the clients are writing data, break the master-slave
                 # link multiple times.
                 if ($reconnect) {
@@ -114,25 +114,25 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl dual
 tags {"external:skip"} {
 foreach mdl {no yes} {
     foreach sdl {disabled swapdb} {
-        foreach dualchan {yes no} {
+        foreach dualchannel {yes no} {
             test_psync {no reconnection, just sync} 6 1000000 3600 0 {
-            } $mdl $sdl $dualchan 0
+            } $mdl $sdl $dualchannel 0
 
             test_psync {ok psync} 6 100000000 3600 0 {
             assert {[s -1 sync_partial_ok] > 0}
-            } $mdl $sdl $dualchan 1
+            } $mdl $sdl $dualchannel 1
 
             test_psync {no backlog} 6 100 3600 0.5 {
             assert {[s -1 sync_partial_err] > 0}
-            } $mdl $sdl $dualchan 1
+            } $mdl $sdl $dualchannel 1
 
             test_psync {ok after delay} 3 100000000 3600 3 {
             assert {[s -1 sync_partial_ok] > 0}
-            } $mdl $sdl $dualchan 1
+            } $mdl $sdl $dualchannel 1
 
             test_psync {backlog expired} 3 100000000 1 3 {
             assert {[s -1 sync_partial_err] > 0}
-            } $mdl $sdl $dualchan 1
+            } $mdl $sdl $dualchannel 1
         }
     }
 }

@@ -230,7 +230,7 @@ void addRdbReplicaToPsyncWait(client *replica_rdb_client) {
               tail ? "tracking repl-backlog tail" : "no repl-backlog to track");
     replica_rdb_client->ref_repl_buf_node = tail ? ln : NULL;
     /* Prevent rdb client from being freed before psync is established. */
-    replica_rdb_client->flag.protected_rdb_chan = 1;
+    replica_rdb_client->flag.protected_rdb_channel = 1;
     uint64_t id = htonu64(replica_rdb_client->id);
     raxInsert(server.replicas_waiting_psync, (unsigned char *)&id, sizeof(id), replica_rdb_client, NULL);
 }
@@ -268,7 +268,7 @@ void removeReplicaFromPsyncWait(client *replica_main_client) {
         o->refcount--;
     }
     replica_rdb_client->ref_repl_buf_node = NULL;
-    replica_rdb_client->flag.protected_rdb_chan = 0;
+    replica_rdb_client->flag.protected_rdb_channel = 0;
     serverLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu, repl buffer block %s",
               replicationGetReplicaName(replica_main_client),
               (long long unsigned int)replica_main_client->associated_rdb_client_id,
@@ -386,7 +386,7 @@ void incrementalTrimReplicationBacklog(size_t max_blocks) {
 
 /* Free replication buffer blocks that are referenced by this client. */
 void freeReplicaReferencedReplBuffer(client *replica) {
-    if (replica->flag.repl_rdb_chan) {
+    if (replica->flag.repl_rdb_channel) {
         uint64_t rdb_cid = htonu64(replica->id);
         if (raxRemove(server.replicas_waiting_psync, (unsigned char *)&rdb_cid, sizeof(rdb_cid), NULL)) {
             serverLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu from replicas rax.",
@@ -479,7 +479,7 @@ void feedReplicationBuffer(char *s, size_t len) {
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
             client *replica = ln->value;
-            if (!canFeedReplicaReplBuffer(replica) && !(replica->flag.protected_rdb_chan)) continue;
+            if (!canFeedReplicaReplBuffer(replica) && !(replica->flag.protected_rdb_channel)) continue;
             /* Update shared replication buffer start position. */
             if (replica->ref_repl_buf_node == NULL) {
                 replica->ref_repl_buf_node = start_node;
@@ -1107,7 +1107,7 @@ void syncCommand(client *c) {
                           "Replica %s is capable of dual channel synchronization, and partial sync isn't possible. "
                           "Full sync will continue with dedicated RDB channel.",
                           replicationGetReplicaName(c));
-                const char *buf = "+DUALCHANNSYNC\r\n";
+                const char *buf = "+DUALCHANNELSYNC\r\n";
                 if (connWrite(c->conn, buf, strlen(buf)) != (int)strlen(buf)) {
                     freeClientAsync(c);
                 }
@@ -1251,7 +1251,7 @@ void syncCommand(client *c) {
  * - version <major.minor.patch>
  * The replica reports its version.
  *
- * - rdb-chan <1|0>
+ * - rdb-channel <1|0>
  * Used to identify the client as a replica's rdb connection in an dual channel
  * sync session.
  * */
@@ -1376,17 +1376,17 @@ void replconfCommand(client *c) {
                 addReplyErrorFormat(c, "Unrecognized version format: %s", (char *)c->argv[j + 1]->ptr);
                 return;
             }
-        } else if (!strcasecmp(c->argv[j]->ptr, "rdb-chan")) {
+        } else if (!strcasecmp(c->argv[j]->ptr, "rdb-channel")) {
             long start_with_offset = 0;
             if (getRangeLongFromObjectOrReply(c, c->argv[j + 1], 0, 1, &start_with_offset, NULL) != C_OK) {
                 return;
             }
             if (start_with_offset == 1) {
-                c->flag.repl_rdb_chan = 1;
-                c->replica_req |= REPLICA_REQ_RDB_CHAN;
+                c->flag.repl_rdb_channel = 1;
+                c->replica_req |= REPLICA_REQ_RDB_CHANNEL;
             } else {
-                c->flag.repl_rdb_chan = 0;
-                c->replica_req &= ~REPLICA_REQ_RDB_CHAN;
+                c->flag.repl_rdb_channel = 0;
+                c->replica_req &= ~REPLICA_REQ_RDB_CHANNEL;
             }
         } else if (!strcasecmp(c->argv[j]->ptr, "set-rdb-client-id")) {
             /* REPLCONF identify <client-id> is used to identify the current replica main channel with existing
@@ -2514,7 +2514,7 @@ void freePendingReplDataBuf(void) {
  * Upon dual-channel sync failure, close rdb-connection, reset repl-state, reset
  * provisional primary struct, and free local replication buffer. */
 void replicationAbortDualChannelSyncTransfer(void) {
-    serverAssert(server.repl_rdb_chan_state != REPL_DUAL_CHAN_STATE_NONE);
+    serverAssert(server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE);
     serverLog(LL_NOTICE, "Aborting dual channel sync");
     if (server.repl_rdb_transfer_s) {
         connClose(server.repl_rdb_transfer_s);
@@ -2526,7 +2526,7 @@ void replicationAbortDualChannelSyncTransfer(void) {
         close(server.repl_transfer_fd);
         server.repl_transfer_fd = -1;
     }
-    server.repl_rdb_chan_state = REPL_DUAL_CHAN_STATE_NONE;
+    server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
     server.repl_provisional_primary.read_reploff = 0;
     server.repl_provisional_primary.reploff = 0;
     server.repl_provisional_primary.conn = NULL;
@@ -2573,7 +2573,7 @@ static void fullSyncWithPrimary(connection *conn) {
         goto error;
     }
     /* Send replica capabilities */
-    if (server.repl_rdb_chan_state == REPL_DUAL_CHAN_SEND_HANDSHAKE) {
+    if (server.repl_rdb_channel_state == REPL_DUAL_CHANNEL_SEND_HANDSHAKE) {
         serverLog(LL_DEBUG, "Received first reply from primary using rdb connection.");
         /* AUTH with the primary if required. */
         if (server.primary_auth) {
@@ -2596,14 +2596,14 @@ static void fullSyncWithPrimary(connection *conn) {
         }
         /* Send replica lisening port to primary for clarification */
         sds portstr = getReplicaPortString();
-        err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-chan", "1", "listening-port", portstr,
+        err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port", portstr,
                           NULL);
         sdsfree(portstr);
         if (err) {
             serverLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", err);
             return;
         }
-        server.repl_rdb_chan_state = REPL_DUAL_CHAN_RECEIVE_AUTH_REPLY;
+        server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RECEIVE_AUTH_REPLY;
 
         if (connSetReadHandler(conn, fullSyncWithPrimary) == C_ERR) {
             char conninfo[CONN_INFO_LEN];
@@ -2613,11 +2613,11 @@ static void fullSyncWithPrimary(connection *conn) {
         }
         return;
     }
-    if (server.repl_rdb_chan_state == REPL_DUAL_CHAN_RECEIVE_AUTH_REPLY && !server.primary_auth) {
-        server.repl_rdb_chan_state = REPL_DUAL_CHAN_RECEIVE_REPLCONF_REPLY;
+    if (server.repl_rdb_channel_state == REPL_DUAL_CHANNEL_RECEIVE_AUTH_REPLY && !server.primary_auth) {
+        server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RECEIVE_REPLCONF_REPLY;
     }
     /* Receive AUTH reply. */
-    if (server.repl_rdb_chan_state == REPL_DUAL_CHAN_RECEIVE_AUTH_REPLY) {
+    if (server.repl_rdb_channel_state == REPL_DUAL_CHANNEL_RECEIVE_AUTH_REPLY) {
         err = receiveSynchronousResponse(conn);
         if (err == NULL) {
             serverLog(LL_WARNING, "Primary did not respond to auth command during SYNC handshake");
@@ -2628,11 +2628,11 @@ static void fullSyncWithPrimary(connection *conn) {
             goto error;
         }
         sdsfree(err);
-        server.repl_rdb_chan_state = REPL_DUAL_CHAN_RECEIVE_REPLCONF_REPLY;
+        server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RECEIVE_REPLCONF_REPLY;
         return;
     }
     /* Receive replconf response */
-    if (server.repl_rdb_chan_state == REPL_DUAL_CHAN_RECEIVE_REPLCONF_REPLY) {
+    if (server.repl_rdb_channel_state == REPL_DUAL_CHANNEL_RECEIVE_REPLCONF_REPLY) {
         err = receiveSynchronousResponse(conn);
         if (err == NULL) {
             serverLog(LL_WARNING, "Primary did not respond to replconf command during SYNC handshake");
@@ -2649,11 +2649,11 @@ static void fullSyncWithPrimary(connection *conn) {
             goto error;
         }
         sdsfree(err);
-        server.repl_rdb_chan_state = REPL_DUAL_CHAN_RECEIVE_ENDOFF;
+        server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RECEIVE_ENDOFF;
         return;
     }
     /* Receive end offset response */
-    if (server.repl_rdb_chan_state == REPL_DUAL_CHAN_RECEIVE_ENDOFF) {
+    if (server.repl_rdb_channel_state == REPL_DUAL_CHANNEL_RECEIVE_ENDOFF) {
         int64_t rdb_client_id;
         err = receiveSynchronousResponse(conn);
         if (err == NULL) goto error;
@@ -2697,7 +2697,7 @@ static void fullSyncWithPrimary(connection *conn) {
         server.repl_transfer_last_fsync_off = 0;
         server.repl_transfer_lastio = server.unixtime;
 
-        server.repl_rdb_chan_state = REPL_DUAL_CHAN_RDB_LOAD;
+        server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RDB_LOAD;
         return;
     }
 
@@ -2870,7 +2870,7 @@ void dualChannelSyncSuccess(void) {
     replicationSteadyStateInit();
     replicationSendAck(); /* Send ACK to notify primary that replica is synced */
     server.rdb_client_id = -1;
-    server.repl_rdb_chan_state = REPL_DUAL_CHAN_STATE_NONE;
+    server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
 }
 
 /* Replication: Replica side.
@@ -2878,7 +2878,7 @@ void dualChannelSyncSuccess(void) {
  * has completed its part and act accordingly. */
 void dualChannelSyncHandlePsync(void) {
     serverAssert(server.repl_state == REPL_STATE_RECEIVE_PSYNC_REPLY);
-    if (server.repl_rdb_chan_state < REPL_DUAL_CHAN_RDB_LOADED) {
+    if (server.repl_rdb_channel_state < REPL_DUAL_CHANNEL_RDB_LOADED) {
         /* RDB is still loading */
         if (connSetReadHandler(server.repl_provisional_primary.conn, bufferReplData) == C_ERR) {
             serverLog(LL_WARNING, "Error while setting readable handler: %s", strerror(errno));
@@ -2889,7 +2889,7 @@ void dualChannelSyncHandlePsync(void) {
         server.repl_state = REPL_STATE_TRANSFER;
         return;
     }
-    serverAssert(server.repl_rdb_chan_state == REPL_DUAL_CHAN_RDB_LOADED);
+    serverAssert(server.repl_rdb_channel_state == REPL_DUAL_CHANNEL_RDB_LOADED);
     /* RDB is loaded */
     serverLog(LL_DEBUG, "Dual channel sync - psync established after rdb load");
     dualChannelSyncSuccess();
@@ -2900,10 +2900,10 @@ void dualChannelSyncHandlePsync(void) {
  * RDB channel done loading the RDB. Check whether the main channel has completed its part
  * and act accordingly. */
 void dualChannelSyncHandleRdbLoadCompletion(void) {
-    serverAssert(server.repl_rdb_chan_state == REPL_DUAL_CHAN_RDB_LOAD);
+    serverAssert(server.repl_rdb_channel_state == REPL_DUAL_CHANNEL_RDB_LOAD);
     if (server.repl_state < REPL_STATE_TRANSFER) {
         /* Main psync channel hasn't been established yet */
-        server.repl_rdb_chan_state = REPL_DUAL_CHAN_RDB_LOADED;
+        server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RDB_LOADED;
         return;
     }
     serverAssert(server.repl_state == REPL_STATE_TRANSFER);
@@ -2966,7 +2966,7 @@ void dualChannelSyncHandleRdbLoadCompletion(void) {
 #define PSYNC_FULLRESYNC 3
 #define PSYNC_NOT_SUPPORTED 4
 #define PSYNC_TRY_LATER 5
-#define PSYNC_FULLRESYNC_RDB_CHAN 6
+#define PSYNC_FULLRESYNC_RDB_CHANNEL 6
 int replicaTryPartialResynchronization(connection *conn, int read_reply) {
     char *psync_replid;
     char psync_offset[32];
@@ -2981,7 +2981,7 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
          * client structure representing the primary into server.primary. */
         server.primary_initial_offset = -1;
 
-        if (server.repl_rdb_chan_state != REPL_DUAL_CHAN_STATE_NONE) {
+        if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
             /* While in dual channel replication, we should use our prepared repl id and offset. */
             psync_replid = server.repl_provisional_primary.replid;
             snprintf(psync_offset, sizeof(psync_offset), "%lld", server.repl_provisional_primary.reploff + 1);
@@ -3063,7 +3063,7 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
     }
 
     if (!strncmp(reply, "+CONTINUE", 9)) {
-        if (server.repl_rdb_chan_state != REPL_DUAL_CHAN_STATE_NONE) {
+        if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
             /* During dual channel sync sesseion, primary struct is already initialized. */
             sdsfree(reply);
             return PSYNC_CONTINUE;
@@ -3129,13 +3129,13 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
         return PSYNC_TRY_LATER;
     }
 
-    if (!strncmp(reply, "+DUALCHANNSYNC", strlen("+DUALCHANNSYNC"))) {
-        /* A response of +DUALCHANNSYNC from the primary implies that partial
+    if (!strncmp(reply, "+DUALCHANNELSYNC", strlen("+DUALCHANNELSYNC"))) {
+        /* A response of +DUALCHANNELSYNC from the primary implies that partial
          * synchronization is not possible and that the primary supports full
          * sync using dedicated RDB channel. Full sync will continue that way. */
         serverLog(LL_NOTICE, "PSYNC is not possible, initialize RDB channel.");
         sdsfree(reply);
-        return PSYNC_FULLRESYNC_RDB_CHAN;
+        return PSYNC_FULLRESYNC_RDB_CHANNEL;
     }
 
     if (strncmp(reply, "-ERR", 4)) {
@@ -3229,7 +3229,7 @@ error:
  *  - Dual channel sync begins when the replica sends a REPLCONF capa dual-channel to the primary during initial
  *    handshake. This allows the replica to verify whether the primary supports dual-channel-replication and, if
  *    so, state that this is the replica's main channel, which is not used for snapshot transfer.
- *  - When replica lacks sufficient data for PSYNC, the primary will send +DUALCHANNSYNC response instead
+ *  - When replica lacks sufficient data for PSYNC, the primary will send +DUALCHANNELSYNC response instead
  *    of RDB data. As a next step, the replica creates a new channel (rdb-channel) and configures it against
  *    the primary with the appropriate capabilities and requirements. The replica then requests a sync
  *    using the RDB channel.
@@ -3247,29 +3247,29 @@ error:
  * │RECEIVE_PING_REPLY │          ┌──────────────────────────────────────────────────────────────┐
  * └────────┬──────────┘          │     RDB channel states               Main channel state      │
  *          │+PONG                │     ┌────────────────────────────┐   ┌───────────────────┐   │
- * ┌────────▼──────────┐        ┌─┼─────►DUAL_CHAN_SEND_HANDSHAKE    │ ┌─►SEND_HANDSHAKE     │   │
+ * ┌────────▼──────────┐        ┌─┼─────►DUAL_CHANNEL_SEND_HANDSHAKE    │ ┌─►SEND_HANDSHAKE     │   │
  * │SEND_HANDSHAKE     │        │ │     └────┬───────────────────────┘ │ └──┬────────────────┘   │
  * └────────┬──────────┘        │ │          │                         │    │REPLCONF set-rdb-client-id
  *          │                   │ │  ┌───────▼───────────────────────┐ │ ┌──▼────────────────┐   │
- * ┌────────▼──────────┐        │ │  │DUAL_CHAN_RECEIVE_AUTH_REPLY   │ │ │RECEIVE_CAPA_REPLY │   │
+ * ┌────────▼──────────┐        │ │  │DUAL_CHANNEL_RECEIVE_AUTH_REPLY   │ │ │RECEIVE_CAPA_REPLY │   │
  * │RECEIVE_AUTH_REPLY │        │ │  └───────┬───────────────────────┘ │ └──┬────────────────┘   │
  * └────────┬──────────┘        │ │          │+OK                      │    │+OK                 │
  *          │+OK                │ │  ┌───────▼───────────────────────┐ │ ┌──▼────────────────┐   │
- * ┌────────▼──────────┐        │ │  │DUAL_CHAN_RECEIVE_REPLCONF_REP.│ │ │SEND_PSYNC         │   │
+ * ┌────────▼──────────┐        │ │  │DUAL_CHANNEL_RECEIVE_REPLCONF_REP.│ │ │SEND_PSYNC         │   │
  * │RECEIVE_PORT_REPLY │        │ │  └───────┬───────────────────────┘ │ └──┬────────────────┘   │
  * └────────┬──────────┘        │ │          │+OK                      │    │PSYNC use snapshot  │
  *          │+OK                │ │  ┌───────▼────────────────┐        │    │end-offset provided │
- * ┌────────▼──────────┐        │ │  │DUAL_CHAN_RECEIVE_ENDOFF│        │    │by the primary      │
+ * ┌────────▼──────────┐        │ │  │DUAL_CHANNEL_RECEIVE_ENDOFF│        │    │by the primary      │
  * │RECEIVE_IP_REPLY   │        │ │  └───────┬────────────────┘        │ ┌──▼────────────────┐   │
  * └────────┬──────────┘        │ │          │$ENDOFF                  │ │RECEIVE_PSYNC_REPLY│   │
  *          │+OK                │ │          ├─────────────────────────┘ └──┬────────────────┘   │
  * ┌────────▼──────────┐        │ │          │                              │+CONTINUE           │
  * │RECEIVE_IP_REPLY   │        │ │  ┌───────▼───────────────┐           ┌──▼────────────────┐   │
- * └────────┬──────────┘        │ │  │DUAL_CHAN_RDB_LOAD     │           │TRANSFER           │   │
+ * └────────┬──────────┘        │ │  │DUAL_CHANNEL_RDB_LOAD     │           │TRANSFER           │   │
  *          │+OK                │ │  └───────┬───────────────┘           └─────┬─────────────┘   │
  * ┌────────▼────────────────┐  │ │          │Done loading                     │                 │
  * │RECEIVE_DUAL_CHANNEL_REP.│  │ │  ┌───────▼───────────────┐                 │                 │
- * └─┬────┬──────────────────┘  │ │  │DUAL_CHAN_RDB_LOADED   │                 │                 │
+ * └─┬────┬──────────────────┘  │ │  │DUAL_CHANNEL_RDB_LOADED   │                 │                 │
  *   │+OK │Unrecognized REPLCONF│ │  └───────┬───────────────┘                 │                 │
  * ┌─▼────▼────────────┐        │ │          │                                 │                 │
  * │RECEIVE_CAPA_REPLY │        │ │          │Replica loads local replication  │                 │
@@ -3282,7 +3282,7 @@ error:
  * ┌─▼─────────────────┐        │                           │
  * │RECEIVE_PSYNC_REPLY│        │                           │
  * └────────┬─┬────────┘        │                           │
- * +CONTINUE│ │+DUALCHANNSYNC   |                           │
+ * +CONTINUE│ │+DUALCHANNELSYNC |                           │
  *   │      │ └─────────────────┘                           │
  *   │      │+FULLRESYNC                                    │
  *   │    ┌─▼─────────────────┐                   ┌─────────▼─────────┐
@@ -3597,9 +3597,9 @@ void syncWithPrimary(connection *conn) {
         server.repl_transfer_fd = dfd;
     }
 
-    /* Using dual-channel-replication, the primary responded +DUALCHANNSYNC. We need to
+    /* Using dual-channel-replication, the primary responded +DUALCHANNELSYNC. We need to
      * initialize the RDB channel. */
-    if (psync_result == PSYNC_FULLRESYNC_RDB_CHAN) {
+    if (psync_result == PSYNC_FULLRESYNC_RDB_CHANNEL) {
         /* Create RDB connection */
         server.repl_rdb_transfer_s = connCreate(connTypeOfReplication());
         if (connConnect(server.repl_rdb_transfer_s, server.primary_host, server.primary_port, server.bind_source_addr,
@@ -3615,7 +3615,7 @@ void syncWithPrimary(connection *conn) {
                       connGetInfo(conn, conninfo, sizeof(conninfo)));
             goto error;
         }
-        server.repl_rdb_chan_state = REPL_DUAL_CHAN_SEND_HANDSHAKE;
+        server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_SEND_HANDSHAKE;
         return;
     }
     /* Setup the non blocking download of the bulk file. */
@@ -3708,7 +3708,7 @@ void replicationAbortSyncTransfer(void) {
  *
  * Otherwise zero is returned and no operation is performed at all. */
 int cancelReplicationHandshake(int reconnect) {
-    if (server.repl_rdb_chan_state != REPL_DUAL_CHAN_STATE_NONE) {
+    if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
         replicationAbortDualChannelSyncTransfer();
     }
     if (server.repl_state == REPL_STATE_TRANSFER) {

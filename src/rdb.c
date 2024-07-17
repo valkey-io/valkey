@@ -3510,7 +3510,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
     listIter li;
     pid_t childpid;
     int pipefds[2], rdb_pipe_write, safe_to_exit_pipe;
-    int dual_channel = (req & REPLICA_REQ_RDB_CHAN);
+    int dual_channel = (req & REPLICA_REQ_RDB_CHANNEL);
 
     if (hasActiveChildProcess()) return C_ERR;
     serverAssert(server.rdb_pipe_read == -1 && server.rdb_child_exit_pipe == -1);

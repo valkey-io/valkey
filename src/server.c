@@ -2045,7 +2045,7 @@ void initServerConfig(void) {
     server.cached_primary = NULL;
     server.primary_initial_offset = -1;
     server.repl_state = REPL_STATE_NONE;
-    server.repl_rdb_chan_state = REPL_DUAL_CHAN_STATE_NONE;
+    server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
     server.repl_transfer_tmpfile = NULL;
     server.repl_transfer_fd = -1;
     server.repl_transfer_s = NULL;
@@ -5813,8 +5813,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                                     "offset=%lld,lag=%ld,type=%s\r\n",
                                     replica_id, replica_ip, replica->replica_listening_port, state,
                                     replica->repl_ack_off, lag,
-                                    replica->flag.repl_rdb_chan                        ? "rdb-chan"
-                                    : replica->repl_state == REPLICA_STATE_BG_RDB_LOAD ? "main-chan"
+                                    replica->flag.repl_rdb_channel                        ? "rdb-channel"
+                                    : replica->repl_state == REPLICA_STATE_BG_RDB_LOAD ? "main-channel"
                                                                                        : "replica");
                 replica_id++;
             }

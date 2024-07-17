@@ -5571,21 +5571,6 @@ int getSlotOrReply(client *c, robj *o) {
     return (int)slot;
 }
 
-/* This method returns the primary node which is healthy/active. Returns NULL if there is none. */
-static clusterNode *clusterNodeGetHealthyPrimary(clusterNode *node) {
-    listIter li;
-    listNode *ln;
-    list *nodes = clusterGetNodesInMyShard(node);
-    listRewind(nodes, &li);
-    while ((ln = listNext(&li))) {
-        clusterNode *node = listNodeValue(ln);
-        if (clusterNodeIsPrimary(node) && !nodeFailed(node)) {
-            return node;
-        }
-    }
-    return NULL;
-}
-
 int checkSlotAssignmentsOrReply(client *c, unsigned char *slots, int del, int start_slot, int end_slot) {
     int slot;
     for (slot = start_slot; slot <= end_slot; slot++) {
@@ -5690,14 +5675,23 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
 /* Add the shard reply of a single shard based off the given primary node. */
 void addShardReplyForClusterShards(client *c, list *nodes) {
     serverAssert(listLength(nodes) > 0);
-    clusterNode *n = listNodeValue(listFirst(nodes));
     addReplyMapLen(c, 2);
     addReplyBulkCString(c, "slots");
 
-    /* Use slot_info_pairs from the primary only */
-    n = clusterNodeGetHealthyPrimary(n);
+    /* Find a node which has the slot information served by this shard.
+     * Note: `clusterGenNodesSlotsInfo` is invoked prior to this method call for pre-computation of slot_info_pairs
+     * for the entire cluster. */
+    clusterNode *n = NULL;
+    listIter li;
+    listRewind(nodes, &li);
+    for (listNode *ln = listNext(&li); ln != NULL; ln = listNext(&li)) {
+        n = listNodeValue(ln);
+        if (n->slot_info_pairs) {
+            break;
+        }
+    }
 
-    if (n->slot_info_pairs != NULL) {
+    if (n && n->slot_info_pairs != NULL) {
         serverAssert((n->slot_info_pairs_count % 2) == 0);
         addReplyArrayLen(c, n->slot_info_pairs_count);
         for (int i = 0; i < n->slot_info_pairs_count; i++) addReplyLongLong(c, (unsigned long)n->slot_info_pairs[i]);
@@ -5708,7 +5702,6 @@ void addShardReplyForClusterShards(client *c, list *nodes) {
 
     addReplyBulkCString(c, "nodes");
     addReplyArrayLen(c, listLength(nodes));
-    listIter li;
     listRewind(nodes, &li);
     for (listNode *ln = listNext(&li); ln != NULL; ln = listNext(&li)) {
         clusterNode *n = listNodeValue(ln);

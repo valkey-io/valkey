@@ -975,7 +975,7 @@ typedef struct multiState {
 } multiState;
 
 /* This structure holds the blocking operation state for a client.
- * The fields used depend on client->btype. */
+ * The fields used depend on client->bstate.btype. */
 typedef struct blockingState {
     /* Generic fields. */
     blocking_type btype;  /* Type of blocking op if CLIENT_BLOCKED. */
@@ -983,6 +983,7 @@ typedef struct blockingState {
                            * is > timeout then the operation timed out. */
     int unblock_on_nokey; /* Whether to unblock the client when at least one of the keys
                              is deleted or does not exist anymore */
+
     /* BLOCKED_LIST, BLOCKED_ZSET and BLOCKED_STREAM or any other Keys related blocking */
     dict *keys; /* The keys we are blocked on */
 
@@ -990,6 +991,7 @@ typedef struct blockingState {
     int numreplicas;      /* Number of replicas we are waiting for ACK. */
     int numlocal;         /* Indication if WAITAOF is waiting for local fsync. */
     long long reploffset; /* Replication offset to reach. */
+    listNode *client_waiting_acks_list_node; /* list node in server.clients_waiting_acks list. */
 
     /* BLOCKED_MODULE */
     void *module_blocked_handle; /* ValkeyModuleBlockedClient structure.
@@ -1267,14 +1269,13 @@ typedef struct client {
     sds peerid;                          /* Cached peer ID. */
     sds sockname;                        /* Cached connection target address. */
     listNode *client_list_node;          /* list node in client list */
-    listNode *client_waiting_acks_list_node;   /* list node in client waiting acks list. */
-    listNode *postponed_list_node;             /* list node within the postponed list */
-    void *module_blocked_client;               /* Pointer to the ValkeyModuleBlockedClient associated with this
-                                                * client. This is set in case of module authentication before the
-                                                * unblocked client is reprocessed to handle reply callbacks. */
-    void *module_auth_ctx;                     /* Ongoing / attempted module based auth callback's ctx.
-                                                * This is only tracked within the context of the command attempting
-                                                * authentication. If not NULL, it means module auth is in progress. */
+    listNode *postponed_list_node;       /* list node within the postponed list */
+    void *module_blocked_client;         /* Pointer to the ValkeyModuleBlockedClient associated with this
+                                          * client. This is set in case of module authentication before the
+                                          * unblocked client is reprocessed to handle reply callbacks. */
+    void *module_auth_ctx;               /* Ongoing / attempted module based auth callback's ctx.
+                                          * This is only tracked within the context of the command attempting
+                                          * authentication. If not NULL, it means module auth is in progress. */
     ValkeyModuleUserChangedFunc auth_callback; /* Module callback to execute
                                                 * when the authenticated user
                                                 * changes. */

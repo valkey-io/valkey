@@ -3390,6 +3390,7 @@ void syncWithPrimary(connection *conn) {
         /* Announce that the replica is capable of dual channel sync. */
         if (server.dual_channel_replication) {
             err = sendCommand(conn, "REPLCONF", "capa", "dual-channel", NULL);
+            if (err) goto write_error;
         }
 
         /* Inform the primary of our (replica) capabilities.

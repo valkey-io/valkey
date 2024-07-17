@@ -988,9 +988,9 @@ typedef struct blockingState {
     dict *keys; /* The keys we are blocked on */
 
     /* BLOCKED_WAIT and BLOCKED_WAITAOF */
-    int numreplicas;      /* Number of replicas we are waiting for ACK. */
-    int numlocal;         /* Indication if WAITAOF is waiting for local fsync. */
-    long long reploffset; /* Replication offset to reach. */
+    int numreplicas;                         /* Number of replicas we are waiting for ACK. */
+    int numlocal;                            /* Indication if WAITAOF is waiting for local fsync. */
+    long long reploffset;                    /* Replication offset to reach. */
     listNode *client_waiting_acks_list_node; /* list node in server.clients_waiting_acks list. */
 
     /* BLOCKED_MODULE */

@@ -928,7 +928,7 @@ void ldbEndSession(client *c) {
 
     /* If it's a fork()ed session, we just exit. */
     if (ldb.forked) {
-        writeToClient(c, 0);
+        writeToClient(c);
         serverLog(LL_NOTICE, "Lua debugging session child exiting");
         exitFromChild(0);
     } else {

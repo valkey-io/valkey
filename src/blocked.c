@@ -146,7 +146,7 @@ void processUnblockedClients(void) {
         if (!c->flag.blocked) {
             /* If we have a queued command, execute it now. */
             if (processPendingCommandAndInputBuffer(c) == C_ERR) {
-                c = NULL;
+                continue;
             }
         }
         beforeNextClient(c);

@@ -765,9 +765,11 @@ int primaryTryPartialResynchronization(client *c, long long psync_offset) {
     }
 
     /* If we reached this point, we are able to perform a partial resync:
-     * 1) Set client state to make it a replica.
-     * 2) Inform the client we can continue with +CONTINUE
-     * 3) Send the backlog data (from the offset to the end) to the replica. */
+     * 1) Make sure no IO operations are being performed before changing the client state.
+     * 2) Set client state to make it a replica.
+     * 3) Inform the client we can continue with +CONTINUE
+     * 4) Send the backlog data (from the offset to the end) to the replica. */
+    waitForClientIO(c);
     c->flag.replica = 1;
     c->repl_state = REPLICA_STATE_ONLINE;
     c->repl_ack_time = server.unixtime;
@@ -1009,6 +1011,8 @@ void syncCommand(client *c) {
     c->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
     if (server.repl_disable_tcp_nodelay) connDisableTcpNoDelay(c->conn); /* Non critical if it fails. */
     c->repldbfd = -1;
+    /* Wait for any IO pending operation to finish before changing the client state */
+    waitForClientIO(c);
     c->flag.replica = 1;
     listAddNodeTail(server.replicas, c);
 
@@ -1377,7 +1381,7 @@ void sendBulkToReplica(connection *conn) {
             freeClient(replica);
             return;
         }
-        atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes, nwritten, memory_order_relaxed);
+        server.stat_net_repl_output_bytes += nwritten;
         sdsrange(replica->replpreamble, nwritten, -1);
         if (sdslen(replica->replpreamble) == 0) {
             sdsfree(replica->replpreamble);
@@ -1405,7 +1409,7 @@ void sendBulkToReplica(connection *conn) {
         return;
     }
     replica->repldboff += nwritten;
-    atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes, nwritten, memory_order_relaxed);
+    server.stat_net_repl_output_bytes += nwritten;
     if (replica->repldboff == replica->repldbsize) {
         closeRepldbfd(replica);
         connSetWriteHandler(replica->conn, NULL);
@@ -1447,7 +1451,7 @@ void rdbPipeWriteHandler(struct connection *conn) {
         return;
     } else {
         replica->repldboff += nwritten;
-        atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes, nwritten, memory_order_relaxed);
+        server.stat_net_repl_output_bytes += nwritten;
         if (replica->repldboff < server.rdb_pipe_bufflen) {
             replica->repl_last_partial_write = server.unixtime;
             return; /* more data to write.. */
@@ -1520,7 +1524,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
                 /* Note: when use diskless replication, 'repldboff' is the offset
                  * of 'rdb_pipe_buff' sent rather than the offset of entire RDB. */
                 replica->repldboff = nwritten;
-                atomic_fetch_add_explicit(&server.stat_net_repl_output_bytes, nwritten, memory_order_relaxed);
+                server.stat_net_repl_output_bytes += nwritten;
             }
             /* If we were unable to write all the data to one of the replicas,
              * setup write handler (and disable pipe read handler, below) */
@@ -1831,7 +1835,7 @@ void readSyncBulkPayload(connection *conn) {
         } else {
             /* nread here is returned by connSyncReadLine(), which calls syncReadLine() and
              * convert "\r\n" to '\0' so 1 byte is lost. */
-            atomic_fetch_add_explicit(&server.stat_net_repl_input_bytes, nread + 1, memory_order_relaxed);
+            server.stat_net_repl_input_bytes += nread + 1;
         }
 
         if (buf[0] == '-') {
@@ -1900,7 +1904,7 @@ void readSyncBulkPayload(connection *conn) {
             cancelReplicationHandshake(1);
             return;
         }
-        atomic_fetch_add_explicit(&server.stat_net_repl_input_bytes, nread, memory_order_relaxed);
+        server.stat_net_repl_input_bytes += nread;
 
         /* When a mark is used, we want to detect EOF asap in order to avoid
          * writing the EOF mark into the file... */

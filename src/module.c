@@ -8950,6 +8950,14 @@ size_t VM_GetClusterSize(void) {
     return getClusterSize();
 }
 
+int moduleGetClusterNodeInfoForClient(ValkeyModuleCtx *ctx,
+                                      client *c,
+                                      const char *node_id,
+                                      char *ip,
+                                      char *primary_id,
+                                      int *port,
+                                      int *flags);
+
 /* Populate the specified info for the node having as ID the specified 'id',
  * then returns VALKEYMODULE_OK. Otherwise if the format of node ID is invalid
  * or the node ID does not exist from the POV of this local node, VALKEYMODULE_ERR
@@ -8971,14 +8979,41 @@ size_t VM_GetClusterSize(void) {
  * * VALKEYMODULE_NODE_NOFAILOVER:   The replica is configured to never failover
  */
 int VM_GetClusterNodeInfo(ValkeyModuleCtx *ctx, const char *id, char *ip, char *primary_id, int *port, int *flags) {
+    return moduleGetClusterNodeInfoForClient(ctx, NULL, id, ip, primary_id, port, flags);
+}
+
+/* Like VM_GetClusterNodeInfo(), but returns IP address specifically for the given
+ * client, depending on whether the client is connected over IPv4 or IPv6.
+ *
+ * See also VM_GetClientId(). */
+int VM_GetClusterNodeInfoForClient(ValkeyModuleCtx *ctx,
+                                   uint64_t client_id,
+                                   const char *node_id,
+                                   char *ip,
+                                   char *primary_id,
+                                   int *port,
+                                   int *flags) {
+    client *c = lookupClientByID(client_id);
+    if (c == NULL) return VALKEYMODULE_ERR;
+    return moduleGetClusterNodeInfoForClient(ctx, c, node_id, ip, primary_id, port, flags);
+}
+
+
+int moduleGetClusterNodeInfoForClient(ValkeyModuleCtx *ctx,
+                                      client *c,
+                                      const char *node_id,
+                                      char *ip,
+                                      char *primary_id,
+                                      int *port,
+                                      int *flags) {
     UNUSED(ctx);
 
-    clusterNode *node = clusterLookupNode(id, strlen(id));
+    clusterNode *node = clusterLookupNode(node_id, strlen(node_id));
     if (node == NULL || clusterNodePending(node)) {
         return VALKEYMODULE_ERR;
     }
 
-    if (ip) valkey_strlcpy(ip, clusterNodeIp(node), NET_IP_STR_LEN);
+    if (ip) valkey_strlcpy(ip, clusterNodeIp(node, c), NET_IP_STR_LEN);
 
     if (primary_id) {
         /* If the information is not available, the function will set the
@@ -13708,6 +13743,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RegisterClusterMessageReceiver);
     REGISTER_API(SendClusterMessage);
     REGISTER_API(GetClusterNodeInfo);
+    REGISTER_API(GetClusterNodeInfoForClient);
     REGISTER_API(GetClusterNodesList);
     REGISTER_API(FreeClusterNodesList);
     REGISTER_API(CreateTimer);

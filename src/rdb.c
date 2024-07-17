@@ -2931,7 +2931,7 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         processModuleLoadingProgressEvent(0);
     }
     if (server.repl_state == REPL_STATE_TRANSFER && rioCheckType(r) == RIO_TYPE_CONN) {
-        atomic_fetch_add_explicit(&server.stat_net_repl_input_bytes, len, memory_order_relaxed);
+        server.stat_net_repl_input_bytes += len;
     }
 }
 
@@ -3324,6 +3324,9 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
 
             /* call key space notification on key loaded for modules only */
             moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", &keyobj, db->id);
+
+            /* Release key (sds), dictEntry stores a copy of it in embedded data */
+            sdsfree(key);
         }
 
         /* Loading the database more slowly is useful in order to test

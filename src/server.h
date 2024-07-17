@@ -446,7 +446,7 @@ typedef enum {
 #define REPLICA_REQ_NONE 0
 #define REPLICA_REQ_RDB_EXCLUDE_DATA (1 << 0)      /* Exclude data from RDB */
 #define REPLICA_REQ_RDB_EXCLUDE_FUNCTIONS (1 << 1) /* Exclude functions from RDB */
-#define REPLICA_REQ_RDB_CHANNEL (1 << 2)              /* Use dual-channel-replication */
+#define REPLICA_REQ_RDB_CHANNEL (1 << 2)           /* Use dual-channel-replication */
 /* Mask of all bits in the replica requirements bitfield that represent non-standard (filtered) RDB requirements */
 #define REPLICA_REQ_RDB_MASK (REPLICA_REQ_RDB_EXCLUDE_DATA | REPLICA_REQ_RDB_EXCLUDE_FUNCTIONS)
 
@@ -1208,19 +1208,21 @@ typedef struct ClientFlags {
     uint64_t authenticated : 1;            /* Indicate a client has successfully authenticated */
     uint64_t
         protected_rdb_channel : 1; /* Dual channel replication sync: Protects the RDB client from premature \
-                                 * release during full sync. This flag is used to ensure that the RDB client, which \
-                                 * references the first replication data block required by the replica, is not \
-                                 * released prematurely. Protecting the client is crucial for prevention of \
-                                 * synchronization failures: \
-                                 * If the RDB client is released before the replica initiates PSYNC, the primary \
-                                 * will reduce the reference count (o->refcount) of the block needed by the replica. \
-                                 * This could potentially lead to the removal of the required data block, resulting \
-                                 * in synchronization failures. Such failures could occur even in scenarios where \
-                                 * the replica only needs an additional 4KB beyond the minimum size of the repl_backlog.
-                                 * By using this flag, we ensure that the RDB client remains intact until the replica \
-                                 * has successfully initiated PSYNC. */
+                                    * release during full sync. This flag is used to ensure that the RDB client, which \
+                                    * references the first replication data block required by the replica, is not \
+                                    * released prematurely. Protecting the client is crucial for prevention of \
+                                    * synchronization failures: \
+                                    * If the RDB client is released before the replica initiates PSYNC, the primary \
+                                    * will reduce the reference count (o->refcount) of the block needed by the replica.
+                                    * \
+                                    * This could potentially lead to the removal of the required data block, resulting \
+                                    * in synchronization failures. Such failures could occur even in scenarios where \
+                                    * the replica only needs an additional 4KB beyond the minimum size of the
+                                    * repl_backlog.
+                                    * By using this flag, we ensure that the RDB client remains intact until the replica
+                                    * \ has successfully initiated PSYNC. */
     uint64_t repl_rdb_channel : 1; /* Dual channel replication sync: track a connection which is used for rdb snapshot */
-    uint64_t reserved : 7;      /* Reserved for future use */
+    uint64_t reserved : 7;         /* Reserved for future use */
 } ClientFlags;
 
 typedef struct client {
@@ -2020,7 +2022,7 @@ struct valkeyServer {
     client *cached_primary;             /* Cached primary to be reused for PSYNC. */
     int repl_syncio_timeout;            /* Timeout for synchronous I/O calls */
     int repl_state;                     /* Replication status if the instance is a replica */
-    int repl_rdb_channel_state;            /* State of the replica's rdb channel during dual-channel-replication */
+    int repl_rdb_channel_state;         /* State of the replica's rdb channel during dual-channel-replication */
     off_t repl_transfer_size;           /* Size of RDB to read from primary during sync. */
     off_t repl_transfer_read;           /* Amount of RDB read from primary during sync. */
     off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */

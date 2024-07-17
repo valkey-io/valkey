@@ -2596,8 +2596,8 @@ static void fullSyncWithPrimary(connection *conn) {
         }
         /* Send replica lisening port to primary for clarification */
         sds portstr = getReplicaPortString();
-        err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port", portstr,
-                          NULL);
+        err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port",
+                          portstr, NULL);
         sdsfree(portstr);
         if (err) {
             serverLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", err);

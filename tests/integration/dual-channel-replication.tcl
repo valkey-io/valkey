@@ -284,23 +284,13 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             test "dual-channel-replication with multiple replicas" {
                 $replica1 replicaof $primary_host $primary_port
                 $replica2 replicaof $primary_host $primary_port
+                verify_replica_online $primary 0 500
+                verify_replica_online $primary 1 500
 
                 wait_for_value_to_propegate_to_replica $primary $replica1 "key1"
                 wait_for_value_to_propegate_to_replica $primary $replica2 "key1"
 
-                wait_for_condition 100 100 {
-                    [s 0 total_forks] eq "1" 
-                } else {
-                    fail "Primary <-> Replica didn't start the full sync"
-                }
-
-                verify_replica_online $primary 0 500
-                verify_replica_online $primary 1 500
-                wait_for_condition 50 1000 {
-                    [status $replica1 master_link_status] == "up"
-                } else {
-                    fail "Replica is not synced"
-                }           
+                assert {[s 0 total_forks] eq "1" }       
             }
 
             $replica1 replicaof no one
@@ -314,12 +304,10 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             test "Test diverse replica sync: dual-channel on/off" {
                 $replica1 replicaof $primary_host $primary_port
                 $replica2 replicaof $primary_host $primary_port
-
-                wait_for_value_to_propegate_to_replica $primary $replica1 "key2"
-                wait_for_value_to_propegate_to_replica $primary $replica2 "key2"
-
                 verify_replica_online $primary 0 500
                 verify_replica_online $primary 1 500
+                wait_for_value_to_propegate_to_replica $primary $replica1 "key2"
+                wait_for_value_to_propegate_to_replica $primary $replica2 "key2"
                 wait_for_condition 50 1000 {
                     [status $replica1 master_link_status] == "up"
                 } else {
@@ -328,7 +316,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             }
 
             $replica1 replicaof no one
-            $primary set key4 val4            
+            $primary set key3 val3
             
             test "Test replica's buffer limit reached" {
                 $primary config set repl-diskless-sync-delay 0
@@ -358,18 +346,18 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 assert {[s -2 replicas_replication_buffer_size] <= 16385*2}
 
                 # Wait for sync to succeed 
-                wait_for_value_to_propegate_to_replica $primary $replica1 "key4"
                 wait_for_condition 50 1000 {
                     [status $replica1 master_link_status] == "up"
                 } else {
                     fail "Replica is not synced"
                 }
+                wait_for_value_to_propegate_to_replica $primary $replica1 "key3"
             }
 
             $replica1 replicaof no one
             $replica1 config set client-output-buffer-limit "replica 256mb 256mb 0"; # remove repl buffer limitation
 
-            $primary set key5 val5
+            $primary set key4 val4
             
             test "dual-channel-replication fails when primary diskless disabled" {
                 set cur_psync [status $primary sync_partial_ok]
@@ -379,13 +367,12 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 $replica1 replicaof $primary_host $primary_port
 
                 # Wait for mitigation and resync
-                wait_for_value_to_propegate_to_replica $primary $replica1 "key5"
-
                 wait_for_condition 50 1000 {
                     [status $replica1 master_link_status] == "up"
                 } else {
                     fail "Replica is not synced"
                 }
+                wait_for_value_to_propegate_to_replica $primary $replica1 "key4"
 
                 # Verify that we did not use dual-channel-replication sync
                 assert {[status $primary sync_partial_ok] == $cur_psync}
@@ -1107,7 +1094,5 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 fail "Replica offset didn't catch up with the primary after too long time"
             }            
         }
-
-      
     }
 }

@@ -96,6 +96,9 @@ typedef struct clusterNodeFailReport {
 #define CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT 12   /* Pub/Sub Publish shard propagation using light header*/
 #define CLUSTERMSG_TYPE_COUNT 13                /* Total number of message types. */
 
+/* Macros for condition which are repeadedly used. */
+#define IS_PUBSUB_LIGHT_MESSAGE (type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT)
+
 /* Initially we don't know our "name", but we'll find it once we connect
  * to the first node, using the getsockname() function. Then we'll use this
  * address for all the next messages. */

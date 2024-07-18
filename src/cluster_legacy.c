@@ -222,7 +222,10 @@ clusterNode *clusterNodeIterNext(ClusterNodeIterator *iter) {
         return ln ? listNodeValue(ln) : NULL;
     }
     /* This line is unreachable but added to avoid compiler warnings */
-    default: serverPanic("bad type"); return NULL;
+    default: {
+        serverPanic("bad type");
+        return NULL;
+    }
     }
 }
 
@@ -2983,12 +2986,13 @@ int clusterIsValidPacket(clusterLink *link) {
         explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
         explen += sizeof(clusterMsgDataPublish) - 8 + ntohl(hdr->data.publish.msg.channel_len) +
                   ntohl(hdr->data.publish.msg.message_len);
-    } else if (type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT) {
+    } else if (IS_PUBSUB_LIGHT_MESSAGE) {
         clusterMsgLight *hdr_pubsub = (clusterMsgLight *)link->rcvbuf;
         explen = sizeof(clusterMsgLight) - sizeof(union clusterMsgDataLight);
         explen += sizeof(clusterMsgDataPublishMulti);
         uint64_t data_count = ntohu64(hdr_pubsub->data.publish.msg.data_count);
-        explen += ((data_count) * (sizeof(clusterMsgDataPublishMessage) - 8));
+        explen += ((data_count) * (sizeof(clusterMsgDataPublishMessage) -
+                                   (sizeof(((clusterMsgDataPublishMessage *)0)->message_data))));
         clusterMsgDataPublishMessage *msg_data = getFirstPublishMessage(&hdr_pubsub->data.publish.msg);
         while (data_count--) {
             uint32_t msglen = getPublishMessageLength(msg_data);
@@ -3044,7 +3048,7 @@ int clusterProcessPacket(clusterLink *link) {
     uint16_t type = ntohs(hdr->type);
     mstime_t now = mstime();
 
-    if (type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT) {
+    if (IS_PUBSUB_LIGHT_MESSAGE) {
         if (!link->node || nodeInHandshake(link->node)) {
             freeClusterLink(link);
             serverLog(
@@ -3607,9 +3611,8 @@ void clusterLinkConnectHandler(connection *conn) {
 static inline int isSigAndMsgLenValid(clusterMsg *hdr) {
     if (memcmp(hdr->sig, "RCmb", 4) != 0) return 0;
     uint16_t type = ntohs(hdr->type);
-    int is_msg_light = (type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT);
     uint32_t totlen = ntohl(hdr->totlen);
-    uint32_t minlen = is_msg_light ? CLUSTERMSG_LIGHT_MIN_LEN : CLUSTERMSG_MIN_LEN;
+    uint32_t minlen = IS_PUBSUB_LIGHT_MESSAGE ? CLUSTERMSG_LIGHT_MIN_LEN : CLUSTERMSG_MIN_LEN;
     if (totlen < minlen) return 0;
     return 1;
 }
@@ -3754,7 +3757,7 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen) {
     hdr->type = htons(type);
     hdr->totlen = htonl(msglen);
 
-    if (type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT) {
+    if (IS_PUBSUB_LIGHT_MESSAGE) {
         clusterMsgLight *hdr_light = (clusterMsgLight *)hdr;
         hdr_light->notused1 = 0;
         return;

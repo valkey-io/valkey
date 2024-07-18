@@ -96,8 +96,7 @@ typedef struct clusterNodeFailReport {
 #define CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT 12   /* Pub/Sub Publish shard propagation using light header*/
 #define CLUSTERMSG_TYPE_COUNT 13                /* Total number of message types. */
 
-#define IS_PUBSUB_LIGHT_MESSAGE(type)                                                                                  \
-    (type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT)
+#define IS_LIGHT_MESSAGE(type) (type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT)
 
 /* Initially we don't know our "name", but we'll find it once we connect
  * to the first node, using the getsockname() function. Then we'll use this
@@ -320,6 +319,7 @@ typedef struct {
     uint16_t ver;    /* Protocol version, currently set to CLUSTER_PROTO_VER. */
     uint16_t notused1;
     uint16_t type; /* Message type */
+    uint16_t notused2;
     union clusterMsgDataLight data;
 } clusterMsgLight;
 
@@ -328,6 +328,7 @@ static_assert(offsetof(clusterMsgLight, totlen) == offsetof(clusterMsg, totlen),
 static_assert(offsetof(clusterMsgLight, ver) == offsetof(clusterMsg, ver), "unexpected field offset");
 static_assert(offsetof(clusterMsgLight, notused1) == offsetof(clusterMsg, port), "unexpected field offset");
 static_assert(offsetof(clusterMsgLight, type) == offsetof(clusterMsg, type), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, notused2) == offsetof(clusterMsg, count), "unexpected field offset");
 static_assert(offsetof(clusterMsgLight, data) == 16, "unexpected field offset");
 
 #define CLUSTERMSG_LIGHT_MIN_LEN (sizeof(clusterMsgLight) - sizeof(union clusterMsgDataLight))

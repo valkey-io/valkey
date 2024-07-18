@@ -2899,15 +2899,15 @@ static uint32_t getPublishMessageLength(clusterMsgDataPublishMessage *cursor) {
     return msg_length;
 }
 
-int pubsubProcessLightPacket(clusterLink *link, uint16_t type) {
+int processLightPacket(clusterLink *link, uint16_t type) {
     clusterMsgLight *hdr = (clusterMsgLight *)link->rcvbuf;
-    robj *channel, *message;
-    uint64_t data_count;
 
     /* Don't bother creating useless objects if there are no
      * Pub/Sub subscribers. */
     if ((type == CLUSTERMSG_TYPE_PUBLISH_LIGHT && serverPubsubSubscriptionCount() > 0) ||
         (type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT && serverPubsubShardSubscriptionCount() > 0)) {
+        robj *channel, *message;
+        uint64_t data_count;
         data_count = ntohu64(hdr->data.publish.msg.data_count);
         clusterMsgDataPublishMessage *cursor = getFirstPublishMessage(&hdr->data.publish.msg);
         channel = readPublishMessageFromCursor(cursor);
@@ -2986,7 +2986,7 @@ int clusterIsValidPacket(clusterLink *link) {
         explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
         explen += sizeof(clusterMsgDataPublish) - 8 + ntohl(hdr->data.publish.msg.channel_len) +
                   ntohl(hdr->data.publish.msg.message_len);
-    } else if (IS_PUBSUB_LIGHT_MESSAGE(type)) {
+    } else if (type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT) {
         clusterMsgLight *hdr_pubsub = (clusterMsgLight *)link->rcvbuf;
         explen = sizeof(clusterMsgLight) - sizeof(union clusterMsgDataLight);
         explen += sizeof(clusterMsgDataPublishMulti);
@@ -3048,7 +3048,7 @@ int clusterProcessPacket(clusterLink *link) {
     uint16_t type = ntohs(hdr->type);
     mstime_t now = mstime();
 
-    if (IS_PUBSUB_LIGHT_MESSAGE(type)) {
+    if (IS_LIGHT_MESSAGE(type)) {
         if (!link->node || nodeInHandshake(link->node)) {
             freeClusterLink(link);
             serverLog(
@@ -3059,7 +3059,7 @@ int clusterProcessPacket(clusterLink *link) {
         }
         clusterNode *sender = link->node;
         sender->data_received = now;
-        return pubsubProcessLightPacket(link, type);
+        return processLightPacket(link, type);
     }
 
     uint16_t flags = ntohs(hdr->flags);
@@ -3612,7 +3612,7 @@ static inline int isSigAndMsgLenValid(clusterMsg *hdr) {
     if (memcmp(hdr->sig, "RCmb", 4) != 0) return 0;
     uint16_t type = ntohs(hdr->type);
     uint32_t totlen = ntohl(hdr->totlen);
-    uint32_t minlen = IS_PUBSUB_LIGHT_MESSAGE(type) ? CLUSTERMSG_LIGHT_MIN_LEN : CLUSTERMSG_MIN_LEN;
+    uint32_t minlen = IS_LIGHT_MESSAGE(type) ? CLUSTERMSG_LIGHT_MIN_LEN : CLUSTERMSG_MIN_LEN;
     if (totlen < minlen) return 0;
     return 1;
 }
@@ -3757,9 +3757,10 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen) {
     hdr->type = htons(type);
     hdr->totlen = htonl(msglen);
 
-    if (IS_PUBSUB_LIGHT_MESSAGE(type)) {
+    if (IS_LIGHT_MESSAGE(type)) {
         clusterMsgLight *hdr_light = (clusterMsgLight *)hdr;
         hdr_light->notused1 = 0;
+        hdr_light->notused2 = 0;
         return;
     }
 

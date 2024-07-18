@@ -1890,6 +1890,7 @@ int freeClientsInAsyncFreeQueue(void) {
              * it serves as a reference to the first required replication data block for
              * this replica */
             if (!c->rdb_client_disconnect_time) {
+                if (c->conn) connSetReadHandler(c->conn, NULL);
                 c->rdb_client_disconnect_time = server.unixtime;
                 serverLog(LL_VERBOSE, "Postpone RDB client id=%llu (%s) free for %d seconds", (unsigned long long)c->id,
                           replicationGetReplicaName(c), server.wait_before_rdb_client_free);

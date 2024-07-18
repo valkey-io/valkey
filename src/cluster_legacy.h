@@ -187,6 +187,12 @@ typedef struct {
               * byte aligned, regardless of its content. */
 } clusterMsgPingExt;
 
+typedef struct {
+    clusterNode *migrating_to;
+    clusterNode *importing_from;
+    clusterNode *slot_owner;
+} clusterSlotState;
+
 union clusterMsgData {
     /* PING, MEET and PONG */
     struct {
@@ -337,9 +343,7 @@ struct clusterState {
     dict *nodes;            /* Hash table of name -> clusterNode structures */
     dict *shards;           /* Hash table of shard_id -> list (of nodes) structures */
     dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
-    clusterNode *migrating_slots_to[CLUSTER_SLOTS];
-    clusterNode *importing_slots_from[CLUSTER_SLOTS];
-    clusterNode *slots[CLUSTER_SLOTS];
+    clusterSlotState slot_states[CLUSTER_SLOTS];
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;  /* Time of previous or next election. */
     int failover_auth_count;      /* Number of votes received so far. */

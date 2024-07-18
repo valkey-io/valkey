@@ -145,7 +145,7 @@ static inline int defaultClientPort(void) {
 }
 
 #define isSlotUnclaimed(slot)                                                                                          \
-    (server.cluster->slots[slot] == NULL || bitmapTestBit(server.cluster->owner_not_claiming_slot, slot))
+    (server.cluster->slot_states[slot].slot_owner == NULL || bitmapTestBit(server.cluster->owner_not_claiming_slot, slot))
 
 #define RCVBUF_INIT_LEN 1024
 #define RCVBUF_MAX_PREALLOC (1 << 20) /* 1MB */
@@ -688,9 +688,9 @@ int clusterLoadConfig(char *filename) {
                     clusterAddNode(cn);
                 }
                 if (direction == '>') {
-                    server.cluster->migrating_slots_to[slot] = cn;
+                    server.cluster->slot_states[slot].migrating_to = cn;
                 } else {
-                    server.cluster->importing_slots_from[slot] = cn;
+                    server.cluster->slot_states[slot].importing_from = cn;
                 }
                 continue;
             } else if ((p = strchr(argv[j], '-')) != NULL) {
@@ -1047,7 +1047,7 @@ void clusterInit(void) {
     server.cluster->stats_pfail_nodes = 0;
     server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
 
-    memset(server.cluster->slots, 0, sizeof(server.cluster->slots));
+    memset(server.cluster->slot_states, 0, sizeof(server.cluster->slot_states));
     clusterCloseAllSlots();
 
     memset(server.cluster->owner_not_claiming_slot, 0, sizeof(server.cluster->owner_not_claiming_slot));
@@ -1619,9 +1619,9 @@ void clusterDelNode(clusterNode *delnode) {
 
     /* 1) Mark slots as unassigned. */
     for (j = 0; j < CLUSTER_SLOTS; j++) {
-        if (server.cluster->importing_slots_from[j] == delnode) server.cluster->importing_slots_from[j] = NULL;
-        if (server.cluster->migrating_slots_to[j] == delnode) server.cluster->migrating_slots_to[j] = NULL;
-        if (server.cluster->slots[j] == delnode) clusterDelSlot(j);
+        if (server.cluster->slot_states[j].importing_from == delnode) server.cluster->slot_states[j].importing_from = NULL;
+        if (server.cluster->slot_states[j].migrating_to == delnode) server.cluster->slot_states[j].migrating_to = NULL;
+        if (server.cluster->slot_states[j].slot_owner == delnode) clusterDelSlot(j);
     }
 
     /* 2) Remove failure reports. */
@@ -2374,7 +2374,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
             sender_slots++;
 
             /* The slot is already bound to the sender of this message. */
-            if (server.cluster->slots[j] == sender) {
+            if (server.cluster->slot_states[j].slot_owner == sender) {
                 bitmapClearBit(server.cluster->owner_not_claiming_slot, j);
                 continue;
             }
@@ -2382,24 +2382,24 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
             /* We rebind the slot to the new node claiming it if
              * the slot was unassigned or the new node claims it with a
              * greater configEpoch. */
-            if (isSlotUnclaimed(j) || server.cluster->slots[j]->configEpoch < senderConfigEpoch) {
-                if (!isSlotUnclaimed(j) && !areInSameShard(server.cluster->slots[j], sender)) {
+            if (isSlotUnclaimed(j) || server.cluster->slot_states[j].slot_owner->configEpoch < senderConfigEpoch) {
+                if (!isSlotUnclaimed(j) && !areInSameShard(server.cluster->slot_states[j].slot_owner, sender)) {
                     serverLog(LL_NOTICE,
                               "Slot %d is migrated from node %.40s (%s) in shard %.40s"
                               " to node %.40s (%s) in shard %.40s.",
-                              j, server.cluster->slots[j]->name, server.cluster->slots[j]->human_nodename,
-                              server.cluster->slots[j]->shard_id, sender->name, sender->human_nodename,
+                              j, server.cluster->slot_states[j].slot_owner->name, server.cluster->slot_states[j].slot_owner->human_nodename,
+                              server.cluster->slot_states[j].slot_owner->shard_id, sender->name, sender->human_nodename,
                               sender->shard_id);
                 }
 
                 /* Was this slot mine, and still contains keys? Mark it as
                  * a dirty slot. */
-                if (server.cluster->slots[j] == myself && countKeysInSlot(j) && sender != myself) {
+                if (server.cluster->slot_states[j].slot_owner == myself && countKeysInSlot(j) && sender != myself) {
                     dirty_slots[dirty_slots_count] = j;
                     dirty_slots_count++;
                 }
 
-                if (server.cluster->slots[j] == cur_primary) {
+                if (server.cluster->slot_states[j].slot_owner == cur_primary) {
                     new_primary = sender;
                     migrated_our_slots++;
                 }
@@ -2410,36 +2410,36 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                  * state for the slot. Otherwise, we are looking at a failover within
                  * the same shard and we should retain the migrating_slots_to state
                  * for the slot in question */
-                if (server.cluster->migrating_slots_to[j] != NULL) {
+                if (server.cluster->slot_states[j].migrating_to != NULL) {
                     if (!areInSameShard(sender, myself)) {
                         serverLog(LL_NOTICE, "Slot %d is no longer being migrated to node %.40s (%s) in shard %.40s.",
-                                  j, server.cluster->migrating_slots_to[j]->name,
-                                  server.cluster->migrating_slots_to[j]->human_nodename,
-                                  server.cluster->migrating_slots_to[j]->shard_id);
-                        server.cluster->migrating_slots_to[j] = NULL;
+                                  j, server.cluster->slot_states[j].migrating_to->name,
+                                  server.cluster->slot_states[j].migrating_to->human_nodename,
+                                  server.cluster->slot_states[j].migrating_to->shard_id);
+                        server.cluster->slot_states[j].migrating_to = NULL;
                     }
                 }
 
                 /* Handle the case where we are importing this slot and the ownership changes */
-                if (server.cluster->importing_slots_from[j] != NULL &&
-                    server.cluster->importing_slots_from[j] != sender) {
+                if (server.cluster->slot_states[j].importing_from != NULL &&
+                    server.cluster->slot_states[j].importing_from != sender) {
                     /* Update importing_slots_from to point to the sender, if it is in the
                      * same shard as the previous slot owner */
-                    if (areInSameShard(sender, server.cluster->importing_slots_from[j])) {
+                    if (areInSameShard(sender, server.cluster->slot_states[j].importing_from)) {
                         serverLog(LL_NOTICE,
                                   "Failover occurred in migration source. Update importing "
                                   "source for slot %d to node %.40s (%s) in shard %.40s.",
                                   j, sender->name, sender->human_nodename, sender->shard_id);
-                        server.cluster->importing_slots_from[j] = sender;
+                        server.cluster->slot_states[j].importing_from = sender;
                     } else {
                         /* If the sender is from a different shard, it must be a result
                          * of deliberate operator actions. We should clear the importing
                          * state to conform to the operator's will. */
                         serverLog(LL_NOTICE, "Slot %d is no longer being imported from node %.40s (%s) in shard %.40s.",
-                                  j, server.cluster->importing_slots_from[j]->name,
-                                  server.cluster->importing_slots_from[j]->human_nodename,
-                                  server.cluster->importing_slots_from[j]->shard_id);
-                        server.cluster->importing_slots_from[j] = NULL;
+                                  j, server.cluster->slot_states[j].importing_from->name,
+                                  server.cluster->slot_states[j].importing_from->human_nodename,
+                                  server.cluster->slot_states[j].importing_from->shard_id);
+                        server.cluster->slot_states[j].importing_from = NULL;
                     }
                 }
 
@@ -2449,7 +2449,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
             }
         } else {
-            if (server.cluster->slots[j] == sender) {
+            if (server.cluster->slot_states[j].slot_owner == sender) {
                 /* The slot is currently bound to the sender but the sender is no longer
                  * claiming it. We don't want to unbind the slot yet as it can cause the cluster
                  * to move to FAIL state and also throw client error. Keeping the slot bound to
@@ -2464,15 +2464,15 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
              * any slot to its shard and if there is a primaryship change in
              * the shard. Update the migrating_slots_to state to point to the
              * sender if it has just taken over the primary role. */
-            if (server.cluster->migrating_slots_to[j] != NULL && server.cluster->migrating_slots_to[j] != sender &&
-                (server.cluster->migrating_slots_to[j]->configEpoch < senderConfigEpoch ||
-                 nodeIsReplica(server.cluster->migrating_slots_to[j])) &&
-                areInSameShard(server.cluster->migrating_slots_to[j], sender)) {
+            if (server.cluster->slot_states[j].migrating_to != NULL && server.cluster->slot_states[j].migrating_to != sender &&
+                (server.cluster->slot_states[j].migrating_to->configEpoch < senderConfigEpoch ||
+                 nodeIsReplica(server.cluster->slot_states[j].migrating_to)) &&
+                areInSameShard(server.cluster->slot_states[j].migrating_to, sender)) {
                 serverLog(LL_NOTICE,
                           "Failover occurred in migration target."
                           " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
                           j, sender->name, sender->human_nodename, sender->shard_id);
-                server.cluster->migrating_slots_to[j] = sender;
+                server.cluster->slot_states[j].migrating_to = sender;
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
             }
 
@@ -2492,14 +2492,14 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
              * 1. Remove the importing state for the specific slot.
              * 2. Finalize the slot's ownership, if I am not already the owner of
              *    the slot. */
-            if (nodeIsPrimary(myself) && server.cluster->importing_slots_from[j] == sender) {
+            if (nodeIsPrimary(myself) && server.cluster->slot_states[j].importing_from == sender) {
                 serverLog(LL_NOTICE,
                           "Slot %d is no longer being imported from node %.40s (%s) in shard %.40s;"
                           " Clear my importing source for the slot.",
                           j, sender->name, sender->human_nodename, sender->shard_id);
-                server.cluster->importing_slots_from[j] = NULL;
+                server.cluster->slot_states[j].importing_from = NULL;
                 /* Take over the slot ownership if I am not the owner yet*/
-                if (server.cluster->slots[j] != myself) {
+                if (server.cluster->slot_states[j].slot_owner != myself) {
                     /* A primary reason why we are here is likely due to my primary crashing during the
                      * slot finalization process, leading me to become the new primary without
                      * inheriting the slot ownership, while the source shard continued and relinquished
@@ -3223,13 +3223,13 @@ int clusterProcessPacket(clusterLink *link) {
              * failover if there are the conditions to win the election). */
             for (int j = 0; j < CLUSTER_SLOTS; j++) {
                 if (bitmapTestBit(hdr->myslots, j)) {
-                    if (server.cluster->slots[j] == sender || isSlotUnclaimed(j)) continue;
-                    if (server.cluster->slots[j]->configEpoch > sender_claimed_config_epoch) {
+                    if (server.cluster->slot_states[j].slot_owner == sender || isSlotUnclaimed(j)) continue;
+                    if (server.cluster->slot_states[j].slot_owner->configEpoch > sender_claimed_config_epoch) {
                         serverLog(LL_VERBOSE,
                                   "Node %.40s has old slots configuration, sending "
                                   "an UPDATE message about %.40s",
-                                  sender->name, server.cluster->slots[j]->name);
-                        clusterSendUpdate(sender->link, server.cluster->slots[j]);
+                                  sender->name, server.cluster->slot_states[j].slot_owner->name);
+                        clusterSendUpdate(sender->link, server.cluster->slot_states[j].slot_owner);
 
                         /* TODO: instead of exiting the loop send every other
                          * UPDATE packet for other nodes that are the new owner
@@ -4112,7 +4112,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
      * slots in the current configuration. */
     for (j = 0; j < CLUSTER_SLOTS; j++) {
         if (bitmapTestBit(claimed_slots, j) == 0) continue;
-        if (isSlotUnclaimed(j) || server.cluster->slots[j]->configEpoch <= requestConfigEpoch) {
+        if (isSlotUnclaimed(j) || server.cluster->slot_states[j].slot_owner->configEpoch <= requestConfigEpoch) {
             continue;
         }
         /* If we reached this point we found a slot that in our current slots
@@ -4121,7 +4121,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
         serverLog(LL_WARNING,
                   "Failover auth denied to %.40s (%s): "
                   "slot %d epoch (%llu) > reqEpoch (%llu)",
-                  node->name, node->human_nodename, j, (unsigned long long)server.cluster->slots[j]->configEpoch,
+                  node->name, node->human_nodename, j, (unsigned long long)server.cluster->slot_states[j].slot_owner->configEpoch,
                   (unsigned long long)requestConfigEpoch);
         return;
     }
@@ -4989,9 +4989,9 @@ int clusterNodeCoversSlot(clusterNode *n, int slot) {
  * If the slot is already assigned to another instance this is considered
  * an error and C_ERR is returned. */
 int clusterAddSlot(clusterNode *n, int slot) {
-    if (server.cluster->slots[slot]) return C_ERR;
+    if (server.cluster->slot_states[slot].slot_owner) return C_ERR;
     clusterNodeSetSlotBit(n, slot);
-    server.cluster->slots[slot] = n;
+    server.cluster->slot_states[slot].slot_owner = n;
     bitmapClearBit(server.cluster->owner_not_claiming_slot, slot);
     return C_OK;
 }
@@ -5000,7 +5000,7 @@ int clusterAddSlot(clusterNode *n, int slot) {
  * Returns C_OK if the slot was assigned, otherwise if the slot was
  * already unassigned C_ERR is returned. */
 int clusterDelSlot(int slot) {
-    clusterNode *n = server.cluster->slots[slot];
+    clusterNode *n = server.cluster->slot_states[slot].slot_owner;
 
     if (!n) return C_ERR;
 
@@ -5008,7 +5008,7 @@ int clusterDelSlot(int slot) {
     removeChannelsInSlot(slot);
     /* Clear the slot bit. */
     serverAssert(clusterNodeClearSlotBit(n, slot) == 1);
-    server.cluster->slots[slot] = NULL;
+    server.cluster->slot_states[slot].slot_owner = NULL;
     /* Make owner_not_claiming_slot flag consistent with slot ownership information. */
     bitmapClearBit(server.cluster->owner_not_claiming_slot, slot);
     return C_OK;
@@ -5031,8 +5031,7 @@ int clusterDelNodeSlots(clusterNode *node) {
 /* Clear the migrating / importing state for all the slots.
  * This is useful at initialization and when turning a primary into replica. */
 void clusterCloseAllSlots(void) {
-    memset(server.cluster->migrating_slots_to, 0, sizeof(server.cluster->migrating_slots_to));
-    memset(server.cluster->importing_slots_from, 0, sizeof(server.cluster->importing_slots_from));
+    memset(server.cluster->slot_states, 0, sizeof(server.cluster->slot_states));
 }
 
 /* -----------------------------------------------------------------------------
@@ -5073,7 +5072,7 @@ void clusterUpdateState(void) {
     /* Check if all the slots are covered. */
     if (server.cluster_require_full_coverage) {
         for (j = 0; j < CLUSTER_SLOTS; j++) {
-            if (server.cluster->slots[j] == NULL || server.cluster->slots[j]->flags & (CLUSTER_NODE_FAIL)) {
+            if (server.cluster->slot_states[j].slot_owner == NULL || server.cluster->slot_states[j].slot_owner->flags & (CLUSTER_NODE_FAIL)) {
                 new_state = CLUSTER_FAIL;
                 break;
             }
@@ -5176,7 +5175,7 @@ int verifyClusterConfigWithData(void) {
         /* Check if we are assigned to this slot or if we are importing it.
          * In both cases check the next slot as the configuration makes
          * sense. */
-        if (server.cluster->slots[j] == myself || server.cluster->importing_slots_from[j] != NULL) continue;
+        if (server.cluster->slot_states[j].slot_owner == myself || server.cluster->slot_states[j].importing_from != NULL) continue;
 
         /* If we are here data and cluster config don't agree, and we have
          * slot 'j' populated even if we are not importing it, nor we are
@@ -5184,14 +5183,14 @@ int verifyClusterConfigWithData(void) {
 
         update_config++;
         /* slot is unassigned. Take responsibility for it. */
-        if (server.cluster->slots[j] == NULL) {
+        if (server.cluster->slot_states[j].slot_owner == NULL) {
             serverLog(LL_NOTICE,
                       "I have keys for unassigned slot %d. "
                       "Taking responsibility for it.",
                       j);
             clusterAddSlot(myself, j);
-        } else if (server.cluster->importing_slots_from[j] != server.cluster->slots[j]) {
-            if (server.cluster->importing_slots_from[j] == NULL) {
+        } else if (server.cluster->slot_states[j].importing_from != server.cluster->slot_states[j].slot_owner) {
+            if (server.cluster->slot_states[j].importing_from == NULL) {
                 serverLog(LL_NOTICE,
                           "I have keys for slot %d, but the slot is "
                           "assigned to another node. Deleting keys in the slot.",
@@ -5200,10 +5199,10 @@ int verifyClusterConfigWithData(void) {
                 serverLog(LL_NOTICE,
                           "I am importing keys from node %.40s (%s) in shard %.40s to slot %d, "
                           "but the slot is now owned by node %.40s (%s) in shard %.40s. Deleting keys in the slot",
-                          server.cluster->importing_slots_from[j]->name,
-                          server.cluster->importing_slots_from[j]->human_nodename,
-                          server.cluster->importing_slots_from[j]->shard_id, j, server.cluster->slots[j]->name,
-                          server.cluster->slots[j]->human_nodename, server.cluster->slots[j]->shard_id);
+                          server.cluster->slot_states[j].importing_from->name,
+                          server.cluster->slot_states[j].importing_from->human_nodename,
+                          server.cluster->slot_states[j].importing_from->shard_id, j, server.cluster->slot_states[j].slot_owner->name,
+                          server.cluster->slot_states[j].slot_owner->human_nodename, server.cluster->slot_states[j].slot_owner->shard_id);
             }
             delKeysInSlot(j);
         }
@@ -5217,7 +5216,7 @@ static inline void removeAllNotOwnedShardChannelSubscriptions(void) {
     if (!kvstoreSize(server.pubsubshard_channels)) return;
     clusterNode *cur_primary = clusterNodeIsPrimary(myself) ? myself : myself->replicaof;
     for (int j = 0; j < CLUSTER_SLOTS; j++) {
-        if (server.cluster->slots[j] != cur_primary) {
+        if (server.cluster->slot_states[j].slot_owner != cur_primary) {
             removeChannelsInSlot(j);
         }
     }
@@ -5375,10 +5374,10 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
      * instances. */
     if (node->flags & CLUSTER_NODE_MYSELF) {
         for (j = 0; j < CLUSTER_SLOTS; j++) {
-            if (server.cluster->migrating_slots_to[j]) {
-                ci = sdscatprintf(ci, " [%d->-%.40s]", j, server.cluster->migrating_slots_to[j]->name);
-            } else if (server.cluster->importing_slots_from[j]) {
-                ci = sdscatprintf(ci, " [%d-<-%.40s]", j, server.cluster->importing_slots_from[j]->name);
+            if (server.cluster->slot_states[j].migrating_to) {
+                ci = sdscatprintf(ci, " [%d->-%.40s]", j, server.cluster->slot_states[j].migrating_to->name);
+            } else if (server.cluster->slot_states[j].importing_from) {
+                ci = sdscatprintf(ci, " [%d-<-%.40s]", j, server.cluster->slot_states[j].importing_from->name);
             }
         }
     }
@@ -5397,14 +5396,14 @@ void clusterGenNodesSlotsInfo(int filter) {
         /* Find start node and slot id. */
         if (n == NULL) {
             if (i == CLUSTER_SLOTS) break;
-            n = server.cluster->slots[i];
+            n = server.cluster->slot_states[i].slot_owner;
             start = i;
             continue;
         }
 
         /* Generate slots info when occur different node with start
          * or end of slot. */
-        if (i == CLUSTER_SLOTS || n != server.cluster->slots[i]) {
+        if (i == CLUSTER_SLOTS || n != server.cluster->slot_states[i].slot_owner) {
             if (!(n->flags & filter)) {
                 if (!n->slot_info_pairs) {
                     n->slot_info_pairs = zmalloc(2 * n->numslots * sizeof(uint16_t));
@@ -5414,7 +5413,7 @@ void clusterGenNodesSlotsInfo(int filter) {
                 n->slot_info_pairs[n->slot_info_pairs_count++] = i - 1;
             }
             if (i == CLUSTER_SLOTS) break;
-            n = server.cluster->slots[i];
+            n = server.cluster->slot_states[i].slot_owner;
             start = i;
         }
     }
@@ -5564,10 +5563,10 @@ int getSlotOrReply(client *c, robj *o) {
 int checkSlotAssignmentsOrReply(client *c, unsigned char *slots, int del, int start_slot, int end_slot) {
     int slot;
     for (slot = start_slot; slot <= end_slot; slot++) {
-        if (del && server.cluster->slots[slot] == NULL) {
+        if (del && server.cluster->slot_states[slot].slot_owner == NULL) {
             addReplyErrorFormat(c, "Slot %d is already unassigned", slot);
             return C_ERR;
-        } else if (!del && server.cluster->slots[slot]) {
+        } else if (!del && server.cluster->slot_states[slot].slot_owner) {
             addReplyErrorFormat(c, "Slot %d is already busy", slot);
             return C_ERR;
         }
@@ -5587,7 +5586,7 @@ void clusterUpdateSlots(client *c, unsigned char *slots, int del) {
 
             /* If this slot was set as importing we can clear this
              * state as now we are the real owner of the slot. */
-            if (server.cluster->importing_slots_from[j]) server.cluster->importing_slots_from[j] = NULL;
+            if (server.cluster->slot_states[j].importing_from) server.cluster->slot_states[j].importing_from = NULL;
 
             retval = del ? clusterDelSlot(j) : clusterAddSlot(myself, j);
             serverAssertWithInfo(c, NULL, retval == C_OK);
@@ -5713,7 +5712,7 @@ sds genClusterInfoString(void) {
     int j;
 
     for (j = 0; j < CLUSTER_SLOTS; j++) {
-        clusterNode *n = server.cluster->slots[j];
+        clusterNode *n = server.cluster->slot_states[j].slot_owner;
 
         if (n == NULL) continue;
         slots_assigned++;
@@ -5976,7 +5975,7 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
 
     if (!strcasecmp(c->argv[3]->ptr, "migrating") && c->argc >= 5) {
         /* CLUSTER SETSLOT <SLOT> MIGRATING <NODE> */
-        if (nodeIsPrimary(myself) && server.cluster->slots[slot] != myself) {
+        if (nodeIsPrimary(myself) && server.cluster->slot_states[slot].slot_owner != myself) {
             addReplyErrorFormat(c, "I'm not the owner of hash slot %u", slot);
             return 0;
         }
@@ -5992,7 +5991,7 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
         if (c->argc > 5) optarg_pos = 5;
     } else if (!strcasecmp(c->argv[3]->ptr, "importing") && c->argc >= 5) {
         /* CLUSTER SETSLOT <SLOT> IMPORTING <NODE> */
-        if (server.cluster->slots[slot] == myself) {
+        if (server.cluster->slot_states[slot].slot_owner == myself) {
             addReplyErrorFormat(c, "I'm already the owner of hash slot %u", slot);
             return 0;
         }
@@ -6022,7 +6021,7 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
         }
         /* If this hash slot was served by 'myself' before to switch
          * make sure there are no longer local keys for this hash slot. */
-        if (server.cluster->slots[slot] == myself && n != myself) {
+        if (server.cluster->slot_states[slot].slot_owner == myself && n != myself) {
             if (countKeysInSlot(slot) != 0) {
                 addReplyErrorFormat(c,
                                     "Can't assign hashslot %d to a different node "
@@ -6131,15 +6130,15 @@ void clusterCommandSetSlot(client *c) {
      * Now exuecte the command on the primary. */
     if (!strcasecmp(c->argv[3]->ptr, "migrating")) {
         serverLog(LL_NOTICE, "Migrating slot %d to node %.40s (%s)", slot, n->name, n->human_nodename);
-        server.cluster->migrating_slots_to[slot] = n;
+        server.cluster->slot_states[slot].migrating_to = n;
     } else if (!strcasecmp(c->argv[3]->ptr, "importing")) {
         serverLog(LL_NOTICE, "Importing slot %d from node %.40s (%s)", slot, n->name, n->human_nodename);
-        server.cluster->importing_slots_from[slot] = n;
+        server.cluster->slot_states[slot].importing_from = n;
     } else if (!strcasecmp(c->argv[3]->ptr, "stable")) {
         /* CLUSTER SETSLOT <SLOT> STABLE */
         serverLog(LL_NOTICE, "Marking slot %d stable", slot);
-        server.cluster->importing_slots_from[slot] = NULL;
-        server.cluster->migrating_slots_to[slot] = NULL;
+        server.cluster->slot_states[slot].importing_from = NULL;
+        server.cluster->slot_states[slot].migrating_to = NULL;
     } else if (!strcasecmp(c->argv[3]->ptr, "node")) {
         /* CLUSTER SETSLOT <SLOT> NODE <NODE ID> */
         serverLog(LL_NOTICE, "Assigning slot %d to node %.40s (%s) in shard %.40s", slot, n->name, n->human_nodename,
@@ -6148,11 +6147,11 @@ void clusterCommandSetSlot(client *c) {
         /* If this slot is in migrating status but we have no keys
          * for it assigning the slot to another node will clear
          * the migrating status. */
-        if (countKeysInSlot(slot) == 0 && server.cluster->migrating_slots_to[slot]) {
-            server.cluster->migrating_slots_to[slot] = NULL;
+        if (countKeysInSlot(slot) == 0 && server.cluster->slot_states[slot].migrating_to) {
+            server.cluster->slot_states[slot].migrating_to = NULL;
         }
 
-        int slot_was_mine = server.cluster->slots[slot] == myself;
+        int slot_was_mine = server.cluster->slot_states[slot].slot_owner == myself;
         clusterDelSlot(slot);
         clusterAddSlot(n, slot);
 
@@ -6169,8 +6168,8 @@ void clusterCommandSetSlot(client *c) {
 
         /* If this node or this node's primary was importing this slot,
          * assigning the slot to itself also clears the importing status. */
-        if ((n == myself || n == myself->replicaof) && server.cluster->importing_slots_from[slot]) {
-            server.cluster->importing_slots_from[slot] = NULL;
+        if ((n == myself || n == myself->replicaof) && server.cluster->slot_states[slot].importing_from) {
+            server.cluster->slot_states[slot].importing_from = NULL;
 
             /* Only primary broadcasts the updates */
             if (n == myself) {
@@ -6548,11 +6547,11 @@ clusterNode *clusterNodeGetReplica(clusterNode *node, int replica_idx) {
 }
 
 clusterNode *getMigratingSlotDest(int slot) {
-    return server.cluster->migrating_slots_to[slot];
+    return server.cluster->slot_states[slot].migrating_to;
 }
 
 clusterNode *getImportingSlotSource(int slot) {
-    return server.cluster->importing_slots_from[slot];
+    return server.cluster->slot_states[slot].importing_from;
 }
 
 int isClusterHealthy(void) {
@@ -6560,7 +6559,7 @@ int isClusterHealthy(void) {
 }
 
 clusterNode *getNodeBySlot(int slot) {
-    return server.cluster->slots[slot];
+    return server.cluster->slot_states[slot].slot_owner;
 }
 
 char *clusterNodeHostname(clusterNode *node) {
@@ -6622,18 +6621,19 @@ sds clusterEncodeOpenSlotsAuxField(int rdbflags) {
     sds s = NULL;
 
     for (int i = 0; i < 2; i++) {
-        clusterNode **nodes_ptr;
-        if (i == 0) {
-            nodes_ptr = server.cluster->importing_slots_from;
-        } else {
-            nodes_ptr = server.cluster->migrating_slots_to;
-        }
-
         for (int j = 0; j < CLUSTER_SLOTS; j++) {
-            if (nodes_ptr[j] == NULL) continue;
+            clusterNode *node_ptr;
+
+            if (i == 0) {
+                node_ptr = server.cluster->slot_states[j].importing_from;
+            } else {
+                node_ptr = server.cluster->slot_states[j].migrating_to;
+            }
+
+            if (node_ptr == NULL) continue;
             if (s == NULL) s = sdsempty();
             s = sdscatfmt(s, "%i%s", j, (i == 0) ? "<" : ">");
-            s = sdscatlen(s, nodes_ptr[j]->name, CLUSTER_NAMELEN);
+            s = sdscatlen(s, node_ptr->name, CLUSTER_NAMELEN);
             s = sdscatlen(s, ",", 1);
         }
     }
@@ -6683,9 +6683,9 @@ int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s) {
 
         /* Set the slot state */
         if (is_importing) {
-            server.cluster->importing_slots_from[slot] = node;
+            server.cluster->slot_states[slot].importing_from = node;
         } else {
-            server.cluster->migrating_slots_to[slot] = node;
+            server.cluster->slot_states[slot].migrating_to = node;
         }
     }
 

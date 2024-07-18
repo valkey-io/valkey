@@ -3052,7 +3052,7 @@ int clusterProcessPacket(clusterLink *link) {
         if (!link->node || nodeInHandshake(link->node)) {
             freeClusterLink(link);
             serverLog(
-                LL_WARNING,
+                LL_NOTICE,
                 "Closing link for node that sent a lightweight message of type %hu as its first message on the link",
                 type);
             return 0;

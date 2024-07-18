@@ -3270,6 +3270,13 @@ void slowlogPushCurrentCommand(client *c, struct serverCommand *cmd, ustime_t du
      * arguments. */
     robj **argv = c->original_argv ? c->original_argv : c->argv;
     int argc = c->original_argv ? c->original_argc : c->argc;
+
+    /* If a script is currently running, the client passed in is a
+     * fake client. Or the client passed in is the original client
+     * if this is a EVAL or alike, doesn't matter. In this case,
+     * use the original client to get the client information. */
+    c = scriptIsRunning() ? scriptGetCaller() : c;
+
     slowlogPushEntryIfNeeded(c, argv, argc, duration);
 }
 

@@ -10,7 +10,7 @@ test "SENTINEL SLAVES returns a list of the monitored slaves (SENTINEL SLAVES as
      assert_morethan_equal [llength [S 0 SENTINEL SLAVES mymaster]] 1
 }
 
-test "SENTINEL MASTER returns the infomation list of the monitored master (SENTINEL MASTER as a deprecated command)" {
+test "SENTINEL MASTER returns the information list of the monitored master (SENTINEL MASTER as a deprecated command)" {
      set info [S 0 SENTINEL MASTER mymaster]
      assert_equal mymaster [dict get $info name]
 }

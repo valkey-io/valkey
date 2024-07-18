@@ -145,7 +145,8 @@ static inline int defaultClientPort(void) {
 }
 
 #define isSlotUnclaimed(slot)                                                                                          \
-    (server.cluster->slot_states[slot].slot_owner == NULL || bitmapTestBit(server.cluster->owner_not_claiming_slot, slot))
+    (server.cluster->slot_states[slot].slot_owner == NULL ||                                                           \
+     bitmapTestBit(server.cluster->owner_not_claiming_slot, slot))
 
 #define RCVBUF_INIT_LEN 1024
 #define RCVBUF_MAX_PREALLOC (1 << 20) /* 1MB */
@@ -1619,7 +1620,8 @@ void clusterDelNode(clusterNode *delnode) {
 
     /* 1) Mark slots as unassigned. */
     for (j = 0; j < CLUSTER_SLOTS; j++) {
-        if (server.cluster->slot_states[j].importing_from == delnode) server.cluster->slot_states[j].importing_from = NULL;
+        if (server.cluster->slot_states[j].importing_from == delnode)
+            server.cluster->slot_states[j].importing_from = NULL;
         if (server.cluster->slot_states[j].migrating_to == delnode) server.cluster->slot_states[j].migrating_to = NULL;
         if (server.cluster->slot_states[j].slot_owner == delnode) clusterDelSlot(j);
     }
@@ -2387,7 +2389,8 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                     serverLog(LL_NOTICE,
                               "Slot %d is migrated from node %.40s (%s) in shard %.40s"
                               " to node %.40s (%s) in shard %.40s.",
-                              j, server.cluster->slot_states[j].slot_owner->name, server.cluster->slot_states[j].slot_owner->human_nodename,
+                              j, server.cluster->slot_states[j].slot_owner->name,
+                              server.cluster->slot_states[j].slot_owner->human_nodename,
                               server.cluster->slot_states[j].slot_owner->shard_id, sender->name, sender->human_nodename,
                               sender->shard_id);
                 }
@@ -2464,7 +2467,8 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
              * any slot to its shard and if there is a primaryship change in
              * the shard. Update the migrating_slots_to state to point to the
              * sender if it has just taken over the primary role. */
-            if (server.cluster->slot_states[j].migrating_to != NULL && server.cluster->slot_states[j].migrating_to != sender &&
+            if (server.cluster->slot_states[j].migrating_to != NULL &&
+                server.cluster->slot_states[j].migrating_to != sender &&
                 (server.cluster->slot_states[j].migrating_to->configEpoch < senderConfigEpoch ||
                  nodeIsReplica(server.cluster->slot_states[j].migrating_to)) &&
                 areInSameShard(server.cluster->slot_states[j].migrating_to, sender)) {
@@ -4121,7 +4125,8 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
         serverLog(LL_WARNING,
                   "Failover auth denied to %.40s (%s): "
                   "slot %d epoch (%llu) > reqEpoch (%llu)",
-                  node->name, node->human_nodename, j, (unsigned long long)server.cluster->slot_states[j].slot_owner->configEpoch,
+                  node->name, node->human_nodename, j,
+                  (unsigned long long)server.cluster->slot_states[j].slot_owner->configEpoch,
                   (unsigned long long)requestConfigEpoch);
         return;
     }
@@ -5072,7 +5077,8 @@ void clusterUpdateState(void) {
     /* Check if all the slots are covered. */
     if (server.cluster_require_full_coverage) {
         for (j = 0; j < CLUSTER_SLOTS; j++) {
-            if (server.cluster->slot_states[j].slot_owner == NULL || server.cluster->slot_states[j].slot_owner->flags & (CLUSTER_NODE_FAIL)) {
+            if (server.cluster->slot_states[j].slot_owner == NULL ||
+                server.cluster->slot_states[j].slot_owner->flags & (CLUSTER_NODE_FAIL)) {
                 new_state = CLUSTER_FAIL;
                 break;
             }
@@ -5175,7 +5181,9 @@ int verifyClusterConfigWithData(void) {
         /* Check if we are assigned to this slot or if we are importing it.
          * In both cases check the next slot as the configuration makes
          * sense. */
-        if (server.cluster->slot_states[j].slot_owner == myself || server.cluster->slot_states[j].importing_from != NULL) continue;
+        if (server.cluster->slot_states[j].slot_owner == myself ||
+            server.cluster->slot_states[j].importing_from != NULL)
+            continue;
 
         /* If we are here data and cluster config don't agree, and we have
          * slot 'j' populated even if we are not importing it, nor we are
@@ -5201,8 +5209,10 @@ int verifyClusterConfigWithData(void) {
                           "but the slot is now owned by node %.40s (%s) in shard %.40s. Deleting keys in the slot",
                           server.cluster->slot_states[j].importing_from->name,
                           server.cluster->slot_states[j].importing_from->human_nodename,
-                          server.cluster->slot_states[j].importing_from->shard_id, j, server.cluster->slot_states[j].slot_owner->name,
-                          server.cluster->slot_states[j].slot_owner->human_nodename, server.cluster->slot_states[j].slot_owner->shard_id);
+                          server.cluster->slot_states[j].importing_from->shard_id, j,
+                          server.cluster->slot_states[j].slot_owner->name,
+                          server.cluster->slot_states[j].slot_owner->human_nodename,
+                          server.cluster->slot_states[j].slot_owner->shard_id);
             }
             delKeysInSlot(j);
         }

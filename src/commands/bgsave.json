@@ -10,6 +10,10 @@
             [
                 "3.2.2",
                 "Added the `SCHEDULE` option."
+            ],
+            [
+                "8.0.0",
+                "Refactor SCHEDULE as a subcommand"
             ]
         ],
         "command_flags": [
@@ -18,23 +22,9 @@
             "NOSCRIPT"
         ],
         "arguments": [
-            {
-                "name": "schedule",
-                "token": "SCHEDULE",
-                "type": "pure-token",
-                "optional": true,
-                "since": "3.2.2"
-            }
         ],
         "reply_schema": {
-            "oneOf": [
-                {
-                    "const": "Background saving started"
-                },
-                {
-                    "const": "Background saving scheduled"
-                }
-            ]
+            "const": "Background saving started"
         }
     }
 }

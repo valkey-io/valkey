@@ -3636,33 +3636,7 @@ void saveCommand(client *c) {
     }
 }
 
-/* BGSAVE CANCEL */
-void bgsaveCancelCommand(client *c) {
-    /* Terminates an in progress BGSAVE */
-    if (server.child_type == CHILD_TYPE_RDB) {
-        /* There is an ongoing save */
-        serverLog(LL_NOTICE, "Background bgsave requested to be canceled by user");
-        killRDBChild();
-        addReply(c, shared.ok);
-    } else {
-        addReplyError(c, "Background bgsave is currently not in progress");
-    }
-}
-
-/* BGSAVE [SCHEDULE] */
-void bgsaveCommand(client *c) {
-    int schedule = 0;
-
-    /* The SCHEDULE option changes the behavior of BGSAVE when an AOF rewrite
-     * is in progress. Instead of returning an error a BGSAVE gets scheduled. */
-    if (c->argc > 1) {
-        if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "schedule")) {
-            schedule = 1;
-        } else {
-            addReplyErrorObject(c, shared.syntaxerr);
-            return;
-        }
-    }
+void bgsaveCommandInternal(client *c, int schedule) {
 
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);
@@ -3683,6 +3657,42 @@ void bgsaveCommand(client *c) {
     } else {
         addReplyErrorObject(c, shared.err);
     }
+}
+
+/* BGSAVE KILL */
+void bgsaveKillCommand(client *c) {
+    /* Terminates an in progress BGSAVE */
+    if (server.child_type == CHILD_TYPE_RDB) {
+        /* There is an ongoing save */
+        serverLog(LL_NOTICE, "Background bgsave requested to be killed by user");
+        killRDBChild();
+        addReply(c, shared.ok);
+    } else {
+        addReplyError(c, "Background bgsave is currently not in progress");
+    }
+}
+
+/* BGSAVE CANCEL */
+void bgsaveCancelCommand(client *c) {
+    /* Cancel a scheduleds BGSAVE */
+    if (server.rdb_bgsave_scheduled == 1) {
+        /* There is an ongoing save */
+        serverLog(LL_NOTICE, "Background bgsave requested to be canceled by user");
+        server.rdb_bgsave_scheduled = 0;
+        addReply(c, shared.ok);
+    } else {
+        addReplyError(c, "Background bgsave is currently not scheduled");
+    }
+}
+
+/* BGSAVE SCHEDULE */
+void bgsaveScheduleCommand(client *c) {
+    bgsaveCommandInternal(c, 1);
+}
+
+/* BGSAVE COMMAND */
+void bgsaveCommand(client *c) {
+    bgsaveCommandInternal(c, 0);
 }
 
 /* Populate the rdbSaveInfo structure used to persist the replication

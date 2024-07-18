@@ -1,0 +1,23 @@
+{
+    "SCHEDULE": {
+        "summary": "Asynchronously saves the database(s) to disk. When an AOF rewrite is in progress and schedule the background save to run at the next opportunity.",
+        "complexity": "O(1)",
+        "group": "server",
+        "since": "8.0.0",
+        "arity": -1,
+        "container": "BGSAVE",
+        "function": "bgsaveScheduleCommand",
+        "history": [
+        ],
+        "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "NOSCRIPT"
+        ],
+        "arguments": [
+        ],
+        "reply_schema": {
+            "const": "Background saving scheduled"
+        }
+    }
+}

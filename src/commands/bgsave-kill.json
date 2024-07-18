@@ -1,12 +1,12 @@
 {
-    "CANCEL": {
-        "summary": "Unschedule all scheduled bgsave requests.",
+    "KILL": {
+        "summary": "Terminates a running bgsave child process.",
         "complexity": "O(1)",
         "group": "server",
         "since": "8.0.0",
         "arity": -1,
         "container": "BGSAVE",
-        "function": "bgsaveCancelCommand",
+        "function": "bgsaveKillCommand",
         "history": [
         ],
         "command_flags": [

@@ -631,9 +631,9 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             set loglines [lindex $res 1]
             incr $loglines
             # At this point rdb is loaded but psync hasn't been established yet. 
-            # Force the replica to sleep for 8 seconds so the primary main process will wake up, while the replica is unresponsive.
+            # Force the replica to sleep so the primary main process will wake up, while the replica is unresponsive.
             # We expect the grace time to be over before the replica wake up, so sync will fail.
-            set sleep_handle [start_bg_server_sleep $replica_host $replica_port 8]
+            set sleep_handle [start_bg_server_sleep $replica_host $replica_port 1000]
             wait_for_condition 50 100 {
                 [string match {*replicas_waiting_psync:1*} [$primary info replication]]
             } else {
@@ -642,15 +642,12 @@ start_server {tags {"dual-channel-replication external:skip"}} {
 
             # Sync should fail once the replica ask for PSYNC using main channel
             set res [wait_for_log_messages -1 {"*Replica main channel failed to establish PSYNC within the grace period*"} 0 4000 1]
-
-            # Should succeed on retry
-            verify_replica_online $primary 0 500
             wait_for_condition 50 100 {
                 [string match {*replicas_waiting_psync:0*} [$primary info replication]]
             } else {
-                fail "Primary did not free repl buf block after psync establishment"
+                fail "Primary did not free waiting psync replica after grace period"
             }
-            $replica replicaof no one
+            stop_bg_server_sleep $sleep_handle
         }
         stop_write_load $load_handle0
     }

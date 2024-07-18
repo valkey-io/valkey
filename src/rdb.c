@@ -3604,11 +3604,11 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
             rioFreeConnset(&rdb);
         } else {
             rioFreeFd(&rdb);
+            /* wake up the reader, tell it we're done. */
             close(rdb_pipe_write);
+            close(server.rdb_child_exit_pipe); /* close write end so that we can detect the close on the parent. */
         }
         zfree(conns);
-        /* wake up the reader, tell it we're done. */
-        close(server.rdb_child_exit_pipe); /* close write end so that we can detect the close on the parent. */
         /* hold exit until the parent tells us it's safe. we're not expecting
          * to read anything, just get the error when the pipe is closed. */
         if (!dual_channel) dummy = read(safe_to_exit_pipe, pipefds, 1);
@@ -3632,8 +3632,8 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
             if (!dual_channel) {
                 close(rdb_pipe_write);
                 close(server.rdb_pipe_read);
+                close(server.rdb_child_exit_pipe);
             }
-            close(server.rdb_child_exit_pipe);
             zfree(conns);
             if (dual_channel) {
                 closeChildInfoPipe();

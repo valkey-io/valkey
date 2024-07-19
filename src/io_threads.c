@@ -124,6 +124,22 @@ int inMainThread(void) {
     return thread_id == 0;
 }
 
+int getIOThreadID(void) {
+    return thread_id;
+}
+
+/* Drains the I/O threads queue by waiting for all jobs to be processed.
+ * This function must be called from the main thread. */
+void drainIOThreadsQueue(void) {
+    serverAssert(inMainThread());
+    for (int i = 1; i < IO_THREADS_MAX_NUM; i++) { /* No need to drain thread 0, which is the main thread. */
+        while (!IOJobQueue_isEmpty(&io_jobs[i])) {
+            /* memory barrier acquire to get the latest job queue state */
+            atomic_thread_fence(memory_order_acquire);
+        }
+    }
+}
+
 /* Wait until the IO-thread is done with the client */
 void waitForClientIO(client *c) {
     /* No need to wait if the client was not offloaded to the IO thread. */
@@ -175,6 +191,17 @@ void adjustIOThreadsByEventLoad(int numevents, int increase_only) {
             server.active_io_threads_num++;
         }
     }
+}
+
+/* This function performs polling on the given event loop and updates the server's
+ * IO fired events count and poll state. */
+void IOThreadPoll(void *data) {
+    aeEventLoop *el = (aeEventLoop *)data;
+    struct timeval tvp = {0, 0};
+    int num_events = aePoll(el, &tvp);
+
+    server.io_ae_fired_events = num_events;
+    atomic_store_explicit(&server.io_poll_state, AE_IO_STATE_DONE, memory_order_release);
 }
 
 static void *IOThreadMain(void *myid) {
@@ -267,6 +294,8 @@ void killIOThreads(void) {
 /* Initialize the data structures needed for I/O threads. */
 void initIOThreads(void) {
     server.active_io_threads_num = 1; /* We start with threads not active. */
+    server.io_poll_state = AE_IO_STATE_NONE;
+    server.io_ae_fired_events = 0;
 
     /* Don't spawn any thread if the user selected a single thread:
      * we'll handle I/O directly from the main thread. */
@@ -374,4 +403,147 @@ int trySendWriteToIOThreads(client *c) {
 
     IOJobQueue_push(jq, ioThreadWriteToClient, c);
     return C_OK;
+}
+
+/* Internal function to free the client's argv in an IO thread. */
+void IOThreadFreeArgv(void *data) {
+    robj **argv = (robj **)data;
+    int last_arg = 0;
+    for (int i = 0;; i++) {
+        robj *o = argv[i];
+        if (o == NULL) {
+            continue;
+        }
+
+        /* The main-thread set the refcount to 0 to indicate that this is the last argument to free */
+        if (o->refcount == 0) {
+            last_arg = 1;
+            o->refcount = 1;
+        }
+
+        decrRefCount(o);
+
+        if (last_arg) {
+            break;
+        }
+    }
+
+    zfree(argv);
+}
+
+/* This function attempts to offload the client's argv to an IO thread.
+ * Returns C_OK if the client's argv were successfully offloaded to an IO thread,
+ * C_ERR otherwise. */
+int tryOffloadFreeArgvToIOThreads(client *c) {
+    if (server.active_io_threads_num <= 1 || c->argc == 0) {
+        return C_ERR;
+    }
+
+    size_t tid = (c->id % (server.active_io_threads_num - 1)) + 1;
+
+    IOJobQueue *jq = &io_jobs[tid];
+    if (IOJobQueue_isFull(jq)) {
+        return C_ERR;
+    }
+
+    int last_arg_to_free = -1;
+
+    /* Prepare the argv */
+    for (int j = 0; j < c->argc; j++) {
+        if (c->argv[j]->refcount > 1) {
+            decrRefCount(c->argv[j]);
+            /* Set argv[j] to NULL to avoid double free */
+            c->argv[j] = NULL;
+        } else {
+            last_arg_to_free = j;
+        }
+    }
+
+    /* If no argv to free, free the argv array at the main thread */
+    if (last_arg_to_free == -1) {
+        zfree(c->argv);
+        return C_OK;
+    }
+
+    /* We set the refcount of the last arg to free to 0 to indicate that
+     * this is the last argument to free. With this approach, we don't need to
+     * send the argc to the IO thread and we can send just the argv ptr. */
+    c->argv[last_arg_to_free]->refcount = 0;
+
+    /* Must succeed as we checked the free space before. */
+    IOJobQueue_push(jq, IOThreadFreeArgv, c->argv);
+
+    return C_OK;
+}
+
+/* This function attempts to offload the free of an object to an IO thread.
+ * Returns C_OK if the object was successfully offloaded to an IO thread,
+ * C_ERR otherwise.*/
+int tryOffloadFreeObjToIOThreads(robj *obj) {
+    if (server.active_io_threads_num <= 1) {
+        return C_ERR;
+    }
+
+    if (obj->refcount > 1) return C_ERR;
+
+    /* We select the thread ID in a round-robin fashion. */
+    size_t tid = (server.stat_io_freed_objects % (server.active_io_threads_num - 1)) + 1;
+
+    IOJobQueue *jq = &io_jobs[tid];
+    if (IOJobQueue_isFull(jq)) {
+        return C_ERR;
+    }
+
+    IOJobQueue_push(jq, decrRefCountVoid, obj);
+    server.stat_io_freed_objects++;
+    return C_OK;
+}
+
+/* This function retrieves the results of the IO Thread poll.
+ * returns the number of fired events if the IO thread has finished processing poll events, 0 otherwise. */
+static int getIOThreadPollResults(aeEventLoop *eventLoop) {
+    int io_state;
+    io_state = atomic_load_explicit(&server.io_poll_state, memory_order_acquire);
+    if (io_state == AE_IO_STATE_POLL) {
+        /* IO thread is still processing poll events. */
+        return 0;
+    }
+
+    /* IO thread is done processing poll events. */
+    serverAssert(io_state == AE_IO_STATE_DONE);
+    server.stat_poll_processed_by_io_threads++;
+    server.io_poll_state = AE_IO_STATE_NONE;
+
+    /* Remove the custom poll proc. */
+    aeSetCustomPollProc(eventLoop, NULL);
+    aeSetPollProtect(eventLoop, 0);
+    return server.io_ae_fired_events;
+}
+
+void trySendPollJobToIOThreads(void) {
+    if (server.active_io_threads_num <= 1) {
+        return;
+    }
+
+    /* If there are no pending jobs, let the main thread do the poll-wait by itself. */
+    if (listLength(server.clients_pending_io_write) + listLength(server.clients_pending_io_read) == 0) {
+        return;
+    }
+
+    /* If the IO thread is already processing poll events, don't send another job. */
+    if (server.io_poll_state != AE_IO_STATE_NONE) {
+        return;
+    }
+
+    /* The poll is sent to the last thread. While a random thread could have been selected,
+     * the last thread has a slightly better chance of being less loaded compared to other threads,
+     * As we activate the lowest threads first. */
+    int tid = server.active_io_threads_num - 1;
+    IOJobQueue *jq = &io_jobs[tid];
+    if (IOJobQueue_isFull(jq)) return; /* The main thread will handle the poll itself. */
+
+    server.io_poll_state = AE_IO_STATE_POLL;
+    aeSetCustomPollProc(server.el, getIOThreadPollResults);
+    aeSetPollProtect(server.el, 1);
+    IOJobQueue_push(jq, IOThreadPoll, server.el);
 }

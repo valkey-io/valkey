@@ -63,6 +63,15 @@
 #endif
 #endif
 
+#define AE_LOCK(eventLoop)                                                                                             \
+    if ((eventLoop)->flags & AE_PROTECT_POLL) {                                                                        \
+        assert(pthread_mutex_lock(&(eventLoop)->poll_mutex) == 0);                                                     \
+    }
+
+#define AE_UNLOCK(eventLoop)                                                                                           \
+    if ((eventLoop)->flags & AE_PROTECT_POLL) {                                                                        \
+        assert(pthread_mutex_unlock(&(eventLoop)->poll_mutex) == 0);                                                   \
+    }
 
 aeEventLoop *aeCreateEventLoop(int setsize) {
     aeEventLoop *eventLoop;
@@ -81,7 +90,14 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->maxfd = -1;
     eventLoop->beforesleep = NULL;
     eventLoop->aftersleep = NULL;
+    eventLoop->custompoll = NULL;
     eventLoop->flags = 0;
+    /* Initialize the eventloop mutex with PTHREAD_MUTEX_ERRORCHECK type */
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK);
+    if (pthread_mutex_init(&eventLoop->poll_mutex, &attr) != 0) goto err;
+
     if (aeApiCreate(eventLoop) == -1) goto err;
     /* Events with mask == AE_NONE are not set. So let's initialize the
      * vector with it. */
@@ -122,11 +138,13 @@ void aeSetDontWait(aeEventLoop *eventLoop, int noWait) {
  *
  * Otherwise AE_OK is returned and the operation is successful. */
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize) {
+    AE_LOCK(eventLoop);
+    int ret = AE_OK;
     int i;
 
-    if (setsize == eventLoop->setsize) return AE_OK;
-    if (eventLoop->maxfd >= setsize) return AE_ERR;
-    if (aeApiResize(eventLoop, setsize) == -1) return AE_ERR;
+    if (setsize == eventLoop->setsize) goto done;
+    if (eventLoop->maxfd >= setsize) goto err;
+    if (aeApiResize(eventLoop, setsize) == -1) goto err;
 
     eventLoop->events = zrealloc(eventLoop->events, sizeof(aeFileEvent) * setsize);
     eventLoop->fired = zrealloc(eventLoop->fired, sizeof(aeFiredEvent) * setsize);
@@ -135,7 +153,13 @@ int aeResizeSetSize(aeEventLoop *eventLoop, int setsize) {
     /* Make sure that if we created new slots, they are initialized with
      * an AE_NONE mask. */
     for (i = eventLoop->maxfd + 1; i < setsize; i++) eventLoop->events[i].mask = AE_NONE;
-    return AE_OK;
+    goto done;
+
+err:
+    ret = AE_ERR;
+done:
+    AE_UNLOCK(eventLoop);
+    return ret;
 }
 
 void aeDeleteEventLoop(aeEventLoop *eventLoop) {
@@ -159,25 +183,35 @@ void aeStop(aeEventLoop *eventLoop) {
 }
 
 int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask, aeFileProc *proc, void *clientData) {
+    AE_LOCK(eventLoop);
+    int ret = AE_ERR;
+
     if (fd >= eventLoop->setsize) {
         errno = ERANGE;
-        return AE_ERR;
+        goto done;
     }
     aeFileEvent *fe = &eventLoop->events[fd];
 
-    if (aeApiAddEvent(eventLoop, fd, mask) == -1) return AE_ERR;
+    if (aeApiAddEvent(eventLoop, fd, mask) == -1) goto done;
     fe->mask |= mask;
     if (mask & AE_READABLE) fe->rfileProc = proc;
     if (mask & AE_WRITABLE) fe->wfileProc = proc;
     fe->clientData = clientData;
     if (fd > eventLoop->maxfd) eventLoop->maxfd = fd;
-    return AE_OK;
+
+    ret = AE_OK;
+
+done:
+    AE_UNLOCK(eventLoop);
+    return ret;
 }
 
 void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask) {
-    if (fd >= eventLoop->setsize) return;
+    AE_LOCK(eventLoop);
+    if (fd >= eventLoop->setsize) goto done;
+
     aeFileEvent *fe = &eventLoop->events[fd];
-    if (fe->mask == AE_NONE) return;
+    if (fe->mask == AE_NONE) goto done;
 
     /* We want to always remove AE_BARRIER if set when AE_WRITABLE
      * is removed. */
@@ -204,6 +238,9 @@ void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask) {
          * which is required by evport and epoll */
         aeApiDelEvent(eventLoop, fd, mask);
     }
+
+done:
+    AE_UNLOCK(eventLoop);
 }
 
 void *aeGetFileClientData(aeEventLoop *eventLoop, int fd) {
@@ -345,6 +382,17 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
     return processed;
 }
 
+/* This function provides direct access to the aeApiPoll call.
+ * It is intended to be called from a custom poll function.*/
+int aePoll(aeEventLoop *eventLoop, struct timeval *tvp) {
+    AE_LOCK(eventLoop);
+
+    int ret = aeApiPoll(eventLoop, tvp);
+
+    AE_UNLOCK(eventLoop);
+    return ret;
+}
+
 /* Process every pending file event, then every pending time event
  * (that may be registered by file event callbacks just processed).
  * Without special flags the function sleeps until some file event
@@ -377,25 +425,29 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
 
         if (eventLoop->beforesleep != NULL && (flags & AE_CALL_BEFORE_SLEEP)) eventLoop->beforesleep(eventLoop);
 
-        /* The eventLoop->flags may be changed inside beforesleep.
-         * So we should check it after beforesleep be called. At the same time,
-         * the parameter flags always should have the highest priority.
-         * That is to say, once the parameter flag is set to AE_DONT_WAIT,
-         * no matter what value eventLoop->flags is set to, we should ignore it. */
-        if ((flags & AE_DONT_WAIT) || (eventLoop->flags & AE_DONT_WAIT)) {
-            tv.tv_sec = tv.tv_usec = 0;
-            tvp = &tv;
-        } else if (flags & AE_TIME_EVENTS) {
-            usUntilTimer = usUntilEarliestTimer(eventLoop);
-            if (usUntilTimer >= 0) {
-                tv.tv_sec = usUntilTimer / 1000000;
-                tv.tv_usec = usUntilTimer % 1000000;
+        if (eventLoop->custompoll != NULL) {
+            numevents = eventLoop->custompoll(eventLoop);
+        } else {
+            /* The eventLoop->flags may be changed inside beforesleep.
+             * So we should check it after beforesleep be called. At the same time,
+             * the parameter flags always should have the highest priority.
+             * That is to say, once the parameter flag is set to AE_DONT_WAIT,
+             * no matter what value eventLoop->flags is set to, we should ignore it. */
+            if ((flags & AE_DONT_WAIT) || (eventLoop->flags & AE_DONT_WAIT)) {
+                tv.tv_sec = tv.tv_usec = 0;
                 tvp = &tv;
+            } else if (flags & AE_TIME_EVENTS) {
+                usUntilTimer = usUntilEarliestTimer(eventLoop);
+                if (usUntilTimer >= 0) {
+                    tv.tv_sec = usUntilTimer / 1000000;
+                    tv.tv_usec = usUntilTimer % 1000000;
+                    tvp = &tv;
+                }
             }
+            /* Call the multiplexing API, will return only on timeout or when
+             * some event fires. */
+            numevents = aeApiPoll(eventLoop, tvp);
         }
-        /* Call the multiplexing API, will return only on timeout or when
-         * some event fires. */
-        numevents = aeApiPoll(eventLoop, tvp);
 
         /* Don't process file events if not requested. */
         if (!(flags & AE_FILE_EVENTS)) {
@@ -502,4 +554,18 @@ void aeSetBeforeSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *beforesleep
 
 void aeSetAfterSleepProc(aeEventLoop *eventLoop, aeAfterSleepProc *aftersleep) {
     eventLoop->aftersleep = aftersleep;
+}
+
+/* This function allows setting a custom poll procedure to be used by the event loop.
+ * The custom poll procedure, if set, will be called instead of the default aeApiPoll */
+void aeSetCustomPollProc(aeEventLoop *eventLoop, aeCustomPollProc *custompoll) {
+    eventLoop->custompoll = custompoll;
+}
+
+void aeSetPollProtect(aeEventLoop *eventLoop, int protect) {
+    if (protect) {
+        eventLoop->flags |= AE_PROTECT_POLL;
+    } else {
+        eventLoop->flags &= ~AE_PROTECT_POLL;
+    }
 }

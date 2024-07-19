@@ -658,6 +658,9 @@ typedef enum {
 #define BUSY_MODULE_YIELD_EVENTS (1 << 0)
 #define BUSY_MODULE_YIELD_CLIENTS (1 << 1)
 
+/* IO poll */
+typedef enum { AE_IO_STATE_NONE, AE_IO_STATE_POLL, AE_IO_STATE_DONE } AeIoState;
+
 /*-----------------------------------------------------------------------------
  * Data types
  *----------------------------------------------------------------------------*/
@@ -1257,6 +1260,7 @@ typedef struct client {
     struct serverCommand *realcmd;       /* The original command that was executed by the client,
                                            Used to update error stats in case the c->cmd was modified
                                            during the command invocation (like on GEOADD for example). */
+    struct serverCommand *io_parsed_cmd; /* The command that was parsed by the IO thread. */
     user *user;                          /* User associated with this connection. If the
                                             user is set to NULL the connection can do
                                             anything (admin). */
@@ -1648,6 +1652,8 @@ struct valkeyServer {
     dict *commands;      /* Command table */
     dict *orig_commands; /* Command table before command renaming. */
     aeEventLoop *el;
+    _Atomic AeIoState io_poll_state;     /* Indicates the state of the IO polling. */
+    int io_ae_fired_events;              /* Number of poll events received by the IO thread. */
     rax *errors;                         /* Errors table */
     unsigned int lruclock;               /* Clock for LRU eviction */
     volatile sig_atomic_t shutdown_asap; /* Shutdown ordered by signal handler. */
@@ -1807,6 +1813,8 @@ struct valkeyServer {
     long long stat_dump_payload_sanitizations;         /* Number deep dump payloads integrity validations. */
     long long stat_io_reads_processed;                 /* Number of read events processed by IO threads */
     long long stat_io_writes_processed;                /* Number of write events processed by IO threads */
+    long long stat_io_freed_objects;                   /* Number of objects freed by IO threads */
+    long long stat_poll_processed_by_io_threads;       /* Total number of poll jobs processed by IO */
     long long stat_total_reads_processed;              /* Total number of read events processed */
     long long stat_total_writes_processed;             /* Total number of write events processed */
     long long stat_client_qbuf_limit_disconnections;   /* Total number of clients reached query buf length limit */
@@ -3239,7 +3247,7 @@ struct serverCommand *lookupCommandByCStringLogic(dict *commands, const char *s)
 struct serverCommand *lookupCommandByCString(const char *s);
 struct serverCommand *lookupCommandOrOriginal(robj **argv, int argc);
 int commandCheckExistence(client *c, sds *err);
-int commandCheckArity(client *c, sds *err);
+int commandCheckArity(struct serverCommand *cmd, int argc, sds *err);
 void startCommandExecution(void);
 int incrCommandStatsOnError(struct serverCommand *cmd, int flags);
 void call(client *c, int flags);

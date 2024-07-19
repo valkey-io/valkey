@@ -61,6 +61,7 @@
 #include "hdr_histogram.h"
 #include "crc16_slottable.h"
 #include "valkeymodule.h"
+#include "io_threads.h"
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -684,7 +685,7 @@ void moduleReleaseTempClient(client *c) {
     c->raw_flag = 0;
     c->flag.module = 1;
     c->user = NULL; /* Root user */
-    c->cmd = c->lastcmd = c->realcmd = NULL;
+    c->cmd = c->lastcmd = c->realcmd = c->io_parsed_cmd = NULL;
     if (c->bstate.async_rm_call_handle) {
         ValkeyModuleAsyncRMCallPromise *promise = c->bstate.async_rm_call_handle;
         promise->c = NULL; /* Remove the client from the promise so it will no longer be possible to abort it. */
@@ -1295,7 +1296,8 @@ int VM_CreateCommand(ValkeyModuleCtx *ctx,
     ValkeyModuleCommand *cp = moduleCreateCommandProxy(ctx->module, declared_name, sdsdup(declared_name), cmdfunc,
                                                        flags, firstkey, lastkey, keystep);
     cp->serverCmd->arity = cmdfunc ? -1 : -2; /* Default value, can be changed later via dedicated API */
-
+    /* Drain IO queue before modifying commands dictionary to prevent concurrent access while modifying it. */
+    drainIOThreadsQueue();
     serverAssert(dictAdd(server.commands, sdsdup(declared_name), cp->serverCmd) == DICT_OK);
     serverAssert(dictAdd(server.orig_commands, sdsdup(declared_name), cp->serverCmd) == DICT_OK);
     cp->serverCmd->id = ACLGetCommandID(declared_name); /* ID used for ACL. */
@@ -6281,7 +6283,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         if (error_as_call_replies) reply = callReplyCreateError(err, ctx);
         goto cleanup;
     }
-    if (!commandCheckArity(c, error_as_call_replies ? &err : NULL)) {
+    if (!commandCheckArity(c->cmd, c->argc, error_as_call_replies ? &err : NULL)) {
         errno = EINVAL;
         if (error_as_call_replies) reply = callReplyCreateError(err, ctx);
         goto cleanup;
@@ -10710,6 +10712,8 @@ void moduleCallCommandFilters(client *c) {
 
     ValkeyModuleCommandFilterCtx filter = {.argv = c->argv, .argv_len = c->argv_len, .argc = c->argc, .c = c};
 
+    robj *tmp = c->argv[0];
+    incrRefCount(tmp);
     while ((ln = listNext(&li))) {
         ValkeyModuleCommandFilter *f = ln->value;
 
@@ -10725,6 +10729,12 @@ void moduleCallCommandFilters(client *c) {
     c->argv = filter.argv;
     c->argv_len = filter.argv_len;
     c->argc = filter.argc;
+    if (tmp != c->argv[0]) {
+        /* With I/O thread command-lookup offload, we set c->io_parsed_cmd to the command corresponding to c->argv[0].
+         * Since the command filter just changed it, we need to reset c->io_parsed_cmd to null. */
+        c->io_parsed_cmd = NULL;
+    }
+    decrRefCount(tmp);
 }
 
 /* Return the number of arguments a filtered command has.  The number of
@@ -12072,6 +12082,8 @@ int moduleFreeCommand(struct ValkeyModule *module, struct serverCommand *cmd) {
 }
 
 void moduleUnregisterCommands(struct ValkeyModule *module) {
+    /* Drain IO queue before modifying commands dictionary to prevent concurrent access while modifying it. */
+    drainIOThreadsQueue();
     /* Unregister all the commands registered by this module. */
     dictIterator *di = dictGetSafeIterator(server.commands);
     dictEntry *de;

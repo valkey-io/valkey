@@ -265,20 +265,25 @@ start_server {tags {"slowlog"} overrides {slowlog-log-slower-than 1000000}} {
                 r fcall myfunc 0
             }
             set slowlog_resp [r slowlog get 2]
+            assert_equal 2 [llength $slowlog_resp]
+
+            # The first one is the script command, and the second one is the ping command executed in the script
+            # Each slowlog contains: id, timestamp, execution time, command array, ip:port, client name
+            set script_cmd [lindex $slowlog_resp 0]
+            set ping_cmd [lindex $slowlog_resp 1]
 
             # Make sure the command are logged.
-            assert_equal 2 [llength $slowlog_resp]
             if {$is_eval} {
-                assert_equal {eval server.call('ping') 0} [lindex [lindex $slowlog_resp 0] 3]
+                assert_equal {eval server.call('ping') 0} [lindex $script_cmd 3]
             } else {
-                assert_equal {fcall myfunc 0} [lindex [lindex $slowlog_resp 0] 3]
+                assert_equal {fcall myfunc 0} [lindex $script_cmd 3]
             }
-            assert_equal {ping} [lindex [lindex $slowlog_resp 1] 3]
+            assert_equal {ping} [lindex $ping_cmd 3]
 
             # Make sure the client info are the logged.
-            assert_equal [lindex [lindex $slowlog_resp 0] 4] [lindex [lindex $slowlog_resp 1] 4]
-            assert_equal {test-client} [lindex [lindex $slowlog_resp 0] 5]
-            assert_equal {test-client} [lindex [lindex $slowlog_resp 1] 5]
+            assert_equal [lindex $script_cmd 4] [lindex $ping_cmd 4]
+            assert_equal {test-client} [lindex $script_cmd 5]
+            assert_equal {test-client} [lindex $ping_cmd 5]
         }
     }
 }

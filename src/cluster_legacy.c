@@ -5246,6 +5246,13 @@ void clusterSetPrimary(clusterNode *n, int closeSlots) {
     replicationSetPrimary(n->ip, getNodeDefaultReplicationPort(n));
     removeAllNotOwnedShardChannelSubscriptions();
     resetManualFailover();
+
+    if (server.cluster->failover_auth_time) {
+        /* Since we have changed to a new primary node, the previously set
+         * failover_auth_time should no longer be used, whether it is in
+         * progress or timed out. */
+        server.cluster->failover_auth_time = 0;
+    }
 }
 
 /* -----------------------------------------------------------------------------

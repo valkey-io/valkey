@@ -1,6 +1,6 @@
 {
     "CANCEL": {
-        "summary": "Unschedule all scheduled bgsave requests.",
+        "summary": "Terminates a running bgsave child process. This will also unschedule all scheduled bgsave requests.",
         "complexity": "O(1)",
         "group": "server",
         "since": "8.0.0",

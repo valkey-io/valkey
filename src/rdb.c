@@ -3658,29 +3658,20 @@ void bgsaveCommandInternal(client *c, int schedule) {
     }
 }
 
-/* BGSAVE KILL */
-void bgsaveKillCommand(client *c) {
+/* BGSAVE CANCEL */
+void bgsaveCancelCommand(client *c) {
     /* Terminates an in progress BGSAVE */
     if (server.child_type == CHILD_TYPE_RDB) {
         /* There is an ongoing save */
-        serverLog(LL_NOTICE, "Background bgsave requested to be killed by user");
+        serverLog(LL_NOTICE, "Background bgsave will be aborted due to user request");
         killRDBChild();
         addReply(c, shared.ok);
-    } else {
-        addReplyError(c, "Background bgsave is currently not in progress");
-    }
-}
-
-/* BGSAVE CANCEL */
-void bgsaveCancelCommand(client *c) {
-    /* Cancel a scheduleds BGSAVE */
-    if (server.rdb_bgsave_scheduled == 1) {
-        /* There is an ongoing save */
-        serverLog(LL_NOTICE, "Background bgsave requested to be canceled by user");
+    } else if (server.rdb_bgsave_scheduled == 1) {
+        serverLog(LL_NOTICE, "Scheduled background bgsave will be cancelled due to user request");
         server.rdb_bgsave_scheduled = 0;
         addReply(c, shared.ok);
     } else {
-        addReplyError(c, "Background bgsave is currently not scheduled");
+        addReplyError(c, "Background bgsave is currently not in progress or scheduled");
     }
 }
 

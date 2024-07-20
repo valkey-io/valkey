@@ -6329,23 +6329,6 @@ struct COMMAND_STRUCT ACL_Subcommands[] = {
 #define BGSAVE_CANCEL_Keyspecs NULL
 #endif
 
-/********** BGSAVE KILL ********************/
-
-#ifndef SKIP_CMD_HISTORY_TABLE
-/* BGSAVE KILL history */
-#define BGSAVE_KILL_History NULL
-#endif
-
-#ifndef SKIP_CMD_TIPS_TABLE
-/* BGSAVE KILL tips */
-#define BGSAVE_KILL_Tips NULL
-#endif
-
-#ifndef SKIP_CMD_KEY_SPECS_TABLE
-/* BGSAVE KILL key specs */
-#define BGSAVE_KILL_Keyspecs NULL
-#endif
-
 /********** BGSAVE SCHEDULE ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -6365,8 +6348,7 @@ struct COMMAND_STRUCT ACL_Subcommands[] = {
 
 /* BGSAVE command table */
 struct COMMAND_STRUCT BGSAVE_Subcommands[] = {
-{MAKE_CMD("cancel","Unschedule all scheduled bgsave requests.","O(1)","8.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,BGSAVE_CANCEL_History,0,BGSAVE_CANCEL_Tips,0,bgsaveCancelCommand,-1,CMD_ADMIN,0,BGSAVE_CANCEL_Keyspecs,0,NULL,0)},
-{MAKE_CMD("kill","Terminates a running bgsave child process.","O(1)","8.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,BGSAVE_KILL_History,0,BGSAVE_KILL_Tips,0,bgsaveKillCommand,-1,CMD_ADMIN,0,BGSAVE_KILL_Keyspecs,0,NULL,0)},
+{MAKE_CMD("cancel","Terminates a running bgsave child process. This will also unschedule all scheduled bgsave requests.","O(1)","8.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,BGSAVE_CANCEL_History,0,BGSAVE_CANCEL_Tips,0,bgsaveCancelCommand,-1,CMD_ADMIN,0,BGSAVE_CANCEL_Keyspecs,0,NULL,0)},
 {MAKE_CMD("schedule","Asynchronously saves the database(s) to disk. When an AOF rewrite is in progress and schedule the background save to run at the next opportunity.","O(1)","8.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,BGSAVE_SCHEDULE_History,0,BGSAVE_SCHEDULE_Tips,0,bgsaveScheduleCommand,-1,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT,0,BGSAVE_SCHEDULE_Keyspecs,0,NULL,0)},
 {0}
 };

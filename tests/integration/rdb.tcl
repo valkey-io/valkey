@@ -171,7 +171,7 @@ start_server {} {
         assert_equal [s rdb_changes_since_last_save] 0
     }
 
-    test {bgsave kill aborts save} {
+    test {bgsave cancel aborts save} {
         r config set save ""
         # Generating RDB will take some 100 seconds
         r config set rdb-key-save-delay 1000000
@@ -185,7 +185,7 @@ start_server {} {
         }
         set fork_child_pid [get_child_pid 0]
         
-        assert {[r bgsave kill] eq {OK}}
+        assert {[r bgsave cancel] eq {OK}}
         set temp_rdb [file join [lindex [r config get dir] 1] temp-${fork_child_pid}.rdb]
         # Temp rdb must be deleted
         wait_for_condition 50 100 {
@@ -195,7 +195,7 @@ start_server {} {
         }
     }
 
-    test {bgsave kill response with error when no ongoing save} {
+    test {bgsave cancel response with error when no ongoing save} {
         r config set save ""
         # Generating RDB will take some 100 seconds
         r config set rdb-key-save-delay 0
@@ -206,10 +206,10 @@ start_server {} {
         } else {
             fail "bgsave is currently running"
         }
-        assert_error "ERR Background bgsave is currently not in progress" {r bgsave kill}
+        assert_error "ERR Background bgsave is currently not in progress or scheduled" {r bgsave cancel}
     }
 
-    test {bgsave cancel request} {
+    test {bgsave cancel schedulled request} {
         r config set save ""
         # Generating RDB will take some 100 seconds
         r config set rdb-key-save-delay 1000000
@@ -230,7 +230,7 @@ start_server {} {
         assert {[r bgsave cancel] eq {OK}}
 
         # Make sure a second call to bgsave cancel return an error
-        assert_error "ERR Background bgsave is currently not scheduled" {r bgsave cancel}
+        assert_error "ERR Background bgsave is currently not in progress or scheduled" {r bgsave cancel}
     }
 
 

@@ -3585,7 +3585,6 @@ void lastsaveCommand(client *c);
 void saveCommand(client *c);
 void bgsaveCommand(client *c);
 void bgsaveCancelCommand(client *c);
-void bgsaveKillCommand(client *c);
 void bgsaveScheduleCommand(client *c);
 void bgrewriteaofCommand(client *c);
 void shutdownCommand(client *c);

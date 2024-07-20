@@ -2500,7 +2500,6 @@ void resetServerStats(void) {
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
     lazyfreeResetStats();
-    clusterSlotStatResetAll();
 }
 
 /* Make the thread killable at any time, so that kill threads functions

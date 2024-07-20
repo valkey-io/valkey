@@ -145,7 +145,7 @@ proc wait_for_replica_key_exists {key key_count} {
 # Test cases for CLUSTER SLOT-STATS cpu-usec metric correctness.
 # -----------------------------------------------------------------------------
 
-start_cluster 1 0 {tags {external:skip cluster}} {
+start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
 
     # Define shared variables.
     set key "FOO"
@@ -153,7 +153,6 @@ start_cluster 1 0 {tags {external:skip cluster}} {
     set key_secondary "FOO2"
     set key_secondary_slot [R 0 cluster keyslot $key_secondary]
     set metrics_to_assert [list cpu-usec]
-    R 0 CONFIG SET cluster-slot-stats-enabled yes
 
     test "CLUSTER SLOT-STATS cpu-usec reset upon CONFIG RESETSTAT." {
         R 0 SET $key VALUE
@@ -264,11 +263,10 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         # Execute transaction, and assert that all nested command times have been accumulated.
         $r1 EXEC
         set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
-        set get_usec [get_cmdstat_usec set r]
-        set set_usec [get_cmdstat_usec get r]
+        set exec_usec [get_cmdstat_usec exec r]
         set expected_slot_stats [
             dict create $key_slot [
-                dict create cpu-usec [expr $get_usec + $set_usec]
+                dict create cpu-usec $exec_usec
             ]
         ]
         assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
@@ -277,15 +275,15 @@ start_cluster 1 0 {tags {external:skip cluster}} {
     R 0 FLUSHALL
 
     test "CLUSTER SLOT-STATS cpu-usec for lua-scripts, without cross-slot keys." {
-        r eval [format "redis.call('set', '%s', 'bar'); redis.call('get', '%s')" $key $key] 0
+        r eval [format "#!lua
+            redis.call('set', '%s', 'bar'); redis.call('get', '%s')" $key $key] 0
 
-        set get_usec [get_cmdstat_usec set r]
-        set set_usec [get_cmdstat_usec get r]
+        set eval_usec [get_cmdstat_usec eval r]
         set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
 
         set expected_slot_stats [
             dict create $key_slot [
-                dict create cpu-usec [expr $get_usec + $set_usec]
+                dict create cpu-usec $eval_usec
             ]
         ]
         assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
@@ -298,20 +296,9 @@ start_cluster 1 0 {tags {external:skip cluster}} {
             redis.call('set', '%s', 'bar'); redis.call('get', '%s');
         " $key $key_secondary] 0
 
-        set set_usec [get_cmdstat_usec set r]
-        set get_usec [get_cmdstat_usec get r]
+        # For cross-slot, we do not accumulate at all.
         set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
-
-        set expected_slot_stats [
-            dict create \
-                $key_slot [
-                    dict create cpu-usec $set_usec
-                ] \
-                $key_secondary_slot [
-                    dict create cpu-usec $get_usec
-                ]
-        ]
-        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
     }
     R 0 CONFIG RESETSTAT
     R 0 FLUSHALL
@@ -325,13 +312,12 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         r function load replace $function_str
         r fcall f1 0
 
-        set set_usec [get_cmdstat_usec set r]
-        set get_usec [get_cmdstat_usec get r]
+        set fcall_usec [get_cmdstat_usec fcall r]
         set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
 
         set expected_slot_stats [
             dict create $key_slot [
-                dict create cpu-usec [expr $get_usec + $set_usec]
+                dict create cpu-usec $fcall_usec
             ]
         ]
         assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
@@ -349,20 +335,9 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         r function load replace $function_str
         r fcall f1 0
 
-        set set_usec [get_cmdstat_usec set r]
-        set get_usec [get_cmdstat_usec get r]
+        # For cross-slot, we do not accumulate at all.
         set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
-
-        set expected_slot_stats [
-            dict create \
-                $key_slot [
-                    dict create cpu-usec $set_usec
-                ] \
-                $key_secondary_slot [
-                    dict create cpu-usec $get_usec
-                ]
-        ]
-        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
     }
     R 0 CONFIG RESETSTAT
     R 0 FLUSHALL
@@ -529,12 +504,11 @@ start_cluster 1 0 {tags {external:skip cluster}} {
 # Test cases for CLUSTER SLOT-STATS replication.
 # -----------------------------------------------------------------------------
 
-start_cluster 1 1 {tags {external:skip cluster}} {
+start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
 
     # Define shared variables.
     set key "FOO"
     set key_slot [R 0 CLUSTER KEYSLOT $key]
-    R 0 CONFIG SET cluster-slot-stats-enabled yes
 
     # For replication, only those metrics that are deterministic upon replication are asserted.
     # * key-count is asserted, as both the primary and its replica must hold the same number of keys.

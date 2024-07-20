@@ -3381,6 +3381,7 @@ void configHelpCommand(client *c) {
 
 void configResetStatCommand(client *c) {
     resetServerStats();
+    resetClusterStats();
     resetCommandTableStats(server.commands);
     resetErrorTableStats();
     addReply(c, shared.ok);

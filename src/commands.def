@@ -6312,54 +6312,13 @@ struct COMMAND_STRUCT ACL_Subcommands[] = {
 #define BGREWRITEAOF_Keyspecs NULL
 #endif
 
-/********** BGSAVE CANCEL ********************/
-
-#ifndef SKIP_CMD_HISTORY_TABLE
-/* BGSAVE CANCEL history */
-#define BGSAVE_CANCEL_History NULL
-#endif
-
-#ifndef SKIP_CMD_TIPS_TABLE
-/* BGSAVE CANCEL tips */
-#define BGSAVE_CANCEL_Tips NULL
-#endif
-
-#ifndef SKIP_CMD_KEY_SPECS_TABLE
-/* BGSAVE CANCEL key specs */
-#define BGSAVE_CANCEL_Keyspecs NULL
-#endif
-
-/********** BGSAVE SCHEDULE ********************/
-
-#ifndef SKIP_CMD_HISTORY_TABLE
-/* BGSAVE SCHEDULE history */
-#define BGSAVE_SCHEDULE_History NULL
-#endif
-
-#ifndef SKIP_CMD_TIPS_TABLE
-/* BGSAVE SCHEDULE tips */
-#define BGSAVE_SCHEDULE_Tips NULL
-#endif
-
-#ifndef SKIP_CMD_KEY_SPECS_TABLE
-/* BGSAVE SCHEDULE key specs */
-#define BGSAVE_SCHEDULE_Keyspecs NULL
-#endif
-
-/* BGSAVE command table */
-struct COMMAND_STRUCT BGSAVE_Subcommands[] = {
-{MAKE_CMD("cancel","Terminates a running bgsave child process. This will also unschedule all scheduled bgsave requests.","O(1)","8.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,BGSAVE_CANCEL_History,0,BGSAVE_CANCEL_Tips,0,bgsaveCancelCommand,-1,CMD_ADMIN,0,BGSAVE_CANCEL_Keyspecs,0,NULL,0)},
-{MAKE_CMD("schedule","Asynchronously saves the database(s) to disk. When an AOF rewrite is in progress and schedule the background save to run at the next opportunity.","O(1)","8.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,BGSAVE_SCHEDULE_History,0,BGSAVE_SCHEDULE_Tips,0,bgsaveScheduleCommand,-1,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT,0,BGSAVE_SCHEDULE_Keyspecs,0,NULL,0)},
-{0}
-};
-
 /********** BGSAVE ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
 /* BGSAVE history */
 commandHistory BGSAVE_History[] = {
 {"3.2.2","Added the `SCHEDULE` option."},
-{"8.0.0","Refactor SCHEDULE as a subcommand"},
+{"8.0.0","Added the `CANCEL` option."},
 };
 #endif
 
@@ -6372,6 +6331,17 @@ commandHistory BGSAVE_History[] = {
 /* BGSAVE key specs */
 #define BGSAVE_Keyspecs NULL
 #endif
+
+/* BGSAVE operation argument table */
+struct COMMAND_ARG BGSAVE_operation_Subargs[] = {
+{MAKE_ARG("schedule",ARG_TYPE_PURE_TOKEN,-1,"SCHEDULE",NULL,"3.2.2",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("cancel",ARG_TYPE_PURE_TOKEN,-1,"CANCEL",NULL,"8.0.0",CMD_ARG_OPTIONAL,0,NULL)},
+};
+
+/* BGSAVE argument table */
+struct COMMAND_ARG BGSAVE_Args[] = {
+{MAKE_ARG("operation",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=BGSAVE_operation_Subargs},
+};
 
 /********** COMMAND COUNT ********************/
 
@@ -10936,7 +10906,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 /* server */
 {MAKE_CMD("acl","A container for Access List Control commands.","Depends on subcommand.","6.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,ACL_History,0,ACL_Tips,0,NULL,-2,CMD_SENTINEL,0,ACL_Keyspecs,0,NULL,0),.subcommands=ACL_Subcommands},
 {MAKE_CMD("bgrewriteaof","Asynchronously rewrites the append-only file to disk.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,BGREWRITEAOF_History,0,BGREWRITEAOF_Tips,0,bgrewriteaofCommand,1,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT,0,BGREWRITEAOF_Keyspecs,0,NULL,0)},
-{MAKE_CMD("bgsave","Asynchronously saves the database(s) to disk.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,BGSAVE_History,2,BGSAVE_Tips,0,bgsaveCommand,-1,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT,0,BGSAVE_Keyspecs,0,NULL,0),.subcommands=BGSAVE_Subcommands},
+{MAKE_CMD("bgsave","Asynchronously saves the database(s) to disk.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,BGSAVE_History,2,BGSAVE_Tips,0,bgsaveCommand,-1,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_NOSCRIPT,0,BGSAVE_Keyspecs,0,NULL,1),.args=BGSAVE_Args},
 {MAKE_CMD("command","Returns detailed information about all commands.","O(N) where N is the total number of commands","2.8.13",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,COMMAND_History,0,COMMAND_Tips,1,commandCommand,-1,CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_CONNECTION,COMMAND_Keyspecs,0,NULL,0),.subcommands=COMMAND_Subcommands},
 {MAKE_CMD("config","A container for server configuration commands.","Depends on subcommand.","2.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,CONFIG_History,0,CONFIG_Tips,0,NULL,-2,0,0,CONFIG_Keyspecs,0,NULL,0),.subcommands=CONFIG_Subcommands},
 {MAKE_CMD("dbsize","Returns the number of keys in the database.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,DBSIZE_History,0,DBSIZE_Tips,2,dbsizeCommand,1,CMD_READONLY|CMD_FAST,ACL_CATEGORY_KEYSPACE,DBSIZE_Keyspecs,0,NULL,0)},

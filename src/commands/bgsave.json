@@ -13,7 +13,7 @@
             ],
             [
                 "8.0.0",
-                "Refactor SCHEDULE as a subcommand"
+                "Added the `CANCEL` option."
             ]
         ],
         "command_flags": [
@@ -22,9 +22,42 @@
             "NOSCRIPT"
         ],
         "arguments": [
+            {
+                "name": "operation",
+                "type": "oneof",
+                "arguments": [
+                    {
+                        "name": "schedule",
+                        "token": "SCHEDULE",
+                        "type": "pure-token",
+                        "optional": true,
+                        "since": "3.2.2"
+                    },
+                    {
+                        "name": "cancel",
+                        "token": "CANCEL",
+                        "type": "pure-token",
+                        "optional": true,
+                        "since": "8.0.0"
+                    }
+                ]
+            }
         ],
         "reply_schema": {
-            "const": "Background saving started"
+            "oneOf": [
+                {
+                    "const": "Background saving started"
+                },
+                {
+                    "const": "Background saving scheduled"
+                },
+                {
+                    "const": "Background bgsave cancelled"
+                },
+                {
+                    "const": "Scheduled background bgsave cancelled"
+                }
+            ]
         }
     }
 }

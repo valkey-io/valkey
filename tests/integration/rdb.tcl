@@ -185,7 +185,7 @@ start_server {} {
         }
         set fork_child_pid [get_child_pid 0]
         
-        assert {[r bgsave cancel] eq {OK}}
+        assert {[r bgsave cancel] eq {Background bgsave cancelled}}
         set temp_rdb [file join [lindex [r config get dir] 1] temp-${fork_child_pid}.rdb]
         # Temp rdb must be deleted
         wait_for_condition 50 100 {
@@ -227,7 +227,7 @@ start_server {} {
         assert {[r bgsave schedule] eq {Background saving scheduled}}
 
         # Cancel the scheduled save
-        assert {[r bgsave cancel] eq {OK}}
+        assert {[r bgsave cancel] eq {Scheduled background bgsave cancelled}}
 
         # Make sure a second call to bgsave cancel return an error
         assert_error "ERR Background bgsave is currently not in progress or scheduled" {r bgsave cancel}

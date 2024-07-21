@@ -3665,7 +3665,7 @@ void bgsaveCommand(client *c) {
             return;
         }
     }
-    
+
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);
 

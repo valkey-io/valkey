@@ -3636,6 +3636,7 @@ void saveCommand(client *c) {
     }
 }
 
+/* BGSAVE [SCHEDULE] */
 void bgsaveCommand(client *c) {
     int schedule = 0;
 
@@ -3664,6 +3665,7 @@ void bgsaveCommand(client *c) {
             return;
         }
     }
+    
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);
 

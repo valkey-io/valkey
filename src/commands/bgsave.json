@@ -25,19 +25,18 @@
             {
                 "name": "operation",
                 "type": "oneof",
+                "optional": true,
                 "arguments": [
                     {
                         "name": "schedule",
                         "token": "SCHEDULE",
                         "type": "pure-token",
-                        "optional": true,
                         "since": "3.2.2"
                     },
                     {
                         "name": "cancel",
                         "token": "CANCEL",
                         "type": "pure-token",
-                        "optional": true,
                         "since": "8.0.0"
                     }
                 ]

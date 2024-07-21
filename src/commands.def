@@ -6334,13 +6334,13 @@ commandHistory BGSAVE_History[] = {
 
 /* BGSAVE operation argument table */
 struct COMMAND_ARG BGSAVE_operation_Subargs[] = {
-{MAKE_ARG("schedule",ARG_TYPE_PURE_TOKEN,-1,"SCHEDULE",NULL,"3.2.2",CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("cancel",ARG_TYPE_PURE_TOKEN,-1,"CANCEL",NULL,"8.0.0",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("schedule",ARG_TYPE_PURE_TOKEN,-1,"SCHEDULE",NULL,"3.2.2",CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("cancel",ARG_TYPE_PURE_TOKEN,-1,"CANCEL",NULL,"8.0.0",CMD_ARG_NONE,0,NULL)},
 };
 
 /* BGSAVE argument table */
 struct COMMAND_ARG BGSAVE_Args[] = {
-{MAKE_ARG("operation",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=BGSAVE_operation_Subargs},
+{MAKE_ARG("operation",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=BGSAVE_operation_Subargs},
 };
 
 /********** COMMAND COUNT ********************/

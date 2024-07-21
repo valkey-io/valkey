@@ -193,14 +193,8 @@ start_server {} {
         } else {
             fail "bgsave temp file was not deleted after cancel"
         }
-    }
 
-    test {bgsave cancel response with error when no ongoing save} {
-        r config set save ""
-        # Generating RDB will take some 100 seconds
-        r config set rdb-key-save-delay 0
-
-        # Make sure no save is running and that bgsave return an error
+         # Make sure no save is running and that bgsave return an error
          wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 0
         } else {

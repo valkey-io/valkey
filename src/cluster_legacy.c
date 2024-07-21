@@ -2874,7 +2874,7 @@ void processPublishPacket(clusterMsgDataPublish *publish_data, uint16_t type) {
     uint32_t channel_len, message_len;
 
     /* Don't bother creating useless objects if there are no
-        * Pub/Sub subscribers. */
+     * Pub/Sub subscribers. */
     if ((type == CLUSTERMSG_TYPE_PUBLISH && serverPubsubSubscriptionCount() > 0) ||
         (type == CLUSTERMSG_TYPE_PUBLISHSHARD && serverPubsubShardSubscriptionCount() > 0)) {
         channel_len = ntohl(publish_data->channel_len);
@@ -2969,8 +2969,8 @@ int clusterIsValidPacket(clusterLink *link) {
             explen = sizeof(clusterMsg);
         }
         explen -= sizeof(union clusterMsgData);
-        explen += sizeof(clusterMsgDataPublish) - 8 + ntohl(publish_data->channel_len) +
-                  ntohl(publish_data->message_len);
+        explen +=
+            sizeof(clusterMsgDataPublish) - 8 + ntohl(publish_data->channel_len) + ntohl(publish_data->message_len);
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST || type == CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK ||
                type == CLUSTERMSG_TYPE_MFSTART) {
         explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
@@ -3983,14 +3983,20 @@ VALKEY_NO_SANITIZE("bounds")
 clusterMsgSendBlock *clusterCreatePublishMsgBlock(robj *channel, robj *message, int is_light, int is_sharded) {
     uint32_t channel_len, message_len;
     uint16_t type = is_sharded ? CLUSTERMSG_TYPE_PUBLISHSHARD : CLUSTERMSG_TYPE_PUBLISH;
-    type = is_light? (type | CLUSTERMSG_MSB) : type;
 
     channel = getDecodedObject(channel);
     message = getDecodedObject(message);
     channel_len = sdslen(channel->ptr);
     message_len = sdslen(message->ptr);
+    size_t msglen;
 
-    size_t msglen = is_light? sizeof(clusterMsgLight) : sizeof(clusterMsg);
+    if (is_light) {
+        /* We set the MSB for message that needs to sent using light header */
+        type |= CLUSTERMSG_MSB;
+        msglen = sizeof(clusterMsgLight);
+    } else {
+        msglen = sizeof(clusterMsg);
+    }
     msglen -= sizeof(union clusterMsgData);
     msglen += sizeof(clusterMsgDataPublish) - 8 + channel_len + message_len;
     clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(type, msglen);
@@ -4108,8 +4114,7 @@ int clusterSendModuleMessageToTarget(const char *target,
  * -------------------------------------------------------------------------- */
 void clusterPropagatePublish(robj *channel, robj *message, int sharded) {
     clusterMsgSendBlock *msgblock, *msgblock_light;
-    msgblock_light = clusterCreatePublishMsgBlock(
-        channel, message, 1, sharded);
+    msgblock_light = clusterCreatePublishMsgBlock(channel, message, 1, sharded);
     /* We will only create msgblock with normal hdr if there are any nodes that do not support light hdr */
     msgblock = NULL;
     ClusterNodeIterator iter;

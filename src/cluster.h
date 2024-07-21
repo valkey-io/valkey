@@ -54,7 +54,7 @@ void clusterUpdateMyselfHostname(void);
 void clusterUpdateMyselfAnnouncedPorts(void);
 void clusterUpdateMyselfHumanNodename(void);
 
-void clusterPropagatePublish(robj *channel, robj **messages, int count, int sharded);
+void clusterPropagatePublish(robj *channel, robj *messages, int sharded);
 
 unsigned long getClusterConnectionsCount(void);
 int isClusterHealthy(void);

@@ -92,11 +92,11 @@ typedef struct clusterNodeFailReport {
 #define CLUSTERMSG_TYPE_MFSTART 8               /* Pause clients for manual failover */
 #define CLUSTERMSG_TYPE_MODULE 9                /* Module cluster API message. */
 #define CLUSTERMSG_TYPE_PUBLISHSHARD 10         /* Pub/Sub Publish shard propagation */
-#define CLUSTERMSG_TYPE_PUBLISH_LIGHT 11        /* Pub/Sub Publish propagation using light header*/
-#define CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT 12   /* Pub/Sub Publish shard propagation using light header*/
-#define CLUSTERMSG_TYPE_COUNT 13                /* Total number of message types. */
+#define CLUSTERMSG_TYPE_COUNT 11                /* Total number of message types. */
+#define CLUSTERMSG_MSB 0x8000
 
-#define IS_LIGHT_MESSAGE(type) (type == CLUSTERMSG_TYPE_PUBLISH_LIGHT || type == CLUSTERMSG_TYPE_PUBLISHSHARD_LIGHT)
+/* For the message with light header, we will set the MSB.*/
+#define IS_LIGHT_MESSAGE(type) ((type) & CLUSTERMSG_MSB)
 
 /* Initially we don't know our "name", but we'll find it once we connect
  * to the first node, using the getsockname() function. Then we'll use this
@@ -224,24 +224,6 @@ union clusterMsgData {
     } module;
 };
 
-/* Light message data and it's supported message types. */
-typedef struct {
-    uint32_t message_len;
-    unsigned char message_data[8]; /* 8 bytes just as placeholder. */
-} clusterMsgDataPublishMessage;
-
-typedef struct {
-    uint64_t data_count;
-    clusterMsgDataPublishMessage *bulk_data;
-} clusterMsgDataPublishMulti;
-
-union clusterMsgDataLight {
-    /* PUBLISH */
-    struct {
-        clusterMsgDataPublishMulti msg;
-    } publish;
-};
-
 #define CLUSTER_PROTO_VER 1 /* Cluster bus protocol version. */
 
 typedef struct {
@@ -320,7 +302,7 @@ typedef struct {
     uint16_t notused1;
     uint16_t type; /* Message type */
     uint16_t notused2;
-    union clusterMsgDataLight data;
+    union clusterMsgData data;
 } clusterMsgLight;
 
 static_assert(offsetof(clusterMsgLight, sig) == offsetof(clusterMsg, sig), "unexpected field offset");
@@ -331,7 +313,7 @@ static_assert(offsetof(clusterMsgLight, type) == offsetof(clusterMsg, type), "un
 static_assert(offsetof(clusterMsgLight, notused2) == offsetof(clusterMsg, count), "unexpected field offset");
 static_assert(offsetof(clusterMsgLight, data) == 16, "unexpected field offset");
 
-#define CLUSTERMSG_LIGHT_MIN_LEN (sizeof(clusterMsgLight) - sizeof(union clusterMsgDataLight))
+#define CLUSTERMSG_LIGHT_MIN_LEN (sizeof(clusterMsgLight) - sizeof(union clusterMsgData))
 
 struct _clusterNode {
     mstime_t ctime;                         /* Node object creation time. */

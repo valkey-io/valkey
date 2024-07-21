@@ -532,15 +532,6 @@ int pubsubPublishMessage(robj *channel, robj *message, int sharded) {
     return pubsubPublishMessageInternal(channel, message, sharded ? pubSubShardType : pubSubType);
 }
 
-/* Publish messages to all the subscribers. */
-int pubsubPublishMultiMessages(robj *channel, robj **messages, int count, int sharded) {
-    int total_receivers = 0;
-    for (int i = 0; i < count; i++) {
-        total_receivers += pubsubPublishMessage(channel, messages[i], sharded);
-    }
-    return total_receivers;
-}
-
 /*-----------------------------------------------------------------------------
  * Pubsub commands implementation
  *----------------------------------------------------------------------------*/
@@ -612,14 +603,10 @@ void punsubscribeCommand(client *c) {
 
 /* This function wraps pubsubPublishMessage and also propagates the message to cluster.
  * Used by the commands PUBLISH/SPUBLISH and their respective module APIs.*/
-int pubsubPublishMultiMessagesAndPropagateToCluster(robj *channel, robj **messages, int count, int sharded) {
-    int receivers = pubsubPublishMultiMessages(channel, messages, count, sharded);
-    if (server.cluster_enabled) clusterPropagatePublish(channel, messages, count, sharded);
-    return receivers;
-}
-
 int pubsubPublishMessageAndPropagateToCluster(robj *channel, robj *message, int sharded) {
-    return pubsubPublishMultiMessagesAndPropagateToCluster(channel, &message, 1, sharded);
+    int receivers = pubsubPublishMessage(channel, message, sharded);
+    if (server.cluster_enabled) clusterPropagatePublish(channel, message, sharded);
+    return receivers;
 }
 
 /* PUBLISH <channel> <message> */
@@ -629,7 +616,7 @@ void publishCommand(client *c) {
         return;
     }
 
-    int receivers = pubsubPublishMultiMessagesAndPropagateToCluster(c->argv[1], &c->argv[2], 1, 0);
+    int receivers = pubsubPublishMessageAndPropagateToCluster(c->argv[1], c->argv[2], 0);
     if (!server.cluster_enabled) forceCommandPropagation(c, PROPAGATE_REPL);
     addReplyLongLong(c, receivers);
 }
@@ -715,7 +702,7 @@ void channelList(client *c, sds pat, kvstore *pubsub_channels) {
 
 /* SPUBLISH <shardchannel> <message> */
 void spublishCommand(client *c) {
-    int receivers = pubsubPublishMultiMessagesAndPropagateToCluster(c->argv[1], &c->argv[2], 1, 1);
+    int receivers = pubsubPublishMessageAndPropagateToCluster(c->argv[1], c->argv[2], 1);
     if (!server.cluster_enabled) forceCommandPropagation(c, PROPAGATE_REPL);
     addReplyLongLong(c, receivers);
 }

@@ -677,14 +677,14 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         $replica config set repl-timeout 10
 
         test "Test dual-channel-replication primary gets cob overrun before established psync" {
-            # Stop primary main process after fork for 1 seconds
+            # Pause primary main process after fork
             $primary debug pause-after-fork 1
             $replica replicaof $primary_host $primary_port
             wait_for_log_messages 0 {"*Done loading RDB*"} 0 2000 1
 
             # At this point rdb is loaded but psync hasn't been established yet. 
-            # Force the replica to sleep for 5 seconds so the primary main process will wake up while the
-            # replica is unresponsive. We expect the main process to fill the COB before the replica wakes.
+            # Pause the replica so the primary main process will wake up while the
+            # replica is unresponsive. We expect the main process to fill the COB and disconnect the replica.
             pause_process $replica_pid
             resume_process $primary_pid
             $primary debug pause-after-fork 0

@@ -3653,7 +3653,7 @@ void bgsaveCommand(client *c) {
                 killRDBChild();
                 addReplyStatus(c, "Background saving cancelled");
             } else if (server.rdb_bgsave_scheduled == 1) {
-                serverLog(LL_NOTICE, "Scheduled background bgsave will be cancelled due to user request");
+                serverLog(LL_NOTICE, "Scheduled background saving will be cancelled due to user request");
                 server.rdb_bgsave_scheduled = 0;
                 addReplyStatus(c, "Scheduled background saving cancelled");
             } else {

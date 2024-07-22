@@ -185,7 +185,7 @@ start_server {} {
         }
         set fork_child_pid [get_child_pid 0]
         
-        assert {[r bgsave cancel] eq {Background bgsave cancelled}}
+        assert {[r bgsave cancel] eq {Background saving cancelled}}
         set temp_rdb [file join [lindex [r config get dir] 1] temp-${fork_child_pid}.rdb]
         # Temp rdb must be deleted
         wait_for_condition 50 100 {

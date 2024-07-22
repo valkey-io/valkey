@@ -5412,8 +5412,8 @@ void clusterGenNodesSlotsInfo(int filter, clusterNode *query_node) {
         /* Generate slots info when occur different node with start
          * or end of slot. */
         if (i == CLUSTER_SLOTS || n != server.cluster->slots[i]) {
-            if (!query_node || server.cluster->slots[i] == query_node) {
-                if (!(n->flags & filter)) {
+            if (!(n->flags & filter)) {
+                if (!query_node || n == query_node) {
                     if (!n->slot_info_pairs) {
                         n->slot_info_pairs = zmalloc(2 * n->numslots * sizeof(uint16_t));
                     }
@@ -5421,10 +5421,10 @@ void clusterGenNodesSlotsInfo(int filter, clusterNode *query_node) {
                     n->slot_info_pairs[n->slot_info_pairs_count++] = start;
                     n->slot_info_pairs[n->slot_info_pairs_count++] = i - 1;
                 }
-                if (i == CLUSTER_SLOTS) break;
-                n = server.cluster->slots[i];
-                start = i;
             }
+            if (i == CLUSTER_SLOTS) break;
+            n = server.cluster->slots[i];
+            start = i;
         }
     }
 }
@@ -5727,6 +5727,13 @@ void clusterCommandShards(client *c) {
     if (c->argc == 3) {
         /* Currently the only extra argument is 'myself' */
         query_node = getMyClusterNode();
+        if (clusterNodeIsReplica(query_node)) {
+            query_node = clusterNodeGetPrimary(query_node);
+            if (query_node == NULL) {
+                addReplyErrorFormat(c, "Node is a replica serving no primary");
+                return;
+            }
+        }
     }
     /* This call will add slot_info_pairs to all nodes */
     clusterGenNodesSlotsInfo(0, query_node);

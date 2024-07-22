@@ -1479,6 +1479,7 @@ void clusterCommandSlots(client *c) {
             reply = generateClusterSlotResponse(c->resp, query_node);
             (*cache) = reply;
         } else {
+            reply = (*cache);
             debugServerAssertWithInfo(c, NULL, verifyCachedClusterSlotsResponse(reply, c->resp, query_node) == 1);
         }
     }

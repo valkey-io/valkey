@@ -834,7 +834,7 @@ void clusterCommand(client *c) {
 
     if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
         clusterCommandHelp(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "nodes") && c->argc <= 3 ) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "nodes") && c->argc <= 3) {
         /* CLUSTER NODES */
         clusterCommandNodes(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "myid") && c->argc == 2) {
@@ -1419,8 +1419,8 @@ void clusterCommandNodes(client *c) {
             }
         }
     }
-    /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client. 
-     * In case we need to only provide data for a specific node, we will skip 
+    /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client.
+     * In case we need to only provide data for a specific node, we will skip
      * filling data for other nodes. */
     sds nodes = clusterGenNodesDescription(c, 0, shouldReturnTlsInfo(), n);
     addReplyVerbatim(c, nodes, sdslen(nodes), "txt");
@@ -1442,7 +1442,7 @@ void clusterCommandSlots(client *c) {
     clusterNode *query_node = NULL;
     sds reply = NULL;
     sds *cache = NULL;
-    bool myself = false;
+    int myself = 0;
     if (connIsTLS(c->conn)) conn_type |= CACHE_CONN_TYPE_TLS;
     if (isClientConnIpV6(c)) conn_type |= CACHE_CONN_TYPE_IPv6;
     if (c->resp == 3) conn_type |= CACHE_CONN_TYPE_RESP3;
@@ -1451,7 +1451,7 @@ void clusterCommandSlots(client *c) {
         /* Fetch data for only specific node slots ownership */
         if (!strcasecmp(c->argv[2]->ptr, "myself")) {
             query_node = getMyClusterNode();
-            myself = true;
+            myself = 1;
         } else {
             query_node = clusterLookupNode(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
             if (query_node == NULL) {

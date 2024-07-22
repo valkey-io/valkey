@@ -5678,8 +5678,8 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
     setDeferredMapLen(c, node_replylen, reply_count);
 }
 
-/* Helper function in order to generate a single shard reply 
- * to client c. The dict entry is the server->cluster.shards entry 
+/* Helper function in order to generate a single shard reply
+ * to client c. The dict entry is the server->cluster.shards entry
  * holding the specific shard. */
 static void addShardReplyForClusterShards(client *c, dictEntry *de) {
     list *nodes = dictGetVal(de);

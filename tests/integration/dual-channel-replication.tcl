@@ -258,7 +258,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             set primary_port [srv 0 port]
             set loglines [count_log_lines -1]
 
-            populate 10000 primary 10000
+            populate 10000 primary 10
             $primary set key1 val1
 
             $primary config set repl-diskless-sync yes
@@ -317,7 +317,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 # It will give us enough time to fill the replica buffer.
                 $replica1 config set dual-channel-replication-enabled yes
                 $replica1 config set client-output-buffer-limit "replica 16383 16383 0"
-                $replica1 config set loglevel debug
 
                 $replica1 replicaof $primary_host $primary_port
                 # Wait for replica to establish psync using main channel
@@ -327,7 +326,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                     fail "replica didn't start sync session in time"
                 }  
 
-                populate 10000 primary 10000
+                populate 10000 primary 10; # set ~ 100kb
                 # Wait for replica's buffer limit reached
                 wait_for_condition 50 1000 {
                     [log_file_matches $replica1_log "*Replication buffer limit reached, stopping buffering*"]

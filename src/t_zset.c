@@ -1205,8 +1205,8 @@ robj *zsetTypeCreate(size_t size_hint, size_t val_len_hint) {
 /* Check if the existing zset should be converted to another encoding based off the
  * the size hint. */
 void zsetTypeMaybeConvert(robj *zobj, size_t size_hint, size_t value_len_hint) {
-    if (zobj->encoding == OBJ_ENCODING_LISTPACK && (size_hint > server.zset_max_listpack_entries ||
-        value_len_hint > server.zset_max_listpack_value)) {
+    if (zobj->encoding == OBJ_ENCODING_LISTPACK &&
+        (size_hint > server.zset_max_listpack_entries || value_len_hint > server.zset_max_listpack_value)) {
         zsetConvertAndExpand(zobj, OBJ_ENCODING_SKIPLIST, size_hint);
     }
 }

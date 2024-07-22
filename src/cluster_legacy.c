@@ -2895,6 +2895,16 @@ void processLightPacket(clusterLink *link, uint16_t type) {
     }
 }
 
+inline int messageTypeSupportsLightHdr(uint16_t type) {
+    switch (type) {
+    case CLUSTERMSG_TYPE_PUBLISH: return 1;
+    case CLUSTERMSG_TYPE_PUBLISHSHARD: return 1;
+    }
+    serverLog(LL_NOTICE, "--- Packet of type %s does not support light cluster header",
+              clusterGetMessageTypeString(type));
+    return 0;
+}
+
 
 int clusterIsValidPacket(clusterLink *link) {
     clusterMsg *hdr = (clusterMsg *)link->rcvbuf;
@@ -2902,7 +2912,8 @@ int clusterIsValidPacket(clusterLink *link) {
     uint16_t type = ntohs(hdr->type);
     int is_light = IS_LIGHT_MESSAGE(type);
     if (is_light) {
-        type &= ~CLUSTERMSG_MSB;
+        type &= ~CLUSTERMSG_LIGHT;
+        serverAssert(messageTypeSupportsLightHdr(type));
     }
 
     if (type < CLUSTERMSG_TYPE_COUNT) server.cluster->stats_bus_messages_received[type]++;
@@ -3022,7 +3033,7 @@ int clusterProcessPacket(clusterLink *link) {
     int is_light = IS_LIGHT_MESSAGE(type);
 
     if (is_light) {
-        type &= ~CLUSTERMSG_MSB;
+        type &= ~CLUSTERMSG_LIGHT;
         if (!link->node || nodeInHandshake(link->node)) {
             freeClusterLink(link);
             serverLog(
@@ -3992,7 +4003,7 @@ clusterMsgSendBlock *clusterCreatePublishMsgBlock(robj *channel, robj *message, 
 
     if (is_light) {
         /* We set the MSB for message that needs to sent using light header */
-        type |= CLUSTERMSG_MSB;
+        type |= CLUSTERMSG_LIGHT;
         msglen = sizeof(clusterMsgLight);
     } else {
         msglen = sizeof(clusterMsg);

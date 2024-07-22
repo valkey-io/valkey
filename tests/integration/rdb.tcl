@@ -200,7 +200,7 @@ start_server {} {
         } else {
             fail "bgsave is currently running"
         }
-        assert_error "ERR Background bgsave is currently not in progress or scheduled" {r bgsave cancel}
+        assert_error "ERR Background saving is currently not in progress or scheduled" {r bgsave cancel}
     }
 
     test {bgsave cancel schedulled request} {

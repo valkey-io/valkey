@@ -841,7 +841,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.base_ref != 'refs/heads/unstable':wq)) &&
+        (github.event_name == 'pull_request' && github.base_ref != 'refs/heads/unstable')) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     strategy:
       fail-fast: false

@@ -3010,6 +3010,8 @@ int clusterProcessPacket(clusterLink *link) {
             if (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
                 node->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
             }
+            node->inbound_link = link;
+            link->node = node;
             clusterAddNode(node);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
         }

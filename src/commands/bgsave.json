@@ -51,7 +51,7 @@
                     "const": "Background saving scheduled"
                 },
                 {
-                    "const": "Background bgsave cancelled"
+                    "const": "Background saving cancelled"
                 },
                 {
                     "const": "Scheduled background bgsave cancelled"

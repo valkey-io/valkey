@@ -3649,7 +3649,7 @@ void bgsaveCommand(client *c) {
             /* Terminates an in progress BGSAVE */
             if (server.child_type == CHILD_TYPE_RDB) {
                 /* There is an ongoing save */
-                serverLog(LL_NOTICE, "Background bgsave will be aborted due to user request");
+                serverLog(LL_NOTICE, "Background saving will be aborted due to user request");
                 killRDBChild();
                 addReplyStatus(c, "Background saving cancelled");
             } else if (server.rdb_bgsave_scheduled == 1) {

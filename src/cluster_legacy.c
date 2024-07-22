@@ -4142,8 +4142,7 @@ void clusterPropagatePublish(robj *channel, robj *message, int sharded) {
             clusterSendMessage(node->link, msgblock_light);
         } else {
             if (msgblock == NULL) {
-                msgblock = clusterCreatePublishMsgBlock(
-                    channel, message, 0, sharded ? CLUSTERMSG_TYPE_PUBLISHSHARD : CLUSTERMSG_TYPE_PUBLISH);
+                msgblock = clusterCreatePublishMsgBlock(channel, message, 0, sharded);
             }
             clusterSendMessage(node->link, msgblock);
         }

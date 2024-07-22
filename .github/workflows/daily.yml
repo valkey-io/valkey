@@ -6,7 +6,7 @@ on:
       # any PR to a release branch.
       - "[0-9].[0-9]"
       - "unstable"
-    types: [labeled]
+    types: [opened, reopened, synchronize, labeled]
   schedule:
     - cron: "0 0 * * *"
   workflow_dispatch:
@@ -37,8 +37,8 @@ jobs:
   test-ubuntu-jemalloc:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey' && github.ref != 'refs/heads/unstable')) &&
-      !contains(github.event.inputs.skipjobs, 'ubuntu') || ((contains(github.event.issue.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request') && github.event_name == 'pull_request')
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
+      !contains(github.event.inputs.skipjobs, 'ubuntu') || (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
     timeout-minutes: 14400
     steps:
       - name: prep
@@ -80,8 +80,8 @@ jobs:
   test-ubuntu-jemalloc-fortify:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
-      !contains(github.event.inputs.skipjobs, 'fortify') || (contains(github.event.issue.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
+      !contains(github.event.inputs.skipjobs, 'fortify') || (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
     container: ubuntu:lunar
     timeout-minutes: 14400
     steps:
@@ -127,8 +127,8 @@ jobs:
   test-ubuntu-libc-malloc:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
-      !contains(github.event.inputs.skipjobs, 'malloc') || (contains(github.event.issue.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
+      !contains(github.event.inputs.skipjobs, 'malloc') || (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
     timeout-minutes: 14400
     steps:
       - name: prep
@@ -164,8 +164,8 @@ jobs:
   test-ubuntu-no-malloc-usable-size:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
-      !contains(github.event.inputs.skipjobs, 'malloc') || (contains(github.event.issue.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
+      !contains(github.event.inputs.skipjobs, 'malloc') || (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
     timeout-minutes: 14400
     steps:
       - name: prep
@@ -201,7 +201,7 @@ jobs:
   test-ubuntu-32bit:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
       !contains(github.event.inputs.skipjobs, '32bit')
     timeout-minutes: 14400
     steps:
@@ -248,8 +248,8 @@ jobs:
   test-ubuntu-tls:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
-      !contains(github.event.inputs.skipjobs, 'tls') || (contains(github.event.issue.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
+      !contains(github.event.inputs.skipjobs, 'tls') || (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
     timeout-minutes: 14400
     steps:
       - name: prep
@@ -292,7 +292,7 @@ jobs:
   test-ubuntu-tls-no-tls:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     timeout-minutes: 14400
     steps:
@@ -336,8 +336,8 @@ jobs:
   test-ubuntu-io-threads:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
-      !contains(github.event.inputs.skipjobs, 'iothreads') || (contains(github.event.issue.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
+      !contains(github.event.inputs.skipjobs, 'iothreads') || (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
     timeout-minutes: 14400
     steps:
       - name: prep
@@ -368,7 +368,7 @@ jobs:
   test-ubuntu-reclaim-cache:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
       !contains(github.event.inputs.skipjobs, 'specific')
     timeout-minutes: 14400
     steps:
@@ -442,7 +442,7 @@ jobs:
   test-valgrind-test:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !contains(github.event.inputs.skiptests, 'valkey')
     timeout-minutes: 14400
     steps:
@@ -472,7 +472,7 @@ jobs:
   test-valgrind-misc:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !(contains(github.event.inputs.skiptests, 'modules') && contains(github.event.inputs.skiptests, 'unittest'))
     timeout-minutes: 14400
     steps:
@@ -507,7 +507,7 @@ jobs:
   test-valgrind-no-malloc-usable-size-test:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !contains(github.event.inputs.skiptests, 'valkey')
     timeout-minutes: 14400
     steps:
@@ -537,7 +537,7 @@ jobs:
   test-valgrind-no-malloc-usable-size-misc:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !(contains(github.event.inputs.skiptests, 'modules') && contains(github.event.inputs.skiptests, 'unittest'))
     timeout-minutes: 14400
     steps:
@@ -572,7 +572,7 @@ jobs:
   test-sanitizer-address:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
       !contains(github.event.inputs.skipjobs, 'sanitizer')
     timeout-minutes: 14400
     strategy:
@@ -622,7 +622,7 @@ jobs:
   test-sanitizer-undefined:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
       !contains(github.event.inputs.skipjobs, 'sanitizer')
     timeout-minutes: 14400
     strategy:
@@ -671,8 +671,8 @@ jobs:
 
   test-rpm-distros-jemalloc:
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
-      !contains(github.event.inputs.skipjobs, 'rpm-distros') || (contains(github.event.issue.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
+      !contains(github.event.inputs.skipjobs, 'rpm-distros') || (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
     strategy:
       fail-fast: false
       matrix:
@@ -735,8 +735,8 @@ jobs:
 
   test-rpm-distros-tls-module:
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
-      !contains(github.event.inputs.skipjobs, 'tls') || (contains(github.event.issue.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
+      !contains(github.event.inputs.skipjobs, 'tls') || (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
     strategy:
       fail-fast: false
       matrix:
@@ -805,7 +805,7 @@ jobs:
 
   test-rpm-distros-tls-module-no-tls:
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     strategy:
       fail-fast: false
@@ -876,8 +876,8 @@ jobs:
   test-macos-latest:
     runs-on: macos-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
-      !contains(github.event.inputs.skipjobs, 'macos') && !(contains(github.event.inputs.skiptests, 'valkey') && contains(github.event.inputs.skiptests, 'modules')) || (contains(github.event.issue.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
+      !contains(github.event.inputs.skipjobs, 'macos') && !(contains(github.event.inputs.skiptests, 'valkey') && contains(github.event.inputs.skiptests, 'modules')) || (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
     timeout-minutes: 14400
     steps:
       - name: prep
@@ -905,7 +905,7 @@ jobs:
   test-macos-latest-sentinel:
     runs-on: macos-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
       !contains(github.event.inputs.skipjobs, 'macos') && !contains(github.event.inputs.skiptests, 'sentinel')
     timeout-minutes: 14400
     steps:
@@ -931,7 +931,7 @@ jobs:
   test-macos-latest-cluster:
     runs-on: macos-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
       !contains(github.event.inputs.skipjobs, 'macos') && !contains(github.event.inputs.skiptests, 'cluster')
     timeout-minutes: 14400
     steps:
@@ -960,7 +960,7 @@ jobs:
         os: [macos-12, macos-14]
     runs-on: ${{ matrix.os }}
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
       !contains(github.event.inputs.skipjobs, 'macos')
     timeout-minutes: 14400
     steps:
@@ -986,8 +986,8 @@ jobs:
   test-freebsd:
     runs-on: macos-12
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
-      !contains(github.event.inputs.skipjobs, 'freebsd') || (contains(github.event.issue.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
+      !contains(github.event.inputs.skipjobs, 'freebsd') || (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') && github.event_name == 'pull_request')
     timeout-minutes: 14400
     steps:
       - name: prep
@@ -1014,7 +1014,7 @@ jobs:
   test-alpine-jemalloc:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
       !contains(github.event.inputs.skipjobs, 'alpine')
     container: alpine:latest
     steps:
@@ -1053,7 +1053,7 @@ jobs:
   test-alpine-libc-malloc:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
       !contains(github.event.inputs.skipjobs, 'alpine')
     container: alpine:latest
     steps:
@@ -1093,7 +1093,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 14400
     if: |
-      (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey')) &&
       !contains(github.event.inputs.skipjobs, 'reply-schema')
     steps:
       - name: prep
@@ -1134,7 +1134,7 @@ jobs:
 
   notify-about-job-results:
     runs-on: ubuntu-latest
-    if: always() && github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey'
+    if: always() && github.event_name == 'schedule' && github.repository == 'valkey-io/valkey'
     needs: [test-ubuntu-jemalloc, test-ubuntu-jemalloc-fortify, test-ubuntu-libc-malloc, test-ubuntu-no-malloc-usable-size, test-ubuntu-32bit, test-ubuntu-tls, test-ubuntu-tls-no-tls, test-ubuntu-io-threads, test-ubuntu-reclaim-cache, test-valgrind-test, test-valgrind-misc, test-valgrind-no-malloc-usable-size-test, test-valgrind-no-malloc-usable-size-misc, test-sanitizer-address, test-sanitizer-undefined, test-rpm-distros-jemalloc, test-rpm-distros-tls-module, test-rpm-distros-tls-module-no-tls, test-macos-latest, test-macos-latest-sentinel, test-macos-latest-cluster, build-macos, test-freebsd, test-alpine-jemalloc, test-alpine-libc-malloc, reply-schemas-validator]
     steps:
       - name: Collect job status

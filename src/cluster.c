@@ -834,22 +834,19 @@ void clusterCommand(client *c) {
 
     if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
         clusterCommandHelp(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "nodes") && c->argc == 2) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "nodes") && c->argc <= 3 ) {
         /* CLUSTER NODES */
-        /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client. */
-        sds nodes = clusterGenNodesDescription(c, 0, shouldReturnTlsInfo());
-        addReplyVerbatim(c, nodes, sdslen(nodes), "txt");
-        sdsfree(nodes);
+        clusterCommandNodes(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "myid") && c->argc == 2) {
         /* CLUSTER MYID */
         clusterCommandMyId(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "myshardid") && c->argc == 2) {
         /* CLUSTER MYSHARDID */
         clusterCommandMyShardId(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "slots") && c->argc == 2) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "slots") && c->argc <= 3) {
         /* CLUSTER SLOTS */
         clusterCommandSlots(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "shards") && c->argc == 2) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "shards") && c->argc <= 3) {
         /* CLUSTER SHARDS */
         clusterCommandShards(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "info") && c->argc == 2) {
@@ -1358,10 +1355,14 @@ void clearCachedClusterSlotsResponse(void) {
             sdsfree(server.cached_cluster_slot_info[conn_type]);
             server.cached_cluster_slot_info[conn_type] = NULL;
         }
+        if (server.cached_cluster_my_slot_info[conn_type]) {
+            sdsfree(server.cached_cluster_my_slot_info[conn_type]);
+            server.cached_cluster_my_slot_info[conn_type] = NULL;
+        }
     }
 }
 
-sds generateClusterSlotResponse(int resp) {
+sds generateClusterSlotResponse(int resp, clusterNode *query_node) {
     client *recording_client = createCachedResponseClient(resp);
     clusterNode *n = NULL;
     int num_primaries = 0, start = -1;
@@ -1379,8 +1380,10 @@ sds generateClusterSlotResponse(int resp) {
         /* Add cluster slots info when occur different node with start
          * or end of slot. */
         if (i == CLUSTER_SLOTS || n != getNodeBySlot(i)) {
-            addNodeReplyForClusterSlot(recording_client, n, start, i - 1);
-            num_primaries++;
+            if (!query_node || n == query_node) {
+                addNodeReplyForClusterSlot(recording_client, n, start, i - 1);
+                num_primaries++;
+            }
             if (i == CLUSTER_SLOTS) break;
             n = getNodeBySlot(i);
             start = i;
@@ -1392,14 +1395,36 @@ sds generateClusterSlotResponse(int resp) {
     return cluster_slot_response;
 }
 
-int verifyCachedClusterSlotsResponse(sds cached_response, int resp) {
-    sds generated_response = generateClusterSlotResponse(resp);
+int verifyCachedClusterSlotsResponse(sds cached_response, int resp, clusterNode *query_node) {
+    sds generated_response = generateClusterSlotResponse(resp, query_node);
     int is_equal = !sdscmp(generated_response, cached_response);
     /* Here, we use LL_WARNING so this gets printed when debug assertions are enabled and the system is about to crash. */
     if (!is_equal)
         serverLog(LL_WARNING, "\ngenerated_response:\n%s\n\ncached_response:\n%s", generated_response, cached_response);
     sdsfree(generated_response);
     return is_equal;
+}
+
+void clusterCommandNodes(client *c) {
+    clusterNode *n = NULL;
+    if (c->argc == 3) {
+        /* In case we are provided with a specific node to display we fetch the node data */
+        if (!strcasecmp(c->argv[2]->ptr, "myself")) {
+            n = getMyClusterNode();
+        } else {
+            n = clusterLookupNode(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
+            if (n == NULL) {
+                addReplyErrorFormat(c, "Unknown node id: %s", (char *)c->argv[2]->ptr);
+                return;
+            }
+        }
+    }
+    /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client. 
+     * In case we need to only provide data for a specific node, we will skip 
+     * filling data for other nodes. */
+    sds nodes = clusterGenNodesDescription(c, 0, shouldReturnTlsInfo(), n);
+    addReplyVerbatim(c, nodes, sdslen(nodes), "txt");
+    sdsfree(nodes);
 }
 
 void clusterCommandSlots(client *c) {
@@ -1414,21 +1439,51 @@ void clusterCommandSlots(client *c) {
      *           ... continued until done
      */
     int conn_type = 0;
+    clusterNode *query_node = NULL;
+    sds reply = NULL;
+    sds *cache = NULL;
+    bool myself = false;
     if (connIsTLS(c->conn)) conn_type |= CACHE_CONN_TYPE_TLS;
     if (isClientConnIpV6(c)) conn_type |= CACHE_CONN_TYPE_IPv6;
     if (c->resp == 3) conn_type |= CACHE_CONN_TYPE_RESP3;
 
+    if (c->argc == 3) {
+        /* Fetch data for only specific node slots ownership */
+        if (!strcasecmp(c->argv[2]->ptr, "myself")) {
+            query_node = getMyClusterNode();
+            myself = true;
+        } else {
+            query_node = clusterLookupNode(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
+            if (query_node == NULL) {
+                addReplyErrorFormat(c, "Unknown node id: %s", (char *)c->argv[2]->ptr);
+                return;
+            }
+        }
+        if (clusterNodeIsReplica(query_node)) {
+            query_node = clusterNodeGetPrimary(query_node);
+            if (query_node == NULL) {
+                addReplyErrorFormat(c, "Node %s is a replica serving no primary", (char *)c->argv[2]->ptr);
+                return;
+            }
+        }
+        cache = &server.cached_cluster_my_slot_info[conn_type];
+    } else {
+        cache = &server.cached_cluster_slot_info[conn_type];
+    }
     if (detectAndUpdateCachedNodeHealth()) clearCachedClusterSlotsResponse();
 
-    sds cached_reply = server.cached_cluster_slot_info[conn_type];
-    if (!cached_reply) {
-        cached_reply = generateClusterSlotResponse(c->resp);
-        server.cached_cluster_slot_info[conn_type] = cached_reply;
+    if (query_node && !myself) {
+        reply = generateClusterSlotResponse(c->resp, query_node);
     } else {
-        debugServerAssertWithInfo(c, NULL, verifyCachedClusterSlotsResponse(cached_reply, c->resp) == 1);
+        if (!(*cache)) {
+            reply = generateClusterSlotResponse(c->resp, query_node);
+            (*cache) = reply;
+        } else {
+            debugServerAssertWithInfo(c, NULL, verifyCachedClusterSlotsResponse(reply, c->resp, query_node) == 1);
+        }
     }
 
-    addReplyProto(c, cached_reply, sdslen(cached_reply));
+    addReplyProto(c, reply, sdslen(reply));
 }
 
 /* -----------------------------------------------------------------------------

@@ -755,7 +755,7 @@ int clusterSaveConfig(int do_fsync) {
 
     /* Get the nodes description and concatenate our "vars" directive to
      * save currentEpoch and lastVoteEpoch. */
-    ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
+    ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0, NULL);
     ci = sdscatprintf(ci, "vars currentEpoch %llu lastVoteEpoch %llu\n",
                       (unsigned long long)server.cluster->currentEpoch,
                       (unsigned long long)server.cluster->lastVoteEpoch);
@@ -5396,7 +5396,7 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
  * in the slots_info struct on the node. This is used to improve the efficiency
  * of clusterGenNodesDescription() because it removes looping of the slot space
  * for generating the slot info for each node individually. */
-void clusterGenNodesSlotsInfo(int filter) {
+void clusterGenNodesSlotsInfo(int filter, clusterNode *query_node) {
     clusterNode *n = NULL;
     int start = -1;
 
@@ -5412,17 +5412,19 @@ void clusterGenNodesSlotsInfo(int filter) {
         /* Generate slots info when occur different node with start
          * or end of slot. */
         if (i == CLUSTER_SLOTS || n != server.cluster->slots[i]) {
-            if (!(n->flags & filter)) {
-                if (!n->slot_info_pairs) {
-                    n->slot_info_pairs = zmalloc(2 * n->numslots * sizeof(uint16_t));
+            if (!query_node || server.cluster->slots[i] == query_node) {
+                if (!(n->flags & filter)) {
+                    if (!n->slot_info_pairs) {
+                        n->slot_info_pairs = zmalloc(2 * n->numslots * sizeof(uint16_t));
+                    }
+                    serverAssert((n->slot_info_pairs_count + 1) < (2 * n->numslots));
+                    n->slot_info_pairs[n->slot_info_pairs_count++] = start;
+                    n->slot_info_pairs[n->slot_info_pairs_count++] = i - 1;
                 }
-                serverAssert((n->slot_info_pairs_count + 1) < (2 * n->numslots));
-                n->slot_info_pairs[n->slot_info_pairs_count++] = start;
-                n->slot_info_pairs[n->slot_info_pairs_count++] = i - 1;
+                if (i == CLUSTER_SLOTS) break;
+                n = server.cluster->slots[i];
+                start = i;
             }
-            if (i == CLUSTER_SLOTS) break;
-            n = server.cluster->slots[i];
-            start = i;
         }
     }
 }
@@ -5448,28 +5450,35 @@ void clusterFreeNodesSlotsInfo(clusterNode *n) {
  * The representation obtained using this function is used for the output
  * of the CLUSTER NODES function, and as format for the cluster
  * configuration file (nodes.conf) for a given node. */
-sds clusterGenNodesDescription(client *c, int filter, int tls_primary) {
+sds clusterGenNodesDescription(client *c, int filter, int tls_primary, clusterNode *query_node) {
     sds ci = sdsempty(), ni;
     dictIterator *di;
     dictEntry *de;
 
     /* Generate all nodes slots info firstly. */
-    clusterGenNodesSlotsInfo(filter);
+    clusterGenNodesSlotsInfo(filter, query_node);
+    if (!query_node) {
+        /* If we need to fetch data for all nodes, iterate over all of them */
+        di = dictGetSafeIterator(server.cluster->nodes);
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *node = dictGetVal(de);
 
-    di = dictGetSafeIterator(server.cluster->nodes);
-    while ((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
+            if (node->flags & filter) continue;
+            ni = clusterGenNodeDescription(c, node, tls_primary);
+            ci = sdscatsds(ci, ni);
+            sdsfree(ni);
+            ci = sdscatlen(ci, "\n", 1);
 
-        if (node->flags & filter) continue;
-        ni = clusterGenNodeDescription(c, node, tls_primary);
+            /* Release slots info. */
+            clusterFreeNodesSlotsInfo(node);
+        }
+        dictReleaseIterator(di);
+    } else if (!(query_node->flags & filter)) {
+        /* query only a single node. No need to iterate over all cluster nodes. */
+        ni = clusterGenNodeDescription(c, query_node, tls_primary);
         ci = sdscatsds(ci, ni);
         sdsfree(ni);
-        ci = sdscatlen(ci, "\n", 1);
-
-        /* Release slots info. */
-        clusterFreeNodesSlotsInfo(node);
     }
-    dictReleaseIterator(di);
     return ci;
 }
 
@@ -5669,52 +5678,76 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
     setDeferredMapLen(c, node_replylen, reply_count);
 }
 
+/* Helper function in order to generate a single shard reply 
+ * to client c. The dict entry is the server->cluster.shards entry 
+ * holding the specific shard. */
+static void addShardReplyForClusterShards(client *c, dictEntry *de) {
+    list *nodes = dictGetVal(de);
+    serverAssert(listLength(nodes) > 0);
+    addReplyMapLen(c, 2);
+    addReplyBulkCString(c, "slots");
+
+    /* Find a node which has the slot information served by this shard. */
+    clusterNode *n = NULL;
+    listIter li;
+    listRewind(nodes, &li);
+    for (listNode *ln = listNext(&li); ln != NULL; ln = listNext(&li)) {
+        n = listNodeValue(ln);
+        if (n->slot_info_pairs) {
+            break;
+        }
+    }
+
+    if (n && n->slot_info_pairs != NULL) {
+        serverAssert((n->slot_info_pairs_count % 2) == 0);
+        addReplyArrayLen(c, n->slot_info_pairs_count);
+        for (int i = 0; i < n->slot_info_pairs_count; i++) {
+            addReplyLongLong(c, (unsigned long)n->slot_info_pairs[i]);
+        }
+    } else {
+        /* If no slot info pair is provided, the node owns no slots */
+        addReplyArrayLen(c, 0);
+    }
+
+    addReplyBulkCString(c, "nodes");
+    addReplyArrayLen(c, listLength(nodes));
+    listRewind(nodes, &li);
+    for (listNode *ln = listNext(&li); ln != NULL; ln = listNext(&li)) {
+        clusterNode *n = listNodeValue(ln);
+        addNodeDetailsToShardReply(c, n);
+        clusterFreeNodesSlotsInfo(n);
+    }
+}
+
 /* Add to the output buffer of the given client, an array of slot (start, end)
  * pair owned by the shard, also the primary and set of replica(s) along with
  * information about each node. */
 void clusterCommandShards(client *c) {
-    addReplyArrayLen(c, dictSize(server.cluster->shards));
-    /* This call will add slot_info_pairs to all nodes */
-    clusterGenNodesSlotsInfo(0);
-    dictIterator *di = dictGetSafeIterator(server.cluster->shards);
-    for (dictEntry *de = dictNext(di); de != NULL; de = dictNext(di)) {
-        list *nodes = dictGetVal(de);
-        serverAssert(listLength(nodes) > 0);
-        addReplyMapLen(c, 2);
-        addReplyBulkCString(c, "slots");
-
-        /* Find a node which has the slot information served by this shard. */
-        clusterNode *n = NULL;
-        listIter li;
-        listRewind(nodes, &li);
-        for (listNode *ln = listNext(&li); ln != NULL; ln = listNext(&li)) {
-            n = listNodeValue(ln);
-            if (n->slot_info_pairs) {
-                break;
-            }
-        }
-
-        if (n && n->slot_info_pairs != NULL) {
-            serverAssert((n->slot_info_pairs_count % 2) == 0);
-            addReplyArrayLen(c, n->slot_info_pairs_count);
-            for (int i = 0; i < n->slot_info_pairs_count; i++) {
-                addReplyLongLong(c, (unsigned long)n->slot_info_pairs[i]);
-            }
-        } else {
-            /* If no slot info pair is provided, the node owns no slots */
-            addReplyArrayLen(c, 0);
-        }
-
-        addReplyBulkCString(c, "nodes");
-        addReplyArrayLen(c, listLength(nodes));
-        listRewind(nodes, &li);
-        for (listNode *ln = listNext(&li); ln != NULL; ln = listNext(&li)) {
-            clusterNode *n = listNodeValue(ln);
-            addNodeDetailsToShardReply(c, n);
-            clusterFreeNodesSlotsInfo(n);
-        }
+    clusterNode *query_node = NULL;
+    if (c->argc == 3) {
+        /* Currently the only extra argument is 'myself' */
+        query_node = getMyClusterNode();
     }
-    dictReleaseIterator(di);
+    /* This call will add slot_info_pairs to all nodes */
+    clusterGenNodesSlotsInfo(0, query_node);
+
+    if (!query_node) {
+        /* Query is for all shards */
+        addReplyArrayLen(c, dictSize(server.cluster->shards));
+        dictIterator *di = dictGetSafeIterator(server.cluster->shards);
+        for (dictEntry *de = dictNext(di); de != NULL; de = dictNext(di)) {
+            addShardReplyForClusterShards(c, de);
+        }
+        dictReleaseIterator(di);
+    } else {
+        /* Query is just for my shard*/
+        addReplyArrayLen(c, 1);
+        sds sid = sdsnewlen(query_node->shard_id, CLUSTER_NAMELEN);
+        dictEntry *de = dictFind(server.cluster->shards, sid);
+        serverAssert(de); 
+        addShardReplyForClusterShards(c, de);
+        sdsfree(sid);
+    }
 }
 
 sds genClusterInfoString(void) {

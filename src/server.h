@@ -2157,6 +2157,7 @@ struct valkeyServer {
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     sds cached_cluster_slot_info[CACHE_CONN_TYPE_MAX]; /* Index in array is a bitwise or of CACHE_CONN_TYPE_* */
+    sds cached_cluster_my_slot_info[CACHE_CONN_TYPE_MAX]; /* Index in array of owned slots which is a bitwise or of CACHE_CONN_TYPE_* */
     /* Scripting */
     mstime_t busy_reply_threshold;  /* Script / module timeout in milliseconds */
     int pre_command_oom_state;      /* OOM before command (script?) was started */

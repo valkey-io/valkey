@@ -4,7 +4,7 @@
         "complexity": "O(N) where N is the total number of Cluster nodes",
         "group": "cluster",
         "since": "3.0.0",
-        "arity": 2,
+        "arity": -2,
         "container": "CLUSTER",
         "function": "clusterCommand",
         "history": [
@@ -15,6 +15,10 @@
             [
                 "7.0.0",
                 "Added additional networking metadata field."
+            ],
+            [
+                "8.0.0",
+                "Added the `node-id` option."
             ]
         ],
         "command_flags": [
@@ -23,6 +27,26 @@
         ],
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT"
+        ],
+        "arguments": [
+            {
+                "name": "operation",
+                "type": "oneof",
+                "optional": true,
+                "arguments": [
+                    {
+                        "name": "myself",
+                        "token": "MYSELF",
+                        "type": "pure-token",
+                        "since": "8.0.0"
+                    },
+                    {
+                        "name": "node-id",
+                        "type": "string",
+                        "since": "8.0.0"
+                    }
+                ]
+            }
         ],
         "reply_schema": {
             "description": "Nested list of slot ranges with networking information.",

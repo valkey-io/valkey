@@ -894,6 +894,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             $primary debug log "killing replica main connection"
             set replica_main_conn_id [get_client_id_by_last_cmd $primary "psync"]
             assert {$replica_main_conn_id != ""}
+            set loglines [count_log_lines -1]
             $primary client kill id $replica_main_conn_id
             # Wait for primary to abort the sync
             wait_for_condition 50 1000 {
@@ -901,11 +902,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             } else {
                 fail "Primary did not free repl buf block after sync failure"
             }
-            wait_for_condition 1000 10 {
-                [s -1 rdb_last_bgsave_status] eq "err"
-            } else {
-                fail "bgsave did not stop in time"
-            }
+            wait_for_log_messages -1 {"*Background RDB transfer error*"} $loglines 1000 10
         }
 
         test "Test dual channel replication slave of no one after main conn kill" {
@@ -931,14 +928,10 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             set replica_rdb_channel_id [get_client_id_by_last_cmd $primary "sync"]
             $primary debug log "killing replica rdb connection $replica_rdb_channel_id"
             assert {$replica_rdb_channel_id != ""}
+            set loglines [count_log_lines -1]
             $primary client kill id $replica_rdb_channel_id
             # Wait for primary to abort the sync
-            wait_for_condition 1000 10 {
-                [s -1 rdb_bgsave_in_progress] eq 0 &&
-                [s -1 rdb_last_bgsave_status] eq "err" 
-            } else {
-                fail "Primary should abort sync"
-            }
+            wait_for_log_messages -1 {"*Background RDB transfer error*"} $loglines 1000 10
         }
 
         test "Test dual channel replication slave of no one after rdb conn kill" {
@@ -1072,6 +1065,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             $primary debug log "killing replica rdb connection"
             set replica_rdb_channel_id [get_client_id_by_last_cmd $primary "sync"]
             assert {$replica_rdb_channel_id != ""}
+            set loglines [count_log_lines -1]
             $primary client kill id $replica_rdb_channel_id
             # Wait for primary to abort the sync
             wait_for_condition 50 1000 {
@@ -1079,11 +1073,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             } else {
                 fail "Primary did not free repl buf block after sync failure"
             }
-            wait_for_condition 1000 10 {
-                [s -1 rdb_last_bgsave_status] eq "err"
-            } else {
-                fail "bgsave did not stop in time"
-            }
+            wait_for_log_messages -1 {"*Background RDB transfer error*"} $loglines 1000 10
             # Replica should retry
             wait_for_condition 500 1000 {
                 [string match "*slave*,state=wait_bgsave*,type=rdb-channel*" [$primary info replication]] &&
@@ -1113,6 +1103,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             $primary debug log "killing replica main connection"
             set replica_main_conn_id [get_client_id_by_last_cmd $primary "sync"]
             assert {$replica_main_conn_id != ""}
+            set loglines [count_log_lines -1]
             $primary client kill id $replica_main_conn_id
             # Wait for primary to abort the sync
             wait_for_condition 50 1000 {
@@ -1120,11 +1111,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             } else {
                 fail "Primary did not free repl buf block after sync failure"
             }
-            wait_for_condition 1000 10 {
-                [s -1 rdb_last_bgsave_status] eq "err"
-            } else {
-                fail "bgsave did not stop in time"
-            }
+            wait_for_log_messages -1 {"*Background RDB transfer error*"} $loglines 1000 10
             # Replica should retry
             wait_for_condition 500 1000 {
                 [string match "*slave*,state=wait_bgsave*,type=rdb-channel*" [$primary info replication]] &&

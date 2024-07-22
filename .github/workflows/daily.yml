@@ -38,7 +38,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.base_ref != 'refs/heads/unstable'))) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'refs/heads/unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'ubuntu')
     timeout-minutes: 14400
     steps:
@@ -83,7 +83,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.base_ref != 'refs/heads/unstable'))) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'refs/heads/unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'fortify')
     container: ubuntu:lunar
     timeout-minutes: 14400
@@ -132,7 +132,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.base_ref != 'refs/heads/unstable'))) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'refs/heads/unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'malloc')
     timeout-minutes: 14400
     steps:
@@ -171,7 +171,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.base_ref != 'refs/heads/unstable'))) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'refs/heads/unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'malloc')
     timeout-minutes: 14400
     steps:
@@ -210,7 +210,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.base_ref != 'refs/heads/unstable'))) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'refs/heads/unstable'))) &&
       !contains(github.event.inputs.skipjobs, '32bit')
     timeout-minutes: 14400
     steps:
@@ -259,7 +259,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.base_ref != 'refs/heads/unstable'))) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'refs/heads/unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     timeout-minutes: 14400
     steps:
@@ -305,7 +305,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.base_ref != 'refs/heads/unstable'))) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'refs/heads/unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     timeout-minutes: 14400
     steps:
@@ -351,7 +351,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.base_ref != 'refs/heads/unstable'))) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'refs/heads/unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'iothreads')
     timeout-minutes: 14400
     steps:
@@ -385,7 +385,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.base_ref != 'refs/heads/unstable'))) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'refs/heads/unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'specific')
     timeout-minutes: 14400
     steps:
@@ -461,7 +461,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.base_ref != 'refs/heads/unstable')) &&
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'refs/heads/unstable')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !contains(github.event.inputs.skiptests, 'valkey')
     timeout-minutes: 14400
     steps:
@@ -493,7 +493,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.base_ref != 'refs/heads/unstable')) &&
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'refs/heads/unstable')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !(contains(github.event.inputs.skiptests, 'modules') && contains(github.event.inputs.skiptests, 'unittest'))
     timeout-minutes: 14400
     steps:
@@ -530,7 +530,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.base_ref != 'refs/heads/unstable')) &&
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'refs/heads/unstable')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !contains(github.event.inputs.skiptests, 'valkey')
     timeout-minutes: 14400
     steps:
@@ -562,7 +562,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.base_ref != 'refs/heads/unstable')) &&
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'refs/heads/unstable')) &&
       !contains(github.event.inputs.skipjobs, 'valgrind') && !(contains(github.event.inputs.skiptests, 'modules') && contains(github.event.inputs.skiptests, 'unittest'))
     timeout-minutes: 14400
     steps:
@@ -599,7 +599,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.base_ref != 'refs/heads/unstable')) &&
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'refs/heads/unstable')) &&
       !contains(github.event.inputs.skipjobs, 'sanitizer')
     timeout-minutes: 14400
     strategy:
@@ -651,7 +651,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.base_ref != 'refs/heads/unstable')) &&
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'refs/heads/unstable')) &&
       !contains(github.event.inputs.skipjobs, 'sanitizer')
     timeout-minutes: 14400
     strategy:
@@ -702,7 +702,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.base_ref != 'refs/heads/unstable'))) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'refs/heads/unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'rpm-distros')
     strategy:
       fail-fast: false
@@ -768,7 +768,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.base_ref != 'refs/heads/unstable'))) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'refs/heads/unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     strategy:
       fail-fast: false
@@ -840,7 +840,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.base_ref != 'refs/heads/unstable')) &&
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'refs/heads/unstable')) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     strategy:
       fail-fast: false
@@ -913,7 +913,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.base_ref != 'refs/heads/unstable'))) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'refs/heads/unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'macos') && !(contains(github.event.inputs.skiptests, 'valkey') && contains(github.event.inputs.skiptests, 'modules'))
     timeout-minutes: 14400
     steps:
@@ -944,7 +944,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.base_ref != 'refs/heads/unstable'))) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'refs/heads/unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'macos') && !contains(github.event.inputs.skiptests, 'sentinel')
     timeout-minutes: 14400
     steps:
@@ -972,7 +972,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.base_ref != 'refs/heads/unstable'))) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'refs/heads/unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'macos') && !contains(github.event.inputs.skiptests, 'cluster')
     timeout-minutes: 14400
     steps:
@@ -1003,7 +1003,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.base_ref != 'refs/heads/unstable'))) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'refs/heads/unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'macos')
     timeout-minutes: 14400
     steps:
@@ -1031,7 +1031,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.base_ref != 'refs/heads/unstable'))) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'refs/heads/unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'freebsd')
     timeout-minutes: 14400
     steps:
@@ -1061,7 +1061,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.base_ref != 'refs/heads/unstable'))) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'refs/heads/unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'alpine')
     container: alpine:latest
     steps:
@@ -1102,7 +1102,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.base_ref != 'refs/heads/unstable'))) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'refs/heads/unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'alpine')
     container: alpine:latest
     steps:
@@ -1144,7 +1144,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.base_ref != 'refs/heads/unstable')) &&
+        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'refs/heads/unstable')) &&
       !contains(github.event.inputs.skipjobs, 'reply-schema')
     steps:
       - name: prep

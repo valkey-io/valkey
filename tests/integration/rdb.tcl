@@ -224,7 +224,7 @@ start_server {} {
         assert {[r bgsave cancel] eq {Scheduled background saving cancelled}}
 
         # Make sure a second call to bgsave cancel return an error
-        assert_error "ERR Background bgsave is currently not in progress or scheduled" {r bgsave cancel}
+        assert_error "ERR Background saving is currently not in progress or scheduled" {r bgsave cancel}
     }
 
 

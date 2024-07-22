@@ -946,7 +946,8 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             $primary client kill id $replica_rdb_channel_id
             # Wait for primary to abort the sync
             wait_for_condition 10000000 10 {
-                [s -1 rdb_bgsave_in_progress] eq 0
+                [s -1 rdb_bgsave_in_progress] eq 0 &&
+                [string match {*replicas_waiting_psync:0*} [$primary info replication]]
             } else {
                 fail "Primary should abort sync"
             }

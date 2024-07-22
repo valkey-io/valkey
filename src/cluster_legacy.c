@@ -5751,7 +5751,7 @@ void clusterCommandShards(client *c) {
         addReplyArrayLen(c, 1);
         sds sid = sdsnewlen(query_node->shard_id, CLUSTER_NAMELEN);
         dictEntry *de = dictFind(server.cluster->shards, sid);
-        serverAssert(de); 
+        serverAssert(de);
         addShardReplyForClusterShards(c, de);
         sdsfree(sid);
     }

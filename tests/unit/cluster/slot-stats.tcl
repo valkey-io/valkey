@@ -433,7 +433,7 @@ start_cluster 1 0 {tags {external:skip cluster}} {
 # -----------------------------------------------------------------------------
 
 start_cluster 1 0 {tags {external:skip cluster}} {
-    
+
     # SET keys for target hashslots, to encourage ordering.
     set hash_tags [list 0 1 2 3 4]
     set num_keys 1
@@ -454,6 +454,7 @@ start_cluster 1 0 {tags {external:skip cluster}} {
 
     test "CLUSTER SLOT-STATS ORDERBY DESC correct ordering" {
         set orderby "key-count"
+        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby DESC LIMIT -1}
         set slot_stats [R 0 CLUSTER SLOT-STATS ORDERBY $orderby DESC]
         assert_slot_stats_monotonic_descent $slot_stats $orderby
     }
@@ -474,6 +475,7 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         set slot_stats_asc_length [llength $slot_stats_asc]
         assert {$limit == $slot_stats_desc_length && $limit == $slot_stats_asc_length}
 
+        # The key count of all slots is 0, so we will order by slot in ascending order.
         set expected_slots [dict create 0 0 1 0 2 0 3 0 4 0]
         assert_slot_visibility $slot_stats_desc $expected_slots
         assert_slot_visibility $slot_stats_asc $expected_slots

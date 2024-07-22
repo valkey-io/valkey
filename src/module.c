@@ -61,6 +61,7 @@
 #include "hdr_histogram.h"
 #include "crc16_slottable.h"
 #include "valkeymodule.h"
+#include "io_threads.h"
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -654,7 +655,7 @@ client *moduleAllocTempClient(void) {
         if (moduleTempClientCount < moduleTempClientMinCount) moduleTempClientMinCount = moduleTempClientCount;
     } else {
         c = createClient(NULL);
-        c->flags |= CLIENT_MODULE;
+        c->flag.module = 1;
         c->user = NULL; /* Root user */
     }
     return c;
@@ -681,9 +682,10 @@ void moduleReleaseTempClient(client *c) {
     c->duration = 0;
     resetClient(c);
     c->bufpos = 0;
-    c->flags = CLIENT_MODULE;
+    c->raw_flag = 0;
+    c->flag.module = 1;
     c->user = NULL; /* Root user */
-    c->cmd = c->lastcmd = c->realcmd = NULL;
+    c->cmd = c->lastcmd = c->realcmd = c->io_parsed_cmd = NULL;
     if (c->bstate.async_rm_call_handle) {
         ValkeyModuleAsyncRMCallPromise *promise = c->bstate.async_rm_call_handle;
         promise->c = NULL; /* Remove the client from the promise so it will no longer be possible to abort it. */
@@ -1294,7 +1296,8 @@ int VM_CreateCommand(ValkeyModuleCtx *ctx,
     ValkeyModuleCommand *cp = moduleCreateCommandProxy(ctx->module, declared_name, sdsdup(declared_name), cmdfunc,
                                                        flags, firstkey, lastkey, keystep);
     cp->serverCmd->arity = cmdfunc ? -1 : -2; /* Default value, can be changed later via dedicated API */
-
+    /* Drain IO queue before modifying commands dictionary to prevent concurrent access while modifying it. */
+    drainIOThreadsQueue();
     serverAssert(dictAdd(server.commands, sdsdup(declared_name), cp->serverCmd) == DICT_OK);
     serverAssert(dictAdd(server.orig_commands, sdsdup(declared_name), cp->serverCmd) == DICT_OK);
     cp->serverCmd->id = ACLGetCommandID(declared_name); /* ID used for ACL. */
@@ -3638,11 +3641,11 @@ int modulePopulateClientInfoStructure(void *ci, client *client, int structver) {
     ValkeyModuleClientInfoV1 *ci1 = ci;
     memset(ci1, 0, sizeof(*ci1));
     ci1->version = structver;
-    if (client->flags & CLIENT_MULTI) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_MULTI;
-    if (client->flags & CLIENT_PUBSUB) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_PUBSUB;
-    if (client->flags & CLIENT_UNIX_SOCKET) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET;
-    if (client->flags & CLIENT_TRACKING) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_TRACKING;
-    if (client->flags & CLIENT_BLOCKED) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_BLOCKED;
+    if (client->flag.multi) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_MULTI;
+    if (client->flag.pubsub) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_PUBSUB;
+    if (client->flag.unix_socket) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET;
+    if (client->flag.tracking) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_TRACKING;
+    if (client->flag.blocked) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_BLOCKED;
     if (client->conn->type == connectionTypeTls()) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_SSL;
 
     int port;
@@ -3853,9 +3856,9 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
     /* Client specific flags */
     if (ctx) {
         if (ctx->client) {
-            if (ctx->client->flags & CLIENT_DENY_BLOCKING) flags |= VALKEYMODULE_CTX_FLAGS_DENY_BLOCKING;
+            if (ctx->client->flag.deny_blocking) flags |= VALKEYMODULE_CTX_FLAGS_DENY_BLOCKING;
             /* Module command received from PRIMARY, is replicated. */
-            if (ctx->client->flags & CLIENT_PRIMARY) flags |= VALKEYMODULE_CTX_FLAGS_REPLICATED;
+            if (ctx->client->flag.primary) flags |= VALKEYMODULE_CTX_FLAGS_REPLICATED;
             if (ctx->client->resp == 3) {
                 flags |= VALKEYMODULE_CTX_FLAGS_RESP3;
             }
@@ -3863,7 +3866,7 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
 
         /* For DIRTY flags, we need the blocked client if used */
         client *c = ctx->blocked_client ? ctx->blocked_client->client : ctx->client;
-        if (c && (c->flags & (CLIENT_DIRTY_CAS | CLIENT_DIRTY_EXEC))) {
+        if (c && (c->flag.dirty_cas || c->flag.dirty_exec)) {
             flags |= VALKEYMODULE_CTX_FLAGS_MULTI_DIRTY;
         }
     }
@@ -5955,8 +5958,7 @@ int VM_CallReplyPromiseAbort(ValkeyModuleCallReply *reply, void **private_data) 
     ValkeyModuleAsyncRMCallPromise *promise = callReplyGetPrivateData(reply);
     if (!promise->c)
         return VALKEYMODULE_ERR; /* Promise can not be aborted, either already aborted or already finished. */
-    if (!(promise->c->flags & CLIENT_BLOCKED))
-        return VALKEYMODULE_ERR; /* Client is not blocked anymore, can not abort it. */
+    if (!(promise->c->flag.blocked)) return VALKEYMODULE_ERR; /* Client is not blocked anymore, can not abort it. */
 
     /* Client is still blocked, remove it from any blocking state and release it. */
     if (private_data) *private_data = promise->private_data;
@@ -6227,7 +6229,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
 
     if (!(flags & VALKEYMODULE_ARGV_ALLOW_BLOCK)) {
         /* We do not want to allow block, the module do not expect it */
-        c->flags |= CLIENT_DENY_BLOCKING;
+        c->flag.deny_blocking = 1;
     }
     c->db = ctx->client->db;
     c->argv = argv;
@@ -6281,7 +6283,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         if (error_as_call_replies) reply = callReplyCreateError(err, ctx);
         goto cleanup;
     }
-    if (!commandCheckArity(c, error_as_call_replies ? &err : NULL)) {
+    if (!commandCheckArity(c->cmd, c->argc, error_as_call_replies ? &err : NULL)) {
         errno = EINVAL;
         if (error_as_call_replies) reply = callReplyCreateError(err, ctx);
         goto cleanup;
@@ -6324,7 +6326,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         }
     } else {
         /* if we aren't OOM checking in VM_Call, we want further executions from this client to also not fail on OOM */
-        c->flags |= CLIENT_ALLOW_OOM;
+        c->flag.allow_oom = 1;
     }
 
     if (flags & VALKEYMODULE_ARGV_NO_WRITES) {
@@ -6422,8 +6424,8 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     if (server.cluster_enabled && !mustObeyClient(ctx->client)) {
         int error_code;
         /* Duplicate relevant flags in the module client. */
-        c->flags &= ~(CLIENT_READONLY | CLIENT_ASKING);
-        c->flags |= ctx->client->flags & (CLIENT_READONLY | CLIENT_ASKING);
+        c->flag.readonly = ctx->client->flag.readonly;
+        c->flag.asking = ctx->client->flag.asking;
         if (getNodeByQuery(c, c->cmd, c->argv, c->argc, NULL, &error_code) != getMyClusterNode()) {
             sds msg = NULL;
             if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {
@@ -6474,7 +6476,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     call(c, call_flags);
     server.replication_allowed = prev_replication_allowed;
 
-    if (c->flags & CLIENT_BLOCKED) {
+    if (c->flag.blocked) {
         serverAssert(flags & VALKEYMODULE_ARGV_ALLOW_BLOCK);
         serverAssert(ctx->module);
         ValkeyModuleAsyncRMCallPromise *promise = zmalloc(sizeof(ValkeyModuleAsyncRMCallPromise));
@@ -6492,11 +6494,11 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         c->bstate.async_rm_call_handle = promise;
         if (!(call_flags & CMD_CALL_PROPAGATE_AOF)) {
             /* No need for AOF propagation, set the relevant flags of the client */
-            c->flags |= CLIENT_MODULE_PREVENT_AOF_PROP;
+            c->flag.module_prevent_aof_prop = 1;
         }
         if (!(call_flags & CMD_CALL_PROPAGATE_REPL)) {
             /* No need for replication propagation, set the relevant flags of the client */
-            c->flags |= CLIENT_MODULE_PREVENT_REPL_PROP;
+            c->flag.module_prevent_repl_prop = 1;
         }
         c = NULL; /* Make sure not to free the client */
     } else {
@@ -7847,7 +7849,7 @@ int attemptNextAuthCb(client *c, robj *username, robj *password, robj **err) {
             continue;
         }
         /* Remove the module auth complete flag before we attempt the next cb. */
-        c->flags &= ~CLIENT_MODULE_AUTH_HAS_RESULT;
+        c->flag.module_auth_has_result = 0;
         ValkeyModuleCtx ctx;
         moduleCreateContext(&ctx, cur_auth_ctx->module, VALKEYMODULE_CTX_NONE);
         ctx.client = c;
@@ -7905,19 +7907,20 @@ int checkModuleAuthentication(client *c, robj *username, robj *password, robj **
     if (result == VALKEYMODULE_AUTH_NOT_HANDLED) {
         result = attemptNextAuthCb(c, username, password, err);
     }
-    if (c->flags & CLIENT_BLOCKED) {
+    if (c->flag.blocked) {
         /* Modules are expected to return VALKEYMODULE_AUTH_HANDLED when blocking clients. */
         serverAssert(result == VALKEYMODULE_AUTH_HANDLED);
         return AUTH_BLOCKED;
     }
     c->module_auth_ctx = NULL;
     if (result == VALKEYMODULE_AUTH_NOT_HANDLED) {
-        c->flags &= ~CLIENT_MODULE_AUTH_HAS_RESULT;
+        c->flag.module_auth_has_result = 0;
         return AUTH_NOT_HANDLED;
     }
-    if (c->flags & CLIENT_MODULE_AUTH_HAS_RESULT) {
-        c->flags &= ~CLIENT_MODULE_AUTH_HAS_RESULT;
-        if (c->flags & CLIENT_AUTHENTICATED) return AUTH_OK;
+
+    if (c->flag.module_auth_has_result) {
+        c->flag.module_auth_has_result = 0;
+        if (c->flag.authenticated) return AUTH_OK;
     }
     return AUTH_ERR;
 }
@@ -8010,8 +8013,8 @@ ValkeyModuleBlockedClient *VM_BlockClientOnAuth(ValkeyModuleCtx *ctx,
     }
     ValkeyModuleBlockedClient *bc =
         moduleBlockClient(ctx, NULL, reply_callback, NULL, free_privdata, 0, NULL, 0, NULL, 0);
-    if (ctx->client->flags & CLIENT_BLOCKED) {
-        ctx->client->flags |= CLIENT_PENDING_COMMAND;
+    if (ctx->client->flag.blocked) {
+        ctx->client->flag.pending_command = 1;
     }
     return bc;
 }
@@ -8298,9 +8301,8 @@ void moduleHandleBlockedClients(void) {
             /* Put the client in the list of clients that need to write
              * if there are pending replies here. This is needed since
              * during a non blocking command the client may receive output. */
-            if (!clientHasModuleAuthInProgress(c) && clientHasPendingReplies(c) && !(c->flags & CLIENT_PENDING_WRITE) &&
-                c->conn) {
-                c->flags |= CLIENT_PENDING_WRITE;
+            if (!clientHasModuleAuthInProgress(c) && clientHasPendingReplies(c) && !c->flag.pending_write && c->conn) {
+                c->flag.pending_write = 1;
                 listLinkNodeHead(server.clients_pending_write, &c->clients_pending_write_node);
             }
         }
@@ -8950,6 +8952,14 @@ size_t VM_GetClusterSize(void) {
     return getClusterSize();
 }
 
+int moduleGetClusterNodeInfoForClient(ValkeyModuleCtx *ctx,
+                                      client *c,
+                                      const char *node_id,
+                                      char *ip,
+                                      char *primary_id,
+                                      int *port,
+                                      int *flags);
+
 /* Populate the specified info for the node having as ID the specified 'id',
  * then returns VALKEYMODULE_OK. Otherwise if the format of node ID is invalid
  * or the node ID does not exist from the POV of this local node, VALKEYMODULE_ERR
@@ -8971,14 +8981,41 @@ size_t VM_GetClusterSize(void) {
  * * VALKEYMODULE_NODE_NOFAILOVER:   The replica is configured to never failover
  */
 int VM_GetClusterNodeInfo(ValkeyModuleCtx *ctx, const char *id, char *ip, char *primary_id, int *port, int *flags) {
+    return moduleGetClusterNodeInfoForClient(ctx, NULL, id, ip, primary_id, port, flags);
+}
+
+/* Like VM_GetClusterNodeInfo(), but returns IP address specifically for the given
+ * client, depending on whether the client is connected over IPv4 or IPv6.
+ *
+ * See also VM_GetClientId(). */
+int VM_GetClusterNodeInfoForClient(ValkeyModuleCtx *ctx,
+                                   uint64_t client_id,
+                                   const char *node_id,
+                                   char *ip,
+                                   char *primary_id,
+                                   int *port,
+                                   int *flags) {
+    client *c = lookupClientByID(client_id);
+    if (c == NULL) return VALKEYMODULE_ERR;
+    return moduleGetClusterNodeInfoForClient(ctx, c, node_id, ip, primary_id, port, flags);
+}
+
+
+int moduleGetClusterNodeInfoForClient(ValkeyModuleCtx *ctx,
+                                      client *c,
+                                      const char *node_id,
+                                      char *ip,
+                                      char *primary_id,
+                                      int *port,
+                                      int *flags) {
     UNUSED(ctx);
 
-    clusterNode *node = clusterLookupNode(id, strlen(id));
+    clusterNode *node = clusterLookupNode(node_id, strlen(node_id));
     if (node == NULL || clusterNodePending(node)) {
         return VALKEYMODULE_ERR;
     }
 
-    if (ip) valkey_strlcpy(ip, clusterNodeIp(node), NET_IP_STR_LEN);
+    if (ip) valkey_strlcpy(ip, clusterNodeIp(node, c), NET_IP_STR_LEN);
 
     if (primary_id) {
         /* If the information is not available, the function will set the
@@ -9465,11 +9502,11 @@ void revokeClientAuthentication(client *c) {
     moduleNotifyUserChanged(c);
 
     c->user = DefaultUser;
-    c->flags &= ~CLIENT_AUTHENTICATED;
+    c->flag.authenticated = 0;
     /* We will write replies to this client later, so we can't close it
      * directly even if async. */
     if (c == server.current_client) {
-        c->flags |= CLIENT_CLOSE_AFTER_COMMAND;
+        c->flag.close_after_command = 1;
     } else {
         freeClientAsync(c);
     }
@@ -9780,17 +9817,17 @@ static int authenticateClientWithUser(ValkeyModuleCtx *ctx,
     }
 
     /* Avoid settings which are meaningless and will be lost */
-    if (!ctx->client || (ctx->client->flags & CLIENT_MODULE)) {
+    if (!ctx->client || (ctx->client->flag.module)) {
         return VALKEYMODULE_ERR;
     }
 
     moduleNotifyUserChanged(ctx->client);
 
     ctx->client->user = user;
-    ctx->client->flags |= CLIENT_AUTHENTICATED;
+    ctx->client->flag.authenticated = 1;
 
     if (clientHasModuleAuthInProgress(ctx->client)) {
-        ctx->client->flags |= CLIENT_MODULE_AUTH_HAS_RESULT;
+        ctx->client->flag.module_auth_has_result = 1;
     }
 
     if (callback) {
@@ -10675,6 +10712,8 @@ void moduleCallCommandFilters(client *c) {
 
     ValkeyModuleCommandFilterCtx filter = {.argv = c->argv, .argv_len = c->argv_len, .argc = c->argc, .c = c};
 
+    robj *tmp = c->argv[0];
+    incrRefCount(tmp);
     while ((ln = listNext(&li))) {
         ValkeyModuleCommandFilter *f = ln->value;
 
@@ -10690,6 +10729,12 @@ void moduleCallCommandFilters(client *c) {
     c->argv = filter.argv;
     c->argv_len = filter.argv_len;
     c->argc = filter.argc;
+    if (tmp != c->argv[0]) {
+        /* With I/O thread command-lookup offload, we set c->io_parsed_cmd to the command corresponding to c->argv[0].
+         * Since the command filter just changed it, we need to reset c->io_parsed_cmd to null. */
+        c->io_parsed_cmd = NULL;
+    }
+    decrRefCount(tmp);
 }
 
 /* Return the number of arguments a filtered command has.  The number of
@@ -12037,6 +12082,8 @@ int moduleFreeCommand(struct ValkeyModule *module, struct serverCommand *cmd) {
 }
 
 void moduleUnregisterCommands(struct ValkeyModule *module) {
+    /* Drain IO queue before modifying commands dictionary to prevent concurrent access while modifying it. */
+    drainIOThreadsQueue();
     /* Unregister all the commands registered by this module. */
     dictIterator *di = dictGetSafeIterator(server.commands);
     dictEntry *de;
@@ -13708,6 +13755,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RegisterClusterMessageReceiver);
     REGISTER_API(SendClusterMessage);
     REGISTER_API(GetClusterNodeInfo);
+    REGISTER_API(GetClusterNodeInfoForClient);
     REGISTER_API(GetClusterNodesList);
     REGISTER_API(FreeClusterNodesList);
     REGISTER_API(CreateTimer);

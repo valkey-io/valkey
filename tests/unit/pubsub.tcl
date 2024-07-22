@@ -85,6 +85,12 @@ start_server {tags {"pubsub network"}} {
         set rd1 [valkey_deferring_client]
         assert_equal {1 2 3} [subscribe $rd1 {chan1 chan2 chan3}]
         unsubscribe $rd1
+        # wait for the unsubscribe to take effect
+        wait_for_condition 50 100 {
+            [r publish chan1 hello] eq 0
+        } else {
+            fail "unsubscribe did not take effect"
+        }
         assert_equal 0 [r publish chan1 hello]
         assert_equal 0 [r publish chan2 hello]
         assert_equal 0 [r publish chan3 hello]
@@ -158,6 +164,12 @@ start_server {tags {"pubsub network"}} {
         set rd1 [valkey_deferring_client]
         assert_equal {1 2 3} [psubscribe $rd1 {chan1.* chan2.* chan3.*}]
         punsubscribe $rd1
+        # wait for the unsubscribe to take effect
+        wait_for_condition 50 100 {
+            [r publish chan1.hi hello] eq 0
+        } else {
+            fail "unsubscribe did not take effect"
+        }
         assert_equal 0 [r publish chan1.hi hello]
         assert_equal 0 [r publish chan2.hi hello]
         assert_equal 0 [r publish chan3.hi hello]

@@ -49,15 +49,23 @@ static uint64_t getSlotStat(int slot, int stat_type) {
     return slot_stat;
 }
 
+/* Compare by stat in ascending order. If stat is the same, compare by slot in ascending order. */
 static int slotStatForSortAscCmp(const void *a, const void *b) {
     slotStatForSort entry_a = *((slotStatForSort *)a);
     slotStatForSort entry_b = *((slotStatForSort *)b);
+    if (entry_a.stat == entry_b.stat) {
+        return entry_a.slot - entry_b.slot;
+    }
     return entry_a.stat - entry_b.stat;
 }
 
+/* Compare by stat in descending order. If stat is the same, compare by slot in ascending order. */
 static int slotStatForSortDescCmp(const void *a, const void *b) {
     slotStatForSort entry_a = *((slotStatForSort *)a);
     slotStatForSort entry_b = *((slotStatForSort *)b);
+    if (entry_b.stat == entry_a.stat) {
+        return entry_a.slot - entry_b.slot;
+    }
     return entry_b.stat - entry_a.stat;
 }
 
@@ -195,7 +203,7 @@ void clusterSlotStatsCommand(client *c) {
         }
         int i = 4; /* Next argument index, following ORDERBY */
         int limit_counter = 0, asc_desc_counter = 0;
-        long limit;
+        long limit = CLUSTER_SLOTS;
         while (i < c->argc) {
             int moreargs = c->argc > i + 1;
             if (!strcasecmp(c->argv[i]->ptr, "limit") && moreargs) {

@@ -195,7 +195,7 @@ void clusterSlotStatsCommand(client *c) {
         int desc = 1, order_by = INVALID;
         if (!strcasecmp(c->argv[3]->ptr, "key-count")) {
             order_by = KEY_COUNT;
-        } else if (!strcasecmp(c->argv[3]->ptr, "cpu-usec")) {
+        } else if (!strcasecmp(c->argv[3]->ptr, "cpu-usec") && server.cluster_slot_stats_enabled) {
             order_by = CPU_USEC;
         } else {
             addReplyError(c, "Unrecognized sort metric for ORDERBY.");

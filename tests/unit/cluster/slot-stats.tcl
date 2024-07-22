@@ -503,6 +503,15 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         assert_slot_visibility $slot_stats_desc $expected_slots
         assert_slot_visibility $slot_stats_asc $expected_slots
     }
+
+    test "CLUSTER SLOT-STATS ORDERBY unsupported sort metric." {
+        set orderby "non-existent-metric"
+        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
+
+        # When cluster-slot-stats-enabled config is disabled, you cannot sort using advanced metrics.
+        set orderby "cpu-usec"
+        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
+    }
 }
 
 # -----------------------------------------------------------------------------

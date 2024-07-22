@@ -144,12 +144,12 @@ void clusterSlotStatResetAll(void) {
  * would equate to repeating the same calculation twice.
  */
 static int canAddCpuDuration(client *c) {
-    return server.cluster_slot_stats_enabled &&  // Config should be enabled.
-           server.cluster_enabled &&             // Cluster mode should be enabled.
-           c->slot != -1 &&                      // Command should be slot specific.
-           (!server.execution_nesting ||         // Either;
-            (server.execution_nesting &&         // 1) Command should not be nested, or
-             c->realcmd->flags & CMD_BLOCKING)); // 2) If command is nested, it must be due to unblocking.
+    return server.cluster_slot_stats_enabled &&  /* Config should be enabled. */
+           server.cluster_enabled &&             /* Cluster mode should be enabled. */
+           c->slot != -1 &&                      /* Command should be slot specific. */
+           (!server.execution_nesting ||         /* Either; */
+            (server.execution_nesting &&         /* 1) Command should not be nested, or */
+             c->realcmd->flags & CMD_BLOCKING)); /* 2) If command is nested, it must be due to unblocking. */
 }
 
 void clusterSlotStatsAddCpuDuration(client *c, ustime_t duration) {

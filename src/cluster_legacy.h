@@ -94,9 +94,9 @@ typedef struct clusterNodeFailReport {
 #define CLUSTERMSG_TYPE_PUBLISHSHARD 10         /* Pub/Sub Publish shard propagation */
 #define CLUSTERMSG_TYPE_COUNT 11                /* Total number of message types. */
 
-#define CLUSTERMSG_LIGHT 0x8000
+#define CLUSTERMSG_LIGHT 0x8000 /* Modifier bit for message types that support light header */
 
-/* For the message with light header, we will set the MSB.*/
+/* We check for the modifier bit to determine if the message is sent using light header.*/
 #define IS_LIGHT_MESSAGE(type) ((type) & CLUSTERMSG_LIGHT)
 
 /* Initially we don't know our "name", but we'll find it once we connect

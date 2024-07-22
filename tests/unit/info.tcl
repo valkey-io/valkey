@@ -278,21 +278,34 @@ start_server {tags {"info" "external:skip"}} {
             r config resetstat
             for {set j 1} {$j <= 1100} {incr j} {
                 assert_error "$j my error message" {
-                    r eval {return redis.error_reply(string.format('%s my error message', ARGV[1]))} 0 $j
+                    r eval {return server.error_reply(string.format('%s my error message', ARGV[1]))} 0 $j
                 }
             }
-
-            assert_equal [count_log_message 0 "Errorstats stopped adding new errors"] 1
-            assert_equal [count_log_message 0 "Current errors code list"] 1
-            assert_equal "count=1" [errorstat ERRORSTATS_DISABLED]
-
-            # Since we currently have no metrics exposed for server.errors, we use lazyfree
-            # to verify that we only have 128 errors.
-            wait_for_condition 50 100 {
-                [s lazyfreed_objects] eq 128
-            } else {
-                fail "errorstats resetstat lazyfree error"
+            # Validate that custom LUA errors are tracked in `ERRORSTATS_OVERFLOW` when errors
+            # has 128 entries.
+            assert_equal "count=972" [errorstat ERRORSTATS_OVERFLOW]
+            # Validate that non LUA errors continue to be tracked even when we have >=128 entries.
+            assert_error {ERR syntax error} {r set a b c d e f g}
+            assert_equal "count=1" [errorstat ERR]
+            # Validate that custom errors that were already tracked continue to increment when past 128 entries.
+            assert_equal "count=1" [errorstat 1]
+            assert_error "1 my error message" {
+                r eval {return server.error_reply(string.format('1 my error message', ARGV[1]))} 0
             }
+            assert_equal "count=2" [errorstat 1]
+            # Test LUA error variants.
+            assert_error "My error message" {r eval {return server.error_reply('My error message')} 0}
+            assert_error "My error message" {r eval {return {err = 'My error message'}} 0}
+            assert_equal "count=974" [errorstat ERRORSTATS_OVERFLOW]
+            # Function calls that contain custom error messages should call be included in overflow counter
+            r FUNCTION LOAD replace [format "#!lua name=mylib\nserver.register_function('customerrorfn', function() return server.error_reply('My error message') end)"]
+            assert_error "My error message" {r fcall customerrorfn 0}
+            assert_equal "count=975" [errorstat ERRORSTATS_OVERFLOW]
+            # Function calls that contain non lua errors should continue to be tracked normally (in a separate counter).
+            r FUNCTION LOAD replace [format "#!lua name=mylib\nserver.register_function('invalidgetcmd', function() return server.call('get', 'x', 'x', 'x') end)"]
+            assert_error "ERR Wrong number of args*" {r fcall invalidgetcmd 0}
+            assert_equal "count=975" [errorstat ERRORSTATS_OVERFLOW]
+            assert_equal "count=2" [errorstat ERR]
         }
 
         # skip the following 2 tests if we are running with io-threads as the eventloop metrics are different in that case.

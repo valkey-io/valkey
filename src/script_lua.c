@@ -617,8 +617,9 @@ static void luaReplyToRedisReply(client *c, client *script_client, lua_State *lu
                     1); /* pop the error message, we will use luaExtractErrorInformation to get error information */
             errorInfo err_info = {0};
             luaExtractErrorInformation(lua, &err_info);
-            addReplyErrorFormatEx(c, err_info.ignore_err_stats_update ? ERR_REPLY_FLAG_NO_STATS_UPDATE : 0, "-%s",
-                                  err_info.msg);
+            addReplyErrorFormatEx(
+                c, ERR_REPLY_FLAG_CUSTOM | (err_info.ignore_err_stats_update ? ERR_REPLY_FLAG_NO_STATS_UPDATE : 0),
+                "-%s", err_info.msg);
             luaErrorInformationDiscard(&err_info);
             lua_pop(lua, 1); /* pop the result table */
             return;

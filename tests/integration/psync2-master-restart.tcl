@@ -203,10 +203,16 @@ start_server {} {
         } else {
             fail "Replicas didn't sync after master restart"
         }
+        set dualchannel [lindex [r config get dual-channel-replication-enabled] 1]
+        set psync_count 0
+        if {$dualchannel == "yes"} {
+            # Expect one fake psync
+            set psync_count 1
+        }
 
         # Replication backlog is full
         assert {[status $master repl_backlog_first_byte_offset] > [status $master second_repl_offset]}
-        assert {[status $master sync_partial_ok] == 0}
+        assert {[status $master sync_partial_ok] == $psync_count}
         assert {[status $master sync_full] == 1}
         assert {[status $master rdb_last_load_keys_expired] == 2048}
         assert {[status $replica sync_full] == 1}

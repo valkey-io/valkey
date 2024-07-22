@@ -119,6 +119,11 @@ int authRequired(client *c) {
     return auth_required;
 }
 
+static inline int isReplicaReadyForReplData(client *replica) {
+    return (replica->repl_state == REPLICA_STATE_ONLINE || replica->repl_state == REPLICA_STATE_BG_RDB_LOAD) &&
+           !(replica->flag.close_asap);
+}
+
 client *createClient(connection *conn) {
     client *c = zmalloc(sizeof(client));
 
@@ -164,7 +169,7 @@ client *createClient(connection *conn) {
     c->nread = 0;
     c->read_flags = 0;
     c->write_flags = 0;
-    c->cmd = c->lastcmd = c->realcmd = NULL;
+    c->cmd = c->lastcmd = c->realcmd = c->io_parsed_cmd = NULL;
     c->cur_script = NULL;
     c->multibulklen = 0;
     c->bulklen = -1;
@@ -189,6 +194,8 @@ client *createClient(connection *conn) {
     c->replica_version = 0;
     c->replica_capa = REPLICA_CAPA_NONE;
     c->replica_req = REPLICA_REQ_NONE;
+    c->associated_rdb_client_id = 0;
+    c->rdb_client_disconnect_time = 0;
     c->reply = listCreate();
     c->deferred_reply_errors = NULL;
     c->reply_bytes = 0;
@@ -255,8 +262,8 @@ void putClientInPendingWriteQueue(client *c) {
     /* Schedule the client to write the output buffers to the socket only
      * if not already done and, for replicas, if the replica can actually receive
      * writes at this stage. */
-    if (!c->flag.pending_write && (c->repl_state == REPL_STATE_NONE ||
-                                   (c->repl_state == REPLICA_STATE_ONLINE && !c->repl_start_cmd_stream_on_ack))) {
+    if (!c->flag.pending_write &&
+        (c->repl_state == REPL_STATE_NONE || (isReplicaReadyForReplData(c) && !c->repl_start_cmd_stream_on_ack))) {
         /* Here instead of installing the write handler, we just flag the
          * client and put it into a list of clients that have something
          * to write to the socket. This way before re-entering the event
@@ -549,19 +556,26 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         server.stat_total_error_replies++;
         /* Increment the error stats
          * If the string already starts with "-..." then the error prefix
-         * is provided by the caller ( we limit the search to 32 chars). Otherwise we use "-ERR". */
-        if (s[0] != '-') {
-            incrementErrorCount("ERR", 3);
-        } else {
+         * is provided by the caller (we limit the search to 32 chars). Otherwise we use "-ERR". */
+        char *err_prefix = "ERR";
+        size_t prefix_len = 3;
+        if (s[0] == '-') {
             char *spaceloc = memchr(s, ' ', len < 32 ? len : 32);
+            /* If we cannot retrieve the error prefix, use the default: "ERR". */
             if (spaceloc) {
                 const size_t errEndPos = (size_t)(spaceloc - s);
-                incrementErrorCount(s + 1, errEndPos - 1);
-            } else {
-                /* Fallback to ERR if we can't retrieve the error prefix */
-                incrementErrorCount("ERR", 3);
+                err_prefix = (char *)s + 1;
+                prefix_len = errEndPos - 1;
             }
         }
+        /* After the errors RAX reaches its limit, instead of tracking
+         * custom errors (e.g. LUA), we track the error under `errorstat_ERRORSTATS_OVERFLOW` */
+        if (flags & ERR_REPLY_FLAG_CUSTOM && raxSize(server.errors) >= ERRORSTATS_LIMIT &&
+            !raxFind(server.errors, (unsigned char *)err_prefix, prefix_len, NULL)) {
+            err_prefix = ERRORSTATS_OVERFLOW_ERR;
+            prefix_len = strlen(ERRORSTATS_OVERFLOW_ERR);
+        }
+        incrementErrorCount(err_prefix, prefix_len);
     } else {
         /* stat_total_error_replies will not be updated, which means that
          * the cmd stats will not be updated as well, we still want this command
@@ -1424,13 +1438,15 @@ void freeClientOriginalArgv(client *c) {
 }
 
 void freeClientArgv(client *c) {
-    int j;
-    for (j = 0; j < c->argc; j++) decrRefCount(c->argv[j]);
+    if (tryOffloadFreeArgvToIOThreads(c) == C_ERR) {
+        for (int j = 0; j < c->argc; j++) decrRefCount(c->argv[j]);
+        zfree(c->argv);
+    }
     c->argc = 0;
     c->cmd = NULL;
+    c->io_parsed_cmd = NULL;
     c->argv_len_sum = 0;
     c->argv_len = 0;
-    zfree(c->argv);
     c->argv = NULL;
 }
 
@@ -1591,7 +1607,7 @@ void freeClient(client *c) {
 
     /* If a client is protected, yet we need to free it right now, make sure
      * to at least use asynchronous freeing. */
-    if (c->flag.protected) {
+    if (c->flag.protected || c->flag.protected_rdb_channel) {
         freeClientAsync(c);
         return;
     }
@@ -1637,7 +1653,10 @@ void freeClient(client *c) {
 
     /* Log link disconnection with replica */
     if (getClientType(c) == CLIENT_TYPE_REPLICA) {
-        serverLog(LL_NOTICE, "Connection with replica %s lost.", replicationGetReplicaName(c));
+        serverLog(LL_NOTICE,
+                  c->flag.repl_rdb_channel ? "Replica %s rdb channel disconnected."
+                                           : "Connection with replica %s lost.",
+                  replicationGetReplicaName(c));
     }
 
     /* Free the query buffer */
@@ -1866,6 +1885,27 @@ int freeClientsInAsyncFreeQueue(void) {
     listRewind(server.clients_to_close, &li);
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
+
+        if (c->flag.protected_rdb_channel) {
+            /* Check if it's safe to remove RDB connection protection during synchronization
+             * The primary gives a grace period before freeing this client because
+             * it serves as a reference to the first required replication data block for
+             * this replica */
+            if (!c->rdb_client_disconnect_time) {
+                if (c->conn) connSetReadHandler(c->conn, NULL);
+                c->rdb_client_disconnect_time = server.unixtime;
+                serverLog(LL_VERBOSE, "Postpone RDB client id=%llu (%s) free for %d seconds", (unsigned long long)c->id,
+                          replicationGetReplicaName(c), server.wait_before_rdb_client_free);
+                continue;
+            }
+            if (server.unixtime - c->rdb_client_disconnect_time > server.wait_before_rdb_client_free) {
+                serverLog(LL_NOTICE,
+                          "Replica main channel failed to establish PSYNC within the grace period (%ld seconds). "
+                          "Freeing RDB client %llu.",
+                          (long int)(server.unixtime - c->rdb_client_disconnect_time), (unsigned long long)c->id);
+                c->flag.protected_rdb_channel = 0;
+            }
+        }
 
         if (c->flag.protected) continue;
 
@@ -2977,6 +3017,10 @@ int processInputBuffer(client *c) {
 void readToQueryBuf(client *c) {
     int big_arg = 0;
     size_t qblen, readlen;
+
+    /* If the replica RDB client is marked as closed ASAP, do not try to read from it */
+    if (c->flag.close_asap) return;
+
     int is_primary = c->read_flags & READ_FLAGS_PRIMARY;
 
     readlen = PROTO_IOBUF_LEN;
@@ -4282,9 +4326,13 @@ int closeClientOnOutputBufferLimitReached(client *c, int async) {
     serverAssert(c->reply_bytes < SIZE_MAX - (1024 * 64));
     /* Note that c->reply_bytes is irrelevant for replica clients
      * (they use the global repl buffers). */
-    if ((c->reply_bytes == 0 && getClientType(c) != CLIENT_TYPE_REPLICA) || c->flag.close_asap) return 0;
+    if ((c->reply_bytes == 0 && getClientType(c) != CLIENT_TYPE_REPLICA) ||
+        (c->flag.close_asap && !(c->flag.protected_rdb_channel)))
+        return 0;
     if (checkClientOutputBufferLimits(c)) {
         sds client = catClientInfoString(sdsempty(), c);
+        /* Remove RDB connection protection on COB overrun */
+        c->flag.protected_rdb_channel = 0;
 
         if (async) {
             freeClientAsync(c);
@@ -4328,7 +4376,7 @@ void flushReplicasOutputBuffers(void) {
          *
          * 3. Obviously if the replica is not ONLINE.
          */
-        if (replica->repl_state == REPLICA_STATE_ONLINE && !(replica->flag.close_asap) && can_receive_writes &&
+        if (isReplicaReadyForReplData(replica) && !(replica->flag.close_asap) && can_receive_writes &&
             !replica->repl_start_cmd_stream_on_ack && clientHasPendingReplies(replica)) {
             writeToClient(replica);
         }
@@ -4644,6 +4692,24 @@ void ioThreadReadQueryFromClient(void *data) {
     }
 
     parseCommand(c);
+
+    /* Parsing was not completed - let the main-thread handle it. */
+    if (!(c->read_flags & READ_FLAGS_PARSING_COMPLETED)) {
+        goto done;
+    }
+
+    /* Empty command - Multibulk processing could see a <= 0 length. */
+    if (c->argc == 0) {
+        goto done;
+    }
+
+    /* Lookup command offload */
+    c->io_parsed_cmd = lookupCommand(c->argv, c->argc);
+    if (c->io_parsed_cmd && commandCheckArity(c->io_parsed_cmd, c->argc, NULL) == 0) {
+        /* The command was found, but the arity is invalid.
+         * In this case, we reset the parsed_cmd and will let the main thread handle it. */
+        c->io_parsed_cmd = NULL;
+    }
 
 done:
     trimClientQueryBuffer(c);

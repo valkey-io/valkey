@@ -492,12 +492,13 @@ dictType dbExpiresDictType = {
 
 /* Command table. sds string -> command struct pointer. */
 dictType commandTableDictType = {
-    dictSdsCaseHash,       /* hash function */
-    NULL,                  /* key dup */
-    dictSdsKeyCaseCompare, /* key compare */
-    dictSdsDestructor,     /* key destructor */
-    NULL,                  /* val destructor */
-    NULL                   /* allow to expand */
+    dictSdsCaseHash,            /* hash function */
+    NULL,                       /* key dup */
+    dictSdsKeyCaseCompare,      /* key compare */
+    dictSdsDestructor,          /* key destructor */
+    NULL,                       /* val destructor */
+    NULL,                       /* allow to expand */
+    .no_incremental_rehash = 1, /* no incremental rehash as the command table may be accessed from IO threads. */
 };
 
 /* Hash type hash table (note that small hashes are represented with listpacks) */
@@ -1564,6 +1565,9 @@ extern int ProcessingEventsWhileBlocked;
 void beforeSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
 
+    /* When I/O threads are enabled and there are pending I/O jobs, the poll is offloaded to one of the I/O threads. */
+    trySendPollJobToIOThreads();
+
     size_t zmalloc_used = zmalloc_used_memory();
     if (zmalloc_used > server.stat_peak_memory) server.stat_peak_memory = zmalloc_used;
 
@@ -1595,10 +1599,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Handle pending data(typical TLS). (must be done before flushAppendOnlyFile) */
     connTypeProcessPendingData();
 
-    /* If any connection type(typical TLS) still has pending unread data or if there are clients
-     * with pending IO reads/writes, don't sleep at all. */
-    int dont_sleep = connTypeHasPendingData() || listLength(server.clients_pending_io_read) > 0 ||
-                     listLength(server.clients_pending_io_write) > 0;
+    /* If any connection type(typical TLS) still has pending unread data don't sleep at all. */
+    int dont_sleep = connTypeHasPendingData();
 
     /* Call the Cluster before sleep function. Note that this function
      * may change the state of Cluster (from ok to fail or vice versa),
@@ -2045,6 +2047,7 @@ void initServerConfig(void) {
     server.cached_primary = NULL;
     server.primary_initial_offset = -1;
     server.repl_state = REPL_STATE_NONE;
+    server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
     server.repl_transfer_tmpfile = NULL;
     server.repl_transfer_fd = -1;
     server.repl_transfer_s = NULL;
@@ -2052,6 +2055,8 @@ void initServerConfig(void) {
     server.repl_down_since = 0; /* Never connected, repl is down since EVER. */
     server.primary_repl_offset = 0;
     server.fsynced_reploff_pending = 0;
+    server.rdb_client_id = -1;
+    server.loading_process_events_interval_ms = LOADING_PROCESS_EVENTS_INTERVAL_DEFAULT;
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;
@@ -2491,6 +2496,8 @@ void resetServerStats(void) {
     server.stat_io_reads_processed = 0;
     server.stat_total_reads_processed = 0;
     server.stat_io_writes_processed = 0;
+    server.stat_io_freed_objects = 0;
+    server.stat_poll_processed_by_io_threads = 0;
     server.stat_total_writes_processed = 0;
     server.stat_client_qbuf_limit_disconnections = 0;
     server.stat_client_outbuf_limit_disconnections = 0;
@@ -2545,16 +2552,19 @@ void initServer(void) {
     server.hz = server.config_hz;
     server.pid = getpid();
     server.in_fork_child = CHILD_TYPE_NONE;
+    server.rdb_pipe_read = -1;
+    server.rdb_child_exit_pipe = -1;
     server.main_thread_id = pthread_self();
     server.current_client = NULL;
     server.errors = raxNew();
-    server.errors_enabled = 1;
     server.execution_nesting = 0;
     server.clients = listCreate();
     server.clients_index = raxNew();
     server.clients_to_close = listCreate();
     server.replicas = listCreate();
     server.monitors = listCreate();
+    server.replicas_waiting_psync = raxNew();
+    server.wait_before_rdb_client_free = DEFAULT_WAIT_BEFORE_RDB_CLIENT_FREE;
     server.clients_pending_write = listCreate();
     server.clients_pending_io_write = listCreate();
     server.clients_pending_io_read = listCreate();
@@ -3030,7 +3040,6 @@ void resetCommandTableStats(dict *commands) {
 void resetErrorTableStats(void) {
     freeErrorsRadixTreeAsync(server.errors);
     server.errors = raxNew();
-    server.errors_enabled = 1;
 }
 
 /* ========================== OP Array API ============================ */
@@ -3719,11 +3728,11 @@ int commandCheckExistence(client *c, sds *err) {
 
 /* Check if c->argc is valid for c->cmd, fills `err` with details in case it isn't.
  * Return 1 if valid. */
-int commandCheckArity(client *c, sds *err) {
-    if ((c->cmd->arity > 0 && c->cmd->arity != c->argc) || (c->argc < -c->cmd->arity)) {
+int commandCheckArity(struct serverCommand *cmd, int argc, sds *err) {
+    if ((cmd->arity > 0 && cmd->arity != argc) || (argc < -cmd->arity)) {
         if (err) {
             *err = sdsnew(NULL);
-            *err = sdscatprintf(*err, "wrong number of arguments for '%s' command", c->cmd->fullname);
+            *err = sdscatprintf(*err, "wrong number of arguments for '%s' command", cmd->fullname);
         }
         return 0;
     }
@@ -3794,13 +3803,14 @@ int processCommand(client *c) {
      * In case we are reprocessing a command after it was blocked,
      * we do not have to repeat the same checks */
     if (!client_reprocessing_command) {
-        c->cmd = c->lastcmd = c->realcmd = lookupCommand(c->argv, c->argc);
+        struct serverCommand *cmd = c->io_parsed_cmd ? c->io_parsed_cmd : lookupCommand(c->argv, c->argc);
+        c->cmd = c->lastcmd = c->realcmd = cmd;
         sds err;
         if (!commandCheckExistence(c, &err)) {
             rejectCommandSds(c, err);
             return C_OK;
         }
-        if (!commandCheckArity(c, &err)) {
+        if (!commandCheckArity(c->cmd, c->argc, &err)) {
             rejectCommandSds(c, err);
             return C_OK;
         }
@@ -4067,48 +4077,9 @@ int processCommand(client *c) {
 
 /* ====================== Error lookup and execution ===================== */
 
-/* Users who abuse lua error_reply will generate a new error object on each
- * error call, which can make server.errors get bigger and bigger. This will
- * cause the server to block when calling INFO (we also return errorstats by
- * default). To prevent the damage it can cause, when a misuse is detected,
- * we will print the warning log and disable the errorstats to avoid adding
- * more new errors. It can be re-enabled via CONFIG RESETSTAT. */
-#define ERROR_STATS_NUMBER 128
 void incrementErrorCount(const char *fullerr, size_t namelen) {
-    /* errorstats is disabled, return ASAP. */
-    if (!server.errors_enabled) return;
-
     void *result;
     if (!raxFind(server.errors, (unsigned char *)fullerr, namelen, &result)) {
-        if (server.errors->numele >= ERROR_STATS_NUMBER) {
-            sds errors = sdsempty();
-            raxIterator ri;
-            raxStart(&ri, server.errors);
-            raxSeek(&ri, "^", NULL, 0);
-            while (raxNext(&ri)) {
-                char *tmpsafe;
-                errors = sdscatlen(errors, getSafeInfoString((char *)ri.key, ri.key_len, &tmpsafe), ri.key_len);
-                errors = sdscatlen(errors, ", ", 2);
-                if (tmpsafe != NULL) zfree(tmpsafe);
-            }
-            sdsrange(errors, 0, -3); /* Remove final ", ". */
-            raxStop(&ri);
-
-            /* Print the warning log and the contents of server.errors to the log. */
-            serverLog(LL_WARNING, "Errorstats stopped adding new errors because the number of "
-                                  "errors reached the limit, may be misuse of lua error_reply, "
-                                  "please check INFO ERRORSTATS, this can be re-enabled via "
-                                  "CONFIG RESETSTAT.");
-            serverLog(LL_WARNING, "Current errors code list: %s", errors);
-            sdsfree(errors);
-
-            /* Reset the errors and add a single element to indicate that it is disabled. */
-            resetErrorTableStats();
-            incrementErrorCount("ERRORSTATS_DISABLED", 19);
-            server.errors_enabled = 0;
-            return;
-        }
-
         struct serverError *error = zmalloc(sizeof(*error));
         error->count = 1;
         raxInsert(server.errors, (unsigned char *)fullerr, namelen, error, NULL);
@@ -5181,6 +5152,7 @@ const char *replstateToString(int replstate) {
     switch (replstate) {
     case REPLICA_STATE_WAIT_BGSAVE_START:
     case REPLICA_STATE_WAIT_BGSAVE_END: return "wait_bgsave";
+    case REPLICA_STATE_BG_RDB_LOAD: return "bg_transfer";
     case REPLICA_STATE_SEND_BULK: return "send_bulk";
     case REPLICA_STATE_ONLINE: return "online";
     default: return "";
@@ -5700,6 +5672,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "total_writes_processed:%lld\r\n", server.stat_total_writes_processed,
             "io_threaded_reads_processed:%lld\r\n", server.stat_io_reads_processed,
             "io_threaded_writes_processed:%lld\r\n", server.stat_io_writes_processed,
+            "io_threaded_freed_objects:%lld\r\n", server.stat_io_freed_objects,
+            "io_threaded_poll_processed:%lld\r\n", server.stat_poll_processed_by_io_threads,
             "client_query_buffer_limit_disconnections:%lld\r\n", server.stat_client_qbuf_limit_disconnections,
             "client_output_buffer_limit_disconnections:%lld\r\n", server.stat_client_outbuf_limit_disconnections,
             "reply_buffer_shrinks:%lld\r\n", server.stat_reply_buffer_shrinks,
@@ -5740,7 +5714,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "master_last_io_seconds_ago:%d\r\n", server.primary ? ((int)(server.unixtime-server.primary->last_interaction)) : -1,
                 "master_sync_in_progress:%d\r\n", server.repl_state == REPL_STATE_TRANSFER,
                 "slave_read_repl_offset:%lld\r\n", replica_read_repl_offset,
-                "slave_repl_offset:%lld\r\n", replica_repl_offset));
+                "slave_repl_offset:%lld\r\n", replica_repl_offset,
+                "replicas_repl_buffer_size:%zu\r\n", server.pending_repl_data.len,
+                "replicas_repl_buffer_peak:%zu\r\n", server.pending_repl_data.peak));
             /* clang-format on */
 
             if (server.repl_state == REPL_STATE_TRANSFER) {
@@ -5800,14 +5776,18 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
 
                 info = sdscatprintf(info,
                                     "slave%d:ip=%s,port=%d,state=%s,"
-                                    "offset=%lld,lag=%ld\r\n",
+                                    "offset=%lld,lag=%ld,type=%s\r\n",
                                     replica_id, replica_ip, replica->replica_listening_port, state,
-                                    replica->repl_ack_off, lag);
+                                    replica->repl_ack_off, lag,
+                                    replica->flag.repl_rdb_channel                     ? "rdb-channel"
+                                    : replica->repl_state == REPLICA_STATE_BG_RDB_LOAD ? "main-channel"
+                                                                                       : "replica");
                 replica_id++;
             }
         }
         /* clang-format off */
         info = sdscatprintf(info, FMTARGS(
+            "replicas_waiting_psync:%llu\r\n", (unsigned long long)raxSize(server.replicas_waiting_psync),
             "master_failover_state:%s\r\n", getFailoverStateString(),
             "master_replid:%s\r\n", server.replid,
             "master_replid2:%s\r\n", server.replid2,

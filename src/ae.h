@@ -34,6 +34,7 @@
 #define __AE_H__
 
 #include "monotonic.h"
+#include <pthread.h>
 
 #define AE_OK 0
 #define AE_ERR -1
@@ -54,6 +55,7 @@
 #define AE_DONT_WAIT (1 << 2)
 #define AE_CALL_BEFORE_SLEEP (1 << 3)
 #define AE_CALL_AFTER_SLEEP (1 << 4)
+#define AE_PROTECT_POLL (1 << 5)
 
 #define AE_NOMORE -1
 #define AE_DELETED_EVENT_ID -1
@@ -61,6 +63,7 @@
 /* Macros */
 #define AE_NOTUSED(V) ((void)V)
 
+struct timeval; /* forward declaration */
 struct aeEventLoop;
 
 /* Types and data structures */
@@ -69,6 +72,7 @@ typedef int aeTimeProc(struct aeEventLoop *eventLoop, long long id, void *client
 typedef void aeEventFinalizerProc(struct aeEventLoop *eventLoop, void *clientData);
 typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
 typedef void aeAfterSleepProc(struct aeEventLoop *eventLoop, int numevents);
+typedef int aeCustomPollProc(struct aeEventLoop *eventLoop);
 
 /* File event structure */
 typedef struct aeFileEvent {
@@ -109,6 +113,8 @@ typedef struct aeEventLoop {
     void *apidata; /* This is used for polling API specific data */
     aeBeforeSleepProc *beforesleep;
     aeAfterSleepProc *aftersleep;
+    aeCustomPollProc *custompoll;
+    pthread_mutex_t poll_mutex;
     int flags;
 } aeEventLoop;
 
@@ -132,6 +138,9 @@ void aeMain(aeEventLoop *eventLoop);
 char *aeGetApiName(void);
 void aeSetBeforeSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *beforesleep);
 void aeSetAfterSleepProc(aeEventLoop *eventLoop, aeAfterSleepProc *aftersleep);
+void aeSetCustomPollProc(aeEventLoop *eventLoop, aeCustomPollProc *custompoll);
+void aeSetPollProtect(aeEventLoop *eventLoop, int protect);
+int aePoll(aeEventLoop *eventLoop, struct timeval *tvp);
 int aeGetSetSize(aeEventLoop *eventLoop);
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
 void aeSetDontWait(aeEventLoop *eventLoop, int noWait);

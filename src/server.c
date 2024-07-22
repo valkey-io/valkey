@@ -3546,8 +3546,8 @@ void call(client *c, int flags) {
      * If the client is blocked we will handle slowlog when it is unblocked. */
     if (!c->flag.blocked) freeClientOriginalArgv(c);
 
-    /* Populate the per-command and per-slot statistics that we show in INFO commandstats and CLUSTER SLOT-STATS, respectively.
-     * If the client is blocked we will handle latency stats and duration when it is unblocked. */
+    /* Populate the per-command and per-slot statistics that we show in INFO commandstats and CLUSTER SLOT-STATS,
+     * respectively. If the client is blocked we will handle latency stats and duration when it is unblocked. */
     if (update_command_stats && !c->flag.blocked) {
         real_cmd->calls++;
         real_cmd->microseconds += c->duration;

@@ -51,6 +51,9 @@ proc assert_empty_slot_stats {slot_stats metrics_to_assert} {
 
 proc assert_empty_slot_stats_with_exception {slot_stats exception_slots metrics_to_assert} {
     set slot_stats [convert_array_into_dict $slot_stats]
+    dict for {slot stats} $exception_slots {
+        assert {[dict exists $slot_stats $slot]} ;# slot_stats must contain the expected slots.
+    }
     dict for {slot stats} $slot_stats {
         if {[dict exists $exception_slots $slot]} {
             foreach metric_name $metrics_to_assert {

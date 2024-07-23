@@ -4332,9 +4332,9 @@ int closeClientOnOutputBufferLimitReached(client *c, int async) {
     if (checkClientOutputBufferLimits(c)) {
         sds client = catClientInfoString(sdsempty(), c);
         /* Remove RDB connection protection on COB overrun */
-        c->flag.protected_rdb_channel = 0;
 
-        if (async) {
+        if (async || c->flag.protected_rdb_channel) {
+            c->flag.protected_rdb_channel = 0;
             freeClientAsync(c);
             serverLog(LL_WARNING, "Client %s scheduled to be closed ASAP for overcoming of output buffer limits.",
                       client);

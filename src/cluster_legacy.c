@@ -735,7 +735,7 @@ fmterr:
 
 /* Cluster node configuration is exactly the same as CLUSTER NODES output.
  *
- * This function writes the node config and returns 0, on error -1
+ * This function writes the node config and returns C_OK, on error C_ERR
  * is returned.
  *
  * Note: we need to write the file in an atomic way from the point of view
@@ -810,7 +810,7 @@ cleanup:
 }
 
 void clusterSaveConfigOrDie(int do_fsync) {
-    if (clusterSaveConfig(do_fsync) == -1) {
+    if (clusterSaveConfig(do_fsync) == C_ERR) {
         serverLog(LL_WARNING, "Fatal: can't update cluster config file.");
         exit(1);
     }
@@ -6338,7 +6338,7 @@ int clusterCommandSpecial(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "saveconfig") && c->argc == 2) {
         int retval = clusterSaveConfig(1);
 
-        if (retval == 0)
+        if (retval == C_OK)
             addReply(c, shared.ok);
         else
             addReplyErrorFormat(c, "error saving the cluster node config: %s", strerror(errno));

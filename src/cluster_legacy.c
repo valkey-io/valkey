@@ -4085,14 +4085,14 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
      * with CLUSTERMSG_FLAG0_FORCEACK (manual failover). */
     if (clusterNodeIsPrimary(node) || primary == NULL || (!nodeFailed(primary) && !force_ack)) {
         if (clusterNodeIsPrimary(node)) {
-            serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): it is a primary node", node->name,
-                      node->human_nodename);
+            serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: it is a primary node",
+                      node->name, node->human_nodename, (unsigned long long)requestCurrentEpoch);
         } else if (primary == NULL) {
-            serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): I don't know its primary", node->name,
-                      node->human_nodename);
+            serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: I don't know its primary",
+                      node->name, node->human_nodename, (unsigned long long)requestCurrentEpoch);
         } else if (!nodeFailed(primary)) {
-            serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): its primary is up", node->name,
-                      node->human_nodename);
+            serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: its primary is up", node->name,
+                      node->human_nodename, (unsigned long long)requestCurrentEpoch);
         }
         return;
     }

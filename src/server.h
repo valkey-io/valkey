@@ -167,6 +167,11 @@ struct hdr_histogram;
  * and hold back additional reading based on this factor. */
 #define CHILD_COW_DUTY_CYCLE 100
 
+/* When child process is performing write to fdset it iterates on the set
+ * writing a chunk of the available data to send on each fd.
+ * This constant defines the maximal size of the chunk to use. */
+#define RIO_WRITE_MAX_CHUNK_SIZE 8192
+
 /* Instantaneous metrics tracking. */
 #define STATS_METRIC_SAMPLES 16               /* Number of samples per metric. */
 #define STATS_METRIC_COMMAND 0                /* Number of commands executed. */

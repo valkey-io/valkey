@@ -3583,7 +3583,8 @@ void clusterLinkConnectHandler(connection *conn) {
     serverLog(LL_DEBUG, "Connecting with Node %.40s at %s:%d", node->name, node->ip, node->cport);
 }
 
-static inline int isSigAndMsgLenValid(clusterMsg *hdr) {
+/* Performs sanity check on the message signature and length depending on the type. */
+static inline int isClusterMsgSignatureAndLengthValid(clusterMsg *hdr) {
     if (memcmp(hdr->sig, "RCmb", 4) != 0) return 0;
     uint16_t type = ntohs(hdr->type);
     uint32_t totlen = ntohl(hdr->totlen);
@@ -3614,7 +3615,7 @@ void clusterReadHandler(connection *conn) {
             if (rcvbuflen == RCVBUF_MIN_READ_LEN) {
                 /* Perform some sanity check on the message signature
                  * and length. */
-                if (!isSigAndMsgLenValid(hdr)) {
+                if (!isClusterMsgSignatureAndLengthValid(hdr)) {
                     char ip[NET_IP_STR_LEN];
                     int port;
                     if (connAddrPeerName(conn, ip, sizeof(ip), &port) == -1) {

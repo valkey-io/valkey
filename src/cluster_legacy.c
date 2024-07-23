@@ -2894,7 +2894,7 @@ void clusterProcessPublishPacket(clusterMsgDataPublish *publish_data, uint16_t t
     }
 }
 
-void processLightPacket(clusterLink *link, uint16_t type) {
+void clusterProcessLightPacket(clusterLink *link, uint16_t type) {
     clusterMsgLight *hdr = (clusterMsgLight *)link->rcvbuf;
 
     if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
@@ -3051,7 +3051,7 @@ int clusterProcessPacket(clusterLink *link) {
         }
         clusterNode *sender = link->node;
         sender->data_received = now;
-        processLightPacket(link, type);
+        clusterProcessLightPacket(link, type);
         return 1;
     }
 

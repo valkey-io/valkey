@@ -2859,7 +2859,7 @@ void dualChannelSyncSuccess(void) {
     server.primary_initial_offset = server.repl_provisional_primary.reploff;
     replicationResurrectProvisionalPrimary();
     /* Wait for the accumulated buffer to be processed before reading any more replication updates */
-    if (streamReplDataBufToDb(server.primary) == C_ERR) {
+    if (server.pending_repl_data.blocks && streamReplDataBufToDb(server.primary) == C_ERR) {
         /* Sync session aborted during repl data streaming. */
         serverLog(LL_WARNING, "Failed to stream local replication buffer into memory");
         replicationAbortDualChannelSyncTransfer();

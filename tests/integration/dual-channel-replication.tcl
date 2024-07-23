@@ -28,6 +28,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     set replica_host [srv 0 host]
     set replica_port [srv 0 port]
     set replica_log [srv 0 stdout]
+    $replica config set loglevel debug    
     start_server {} {
         set primary [srv 0 client]
         set primary_host [srv 0 host]
@@ -38,6 +39,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         $primary config set repl-diskless-sync yes
         $primary config set repl-diskless-sync-delay 1000
         $primary config set dual-channel-replication-enabled yes
+        $primary config set loglevel debug
 
         # Start the replication process...
         $replica config set dual-channel-replication-enabled yes

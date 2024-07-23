@@ -96,6 +96,8 @@ typedef struct clusterNodeFailReport {
 
 #define CLUSTERMSG_LIGHT 0x8000 /* Modifier bit for message types that support light header */
 
+#define CLUSTERMSG_MODIFIER_MASK (CLUSTERMSG_LIGHT) /* Modifier bit for message types that support light header */
+
 /* We check for the modifier bit to determine if the message is sent using light header.*/
 #define IS_LIGHT_MESSAGE(type) ((type) & CLUSTERMSG_LIGHT)
 

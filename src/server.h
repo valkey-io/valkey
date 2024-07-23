@@ -170,7 +170,7 @@ struct hdr_histogram;
 /* When child process is performing write to fdset it iterates on the set
  * writing a chunk of the available data to send on each fd.
  * This constant defines the maximal size of the chunk to use. */
-#define RIO_WRITE_MAX_CHUNK_SIZE 8192
+#define RIO_WRITE_MAX_CHUNK_SIZE 16384
 
 /* Instantaneous metrics tracking. */
 #define STATS_METRIC_SAMPLES 16               /* Number of samples per metric. */

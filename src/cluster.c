@@ -35,6 +35,7 @@
 
 #include "server.h"
 #include "cluster.h"
+#include "cluster_slot_stats.h"
 
 #include <ctype.h>
 
@@ -1460,4 +1461,13 @@ void readonlyCommand(client *c) {
 void readwriteCommand(client *c) {
     c->flag.readonly = 0;
     addReply(c, shared.ok);
+}
+
+/* Resets transient cluster stats that we expose via INFO or other means that we want
+ * to reset via CONFIG RESETSTAT. The function is also used in order to
+ * initialize these fields in clusterInit() at server startup. */
+void resetClusterStats(void) {
+    if (!server.cluster_enabled) return;
+
+    clusterSlotStatResetAll();
 }

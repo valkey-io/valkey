@@ -127,4 +127,5 @@ ConnectionType *connTypeOfCluster(void);
 int isNodeAvailable(clusterNode *node);
 long long getNodeReplicationOffset(clusterNode *node);
 sds aggregateClientOutputBuffer(client *c);
+void resetClusterStats(void);
 #endif /* __CLUSTER_H */

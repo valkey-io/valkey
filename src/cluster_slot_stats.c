@@ -4,15 +4,11 @@
  * SPDX-License-Identifier: BSD 3-Clause
  */
 
-#include "server.h"
-#include "cluster.h"
+#include "cluster_slot_stats.h"
 
 #define UNASSIGNED_SLOT 0
 
-typedef enum {
-    KEY_COUNT,
-    INVALID,
-} slotStatTypes;
+typedef enum { KEY_COUNT, CPU_USEC, SLOT_STAT_COUNT, INVALID } slotStatTypes;
 
 /* -----------------------------------------------------------------------------
  * CLUSTER SLOT-STATS command
@@ -47,6 +43,8 @@ static uint64_t getSlotStat(int slot, int stat_type) {
     uint64_t slot_stat = 0;
     if (stat_type == KEY_COUNT) {
         slot_stat = countKeysInSlot(slot);
+    } else if (stat_type == CPU_USEC) {
+        slot_stat = server.cluster->slot_stats[slot].cpu_usec;
     }
     return slot_stat;
 }
@@ -88,9 +86,17 @@ static void addReplySlotStat(client *c, int slot) {
     addReplyArrayLen(c, 2); /* Array of size 2, where 0th index represents (int) slot,
                              * and 1st index represents (map) usage statistics. */
     addReplyLongLong(c, slot);
-    addReplyMapLen(c, 1); /* Nested map representing slot usage statistics. */
+    addReplyMapLen(c, (server.cluster_slot_stats_enabled) ? SLOT_STAT_COUNT
+                                                          : 1); /* Nested map representing slot usage statistics. */
     addReplyBulkCString(c, "key-count");
     addReplyLongLong(c, countKeysInSlot(slot));
+
+    /* Any additional metrics aside from key-count come with a performance trade-off,
+     * and are aggregated and returned based on its server config. */
+    if (server.cluster_slot_stats_enabled) {
+        addReplyBulkCString(c, "cpu-usec");
+        addReplyLongLong(c, server.cluster->slot_stats[slot].cpu_usec);
+    }
 }
 
 /* Adds reply for the SLOTSRANGE variant.
@@ -121,6 +127,46 @@ static void addReplyOrderBy(client *c, int order_by, long limit, int desc) {
     addReplySortedSlotStats(c, slot_stats, limit);
 }
 
+/* Resets applicable slot statistics. */
+void clusterSlotStatReset(int slot) {
+    /* key-count is exempt, as it is queried separately through `countKeysInSlot()`. */
+    memset(&server.cluster->slot_stats[slot], 0, sizeof(slotStat));
+}
+
+void clusterSlotStatResetAll(void) {
+    memset(server.cluster->slot_stats, 0, sizeof(server.cluster->slot_stats));
+}
+
+/* For cpu-usec accumulation, nested commands within EXEC, EVAL, FCALL are skipped.
+ * This is due to their unique callstack, where the c->duration for
+ * EXEC, EVAL and FCALL already includes all of its nested commands.
+ * Meaning, the accumulation of cpu-usec for these nested commands
+ * would equate to repeating the same calculation twice.
+ */
+static int canAddCpuDuration(client *c) {
+    return server.cluster_slot_stats_enabled &&  /* Config should be enabled. */
+           server.cluster_enabled &&             /* Cluster mode should be enabled. */
+           c->slot != -1 &&                      /* Command should be slot specific. */
+           (!server.execution_nesting ||         /* Either; */
+            (server.execution_nesting &&         /* 1) Command should not be nested, or */
+             c->realcmd->flags & CMD_BLOCKING)); /* 2) If command is nested, it must be due to unblocking. */
+}
+
+void clusterSlotStatsAddCpuDuration(client *c, ustime_t duration) {
+    if (!canAddCpuDuration(c)) return;
+
+    serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
+    server.cluster->slot_stats[c->slot].cpu_usec += duration;
+}
+
+/* For cross-slot scripting, its caller client's slot must be invalidated,
+ * such that its slot-stats aggregation is bypassed. */
+void clusterSlotStatsInvalidateSlotIfApplicable(scriptRunCtx *ctx) {
+    if (!(ctx->flags & SCRIPT_ALLOW_CROSS_SLOT)) return;
+
+    ctx->original_client->slot = -1;
+}
+
 void clusterSlotStatsCommand(client *c) {
     if (server.cluster_enabled == 0) {
         addReplyError(c, "This instance has cluster support disabled");
@@ -149,8 +195,10 @@ void clusterSlotStatsCommand(client *c) {
         int desc = 1, order_by = INVALID;
         if (!strcasecmp(c->argv[3]->ptr, "key-count")) {
             order_by = KEY_COUNT;
+        } else if (!strcasecmp(c->argv[3]->ptr, "cpu-usec") && server.cluster_slot_stats_enabled) {
+            order_by = CPU_USEC;
         } else {
-            addReplyError(c, "Unrecognized sort metric for ORDER BY. The supported metrics are: key-count.");
+            addReplyError(c, "Unrecognized sort metric for ORDERBY.");
             return;
         }
         int i = 4; /* Next argument index, following ORDERBY */

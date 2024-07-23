@@ -30,6 +30,7 @@
 #include "server.h"
 #include "monotonic.h"
 #include "cluster.h"
+#include "cluster_slot_stats.h"
 #include "slowlog.h"
 #include "bio.h"
 #include "latency.h"
@@ -3545,13 +3546,14 @@ void call(client *c, int flags) {
      * If the client is blocked we will handle slowlog when it is unblocked. */
     if (!c->flag.blocked) freeClientOriginalArgv(c);
 
-    /* populate the per-command statistics that we show in INFO commandstats.
-     * If the client is blocked we will handle latency stats and duration when it is unblocked. */
+    /* Populate the per-command and per-slot statistics that we show in INFO commandstats and CLUSTER SLOT-STATS,
+     * respectively. If the client is blocked we will handle latency stats and duration when it is unblocked. */
     if (update_command_stats && !c->flag.blocked) {
         real_cmd->calls++;
         real_cmd->microseconds += c->duration;
         if (server.latency_tracking_enabled && !c->flag.blocked)
             updateCommandLatencyHistogram(&(real_cmd->latency_histogram), c->duration * 1000);
+        clusterSlotStatsAddCpuDuration(c, c->duration);
     }
 
     /* The duration needs to be reset after each call except for a blocked command,

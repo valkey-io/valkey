@@ -329,6 +329,11 @@ struct _clusterNode {
                                                Update with updateAndCountChangedNodeHealth(). */
 };
 
+/* Struct used for storing slot statistics. */
+typedef struct slotStat {
+    uint64_t cpu_usec;
+} slotStat;
+
 struct clusterState {
     clusterNode *myself; /* This node */
     uint64_t currentEpoch;
@@ -376,6 +381,8 @@ struct clusterState {
      * stops claiming the slot. This prevents spreading incorrect information (that
      * source still owns the slot) using UPDATE messages. */
     unsigned char owner_not_claiming_slot[CLUSTER_SLOTS / 8];
+    /* Struct used for storing slot statistics, for all slots owned by the current shard. */
+    slotStat slot_stats[CLUSTER_SLOTS];
 };
 
 

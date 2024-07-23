@@ -62,7 +62,13 @@ test "sunsubscribe without specifying any channel would unsubscribe all shard ch
     set sub_res [ssubscribe $subscribeclient [list "\{channel.0\}1" "\{channel.0\}2" "\{channel.0\}3"]]
     assert_equal [list 1 2 3] $sub_res
     sunsubscribe $subscribeclient
-
+    
+    # wait for the unsubscribe to take effect
+    wait_for_condition 50 10 {
+        [$publishclient spublish "\{channel.0\}1" hello] eq 0
+    } else {
+        fail "unsubscribe did not take effect as expected"
+    }
     assert_equal 0 [$publishclient spublish "\{channel.0\}1" hello]
     assert_equal 0 [$publishclient spublish "\{channel.0\}2" hello]
     assert_equal 0 [$publishclient spublish "\{channel.0\}3" hello]

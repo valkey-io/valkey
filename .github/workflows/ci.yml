@@ -44,6 +44,26 @@ jobs:
       - name: module api test
         run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
 
+  test-rdma:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: make
+        run: |
+          sudo apt-get install librdmacm-dev libibverbs-dev
+          make BUILD_RDMA=module
+      - name: clone-rxe-kmod
+        run: |
+          mkdir -p tests/rdma/rxe
+          git clone https://github.com/pizhenwei/rxe.git tests/rdma/rxe
+          make -C tests/rdma/rxe
+      - name: clear-kernel-log
+        run: sudo dmesg -c > /dev/null
+      - name: test
+        run: sudo ./runtest-rdma --install-rxe
+      - name: show-kernel-log
+        run: sudo dmesg -c
+
   build-debian-old:
     runs-on: ubuntu-latest
     container: debian:buster

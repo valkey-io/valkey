@@ -34,12 +34,10 @@ start_server {tags {"multi"}} {
     } {QUEUED OK {a b c}}
 
     test {Nested MULTI are not allowed} {
-        set err {}
         r multi
-        catch {[r multi]} err
-        r exec
-        set _ $err
-    } {*ERR MULTI*}
+        assert_error "ERR*" {r multi}
+        assert_error "EXECABORT*" {r exec}
+    }
 
     test {MULTI where commands alter argc/argv} {
         r sadd myset a
@@ -49,12 +47,10 @@ start_server {tags {"multi"}} {
     } {a 0}
 
     test {WATCH inside MULTI is not allowed} {
-        set err {}
         r multi
-        catch {[r watch x]} err
-        r exec
-        set _ $err
-    } {*ERR WATCH*}
+        assert_error "ERR*" {r watch}
+        assert_error "EXECABORT*" {r exec}
+    }
 
     test {EXEC fails if there are errors while queueing commands #1} {
         r del foo1{t} foo2{t}

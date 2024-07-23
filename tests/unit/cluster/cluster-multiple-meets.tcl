@@ -51,7 +51,13 @@ tags {tls:skip external:skip cluster} {
             }
 
             # 0 will be connected to 1, but 1 won't see that 0 is connected
-            assert {[llength [get_cluster_nodes 1 connected]] == 1}
+            # Using a wait condition here as an assert can be flaky - especially
+            # when cluster nodes is processed when the link is established to send MEET.
+            wait_for_condition 1000 50 {
+                [llength [get_cluster_nodes 1 connected]] == 1
+            } else {
+                fail "Node 1 recognizes node 0 even though it drops PONGs from node 0"
+            }
             assert {[llength [get_cluster_nodes 0 connected]] == 2}
 
             # Drop incoming and outgoing links from/to 1

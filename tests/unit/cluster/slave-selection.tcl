@@ -94,7 +94,7 @@ test "Wait for the node #10 to return alive before ending the test" {
 
 test "Cluster should eventually be up again" {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
-        if {[process_is_paused $paused_pid]} continue
+        if {[process_is_paused [srv -$j pid]]} continue
         wait_for_condition 1000 50 {
             [CI $j cluster_state] eq "ok"
         } else {
@@ -190,7 +190,7 @@ test "New Master down consecutively" {
         }
 
         for {set j 0} {$j < [llength $::servers]} {incr j} {
-            if {[process_is_paused $paused_pid]} continue
+            if {[process_is_paused [srv -$j pid]]} continue
             wait_for_condition 1000 50 {
                 [CI $j cluster_state] eq "ok"
             } else {

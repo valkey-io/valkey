@@ -8,11 +8,7 @@
 
 #define UNASSIGNED_SLOT 0
 
-typedef enum {
-    INVALID,
-    KEY_COUNT,
-    NETWORK_BYTES_IN,
-} slotStatTypes;
+typedef enum { KEY_COUNT, CPU_USEC, NETWORK_BYTES_IN, SLOT_STAT_COUNT, INVALID } slotStatTypes;
 
 /* -----------------------------------------------------------------------------
  * CLUSTER SLOT-STATS command
@@ -49,6 +45,8 @@ static uint64_t getSlotStat(int slot, int stat_type) {
         slot_stat = countKeysInSlot(slot);
     } else if (stat_type == NETWORK_BYTES_IN) {
         slot_stat = server.cluster->slot_stats[slot].network_bytes_in;
+    } else if (stat_type == CPU_USEC) {
+        slot_stat = server.cluster->slot_stats[slot].cpu_usec;
     }
     return slot_stat;
 }
@@ -90,11 +88,19 @@ static void addReplySlotStat(client *c, int slot) {
     addReplyArrayLen(c, 2); /* Array of size 2, where 0th index represents (int) slot,
                              * and 1st index represents (map) usage statistics. */
     addReplyLongLong(c, slot);
-    addReplyMapLen(c, 2); /* Nested map representing slot usage statistics. */
+    addReplyMapLen(c, (server.cluster_slot_stats_enabled) ? SLOT_STAT_COUNT
+                                                          : 1); /* Nested map representing slot usage statistics. */
     addReplyBulkCString(c, "key-count");
     addReplyLongLong(c, countKeysInSlot(slot));
-    addReplyBulkCString(c, "network-bytes-in");
-    addReplyLongLong(c, server.cluster->slot_stats[slot].network_bytes_in);
+
+    /* Any additional metrics aside from key-count come with a performance trade-off,
+     * and are aggregated and returned based on its server config. */
+    if (server.cluster_slot_stats_enabled) {
+        addReplyBulkCString(c, "cpu-usec");
+        addReplyLongLong(c, server.cluster->slot_stats[slot].cpu_usec);
+        addReplyBulkCString(c, "network-bytes-in");
+        addReplyLongLong(c, server.cluster->slot_stats[slot].network_bytes_in);
+    }
 }
 
 /* Adds reply for the SLOTSRANGE variant.
@@ -125,23 +131,51 @@ static void addReplyOrderBy(client *c, int order_by, long limit, int desc) {
     addReplySortedSlotStats(c, slot_stats, limit);
 }
 
+/* Resets applicable slot statistics. */
+void clusterSlotStatReset(int slot) {
+    /* key-count is exempt, as it is queried separately through `countKeysInSlot()`. */
+    memset(&server.cluster->slot_stats[slot], 0, sizeof(slotStat));
+}
+
+void clusterSlotStatResetAll(void) {
+    memset(server.cluster->slot_stats, 0, sizeof(server.cluster->slot_stats));
+}
+
+/* For cpu-usec accumulation, nested commands within EXEC, EVAL, FCALL are skipped.
+ * This is due to their unique callstack, where the c->duration for
+ * EXEC, EVAL and FCALL already includes all of its nested commands.
+ * Meaning, the accumulation of cpu-usec for these nested commands
+ * would equate to repeating the same calculation twice.
+ */
+static int canAddCpuDuration(client *c) {
+    return server.cluster_slot_stats_enabled &&  /* Config should be enabled. */
+           server.cluster_enabled &&             /* Cluster mode should be enabled. */
+           c->slot != -1 &&                      /* Command should be slot specific. */
+           (!server.execution_nesting ||         /* Either; */
+            (server.execution_nesting &&         /* 1) Command should not be nested, or */
+             c->realcmd->flags & CMD_BLOCKING)); /* 2) If command is nested, it must be due to unblocking. */
+}
+
+void clusterSlotStatsAddCpuDuration(client *c, ustime_t duration) {
+    if (!canAddCpuDuration(c)) return;
+
+    serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
+    server.cluster->slot_stats[c->slot].cpu_usec += duration;
+}
+
+/* For cross-slot scripting, its caller client's slot must be invalidated,
+ * such that its slot-stats aggregation is bypassed. */
+void clusterSlotStatsInvalidateSlotIfApplicable(scriptRunCtx *ctx) {
+    if (!(ctx->flags & SCRIPT_ALLOW_CROSS_SLOT)) return;
+
+    ctx->original_client->slot = -1;
+}
+
 static int canAddNetworkBytes(client *c) {
     /* First, cluster mode must be enabled.
      * Second, command should target a specific slot.
      * Third, blocked client is not aggregated, to avoid duplicate aggregation upon unblocking. */
     return server.cluster_enabled && server.cluster_slot_stats_enabled && c->slot != -1 && !(c->flag.blocked);
-}
-
-/* Resets applicable slot statistics. */
-void clusterSlotStatReset(int slot) {
-    /* key-count is exempt, as it is queried separately through countKeysInSlot(). */
-    server.cluster->slot_stats[slot].network_bytes_in = 0;
-}
-
-void clusterSlotStatResetAll(void) {
-    if (server.cluster == NULL) return;
-
-    memset(server.cluster->slot_stats, 0, sizeof(server.cluster->slot_stats));
 }
 
 /* Adds network ingress bytes of the current command in execution,
@@ -174,11 +208,6 @@ void clusterSlotStatsCommand(client *c) {
         return;
     }
 
-    if (!server.cluster_slot_stats_enabled) {
-        addReplyError(c, "Slot usage statistics configuration is disabled");
-        return;
-    }
-
     /* Parse additional arguments. */
     if (c->argc == 5 && !strcasecmp(c->argv[2]->ptr, "slotsrange")) {
         /* CLUSTER SLOT-STATS SLOTSRANGE start-slot end-slot */
@@ -201,7 +230,9 @@ void clusterSlotStatsCommand(client *c) {
         int desc = 1, order_by = INVALID;
         if (!strcasecmp(c->argv[3]->ptr, "key-count")) {
             order_by = KEY_COUNT;
-        } else if (!strcasecmp(c->argv[3]->ptr, "network-bytes-in")) {
+        } else if (!strcasecmp(c->argv[3]->ptr, "cpu-usec") && server.cluster_slot_stats_enabled) {
+            order_by = CPU_USEC;
+        } else if (!strcasecmp(c->argv[3]->ptr, "network-bytes-in") && server.cluster_slot_stats_enabled) {
             order_by = NETWORK_BYTES_IN;
         } else {
             addReplyError(c, "Unrecognized sort metric for ORDERBY.");

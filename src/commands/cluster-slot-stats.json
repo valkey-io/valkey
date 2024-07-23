@@ -36,6 +36,9 @@
                             "key-count": {
                                 "type": "integer"
                             },
+                            "cpu-usec": {
+                                "type": "integer"
+                            },
                             "network-bytes-in": {
                                 "type": "integer"
                             }

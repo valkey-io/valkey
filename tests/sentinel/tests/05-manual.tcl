@@ -38,11 +38,11 @@ test "Manual failover works" {
     set master_id [get_instance_id_by_port valkey [lindex $addr 1]]
 }
 
-test "New master [join $addr {:}] role matches" {
+test "New primary [join $addr {:}] role matches" {
     assert {[RI $master_id role] eq {master}}
 }
 
-test "All the other slaves now point to the new master" {
+test "All the other slaves now point to the new primary" {
     foreach_valkey_id id {
         if {$id != $master_id && $id != 0} {
             wait_for_condition 1000 50 {
@@ -54,7 +54,7 @@ test "All the other slaves now point to the new master" {
     }
 }
 
-test "The old master eventually gets reconfigured as a slave" {
+test "The old primary eventually gets reconfigured as a slave" {
     wait_for_condition 1000 50 {
         [RI 0 master_port] == [lindex $addr 1]
     } else {

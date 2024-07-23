@@ -63,11 +63,11 @@ proc wait_for_sentinels_connect_servers { {is_connect 1} } {
     }
 }
 
-test "Sentinels (re)connection following SENTINEL SET mymaster auth-pass" {
+test "Sentinels (re)connection following SENTINEL SET myprimary auth-pass" {
     # 3 types of sentinels to test:
-    # (re)started while master changed pwd. Manage to connect only after setting pwd
+    # (re)started while primary changed pwd. Manage to connect only after setting pwd
     set sent2re 0
-    # (up)dated in advance with master new password
+    # (up)dated in advance with primary new password
     set sent2up 1
     # (un)touched. Yet manage to maintain (old) connection
     set sent2un 2
@@ -98,7 +98,7 @@ test "Sentinels (re)connection following SENTINEL SET mymaster auth-pass" {
     verify_sentinel_auto_discovery
 }
 
-test "Sentinels (re)connection following master ACL change" {
+test "Sentinels (re)connection following primary ACL change" {
     # Three types of sentinels to test during ACL change:
     # 1. (re)started Sentinel. Manage to connect only after setting new pwd
     # 2. (up)dated Sentinel, get just before ACL change the new password

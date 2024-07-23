@@ -475,7 +475,7 @@ proc signal_idle_client fd {
         send_data_packet $fd run [lindex $::all_tests $::next_test]
         lappend ::active_clients $fd
         incr ::next_test
-        if {$::loop && $::next_test == [llength $::all_tests]} {
+        if {$::loop > 1 && $::next_test == [llength $::all_tests]} {
             set ::next_test 0
             incr ::loop -1
         }
@@ -703,6 +703,10 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         set ::loop 2147483647
     } elseif {$opt eq {--loops}} {
         set ::loop $arg
+        if {$::loop <= 0} {
+            puts "Wrong argument: $opt, loops should be greater than 0"
+            exit 1
+        }
         incr j
     } elseif {$opt eq {--timeout}} {
         set ::timeout $arg

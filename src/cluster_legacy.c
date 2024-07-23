@@ -196,19 +196,19 @@ typedef struct {
     };
 } ClusterNodeIterator;
 
-void clusterNodeIterInitAllNodes(ClusterNodeIterator *iter) {
+static void clusterNodeIterInitAllNodes(ClusterNodeIterator *iter) {
     iter->type = ITER_DICT;
     dictInitSafeIterator(&iter->di, server.cluster->nodes);
 }
 
-void clusterNodeIterInitMyShard(ClusterNodeIterator *iter) {
+static void clusterNodeIterInitMyShard(ClusterNodeIterator *iter) {
     list *nodes = clusterGetNodesInMyShard(server.cluster->myself);
     serverAssert(nodes != NULL);
     iter->type = ITER_LIST;
     listRewind(nodes, &iter->li);
 }
 
-clusterNode *clusterNodeIterNext(ClusterNodeIterator *iter) {
+static clusterNode *clusterNodeIterNext(ClusterNodeIterator *iter) {
     switch (iter->type) {
     case ITER_DICT: {
         /* Get the next entry in the dictionary */
@@ -230,7 +230,7 @@ clusterNode *clusterNodeIterNext(ClusterNodeIterator *iter) {
     }
 }
 
-void clusterNodeIterReset(ClusterNodeIterator *iter) {
+static void clusterNodeIterReset(ClusterNodeIterator *iter) {
     if (iter->type == ITER_DICT) {
         dictResetIterator(&iter->di);
     }

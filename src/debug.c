@@ -2302,9 +2302,9 @@ void applyWatchdogPeriod(void) {
 }
 
 void debugPauseProcess(void) {
-    serverLog(LL_DEBUG, "Process is about to stop.");
+    serverLog(LL_NOTICE, "Process is about to stop.");
     raise(SIGSTOP);
-    serverLog(LL_DEBUG, "Process has been continued.");
+    serverLog(LL_NOTICE, "Process has been continued.");
 }
 
 /* Positive input is sleep time in microseconds. Negative input is fractions

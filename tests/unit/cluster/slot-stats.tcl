@@ -478,7 +478,7 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-en
         set slot_stats [$replica CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
         set expected_slot_stats [
             dict create $key_slot [
-                dict create network-bytes-in 46 ;# 34 + 12 bytes from sdslen(channel) + sdslen(hello).
+                dict create network-bytes-in 2310 ;# 34 + 2276 bytes from clusterMsg.
             ]
         ]
         assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert

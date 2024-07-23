@@ -3297,8 +3297,9 @@ int clusterProcessPacket(clusterLink *link) {
             message_len = ntohl(hdr->data.publish.msg.message_len);
             channel = createStringObject((char *)hdr->data.publish.msg.bulk_data, channel_len);
             message = createStringObject((char *)hdr->data.publish.msg.bulk_data + channel_len, message_len);
-            clusterSlotStatsAddNetworkBytesInForShardedPubSub(channel, message);
+            clusterSlotStatsSetClusterMsgLength(ntohl(hdr->totlen));
             pubsubPublishMessage(channel, message, type == CLUSTERMSG_TYPE_PUBLISHSHARD);
+            clusterSlotStatsResetClusterMsgLength();
             decrRefCount(channel);
             decrRefCount(message);
         }

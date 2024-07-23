@@ -29,6 +29,7 @@
 
 #include "server.h"
 #include "cluster.h"
+#include "cluster_slot_stats.h"
 
 /* Structure to hold the pubsub related metadata. Currently used
  * for pubsub and pubsubshard feature. */
@@ -480,6 +481,7 @@ int pubsubPublishMessageInternal(robj *channel, robj *message, pubsubtype type) 
     /* Send to clients listening for that channel */
     if (server.cluster_enabled && type.shard) {
         slot = keyHashSlot(channel->ptr, sdslen(channel->ptr));
+        clusterSlotStatsAddNetworkBytesInForShardedPubSub(slot);
     }
     de = kvstoreDictFind(*type.serverPubSubChannels, slot, channel);
     if (de) {

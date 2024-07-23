@@ -2631,8 +2631,8 @@ void processInlineBuffer(client *c) {
 
     /* Per-slot network bytes-in calculation.
      *
-     * Within networking.c, we calculate and store the current command's ingress bytes
-     * under c->net_input_bytes_curr_cmd, for which its per-slot aggregation is deferred
+     * We calculate and store the current command's ingress bytes under 
+     * c->net_input_bytes_curr_cmd, for which its per-slot aggregation is deferred
      * until c->slot is parsed later within processCommand().
      *
      * Calculation: For inline buffer, every whitespace is of length 1,
@@ -2741,8 +2741,8 @@ void processMultibulkBuffer(client *c) {
 
         /* Per-slot network bytes-in calculation.
          *
-         * Within networking.c, we calculate and store the current command's ingress bytes
-         * under c->net_input_bytes_curr_cmd, for which its per-slot aggregation is deferred
+         * We calculate and store the current command's ingress bytes under
+         * c->net_input_bytes_curr_cmd, for which its per-slot aggregation is deferred
          * until c->slot is parsed later within processCommand().
          *
          * Calculation: For multi bulk buffer, we accumulate four factors, namely;

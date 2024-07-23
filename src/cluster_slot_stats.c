@@ -20,6 +20,12 @@ typedef struct {
     uint64_t stat;
 } slotStatForSort;
 
+typedef struct {
+    uint32_t len;
+} pubsubState;
+
+static pubsubState pubsub_state;
+
 static int doesSlotBelongToMyShard(int slot) {
     clusterNode *myself = getMyClusterNode();
     clusterNode *primary = clusterNodeGetPrimary(myself);
@@ -195,11 +201,20 @@ void clusterSlotStatsAddNetworkBytesIn(client *c) {
     server.cluster->slot_stats[c->slot].network_bytes_in += c->net_input_bytes_curr_cmd;
 }
 
+void clusterSlotStatsSetClusterMsgLength(uint32_t len) {
+    pubsub_state.len = len;
+}
+
+void clusterSlotStatsResetClusterMsgLength() {
+    pubsub_state.len = 0;
+}
+
 /* Adds network ingress bytes from sharded pubsub subscription.
  * Since sharded pubsub targets a specific slot, we are able to aggregate its ingress bytes under per-slot context. */
-void clusterSlotStatsAddNetworkBytesInForShardedPubSub(robj *channel, robj *message) {
-    int slot = keyHashSlot(channel->ptr, sdslen(channel->ptr));
-    server.cluster->slot_stats[slot].network_bytes_in += (sdslen(channel->ptr) + sdslen(message->ptr));
+void clusterSlotStatsAddNetworkBytesInForShardedPubSub(int slot) {
+    serverAssert(slot >= 0 && slot < CLUSTER_SLOTS);
+
+    server.cluster->slot_stats[slot].network_bytes_in += pubsub_state.len;
 }
 
 void clusterSlotStatsCommand(client *c) {

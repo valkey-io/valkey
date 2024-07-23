@@ -2005,7 +2005,7 @@ struct valkeyServer {
                                                 * use dual channel replication for full syncs. */
     int wait_before_rdb_client_free;           /* Grace period in seconds for replica main channel
                                                 * to establish psync. */
-    int debug_pause_after_fork;                /* Debug param that pause the main process
+    int debug_pause_after_fork;                /* Debug param that pauses the main process
                                                 * after a replication fork() (for bgsave). */
     size_t repl_buffer_mem;                    /* The memory of replication buffer. */
     list *repl_buffer_blocks;                  /* Replication buffers blocks list

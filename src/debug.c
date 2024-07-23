@@ -998,7 +998,6 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "sleep-after-fork-seconds") && c->argc == 3) {
         double sleep_after_fork_seconds;
         if (getDoubleFromObjectOrReply(c, c->argv[2], &sleep_after_fork_seconds, NULL) != C_OK) {
-            addReply(c, shared.err);
             return;
         }
         server.debug_sleep_after_fork_us = (int)(sleep_after_fork_seconds * 1e6);

@@ -836,7 +836,7 @@ jobs:
         run: |
           ./runtest-cluster --tls-module ${{github.event.inputs.cluster_test_args}}
 
-  test-rpm-distros-tls-module-no-tls:
+  test-rpm-distros-tls-module-no-tls1:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||

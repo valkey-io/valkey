@@ -168,7 +168,7 @@ struct hdr_histogram;
 #define CHILD_COW_DUTY_CYCLE 100
 
 /* When child process is performing write to connset it iterates on the set
- * writing a chunk of the available data to send on each fd.
+ * writing a chunk of the available data to send on each connection.
  * This constant defines the maximal size of the chunk to use. */
 #define RIO_CONNSET_WRITE_MAX_CHUNK_SIZE 16384
 

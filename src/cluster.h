@@ -38,6 +38,7 @@ void clusterInit(void);
 void clusterInitLast(void);
 void clusterCron(void);
 void clusterBeforeSleep(void);
+int clusterSaveConfig(int do_fsync);
 int verifyClusterConfigWithData(void);
 
 int clusterSendModuleMessageToTarget(const char *target,

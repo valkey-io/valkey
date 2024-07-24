@@ -4336,13 +4336,18 @@ int finishShutdown(void) {
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);
 
+    if (server.cluster_enabled) {
+        /* The error logs have been logged in the save function if the save fails. */
+        serverLog(LL_NOTICE, "Saving the cluster configuration file before exiting.");
+        clusterSaveConfig(1);
+    }
+
 #if !defined(__sun)
     /* Unlock the cluster config file before shutdown */
     if (server.cluster_enabled && server.cluster_config_file_lock_fd != -1) {
         flock(server.cluster_config_file_lock_fd, LOCK_UN | LOCK_NB);
     }
 #endif /* __sun */
-
 
     serverLog(LL_WARNING, "%s is now ready to exit, bye bye...", server.sentinel_mode ? "Sentinel" : "Valkey");
     return C_OK;

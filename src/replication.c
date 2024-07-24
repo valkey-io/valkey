@@ -3162,7 +3162,7 @@ void setupMainConnForPsync(connection *conn) {
     char *err = NULL;
     if (server.repl_state == REPL_STATE_SEND_HANDSHAKE) {
         /* We already have an initialized connection at primary side, we only need to associate it with RDB connection */
-        ll2string(llstr, sizeof(llstr), server.rdb_client_id);
+        ull2string(llstr, sizeof(llstr), server.rdb_client_id);
         err = sendCommand(conn, "REPLCONF", "set-rdb-client-id", llstr, NULL);
         if (err) goto error;
         server.repl_state = REPL_STATE_RECEIVE_CAPA_REPLY;

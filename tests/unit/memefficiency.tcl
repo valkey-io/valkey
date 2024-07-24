@@ -405,7 +405,7 @@ run_solo {defrag} {
         } {OK}
 
         # Skip the following two tests if we are running with IO threads, as the IO threads allocate the command arguments in a different arena. As a result, fragmentation is not as expected.
-        if {[r config get io-threads] eq 0} {
+        if {[r config get io-threads] eq "io-threads 1"} {
         test "Active defrag pubsub: $type" {
             r flushdb
             r config resetstat

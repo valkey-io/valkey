@@ -309,7 +309,7 @@ start_server {tags {"info" "external:skip"}} {
         }
 
         # skip the following 2 tests if we are running with io-threads as the eventloop metrics are different in that case.
-        if {[r config get io-threads] eq 0} {
+        if {[r config get io-threads] eq "io-threads 1"} {
             test {stats: eventloop metrics} {
                 set info1 [r info stats]
                 set cycle1 [getInfoProperty $info1 eventloop_cycles]

@@ -1802,7 +1802,7 @@ void zaddGenericCommand(client *c, int flags) {
     if (checkType(c, zobj, OBJ_ZSET)) goto cleanup;
     if (zobj == NULL) {
         if (xx) goto reply_to_client; /* No key + XX option: nothing to do. */
-        zobj = zsetTypeCreate(elements, sdslen(c->argv[scoreidx + 1]->ptr));
+        zobj = zsetTypeCreate(elements, maxelelen);
         dbAdd(c->db, key, zobj);
     } else {
         zsetTypeMaybeConvert(zobj, elements, maxelelen);

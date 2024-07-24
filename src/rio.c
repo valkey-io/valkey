@@ -528,7 +528,7 @@ static size_t rioConnsetWrite(rio *r, const void *buf, size_t len) {
      * parallelize while the kernel is sending data in background to
      * the TCP socket. */
     while (len) {
-        size_t count = len < RIO_WRITE_MAX_CHUNK_SIZE ? len : RIO_WRITE_MAX_CHUNK_SIZE;
+        size_t count = len < RIO_CONNSET_WRITE_MAX_CHUNK_SIZE ? len : RIO_CONNSET_WRITE_MAX_CHUNK_SIZE;
         int broken = 0;
         for (j = 0; j < r->io.connset.numconns; j++) {
             if (r->io.connset.state[j] != 0) {

@@ -655,4 +655,20 @@ tags {"aof external:skip"} {
             }
         }
     }
+
+    start_server {} {
+        test {FLUSHDB / FLUSHALL should persist in AOF} {
+            r config set appendonly no
+            r multi
+            r config set appendonly yes
+            r config set appendonly no
+            r exec
+
+            r config set appendonly yes
+            r multi
+            r config set appendonly no
+            r config set appendonly yes
+            r exec
+        }
+    }
 }

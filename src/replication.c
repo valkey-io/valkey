@@ -2514,7 +2514,7 @@ void freePendingReplDataBuf(void) {
  * Upon dual-channel sync failure, close rdb-connection, reset repl-state, reset
  * provisional primary struct, and free local replication buffer. */
 void replicationAbortDualChannelSyncTransfer(void) {
-    if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) return;
+    serverAssert(server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE);
     serverLog(LL_NOTICE, "Aborting dual channel sync");
     if (server.repl_rdb_transfer_s) {
         connClose(server.repl_rdb_transfer_s);
@@ -3688,7 +3688,9 @@ void replicationAbortSyncTransfer(void) {
  *
  * Otherwise zero is returned and no operation is performed at all. */
 int cancelReplicationHandshake(int reconnect) {
-    replicationAbortDualChannelSyncTransfer();
+    if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
+        replicationAbortDualChannelSyncTransfer();
+    }
     if (server.repl_state == REPL_STATE_TRANSFER) {
         replicationAbortSyncTransfer();
         server.repl_state = REPL_STATE_CONNECT;

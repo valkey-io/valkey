@@ -840,7 +840,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
-        (github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'unstable')) &&
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'tls')
     strategy:
       fail-fast: false

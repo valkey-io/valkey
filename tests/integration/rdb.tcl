@@ -181,7 +181,7 @@ start_server {} {
         wait_for_condition 50 100 {
             [s rdb_bgsave_in_progress] == 1
         } else {
-            fail "bgsave not done"
+            fail "bgsave did not start in time"
         }
         set fork_child_pid [get_child_pid 0]
         

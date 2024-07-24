@@ -2862,8 +2862,11 @@ void dualChannelSyncSuccess(void) {
     if (server.pending_repl_data.blocks && streamReplDataBufToDb(server.primary) == C_ERR) {
         /* Sync session aborted during repl data streaming. */
         serverLog(LL_WARNING, "Failed to stream local replication buffer into memory");
-        replicationAbortDualChannelSyncTransfer();
-        replicationUnsetPrimary();
+        /* Verify sync is still in progress */
+        if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
+            replicationAbortDualChannelSyncTransfer();
+            replicationUnsetPrimary();
+        }
         return;
     }
     freePendingReplDataBuf();

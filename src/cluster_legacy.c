@@ -1136,6 +1136,20 @@ void clusterInitLast(void) {
     }
 }
 
+/* Called when a cluster node calls SHUTDOWN. */
+void clusterHandleServerShutdown(void) {
+    /* The error logs have been logged in the save function if the save fails. */
+    serverLog(LL_NOTICE, "Saving the cluster configuration file before exiting.");
+    clusterSaveConfig(1);
+
+#if !defined(__sun)
+    /* Unlock the cluster config file before shutdown, see clusterLockConfig. */
+    if (server.cluster_config_file_lock_fd != -1) {
+        flock(server.cluster_config_file_lock_fd, LOCK_UN | LOCK_NB);
+    }
+#endif /* __sun */
+}
+
 /* Reset a node performing a soft or hard reset:
  *
  * 1) All other nodes are forgotten.

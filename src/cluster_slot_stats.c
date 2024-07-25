@@ -20,12 +20,6 @@ typedef struct {
     uint64_t stat;
 } slotStatForSort;
 
-typedef struct {
-    uint32_t len;
-} pubsubState;
-
-static pubsubState pubsub_state;
-
 static int doesSlotBelongToMyShard(int slot) {
     clusterNode *myself = getMyClusterNode();
     clusterNode *primary = clusterNodeGetPrimary(myself);
@@ -155,6 +149,7 @@ void clusterSlotStatsAddNetworkBytesOutForReplication(int len) {
 /* Upon SPUBLISH, two egress events are triggered.
  * 1) Internal propagation, for clients that are subscribed to the current node.
  * 2) External propagation, for other nodes within the same shard (could either be a primary or replica).
+ *    This type is not aggregated, to stay consistent with server.stat_net_output_bytes aggregation.
  * This function covers the internal propagation component. */
 void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(client *c, int slot) {
     /* For a blocked client, c->slot could be pre-filled.
@@ -174,18 +169,6 @@ void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(clien
      * as resetClient() is not called until subscription ends. */
     c->net_output_bytes_curr_cmd = 0;
     c->slot = _slot;
-}
-
-/* Upon SPUBLISH, two egress events are triggered.
- * 1) Internal propagation, for clients that are subscribed to the current node.
- * 2) External propagation, for other nodes within the same shard (could either be a primary or replica).
- * This function covers the external propagation component. */
-void clusterSlotStatsAddNetworkBytesOutForShardedPubSubExternalPropagation(size_t len) {
-    client *c = server.current_client;
-    if (c == NULL || !canAddNetworkBytesOut(c)) return;
-
-    serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
-    server.cluster->slot_stats[c->slot].network_bytes_out += len;
 }
 
 /* Adds reply for the ORDERBY variant.
@@ -261,26 +244,6 @@ void clusterSlotStatsAddNetworkBytesInForUserClient(client *c) {
     }
 
     server.cluster->slot_stats[c->slot].network_bytes_in += c->net_input_bytes_curr_cmd;
-}
-
-/* Adds network ingress bytes from sharded pubsub subscription.
- * Since sharded pubsub targets a specific slot, we are able to aggregate its ingress bytes under per-slot context. */
-void clusterSlotStatsAddNetworkBytesInForShardedPubSub(int slot) {
-    serverAssert(slot >= 0 && slot < CLUSTER_SLOTS);
-
-    server.cluster->slot_stats[slot].network_bytes_in += pubsub_state.len;
-}
-
-/* To avoid redundant keyHashSlot(), network-bytes-in accumulation for sharded pubsub employs a stateful design pattern.
- * The total length of the clusterMsg is first recorded under a state, called pubsub_state.
- * This recorded value is then accumulated later upon keyHashSlot() within the call-stack.
- * After its accumulation, the state is reset back to 0. */
-void clusterSlotStatsSetClusterMsgLength(uint32_t len) {
-    pubsub_state.len = len;
-}
-
-void clusterSlotStatsResetClusterMsgLength(void) {
-    pubsub_state.len = 0;
 }
 
 void clusterSlotStatsCommand(client *c) {

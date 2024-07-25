@@ -481,7 +481,6 @@ int pubsubPublishMessageInternal(robj *channel, robj *message, pubsubtype type) 
     /* Send to clients listening for that channel */
     if (server.cluster_enabled && type.shard) {
         slot = keyHashSlot(channel->ptr, sdslen(channel->ptr));
-        clusterSlotStatsAddNetworkBytesInForShardedPubSub(slot);
     }
     de = kvstoreDictFind(*type.serverPubSubChannels, (slot == -1) ? 0 : slot, channel);
     if (de) {

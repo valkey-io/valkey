@@ -385,6 +385,10 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
         $rd BLPOP $key 0
         wait_for_blocked_clients_count 1
 
+        # Slot-stats must be empty here, as the client is yet to be unblocked.
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
+
         # *3\r\n$5\r\nlpush\r\n$3\r\nkey\r\n$5\r\nvalue\r\n --> 35 bytes.
         R 0 LPUSH $key value
         wait_for_blocked_clients_count 0
@@ -395,6 +399,8 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
                 dict create network-bytes-in 66 ;# 31 + 35 bytes.
             ]
         ]
+
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
     }
     R 0 CONFIG RESETSTAT
     R 0 FLUSHALL
@@ -478,7 +484,7 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-en
         set slot_stats [$replica CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
         set expected_slot_stats [
             dict create $key_slot [
-                dict create network-bytes-in 2310 ;# 34 + 2276 bytes from clusterMsg.
+                dict create network-bytes-in 34
             ]
         ]
         assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
@@ -608,12 +614,11 @@ start_cluster 1 1 {tags {external:skip cluster}} {
 
         # Publisher client) :1\r\n --> 4 bytes.
         # Subscriber client) *3\r\n$8\r\nsmessage\r\n$7\r\nchannel\r\n$5\r\nhello\r\n --> 42 bytes.
-        # Cluster propagation) sdslen(channel) + sdslen(hello) --> 12 bytes.
         assert_equal 1 [$publisher SPUBLISH $channel hello]
         set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
         set expected_slot_stats [
             dict create $key_slot [
-                dict create network-bytes-out 2338 ;# 4 + 42 + 12 + 2280 bytes from clusterMsgSendBlock.
+                dict create network-bytes-out 46 ;# 4 + 42 bytes.
             ]
         ]
         assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
@@ -650,21 +655,19 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         # For primary channel;
         # Publisher client) :1\r\n --> 4 bytes.
         # Subscriber client) *3\r\n$8\r\nsmessage\r\n$7\r\nchannel\r\n$5\r\nhello\r\n --> 42 bytes.
-        # Cluster propagation) sdslen(channel) + sdslen(hello) --> 12 bytes.
         # For secondary channel;
         # Publisher client) :1\r\n --> 4 bytes.
         # Subscriber client) *3\r\n$8\r\nsmessage\r\n$8\r\nchannel2\r\n$5\r\nhello\r\n --> 43 bytes.
-        # Cluster propagation) sdslen(channel2) + sdslen(hello) --> 13 bytes.
         assert_equal 1 [$publisher SPUBLISH $channel hello]
         assert_equal 1 [$publisher SPUBLISH $channel_secondary hello]
         set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
         set expected_slot_stats [
             dict create \
                 $key_slot [ \
-                    dict create network-bytes-out 2338 ;# 4 + 42 + 12 + 2280 bytes from clusterMsgSendBlock.
+                    dict create network-bytes-out 46 ;# 4 + 42 bytes.
                 ] \
                 $key_slot_secondary [ \
-                    dict create network-bytes-out 2340 ;# 4 + 43 + 13 + 2280 bytes from clusterMsgSendBlock.
+                    dict create network-bytes-out 47 ;# 4 + 43 bytes.
                 ]
         ]
         assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert

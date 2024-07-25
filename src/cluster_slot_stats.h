@@ -13,7 +13,6 @@ void clusterSlotStatsInvalidateSlotIfApplicable(scriptRunCtx *ctx);
 
 /* network-bytes-in metric. */
 void clusterSlotStatsAddNetworkBytesInForUserClient(client *c);
-void clusterSlotStatsAddNetworkBytesInForShardedPubSub(int slot);
 void clusterSlotStatsSetClusterMsgLength(uint32_t len);
 void clusterSlotStatsResetClusterMsgLength(void);
 
@@ -21,4 +20,3 @@ void clusterSlotStatsResetClusterMsgLength(void);
 void clusterSlotStatsAddNetworkBytesOutForUserClient(client *c);
 void clusterSlotStatsAddNetworkBytesOutForReplication(int len);
 void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(client *c, int slot);
-void clusterSlotStatsAddNetworkBytesOutForShardedPubSubExternalPropagation(size_t len);

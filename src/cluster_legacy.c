@@ -3297,9 +3297,7 @@ int clusterProcessPacket(clusterLink *link) {
             message_len = ntohl(hdr->data.publish.msg.message_len);
             channel = createStringObject((char *)hdr->data.publish.msg.bulk_data, channel_len);
             message = createStringObject((char *)hdr->data.publish.msg.bulk_data + channel_len, message_len);
-            clusterSlotStatsSetClusterMsgLength(ntohl(hdr->totlen));
             pubsubPublishMessage(channel, message, type == CLUSTERMSG_TYPE_PUBLISHSHARD);
-            clusterSlotStatsResetClusterMsgLength();
             decrRefCount(channel);
             decrRefCount(message);
         }
@@ -4000,7 +3998,6 @@ void clusterPropagatePublish(robj *channel, robj *message, int sharded) {
         clusterNode *node = listNodeValue(ln);
         if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
         clusterSendMessage(node->link, msgblock);
-        clusterSlotStatsAddNetworkBytesOutForShardedPubSubExternalPropagation(msgblock->totlen);
     }
     clusterMsgSendBlockDecrRefCount(msgblock);
 }

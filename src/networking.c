@@ -1899,9 +1899,9 @@ int freeClientsInAsyncFreeQueue(void) {
             }
             if (server.unixtime - c->rdb_client_disconnect_time <= server.wait_before_rdb_client_free) continue;
             serverLog(LL_NOTICE,
-                        "Replica main channel failed to establish PSYNC within the grace period (%ld seconds). "
-                        "Freeing RDB client %llu.",
-                        (long int)(server.unixtime - c->rdb_client_disconnect_time), (unsigned long long)c->id);
+                      "Replica main channel failed to establish PSYNC within the grace period (%ld seconds). "
+                      "Freeing RDB client %llu.",
+                      (long int)(server.unixtime - c->rdb_client_disconnect_time), (unsigned long long)c->id);
             c->flag.protected_rdb_channel = 0;
         }
 

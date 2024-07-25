@@ -1770,6 +1770,7 @@ void freeClient(client *c) {
 void freeClientAsync(client *c) {
     if (c->flag.close_asap || c->flag.script) return;
     c->flag.close_asap = 1;
+    serverAssert(listSearchKey(server.clients_to_close,c) != NULL); // TODO remove
     listAddNodeTail(server.clients_to_close, c);
 }
 
@@ -1894,7 +1895,7 @@ int freeClientsInAsyncFreeQueue(void) {
             if (!c->rdb_client_disconnect_time) {
                 if (c->conn) connSetReadHandler(c->conn, NULL);
                 c->rdb_client_disconnect_time = server.unixtime;
-                serverLog(LL_VERBOSE, "Postpone RDB client id=%llu (%s) free for %d seconds", (unsigned long long)c->id,
+                serverLog(LL_NOTICE, "Postpone RDB client id=%llu (%s) free for %d seconds", (unsigned long long)c->id,
                           replicationGetReplicaName(c), server.wait_before_rdb_client_free);
                 continue;
             }

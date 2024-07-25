@@ -2672,6 +2672,7 @@ static void fullSyncWithPrimary(connection *conn) {
             sdsfree(err);
             return;
         }
+        serverLog(LL_NOTICE, "fullSyncWithPrimary ull2string message got from primary: %s",err);
         long long reploffset;
         char primary_replid[CONFIG_RUN_ID_SIZE + 1];
         int dbid;

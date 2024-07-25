@@ -2010,8 +2010,8 @@ struct valkeyServer {
                                                 * use dual channel replication for full syncs. */
     int wait_before_rdb_client_free;           /* Grace period in seconds for replica main channel
                                                 * to establish psync. */
-    int debug_sleep_after_fork_us;             /* Debug param that force the main process to
-                                                * sleep for N microseconds after fork() in repl. */
+    int debug_pause_after_fork;                /* Debug param that pauses the main process
+                                                * after a replication fork() (for bgsave). */
     size_t repl_buffer_mem;                    /* The memory of replication buffer. */
     list *repl_buffer_blocks;                  /* Replication buffers blocks list
                                                 * (serving replica clients and repl backlog) */
@@ -3986,6 +3986,7 @@ void killThreads(void);
 void makeThreadKillable(void);
 void swapMainDbWithTempDb(serverDb *tempDb);
 sds getVersion(void);
+void debugPauseProcess(void);
 
 /* Use macro for checking log level to avoid evaluating arguments in cases log
  * should be ignored due to low level. */

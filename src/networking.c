@@ -1896,15 +1896,13 @@ int freeClientsInAsyncFreeQueue(void) {
                 c->rdb_client_disconnect_time = server.unixtime;
                 serverLog(LL_VERBOSE, "Postpone RDB client id=%llu (%s) free for %d seconds", (unsigned long long)c->id,
                           replicationGetReplicaName(c), server.wait_before_rdb_client_free);
-                continue;
             }
-            if (server.unixtime - c->rdb_client_disconnect_time > server.wait_before_rdb_client_free) {
-                serverLog(LL_NOTICE,
-                          "Replica main channel failed to establish PSYNC within the grace period (%ld seconds). "
-                          "Freeing RDB client %llu.",
-                          (long int)(server.unixtime - c->rdb_client_disconnect_time), (unsigned long long)c->id);
-                c->flag.protected_rdb_channel = 0;
-            }
+            if (server.unixtime - c->rdb_client_disconnect_time <= server.wait_before_rdb_client_free) continue;
+            serverLog(LL_NOTICE,
+                      "Replica main channel failed to establish PSYNC within the grace period (%ld seconds). "
+                      "Freeing RDB client %llu.",
+                      (long int)(server.unixtime - c->rdb_client_disconnect_time), (unsigned long long)c->id);
+            c->flag.protected_rdb_channel = 0;
         }
 
         if (c->flag.protected) continue;
@@ -4332,9 +4330,9 @@ int closeClientOnOutputBufferLimitReached(client *c, int async) {
     if (checkClientOutputBufferLimits(c)) {
         sds client = catClientInfoString(sdsempty(), c);
         /* Remove RDB connection protection on COB overrun */
-        c->flag.protected_rdb_channel = 0;
 
-        if (async) {
+        if (async || c->flag.protected_rdb_channel) {
+            c->flag.protected_rdb_channel = 0;
             freeClientAsync(c);
             serverLog(LL_WARNING, "Client %s scheduled to be closed ASAP for overcoming of output buffer limits.",
                       client);

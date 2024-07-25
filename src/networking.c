@@ -1770,7 +1770,7 @@ void freeClient(client *c) {
 void freeClientAsync(client *c) {
     if (c->flag.close_asap || c->flag.script) return;
     c->flag.close_asap = 1;
-    serverAssert(listSearchKey(server.clients_to_close,c) != NULL); // TODO remove
+    serverAssert(listSearchKey(server.clients_to_close,c) == NULL); // TODO remove
     listAddNodeTail(server.clients_to_close, c);
 }
 

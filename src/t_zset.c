@@ -1204,8 +1204,9 @@ robj *zsetTypeCreate(size_t size_hint, size_t val_len_hint) {
 
 /* Check if the existing zset should be converted to another encoding based off the
  * the size hint. */
-void zsetTypeMaybeConvert(robj *zobj, size_t size_hint) {
-    if (zobj->encoding == OBJ_ENCODING_LISTPACK && size_hint > server.zset_max_listpack_entries) {
+void zsetTypeMaybeConvert(robj *zobj, size_t size_hint, size_t value_len_hint) {
+    if (zobj->encoding == OBJ_ENCODING_LISTPACK &&
+        (size_hint > server.zset_max_listpack_entries || value_len_hint > server.zset_max_listpack_value)) {
         zsetConvertAndExpand(zobj, OBJ_ENCODING_SKIPLIST, size_hint);
     }
 }
@@ -1720,6 +1721,7 @@ void zaddGenericCommand(client *c, int flags) {
     sds ele;
     double score = 0, *scores = NULL;
     int j, elements, ch = 0;
+    size_t maxelelen = 0;
     int scoreidx = 0;
     /* The following vars are used in order to track what the command actually
      * did during the execution, to reply to the client and to trigger the
@@ -1790,6 +1792,9 @@ void zaddGenericCommand(client *c, int flags) {
     scores = zmalloc(sizeof(double) * elements);
     for (j = 0; j < elements; j++) {
         if (getDoubleFromObjectOrReply(c, c->argv[scoreidx + j * 2], &scores[j], NULL) != C_OK) goto cleanup;
+        ele = c->argv[scoreidx + 1 + j * 2]->ptr;
+        size_t elelen = sdslen(ele);
+        if (elelen > maxelelen) maxelelen = elelen;
     }
 
     /* Lookup the key and create the sorted set if does not exist. */
@@ -1797,10 +1802,10 @@ void zaddGenericCommand(client *c, int flags) {
     if (checkType(c, zobj, OBJ_ZSET)) goto cleanup;
     if (zobj == NULL) {
         if (xx) goto reply_to_client; /* No key + XX option: nothing to do. */
-        zobj = zsetTypeCreate(elements, sdslen(c->argv[scoreidx + 1]->ptr));
+        zobj = zsetTypeCreate(elements, maxelelen);
         dbAdd(c->db, key, zobj);
     } else {
-        zsetTypeMaybeConvert(zobj, elements);
+        zsetTypeMaybeConvert(zobj, elements, maxelelen);
     }
 
     for (j = 0; j < elements; j++) {

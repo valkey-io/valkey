@@ -2663,7 +2663,7 @@ static void fullSyncWithPrimary(connection *conn) {
     }
     /* Receive end offset response */
     if (server.repl_rdb_channel_state == REPL_DUAL_CHANNEL_RECEIVE_ENDOFF) {
-        int64_t rdb_client_id;
+        uint64_t rdb_client_id;
         err = receiveSynchronousResponse(conn);
         if (err == NULL) goto error;
         if (err[0] == '\0') {
@@ -2677,7 +2677,7 @@ static void fullSyncWithPrimary(connection *conn) {
         char primary_replid[CONFIG_RUN_ID_SIZE + 1];
         int dbid;
         /* Parse end offset response */
-        char *endoff_format = "$ENDOFF:%lld %40s %d %ld";
+        char *endoff_format = "$ENDOFF:%lld %40s %d %"SCNu64;
         if (sscanf(err, endoff_format, &reploffset, primary_replid, &dbid, &rdb_client_id) != 4) {
             goto error;
         }

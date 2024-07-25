@@ -2677,7 +2677,7 @@ static void fullSyncWithPrimary(connection *conn) {
         char primary_replid[CONFIG_RUN_ID_SIZE + 1];
         int dbid;
         /* Parse end offset response */
-        char *endoff_format = "$ENDOFF:%lld %40s %d %"SCNu64;
+        char *endoff_format = "$ENDOFF:%lld %40s %d %llu";
         if (sscanf(err, endoff_format, &reploffset, primary_replid, &dbid, &rdb_client_id) != 4) {
             goto error;
         }

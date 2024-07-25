@@ -225,7 +225,7 @@ void addRdbReplicaToPsyncWait(client *replica_rdb_client) {
             tail->refcount++;
         }
     }
-    serverLog(LL_NOTICE, "Add rdb replica %s to waiting psync, with cid %llu, %s ",
+    serverLog(LL_DEBUG, "Add rdb replica %s to waiting psync, with cid %llu, %s ",
               replicationGetReplicaName(replica_rdb_client), (unsigned long long)replica_rdb_client->id,
               tail ? "tracking repl-backlog tail" : "no repl-backlog to track");
     replica_rdb_client->ref_repl_buf_node = tail ? ln : NULL;
@@ -250,7 +250,7 @@ void backfillRdbReplicasToPsyncWait(void) {
         if (replica_rdb_client->ref_repl_buf_node) continue;
         replica_rdb_client->ref_repl_buf_node = ln;
         head->refcount++;
-        serverLog(LL_NOTICE, "Attach replica rdb client %llu to repl buf block",
+        serverLog(LL_DEBUG, "Attach replica rdb client %llu to repl buf block",
                   (long long unsigned int)replica_rdb_client->id);
     }
     raxStop(&iter);
@@ -269,7 +269,7 @@ void removeReplicaFromPsyncWait(client *replica_main_client) {
     }
     replica_rdb_client->ref_repl_buf_node = NULL;
     replica_rdb_client->flag.protected_rdb_channel = 0;
-    serverLog(LL_NOTICE, "Remove psync waiting replica %s with cid %llu, repl buffer block %s",
+    serverLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu, repl buffer block %s",
               replicationGetReplicaName(replica_main_client),
               (long long unsigned int)replica_main_client->associated_rdb_client_id,
               o ? "ref count decreased" : "doesn't exist");
@@ -389,7 +389,7 @@ void freeReplicaReferencedReplBuffer(client *replica) {
     if (replica->flag.repl_rdb_channel) {
         uint64_t rdb_cid = htonu64(replica->id);
         if (raxRemove(server.replicas_waiting_psync, (unsigned char *)&rdb_cid, sizeof(rdb_cid), NULL)) {
-            serverLog(LL_NOTICE, "Remove psync waiting replica %s with cid %llu from replicas rax.",
+            serverLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu from replicas rax.",
                       replicationGetReplicaName(replica), (long long unsigned int)replica->associated_rdb_client_id);
         }
     }

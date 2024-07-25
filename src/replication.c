@@ -2682,7 +2682,7 @@ static void fullSyncWithPrimary(connection *conn) {
         }
         sdsfree(err);
         server.rdb_client_id = rdb_client_id;
-        serverLog(LL_NOTICE, "fullSyncWithPrimary ull2string server.rdb_client_id %llu",server.rdb_client_id);
+        serverLog(LL_NOTICE, "fullSyncWithPrimary ull2string server.rdb_client_id %lu",server.rdb_client_id);
         server.primary_initial_offset = reploffset;
 
         /* Initiate repl_provisional_primary to act as this replica temp primary until RDB is loaded */

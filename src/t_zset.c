@@ -1794,7 +1794,7 @@ void zaddGenericCommand(client *c, int flags) {
         if (getDoubleFromObjectOrReply(c, c->argv[scoreidx + j * 2], &scores[j], NULL) != C_OK) goto cleanup;
         ele = c->argv[scoreidx + 1 + j * 2]->ptr;
         size_t elelen = sdslen(ele);
-        if (maxelelen < elelen) maxelelen = elelen;
+        if (elelen > maxelelen) maxelelen = elelen;
     }
 
     /* Lookup the key and create the sorted set if does not exist. */

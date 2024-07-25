@@ -1392,6 +1392,14 @@ void replconfCommand(client *c) {
             /* REPLCONF identify <client-id> is used to identify the current replica main channel with existing
              * rdb-connection with the given id. */
             long long client_id = 0;
+            robj *o = c->argv[j + 1];
+            if (sdsEncodedObject(o)) {
+                serverLog(LL_NOTICE, "replconfCommand got from replica (char*)o->ptr %s", (char*)o->ptr);
+            } else if (o->encoding == OBJ_ENCODING_INT) {
+                serverLog(LL_NOTICE, "replconfCommand got from replica (long)o->ptr %ld", (long)o->ptr);
+            } else {
+                serverPanic("Unknown string encoding");
+            }
             if (getLongLongFromObjectOrReply(c, c->argv[j + 1], &client_id, NULL) != C_OK) {
                 return;
             }
@@ -2532,6 +2540,7 @@ void replicationAbortDualChannelSyncTransfer(void) {
     server.repl_provisional_primary.conn = NULL;
     server.repl_provisional_primary.dbid = -1;
     server.rdb_client_id = -1;
+    serverLog(LL_NOTICE, "replicationAbortDualChannelSyncTransfer ull2string server.rdb_client_id = -1");
     freePendingReplDataBuf();
     return;
 }
@@ -2673,6 +2682,7 @@ static void fullSyncWithPrimary(connection *conn) {
         }
         sdsfree(err);
         server.rdb_client_id = rdb_client_id;
+        serverLog(LL_NOTICE, "fullSyncWithPrimary ull2string server.rdb_client_id %lu",server.rdb_client_id);
         server.primary_initial_offset = reploffset;
 
         /* Initiate repl_provisional_primary to act as this replica temp primary until RDB is loaded */
@@ -2874,6 +2884,7 @@ void dualChannelSyncSuccess(void) {
     /* We can resume reading from the primary connection once the local replication buffer has been loaded. */
     replicationSteadyStateInit();
     replicationSendAck(); /* Send ACK to notify primary that replica is synced */
+    serverLog(LL_NOTICE, "dualChannelSyncSuccess ull2string server.rdb_client_id = -1");
     server.rdb_client_id = -1;
     server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
 }
@@ -3165,7 +3176,8 @@ void setupMainConnForPsync(connection *conn) {
     char *err = NULL;
     if (server.repl_state == REPL_STATE_SEND_HANDSHAKE) {
         /* We already have an initialized connection at primary side, we only need to associate it with RDB connection */
-        ull2string(llstr, sizeof(llstr), server.rdb_client_id);
+        int k = ull2string(llstr, sizeof(llstr), server.rdb_client_id);
+        serverLog(3, "setupMainConnForPsync ull2string %s %i",llstr,k);
         err = sendCommand(conn, "REPLCONF", "set-rdb-client-id", llstr, NULL);
         if (err) goto error;
         server.repl_state = REPL_STATE_RECEIVE_CAPA_REPLY;

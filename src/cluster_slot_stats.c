@@ -8,7 +8,7 @@
 
 #define UNASSIGNED_SLOT 0
 
-typedef enum { KEY_COUNT, CPU_USEC, SLOT_STAT_COUNT, INVALID } slotStatTypes;
+typedef enum { KEY_COUNT, CPU_USEC, NETWORK_BYTES_IN, NETWORK_BYTES_OUT, SLOT_STAT_COUNT, INVALID } slotStatType;
 
 /* -----------------------------------------------------------------------------
  * CLUSTER SLOT-STATS command
@@ -38,13 +38,15 @@ static int markSlotsAssignedToMyShard(unsigned char *assigned_slots, int start_s
     return assigned_slots_count;
 }
 
-static uint64_t getSlotStat(int slot, int stat_type) {
-    serverAssert(stat_type != INVALID);
+static uint64_t getSlotStat(int slot, slotStatType stat_type) {
     uint64_t slot_stat = 0;
-    if (stat_type == KEY_COUNT) {
-        slot_stat = countKeysInSlot(slot);
-    } else if (stat_type == CPU_USEC) {
-        slot_stat = server.cluster->slot_stats[slot].cpu_usec;
+    switch (stat_type) {
+    case KEY_COUNT: slot_stat = countKeysInSlot(slot); break;
+    case CPU_USEC: slot_stat = server.cluster->slot_stats[slot].cpu_usec; break;
+    case NETWORK_BYTES_IN: slot_stat = server.cluster->slot_stats[slot].network_bytes_in; break;
+    case NETWORK_BYTES_OUT: slot_stat = server.cluster->slot_stats[slot].network_bytes_out; break;
+    case SLOT_STAT_COUNT:
+    case INVALID: serverPanic("Invalid slot stat type %d was found.", stat_type);
     }
     return slot_stat;
 }
@@ -69,7 +71,7 @@ static int slotStatForSortDescCmp(const void *a, const void *b) {
     return entry_b.stat - entry_a.stat;
 }
 
-static void collectAndSortSlotStats(slotStatForSort slot_stats[], int order_by, int desc) {
+static void collectAndSortSlotStats(slotStatForSort slot_stats[], slotStatType order_by, int desc) {
     int i = 0;
 
     for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
@@ -96,6 +98,10 @@ static void addReplySlotStat(client *c, int slot) {
     if (server.cluster_slot_stats_enabled) {
         addReplyBulkCString(c, "cpu-usec");
         addReplyLongLong(c, server.cluster->slot_stats[slot].cpu_usec);
+        addReplyBulkCString(c, "network-bytes-in");
+        addReplyLongLong(c, server.cluster->slot_stats[slot].network_bytes_in);
+        addReplyBulkCString(c, "network-bytes-out");
+        addReplyLongLong(c, server.cluster->slot_stats[slot].network_bytes_out);
     }
 }
 
@@ -119,9 +125,56 @@ static void addReplySortedSlotStats(client *c, slotStatForSort slot_stats[], lon
     }
 }
 
+static int canAddNetworkBytesOut(client *c) {
+    return server.cluster_slot_stats_enabled && server.cluster_enabled && c->slot != -1;
+}
+
+/* Accumulates egress bytes upon sending RESP responses back to user clients. */
+void clusterSlotStatsAddNetworkBytesOutForUserClient(client *c) {
+    if (!canAddNetworkBytesOut(c)) return;
+
+    serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
+    server.cluster->slot_stats[c->slot].network_bytes_out += c->net_output_bytes_curr_cmd;
+}
+
+/* Accumulates egress bytes upon sending replication stream. This only applies for primary nodes. */
+void clusterSlotStatsAddNetworkBytesOutForReplication(int len) {
+    client *c = server.current_client;
+    if (c == NULL || !canAddNetworkBytesOut(c)) return;
+
+    serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
+    server.cluster->slot_stats[c->slot].network_bytes_out += (len * listLength(server.replicas));
+}
+
+/* Upon SPUBLISH, two egress events are triggered.
+ * 1) Internal propagation, for clients that are subscribed to the current node.
+ * 2) External propagation, for other nodes within the same shard (could either be a primary or replica).
+ *    This type is not aggregated, to stay consistent with server.stat_net_output_bytes aggregation.
+ * This function covers the internal propagation component. */
+void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(client *c, int slot) {
+    /* For a blocked client, c->slot could be pre-filled.
+     * Thus c->slot is backed-up for restoration after aggregation is completed. */
+    int _slot = c->slot;
+    c->slot = slot;
+    if (!canAddNetworkBytesOut(c)) {
+        /* c->slot should not change as a side effect of this function,
+         * regardless of the function's early return condition. */
+        c->slot = _slot;
+        return;
+    }
+
+    serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
+    server.cluster->slot_stats[c->slot].network_bytes_out += c->net_output_bytes_curr_cmd;
+
+    /* For sharded pubsub, the client's network bytes metrics must be reset here,
+     * as resetClient() is not called until subscription ends. */
+    c->net_output_bytes_curr_cmd = 0;
+    c->slot = _slot;
+}
+
 /* Adds reply for the ORDERBY variant.
  * Response is ordered based on the sort result. */
-static void addReplyOrderBy(client *c, int order_by, long limit, int desc) {
+static void addReplyOrderBy(client *c, slotStatType order_by, long limit, int desc) {
     slotStatForSort slot_stats[CLUSTER_SLOTS];
     collectAndSortSlotStats(slot_stats, order_by, desc);
     addReplySortedSlotStats(c, slot_stats, limit);
@@ -167,8 +220,35 @@ void clusterSlotStatsInvalidateSlotIfApplicable(scriptRunCtx *ctx) {
     ctx->original_client->slot = -1;
 }
 
+static int canAddNetworkBytesIn(client *c) {
+    /* First, cluster mode must be enabled.
+     * Second, command should target a specific slot.
+     * Third, blocked client is not aggregated, to avoid duplicate aggregation upon unblocking.
+     * Fourth, the server is not under a MULTI/EXEC transaction, to avoid duplicate aggregation of
+     * EXEC's 14 bytes RESP upon nested call()'s afterCommand(). */
+    return server.cluster_enabled && server.cluster_slot_stats_enabled && c->slot != -1 && !(c->flag.blocked) &&
+           !server.in_exec;
+}
+
+/* Adds network ingress bytes of the current command in execution,
+ * calculated earlier within networking.c layer.
+ *
+ * Note: Below function should only be called once c->slot is parsed.
+ * Otherwise, the aggregation will be skipped due to canAddNetworkBytesIn() check failure.
+ * */
+void clusterSlotStatsAddNetworkBytesInForUserClient(client *c) {
+    if (!canAddNetworkBytesIn(c)) return;
+
+    if (c->cmd->proc == execCommand) {
+        /* Accumulate its corresponding MULTI RESP; *1\r\n$5\r\nmulti\r\n */
+        c->net_input_bytes_curr_cmd += 15;
+    }
+
+    server.cluster->slot_stats[c->slot].network_bytes_in += c->net_input_bytes_curr_cmd;
+}
+
 void clusterSlotStatsCommand(client *c) {
-    if (server.cluster_enabled == 0) {
+    if (!server.cluster_enabled) {
         addReplyError(c, "This instance has cluster support disabled");
         return;
     }
@@ -192,11 +272,16 @@ void clusterSlotStatsCommand(client *c) {
 
     } else if (c->argc >= 4 && !strcasecmp(c->argv[2]->ptr, "orderby")) {
         /* CLUSTER SLOT-STATS ORDERBY metric [LIMIT limit] [ASC | DESC] */
-        int desc = 1, order_by = INVALID;
+        int desc = 1;
+        slotStatType order_by = INVALID;
         if (!strcasecmp(c->argv[3]->ptr, "key-count")) {
             order_by = KEY_COUNT;
         } else if (!strcasecmp(c->argv[3]->ptr, "cpu-usec") && server.cluster_slot_stats_enabled) {
             order_by = CPU_USEC;
+        } else if (!strcasecmp(c->argv[3]->ptr, "network-bytes-in") && server.cluster_slot_stats_enabled) {
+            order_by = NETWORK_BYTES_IN;
+        } else if (!strcasecmp(c->argv[3]->ptr, "network-bytes-out") && server.cluster_slot_stats_enabled) {
+            order_by = NETWORK_BYTES_OUT;
         } else {
             addReplyError(c, "Unrecognized sort metric for ORDERBY.");
             return;

@@ -3,7 +3,20 @@
 #include "script.h"
 #include "cluster_legacy.h"
 
+/* General use-cases. */
 void clusterSlotStatReset(int slot);
 void clusterSlotStatResetAll(void);
+
+/* cpu-usec metric. */
 void clusterSlotStatsAddCpuDuration(client *c, ustime_t duration);
 void clusterSlotStatsInvalidateSlotIfApplicable(scriptRunCtx *ctx);
+
+/* network-bytes-in metric. */
+void clusterSlotStatsAddNetworkBytesInForUserClient(client *c);
+void clusterSlotStatsSetClusterMsgLength(uint32_t len);
+void clusterSlotStatsResetClusterMsgLength(void);
+
+/* network-bytes-out metric. */
+void clusterSlotStatsAddNetworkBytesOutForUserClient(client *c);
+void clusterSlotStatsAddNetworkBytesOutForReplication(int len);
+void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(client *c, int slot);

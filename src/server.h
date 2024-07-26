@@ -1372,9 +1372,13 @@ typedef struct client {
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
-    unsigned long long net_input_bytes;    /* Total network input bytes read from this client. */
-    unsigned long long net_output_bytes;   /* Total network output bytes sent to this client. */
-    unsigned long long commands_processed; /* Total count of commands this client executed. */
+    unsigned long long net_input_bytes;          /* Total network input bytes read from this client. */
+    unsigned long long net_input_bytes_curr_cmd; /* Total network input bytes read for the
+                                                  * execution of this client's current command. */
+    unsigned long long net_output_bytes;         /* Total network output bytes sent to this client. */
+    unsigned long long commands_processed;       /* Total count of commands this client executed. */
+    unsigned long long
+        net_output_bytes_curr_cmd; /* Total network output bytes sent to this client, by the current command. */
 } client;
 
 /* ACL information */

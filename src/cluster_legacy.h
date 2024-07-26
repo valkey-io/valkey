@@ -361,6 +361,8 @@ struct _clusterNode {
 /* Struct used for storing slot statistics. */
 typedef struct slotStat {
     uint64_t cpu_usec;
+    uint64_t network_bytes_in;
+    uint64_t network_bytes_out;
 } slotStat;
 
 struct clusterState {
@@ -413,6 +415,5 @@ struct clusterState {
     /* Struct used for storing slot statistics, for all slots owned by the current shard. */
     slotStat slot_stats[CLUSTER_SLOTS];
 };
-
 
 #endif // CLUSTER_LEGACY_H

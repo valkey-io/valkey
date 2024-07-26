@@ -1136,7 +1136,7 @@ void clusterInitLast(void) {
     }
 }
 
-/* Called when a cluster node calls SHUTDOWN. */
+/* Called when a cluster node receives SHUTDOWN. */
 void clusterHandleServerShutdown(void) {
     /* The error logs have been logged in the save function if the save fails. */
     serverLog(LL_NOTICE, "Saving the cluster configuration file before exiting.");

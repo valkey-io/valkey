@@ -657,7 +657,8 @@ tags {"aof external:skip"} {
     }
 
     start_server {} {
-        test {FLUSHDB / FLUSHALL should persist in AOF} {
+        # This test is just a coverage test, it does not check anything。
+        test {Turning appendonly on and off within a transaction} {
             r config set appendonly no
             r multi
             r config set appendonly yes

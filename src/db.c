@@ -231,9 +231,13 @@ int calculateKeySlot(sds key) {
 int getKeySlot(sds key) {
     /* This is performance optimization that uses pre-set slot id from the current command,
      * in order to avoid calculation of the key hash.
+     *
      * This optimization is only used when current_client flag `CLIENT_EXECUTING_COMMAND` is set.
      * It only gets set during the execution of command under `call` method. Other flows requesting
      * the key slot would fallback to calculateKeySlot.
+     *
+     * Modules and scripts executed on the primary may get replicated as multi-execs that operate on multiple slots,
+     * so we must always recompute the slot for commands coming from the primary.
      */
     if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command &&
         !server.current_client->flag.primary) {

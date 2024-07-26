@@ -45,8 +45,8 @@ static uint64_t getSlotStat(int slot, slotStatType stat_type) {
     case CPU_USEC: slot_stat = server.cluster->slot_stats[slot].cpu_usec; break;
     case NETWORK_BYTES_IN: slot_stat = server.cluster->slot_stats[slot].network_bytes_in; break;
     case NETWORK_BYTES_OUT: slot_stat = server.cluster->slot_stats[slot].network_bytes_out; break;
-    default: /* SLOT_STAT_COUNT, INVALID */
-        serverPanic("Invalid slot stat type %d was found.", stat_type);
+    case SLOT_STAT_COUNT:
+    case INVALID: serverPanic("Invalid slot stat type %d was found.", stat_type);
     }
     return slot_stat;
 }

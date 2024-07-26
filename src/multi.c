@@ -28,7 +28,6 @@
  */
 
 #include "server.h"
-#include "cluster_slot_stats.h"
 
 /* ================================ MULTI/EXEC ============================== */
 

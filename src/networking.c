@@ -2902,6 +2902,7 @@ void commandProcessed(client *c) {
     if (c->flag.blocked) return;
 
     reqresAppendResponse(c);
+    clusterSlotStatsAddNetworkBytesInForUserClient(c);
     resetClient(c);
 
     long long prev_offset = c->reploff;

@@ -3694,7 +3694,6 @@ void afterCommand(client *c) {
     /* Flush pending tracking invalidations. */
     trackingHandlePendingKeyInvalidations();
 
-    clusterSlotStatsAddNetworkBytesInForUserClient(c);
     clusterSlotStatsAddNetworkBytesOutForUserClient(c);
 
     /* Flush other pending push messages. only when we are not in nested call.

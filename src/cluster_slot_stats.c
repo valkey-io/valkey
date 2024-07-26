@@ -8,7 +8,7 @@
 
 #define UNASSIGNED_SLOT 0
 
-typedef enum { KEY_COUNT, CPU_USEC, NETWORK_BYTES_IN, NETWORK_BYTES_OUT, SLOT_STAT_COUNT, INVALID } slotStatTypes;
+typedef enum { KEY_COUNT, CPU_USEC, NETWORK_BYTES_IN, NETWORK_BYTES_OUT, SLOT_STAT_COUNT, INVALID } slotStatType;
 
 /* -----------------------------------------------------------------------------
  * CLUSTER SLOT-STATS command
@@ -38,15 +38,15 @@ static int markSlotsAssignedToMyShard(unsigned char *assigned_slots, int start_s
     return assigned_slots_count;
 }
 
-static uint64_t getSlotStat(int slot, int stat_type) {
-    serverAssert(stat_type != INVALID);
+static uint64_t getSlotStat(int slot, slotStatType stat_type) {
     uint64_t slot_stat = 0;
-    if (stat_type == KEY_COUNT) {
-        slot_stat = countKeysInSlot(slot);
-    } else if (stat_type == NETWORK_BYTES_IN) {
-        slot_stat = server.cluster->slot_stats[slot].network_bytes_in;
-    } else if (stat_type == CPU_USEC) {
-        slot_stat = server.cluster->slot_stats[slot].cpu_usec;
+    switch (stat_type) {
+    case KEY_COUNT: slot_stat = countKeysInSlot(slot); break;
+    case CPU_USEC: slot_stat = server.cluster->slot_stats[slot].cpu_usec; break;
+    case NETWORK_BYTES_IN: slot_stat = server.cluster->slot_stats[slot].network_bytes_in; break;
+    case NETWORK_BYTES_OUT: slot_stat = server.cluster->slot_stats[slot].network_bytes_out; break;
+    default: // SLOT_STAT_COUNT, INVALID
+        serverPanic("Invalid slot stat type %d was found.", stat_type);
     }
     return slot_stat;
 }
@@ -71,7 +71,7 @@ static int slotStatForSortDescCmp(const void *a, const void *b) {
     return entry_b.stat - entry_a.stat;
 }
 
-static void collectAndSortSlotStats(slotStatForSort slot_stats[], int order_by, int desc) {
+static void collectAndSortSlotStats(slotStatForSort slot_stats[], slotStatType order_by, int desc) {
     int i = 0;
 
     for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
@@ -157,7 +157,8 @@ void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(clien
     int _slot = c->slot;
     c->slot = slot;
     if (!canAddNetworkBytesOut(c)) {
-        /* c->slot should be kept idempotent, regardless of the function's early return condition. */
+        /* c->slot should not change as a side effect of this function,
+         * regardless of the function's early return condition. */
         c->slot = _slot;
         return;
     }
@@ -173,7 +174,7 @@ void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(clien
 
 /* Adds reply for the ORDERBY variant.
  * Response is ordered based on the sort result. */
-static void addReplyOrderBy(client *c, int order_by, long limit, int desc) {
+static void addReplyOrderBy(client *c, slotStatType order_by, long limit, int desc) {
     slotStatForSort slot_stats[CLUSTER_SLOTS];
     collectAndSortSlotStats(slot_stats, order_by, desc);
     addReplySortedSlotStats(c, slot_stats, limit);
@@ -271,7 +272,8 @@ void clusterSlotStatsCommand(client *c) {
 
     } else if (c->argc >= 4 && !strcasecmp(c->argv[2]->ptr, "orderby")) {
         /* CLUSTER SLOT-STATS ORDERBY metric [LIMIT limit] [ASC | DESC] */
-        int desc = 1, order_by = INVALID;
+        int desc = 1;
+        slotStatType order_by = INVALID;
         if (!strcasecmp(c->argv[3]->ptr, "key-count")) {
             order_by = KEY_COUNT;
         } else if (!strcasecmp(c->argv[3]->ptr, "cpu-usec") && server.cluster_slot_stats_enabled) {

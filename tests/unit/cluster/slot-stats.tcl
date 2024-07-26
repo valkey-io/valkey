@@ -68,7 +68,7 @@ proc assert_empty_slot_stats_with_exception {slot_stats exception_slots metrics_
     }
 }
 
-proc assert_equal_slot_stats {slot_stats_1 slot_stats_2 metrics_to_assert} {
+proc assert_equal_slot_stats {slot_stats_1 slot_stats_2 deterministic_metrics non_deterministic_metrics} {
     set slot_stats_1 [convert_array_into_dict $slot_stats_1]
     set slot_stats_2 [convert_array_into_dict $slot_stats_2]
     assert {[dict size $slot_stats_1] == [dict size $slot_stats_2]}
@@ -76,8 +76,15 @@ proc assert_equal_slot_stats {slot_stats_1 slot_stats_2 metrics_to_assert} {
     dict for {slot stats_1} $slot_stats_1 {
         assert {[dict exists $slot_stats_2 $slot]}
         set stats_2 [dict get $slot_stats_2 $slot]
-        foreach metric_name $metrics_to_assert {
-            assert {[dict get $stats_1 $metric_name] == [dict get $stats_2 $metric_name]}
+
+        # For deterministic metrics, we assert their equality.
+        foreach metric $deterministic_metrics {
+            assert {[dict get $stats_1 $metric] == [dict get $stats_2 $metric]}
+        }
+        # For non-deterministic metrics, we assert their non-zeroness as a best-effort.
+        foreach metric $non_deterministic_metrics {
+            assert {([dict get $stats_1 $metric] == 0 && [dict get $stats_2 $metric] == 0) || \
+                    ([dict get $stats_1 $metric] != 0 && [dict get $stats_2 $metric] != 0)}
         }
     }
 }
@@ -763,7 +770,9 @@ start_cluster 1 0 {tags {external:skip cluster}} {
 # Test cases for CLUSTER SLOT-STATS ORDERBY sub-argument.
 # -----------------------------------------------------------------------------
 
-start_cluster 1 0 {tags {external:skip cluster}} {
+start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
+
+    set metrics [list "key-count" "cpu-usec" "network-bytes-in" "network-bytes-out"]
 
     # SET keys for target hashslots, to encourage ordering.
     set hash_tags [list 0 1 2 3 4]
@@ -784,32 +793,36 @@ start_cluster 1 0 {tags {external:skip cluster}} {
     }
 
     test "CLUSTER SLOT-STATS ORDERBY DESC correct ordering" {
-        set orderby "key-count"
-        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby DESC LIMIT -1}
-        set slot_stats [R 0 CLUSTER SLOT-STATS ORDERBY $orderby DESC]
-        assert_slot_stats_monotonic_descent $slot_stats $orderby
+        foreach orderby $metrics {
+            set slot_stats [R 0 CLUSTER SLOT-STATS ORDERBY $orderby DESC]
+            assert_slot_stats_monotonic_descent $slot_stats $orderby
+        }
     }
 
     test "CLUSTER SLOT-STATS ORDERBY ASC correct ordering" {
-        set orderby "key-count"
-        set slot_stats [R 0 CLUSTER SLOT-STATS ORDERBY $orderby ASC]
-        assert_slot_stats_monotonic_ascent $slot_stats $orderby
+        foreach orderby $metrics {
+            set slot_stats [R 0 CLUSTER SLOT-STATS ORDERBY $orderby ASC]
+            assert_slot_stats_monotonic_ascent $slot_stats $orderby
+        }
     }
 
     test "CLUSTER SLOT-STATS ORDERBY LIMIT correct response pagination, where limit is less than number of assigned slots" {
         R 0 FLUSHALL SYNC
+        R 0 CONFIG RESETSTAT
 
-        set limit 5
-        set slot_stats_desc [R 0 CLUSTER SLOT-STATS ORDERBY key-count LIMIT $limit DESC]
-        set slot_stats_asc [R 0 CLUSTER SLOT-STATS ORDERBY key-count LIMIT $limit ASC]
-        set slot_stats_desc_length [llength $slot_stats_desc]
-        set slot_stats_asc_length [llength $slot_stats_asc]
-        assert {$limit == $slot_stats_desc_length && $limit == $slot_stats_asc_length}
+        foreach orderby $metrics {
+            set limit 5
+            set slot_stats_desc [R 0 CLUSTER SLOT-STATS ORDERBY $orderby LIMIT $limit DESC]
+            set slot_stats_asc [R 0 CLUSTER SLOT-STATS ORDERBY $orderby LIMIT $limit ASC]
+            set slot_stats_desc_length [llength $slot_stats_desc]
+            set slot_stats_asc_length [llength $slot_stats_asc]
+            assert {$limit == $slot_stats_desc_length && $limit == $slot_stats_asc_length}
 
-        # The key count of all slots is 0, so we will order by slot in ascending order.
-        set expected_slots [dict create 0 0 1 0 2 0 3 0 4 0]
-        assert_slot_visibility $slot_stats_desc $expected_slots
-        assert_slot_visibility $slot_stats_asc $expected_slots
+            # All slot statistics have been reset to 0, so we will order by slot in ascending order.
+            set expected_slots [dict create 0 0 1 0 2 0 3 0 4 0]
+            assert_slot_visibility $slot_stats_desc $expected_slots
+            assert_slot_visibility $slot_stats_asc $expected_slots
+        }
     }
 
     test "CLUSTER SLOT-STATS ORDERBY LIMIT correct response pagination, where limit is greater than number of assigned slots" {
@@ -818,25 +831,31 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         R 0 CLUSTER FLUSHSLOTS
         R 0 CLUSTER ADDSLOTS 100 101
 
-        set num_assigned_slots 2
-        set limit 5
-        set slot_stats_desc [R 0 CLUSTER SLOT-STATS ORDERBY key-count LIMIT $limit DESC]
-        set slot_stats_asc [R 0 CLUSTER SLOT-STATS ORDERBY key-count LIMIT $limit ASC]
-        set slot_stats_desc_length [llength $slot_stats_desc]
-        set slot_stats_asc_length [llength $slot_stats_asc]
-        set expected_response_length [expr min($num_assigned_slots, $limit)]
-        assert {$expected_response_length == $slot_stats_desc_length && $expected_response_length == $slot_stats_asc_length}
+        foreach orderby $metrics {
+            set num_assigned_slots 2
+            set limit 5
+            set slot_stats_desc [R 0 CLUSTER SLOT-STATS ORDERBY $orderby LIMIT $limit DESC]
+            set slot_stats_asc [R 0 CLUSTER SLOT-STATS ORDERBY $orderby LIMIT $limit ASC]
+            set slot_stats_desc_length [llength $slot_stats_desc]
+            set slot_stats_asc_length [llength $slot_stats_asc]
+            set expected_response_length [expr min($num_assigned_slots, $limit)]
+            assert {$expected_response_length == $slot_stats_desc_length && $expected_response_length == $slot_stats_asc_length}
 
-        set expected_slots [dict create 100 0 101 0]
-        assert_slot_visibility $slot_stats_desc $expected_slots
-        assert_slot_visibility $slot_stats_asc $expected_slots
+            set expected_slots [dict create 100 0 101 0]
+            assert_slot_visibility $slot_stats_desc $expected_slots
+            assert_slot_visibility $slot_stats_asc $expected_slots
+        }
     }
 
-    test "CLUSTER SLOT-STATS ORDERBY unsupported sort metric." {
-        set orderby "non-existent-metric"
-        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
-
+    test "CLUSTER SLOT-STATS ORDERBY arg sanity check." {
+        # Non-existent argument.
+        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY key-count non-existent-arg}
+        # Negative LIMIT.
+        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY key-count DESC LIMIT -1}
+        # Non-existent ORDERBY metric.
+        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY non-existent-metric}
         # When cluster-slot-stats-enabled config is disabled, you cannot sort using advanced metrics.
+        R 0 CONFIG SET cluster-slot-stats-enabled no
         set orderby "cpu-usec"
         assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
         set orderby "network-bytes-in"
@@ -844,6 +863,7 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         set orderby "network-bytes-out"
         assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
     }
+
 }
 
 # -----------------------------------------------------------------------------
@@ -853,17 +873,23 @@ start_cluster 1 0 {tags {external:skip cluster}} {
 start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
 
     # Define shared variables.
-    set key "FOO"
+    set key "key"
     set key_slot [R 0 CLUSTER KEYSLOT $key]
     set primary [Rn 0]
     set replica [Rn 1]
-    set metrics_to_assert [list key-count network-bytes-in]
 
-    # For replication, only those metrics that are deterministic upon replication are asserted.
-    # * key-count is asserted, as both the primary and its replica must hold the same number of keys.
-    # * cpu-usec is not asserted, as its micro-seconds command duration is not guaranteed to be exact
-    #   between the primary and its replica.
-    set metrics_to_assert [list key-count]
+    # For replication, assertions are split between deterministic and non-deterministic metrics.
+    # * For deterministic metrics, strict equality assertions are made.
+    # * For non-deterministic metrics, non-zeroness assertions are made. 
+    #   Non-zeroness as in, both primary and replica should either have some value, or no value at all.
+    #
+    # * key-count is deterministic between primary and its replica.
+    # * cpu-usec is non-deterministic between primary and its replica.
+    # * network-bytes-in is deterministic between primary and its replica.
+    # * network-bytes-out will remain empty in the replica, since primary client do not receive replies, unless for replicationSendAck().
+    set deterministic_metrics [list key-count network-bytes-in]
+    set non_deterministic_metrics [list cpu-usec]
+    set empty_metrics [list network-bytes-out]
 
     # Setup replication.
     assert {[s -1 role] eq {slave}}
@@ -884,7 +910,7 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-en
             ]
         ]
         set slot_stats_master [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
-        assert_empty_slot_stats_with_exception $slot_stats_master $expected_slot_stats $metrics_to_assert
+        assert_empty_slot_stats_with_exception $slot_stats_master $expected_slot_stats $deterministic_metrics
 
         wait_for_condition 500 10 {
             [string match {*calls=1,*} [cmdrstat set $replica]]
@@ -892,7 +918,8 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-en
             fail "Replica did not receive the command."
         }
         set slot_stats_replica [R 1 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
-        assert_equal_slot_stats $slot_stats_master $slot_stats_replica $metrics_to_assert
+        assert_equal_slot_stats $slot_stats_master $slot_stats_replica $deterministic_metrics $non_deterministic_metrics
+        assert_empty_slot_stats $slot_stats_replica $empty_metrics
     }
     R 0 CONFIG RESETSTAT
     R 1 CONFIG RESETSTAT
@@ -907,7 +934,7 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-en
             ]
         ]
         set slot_stats_master [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
-        assert_empty_slot_stats_with_exception $slot_stats_master $expected_slot_stats $metrics_to_assert
+        assert_empty_slot_stats_with_exception $slot_stats_master $expected_slot_stats $deterministic_metrics
 
         wait_for_condition 500 10 {
             [string match {*calls=1,*} [cmdrstat set $replica]]
@@ -915,7 +942,8 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-en
             fail "Replica did not receive the command."
         }
         set slot_stats_replica [R 1 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
-        assert_equal_slot_stats $slot_stats_master $slot_stats_replica $metrics_to_assert
+        assert_equal_slot_stats $slot_stats_master $slot_stats_replica $deterministic_metrics $non_deterministic_metrics
+        assert_empty_slot_stats $slot_stats_replica $empty_metrics
     }
     R 0 CONFIG RESETSTAT
     R 1 CONFIG RESETSTAT
@@ -930,7 +958,7 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-en
             ]
         ]
         set slot_stats_master [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
-        assert_empty_slot_stats_with_exception $slot_stats_master $expected_slot_stats $metrics_to_assert
+        assert_empty_slot_stats_with_exception $slot_stats_master $expected_slot_stats $deterministic_metrics
 
         wait_for_condition 500 10 {
             [string match {*calls=1,*} [cmdrstat del $replica]]
@@ -938,7 +966,8 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-en
             fail "Replica did not receive the command."
         }
         set slot_stats_replica [R 1 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
-        assert_equal_slot_stats $slot_stats_master $slot_stats_replica $metrics_to_assert
+        assert_equal_slot_stats $slot_stats_master $slot_stats_replica $deterministic_metrics $non_deterministic_metrics
+        assert_empty_slot_stats $slot_stats_replica $empty_metrics
     }
     R 0 CONFIG RESETSTAT
     R 1 CONFIG RESETSTAT

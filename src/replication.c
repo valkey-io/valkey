@@ -3975,6 +3975,10 @@ void replicationSendAck(void) {
             addReplyBulkLongLong(c, server.fsynced_reploff);
         }
         c->flag.primary_force_reply = 0;
+
+        /* Accumulation from above replies must be reset back to 0 manually,
+         * as this subroutine does not invoke resetClient(). */
+        c->net_output_bytes_curr_cmd = 0;
     }
 }
 

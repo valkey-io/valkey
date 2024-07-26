@@ -2876,7 +2876,7 @@ static clusterNode *getNodeFromLinkAndMsg(clusterLink *link, clusterMsg *hdr) {
     return sender;
 }
 
-void clusterProcessPublishPacket(clusterMsgDataPublish *publish_data, uint16_t type) {
+static void clusterProcessPublishPacket(clusterMsgDataPublish *publish_data, uint16_t type) {
     robj *channel, *message;
     uint32_t channel_len, message_len;
 
@@ -2894,7 +2894,7 @@ void clusterProcessPublishPacket(clusterMsgDataPublish *publish_data, uint16_t t
     }
 }
 
-void clusterProcessLightPacket(clusterLink *link, uint16_t type) {
+static void clusterProcessLightPacket(clusterLink *link, uint16_t type) {
     clusterMsgLight *hdr = (clusterMsgLight *)link->rcvbuf;
 
     if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {

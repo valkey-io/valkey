@@ -241,6 +241,11 @@ proc tags_acceptable {tags err_return} {
         return 0
     }
 
+    if {$::io_threads && [lsearch $tags "io-threads:skip"] >= 0} {
+        set err "Not supported in io-threads mode"
+        return 0
+    }
+
     return 1
 }
 
@@ -497,6 +502,12 @@ proc start_server {options {code undefined}} {
         dict set config "tls-ca-cert-file" [format "%s/tests/tls/ca.crt" [pwd]]
         dict set config "loglevel" "debug"
     }
+
+    if {$::io_threads} {
+        dict set config "io-threads" 2
+        dict set config "events-per-io-thread" 0
+    }
+
     foreach line $data {
         if {[string length $line] > 0 && [string index $line 0] ne "#"} {
             set elements [split $line " "]

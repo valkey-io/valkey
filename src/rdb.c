@@ -3674,6 +3674,11 @@ void bgsaveCommand(client *c) {
     } else if (hasActiveChildProcess() || server.in_exec) {
         if (schedule || server.in_exec) {
             server.rdb_bgsave_scheduled = 1;
+            if (schedule) {
+                serverLog(LL_NOTICE, "Background saving scheduled due to user request");
+            } else {
+                serverLog(LL_NOTICE, "Background saving scheduled to run after transaction execution");
+            }
             addReplyStatus(c, "Background saving scheduled");
         } else {
             addReplyError(c, "Another child process is active (AOF?): can't BGSAVE right now. "

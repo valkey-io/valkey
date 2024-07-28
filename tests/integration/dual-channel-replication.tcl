@@ -23,6 +23,12 @@ proc get_client_id_by_last_cmd {r cmd} {
     return $client_id
 }
 
+proc wait_and_resume_process idx {
+    set pid [srv $idx pid]
+    wait_for_log_messages $idx {"*Process is about to stop.*"} 0 2000 1
+    resume_process $pid
+}
+
 start_server {tags {"dual-channel-replication external:skip"}} {
     set replica [srv 0 client]
     set replica_host [srv 0 host]
@@ -382,7 +388,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         set primary [srv 0 client]
         set primary_host [srv 0 host]
         set primary_port [srv 0 port]
-        set primary_pid [srv 0 pid]
         # Create small enough db to be loaded before replica establish psync connection
         $primary set key1 val1
 
@@ -396,7 +401,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         test "Test dual-channel-replication sync- psync established after rdb load" {
             $replica replicaof $primary_host $primary_port
             wait_for_log_messages -1 {"*Done loading RDB*"} 0 2000 1
-            resume_process $primary_pid
+            wait_and_resume_process 0
 
             verify_replica_online $primary 0 500
             wait_for_condition 50 1000 {
@@ -416,7 +421,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     set replica_host [srv 0 host]
     set replica_port [srv 0 port]
     set replica_log [srv 0 stdout]
-    set replica_pid [srv 0 pid]
     start_server {} {
         set primary [srv 0 client]
         set primary_host [srv 0 host]
@@ -450,7 +454,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             } else {
                 fail "Primary should allow backlog to grow beyond its limits during dual-channel-replication sync handshake"
             }
-            resume_process $replica_pid
+            wait_and_resume_process -1
 
             verify_replica_online $primary 0 500
             wait_for_condition 50 1000 {
@@ -472,13 +476,11 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     set replica1_host [srv 0 host]
     set replica1_port [srv 0 port]
     set replica1_log [srv 0 stdout]
-    set replica1_pid [srv 0 pid]
     start_server {} {
         set replica2 [srv 0 client]
         set replica2_host [srv 0 host]
         set replica2_port [srv 0 port]
         set replica2_log [srv 0 stdout]
-        set replica2_pid [srv 0 pid]
         start_server {} {
             set primary [srv 0 client]
             set primary_host [srv 0 host]
@@ -512,7 +514,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 set res [wait_for_log_messages 0 {"*Attach replica rdb client*"} $loglines 2000 1]
                 set loglines [lindex $res 1]
                 incr $loglines
-                resume_process $replica1_pid
+                wait_and_resume_process -2
                 verify_replica_online $primary 0 700
                 wait_for_condition 50 1000 {
                     [status $replica1 master_link_status] == "up"
@@ -528,7 +530,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 set res [wait_for_log_messages 0 {"*Add rdb replica * tracking repl-backlog tail*"} $loglines 2000 1]
                 set loglines [lindex $res 1]
                 incr $loglines
-                resume_process $replica2_pid
+                wait_and_resume_process -1
                 verify_replica_online $primary 0 700
                 wait_for_condition 50 1000 {
                     [status $replica2 master_link_status] == "up"
@@ -547,7 +549,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
-    set primary_pid  [srv 0 pid]
     
     $primary config set repl-diskless-sync yes
     $primary config set dual-channel-replication-enabled yes
@@ -586,7 +587,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             $replica replicaof $primary_host $primary_port
             wait_for_log_messages 0 {"*Done loading RDB*"} $loglines 2000 1
             pause_process $replica_pid
-            resume_process $primary_pid
+            wait_and_resume_process -1
             wait_for_condition 50 100 {
                 [string match {*replicas_waiting_psync:1*} [$primary info replication]]
             } else {
@@ -604,6 +605,24 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         }
         stop_write_load $load_handle0
     }
+}
+
+start_server {tags {"dual-channel-replication external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+
+    $primary config set repl-diskless-sync yes
+    $primary config set dual-channel-replication-enabled yes
+    $primary config set repl-backlog-size [expr {10 ** 6}]
+    $primary config set loglevel debug
+    $primary config set repl-timeout 10
+    # generate small db
+    populate 10 primary 10
+    # Pause primary main process after fork
+    $primary debug pause-after-fork 1
+    # Give replica two second grace period before disconnection
+    $primary debug delay-rdb-client-free-seconds 2
 
     start_server {} {
         set replica [srv 0 client]
@@ -629,7 +648,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             $replica replicaof $primary_host $primary_port
             wait_for_log_messages 0 {"*Done loading RDB*"} $loglines 2000 1
             pause_process $replica_pid
-            resume_process $primary_pid
+            wait_and_resume_process -1
             wait_for_condition 50 100 {
                 [string match {*replicas_waiting_psync:1*} [$primary info replication]]
             } else {
@@ -654,7 +673,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
     set loglines [count_log_lines 0]
-    set primary_pid  [srv 0 pid]
 
     $primary config set repl-diskless-sync yes
     $primary config set dual-channel-replication-enabled yes
@@ -687,7 +705,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             # Pause the replica so the primary main process will wake up while the
             # replica is unresponsive. We expect the main process to fill the COB and disconnect the replica.
             pause_process $replica_pid
-            resume_process $primary_pid
+            wait_and_resume_process -1
             $primary debug pause-after-fork 0
             wait_for_log_messages -1 {"*Client * closed * for overcoming of output buffer limits.*"} $loglines 2000 1
             wait_for_condition 50 100 {
@@ -726,7 +744,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             } else {
                 fail "Primary did not free repl buf block after sync failure"
             }
-            resume_process $replica_pid
+            wait_and_resume_process 0
             set res [wait_for_log_messages -1 {"*Unable to partial resync with replica * for lack of backlog*"} $loglines 20000 1]
             set loglines [lindex $res 0]
         }
@@ -852,7 +870,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         set replica_host [srv 0 host]
         set replica_port [srv 0 port]
         set replica_log [srv 0 stdout]
-        set replica_pid [srv 0 pid]
 
         set load_handle [start_write_load $primary_host $primary_port 20]
 
@@ -955,7 +972,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             # Verify primary reject replconf set-rdb-client-id
             set res [catch {$primary replconf set-rdb-client-id $replica_rdb_channel_id} err]
             assert [string match *ERR* $err]
-            resume_process $replica_pid
+            wait_and_resume_process 0
         }
         stop_write_load $load_handle
     }

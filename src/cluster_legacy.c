@@ -1267,7 +1267,7 @@ void clusterReset(int hard) {
 /* -----------------------------------------------------------------------------
  * CLUSTER communication link
  * -------------------------------------------------------------------------- */
-static clusterMsgSendBlock *createClusterMsgSendBlock(int type, uint32_t msglen) {
+clusterMsgSendBlock *createClusterMsgSendBlock(int type, uint32_t msglen) {
     uint32_t blocklen = msglen + offsetof(clusterMsgSendBlock, msg);
     clusterMsgSendBlock *msgblock = zcalloc(blocklen);
     msgblock->refcount = 1;

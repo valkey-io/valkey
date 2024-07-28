@@ -26,7 +26,7 @@ proc get_client_id_by_last_cmd {r cmd} {
 proc wait_and_resume_process idx {
     set pid [srv $idx pid]
     wait_for_log_messages $idx {"*Process is about to stop.*"} 0 2000 1
-    exec kill -SIGCONT $pid
+    resume_process $pid
 }
 
 start_server {tags {"dual-channel-replication external:skip"}} {

@@ -25,7 +25,12 @@ proc get_client_id_by_last_cmd {r cmd} {
 
 proc wait_and_resume_process idx {
     set pid [srv $idx pid]
-    wait_for_log_messages $idx {"*Process is about to stop.*"} 0 2000 1
+    wait_for_condition 50 1000 {
+        [exec ps -o state= -p $pid] eq "T" ||
+        [exec ps -o state= -p $pid] eq "Z"
+    } else {
+        fail "Process $pid didn't stop"
+    }
     resume_process $pid
 }
 

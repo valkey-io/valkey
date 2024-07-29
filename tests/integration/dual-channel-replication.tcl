@@ -23,6 +23,7 @@ proc get_client_id_by_last_cmd {r cmd} {
     return $client_id
 }
 
+# Wait until the process enters a paused state, then resume the process.
 proc wait_and_resume_process idx {
     set pid [srv $idx pid]
     wait_for_condition 50 1000 {

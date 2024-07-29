@@ -4160,6 +4160,7 @@ void replicationResurrectProvisionalPrimary(void) {
     server.primary->reploff = server.repl_provisional_primary.reploff;
     server.primary->read_reploff = server.repl_provisional_primary.read_reploff;
     server.primary_repl_offset = server.primary->reploff;
+    memcpy(server.replid, server.primary->replid, sizeof(server.primary->replid));
     establishPrimaryConnection();
 }
 

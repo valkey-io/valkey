@@ -143,7 +143,13 @@ void clusterSlotStatsAddNetworkBytesOutForReplication(int len) {
     if (c == NULL || !canAddNetworkBytesOut(c)) return;
 
     serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
-    server.cluster->slot_stats[c->slot].network_bytes_out += (len * listLength(server.replicas));
+    int64_t absolute_len = abs(len) * listLength(server.replicas);
+    if (len < 0) {
+        serverAssert(server.cluster->slot_stats[c->slot].network_bytes_out >= (uint64_t)absolute_len);
+        server.cluster->slot_stats[c->slot].network_bytes_out += -absolute_len;
+    } else {
+        server.cluster->slot_stats[c->slot].network_bytes_out += absolute_len;
+    }
 }
 
 /* Upon SPUBLISH, two egress events are triggered.

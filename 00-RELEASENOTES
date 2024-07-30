@@ -15,7 +15,8 @@ SECURITY: There are security fixes in the release.
 Valkey 7.2.6 GA  -  Released Tue 30 July 2024
 ================================================================================
 
-Upgrade urgency Medium: This release fixes an incompatibility issue with modules compiled for Redis. For other users, it primarily is fixing uncommon bugs.
+Upgrade urgency MODERATE: This release fixes an incompatibility issue with modules compiled for Redis.
+For other users, it primarily fixes uncommon bugs.
 
 Bug fixes - Core
 ================
@@ -25,7 +26,8 @@ Bug fixes - Core
 * Fix a crash caused by quicklist node merges (Redis#13040)
 * Fix crashes in module blocking client timeout cases (Redis#13011)
 * Fix conversion of numbers in Lua args to Redis args (Redis#13115, Fixes Redis#13113)
-* Fix crash in LSET command when replacing small list items with larger ones, creating listpacks larger than 4GB (Redis#12955, Fixes Redis#12864)
+* Fix crash in LSET command when replacing small list items with larger ones,
+  creating listpacks larger than 4GB (Redis#12955, Fixes Redis#12864)
 * Fix blocking command timeout reset issue during reprocessing (Redis#13004) 
 
 Bug fixes - Cluster

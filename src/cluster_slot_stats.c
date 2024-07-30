@@ -143,13 +143,8 @@ static void clusterSlotStatsUpdateNetworkBytesOutForReplication(long long len) {
     if (c == NULL || !canAddNetworkBytesOut(c)) return;
 
     serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
-    int64_t absolute_len = abs(len) * listLength(server.replicas);
-    if (len < 0) {
-        serverAssert(server.cluster->slot_stats[c->slot].network_bytes_out >= (uint64_t)absolute_len);
-        server.cluster->slot_stats[c->slot].network_bytes_out += -absolute_len;
-    } else {
-        server.cluster->slot_stats[c->slot].network_bytes_out += absolute_len;
-    }
+    if (len < 0) serverAssert(server.cluster->slot_stats[c->slot].network_bytes_out >= (uint64_t)labs(len));
+    server.cluster->slot_stats[c->slot].network_bytes_out += (len * listLength(server.replicas));
 }
 
 /* Increment network bytes out for replication stream. This method will increment `len` value times the active replica

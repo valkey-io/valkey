@@ -416,7 +416,7 @@ void feedReplicationBuffer(char *s, size_t len) {
 
     if (server.repl_backlog == NULL) return;
 
-    clusterSlotStatsAddNetworkBytesOutForReplication(len);
+    clusterSlotStatsIncrNetworkBytesOutForReplication(len);
 
     while (len > 0) {
         size_t start_pos = 0;        /* The position of referenced block to start sending. */
@@ -574,7 +574,7 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
         /* Although the SELECT command is not associated with any slot,
          * its per-slot network-bytes-out accumulation is made by the above function call.
          * To cancel-out this accumulation, below adjustment is made. */
-        clusterSlotStatsAddNetworkBytesOutForReplication(-sdslen(selectcmd->ptr));
+        clusterSlotStatsDecrNetworkBytesOutForReplication(sdslen(selectcmd->ptr));
 
         if (dictid < 0 || dictid >= PROTO_SHARED_SELECT_CMDS) decrRefCount(selectcmd);
 

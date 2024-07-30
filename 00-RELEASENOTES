@@ -46,7 +46,7 @@ Bug fixes - CLI
 * Fix redis-check-aof misidentifying data in manifest format as MP-AOF (Redis#12951)  
 * Update redis-check-rdb types to replace stream-v2 with stream-v3 (Redis#12969)
 
-=================================================================================
+================================================================================
 Valkey 7.2.5 GA  -  Released Tue 16 Apr 2024
 ================================================================================
 

@@ -2296,6 +2296,7 @@ static void cliWaitForMessagesOrStdin(void) {
 }
 
 static int cliSendCommand(int argc, char **argv, long repeat) {
+    printf("We are in the cliSendCommand function, argc is %d, and repeat is %ld\n", argc, repeat);
     char *command = argv[0];
     size_t *argvlen;
     int j, output_raw;
@@ -2375,7 +2376,8 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
              * an in-band message is received, but these commands are confirmed
              * using push replies only. There is one push reply per channel if
              * channels are specified, otherwise at least one. */
-            num_expected_pubsub_push = argc > 1 ? argc - 1 : 1;
+            //num_expected_pubsub_push = argc > 1 ? argc - 1 : 1;
+            num_expected_pubsub_push = 1;
             /* Unset our default PUSH handler so this works in RESP2/RESP3 */
             redisSetPushCallback(context, NULL);
         }
@@ -2389,6 +2391,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
         }
 
         /* Read response, possibly skipping pubsub/push messages. */
+	printf("is_subscribe is %d and num_expected_pubsub_push is %d\n",is_subscribe, num_expected_pubsub_push);
         while (1) {
             if (cliReadReply(output_raw) != REDIS_OK) {
                 zfree(argvlen);
@@ -2401,6 +2404,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
                         /* This pushed message confirms the
                          * [p|s][un]subscribe command. */
                         if (is_subscribe && !config.pubsub_mode) {
+			    printf("--------- We assign config.pubsub_mode = 1\n");
                             config.pubsub_mode = 1;
                             cliRefreshPrompt();
                         }

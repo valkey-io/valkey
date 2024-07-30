@@ -3734,7 +3734,7 @@ void replicationSetPrimary(char *ip, int port, int disconnect_blocked) {
     if (server.primary) {
         freeClient(server.primary);
     }
-    if (disconnect_blocked) disconnectAllBlockedClients(); /* Clients blocked in primary, now replica. */
+    if (disconnect_blocked) disconnectOrRedirectBlockedClients(); /* Clients blocked in primary, now replica. */
 
     /* Setting primary_host only after the call to freeClient since it calls
      * replicationHandlePrimaryDisconnection which can trigger a re-connect
@@ -4744,7 +4744,7 @@ void clearFailoverState(int success) {
     server.target_replica_host = NULL;
     server.target_replica_port = 0;
     server.failover_state = NO_FAILOVER;
-    if (success) disconnectAllBlockedClients();
+    if (success) disconnectOrRedirectBlockedClients();
     unpauseActions(PAUSE_DURING_FAILOVER);
 }
 

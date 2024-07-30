@@ -274,8 +274,9 @@ void replyToClientsBlockedOnShutdown(void) {
  * is called when a primary turns into a replica.
  *
  * The semantics is to send an -UNBLOCKED error to the client, disconnecting
- * it at the same time. */
-void disconnectAllBlockedClients(void) {
+ * it at the same time. If a client has the redirect capability, we send a
+ * -REDIRECT error instead to point it to the primary, if possible. */
+void disconnectOrRedirectBlockedClients(void) {
     listNode *ln;
     listIter li;
 
@@ -290,9 +291,23 @@ void disconnectAllBlockedClients(void) {
              * which the command is already in progress in a way. */
             if (c->bstate.btype == BLOCKED_POSTPONE) continue;
 
-            unblockClientOnError(c, "-UNBLOCKED force unblock from blocking operation, "
-                                    "instance state changed (master -> replica?)");
-            c->flag.close_after_reply = 1;
+            if (!server.cluster_enabled && c->capa & CLIENT_CAPA_REDIRECT && server.primary_host &&
+                (c->bstate.btype == BLOCKED_LIST || c->bstate.btype == BLOCKED_ZSET ||
+                 c->bstate.btype == BLOCKED_STREAM || c->bstate.btype == BLOCKED_MODULE)) {
+                /* If the client is blocked on module, but not on a specific key,
+                 * don't unblock it. */
+                if (c->bstate.btype == BLOCKED_MODULE && !moduleClientIsBlockedOnKeys(c)) continue;
+
+                /* if the client is read-only and attempting to read, don't unblock it. */
+                if (c->flag.readonly && !(c->lastcmd->flags & CMD_WRITE)) continue;
+
+                unblockClientOnErrorSds(
+                    c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
+            } else {
+                unblockClientOnError(c, "-UNBLOCKED force unblock from blocking operation, "
+                                        "instance state changed (master -> replica?)");
+                c->flag.close_after_reply = 1;
+            }
         }
     }
 }
@@ -711,6 +726,14 @@ void unblockClientOnError(client *c, const char *err_str) {
     updateStatsOnUnblock(c, 0, 0, 1);
     if (c->flag.pending_command) c->flag.pending_command = 0;
     unblockClient(c, 1);
+}
+
+/* Unblock a client which is currently blocked with error.
+ * err will be used to reply to the blocked client. As a side
+ * effect the SDS string is freed. */
+void unblockClientOnErrorSds(client *c, sds err) {
+    addReplyErrorSds(c, err);
+    unblockClientOnError(c, NULL);
 }
 
 void blockedBeforeSleep(void) {

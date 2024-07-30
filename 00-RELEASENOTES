@@ -15,7 +15,7 @@ SECURITY: There are security fixes in the release.
 Valkey 7.2.6 GA  -  Released Tue 30 July 2024
 ================================================================================
 
-Upgrade urgency MODERATE: Program an upgrade of the server, but it's not urgent.
+Upgrade urgency Medium: This release fixes an incompatibility issue with modules compiled for Redis. For other users, it primarily is fixing uncommon bugs.
 
 Bug fixes - Core
 ================

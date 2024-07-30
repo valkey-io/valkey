@@ -501,7 +501,7 @@ run_solo {defrag} {
                 $rd_pubsub read
             }
             $rd_pubsub close
-        } {} {io-threads:skip} ; # skip with io-threads as the threads may allocate the command arguments in a different arena. As a result, fragmentation is not as expected.
+        } {0} {io-threads:skip} ; # skip with io-threads as the threads may allocate the command arguments in a different arena. As a result, fragmentation is not as expected.
 
         if {$type eq "standalone"} { ;# skip in cluster mode
         test "Active defrag big list: $type" {

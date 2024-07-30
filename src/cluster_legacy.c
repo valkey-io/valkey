@@ -2370,7 +2370,7 @@ int nodeUpdateAddressIfNeeded(clusterNode *node, clusterLink *link, clusterMsg *
     /* Check if this is our primary and we have to change the
      * replication target as well. */
     if (nodeIsReplica(myself) && myself->replicaof == node)
-        replicationSetPrimary(node->ip, getNodeDefaultReplicationPort(node));
+        replicationSetPrimary(node->ip, getNodeDefaultReplicationPort(node), 1);
     return 1;
 }
 
@@ -5005,7 +5005,7 @@ void clusterCron(void) {
      * enable it if we know the address of our primary and it appears to
      * be up. */
     if (nodeIsReplica(myself) && server.primary_host == NULL && myself->replicaof && nodeHasAddr(myself->replicaof)) {
-        replicationSetPrimary(myself->replicaof->ip, getNodeDefaultReplicationPort(myself->replicaof));
+        replicationSetPrimary(myself->replicaof->ip, getNodeDefaultReplicationPort(myself->replicaof), 1);
     }
 
     /* Abort a manual failover if the timeout is reached. */
@@ -5412,7 +5412,7 @@ void clusterSetPrimary(clusterNode *n, int closeSlots) {
     myself->replicaof = n;
     updateShardId(myself, n->shard_id);
     clusterNodeAddReplica(n, myself);
-    replicationSetPrimary(n->ip, getNodeDefaultReplicationPort(n));
+    replicationSetPrimary(n->ip, getNodeDefaultReplicationPort(n), 1);
     removeAllNotOwnedShardChannelSubscriptions();
     resetManualFailover();
 

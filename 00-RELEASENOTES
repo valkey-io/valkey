@@ -12,6 +12,53 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
+Valkey 7.2.6 GA  -  Released Tue 30 July 2024
+================================================================================
+
+Upgrade urgency MODERATE: This release fixes an incompatibility issue with modules
+compiled for Redis. For other users, it primarily fixes uncommon bugs.
+
+Bug fixes - Core
+================
+* Fix typo in REGISTER_API macro to prevent segfaults when loading Redis
+  modules (#608)
+* Fix the command duration reset issue when clients are blocked and commands
+  are reprocessed (#526)
+* Fix the data type conversion error in zrangeResultBeginStore (Redis#13148)
+* Fix a crash caused by quicklist node merges (Redis#13040)
+* Fix crashes in module blocking client timeout cases (Redis#13011)
+* Fix conversion of numbers in Lua args to Redis args
+  (Redis#13115, Fixes Redis#13113)
+* Fix crash in LSET command when replacing small list items with larger ones,
+  creating listpacks larger than 4GB (Redis#12955, Fixes Redis#12864)
+* Fix blocking command timeout reset issue during reprocessing (Redis#13004) 
+
+Bug fixes - Cluster
+===================
+* Fix the CLUSTER SHARDS command to display accurate slot information even
+  if a primary node fails (#790, Fixes #784)
+* Fix an issue where module authentication failed when the cluster was down
+  (#693, Fixes #619)
+* Ensure only primary nodes with slots can mark another node as failed (#634)
+* Improve MEET command reliability under link failures to maintain cluster
+  membership symmetry (#461)
+* Allow single primary node to mark potentially failed replica as FAIL in
+  single-shard cluster (Redis#12824)
+
+Bug fixes - Sentinel
+====================
+* Accept redis-sentinel to start Valkey in sentinel mode (#731, Fixes #719)
+
+Bug fixes - CLI
+===============
+* Ensure the `--count` option in redis-cli works correctly even without 
+  `--pattern` (Redis#13092)
+* Fix redis-check-aof misidentifying data in manifest format as MP-AOF
+  (Redis#12951)  
+* Update redis-check-rdb types to replace stream-v2 with stream-v3
+  (Redis#12969)
+
+================================================================================
 Valkey 7.2.5 GA  -  Released Tue 16 Apr 2024
 ================================================================================
 

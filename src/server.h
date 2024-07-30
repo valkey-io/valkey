@@ -1229,7 +1229,8 @@ typedef struct ClientFlags {
                                     * By using this flag, we ensure that the RDB client remains intact until the replica
                                     * \ has successfully initiated PSYNC. */
     uint64_t repl_rdb_channel : 1; /* Dual channel replication sync: track a connection which is used for rdb snapshot */
-    uint64_t reserved : 7;         /* Reserved for future use */
+    uint64_t pending_io_uring_write : 1; /* Client has output to send using io_uring. */
+    uint64_t reserved : 6;               /* Reserved for future use */
 } ClientFlags;
 
 typedef struct client {
@@ -2219,6 +2220,7 @@ struct valkeyServer {
     sds availability_zone; /* When run in a cloud environment we can configure the availability zone it is running in */
     /* Local environment */
     char *locale_collate;
+    int io_uring_enabled; /* If io_uring is enabled */
 };
 
 #define MAX_KEYS_BUFFER 256

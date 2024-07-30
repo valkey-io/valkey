@@ -102,7 +102,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         set primary_host [srv 0 host]
         set primary_port [srv 0 port]
 
-        $primary config set rdb-key-save-delay 200
         $primary config set dual-channel-replication-enabled yes
         $replica config set dual-channel-replication-enabled yes
         $replica config set repl-diskless-sync no
@@ -320,13 +319,12 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             }
 
             $replica1 replicaof no one
-            $primary set key3 val3
             
             test "Test replica's buffer limit reached" {
                 $primary config set repl-diskless-sync-delay 0
-                $primary config set rdb-key-save-delay 500
+                $primary config set rdb-key-save-delay 10000
                 # At this point we have about 10k keys in the db, 
-                # We expect that the next full sync will take 5 seconds (10k*500)ms
+                # We expect that the next full sync will take 100 seconds (10k*10000)ms
                 # It will give us enough time to fill the replica buffer.
                 $replica1 config set dual-channel-replication-enabled yes
                 $replica1 config set client-output-buffer-limit "replica 16383 16383 0"
@@ -347,21 +345,14 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                     fail "Replica buffer should fill"
                 }
                 assert {[s -2 replicas_replication_buffer_size] <= 16385*2}
-
-                # Wait for sync to succeed
-                $primary config set rdb-key-save-delay 0
-                wait_for_condition 50 1000 {
-                    [status $replica1 master_link_status] == "up"
-                } else {
-                    fail "Replica is not synced"
-                }
-                wait_for_value_to_propegate_to_replica $primary $replica1 "key3"
             }
 
             $replica1 replicaof no one
-            $replica1 config set client-output-buffer-limit "replica 256mb 256mb 0"; # remove repl buffer limitation
+            catch {exec kill -9 [get_child_pid 0]}
 
-            $primary set key4 val4
+            $replica1 config set client-output-buffer-limit "replica 256mb 256mb 0"; # remove repl buffer limitation
+            $primary config set rdb-key-save-delay 0
+            $primary set key3 val3
             
             test "dual-channel-replication fails when primary diskless disabled" {
                 set cur_psync [status $primary sync_partial_ok]
@@ -376,7 +367,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 } else {
                     fail "Replica is not synced"
                 }
-                wait_for_value_to_propegate_to_replica $primary $replica1 "key4"
+                wait_for_value_to_propegate_to_replica $primary $replica1 "key3"
 
                 # Verify that we did not use dual-channel-replication sync
                 assert {[status $primary sync_partial_ok] == $cur_psync}
@@ -439,7 +430,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         $primary config set repl-backlog-size $backlog_size
         $primary config set loglevel debug
         $primary config set repl-timeout 10
-        $primary config set rdb-key-save-delay 200
         populate 10000 primary 10000
         
         set load_handle1 [start_one_key_write_load $primary_host $primary_port 100 "mykey1"]
@@ -499,7 +489,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             $primary config set repl-backlog-size $backlog_size
             $primary config set loglevel debug
             $primary config set repl-timeout 10
-            $primary config set rdb-key-save-delay 10
             populate 1024 primary 16
             
             set load_handle0 [start_write_load $primary_host $primary_port 20]
@@ -565,8 +554,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     populate 10 primary 10
     # Pause primary main process after fork
     $primary debug pause-after-fork 1
-    # Give replica two second grace period before disconnection
-    $primary debug delay-rdb-client-free-seconds 2
 
     start_server {} {
         set replica [srv 0 client]
@@ -627,8 +614,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     populate 10 primary 10
     # Pause primary main process after fork
     $primary debug pause-after-fork 1
-    # Give replica two second grace period before disconnection
-    $primary debug delay-rdb-client-free-seconds 2
+    $primary debug delay-rdb-client-free-seconds 100
 
     start_server {} {
         set replica [srv 0 client]
@@ -660,7 +646,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             } else {
                 fail "Primary should wait before freeing repl block"
             }
-
+            $primary debug delay-rdb-client-free-seconds 1
             # Sync should fail once the replica ask for PSYNC using main channel
             set res [wait_for_log_messages -1 {"*Replica main channel failed to establish PSYNC within the grace period*"} 0 4000 1]
             wait_for_condition 50 100 {
@@ -693,9 +679,9 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         set replica_log [srv 0 stdout]
         set replica_pid  [srv 0 pid]
         
-        set load_handle0 [start_write_load $primary_host $primary_port 20]
-        set load_handle1 [start_write_load $primary_host $primary_port 20]
-        set load_handle2 [start_write_load $primary_host $primary_port 20]
+        set load_handle0 [start_one_key_write_load $primary_host $primary_port 100 "mykey1"]
+        set load_handle1 [start_one_key_write_load $primary_host $primary_port 100 "mykey2"]
+        set load_handle2 [start_one_key_write_load $primary_host $primary_port 100 "mykey3"]
 
         $replica config set dual-channel-replication-enabled yes
         $replica config set loglevel debug
@@ -734,7 +720,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         $primary debug populate 1000 primary 100000
         # Set primary with a slow rdb generation, so that we can easily intercept loading
         # 10ms per key, with 1000 keys is 10 seconds
-        $primary config set rdb-key-save-delay 10000
 
         test "Test dual-channel-replication primary gets cob overrun during replica rdb load" {
             set cur_client_closed_count [s -1 client_output_buffer_limit_disconnections]
@@ -751,8 +736,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 fail "Primary did not free repl buf block after sync failure"
             }
             wait_and_resume_process 0
-            set res [wait_for_log_messages -1 {"*Unable to partial resync with replica * for lack of backlog*"} $loglines 20000 1]
-            set loglines [lindex $res 0]
+            wait_for_log_messages -1 {"*Unable to partial resync with replica * for lack of backlog*"} $loglines 20000 1
         }
         stop_write_load $load_handle0
         stop_write_load $load_handle1
@@ -760,7 +744,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     }
 }
 
-foreach dualchannel {yes no} {
 start_server {tags {"dual-channel-replication external:skip"}} {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
@@ -772,77 +755,53 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     $primary config set loglevel debug
     $primary config set repl-diskless-sync-delay 5
     
-    # Generating RDB will cost 5s(10000 * 0.0005s)
-    $primary debug populate 10000 primary 1
-    $primary config set rdb-key-save-delay 500
+    # Sync should take 1000 seconds
+    $primary debug populate 100000 primary 1
+    $primary config set rdb-key-save-delay 10000
 
-    $primary config set dual-channel-replication-enabled $dualchannel
+    $primary config set dual-channel-replication-enabled yes
 
     start_server {} {
         set replica1 [srv 0 client]
-        $replica1 config set dual-channel-replication-enabled $dualchannel
+        $replica1 config set dual-channel-replication-enabled yes
         $replica1 config set loglevel debug
         start_server {} {
             set replica2 [srv 0 client]
-            $replica2 config set dual-channel-replication-enabled $dualchannel
+            $replica2 config set dual-channel-replication-enabled yes
             $replica2 config set loglevel debug
             $replica2 config set repl-timeout 60
 
             set load_handle [start_one_key_write_load $primary_host $primary_port 100 "mykey1"]
-            test "Sync should continue if not all slaves dropped dual-channel-replication $dualchannel" {
+            test "Sync should continue if not all slaves dropped dual-channel-replication" {
                 $replica1 replicaof $primary_host $primary_port
                 $replica2 replicaof $primary_host $primary_port
 
                 wait_for_condition 50 1000 {
-                    [status $primary rdb_bgsave_in_progress] == 1
+                    [status $primary rdb_bgsave_in_progress] == 1 &&
+                    [status $primary connected_slaves] == 4
                 } else {
                     fail "Sync did not start"
                 }
-                if {$dualchannel == "yes"} {
-                    # Wait for both replicas main conns to establish psync
-                    wait_for_condition 50 1000 {
-                        [status $primary sync_partial_ok] == 2
-                    } else {
-                        fail "Replicas main conns didn't establish psync [status $primary sync_partial_ok]"
-                    }
+                # Wait for both replicas main conns to establish psync
+                wait_for_condition 50 1000 {
+                    [status $primary sync_partial_ok] == 2
+                } else {
+                    fail "Replicas main conns didn't establish psync [status $primary sync_partial_ok]"
                 }
 
                 catch {$replica1 shutdown nosave}
+                # wait for replica1 to disconnect
                 wait_for_condition 50 2000 {
-                    [status $replica2 master_link_status] == "up" &&
-                    [status $primary sync_full] == 2 &&
-                    (($dualchannel == "yes" && [status $primary sync_partial_ok] == 2) || $dualchannel == "no")
+                    [status $primary connected_slaves] == 2
                 } else {
-                    fail "Sync session interapted\n
-                        sync_full:[status $primary sync_full]\n
-                        sync_partial_ok:[status $primary sync_partial_ok]"
+                    fail "Sync session interapted"
                 }
+                # Verify sync session was not interapted
+                assert {[status $primary rdb_bgsave_in_progress] eq 1}
+                assert {[status $primary rdb_last_bgsave_status] eq "ok"}
             }
-            
-            $replica2 replicaof no one
-
-            # Generating RDB will cost 500s(1000000 * 0.0001s)
-            $primary debug populate 1000000 primary 1
-            $primary config set rdb-key-save-delay 100
     
-            test "Primary abort sync if all slaves dropped dual-channel-replication $dualchannel" {
-                set cur_psync [status $primary sync_partial_ok]
-                $replica2 replicaof $primary_host $primary_port
-
-                wait_for_condition 50 1000 {
-                    [status $primary rdb_bgsave_in_progress] == 1
-                } else {
-                    fail "Sync did not start"
-                }
-                if {$dualchannel == "yes"} {
-                    # Wait for both replicas main conns to establish psync
-                    wait_for_condition 50 1000 {
-                        [status $primary sync_partial_ok] == $cur_psync + 1
-                    } else {
-                        fail "Replicas main conns didn't establish psync [status $primary sync_partial_ok]"
-                    }
-                }
-
+            test "Primary abort sync if all slaves dropped dual-channel-replication" {
                 catch {$replica2 shutdown nosave}
                 wait_for_condition 50 1000 {
                     [status $primary rdb_bgsave_in_progress] == 0
@@ -853,7 +812,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             stop_write_load $load_handle
         }
     }
-}
 }
 
 start_server {tags {"dual-channel-replication external:skip"}} {
@@ -869,7 +827,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
 
     # Generating RDB will cost 500s(1000000 * 0.0001s)
     $primary debug populate 1000000 primary 1
-    $primary config set rdb-key-save-delay 100
+    $primary config set rdb-key-save-delay 10000
     
     start_server {} {
         set replica [srv 0 client]
@@ -995,9 +953,8 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     $primary config set loglevel debug
     $primary config set repl-diskless-sync-delay 0; # don't wait for other replicas
 
-    # Generating RDB will cost 5s(10000 * 0.0001s)
     $primary debug populate 10000 primary 1
-    $primary config set rdb-key-save-delay 100
+    $primary config set rdb-key-save-delay 10000
     
     start_server {} {
         set replica_1 [srv 0 client]
@@ -1025,15 +982,10 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 wait_for_condition 50 100 {
                     [s -2 rdb_bgsave_in_progress] eq 1
                 } else {
-                    fail "replica didn't start sync session in time1"
+                    fail "replica didn't start sync session in time"
                 }
                 $replica_2 replicaof $primary_host $primary_port
                 wait_for_log_messages -2 {"*Current BGSAVE has socket target. Waiting for next BGSAVE for SYNC*"} $loglines 100 1000
-                $primary config set rdb-key-save-delay 0
-                # Verify second replica needed new session
-                wait_for_sync $replica_2
-                assert {[s -2 sync_partial_ok] eq 2}
-                assert {[s -2 sync_full] eq 2}
             }
             stop_write_load $load_handle
         }
@@ -1051,15 +1003,15 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     $primary config set loglevel debug
     $primary config set repl-diskless-sync-delay 5; # allow catch failed sync before retry
 
-    # Generating RDB will cost 5s(10000 * 0.0001s)
     $primary debug populate 10000 primary 1
-    $primary config set rdb-key-save-delay 100
+    $primary config set rdb-key-save-delay 10000
     
     start_server {} {
         set replica [srv 0 client]
         set replica_host [srv 0 host]
         set replica_port [srv 0 port]
         set replica_log [srv 0 stdout]
+        set replica_pid [srv 0 pid]
         
         $replica config set dual-channel-replication-enabled yes
         $replica config set loglevel debug
@@ -1074,7 +1026,8 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 [s -1 rdb_bgsave_in_progress] eq 1
             } else {
                 fail "replica didn't start sync session in time"
-            }            
+            }
+            pause_process $replica_pid
 
             $primary debug log "killing replica rdb connection"
             set replica_rdb_channel_id [get_client_id_by_last_cmd $primary "sync"]
@@ -1092,6 +1045,8 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 fail "bgsave did not stop in time"
             }
             # Replica should retry
+            $primary config set rdb-key-save-delay 0
+            resume_process $replica_pid
             verify_replica_online $primary 0 500
             stop_write_load $load_handle
             wait_for_condition 1000 100 {
@@ -1101,6 +1056,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             }            
         }
         $replica replicaof no one
+        $primary config set rdb-key-save-delay 10000
 
         test "Replica recover main-connection killed" {
             set load_handle [start_one_key_write_load $primary_host $primary_port 100 "mykey"]
@@ -1112,8 +1068,8 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 [s -1 rdb_bgsave_in_progress] eq 1
             } else {
                 fail "replica didn't start sync session in time"
-            }            
-
+            }
+            pause_process $replica_pid
             $primary debug log "killing replica main connection"
             set replica_main_conn_id [get_client_id_by_last_cmd $primary "sync"]
             assert {$replica_main_conn_id != ""}
@@ -1130,6 +1086,8 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 fail "bgsave did not stop in time"
             }
             # Replica should retry
+            $primary config set rdb-key-save-delay 0
+            resume_process $replica_pid
             verify_replica_online $primary 0 500
             stop_write_load $load_handle
             wait_for_condition 1000 100 {

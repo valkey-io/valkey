@@ -37,11 +37,11 @@ Bug fixes - Cluster
 * Allow single primary node to mark potentially failed replica as FAIL in single-shard cluster (Redis#12824)
 
 Bug fixes - Sentinel
-=========
+====================
 * Accept redis-sentinel to start Valkey in sentinel mode (#731, Fixes #719)
 
 Bug fixes - CLI
-=========
+===============
 * Ensure the --count option in redis-cli works correctly even without --pattern (Redis#13092)
 * Fix redis-check-aof misidentifying data in manifest format as MP-AOF (Redis#12951)  
 * Update redis-check-rdb types to replace stream-v2 with stream-v3 (Redis#12969)

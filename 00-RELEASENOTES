@@ -29,7 +29,7 @@ Bug fixes - Core
 * Fix blocking command timeout reset issue during reprocessing (Redis#13004) 
 
 Bug fixes - Cluster
-=========
+===================
 * Fix the CLUSTER SHARDS command to display accurate slot information even if a primary node fails (#790, Fixes #784)
 * Fix an issue where module authentication failed when the cluster was down (#693, Fixes #619)
 * Ensure only primary nodes with slots can mark another node as failed (#634)

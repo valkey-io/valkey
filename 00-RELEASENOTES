@@ -18,7 +18,7 @@ Valkey 7.2.6 GA  -  Released Tue 30 July 2024
 Upgrade urgency MODERATE: Program an upgrade of the server, but it's not urgent.
 
 Bug fixes - Core
-=========
+================
 * Fix typo in REGISTER_API macro to prevent segfaults when loading Redis modules (#608)
 * Fix the command duration reset issue when clients are blocked and commands are reprocessed (#526)
 * Fix the data type conversion error in zrangeResultBeginStore (Redis#13148)

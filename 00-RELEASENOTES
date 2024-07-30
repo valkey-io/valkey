@@ -17,7 +17,7 @@ Valkey 7.2.6 GA  -  Released Tue 30 July 2024
 
 Upgrade urgency MODERATE: Program an upgrade of the server, but it's not urgent.
 
-Bug fixes - core
+Bug fixes - Core
 =========
 * Fix typo in REGISTER_API macro to prevent segfaults when loading Redis modules (#608)
 * Fix the command duration reset issue when clients are blocked and commands are reprocessed (#526)
@@ -28,7 +28,7 @@ Bug fixes - core
 * Fix crash in LSET command when replacing small list items with larger ones, creating listpacks larger than 4GB (Redis#12955, Fixes Redis#12864)
 * Fix blocking command timeout reset issue during reprocessing (Redis#13004) 
 
-Bug fixes - cluster
+Bug fixes - Cluster
 =========
 * Fix the CLUSTER SHARDS command to display accurate slot information even if a primary node fails (#790, Fixes #784)
 * Fix an issue where module authentication failed when the cluster was down (#693, Fixes #619)
@@ -36,7 +36,7 @@ Bug fixes - cluster
 * Improve MEET command reliability under link failures to maintain cluster membership symmetry (#461)
 * Allow single primary node to mark potentially failed replica as FAIL in single-shard cluster (Redis#12824)
 
-Bug fixes - sentinel
+Bug fixes - Sentinel
 =========
 * Accept redis-sentinel to start Valkey in sentinel mode (#731, Fixes #719)
 

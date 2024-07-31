@@ -5,8 +5,8 @@ name: "Codecov"
 on: [push, pull_request]
 
 concurrency:
-    group: codecov-${{ github.head_ref || github.ref }}
-    cancel-in-progress: true
+  group: codecov-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   code-coverage:

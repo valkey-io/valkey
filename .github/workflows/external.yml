@@ -7,8 +7,8 @@ on:
     - cron: '0 2 * * *'
 
 concurrency:
-    group: external-${{ github.head_ref || github.ref }}
-    cancel-in-progress: true
+  group: external-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

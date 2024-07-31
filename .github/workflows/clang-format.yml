@@ -6,8 +6,8 @@ on:
       - 'src/**'
 
 concurrency:
-    group: clang-${{ github.head_ref || github.ref }}
-    cancel-in-progress: true
+  group: clang-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   clang-format-check:

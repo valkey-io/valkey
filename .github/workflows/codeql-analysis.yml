@@ -7,8 +7,8 @@ on:
     - cron: '0 3 * * 0'
 
 concurrency:
-    group: codeql-${{ github.head_ref || github.ref }}
-    cancel-in-progress: true
+  group: codeql-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

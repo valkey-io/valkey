@@ -8,8 +8,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-    group: coverity-${{ github.head_ref || github.ref }}
-    cancel-in-progress: true
+  group: coverity-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

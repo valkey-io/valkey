@@ -29,6 +29,10 @@ on:
         description: "git branch or sha to use"
         default: "unstable"
 
+concurrency:
+    group: daily-${{ github.head_ref || github.ref }}
+    cancel-in-progress: true
+
 permissions:
   contents: read
 

@@ -6284,7 +6284,7 @@ void clusterCommandSetSlot(client *c) {
      * the process. */
     if (nodeIsPrimary(myself) && myself->num_replicas != 0 && !c->flag.replication_done) {
         /* Iterate through the list of replicas to check if there are any running
-         * a version older than 8.0.0. Replicas with versions older than 8.0.0 do
+         * version 7.2 or older. Replicas running on these versions do
          * not support the CLUSTER SETSLOT command on replicas. If such a replica
          * is found, we should skip the replication and fall back to the old
          * non-replicated behavior.*/
@@ -6294,7 +6294,7 @@ void clusterCommandSetSlot(client *c) {
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
             client *r = ln->value;
-            if (r->replica_version < 0x80000 /* 8.0.0 */) {
+            if (r->replica_version < 0x702ff /* 7.2.255 */) {
                 legacy_replica_found++;
                 break;
             }

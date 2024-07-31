@@ -6,7 +6,7 @@ extend-exclude = [
     # crc16_slottable is primarily pre-generated random strings.
     "src/crc16_slottable.h",
     # 00-RELEASENOTES includes non-English names that might be flagged as typos in other contexts.
-    "00-RELEASENOTES"
+    "00-RELEASENOTES",
 ]
 
 [default.extend-words]

@@ -53,6 +53,8 @@ New/Modified Metrics - Core
 * Add metrics for client buffer limit disconnections to `INFO`. (Redis#12476)
 * Add metrics for monitoring clients using `WATCH` command and watched keys.
   (Redis#12966)
+* Added allocator muzzy memory metrics to `INFO MEMORY` and `MEMORY STATS`.
+  (Redis#12996)
 
 New Features - Core
 ===================
@@ -196,6 +198,8 @@ Behavior Changes - Core
 * Validate `BITCOUNT` arguments before key existence check. (Redis#12394)
 * Redact ACL username information and mark `*-key-file-pass` configs as
   sensitive. (Redis#12860)
+* Allow `MULTI/EXEC` to use a small amount of additional memory beyond the
+  used-memory limit. (Redis#12961)
 
 Behavior Changes - Cluster
 ==========================
@@ -238,6 +242,8 @@ Bug Fixes - Tooling
   (Redis#12958)
 * Fix `valkey-cli` to respect the `--count` option without requiring
   `--pattern`. (Redis#13092)
+* Fix `valkey-benchmark` to distribute operations across all slots owned by
+  a node in cluster mode. (Redis#12986)
 
 Internal Codebase Improvements
 ==============================
@@ -264,21 +270,4 @@ Experimental
 ============
 * Introduce Valkey Over RDMA transport (experimental). (#477)
 
-We appreciate the efforts of all who contributed to this release:
-
-Alan Slang, Binbin, Brennan, Chen Tianjie, Cui Fliter, Daniel House, Darren Jiang,
-David Carlier, Debing Sun, Dingrui, Dmitry Polyakovsky, Eran Liberty, Gabi Ganam,
-George Guimares, Guillaume Koenig, Guybe, Harkrishn Patro, Hassaan Khan, Hwang Si Yeon,
-ICHINOSE Shogo, icy17, Ikko Eltociear Ashimine, iKun, Itamar Haber, Jachin, Jacob Murphy,
-Jason Elbaum, Jeff Liu, John Sully, John Vandenberg, Jonathan Wright, Jonghoonpark, Joe Hu,
-Josiah Carlson, Juho Kim, judeng, Jun Luo, K.G. Wang, Karthik Subbarao, Karthick Ariyaratnam,
-kell0gg, Kyle Kim, Leibale Eidelman, LiiNen, Lipeng Zhu, Lior Kogan, Lior Lahav, Madelyn Olson,
-Makdon, Maria Markova, Mason Hall, Matthew Douglass, meiravgri, michalbiesek, Mike Dolan,
-Mikel Olasagasti Uranga, Moshe Kaplan, mwish, naglera, NAM UK KIM, Neal Gompa, nitaicaro,
-Nir Rattner, Oran Agra, Ouri Half, Ozan Tezcan, Parth, PatrickJS, Pengfei Han, Pierre, Ping Xie,
-poiuj, pshankinclarke, ranshid, Ronen Kalish, Roshan Khatri, Samuel Adetunji, Sankar, secwall,
-Sergey Fedorov, Sher_Sun, Shivshankar, skyfirelee, Slava Koyfman, Subhi Al Hasan, sundb,
-Ted Lyngmo, Thomas Fline, tison, Tom Morris, Tyler Bream, uriyage, Viktor Söderqvist, Vitaly,
-Vitah Lin, VoletiRam, w. ian douglas, WangYu, Wen Hui, Wenwen Chen, Yaacov Hazan, Yanqi Lv,
-Yehoshua Hershberg, Yves LeBras, zalj, Zhao Zhao, zhenwei pi, zisong.cw
-
+We appreciate the efforts of all who contributed to this release!

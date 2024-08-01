@@ -32,6 +32,7 @@
 #include "latency.h"
 #include "script.h"
 #include "functions.h"
+#include "io_threads.h"
 
 #include <signal.h>
 #include <ctype.h>
@@ -230,15 +231,27 @@ int calculateKeySlot(sds key) {
 int getKeySlot(sds key) {
     /* This is performance optimization that uses pre-set slot id from the current command,
      * in order to avoid calculation of the key hash.
+     *
      * This optimization is only used when current_client flag `CLIENT_EXECUTING_COMMAND` is set.
      * It only gets set during the execution of command under `call` method. Other flows requesting
      * the key slot would fallback to calculateKeySlot.
+     *
+     * Modules and scripts executed on the primary may get replicated as multi-execs that operate on multiple slots,
+     * so we must always recompute the slot for commands coming from the primary.
      */
-    if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command) {
+    if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command &&
+        !server.current_client->flag.primary) {
         debugServerAssertWithInfo(server.current_client, NULL, calculateKeySlot(key) == server.current_client->slot);
         return server.current_client->slot;
     }
-    return calculateKeySlot(key);
+    int slot = calculateKeySlot(key);
+    /* For the case of replicated commands from primary, getNodeByQuery() never gets called,
+     * and thus c->slot never gets populated. That said, if this command ends up accessing a key,
+     * we are able to backfill c->slot here, where the key's hash calculation is made. */
+    if (server.current_client && server.current_client->flag.primary) {
+        server.current_client->slot = slot;
+    }
+    return slot;
 }
 
 /* This is a special version of dbAdd() that is used only when loading
@@ -297,7 +310,10 @@ static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEn
         old = dictGetVal(de);
     }
     kvstoreDictSetVal(db->keys, slot, de, val);
-    if (server.lazyfree_lazy_server_del) {
+    /* For efficiency, let the I/O thread that allocated an object also deallocate it. */
+    if (tryOffloadFreeObjToIOThreads(old) == C_OK) {
+        /* OK */
+    } else if (server.lazyfree_lazy_server_del) {
         freeObjAsync(key, old, db->id);
     } else {
         decrRefCount(old);

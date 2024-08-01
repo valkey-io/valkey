@@ -37,6 +37,7 @@
 #include "fpconv_dtoa.h"
 #include "cluster.h"
 #include "threads_mngr.h"
+#include "io_threads.h"
 
 #include <arpa/inet.h>
 #include <signal.h>
@@ -494,6 +495,10 @@ void debugCommand(client *c) {
             "    In case RESET is provided the peak reset time will be restored to the default value",
             "REPLYBUFFER RESIZING <0|1>",
             "    Enable or disable the reply buffer resize cron job",
+            "PAUSE-AFTER-FORK <0|1>",
+            "    Stop the server's main process after fork.",
+            "DELAY-RDB-CLIENT-FREE-SECOND <seconds>",
+            "    Grace period in seconds for replica main channel to establish psync.",
             "DICT-RESIZING <0|1>",
             "    Enable or disable the main dict and expire dict resizing.",
             NULL};
@@ -989,6 +994,12 @@ void debugCommand(client *c) {
             addReplySubcommandSyntaxError(c);
             return;
         }
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "pause-after-fork") && c->argc == 3) {
+        server.debug_pause_after_fork = atoi(c->argv[2]->ptr);
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "delay-rdb-client-free-seconds") && c->argc == 3) {
+        server.wait_before_rdb_client_free = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "dict-resizing") && c->argc == 3) {
         server.dict_resizing = atoi(c->argv[2]->ptr);
@@ -2159,6 +2170,7 @@ void removeSigSegvHandlers(void) {
 }
 
 void printCrashReport(void) {
+    server.crashed = 1;
     /* Log INFO and CLIENT LIST */
     logServerInfo();
 
@@ -2287,6 +2299,12 @@ void applyWatchdogPeriod(void) {
         if (server.watchdog_period < min_period) server.watchdog_period = min_period;
         watchdogScheduleSignal(server.watchdog_period); /* Adjust the current timer. */
     }
+}
+
+void debugPauseProcess(void) {
+    serverLog(LL_NOTICE, "Process is about to stop.");
+    raise(SIGSTOP);
+    serverLog(LL_NOTICE, "Process has been continued.");
 }
 
 /* Positive input is sleep time in microseconds. Negative input is fractions

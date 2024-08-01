@@ -329,6 +329,12 @@ int _dictResize(dict *d, unsigned long size, int *malloc_failed) {
         return DICT_OK;
     }
 
+    if (d->type->no_incremental_rehash) {
+        /* If the dict type does not support incremental rehashing, we need to
+         * rehash the whole table immediately. */
+        while (dictRehash(d, 1000));
+    }
+
     return DICT_OK;
 }
 
@@ -1806,7 +1812,6 @@ void dictGetStats(char *buf, size_t bufsize, dict *d, int full) {
 #ifdef SERVER_TEST
 #include "testhelp.h"
 
-#define UNUSED(V) ((void)V)
 #define TEST(name) printf("test — %s\n", name);
 
 uint64_t hashCallback(const void *key) {

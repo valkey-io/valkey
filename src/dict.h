@@ -87,6 +87,8 @@ typedef struct dictType {
     /* If embedded_entry flag is set, it indicates that a copy of the key is created and the key is embedded
      * as part of the dict entry. */
     unsigned int embedded_entry : 1;
+    /* Perform rehashing during resizing instead of incrementally rehashing across multiple steps */
+    unsigned int no_incremental_rehash : 1;
 } dictType;
 
 #define DICTHT_SIZE(exp) ((exp) == -1 ? 0 : (unsigned long)1 << (exp))

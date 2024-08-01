@@ -31,6 +31,12 @@ libssl-dev on Debian/Ubuntu) and run:
 
     % make BUILD_TLS=yes
 
+To build with experimental RDMA support you'll need RDMA development libraries
+(e.g. librdmacm-dev and libibverbs-dev on Debian/Ubuntu). For now, Valkey only
+supports RDMA as connection module mode. Run:
+
+    % make BUILD_RDMA=module
+
 To build with systemd support, you'll need systemd development libraries (such 
 as libsystemd-dev on Debian/Ubuntu or systemd-devel on CentOS) and run:
 
@@ -154,6 +160,38 @@ Running Valkey with TLS:
 
 Please consult the [TLS.md](TLS.md) file for more information on
 how to use Valkey with TLS.
+
+Running Valkey with RDMA:
+------------------
+
+Note that Valkey Over RDMA is an experimental feature.
+It may be changed or removed in any minor or major version.
+Currently, it is only supported on Linux.
+
+To manually run a Valkey server with RDMA mode:
+
+    % ./src/valkey-server --protected-mode no \
+         --loadmodule src/valkey-rdma.so bind=192.168.122.100 port=6379
+
+It's possible to change bind address/port of RDMA by runtime command:
+
+    192.168.122.100:6379> CONFIG SET rdma.port 6380
+
+It's also possible to have both RDMA and TCP available, and there is no
+conflict of TCP(6379) and RDMA(6379), Ex:
+
+    % ./src/valkey-server --protected-mode no \
+         --loadmodule src/valkey-rdma.so bind=192.168.122.100 port=6379 \
+         --port 6379
+
+Note that the network card (192.168.122.100 of this example) should support
+RDMA. To test a server supports RDMA or not:
+
+    % rdma res show (a new version iproute2 package)
+Or:
+
+    % ibv_devices
+
 
 Playing with Valkey
 ------------------

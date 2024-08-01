@@ -1,16 +1,289 @@
-Hello! This file is just a placeholder, since this is the "unstable" branch
-of Valkey, the place where all the development happens.
+Valkey 8.0 release notes
+========================
+--------------------------------------------------------------------------------
+Upgrade urgency levels:
+LOW:      No need to upgrade unless there are new features you want to use.
+MODERATE: Program an upgrade of the server, but it's not urgent.
+HIGH:     There is a critical bug that may affect a subset of users. Upgrade!
+CRITICAL: There is a critical bug affecting MOST USERS. Upgrade ASAP.
+SECURITY: There are security fixes in the release.
+--------------------------------------------------------------------------------
 
-There is no release notes for this branch, it gets forked into another branch
-every time there is a partial feature freeze in order to eventually create
-a new stable release.
+================================================================================
+Valkey 8.0.0 RC1  -  Released Thu 1 Aug 2024
+================================================================================
+Upgrade urgency LOW: This is the first release candidate of Valkey 8.0, with
+performance, reliability, and observability improvements. It includes asynchronous
+I/O threading, better cluster scaling reliability, dual primary-replica channel
+for faster full synchronization, per-slot metrics for resource management, and
+experimental RDMA support for increased throughput and reduced latency. This
+release is fully compatible with Redis OSS 7.2.4.
 
-Usually "unstable" is stable enough for you to use it in development environments
-however you should never use it in production environments. It is possible
-to download the latest stable release here:
+Un-deprecated Commands - Cluster
+================================
+* Un-deprecate the `CLUSTER SLOTS` command. (#536)
 
-    https://valkey.io/download/
+New/Modified Commands - Core
+============================
+* Add `SCRIPT SHOW` sub-command to dump scripts via SHA1. (#617)
+* Add `NOSCORES` option to `ZSCAN` command. (#324)
+* Add `NOVALUES` option to `HSCAN` command. (Redis#12765)
+* Expose Lua `os.clock()` API to allow scripts to determine how long the
+  script has been executing. (Redis#12971)
+* Implement `CLIENT KILL MAXAGE <MAXAGE>`. (Redis#12299)
+* Allow running `WAITAOF` in scripts, remove `NOSCRIPT` flag. (Redis#12977)
+* Support `XREAD[GROUP]` with `BLOCK` option in scripts. (Redis#12596)
+* Introduce `+` as a special ID for the last item in stream on `XREAD`
+  Command. (Redis#7388, Redis#13117)
 
-More information is available at https://valkey.io
+New/Modified Commands - Cluster
+===============================
+* Introduce `CLUSTER SLOT-STATS` command which allows tracking of per slot
+  metrics for key count, CPU utilization, network bytes in, and network
+  bytes out. (#20, #351)
+* Add `TIMEOUT` option to `CLUSTER SETSLOT` command. (#556, #445)
 
-Happy hacking!
+New/Modified Metrics - Core
+===========================
+* Introduce per-client metrics for network traffic and command execution
+  in `CLIENT LIST` and `CLIENT INFO`. (#327)
+* Add metrics for DB memory overhead and rehashing status to `INFO MEMORY`
+  and `MEMORY STATS`. (Redis#12913)
+* Add `pubsub_clients` metric to `INFO CLIENTS`. (Redis#12849)
+* Add metrics for client buffer limit disconnections to `INFO`. (Redis#12476)
+* Add metrics for monitoring clients using `WATCH` command and watched keys.
+  (Redis#12966)
+* Added allocator muzzy memory metrics to `INFO MEMORY` and `MEMORY STATS`.
+  (Redis#12996)
+
+New Features - Core
+===================
+* Support replica redirect for read/write operations to primary in standalone
+  mode. (#325)
+* Add server config for cluster blacklist TTL. (#738)
+* Add availability zone server config. (#700)
+
+New Features - Cluster
+======================
+* Support IPv4 and IPv6 dual stack and client-specific IPs in clusters. (#736)
+* Support `BY/GET` options for `SORT/SORT_RO` in cluster mode when pattern
+  implies a single slot. (Redis#12728)
+
+Compatibility Improvements - Core
+=================================
+* Derive RDB and module child process names based on server start name for
+  compatibility. (#454)
+* Update server identity in `serverPanic` output based on `extended-redis-compatibility`
+  config. (#415)
+
+Compatibility Improvements - Sentinel
+=====================================
+* Accept `redis-sentinel` to start Valkey in sentinel mode. (#731)
+
+Performance/Efficiency Improvements - Core
+==========================================
+* Introduce dual channel for more efficient full sync replication. (#60)
+* Introduce async IO threading for improved multi-threaded performance.
+  (#763, #758)
+* Embed key directly in main dictionary entry for improved memory efficiency.
+  (#541)
+* Use thread-local storage to reduce atomic contention in updating memory
+  metrics. (#674)
+* Reduce redundant calls to `prepareClientToWrite` for continuous `addReply*`.
+  (#670)
+* Optimize the logic for checking conversion to skip list during `ZADD` operations.
+  (#806)
+* Optimize `sdsfree` with `zfree_with_size` to avoid redundant size calculation.
+  (#453)
+* Combine events to eliminate redundant `kevent(2)` calls. (#638)
+* Introduce shared query buffer for client reads to reduce memory usage. (#258)
+* Optimize CRC64 performance for large batches by processing bytes in parallel.
+  (#350)
+* Use `SOCK_NONBLOCK` to reduce system calls for outgoing connections. (#293)
+* Enable `accept4()` detection on specific versions of various platforms. (#294)
+* Convert CRC16 slot table to fixed-size array for improved memory efficiency.
+  (Redis#13112)
+* Run `SCRIPT FLUSH` truly asynchronously and close Lua interpreter in a
+  background thread. (Redis#13087)
+* Optimize `DEL` command to avoid redundant deletions for expired keys. (Redis#13080)
+* Improve defragmentation for large bins to enhance memory efficiency. (Redis#12996)
+* Optimize hash table resizing to include empty dictionaries. (Redis#12819)
+* Reduce performance impact of dictionary rehashing by optimizing bucket processing.
+  (Redis#12899)
+* Optimize performance for simultaneous client `[P|S]UNSUBSCRIBE`. (Redis#12838)
+* Optimize CPU cache efficiency during dictionary rehashing. (Redis#5692)
+* Optimize `ZRANGE` offset location from linear search to skip list jump. (Redis#12450)
+* Fix `aeSetDontWait` timing to avoid unnecessary waits in `aeProcessEvent`. (Redis#12068)
+
+Performance/Efficiency Improvements - Cluster
+=============================================
+* Add lightweight cluster message header for Pub/Sub messages. (#654)
+* Minor performance improvement in Valkey cluster by avoid initializing key
+  buffer in `getKeysResult`. (#631)
+* Cache `CLUSTER SLOTS` response to improve throughput and reduce latency. (#53)
+* Replace slots_to_channels radix tree with slot-specific dictionaries for
+  shard channels. (Redis#12804)
+* Optimize `KEYS` command when pattern includes hashtag and implies a single
+  slot. (Redis#12754)
+* Optimize `SCAN` command with `MATCH` when pattern implies a single slot.
+  (Redis#12536)
+* Replace cluster metadata with slot specific dictionaries to reduce memory
+  usage when using Valkey cluster. (Redis#11695, Redis#12704)
+
+Reliability Improvements - Core
+===============================
+* Limit tracking custom errors (e.g. from Lua) while allowing normal errors
+  to be tracked (#500, Redis#13141)
+* Manage maximum number of new connections per cycle to prevent connection
+  storms. (Redis#12178)
+
+Reliability Improvements - Cluster
+==================================
+* Reduce fail-over time in Valkey cluster when multiple sequential fail-overs
+  occurred by resetting `failover_auth_time` when the new primary node goes
+  down. (#782)
+* Restrict node failure marking to primaries with assigned slots. (#634)
+* Enhance cluster meet reliability under link failures. (#461)
+* Improve reliability of slot migration in Valkey clusters. (#445)
+
+Usability Improvements - Core
+=============================
+* Re-brand and refine latency report messages. (#644)
+* Optimize `ACL LOAD` to avoid disconnecting clients whose users are unchanged.
+  (Redis#12171)
+
+Usability Improvements - Cluster
+================================
+* Adjust log levels for various cluster-related logs to improve clarity. (#633)
+* Maintain deterministic ordering of replica(s) in `CLUSTER SLOTS` response. (#265)
+
+Usability Improvements - CLI
+================================
+* Add prompt message when Ctrl-C is pressed in `valkey-cli`. (#702)
+* Keep an in-memory history of all commands in `valkey-cli` so that sensitive
+  commands can be shown within the same session. (Redis#12862)
+
+Module Improvements - Core
+==========================
+* Add `ValkeyModule_TryCalloc()` and `ValkeyModule_TryRealloc()` to handle
+  allocation failures gracefully. (Redis#12985)
+* Make `ValkeyModule_Yield` thread-safe by handling events in the main thread.
+  (Redis#12905)
+* Allow modules to declare new ACL categories. (Redis#12486)
+
+Module Improvements - Cluster
+=============================
+* Add API `ValkeyModule_ClusterKeySlot` and `ValkeyModule_ClusterCanonicalKeyNameInSlot`.
+  (Redis#13069)
+
+Behavior Changes - Core
+=======================
+* Re-brand the Lua debugger. (#603)
+* Change default pidfile from `redis.pid` to `valkey.pid`. (#378)
+* Abort transactions on nested `MULTI` or `WATCH` commands. (#723)
+* Ensure keys that match the `SCAN` filter are not lazily expired and return
+  an error for invalid types. (#501)
+* Rename `redis` in AOF logs and proc title to `valkey-aof-rewrite`. (#393)
+* Change default syslog-ident from `redis` to `valkey`. (#390)
+* Update `Redis` to `Valkey` in `serverLog` messages in server.c file. (#231)
+* Remove `Redis` from various error reply messages. See GitHub PR for more
+  details. (#206)
+* Reject empty strings for configs `dir`, `dbfilename`, and `cluster-config-file`.
+  (#636)
+* Change key-spec flag from `RW` to `OW` for `SINTERSTORE` command. (Redis#12917)
+* Return more precise error messages for some cases verifying keys during script
+  execution. (Redis#12707)
+* Return errors for `BITCOUNT` and `BITPOS` with non-existing keys or invalid
+  arguments instead of zero. (Redis#11734)
+* Validate `BITCOUNT` arguments before key existence check. (Redis#12394)
+* Redact ACL username information and mark `*-key-file-pass` configs as
+  sensitive. (Redis#12860)
+* Allow `MULTI/EXEC` to use a small amount of additional memory beyond the
+  used-memory limit. (Redis#12961)
+
+Behavior Changes - Cluster
+==========================
+* Allow `CLUSTER NODES/INFO/MYID/MYSHARDID` during loading state. (#596)
+* Make cluster replicas return `ASK` and `TRYAGAIN` during slot migration. (#495)
+
+Behavior Changes - Sentinel
+===========================
+* Replace `master-reboot-down-after-period` with `primary-reboot-down-after-period`
+  in `sentinel.conf`. (#647)
+
+Bug Fixes - Core
+================
+* Fix a bug that caused LRU/LFU inconsistencies for some integer objects. (#250)
+* Fix a bug where Valkey may use a sub-optimal encoding for some data types.
+  (Redis#13148)
+* Fix propagation of `entries_read` by calling `streamPropagateGroupID`
+  unconditionally. (Redis#12898)
+* Fix race condition issues between the main thread and module threads.
+  (Redis#12817)
+* Wake blocked clients ASAP in next `beforeSleep` for `WAITAOF`. (Redis#12627)
+* Fix crash in crash-report and improve thread management with RW locks.
+  (Redis#12623)
+
+Bug Fixes - Cluster
+===================
+* Fix a bug where a shard returns the incorrect slot slot information in
+  `CLUSTER SHARDS` command on primary failure. (#790)
+* Allow module authentication to succeed when the cluster is down. (#693)
+* Fix `PONG` message processing for primary-ship tracking during fail-overs.
+  (Redis#13055)
+* Prevent double freeing of cluster link with `DEBUG CLUSTERLINK KILL`.
+  (Redis#12930)
+* Unsubscribe all clients from replica for shard channel if the primary
+  ownership changes. (Redis#12577)
+
+Bug Fixes - Tooling
+===============
+* Fix `valkey-check-aof` misidentifying data in manifest format as MP-AOF.
+  (Redis#12958)
+* Fix `valkey-cli` to respect the `--count` option without requiring
+  `--pattern`. (Redis#13092)
+* Fix `valkey-benchmark` to distribute operations across all slots owned by
+  a node in cluster mode. (Redis#12986)
+
+Internal Codebase Improvements
+==============================
+* Enable debug asserts for cluster and sentinel tests. (#588)
+* Introduce a minimal debugger for Tcl integration test suite. (#683)
+* Set up clang-format GitHub action for automated code formatting checks. (#538)
+* Replace custom atomic logic with C11 _Atomics. (#490)
+* Add fast fail option for Tcl test cases. (#482)
+* Introduce a simple unit test framework. (#460)
+* An initial simple unit test framework. (#344)
+* Introduce Codecov for automated code coverage tracking. (#316)
+* Remove deprecated `redis-trib` CLI program. (#281)
+* Add `-fno-omit-frame-pointer` to default compilation flags to improve
+  debuggability. (Redis#12973)
+* Refactor the per-slot dict-array db.c into a new kvstore data structure.
+  (Redis#12822)
+* Unified database rehash method for both standalone and cluster modes.
+  (Redis#12848)
+* Clarify and decouple the sampling logic in eviction to improve readability.
+  (Redis#12781)
+* Rewrite large printf calls to smaller ones for readability. (Redis#12257)
+
+Experimental
+============
+* Introduce Valkey Over RDMA transport (experimental). (#477)
+
+We appreciate the efforts of all who contributed code to this release!
+
+lan Slang, Binbin, Brennan, Chen Tianjie, Cui Fliter, Daniel House, Darren Jiang,
+David Carlier, Debing Sun, Dingrui, Dmitry Polyakovsky, Eran Liberty, Gabi Ganam,
+George Guimares, Guillaume Koenig, Guybe, Harkrishn Patro, Hassaan Khan, Hwang Si Yeon,
+ICHINOSE Shogo, icy17, Ikko Eltociear Ashimine, iKun, Itamar Haber, Jachin, Jacob Murphy,
+Jason Elbaum, Jeff Liu, John Sully, John Vandenberg, Jonathan Wright, Jonghoonpark, Joe Hu,
+Josiah Carlson, Juho Kim, judeng, Jun Luo, K.G. Wang, Karthik Subbarao, Karthick Ariyaratnam,
+kell0gg, Kyle Kim, Leibale Eidelman, LiiNen, Lipeng Zhu, Lior Kogan, Lior Lahav, Madelyn Olson,
+Makdon, Maria Markova, Mason Hall, Matthew Douglass, meiravgri, michalbiesek, Mike Dolan,
+Mikel Olasagasti Uranga, Moshe Kaplan, mwish, naglera, NAM UK KIM, Neal Gompa, nitaicaro,
+Nir Rattner, Oran Agra, Ouri Half, Ozan Tezcan, Parth, PatrickJS, Pengfei Han, Pierre, Ping Xie,
+poiuj, pshankinclarke, ranshid, Ronen Kalish, Roshan Khatri, Samuel Adetunji, Sankar, secwall,
+Sergey Fedorov, Sher_Sun, Shivshankar, skyfirelee, Slava Koyfman, Subhi Al Hasan, sundb,
+Ted Lyngmo, Thomas Fline, tison, Tom Morris, Tyler Bream, uriyage, Viktor Söderqvist, Vitaly,
+Vitah Lin, VoletiRam, w. ian douglas, WangYu, Wen Hui, Wenwen Chen, Yaacov Hazan, Yanqi Lv,
+Yehoshua Hershberg, Yves LeBras, zalj, Zhao Zhao, zhenwei pi, zisong.cw

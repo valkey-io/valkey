@@ -232,7 +232,7 @@ Bug Fixes - Cluster
 * Unsubscribe all clients from replica for shard channel if the primary
   ownership changes. (Redis#12577)
 
-Bug Fixes - CLI
+Bug Fixes - Tooling
 ===============
 * Fix `valkey-check-aof` misidentifying data in manifest format as MP-AOF.
   (Redis#12958)

@@ -17,7 +17,7 @@ performance, reliability, and observability improvements. It includes asynchrono
 I/O threading, better cluster scaling reliability, dual primary-replica channel
 for faster full synchronization, per-slot metrics for resource management, and
 experimental RDMA support for increased throughput and reduced latency. This
-release is fully compatible with OSS Redis 7.2.4.
+release is fully compatible with Redis OSS 7.2.4.
 
 Un-deprecated Commands - Cluster
 ================================

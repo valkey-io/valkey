@@ -650,6 +650,7 @@ void listPopRangeAndReplyWithKey(client *c, robj *o, robj *key, int where, long 
  * Note that the purpose is to make the methods small so that the
  * code in the loop can be inlined better to improve performance. */
 void addListQuicklistRangeReply(client *c, robj *o, int from, int rangelen, int reverse) {
+    if (prepareClientToWrite(c) != C_OK) return;
     /* Return the result in form of a multi-bulk reply */
     addReplyArrayLen(c, rangelen);
 
@@ -659,9 +660,9 @@ void addListQuicklistRangeReply(client *c, robj *o, int from, int rangelen, int 
         quicklistEntry qe;
         serverAssert(quicklistNext(iter, &qe)); /* fail on corrupt data */
         if (qe.value) {
-            addReplyBulkCBuffer(c, qe.value, qe.sz);
+            addReplyBulkCBufferSkipPrepareClient(c, qe.value, qe.sz);
         } else {
-            addReplyBulkLongLong(c, qe.longval);
+            addReplyBulkLongLongSkipPrepareClient(c, qe.longval);
         }
     }
     quicklistReleaseIterator(iter);
@@ -671,21 +672,21 @@ void addListQuicklistRangeReply(client *c, robj *o, int from, int rangelen, int 
  * Note that the purpose is to make the methods small so that the
  * code in the loop can be inlined better to improve performance. */
 void addListListpackRangeReply(client *c, robj *o, int from, int rangelen, int reverse) {
+    if (prepareClientToWrite(c) != C_OK) return;
+    /* Return the result in form of a multi-bulk reply */
+    addReplyArrayLen(c, rangelen);
     unsigned char *p = lpSeek(o->ptr, from);
     unsigned char *vstr;
     unsigned int vlen;
     long long lval;
 
-    /* Return the result in form of a multi-bulk reply */
-    addReplyArrayLen(c, rangelen);
-
     while (rangelen--) {
         serverAssert(p); /* fail on corrupt data */
         vstr = lpGetValue(p, &vlen, &lval);
         if (vstr) {
-            addReplyBulkCBuffer(c, vstr, vlen);
+            addReplyBulkCBufferSkipPrepareClient(c, vstr, vlen);
         } else {
-            addReplyBulkLongLong(c, lval);
+            addReplyBulkLongLongSkipPrepareClient(c, lval);
         }
         p = reverse ? lpPrev(o->ptr, p) : lpNext(o->ptr, p);
     }

@@ -29,7 +29,7 @@ proc wait_and_resume_process idx {
     wait_for_condition 50 1000 {
         [exec ps -o state= -p $pid] eq "T"
     } else {
-        puts "Process $pid didn't stop"
+        fail "Process $pid didn't stop"
     }
     resume_process $pid
 }
@@ -348,8 +348,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 }
                 assert {[s -2 replicas_replication_buffer_size] <= 16385*2}
 
-                # Wait for sync to succeed
-                $primary config set rdb-key-save-delay 0
+                # Wait for sync to succeed 
                 wait_for_condition 50 1000 {
                     [status $replica1 master_link_status] == "up"
                 } else {

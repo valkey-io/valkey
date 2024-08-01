@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2009-2016, Salvatore Sanfilippo <antirez at gail dot co>
- * All rights reserved.
+ * Copyright (c) 2024 Samsung Electronics Co., Ltd. All rights reserved.
+ * Author: Wenwen Chen <Wenwen.chen@samsung.com>
  *
  * Redistribution and use in source and binary fors, with or without
  * odification, are peritted provided that the following conditions are et:
@@ -28,7 +28,7 @@
  */
 
 #include "io_uring.h"
-
+#include "server.h"
 #ifdef HAVE_IO_URING
 #include <liburing.h>
 #include "zmalloc.h"
@@ -37,26 +37,50 @@
 #define AOF_IOURING_MAX_ENTRIES (64)
 #define AOF_IOURING_MAX_BLOCKSIZE (32 * 1024)
 
+struct io_data {
+    struct iovec iov;
+    int used;
+};
+
+static struct io_data buffer[AOF_IOURING_MAX_ENTRIES];
 static struct io_uring *_aof_io_uring;
-static struct iovec iov[AOF_IOURING_MAX_ENTRIES];
-static int inflight = 0;
+
+static inline void initIoData(void) {
+    for (int index = 0; index < AOF_IOURING_MAX_ENTRIES; index++) {
+        buffer[index].used = 0;
+    }
+}
+
+static inline struct io_data *getIoData(void) {
+    struct io_data *ret = NULL;
+    for (int index = 0; index < AOF_IOURING_MAX_ENTRIES; index++) {
+        if (0 == buffer[index].used) {
+            ret = &buffer[index];
+            ret->used = 1;
+            return ret;
+        }
+    }
+    return ret;
+}
+
+static inline void releaseIoData(struct io_data *data) {
+    if (NULL == data) return;
+    data->used = 0;
+}
 
 int initAofIOUring(void) {
     _aof_io_uring = NULL;
     struct io_uring *ring = zmalloc(sizeof(struct io_uring));
-    if (!ring) {
-        fprintf(stderr, "failed to allocate memory for aof io_uring...\n");
-        return -1;
-    }
+    if (!ring) return -1;
 
     int ret = io_uring_queue_init(AOF_IOURING_MAX_ENTRIES, ring, 0);
     if (ret != 0) {
-        fprintf(stderr, "failed to init queue of aof io_uring...\n");
         zfree(ring);
         return -1;
     }
 
     _aof_io_uring = ring;
+    initIoData();
     return 0;
 }
 
@@ -69,75 +93,77 @@ void freeAofIOUring(void) {
 }
 
 struct io_uring *getAofIOUring(void) {
-    if (!_aof_io_uring) {
-        initAofIOUring();
-    }
+    if (!_aof_io_uring) initAofIOUring();
+
     return _aof_io_uring;
 }
 
-static int prepWrite(int fd, struct iovec *iov, unsigned nr_vecs, unsigned offset) {
+static int prepWrite(int fd, struct io_data *data, unsigned nr_vecs, unsigned offset) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(_aof_io_uring);
     if (!sqe) return -1;
 
-    io_uring_prep_writev(sqe, fd, iov, nr_vecs, offset);
-    io_uring_sqe_set_data(sqe, &_aof_io_uring);
+    io_uring_prep_writev(sqe, fd, &data->iov, nr_vecs, offset);
+    io_uring_sqe_set_data(sqe, data);
     return 0;
 }
 
-static int reapCompletions(void) {
-    struct io_uring_cqe *cqes[inflight];
-    int cqecnt = io_uring_peek_batch_cqe(_aof_io_uring, cqes, inflight);
-    if (cqecnt < 0) {
-        return -1;
-    }
-    io_uring_cq_advance(_aof_io_uring, cqecnt);
-    inflight -= cqecnt;
+static int reapCq(int *len) {
+    struct io_uring_cqe *cqe;
+    int ret = io_uring_wait_cqe(_aof_io_uring, &cqe);
+    if (ret < 0) return ret;
+
+    struct io_data *data = io_uring_cqe_get_data(cqe);
+    releaseIoData(data);
+    *len = cqe->res;
+    io_uring_cqe_seen(_aof_io_uring, cqe);
     return 0;
 }
 
 int aofWriteByIOUring(int fd, const char *buf, size_t len) {
-    ssize_t writing = 0;
-    ssize_t totwritten = 0;
+    size_t submit_size = 0;
+    size_t complete_size = 0;
+    int submit_cnt = 0;
+    int complete_cnt = 0;
+    size_t write_left = len;
 
-    while (len) {
-        ssize_t offset = 0;
-        ssize_t this_size = 0;
-        int has_inflight = inflight;
+    while (write_left || (submit_cnt > complete_cnt)) {
+        size_t offset = 0;
+        size_t this_size = 0;
+        int has_submit = submit_cnt;
+        struct io_data *data = NULL;
 
-        while (len && (inflight < AOF_IOURING_MAX_ENTRIES)) {
-            this_size = len;
+        // Queue up as many writes as we can
+        while (write_left && ((submit_cnt - complete_cnt) < AOF_IOURING_MAX_ENTRIES)) {
+            this_size = write_left;
             if (this_size > AOF_IOURING_MAX_BLOCKSIZE) this_size = AOF_IOURING_MAX_BLOCKSIZE;
 
-            iov[inflight].iov_base = ((char *)buf) + offset;
-            iov[inflight].iov_len = this_size;
-            if (0 != prepWrite(fd, &iov[inflight], 1, 0)) {
-                fprintf(stderr, "## prepWrite failed when persist AOF file by io_uring...\n");
-            }
+            data = getIoData();
+            if (NULL == data) return complete_size;
 
-            len -= this_size;
+            data->iov.iov_base = ((char *)buf) + offset;
+            data->iov.iov_len = this_size;
+            if (0 != prepWrite(fd, data, 1, 0)) return complete_size;
+
+            write_left -= this_size;
             offset += this_size;
-            writing += this_size;
-            inflight++;
+            submit_size += this_size;
+            submit_cnt++;
         }
-
-        if (has_inflight != inflight) io_uring_submit(_aof_io_uring);
-
-        int depth;
-        if (len)
-            depth = AOF_IOURING_MAX_ENTRIES;
-        else
-            depth = 1;
-
-        while (inflight >= depth) {
-            if (0 != reapCompletions()) {
-                fprintf(stderr, "## reapCompletions failed when persist AOF file by io_uring...\n");
-                return totwritten;
-            }
+        if (has_submit != submit_cnt) {
+            int ret = io_uring_submit(_aof_io_uring);
+            if (ret < 0) return complete_size;
         }
-        totwritten = writing;
+        // Queue is full at this point. Find at least one completion.
+        while (complete_size < len) {
+            int cq_size = 0;
+            if (0 != reapCq(&cq_size)) break;
+
+            complete_size += cq_size;
+            complete_cnt++;
+        }
     }
 
-    return totwritten;
+    return complete_size;
 }
 
 #else

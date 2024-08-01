@@ -1027,7 +1027,6 @@ ssize_t aofWrite(int fd, const char *buf, size_t len) {
         buf += nwritten;
         totwritten += nwritten;
     }
-
     return totwritten;
 }
 

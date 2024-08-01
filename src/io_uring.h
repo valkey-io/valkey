@@ -1,7 +1,6 @@
 /*
- * Copyright (c) 2009-2016, Salvatore Sanfilippo <antirez at gail dot co>
- * All rights reserved.
- *
+ * Copyright (c) 2024 Samsung Electronics Co., Ltd. All rights reserved.
+ * Author: Wenwen Chen <Wenwen.chen@samsung.com>
  * Redistribution and use in source and binary fors, with or without
  * odification, are peritted provided that the following conditions are et:
  *

@@ -3557,7 +3557,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
             if (replica->replica_req != req) continue;
 
             conns[connsnum++] = replica->conn;
-            if (dual_channel) {                
+            if (dual_channel) {
                 connSendTimeout(replica->conn, server.repl_timeout * 1000);
                 /* This replica uses diskless dual channel sync, hence we need
                  * to inform it with the save end offset.*/

@@ -3563,7 +3563,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
                 connSendTimeout(replica->conn, server.repl_timeout * 1000);
                 /* This replica uses diskless dual channel sync, hence we need
                  * to inform it with the save end offset.*/
-                sendCurrentOffsetToReplica(replica);
+                if (sendCurrentOffsetToReplica(replica) == C_ERR) return C_ERR;
                 /* Make sure repl traffic is appended to the replication backlog */
                 addRdbReplicaToPsyncWait(replica);
             } else {
@@ -3578,7 +3578,10 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
         /* Child */
         int retval, dummy;
         rio rdb;
-        if (dual_channel) {
+        if (dual_channel) {            
+            for (int i = 0; i < connsnum; i++) {
+                connBlock(conns[i]); /* Child process's i/o runs in blocking mode. */
+            }            
             rioInitWithConnset(&rdb, conns, connsnum);
         } else {
             rioInitWithFd(&rdb, rdb_pipe_write);

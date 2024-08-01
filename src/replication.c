@@ -2552,9 +2552,11 @@ int sendCurrentOffsetToReplica(client *replica) {
     int buflen;
     buflen = snprintf(buf, sizeof(buf), "$ENDOFF:%lld %s %d %llu\r\n", server.primary_repl_offset, server.replid,
                       server.db->id, (long long unsigned int)replica->id);
+    char *replicaname = replicationGetReplicaName(replica);
     serverLog(LL_NOTICE, "Sending to replica %s RDB end offset %lld and client-id %llu",
-              replicationGetReplicaName(replica), server.primary_repl_offset, (long long unsigned int)replica->id);
+              replicaname, server.primary_repl_offset, (long long unsigned int)replica->id);
     if (connSyncWrite(replica->conn, buf, buflen, server.repl_syncio_timeout * 1000) != buflen) {
+        serverLog(LL_NOTICE, "Unable to send rdb end offset to replica %s, aborting sync.", replicaname);
         freeClientAsync(replica);
         return C_ERR;
     }

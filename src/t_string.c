@@ -109,6 +109,28 @@ void setGenericCommand(client *c,
         return;
     }
 
+    /* If the milliseconds have expired, then we don't need to set it into the
+     * database, and then wait for the active expire to delete it, it is wasteful.
+     * If the key already exists, delete it. */
+    if (expire && checkAlreadyExpired(milliseconds)) {
+        if (found) {
+            int deleted = dbGenericDelete(c->db, key, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED);
+            serverAssertWithInfo(c, key, deleted);
+            server.dirty++;
+
+            /* Replicate/AOF this as an explicit DEL or UNLINK. */
+            robj *aux = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
+            rewriteClientCommandVector(c, 2, aux, key);
+            signalModifiedKey(c, c->db, key);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
+        }
+
+        if (!(flags & OBJ_SET_GET)) {
+            addReply(c, ok_reply ? ok_reply : shared.ok);
+        }
+        return;
+    }
+
     /* When expire is not NULL, we avoid deleting the TTL so it can be updated later instead of being deleted and then
      * created again. */
     setkey_flags |= ((flags & OBJ_KEEPTTL) || expire) ? SETKEY_KEEPTTL : 0;

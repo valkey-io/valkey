@@ -465,15 +465,15 @@ int hllPatLen(unsigned char *ele, size_t elesize, long *regp) {
      * Note that the final "1" ending the sequence of zeroes must be
      * included in the count, so if we find "001" the count is 3, and
      * the smallest count possible is no zeroes at all, just a 1 bit
-     * at the first position, that is a count of 1.
-     */
+     * at the first position, that is a count of 1. */
     hash = MurmurHash64A(ele, elesize, 0xadc83b19ULL);
     index = hash & HLL_P_MASK;      /* Register index. */
     hash >>= HLL_P;                 /* Remove bits used to address the register. */
     hash |= ((uint64_t)1 << HLL_Q); /* Make sure ctz will not get undefined results
                                        and count will be <= Q+1. */
     /* Initialized to 1 since we count the "00000...1" pattern. */
-    count = 1 + __builtin_ctzll(hash);
+    count = 1; /* Initialized to 1 since we count the "00000...1" pattern. */
+    count += __builtin_ctzll(hash); /* ctz is more effective than bit shift. */
     *regp = (int)index;
     return count;
 }

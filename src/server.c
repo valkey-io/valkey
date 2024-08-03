@@ -1344,12 +1344,11 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* Show information about connected clients */
     if (!server.sentinel_mode) {
-        char hmem[64];
-        size_t zmalloc_used = zmalloc_used_memory();
-
-        bytesToHuman(hmem, sizeof(hmem), zmalloc_used);
-
         run_with_period(5000) {
+            char hmem[64];
+            size_t zmalloc_used = zmalloc_used_memory();
+            bytesToHuman(hmem, sizeof(hmem), zmalloc_used);
+
             serverLog(LL_DEBUG, "Total: %lu clients connected (%lu replicas), %zu (%s) bytes in use",
                       listLength(server.clients) - listLength(server.slaves), listLength(server.slaves),
                       zmalloc_used, hmem);

@@ -4865,11 +4865,11 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
                  * check whether its value is the same in both nodes.
                  * In case of equal values, retry migration with the
                  * REPLACE option.
+                 *
                  * In case of different values:
-                 *  - If the migration is requested by the fix command, stop
+                 *  - If --cluster-replace option is not provided, stop
                  *    and warn the user.
-                 *  - In other cases (ie. reshard), proceed only if the user
-                 *    launched the command with the --cluster-replace option.*/
+                 *  - If --cluster-replace option is provided, proceed it. */
                 if (is_busy) {
                     clusterManagerLogWarn("\n*** Target key exists\n");
                     if (!do_replace) {

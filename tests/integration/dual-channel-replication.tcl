@@ -1050,9 +1050,9 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     $primary config set loglevel debug
     $primary config set repl-diskless-sync-delay 5; # allow catch failed sync before retry
 
-    # Generating RDB will cost 5s(10000 * 0.0001s)
+    # Generating RDB will cost 100 sec to generate
     $primary debug populate 10000 primary 1
-    $primary config set rdb-key-save-delay 100
+    $primary config set rdb-key-save-delay 10000
     
     start_server {} {
         set replica [srv 0 client]
@@ -1063,8 +1063,8 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         $replica config set dual-channel-replication-enabled yes
         $replica config set loglevel debug
         $replica config set repl-timeout 10
+        set load_handle [start_one_key_write_load $primary_host $primary_port 100 "mykey"]
         test "Replica recover rdb-connection killed" {
-            set load_handle [start_one_key_write_load $primary_host $primary_port 100 "mykey"]
             $replica replicaof $primary_host $primary_port
             # Wait for sync session to start
             wait_for_condition 500 1000 {
@@ -1091,18 +1091,21 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 fail "bgsave did not stop in time"
             }
             # Replica should retry
-            verify_replica_online $primary 0 500
-            stop_write_load $load_handle
-            wait_for_condition 1000 100 {
-                [s -1 master_repl_offset] eq [s master_repl_offset]
+            wait_for_condition 500 1000 {
+                [string match "*slave*,state=wait_bgsave*,type=rdb-channel*" [$primary info replication]] &&
+                [string match "*slave*,state=bg_transfer*,type=main-channel*" [$primary info replication]] &&
+                [s -1 rdb_bgsave_in_progress] eq 1
             } else {
-                fail "Replica offset didn't catch up with the primary after too long time"
+                fail "replica didn't retry after connection close"
             }            
         }
         $replica replicaof no one
-
+        wait_for_condition 500 1000 {
+            [s -1 rdb_bgsave_in_progress] eq 0
+        } else {
+            fail "Primary should abort sync"
+        }
         test "Replica recover main-connection killed" {
-            set load_handle [start_one_key_write_load $primary_host $primary_port 100 "mykey"]
             $replica replicaof $primary_host $primary_port
             # Wait for sync session to start
             wait_for_condition 500 1000 {
@@ -1129,13 +1132,14 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 fail "bgsave did not stop in time"
             }
             # Replica should retry
-            verify_replica_online $primary 0 500
-            stop_write_load $load_handle
-            wait_for_condition 1000 100 {
-                [s -1 master_repl_offset] eq [s master_repl_offset]
+            wait_for_condition 500 1000 {
+                [string match "*slave*,state=wait_bgsave*,type=rdb-channel*" [$primary info replication]] &&
+                [string match "*slave*,state=bg_transfer*,type=main-channel*" [$primary info replication]] &&
+                [s -1 rdb_bgsave_in_progress] eq 1
             } else {
-                fail "Replica offset didn't catch up with the primary after too long time"
-            }            
+                fail "replica didn't retry after connection close"
+            }    
         }
+        stop_write_load $load_handle
     }
 }

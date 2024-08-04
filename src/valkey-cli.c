@@ -4662,9 +4662,12 @@ static int clusterManagerSetSlotOwner(clusterManagerNode *owner, int slot, int d
  * 2. DEBUG command not allowed. This happened when we disable enable-debug-command.
  *
  * Return 0 and set the error message in case of reply error. */
-static int
-clusterManagerCompareKeysValues(clusterManagerNode *n1, clusterManagerNode *n2, redisReply *keys_reply, list *diffs,
-                                char **n1_err, char **n2_err) {
+static int clusterManagerCompareKeysValues(clusterManagerNode *n1,
+                                           clusterManagerNode *n2,
+                                           redisReply *keys_reply,
+                                           list *diffs,
+                                           char **n1_err,
+                                           char **n2_err) {
     size_t i, argc = keys_reply->elements + 2;
     static const char *hash_zero = "0000000000000000000000000000000000000000";
     char **argv = zcalloc(argc * sizeof(char *));
@@ -4898,7 +4901,8 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
                         char *source_err = NULL;
                         char *target_err = NULL;
                         list *diffs = listCreate();
-                        success = clusterManagerCompareKeysValues(source, target, reply, diffs, &source_err, &target_err);
+                        success =
+                            clusterManagerCompareKeysValues(source, target, reply, diffs, &source_err, &target_err);
                         if (!success) {
                             clusterManagerLogErr("*** Value check failed!\n");
                             const char *debug_not_allowed = "ERR DEBUG command not allowed.";

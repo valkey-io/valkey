@@ -4665,8 +4665,10 @@ void processBatchClientsCommands(void) {
         batch.keys[i] = ((robj *)batch.keys[i])->ptr;
     }
 
-    /* Prefetch keys for all commands */
+    /* Prefetch keys for all commands, prefetch is beneficial only if there are more than one key */
     if (batch.keys_count > 1) {
+        server.stat_total_prefetch_batches++;
+        server.stat_total_prefetch_entries += batch.keys_count;
         /* Keys */
         kvstoreDictPrefetch(batch.keys_kvs, batch.slots, (const void **)batch.keys, batch.keys_count, getValData);
         /* Expires - with expires no values prefetch are required. */

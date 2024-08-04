@@ -172,38 +172,47 @@ start_server {config "minimal.conf" tags {"external:skip"}} {
 }
 
 start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-debug-command {yes}}} {
-    test {prefetch works as expected when killing a client from the middle of prefetch commands batch} {
-        # Create 17 (prefetch batch size) +1 clients
-        for {set i 0} {$i < 17} {incr i} {
-            set rd$i [valkey_deferring_client]
+
+    # Skip if non io-threads mode - as it is relevant only for io-threads mode
+    if {[r config get io-threads] ne "io-threads 1"} {
+        test {prefetch works as expected when killing a client from the middle of prefetch commands batch} {
+            # Create 17 (prefetch batch size) +1 clients
+            for {set i 0} {$i < 17} {incr i} {
+                set rd$i [valkey_deferring_client]
+            }
+
+            # Get the client ID of rd4
+            $rd4 client id
+            set rd4_id [$rd4 read]
+
+            # Create a batch of commands by making sure the server sleeps for a while
+            # before responding to the first command
+            $rd0 debug sleep 2
+            after 200  ; # wait a bit to make sure the server is sleeping.
+
+            # The first client will kill the fourth client
+            $rd1 client kill id $rd4_id
+
+            # Send set commands for all clients except the first
+            for {set i 1} {$i < 17} {incr i} {
+                [set rd$i] set a $i
+                [set rd$i] flush
+            }
+
+            # Read the results
+            assert_equal {1} [$rd1 read]
+            catch {$rd4 read} err
+            assert_match {I/O error reading reply} $err
+
+            # verify the prefetch stats are as expected
+            set info [r info stats]
+            set prefetch_stats [getInfoProperty $info io_threaded_average_prefetch_batch_size]
+            assert_range [expr $prefetch_stats] 2 15  ; # we expect max 15 as the the kill command doesn't have any keys.
+
+            # Verify the final state
+            $rd16 get a
+            assert_equal {OK} [$rd16 read]
+            assert_equal {16} [$rd16 read]
         }
-
-        # Get the client ID of rd4
-        $rd4 client id
-        set rd4_id [$rd4 read]
-
-        # Create a batch of commands by making sure the server sleeps for a while
-        # before responding to the first command
-        $rd0 debug sleep 2
-        after 200  ; # wait a bit to make sure the server is sleeping.
-
-        # The first client will kill the fourth client
-        $rd1 client kill id $rd4_id
-
-        # Send set commands for all clients except the first
-        for {set i 1} {$i < 17} {incr i} {
-            [set rd$i] set a $i
-            [set rd$i] flush
-        }
-
-        # Read the results
-        assert_equal {1} [$rd1 read]
-        catch {$rd4 read} err
-        assert_match {I/O error reading reply} $err
-
-        # Verify the final state
-        $rd16 get a
-        assert_equal {OK} [$rd16 read]
-        assert_equal {16} [$rd16 read]
     }
 }

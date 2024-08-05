@@ -416,7 +416,7 @@ void feedReplicationBuffer(char *s, size_t len) {
 
     if (server.repl_backlog == NULL) return;
 
-    clusterSlotStatsAddNetworkBytesOutForReplication(len);
+    clusterSlotStatsIncrNetworkBytesOutForReplication(len);
 
     while (len > 0) {
         size_t start_pos = 0;        /* The position of referenced block to start sending. */
@@ -574,7 +574,7 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
         /* Although the SELECT command is not associated with any slot,
          * its per-slot network-bytes-out accumulation is made by the above function call.
          * To cancel-out this accumulation, below adjustment is made. */
-        clusterSlotStatsAddNetworkBytesOutForReplication(-sdslen(selectcmd->ptr));
+        clusterSlotStatsDecrNetworkBytesOutForReplication(sdslen(selectcmd->ptr));
 
         if (dictid < 0 || dictid >= PROTO_SHARED_SELECT_CMDS) decrRefCount(selectcmd);
 
@@ -4474,7 +4474,7 @@ void replicationCron(void) {
     if (server.primary_host && server.repl_state == REPL_STATE_TRANSFER &&
         (time(NULL) - server.repl_transfer_lastio) > server.repl_timeout) {
         serverLog(LL_WARNING, "Timeout receiving bulk data from PRIMARY... If the problem persists try to set the "
-                              "'repl-timeout' parameter in redis.conf to a larger value.");
+                              "'repl-timeout' parameter in valkey.conf to a larger value.");
         cancelReplicationHandshake(1);
     }
 

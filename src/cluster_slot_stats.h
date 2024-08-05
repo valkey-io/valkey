@@ -18,5 +18,6 @@ void clusterSlotStatsResetClusterMsgLength(void);
 
 /* network-bytes-out metric. */
 void clusterSlotStatsAddNetworkBytesOutForUserClient(client *c);
-void clusterSlotStatsAddNetworkBytesOutForReplication(int len);
+void clusterSlotStatsIncrNetworkBytesOutForReplication(long long len);
+void clusterSlotStatsDecrNetworkBytesOutForReplication(long long len);
 void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(client *c, int slot);

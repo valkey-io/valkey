@@ -138,12 +138,26 @@ void clusterSlotStatsAddNetworkBytesOutForUserClient(client *c) {
 }
 
 /* Accumulates egress bytes upon sending replication stream. This only applies for primary nodes. */
-void clusterSlotStatsAddNetworkBytesOutForReplication(int len) {
+static void clusterSlotStatsUpdateNetworkBytesOutForReplication(long long len) {
     client *c = server.current_client;
     if (c == NULL || !canAddNetworkBytesOut(c)) return;
 
     serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
+    if (len < 0) serverAssert(server.cluster->slot_stats[c->slot].network_bytes_out >= (uint64_t)llabs(len));
     server.cluster->slot_stats[c->slot].network_bytes_out += (len * listLength(server.replicas));
+}
+
+/* Increment network bytes out for replication stream. This method will increment `len` value times the active replica
+ * count. */
+void clusterSlotStatsIncrNetworkBytesOutForReplication(long long len) {
+    clusterSlotStatsUpdateNetworkBytesOutForReplication(len);
+}
+
+/* Decrement network bytes out for replication stream.
+ * This is used to remove accounting of data which doesn't belong to any particular slots e.g. SELECT command.
+ * This will decrement `len` value times the active replica count. */
+void clusterSlotStatsDecrNetworkBytesOutForReplication(long long len) {
+    clusterSlotStatsUpdateNetworkBytesOutForReplication(-len);
 }
 
 /* Upon SPUBLISH, two egress events are triggered.

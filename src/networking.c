@@ -2428,8 +2428,9 @@ int processIOThreadsWriteDone(void) {
 /* If client is suitable to use io_uring to handle the write request. */
 static inline int _canWriteUsingIOUring(client *c) {
     if (server.io_uring_enabled && server.io_threads_num == 1) {
-        /* Currently, we only use io_uring to handle the static buffer write requests. */
-        return getClientType(c) != CLIENT_TYPE_REPLICA && listLength(c->reply) == 0 && c->bufpos > 0;
+        /* Currently, we only use io_uring to handle the static buffer write requests.
+         * If io-threads or tls is enabled, skip the io_uring. */
+        return connIsTLS(c->conn) == 0 && getClientType(c) != CLIENT_TYPE_REPLICA && listLength(c->reply) == 0 && c->bufpos > 0;
     }
     return 0;
 }
@@ -2479,7 +2480,6 @@ static void _postIOUringWrite(void) {
     listRewind(server.clients_pending_write, &li);
     while ((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
-        c->flag.pending_io_uring_write = 0;
         listUnlinkNode(server.clients_pending_write, ln);
 
         if (_checkPendingIOUringWriteState(c) == IO_URING_ERR) continue;
@@ -2540,26 +2540,31 @@ int handleClientsWithPendingWrites(void) {
         }
 
         /* If we can send the client to the I/O thread, let it handle the write. */
-        if (trySendWriteToIOThreads(c) == C_OK) {
+        if (server.io_threads_num > 1) {
             listUnlinkNode(server.clients_pending_write, ln);
-            continue;
+            if (trySendWriteToIOThreads(c) == C_OK) {
+                continue;
+            }
         }
 
         /* We can't write to the client while IO operation is in progress. */
         if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) {
-            listUnlinkNode(server.clients_pending_write, ln);
+            if (server.io_threads_num == 1) {
+                listUnlinkNode(server.clients_pending_write, ln);
+            }
             continue;
         }
 
         processed++;
         if (_canWriteUsingIOUring(c)) {
-            c->flag.pending_io_uring_write = 1;
             if (ioUringPrepWrite(c, c->conn->fd, c->buf + c->sentlen, c->bufpos - c->sentlen) == IO_URING_ERR) {
                 listUnlinkNode(server.clients_pending_write, ln);
                 continue;
             }
         } else {
-            listUnlinkNode(server.clients_pending_write, ln);
+            if (server.io_threads_num == 1) {
+                listUnlinkNode(server.clients_pending_write, ln);
+            }
             /* Try to write buffers to the client socket. */
             if (writeToClient(c) == C_ERR) continue;
 

@@ -27,9 +27,9 @@ proc get_client_id_by_last_cmd {r cmd} {
 proc wait_and_resume_process idx {
     set pid [srv $idx pid]
     wait_for_condition 50 1000 {
-        [exec ps -o state= -p $pid] eq "T"
+        [string match "T*" [exec ps -o state= -p $pid]]
     } else {
-        fail "Process $pid didn't stop"
+        fail "Process $pid didn't stop, current state is [exec ps -o state= -p $pid]"
     }
     resume_process $pid
 }

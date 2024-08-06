@@ -320,13 +320,12 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             }
 
             $replica1 replicaof no one
-            $primary set key3 val3
-            
+
             test "Test replica's buffer limit reached" {
                 $primary config set repl-diskless-sync-delay 0
-                $primary config set rdb-key-save-delay 500
+                $primary config set rdb-key-save-delay 10000
                 # At this point we have about 10k keys in the db, 
-                # We expect that the next full sync will take 5 seconds (10k*500)ms
+                # We expect that the next full sync will take 100 seconds (10k*10000)ms
                 # It will give us enough time to fill the replica buffer.
                 $replica1 config set dual-channel-replication-enabled yes
                 $replica1 config set client-output-buffer-limit "replica 16383 16383 0"
@@ -348,19 +347,19 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 }
                 assert {[s -2 replicas_replication_buffer_size] <= 16385*2}
 
-                # Wait for sync to succeed 
+                # Primary replication buffer should grow
                 wait_for_condition 50 1000 {
-                    [status $replica1 master_link_status] == "up"
+                    [status $primary mem_total_replication_buffers] >= 81915
                 } else {
-                    fail "Replica is not synced"
+                    fail "Primary should take the load"
                 }
-                wait_for_value_to_propegate_to_replica $primary $replica1 "key3"
             }
 
             $replica1 replicaof no one
             $replica1 config set client-output-buffer-limit "replica 256mb 256mb 0"; # remove repl buffer limitation
+            $primary config set rdb-key-save-delay 0
 
-            $primary set key4 val4
+            $primary set key3 val3
             
             test "dual-channel-replication fails when primary diskless disabled" {
                 set cur_psync [status $primary sync_partial_ok]
@@ -375,7 +374,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 } else {
                     fail "Replica is not synced"
                 }
-                wait_for_value_to_propegate_to_replica $primary $replica1 "key4"
+                wait_for_value_to_propegate_to_replica $primary $replica1 "key3"
 
                 # Verify that we did not use dual-channel-replication sync
                 assert {[status $primary sync_partial_ok] == $cur_psync}

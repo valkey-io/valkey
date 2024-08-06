@@ -5,6 +5,10 @@ on:
     paths:
       - 'src/**'
 
+concurrency:
+  group: clang-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   clang-format-check:
     runs-on: ubuntu-latest

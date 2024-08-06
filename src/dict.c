@@ -48,6 +48,7 @@
 #include "zmalloc.h"
 #include "serverassert.h"
 #include "monotonic.h"
+#include "config.h"
 
 #ifndef static_assert
 #define static_assert(expr, lit) _Static_assert(expr, lit)
@@ -1595,47 +1596,38 @@ typedef struct {
     size_t keys_done;          /* Number of keys that have been processed */
 } PrefetchBatch;
 
-static PrefetchBatch prefetchBatch; /* Global prefetch batch - holds the current batch of keys being prefetched */
-
-static void incrCurIdx(void) {
-    prefetchBatch.cur_idx++;
-    if (prefetchBatch.cur_idx >= prefetchBatch.current_batch_size) {
-        prefetchBatch.cur_idx %= prefetchBatch.current_batch_size;
-    }
-}
-
 /* Prefetches the given pointer and move to the next key in the batch */
-static void prefetch(void *ptr) {
-    __builtin_prefetch(ptr);
+static void prefetch(void *addr, PrefetchBatch *batch) {
+    valkey_prefetch(addr);
     /* while the prefetch is in progress, we can continue to the next key */
-    incrCurIdx();
+    batch->cur_idx = (batch->cur_idx + 1) % batch->current_batch_size;
 }
 
-static void markDone(PrefetchInfo *info) {
+static void markDone(PrefetchInfo *info, PrefetchBatch *batch) {
     info->state = PrefetchDone;
-    prefetchBatch.keys_done++;
+    batch->keys_done++;
 }
 
-static PrefetchInfo *getNextPrefetchInfo(void) {
-    while (prefetchBatch.prefetch_info[prefetchBatch.cur_idx].state == PrefetchDone) {
-        incrCurIdx();
+static PrefetchInfo *getNextPrefetchInfo(PrefetchBatch *batch) {
+    while (batch->prefetch_info[batch->cur_idx].state == PrefetchDone) {
+        batch->cur_idx = (batch->cur_idx + 1) % batch->current_batch_size;
     }
-    return &prefetchBatch.prefetch_info[prefetchBatch.cur_idx];
+    return &batch->prefetch_info[batch->cur_idx];
 }
 
-static void initBatch(dict **keys_dicts, size_t num_keys, const void **keys) {
+static void initBatch(dict **keys_dicts, size_t num_keys, const void **keys, PrefetchBatch *batch) {
     assert(num_keys <= DictMaxPrefetchSize);
 
-    prefetchBatch.current_batch_size = num_keys;
-    prefetchBatch.cur_idx = 0;
-    prefetchBatch.keys_done = 0;
+    batch->current_batch_size = num_keys;
+    batch->cur_idx = 0;
+    batch->keys_done = 0;
 
     /* Initialize the prefetch info */
-    for (size_t i = 0; i < prefetchBatch.current_batch_size; i++) {
-        PrefetchInfo *info = &prefetchBatch.prefetch_info[i];
+    for (size_t i = 0; i < batch->current_batch_size; i++) {
+        PrefetchInfo *info = &batch->prefetch_info[i];
         if (!keys_dicts[i] || dictSize(keys_dicts[i]) == 0) {
             info->state = PrefetchDone;
-            prefetchBatch.keys_done++;
+            batch->keys_done++;
             continue;
         }
         info->ht_idx = -1;
@@ -1665,11 +1657,12 @@ static void initBatch(dict **keys_dicts, size_t num_keys, const void **keys) {
  * dictPrefetch can be invoked with a callback function, get_val_data_func,
  * to bring the key's value data closer to the L1 cache as well. */
 void dictPrefetch(dict **keys_dicts, size_t num_keys, const void **keys, void *(*get_val_data_func)(const void *val)) {
-    initBatch(keys_dicts, num_keys, keys);
+    PrefetchBatch batch; /* prefetch batch - holds the current batch of keys being prefetched */
+    initBatch(keys_dicts, num_keys, keys, &batch);
 
-    while (prefetchBatch.keys_done < prefetchBatch.current_batch_size) {
-        PrefetchInfo *info = getNextPrefetchInfo();
-        size_t i = prefetchBatch.cur_idx;
+    while (batch.keys_done < batch.current_batch_size) {
+        PrefetchInfo *info = getNextPrefetchInfo(&batch);
+        size_t i = batch.cur_idx;
         switch (info->state) {
         case PrefetchBucket:
             /* Determine which hash table to use */
@@ -1679,13 +1672,13 @@ void dictPrefetch(dict **keys_dicts, size_t num_keys, const void **keys, void *(
                 info->ht_idx = 1;
             } else {
                 /* No more tables left - mark as done. */
-                markDone(info);
+                markDone(info, &batch);
                 break;
             }
 
             /* Prefetch the bucket */
             info->bucket_idx = info->key_hash & DICTHT_SIZE_MASK(keys_dicts[i]->ht_size_exp[info->ht_idx]);
-            prefetch(&keys_dicts[i]->ht_table[info->ht_idx][info->bucket_idx]);
+            prefetch(&keys_dicts[i]->ht_table[info->ht_idx][info->bucket_idx], &batch);
             info->current_entry = NULL;
             info->state = PrefetchEntry;
             break;
@@ -1701,7 +1694,7 @@ void dictPrefetch(dict **keys_dicts, size_t num_keys, const void **keys, void *(
             }
 
             if (info->current_entry) {
-                prefetch(info->current_entry);
+                prefetch(info->current_entry, &batch);
                 info->state = PrefetchValue;
             } else {
                 /* No entry found in the bucket - try the bucket in the next table */
@@ -1715,7 +1708,7 @@ void dictPrefetch(dict **keys_dicts, size_t num_keys, const void **keys, void *(
 
             if (dictGetNext(info->current_entry) == NULL && !dictIsRehashing(keys_dicts[i])) {
                 /* If this is the last element we assume a hit and dont compare the keys */
-                prefetch(value);
+                prefetch(value, &batch);
                 info->state = PrefetchValueData;
                 break;
             }
@@ -1723,7 +1716,7 @@ void dictPrefetch(dict **keys_dicts, size_t num_keys, const void **keys, void *(
             void *current_entry_key = dictGetKey(info->current_entry);
             if (keys[i] == current_entry_key || dictCompareKeys(keys_dicts[i], keys[i], current_entry_key)) {
                 /* If the key is found, prefetch the value */
-                prefetch(value);
+                prefetch(value, &batch);
                 info->state = PrefetchValueData;
             } else {
                 /* Move to next entry */
@@ -1736,9 +1729,9 @@ void dictPrefetch(dict **keys_dicts, size_t num_keys, const void **keys, void *(
             /* Prefetch value data if available */
             if (get_val_data_func) {
                 void *value_data = get_val_data_func(dictGetVal(info->current_entry));
-                if (value_data) prefetch(value_data);
+                if (value_data) prefetch(value_data, &batch);
             }
-            markDone(info);
+            markDone(info, &batch);
             break;
         }
 

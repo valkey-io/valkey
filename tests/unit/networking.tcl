@@ -206,8 +206,10 @@ start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-deb
 
             # verify the prefetch stats are as expected
             set info [r info stats]
-            set prefetch_stats [getInfoProperty $info io_threaded_average_prefetch_batch_size]
-            assert_range [expr $prefetch_stats] 2 15  ; # we expect max 15 as the the kill command doesn't have any keys.
+            set prefetch_entries [getInfoProperty $info io_threaded_total_prefetch_entries]
+            assert_range $prefetch_entries 2 15; # With slower machines, the number of prefetch entries can be lower
+            set prefetch_batches [getInfoProperty $info io_threaded_total_prefetch_batches]
+            assert_range $prefetch_batches  1 7; # With slower machines, the number of batches can be higher
 
             # Verify the final state
             $rd16 get a

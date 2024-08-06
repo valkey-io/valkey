@@ -2219,6 +2219,7 @@ struct valkeyServer {
     sds availability_zone; /* When run in a cloud environment we can configure the availability zone it is running in */
     /* Local environment */
     char *locale_collate;
+    char *debug_context; /* A free-form string that can be used by the user for any purpose. It has no impact on server behavior. */
 };
 
 #define MAX_KEYS_BUFFER 256

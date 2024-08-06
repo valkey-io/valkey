@@ -34,9 +34,9 @@ int test_stringmatch(int argc, char **argv, int flags) {
     TEST_STRINGMATCH("\\A", "A", 1, 1);
     TEST_STRINGMATCH("\\A", "a", 0, 1);
     TEST_STRINGMATCH("[\\a]", "a", 1, 1);
-    TEST_STRINGMATCH("[\\a]", "A", 0, 0); /* BUG */
+    TEST_STRINGMATCH("[\\a]", "A", 0, 1);
     TEST_STRINGMATCH("[\\A]", "A", 1, 1);
-    TEST_STRINGMATCH("[\\A]", "a", 0, 0); /* BUG */
+    TEST_STRINGMATCH("[\\A]", "a", 0, 1);
 
     /* Escaped metacharacters: */
     TEST_STRINGMATCH("\\*", "*", 1, 1);

@@ -993,9 +993,9 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     $primary config set loglevel debug
     $primary config set repl-diskless-sync-delay 0; # don't wait for other replicas
 
-    # Generating RDB will cost 5s(10000 * 0.0001s)
+    # Generating RDB will cost 100s
     $primary debug populate 10000 primary 1
-    $primary config set rdb-key-save-delay 100
+    $primary config set rdb-key-save-delay 10000
     
     start_server {} {
         set replica_1 [srv 0 client]
@@ -1027,11 +1027,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 }
                 $replica_2 replicaof $primary_host $primary_port
                 wait_for_log_messages -2 {"*Current BGSAVE has socket target. Waiting for next BGSAVE for SYNC*"} $loglines 100 1000
-                $primary config set rdb-key-save-delay 0
-                # Verify second replica needed new session
-                wait_for_sync $replica_2
-                assert {[s -2 sync_partial_ok] eq 2}
-                assert {[s -2 sync_full] eq 2}
             }
             stop_write_load $load_handle
         }

@@ -4356,9 +4356,6 @@ int clusterGetReplicaRank(void) {
  * 2) Also, the log is emitted again if the primary is still down and
  *    the reason for not failing over is still the same, but more than
  *    CLUSTER_CANT_FAILOVER_RELOG_PERIOD seconds elapsed.
- * 3) Finally, the function only logs if the replica is down for more than
- *    five seconds + NODE_TIMEOUT. This way nothing is logged when a
- *    failover starts in a reasonable time.
  *
  * The function is called with the reason why the replica can't failover
  * which is one of the integer macros CLUSTER_CANT_FAILOVER_*.
@@ -4367,7 +4364,6 @@ int clusterGetReplicaRank(void) {
 void clusterLogCantFailover(int reason) {
     char *msg;
     static time_t lastlog_time = 0;
-    mstime_t nolog_fail_time = server.cluster_node_timeout + 5000;
 
     /* Don't log if we have the same reason for some time. */
     if (reason == server.cluster->cant_failover_reason &&
@@ -4375,13 +4371,6 @@ void clusterLogCantFailover(int reason) {
         return;
 
     server.cluster->cant_failover_reason = reason;
-
-    /* We also don't emit any log if the primary failed no long ago, the
-     * goal of this function is to log replicas in a stalled condition for
-     * a long time. */
-    if (myself->replicaof && nodeFailed(myself->replicaof) &&
-        (mstime() - myself->replicaof->fail_time) < nolog_fail_time)
-        return;
 
     switch (reason) {
     case CLUSTER_CANT_FAILOVER_DATA_AGE:

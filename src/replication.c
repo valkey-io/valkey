@@ -391,7 +391,7 @@ void freeReplicaReferencedReplBuffer(client *replica) {
         uint64_t rdb_cid = htonu64(replica->id);
         if (raxRemove(server.replicas_waiting_psync, (unsigned char *)&rdb_cid, sizeof(rdb_cid), NULL)) {
             serverLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu from replicas rax.",
-                      replicationGetReplicaName(replica), (long long unsigned int)rdb_cid);
+                      replicationGetReplicaName(replica), (long long unsigned int)replica->id);
         }
     }
     if (replica->ref_repl_buf_node != NULL) {

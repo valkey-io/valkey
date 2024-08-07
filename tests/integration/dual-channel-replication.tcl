@@ -928,8 +928,8 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 fail "replica didn't start sync session in time"
             }            
 
-            $primary debug log "killing replica rdb connection"
             set replica_rdb_channel_id [get_client_id_by_last_cmd $primary "sync"]
+            $primary debug log "killing replica rdb connection $replica_rdb_channel_id"
             assert {$replica_rdb_channel_id != ""}
             $primary client kill id $replica_rdb_channel_id
             # Wait for primary to abort the sync
@@ -967,6 +967,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             $primary debug log "killing replica rdb connection $replica_rdb_channel_id"
             $primary client kill id $replica_rdb_channel_id
             # Wait for primary to abort the sync
+            wait_and_resume_process 0
             wait_for_condition 10000000 10 {
                 [s -1 rdb_bgsave_in_progress] eq 0 &&
                 [string match {*replicas_waiting_psync:0*} [$primary info replication]]
@@ -976,7 +977,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             # Verify primary reject replconf set-rdb-client-id
             set res [catch {$primary replconf set-rdb-client-id $replica_rdb_channel_id} err]
             assert [string match *ERR* $err]
-            wait_and_resume_process 0
         }
         stop_write_load $load_handle
     }

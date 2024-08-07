@@ -131,10 +131,11 @@ void serverLogRaw(int level, const char *msg) {
         struct timeval tv;
         int role_char;
         pid_t pid = getpid();
+        int daylight_active = atomic_load_explicit(&server.daylight_active, memory_order_relaxed);
 
         gettimeofday(&tv, NULL);
         struct tm tm;
-        nolocks_localtime(&tm, tv.tv_sec, server.timezone, server.daylight_active);
+        nolocks_localtime(&tm, tv.tv_sec, server.timezone, daylight_active);
         off = strftime(buf, sizeof(buf), "%d %b %Y %H:%M:%S.", &tm);
         snprintf(buf + off, sizeof(buf) - off, "%03d", (int)tv.tv_usec / 1000);
         if (server.sentinel_mode) {
@@ -1091,7 +1092,7 @@ static inline void updateCachedTimeWithUs(int update_daylight_info, const long l
         struct tm tm;
         time_t ut = server.unixtime;
         localtime_r(&ut, &tm);
-        server.daylight_active = tm.tm_isdst;
+        atomic_store_explicit(&server.daylight_active, tm.tm_isdst, memory_order_relaxed);
     }
 }
 

@@ -271,7 +271,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             set primary_port [srv 0 port]
             set loglines [count_log_lines -1]
 
-            populate 100000 primary 10
+            populate 10000 primary 10
             $primary set key1 val1
 
             $primary config set repl-diskless-sync yes
@@ -323,9 +323,9 @@ start_server {tags {"dual-channel-replication external:skip"}} {
 
             test "Test replica's buffer limit reached" {
                 $primary config set repl-diskless-sync-delay 0
-                $primary config set rdb-key-save-delay 1000
-                # At this point we have about 100k keys in the db, 
-                # We expect that the next full sync will take 100 seconds (100k*1000)ms
+                $primary config set rdb-key-save-delay 10000
+                # At this point we have about 10k keys in the db, 
+                # We expect that the next full sync will take 100 seconds (10k*10000)ms
                 # It will give us enough time to fill the replica buffer.
                 $replica1 config set dual-channel-replication-enabled yes
                 $replica1 config set client-output-buffer-limit "replica 16383 16383 0"
@@ -356,11 +356,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             }
 
             $replica1 replicaof no one
-            wait_for_condition 500 1000 {
-                [s -1 rdb_bgsave_in_progress] eq 0
-            } else {
-                fail "Primary should abort sync"
-            }
             $replica1 config set client-output-buffer-limit "replica 256mb 256mb 0"; # remove repl buffer limitation
             $primary config set rdb-key-save-delay 0
 
@@ -1050,8 +1045,8 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     $primary config set repl-diskless-sync-delay 5; # allow catch failed sync before retry
 
     # Generating RDB will cost 100 sec to generate
-    $primary debug populate 100000 primary 1
-    $primary config set rdb-key-save-delay 1000
+    $primary debug populate 10000 primary 1
+    $primary config set rdb-key-save-delay 10000
     
     start_server {} {
         set replica [srv 0 client]

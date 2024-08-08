@@ -262,10 +262,7 @@ void restoreCommand(client *c) {
     if (ttl && !absttl) ttl += commandTimeSnapshot();
     if (ttl && checkAlreadyExpired(ttl)) {
         if (deleted) {
-            robj *aux = server.lazyfree_lazy_server_del ? shared.unlink : shared.del;
-            rewriteClientCommandVector(c, 2, aux, key);
-            signalModifiedKey(c, c->db, key);
-            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
+            deleteExpiredKeyFromOverwriteAndPropagate(c, key, 0);
             server.dirty++;
         }
         decrRefCount(obj);

@@ -113,21 +113,8 @@ void setGenericCommand(client *c,
      * database, and then wait for the active expire to delete it, it is wasteful.
      * If the key already exists, delete it. */
     if (expire && checkAlreadyExpired(milliseconds)) {
-        if (found) {
-            int deleted = dbGenericDelete(c->db, key, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED);
-            serverAssertWithInfo(c, key, deleted);
-            server.dirty++;
-
-            /* Replicate/AOF this as an explicit DEL or UNLINK. */
-            robj *aux = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
-            rewriteClientCommandVector(c, 2, aux, key);
-            signalModifiedKey(c, c->db, key);
-            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
-        }
-
-        if (!(flags & OBJ_SET_GET)) {
-            addReply(c, ok_reply ? ok_reply : shared.ok);
-        }
+        if (found) deleteExpiredKeyFromOverwriteAndPropagate(c, key, 1);
+        if (!(flags & OBJ_SET_GET)) addReply(c, shared.ok);
         return;
     }
 
@@ -417,13 +404,7 @@ void getexCommand(client *c) {
     if (((flags & OBJ_PXAT) || (flags & OBJ_EXAT)) && checkAlreadyExpired(milliseconds)) {
         /* When PXAT/EXAT absolute timestamp is specified, there can be a chance that timestamp
          * has already elapsed so delete the key in that case. */
-        int deleted = dbGenericDelete(c->db, c->argv[1], server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED);
-        serverAssert(deleted);
-        robj *aux = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
-        rewriteClientCommandVector(c,2,aux,c->argv[1]);
-        signalModifiedKey(c, c->db, c->argv[1]);
-        notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
-        server.dirty++;
+        deleteExpiredKeyFromOverwriteAndPropagate(c, c->argv[1], 1);
     } else if (expire) {
         setExpire(c,c->db,c->argv[1],milliseconds);
         /* Propagate as PXEXPIREAT millisecond-timestamp if there is

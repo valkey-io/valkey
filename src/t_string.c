@@ -109,7 +109,7 @@ void setGenericCommand(client *c,
         return;
     }
 
-    /* If the milliseconds have expired, then we don't need to set it into the
+    /* If the `milliseconds` have expired, then we don't need to set it into the
      * database, and then wait for the active expire to delete it, it is wasteful.
      * If the key already exists, delete it. */
     if (expire && checkAlreadyExpired(milliseconds)) {

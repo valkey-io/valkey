@@ -6259,7 +6259,7 @@ void clusterCommandSetSlot(client *c) {
      * To mitigate this issue, the following order needs to be enforced for slot
      * migration finalization such that the replicas finalize the slot ownership
      * before the primary:
- .   *
+     *
      * 1. Client C issues SETSLOT n NODE B against node B.
      * 2. Primary B replicates `SETSLOT n NODE B` to all of its replicas (e.g., B', B'').
      * 3. Upon replication completion, primary B executes `SETSLOT n NODE B` and
@@ -6280,26 +6280,29 @@ void clusterCommandSetSlot(client *c) {
         listIter li;
         listNode *ln;
         int legacy_replica_found = 0;
+        int online_replica_found = 0;
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
             client *r = ln->value;
             if (r->replica_version < 0x702ff /* 7.2.255 */) {
                 legacy_replica_found++;
-                break;
+            }
+            if (r->repl_state == REPLICA_STATE_ONLINE) {
+                online_replica_found++;
             }
         }
 
-        if (!legacy_replica_found) {
+        if (!legacy_replica_found && online_replica_found) {
             forceCommandPropagation(c, PROPAGATE_REPL);
             /* We are a primary and this is the first time we see this `SETSLOT`
              * command. Force-replicate the command to all of our replicas
-             * first and only on success will we handle the command.
+             * first and only on success we will handle the command.
              * Note that
              * 1. All replicas are expected to ack the replication within the given timeout
              * 2. The repl offset target is set to the primary's current repl offset + 1.
              *    There is no concern of partial replication because replicas always
              *    ack the repl offset at the command boundary. */
-            blockClientForReplicaAck(c, timeout_ms, server.primary_repl_offset + 1, myself->num_replicas, 0);
+            blockClientForReplicaAck(c, timeout_ms, server.primary_repl_offset + 1, online_replica_found, 0);
             /* Mark client as pending command for execution after replication to replicas. */
             c->flag.pending_command = 1;
             replicationRequestAckFromReplicas();

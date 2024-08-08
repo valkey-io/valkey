@@ -650,9 +650,10 @@ void listPopRangeAndReplyWithKey(client *c, robj *o, robj *key, int where, long 
  * Note that the purpose is to make the methods small so that the
  * code in the loop can be inlined better to improve performance. */
 void addListQuicklistRangeReply(client *c, robj *o, int from, int rangelen, int reverse) {
-    if (prepareClientToWrite(c) != C_OK) return;
+    writeReadyClient *wrc = initClientReply(c);
+    if (!wrc) return;
     /* Return the result in form of a multi-bulk reply */
-    addReplyArrayLen(c, rangelen);
+    addWriteReadyReplyArrayLen(wrc, rangelen);
 
     int direction = reverse ? AL_START_TAIL : AL_START_HEAD;
     quicklistIter *iter = quicklistGetIteratorAtIdx(o->ptr, direction, from);
@@ -660,9 +661,9 @@ void addListQuicklistRangeReply(client *c, robj *o, int from, int rangelen, int 
         quicklistEntry qe;
         serverAssert(quicklistNext(iter, &qe)); /* fail on corrupt data */
         if (qe.value) {
-            addReplyBulkCBufferSkipPrepareClient(c, qe.value, qe.sz);
+            addWriteReadyReplyBulkCBuffer(wrc, qe.value, qe.sz);
         } else {
-            addReplyBulkLongLongSkipPrepareClient(c, qe.longval);
+            addWriteReadyReplyBulkLongLong(wrc, qe.longval);
         }
     }
     quicklistReleaseIterator(iter);
@@ -672,9 +673,10 @@ void addListQuicklistRangeReply(client *c, robj *o, int from, int rangelen, int 
  * Note that the purpose is to make the methods small so that the
  * code in the loop can be inlined better to improve performance. */
 void addListListpackRangeReply(client *c, robj *o, int from, int rangelen, int reverse) {
-    if (prepareClientToWrite(c) != C_OK) return;
+    writeReadyClient *wrc = initClientReply(c);
+    if (!wrc) return;
     /* Return the result in form of a multi-bulk reply */
-    addReplyArrayLen(c, rangelen);
+    addWriteReadyReplyArrayLen(wrc, rangelen);
     unsigned char *p = lpSeek(o->ptr, from);
     unsigned char *vstr;
     unsigned int vlen;
@@ -684,9 +686,9 @@ void addListListpackRangeReply(client *c, robj *o, int from, int rangelen, int r
         serverAssert(p); /* fail on corrupt data */
         vstr = lpGetValue(p, &vlen, &lval);
         if (vstr) {
-            addReplyBulkCBufferSkipPrepareClient(c, vstr, vlen);
+            addWriteReadyReplyBulkCBuffer(wrc, vstr, vlen);
         } else {
-            addReplyBulkLongLongSkipPrepareClient(c, lval);
+            addWriteReadyReplyBulkLongLong(wrc, lval);
         }
         p = reverse ? lpPrev(o->ptr, p) : lpNext(o->ptr, p);
     }

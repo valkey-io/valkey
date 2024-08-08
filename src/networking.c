@@ -921,6 +921,13 @@ void setDeferredPushLen(client *c, void *node, long length) {
     setDeferredAggregateLen(c, node, length, '>');
 }
 
+writeReadyClient *initClientReply(client *c) {
+    if (prepareClientToWrite(c) == C_OK) {
+        return (writeReadyClient *)c;
+    }
+    return NULL;
+}
+
 /* Add a double as a bulk reply */
 void addReplyDouble(client *c, double d) {
     if (c->resp == 3) {
@@ -1037,7 +1044,7 @@ void addReplyArrayLen(client *c, long length) {
     addReplyAggregateLen(c, length, '*');
 }
 
-void addReplyArrayLenSkipPrepareClient(client *c, long length) {
+void addWriteReadyReplyArrayLen(writeReadyClient *c, long length) {
     serverAssert(length >= 0);
     _addReplyLongLongWithPrefix(c, length, '*');
 }
@@ -1109,10 +1116,12 @@ void addReplyBulk(client *c, robj *obj) {
 /* Add a C buffer as bulk reply */
 void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
     if (prepareClientToWrite(c) != C_OK) return;
-    addReplyBulkCBufferSkipPrepareClient(c, p, len);
+    _addReplyLongLongWithPrefix(c, len, '$');
+    _addReplyToBufferOrList(c, p, len);
+    _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
-void addReplyBulkCBufferSkipPrepareClient(client *c, const void *p, size_t len) {
+void addWriteReadyReplyBulkCBuffer(writeReadyClient *c, const void *p, size_t len) {
     _addReplyLongLongWithPrefix(c, len, '$');
     _addReplyToBufferOrList(c, p, len);
     _addReplyToBufferOrList(c, "\r\n", 2);
@@ -1156,12 +1165,12 @@ void addReplyBulkLongLong(client *c, long long ll) {
     addReplyBulkCBuffer(c, buf, len);
 }
 
-void addReplyBulkLongLongSkipPrepareClient(client *c, long long ll) {
+void addWriteReadyReplyBulkLongLong(writeReadyClient *c, long long ll) {
     char buf[64];
     int len;
 
     len = ll2string(buf, 64, ll);
-    addReplyBulkCBufferSkipPrepareClient(c, buf, len);
+    addWriteReadyReplyBulkCBuffer(c, buf, len);
 }
 
 /* Reply with a verbatim type having the specified extension.

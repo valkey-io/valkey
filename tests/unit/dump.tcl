@@ -118,7 +118,7 @@ start_server {tags {"dump"}} {
         assert_replication_stream $repl {
             {select *}
             {del key1{t}}
-            {del key2{t}}
+            {unlink key2{t}}
         }
 
         close_replication_stream $repl

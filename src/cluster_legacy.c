@@ -6311,7 +6311,7 @@ void clusterCommandSetSlot(client *c) {
     }
 
     /* Slot states have been updated on the compatible replicas (if any).
-     * Now exuecte the command on the primary. */
+     * Now execute the command on the primary. */
     if (!strcasecmp(c->argv[3]->ptr, "migrating")) {
         serverLog(LL_NOTICE, "Migrating slot %d to node %.40s (%s)", slot, n->name, n->human_nodename);
         server.cluster->migrating_slots_to[slot] = n;

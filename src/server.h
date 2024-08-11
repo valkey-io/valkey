@@ -1849,13 +1849,13 @@ struct valkeyServer {
     durationStats duration_stats[EL_DURATION_TYPE_NUM];
 
     /* Configuration */
-    int verbosity;             /* Loglevel verbosity */
-    int hide_client_log;       /* In the event of an assertion failure, hide command arguments from the operator */
-    int maxidletime;           /* Client timeout in seconds */
-    int tcpkeepalive;          /* Set SO_KEEPALIVE if non-zero. */
-    int active_expire_enabled; /* Can be disabled for testing purposes. */
-    int active_expire_effort;  /* From 1 (default) to 10, active effort. */
-    int lazy_expire_disabled;  /* If > 0, don't trigger lazy expire */
+    int verbosity;               /* Loglevel verbosity */
+    int hide_user_data_from_log; /* In the event of an assertion failure, hide command arguments from the operator */
+    int maxidletime;             /* Client timeout in seconds */
+    int tcpkeepalive;            /* Set SO_KEEPALIVE if non-zero. */
+    int active_expire_enabled;   /* Can be disabled for testing purposes. */
+    int active_expire_effort;    /* From 1 (default) to 10, active effort. */
+    int lazy_expire_disabled;    /* If > 0, don't trigger lazy expire */
     int active_defrag_enabled;
     int sanitize_dump_payload;    /* Enables deep sanitization for ziplist and listpack in RDB and RESTORE. */
     int skip_checksum_validation; /* Disable checksum validation for RDB and RESTORE payload. */

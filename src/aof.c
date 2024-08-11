@@ -423,7 +423,7 @@ void aofManifestFreeAndUpdate(aofManifest *am) {
  *  appendonly.aof.1.base.aof  (server.aof_use_rdb_preamble is no)
  *  appendonly.aof.1.base.rdb  (server.aof_use_rdb_preamble is yes)
  */
-sds getNewBaseFileNameAndMarkPreAsHistory(aofManifest *am) {
+sds getNewBaseFileNameAndMarkPreAsHistory(aofManifest *am, int aof_use_rdb_preamble) {
     serverAssert(am != NULL);
     if (am->base_aof_info) {
         serverAssert(am->base_aof_info->file_type == AOF_FILE_TYPE_BASE);
@@ -431,7 +431,7 @@ sds getNewBaseFileNameAndMarkPreAsHistory(aofManifest *am) {
         listAddNodeHead(am->history_aof_list, am->base_aof_info);
     }
 
-    char *format_suffix = server.aof_use_rdb_preamble ? RDB_FORMAT_SUFFIX : AOF_FORMAT_SUFFIX;
+    char *format_suffix = aof_use_rdb_preamble ? RDB_FORMAT_SUFFIX : AOF_FORMAT_SUFFIX;
 
     aofInfo *ai = aofInfoCreate();
     ai->file_name = sdscatprintf(sdsempty(), "%s.%lld%s%s", server.aof_filename, ++am->curr_base_file_seq,
@@ -712,7 +712,7 @@ void aofOpenIfNeededOnServerStart(void) {
     /* If we start with an empty dataset, we will force create a BASE file. */
     size_t incr_aof_len = listLength(server.aof_manifest->incr_aof_list);
     if (!server.aof_manifest->base_aof_info && !incr_aof_len) {
-        sds base_name = getNewBaseFileNameAndMarkPreAsHistory(server.aof_manifest);
+        sds base_name = getNewBaseFileNameAndMarkPreAsHistory(server.aof_manifest, server.aof_use_rdb_preamble);
         sds base_filepath = makePath(server.aof_dirname, base_name);
         if (rewriteAppendOnlyFile(base_filepath) != C_OK) {
             exit(1);
@@ -2445,6 +2445,7 @@ int rewriteAppendOnlyFileBackground(void) {
         serverLog(LL_NOTICE, "Background append only file rewriting started by pid %ld", (long)childpid);
         server.aof_rewrite_scheduled = 0;
         server.aof_rewrite_time_start = time(NULL);
+        server.aof_rewrite_use_rdb_preamble = server.aof_use_rdb_preamble;
         return C_OK;
     }
     return C_OK; /* unreached */
@@ -2557,7 +2558,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
 
         /* Get a new BASE file name and mark the previous (if we have)
          * as the HISTORY type. */
-        sds new_base_filename = getNewBaseFileNameAndMarkPreAsHistory(temp_am);
+        sds new_base_filename = getNewBaseFileNameAndMarkPreAsHistory(temp_am, server.aof_rewrite_use_rdb_preamble);
         serverAssert(new_base_filename != NULL);
         new_base_filepath = makePath(server.aof_dirname, new_base_filename);
 

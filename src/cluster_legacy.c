@@ -6548,6 +6548,13 @@ int clusterCommandSpecial(client *c) {
             return 1;
         }
 
+        /* If n is already myself primary, there is no need to re-establish the
+         * replication connection. */
+        if (myself->replicaof == n) {
+            addReply(c, shared.ok);
+            return 1;
+        }
+
         /* Set the primary. */
         clusterSetPrimary(n, 1);
         clusterBroadcastPong(CLUSTER_BROADCAST_ALL);

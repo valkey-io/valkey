@@ -3020,7 +3020,7 @@ void replicationStartPendingFork(void);
 void replicationHandlePrimaryDisconnection(void);
 void replicationCachePrimary(client *c);
 void resizeReplicationBacklog(void);
-void replicationSetPrimary(char *ip, int port);
+void replicationSetPrimary(char *ip, int port, int try_psync);
 void replicationUnsetPrimary(void);
 void refreshGoodReplicasCount(void);
 int checkGoodReplicasStatus(void);

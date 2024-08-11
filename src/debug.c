@@ -1040,9 +1040,11 @@ __attribute__((noinline)) void _serverAssert(const char *estr, const char *file,
     bugReportEnd(0, 0);
 }
 
-/* Returns the amount of client's command arguments we allow logging */
-int clientArgsToLog(const client *c) {
-    return server.hide_client_log ? 1 : c->argc;
+/* Checks if logging the provided argument is permitted based on the current
+ * configuration for hiding user data from logs. */
+int canLogClientArg(const client *c, int idx) {
+    serverAssert(idx < c->argc);
+    return idx >= server.hide_user_data_from_log ? 1 : c->argc;
 }
 
 void _serverAssertPrintClientInfo(const client *c) {
@@ -1055,8 +1057,8 @@ void _serverAssertPrintClientInfo(const client *c) {
     serverLog(LL_WARNING, "client->conn = %s", connGetInfo(c->conn, conninfo, sizeof(conninfo)));
     serverLog(LL_WARNING, "client->argc = %d", c->argc);
     for (j = 0; j < c->argc; j++) {
-        if (j >= clientArgsToLog(c)) {
-            serverLog(LL_WARNING | LL_RAW, "client->argv[%d]: *redacted*\n", j);
+        if (canLogClientArg(c, j)) {
+            serverLog(LL_WARNING | LL_RAW, "client->argv[%d]: %lu bytes", j, strlen(c->argv[j]));
             continue;
         }
         char buf[128];
@@ -1259,8 +1261,8 @@ static void *getAndSetMcontextEip(ucontext_t *uc, void *eip) {
 
 VALKEY_NO_SANITIZE("address")
 void logStackContent(void **sp) {
-    if (server.hide_client_log) {
-        serverLog(LL_NOTICE, "hide-client-log is on, skip logging stack content to avid spilling PII.");
+    if (server.hide_user_data_from_log) {
+        serverLog(LL_NOTICE, "hide-user-data-from-log is on, skip logging stack content to avoid spilling PII.");
         return;
     }
     int i;
@@ -1878,8 +1880,8 @@ void logCurrentClient(client *cc, const char *title) {
     sdsfree(client);
     serverLog(LL_WARNING | LL_RAW, "argc: '%d'\n", cc->argc);
     for (j = 0; j < cc->argc; j++) {
-        if (j >= clientArgsToLog(cc)) {
-            serverLog(LL_WARNING | LL_RAW, "client->argv[%d]: *redacted*\n", j);
+        if (canLogClientArg(cc, j)) {
+            serverLog(LL_WARNING | LL_RAW, "client->argv[%d]: %lu bytes", j, strlen(cc->argv[j]));
             continue;
         }
         robj *decoded;

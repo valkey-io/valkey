@@ -359,6 +359,12 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             $replica1 config set client-output-buffer-limit "replica 256mb 256mb 0"; # remove repl buffer limitation
             $primary config set rdb-key-save-delay 0
 
+            wait_for_condition 500 1000 {
+                [s 0 rdb_bgsave_in_progress] eq 0
+            } else {
+                fail "can't kill rdb child"
+            }
+
             $primary set key3 val3
             
             test "dual-channel-replication fails when primary diskless disabled" {

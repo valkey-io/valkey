@@ -3557,14 +3557,14 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
 
             conns[connsnum++] = replica->conn;
             if (dual_channel) {
-                /* Put the socket in blocking mode to simplify RDB transfer. */
-                connBlock(replica->conn);
                 connSendTimeout(replica->conn, server.repl_timeout * 1000);
                 /* This replica uses diskless dual channel sync, hence we need
                  * to inform it with the save end offset.*/
                 sendCurrentOffsetToReplica(replica);
                 /* Make sure repl traffic is appended to the replication backlog */
                 addRdbReplicaToPsyncWait(replica);
+                /* Put the socket in blocking mode to simplify RDB transfer. */
+                connBlock(replica->conn);
             } else {
                 server.rdb_pipe_numconns++;
             }

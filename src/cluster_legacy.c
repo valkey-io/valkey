@@ -6548,7 +6548,7 @@ int clusterCommandSpecial(client *c) {
             return 1;
         }
 
-        /* If n is already myself primary, there is no need to re-establish the
+        /* If `n` is already my primary, there is no need to re-establish the
          * replication connection. */
         if (myself->replicaof == n) {
             addReply(c, shared.ok);

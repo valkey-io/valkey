@@ -2758,6 +2758,7 @@ void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIndex, in
             zuiClearIterator(&src[i]);
         }
 
+        /* Step 2: convert the dictionary into the final sorted set. */
         di = dictGetIterator(dstzset->dict);
 
         while ((de = dictNext(di)) != NULL) {

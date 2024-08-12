@@ -2709,7 +2709,11 @@ static int setConfigDirOption(standardConfig *config, sds *argv, int argc, const
         *err = "dir can't be empty";
         return 0;
     }
-    if (hasActiveChildProcess()) {
+    if (hasActiveChildProcess() && server.child_type == CHILD_TYPE_AOF) {
+        *err = "it is unsafe to modify dir when a AOF rewrite is running";
+        return 0;
+    }
+    if (hasActiveChildProcess() && server.logfile[0] != '\0') {
         *err = "it is unsafe to modify dir when a child process is running";
         return 0;
     }

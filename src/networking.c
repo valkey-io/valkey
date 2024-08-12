@@ -1518,7 +1518,11 @@ void unlinkClient(client *c) {
             }
         }
         /* Only use shutdown when the fork is active and we are the parent. */
-        if (server.child_type) connShutdown(c->conn);
+        if (server.child_type && !c->flag.repl_rdb_channel) {
+            connShutdown(c->conn);
+        } else if (c->flag.repl_rdb_channel) {
+            shutdown(c->conn->fd, SHUT_RDWR);
+        }
         connClose(c->conn);
         c->conn = NULL;
     }

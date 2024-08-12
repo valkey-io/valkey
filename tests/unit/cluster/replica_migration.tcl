@@ -19,18 +19,18 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
         assert_equal {1024} [R 0 get key_991803]
     }
 
-    test "Write some data to primary 4, slot 0, make a big repl_offset" {
+    test "Write some data to primary 3, slot 0, make a big repl_offset" {
         for {set i 0} {$i < 10240} {incr i} {
             R 3 incr key_977613
         }
         assert_equal {10240} [R 3 get key_977613]
     }
 
-    test "If a replica has not completed sync, it can not do the failover" {
-        # 10s, make sure primary 1 will hang in the save
+    test "If a replica has not completed full sync, the offset is 0 and the rank is the lowest" {
+        # 10s, make sure primary 0 will hang in the save.
         R 0 config set rdb-key-save-delay 100000000
 
-        # Move the slot 0 from primary 4 to primary 1
+        # Move the slot 0 from primary 3 to primary 0
         set addr "[srv 0 host]:[srv 0 port]"
         set myid [R 3 CLUSTER MYID]
         set code [catch {
@@ -40,15 +40,15 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
             fail "valkey-cli --cluster rebalance returns non-zero exit code, output below:\n$result"
         }
 
-        # Let primary 4's primary and replica can convert to replicas when
-        # they lost the last slot.
+        # Validate that shard 3's primary and replica can convert to replicas after
+        # they lose the last slot.
         R 3 config set cluster-replica-validity-factor 0
         R 7 config set cluster-replica-validity-factor 0
         R 3 config set cluster-allow-replica-migration yes
         R 7 config set cluster-allow-replica-migration yes
 
-        # Shutdown the primary 1
-        catch {R 0 shutdown nosave}
+        # Shutdown the primary 0.
+        catch {R 0 shutdown}
 
         # Wait for the replica become a primary, and make sure
         # the other primary become a replica.
@@ -63,14 +63,14 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
             fail "Failover does not happened"
         }
 
-        # Make sure 3 / 7 get the lower rank and offset is 0.
+        # Make sure 3 / 7 get the lower rank and the offset is 0.
         verify_log_message -3 "*Start of election*offset 0*" 0
         verify_log_message -7 "*Start of election*offset 0*" 0
 
         # Make sure the right replica get the higher rank.
         verify_log_message -4 "*Start of election*rank #0*" 0
 
-        # Make sure the key is exists and consistent.
+        # Make sure the key exists and is consistent.
         R 3 readonly
         R 7 readonly
         wait_for_condition 1000 50 {
@@ -94,7 +94,7 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
         assert_equal {1024} [R 0 get key_991803]
     }
 
-    test "Write some data to primary 4, slot 0, make a big repl_offset" {
+    test "Write some data to primary 3, slot 0, make a big repl_offset" {
         for {set i 0} {$i < 10240} {incr i} {
             R 3 incr key_977613
         }
@@ -102,16 +102,16 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
     }
 
     test "A old replica use CLUSTER REPLICA get a zero offset before the full sync is completed" {
-        # 10s, make sure primary 1 will hang in the save
+        # 10s, make sure primary 0 will hang in the save.
         R 0 config set rdb-key-save-delay 100000000
 
-        # Let the replica do the replicate with primary 1.
+        # Let the replica do the replicate with primary 0.
         R 7 config set cluster-replica-validity-factor 0
         R 7 config set cluster-allow-replica-migration yes
         R 7 cluster replicate [R 0 cluster myid]
 
-        # Shutdown the primary 1.
-        catch {R 0 shutdown nosave}
+        # Shutdown the primary 0.
+        catch {R 0 shutdown}
 
         # Wait for the replica become a primary.
         wait_for_condition 1000 50 {
@@ -127,7 +127,7 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
         verify_log_message -4 "*Start of election*rank #0*" 0
         verify_log_message -7 "*Start of election*offset 0*" 0
 
-        # Make sure the key is exists and consistence.
+        # Make sure the key exists and is consistent.
         R 7 readonly
         wait_for_condition 1000 50 {
             [R 4 get key_991803] == 1024 &&

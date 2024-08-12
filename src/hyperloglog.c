@@ -394,6 +394,24 @@ static char *invalid_hll_err = "-INVALIDOBJ Corrupted HLL object detected";
     } while (0)
 #define HLL_ALPHA_INF 0.721347520444481703680 /* constant for 0.5/ln(2) */
 
+static inline int32_t count_trailing_zeros_64(uint64_t value) {
+#if defined(__clang__) || defined(__GNUC__)
+    return __builtin_ctzll(value);
+#elif defined(_MSC_VER) && defined(_WIN64)
+    uint32_t trailing_zero = 0;
+    _BitScanForward64(&trailing_zero, value) return trailing_zero;
+#else
+    int bitpos = 0;
+    if (value) {
+        while (value & 1 == 0) {
+            value >>= 1;
+            ++bitpos;
+        }
+    }
+    return bitpos;
+#endif
+}
+
 /* ========================= HyperLogLog algorithm  ========================= */
 
 /* Our hash function is MurmurHash2, 64 bit version.
@@ -472,7 +490,7 @@ int hllPatLen(unsigned char *ele, size_t elesize, long *regp) {
     hash |= ((uint64_t)1 << HLL_Q); /* Make sure ctz will not get undefined results
                                        and count will be <= Q+1. */
     count = 1;                      /* Initialized to 1 since we count the "00000...1" pattern. */
-    count += __builtin_ctzll(hash); /* ctz is more effective than bit shift. */
+    count += count_trailing_zeros_64(hash);
     *regp = (int)index;
     return count;
 }

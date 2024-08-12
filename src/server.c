@@ -3911,6 +3911,13 @@ int processCommand(client *c) {
 
     if (!server.cluster_enabled && c->capa & CLIENT_CAPA_REDIRECT && server.primary_host && !mustObeyClient(c) &&
         (is_write_command || (is_read_command && !c->flag.readonly))) {
+        if (c->cmd->proc == execCommand) {
+            discardTransaction(c);
+        } else {
+            flagTransaction(c);
+        }
+        c->duration = 0;
+        c->cmd->rejected_calls++;
         addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
         return C_OK;
     }

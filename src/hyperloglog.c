@@ -397,10 +397,6 @@ static char *invalid_hll_err = "-INVALIDOBJ Corrupted HLL object detected";
 static inline int32_t count_trailing_zeros_64(uint64_t value) {
 #if defined(__clang__) || defined(__GNUC__)
     return __builtin_ctzll(value);
-#elif defined(_MSC_VER) && defined(_WIN64)
-    uint32_t trailing_zero = 0;
-    _BitScanForward64(&trailing_zero, value);
-    return trailing_zero;
 #else
     int bitpos = 0;
     if (value) {

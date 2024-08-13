@@ -4485,7 +4485,7 @@ void sentinelAskPrimaryStateToOtherSentinels(sentinelValkeyInstance *primary, in
         /* Ask */
         ll2string(port, sizeof(port), primary->addr->port);
         retval = redisAsyncCommand(
-            ri->link->cc, sentinelReceiveIsPrimaryDownReply, ri, "%s is-primary-down-by-addr %s %s %llu %s",
+            ri->link->cc, sentinelReceiveIsPrimaryDownReply, ri, "%s is-master-down-by-addr %s %s %llu %s",
             sentinelInstanceMapCommand(ri, "SENTINEL"), announceSentinelAddr(primary->addr), port,
             sentinel.current_epoch, (primary->failover_state > SENTINEL_FAILOVER_STATE_NONE) ? sentinel.myid : "*");
         if (retval == C_OK) ri->link->pending_commands++;

@@ -697,9 +697,9 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         set replica_log [srv 0 stdout]
         set replica_pid  [srv 0 pid]
         
-        set load_handle0 [start_write_load $primary_host $primary_port 20]
-        set load_handle1 [start_write_load $primary_host $primary_port 20]
-        set load_handle2 [start_write_load $primary_host $primary_port 20]
+        set load_handle0 [start_write_load $primary_host $primary_port 60]
+        set load_handle1 [start_write_load $primary_host $primary_port 60]
+        set load_handle2 [start_write_load $primary_host $primary_port 60]
 
         $replica config set dual-channel-replication-enabled yes
         $replica config set loglevel debug
@@ -709,7 +709,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             # Pause primary main process after fork
             $primary debug pause-after-fork 1
             $replica replicaof $primary_host $primary_port
-            wait_for_log_messages 0 {"*Done loading RDB*"} 0 2000 1
+            wait_for_log_messages 0 {"*Done loading RDB*"} 0 1000 10
 
             # At this point rdb is loaded but psync hasn't been established yet. 
             # Pause the replica so the primary main process will wake up while the
@@ -717,14 +717,14 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             pause_process $replica_pid
             wait_and_resume_process -1
             $primary debug pause-after-fork 0
-            wait_for_log_messages -1 {"*Client * closed * for overcoming of output buffer limits.*"} $loglines 2000 1
+            wait_for_log_messages -1 {"*Client * closed * for overcoming of output buffer limits.*"} $loglines 1000 10
             wait_for_condition 50 100 {
                 [string match {*replicas_waiting_psync:0*} [$primary info replication]]
             } else {
                 fail "Primary did not free repl buf block after sync failure"
             }
             resume_process $replica_pid
-            set res [wait_for_log_messages -1 {"*Unable to partial resync with replica * for lack of backlog*"} $loglines 20000 1]
+            set res [wait_for_log_messages -1 {"*Unable to partial resync with replica * for lack of backlog*"} $loglines 2000 10]
             set loglines [lindex $res 1]
         }
         $replica replicaof no one

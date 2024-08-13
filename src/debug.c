@@ -1044,7 +1044,8 @@ __attribute__((noinline)) void _serverAssert(const char *estr, const char *file,
  * configuration for hiding user data from logs. */
 int canLogClientArg(const client *c, int idx) {
     serverAssert(idx < c->argc);
-    return idx >= server.hide_user_data_from_log ? 1 : c->argc;
+    if (server.hide_user_data_from_log < 0) return 1;
+    return idx < server.hide_user_data_from_log;
 }
 
 void _serverAssertPrintClientInfo(const client *c) {
@@ -1057,7 +1058,7 @@ void _serverAssertPrintClientInfo(const client *c) {
     serverLog(LL_WARNING, "client->conn = %s", connGetInfo(c->conn, conninfo, sizeof(conninfo)));
     serverLog(LL_WARNING, "client->argc = %d", c->argc);
     for (j = 0; j < c->argc; j++) {
-        if (canLogClientArg(c, j)) {
+        if (!canLogClientArg(c, j)) {
             serverLog(LL_WARNING | LL_RAW, "client->argv[%d]: %zu bytes ", j, strlen((sds)c->argv[j]->ptr));
             continue;
         }
@@ -1261,7 +1262,7 @@ static void *getAndSetMcontextEip(ucontext_t *uc, void *eip) {
 
 VALKEY_NO_SANITIZE("address")
 void logStackContent(void **sp) {
-    if (server.hide_user_data_from_log) {
+    if (server.hide_user_data_from_log > 0) {
         serverLog(LL_NOTICE, "hide-user-data-from-log is on, skip logging stack content to avoid spilling PII.");
         return;
     }
@@ -1880,7 +1881,7 @@ void logCurrentClient(client *cc, const char *title) {
     sdsfree(client);
     serverLog(LL_WARNING | LL_RAW, "argc: '%d'\n", cc->argc);
     for (j = 0; j < cc->argc; j++) {
-        if (canLogClientArg(cc, j)) {
+        if (!canLogClientArg(cc, j)) {
             serverLog(LL_WARNING | LL_RAW, "client->argv[%d]: %zu bytes ", j, sdslen((sds)cc->argv[j]->ptr));
             continue;
         }

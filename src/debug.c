@@ -1607,15 +1607,12 @@ void logRegisters(ucontext_t *uc) {
  *
  * Close it with closeDirectLogFiledes(). */
 int openDirectLogFiledes(void) {
-    int log_to_stdout = server.logfile[0] == '\0';
-    int fd = log_to_stdout ? STDOUT_FILENO : open(server.logfile, O_APPEND | O_CREAT | O_WRONLY, 0644);
-    return fd;
+    return server.log_fd;
 }
 
 /* Used to close what closeDirectLogFiledes() returns. */
 void closeDirectLogFiledes(int fd) {
-    int log_to_stdout = server.logfile[0] == '\0';
-    if (!log_to_stdout) close(fd);
+    UNUSED(fd);
 }
 
 #if defined(HAVE_BACKTRACE) && defined(__linux__)

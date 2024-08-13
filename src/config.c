@@ -561,17 +561,12 @@ void loadServerConfigFromString(char *config) {
         argv = NULL;
     }
 
-    if (server.logfile[0] != '\0') {
-        FILE *logfp;
-
+    serverLogOpen();
+    if (server.log_fd == -1) {
         /* Test if we are able to open the file. The server will not
          * be able to abort just for this problem later... */
-        logfp = fopen(server.logfile, "a");
-        if (logfp == NULL) {
-            err = sdscatprintf(sdsempty(), "Can't open the log file: %s", strerror(errno));
-            goto loaderr;
-        }
-        fclose(logfp);
+        err = sdscatprintf(sdsempty(), "Can't open the log file: %s", strerror(errno));
+        goto loaderr;
     }
 
     /* Sanity checks. */
@@ -2713,6 +2708,7 @@ static int setConfigDirOption(standardConfig *config, sds *argv, int argc, const
         *err = strerror(errno);
         return 0;
     }
+    if (server.logfile[0] != '\0') serverLogOpen();
     return 1;
 }
 

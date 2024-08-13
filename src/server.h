@@ -1967,6 +1967,7 @@ struct valkeyServer {
     int replication_allowed;      /* Are we allowed to replicate? */
     /* Logging */
     char *logfile;         /* Path of log file */
+    int log_fd;            /* File descriptor of currently log file. */
     int syslog_enabled;    /* Is syslog enabled? */
     char *syslog_ident;    /* Syslog ident */
     int syslog_facility;   /* Syslog facility */
@@ -3283,6 +3284,7 @@ void serverLogFromHandler(int level, const char *fmt, ...) __attribute__((format
 void serverLogFromHandler(int level, const char *fmt, ...);
 void _serverLog(int level, const char *fmt, ...);
 #endif
+void serverLogOpen(void);
 void serverLogRaw(int level, const char *msg);
 void serverLogRawFromHandler(int level, const char *msg);
 void usage(void);

@@ -1519,7 +1519,11 @@ void unlinkClient(client *c) {
             }
         }
         /* Only use shutdown when the fork is active and we are the parent. */
-        if (server.child_type) connShutdown(c->conn);
+        if (server.child_type && !c->flag.repl_rdb_channel) {
+            connShutdown(c->conn);
+        } else if (c->flag.repl_rdb_channel) {
+            shutdown(c->conn->fd, SHUT_RDWR);
+        }
         connClose(c->conn);
         c->conn = NULL;
     }
@@ -1776,6 +1780,7 @@ void freeClient(client *c) {
 void freeClientAsync(client *c) {
     if (c->flag.close_asap || c->flag.script) return;
     c->flag.close_asap = 1;
+    debugServerAssertWithInfo(c, NULL, listSearchKey(server.clients_to_close, c) == NULL);
     listAddNodeTail(server.clients_to_close, c);
 }
 
@@ -2430,7 +2435,8 @@ static inline int _canWriteUsingIOUring(client *c) {
     if (server.io_uring_enabled && server.io_threads_num == 1) {
         /* Currently, we only use io_uring to handle the static buffer write requests.
          * If io-threads or tls is enabled, skip the io_uring. */
-        return connIsTLS(c->conn) == 0 && getClientType(c) != CLIENT_TYPE_REPLICA && listLength(c->reply) == 0 && c->bufpos > 0;
+        return connIsTLS(c->conn) == 0 && getClientType(c) != CLIENT_TYPE_REPLICA && listLength(c->reply) == 0 &&
+               c->bufpos > 0;
     }
     return 0;
 }

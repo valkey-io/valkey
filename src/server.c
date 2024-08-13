@@ -1421,8 +1421,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* Run the Cluster cron. */
-    run_with_period(100) {
-        if (server.cluster_enabled) clusterCron();
+    if (server.cluster_enabled) {
+        run_with_period(100) clusterCron();
     }
 
     /* Run the Sentinel timer if we are in sentinel mode. */
@@ -1454,8 +1454,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             server.rdb_bgsave_scheduled = 0;
     }
 
-    run_with_period(100) {
-        if (moduleCount()) modulesCron();
+    if (moduleCount()) {
+        run_with_period(100) modulesCron();
     }
 
     /* Fire the cron loop modules event. */
@@ -3282,6 +3282,13 @@ void slowlogPushCurrentCommand(client *c, struct serverCommand *cmd, ustime_t du
      * arguments. */
     robj **argv = c->original_argv ? c->original_argv : c->argv;
     int argc = c->original_argv ? c->original_argc : c->argc;
+
+    /* If a script is currently running, the client passed in is a
+     * fake client. Or the client passed in is the original client
+     * if this is a EVAL or alike, doesn't matter. In this case,
+     * use the original client to get the client information. */
+    c = scriptIsRunning() ? scriptGetCaller() : c;
+
     slowlogPushEntryIfNeeded(c, argv, argc, duration);
 }
 

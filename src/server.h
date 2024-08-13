@@ -2219,7 +2219,7 @@ struct valkeyServer {
     sds availability_zone; /* When run in a cloud environment we can configure the availability zone it is running in */
     /* Local environment */
     char *locale_collate;
-    char *debug_context; /* A free-form string that has no impact on server except being included in a crash report. */
+    char *debug_context;  /* A free-form string that has no impact on server except being included in a crash report. */
     int io_uring_enabled; /* If io_uring is enabled */
 };
 

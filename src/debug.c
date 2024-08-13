@@ -1872,7 +1872,7 @@ void logCurrentClient(client *cc, const char *title) {
     serverLog(LL_WARNING | LL_RAW, "argc: '%d'\n", cc->argc);
     for (j = 0; j < cc->argc; j++) {
         if (canLogClientArg(cc, j)) {
-            serverLog(LL_WARNING | LL_RAW, "client->argv[%d]: %zu bytes ", j, strlen((sds)cc->argv[j]->ptr));
+            serverLog(LL_WARNING | LL_RAW, "client->argv[%d]: %zu bytes ", j, sdslen((sds)cc->argv[j]->ptr));
             continue;
         }
         robj *decoded;

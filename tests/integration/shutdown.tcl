@@ -19,8 +19,8 @@ proc fill_up_os_socket_send_buffer_for_repl {idx} {
 
 foreach how {sigterm shutdown} {
     test "Shutting down master waits for replica to catch up ($how)" {
-        start_server {overrides {save ""}} {
-            start_server {overrides {save ""}} {
+        start_server {overrides {save "" repl-backlog-size 1MB}} {
+            start_server {overrides {save "" repl-backlog-size 1MB}} {
                 set master [srv -1 client]
                 set master_host [srv -1 host]
                 set master_port [srv -1 port]

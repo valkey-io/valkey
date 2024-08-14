@@ -3450,10 +3450,9 @@ static void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
     if (!bysignal && exitcode == 0) {
         serverLog(LL_NOTICE, "Background RDB transfer terminated with success");
     } else if (!bysignal && exitcode != 0) {
-        serverLog(LL_WARNING, "Background transfer error");
-        server.lastbgsave_status = C_ERR;
+        serverLog(LL_WARNING, "Background RDB transfer error");
     } else {
-        serverLog(LL_WARNING, "Background transfer terminated by signal %d", bysignal);
+        serverLog(LL_WARNING, "Background RDB transfer terminated by signal %d", bysignal);
     }
     if (server.rdb_child_exit_pipe != -1) close(server.rdb_child_exit_pipe);
     if (server.rdb_pipe_read > 0) {
@@ -3558,14 +3557,14 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
 
             conns[connsnum++] = replica->conn;
             if (dual_channel) {
-                /* Put the socket in blocking mode to simplify RDB transfer. */
-                connBlock(replica->conn);
                 connSendTimeout(replica->conn, server.repl_timeout * 1000);
                 /* This replica uses diskless dual channel sync, hence we need
                  * to inform it with the save end offset.*/
                 sendCurrentOffsetToReplica(replica);
                 /* Make sure repl traffic is appended to the replication backlog */
                 addRdbReplicaToPsyncWait(replica);
+                /* Put the socket in blocking mode to simplify RDB transfer. */
+                connBlock(replica->conn);
             } else {
                 server.rdb_pipe_numconns++;
             }

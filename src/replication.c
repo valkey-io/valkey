@@ -391,7 +391,7 @@ void freeReplicaReferencedReplBuffer(client *replica) {
         uint64_t rdb_cid = htonu64(replica->id);
         if (raxRemove(server.replicas_waiting_psync, (unsigned char *)&rdb_cid, sizeof(rdb_cid), NULL)) {
             serverLog(LL_DEBUG, "Remove psync waiting replica %s with cid %llu from replicas rax.",
-                      replicationGetReplicaName(replica), (long long unsigned int)replica->associated_rdb_client_id);
+                      replicationGetReplicaName(replica), (long long unsigned int)replica->id);
         }
     }
     if (replica->ref_repl_buf_node != NULL) {
@@ -956,7 +956,9 @@ int startBgsaveForReplication(int mincapa, int req) {
     /* `SYNC` should have failed with error if we don't support socket and require a filter, assert this here */
     serverAssert(socket_target || !(req & REPLICA_REQ_RDB_MASK));
 
-    serverLog(LL_NOTICE, "Starting BGSAVE for SYNC with target: %s", socket_target ? "replicas sockets" : "disk");
+    serverLog(LL_NOTICE, "Starting BGSAVE for SYNC with target: %s using: %s",
+              socket_target ? "replicas sockets" : "disk",
+              (req & REPLICA_REQ_RDB_CHANNEL) ? "dual-channel" : "normal sync");
 
     rdbSaveInfo rsi, *rsiptr;
     rsiptr = rdbPopulateSaveInfo(&rsi);
@@ -4159,6 +4161,8 @@ void replicationResurrectProvisionalPrimary(void) {
     memcpy(server.primary->replid, server.repl_provisional_primary.replid, CONFIG_RUN_ID_SIZE);
     server.primary->reploff = server.repl_provisional_primary.reploff;
     server.primary->read_reploff = server.repl_provisional_primary.read_reploff;
+    server.primary_repl_offset = server.primary->reploff;
+    memcpy(server.replid, server.primary->replid, sizeof(server.primary->replid));
     establishPrimaryConnection();
 }
 

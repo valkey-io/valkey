@@ -1935,7 +1935,7 @@ void restartAOFAfterSYNC(void) {
 
 static int useDisklessLoad(void) {
     /* compute boolean decision to use diskless load */
-    int enabled = server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB ||
+    int enabled = server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB || server.repl_diskless_load == REPL_DISKLESS_LOAD_FLUSHDB ||
                   (server.repl_diskless_load == REPL_DISKLESS_LOAD_WHEN_DB_EMPTY && dbTotalServerKeyCount() == 0);
 
     if (enabled) {

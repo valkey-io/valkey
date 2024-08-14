@@ -614,7 +614,7 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
 void showLatestBacklog(void) {
     if (server.repl_backlog == NULL) return;
     if (listLength(server.repl_buffer_blocks) == 0) return;
-    if (server.hide_user_data_from_log > 0) {
+    if (server.hide_user_data_from_log) {
         serverLog(LL_NOTICE, "hide-user-data-from-log is on, skip logging backlog content to avoid spilling user data.");
         return;
     }
@@ -649,7 +649,7 @@ void replicationFeedStreamFromPrimaryStream(char *buf, size_t buflen) {
     /* Debugging: this is handy to see the stream sent from primary
      * to replicas. Disabled with if(0). */
     if (0) {
-        if (server.hide_user_data_from_log < 0) {
+        if (server.hide_user_data_from_log) {
             printf("%zu:", buflen);
             for (size_t j = 0; j < buflen; j++) {
                 printf("%c", isprint(buf[j]) ? buf[j] : '.');

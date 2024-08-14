@@ -3287,14 +3287,13 @@ sds catClientInfoString(sds s, client *client) {
         used_blocks_of_repl_buf = last->id - cur->id + 1;
     }
     
-    int hide_data = server.hide_user_data_from_log > 0;
     /* clang-format off */
     sds ret = sdscatfmt(s, FMTARGS(
         "id=%U", (unsigned long long) client->id,
         " addr=%s", getClientPeerId(client),
         " laddr=%s", getClientSockname(client),
         " %s", connGetInfo(client->conn, conninfo, sizeof(conninfo)),
-        " name=%s", hide_data ? "*redacted*" : (client->name ? (char*)client->name->ptr : ""),
+        " name=%s", server.hide_user_data_from_log ? "*redacted*" : (client->name ? (char*)client->name->ptr : ""),
         " age=%I", (long long)(commandTimeSnapshot() / 1000 - client->ctime),
         " idle=%I", (long long)(server.unixtime - client->last_interaction),
         " flags=%s", flags,
@@ -3316,7 +3315,7 @@ sds catClientInfoString(sds s, client *client) {
         " tot-mem=%U", (unsigned long long) total_mem,
         " events=%s", events,
         " cmd=%s", client->lastcmd ? client->lastcmd->fullname : "NULL",
-        " user=%s", hide_data ? "*redacted*" : (client->user ? client->user->name : "(superuser)"),
+        " user=%s", server.hide_user_data_from_log ? "*redacted*" : (client->user ? client->user->name : "(superuser)"),
         " redir=%I", (client->flag.tracking) ? (long long) client->client_tracking_redirection : -1,
         " resp=%i", client->resp,
         " lib-name=%s", client->lib_name ? (char*)client->lib_name->ptr : "",

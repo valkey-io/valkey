@@ -166,7 +166,7 @@ int lpSafeToAdd(unsigned char *lp, size_t add) {
  * "utils.c", function string2ll(), and is copyright:
  *
  * Copyright(C) 2011, Pieter Noordhuis
- * Copyright(C) 2011, Salvatore Sanfilippo
+ * Copyright(C) 2011, Redis Ltd.
  *
  * The function is released under the BSD 3-clause license.
  */

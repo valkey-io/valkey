@@ -3912,7 +3912,30 @@ int processCommand(client *c) {
 
     if (!server.cluster_enabled && c->capa & CLIENT_CAPA_REDIRECT && server.primary_host && !mustObeyClient(c) &&
         (is_write_command || (is_read_command && !c->flag.readonly))) {
-        addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
+        if (server.failover_state == FAILOVER_IN_PROGRESS) {
+            /* During the FAILOVER process, when conditions are met (such as
+             * when the force time is reached or the primary and replica offsets
+             * are consistent), the primary actively becomes the replica and
+             * transitions to the FAILOVER_IN_PROGRESS state.
+             *
+             * After the primary becomes the replica, and after handshaking
+             * and other operations, it will eventually send the PSYNC FAILOVER
+             * command to the replica, then the replica will become the primary.
+             * This means that the upgrade of the replica to the primary is an
+             * asynchronous operation, which implies that during the
+             * FAILOVER_IN_PROGRESS state, there may be a period of time where
+             * both nodes are replicas.
+             *
+             * In this scenario, if a -REDIRECT is returned, the request will be
+             * redirected to the replica and then redirected back, causing back
+             * and forth redirection. To avoid this situation, during the
+             * FAILOVER_IN_PROGRESS state, we temporarily suspend the clients
+             * that need to be redirected until the replica truly becomes the primary,
+             * and then resume the execution. */
+            blockPostponeClient(c);
+        } else {
+            addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
+        }
         return C_OK;
     }
 

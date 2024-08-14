@@ -426,8 +426,10 @@ void debugCommand(client *c) {
             "MALLCTL-STR <key> [<val>]",
             "    Get or set a malloc tuning string.",
 #endif
-            "OBJECT <key> [full]",
+            "OBJECT <key> [fast]",
             "    Show low level info about `key` and associated value.",
+            "    Some fields of the default behavior may be time consuming to fetch,",
+            "    and `fast` can be passed to avoid fetching them.",
             "DROP-CLUSTER-PACKET-FILTER <packet-type>",
             "    Drop all packets that match the filtered type. Set to -1 allow all packets.",
             "CLOSE-CLUSTER-LINK-ON-PACKET-DROP <0|1>",
@@ -609,8 +611,8 @@ void debugCommand(client *c) {
         robj *val;
         char *strenc;
 
-        int full = 0;
-        if (c->argc == 4 && !strcasecmp(c->argv[3]->ptr, "full")) full = 1;
+        int fast = 0;
+        if (c->argc == 4 && !strcasecmp(c->argv[3]->ptr, "fast")) fast = 1;
 
         if ((de = dbFind(c->db, c->argv[2]->ptr)) == NULL) {
             addReplyErrorObject(c, shared.nokeyerr);
@@ -642,7 +644,7 @@ void debugCommand(client *c) {
             used = snprintf(nextra, remaining, " ql_compressed:%d", compressed);
             nextra += used;
             remaining -= used;
-            if (full) {
+            if (!fast) {
                 /* Add total uncompressed size */
                 unsigned long sz = 0;
                 for (quicklistNode *node = ql->head; node; node = node->next) {
@@ -656,7 +658,7 @@ void debugCommand(client *c) {
 
         sds s = sdsempty();
         s = sdscatprintf(s, "Value at:%p refcount:%d encoding:%s", (void *)val, val->refcount, strenc);
-        if (full) s = sdscatprintf(s, " serializedlength:%zu", rdbSavedObjectLen(val, c->argv[2], c->db->id));
+        if (!fast) s = sdscatprintf(s, " serializedlength:%zu", rdbSavedObjectLen(val, c->argv[2], c->db->id));
         s = sdscatprintf(s, " lru:%d lru_seconds_idle:%llu", val->lru, estimateObjectIdleTime(val) / 1000);
         s = sdscatprintf(s, "%s", extra);
         addReplyStatusLength(c, s, sdslen(s));

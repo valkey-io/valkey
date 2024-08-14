@@ -6401,10 +6401,7 @@ static int clusterManagerCheckCluster(int quiet) {
         clusterManagerOnError(err);
         result = 0;
         if (do_fix /* && result*/) {
-            dictType dtype = clusterManagerDictType;
-            dtype.keyDestructor = dictSdsDestructor;
-            dtype.valDestructor = dictListDestructor;
-            clusterManagerUncoveredSlots = dictCreate(&dtype);
+            clusterManagerUncoveredSlots = dictCreate(&clusterManagerLinkDictType);
             int fixed = clusterManagerFixSlotsCoverage(slots);
             if (fixed > 0) result = 1;
         }

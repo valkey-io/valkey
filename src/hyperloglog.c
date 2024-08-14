@@ -399,11 +399,9 @@ static inline int32_t count_trailing_zeros_64(uint64_t value) {
     return __builtin_ctzll(value);
 #else
     int bitpos = 0;
-    if (value) {
-        while (value & 1 == 0) {
-            value >>= 1;
-            ++bitpos;
-        }
+    while (value & 1 == 0) {
+        value >>= 1;
+        ++bitpos;
     }
     return bitpos;
 #endif

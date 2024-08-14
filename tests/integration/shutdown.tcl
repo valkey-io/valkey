@@ -85,8 +85,8 @@ foreach how {sigterm shutdown} {
 }
 
 test {Shutting down master waits for replica timeout} {
-    start_server {overrides {save ""}} {
-        start_server {overrides {save ""}} {
+    start_server {overrides {save "" repl-backlog-size 1MB}} {
+        start_server {overrides {save "" repl-backlog-size 1MB}} {
             set master [srv -1 client]
             set master_host [srv -1 host]
             set master_port [srv -1 port]

@@ -158,11 +158,9 @@ void serverLogRaw(int level, const char *msg) {
 
         char newline[] = "\n";
 
-        struct iovec iov[3] = {
-                {.iov_base = (void *)buf, .iov_len = len},
-                {.iov_base = (void *)msg, .iov_len = strlen(msg)},
-                {.iov_base = (void *)newline, strlen(newline)}
-        };
+        struct iovec iov[3] = {{.iov_base = (void *)buf, .iov_len = len},
+                               {.iov_base = (void *)msg, .iov_len = strlen(msg)},
+                               {.iov_base = (void *)newline, strlen(newline)}};
         writev(server.log_fd, iov, 3);
     }
 

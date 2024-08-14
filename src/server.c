@@ -132,8 +132,9 @@ void serverLogRaw(int level, const char *msg) {
     if (server.log_fd == -1) serverLogOpen();
     if (server.log_fd == -1) return;
 
+    ssize_t nwritten;
     if (rawmode) {
-        write(server.log_fd, msg, strlen(msg));
+        nwritten = write(server.log_fd, msg, strlen(msg));
     } else {
         struct timeval tv;
         int role_char;
@@ -161,8 +162,9 @@ void serverLogRaw(int level, const char *msg) {
         struct iovec iov[3] = {{.iov_base = (void *)buf, .iov_len = len},
                                {.iov_base = (void *)msg, .iov_len = strlen(msg)},
                                {.iov_base = (void *)newline, strlen(newline)}};
-        writev(server.log_fd, iov, 3);
+        nwritten = writev(server.log_fd, iov, 3);
     }
+    UNUSED(nwritten);
 
     if (server.syslog_enabled) syslog(syslogLevelMap[level], "%s", msg);
 }

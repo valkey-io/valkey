@@ -1118,6 +1118,7 @@ typedef struct replDataBuf {
     list *blocks; /* List of replDataBufBlock */
     size_t len;   /* Number of bytes stored in all blocks */
     size_t peak;
+    size_t limit_bytes; /* Configurable buffer limit */
 } replDataBuf;
 
 typedef struct {

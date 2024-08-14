@@ -328,7 +328,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 # We expect that the next full sync will take 100 seconds (10k*10000)ms
                 # It will give us enough time to fill the replica buffer.
                 $replica1 config set dual-channel-replication-enabled yes
-                $replica1 config set client-output-buffer-limit "replica 16383 16383 0"
+                $replica1 config set replicas-dual-channel-buffer-limit "16383"
 
                 $replica1 replicaof $primary_host $primary_port
                 # Wait for replica to establish psync using main channel
@@ -356,7 +356,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             }
 
             $replica1 replicaof no one
-            $replica1 config set client-output-buffer-limit "replica 256mb 256mb 0"; # remove repl buffer limitation
+            $replica1 config set replicas-dual-channel-buffer-limit [expr {1024 * 1024 * 1024}]; # remove repl buffer limitation
             $primary config set rdb-key-save-delay 0
 
             wait_for_condition 500 1000 {

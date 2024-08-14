@@ -178,7 +178,7 @@ run_solo {defrag} {
         r config set key-load-delay 0
 
         test "Active defrag eval scripts: $type" {
-            r flushdb
+            r flushdb sync
             r script flush sync
             r config resetstat
             r config set hz 100
@@ -264,7 +264,7 @@ run_solo {defrag} {
         } {OK}
 
         test "Active defrag big keys: $type" {
-            r flushdb
+            r flushdb sync
             r config resetstat
             r config set hz 100
             r config set activedefrag no
@@ -407,7 +407,7 @@ run_solo {defrag} {
         # Skip the following two tests if we are running with IO threads, as the IO threads allocate the command arguments in a different arena. As a result, fragmentation is not as expected.
         if {[r config get io-threads] eq 0} {
         test "Active defrag pubsub: $type" {
-            r flushdb
+            r flushdb sync
             r config resetstat
             r config set hz 100
             r config set activedefrag no
@@ -508,7 +508,7 @@ run_solo {defrag} {
 
         if {$type eq "standalone"} { ;# skip in cluster mode
         test "Active defrag big list: $type" {
-            r flushdb
+            r flushdb sync
             r config resetstat
             r config set hz 100
             r config set activedefrag no
@@ -620,7 +620,7 @@ run_solo {defrag} {
             # kept running and not move any allocation.
             # this test is more consistent on a fresh server with no history
             start_server {tags {"defrag"} overrides {save ""}} {
-                r flushdb
+                r flushdb sync
                 r config resetstat
                 r config set hz 100
                 r config set activedefrag no

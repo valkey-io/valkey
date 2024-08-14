@@ -1,6 +1,6 @@
 /* tracking.c - Client side caching: keys tracking and invalidation
  *
- * Copyright (c) 2019, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2019, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without

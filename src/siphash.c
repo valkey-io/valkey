@@ -4,7 +4,7 @@
    Copyright (c) 2012-2016 Jean-Philippe Aumasson
    <jeanphilippe.aumasson@gmail.com>
    Copyright (c) 2012-2014 Daniel J. Bernstein <djb@cr.yp.to>
-   Copyright (c) 2017 Salvatore Sanfilippo <antirez@gmail.com>
+   Copyright (c) 2017 Redis Ltd.
 
    To the extent possible under law, the author(s) have dedicated all copyright
    and related and neighboring rights to this software to the public domain
@@ -16,7 +16,7 @@
 
    ----------------------------------------------------------------------------
 
-   This version was modified by Salvatore Sanfilippo <antirez@gmail.com>
+   This version was modified by Redis Ltd.
    in the following ways:
 
    1. We use SipHash 1-2. This is not believed to be as strong as the

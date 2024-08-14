@@ -1,5 +1,5 @@
 # Valkey Makefile
-# Copyright (C) 2009 Salvatore Sanfilippo <antirez at gmail dot com>
+# Copyright (C) 2009 Redis Ltd.
 # This file is released under the BSD license, see the COPYING file
 #
 # The Makefile composes the final FINAL_CFLAGS and FINAL_LDFLAGS using

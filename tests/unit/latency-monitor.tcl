@@ -167,6 +167,7 @@ tags {"needs:debug"} {
         }
 
         r config set latency-monitor-threshold 200
+        r config set lazyfree-lazy-expire yes
     }
 
     test {LATENCY HISTORY / RESET with wrong event name is fine} {

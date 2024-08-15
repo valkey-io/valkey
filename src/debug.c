@@ -1060,7 +1060,7 @@ void _serverAssertPrintClientInfo(const client *c) {
     serverLog(LL_WARNING, "client->conn = %s", connGetInfo(c->conn, conninfo, sizeof(conninfo)));
     serverLog(LL_WARNING, "client->argc = %d", c->argc);
     for (j = 0; j < c->argc; j++) {
-        if (!shouldRedactArg(c, j)) {
+        if (shouldRedactArg(c, j)) {
             serverLog(LL_WARNING | LL_RAW, "client->argv[%d]: %zu bytes ", j, sdslen((sds)c->argv[j]->ptr));
             continue;
         }
@@ -1883,7 +1883,7 @@ void logCurrentClient(client *cc, const char *title) {
     sdsfree(client);
     serverLog(LL_WARNING | LL_RAW, "argc: '%d'\n", cc->argc);
     for (j = 0; j < cc->argc; j++) {
-        if (!shouldRedactArg(cc, j)) {
+        if (shouldRedactArg(cc, j)) {
             serverLog(LL_WARNING | LL_RAW, "client->argv[%d]: %zu bytes ", j, sdslen((sds)cc->argv[j]->ptr));
             continue;
         }

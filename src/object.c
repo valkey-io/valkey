@@ -29,8 +29,10 @@
  */
 
 #include "server.h"
+#include "serverassert.h"
 #include "functions.h"
 #include "intset.h" /* Compact integer set structure */
+#include "zmalloc.h"
 #include <math.h>
 #include <ctype.h>
 
@@ -89,7 +91,9 @@ robj *createRawStringObject(const char *ptr, size_t len) {
  * an object where the sds string is actually an unmodifiable string
  * allocated in the same chunk as the object itself. */
 robj *createEmbeddedStringObject(const char *ptr, size_t len) {
-    robj *o = zmalloc(sizeof(robj) + sizeof(struct sdshdr8) + len + 1);
+    size_t bufsize = 0;
+    size_t sds_hdrlen = sizeof(struct sdshdr8);
+    robj *o = zmalloc_usable(sizeof(robj) + sds_hdrlen + len + 1, &bufsize);
     struct sdshdr8 *sh = (void *)(o + 1);
 
     o->type = OBJ_STRING;
@@ -99,7 +103,11 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
     o->lru = 0;
 
     sh->len = len;
-    sh->alloc = len;
+    size_t usable = bufsize - (sizeof(robj) + sds_hdrlen + 1);
+    sh->alloc = usable;
+    /* Overflow check. Must not happen as we use embedded strings only
+     * for sds strings that fit into SDS_TYPE_8. */
+    assert(usable == sh->alloc);
     sh->flags = SDS_TYPE_8;
     if (ptr == SDS_NOINIT)
         sh->buf[len] = '\0';

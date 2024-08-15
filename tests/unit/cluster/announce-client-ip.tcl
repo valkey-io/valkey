@@ -68,7 +68,6 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-replica-no-fa
     }
 }
 
-if {![string match {*Darwin*} [exec uname -a]]} {
 start_cluster 2 2 {tags {external:skip cluster ipv6} overrides {cluster-replica-no-failover yes bind {127.0.0.1 ::1}}} {
     # Connecting to localhost as "::1" makes the clients use IPv6.
     set clients {}
@@ -148,4 +147,3 @@ start_cluster 2 2 {tags {external:skip cluster ipv6} overrides {cluster-replica-
         [lindex $clients $j] close
     }
 }
-} ;# if uname

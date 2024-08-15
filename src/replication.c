@@ -2679,6 +2679,7 @@ static void fullSyncWithPrimary(connection *conn) {
         /* Parse end offset response */
         char *endoff_format = "$ENDOFF:%lld %40s %d %llu";
         if (sscanf(err, endoff_format, &reploffset, primary_replid, &dbid, &rdb_client_id) != 4) {
+            serverLog(LL_WARNING, "Received unexpected $ENDOFF response: %s", err);
             goto error;
         }
         sdsfree(err);

@@ -548,9 +548,9 @@ start_server {tags {"maxmemory" "external:skip"}} {
             {set asdf1 1}
             {set asdf2 2}
             {set asdf3 3}
-            {del asdf*}
-            {del asdf*}
-            {del asdf*}
+            {unlink asdf*}
+            {unlink asdf*}
+            {unlink asdf*}
             {set asdf4 4}
         }
         close_replication_stream $repl
@@ -584,7 +584,7 @@ start_server {tags {"maxmemory" "external:skip"}} {
             {incr x}
             {incr x}
             {exec}
-            {del x}
+            {unlink x}
         }
         close_replication_stream $repl
 

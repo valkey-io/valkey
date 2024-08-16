@@ -303,6 +303,8 @@ void initIOThreads(void) {
 
     serverAssert(server.io_threads_num <= IO_THREADS_MAX_NUM);
 
+    prefetchCommandsBatchInit();
+
     /* Spawn and initialize the I/O threads. */
     for (int i = 1; i < server.io_threads_num; i++) {
         createIOThread(i);

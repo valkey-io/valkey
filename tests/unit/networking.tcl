@@ -181,6 +181,9 @@ start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-deb
                 set rd$i [valkey_deferring_client]
             }
 
+            # set a key that will be later be prefetch
+            r set a 0
+
             # Get the client ID of rd4
             $rd4 client id
             set rd4_id [$rd4 read]
@@ -215,6 +218,69 @@ start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-deb
             $rd16 get a
             assert_equal {OK} [$rd16 read]
             assert_equal {16} [$rd16 read]
+        }
+        
+        test {prefetch works as expected when changing the batch size while executing the commands batch} {
+            # Create 16 (default prefetch batch size) clients
+            for {set i 0} {$i < 16} {incr i} {
+                set rd$i [valkey_deferring_client]
+            }
+            
+            # Create a batch of commands by making sure the server sleeps for a while
+            # before responding to the first command
+            $rd0 debug sleep 2
+            after 200  ; # wait a bit to make sure the server is sleeping.
+            
+            # Send set commands for all clients the 5th client will change the prefetch batch size
+            for {set i 0} {$i < 16} {incr i} {
+                if {$i == 4} {
+                    [set rd$i] config set prefetch-batch-max-size 1
+                }
+                [set rd$i] set a $i
+                [set rd$i] flush
+            }
+            
+            # Read the results
+            for {set i 0} {$i < 16} {incr i} {
+                assert_equal {OK} [[set rd$i] read]
+            }
+            
+            # assert the configured prefetch batch size was changed
+            assert {[r config get prefetch-batch-max-size] eq "prefetch-batch-max-size 1"}  
+        }
+          
+        test {no prefetch when the batch size is set to 0} {
+            # set the batch size to 0
+            r config set prefetch-batch-max-size 0
+            # save the current value of prefetch entries
+            set info [r info stats]
+            set prefetch_entries [getInfoProperty $info io_threaded_total_prefetch_entries]
+            
+            # Create 16 (default prefetch batch size) clients
+            for {set i 0} {$i < 16} {incr i} {
+                set rd$i [valkey_deferring_client]
+            }
+            
+            # Create a batch of commands by making sure the server sleeps for a while
+            # before responding to the first command
+            $rd0 debug sleep 2
+            after 200  ; # wait a bit to make sure the server is sleeping.
+            
+            # Send set commands for all clients
+            for {set i 0} {$i < 16} {incr i} {
+                [set rd$i] set a $i
+                [set rd$i] flush
+            }
+            
+            # Read the results
+            for {set i 0} {$i < 16} {incr i} {
+                assert_equal {OK} [[set rd$i] read]
+            }
+            
+            # assert the prefetch entries did not change
+            set info [r info stats]
+            set new_prefetch_entries [getInfoProperty $info io_threaded_total_prefetch_entries]
+            assert_equal $prefetch_entries $new_prefetch_entries
         }
     }
 }

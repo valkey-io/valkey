@@ -1002,7 +1002,7 @@ typedef struct multiState {
 } multiState;
 
 /* This structure holds the blocking operation state for a client.
- * The fields used depend on client->btype. */
+ * The fields used depend on client->bstate.btype. */
 typedef struct blockingState {
     /* Generic fields. */
     blocking_type btype;  /* Type of blocking op if CLIENT_BLOCKED. */
@@ -1010,13 +1010,15 @@ typedef struct blockingState {
                            * is > timeout then the operation timed out. */
     int unblock_on_nokey; /* Whether to unblock the client when at least one of the keys
                              is deleted or does not exist anymore */
+
     /* BLOCKED_LIST, BLOCKED_ZSET and BLOCKED_STREAM or any other Keys related blocking */
     dict *keys; /* The keys we are blocked on */
 
     /* BLOCKED_WAIT and BLOCKED_WAITAOF */
-    int numreplicas;      /* Number of replicas we are waiting for ACK. */
-    int numlocal;         /* Indication if WAITAOF is waiting for local fsync. */
-    long long reploffset; /* Replication offset to reach. */
+    int numreplicas;                         /* Number of replicas we are waiting for ACK. */
+    int numlocal;                            /* Indication if WAITAOF is waiting for local fsync. */
+    long long reploffset;                    /* Replication offset to reach. */
+    listNode *client_waiting_acks_list_node; /* list node in server.clients_waiting_acks list. */
 
     /* BLOCKED_MODULE */
     void *module_blocked_handle; /* ValkeyModuleBlockedClient structure.

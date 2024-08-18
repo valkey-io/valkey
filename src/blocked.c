@@ -76,10 +76,13 @@ static void releaseBlockedEntry(client *c, dictEntry *de, int remove_key);
 void initClientBlockingState(client *c) {
     c->bstate.btype = BLOCKED_NONE;
     c->bstate.timeout = 0;
+    c->bstate.unblock_on_nokey = 0;
     c->bstate.keys = dictCreate(&objectKeyHeapPointerValueDictType);
     c->bstate.numreplicas = 0;
+    c->bstate.numlocal = 0;
     c->bstate.reploffset = 0;
-    c->bstate.unblock_on_nokey = 0;
+    c->bstate.client_waiting_acks_list_node = NULL;
+    c->bstate.module_blocked_handle = NULL;
     c->bstate.async_rm_call_handle = NULL;
 }
 
@@ -595,6 +598,11 @@ void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, lon
     c->bstate.numreplicas = numreplicas;
     c->bstate.numlocal = numlocal;
     listAddNodeHead(server.clients_waiting_acks, c);
+    /* Note that we remember the linked list node where the client is stored,
+     * this way removing the client in unblockClientWaitingReplicas() will not
+     * require a linear scan, but just a constant time operation. */
+    serverAssert(c->bstate.client_waiting_acks_list_node == NULL);
+    c->bstate.client_waiting_acks_list_node = listFirst(server.clients_waiting_acks);
     blockClient(c, BLOCKED_WAIT);
 }
 

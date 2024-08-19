@@ -285,7 +285,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                     }
                     set instance $primary
                     if {$test_instance == "replica"} {
-                        set instnace $replica
+                        set instance $replica
                     }
                     $instance config set dual-channel-replication-enabled $new_value
                     # Wait for at least one server cron

@@ -81,7 +81,7 @@ void initClientBlockingState(client *c) {
     c->bstate.numreplicas = 0;
     c->bstate.numlocal = 0;
     c->bstate.reploffset = 0;
-    c->bstate.client_waiting_acks_list_node = NULL;
+    c->bstate.generic_blocked_list_node = NULL;
     c->bstate.module_blocked_handle = NULL;
     c->bstate.async_rm_call_handle = NULL;
 }
@@ -194,8 +194,9 @@ void unblockClient(client *c, int queue_for_reprocessing) {
         if (moduleClientIsBlockedOnKeys(c)) unblockClientWaitingData(c);
         unblockClientFromModule(c);
     } else if (c->bstate.btype == BLOCKED_POSTPONE) {
-        listDelNode(server.postponed_clients, c->postponed_list_node);
-        c->postponed_list_node = NULL;
+        serverAssert(c->bstate.postponed_list_node);
+        listDelNode(server.postponed_clients, c->bstate.postponed_list_node);
+        c->bstate.postponed_list_node = NULL;
     } else if (c->bstate.btype == BLOCKED_SHUTDOWN) {
         /* No special cleanup. */
     } else {
@@ -613,7 +614,8 @@ void blockPostponeClient(client *c) {
     c->bstate.timeout = 0;
     blockClient(c, BLOCKED_POSTPONE);
     listAddNodeTail(server.postponed_clients, c);
-    c->postponed_list_node = listLast(server.postponed_clients);
+    serverAssert(c->bstate.postponed_list_node == NULL);
+    c->bstate.postponed_list_node = listLast(server.postponed_clients);
     /* Mark this client to execute its command */
     c->flag.pending_command = 1;
 }

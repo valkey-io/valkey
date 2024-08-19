@@ -199,6 +199,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
 
             test "Toggle dual-channel-replication-enabled: $enable start" {    
                 populate 1000 primary 10000
+                $primary config set rdb-key-save-delay 0
                 set prev_sync_full [s 0 sync_full]
                 set prev_sync_partial [s 0 sync_partial_ok]
 
@@ -250,6 +251,63 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                     assert {$cur_sync_partial == [expr $prev_sync_partial + 1]}
                 }
                 $replica replicaof no one
+            }
+
+            foreach test_instance {primary replica} {
+                $primary config set dual-channel-replication-enabled $enable
+                $replica config set dual-channel-replication-enabled $enable
+                test "Online toggle dual-channel-replication-enabled: $enable start, toggle on $test_instance" {    
+                    populate 1000 primary 10000
+                    $primary config set rdb-key-save-delay 100000   
+
+                    $replica replicaof $primary_host $primary_port
+                    # wait for sync to start
+                    if {$enable == "yes"} {
+                        wait_for_condition 500 1000 {
+                            [string match "*slave*,state=wait_bgsave*,type=rdb-channel*" [$primary info replication]] &&
+                            [string match "*slave*,state=bg_transfer*,type=main-channel*" [$primary info replication]] &&
+                            [s 0 rdb_bgsave_in_progress] eq 1
+                        } else {
+                            fail "replica didn't start sync session in time"
+                        }
+                    } else {
+                        wait_for_condition 500 1000 {
+                            [string match "*slave*,state=wait_bgsave*,type=replica*" [$primary info replication]] &&
+                            [s 0 rdb_bgsave_in_progress] eq 1
+                        } else {
+                            fail "replica didn't start sync session in time"
+                        }
+                    }
+                    # Toggle config
+                    set new_value "yes"
+                    if {$enable == "yes"} {
+                        set new_value "no"
+                    }
+                    set instance $primary
+                    if {$test_instance == "replica"} {
+                        set instnace $replica
+                    }
+                    $instance config set dual-channel-replication-enabled $new_value
+                    # Wait for at least one server cron
+                    after 1
+
+                    if {$enable == "yes"} {
+                        # Verify that dual channel replication sync is still in progress
+                        assert [string match "*slave*,state=wait_bgsave*,type=rdb-channel*" [$primary info replication]]
+                        assert [string match "*slave*,state=bg_transfer*,type=main-channel*" [$primary info replication]]
+                        assert {[s 0 rdb_bgsave_in_progress] eq 1}
+                    } else {
+                        # Verify that normal sync is still in progress
+                        assert [string match "*slave*,state=wait_bgsave*,type=replica*" [$primary info replication]]
+                        assert {[s 0 rdb_bgsave_in_progress] eq 1}
+                    }
+                    $replica replicaof no one
+                    wait_for_condition 500 1000 {
+                        [s -1 rdb_bgsave_in_progress] eq 0
+                    } else {
+                        fail "Primary should abort sync"
+                    }
+                }
             }
         }
     }

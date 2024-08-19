@@ -1015,17 +1015,17 @@ typedef struct blockingState {
         listNode *postponed_list_node;           /* list node within the postponed list */
         listNode *generic_blocked_list_node;     /* generic placeholder for blocked clients utility lists.
                                                     Since a client cannot be blocked multiple times, we can assume
-                                                    It will be held in only one extra utility list, so it is O.K maintain a union of these 
-                                                    listNode references. */
+                                                    it will be held in only one extra utility list, so it is O.K maintain a
+                                                    union of these listNode references. */
     };
 
     /* BLOCKED_LIST, BLOCKED_ZSET and BLOCKED_STREAM or any other Keys related blocking */
     dict *keys; /* The keys we are blocked on */
 
     /* BLOCKED_WAIT and BLOCKED_WAITAOF */
-    int numreplicas;                         /* Number of replicas we are waiting for ACK. */
-    int numlocal;                            /* Indication if WAITAOF is waiting for local fsync. */
-    long long reploffset;                    /* Replication offset to reach. */
+    int numreplicas;      /* Number of replicas we are waiting for ACK. */
+    int numlocal;         /* Indication if WAITAOF is waiting for local fsync. */
+    long long reploffset; /* Replication offset to reach. */
 
     /* BLOCKED_MODULE */
     void *module_blocked_handle; /* ValkeyModuleBlockedClient structure.

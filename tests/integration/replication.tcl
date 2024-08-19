@@ -1532,5 +1532,5 @@ foreach dualchannel {yes no} {
                 $master config set rdb-key-save-delay 0
             }
         }
-    }
+    } {} {external:skip}
 }

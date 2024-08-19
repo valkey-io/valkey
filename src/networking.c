@@ -31,6 +31,7 @@
 #include "cluster.h"
 #include "cluster_slot_stats.h"
 #include "script.h"
+#include "sds.h"
 #include "fpconv_dtoa.h"
 #include "fmtargs.h"
 #include <strings.h>
@@ -50,23 +51,14 @@ __thread sds thread_shared_qb = NULL;
 
 typedef enum { PARSE_OK = 0, PARSE_ERR = -1, PARSE_NEEDMORE = -2 } parseResult;
 
-/* Return the size consumed from the allocator, for the specified SDS string,
- * including internal fragmentation. This function is used in order to compute
- * the client output buffer size. */
-size_t sdsZmallocSize(sds s) {
-    void *sh = sdsAllocPtr(s);
-    return zmalloc_size(sh);
-}
-
 /* Return the amount of memory used by the sds string at object->ptr
  * for a string object. This includes internal fragmentation. */
 size_t getStringObjectSdsUsedMemory(robj *o) {
     serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
-    switch (o->encoding) {
-    case OBJ_ENCODING_RAW: return sdsZmallocSize(o->ptr);
-    case OBJ_ENCODING_EMBSTR: return zmalloc_size(o) - sizeof(robj);
-    default: return 0; /* Just integer encoding for now. */
+    if (o->encoding != OBJ_ENCODING_INT) {
+        return sdsAllocSize(o->ptr);
     }
+    return 0;
 }
 
 /* Return the length of a string object.
@@ -4260,7 +4252,7 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
     size_t mem = getClientOutputBufferMemoryUsage(c);
 
     if (output_buffer_mem_usage != NULL) *output_buffer_mem_usage = mem;
-    mem += c->querybuf ? sdsZmallocSize(c->querybuf) : 0;
+    mem += c->querybuf ? sdsAllocSize(c->querybuf) : 0;
     mem += zmalloc_size(c);
     mem += c->buf_usable_size;
     /* For efficiency (less work keeping track of the argv memory), it doesn't include the used memory

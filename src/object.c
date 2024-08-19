@@ -33,6 +33,7 @@
 #include "functions.h"
 #include "intset.h" /* Compact integer set structure */
 #include "zmalloc.h"
+#include "sds.h"
 #include <math.h>
 #include <ctype.h>
 
@@ -990,7 +991,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
         if (o->encoding == OBJ_ENCODING_INT) {
             asize = sizeof(*o);
         } else if (o->encoding == OBJ_ENCODING_RAW) {
-            asize = sdsZmallocSize(o->ptr) + sizeof(*o);
+            asize = sdsAllocSize(o->ptr) + sizeof(*o);
         } else if (o->encoding == OBJ_ENCODING_EMBSTR) {
             asize = zmalloc_size((void *)o);
         } else {
@@ -1018,7 +1019,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             asize = sizeof(*o) + sizeof(dict) + (sizeof(struct dictEntry *) * dictBuckets(d));
             while ((de = dictNext(di)) != NULL && samples < sample_size) {
                 ele = dictGetKey(de);
-                elesize += dictEntryMemUsage(de) + sdsZmallocSize(ele);
+                elesize += dictEntryMemUsage(de) + sdsAllocSize(ele);
                 samples++;
             }
             dictReleaseIterator(di);
@@ -1040,7 +1041,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             asize = sizeof(*o) + sizeof(zset) + sizeof(zskiplist) + sizeof(dict) +
                     (sizeof(struct dictEntry *) * dictBuckets(d)) + zmalloc_size(zsl->header);
             while (znode != NULL && samples < sample_size) {
-                elesize += sdsZmallocSize(znode->ele);
+                elesize += sdsAllocSize(znode->ele);
                 elesize += dictEntryMemUsage(NULL) + zmalloc_size(znode);
                 samples++;
                 znode = znode->level[0].forward;
@@ -1059,7 +1060,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             while ((de = dictNext(di)) != NULL && samples < sample_size) {
                 ele = dictGetKey(de);
                 ele2 = dictGetVal(de);
-                elesize += sdsZmallocSize(ele) + sdsZmallocSize(ele2);
+                elesize += sdsAllocSize(ele) + sdsAllocSize(ele2);
                 elesize += dictEntryMemUsage(de);
                 samples++;
             }
@@ -1203,7 +1204,7 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
 
     mem = 0;
     if (server.aof_state != AOF_OFF) {
-        mem += sdsZmallocSize(server.aof_buf);
+        mem += sdsAllocSize(server.aof_buf);
     }
     mh->aof_buffer = mem;
     mem_total += mem;

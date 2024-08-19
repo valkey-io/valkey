@@ -1012,7 +1012,7 @@ typedef struct blockingState {
                              is deleted or does not exist anymore */
     union {
         listNode *client_waiting_acks_list_node; /* list node in server.clients_waiting_acks list. */
-        listNode *postponed_list_node;           /* list node within the postponed list */
+        listNode *postponed_list_node;           /* list node in server.postponed_clients */
         listNode *generic_blocked_list_node;     /* generic placeholder for blocked clients utility lists.
                                                     Since a client cannot be blocked multiple times, we can assume
                                                     it will be held in only one extra utility list, so it is O.K maintain a

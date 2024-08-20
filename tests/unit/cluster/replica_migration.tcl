@@ -12,21 +12,19 @@ proc my_slot_allocation {masters replicas} {
 }
 
 start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
-   test "Write some data to primary 0, slot 1, make a small repl_offset" {
+    test "If a replica has not completed full sync, the offset is 0 and the rank is the lowest" {
+        # Write some data to primary 0, slot 1, make a small repl_offset.
         for {set i 0} {$i < 1024} {incr i} {
             R 0 incr key_991803
         }
         assert_equal {1024} [R 0 get key_991803]
-    }
 
-    test "Write some data to primary 3, slot 0, make a big repl_offset" {
+        # Write some data to primary 3, slot 0, make a big repl_offset.
         for {set i 0} {$i < 10240} {incr i} {
             R 3 incr key_977613
         }
         assert_equal {10240} [R 3 get key_977613]
-    }
 
-    test "If a replica has not completed full sync, the offset is 0 and the rank is the lowest" {
         # 10s, make sure primary 0 will hang in the save.
         R 0 config set rdb-key-save-delay 100000000
 
@@ -99,21 +97,19 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
 start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
-    test "Write some data to primary 0, slot 1, make a small repl_offset" {
+    test "A old replica use CLUSTER REPLICA get a zero offset before the full sync is completed" {
+        # Write some data to primary 0, slot 1, make a small repl_offset.
         for {set i 0} {$i < 1024} {incr i} {
             R 0 incr key_991803
         }
         assert_equal {1024} [R 0 get key_991803]
-    }
 
-    test "Write some data to primary 3, slot 0, make a big repl_offset" {
+        # Write some data to primary 3, slot 0, make a big repl_offset.
         for {set i 0} {$i < 10240} {incr i} {
             R 3 incr key_977613
         }
         assert_equal {10240} [R 3 get key_977613]
-    }
 
-    test "A old replica use CLUSTER REPLICA get a zero offset before the full sync is completed" {
         # 10s, make sure primary 0 will hang in the save.
         R 0 config set rdb-key-save-delay 100000000
 

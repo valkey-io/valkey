@@ -212,7 +212,6 @@ client *createClient(connection *conn) {
     c->peerid = NULL;
     c->sockname = NULL;
     c->client_list_node = NULL;
-    c->postponed_list_node = NULL;
     c->io_read_state = CLIENT_IDLE;
     c->io_write_state = CLIENT_IDLE;
     c->nwritten = 0;

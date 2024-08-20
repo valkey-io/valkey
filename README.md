@@ -27,9 +27,17 @@ It is as simple as:
     % make
 
 To build with TLS support, you'll need OpenSSL development libraries (e.g.
-libssl-dev on Debian/Ubuntu) and run:
+libssl-dev on Debian/Ubuntu).
+
+To build TLS support as Valkey built-in:
 
     % make BUILD_TLS=yes
+
+TO build TLS as Valkey module:
+
+    % make BUILD_TLS=module
+
+Note that sentinel mode does not support TLS module.
 
 To build with experimental RDMA support you'll need RDMA development libraries
 (e.g. librdmacm-dev and libibverbs-dev on Debian/Ubuntu). For now, Valkey only
@@ -158,8 +166,55 @@ line, with exactly the same name.
 Running Valkey with TLS:
 ------------------
 
-Please consult the [TLS.md](TLS.md) file for more information on
-how to use Valkey with TLS.
+### Running manually
+To manually run a Valkey server with TLS mode (assuming `./gen-test-certs.sh` was invoked so sample certificates/keys are available):
+
+* TLS built-in mode:
+    ```
+    ./src/valkey-server --tls-port 6379 --port 0 \
+        --tls-cert-file ./tests/tls/valkey.crt \
+        --tls-key-file ./tests/tls/valkey.key \
+        --tls-ca-cert-file ./tests/tls/ca.crt
+    ```
+
+* TLS module mode:
+    ```
+    ./src/valkey-server --tls-port 6379 --port 0 \
+        --tls-cert-file ./tests/tls/valkey.crt \
+        --tls-key-file ./tests/tls/valkey.key \
+        --tls-ca-cert-file ./tests/tls/ca.crt \
+        --loadmodule src/valkey-tls.so
+    ```
+
+Note that you can disable TCP by specifying `--port 0` explicitly.
+It's also possible to have both TCP and TLS available at the same time,
+but you'll have to assign different ports.
+
+Use `valkey-cli` to connect to the Valkey server:
+```
+./src/valkey-cli --tls \
+    --cert ./tests/tls/valkey.crt \
+    --key ./tests/tls/valkey.key \
+    --cacert ./tests/tls/ca.crt
+```
+
+Specifying `--tls-replication yes` can make a Replica connect to the master.
+Using `--tls-cluster yes` to make Valkey Cluster use TLS across nodes.
+
+#### TLS Connections
+All socket operations now use a connection abstraction layer, concealing I/O and event handling from the caller.
+
+Multi-threaded I/O isn't supported for TLS because it requires unique handling of AE events, which isn't thread-safe. A better approach might involve managing independent AE loops for I/O threads and associating connections with threads long-term, potentially improving performance.
+
+Currently, synchronize I/O for TLS is implemented in a hackish way, involving blocking sockets and socket-level timeouts, leading to potential inaccuracies and syscall overhead. Transitioning entirely to pure async I/O may be a better solution, especially for replication. Although cluster keys migration could be more challenging, it presents an opportunity for improvement.
+
+#### TLS Multi-port support
+Consider the implications of allowing TLS to be configured on a separate port, making Valkey listening on multiple ports:
+
+1. Startup banner port notification
+2. Proctitle
+3. How slaves announce themselves
+4. Cluster bus port calculation
 
 Running Valkey with RDMA:
 ------------------

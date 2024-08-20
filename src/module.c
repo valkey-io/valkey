@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2016, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -61,6 +61,7 @@
 #include "hdr_histogram.h"
 #include "crc16_slottable.h"
 #include "valkeymodule.h"
+#include "io_threads.h"
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -684,7 +685,7 @@ void moduleReleaseTempClient(client *c) {
     c->raw_flag = 0;
     c->flag.module = 1;
     c->user = NULL; /* Root user */
-    c->cmd = c->lastcmd = c->realcmd = NULL;
+    c->cmd = c->lastcmd = c->realcmd = c->io_parsed_cmd = NULL;
     if (c->bstate.async_rm_call_handle) {
         ValkeyModuleAsyncRMCallPromise *promise = c->bstate.async_rm_call_handle;
         promise->c = NULL; /* Remove the client from the promise so it will no longer be possible to abort it. */
@@ -1295,7 +1296,8 @@ int VM_CreateCommand(ValkeyModuleCtx *ctx,
     ValkeyModuleCommand *cp = moduleCreateCommandProxy(ctx->module, declared_name, sdsdup(declared_name), cmdfunc,
                                                        flags, firstkey, lastkey, keystep);
     cp->serverCmd->arity = cmdfunc ? -1 : -2; /* Default value, can be changed later via dedicated API */
-
+    /* Drain IO queue before modifying commands dictionary to prevent concurrent access while modifying it. */
+    drainIOThreadsQueue();
     serverAssert(dictAdd(server.commands, sdsdup(declared_name), cp->serverCmd) == DICT_OK);
     serverAssert(dictAdd(server.orig_commands, sdsdup(declared_name), cp->serverCmd) == DICT_OK);
     cp->serverCmd->id = ACLGetCommandID(declared_name); /* ID used for ACL. */
@@ -6281,7 +6283,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         if (error_as_call_replies) reply = callReplyCreateError(err, ctx);
         goto cleanup;
     }
-    if (!commandCheckArity(c, error_as_call_replies ? &err : NULL)) {
+    if (!commandCheckArity(c->cmd, c->argc, error_as_call_replies ? &err : NULL)) {
         errno = EINVAL;
         if (error_as_call_replies) reply = callReplyCreateError(err, ctx);
         goto cleanup;
@@ -8950,6 +8952,14 @@ size_t VM_GetClusterSize(void) {
     return getClusterSize();
 }
 
+int moduleGetClusterNodeInfoForClient(ValkeyModuleCtx *ctx,
+                                      client *c,
+                                      const char *node_id,
+                                      char *ip,
+                                      char *primary_id,
+                                      int *port,
+                                      int *flags);
+
 /* Populate the specified info for the node having as ID the specified 'id',
  * then returns VALKEYMODULE_OK. Otherwise if the format of node ID is invalid
  * or the node ID does not exist from the POV of this local node, VALKEYMODULE_ERR
@@ -8971,14 +8981,41 @@ size_t VM_GetClusterSize(void) {
  * * VALKEYMODULE_NODE_NOFAILOVER:   The replica is configured to never failover
  */
 int VM_GetClusterNodeInfo(ValkeyModuleCtx *ctx, const char *id, char *ip, char *primary_id, int *port, int *flags) {
+    return moduleGetClusterNodeInfoForClient(ctx, NULL, id, ip, primary_id, port, flags);
+}
+
+/* Like VM_GetClusterNodeInfo(), but returns IP address specifically for the given
+ * client, depending on whether the client is connected over IPv4 or IPv6.
+ *
+ * See also VM_GetClientId(). */
+int VM_GetClusterNodeInfoForClient(ValkeyModuleCtx *ctx,
+                                   uint64_t client_id,
+                                   const char *node_id,
+                                   char *ip,
+                                   char *primary_id,
+                                   int *port,
+                                   int *flags) {
+    client *c = lookupClientByID(client_id);
+    if (c == NULL) return VALKEYMODULE_ERR;
+    return moduleGetClusterNodeInfoForClient(ctx, c, node_id, ip, primary_id, port, flags);
+}
+
+
+int moduleGetClusterNodeInfoForClient(ValkeyModuleCtx *ctx,
+                                      client *c,
+                                      const char *node_id,
+                                      char *ip,
+                                      char *primary_id,
+                                      int *port,
+                                      int *flags) {
     UNUSED(ctx);
 
-    clusterNode *node = clusterLookupNode(id, strlen(id));
+    clusterNode *node = clusterLookupNode(node_id, strlen(node_id));
     if (node == NULL || clusterNodePending(node)) {
         return VALKEYMODULE_ERR;
     }
 
-    if (ip) valkey_strlcpy(ip, clusterNodeIp(node), NET_IP_STR_LEN);
+    if (ip) valkey_strlcpy(ip, clusterNodeIp(node, c), NET_IP_STR_LEN);
 
     if (primary_id) {
         /* If the information is not available, the function will set the
@@ -10675,6 +10712,8 @@ void moduleCallCommandFilters(client *c) {
 
     ValkeyModuleCommandFilterCtx filter = {.argv = c->argv, .argv_len = c->argv_len, .argc = c->argc, .c = c};
 
+    robj *tmp = c->argv[0];
+    incrRefCount(tmp);
     while ((ln = listNext(&li))) {
         ValkeyModuleCommandFilter *f = ln->value;
 
@@ -10690,6 +10729,12 @@ void moduleCallCommandFilters(client *c) {
     c->argv = filter.argv;
     c->argv_len = filter.argv_len;
     c->argc = filter.argc;
+    if (tmp != c->argv[0]) {
+        /* With I/O thread command-lookup offload, we set c->io_parsed_cmd to the command corresponding to c->argv[0].
+         * Since the command filter just changed it, we need to reset c->io_parsed_cmd to null. */
+        c->io_parsed_cmd = NULL;
+    }
+    decrRefCount(tmp);
 }
 
 /* Return the number of arguments a filtered command has.  The number of
@@ -12037,6 +12082,8 @@ int moduleFreeCommand(struct ValkeyModule *module, struct serverCommand *cmd) {
 }
 
 void moduleUnregisterCommands(struct ValkeyModule *module) {
+    /* Drain IO queue before modifying commands dictionary to prevent concurrent access while modifying it. */
+    drainIOThreadsQueue();
     /* Unregister all the commands registered by this module. */
     dictIterator *di = dictGetSafeIterator(server.commands);
     dictEntry *de;
@@ -13708,6 +13755,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RegisterClusterMessageReceiver);
     REGISTER_API(SendClusterMessage);
     REGISTER_API(GetClusterNodeInfo);
+    REGISTER_API(GetClusterNodeInfoForClient);
     REGISTER_API(GetClusterNodesList);
     REGISTER_API(FreeClusterNodesList);
     REGISTER_API(CreateTimer);

@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2009-2020, Salvatore Sanfilippo <antirez at gmail dot com>
- * Copyright (c) 2020, Redis Labs, Inc
+ * Copyright (c) 2009-2020, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,6 +36,7 @@
 #include "fpconv_dtoa.h"
 #include "cluster.h"
 #include "threads_mngr.h"
+#include "io_threads.h"
 
 #include <arpa/inet.h>
 #include <signal.h>
@@ -425,8 +425,10 @@ void debugCommand(client *c) {
             "MALLCTL-STR <key> [<val>]",
             "    Get or set a malloc tuning string.",
 #endif
-            "OBJECT <key>",
+            "OBJECT <key> [fast]",
             "    Show low level info about `key` and associated value.",
+            "    Some fields of the default behavior may be time consuming to fetch,",
+            "    and `fast` can be passed to avoid fetching them.",
             "DROP-CLUSTER-PACKET-FILTER <packet-type>",
             "    Drop all packets that match the filtered type. Set to -1 allow all packets.",
             "CLOSE-CLUSTER-LINK-ON-PACKET-DROP <0|1>",
@@ -494,6 +496,10 @@ void debugCommand(client *c) {
             "    In case RESET is provided the peak reset time will be restored to the default value",
             "REPLYBUFFER RESIZING <0|1>",
             "    Enable or disable the reply buffer resize cron job",
+            "PAUSE-AFTER-FORK <0|1>",
+            "    Stop the server's main process after fork.",
+            "DELAY-RDB-CLIENT-FREE-SECOND <seconds>",
+            "    Grace period in seconds for replica main channel to establish psync.",
             "DICT-RESIZING <0|1>",
             "    Enable or disable the main dict and expire dict resizing.",
             NULL};
@@ -599,10 +605,13 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "close-cluster-link-on-packet-drop") && c->argc == 3) {
         server.debug_cluster_close_link_on_packet_drop = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "object") && c->argc == 3) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "object") && (c->argc == 3 || c->argc == 4)) {
         dictEntry *de;
         robj *val;
         char *strenc;
+
+        int fast = 0;
+        if (c->argc == 4 && !strcasecmp(c->argv[3]->ptr, "fast")) fast = 1;
 
         if ((de = dbFind(c->db, c->argv[2]->ptr)) == NULL) {
             addReplyErrorObject(c, shared.nokeyerr);
@@ -634,22 +643,27 @@ void debugCommand(client *c) {
             used = snprintf(nextra, remaining, " ql_compressed:%d", compressed);
             nextra += used;
             remaining -= used;
-            /* Add total uncompressed size */
-            unsigned long sz = 0;
-            for (quicklistNode *node = ql->head; node; node = node->next) {
-                sz += node->sz;
+            if (!fast) {
+                /* Add total uncompressed size */
+                unsigned long sz = 0;
+                for (quicklistNode *node = ql->head; node; node = node->next) {
+                    sz += node->sz;
+                }
+                used = snprintf(nextra, remaining, " ql_uncompressed_size:%lu", sz);
+                nextra += used;
+                remaining -= used;
             }
-            used = snprintf(nextra, remaining, " ql_uncompressed_size:%lu", sz);
-            nextra += used;
-            remaining -= used;
         }
 
-        addReplyStatusFormat(c,
-                             "Value at:%p refcount:%d "
-                             "encoding:%s serializedlength:%zu "
-                             "lru:%d lru_seconds_idle:%llu%s",
-                             (void *)val, val->refcount, strenc, rdbSavedObjectLen(val, c->argv[2], c->db->id),
-                             val->lru, estimateObjectIdleTime(val) / 1000, extra);
+        sds s = sdsempty();
+        s = sdscatprintf(s, "Value at:%p refcount:%d encoding:%s", (void *)val, val->refcount, strenc);
+        if (!fast) s = sdscatprintf(s, " serializedlength:%zu", rdbSavedObjectLen(val, c->argv[2], c->db->id));
+        /* Either lru or lfu field could work correctly which depends on server.maxmemory_policy. */
+        s = sdscatprintf(s, " lru:%d lru_seconds_idle:%llu", val->lru, estimateObjectIdleTime(val) / 1000);
+        s = sdscatprintf(s, " lfu_freq:%lu lfu_access_time_minutes:%u", LFUDecrAndReturn(val), val->lru >> 8);
+        s = sdscatprintf(s, "%s", extra);
+        addReplyStatusLength(c, s, sdslen(s));
+        sdsfree(s);
     } else if (!strcasecmp(c->argv[1]->ptr, "sdslen") && c->argc == 3) {
         dictEntry *de;
         robj *val;
@@ -989,6 +1003,12 @@ void debugCommand(client *c) {
             addReplySubcommandSyntaxError(c);
             return;
         }
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "pause-after-fork") && c->argc == 3) {
+        server.debug_pause_after_fork = atoi(c->argv[2]->ptr);
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "delay-rdb-client-free-seconds") && c->argc == 3) {
+        server.wait_before_rdb_client_free = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "dict-resizing") && c->argc == 3) {
         server.dict_resizing = atoi(c->argv[2]->ptr);
@@ -2159,6 +2179,7 @@ void removeSigSegvHandlers(void) {
 }
 
 void printCrashReport(void) {
+    server.crashed = 1;
     /* Log INFO and CLIENT LIST */
     logServerInfo();
 
@@ -2287,6 +2308,12 @@ void applyWatchdogPeriod(void) {
         if (server.watchdog_period < min_period) server.watchdog_period = min_period;
         watchdogScheduleSignal(server.watchdog_period); /* Adjust the current timer. */
     }
+}
+
+void debugPauseProcess(void) {
+    serverLog(LL_NOTICE, "Process is about to stop.");
+    raise(SIGSTOP);
+    serverLog(LL_NOTICE, "Process has been continued.");
 }
 
 /* Positive input is sleep time in microseconds. Negative input is fractions

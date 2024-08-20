@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -931,18 +931,23 @@ void killAppendOnlyChild(void) {
  * at runtime using the CONFIG command. */
 void stopAppendOnly(void) {
     serverAssert(server.aof_state != AOF_OFF);
-    flushAppendOnlyFile(1);
-    if (valkey_fsync(server.aof_fd) == -1) {
-        serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
-    } else {
-        server.aof_last_fsync = server.mstime;
+    if (server.aof_fd != -1) {
+        flushAppendOnlyFile(1);
+        if (valkey_fsync(server.aof_fd) == -1) {
+            serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
+        } else {
+            server.aof_last_fsync = server.mstime;
+        }
+        close(server.aof_fd);
     }
-    close(server.aof_fd);
 
     server.aof_fd = -1;
     server.aof_selected_db = -1;
     server.aof_state = AOF_OFF;
-    server.aof_rewrite_scheduled = 0;
+    if (server.aof_rewrite_scheduled) {
+        server.aof_rewrite_scheduled = 0;
+        serverLog(LL_NOTICE, "AOF was disabled but there is a scheduled AOF background, cancel it.");
+    }
     server.aof_last_incr_size = 0;
     server.aof_last_incr_fsync_offset = 0;
     server.fsynced_reploff = -1;
@@ -2453,6 +2458,7 @@ void bgrewriteaofCommand(client *c) {
         /* When manually triggering AOFRW we reset the count
          * so that it can be executed immediately. */
         server.stat_aofrw_consecutive_failures = 0;
+        serverLog(LL_NOTICE, "Background append only file rewriting scheduled.");
         addReplyStatus(c, "Background append only file rewriting scheduled");
     } else if (rewriteAppendOnlyFileBackground() == C_OK) {
         addReplyStatus(c, "Background append only file rewriting started");

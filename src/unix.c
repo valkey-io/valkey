@@ -198,6 +198,8 @@ static ConnectionType CT_Unix = {
     /* pending data */
     .has_pending_data = NULL,
     .process_pending_data = NULL,
+    .postpone_update_state = NULL,
+    .update_state = NULL,
 };
 
 int RedisRegisterConnectionTypeUnix(void) {

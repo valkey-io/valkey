@@ -156,6 +156,12 @@ test "Shutting down master waits for replica then fails" {
             set rd2 [valkey_deferring_client -1]
             $rd1 shutdown
             $rd2 shutdown
+            wait_for_condition 50 100 {
+                [llength [lsearch -all [split [string trim [$master client list]] "\r\n"] *cmd=shutdown*]] == 2
+            } else {
+                fail "SHUTDOWN not called on all clients"
+            }
+
             set info_clients [$master info clients]
             assert_match "*connected_clients:3*" $info_clients
             assert_match "*blocked_clients:2*" $info_clients
@@ -209,6 +215,12 @@ test "Shutting down master waits for replica then aborted" {
             set rd2 [valkey_deferring_client -1]
             $rd1 shutdown
             $rd2 shutdown
+            wait_for_condition 50 100 {
+                [llength [lsearch -all [split [string trim [$master client list]] "\r\n"] *cmd=shutdown*]] == 2
+            } else {
+                fail "SHUTDOWN not called on all clients"
+            }
+
             set info_clients [$master info clients]
             assert_match "*connected_clients:3*" $info_clients
             assert_match "*blocked_clients:2*" $info_clients

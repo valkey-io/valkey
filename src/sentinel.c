@@ -1,6 +1,6 @@
 /* Sentinel implementation
  *
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -1946,7 +1946,9 @@ const char *sentinelHandleConfiguration(char **argv, int argc) {
         if ((sentinel.announce_hostnames = yesnotoi(argv[1])) == -1) {
             return "Please specify yes or no for the announce-hostnames option.";
         }
-    } else if (!strcasecmp(argv[0], "master-reboot-down-after-period") && argc == 3) {
+    } else if ((!strcasecmp(argv[0], "primary-reboot-down-after-period") ||
+                !strcasecmp(argv[0], "master-reboot-down-after-period")) &&
+               argc == 3) {
         /* primary-reboot-down-after-period <name> <milliseconds> */
         ri = sentinelGetPrimaryByName(argv[1]);
         if (!ri) return "No such master with specified name.";
@@ -2058,9 +2060,9 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
 
         /* sentinel primary-reboot-down-after-period */
         if (primary->primary_reboot_down_after_period != 0) {
-            line = sdscatprintf(sdsempty(), "sentinel master-reboot-down-after-period %s %ld", primary->name,
+            line = sdscatprintf(sdsempty(), "sentinel primary-reboot-down-after-period %s %ld", primary->name,
                                 (long)primary->primary_reboot_down_after_period);
-            rewriteConfigRewriteLine(state, "sentinel master-reboot-down-after-period", line, 1);
+            rewriteConfigRewriteLine(state, "sentinel primary-reboot-down-after-period", line, 1);
             /* rewriteConfigMarkAsProcessed is handled after the loop */
         }
 
@@ -2085,7 +2087,7 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
             ri = dictGetVal(de);
             replica_addr = ri->addr;
 
-            /* If primary_addr (obtained using sentinelGetCurrentMasterAddress()
+            /* If primary_addr (obtained using sentinelGetCurrentPrimaryAddress()
              * so it may be the address of the promoted replica) is equal to this
              * replica's address, a failover is in progress and the replica was
              * already successfully promoted. So as the address of this replica
@@ -2184,7 +2186,7 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
     rewriteConfigMarkAsProcessed(state, "sentinel known-replica");
     rewriteConfigMarkAsProcessed(state, "sentinel known-sentinel");
     rewriteConfigMarkAsProcessed(state, "sentinel rename-command");
-    rewriteConfigMarkAsProcessed(state, "sentinel master-reboot-down-after-period");
+    rewriteConfigMarkAsProcessed(state, "sentinel primary-reboot-down-after-period");
 }
 
 /* This function uses the config rewriting in order to persist
@@ -3686,7 +3688,7 @@ void sentinelCommand(client *c) {
 "DEBUG [<param> <value> ...]",
 "    Show a list of configurable time parameters and their values (milliseconds).",
 "    Or update current configurable parameters values (one or more).",
-"GET-MASTER-ADDR-BY-NAME <primary-name>",
+"GET-PRIMARY-ADDR-BY-NAME <primary-name>",
 "    Return the ip and port number of the primary with that name.",
 "FAILOVER <primary-name>",
 "    Manually failover a primary node without asking for agreement from other",
@@ -3696,12 +3698,12 @@ void sentinelCommand(client *c) {
 "    Sentinel state.",
 "INFO-CACHE <primary-name>",
 "    Return last cached INFO output from primaries and all its replicas.",
-"IS-MASTER-DOWN-BY-ADDR <ip> <port> <current-epoch> <runid>",
+"IS-PRIMARY-DOWN-BY-ADDR <ip> <port> <current-epoch> <runid>",
 "    Check if the primary specified by ip:port is down from current Sentinel's",
 "    point of view.",
-"MASTER <primary-name>",
+"PRIMARY <primary-name>",
 "    Show the state and info of the specified primary.",
-"MASTERS",
+"PRIMARIES",
 "    Show a list of monitored primaries and their state.",
 "MONITOR <name> <ip> <port> <quorum>",
 "    Start monitoring a new primary with the specified name, ip, port and quorum.",
@@ -3725,11 +3727,11 @@ NULL
         };
         /* clang-format on */
         addReplyHelp(c, help);
-    } else if (!strcasecmp(c->argv[1]->ptr, "masters")) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "primaries") || !strcasecmp(c->argv[1]->ptr, "masters")) {
         /* SENTINEL PRIMARIES */
         if (c->argc != 2) goto numargserr;
         addReplyDictOfValkeyInstances(c, sentinel.primaries);
-    } else if (!strcasecmp(c->argv[1]->ptr, "master")) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "primary") || !strcasecmp(c->argv[1]->ptr, "master")) {
         /* SENTINEL PRIMARY <name> */
         sentinelValkeyInstance *ri;
 
@@ -3753,7 +3755,8 @@ NULL
     } else if (!strcasecmp(c->argv[1]->ptr, "myid") && c->argc == 2) {
         /* SENTINEL MYID */
         addReplyBulkCBuffer(c, sentinel.myid, CONFIG_RUN_ID_SIZE);
-    } else if (!strcasecmp(c->argv[1]->ptr, "is-master-down-by-addr")) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "is-primary-down-by-addr") ||
+               !strcasecmp(c->argv[1]->ptr, "is-master-down-by-addr")) {
         /* SENTINEL IS-PRIMARY-DOWN-BY-ADDR <ip> <port> <current-epoch> <runid>
          *
          * Arguments:
@@ -3805,7 +3808,8 @@ NULL
         /* SENTINEL RESET <pattern> */
         if (c->argc != 3) goto numargserr;
         addReplyLongLong(c, sentinelResetPrimariesByPattern(c->argv[2]->ptr, SENTINEL_GENERATE_EVENT));
-    } else if (!strcasecmp(c->argv[1]->ptr, "get-master-addr-by-name")) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "get-primary-addr-by-name") ||
+               !strcasecmp(c->argv[1]->ptr, "get-master-addr-by-name")) {
         /* SENTINEL GET-PRIMARY-ADDR-BY-NAME <primary-name> */
         sentinelValkeyInstance *ri;
 
@@ -4249,7 +4253,9 @@ void sentinelSetCommand(client *c) {
                 dictAdd(ri->renamed_commands, oldname, newname);
             }
             changes++;
-        } else if (!strcasecmp(option, "master-reboot-down-after-period") && moreargs > 0) {
+        } else if ((!strcasecmp(option, "primary-reboot-down-after-period") ||
+                    !strcasecmp(option, "master-reboot-down-after-period")) &&
+                   moreargs > 0) {
             /* primary-reboot-down-after-period <milliseconds> */
             robj *o = c->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll < 0) {

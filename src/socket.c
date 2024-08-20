@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Redis Labs
+ * Copyright (c) 2019, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -423,6 +423,8 @@ static ConnectionType CT_Socket = {
     /* pending data */
     .has_pending_data = NULL,
     .process_pending_data = NULL,
+    .postpone_update_state = NULL,
+    .update_state = NULL,
 };
 
 int connBlock(connection *conn) {

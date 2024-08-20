@@ -37,7 +37,7 @@ proc reboot_instance {type id} {
 
 test "Primary reboot in very short time" {
     set old_port [RPort $master_id]
-    set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
+    set addr [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
     assert {[lindex $addr 1] == $old_port}
     
     R $master_id debug populate 10000
@@ -47,9 +47,11 @@ test "Primary reboot in very short time" {
     R $master_id config rewrite
 
     foreach_sentinel_id id {
-        S $id SENTINEL SET mymaster master-reboot-down-after-period 5000
-        S $id sentinel debug ping-period 500
-        S $id sentinel debug ask-period 500 
+	foreach role {master primary} {
+            S $id SENTINEL SET mymaster $role-reboot-down-after-period 5000
+            S $id sentinel debug ping-period 500
+            S $id sentinel debug ask-period 500 
+	}
     }
 
     kill_instance valkey $master_id
@@ -57,13 +59,13 @@ test "Primary reboot in very short time" {
     
     foreach_sentinel_id id {        
         wait_for_condition 1000 100 {
-            [lindex [S $id SENTINEL GET-MASTER-ADDR-BY-NAME mymaster] 1] != $old_port
+            [lindex [S $id SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster] 1] != $old_port
         } else {
             fail "At least one Sentinel did not receive failover info"
         }
     }
 
-    set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
+    set addr [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
     set master_id [get_instance_id_by_port valkey [lindex $addr 1]]
 
     # Make sure the instance load all the dataset
@@ -88,7 +90,7 @@ test "All the other slaves now point to the new primary" {
             wait_for_condition 1000 50 {
                 [RI $id master_port] == [lindex $addr 1]
             } else {
-                fail "Valkey ID $id not configured to replicate with new master"
+                fail "Valkey ID $id not configured to replicate with new primary"
             }
         }
     }

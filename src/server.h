@@ -1015,8 +1015,8 @@ typedef struct blockingState {
         listNode *postponed_list_node;           /* list node in server.postponed_clients */
         listNode *generic_blocked_list_node;     /* generic placeholder for blocked clients utility lists.
                                                     Since a client cannot be blocked multiple times, we can assume
-                                                    it will be held in only one extra utility list, so it is ok to maintain a
-                                                    union of these listNode references. */
+                                                    it will be held in only one extra utility list, so it is ok to maintain
+                                                    a union of these listNode references. */
     };
 
     /* BLOCKED_LIST, BLOCKED_ZSET and BLOCKED_STREAM or any other Keys related blocking */

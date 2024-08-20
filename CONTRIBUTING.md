@@ -19,6 +19,16 @@ The Valkey project is led by a Technical Steering Committee, whose responsibilit
 * Want to help with documentation? [Move on to valkey-doc](https://github.com/valkey-io/valkey-doc)
 * Report a vulnerability? See [SECURITY.md](SECURITY.md)
 
+## Code Formatting
+
+Before committing your changes, please ensure your code is properly formatted:
+
+1. Run `make format` in the project root directory.
+2. Review the changes made by the formatter.
+3. Commit the formatted code along with your changes.
+
+This helps maintain consistent code style across the project.
+
 ## Developer Certificate of Origin
 
 We respect the intellectual property rights of others and we want to make sure

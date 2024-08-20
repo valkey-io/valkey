@@ -639,3 +639,25 @@ uninstall:
 	$(call MAYBE_UNINSTALL_REDIS_SYMLINK,$(INSTALL_BIN),$(ENGINE_CHECK_RDB_NAME))
 	$(call MAYBE_UNINSTALL_REDIS_SYMLINK,$(INSTALL_BIN),$(ENGINE_CHECK_AOF_NAME))
 	$(call MAYBE_UNINSTALL_REDIS_SYMLINK,$(INSTALL_BIN),$(ENGINE_SENTINEL_NAME))
+
+format:
+	@if ! command -v clang-format >/dev/null 2>&1; then \
+		echo "Error: clang-format is required to run this command."; \
+		exit 1; \
+	fi
+	@CLANG_FORMAT_VERSION=$$(clang-format --version | awk '{print $$3}' | cut -d. -f1); \
+	if [ $$CLANG_FORMAT_VERSION -lt 18 ]; then \
+		echo "Error: clang-format version 18 or higher is required."; \
+		echo "Your version: $$(clang-format --version)"; \
+		echo "Please upgrade clang-format to continue."; \
+		exit 1; \
+	fi
+	@echo "Formatting code.."
+	@trap 'kill $$!' EXIT; \
+	{ while true; do for s in / - \\ \|; do printf "\r%s" $$s; sleep 0.1; done; done } & \
+	{ \
+		find . \( -name '*.c' -o -name '*.h' \) -type f | xargs clang-format -i -style=file; \
+	}
+	@printf "\rFormatting finished.   \n"
+
+.PHONY: format

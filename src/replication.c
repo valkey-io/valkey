@@ -2253,6 +2253,7 @@ void readSyncBulkPayload(connection *conn) {
                 serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding temporary DB in background");
             } else {
                 /* Remove the half-loaded data in case we started with an empty replica. */
+                serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
                 emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
             }
 
@@ -2352,6 +2353,7 @@ void readSyncBulkPayload(connection *conn) {
             }
 
             /* If disk-based RDB loading fails, remove the half-loaded dataset. */
+                serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
             emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
 
             /* Note that there's no point in restarting the AOF on sync failure,

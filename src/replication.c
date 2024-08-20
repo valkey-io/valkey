@@ -1994,8 +1994,8 @@ void readSyncBulkPayload(connection *conn) {
 
     /* Static vars used to hold the EOF mark, and the last bytes received
      * from the server: when they match, we reached the end of the transfer. */
-    static char eofmark[CONFIG_RUN_ID_SIZE];
-    static char lastbytes[CONFIG_RUN_ID_SIZE];
+    static char eofmark[RDB_EOF_MARK_SIZE];
+    static char lastbytes[RDB_EOF_MARK_SIZE];
     static int usemark = 0;
 
     /* If repl_transfer_size == -1 we still have to read the bulk length
@@ -2038,10 +2038,10 @@ void readSyncBulkPayload(connection *conn) {
          * At the end of the file the announced delimiter is transmitted. The
          * delimiter is long and random enough that the probability of a
          * collision with the actual file content can be ignored. */
-        if (strncmp(buf + 1, "EOF:", 4) == 0 && strlen(buf + 5) >= CONFIG_RUN_ID_SIZE) {
+        if (strncmp(buf + 1, "EOF:", 4) == 0 && strlen(buf + 5) >= RDB_EOF_MARK_SIZE) {
             usemark = 1;
-            memcpy(eofmark, buf + 5, CONFIG_RUN_ID_SIZE);
-            memset(lastbytes, 0, CONFIG_RUN_ID_SIZE);
+            memcpy(eofmark, buf + 5, RDB_EOF_MARK_SIZE);
+            memset(lastbytes, 0, RDB_EOF_MARK_SIZE);
             /* Set any repl_transfer_size to avoid entering this code path
              * at the next call. */
             server.repl_transfer_size = 0;
@@ -2086,14 +2086,14 @@ void readSyncBulkPayload(connection *conn) {
         if (usemark) {
             /* Update the last bytes array, and check if it matches our
              * delimiter. */
-            if (nread >= CONFIG_RUN_ID_SIZE) {
-                memcpy(lastbytes, buf + nread - CONFIG_RUN_ID_SIZE, CONFIG_RUN_ID_SIZE);
+            if (nread >= RDB_EOF_MARK_SIZE) {
+                memcpy(lastbytes, buf + nread - RDB_EOF_MARK_SIZE, RDB_EOF_MARK_SIZE);
             } else {
-                int rem = CONFIG_RUN_ID_SIZE - nread;
+                int rem = RDB_EOF_MARK_SIZE - nread;
                 memmove(lastbytes, lastbytes + nread, rem);
                 memcpy(lastbytes + rem, buf, nread);
             }
-            if (memcmp(lastbytes, eofmark, CONFIG_RUN_ID_SIZE) == 0) eof_reached = 1;
+            if (memcmp(lastbytes, eofmark, RDB_EOF_MARK_SIZE) == 0) eof_reached = 1;
         }
 
         /* Update the last I/O time for the replication transfer (used in
@@ -2111,7 +2111,7 @@ void readSyncBulkPayload(connection *conn) {
 
         /* Delete the last 40 bytes from the file if we reached EOF. */
         if (usemark && eof_reached) {
-            if (ftruncate(server.repl_transfer_fd, server.repl_transfer_read - CONFIG_RUN_ID_SIZE) == -1) {
+            if (ftruncate(server.repl_transfer_fd, server.repl_transfer_read - RDB_EOF_MARK_SIZE) == -1) {
                 serverLog(LL_WARNING,
                           "Error truncating the RDB file received from the primary "
                           "for SYNC: %s",
@@ -2228,7 +2228,7 @@ void readSyncBulkPayload(connection *conn) {
             loadingFailed = 1;
         } else if (usemark) {
             /* Verify the end mark is correct. */
-            if (!rioRead(&rdb, buf, CONFIG_RUN_ID_SIZE) || memcmp(buf, eofmark, CONFIG_RUN_ID_SIZE) != 0) {
+            if (!rioRead(&rdb, buf, RDB_EOF_MARK_SIZE) || memcmp(buf, eofmark, RDB_EOF_MARK_SIZE) != 0) {
                 serverLog(LL_WARNING, "Replication stream EOF marker is broken");
                 loadingFailed = 1;
             }

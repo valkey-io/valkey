@@ -275,11 +275,6 @@ static inline dictEntryNormal *decodeEntryNormal(const dictEntry *de) {
     return decodeMaskedPtr(de);
 }
 
-/* Returns 1 if the entry has a value field and 0 otherwise. */
-static inline int entryHasValue(const dictEntry *de) {
-    return entryIsNormal(de) || entryIsEmbedded(de);
-}
-
 /* ----------------------------- API implementation ------------------------- */
 
 /* Reset hash table parameters already initialized with _dictInit()*/

@@ -79,7 +79,7 @@ typedef long long ustime_t; /* microsecond time type. */
                            N-elements flat arrays */
 #include "rax.h"        /* Radix tree */
 #include "connection.h" /* Connection abstraction */
-#include "maa.h"        /* Memory access amortization */
+#include "memory_prefetch.h"
 
 #define VALKEYMODULE_CORE 1
 typedef struct serverObject robj;

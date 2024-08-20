@@ -1,5 +1,5 @@
-#ifndef MAA_H
-#define MAA_H
+#ifndef MEMORY_PREFETCH_H
+#define MEMORY_PREFETCH_H
 
 struct client;
 
@@ -9,4 +9,4 @@ void processClientsCommandsBatch(void);
 int addCommandToBatchAndProcessIfFull(struct client *c);
 void removeClientFromPendingCommandsBatch(struct client *c);
 
-#endif /* MAA_H */
+#endif /* MEMORY_PREFETCH_H */

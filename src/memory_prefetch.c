@@ -1,12 +1,9 @@
 /*
- * maa.c - Memory Access Amortization (MAA) Implementation
- *
- * This file implements the memory access amortization technique for Valkey.
- * It utilizes prefetching keys and data for multiple commands in a batch,
+ * This file utilizes prefetching keys and data for multiple commands in a batch,
  * to improve performance by amortizing memory access costs across multiple operations.
  */
 
-#include "maa.h"
+#include "memory_prefetch.h"
 #include "server.h"
 #include "dict.h"
 
@@ -16,9 +13,7 @@ dictEntry *dictGetNext(const dictEntry *de);
 /* Forward declarations of kvstore.c functions */
 dict *kvstoreGetDict(kvstore *kvs, int didx);
 
-#define HT_IDX_FIRST 0
-#define HT_IDX_SECOND 1
-#define HT_IDX_INVALID -1
+typedef enum { HT_IDX_FIRST = 0, HT_IDX_SECOND = 1, HT_IDX_INVALID = -1 } HashTableIndex;
 
 typedef enum {
     PREFETCH_BUCKET,     /* Initial state, determines which hash table to use and prefetch the table's bucket */
@@ -61,7 +56,7 @@ typedef void *(*GetValueDataFunc)(const void *val);
 
 typedef struct PrefetchInfo {
     PrefetchState state;      /* Current state of the prefetch operation */
-    int ht_idx;               /* Index of the current hash table (0 or 1 for rehashing) */
+    HashTableIndex ht_idx;    /* Index of the current hash table (0 or 1 for rehashing) */
     uint64_t bucket_idx;      /* Index of the bucket in the current hash table */
     uint64_t key_hash;        /* Hash value of the key being prefetched */
     dictEntry *current_entry; /* Pointer to the current entry being processed */

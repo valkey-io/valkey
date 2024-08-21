@@ -13,23 +13,35 @@ source tests/support/tmpfile.tcl
 source tests/support/test.tcl
 source tests/support/util.tcl
 
-set dir [pwd]
 set ::all_tests []
+set ::filter_test_dir ""
+set ::test_dirs {
+        unit
+        unit/type
+        unit/cluster
+        integration
+    }
 
-set test_dirs {
-    unit
-    unit/type
-    unit/cluster
-    integration
-}
+proc initialize_test_dir {} {
+    set dir [pwd]
+    
+    foreach test_dir $::test_dirs {
+        if {$::filter_test_dir ne "" && ![string match tests/$test_dir $::filter_test_dir]} {
+            continue
+        }
+        set files [glob -nocomplain $dir/tests/$test_dir/*.tcl]
 
-foreach test_dir $test_dirs {
-    set files [glob -nocomplain $dir/tests/$test_dir/*.tcl]
-
-    foreach file $files {
-        lappend ::all_tests $test_dir/[file root [file tail $file]]
+        foreach file $files {
+            lappend ::all_tests $test_dir/[file root [file tail $file]]
+        }
+    }
+    if {[llength $::all_tests] eq 0} {
+        puts "[colorstr bold-red {No test found!}]\n"
+        flush stdout;
+        exit 1
     }
 }
+
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0
 
@@ -560,6 +572,7 @@ proc print_help_screen {} {
         "--only <test>      Just execute the specified test by test name or tests that match <test> regexp (if <test> starts with '/'). This option can be repeated."
         "--skip-till <unit> Skip all units until (and including) the specified one."
         "--skipunit <unit>  Skip one unit."
+        "--test-dir <dir>   Run tests within specific directory like unit, unit/type, unit/cluster, integration"
         "--clients <num>    Number of test clients (default 16)."
         "--timeout <sec>    Test timeout in seconds (default 20 min)."
         "--force-failure    Force the execution of a test that always fails."
@@ -630,6 +643,14 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         }
     } elseif {$opt eq {--quiet}} {
         set ::quiet 1
+    } elseif {$opt eq {--test-dir}} {
+        if {[file isdirectory $arg] eq 0} {
+            puts "Invalid directory path provided: $arg"
+            flush stdout;
+            exit 1
+        }
+        set ::filter_test_dir [string trim $arg "/"]
+        incr j
     } elseif {$opt eq {--tls} || $opt eq {--tls-module}} {
         package require tls 1.6
         set ::tls 1
@@ -733,6 +754,8 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
 
 set filtered_tests {}
 
+initialize_test_dir
+
 # Set the filtered tests to be the short list (single_tests) if exists.
 # Otherwise, we start filtering all_tests
 if {[llength $::single_tests] > 0} {
@@ -774,6 +797,7 @@ if {[llength $::skipunits] > 0} {
 if {[llength $filtered_tests] < [llength $::all_tests]} {
     set ::all_tests $filtered_tests
 }
+
 
 proc attach_to_replication_stream_on_connection {conn} {
     r config set repl-ping-replica-period 3600

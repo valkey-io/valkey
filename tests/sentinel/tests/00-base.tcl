@@ -208,3 +208,13 @@ test "SENTINEL RESET can resets the primary" {
     assert_equal 0 $res2
     assert_equal 0 $res3
 }
+
+test "SENTINEL IS-PRIMARY-DOWN-BY-ADDR checks if the primary is down" {
+    set sentinel_id [S 0 SENTINEL MYID]
+    set master_ip_port [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
+    set master_ip [lindex $master_ip_port 0]
+    set master_port [lindex $master_ip_port 1]
+    set result [S 0 SENTINEL IS-PRIMARY-DOWN-BY-ADDR $master_ip $master_port 50 $sentinel_id]
+    assert_equal $sentinel_id [lindex $result 1]
+    assert_equal {50} [lindex $result 2]
+}

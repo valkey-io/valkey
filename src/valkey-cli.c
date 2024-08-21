@@ -5030,11 +5030,18 @@ clusterManagerMoveSlot(clusterManagerNode *source, clusterManagerNode *target, i
          * the face of primary failures. However, while our client is blocked on
          * the primary awaiting replication, the primary might become a replica
          * for the same reason as mentioned above, resulting in the client being
-         * unblocked with the role change error. */
+         * unblocked with the role change error.
+         *
+         * Another acceptable error can arise now that the primary pre-replicates
+         * `cluster setslot` commands to replicas while blocking the client on the
+         * primary. And during the block, the replicas were automatically migrates
+         * to another primary, resulting in the client being unblocked with the
+         * NOREPLICAS error. In this case, since the configuration will eventually
+         * propagate itself, so we ignore this error in the source node. */
         success = clusterManagerSetSlot(source, target, slot, "node", err);
         if (!success && err) {
             const char *acceptable[] = {"ERR Please use SETSLOT only with masters.",
-                                        "ERR Please use SETSLOT only with primaries.", "UNBLOCKED"};
+                                        "ERR Please use SETSLOT only with primaries.", "UNBLOCKED", "NOREPLICAS"};
             for (size_t i = 0; i < sizeof(acceptable) / sizeof(acceptable[0]); i++) {
                 if (!strncmp(*err, acceptable[i], strlen(acceptable[i]))) {
                     zfree(*err);

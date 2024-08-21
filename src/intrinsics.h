@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef INTRINSICS_H
-#define INTRINSICS_H
+#ifndef __INTRINSICS_H
+#define __INTRINSICS_H
 
 #include <stdint.h>
 
@@ -48,4 +48,4 @@ static inline int32_t count_trailing_zeros_64(uint64_t value) {
 #endif
 }
 
-#endif // INTRINSICS
+#endif // __INTRINSICS_H

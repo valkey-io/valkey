@@ -29,8 +29,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "intrinsics.h"
 #include "server.h"
+#include "intrinsics.h"
 
 #include <stdint.h>
 #include <math.h>

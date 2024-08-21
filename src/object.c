@@ -108,7 +108,7 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
     sh->alloc = usable;
     /* Overflow check. Must not happen as we use embedded strings only
      * for sds strings that fit into SDS_TYPE_8. */
-    assert(usable == sh->alloc);
+    serverAssert(usable == sh->alloc);
     sh->flags = SDS_TYPE_8;
     if (ptr == SDS_NOINIT)
         sh->buf[len] = '\0';

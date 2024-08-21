@@ -29,6 +29,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "intrinsics.h"
 #include "server.h"
 
 #include <stdint.h>
@@ -393,19 +394,6 @@ static char *invalid_hll_err = "-INVALIDOBJ Corrupted HLL object detected";
         *((p) + 1) = (_l & 0xff);                                                                                      \
     } while (0)
 #define HLL_ALPHA_INF 0.721347520444481703680 /* constant for 0.5/ln(2) */
-
-static inline int32_t count_trailing_zeros_64(uint64_t value) {
-#if defined(__clang__) || defined(__GNUC__)
-    return __builtin_ctzll(value);
-#else
-    int bitpos = 0;
-    while (value & 1 == 0) {
-        value >>= 1;
-        ++bitpos;
-    }
-    return bitpos;
-#endif
-}
 
 /* ========================= HyperLogLog algorithm  ========================= */
 

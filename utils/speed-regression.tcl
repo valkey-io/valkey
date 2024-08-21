@@ -1,5 +1,5 @@
 #!/usr/bin/env tclsh8.5
-# Copyright (C) 2011 Salvatore Sanfilippo
+# Copyright (C) 2011 Redis Ltd.
 # Released under the BSD license like Redis itself
 
 source ../tests/support/valkey.tcl

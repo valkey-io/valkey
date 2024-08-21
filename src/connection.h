@@ -35,6 +35,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/uio.h>
+#include <sys/socket.h>
 
 #include "ae.h"
 
@@ -255,8 +256,18 @@ static inline int connSetWriteHandlerWithBarrier(connection *conn, ConnectionCal
     return conn->type->set_write_handler(conn, func, barrier);
 }
 
-static inline void connShutdown(connection *conn) {
-    conn->type->shutdown(conn);
+static inline void connShutdown(connection *conn, int is_rdb_channel) {
+    if (is_rdb_channel) {
+        /*
+         * When using dual-channel replication, the replication channel connection
+         * may be blocked waiting for data from the replica. In such cases, we
+         * don't want the main process performing the shutdown to get blocked on
+         * read or write operations involving the replica connection.
+         */
+        shutdown(conn->fd, SHUT_RDWR);
+    } else {
+        conn->type->shutdown(conn);
+    }
 }
 
 static inline void connClose(connection *conn) {

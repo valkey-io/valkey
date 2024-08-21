@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * Copyright (c) 2009-2012, Pieter Noordhuis <pcnoordhuis at gmail dot com>
  * All rights reserved.
  *
@@ -1204,8 +1204,9 @@ robj *zsetTypeCreate(size_t size_hint, size_t val_len_hint) {
 
 /* Check if the existing zset should be converted to another encoding based off the
  * the size hint. */
-void zsetTypeMaybeConvert(robj *zobj, size_t size_hint) {
-    if (zobj->encoding == OBJ_ENCODING_LISTPACK && size_hint > server.zset_max_listpack_entries) {
+void zsetTypeMaybeConvert(robj *zobj, size_t size_hint, size_t value_len_hint) {
+    if (zobj->encoding == OBJ_ENCODING_LISTPACK &&
+        (size_hint > server.zset_max_listpack_entries || value_len_hint > server.zset_max_listpack_value)) {
         zsetConvertAndExpand(zobj, OBJ_ENCODING_SKIPLIST, size_hint);
     }
 }
@@ -1720,6 +1721,7 @@ void zaddGenericCommand(client *c, int flags) {
     sds ele;
     double score = 0, *scores = NULL;
     int j, elements, ch = 0;
+    size_t maxelelen = 0;
     int scoreidx = 0;
     /* The following vars are used in order to track what the command actually
      * did during the execution, to reply to the client and to trigger the
@@ -1790,6 +1792,9 @@ void zaddGenericCommand(client *c, int flags) {
     scores = zmalloc(sizeof(double) * elements);
     for (j = 0; j < elements; j++) {
         if (getDoubleFromObjectOrReply(c, c->argv[scoreidx + j * 2], &scores[j], NULL) != C_OK) goto cleanup;
+        ele = c->argv[scoreidx + 1 + j * 2]->ptr;
+        size_t elelen = sdslen(ele);
+        if (elelen > maxelelen) maxelelen = elelen;
     }
 
     /* Lookup the key and create the sorted set if does not exist. */
@@ -1797,10 +1802,10 @@ void zaddGenericCommand(client *c, int flags) {
     if (checkType(c, zobj, OBJ_ZSET)) goto cleanup;
     if (zobj == NULL) {
         if (xx) goto reply_to_client; /* No key + XX option: nothing to do. */
-        zobj = zsetTypeCreate(elements, sdslen(c->argv[scoreidx + 1]->ptr));
+        zobj = zsetTypeCreate(elements, maxelelen);
         dbAdd(c->db, key, zobj);
     } else {
-        zsetTypeMaybeConvert(zobj, elements);
+        zsetTypeMaybeConvert(zobj, elements, maxelelen);
     }
 
     for (j = 0; j < elements; j++) {
@@ -2524,15 +2529,6 @@ static void zdiff(zsetopsrc *src, long setnum, zset *dstzset, size_t *maxelelen,
     }
 }
 
-dictType setAccumulatorDictType = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    NULL,              /* key destructor */
-    NULL,              /* val destructor */
-    NULL               /* allow to expand */
-};
-
 /* The zunionInterDiffGenericCommand() function is called in order to implement the
  * following commands: ZUNION, ZINTER, ZDIFF, ZUNIONSTORE, ZINTERSTORE, ZDIFFSTORE,
  * ZINTERCARD.
@@ -2719,7 +2715,6 @@ void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIndex, in
             zuiClearIterator(&src[0]);
         }
     } else if (op == SET_OP_UNION) {
-        dict *accumulator = dictCreate(&setAccumulatorDictType);
         dictIterator *di;
         dictEntry *de, *existing;
         double score;
@@ -2727,7 +2722,7 @@ void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIndex, in
         if (setnum) {
             /* Our union is at least as large as the largest set.
              * Resize the dictionary ASAP to avoid useless rehashing. */
-            dictExpand(accumulator, zuiLength(&src[setnum - 1]));
+            dictExpand(dstzset->dict, zuiLength(&src[setnum - 1]));
         }
 
         /* Step 1: Create a dictionary of elements -> aggregated-scores
@@ -2742,7 +2737,7 @@ void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIndex, in
                 if (isnan(score)) score = 0;
 
                 /* Search for this element in the accumulating dictionary. */
-                de = dictAddRaw(accumulator, zuiSdsFromValue(&zval), &existing);
+                de = dictAddRaw(dstzset->dict, zuiSdsFromValue(&zval), &existing);
                 /* If we don't have it, we need to create a new entry. */
                 if (!existing) {
                     tmp = zuiNewSdsFromValue(&zval);
@@ -2752,7 +2747,7 @@ void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIndex, in
                     totelelen += sdslen(tmp);
                     if (sdslen(tmp) > maxelelen) maxelelen = sdslen(tmp);
                     /* Update the element with its initial score. */
-                    dictSetKey(accumulator, de, tmp);
+                    dictSetKey(dstzset->dict, de, tmp);
                     dictSetDoubleVal(de, score);
                 } else {
                     /* Update the score with the score of the new instance
@@ -2769,21 +2764,15 @@ void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIndex, in
         }
 
         /* Step 2: convert the dictionary into the final sorted set. */
-        di = dictGetIterator(accumulator);
-
-        /* We now are aware of the final size of the resulting sorted set,
-         * let's resize the dictionary embedded inside the sorted set to the
-         * right size, in order to save rehashing time. */
-        dictExpand(dstzset->dict, dictSize(accumulator));
+        di = dictGetIterator(dstzset->dict);
 
         while ((de = dictNext(di)) != NULL) {
             sds ele = dictGetKey(de);
             score = dictGetDoubleVal(de);
             znode = zslInsert(dstzset->zsl, score, ele);
-            dictAdd(dstzset->dict, ele, &znode->score);
+            dictSetVal(dstzset->dict, de, &znode->score);
         }
         dictReleaseIterator(di);
-        dictRelease(accumulator);
     } else if (op == SET_OP_DIFF) {
         zdiff(src, setnum, dstzset, &maxelelen, &totelelen);
     } else {

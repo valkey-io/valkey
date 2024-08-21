@@ -27,6 +27,9 @@ start_server {} {
     # Make sure replica3 is synchronized with master
     $replica3 replicaof $master_host $master_port
     wait_for_sync $replica3
+    if {$dualchannel == "yes"} {
+        wait_for_ofs_sync $master $replica3
+    }
 
     # Generating RDB will take some 100 seconds
     $master config set rdb-key-save-delay 1000000

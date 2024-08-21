@@ -1,4 +1,4 @@
-# Server test suite. Copyright (C) 2009 Salvatore Sanfilippo antirez@gmail.com
+# Server test suite. Copyright (C) 2009 Redis Ltd.
 # This software is released under the BSD License. See the COPYING file for
 # more information.
 

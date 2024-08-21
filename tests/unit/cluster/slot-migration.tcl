@@ -437,7 +437,8 @@ start_cluster 2 0 {tags {tls:skip external:skip cluster regression} overrides {c
 }
 
 start_cluster 3 6 {tags {external:skip cluster} overrides {cluster-node-timeout 1000} } {
-    test "Killing all replicas in primary 0" {
+    test "Slot migration is ok when the replicas are down" {
+        # Killing all replicas in primary 0.
         assert_equal 2 [s 0 connected_slaves]
         catch {R 3 shutdown nosave}
         catch {R 6 shutdown nosave}
@@ -446,9 +447,8 @@ start_cluster 3 6 {tags {external:skip cluster} overrides {cluster-node-timeout 
         } else {
             fail "The replicas in primary 0 are still connecting"
         }
-    }
 
-    test "Killing one replica in primary 1" {
+        # Killing one replica in primary 1.
         assert_equal 2 [s -1 connected_slaves]
         catch {R 4 shutdown nosave}
         wait_for_condition 50 100 {
@@ -456,9 +456,8 @@ start_cluster 3 6 {tags {external:skip cluster} overrides {cluster-node-timeout 
         } else {
             fail "The replica in primary 1 is still connecting"
         }
-    }
 
-    test "Slot migration is ok when the replicas are down" {
+        # Check slot migration is ok when the replicas are down.
         migrate_slot 0 1 0
         migrate_slot 0 2 1
         assert_equal {OK} [R 0 CLUSTER SETSLOT 0 NODE [R 1 CLUSTER MYID]]

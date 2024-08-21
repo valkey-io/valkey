@@ -6288,7 +6288,7 @@ void clusterCommandSetSlot(client *c) {
              * wait for the online replicas. The admin can easily check if there
              * are replicas that are down for an extended period of time. If they
              * decide to move forward anyways, we should not block it. If a replica
-             * failed right before the replication and did not included in the
+             * failed right before the replication and was not included in the
              * replication, it would also unlikely win the election.
              *
              * And 0x702ff is 7.2.255, we only support new versions in this case. */

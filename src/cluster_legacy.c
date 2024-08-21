@@ -5908,12 +5908,20 @@ static void addShardReplyForClusterShards(client *c, dictEntry *de) {
 void clusterCommandShards(client *c) {
     clusterNode *query_node = NULL;
     if (c->argc == 3) {
-        /* Currently the only extra argument is 'myself' */
-        query_node = getMyClusterNode();
+        /* Fetch data for only specific node slots ownership */
+        if (!strcasecmp(c->argv[2]->ptr, "myself")) {
+            query_node = getMyClusterNode();
+        } else {
+            query_node = clusterLookupNode(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
+            if (query_node == NULL) {
+                addReplyErrorFormat(c, "Unknown node id: %s", (char *)c->argv[2]->ptr);
+                return;
+            }
+        }
         if (clusterNodeIsReplica(query_node)) {
             query_node = clusterNodeGetPrimary(query_node);
             if (query_node == NULL) {
-                addReplyErrorFormat(c, "Node is a replica serving no primary");
+                addReplyErrorFormat(c, "Node %s is a replica serving no primary", (char *)c->argv[2]->ptr);
                 return;
             }
         }

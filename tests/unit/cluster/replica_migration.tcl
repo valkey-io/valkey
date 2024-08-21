@@ -1,5 +1,5 @@
 # Allocate slot 0 to the last primary and evenly distribute the remaining
-# slots to the remaining primary.
+# slots to the remaining primaries.
 proc my_slot_allocation {masters replicas} {
     set avg [expr double(16384) / [expr $masters-1]]
     set slot_start 1
@@ -12,7 +12,7 @@ proc my_slot_allocation {masters replicas} {
 }
 
 start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
-    test "If a replica has not completed full sync, the offset is 0 and the rank is the lowest" {
+    test "Migrated replica reports zero repl offset and rank, and fails to win election" {
         # Write some data to primary 0, slot 1, make a small repl_offset.
         for {set i 0} {$i < 1024} {incr i} {
             R 0 incr key_991803
@@ -45,10 +45,10 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
         R 3 config set cluster-allow-replica-migration yes
         R 7 config set cluster-allow-replica-migration yes
 
-        # Shutdown the primary 0.
-        catch {R 0 shutdown}
+        # Shutdown primary 0.
+        catch {R 0 shutdown nosave}
 
-        # Wait for the replica become a primary, and make sure
+        # Wait for the replica to become a primary, and make sure
         # the other primary become a replica.
         wait_for_condition 1000 50 {
             [s -4 role] eq {master} &&
@@ -61,11 +61,11 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
             fail "Failover does not happened"
         }
 
-        # Make sure 3 / 7 get the lower rank and the offset is 0.
+        # Make sure the offset of server 3 / 7 is 0.
         verify_log_message -3 "*Start of election*offset 0*" 0
         verify_log_message -7 "*Start of election*offset 0*" 0
 
-        # Make sure the right replica get the higher rank.
+        # Make sure the right replica gets the higher rank.
         verify_log_message -4 "*Start of election*rank #0*" 0
 
         # Wait for the cluster to be ok.
@@ -97,7 +97,7 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
 start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
-    test "A old replica use CLUSTER REPLICA get a zero offset before the full sync is completed" {
+    test "New non-empty replica reports zero repl offset and rank, and fails to win election" {
         # Write some data to primary 0, slot 1, make a small repl_offset.
         for {set i 0} {$i < 1024} {incr i} {
             R 0 incr key_991803
@@ -113,15 +113,15 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
         # 10s, make sure primary 0 will hang in the save.
         R 0 config set rdb-key-save-delay 100000000
 
-        # Let the replica do the replicate with primary 0.
+        # Make server 7 a replica of server 0.
         R 7 config set cluster-replica-validity-factor 0
         R 7 config set cluster-allow-replica-migration yes
         R 7 cluster replicate [R 0 cluster myid]
 
-        # Shutdown the primary 0.
-        catch {R 0 shutdown}
+        # Shutdown primary 0.
+        catch {R 0 shutdown nosave}
 
-        # Wait for the replica become a primary.
+        # Wait for the replica to become a primary.
         wait_for_condition 1000 50 {
             [s -4 role] eq {master} &&
             [s -7 role] eq {slave}
@@ -131,7 +131,7 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
             fail "Failover does not happened"
         }
 
-        # Make sure 7 get the lower rank and it's offset is 0.
+        # Make sure server 7 gets the lower rank and it's offset is 0.
         verify_log_message -4 "*Start of election*rank #0*" 0
         verify_log_message -7 "*Start of election*offset 0*" 0
 

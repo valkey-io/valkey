@@ -69,7 +69,7 @@ int clusterAddSlot(clusterNode *n, int slot);
 int clusterDelSlot(int slot);
 int clusterDelNodeSlots(clusterNode *node);
 int clusterNodeSetSlotBit(clusterNode *n, int slot);
-void clusterSetPrimary(clusterNode *n, int closeSlots);
+static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
 void clusterHandleReplicaFailover(void);
 void clusterHandleReplicaMigration(int max_replicas);
 int bitmapTestBit(unsigned char *bitmap, int pos);
@@ -2370,7 +2370,7 @@ int nodeUpdateAddressIfNeeded(clusterNode *node, clusterLink *link, clusterMsg *
     /* Check if this is our primary and we have to change the
      * replication target as well. */
     if (nodeIsReplica(myself) && myself->replicaof == node)
-        replicationSetPrimary(node->ip, getNodeDefaultReplicationPort(node));
+        replicationSetPrimary(node->ip, getNodeDefaultReplicationPort(node), 0);
     return 1;
 }
 
@@ -2432,6 +2432,9 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
         return;
     }
 
+    /* Sender and myself in the same shard? */
+    int are_in_same_shard = areInSameShard(sender, myself);
+
     for (j = 0; j < CLUSTER_SLOTS; j++) {
         if (bitmapTestBit(slots, j)) {
             sender_slots++;
@@ -2474,7 +2477,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                  * the same shard and we should retain the migrating_slots_to state
                  * for the slot in question */
                 if (server.cluster->migrating_slots_to[j] != NULL) {
-                    if (!areInSameShard(sender, myself)) {
+                    if (!are_in_same_shard) {
                         serverLog(LL_NOTICE, "Slot %d is no longer being migrated to node %.40s (%s) in shard %.40s.",
                                   j, server.cluster->migrating_slots_to[j]->name,
                                   server.cluster->migrating_slots_to[j]->human_nodename,
@@ -2595,7 +2598,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
      * the new primary if my current config epoch is lower than the
      * sender's. */
     if (!new_primary && myself->replicaof != sender && sender_slots == 0 && myself->numslots == 0 &&
-        nodeEpoch(myself) < senderConfigEpoch && areInSameShard(sender, myself)) {
+        nodeEpoch(myself) < senderConfigEpoch && are_in_same_shard) {
         new_primary = sender;
     }
 
@@ -2619,16 +2622,18 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
      * sender. In this case we don't reconfigure ourselves as a replica
      * of the sender. */
     if (new_primary && cur_primary->numslots == 0) {
-        if (server.cluster_allow_replica_migration || areInSameShard(sender, myself)) {
+        if (server.cluster_allow_replica_migration || are_in_same_shard) {
             serverLog(LL_NOTICE,
                       "Configuration change detected. Reconfiguring myself "
                       "as a replica of node %.40s (%s) in shard %.40s",
                       sender->name, sender->human_nodename, sender->shard_id);
             /* Don't clear the migrating/importing states if this is a replica that
-             * just gets promoted to the new primary in the shard. */
-            clusterSetPrimary(sender, !areInSameShard(sender, myself));
+             * just gets promoted to the new primary in the shard.
+             *
+             * If the sender and myself are in the same shard, try psync. */
+            clusterSetPrimary(sender, !are_in_same_shard, !are_in_same_shard);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
-        } else if ((sender_slots >= migrated_our_slots) && !areInSameShard(sender, myself)) {
+        } else if ((sender_slots >= migrated_our_slots) && !are_in_same_shard) {
             /* When all our slots are lost to the sender and the sender belongs to
              * a different shard, this is likely due to a client triggered slot
              * migration. Don't reconfigure this node to migrate to the new shard
@@ -3383,12 +3388,19 @@ int clusterProcessPacket(clusterLink *link) {
         /* Explicitly check for a replication loop before attempting the replication
          * chain folding logic. */
         if (myself->replicaof && myself->replicaof->replicaof && myself->replicaof->replicaof != myself) {
-            /* Safeguard against sub-replicas. A replica's primary can turn itself
-             * into a replica if its last slot is removed. If no other node takes
-             * over the slot, there is nothing else to trigger replica migration. */
+            /* Safeguard against sub-replicas.
+             *
+             * A replica's primary can turn itself into a replica if its last slot
+             * is removed. If no other node takes over the slot, there is nothing
+             * else to trigger replica migration. In this case, they are not in the
+             * same shard, so a full sync is required.
+             *
+             * Or a replica's primary can turn itself into a replica of its other
+             * replica during a failover. In this case, they are in the same shard,
+             * so we can try a psync. */
             serverLog(LL_NOTICE, "I'm a sub-replica! Reconfiguring myself as a replica of %.40s from %.40s",
                       myself->replicaof->replicaof->name, myself->replicaof->name);
-            clusterSetPrimary(myself->replicaof->replicaof, 1);
+            clusterSetPrimary(myself->replicaof->replicaof, 1, !areInSameShard(myself->replicaof->replicaof, myself));
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
         }
 
@@ -4692,7 +4704,9 @@ void clusterHandleReplicaMigration(int max_replicas) {
         !(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER)) {
         serverLog(LL_NOTICE, "Migrating to orphaned primary %.40s (%s) in shard %.40s", target->name,
                   target->human_nodename, target->shard_id);
-        clusterSetPrimary(target, 1);
+        /* We are migrating to a different shard that has a completely different
+         * replication history, so a full sync is required. */
+        clusterSetPrimary(target, 1, 1);
     }
 }
 
@@ -5005,7 +5019,7 @@ void clusterCron(void) {
      * enable it if we know the address of our primary and it appears to
      * be up. */
     if (nodeIsReplica(myself) && server.primary_host == NULL && myself->replicaof && nodeHasAddr(myself->replicaof)) {
-        replicationSetPrimary(myself->replicaof->ip, getNodeDefaultReplicationPort(myself->replicaof));
+        replicationSetPrimary(myself->replicaof->ip, getNodeDefaultReplicationPort(myself->replicaof), 0);
     }
 
     /* Abort a manual failover if the timeout is reached. */
@@ -5398,7 +5412,7 @@ static inline void removeAllNotOwnedShardChannelSubscriptions(void) {
 
 /* Set the specified node 'n' as primary for this node.
  * If this node is currently a primary, it is turned into a replica. */
-void clusterSetPrimary(clusterNode *n, int closeSlots) {
+static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required) {
     serverAssert(n != myself);
     serverAssert(myself->numslots == 0);
 
@@ -5412,7 +5426,7 @@ void clusterSetPrimary(clusterNode *n, int closeSlots) {
     myself->replicaof = n;
     updateShardId(myself, n->shard_id);
     clusterNodeAddReplica(n, myself);
-    replicationSetPrimary(n->ip, getNodeDefaultReplicationPort(n));
+    replicationSetPrimary(n->ip, getNodeDefaultReplicationPort(n), full_sync_required);
     removeAllNotOwnedShardChannelSubscriptions();
     resetManualFailover();
 
@@ -6343,7 +6357,9 @@ void clusterCommandSetSlot(client *c) {
                       "Lost my last slot during slot migration. Reconfiguring myself "
                       "as a replica of %.40s (%s) in shard %.40s",
                       n->name, n->human_nodename, n->shard_id);
-            clusterSetPrimary(n, 1);
+            /* We are migrating to a different shard that has a completely different
+             * replication history, so a full sync is required. */
+            clusterSetPrimary(n, 1, 1);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
         }
 
@@ -6548,8 +6564,11 @@ int clusterCommandSpecial(client *c) {
             return 1;
         }
 
-        /* Set the primary. */
-        clusterSetPrimary(n, 1);
+        /* Set the primary.
+         * If the instance is a primary, it is an empty primary.
+         * If the instance is a replica, it had a totally different replication history.
+         * In these both cases, myself as a replica has to do a full sync. */
+        clusterSetPrimary(n, 1, 1);
         clusterBroadcastPong(CLUSTER_BROADCAST_ALL);
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
         addReply(c, shared.ok);

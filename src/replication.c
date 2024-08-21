@@ -3726,7 +3726,7 @@ int cancelReplicationHandshake(int reconnect) {
 }
 
 /* Set replication to the specified primary address and port. */
-void replicationSetPrimary(char *ip, int port) {
+void replicationSetPrimary(char *ip, int port, int full_sync_required) {
     int was_primary = server.primary_host == NULL;
 
     sdsfree(server.primary_host);
@@ -3752,11 +3752,20 @@ void replicationSetPrimary(char *ip, int port) {
      * sync with new primary. */
 
     cancelReplicationHandshake(0);
+
     /* Before destroying our primary state, create a cached primary using
      * our own parameters, to later PSYNC with the new primary. */
-    if (was_primary) {
+    if (was_primary && !full_sync_required) {
         replicationDiscardCachedPrimary();
         replicationCachePrimaryUsingMyself();
+    }
+
+    /* If full sync is required, drop the cached primary. Doing so increases
+     * this replica node's election rank (delay) and reduces its chance of
+     * winning the election. If a replica requiring a full sync wins the
+     * election, it will flush valid data in the shard, causing data loss. */
+    if (full_sync_required) {
+        replicationDiscardCachedPrimary();
     }
 
     /* Fire the role change modules event. */
@@ -3896,7 +3905,7 @@ void replicaofCommand(client *c) {
         }
         /* There was no previous primary or the user specified a different one,
          * we can continue. */
-        replicationSetPrimary(c->argv[1]->ptr, port);
+        replicationSetPrimary(c->argv[1]->ptr, port, 0);
         sds client = catClientInfoString(sdsempty(), c);
         serverLog(LL_NOTICE, "REPLICAOF %s:%d enabled (user request from '%s')", server.primary_host,
                   server.primary_port, client);
@@ -4907,7 +4916,7 @@ void updateFailoverStatus(void) {
                       server.target_replica_port);
             server.failover_state = FAILOVER_IN_PROGRESS;
             /* If timeout has expired force a failover if requested. */
-            replicationSetPrimary(server.target_replica_host, server.target_replica_port);
+            replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0);
             return;
         } else {
             /* Force was not requested, so timeout. */
@@ -4950,6 +4959,6 @@ void updateFailoverStatus(void) {
         serverLog(LL_NOTICE, "Failover target %s:%d is synced, failing over.", server.target_replica_host,
                   server.target_replica_port);
         /* Designated replica is caught up, failover to it. */
-        replicationSetPrimary(server.target_replica_host, server.target_replica_port);
+        replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0);
     }
 }

@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef CONFIG_H
-#define CONFIG_H
+#ifndef INTRINSICS_H
+#define INTRINSICS_H
 
 #include <stdint.h>
 
@@ -48,4 +48,4 @@ static inline int32_t count_trailing_zeros_64(uint64_t value) {
 #endif
 }
 
-#endif // CONFIG_H
+#endif // INTRINSICS

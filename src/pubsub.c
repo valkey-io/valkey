@@ -551,6 +551,8 @@ void subscribeCommand(client *c) {
         return;
     }
 
+    struct ClientFlags old_flags = c->flag;
+    c->flag.pushing = 1;
     int number = (c->argc-1) * 3;
     
     if (c->resp == 2)
@@ -561,10 +563,6 @@ void subscribeCommand(client *c) {
     for (j = 1; j < c->argc; j++) { 
         pubsubSubscribeChannel(c, c->argv[j], pubSubType);
     }
-
-
-    struct ClientFlags old_flags = c->flag;
-    c->flag.pushing = 1;
 
     for (j = 1; j < c->argc; j++) { 
         addReply(c, *pubSubType.subscribeMsg);

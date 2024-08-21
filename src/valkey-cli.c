@@ -2296,7 +2296,6 @@ static void cliWaitForMessagesOrStdin(void) {
 }
 
 static int cliSendCommand(int argc, char **argv, long repeat) {
-    printf("We are in the cliSendCommand function, argc is %d, and repeat is %ld\n", argc, repeat);
     char *command = argv[0];
     size_t *argvlen;
     int j, output_raw;
@@ -2391,7 +2390,6 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
         }
 
         /* Read response, possibly skipping pubsub/push messages. */
-	printf("is_subscribe is %d and num_expected_pubsub_push is %d\n",is_subscribe, num_expected_pubsub_push);
         while (1) {
             if (cliReadReply(output_raw) != REDIS_OK) {
                 zfree(argvlen);

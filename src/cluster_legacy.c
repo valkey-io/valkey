@@ -6564,6 +6564,13 @@ int clusterCommandSpecial(client *c) {
             return 1;
         }
 
+        /* If `n` is already my primary, there is no need to re-establish the
+         * replication connection. */
+        if (myself->replicaof == n) {
+            addReply(c, shared.ok);
+            return 1;
+        }
+
         /* Set the primary.
          * If the instance is a primary, it is an empty primary.
          * If the instance is a replica, it had a totally different replication history.

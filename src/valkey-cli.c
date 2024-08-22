@@ -1,6 +1,6 @@
 /* Server CLI (command line interface)
  *
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -4655,10 +4655,19 @@ static int clusterManagerSetSlotOwner(clusterManagerNode *owner, int slot, int d
 /* Get the hash for the values of the specified keys in *keys_reply for the
  * specified nodes *n1 and *n2, by calling DEBUG DIGEST-VALUE command
  * on both nodes. Every key with same name on both nodes but having different
- * values will be added to the *diffs list. Return 0 in case of reply
- * error. */
-static int
-clusterManagerCompareKeysValues(clusterManagerNode *n1, clusterManagerNode *n2, redisReply *keys_reply, list *diffs) {
+ * values will be added to the *diffs list.
+ *
+ * DEBUG DIGEST-VALUE currently will only return two errors:
+ * 1. Unknown subcommand. This happened in older server versions.
+ * 2. DEBUG command not allowed. This happened when we disable enable-debug-command.
+ *
+ * Return 0 and set the error message in case of reply error. */
+static int clusterManagerCompareKeysValues(clusterManagerNode *n1,
+                                           clusterManagerNode *n2,
+                                           redisReply *keys_reply,
+                                           list *diffs,
+                                           char **n1_err,
+                                           char **n2_err) {
     size_t i, argc = keys_reply->elements + 2;
     static const char *hash_zero = "0000000000000000000000000000000000000000";
     char **argv = zcalloc(argc * sizeof(char *));
@@ -4678,18 +4687,32 @@ clusterManagerCompareKeysValues(clusterManagerNode *n1, clusterManagerNode *n2, 
     redisReply *r1 = NULL, *r2 = NULL;
     redisAppendCommandArgv(n1->context, argc, (const char **)argv, argv_len);
     success = (redisGetReply(n1->context, &_reply1) == REDIS_OK);
-    if (!success) goto cleanup;
+    if (!success) {
+        fprintf(stderr, "Error getting DIGEST-VALUE from %s:%d, error: %s\n", n1->ip, n1->port, n1->context->errstr);
+        exit(1);
+    }
     r1 = (redisReply *)_reply1;
     redisAppendCommandArgv(n2->context, argc, (const char **)argv, argv_len);
     success = (redisGetReply(n2->context, &_reply2) == REDIS_OK);
-    if (!success) goto cleanup;
+    if (!success) {
+        fprintf(stderr, "Error getting DIGEST-VALUE from %s:%d, error: %s\n", n2->ip, n2->port, n2->context->errstr);
+        exit(1);
+    }
     r2 = (redisReply *)_reply2;
     success = (r1->type != REDIS_REPLY_ERROR && r2->type != REDIS_REPLY_ERROR);
     if (r1->type == REDIS_REPLY_ERROR) {
+        if (n1_err != NULL) {
+            *n1_err = zmalloc((r1->len + 1) * sizeof(char));
+            valkey_strlcpy(*n1_err, r1->str, r1->len + 1);
+        }
         CLUSTER_MANAGER_PRINT_REPLY_ERROR(n1, r1->str);
         success = 0;
     }
     if (r2->type == REDIS_REPLY_ERROR) {
+        if (n2_err != NULL) {
+            *n2_err = zmalloc((r2->len + 1) * sizeof(char));
+            valkey_strlcpy(*n2_err, r2->str, r2->len + 1);
+        }
         CLUSTER_MANAGER_PRINT_REPLY_ERROR(n2, r2->str);
         success = 0;
     }
@@ -4875,10 +4898,27 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
                     if (!do_replace) {
                         clusterManagerLogWarn("*** Checking key values on "
                                               "both nodes...\n");
+                        char *source_err = NULL;
+                        char *target_err = NULL;
                         list *diffs = listCreate();
-                        success = clusterManagerCompareKeysValues(source, target, reply, diffs);
+                        success =
+                            clusterManagerCompareKeysValues(source, target, reply, diffs, &source_err, &target_err);
                         if (!success) {
                             clusterManagerLogErr("*** Value check failed!\n");
+                            const char *debug_not_allowed = "ERR DEBUG command not allowed.";
+                            if ((source_err && !strncmp(source_err, debug_not_allowed, 30)) ||
+                                (target_err && !strncmp(target_err, debug_not_allowed, 30))) {
+                                clusterManagerLogErr("DEBUG command is not allowed.\n"
+                                                     "You can turn on the enable-debug-command option.\n"
+                                                     "Or you can relaunch the command with --cluster-replace "
+                                                     "option to force key overriding.\n");
+                            } else if (source_err || target_err) {
+                                clusterManagerLogErr("DEBUG DIGEST-VALUE command is not supported.\n"
+                                                     "You can relaunch the command with --cluster-replace "
+                                                     "option to force key overriding.\n");
+                            }
+                            if (source_err) zfree(source_err);
+                            if (target_err) zfree(target_err);
                             listRelease(diffs);
                             goto next;
                         }
@@ -6361,10 +6401,7 @@ static int clusterManagerCheckCluster(int quiet) {
         clusterManagerOnError(err);
         result = 0;
         if (do_fix /* && result*/) {
-            dictType dtype = clusterManagerDictType;
-            dtype.keyDestructor = dictSdsDestructor;
-            dtype.valDestructor = dictListDestructor;
-            clusterManagerUncoveredSlots = dictCreate(&dtype);
+            clusterManagerUncoveredSlots = dictCreate(&clusterManagerLinkDictType);
             int fixed = clusterManagerFixSlotsCoverage(slots);
             if (fixed > 0) result = 1;
         }

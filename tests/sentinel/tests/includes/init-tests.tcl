@@ -12,7 +12,7 @@ test "(init) Remove old primary entry from sentinels" {
 }
 
 set redis_slaves [expr $::instances_count - 1]
-test "(init) Create a primary-slaves cluster of [expr $redis_slaves+1] instances" {
+test "(init) Create a primary-replicas cluster of [expr $redis_slaves+1] instances" {
     create_valkey_master_slave_cluster [expr {$redis_slaves+1}]
 }
 set master_id 0
@@ -26,7 +26,7 @@ test "(init) Sentinels can start monitoring a primary" {
               [get_instance_attrib valkey $master_id port] $quorum
     }
     foreach_sentinel_id id {
-        assert {[S $id sentinel master mymaster] ne {}}
+        assert {[S $id sentinel primary mymaster] ne {}}
         S $id SENTINEL SET mymaster down-after-milliseconds 2000
         S $id SENTINEL SET mymaster failover-timeout 10000
         S $id SENTINEL debug tilt-period 5000
@@ -41,9 +41,9 @@ test "(init) Sentinels can start monitoring a primary" {
 test "(init) Sentinels can talk with the primary" {
     foreach_sentinel_id id {
         wait_for_condition 1000 50 {
-            [catch {S $id SENTINEL GET-MASTER-ADDR-BY-NAME mymaster}] == 0
+            [catch {S $id SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster}] == 0
         } else {
-            fail "Sentinel $id can't talk with the master."
+            fail "Sentinel $id can't talk with the primary."
         }
     }
 }
@@ -52,12 +52,12 @@ test "(init) Sentinels are able to auto-discover other sentinels" {
     verify_sentinel_auto_discovery
 }
 
-test "(init) Sentinels are able to auto-discover slaves" {
+test "(init) Sentinels are able to auto-discover replicas" {
     foreach_sentinel_id id {
         wait_for_condition 1000 50 {
-            [dict get [S $id SENTINEL MASTER mymaster] num-slaves] == $redis_slaves
+            [dict get [S $id SENTINEL PRIMARY mymaster] num-slaves] == $redis_slaves
         } else {
-            fail "At least some sentinel can't detect some slave"
+            fail "At least some sentinels can't detect some replicas"
         }
     }
 }

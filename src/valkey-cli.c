@@ -5034,10 +5034,10 @@ clusterManagerMoveSlot(clusterManagerNode *source, clusterManagerNode *target, i
          *
          * Another acceptable error can arise now that the primary pre-replicates
          * `cluster setslot` commands to replicas while blocking the client on the
-         * primary. And during the block, the replicas were automatically migrates
+         * primary. And during the block, the replicas might automatically migrate
          * to another primary, resulting in the client being unblocked with the
          * NOREPLICAS error. In this case, since the configuration will eventually
-         * propagate itself, so we ignore this error in the source node. */
+         * propagate itself, we can safely ignore this error on the source node. */
         success = clusterManagerSetSlot(source, target, slot, "node", err);
         if (!success && err) {
             const char *acceptable[] = {"ERR Please use SETSLOT only with masters.",

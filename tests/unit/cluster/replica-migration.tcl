@@ -160,7 +160,6 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
 
 start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
     test "valkey-cli make source node ignores NOREPLICAS error when doing the last CLUSTER SETSLOT" {
-        # Primary disable the replica-migration and replica enable the replica-migration.
         R 3 config set cluster-allow-replica-migration no
         R 7 config set cluster-allow-replica-migration yes
 
@@ -168,7 +167,7 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
         set old_primary_ip [lindex [R 7 role] 1]
         set old_primary_port [lindex [R 7 role] 2]
 
-        # Move the slot 0 from primary 3 to primary 0.
+        # Move slot 0 from primary 3 to primary 0.
         set addr "[srv 0 host]:[srv 0 port]"
         set myid [R 3 CLUSTER MYID]
         set code [catch {
@@ -181,7 +180,7 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
         wait_for_cluster_propagation
         wait_for_cluster_state "ok"
 
-        # Make sure server 3 is still a primary and has not replicas.
+        # Make sure server 3 is still a primary and has no replicas.
         assert_equal [s -3 role] {master}
         assert_equal [lindex [R 3 role] 2] {}
 

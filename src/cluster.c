@@ -1486,6 +1486,11 @@ void clusterCommandSlots(client *c) {
     }
 
     addReplyProto(c, reply, sdslen(reply));
+
+    /* We need to free the reply in case it was not cached */
+    if (reply != *cache) {
+        sdsfree(reply);
+    }
 }
 
 /* -----------------------------------------------------------------------------

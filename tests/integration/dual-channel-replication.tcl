@@ -704,6 +704,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         $replica config set dual-channel-replication-enabled yes
         $replica config set loglevel debug
         $replica config set repl-timeout 10
+        $primary config set repl-backlog-size 1mb
 
         test "Test dual-channel-replication primary gets cob overrun before established psync" {
             # Pause primary main process after fork

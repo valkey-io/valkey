@@ -109,10 +109,12 @@ start_server {tags {"pubsub network"}} {
         $rd1 close
     }
 
-    test "UNSUBSCRIBE from non-subscribed channels" {
+    test "UNSUBSCRIBE and PUNSUBSCRIBE from non-subscribed channels" {
         set rd1 [valkey_deferring_client]
-        assert_equal {0 0 0} [unsubscribe $rd1 {foo bar quux}]
-
+        foreach command {unsubscribe punsubscribe} {
+            catch {$command $rd1 {foo bar quux}} e
+            assert_match {*NOSUB*} $e
+        }
         # clean up clients
         $rd1 close
     }
@@ -202,14 +204,6 @@ start_server {tags {"pubsub network"}} {
         $rd close
     } {0} {resp3}
 
-    test "PUNSUBSCRIBE from non-subscribed channels" {
-        set rd1 [valkey_deferring_client]
-        assert_equal {0 0 0} [punsubscribe $rd1 {foo.* bar.* quux.*}]
-
-        # clean up clients
-        $rd1 close
-    }
-
     test "NUMSUB returns numbers, not strings (#1561)" {
         r pubsub numsub abc def
     } {abc 0 def 0}
@@ -246,16 +240,6 @@ start_server {tags {"pubsub network"}} {
         # clean up clients
         $rd1 close
     }
-
-    test "PUNSUBSCRIBE and UNSUBSCRIBE should always reply" {
-        # Make sure we are not subscribed to any channel at all.
-        r punsubscribe
-        r unsubscribe
-        # Now check if the commands still reply correctly.
-        set reply1 [r punsubscribe]
-        set reply2 [r unsubscribe]
-        concat $reply1 $reply2
-    } {punsubscribe {} 0 unsubscribe {} 0}
 
     ### Keyspace events notification tests
 

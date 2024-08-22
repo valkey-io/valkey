@@ -470,10 +470,9 @@ int hllPatLen(unsigned char *ele, size_t elesize, long *regp) {
     hash = MurmurHash64A(ele, elesize, 0xadc83b19ULL);
     index = hash & HLL_P_MASK;      /* Register index. */
     hash >>= HLL_P;                 /* Remove bits used to address the register. */
-    hash |= ((uint64_t)1 << HLL_Q); /* Make sure ctz will not get undefined results
-                                       and count will be <= Q+1. */
+    hash |= ((uint64_t)1 << HLL_Q); /* Make sure count will be <= Q+1. */
     count = 1;                      /* Initialized to 1 since we count the "00000...1" pattern. */
-    count += count_trailing_zeros_64(hash);
+    count += builtin_ctzll(hash);
     *regp = (int)index;
     return count;
 }

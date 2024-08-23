@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -1002,7 +1002,7 @@ typedef struct multiState {
 } multiState;
 
 /* This structure holds the blocking operation state for a client.
- * The fields used depend on client->btype. */
+ * The fields used depend on client->bstate.btype. */
 typedef struct blockingState {
     /* Generic fields. */
     blocking_type btype;  /* Type of blocking op if CLIENT_BLOCKED. */
@@ -1010,6 +1010,15 @@ typedef struct blockingState {
                            * is > timeout then the operation timed out. */
     int unblock_on_nokey; /* Whether to unblock the client when at least one of the keys
                              is deleted or does not exist anymore */
+    union {
+        listNode *client_waiting_acks_list_node; /* list node in server.clients_waiting_acks list. */
+        listNode *postponed_list_node;           /* list node in server.postponed_clients */
+        listNode *generic_blocked_list_node;     /* generic placeholder for blocked clients utility lists.
+                                                    Since a client cannot be blocked multiple times, we can assume
+                                                    it will be held in only one extra utility list, so it is ok to maintain
+                                                    a union of these listNode references. */
+    };
+
     /* BLOCKED_LIST, BLOCKED_ZSET and BLOCKED_STREAM or any other Keys related blocking */
     dict *keys; /* The keys we are blocked on */
 
@@ -1319,7 +1328,6 @@ typedef struct client {
     sds peerid;                          /* Cached peer ID. */
     sds sockname;                        /* Cached connection target address. */
     listNode *client_list_node;          /* list node in client list */
-    listNode *postponed_list_node;       /* list node within the postponed list */
     void *module_blocked_client;         /* Pointer to the ValkeyModuleBlockedClient associated with this
                                           * client. This is set in case of module authentication before the
                                           * unblocked client is reprocessed to handle reply callbacks. */
@@ -2114,7 +2122,7 @@ struct valkeyServer {
     /* time cache */
     time_t unixtime;             /* Unix time sampled every cron cycle. */
     time_t timezone;             /* Cached timezone. As set by tzset(). */
-    int daylight_active;         /* Currently in daylight saving time. */
+    _Atomic int daylight_active; /* Currently in daylight saving time. */
     mstime_t mstime;             /* 'unixtime' in milliseconds. */
     ustime_t ustime;             /* 'unixtime' in microseconds. */
     mstime_t cmd_time_snapshot;  /* Time snapshot of the root execution nesting. */
@@ -2219,6 +2227,7 @@ struct valkeyServer {
     sds availability_zone; /* When run in a cloud environment we can configure the availability zone it is running in */
     /* Local environment */
     char *locale_collate;
+    char *debug_context; /* A free-form string that has no impact on server except being included in a crash report. */
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -3020,7 +3029,7 @@ void replicationStartPendingFork(void);
 void replicationHandlePrimaryDisconnection(void);
 void replicationCachePrimary(client *c);
 void resizeReplicationBacklog(void);
-void replicationSetPrimary(char *ip, int port);
+void replicationSetPrimary(char *ip, int port, int full_sync_required);
 void replicationUnsetPrimary(void);
 void refreshGoodReplicasCount(void);
 int checkGoodReplicasStatus(void);

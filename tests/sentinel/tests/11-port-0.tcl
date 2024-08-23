@@ -13,7 +13,7 @@ test "Start/Stop sentinel on same port with a different runID should not change 
         delete_lines_with_pattern $orgfilename $tmpfilename "myid"
 
         # Get count of total sentinels
-        set a [S 0 SENTINEL  master mymaster]
+        set a [S 0 SENTINEL primary mymaster]
         set original_count [lindex $a 33]
 
         # Restart sentinel with the modified config file
@@ -23,7 +23,7 @@ test "Start/Stop sentinel on same port with a different runID should not change 
         after 1000
 
         # Get new count of total sentinel
-        set b [S 0 SENTINEL master mymaster]
+        set b [S 0 SENTINEL primary mymaster]
         set curr_count [lindex $b 33]
 
         # If the count is not the same then fail the test

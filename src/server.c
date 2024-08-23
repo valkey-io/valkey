@@ -2787,7 +2787,8 @@ void initListeners(void) {
         listener->bindaddr = &server.unixsocket;
         listener->bindaddr_count = 1;
         listener->ct = connectionByType(CONN_TYPE_UNIX);
-        listener->priv = &server.unixsocketperm; /* Unix socket specified */
+        listener->priv1 = &server.unixsocketperm; /* Unix socket specified */
+        listener->priv2 = server.unixsocketgroup; /* Unix socket group specified */
     }
 
     /* create all the configured listener, and add handler to start to accept */

@@ -62,7 +62,6 @@ void clusterSendPing(clusterLink *link, int type);
 void clusterSendFail(char *nodename);
 void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request);
 void clusterUpdateState(void);
-int clusterNodeCoversSlot(clusterNode *n, int slot);
 list *clusterGetNodesInMyShard(clusterNode *node);
 int clusterNodeAddReplica(clusterNode *primary, clusterNode *replica);
 int clusterAddSlot(clusterNode *n, int slot);
@@ -93,7 +92,6 @@ void moduleCallClusterReceivers(const char *sender_id,
                                 uint32_t len);
 const char *clusterGetMessageTypeString(int type);
 void removeChannelsInSlot(unsigned int slot);
-unsigned int countKeysInSlot(unsigned int hashslot);
 unsigned int countChannelsInSlot(unsigned int hashslot);
 unsigned int delKeysInSlot(unsigned int hashslot);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);

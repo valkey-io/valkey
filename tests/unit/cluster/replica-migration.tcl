@@ -107,7 +107,6 @@ proc test_migrated_replica {type} {
             wait_for_condition 1000 50 {
                 [s 0 role] eq {slave}
             } else {
-                R 0 debug log "binbinzhubinbinzhubinbinzhubinbinzhu"
                 fail "The old primary was not converted into replica"
             }
         }

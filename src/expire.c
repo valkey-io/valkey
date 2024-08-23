@@ -668,7 +668,7 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
     }
 
     if (checkAlreadyExpired(when)) {
-        deleteExpiredKeyFromOverwriteAndPropagate(c, key, 1);
+        deleteExpiredKeyFromOverwriteAndPropagate(c, key);
         addReply(c, shared.cone);
         return;
     } else {

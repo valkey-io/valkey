@@ -1713,12 +1713,10 @@ void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj) {
 }
 
 /* Delete the specified expired key from overwriting and propagate the DEL or UNLINK. */
-void deleteExpiredKeyFromOverwriteAndPropagate(client *c, robj *keyobj, int do_delete) {
-    if (do_delete) {
-        int deleted = dbGenericDelete(c->db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED);
-        serverAssertWithInfo(c, keyobj, deleted);
-        server.dirty++;
-    }
+void deleteExpiredKeyFromOverwriteAndPropagate(client *c, robj *keyobj) {
+    int deleted = dbGenericDelete(c->db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED);
+    serverAssertWithInfo(c, keyobj, deleted);
+    server.dirty++;
 
     /* Replicate/AOF this as an explicit DEL or UNLINK. */
     robj *aux = server.lazyfree_lazy_expire ? shared.unlink : shared.del;

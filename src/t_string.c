@@ -113,7 +113,7 @@ void setGenericCommand(client *c,
      * database, and then wait for the active expire to delete it, it is wasteful.
      * If the key already exists, delete it. */
     if (expire && checkAlreadyExpired(milliseconds)) {
-        if (found) deleteExpiredKeyFromOverwriteAndPropagate(c, key, 1);
+        if (found) deleteExpiredKeyFromOverwriteAndPropagate(c, key);
         if (!(flags & OBJ_SET_GET)) addReply(c, shared.ok);
         return;
     }
@@ -404,7 +404,7 @@ void getexCommand(client *c) {
     if (((flags & OBJ_PXAT) || (flags & OBJ_EXAT)) && checkAlreadyExpired(milliseconds)) {
         /* When PXAT/EXAT absolute timestamp is specified, there can be a chance that timestamp
          * has already elapsed so delete the key in that case. */
-        deleteExpiredKeyFromOverwriteAndPropagate(c, c->argv[1], 1);
+        deleteExpiredKeyFromOverwriteAndPropagate(c, c->argv[1]);
     } else if (expire) {
         setExpire(c,c->db,c->argv[1],milliseconds);
         /* Propagate as PXEXPIREAT millisecond-timestamp if there is

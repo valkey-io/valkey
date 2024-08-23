@@ -2787,7 +2787,8 @@ void initListeners(void) {
         listener->bindaddr = &server.unixsocket;
         listener->bindaddr_count = 1;
         listener->ct = connectionByType(CONN_TYPE_UNIX);
-        listener->priv = &server.unixsocketperm; /* Unix socket specified */
+        listener->priv1 = &server.unixsocketperm; /* Unix socket specified */
+        listener->priv2 = server.unixsocketgroup; /* Unix socket group specified */
     }
 
     /* create all the configured listener, and add handler to start to accept */
@@ -4037,6 +4038,12 @@ int processCommand(client *c) {
         return C_OK;
     }
 
+    /* Not allow several UNSUBSCRIBE commands executed under non-pubsub mode */
+    if (!c->flag.pubsub && (c->cmd->proc == unsubscribeCommand || c->cmd->proc == sunsubscribeCommand ||
+                            c->cmd->proc == punsubscribeCommand)) {
+        rejectCommandFormat(c, "-NOSUB '%s' command executed not in subscribed mode", c->cmd->fullname);
+        return C_OK;
+    }
     /* Only allow commands with flag "t", such as INFO, REPLICAOF and so on,
      * when replica-serve-stale-data is no and we are a replica with a broken
      * link with primary. */

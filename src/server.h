@@ -1010,15 +1010,22 @@ typedef struct blockingState {
                            * is > timeout then the operation timed out. */
     int unblock_on_nokey; /* Whether to unblock the client when at least one of the keys
                              is deleted or does not exist anymore */
+    union {
+        listNode *client_waiting_acks_list_node; /* list node in server.clients_waiting_acks list. */
+        listNode *postponed_list_node;           /* list node in server.postponed_clients */
+        listNode *generic_blocked_list_node;     /* generic placeholder for blocked clients utility lists.
+                                                    Since a client cannot be blocked multiple times, we can assume
+                                                    it will be held in only one extra utility list, so it is ok to maintain
+                                                    a union of these listNode references. */
+    };
 
     /* BLOCKED_LIST, BLOCKED_ZSET and BLOCKED_STREAM or any other Keys related blocking */
     dict *keys; /* The keys we are blocked on */
 
     /* BLOCKED_WAIT and BLOCKED_WAITAOF */
-    int numreplicas;                         /* Number of replicas we are waiting for ACK. */
-    int numlocal;                            /* Indication if WAITAOF is waiting for local fsync. */
-    long long reploffset;                    /* Replication offset to reach. */
-    listNode *client_waiting_acks_list_node; /* list node in server.clients_waiting_acks list. */
+    int numreplicas;      /* Number of replicas we are waiting for ACK. */
+    int numlocal;         /* Indication if WAITAOF is waiting for local fsync. */
+    long long reploffset; /* Replication offset to reach. */
 
     /* BLOCKED_MODULE */
     void *module_blocked_handle; /* ValkeyModuleBlockedClient structure.
@@ -1321,7 +1328,6 @@ typedef struct client {
     sds peerid;                          /* Cached peer ID. */
     sds sockname;                        /* Cached connection target address. */
     listNode *client_list_node;          /* list node in client list */
-    listNode *postponed_list_node;       /* list node within the postponed list */
     void *module_blocked_client;         /* Pointer to the ValkeyModuleBlockedClient associated with this
                                           * client. This is set in case of module authentication before the
                                           * unblocked client is reprocessed to handle reply callbacks. */
@@ -1706,6 +1712,7 @@ struct valkeyServer {
     int bindaddr_count;                    /* Number of addresses in server.bindaddr[] */
     char *bind_source_addr;                /* Source address to bind on for outgoing connections */
     char *unixsocket;                      /* UNIX socket path */
+    char *unixsocketgroup;                 /* UNIX socket group */
     unsigned int unixsocketperm;           /* UNIX socket permission (see mode_t) */
     connListener listeners[CONN_TYPE_MAX]; /* TCP/Unix/TLS even more types */
     uint32_t socket_mark_id;               /* ID for listen socket marking */
@@ -3023,7 +3030,7 @@ void replicationStartPendingFork(void);
 void replicationHandlePrimaryDisconnection(void);
 void replicationCachePrimary(client *c);
 void resizeReplicationBacklog(void);
-void replicationSetPrimary(char *ip, int port);
+void replicationSetPrimary(char *ip, int port, int full_sync_required);
 void replicationUnsetPrimary(void);
 void refreshGoodReplicasCount(void);
 int checkGoodReplicasStatus(void);

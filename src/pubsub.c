@@ -560,14 +560,11 @@ void subscribeCommand(client *c) {
     else
         addReplyPushLen(c, number);
 
-    for (j = 1; j < c->argc; j++) { 
+    for (j = 1; j < c->argc; j++) {
         pubsubSubscribeChannel(c, c->argv[j], pubSubType);
-    }
-
-    for (j = 1; j < c->argc; j++) { 
         addReply(c, *pubSubType.subscribeMsg);
         addReplyBulk(c, c->argv[j]);
-        addReplyLongLong(c, j);
+        addReplyLongLong(c, pubSubType.subscriptionCount(c));
     }
     if (!old_flags.pushing) c->flag.pushing = 0;
 
@@ -736,10 +733,24 @@ void ssubscribeCommand(client *c) {
         addReplyError(c, "SSUBSCRIBE isn't allowed for a DENY BLOCKING client");
         return;
     }
+    int j;
 
-    for (int j = 1; j < c->argc; j++) {
+    struct ClientFlags old_flags = c->flag;
+    c->flag.pushing = 1;
+    int number = (c->argc - 1) * 3;
+
+    if (c->resp == 2)
+        addReply(c, shared.mbulkhdr[number]);
+    else
+        addReplyPushLen(c, number);
+
+    for (j = 1; j < c->argc; j++) {
         pubsubSubscribeChannel(c, c->argv[j], pubSubShardType);
+        addReply(c, *pubSubShardType.subscribeMsg);
+        addReplyBulk(c, c->argv[j]);
+        addReplyLongLong(c, pubSubShardType.subscriptionCount(c));
     }
+    if (!old_flags.pushing) c->flag.pushing = 0;
     markClientAsPubSub(c);
 }
 

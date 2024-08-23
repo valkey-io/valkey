@@ -2710,11 +2710,11 @@ static int setConfigDirOption(standardConfig *config, sds *argv, int argc, const
         return 0;
     }
     if (hasActiveChildProcess() && server.child_type == CHILD_TYPE_AOF) {
-        *err = "it is unsafe to modify dir when a AOF rewrite is running";
+        *err = "Can not modify dir when an AOF rewrite is running";
         return 0;
     }
-    if (hasActiveChildProcess() && server.logfile[0] != '\0') {
-        *err = "it is unsafe to modify dir when a child process is running";
+    if (hasActiveChildProcess()) {
+        *err = "Can not modify dir when a child process is running";
         return 0;
     }
     if (chdir(argv[0]) == -1) {

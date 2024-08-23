@@ -6,7 +6,6 @@
  *
  *    * Redistributions of source code must retain the above copyright notice,
  *      this list of conditions and the following disclaimer.
- *
  *    * Redistributions in binary form must reproduce the above copyright
  *      notice, this list of conditions and the following disclaimer in the
  *      documentation and/or other materials provided with the distribution.
@@ -33,7 +32,7 @@
 /* Hash Set Implementation.
  *
  * This is a cache friendly hash table implementation. It uses an open
- * addressing scheme, with buckets of 64 bytes (one cache line).
+ * addressing scheme with buckets of 64 bytes (one cache line).
  *
  * Functions and types are prefixed by "hashset", macros by "HASHSET".
  *
@@ -43,7 +42,7 @@
  *         An instance of the data structure, a set of elements.
  *
  * key
- *         A key used for lookuping up an element in the hashset.
+ *         A key used for looking up an element in the hashset.
  *
  * element
  *         An element in the hashset. This may be of the same type as the key,
@@ -66,10 +65,10 @@ typedef struct hashset hashset;
 typedef struct {
     /* If the type of an element is not the same as the type of a key used for
      * lookup, this callback needs to return the key within an element. */
-    void (*elementGetKey)(const void *element);
+    const void *(*elementGetKey)(const void *element);
     uint64_t (*hashFunction)(const void *key);
     int (*keyCompare)(hashset *s, const void *key1, const void *key2);
-    void (*elementDestructor)(hashset *s, void *key);
+    void (*elementDestructor)(hashset *s, void *elem);
     int (*resizeAllowed)(size_t moreMem, double usedRatio);
     /* Invoked at the start of rehashing. Both tables are already created. */
     void (*rehashingStarted)(hashset *s);
@@ -79,23 +78,33 @@ typedef struct {
     /* Allow a hashset to carry extra caller-defined metadata. The extra memory
      * is initialized to 0. */
     size_t (*getMetadataSize)(void);
-    /* Allow the caller to store some data here. It's useful for the
+    /* Allow the caller to store some data here in the type. It's useful for the
      * rehashingStarted and rehashingCompleted callbacks. */
     void *userdata;
 } hashsetType;
 
 typedef enum {
-    HASHSET_RESIZE_ALLOW,
+    HASHSET_RESIZE_ALLOW = 0,
     HASHSET_RESIZE_AVOID,
     HASHSET_RESIZE_FORBID,
-} hashsetResizeMode;
+} hashsetResizePolicy;
 
 /* TODO: Iterator, stats, scan callback typedefs, defrag functions */
 
+/* TODO: Type flag to disable incremental rehashing. */
+
 /* --- Inline functions --- */
 
-
 /* --- Prototypes --- */
+
+/* Hash function (global seed) */
+void hashsetSetHashFunctionSeed(uint8_t *seed);
+uint8_t *hashsetGetHashFunctionSeed(void);
+uint64_t hashsetGenHashFunction(const char *buf, size_t len);
+uint64_t hashsetGenCaseHashFunction(const char *buf, size_t len);
+
+/* Global resize policy */
+void hashsetSetResizePolicy(hashsetResizePolicy policy);
 
 hashset *hashsetCreate(hashsetType *type);
 hashsetType *hashsetGetType(hashset *s);
@@ -106,6 +115,9 @@ void hashtablePauseAutoResize(hashset *s);
 void hashsetResumeAutoResize(hashset *s);
 int hashsetIsRehashing(hashset *s);
 
-
+int hashsetFind(hashset *s, const void *key, void **found);
+int hashsetAdd(hashset *s, void *elem);
+int hashsetAddRaw(hashset *s, void *elem, void **existing);
+int hashsetReplace(hashset *s, void *elem);
 
 #endif

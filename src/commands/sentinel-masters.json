@@ -1,12 +1,17 @@
 {
     "MASTERS": {
-        "summary": "Returns a list of monitored masters.",
-        "complexity": "O(N) where N is the number of masters",
+        "summary": "Returns a list of monitored primaries.",
+        "complexity": "O(N) where N is the number of primaries",
         "group": "sentinel",
         "since": "2.8.4",
         "arity": 2,
         "container": "SENTINEL",
         "function": "sentinelCommand",
+        "deprecated_since": "8.0.0",
+        "replaced_by": "`SENTINEL PRIMARIES`",
+        "doc_flags": [
+            "DEPRECATED"
+        ],
         "command_flags": [
             "ADMIN",
             "SENTINEL",
@@ -14,7 +19,7 @@
         ],
         "reply_schema": {
             "type": "array",
-            "description": "List of monitored masters, and their state.",
+            "description": "List of monitored primaries, and their states.",
             "items": {
                 "type": "object",
                 "additionalProperties": {

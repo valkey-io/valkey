@@ -1,7 +1,3 @@
-proc get_slot_field {slot_output shard_id node_id attrib_id} {
-    return [lindex [lindex [lindex $slot_output $shard_id] $node_id] $attrib_id]
-}
-
 # Start a cluster with 3 masters and 4 replicas.
 # These tests rely on specific node ordering, so make sure no node fails over.
 start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-replica-no-failover yes}} {
@@ -160,18 +156,18 @@ test "Verify the nodes configured with prefer hostname only show hostname for ne
     # to accept our isolated nodes connections. At this point they will
     # start showing up in cluster slots. 
     wait_for_condition 50 100 {
-        [llength [R 6 CLUSTER SLOTS]] eq 3
+        [llength [R 6 CLUSTER SLOTS]] eq 2
     } else {
         fail "Node did not learn about the 2 shards it can talk to"
     }
     wait_for_condition 50 100 {
-        [lindex [get_slot_field [R 6 CLUSTER SLOTS] 1 2 3] 1] eq "shard-1.com"
+        [lindex [get_slot_field [R 6 CLUSTER SLOTS] 0 2 3] 1] eq "shard-1.com"
     } else {
         fail "hostname for shard-1 didn't reach node 6"
     }
 
     wait_for_condition 50 100 {
-        [lindex [get_slot_field [R 6 CLUSTER SLOTS] 2 2 3] 1] eq "shard-2.com"
+        [lindex [get_slot_field [R 6 CLUSTER SLOTS] 1 2 3] 1] eq "shard-2.com"
     } else {
         fail "hostname for shard-2 didn't reach node 6"
     }

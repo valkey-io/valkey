@@ -6,7 +6,7 @@
  *
  * -----------------------------------------------------------------------------
  *
- * Copyright (c) 2016, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2016, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -251,7 +251,7 @@ int HelloRepl1_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, in
 
 /* Another command to show replication. In this case, we call
  * ValkeyModule_ReplicateVerbatim() to mean we want just the command to be
- * propagated to slaves / AOF exactly as it was called by the user.
+ * propagated to replicas / AOF exactly as it was called by the user.
  *
  * This command also shows how to work with string objects.
  * It takes a list, and increments all the elements (that must have

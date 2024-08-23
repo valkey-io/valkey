@@ -5,19 +5,19 @@
 
 /* The following defines are amount of time, sometimes expressed as
  * multiplicators of the node timeout value (when ending with MULT). */
-#define CLUSTER_FAIL_REPORT_VALIDITY_MULT 2 /* Fail report validity. */
-#define CLUSTER_FAIL_UNDO_TIME_MULT 2       /* Undo fail if master is back. */
-#define CLUSTER_MF_TIMEOUT 5000             /* Milliseconds to do a manual failover. */
-#define CLUSTER_MF_PAUSE_MULT 2             /* Master pause manual failover mult. */
-#define CLUSTER_SLAVE_MIGRATION_DELAY 5000  /* Delay for slave migration. */
+#define CLUSTER_FAIL_REPORT_VALIDITY_MULT 2  /* Fail report validity. */
+#define CLUSTER_FAIL_UNDO_TIME_MULT 2        /* Undo fail if primary is back. */
+#define CLUSTER_MF_TIMEOUT 5000              /* Milliseconds to do a manual failover. */
+#define CLUSTER_MF_PAUSE_MULT 2              /* Primary pause manual failover mult. */
+#define CLUSTER_REPLICA_MIGRATION_DELAY 5000 /* Delay for replica migration. */
 
-/* Reasons why a slave is not able to failover. */
+/* Reasons why a replica is not able to failover. */
 #define CLUSTER_CANT_FAILOVER_NONE 0
 #define CLUSTER_CANT_FAILOVER_DATA_AGE 1
 #define CLUSTER_CANT_FAILOVER_WAITING_DELAY 2
 #define CLUSTER_CANT_FAILOVER_EXPIRED 3
 #define CLUSTER_CANT_FAILOVER_WAITING_VOTES 4
-#define CLUSTER_CANT_FAILOVER_RELOG_PERIOD (10) /* seconds. */
+#define CLUSTER_CANT_FAILOVER_RELOG_PERIOD 1 /* seconds. */
 
 /* clusterState todo_before_sleep flags. */
 #define CLUSTER_TODO_HANDLE_FAILOVER (1 << 0)
@@ -41,29 +41,31 @@ typedef struct clusterLink {
 } clusterLink;
 
 /* Cluster node flags and macros. */
-#define CLUSTER_NODE_MASTER 1                  /* The node is a master */
-#define CLUSTER_NODE_SLAVE 2                   /* The node is a slave */
-#define CLUSTER_NODE_PFAIL 4                   /* Failure? Need acknowledge */
-#define CLUSTER_NODE_FAIL 8                    /* The node is believed to be malfunctioning */
-#define CLUSTER_NODE_MYSELF 16                 /* This node is myself */
-#define CLUSTER_NODE_HANDSHAKE 32              /* We have still to exchange the first ping */
-#define CLUSTER_NODE_NOADDR 64                 /* We don't know the address of this node */
-#define CLUSTER_NODE_MEET 128                  /* Send a MEET message to this node */
-#define CLUSTER_NODE_MIGRATE_TO 256            /* Master eligible for replica migration. */
-#define CLUSTER_NODE_NOFAILOVER 512            /* Slave will not try to failover. */
-#define CLUSTER_NODE_EXTENSIONS_SUPPORTED 1024 /* This node supports extensions. */
+#define CLUSTER_NODE_PRIMARY (1 << 0)               /* The node is a primary */
+#define CLUSTER_NODE_REPLICA (1 << 1)               /* The node is a replica */
+#define CLUSTER_NODE_PFAIL (1 << 2)                 /* Failure? Need acknowledge */
+#define CLUSTER_NODE_FAIL (1 << 3)                  /* The node is believed to be malfunctioning */
+#define CLUSTER_NODE_MYSELF (1 << 4)                /* This node is myself */
+#define CLUSTER_NODE_HANDSHAKE (1 << 5)             /* We have still to exchange the first ping */
+#define CLUSTER_NODE_NOADDR (1 << 6)                /* We don't know the address of this node */
+#define CLUSTER_NODE_MEET (1 << 7)                  /* Send a MEET message to this node */
+#define CLUSTER_NODE_MIGRATE_TO (1 << 8)            /* Primary eligible for replica migration. */
+#define CLUSTER_NODE_NOFAILOVER (1 << 9)            /* Replica will not try to failover. */
+#define CLUSTER_NODE_EXTENSIONS_SUPPORTED (1 << 10) /* This node supports extensions. */
+#define CLUSTER_NODE_LIGHT_HDR_SUPPORTED (1 << 11)  /* This node supports light pubsub message header. */
 #define CLUSTER_NODE_NULL_NAME                                                                                         \
     "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
     "\000\000\000\000\000\000\000\000\000\000\000\000"
 
-#define nodeIsMaster(n) ((n)->flags & CLUSTER_NODE_MASTER)
-#define nodeIsSlave(n) ((n)->flags & CLUSTER_NODE_SLAVE)
+#define nodeIsPrimary(n) ((n)->flags & CLUSTER_NODE_PRIMARY)
+#define nodeIsReplica(n) ((n)->flags & CLUSTER_NODE_REPLICA)
 #define nodeInHandshake(n) ((n)->flags & CLUSTER_NODE_HANDSHAKE)
 #define nodeHasAddr(n) (!((n)->flags & CLUSTER_NODE_NOADDR))
 #define nodeTimedOut(n) ((n)->flags & CLUSTER_NODE_PFAIL)
 #define nodeFailed(n) ((n)->flags & CLUSTER_NODE_FAIL)
 #define nodeCantFailover(n) ((n)->flags & CLUSTER_NODE_NOFAILOVER)
 #define nodeSupportsExtensions(n) ((n)->flags & CLUSTER_NODE_EXTENSIONS_SUPPORTED)
+#define nodeSupportsLightMsgHdr(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_SUPPORTED)
 
 /* This structure represent elements of node->fail_reports. */
 typedef struct clusterNodeFailReport {
@@ -91,6 +93,13 @@ typedef struct clusterNodeFailReport {
 #define CLUSTERMSG_TYPE_MODULE 9                /* Module cluster API message. */
 #define CLUSTERMSG_TYPE_PUBLISHSHARD 10         /* Pub/Sub Publish shard propagation */
 #define CLUSTERMSG_TYPE_COUNT 11                /* Total number of message types. */
+
+#define CLUSTERMSG_LIGHT 0x8000 /* Modifier bit for message types that support light header */
+
+#define CLUSTERMSG_MODIFIER_MASK (CLUSTERMSG_LIGHT) /* Modifier mask for header types. (if we add more in the future) */
+
+/* We check for the modifier bit to determine if the message is sent using light header.*/
+#define IS_LIGHT_MESSAGE(type) ((type) & CLUSTERMSG_LIGHT)
 
 /* Initially we don't know our "name", but we'll find it once we connect
  * to the first node, using the getsockname() function. Then we'll use this
@@ -138,6 +147,8 @@ typedef enum {
     CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME,
     CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE,
     CLUSTERMSG_EXT_TYPE_SHARDID,
+    CLUSTERMSG_EXT_TYPE_CLIENT_IPV4,
+    CLUSTERMSG_EXT_TYPE_CLIENT_IPV6,
 } clusterMsgPingtypes;
 
 /* Helper function for making sure extensions are eight byte aligned. */
@@ -163,6 +174,14 @@ typedef struct {
 } clusterMsgPingExtShardId;
 
 typedef struct {
+    char announce_client_ipv4[1]; /* Announced client IPv4, ends with \0. */
+} clusterMsgPingExtClientIpV4;
+
+typedef struct {
+    char announce_client_ipv6[1]; /* Announced client IPv6, ends with \0. */
+} clusterMsgPingExtClientIpV6;
+
+typedef struct {
     uint32_t length; /* Total length of this extension message (including this header) */
     uint16_t type;   /* Type of this extension message (see clusterMsgPingtypes) */
     uint16_t unused; /* 16 bits of padding to make this structure 8 byte aligned. */
@@ -171,6 +190,8 @@ typedef struct {
         clusterMsgPingExtHumanNodename human_nodename;
         clusterMsgPingExtForgottenNode forgotten_node;
         clusterMsgPingExtShardId shard_id;
+        clusterMsgPingExtClientIpV4 announce_client_ipv4;
+        clusterMsgPingExtClientIpV6 announce_client_ipv6;
     } ext[]; /* Actual extension information, formatted so that the data is 8
               * byte aligned, regardless of its content. */
 } clusterMsgPingExt;
@@ -216,14 +237,14 @@ typedef struct {
     uint16_t type;                /* Message type */
     uint16_t count;               /* Number of gossip sections. */
     uint64_t currentEpoch;        /* The epoch accordingly to the sending node. */
-    uint64_t configEpoch;         /* The config epoch if it's a master, or the last
-                                     epoch advertised by its master if it is a
-                                     slave. */
-    uint64_t offset;              /* Master replication offset if node is a master or
-                                     processed replication offset if node is a slave. */
+    uint64_t configEpoch;         /* The config epoch if it's a primary, or the last
+                                     epoch advertised by its primary if it is a
+                                     replica. */
+    uint64_t offset;              /* Primary replication offset if node is a primary or
+                                     processed replication offset if node is a replica. */
     char sender[CLUSTER_NAMELEN]; /* Name of the sender node */
     unsigned char myslots[CLUSTER_SLOTS / 8];
-    char slaveof[CLUSTER_NAMELEN];
+    char replicaof[CLUSTER_NAMELEN];
     char myip[NET_IP_STR_LEN]; /* Sender IP, if not all zeroed. */
     uint16_t extensions;       /* Number of extensions sent along with this packet. */
     char notused1[30];         /* 30 bytes reserved for future usage. */
@@ -256,7 +277,7 @@ static_assert(offsetof(clusterMsg, configEpoch) == 24, "unexpected field offset"
 static_assert(offsetof(clusterMsg, offset) == 32, "unexpected field offset");
 static_assert(offsetof(clusterMsg, sender) == 40, "unexpected field offset");
 static_assert(offsetof(clusterMsg, myslots) == 80, "unexpected field offset");
-static_assert(offsetof(clusterMsg, slaveof) == 2128, "unexpected field offset");
+static_assert(offsetof(clusterMsg, replicaof) == 2128, "unexpected field offset");
 static_assert(offsetof(clusterMsg, myip) == 2168, "unexpected field offset");
 static_assert(offsetof(clusterMsg, extensions) == 2214, "unexpected field offset");
 static_assert(offsetof(clusterMsg, notused1) == 2216, "unexpected field offset");
@@ -271,11 +292,31 @@ static_assert(offsetof(clusterMsg, data) == 2256, "unexpected field offset");
 
 /* Message flags better specify the packet content or are used to
  * provide some information about the node state. */
-#define CLUSTERMSG_FLAG0_PAUSED (1 << 0) /* Master paused for manual failover. */
+#define CLUSTERMSG_FLAG0_PAUSED (1 << 0) /* Primary paused for manual failover. */
 #define CLUSTERMSG_FLAG0_FORCEACK                                                                                      \
     (1 << 1)                               /* Give ACK to AUTH_REQUEST even if                                         \
-                                              master is up. */
+                                              primary is up. */
 #define CLUSTERMSG_FLAG0_EXT_DATA (1 << 2) /* Message contains extension data */
+
+typedef struct {
+    char sig[4];     /* Signature "RCmb" (Cluster message bus). */
+    uint32_t totlen; /* Total length of this message */
+    uint16_t ver;    /* Protocol version, currently set to CLUSTER_PROTO_VER. */
+    uint16_t notused1;
+    uint16_t type; /* Message type */
+    uint16_t notused2;
+    union clusterMsgData data;
+} clusterMsgLight;
+
+static_assert(offsetof(clusterMsgLight, sig) == offsetof(clusterMsg, sig), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, totlen) == offsetof(clusterMsg, totlen), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, ver) == offsetof(clusterMsg, ver), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, notused1) == offsetof(clusterMsg, port), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, type) == offsetof(clusterMsg, type), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, notused2) == offsetof(clusterMsg, count), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, data) == 16, "unexpected field offset");
+
+#define CLUSTERMSG_LIGHT_MIN_LEN (sizeof(clusterMsgLight) - sizeof(union clusterMsgData))
 
 struct _clusterNode {
     mstime_t ctime;                         /* Node object creation time. */
@@ -287,22 +328,24 @@ struct _clusterNode {
     uint16_t *slot_info_pairs;              /* Slots info represented as (start/end) pair (consecutive index). */
     int slot_info_pairs_count;              /* Used number of slots in slot_info_pairs */
     int numslots;                           /* Number of slots handled by this node */
-    int numslaves;                          /* Number of slave nodes, if this is a master */
-    clusterNode **slaves;                   /* pointers to slave nodes */
-    clusterNode *slaveof;                   /* pointer to the master node. Note that it
-                                               may be NULL even if the node is a slave
-                                               if we don't have the master node in our
-                                               tables. */
+    int num_replicas;                       /* Number of replica nodes, if this is a primary */
+    clusterNode **replicas;                 /* pointers to replica nodes */
+    clusterNode *replicaof;                 /* pointer to the primary node. Note that it
+                                             may be NULL even if the node is a replica
+                                             if we don't have the primary node in our
+                                             tables. */
     unsigned long long last_in_ping_gossip; /* The number of the last carried in the ping gossip section */
     mstime_t ping_sent;                     /* Unix time we sent latest ping */
     mstime_t pong_received;                 /* Unix time we received the pong */
     mstime_t data_received;                 /* Unix time we received any data */
     mstime_t fail_time;                     /* Unix time when FAIL flag was set */
-    mstime_t voted_time;                    /* Last time we voted for a slave of this master */
+    mstime_t voted_time;                    /* Last time we voted for a replica of this primary */
     mstime_t repl_offset_time;              /* Unix time we received offset for this node */
-    mstime_t orphaned_time;                 /* Starting time of orphaned master condition */
+    mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
     long long repl_offset;                  /* Last known repl offset for this node. */
     char ip[NET_IP_STR_LEN];                /* Latest known IP address of this node */
+    sds announce_client_ipv4;               /* IPv4 for clients only. */
+    sds announce_client_ipv6;               /* IPv6 for clients only. */
     sds hostname;                           /* The known hostname for this node */
     sds human_nodename;                     /* The known human readable nodename for this node */
     int tcp_port;                           /* Latest known clients TCP port. */
@@ -315,36 +358,43 @@ struct _clusterNode {
                                                Update with updateAndCountChangedNodeHealth(). */
 };
 
+/* Struct used for storing slot statistics. */
+typedef struct slotStat {
+    uint64_t cpu_usec;
+    uint64_t network_bytes_in;
+    uint64_t network_bytes_out;
+} slotStat;
+
 struct clusterState {
     clusterNode *myself; /* This node */
     uint64_t currentEpoch;
     int state;              /* CLUSTER_OK, CLUSTER_FAIL, ... */
-    int size;               /* Num of master nodes with at least one slot */
+    int size;               /* Num of primary nodes with at least one slot */
     dict *nodes;            /* Hash table of name -> clusterNode structures */
     dict *shards;           /* Hash table of shard_id -> list (of nodes) structures */
     dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
     clusterNode *migrating_slots_to[CLUSTER_SLOTS];
     clusterNode *importing_slots_from[CLUSTER_SLOTS];
     clusterNode *slots[CLUSTER_SLOTS];
-    /* The following fields are used to take the slave state on elections. */
+    /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;  /* Time of previous or next election. */
     int failover_auth_count;      /* Number of votes received so far. */
     int failover_auth_sent;       /* True if we already asked for votes. */
-    int failover_auth_rank;       /* This slave rank for current auth request. */
+    int failover_auth_rank;       /* This replica rank for current auth request. */
     uint64_t failover_auth_epoch; /* Epoch of the current election. */
-    int cant_failover_reason;     /* Why a slave is currently not able to
+    int cant_failover_reason;     /* Why a replica is currently not able to
                                      failover. See the CANT_FAILOVER_* macros. */
     /* Manual failover state in common. */
     mstime_t mf_end; /* Manual failover time limit (ms unixtime).
                         It is zero if there is no MF in progress. */
-    /* Manual failover state of master. */
-    clusterNode *mf_slave; /* Slave performing the manual failover. */
-    /* Manual failover state of slave. */
-    long long mf_master_offset; /* Master offset the slave needs to start MF
+    /* Manual failover state of primary. */
+    clusterNode *mf_replica; /* replica performing the manual failover. */
+    /* Manual failover state of replica. */
+    long long mf_primary_offset; /* Primary offset the replica needs to start MF
                                    or -1 if still not received. */
-    int mf_can_start;           /* If non-zero signal that the manual failover
-                                   can start requesting masters vote. */
-    /* The following fields are used by masters to take state on elections. */
+    int mf_can_start;            /* If non-zero signal that the manual failover
+                                    can start requesting primary vote. */
+    /* The following fields are used by primaries to take state on elections. */
     uint64_t lastVoteEpoch; /* Epoch of the last vote granted. */
     int todo_before_sleep;  /* Things to do in clusterBeforeSleep(). */
     /* Stats */
@@ -362,7 +412,8 @@ struct clusterState {
      * stops claiming the slot. This prevents spreading incorrect information (that
      * source still owns the slot) using UPDATE messages. */
     unsigned char owner_not_claiming_slot[CLUSTER_SLOTS / 8];
+    /* Struct used for storing slot statistics, for all slots owned by the current shard. */
+    slotStat slot_stats[CLUSTER_SLOTS];
 };
-
 
 #endif // CLUSTER_LEGACY_H

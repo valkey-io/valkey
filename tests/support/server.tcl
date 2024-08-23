@@ -241,6 +241,16 @@ proc tags_acceptable {tags err_return} {
         return 0
     }
 
+    if {$::io_threads && [lsearch $tags "io-threads:skip"] >= 0} {
+        set err "Not supported in io-threads mode"
+        return 0
+    }
+
+    if {$::tcl_version < 8.6 && [lsearch $tags "ipv6"] >= 0} {
+        set err "TCL version is too low and does not support this"
+        return 0
+    }
+
     return 1
 }
 
@@ -304,7 +314,7 @@ proc spawn_server {config_file stdout stderr args} {
 }
 
 # Wait for actual startup, return 1 if port is busy, 0 otherwise
-proc wait_server_started {config_file stdout pid} {
+proc wait_server_started {config_file stdout stderr pid} {
     set checkperiod 100; # Milliseconds
     set maxiter [expr {120*1000/$checkperiod}] ; # Wait up to 2 minutes.
     set port_busy 0
@@ -326,6 +336,13 @@ proc wait_server_started {config_file stdout pid} {
         # for this reason.
         if {[regexp {Failed listening on port} [exec cat $stdout]]} {
             set port_busy 1
+            break
+        }
+
+        # Configuration errors are unexpected, but it's helpful to fail fast
+        # to give the feedback to the test runner.
+        if {[regexp {FATAL CONFIG FILE ERROR} [exec cat $stderr]]} {
+            start_server_error $config_file "Configuration issue prevented Valkey startup"
             break
         }
     }
@@ -490,6 +507,12 @@ proc start_server {options {code undefined}} {
         dict set config "tls-ca-cert-file" [format "%s/tests/tls/ca.crt" [pwd]]
         dict set config "loglevel" "debug"
     }
+
+    if {$::io_threads} {
+        dict set config "io-threads" 2
+        dict set config "events-per-io-thread" 0
+    }
+
     foreach line $data {
         if {[string length $line] > 0 && [string index $line 0] ne "#"} {
             set elements [split $line " "]
@@ -568,7 +591,7 @@ proc start_server {options {code undefined}} {
         set pid [spawn_server $config_file $stdout $stderr $args]
 
         # check that the server actually started
-        set port_busy [wait_server_started $config_file $stdout $pid]
+        set port_busy [wait_server_started $config_file $stdout $stderr $pid]
 
         # Sometimes we have to try a different port, even if we checked
         # for availability. Other test clients may grab the port before we
@@ -615,7 +638,7 @@ proc start_server {options {code undefined}} {
     # setup properties to be able to initialize a client object
     set port_param [expr $::tls ? {"tls-port"} : {"port"}]
     set host $::host
-    if {[dict exists $config bind]} { set host [dict get $config bind] }
+    if {[dict exists $config bind]} { set host [lindex [dict get $config bind] 0] }
     if {[dict exists $config $port_param]} { set port [dict get $config $port_param] }
 
     # setup config dict
@@ -778,7 +801,7 @@ proc restart_server {level wait_ready rotate_logs {reconnect 1} {shutdown sigter
     set pid [spawn_server $config_file $stdout $stderr {}]
 
     # check that the server actually started
-    wait_server_started $config_file $stdout $pid
+    wait_server_started $config_file $stdout $stderr $pid
 
     # update the pid in the servers list
     dict set srv "pid" $pid

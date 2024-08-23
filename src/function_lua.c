@@ -274,7 +274,7 @@ static int luaRegisterFunctionReadNamedArgs(lua_State *lua, registerFunctionArgs
     luaFunctionCtx *lua_f_ctx = NULL;
     uint64_t flags = 0;
     if (!lua_istable(lua, 1)) {
-        err = "calling redis.register_function with a single argument is only applicable to Lua table (representing "
+        err = "calling server.register_function with a single argument is only applicable to Lua table (representing "
               "named arguments).";
         goto error;
     }
@@ -284,23 +284,23 @@ static int luaRegisterFunctionReadNamedArgs(lua_State *lua, registerFunctionArgs
     while (lua_next(lua, -2)) {
         /* Stack now: table, key, value */
         if (!lua_isstring(lua, -2)) {
-            err = "named argument key given to redis.register_function is not a string";
+            err = "named argument key given to server.register_function is not a string";
             goto error;
         }
         const char *key = lua_tostring(lua, -2);
         if (!strcasecmp(key, "function_name")) {
             if (!(name = luaGetStringSds(lua, -1))) {
-                err = "function_name argument given to redis.register_function must be a string";
+                err = "function_name argument given to server.register_function must be a string";
                 goto error;
             }
         } else if (!strcasecmp(key, "description")) {
             if (!(desc = luaGetStringSds(lua, -1))) {
-                err = "description argument given to redis.register_function must be a string";
+                err = "description argument given to server.register_function must be a string";
                 goto error;
             }
         } else if (!strcasecmp(key, "callback")) {
             if (!lua_isfunction(lua, -1)) {
-                err = "callback argument given to redis.register_function must be a function";
+                err = "callback argument given to server.register_function must be a function";
                 goto error;
             }
             int lua_function_ref = luaL_ref(lua, LUA_REGISTRYINDEX);
@@ -310,7 +310,7 @@ static int luaRegisterFunctionReadNamedArgs(lua_State *lua, registerFunctionArgs
             continue; /* value was already popped, so no need to pop it out. */
         } else if (!strcasecmp(key, "flags")) {
             if (!lua_istable(lua, -1)) {
-                err = "flags argument to redis.register_function must be a table representing function flags";
+                err = "flags argument to server.register_function must be a table representing function flags";
                 goto error;
             }
             if (luaRegisterFunctionReadFlags(lua, &flags) != C_OK) {
@@ -319,19 +319,19 @@ static int luaRegisterFunctionReadNamedArgs(lua_State *lua, registerFunctionArgs
             }
         } else {
             /* unknown argument was given, raise an error */
-            err = "unknown argument given to redis.register_function";
+            err = "unknown argument given to server.register_function";
             goto error;
         }
         lua_pop(lua, 1); /* pop the value to continue the iteration */
     }
 
     if (!name) {
-        err = "redis.register_function must get a function name argument";
+        err = "server.register_function must get a function name argument";
         goto error;
     }
 
     if (!lua_f_ctx) {
-        err = "redis.register_function must get a callback argument";
+        err = "server.register_function must get a callback argument";
         goto error;
     }
 
@@ -355,12 +355,12 @@ static int luaRegisterFunctionReadPositionalArgs(lua_State *lua, registerFunctio
     sds name = NULL;
     luaFunctionCtx *lua_f_ctx = NULL;
     if (!(name = luaGetStringSds(lua, 1))) {
-        err = "first argument to redis.register_function must be a string";
+        err = "first argument to server.register_function must be a string";
         goto error;
     }
 
     if (!lua_isfunction(lua, 2)) {
-        err = "second argument to redis.register_function must be a function";
+        err = "second argument to server.register_function must be a function";
         goto error;
     }
 
@@ -382,7 +382,7 @@ error:
 static int luaRegisterFunctionReadArgs(lua_State *lua, registerFunctionArgs *register_f_args) {
     int argc = lua_gettop(lua);
     if (argc < 1 || argc > 2) {
-        luaPushError(lua, "wrong number of arguments to redis.register_function");
+        luaPushError(lua, "wrong number of arguments to server.register_function");
         return C_ERR;
     }
 
@@ -398,7 +398,7 @@ static int luaRegisterFunction(lua_State *lua) {
 
     loadCtx *load_ctx = luaGetFromRegistry(lua, REGISTRY_LOAD_CTX_NAME);
     if (!load_ctx) {
-        luaPushError(lua, "redis.register_function can only be called on FUNCTION LOAD command");
+        luaPushError(lua, "server.register_function can only be called on FUNCTION LOAD command");
         return luaError(lua);
     }
 
@@ -423,7 +423,7 @@ int luaEngineInitEngine(void) {
     luaEngineCtx *lua_engine_ctx = zmalloc(sizeof(*lua_engine_ctx));
     lua_engine_ctx->lua = lua_open();
 
-    luaRegisterRedisAPI(lua_engine_ctx->lua);
+    luaRegisterServerAPI(lua_engine_ctx->lua);
 
     /* Register the library commands table and fields and store it to registry */
     lua_newtable(lua_engine_ctx->lua); /* load library globals */

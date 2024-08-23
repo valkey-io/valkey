@@ -3,7 +3,7 @@
 # basic capabilities for spawning and handling N parallel Server / Sentinel
 # instances.
 #
-# Copyright (C) 2014 Salvatore Sanfilippo antirez@gmail.com
+# Copyright (C) 2014 Redis Ltd.
 # This software is released under the BSD License. See the COPYING file for
 # more information.
 
@@ -20,6 +20,7 @@ set ::verbose 0
 set ::valgrind 0
 set ::tls 0
 set ::tls_module 0
+set ::io_threads 0
 set ::pause_on_error 0
 set ::dont_clean 0
 set ::simulate_error 0
@@ -107,6 +108,11 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
             puts $cfg "port $port"
         }
 
+        if {$::io_threads} {
+            puts $cfg "io-threads 2"
+            puts $cfg "events-per-io-thread 0"
+        }
+
         if {$::log_req_res} {
             puts $cfg "req-res-logfile stdout.reqres"
         }
@@ -118,6 +124,8 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
         puts $cfg "repl-diskless-sync-delay 0"
         puts $cfg "dir ./$dirname"
         puts $cfg "logfile log.txt"
+        puts $cfg "enable-debug-assert yes"
+
         # Add additional config files
         foreach directive $conf {
             puts $cfg $directive
@@ -295,6 +303,8 @@ proc parse_options {} {
             if {$opt eq {--tls-module}} {
                 set ::tls_module 1
             }
+        } elseif {$opt eq {--io-threads}} {
+            set ::io_threads 1
         } elseif {$opt eq {--config}} {
             set val2 [lindex $::argv [expr $j+2]]
             dict set ::global_config $val $val2
@@ -317,6 +327,7 @@ proc parse_options {} {
             puts "--valgrind              Run with valgrind."
             puts "--tls                   Run tests in TLS mode."
             puts "--tls-module            Run tests in TLS mode with Valkey module."
+            puts "--io-threads            Run tests with IO threads."
             puts "--host <host>           Use hostname instead of 127.0.0.1."
             puts "--config <k> <v>        Extra config argument(s)."
             puts "--fast-fail             Exit immediately once the first test fails."

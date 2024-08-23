@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2016, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -61,6 +61,7 @@
 #include "hdr_histogram.h"
 #include "crc16_slottable.h"
 #include "valkeymodule.h"
+#include "io_threads.h"
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -654,7 +655,7 @@ client *moduleAllocTempClient(void) {
         if (moduleTempClientCount < moduleTempClientMinCount) moduleTempClientMinCount = moduleTempClientCount;
     } else {
         c = createClient(NULL);
-        c->flags |= CLIENT_MODULE;
+        c->flag.module = 1;
         c->user = NULL; /* Root user */
     }
     return c;
@@ -681,9 +682,10 @@ void moduleReleaseTempClient(client *c) {
     c->duration = 0;
     resetClient(c);
     c->bufpos = 0;
-    c->flags = CLIENT_MODULE;
+    c->raw_flag = 0;
+    c->flag.module = 1;
     c->user = NULL; /* Root user */
-    c->cmd = c->lastcmd = c->realcmd = NULL;
+    c->cmd = c->lastcmd = c->realcmd = c->io_parsed_cmd = NULL;
     if (c->bstate.async_rm_call_handle) {
         ValkeyModuleAsyncRMCallPromise *promise = c->bstate.async_rm_call_handle;
         promise->c = NULL; /* Remove the client from the promise so it will no longer be possible to abort it. */
@@ -1220,7 +1222,7 @@ ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module,
  *                    Starting from Redis OSS 7.0 this flag has been deprecated.
  *                    Declaring a command as "random" can be done using
  *                    command tips, see https://valkey.io/topics/command-tips.
- * * **"allow-stale"**: The command is allowed to run on slaves that don't
+ * * **"allow-stale"**: The command is allowed to run on replicas that don't
  *                      serve stale data. Don't use if you don't know what
  *                      this means.
  * * **"no-monitor"**: Don't propagate the command on monitor. Use this if
@@ -1294,7 +1296,8 @@ int VM_CreateCommand(ValkeyModuleCtx *ctx,
     ValkeyModuleCommand *cp = moduleCreateCommandProxy(ctx->module, declared_name, sdsdup(declared_name), cmdfunc,
                                                        flags, firstkey, lastkey, keystep);
     cp->serverCmd->arity = cmdfunc ? -1 : -2; /* Default value, can be changed later via dedicated API */
-
+    /* Drain IO queue before modifying commands dictionary to prevent concurrent access while modifying it. */
+    drainIOThreadsQueue();
     serverAssert(dictAdd(server.commands, sdsdup(declared_name), cp->serverCmd) == DICT_OK);
     serverAssert(dictAdd(server.orig_commands, sdsdup(declared_name), cp->serverCmd) == DICT_OK);
     cp->serverCmd->id = ACLGetCommandID(declared_name); /* ID used for ACL. */
@@ -3491,7 +3494,7 @@ int VM_ReplyWithLongDouble(ValkeyModuleCtx *ctx, long double ld) {
  * ## Commands replication API
  * -------------------------------------------------------------------------- */
 
-/* Replicate the specified command and arguments to slaves and AOF, as effect
+/* Replicate the specified command and arguments to replicas and AOF, as effect
  * of execution of the calling command implementation.
  *
  * The replicated commands are always wrapped into the MULTI/EXEC that
@@ -3565,7 +3568,7 @@ int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...
  * commands.
  *
  * Basically this form of replication is useful when you want to propagate
- * the command to the slaves and AOF file exactly as it was called, since
+ * the command to the replicas and AOF file exactly as it was called, since
  * the command can just be re-executed to deterministically re-create the
  * new state starting from the old one.
  *
@@ -3638,11 +3641,11 @@ int modulePopulateClientInfoStructure(void *ci, client *client, int structver) {
     ValkeyModuleClientInfoV1 *ci1 = ci;
     memset(ci1, 0, sizeof(*ci1));
     ci1->version = structver;
-    if (client->flags & CLIENT_MULTI) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_MULTI;
-    if (client->flags & CLIENT_PUBSUB) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_PUBSUB;
-    if (client->flags & CLIENT_UNIX_SOCKET) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET;
-    if (client->flags & CLIENT_TRACKING) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_TRACKING;
-    if (client->flags & CLIENT_BLOCKED) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_BLOCKED;
+    if (client->flag.multi) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_MULTI;
+    if (client->flag.pubsub) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_PUBSUB;
+    if (client->flag.unix_socket) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET;
+    if (client->flag.tracking) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_TRACKING;
+    if (client->flag.blocked) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_BLOCKED;
     if (client->conn->type == connectionTypeTls()) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_SSL;
 
     int port;
@@ -3664,12 +3667,12 @@ int modulePopulateReplicationInfoStructure(void *ri, int structver) {
     ValkeyModuleReplicationInfoV1 *ri1 = ri;
     memset(ri1, 0, sizeof(*ri1));
     ri1->version = structver;
-    ri1->master = server.masterhost == NULL;
-    ri1->masterhost = server.masterhost ? server.masterhost : "";
-    ri1->masterport = server.masterport;
+    ri1->primary = server.primary_host == NULL;
+    ri1->primary_host = server.primary_host ? server.primary_host : "";
+    ri1->primary_port = server.primary_port;
     ri1->replid1 = server.replid;
     ri1->replid2 = server.replid2;
-    ri1->repl1_offset = server.master_repl_offset;
+    ri1->repl1_offset = server.primary_repl_offset;
     ri1->repl2_offset = server.second_replid_offset;
     return VALKEYMODULE_OK;
 }
@@ -3794,7 +3797,7 @@ int VM_GetSelectedDb(ValkeyModuleCtx *ctx) {
  *  * VALKEYMODULE_CTX_FLAGS_MULTI: The command is running inside a transaction
  *
  *  * VALKEYMODULE_CTX_FLAGS_REPLICATED: The command was sent over the replication
- *    link by the MASTER
+ *    link by the PRIMARY
  *
  *  * VALKEYMODULE_CTX_FLAGS_PRIMARY: The instance is a primary
  *
@@ -3821,16 +3824,16 @@ int VM_GetSelectedDb(ValkeyModuleCtx *ctx) {
  *
  *  * VALKEYMODULE_CTX_FLAGS_LOADING: Server is loading RDB/AOF
  *
- *  * VALKEYMODULE_CTX_FLAGS_REPLICA_IS_STALE: No active link with the master.
+ *  * VALKEYMODULE_CTX_FLAGS_REPLICA_IS_STALE: No active link with the primary.
  *
  *  * VALKEYMODULE_CTX_FLAGS_REPLICA_IS_CONNECTING: The replica is trying to
- *                                                 connect with the master.
+ *                                                 connect with the primary.
  *
- *  * VALKEYMODULE_CTX_FLAGS_REPLICA_IS_TRANSFERRING: Master -> Replica RDB
+ *  * VALKEYMODULE_CTX_FLAGS_REPLICA_IS_TRANSFERRING: primary -> Replica RDB
  *                                                   transfer is in progress.
  *
  *  * VALKEYMODULE_CTX_FLAGS_REPLICA_IS_ONLINE: The replica has an active link
- *                                             with its master. This is the
+ *                                             with its primary. This is the
  *                                             contrary of STALE state.
  *
  *  * VALKEYMODULE_CTX_FLAGS_ACTIVE_CHILD: There is currently some background
@@ -3853,9 +3856,9 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
     /* Client specific flags */
     if (ctx) {
         if (ctx->client) {
-            if (ctx->client->flags & CLIENT_DENY_BLOCKING) flags |= VALKEYMODULE_CTX_FLAGS_DENY_BLOCKING;
-            /* Module command received from MASTER, is replicated. */
-            if (ctx->client->flags & CLIENT_MASTER) flags |= VALKEYMODULE_CTX_FLAGS_REPLICATED;
+            if (ctx->client->flag.deny_blocking) flags |= VALKEYMODULE_CTX_FLAGS_DENY_BLOCKING;
+            /* Module command received from PRIMARY, is replicated. */
+            if (ctx->client->flag.primary) flags |= VALKEYMODULE_CTX_FLAGS_REPLICATED;
             if (ctx->client->resp == 3) {
                 flags |= VALKEYMODULE_CTX_FLAGS_RESP3;
             }
@@ -3863,7 +3866,7 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
 
         /* For DIRTY flags, we need the blocked client if used */
         client *c = ctx->blocked_client ? ctx->blocked_client->client : ctx->client;
-        if (c && (c->flags & (CLIENT_DIRTY_CAS | CLIENT_DIRTY_EXEC))) {
+        if (c && (c->flag.dirty_cas || c->flag.dirty_exec)) {
             flags |= VALKEYMODULE_CTX_FLAGS_MULTI_DIRTY;
         }
     }
@@ -3880,7 +3883,7 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
         flags |= VALKEYMODULE_CTX_FLAGS_LOADING;
 
     /* Maxmemory and eviction policy */
-    if (server.maxmemory > 0 && (!server.masterhost || !server.repl_slave_ignore_maxmemory)) {
+    if (server.maxmemory > 0 && (!server.primary_host || !server.repl_replica_ignore_maxmemory)) {
         flags |= VALKEYMODULE_CTX_FLAGS_MAXMEMORY;
 
         if (server.maxmemory_policy != MAXMEMORY_NO_EVICTION) flags |= VALKEYMODULE_CTX_FLAGS_EVICT;
@@ -3891,11 +3894,11 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
     if (server.saveparamslen > 0) flags |= VALKEYMODULE_CTX_FLAGS_RDB;
 
     /* Replication flags */
-    if (server.masterhost == NULL) {
+    if (server.primary_host == NULL) {
         flags |= VALKEYMODULE_CTX_FLAGS_PRIMARY;
     } else {
         flags |= VALKEYMODULE_CTX_FLAGS_REPLICA;
-        if (server.repl_slave_ro) flags |= VALKEYMODULE_CTX_FLAGS_READONLY;
+        if (server.repl_replica_ro) flags |= VALKEYMODULE_CTX_FLAGS_READONLY;
 
         /* Replica state flags. */
         if (server.repl_state == REPL_STATE_CONNECT || server.repl_state == REPL_STATE_CONNECTING) {
@@ -3927,16 +3930,16 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
 
 /* Returns true if a client sent the CLIENT PAUSE command to the server or
  * if the Cluster does a manual failover, pausing the clients.
- * This is needed when we have a master with replicas, and want to write,
+ * This is needed when we have a primary with replicas, and want to write,
  * without adding further data to the replication channel, that the replicas
- * replication offset, match the one of the master. When this happens, it is
- * safe to failover the master without data loss.
+ * replication offset, match the one of the primary. When this happens, it is
+ * safe to failover the primary without data loss.
  *
  * However modules may generate traffic by calling ValkeyModule_Call() with
  * the "!" flag, or by calling ValkeyModule_Replicate(), in a context outside
  * commands execution, for instance in timeout callbacks, threads safe
  * contexts, and so forth. When modules will generate too much traffic, it
- * will be hard for the master and replicas offset to match, because there
+ * will be hard for the primary and replicas offset to match, because there
  * is more data to send in the replication channel.
  *
  * So modules may want to try to avoid very heavy background work that has
@@ -5955,8 +5958,7 @@ int VM_CallReplyPromiseAbort(ValkeyModuleCallReply *reply, void **private_data) 
     ValkeyModuleAsyncRMCallPromise *promise = callReplyGetPrivateData(reply);
     if (!promise->c)
         return VALKEYMODULE_ERR; /* Promise can not be aborted, either already aborted or already finished. */
-    if (!(promise->c->flags & CLIENT_BLOCKED))
-        return VALKEYMODULE_ERR; /* Client is not blocked anymore, can not abort it. */
+    if (!(promise->c->flag.blocked)) return VALKEYMODULE_ERR; /* Client is not blocked anymore, can not abort it. */
 
     /* Client is still blocked, remove it from any blocking state and release it. */
     if (private_data) *private_data = promise->private_data;
@@ -6227,7 +6229,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
 
     if (!(flags & VALKEYMODULE_ARGV_ALLOW_BLOCK)) {
         /* We do not want to allow block, the module do not expect it */
-        c->flags |= CLIENT_DENY_BLOCKING;
+        c->flag.deny_blocking = 1;
     }
     c->db = ctx->client->db;
     c->argv = argv;
@@ -6281,7 +6283,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         if (error_as_call_replies) reply = callReplyCreateError(err, ctx);
         goto cleanup;
     }
-    if (!commandCheckArity(c, error_as_call_replies ? &err : NULL)) {
+    if (!commandCheckArity(c->cmd, c->argc, error_as_call_replies ? &err : NULL)) {
         errno = EINVAL;
         if (error_as_call_replies) reply = callReplyCreateError(err, ctx);
         goto cleanup;
@@ -6324,7 +6326,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         }
     } else {
         /* if we aren't OOM checking in VM_Call, we want further executions from this client to also not fail on OOM */
-        c->flags |= CLIENT_ALLOW_OOM;
+        c->flag.allow_oom = 1;
     }
 
     if (flags & VALKEYMODULE_ARGV_NO_WRITES) {
@@ -6369,21 +6371,21 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
                 goto cleanup;
             }
 
-            if (server.masterhost && server.repl_slave_ro && !obey_client) {
+            if (server.primary_host && server.repl_replica_ro && !obey_client) {
                 errno = ESPIPE;
                 if (error_as_call_replies) {
-                    sds msg = sdsdup(shared.roslaveerr->ptr);
+                    sds msg = sdsdup(shared.roreplicaerr->ptr);
                     reply = callReplyCreateError(msg, ctx);
                 }
                 goto cleanup;
             }
         }
 
-        if (server.masterhost && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
+        if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
             !(cmd_flags & CMD_STALE)) {
             errno = ESPIPE;
             if (error_as_call_replies) {
-                sds msg = sdsdup(shared.masterdownerr->ptr);
+                sds msg = sdsdup(shared.primarydownerr->ptr);
                 reply = callReplyCreateError(msg, ctx);
             }
             goto cleanup;
@@ -6418,12 +6420,12 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
 
     /* If this is a Cluster node, we need to make sure the module is not
      * trying to access non-local keys, with the exception of commands
-     * received from our master. */
+     * received from our primary. */
     if (server.cluster_enabled && !mustObeyClient(ctx->client)) {
         int error_code;
         /* Duplicate relevant flags in the module client. */
-        c->flags &= ~(CLIENT_READONLY | CLIENT_ASKING);
-        c->flags |= ctx->client->flags & (CLIENT_READONLY | CLIENT_ASKING);
+        c->flag.readonly = ctx->client->flag.readonly;
+        c->flag.asking = ctx->client->flag.asking;
         if (getNodeByQuery(c, c->cmd, c->argv, c->argc, NULL, &error_code) != getMyClusterNode()) {
             sds msg = NULL;
             if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {
@@ -6474,7 +6476,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     call(c, call_flags);
     server.replication_allowed = prev_replication_allowed;
 
-    if (c->flags & CLIENT_BLOCKED) {
+    if (c->flag.blocked) {
         serverAssert(flags & VALKEYMODULE_ARGV_ALLOW_BLOCK);
         serverAssert(ctx->module);
         ValkeyModuleAsyncRMCallPromise *promise = zmalloc(sizeof(ValkeyModuleAsyncRMCallPromise));
@@ -6492,11 +6494,11 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         c->bstate.async_rm_call_handle = promise;
         if (!(call_flags & CMD_CALL_PROPAGATE_AOF)) {
             /* No need for AOF propagation, set the relevant flags of the client */
-            c->flags |= CLIENT_MODULE_PREVENT_AOF_PROP;
+            c->flag.module_prevent_aof_prop = 1;
         }
         if (!(call_flags & CMD_CALL_PROPAGATE_REPL)) {
             /* No need for replication propagation, set the relevant flags of the client */
-            c->flags |= CLIENT_MODULE_PREVENT_REPL_PROP;
+            c->flag.module_prevent_repl_prop = 1;
         }
         c = NULL; /* Make sure not to free the client */
     } else {
@@ -7847,7 +7849,7 @@ int attemptNextAuthCb(client *c, robj *username, robj *password, robj **err) {
             continue;
         }
         /* Remove the module auth complete flag before we attempt the next cb. */
-        c->flags &= ~CLIENT_MODULE_AUTH_HAS_RESULT;
+        c->flag.module_auth_has_result = 0;
         ValkeyModuleCtx ctx;
         moduleCreateContext(&ctx, cur_auth_ctx->module, VALKEYMODULE_CTX_NONE);
         ctx.client = c;
@@ -7905,19 +7907,20 @@ int checkModuleAuthentication(client *c, robj *username, robj *password, robj **
     if (result == VALKEYMODULE_AUTH_NOT_HANDLED) {
         result = attemptNextAuthCb(c, username, password, err);
     }
-    if (c->flags & CLIENT_BLOCKED) {
+    if (c->flag.blocked) {
         /* Modules are expected to return VALKEYMODULE_AUTH_HANDLED when blocking clients. */
         serverAssert(result == VALKEYMODULE_AUTH_HANDLED);
         return AUTH_BLOCKED;
     }
     c->module_auth_ctx = NULL;
     if (result == VALKEYMODULE_AUTH_NOT_HANDLED) {
-        c->flags &= ~CLIENT_MODULE_AUTH_HAS_RESULT;
+        c->flag.module_auth_has_result = 0;
         return AUTH_NOT_HANDLED;
     }
-    if (c->flags & CLIENT_MODULE_AUTH_HAS_RESULT) {
-        c->flags &= ~CLIENT_MODULE_AUTH_HAS_RESULT;
-        if (c->authenticated) return AUTH_OK;
+
+    if (c->flag.module_auth_has_result) {
+        c->flag.module_auth_has_result = 0;
+        if (c->flag.authenticated) return AUTH_OK;
     }
     return AUTH_ERR;
 }
@@ -8010,8 +8013,8 @@ ValkeyModuleBlockedClient *VM_BlockClientOnAuth(ValkeyModuleCtx *ctx,
     }
     ValkeyModuleBlockedClient *bc =
         moduleBlockClient(ctx, NULL, reply_callback, NULL, free_privdata, 0, NULL, 0, NULL, 0);
-    if (ctx->client->flags & CLIENT_BLOCKED) {
-        ctx->client->flags |= CLIENT_PENDING_COMMAND;
+    if (ctx->client->flag.blocked) {
+        ctx->client->flag.pending_command = 1;
     }
     return bc;
 }
@@ -8293,14 +8296,13 @@ void moduleHandleBlockedClients(void) {
 
             /* Update the wait offset, we don't know if this blocked client propagated anything,
              * currently we rather not add any API for that, so we just assume it did. */
-            c->woff = server.master_repl_offset;
+            c->woff = server.primary_repl_offset;
 
             /* Put the client in the list of clients that need to write
              * if there are pending replies here. This is needed since
              * during a non blocking command the client may receive output. */
-            if (!clientHasModuleAuthInProgress(c) && clientHasPendingReplies(c) && !(c->flags & CLIENT_PENDING_WRITE) &&
-                c->conn) {
-                c->flags |= CLIENT_PENDING_WRITE;
+            if (!clientHasModuleAuthInProgress(c) && clientHasPendingReplies(c) && !c->flag.pending_write && c->conn) {
+                c->flag.pending_write = 1;
                 listLinkNodeHead(server.clients_pending_write, &c->clients_pending_write_node);
             }
         }
@@ -8687,7 +8689,7 @@ int VM_AddPostNotificationJob(ValkeyModuleCtx *ctx,
                               ValkeyModulePostNotificationJobFunc callback,
                               void *privdata,
                               void (*free_privdata)(void *)) {
-    if (server.loading || (server.masterhost && server.repl_slave_ro)) {
+    if (server.loading || (server.primary_host && server.repl_replica_ro)) {
         return VALKEYMODULE_ERR;
     }
     ValkeyModulePostExecUnitJob *job = zmalloc(sizeof(*job));
@@ -8812,7 +8814,7 @@ typedef struct moduleClusterNodeInfo {
     int flags;
     char ip[NET_IP_STR_LEN];
     int port;
-    char master_id[40]; /* Only if flags & VALKEYMODULE_NODE_PRIMARY is true. */
+    char primary_id[40]; /* Only if flags & VALKEYMODULE_NODE_PRIMARY is true. */
 } mdouleClusterNodeInfo;
 
 /* We have an array of message types: each bucket is a linked list of
@@ -8950,16 +8952,24 @@ size_t VM_GetClusterSize(void) {
     return getClusterSize();
 }
 
+int moduleGetClusterNodeInfoForClient(ValkeyModuleCtx *ctx,
+                                      client *c,
+                                      const char *node_id,
+                                      char *ip,
+                                      char *primary_id,
+                                      int *port,
+                                      int *flags);
+
 /* Populate the specified info for the node having as ID the specified 'id',
  * then returns VALKEYMODULE_OK. Otherwise if the format of node ID is invalid
  * or the node ID does not exist from the POV of this local node, VALKEYMODULE_ERR
  * is returned.
  *
- * The arguments `ip`, `master_id`, `port` and `flags` can be NULL in case we don't
- * need to populate back certain info. If an `ip` and `master_id` (only populated
- * if the instance is a slave) are specified, they point to buffers holding
+ * The arguments `ip`, `primary_id`, `port` and `flags` can be NULL in case we don't
+ * need to populate back certain info. If an `ip` and `primary_id` (only populated
+ * if the instance is a replica) are specified, they point to buffers holding
  * at least VALKEYMODULE_NODE_ID_LEN bytes. The strings written back as `ip`
- * and `master_id` are not null terminated.
+ * and `primary_id` are not null terminated.
  *
  * The list of flags reported is the following:
  *
@@ -8968,26 +8978,53 @@ size_t VM_GetClusterSize(void) {
  * * VALKEYMODULE_NODE_REPLICA:      The node is a replica
  * * VALKEYMODULE_NODE_PFAIL:        We see the node as failing
  * * VALKEYMODULE_NODE_FAIL:         The cluster agrees the node is failing
- * * VALKEYMODULE_NODE_NOFAILOVER:   The slave is configured to never failover
+ * * VALKEYMODULE_NODE_NOFAILOVER:   The replica is configured to never failover
  */
-int VM_GetClusterNodeInfo(ValkeyModuleCtx *ctx, const char *id, char *ip, char *master_id, int *port, int *flags) {
+int VM_GetClusterNodeInfo(ValkeyModuleCtx *ctx, const char *id, char *ip, char *primary_id, int *port, int *flags) {
+    return moduleGetClusterNodeInfoForClient(ctx, NULL, id, ip, primary_id, port, flags);
+}
+
+/* Like VM_GetClusterNodeInfo(), but returns IP address specifically for the given
+ * client, depending on whether the client is connected over IPv4 or IPv6.
+ *
+ * See also VM_GetClientId(). */
+int VM_GetClusterNodeInfoForClient(ValkeyModuleCtx *ctx,
+                                   uint64_t client_id,
+                                   const char *node_id,
+                                   char *ip,
+                                   char *primary_id,
+                                   int *port,
+                                   int *flags) {
+    client *c = lookupClientByID(client_id);
+    if (c == NULL) return VALKEYMODULE_ERR;
+    return moduleGetClusterNodeInfoForClient(ctx, c, node_id, ip, primary_id, port, flags);
+}
+
+
+int moduleGetClusterNodeInfoForClient(ValkeyModuleCtx *ctx,
+                                      client *c,
+                                      const char *node_id,
+                                      char *ip,
+                                      char *primary_id,
+                                      int *port,
+                                      int *flags) {
     UNUSED(ctx);
 
-    clusterNode *node = clusterLookupNode(id, strlen(id));
+    clusterNode *node = clusterLookupNode(node_id, strlen(node_id));
     if (node == NULL || clusterNodePending(node)) {
         return VALKEYMODULE_ERR;
     }
 
-    if (ip) valkey_strlcpy(ip, clusterNodeIp(node), NET_IP_STR_LEN);
+    if (ip) valkey_strlcpy(ip, clusterNodeIp(node, c), NET_IP_STR_LEN);
 
-    if (master_id) {
+    if (primary_id) {
         /* If the information is not available, the function will set the
          * field to zero bytes, so that when the field can't be populated the
          * function kinda remains predictable. */
-        if (clusterNodeIsSlave(node) && clusterNodeGetMaster(node))
-            memcpy(master_id, clusterNodeGetName(clusterNodeGetMaster(node)), VALKEYMODULE_NODE_ID_LEN);
+        if (clusterNodeIsReplica(node) && clusterNodeGetPrimary(node))
+            memcpy(primary_id, clusterNodeGetName(clusterNodeGetPrimary(node)), VALKEYMODULE_NODE_ID_LEN);
         else
-            memset(master_id, 0, VALKEYMODULE_NODE_ID_LEN);
+            memset(primary_id, 0, VALKEYMODULE_NODE_ID_LEN);
     }
     if (port) *port = getNodeDefaultClientPort(node);
 
@@ -8996,8 +9033,8 @@ int VM_GetClusterNodeInfo(ValkeyModuleCtx *ctx, const char *id, char *ip, char *
     if (flags) {
         *flags = 0;
         if (clusterNodeIsMyself(node)) *flags |= VALKEYMODULE_NODE_MYSELF;
-        if (clusterNodeIsMaster(node)) *flags |= VALKEYMODULE_NODE_PRIMARY;
-        if (clusterNodeIsSlave(node)) *flags |= VALKEYMODULE_NODE_REPLICA;
+        if (clusterNodeIsPrimary(node)) *flags |= VALKEYMODULE_NODE_PRIMARY;
+        if (clusterNodeIsReplica(node)) *flags |= VALKEYMODULE_NODE_REPLICA;
         if (clusterNodeTimedOut(node)) *flags |= VALKEYMODULE_NODE_PFAIL;
         if (clusterNodeIsFailing(node)) *flags |= VALKEYMODULE_NODE_FAIL;
         if (clusterNodeIsNoFailover(node)) *flags |= VALKEYMODULE_NODE_NOFAILOVER;
@@ -9016,7 +9053,7 @@ int VM_GetClusterNodeInfo(ValkeyModuleCtx *ctx, const char *id, char *ip, char *
  *
  * With the following effects:
  *
- * * NO_FAILOVER: prevent Cluster slaves from failing over a dead master.
+ * * NO_FAILOVER: prevent Cluster replicas from failing over a dead primary.
  *                Also disables the replica migration feature.
  *
  * * NO_REDIRECTION: Every node will accept any key, without trying to perform
@@ -9465,11 +9502,11 @@ void revokeClientAuthentication(client *c) {
     moduleNotifyUserChanged(c);
 
     c->user = DefaultUser;
-    c->authenticated = 0;
+    c->flag.authenticated = 0;
     /* We will write replies to this client later, so we can't close it
      * directly even if async. */
     if (c == server.current_client) {
-        c->flags |= CLIENT_CLOSE_AFTER_COMMAND;
+        c->flag.close_after_command = 1;
     } else {
         freeClientAsync(c);
     }
@@ -9780,17 +9817,17 @@ static int authenticateClientWithUser(ValkeyModuleCtx *ctx,
     }
 
     /* Avoid settings which are meaningless and will be lost */
-    if (!ctx->client || (ctx->client->flags & CLIENT_MODULE)) {
+    if (!ctx->client || (ctx->client->flag.module)) {
         return VALKEYMODULE_ERR;
     }
 
     moduleNotifyUserChanged(ctx->client);
 
     ctx->client->user = user;
-    ctx->client->authenticated = 1;
+    ctx->client->flag.authenticated = 1;
 
     if (clientHasModuleAuthInProgress(ctx->client)) {
-        ctx->client->flags |= CLIENT_MODULE_AUTH_HAS_RESULT;
+        ctx->client->flag.module_auth_has_result = 1;
     }
 
     if (callback) {
@@ -10594,7 +10631,7 @@ int moduleUnregisterFilters(ValkeyModule *module) {
  * 1. Invocation by a client.
  * 2. Invocation through `ValkeyModule_Call()` by any module.
  * 3. Invocation through Lua `redis.call()`.
- * 4. Replication of a command from a master.
+ * 4. Replication of a command from a primary.
  *
  * The filter executes in a special filter context, which is different and more
  * limited than a ValkeyModuleCtx.  Because the filter affects any command, it
@@ -10675,6 +10712,8 @@ void moduleCallCommandFilters(client *c) {
 
     ValkeyModuleCommandFilterCtx filter = {.argv = c->argv, .argv_len = c->argv_len, .argc = c->argc, .c = c};
 
+    robj *tmp = c->argv[0];
+    incrRefCount(tmp);
     while ((ln = listNext(&li))) {
         ValkeyModuleCommandFilter *f = ln->value;
 
@@ -10690,6 +10729,12 @@ void moduleCallCommandFilters(client *c) {
     c->argv = filter.argv;
     c->argv_len = filter.argv_len;
     c->argc = filter.argc;
+    if (tmp != c->argv[0]) {
+        /* With I/O thread command-lookup offload, we set c->io_parsed_cmd to the command corresponding to c->argv[0].
+         * Since the command filter just changed it, we need to reset c->io_parsed_cmd to null. */
+        c->io_parsed_cmd = NULL;
+    }
+    decrRefCount(tmp);
 }
 
 /* Return the number of arguments a filtered command has.  The number of
@@ -11243,10 +11288,10 @@ static uint64_t moduleEventVersions[] = {
  *
  * * ValkeyModuleEvent_ReplicationRoleChanged:
  *
- *     This event is called when the instance switches from master
+ *     This event is called when the instance switches from primary
  *     to replica or the other way around, however the event is
  *     also called when the replica remains a replica but starts to
- *     replicate with a different master.
+ *     replicate with a different primary.
  *
  *     The following sub events are available:
  *
@@ -11256,9 +11301,9 @@ static uint64_t moduleEventVersions[] = {
  *     The 'data' field can be casted by the callback to a
  *     `ValkeyModuleReplicationInfo` structure with the following fields:
  *
- *         int master; // true if master, false if replica
- *         char *masterhost; // master instance hostname for NOW_REPLICA
- *         int masterport; // master instance port for NOW_REPLICA
+ *         int primary; // true if primary, false if replica
+ *         char *primary_host; // primary instance hostname for NOW_REPLICA
+ *         int primary_port; // primary instance port for NOW_REPLICA
  *         char *replid1; // Main replication ID
  *         char *replid2; // Secondary replication ID
  *         uint64_t repl1_offset; // Main replication offset
@@ -11315,7 +11360,7 @@ static uint64_t moduleEventVersions[] = {
  *
  *     Called on loading operations: at startup when the server is
  *     started, but also after a first synchronization when the
- *     replica is loading the RDB file from the master.
+ *     replica is loading the RDB file from the primary.
  *     The following sub events are available:
  *
  *     * `VALKEYMODULE_SUBEVENT_LOADING_RDB_START`
@@ -11344,7 +11389,7 @@ static uint64_t moduleEventVersions[] = {
  * * ValkeyModuleEvent_ReplicaChange
  *
  *     This event is called when the instance (that can be both a
- *     master or a replica) get a new online replica, or lose a
+ *     primary or a replica) get a new online replica, or lose a
  *     replica since it gets disconnected.
  *     The following sub events are available:
  *
@@ -11372,9 +11417,9 @@ static uint64_t moduleEventVersions[] = {
  * * ValkeyModuleEvent_PrimaryLinkChange
  *
  *     This is called for replicas in order to notify when the
- *     replication link becomes functional (up) with our master,
+ *     replication link becomes functional (up) with our primary,
  *     or when it goes down. Note that the link is not considered
- *     up when we just connected to the master, but only if the
+ *     up when we just connected to the primary, but only if the
  *     replication is happening correctly.
  *     The following sub events are available:
  *
@@ -11442,7 +11487,7 @@ static uint64_t moduleEventVersions[] = {
  *
  * * ValkeyModuleEvent_ReplAsyncLoad
  *
- *     Called when repl-diskless-load config is set to swapdb and a replication with a master of same
+ *     Called when repl-diskless-load config is set to swapdb and a replication with a primary of same
  *     data set history (matching replication ID) occurs.
  *     In which case the server serves current data set while loading new database in memory from socket.
  *     Modules must have declared they support this mechanism in order to activate it, through
@@ -11780,7 +11825,6 @@ int dictCStringKeyCompare(dict *d, const void *key1, const void *key2) {
 dictType moduleAPIDictType = {
     dictCStringKeyHash,    /* hash function */
     NULL,                  /* key dup */
-    NULL,                  /* val dup */
     dictCStringKeyCompare, /* key compare */
     NULL,                  /* key destructor */
     NULL,                  /* val destructor */
@@ -11811,7 +11855,6 @@ void moduleInitModulesSystemLast(void) {
 dictType sdsKeyValueHashDictType = {
     dictSdsCaseHash,       /* hash function */
     NULL,                  /* key dup */
-    NULL,                  /* val dup */
     dictSdsKeyCaseCompare, /* key compare */
     dictSdsDestructor,     /* key destructor */
     dictSdsDestructor,     /* val destructor */
@@ -11926,7 +11969,7 @@ void moduleRemoveCateogires(ValkeyModule *module) {
  * The function aborts the server on errors, since to start with missing
  * modules is not considered sane: clients may rely on the existence of
  * given commands, loading AOF also may need some modules to exist, and
- * if this instance is a slave, it must understand commands from master. */
+ * if this instance is a replica, it must understand commands from primary. */
 void moduleLoadFromQueue(void) {
     listIter li;
     listNode *ln;
@@ -12039,6 +12082,8 @@ int moduleFreeCommand(struct ValkeyModule *module, struct serverCommand *cmd) {
 }
 
 void moduleUnregisterCommands(struct ValkeyModule *module) {
+    /* Drain IO queue before modifying commands dictionary to prevent concurrent access while modifying it. */
+    drainIOThreadsQueue();
     /* Unregister all the commands registered by this module. */
     dictIterator *di = dictGetSafeIterator(server.commands);
     dictEntry *de;
@@ -12911,13 +12956,13 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
     }
 
     /* Not allowed on replicas. */
-    if (server.masterhost != NULL) {
+    if (server.primary_host != NULL) {
         errno = ENOTSUP;
         return VALKEYMODULE_ERR;
     }
 
     /* Drop replicas if exist. */
-    disconnectSlaves();
+    disconnectReplicas();
     freeReplicationBacklog();
 
     if (server.aof_state != AOF_OFF) stopAppendOnly();
@@ -13249,7 +13294,8 @@ int *VM_GetCommandKeysWithFlags(ValkeyModuleCtx *ctx,
         return NULL;
     }
 
-    getKeysResult result = GETKEYS_RESULT_INIT;
+    getKeysResult result;
+    initGetKeysResult(&result);
     getKeysFromCommand(cmd, argv, argc, &result);
 
     *num_keys = result.numkeys;
@@ -13709,6 +13755,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RegisterClusterMessageReceiver);
     REGISTER_API(SendClusterMessage);
     REGISTER_API(GetClusterNodeInfo);
+    REGISTER_API(GetClusterNodeInfoForClient);
     REGISTER_API(GetClusterNodesList);
     REGISTER_API(FreeClusterNodesList);
     REGISTER_API(CreateTimer);

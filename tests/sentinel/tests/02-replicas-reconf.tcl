@@ -9,7 +9,7 @@ source "../tests/includes/init-tests.tcl"
 
 proc 02_test_slaves_replication {} {
     uplevel 1 {
-        test "Check that slaves replicate from current master" {
+        test "Check that slaves replicate from current primary" {
             set master_port [RPort $master_id]
             foreach_valkey_id id {
                 if {$id == $master_id} continue
@@ -27,20 +27,20 @@ proc 02_test_slaves_replication {} {
 
 proc 02_crash_and_failover {} {
     uplevel 1 {
-        test "Crash the master and force a failover" {
+        test "Crash the primary and force a failover" {
             set old_port [RPort $master_id]
-            set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
+            set addr [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
             assert {[lindex $addr 1] == $old_port}
             kill_instance valkey $master_id
             foreach_sentinel_id id {
                 wait_for_condition 1000 50 {
-                    [lindex [S $id SENTINEL GET-MASTER-ADDR-BY-NAME mymaster] 1] != $old_port
+                    [lindex [S $id SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster] 1] != $old_port
                 } else {
                     fail "At least one Sentinel did not receive failover info"
                 }
             }
             restart_instance valkey $master_id
-            set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
+            set addr [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
             set master_id [get_instance_id_by_port valkey [lindex $addr 1]]
         }
     }
@@ -74,7 +74,7 @@ test "Wait for failover to end" {
     while {$inprogress} {
         set inprogress 0
         foreach_sentinel_id id {
-            if {[dict exists [S $id SENTINEL MASTER mymaster] failover-state]} {
+            if {[dict exists [S $id SENTINEL PRIMARY mymaster] failover-state]} {
                 incr inprogress
             }
         }

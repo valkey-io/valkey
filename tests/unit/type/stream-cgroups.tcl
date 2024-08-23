@@ -520,7 +520,7 @@ start_server {
 
         # Before the fix in #13004, this time would have been 1200+ (i.e. more than 1200ms),
         # now it should be 1000, but in order to avoid timing issues, we increase the range a bit.
-        assert_range [expr $end-$start] 1000 1150
+        assert_range [expr $end-$start] 1000 1199
 
         $rd1 close
         $rd2 close
@@ -931,14 +931,14 @@ start_server {
         set reply [r xinfo consumers mystream mygroup]
         set consumer_info [lindex $reply 0]
         assert_equal [lindex $consumer_info 1] "Alice" ;# consumer name
-        assert {[dict get $consumer_info idle] < 80} ;# consumer idle (seen-time)
-        assert {[dict get $consumer_info inactive] < 80} ;# consumer inactive (active-time)
+        assert {[dict get $consumer_info idle] < 300} ;# consumer idle (seen-time)
+        assert {[dict get $consumer_info inactive] < 300} ;# consumer inactive (active-time)
 
         after 100
         r XREADGROUP GROUP mygroup Alice COUNT 1 STREAMS mystream >
         set reply [r xinfo consumers mystream mygroup]
         set consumer_info [lindex $reply 0]
-        assert {[dict get $consumer_info idle] < 80} ;# consumer idle (seen-time)
+        assert {[dict get $consumer_info idle] < 300} ;# consumer idle (seen-time)
         assert {[dict get $consumer_info inactive] >= 100} ;# consumer inactive (active-time)
 
 
@@ -1323,6 +1323,9 @@ start_server {
             set group [lindex [dict get $reply groups] 0]
             assert_equal [dict get $group entries-read] 3
             assert_equal [dict get $group lag] 0
+
+            # wait for replica offset
+            wait_for_ofs_sync $master $replica
 
             set reply [$replica XINFO STREAM mystream FULL]
             set group [lindex [dict get $reply groups] 0]

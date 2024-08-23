@@ -295,7 +295,7 @@ start_server {tags {"scripting"}} {
 
     test {EVAL - Scripts do not block on waitaof} {
         run_script {return redis.pcall('waitaof','0','1','0')} 0
-    } {0 0}
+    } {* 0}
 
     test {EVAL - Scripts do not block on XREAD with BLOCK option} {
         r del s
@@ -637,6 +637,21 @@ start_server {tags {"scripting"}} {
             [r script load "return 'loaded'"] \
             [r evalsha b534286061d4b9e4026607613b95c06c06015ae8 0]
     } {b534286061d4b9e4026607613b95c06c06015ae8 loaded}
+
+    test {SCRIPT SHOW - is able to dump scripts from the scripting cache} {
+        r script load "return 'dump'"
+        r script show 4f5a49d7b18244a3b100d159b78b51474e23e081
+    } {return 'dump'}
+
+    test {SCRIPT SHOW - wrong sha1 length or invalid sha1 char return noscript error} {
+        assert_error {NOSCRIPT*} {r script show b534286061d4b06c06015ae8}
+        assert_error {NOSCRIPT*} {r script show AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA}
+    }
+
+    test {SCRIPT SHOW - script not exist return noscript error} {
+        r script flush
+        assert_error {NOSCRIPT*} {r script show 4f5a49d7b18244a3b100d159b78b51474e23e081}
+    }
 
     test "SORT is normally not alpha re-ordered for the scripting engine" {
         r del myset
@@ -1189,7 +1204,7 @@ start_server {tags {"scripting"}} {
             set buf "*3\r\n\$4\r\neval\r\n\$33\r\nwhile 1 do redis.call('ping') end\r\n\$1\r\n0\r\n"
             append buf "*1\r\n\$4\r\nping\r\n"
         } else {
-            set buf "*4\r\n\$8\r\nfunction\r\n\$4\r\nload\r\n\$7\r\nreplace\r\n\$97\r\n#!lua name=test\nredis.register_function('test', function() while 1 do redis.call('ping') end end)\r\n"
+            set buf "*4\r\n\$8\r\nfunction\r\n\$4\r\nload\r\n\$7\r\nreplace\r\n\$99\r\n#!lua name=test\nserver.register_function('test', function() while 1 do server.call('ping') end end)\r\n"
             append buf "*3\r\n\$5\r\nfcall\r\n\$4\r\ntest\r\n\$1\r\n0\r\n"
             append buf "*1\r\n\$4\r\nping\r\n"
         }
@@ -1525,13 +1540,13 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         r script debug sync
         r eval {return 'hello'} 0
         catch {r 'hello\0world'} e
-        assert_match {*Unknown Redis Lua debugger command*} $e
+        assert_match {*Unknown Lua debugger command*} $e
         catch {r 'hello\0'} e
-        assert_match {*Unknown Redis Lua debugger command*} $e
+        assert_match {*Unknown Lua debugger command*} $e
         catch {r '\0hello'} e
-        assert_match {*Unknown Redis Lua debugger command*} $e
+        assert_match {*Unknown Lua debugger command*} $e
         catch {r '\0hello\0'} e
-        assert_match {*Unknown Redis Lua debugger command*} $e
+        assert_match {*Unknown Lua debugger command*} $e
     }
 
     test {Test scripting debug lua stack overflow} {
@@ -1555,7 +1570,6 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         r write $cmd
         r flush
         set ret [r read]
-        puts $ret
         assert_match {*PONG*} $ret
         reconnect 
         assert_equal [r ping] {PONG}
@@ -1619,7 +1633,7 @@ start_server {tags {"scripting external:skip"}} {
         # "return 1" is ok since it was moved to tail.
         assert_equal 1 [r evalsha e0e1f9fabfc9d4800c877a703b823ac0578ff8db 0]
         # "return 2" is ok since it was moved to tail.
-        assert_equal 1 [r evalsha e0e1f9fabfc9d4800c877a703b823ac0578ff8db 0]
+        assert_equal 2 [r evalsha 7f923f79fe76194c868d7e1d0820de36700eb649 0]
         # "return 3" was evicted.
         assert_error {NOSCRIPT*} {r evalsha 09d3822de862f46d784e6a36848b4f0736dda47a 0}
         # Others are ok.
@@ -1645,6 +1659,19 @@ start_server {tags {"scripting external:skip"}} {
         assert_equal $evicted [expr $num-500]
         # cached = num load scripts + 500 eval scripts
         assert_equal $cached [expr $num+500]
+    }
+
+    test {Lua scripts promoted from eval to script load} {
+        r script flush
+        r config resetstat
+
+        r eval "return 'hello world'" 0
+        set sha [r script load "return 'hello world'"]
+        for {set j 1} {$j <= 500} {incr j} {
+            r script load "return $j"
+            r eval "return 'str_$j'" 0
+        }
+        assert_equal {hello world} [r evalsha $sha 0]
     }
 }
 

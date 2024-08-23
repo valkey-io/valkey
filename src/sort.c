@@ -1,6 +1,6 @@
 /* SORT command and helper functions.
  *
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -308,7 +308,7 @@ void sortCommandGeneric(client *c, int readonly) {
      * The other types (list, sorted set) will retain their native order
      * even if no sort order is requested, so they remain stable across
      * scripting and replication. */
-    if (dontsort && sortval->type == OBJ_SET && (storekey || c->flags & CLIENT_SCRIPT)) {
+    if (dontsort && sortval->type == OBJ_SET && (storekey || c->flag.script)) {
         /* Force ALPHA sorting */
         dontsort = 0;
         alpha = 1;

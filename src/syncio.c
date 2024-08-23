@@ -1,6 +1,6 @@
 /* Synchronous socket and file I/O operations useful across the core.
  *
- * Copyright (c) 2009-2010, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2010, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,7 +33,7 @@
 /* ----------------- Blocking sockets I/O with timeouts --------------------- */
 
 /* The server performs most of the I/O in a nonblocking way, with the exception
- * of the SYNC command where the slave does it in a blocking way, and
+ * of the SYNC command where the replica does it in a blocking way, and
  * the MIGRATE command that must be blocking in order to be atomic from the
  * point of view of the two instances (one migrating the key and one receiving
  * the key). This is why need the following blocking I/O functions.

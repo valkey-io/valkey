@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * Copyright (c) 2012, Twitter, Inc.
  * All rights reserved.
  *
@@ -1251,7 +1251,6 @@ static char *i2string_async_signal_safe(int base, int64_t val, char *buf) {
         int ix;
         buf = orig_buf - 1;
         for (ix = 0; ix < 16; ++ix, --buf) {
-            /* clang-format off */
             switch (*buf) {
             case '0': *buf = 'f'; break;
             case '1': *buf = 'e'; break;
@@ -1270,7 +1269,6 @@ static char *i2string_async_signal_safe(int base, int64_t val, char *buf) {
             case 'e': *buf = '1'; break;
             case 'f': *buf = '0'; break;
             }
-            /* clang-format on */
         }
     }
     return buf + 1;

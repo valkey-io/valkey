@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,6 +32,7 @@
 #include "latency.h"
 #include "script.h"
 #include "functions.h"
+#include "io_threads.h"
 
 #include <signal.h>
 #include <ctype.h>
@@ -88,8 +89,8 @@ void updateLFU(robj *val) {
  *
  * Note: this function also returns NULL if the key is logically expired but
  * still existing, in case this is a replica and the LOOKUP_WRITE is not set.
- * Even if the key expiry is master-driven, we can correctly report a key is
- * expired on replicas even if the master is lagging expiring our key via DELs
+ * Even if the key expiry is primary-driven, we can correctly report a key is
+ * expired on replicas even if the primary is lagging expiring our key via DELs
  * in the replication link. */
 robj *lookupKey(serverDb *db, robj *key, int flags) {
     dictEntry *de = dbFind(db, key->ptr);
@@ -97,14 +98,14 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
     if (de) {
         val = dictGetVal(de);
         /* Forcing deletion of expired keys on a replica makes the replica
-         * inconsistent with the master. We forbid it on readonly replicas, but
+         * inconsistent with the primary. We forbid it on readonly replicas, but
          * we have to allow it on writable replicas to make write commands
          * behave consistently.
          *
          * It's possible that the WRITE flag is set even during a readonly
          * command, since the command may trigger events that cause modules to
          * perform additional writes. */
-        int is_ro_replica = server.masterhost && server.repl_slave_ro;
+        int is_ro_replica = server.primary_host && server.repl_replica_ro;
         int expire_flags = 0;
         if (flags & LOOKUP_WRITE && !is_ro_replica) expire_flags |= EXPIRE_FORCE_DELETE_EXPIRED;
         if (flags & LOOKUP_NOEXPIRE) expire_flags |= EXPIRE_AVOID_DELETE_EXPIRED;
@@ -118,7 +119,7 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         /* Update the access time for the ageing algorithm.
          * Don't do it if we have a saving child, as this will trigger
          * a copy on write madness. */
-        if (server.current_client && server.current_client->flags & CLIENT_NO_TOUCH &&
+        if (server.current_client && server.current_client->flag.no_touch &&
             server.current_client->cmd->proc != touchCommand)
             flags |= LOOKUP_NOTOUCH;
         if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)) {
@@ -190,7 +191,11 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
     return o;
 }
 
-/* Add the key to the DB. It's up to the caller to increment the reference
+/* Add the key to the DB.
+ *
+ * In this case a copy of `key` is copied in kvstore, the caller must ensure the `key` is properly freed.
+ *
+ * It's up to the caller to increment the reference
  * counter of the value if needed.
  *
  * If the update_if_existing argument is false, the program is aborted
@@ -204,7 +209,6 @@ static void dbAddInternal(serverDb *db, robj *key, robj *val, int update_if_exis
         return;
     }
     serverAssertWithInfo(NULL, key, de != NULL);
-    kvstoreDictSetKey(db->keys, slot, de, sdsdup(key->ptr));
     initObjectLRUOrLFU(val);
     kvstoreDictSetVal(db->keys, slot, de, val);
     signalKeyAsReady(db, key, val->type);
@@ -227,29 +231,41 @@ int calculateKeySlot(sds key) {
 int getKeySlot(sds key) {
     /* This is performance optimization that uses pre-set slot id from the current command,
      * in order to avoid calculation of the key hash.
+     *
      * This optimization is only used when current_client flag `CLIENT_EXECUTING_COMMAND` is set.
      * It only gets set during the execution of command under `call` method. Other flows requesting
      * the key slot would fallback to calculateKeySlot.
+     *
+     * Modules and scripts executed on the primary may get replicated as multi-execs that operate on multiple slots,
+     * so we must always recompute the slot for commands coming from the primary.
      */
-    if (server.current_client && server.current_client->slot >= 0 &&
-        server.current_client->flags & CLIENT_EXECUTING_COMMAND) {
+    if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command &&
+        !server.current_client->flag.primary) {
         debugServerAssertWithInfo(server.current_client, NULL, calculateKeySlot(key) == server.current_client->slot);
         return server.current_client->slot;
     }
-    return calculateKeySlot(key);
+    int slot = calculateKeySlot(key);
+    /* For the case of replicated commands from primary, getNodeByQuery() never gets called,
+     * and thus c->slot never gets populated. That said, if this command ends up accessing a key,
+     * we are able to backfill c->slot here, where the key's hash calculation is made. */
+    if (server.current_client && server.current_client->flag.primary) {
+        server.current_client->slot = slot;
+    }
+    return slot;
 }
 
 /* This is a special version of dbAdd() that is used only when loading
  * keys from the RDB file: the key is passed as an SDS string that is
- * retained by the function (and not freed by the caller).
+ * copied by the function and freed by the caller.
  *
  * Moreover this function will not abort if the key is already busy, to
  * give more control to the caller, nor will signal the key as ready
  * since it is not useful in this context.
  *
- * The function returns 1 if the key was added to the database, taking
- * ownership of the SDS string, otherwise 0 is returned, and is up to the
- * caller to free the SDS string. */
+ * The function returns 1 if the key was added to the database, otherwise 0 is returned.
+ *
+ * In this case a copy of `key` is copied in kvstore, the caller must ensure the `key` is properly freed.
+ */
 int dbAddRDBLoad(serverDb *db, sds key, robj *val) {
     int slot = getKeySlot(key);
     dictEntry *de = kvstoreDictAddRaw(db->keys, slot, key, NULL);
@@ -294,7 +310,10 @@ static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEn
         old = dictGetVal(de);
     }
     kvstoreDictSetVal(db->keys, slot, de, val);
-    if (server.lazyfree_lazy_server_del) {
+    /* For efficiency, let the I/O thread that allocated an object also deallocate it. */
+    if (tryOffloadFreeObjToIOThreads(old) == C_OK) {
+        /* OK */
+    } else if (server.lazyfree_lazy_server_del) {
         freeObjAsync(key, old, db->id);
     } else {
         decrRefCount(old);
@@ -361,10 +380,10 @@ robj *dbRandomKey(serverDb *db) {
         key = dictGetKey(de);
         keyobj = createStringObject(key, sdslen(key));
         if (dbFindExpires(db, key)) {
-            if (allvolatile && server.masterhost && --maxtries == 0) {
+            if (allvolatile && server.primary_host && --maxtries == 0) {
                 /* If the DB is composed only of keys with an expire set,
                  * it could happen that all the keys are already logically
-                 * expired in the slave, so the function cannot stop because
+                 * expired in the repilca, so the function cannot stop because
                  * expireIfNeeded() is false, nor it can stop because
                  * dictGetFairRandomKey() returns NULL (there are keys to return).
                  * To prevent the infinite loop we do some tries, but if there
@@ -540,7 +559,7 @@ long long emptyData(int dbnum, int flags, void(callback)(dict *)) {
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
 
-    if (dbnum == -1) flushSlaveKeysWithExpireList();
+    if (dbnum == -1) flushReplicaKeysWithExpireList();
 
     if (with_functions) {
         serverAssert(dbnum == -1);
@@ -673,7 +692,7 @@ void flushAllDataAndResetRDB(int flags) {
     if (server.saveparamslen > 0) {
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
-        rdbSave(SLAVE_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE);
+        rdbSave(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE);
     }
 
 #if defined(USE_JEMALLOC)
@@ -822,7 +841,7 @@ void keysCommand(client *c) {
                 numkeys++;
             }
         }
-        if (c->flags & CLIENT_CLOSE_ASAP) break;
+        if (c->flag.close_asap) break;
     }
     if (kvs_di) kvstoreReleaseDictIterator(kvs_di);
     if (kvs_it) kvstoreIteratorRelease(kvs_it);
@@ -1238,7 +1257,7 @@ void shutdownCommand(client *c) {
         return;
     }
 
-    if (!(flags & SHUTDOWN_NOW) && c->flags & CLIENT_DENY_BLOCKING) {
+    if (!(flags & SHUTDOWN_NOW) && c->flag.deny_blocking) {
         addReplyError(c, "SHUTDOWN without NOW or ABORT isn't allowed for DENY BLOCKING client");
         return;
     }
@@ -1610,7 +1629,7 @@ void swapMainDbWithTempDb(serverDb *tempDb) {
     }
 
     trackingInvalidateKeysOnFlush(1);
-    flushSlaveKeysWithExpireList();
+    flushReplicaKeysWithExpireList();
 }
 
 /* SWAPDB db1 db2 */
@@ -1666,8 +1685,8 @@ void setExpire(client *c, serverDb *db, robj *key, long long when) {
         dictSetSignedIntegerVal(de, when);
     }
 
-    int writable_slave = server.masterhost && server.repl_slave_ro == 0;
-    if (c && writable_slave && !(c->flags & CLIENT_MASTER)) rememberSlaveKeyWithExpire(db, key);
+    int writable_replica = server.primary_host && server.repl_replica_ro == 0;
+    if (c && writable_replica && !c->flag.primary) rememberReplicaKeyWithExpire(db, key);
 }
 
 /* Return the expire time of the specified key, or -1 if no expire
@@ -1694,7 +1713,7 @@ void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj) {
 }
 
 /* Propagate an implicit key deletion into replicas and the AOF file.
- * When a key was deleted in the master by eviction, expiration or a similar
+ * When a key was deleted in the primary by eviction, expiration or a similar
  * mechanism a DEL/UNLINK operation for this key is sent
  * to all the replicas and the AOF file if enabled.
  *
@@ -1720,7 +1739,7 @@ void propagateDeletion(serverDb *db, robj *key, int lazy) {
     incrRefCount(argv[0]);
     incrRefCount(argv[1]);
 
-    /* If the master decided to delete a key we must propagate it to replicas no matter what.
+    /* If the primary decided to delete a key we must propagate it to replicas no matter what.
      * Even if module executed a command without asking for propagation. */
     int prev_replication_allowed = server.replication_allowed;
     server.replication_allowed = 1;
@@ -1755,13 +1774,13 @@ int keyIsExpired(serverDb *db, robj *key) {
  *
  * The behavior of the function depends on the replication role of the
  * instance, because by default replicas do not delete expired keys. They
- * wait for DELs from the master for consistency matters. However even
+ * wait for DELs from the primary for consistency matters. However even
  * replicas will try to have a coherent return value for the function,
  * so that read commands executed in the replica side will be able to
  * behave like if the key is expired even if still present (because the
- * master has yet to propagate the DEL).
+ * primary has yet to propagate the DEL).
  *
- * In masters as a side effect of finding a key which is expired, such
+ * In primary as a side effect of finding a key which is expired, such
  * key will be evicted from the database. Also this may trigger the
  * propagation of a DEL/UNLINK command in AOF / replication stream.
  *
@@ -1769,7 +1788,7 @@ int keyIsExpired(serverDb *db, robj *key) {
  * it still returns KEY_EXPIRED if the key is logically expired. To force deletion
  * of logically expired keys even on replicas, use the EXPIRE_FORCE_DELETE_EXPIRED
  * flag. Note though that if the current client is executing
- * replicated commands from the master, keys are never considered expired.
+ * replicated commands from the primary, keys are never considered expired.
  *
  * On the other hand, if you just want expiration check, but need to avoid
  * the actual key deletion and propagation of the deletion, use the
@@ -1784,7 +1803,7 @@ keyStatus expireIfNeeded(serverDb *db, robj *key, int flags) {
 
     /* If we are running in the context of a replica, instead of
      * evicting the expired key from the database, we return ASAP:
-     * the replica key expiration is controlled by the master that will
+     * the replica key expiration is controlled by the primary that will
      * send us synthesized DEL operations for expired keys. The
      * exception is when write operations are performed on writable
      * replicas.
@@ -1793,15 +1812,15 @@ keyStatus expireIfNeeded(serverDb *db, robj *key, int flags) {
      * that is, KEY_VALID if we think the key should still be valid,
      * KEY_EXPIRED if we think the key is expired but don't want to delete it at this time.
      *
-     * When replicating commands from the master, keys are never considered
+     * When replicating commands from the primary, keys are never considered
      * expired. */
-    if (server.masterhost != NULL) {
-        if (server.current_client && (server.current_client->flags & CLIENT_MASTER)) return KEY_VALID;
+    if (server.primary_host != NULL) {
+        if (server.current_client && (server.current_client->flag.primary)) return KEY_VALID;
         if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return KEY_EXPIRED;
     }
 
     /* In some cases we're explicitly instructed to return an indication of a
-     * missing key without actually deleting it, even on masters. */
+     * missing key without actually deleting it, even on primaries. */
     if (flags & EXPIRE_AVOID_DELETE_EXPIRED) return KEY_EXPIRED;
 
     /* If 'expire' action is paused, for whatever reason, then don't expire any key.
@@ -1894,7 +1913,7 @@ unsigned long long dbScan(serverDb *db, unsigned long long cursor, dictScanFunct
  * the result, and can be called repeatedly to enlarge the result array.
  */
 keyReference *getKeysPrepareResult(getKeysResult *result, int numkeys) {
-    /* GETKEYS_RESULT_INIT initializes keys to NULL, point it to the pre-allocated stack
+    /* initGetKeysResult initializes keys to NULL, point it to the pre-allocated stack
      * buffer here. */
     if (!result->keys) {
         serverAssert(!result->numkeys);

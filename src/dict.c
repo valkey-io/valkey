@@ -5,7 +5,7 @@
  * tables of power of two in size are used, collisions are handled by
  * chaining. See the source code for more information... :)
  *
- * Copyright (c) 2006-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2006-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -35,6 +35,7 @@
 
 #include "fmacros.h"
 
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -47,6 +48,12 @@
 #include "zmalloc.h"
 #include "serverassert.h"
 #include "monotonic.h"
+
+#ifndef static_assert
+#define static_assert(expr, lit) _Static_assert(expr, lit)
+#endif
+
+#define UNUSED(V) ((void)V)
 
 /* Using dictSetResizeEnabled() we make possible to disable
  * resizing and rehashing of the hash table as needed. This is very important
@@ -75,6 +82,33 @@ struct dictEntry {
 };
 
 typedef struct {
+    union {
+        void *val;
+        uint64_t u64;
+        int64_t s64;
+        double d;
+    } v;
+    struct dictEntry *next;  /* Next entry in the same hash bucket. */
+    uint8_t key_header_size; /* offset into key_buf where the key is located at. */
+    unsigned char key_buf[]; /* buffer with embedded key. */
+} embeddedDictEntry;
+
+/* Validation and helper for `embeddedDictEntry` */
+
+static_assert(offsetof(embeddedDictEntry, v) == 0, "unexpected field offset");
+static_assert(offsetof(embeddedDictEntry, next) == sizeof(double), "unexpected field offset");
+static_assert(offsetof(embeddedDictEntry, key_header_size) == sizeof(double) + sizeof(void *),
+              "unexpected field offset");
+/* key_buf is located after a union with a double value  `v.d`, a pointer `next` and uint8_t field `key_header_size` */
+static_assert(offsetof(embeddedDictEntry, key_buf) == sizeof(double) + sizeof(void *) + sizeof(uint8_t),
+              "unexpected field offset");
+
+/* The minimum amount of bytes required for embedded dict entry. */
+static inline size_t compactSizeEmbeddedDictEntry(void) {
+    return offsetof(embeddedDictEntry, key_buf);
+}
+
+typedef struct {
     void *key;
     dictEntry *next;
 } dictEntryNoValue;
@@ -88,6 +122,19 @@ static int _dictInit(dict *d, dictType *type);
 static dictEntry *dictGetNext(const dictEntry *de);
 static dictEntry **dictGetNextRef(dictEntry *de);
 static void dictSetNext(dictEntry *de, dictEntry *next);
+
+/* -------------------------- Utility functions -------------------------------- */
+
+/* Validates dict type members dependencies. */
+static inline void validateDictType(dictType *type) {
+    if (type->embedded_entry) {
+        assert(type->embedKey);
+        assert(!type->keyDup);
+        assert(!type->keyDestructor);
+    } else {
+        assert(!type->embedKey);
+    }
+}
 
 /* -------------------------- hash functions -------------------------------- */
 
@@ -124,6 +171,8 @@ uint64_t dictGenCaseHashFunction(const unsigned char *buf, size_t len) {
 #define ENTRY_PTR_MASK 7     /* 111 */
 #define ENTRY_PTR_NORMAL 0   /* 000 */
 #define ENTRY_PTR_NO_VALUE 2 /* 010 */
+#define ENTRY_PTR_EMBEDDED 4 /* 100 */
+/*      ENTRY_PTR_IS_KEY        xx1 */
 
 /* Returns 1 if the entry pointer is a pointer to a key, rather than to an
  * allocated entry. Returns 0 otherwise. */
@@ -143,12 +192,9 @@ static inline int entryIsNoValue(const dictEntry *de) {
     return ((uintptr_t)(void *)de & ENTRY_PTR_MASK) == ENTRY_PTR_NO_VALUE;
 }
 
-/* Creates an entry without a value field. */
-static inline dictEntry *createEntryNoValue(void *key, dictEntry *next) {
-    dictEntryNoValue *entry = zmalloc(sizeof(*entry));
-    entry->key = key;
-    entry->next = next;
-    return (dictEntry *)(void *)((uintptr_t)(void *)entry | ENTRY_PTR_NO_VALUE);
+
+static inline int entryIsEmbedded(const dictEntry *de) {
+    return ((uintptr_t)(void *)de & ENTRY_PTR_MASK) == ENTRY_PTR_EMBEDDED;
 }
 
 static inline dictEntry *encodeMaskedPtr(const void *ptr, unsigned int bits) {
@@ -161,15 +207,40 @@ static inline void *decodeMaskedPtr(const dictEntry *de) {
     return (void *)((uintptr_t)(void *)de & ~ENTRY_PTR_MASK);
 }
 
+/* Creates an entry without a value field. */
+static inline dictEntry *createEntryNoValue(void *key, dictEntry *next) {
+    dictEntryNoValue *entry = zmalloc(sizeof(*entry));
+    entry->key = key;
+    entry->next = next;
+    return encodeMaskedPtr(entry, ENTRY_PTR_NO_VALUE);
+}
+
+static inline dictEntry *createEmbeddedEntry(void *key, dictEntry *next, dictType *dt) {
+    size_t key_len = dt->embedKey(NULL, 0, key, NULL);
+    embeddedDictEntry *entry = zmalloc(compactSizeEmbeddedDictEntry() + key_len);
+    dt->embedKey(entry->key_buf, key_len, key, &entry->key_header_size);
+    entry->next = next;
+    return encodeMaskedPtr(entry, ENTRY_PTR_EMBEDDED);
+}
+
+static inline void *getEmbeddedKey(const dictEntry *de) {
+    embeddedDictEntry *entry = (embeddedDictEntry *)decodeMaskedPtr(de);
+    return &entry->key_buf[entry->key_header_size];
+}
+
 /* Decodes the pointer to an entry without value, when you know it is an entry
  * without value. Hint: Use entryIsNoValue to check. */
 static inline dictEntryNoValue *decodeEntryNoValue(const dictEntry *de) {
     return decodeMaskedPtr(de);
 }
 
+static inline embeddedDictEntry *decodeEmbeddedEntry(const dictEntry *de) {
+    return decodeMaskedPtr(de);
+}
+
 /* Returns 1 if the entry has a value field and 0 otherwise. */
 static inline int entryHasValue(const dictEntry *de) {
-    return entryIsNormal(de);
+    return entryIsNormal(de) || entryIsEmbedded(de);
 }
 
 /* ----------------------------- API implementation ------------------------- */
@@ -183,6 +254,7 @@ static void _dictReset(dict *d, int htidx) {
 
 /* Create a new hash table */
 dict *dictCreate(dictType *type) {
+    validateDictType(type);
     size_t metasize = type->dictMetadataBytes ? type->dictMetadataBytes(NULL) : 0;
     dict *d = zmalloc(sizeof(*d) + metasize);
     if (metasize > 0) {
@@ -255,6 +327,12 @@ int _dictResize(dict *d, unsigned long size, int *malloc_failed) {
         _dictReset(d, 1);
         d->rehashidx = -1;
         return DICT_OK;
+    }
+
+    if (d->type->no_incremental_rehash) {
+        /* If the dict type does not support incremental rehashing, we need to
+         * rehash the whole table immediately. */
+        while (dictRehash(d, 1000));
     }
 
     return DICT_OK;
@@ -471,6 +549,10 @@ int dictAdd(dict *d, void *key, void *val) {
  * with the existing entry if existing is not NULL.
  *
  * If key was added, the hash entry is returned to be manipulated by the caller.
+ *
+ * The dict handles `key` based on `dictType` during initialization:
+ * - If `dictType.embedded-entry` is 1, it clones the `key`.
+ * - Otherwise, it assumes ownership of the `key`.
  */
 dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing) {
     /* Get the position for the new key or NULL if the key already exists. */
@@ -509,6 +591,8 @@ dictEntry *dictInsertAtPosition(dict *d, void *key, void *position) {
             /* Allocate an entry without value. */
             entry = createEntryNoValue(key, *bucket);
         }
+    } else if (d->type->embedded_entry) {
+        entry = createEmbeddedEntry(key, *bucket, d->type);
     } else {
         /* Allocate the memory and store the new entry.
          * Insert the element in top, with the assumption that in a database
@@ -656,6 +740,7 @@ void dictFreeUnlinkedEntry(dict *d, dictEntry *he) {
     if (he == NULL) return;
     dictFreeKey(d, he);
     dictFreeVal(d, he);
+    /* Clear the dictEntry */
     if (!entryIsKey(he)) zfree(decodeMaskedPtr(he));
 }
 
@@ -800,8 +885,13 @@ void dictSetKey(dict *d, dictEntry *de, void *key) {
 }
 
 void dictSetVal(dict *d, dictEntry *de, void *val) {
+    UNUSED(d);
     assert(entryHasValue(de));
-    de->v.val = d->type->valDup ? d->type->valDup(d, val) : val;
+    if (entryIsEmbedded(de)) {
+        decodeEmbeddedEntry(de)->v.val = val;
+    } else {
+        de->v.val = val;
+    }
 }
 
 void dictSetSignedIntegerVal(dictEntry *de, int64_t val) {
@@ -837,11 +927,15 @@ double dictIncrDoubleVal(dictEntry *de, double val) {
 void *dictGetKey(const dictEntry *de) {
     if (entryIsKey(de)) return (void *)de;
     if (entryIsNoValue(de)) return decodeEntryNoValue(de)->key;
+    if (entryIsEmbedded(de)) return getEmbeddedKey(de);
     return de->key;
 }
 
 void *dictGetVal(const dictEntry *de) {
     assert(entryHasValue(de));
+    if (entryIsEmbedded(de)) {
+        return decodeEmbeddedEntry(de)->v.val;
+    }
     return de->v.val;
 }
 
@@ -871,6 +965,7 @@ double *dictGetDoubleValPtr(dictEntry *de) {
 static dictEntry *dictGetNext(const dictEntry *de) {
     if (entryIsKey(de)) return NULL; /* there's no next */
     if (entryIsNoValue(de)) return decodeEntryNoValue(de)->next;
+    if (entryIsEmbedded(de)) return decodeEmbeddedEntry(de)->next;
     return de->next;
 }
 
@@ -879,14 +974,16 @@ static dictEntry *dictGetNext(const dictEntry *de) {
 static dictEntry **dictGetNextRef(dictEntry *de) {
     if (entryIsKey(de)) return NULL;
     if (entryIsNoValue(de)) return &decodeEntryNoValue(de)->next;
+    if (entryIsEmbedded(de)) return &decodeEmbeddedEntry(de)->next;
     return &de->next;
 }
 
 static void dictSetNext(dictEntry *de, dictEntry *next) {
     assert(!entryIsKey(de));
     if (entryIsNoValue(de)) {
-        dictEntryNoValue *entry = decodeEntryNoValue(de);
-        entry->next = next;
+        decodeEntryNoValue(de)->next = next;
+    } else if (entryIsEmbedded(de)) {
+        decodeEmbeddedEntry(de)->next = next;
     } else {
         de->next = next;
     }
@@ -898,8 +995,20 @@ size_t dictMemUsage(const dict *d) {
     return dictSize(d) * sizeof(dictEntry) + dictBuckets(d) * sizeof(dictEntry *);
 }
 
-size_t dictEntryMemUsage(void) {
-    return sizeof(dictEntry);
+/* Returns the memory usage in bytes of dictEntry based on the type. if `de` is NULL, return the size of
+ * regular dict entry else return based on the type. */
+size_t dictEntryMemUsage(dictEntry *de) {
+    if (de == NULL || entryIsNormal(de))
+        return sizeof(dictEntry);
+    else if (entryIsKey(de))
+        return 0;
+    else if (entryIsNoValue(de))
+        return sizeof(dictEntryNoValue);
+    else if (entryIsEmbedded(de))
+        return zmalloc_size(decodeEmbeddedEntry(de));
+    else
+        assert("Entry type not supported");
+    return 0;
 }
 
 /* A fingerprint is a 64 bit number that represents the state of the dictionary
@@ -940,6 +1049,8 @@ unsigned long long dictFingerprint(dict *d) {
     return hash;
 }
 
+/* Initiaize a normal iterator. This function should be called when initializing
+ * an iterator on the stack. */
 void dictInitIterator(dictIterator *iter, dict *d) {
     iter->d = d;
     iter->table = 0;
@@ -949,6 +1060,8 @@ void dictInitIterator(dictIterator *iter, dict *d) {
     iter->nextEntry = NULL;
 }
 
+/* Initialize a safe iterator, which is allowed to modify the dictionary while iterating.
+ * You must call dictResetIterator when you are done with a safe iterator. */
 void dictInitSafeIterator(dictIterator *iter, dict *d) {
     dictInitIterator(iter, d);
     iter->safe = 1;
@@ -956,9 +1069,10 @@ void dictInitSafeIterator(dictIterator *iter, dict *d) {
 
 void dictResetIterator(dictIterator *iter) {
     if (!(iter->index == -1 && iter->table == 0)) {
-        if (iter->safe)
+        if (iter->safe) {
             dictResumeRehashing(iter->d);
-        else
+            assert(iter->d->pauserehash >= 0);
+        } else
             assert(iter->fingerprint == dictFingerprint(iter->d));
     }
 }
@@ -1164,7 +1278,7 @@ end:
 
 /* Reallocate the dictEntry, key and value allocations in a bucket using the
  * provided allocation functions in order to defrag them. */
-static void dictDefragBucket(dictEntry **bucketref, dictDefragFunctions *defragfns) {
+static void dictDefragBucket(dictEntry **bucketref, dictDefragFunctions *defragfns, void *privdata) {
     dictDefragAllocFunction *defragalloc = defragfns->defragAlloc;
     dictDefragAllocFunction *defragkey = defragfns->defragKey;
     dictDefragAllocFunction *defragval = defragfns->defragVal;
@@ -1182,6 +1296,17 @@ static void dictDefragBucket(dictEntry **bucketref, dictDefragFunctions *defragf
                 entry = newentry;
             }
             if (newkey) entry->key = newkey;
+        } else if (entryIsEmbedded(de)) {
+            defragfns->defragEntryStartCb(privdata, de);
+            embeddedDictEntry *entry = decodeEmbeddedEntry(de), *newentry;
+            if ((newentry = defragalloc(entry))) {
+                newde = encodeMaskedPtr(newentry, ENTRY_PTR_EMBEDDED);
+                entry = newentry;
+                defragfns->defragEntryFinishCb(privdata, newde);
+            } else {
+                defragfns->defragEntryFinishCb(privdata, NULL);
+            }
+            if (newval) entry->v.val = newval;
         } else {
             assert(entryIsNormal(de));
             newde = defragalloc(de);
@@ -1345,7 +1470,7 @@ dictScanDefrag(dict *d, unsigned long v, dictScanFunction *fn, dictDefragFunctio
 
         /* Emit entries at cursor */
         if (defragfns) {
-            dictDefragBucket(&d->ht_table[htidx0][v & m0], defragfns);
+            dictDefragBucket(&d->ht_table[htidx0][v & m0], defragfns, privdata);
         }
         de = d->ht_table[htidx0][v & m0];
         while (de) {
@@ -1378,7 +1503,7 @@ dictScanDefrag(dict *d, unsigned long v, dictScanFunction *fn, dictDefragFunctio
 
         /* Emit entries at cursor */
         if (defragfns) {
-            dictDefragBucket(&d->ht_table[htidx0][v & m0], defragfns);
+            dictDefragBucket(&d->ht_table[htidx0][v & m0], defragfns, privdata);
         }
         de = d->ht_table[htidx0][v & m0];
         while (de) {
@@ -1392,7 +1517,7 @@ dictScanDefrag(dict *d, unsigned long v, dictScanFunction *fn, dictDefragFunctio
         do {
             /* Emit entries at cursor */
             if (defragfns) {
-                dictDefragBucket(&d->ht_table[htidx1][v & m1], defragfns);
+                dictDefragBucket(&d->ht_table[htidx1][v & m1], defragfns, privdata);
             }
             de = d->ht_table[htidx1][v & m1];
             while (de) {
@@ -1565,29 +1690,6 @@ uint64_t dictGetHash(dict *d, const void *key) {
     return dictHashKey(d, key);
 }
 
-/* Finds the dictEntry using pointer and pre-calculated hash.
- * oldkey is a dead pointer and should not be accessed.
- * the hash value should be provided using dictGetHash.
- * no string / key comparison is performed.
- * return value is a pointer to the dictEntry if found, or NULL if not found. */
-dictEntry *dictFindEntryByPtrAndHash(dict *d, const void *oldptr, uint64_t hash) {
-    dictEntry *he;
-    unsigned long idx, table;
-
-    if (dictSize(d) == 0) return NULL; /* dict is empty */
-    for (table = 0; table <= 1; table++) {
-        idx = hash & DICTHT_SIZE_MASK(d->ht_size_exp[table]);
-        if (table == 0 && (long)idx < d->rehashidx) continue;
-        he = d->ht_table[table][idx];
-        while (he) {
-            if (oldptr == dictGetKey(he)) return he;
-            he = dictGetNext(he);
-        }
-        if (!dictIsRehashing(d)) return NULL;
-    }
-    return NULL;
-}
-
 /* Provides the old and new ht size for a given dictionary during rehashing. This method
  * should only be invoked during initialization/rehashing. */
 void dictRehashingInfo(dict *d, unsigned long long *from_size, unsigned long long *to_size) {
@@ -1710,7 +1812,6 @@ void dictGetStats(char *buf, size_t bufsize, dict *d, int full) {
 #ifdef SERVER_TEST
 #include "testhelp.h"
 
-#define UNUSED(V) ((void)V)
 #define TEST(name) printf("test — %s\n", name);
 
 uint64_t hashCallback(const void *key) {
@@ -1745,7 +1846,7 @@ char *stringFromLongLong(long long value) {
     return s;
 }
 
-dictType BenchmarkDictType = {hashCallback, NULL, NULL, compareCallback, freeCallback, NULL, NULL};
+dictType BenchmarkDictType = {hashCallback, NULL, compareCallback, freeCallback, NULL, NULL};
 
 #define start_benchmark() start = timeInMilliseconds()
 #define end_benchmark(msg)                                                                                             \

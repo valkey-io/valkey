@@ -691,9 +691,9 @@ typedef struct ValkeyModuleReplicationInfo {
     uint64_t version;      /* Not used since this structure is never passed
                               from the module to the core right now. Here
                               for future compatibility. */
-    int master;            /* true if primary, false if replica */
-    char *masterhost;      /* primary instance hostname for NOW_REPLICA */
-    int masterport;        /* primary instance port for NOW_REPLICA */
+    int primary;           /* true if primary, false if replica */
+    char *primary_host;    /* primary instance hostname for NOW_REPLICA */
+    int primary_port;      /* primary instance port for NOW_REPLICA */
     char *replid1;         /* Main replication ID */
     char *replid2;         /* Secondary replication ID */
     uint64_t repl1_offset; /* Main replication offset */
@@ -1469,9 +1469,16 @@ VALKEYMODULE_API int (*ValkeyModule_SendClusterMessage)(ValkeyModuleCtx *ctx,
 VALKEYMODULE_API int (*ValkeyModule_GetClusterNodeInfo)(ValkeyModuleCtx *ctx,
                                                         const char *id,
                                                         char *ip,
-                                                        char *master_id,
+                                                        char *primary_id,
                                                         int *port,
                                                         int *flags) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_GetClusterNodeInfoForClient)(ValkeyModuleCtx *ctx,
+                                                                 uint64_t client_id,
+                                                                 const char *node_id,
+                                                                 char *ip,
+                                                                 char *primary_id,
+                                                                 int *port,
+                                                                 int *flags) VALKEYMODULE_ATTR;
 VALKEYMODULE_API char **(*ValkeyModule_GetClusterNodesList)(ValkeyModuleCtx *ctx, size_t *numnodes)VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_FreeClusterNodesList)(char **ids) VALKEYMODULE_ATTR;
 VALKEYMODULE_API ValkeyModuleTimerID (*ValkeyModule_CreateTimer)(ValkeyModuleCtx *ctx,
@@ -1938,6 +1945,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(RegisterClusterMessageReceiver);
     VALKEYMODULE_GET_API(SendClusterMessage);
     VALKEYMODULE_GET_API(GetClusterNodeInfo);
+    VALKEYMODULE_GET_API(GetClusterNodeInfoForClient);
     VALKEYMODULE_GET_API(GetClusterNodesList);
     VALKEYMODULE_GET_API(FreeClusterNodesList);
     VALKEYMODULE_GET_API(CreateTimer);

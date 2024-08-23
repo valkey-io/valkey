@@ -171,12 +171,21 @@ proc count_log_message {srv_idx pattern} {
     return [count_message_lines $stdout $pattern]
 }
 
-# verify pattern exists in server's sdtout after a certain line number
+# verify pattern exists in server's stdout after a certain line number
 proc verify_log_message {srv_idx pattern from_line} {
     incr from_line
     set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
     if {![string match $pattern $result]} {
-        error "assertion:expected message not found in log file: $pattern"
+        fail "expected message not found in log file: $pattern"
+    }
+}
+
+# verify pattern does not exists in server's stout after a certain line number
+proc verify_no_log_message {srv_idx pattern from_line} {
+    incr from_line
+    set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
+    if {[string match $pattern $result]} {
+        fail "expected message found in log file: $pattern"
     }
 }
 
@@ -555,7 +564,15 @@ proc find_valgrind_errors {stderr on_termination} {
 # of seconds to the specified the server instance.
 proc start_write_load {host port seconds} {
     set tclsh [info nameofexecutable]
-    exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds $::tls &
+    exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds $::tls "" &
+}
+
+# Execute a background process writing only one key for the specified number
+# of seconds to the specified Redis instance. This load handler is useful for
+# tests which requires heavy replication stream but no memory load. 
+proc start_one_key_write_load {host port seconds key} {
+    set tclsh [info nameofexecutable]
+    exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds $::tls $key &
 }
 
 # Stop a process generating write load executed with start_write_load.
@@ -1161,4 +1178,26 @@ proc generate_largevalue_test_array {} {
     set largevalue(listpack) "hello"
     set largevalue(quicklist) [string repeat "x" 8192]
     return [array get largevalue]
+}
+
+# Breakpoint function, which invokes a minimal debugger.
+# This function can be placed within the desired Tcl tests for debugging purposes.
+# 
+# Arguments:
+# * 's': breakpoint label, which is printed when breakpoints are hit for unique identification.
+# 
+# Source: https://wiki.tcl-lang.org/page/A+minimal+debugger
+proc bp {{s {}}} {
+    if ![info exists ::bp_skip] {
+        set ::bp_skip [list]
+    } elseif {[lsearch -exact $::bp_skip $s]>=0} return
+    if [catch {info level -1} who] {set who ::}
+    while 1 {
+        puts -nonewline "$who/$s> "; flush stdout
+        gets stdin line
+        if {$line=="c"} {puts "continuing.."; break}
+        if {$line=="i"} {set line "info locals"}
+        catch {uplevel 1 $line} res
+        puts $res
+    }
 }

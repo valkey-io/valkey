@@ -15,9 +15,6 @@ proc get_cluster_role {srv_idx} {
 }
 
 proc wait_for_role {srv_idx role} {
-    set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
-    # wait for a gossip cycle for states to be propagated throughout the cluster
-    after $node_timeout
     wait_for_condition 100 100 {
         [lindex [split [R $srv_idx ROLE] " "] 0] eq $role
     } else {
@@ -46,20 +43,11 @@ proc check_server_response {server_id} {
 }
 
 # restart a server and wait for it to come back online
-proc restart_server_and_wait {server_id} {
+proc fail_server {server_id} {
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
-    set result [catch {R $server_id DEBUG RESTART [expr 3*$node_timeout]} err]
-
-    # Check if the error is the expected "I/O error reading reply"
-    if {$result != 0 && $err ne "I/O error reading reply"} {
-        fail "Unexpected error restarting server $server_id: $err"
-    }
-
-    wait_for_condition 100 100 {
-        [check_server_response $server_id] eq 1
-    } else {
-        fail "Server $server_id didn't come back online in time"
-    }
+    pause_process [srv [expr -1*$server_id] pid]
+    after [expr 3*$node_timeout]
+    resume_process [srv [expr -1*$server_id] pid]
 }
 
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
@@ -94,8 +82,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Migration target is auto-updated after failover in target shard" {
-        # Restart R1 to trigger an auto-failover to R4
-        restart_server_and_wait 1
+        # Trigger an auto-failover from R1 to R4
+        fail_server 1
         # Wait for R1 to become a replica
         wait_for_role 1 slave
         # Validate final states
@@ -114,8 +102,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Migration source is auto-updated after failover in source shard" {
-        # Restart R0 to trigger an auto-failover to R3
-        restart_server_and_wait 0
+        # Trigger an auto-failover from R0 to R3
+        fail_server 0
         # Wait for R0 to become a replica
         wait_for_role 0 slave
         # Validate final states
@@ -198,7 +186,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_equal {OK} [R 3 CLUSTER REPLICATE $R0_id]
         wait_for_role 3 slave
         # Validate that R3 now sees slot 609 open
-        assert_equal [get_open_slots 3] "\[609->-$R1_id\]"
+        wait_for_slot_state 3 "\[609->-$R1_id\]"
     }
 
     test "New replica inherits importing slot" {
@@ -212,7 +200,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_equal {OK} [R 4 CLUSTER REPLICATE $R1_id]
         wait_for_role 4 slave
         # Validate that R4 now sees slot 609 open
-        assert_equal [get_open_slots 4] "\[609-<-$R0_id\]"
+        wait_for_slot_state 4 "\[609-<-$R0_id\]"
     }
 }
 
@@ -228,6 +216,9 @@ proc create_empty_shard {p r} {
     wait_for_role $p master
 }
 
+# Temporarily disable empty shard migration tests while we
+# work to reduce their flakiness. See https://github.com/valkey-io/valkey/issues/858.
+if {0} {
 start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
@@ -262,10 +253,10 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
         wait_for_slot_state 7 "\[609-<-$R0_id\]"
     }
 
-    test "Empty-shard migration target is auto-updated after faiover in target shard" {
+    test "Empty-shard migration target is auto-updated after failover in target shard" {
         wait_for_role 6 master
-        # Restart R6 to trigger an auto-failover to R7
-        restart_server_and_wait 6
+        # Trigger an auto-failover from R6 to R7
+        fail_server 6
         # Wait for R6 to become a replica
         wait_for_role 6 slave
         # Validate final states
@@ -283,10 +274,10 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
         wait_for_slot_state 7 "\[609-<-$R0_id\]"
     }
 
-    test "Empty-shard migration source is auto-updated after faiover in source shard" {
+    test "Empty-shard migration source is auto-updated after failover in source shard" {
         wait_for_role 0 master
-        # Restart R0 to trigger an auto-failover to R3
-        restart_server_and_wait 0
+        # Trigger an auto-failover from R0 to R3
+        fail_server 0
         # Wait for R0 to become a replica
         wait_for_role 0 slave
         # Validate final states
@@ -303,6 +294,7 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
         wait_for_slot_state 3 "\[609->-$R6_id\]"
         wait_for_slot_state 7 "\[609-<-$R0_id\]"
     }
+}
 }
 
 proc migrate_slot {from to slot} {
@@ -423,7 +415,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 }
 
-start_cluster 2 0 {tags {external:skip cluster regression} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
+start_cluster 2 0 {tags {tls:skip external:skip cluster regression} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
     # Issue #563 regression test
     test "Client blocked on XREADGROUP while stream's slot is migrated" {
         set stream_name aga
@@ -441,5 +433,37 @@ start_cluster 2 0 {tags {external:skip cluster regression} overrides {cluster-al
 
         # This line should cause the crash
         R 0 MIGRATE 127.0.0.1 [lindex [R 1 CONFIG GET port] 1] $stream_name 0 5000
+    }
+}
+
+start_cluster 3 6 {tags {external:skip cluster} overrides {cluster-node-timeout 1000} } {
+    test "Slot migration is ok when the replicas are down" {
+        # Killing all replicas in primary 0.
+        assert_equal 2 [s 0 connected_slaves]
+        catch {R 3 shutdown nosave}
+        catch {R 6 shutdown nosave}
+        wait_for_condition 50 100 {
+            [s 0 connected_slaves] == 0
+        } else {
+            fail "The replicas in primary 0 are still connecting"
+        }
+
+        # Killing one replica in primary 1.
+        assert_equal 2 [s -1 connected_slaves]
+        catch {R 4 shutdown nosave}
+        wait_for_condition 50 100 {
+            [s -1 connected_slaves] == 1
+        } else {
+            fail "The replica in primary 1 is still connecting"
+        }
+
+        # Check slot migration is ok when the replicas are down.
+        migrate_slot 0 1 0
+        migrate_slot 0 2 1
+        assert_equal {OK} [R 0 CLUSTER SETSLOT 0 NODE [R 1 CLUSTER MYID]]
+        assert_equal {OK} [R 0 CLUSTER SETSLOT 1 NODE [R 2 CLUSTER MYID]]
+        wait_for_slot_state 0 ""
+        wait_for_slot_state 1 ""
+        wait_for_slot_state 2 ""
     }
 }

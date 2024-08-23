@@ -47,6 +47,7 @@ start_server {tags {"auth external:skip"} overrides {requirepass foobar}} {
     }
 }
 
+foreach dualchannel {yes no} {
 start_server {tags {"auth_binary_password external:skip"}} {
     test {AUTH fails when binary password is wrong} {
         r config set requirepass "abc\x00def"
@@ -59,26 +60,27 @@ start_server {tags {"auth_binary_password external:skip"}} {
         r auth "abc\x00def"
     } {OK}
 
-    start_server {tags {"masterauth"}} {
+    start_server {tags {"primaryauth"}} {
         set master [srv -1 client]
         set master_host [srv -1 host]
         set master_port [srv -1 port]
         set slave [srv 0 client]
 
-        test {MASTERAUTH test with binary password} {
+        test "primaryauth test with binary password dualchannel = $dualchannel" {
             $master config set requirepass "abc\x00def"
-
-            # Configure the replica with masterauth
+            $master config set dual-channel-replication-enabled $dualchannel
+            # Configure the replica with primaryauth
             set loglines [count_log_lines 0]
-            $slave config set masterauth "abc"
+            $slave config set primaryauth "abc"
+            $slave config set dual-channel-replication-enabled $dualchannel
             $slave slaveof $master_host $master_port
 
             # Verify replica is not able to sync with master
-            wait_for_log_messages 0 {"*Unable to AUTH to MASTER*"} $loglines 1000 10
+            wait_for_log_messages 0 {"*Unable to AUTH to PRIMARY*"} $loglines 1000 10
             assert_equal {down} [s 0 master_link_status]
             
-            # Test replica with the correct masterauth
-            $slave config set masterauth "abc\x00def"
+            # Test replica with the correct primaryauth
+            $slave config set primaryauth "abc\x00def"
             wait_for_condition 50 100 {
                 [s 0 master_link_status] eq {up}
             } else {
@@ -86,4 +88,5 @@ start_server {tags {"auth_binary_password external:skip"}} {
             }
         }
     }
+}
 }

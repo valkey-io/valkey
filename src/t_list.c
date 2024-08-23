@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -1213,7 +1213,7 @@ void blockingPopGenericCommand(client *c, robj **keys, int numkeys, int where, i
 
     /* If we are not allowed to block the client, the only thing
      * we can do is treating it as a timeout (even with timeout 0). */
-    if (c->flags & CLIENT_DENY_BLOCKING) {
+    if (c->flag.deny_blocking) {
         addReplyNullArray(c);
         return;
     }
@@ -1237,7 +1237,7 @@ void blmoveGenericCommand(client *c, int wherefrom, int whereto, mstime_t timeou
     if (checkType(c, key, OBJ_LIST)) return;
 
     if (key == NULL) {
-        if (c->flags & CLIENT_DENY_BLOCKING) {
+        if (c->flag.deny_blocking) {
             /* Blocking against an empty list when blocking is not allowed
              * returns immediately. */
             addReplyNull(c);

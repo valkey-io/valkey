@@ -635,7 +635,7 @@ const char *strChildType(int type) {
 /* Return true if there are active children processes doing RDB saving,
  * AOF rewriting, or some side process spawned by a loaded module. */
 int hasActiveChildProcess(void) {
-    return server.child_pid != -1;
+    return server.child_pid != -1 && server.child_type != CHILD_TYPE_NONE;
 }
 
 void resetChildState(void) {

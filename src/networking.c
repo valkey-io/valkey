@@ -3286,7 +3286,6 @@ sds catClientInfoString(sds s, client *client) {
         replBufBlock *cur = listNodeValue(client->ref_repl_buf_node);
         used_blocks_of_repl_buf = last->id - cur->id + 1;
     }
-    
     /* clang-format off */
     sds ret = sdscatfmt(s, FMTARGS(
         "id=%U", (unsigned long long) client->id,

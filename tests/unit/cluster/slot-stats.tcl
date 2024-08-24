@@ -68,7 +68,7 @@ proc assert_empty_slot_stats_with_exception {slot_stats exception_slots metrics_
     }
 }
 
-proc assert_equal_slot_stats {slot_stats_1 slot_stats_2 metrics_to_assert} {
+proc assert_equal_slot_stats {slot_stats_1 slot_stats_2 deterministic_metrics non_deterministic_metrics} {
     set slot_stats_1 [convert_array_into_dict $slot_stats_1]
     set slot_stats_2 [convert_array_into_dict $slot_stats_2]
     assert {[dict size $slot_stats_1] == [dict size $slot_stats_2]}
@@ -76,8 +76,15 @@ proc assert_equal_slot_stats {slot_stats_1 slot_stats_2 metrics_to_assert} {
     dict for {slot stats_1} $slot_stats_1 {
         assert {[dict exists $slot_stats_2 $slot]}
         set stats_2 [dict get $slot_stats_2 $slot]
-        foreach metric_name $metrics_to_assert {
-            assert {[dict get $stats_1 $metric_name] == [dict get $stats_2 $metric_name]}
+
+        # For deterministic metrics, we assert their equality.
+        foreach metric $deterministic_metrics {
+            assert {[dict get $stats_1 $metric] == [dict get $stats_2 $metric]}
+        }
+        # For non-deterministic metrics, we assert their non-zeroness as a best-effort.
+        foreach metric $non_deterministic_metrics {
+            assert {([dict get $stats_1 $metric] == 0 && [dict get $stats_2 $metric] == 0) || \
+                    ([dict get $stats_1 $metric] != 0 && [dict get $stats_2 $metric] != 0)}
         }
     }
 }
@@ -96,17 +103,6 @@ proc assert_slot_visibility {slot_stats expected_slots} {
     }
 
     assert_all_slots_have_been_seen $expected_slots
-}
-
-proc assert_slot_stats_key_count {slot_stats expected_slots_key_count} {
-    set slot_stats [convert_array_into_dict $slot_stats]
-    dict for {slot stats} $slot_stats {
-        if {[dict exists $expected_slots_key_count $slot]} {
-            set key_count [dict get $stats key-count]
-            set key_count_expected [dict get $expected_slots_key_count $slot]
-            assert {$key_count == $key_count_expected}
-        }
-    }
 }
 
 proc assert_slot_stats_monotonic_order {slot_stats orderby is_desc} {
@@ -347,10 +343,349 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
 }
 
 # -----------------------------------------------------------------------------
-# Test cases for CLUSTER SLOT-STATS key-count metric correctness.
+# Test cases for CLUSTER SLOT-STATS network-bytes-in.
+# -----------------------------------------------------------------------------
+
+start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
+
+    # Define shared variables.
+    set key "key"
+    set key_slot [R 0 cluster keyslot $key]
+    set metrics_to_assert [list network-bytes-in]
+
+    test "CLUSTER SLOT-STATS network-bytes-in, multi bulk buffer processing." {
+        # *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n --> 33 bytes.
+        R 0 SET $key value
+
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create network-bytes-in 33
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS network-bytes-in, in-line buffer processing." {
+        set rd [valkey_deferring_client]
+        # SET key value\r\n --> 15 bytes.
+        $rd write "SET $key value\r\n"
+        $rd flush
+
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create network-bytes-in 15
+            ]
+        ]
+
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS network-bytes-in, blocking command." {
+        set rd [valkey_deferring_client]
+        # *3\r\n$5\r\nblpop\r\n$3\r\nkey\r\n$1\r\n0\r\n --> 31 bytes.
+        $rd BLPOP $key 0
+        wait_for_blocked_clients_count 1
+
+        # Slot-stats must be empty here, as the client is yet to be unblocked.
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
+
+        # *3\r\n$5\r\nlpush\r\n$3\r\nkey\r\n$5\r\nvalue\r\n --> 35 bytes.
+        R 0 LPUSH $key value
+        wait_for_blocked_clients_count 0
+
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create network-bytes-in 66 ;# 31 + 35 bytes.
+            ]
+        ]
+
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS network-bytes-in, multi-exec transaction." {
+        set r [valkey_client]
+        # *1\r\n$5\r\nmulti\r\n --> 15 bytes.
+        $r MULTI
+        # *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n --> 33 bytes.
+        assert {[$r SET $key value] eq {QUEUED}}
+        # *1\r\n$4\r\nexec\r\n --> 14 bytes.
+        assert {[$r EXEC] eq {OK}}
+
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create network-bytes-in 62 ;# 15 + 33 + 14 bytes.
+            ]
+        ]
+
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS network-bytes-in, non slot specific command." {
+        R 0 INFO
+
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS network-bytes-in, pub/sub." {
+        # PUB/SUB does not get accumulated at per-slot basis, 
+        # as it is cluster-wide and is not slot specific.
+        set rd [valkey_deferring_client]
+        $rd subscribe channel
+        R 0 publish channel message
+
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+}
+
+start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
+    set channel "channel"
+    set key_slot [R 0 cluster keyslot $channel]
+    set metrics_to_assert [list network-bytes-in]
+
+    # Setup replication.
+    assert {[s -1 role] eq {slave}}
+    wait_for_condition 1000 50 {
+        [s -1 master_link_status] eq {up}
+    } else {
+        fail "Instance #1 master link status is not up"
+    }
+    R 1 readonly
+
+    test "CLUSTER SLOT-STATS network-bytes-in, sharded pub/sub." {
+        set slot [R 0 cluster keyslot $channel]
+        set primary [Rn 0]
+        set replica [Rn 1]
+        set replica_subcriber [valkey_deferring_client -1]
+        $replica_subcriber SSUBSCRIBE $channel
+        # *2\r\n$10\r\nssubscribe\r\n$7\r\nchannel\r\n --> 34 bytes.
+        $primary SPUBLISH $channel hello
+        # *3\r\n$8\r\nspublish\r\n$7\r\nchannel\r\n$5\r\nhello\r\n --> 42 bytes.
+
+        set slot_stats [$primary CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create network-bytes-in 42
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+
+        set slot_stats [$replica CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create network-bytes-in 34
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+}
+
+# -----------------------------------------------------------------------------
+# Test cases for CLUSTER SLOT-STATS network-bytes-out correctness.
 # -----------------------------------------------------------------------------
 
 start_cluster 1 0 {tags {external:skip cluster}} {
+    # Define shared variables.
+    set key "FOO"
+    set key_slot [R 0 cluster keyslot $key]
+    set expected_slots_to_key_count [dict create $key_slot 1]
+    set metrics_to_assert [list network-bytes-out]
+    R 0 CONFIG SET cluster-slot-stats-enabled yes
+
+    test "CLUSTER SLOT-STATS network-bytes-out, for non-slot specific commands." {
+        R 0 INFO
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS network-bytes-out, for slot specific commands." {
+        R 0 SET $key value
+        # +OK\r\n --> 5 bytes
+
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create network-bytes-out 5
+            ]
+        ]
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+
+    test "CLUSTER SLOT-STATS network-bytes-out, blocking commands." {
+        set rd [valkey_deferring_client]
+        $rd BLPOP $key 0
+        wait_for_blocked_clients_count 1
+
+        # Assert empty slot stats here, since COB is yet to be flushed due to the block.
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats $slot_stats $metrics_to_assert
+
+        # Unblock the command.
+        # LPUSH client) :1\r\n --> 4 bytes.
+        # BLPOP client) *2\r\n$3\r\nkey\r\n$5\r\nvalue\r\n --> 24 bytes, upon unblocking.
+        R 0 LPUSH $key value
+        wait_for_blocked_clients_count 0
+
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create network-bytes-out 28 ;# 4 + 24 bytes.
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    R 0 CONFIG RESETSTAT
+    R 0 FLUSHALL
+}
+
+start_cluster 1 1 {tags {external:skip cluster}} {
+
+    # Define shared variables.
+    set key "FOO"
+    set key_slot [R 0 CLUSTER KEYSLOT $key]
+    set metrics_to_assert [list network-bytes-out]
+    R 0 CONFIG SET cluster-slot-stats-enabled yes
+
+    # Setup replication.
+    assert {[s -1 role] eq {slave}}
+    wait_for_condition 1000 50 {
+        [s -1 master_link_status] eq {up}
+    } else {
+        fail "Instance #1 master link status is not up"
+    }
+    R 1 readonly
+
+    test "CLUSTER SLOT-STATS network-bytes-out, replication stream egress." {
+        assert_equal [R 0 SET $key VALUE] {OK}
+        # Local client) +OK\r\n --> 5 bytes.
+        # Replication stream) *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n --> 33 bytes.
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create network-bytes-out 38 ;# 5 + 33 bytes.
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+}
+
+start_cluster 1 1 {tags {external:skip cluster}} {
+
+    # Define shared variables.
+    set channel "channel"
+    set key_slot [R 0 cluster keyslot $channel]
+    set channel_secondary "channel2"
+    set key_slot_secondary [R 0 cluster keyslot $channel_secondary]
+    set metrics_to_assert [list network-bytes-out]
+    R 0 CONFIG SET cluster-slot-stats-enabled yes
+
+    test "CLUSTER SLOT-STATS network-bytes-out, sharded pub/sub, single channel." {
+        set slot [R 0 cluster keyslot $channel]
+        set publisher [Rn 0]
+        set subscriber [valkey_client]
+        set replica [valkey_deferring_client -1]
+
+        # Subscriber client) *3\r\n$10\r\nssubscribe\r\n$7\r\nchannel\r\n:1\r\n --> 38 bytes
+        $subscriber SSUBSCRIBE $channel 
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create network-bytes-out 38
+            ]
+        ]
+        R 0 CONFIG RESETSTAT
+
+        # Publisher client) :1\r\n --> 4 bytes.
+        # Subscriber client) *3\r\n$8\r\nsmessage\r\n$7\r\nchannel\r\n$5\r\nhello\r\n --> 42 bytes.
+        assert_equal 1 [$publisher SPUBLISH $channel hello]
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create network-bytes-out 46 ;# 4 + 42 bytes.
+            ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+    $subscriber QUIT
+    R 0 FLUSHALL
+    R 0 CONFIG RESETSTAT
+
+    test "CLUSTER SLOT-STATS network-bytes-out, sharded pub/sub, cross-slot channels." {
+        set slot [R 0 cluster keyslot $channel]
+        set publisher [Rn 0]
+        set subscriber [valkey_client]
+        set replica [valkey_deferring_client -1]
+
+        # Stack multi-slot subscriptions against a single client.
+        # For primary channel;
+        # Subscriber client) *3\r\n$10\r\nssubscribe\r\n$7\r\nchannel\r\n:1\r\n --> 38 bytes
+        # For secondary channel;
+        # Subscriber client) *3\r\n$10\r\nssubscribe\r\n$8\r\nchannel2\r\n:1\r\n --> 39 bytes
+        $subscriber SSUBSCRIBE $channel
+        $subscriber SSUBSCRIBE $channel_secondary
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create \
+                $key_slot [ \
+                    dict create network-bytes-out 38
+                ] \
+                $key_slot_secondary [ \
+                    dict create network-bytes-out 39
+                ]
+        ]
+        R 0 CONFIG RESETSTAT
+
+        # For primary channel;
+        # Publisher client) :1\r\n --> 4 bytes.
+        # Subscriber client) *3\r\n$8\r\nsmessage\r\n$7\r\nchannel\r\n$5\r\nhello\r\n --> 42 bytes.
+        # For secondary channel;
+        # Publisher client) :1\r\n --> 4 bytes.
+        # Subscriber client) *3\r\n$8\r\nsmessage\r\n$8\r\nchannel2\r\n$5\r\nhello\r\n --> 43 bytes.
+        assert_equal 1 [$publisher SPUBLISH $channel hello]
+        assert_equal 1 [$publisher SPUBLISH $channel_secondary hello]
+        set slot_stats [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        set expected_slot_stats [
+            dict create \
+                $key_slot [ \
+                    dict create network-bytes-out 46 ;# 4 + 42 bytes.
+                ] \
+                $key_slot_secondary [ \
+                    dict create network-bytes-out 47 ;# 4 + 43 bytes.
+                ]
+        ]
+        assert_empty_slot_stats_with_exception $slot_stats $expected_slot_stats $metrics_to_assert
+    }
+}
+
+# -----------------------------------------------------------------------------
+# Test cases for CLUSTER SLOT-STATS key-count metric correctness.
+# -----------------------------------------------------------------------------
+
+start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
 
     # Define shared variables.
     set key "FOO"
@@ -435,7 +770,9 @@ start_cluster 1 0 {tags {external:skip cluster}} {
 # Test cases for CLUSTER SLOT-STATS ORDERBY sub-argument.
 # -----------------------------------------------------------------------------
 
-start_cluster 1 0 {tags {external:skip cluster}} {
+start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
+
+    set metrics [list "key-count" "cpu-usec" "network-bytes-in" "network-bytes-out"]
 
     # SET keys for target hashslots, to encourage ordering.
     set hash_tags [list 0 1 2 3 4]
@@ -456,32 +793,36 @@ start_cluster 1 0 {tags {external:skip cluster}} {
     }
 
     test "CLUSTER SLOT-STATS ORDERBY DESC correct ordering" {
-        set orderby "key-count"
-        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby DESC LIMIT -1}
-        set slot_stats [R 0 CLUSTER SLOT-STATS ORDERBY $orderby DESC]
-        assert_slot_stats_monotonic_descent $slot_stats $orderby
+        foreach orderby $metrics {
+            set slot_stats [R 0 CLUSTER SLOT-STATS ORDERBY $orderby DESC]
+            assert_slot_stats_monotonic_descent $slot_stats $orderby
+        }
     }
 
     test "CLUSTER SLOT-STATS ORDERBY ASC correct ordering" {
-        set orderby "key-count"
-        set slot_stats [R 0 CLUSTER SLOT-STATS ORDERBY $orderby ASC]
-        assert_slot_stats_monotonic_ascent $slot_stats $orderby
+        foreach orderby $metrics {
+            set slot_stats [R 0 CLUSTER SLOT-STATS ORDERBY $orderby ASC]
+            assert_slot_stats_monotonic_ascent $slot_stats $orderby
+        }
     }
 
     test "CLUSTER SLOT-STATS ORDERBY LIMIT correct response pagination, where limit is less than number of assigned slots" {
         R 0 FLUSHALL SYNC
+        R 0 CONFIG RESETSTAT
 
-        set limit 5
-        set slot_stats_desc [R 0 CLUSTER SLOT-STATS ORDERBY key-count LIMIT $limit DESC]
-        set slot_stats_asc [R 0 CLUSTER SLOT-STATS ORDERBY key-count LIMIT $limit ASC]
-        set slot_stats_desc_length [llength $slot_stats_desc]
-        set slot_stats_asc_length [llength $slot_stats_asc]
-        assert {$limit == $slot_stats_desc_length && $limit == $slot_stats_asc_length}
+        foreach orderby $metrics {
+            set limit 5
+            set slot_stats_desc [R 0 CLUSTER SLOT-STATS ORDERBY $orderby LIMIT $limit DESC]
+            set slot_stats_asc [R 0 CLUSTER SLOT-STATS ORDERBY $orderby LIMIT $limit ASC]
+            set slot_stats_desc_length [llength $slot_stats_desc]
+            set slot_stats_asc_length [llength $slot_stats_asc]
+            assert {$limit == $slot_stats_desc_length && $limit == $slot_stats_asc_length}
 
-        # The key count of all slots is 0, so we will order by slot in ascending order.
-        set expected_slots [dict create 0 0 1 0 2 0 3 0 4 0]
-        assert_slot_visibility $slot_stats_desc $expected_slots
-        assert_slot_visibility $slot_stats_asc $expected_slots
+            # All slot statistics have been reset to 0, so we will order by slot in ascending order.
+            set expected_slots [dict create 0 0 1 0 2 0 3 0 4 0]
+            assert_slot_visibility $slot_stats_desc $expected_slots
+            assert_slot_visibility $slot_stats_asc $expected_slots
+        }
     }
 
     test "CLUSTER SLOT-STATS ORDERBY LIMIT correct response pagination, where limit is greater than number of assigned slots" {
@@ -490,28 +831,39 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         R 0 CLUSTER FLUSHSLOTS
         R 0 CLUSTER ADDSLOTS 100 101
 
-        set num_assigned_slots 2
-        set limit 5
-        set slot_stats_desc [R 0 CLUSTER SLOT-STATS ORDERBY key-count LIMIT $limit DESC]
-        set slot_stats_asc [R 0 CLUSTER SLOT-STATS ORDERBY key-count LIMIT $limit ASC]
-        set slot_stats_desc_length [llength $slot_stats_desc]
-        set slot_stats_asc_length [llength $slot_stats_asc]
-        set expected_response_length [expr min($num_assigned_slots, $limit)]
-        assert {$expected_response_length == $slot_stats_desc_length && $expected_response_length == $slot_stats_asc_length}
+        foreach orderby $metrics {
+            set num_assigned_slots 2
+            set limit 5
+            set slot_stats_desc [R 0 CLUSTER SLOT-STATS ORDERBY $orderby LIMIT $limit DESC]
+            set slot_stats_asc [R 0 CLUSTER SLOT-STATS ORDERBY $orderby LIMIT $limit ASC]
+            set slot_stats_desc_length [llength $slot_stats_desc]
+            set slot_stats_asc_length [llength $slot_stats_asc]
+            set expected_response_length [expr min($num_assigned_slots, $limit)]
+            assert {$expected_response_length == $slot_stats_desc_length && $expected_response_length == $slot_stats_asc_length}
 
-        set expected_slots [dict create 100 0 101 0]
-        assert_slot_visibility $slot_stats_desc $expected_slots
-        assert_slot_visibility $slot_stats_asc $expected_slots
+            set expected_slots [dict create 100 0 101 0]
+            assert_slot_visibility $slot_stats_desc $expected_slots
+            assert_slot_visibility $slot_stats_asc $expected_slots
+        }
     }
 
-    test "CLUSTER SLOT-STATS ORDERBY unsupported sort metric." {
-        set orderby "non-existent-metric"
-        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
-
+    test "CLUSTER SLOT-STATS ORDERBY arg sanity check." {
+        # Non-existent argument.
+        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY key-count non-existent-arg}
+        # Negative LIMIT.
+        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY key-count DESC LIMIT -1}
+        # Non-existent ORDERBY metric.
+        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY non-existent-metric}
         # When cluster-slot-stats-enabled config is disabled, you cannot sort using advanced metrics.
+        R 0 CONFIG SET cluster-slot-stats-enabled no
         set orderby "cpu-usec"
         assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
+        set orderby "network-bytes-in"
+        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
+        set orderby "network-bytes-out"
+        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY $orderby}
     }
+
 }
 
 # -----------------------------------------------------------------------------
@@ -521,14 +873,23 @@ start_cluster 1 0 {tags {external:skip cluster}} {
 start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-enabled yes}} {
 
     # Define shared variables.
-    set key "FOO"
+    set key "key"
     set key_slot [R 0 CLUSTER KEYSLOT $key]
+    set primary [Rn 0]
+    set replica [Rn 1]
 
-    # For replication, only those metrics that are deterministic upon replication are asserted.
-    # * key-count is asserted, as both the primary and its replica must hold the same number of keys.
-    # * cpu-usec is not asserted, as its micro-seconds command duration is not guaranteed to be exact
-    #   between the primary and its replica.
-    set metrics_to_assert [list key-count]
+    # For replication, assertions are split between deterministic and non-deterministic metrics.
+    # * For deterministic metrics, strict equality assertions are made.
+    # * For non-deterministic metrics, non-zeroness assertions are made. 
+    #   Non-zeroness as in, both primary and replica should either have some value, or no value at all.
+    #
+    # * key-count is deterministic between primary and its replica.
+    # * cpu-usec is non-deterministic between primary and its replica.
+    # * network-bytes-in is deterministic between primary and its replica.
+    # * network-bytes-out will remain empty in the replica, since primary client do not receive replies, unless for replicationSendAck().
+    set deterministic_metrics [list key-count network-bytes-in]
+    set non_deterministic_metrics [list cpu-usec]
+    set empty_metrics [list network-bytes-out]
 
     # Setup replication.
     assert {[s -1 role] eq {slave}}
@@ -539,39 +900,75 @@ start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-slot-stats-en
     }
     R 1 readonly
 
-    test "CLUSTER SLOT-STATS key-count replication for new keys" {
+    test "CLUSTER SLOT-STATS metrics replication for new keys" {
+        # *3\r\n$3\r\nset\r\n$3\r\nkey\r\n$5\r\nvalue\r\n --> 33 bytes.
         R 0 SET $key VALUE
+
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create key-count 1 network-bytes-in 33
+            ]
+        ]
         set slot_stats_master [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats_with_exception $slot_stats_master $expected_slot_stats $deterministic_metrics
 
-        set expected_slots_key_count [dict create $key_slot 1]
-        assert_slot_stats_key_count $slot_stats_master $expected_slots_key_count
-        wait_for_replica_key_exists $key 1
-
+        wait_for_condition 500 10 {
+            [string match {*calls=1,*} [cmdrstat set $replica]]
+        } else {
+            fail "Replica did not receive the command."
+        }
         set slot_stats_replica [R 1 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
-        assert_equal_slot_stats $slot_stats_master $slot_stats_replica $metrics_to_assert
+        assert_equal_slot_stats $slot_stats_master $slot_stats_replica $deterministic_metrics $non_deterministic_metrics
+        assert_empty_slot_stats $slot_stats_replica $empty_metrics
     }
+    R 0 CONFIG RESETSTAT
+    R 1 CONFIG RESETSTAT
 
-    test "CLUSTER SLOT-STATS key-count replication for existing keys" {
+    test "CLUSTER SLOT-STATS metrics replication for existing keys" {
+        # *3\r\n$3\r\nset\r\n$3\r\nkey\r\n$13\r\nvalue_updated\r\n --> 42 bytes.
         R 0 SET $key VALUE_UPDATED
+
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create key-count 1 network-bytes-in 42
+            ]
+        ]
         set slot_stats_master [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats_with_exception $slot_stats_master $expected_slot_stats $deterministic_metrics
 
-        set expected_slots_key_count [dict create $key_slot 1]
-        assert_slot_stats_key_count $slot_stats_master $expected_slots_key_count
-        wait_for_replica_key_exists $key 1
-
+        wait_for_condition 500 10 {
+            [string match {*calls=1,*} [cmdrstat set $replica]]
+        } else {
+            fail "Replica did not receive the command."
+        }
         set slot_stats_replica [R 1 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
-        assert_equal_slot_stats $slot_stats_master $slot_stats_replica $metrics_to_assert
+        assert_equal_slot_stats $slot_stats_master $slot_stats_replica $deterministic_metrics $non_deterministic_metrics
+        assert_empty_slot_stats $slot_stats_replica $empty_metrics
     }
+    R 0 CONFIG RESETSTAT
+    R 1 CONFIG RESETSTAT
 
-    test "CLUSTER SLOT-STATS key-count replication for deleting keys" {
+    test "CLUSTER SLOT-STATS metrics replication for deleting keys" {
+        # *2\r\n$3\r\ndel\r\n$3\r\nkey\r\n --> 22 bytes.
         R 0 DEL $key
+
+        set expected_slot_stats [
+            dict create $key_slot [
+                dict create key-count 0 network-bytes-in 22
+            ]
+        ]
         set slot_stats_master [R 0 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
+        assert_empty_slot_stats_with_exception $slot_stats_master $expected_slot_stats $deterministic_metrics
 
-        set expected_slots_key_count [dict create $key_slot 0]
-        assert_slot_stats_key_count $slot_stats_master $expected_slots_key_count
-        wait_for_replica_key_exists $key 0
-
+        wait_for_condition 500 10 {
+            [string match {*calls=1,*} [cmdrstat del $replica]]
+        } else {
+            fail "Replica did not receive the command."
+        }
         set slot_stats_replica [R 1 CLUSTER SLOT-STATS SLOTSRANGE 0 16383]
-        assert_equal_slot_stats $slot_stats_master $slot_stats_replica $metrics_to_assert
+        assert_equal_slot_stats $slot_stats_master $slot_stats_replica $deterministic_metrics $non_deterministic_metrics
+        assert_empty_slot_stats $slot_stats_replica $empty_metrics
     }
+    R 0 CONFIG RESETSTAT
+    R 1 CONFIG RESETSTAT
 }

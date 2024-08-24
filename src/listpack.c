@@ -4,8 +4,7 @@
  *
  *  https://github.com/antirez/listpack
  *
- * Copyright (c) 2017, Salvatore Sanfilippo <antirez at gmail dot com>
- * Copyright (c) 2020, Redis Labs, Inc
+ * Copyright (c) 2017,2020, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -167,7 +166,7 @@ int lpSafeToAdd(unsigned char *lp, size_t add) {
  * "utils.c", function string2ll(), and is copyright:
  *
  * Copyright(C) 2011, Pieter Noordhuis
- * Copyright(C) 2011, Salvatore Sanfilippo
+ * Copyright(C) 2011, Redis Ltd.
  *
  * The function is released under the BSD 3-clause license.
  */

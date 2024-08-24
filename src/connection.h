@@ -1,6 +1,6 @@
 
 /*
- * Copyright (c) 2019, Redis Labs
+ * Copyright (c) 2019, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -144,7 +144,8 @@ struct connListener {
     int bindaddr_count;
     int port;
     ConnectionType *ct;
-    void *priv; /* used by connection type specified data */
+    void *priv1; /* used by connection type specified data */
+    void *priv2; /* used by connection type specified data */
 };
 
 /* The connection module does not deal with listening and accepting sockets,

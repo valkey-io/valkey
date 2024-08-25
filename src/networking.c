@@ -2521,7 +2521,8 @@ void resetClient(client *c) {
     }
 }
 
-/* Initializes the shared query buffer to a new sds with the default capacity */
+/* Initializes the shared query buffer to a new sds with the default capacity.
+ * Need to ensure the initlen is not less than readlen in readToQueryBuf. */
 void initSharedQueryBuf(void) {
     thread_shared_qb = sdsnewlen(NULL, PROTO_IOBUF_LEN);
     sdsclear(thread_shared_qb);
@@ -3119,6 +3120,10 @@ void readToQueryBuf(client *c) {
         qblen = sdslen(c->querybuf);
     }
 
+    /* c->querybuf may be expanded. If so, the old thread_shared_qb will be released.
+     * Although we have ensured that c->querybuf will not be expanded in the current
+     * thread_shared_qb, we still add this check for code robustness. */
+    int use_thread_shared_qb = (c->querybuf == thread_shared_qb) ? 1 : 0;
     if (!is_primary && // primary client's querybuf can grow greedy.
         (big_arg || sdsalloc(c->querybuf) < PROTO_IOBUF_LEN)) {
         /* When reading a BIG_ARG we won't be reading more than that one arg
@@ -3136,6 +3141,8 @@ void readToQueryBuf(client *c) {
         /* Read as much as possible from the socket to save read(2) system calls. */
         readlen = sdsavail(c->querybuf);
     }
+    if (use_thread_shared_qb) serverAssert(c->querybuf == thread_shared_qb);
+
     c->nread = connRead(c->conn, c->querybuf + qblen, readlen);
     if (c->nread <= 0) {
         return;

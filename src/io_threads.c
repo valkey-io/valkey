@@ -1,3 +1,9 @@
+/*
+ * Copyright Valkey Contributors.
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ */
+
 #include "io_threads.h"
 
 static __thread int thread_id = 0; /* Thread local var */

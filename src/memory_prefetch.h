@@ -3,7 +3,6 @@
 
 struct client;
 
-void onMaxBatchSizeChange(void);
 void prefetchCommandsBatchInit(void);
 void processClientsCommandsBatch(void);
 int addCommandToBatchAndProcessIfFull(struct client *c);

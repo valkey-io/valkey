@@ -120,7 +120,6 @@ static void _dictExpandIfNeeded(dict *d);
 static void _dictShrinkIfNeeded(dict *d);
 static signed char _dictNextExp(unsigned long size);
 static int _dictInit(dict *d, dictType *type);
-dictEntry *dictGetNext(const dictEntry *de);
 static dictEntry **dictGetNextRef(dictEntry *de);
 static void dictSetNext(dictEntry *de, dictEntry *next);
 

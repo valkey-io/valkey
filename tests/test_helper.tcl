@@ -271,6 +271,18 @@ proc cleanup {} {
 proc test_server_main {} {
     if {!$::dont_pre_clean} cleanup
     set tclsh [info nameofexecutable]
+    
+    # Load the test override configuration file
+    set config_file "tests/test_override.conf"
+    set fp [open $config_file r]
+    set config_data [read $fp]
+    close $fp
+    foreach line [split $config_data "\n"] {
+        lappend ::global_overrides {*}$line
+    }
+    # Pass the configuration overrides to the test clients
+    lappend ::argv "--config" {*}$::global_overrides
+
     # Open a listening socket, trying different ports in order to find a
     # non busy one.
     set clientport [find_available_port [expr {$::baseport - 32}] 32]

@@ -256,13 +256,13 @@ static inline int connSetWriteHandlerWithBarrier(connection *conn, ConnectionCal
     return conn->type->set_write_handler(conn, func, barrier);
 }
 
-static inline void connShutdown(connection *conn, int is_rdb_channel) {
-    if (is_rdb_channel) {
+static inline void connShutdown(connection *conn, int force) {
+    if (force) {
         /*
-         * When using dual-channel replication, the replication channel connection
-         * may be blocked waiting for data from the replica. In such cases, we
-         * don't want the main process performing the shutdown to get blocked on
-         * read or write operations involving the replica connection.
+         * When the 'force' flag is set, we perform a forceful shutdown of the
+         * connection, regardless of whether it is currently blocked or not.
+         * This is useful in situations where we need to terminate the connection
+         * immediately, without waiting for any pending operations to complete.
          */
         shutdown(conn->fd, SHUT_RDWR);
     } else {

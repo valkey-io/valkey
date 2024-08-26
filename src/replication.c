@@ -2626,7 +2626,7 @@ static void fullSyncWithPrimary(connection *conn) {
             err = sendCommandArgv(conn, argc, args, lens);
             if (err) {
                 serverLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", err);
-                return;
+                goto cleanup;
             }
         }
         /* Send replica lisening port to primary for clarification */
@@ -2636,7 +2636,7 @@ static void fullSyncWithPrimary(connection *conn) {
         sdsfree(portstr);
         if (err) {
             serverLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", err);
-            return;
+            goto cleanup;
         }
         server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RECEIVE_AUTH_REPLY;
 
@@ -2646,7 +2646,7 @@ static void fullSyncWithPrimary(connection *conn) {
                       connGetInfo(conn, conninfo, sizeof(conninfo)));
             goto error;
         }
-        return;
+        goto cleanup;
     }
     if (server.repl_rdb_channel_state == REPL_DUAL_CHANNEL_RECEIVE_AUTH_REPLY && !server.primary_auth) {
         server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RECEIVE_REPLCONF_REPLY;
@@ -2662,9 +2662,8 @@ static void fullSyncWithPrimary(connection *conn) {
             serverLog(LL_WARNING, "Unable to AUTH to Primary: %s", err);
             goto error;
         }
-        sdsfree(err);
         server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RECEIVE_REPLCONF_REPLY;
-        return;
+        goto cleanup;
     }
     /* Receive replconf response */
     if (server.repl_rdb_channel_state == REPL_DUAL_CHANNEL_RECEIVE_REPLCONF_REPLY) {
@@ -2683,9 +2682,8 @@ static void fullSyncWithPrimary(connection *conn) {
             serverLog(LL_WARNING, "I/O error writing to Primary: %s", connGetLastError(conn));
             goto error;
         }
-        sdsfree(err);
         server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RECEIVE_ENDOFF;
-        return;
+        goto cleanup;
     }
     /* Receive end offset response */
     if (server.repl_rdb_channel_state == REPL_DUAL_CHANNEL_RECEIVE_ENDOFF) {
@@ -2695,8 +2693,7 @@ static void fullSyncWithPrimary(connection *conn) {
         if (err[0] == '\0') {
             /* Retry again later */
             serverLog(LL_DEBUG, "Received empty $ENDOFF response");
-            sdsfree(err);
-            return;
+            goto cleanup;
         }
         long long reploffset;
         char primary_replid[CONFIG_RUN_ID_SIZE + 1];
@@ -2707,7 +2704,6 @@ static void fullSyncWithPrimary(connection *conn) {
             serverLog(LL_WARNING, "Received unexpected $ENDOFF response: %s", err);
             goto error;
         }
-        sdsfree(err);
         server.rdb_client_id = rdb_client_id;
         server.primary_initial_offset = reploffset;
 
@@ -2734,7 +2730,7 @@ static void fullSyncWithPrimary(connection *conn) {
         server.repl_transfer_lastio = server.unixtime;
 
         server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RDB_LOAD;
-        return;
+        goto cleanup;
     }
 
 error:
@@ -2751,7 +2747,8 @@ error:
     server.repl_transfer_fd = -1;
     server.repl_state = REPL_STATE_CONNECT;
     replicationAbortDualChannelSyncTransfer();
-    return;
+cleanup:
+    sdsfree(err);
 }
 
 /* Replication: Replica side.
@@ -3208,8 +3205,7 @@ void setupMainConnForPsync(connection *conn) {
         err = sendCommand(conn, "REPLCONF", "set-rdb-client-id", llstr, NULL);
         if (err) goto error;
         server.repl_state = REPL_STATE_RECEIVE_CAPA_REPLY;
-        sdsfree(err);
-        return;
+        goto cleanup;
     }
 
     if (server.repl_state == REPL_STATE_RECEIVE_CAPA_REPLY) {
@@ -3231,7 +3227,7 @@ void setupMainConnForPsync(connection *conn) {
             cancelReplicationHandshake(1);
         }
         server.repl_state = REPL_STATE_RECEIVE_PSYNC_REPLY;
-        return;
+        goto cleanup;
     }
     psync_result = replicaTryPartialResynchronization(conn, 1);
     if (psync_result == PSYNC_WAIT_REPLY) return; /* Try again later... */
@@ -3244,15 +3240,16 @@ void setupMainConnForPsync(connection *conn) {
                                      "accept connections in read-write mode.\n");
         }
         dualChannelSyncHandlePsync();
-        return;
+        goto cleanup;
     }
 
 error:
-    sdsfree(err);
     /* The dual-channel sync session must be aborted for any psync_result other than PSYNC_CONTINUE or PSYNC_WAIT_REPLY.
      */
     serverLog(LL_WARNING, "Aborting dual channel sync. Main channel psync result %d", psync_result);
     cancelReplicationHandshake(1);
+cleanup:
+    sdsfree(err);
 }
 
 /*

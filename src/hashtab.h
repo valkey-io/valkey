@@ -26,26 +26,24 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef HASHSET_H
-#define HASHSET_H
+#ifndef HASHTAB_H
+#define HASHTAB_H
 
-/* Hash Set Implementation.
+/* Hash table implementation.
  *
- * This is a cache friendly hash table implementation. It uses an open
+ * This is a cache-friendly hash table implementation. It uses an open
  * addressing scheme with buckets of 64 bytes (one cache line).
- *
- * Functions and types are prefixed by "hashset", macros by "HASHSET".
  *
  * Terminology:
  *
- * hashset
+ * hashtab
  *         An instance of the data structure, a set of elements.
  *
  * key
- *         A key used for looking up an element in the hashset.
+ *         A key used for looking up an element in the hashtab.
  *
  * element
- *         An element in the hashset. This may be of the same type as the key,
+ *         An element in the hashtab. This may be of the same type as the key,
  *         or a struct containing a key and other fields.
  *
  * type
@@ -53,43 +51,56 @@
  *         function and how to get the key in an element.
  */
 
+#include <stddef.h>
 #include <stdint.h>
 
 /* --- Opaque types --- */
 
-typedef struct hashset hashset;
+typedef struct hashtab hashtab;
 
 /* --- Non-opaque types --- */
 
-/* The hashsetType is a set of callbacks for a hashset. */
+/* The hashtabType is a set of callbacks for a hashtab. All callbacks are
+ * optional. With all callbacks omitted, the hashtab is effectively a set of
+ * pointer-sized integers. */
 typedef struct {
     /* If the type of an element is not the same as the type of a key used for
      * lookup, this callback needs to return the key within an element. */
     const void *(*elementGetKey)(const void *element);
+    /* Hash function. Defaults to hashing the bits in the pointer. */
     uint64_t (*hashFunction)(const void *key);
-    int (*keyCompare)(hashset *s, const void *key1, const void *key2);
-    void (*elementDestructor)(hashset *s, void *elem);
+    /* Compare function, returns 0 if the keys are equal. Defaults to just
+     * comparing the pointes for equality. */
+    int (*keyCompare)(hashtab *s, const void *key1, const void *key2);
+    /* Callback to free an element when it's overwritten or deleted.
+     * Optional. */
+    void (*elementDestructor)(hashtab *s, void *elem);
+    /* Optional callback to control when resizing should be allowed. (Not implemented) */
     int (*resizeAllowed)(size_t moreMem, double usedRatio);
     /* Invoked at the start of rehashing. Both tables are already created. */
-    void (*rehashingStarted)(hashset *s);
+    void (*rehashingStarted)(hashtab *s);
     /* Invoked at the end of rehashing. Both tables still exist and are cleaned
      * up after this callback. */
-    void (*rehashingCompleted)(hashset *s);
-    /* Allow a hashset to carry extra caller-defined metadata. The extra memory
+    void (*rehashingCompleted)(hashtab *s);
+    /* Allow a hashtab to carry extra caller-defined metadata. The extra memory
      * is initialized to 0. */
     size_t (*getMetadataSize)(void);
     /* Allow the caller to store some data here in the type. It's useful for the
      * rehashingStarted and rehashingCompleted callbacks. */
     void *userdata;
-} hashsetType;
+} hashtabType;
 
 typedef enum {
-    HASHSET_RESIZE_ALLOW = 0,
-    HASHSET_RESIZE_AVOID,
-    HASHSET_RESIZE_FORBID,
-} hashsetResizePolicy;
+    HASHTAB_RESIZE_ALLOW = 0,
+    HASHTAB_RESIZE_AVOID,
+    HASHTAB_RESIZE_FORBID,
+} hashtabResizePolicy;
 
-/* TODO: Iterator, stats, scan callback typedefs, defrag functions */
+typedef void(*hashtabScanFunction)(void *privdata, void *element);
+
+/* TODO: Iterator, stats */
+
+/* Not needed: defrag functions (solved by emit_ref in scan) */
 
 /* TODO: Type flag to disable incremental rehashing. */
 
@@ -98,26 +109,29 @@ typedef enum {
 /* --- Prototypes --- */
 
 /* Hash function (global seed) */
-void hashsetSetHashFunctionSeed(uint8_t *seed);
-uint8_t *hashsetGetHashFunctionSeed(void);
-uint64_t hashsetGenHashFunction(const char *buf, size_t len);
-uint64_t hashsetGenCaseHashFunction(const char *buf, size_t len);
+void hashtabSetHashFunctionSeed(uint8_t *seed);
+uint8_t *hashtabGetHashFunctionSeed(void);
+uint64_t hashtabGenHashFunction(const char *buf, size_t len);
+uint64_t hashtabGenCaseHashFunction(const char *buf, size_t len);
 
 /* Global resize policy */
-void hashsetSetResizePolicy(hashsetResizePolicy policy);
+void hashtabSetResizePolicy(hashtabResizePolicy policy);
 
-hashset *hashsetCreate(hashsetType *type);
-hashsetType *hashsetGetType(hashset *s);
-void *hashsetMetadata(hashset *s);
-size_t hashsetNumBuckets(hashset *s);
-size_t hashsetCount(hashset *s);
-void hashtablePauseAutoResize(hashset *s);
-void hashsetResumeAutoResize(hashset *s);
-int hashsetIsRehashing(hashset *s);
+hashtab *hashtabCreate(hashtabType *type);
+hashtabType *hashtabGetType(hashtab *s);
+void *hashtabMetadata(hashtab *s);
+size_t hashtabSize(hashtab *s);
+void hashtabPauseAutoShrink(hashtab *s);
+void hashtabResumeAutoShrink(hashtab *s);
+int hashtabIsRehashing(hashtab *s);
 
-int hashsetFind(hashset *s, const void *key, void **found);
-int hashsetAdd(hashset *s, void *elem);
-int hashsetAddRaw(hashset *s, void *elem, void **existing);
-int hashsetReplace(hashset *s, void *elem);
+int hashtabExpandIfNeeded(hashtab *s);
+int hashtabShrinkIfNeeded(hashtab *s);
 
+int hashtabFind(hashtab *s, const void *key, void **found);
+int hashtabAdd(hashtab *s, void *elem);
+int hashtabAddRaw(hashtab *s, void *elem, void **existing);
+int hashtabReplace(hashtab *s, void *elem);
+
+size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *privdata, int emit_ref);
 #endif

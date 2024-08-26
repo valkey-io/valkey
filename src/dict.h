@@ -250,8 +250,4 @@ dictStats *dictGetStatsHt(dict *d, int htidx, int full);
 void dictCombineStats(dictStats *from, dictStats *into);
 void dictFreeStats(dictStats *stats);
 
-#ifdef SERVER_TEST
-int dictTest(int argc, char *argv[], int flags);
-#endif
-
 #endif /* __DICT_H */

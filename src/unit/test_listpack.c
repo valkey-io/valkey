@@ -1167,7 +1167,7 @@ int test_listpackLpValidateIntegrity(int argc, char **argv, int flags) {
 }
 
 
-int test_listpackNumberOfElemetsExceedsLP_HDR_NUMELE_UNKNOWN(int argc, char **argv, int flags) {
+int test_listpackNumberOfElementsExceedsLP_HDR_NUMELE_UNKNOWN(int argc, char **argv, int flags) {
     // Test number of elements exceeds LP_HDR_NUMELE_UNKNOWN
     UNUSED(argc);
     UNUSED(argv);

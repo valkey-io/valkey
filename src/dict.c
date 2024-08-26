@@ -882,7 +882,7 @@ void dictTwoPhaseUnlinkFree(dict *d, dictEntry *he, dictEntry **plink, int table
             dictEntryNoValue *_de = decodeEntryNoValue(de);                                                            \
             _de->key = k;                                                                                              \
         } else {                                                                                                       \
-            assert(!"Entry type not supported");                                                                       \
+            panic("Entry type not supported");                                                                       \
         }                                                                                                              \
     }
 #define DICT_SET_VALUE(de, field, val)                                                                                 \
@@ -894,7 +894,7 @@ void dictTwoPhaseUnlinkFree(dict *d, dictEntry *he, dictEntry **plink, int table
             dictEntryEmbedded *_de = decodeEntryEmbedded(de);                                                          \
             _de->field = val;                                                                                          \
         } else {                                                                                                       \
-            assert(!"Entry type not supported");                                                                       \
+            panic("Entry type not supported");                                                                       \
         }                                                                                                              \
     }
 #define DICT_INCR_VALUE(de, field, val)                                                                                \
@@ -906,18 +906,18 @@ void dictTwoPhaseUnlinkFree(dict *d, dictEntry *he, dictEntry **plink, int table
             dictEntryEmbedded *_de = decodeEntryEmbedded(de);                                                          \
             _de->field += val;                                                                                         \
         } else {                                                                                                       \
-            assert(!"Entry type not supported");                                                                       \
+            panic("Entry type not supported");                                                                       \
         }                                                                                                              \
     }
 #define DICT_GET_VALUE(de, field)                                                                                      \
     (entryIsNormal(de)                                                                                                 \
          ? decodeEntryNormal(de)->field                                                                                \
          : (entryIsEmbedded(de) ? decodeEntryEmbedded(de)->field                                                       \
-                                : (assert(!"Entry type not supported"), ((dictEntryNormal *)de)->field)))
+                                : (panic("Entry type not supported"), ((dictEntryNormal *)de)->field)))
 #define DICT_GET_VALUE_PTR(de, field)                                                                                  \
     (entryIsNormal(de)                                                                                                 \
          ? &decodeEntryNormal(de)->field                                                                               \
-         : (entryIsEmbedded(de) ? &decodeEntryEmbedded(de)->field : (assert(!"Entry type not supported"), NULL)))
+         : (entryIsEmbedded(de) ? &decodeEntryEmbedded(de)->field : (panic("Entry type not supported"), NULL)))
 
 void dictSetKey(dict *d, dictEntry *de, void *key) {
     void *k = d->type->keyDup ? d->type->keyDup(d, key) : key;
@@ -1031,7 +1031,7 @@ size_t dictEntryMemUsage(dictEntry *de) {
     else if (entryIsEmbedded(de))
         return zmalloc_size(decodeEntryEmbedded(de));
     else
-        assert(!"Entry type not supported");
+        panic("Entry type not supported");
     return 0;
 }
 

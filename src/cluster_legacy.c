@@ -3320,7 +3320,7 @@ int clusterProcessPacket(clusterLink *link) {
 
                     /* The later updateShardId may change myself shard_id, and we
                      * need to remember whether this change has occurred. */
-                    if (sender_claimed_primary->shard_id && myself != sender && myself->replicaof == sender) {
+                    if (myself != sender && myself->replicaof == sender) {
                         myself_shard_id_changed = 1;
                     }
 

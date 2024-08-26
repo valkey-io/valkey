@@ -4644,7 +4644,7 @@ int processIOThreadsReadDone(void) {
         c->flag.pending_read = 0;
         c->io_read_state = CLIENT_IDLE;
 
-        /* Don't post-process-reads to clients that are going to be closed anyway. */
+        /* Don't post-process-reads from clients that are going to be closed anyway. */
         if (c->flag.close_asap) continue;
 
         /* If a client is protected, don't do anything,

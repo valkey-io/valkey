@@ -3162,6 +3162,8 @@ int clusterProcessPacket(clusterLink *link) {
 
     /* PING, PONG, MEET: process config information. */
     if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_PONG || type == CLUSTERMSG_TYPE_MEET) {
+        int myself_shard_id_changed = 0;
+
         serverLog(LL_DEBUG, "%s packet received: %.40s", clusterGetMessageTypeString(type),
                   link->node ? link->node->name : "NULL");
 
@@ -3312,9 +3314,15 @@ int clusterProcessPacket(clusterLink *link) {
                     if (sender->replicaof) clusterNodeRemoveReplica(sender->replicaof, sender);
                     serverLog(LL_NOTICE, "Node %.40s (%s) is now a replica of node %.40s (%s) in shard %.40s",
                               sender->name, sender->human_nodename, sender_claimed_primary->name,
-                              sender_claimed_primary->human_nodename, sender->shard_id);
+                              sender_claimed_primary->human_nodename, sender_claimed_primary->shard_id);
                     clusterNodeAddReplica(sender_claimed_primary, sender);
                     sender->replicaof = sender_claimed_primary;
+
+                    /* The later updateShardId may change myself shard_id, and we
+                     * need to remember whether this change has occurred. */
+                    if (sender_claimed_primary->shard_id && myself != sender && myself->replicaof == sender) {
+                        myself_shard_id_changed = 1;
+                    }
 
                     /* Update the shard_id when a replica is connected to its
                      * primary in the very first time. */
@@ -3398,7 +3406,14 @@ int clusterProcessPacket(clusterLink *link) {
              * so we can try a psync. */
             serverLog(LL_NOTICE, "I'm a sub-replica! Reconfiguring myself as a replica of %.40s from %.40s",
                       myself->replicaof->replicaof->name, myself->replicaof->name);
-            clusterSetPrimary(myself->replicaof->replicaof, 1, !areInSameShard(myself->replicaof->replicaof, myself));
+            if (myself_shard_id_changed) {
+                /* If myself shard_id changes during the clusterProcessPacket, myself
+                 * will not be able to psync with the new shard. */
+                clusterSetPrimary(myself->replicaof->replicaof, 1, 1);
+            } else {
+                int are_in_same_shard = areInSameShard(myself->replicaof->replicaof, myself);
+                clusterSetPrimary(myself->replicaof->replicaof, 1, !are_in_same_shard);
+            }
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
         }
 

@@ -82,30 +82,34 @@ int test_add_and_find(int argc, char **argv, int flags) {
         .keyCompare = keycmp,
         .elementDestructor = freekeyval,
     };
-    hashtab *ht = hashtabCreate(&keyval_type);
+    hashtab *t = hashtabCreate(&keyval_type);
     int j;
 
+    /* Add */
     for (j = 0; j < count; j++) {
         char key[32], val[32];
         snprintf(key, sizeof(key), "%d", j);
         snprintf(val, sizeof(val), "%d", count - j + 42);
         keyval *e = create_keyval(key, val);
-        assert(hashtabAdd(ht, e));
+        assert(hashtabAdd(t, e));
     }
 
     printf("Bucket fill: ");
-    hashtabHistogram(ht);
-    //hashtabDump(ht);
+    hashtabHistogram(t);
+    //hashtabDump(t);
 
+    /* Find */
     for (j = 0; j < count; j++) {
         char key[32], val[32];
         snprintf(key, sizeof(key), "%d", j);
         snprintf(val, sizeof(val), "%d", count - j + 42);
         keyval *e;
-        assert(hashtabFind(ht, key, (void **)&e));
+        assert(hashtabFind(t, key, (void **)&e));
         assert(!strcmp(val, getval(e)));
-        //printf("Key %s => %s\n", (char *)getkey(e), (char *)getval(e));
     }
+
+    /* Release memory */
+    hashtabRelease(t);
 
     return 0;
 }
@@ -145,12 +149,15 @@ int test_scan(int argc, char **argv, int flags) {
     /* Populate */
     for (j = 0; j < count; j++) {
         long existing = 0;
-        int ret = hashtabAddRaw(t, (void *)j, (void**)&existing);
+        int ret = hashtabAddOrFind(t, (void *)j, (void**)&existing);
         /* int ret = hashtabAdd(t, (void *)j); */
         if (!ret) {
             /* printf("Add failed for %ld, ret = %d\n", j, ret); */
             printf("Add failed for %ld, existing = %ld\n", j, existing);
         }
+        /* Sample some iterations and check for the longest probing chain. This
+         * isn't for the unit test, but for tuning the fill factor and for
+         * debugging. */
         if (j % (count / 13) == 0) {
             int longest_chainlen = hashtabLongestProbingChain(t);
             if (longest_chainlen > max_chainlen_seen) {
@@ -162,6 +169,7 @@ int test_scan(int argc, char **argv, int flags) {
     printf("Added %lu elements. Longest chain seen: %d.\n",
            count, max_chainlen_seen);
     if (0) {
+        /* Too large output for hugh tables. */
         printf("Bucket fill: ");
         hashtabHistogram(t);
     }

@@ -31,13 +31,17 @@
 
 /* Hash table implementation.
  *
- * This is a cache-friendly hash table implementation. It uses an open
- * addressing scheme with buckets of 64 bytes (one cache line).
+ * This is a cache-friendly hash table implementation. For details about the
+ * implementation and documentation of functions, se comments in hashtab.c.
+ *
+ * The elements in a hashtab are of a user-defined type, but an element needs to
+ * contain a key. It can represent a key-value entry, or it can be just a key,
+ * if set semantics are desired.
  *
  * Terminology:
  *
  * hashtab
- *         An instance of the data structure, a set of elements.
+ *         An instance of the data structure.
  *
  * key
  *         A key used for looking up an element in the hashtab.
@@ -71,17 +75,17 @@ typedef struct {
     uint64_t (*hashFunction)(const void *key);
     /* Compare function, returns 0 if the keys are equal. Defaults to just
      * comparing the pointes for equality. */
-    int (*keyCompare)(hashtab *s, const void *key1, const void *key2);
+    int (*keyCompare)(hashtab *t, const void *key1, const void *key2);
     /* Callback to free an element when it's overwritten or deleted.
      * Optional. */
-    void (*elementDestructor)(hashtab *s, void *elem);
+    void (*elementDestructor)(hashtab *t, void *elem);
     /* Optional callback to control when resizing should be allowed. (Not implemented) */
     int (*resizeAllowed)(size_t moreMem, double usedRatio);
     /* Invoked at the start of rehashing. Both tables are already created. */
-    void (*rehashingStarted)(hashtab *s);
+    void (*rehashingStarted)(hashtab *t);
     /* Invoked at the end of rehashing. Both tables still exist and are cleaned
      * up after this callback. */
-    void (*rehashingCompleted)(hashtab *s);
+    void (*rehashingCompleted)(hashtab *t);
     /* Allow a hashtab to carry extra caller-defined metadata. The extra memory
      * is initialized to 0. */
     size_t (*getMetadataSize)(void);
@@ -109,7 +113,7 @@ typedef void(*hashtabScanFunction)(void *privdata, void *element);
 /* --- Prototypes --- */
 
 /* Hash function (global seed) */
-void hashtabSetHashFunctionSeed(uint8_t *seed);
+void hashtabSetHashFunctionSeed(const uint8_t *seed);
 uint8_t *hashtabGetHashFunctionSeed(void);
 uint64_t hashtabGenHashFunction(const char *buf, size_t len);
 uint64_t hashtabGenCaseHashFunction(const char *buf, size_t len);
@@ -117,21 +121,28 @@ uint64_t hashtabGenCaseHashFunction(const char *buf, size_t len);
 /* Global resize policy */
 void hashtabSetResizePolicy(hashtabResizePolicy policy);
 
+/* Hashtable instance */
 hashtab *hashtabCreate(hashtabType *type);
-hashtabType *hashtabGetType(hashtab *s);
-void *hashtabMetadata(hashtab *s);
-size_t hashtabSize(hashtab *s);
-void hashtabPauseAutoShrink(hashtab *s);
-void hashtabResumeAutoShrink(hashtab *s);
-int hashtabIsRehashing(hashtab *s);
+void hashtabRelease(hashtab *t);
+hashtabType *hashtabGetType(hashtab *t);
+void *hashtabMetadata(hashtab *t);
+size_t hashtabSize(hashtab *t);
+void hashtabPauseAutoShrink(hashtab *t);
+void hashtabResumeAutoShrink(hashtab *t);
+int hashtabIsRehashing(hashtab *t);
+int hashtabExpand(hashtab *t, size_t size);
+int hashtabTryExpand(hashtab *t, size_t size);
+int hashtabExpandIfNeeded(hashtab *t);
+int hashtabShrinkIfNeeded(hashtab *t);
 
-int hashtabExpandIfNeeded(hashtab *s);
-int hashtabShrinkIfNeeded(hashtab *s);
+/* Elements */
+int hashtabFind(hashtab *t, const void *key, void **found);
+int hashtabAdd(hashtab *t, void *elem);
+int hashtabAddOrFind(hashtab *t, void *elem, void **existing);
+int hashtabReplace(hashtab *t, void *elem);
+int hashtabPop(hashtab *t, const void *key, void **popped);
+int hashtabDelete(hashtab *t, const void *key);
 
-int hashtabFind(hashtab *s, const void *key, void **found);
-int hashtabAdd(hashtab *s, void *elem);
-int hashtabAddRaw(hashtab *s, void *elem, void **existing);
-int hashtabReplace(hashtab *s, void *elem);
-
+/* Iteration */
 size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *privdata, int emit_ref);
 #endif

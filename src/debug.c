@@ -37,6 +37,7 @@
 #include "cluster.h"
 #include "threads_mngr.h"
 #include "io_threads.h"
+#include "sds.h"
 
 #include <arpa/inet.h>
 #include <signal.h>
@@ -682,7 +683,7 @@ void debugCommand(client *c) {
             addReplyStatusFormat(c,
                                  "key_sds_len:%lld, key_sds_avail:%lld, key_zmalloc: %lld, "
                                  "val_sds_len:%lld, val_sds_avail:%lld, val_zmalloc: %lld",
-                                 (long long)sdslen(key), (long long)sdsavail(key), (long long)sdsZmallocSize(key),
+                                 (long long)sdslen(key), (long long)sdsavail(key), (long long)sdsAllocSize(key),
                                  (long long)sdslen(val->ptr), (long long)sdsavail(val->ptr),
                                  (long long)getStringObjectSdsUsedMemory(val));
         }

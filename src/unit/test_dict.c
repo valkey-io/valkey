@@ -219,18 +219,6 @@ int test_dictDisableResizeReduceTo3(int argc, char **argv, int flags) {
     return 0;
 }
 
-int test_dictRelease(int argc, char **argv, int flags) {
-    /* Restore to original state */
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-
-    dictRelease(_dict);
-
-    return 0;
-}
-
-
 int test_dictDeleteOneKeyTriggerResizeAgain(int argc, char **argv, int flags) {
     /* Delete one more key, trigger the dict resize */
     UNUSED(argc);
@@ -257,6 +245,16 @@ int test_dictDeleteOneKeyTriggerResizeAgain(int argc, char **argv, int flags) {
     return 0;
 }
 
+int test_dictRelease(int argc, char **argv, int flags) {
+    /* Restore to original state */
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    dictRelease(_dict);
+
+    return 0;
+}
 
 int test_dictBenchmark(int argc, char **argv, int flags) {
     long j;

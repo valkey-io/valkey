@@ -63,7 +63,7 @@ int test_dictCreate(int argc, char **argv, int flags) {
 
 
 int test_dictAdd16Keys(int argc, char **argv, int flags) {
-    // Add 16 keys and verify dict resize is ok
+    /* Add 16 keys and verify dict resize is ok */
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -82,7 +82,7 @@ int test_dictAdd16Keys(int argc, char **argv, int flags) {
 
 
 int test_dictDisableResize(int argc, char **argv, int flags) {
-    // Use DICT_RESIZE_AVOID to disable the dict resize and pad to (dict_force_resize_ratio * 16)
+    /* Use DICT_RESIZE_AVOID to disable the dict resize and pad to (dict_force_resize_ratio * 16) */
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -104,7 +104,7 @@ int test_dictDisableResize(int argc, char **argv, int flags) {
 
 
 int test_dictAddOneKeyTriggerResize(int argc, char **argv, int flags) {
-    // Add one more key, trigger the dict resize
+    /* Add one more key, trigger the dict resize */
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -129,7 +129,7 @@ int test_dictAddOneKeyTriggerResize(int argc, char **argv, int flags) {
 
 
 int test_dictDeleteKeys(int argc, char **argv, int flags) {
-    // Delete keys until we can trigger shrink in next test
+    /* Delete keys until we can trigger shrink in next test */
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -151,7 +151,7 @@ int test_dictDeleteKeys(int argc, char **argv, int flags) {
 
 
 int test_dictDeleteOneKeyTriggerResize(int argc, char **argv, int flags) {
-    // Delete one more key, trigger the dict resize
+    /* Delete one more key, trigger the dict resize */
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -178,7 +178,7 @@ int test_dictDeleteOneKeyTriggerResize(int argc, char **argv, int flags) {
 
 
 int test_dictEmptyDirAdd128Keys(int argc, char **argv, int flags) {
-    // Empty the dictionary and add 128 keys
+    /* Empty the dictionary and add 128 keys */
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -197,7 +197,7 @@ int test_dictEmptyDirAdd128Keys(int argc, char **argv, int flags) {
 
 
 int test_dictDisableResizeReduceTo3(int argc, char **argv, int flags) {
-    // Use DICT_RESIZE_AVOID to disable the dict resize and reduce to 3
+    /* Use DICT_RESIZE_AVOID to disable the dict resize and reduce to 3 */
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -220,7 +220,7 @@ int test_dictDisableResizeReduceTo3(int argc, char **argv, int flags) {
 }
 
 int test_dictRelease(int argc, char **argv, int flags) {
-    // Restore to original state
+    /* Restore to original state */
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -232,7 +232,7 @@ int test_dictRelease(int argc, char **argv, int flags) {
 
 
 int test_dictDeleteOneKeyTriggerResizeAgain(int argc, char **argv, int flags) {
-    // Delete one more key, trigger the dict resize
+    /* Delete one more key, trigger the dict resize */
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);

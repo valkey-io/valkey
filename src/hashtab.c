@@ -36,7 +36,7 @@
  *
  * - Incremental rehashing using two tables.
  *
- * - Stateless interation using 'scan'.
+ * - Stateless iteration using 'scan'.
  *
  * - A hash table contains pointer-sized elements rather than key-value entries.
  *   Using it as a set is strait-forward. Using it as a key-value store requires
@@ -93,7 +93,7 @@ static hashtabResizePolicy resize_policy = HASHTAB_RESIZE_ALLOW;
 
 /* --- Fill factor --- */
 
-/* We use a soft and a hard limit for the minumum and maximum fill factor. The
+/* We use a soft and a hard limit for the minimum and maximum fill factor. The
  * hard limits are used when resizing should be avoided, according to the resize
  * policy. Resizing is typically to be avoided when we have forked child process
  * running. Then, we don't want to move too much memory around, since the fork

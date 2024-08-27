@@ -279,14 +279,11 @@ void pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
             clients = dictCreate(&clientDictType);
             kvstoreDictSetVal(*type.serverPubSubChannels, slot, de, clients);
             incrRefCount(channel);
-            serverLog(LL_WARNING, "The channel count is %d", type.subscriptionCount(c));
         }
 
         serverAssert(dictAdd(clients, c, NULL) != DICT_ERR);
         serverAssert(dictInsertAtPosition(type.clientPubSubChannels(c), channel, position));
         incrRefCount(channel);
-        serverLog(LL_WARNING, "The channel count is %d", type.subscriptionCount(c));
-	
     }
 }
 

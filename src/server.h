@@ -79,6 +79,7 @@ typedef long long ustime_t; /* microsecond time type. */
                            N-elements flat arrays */
 #include "rax.h"        /* Radix tree */
 #include "connection.h" /* Connection abstraction */
+#include "memory_prefetch.h"
 
 #define VALKEYMODULE_CORE 1
 typedef struct serverObject robj;
@@ -1756,6 +1757,7 @@ struct valkeyServer {
     int io_threads_do_reads;                  /* Read and parse from IO threads? */
     int active_io_threads_num;                /* Current number of active IO threads, includes main thread. */
     int events_per_io_thread;                 /* Number of events on the event loop to trigger IO threads activation. */
+    int prefetch_batch_max_size;              /* Maximum number of keys to prefetch in a single batch */
     long long events_processed_while_blocked; /* processEventsWhileBlocked() */
     int enable_protected_configs; /* Enable the modification of protected configs, see PROTECTED_ACTION_ALLOWED_* */
     int enable_debug_cmd;         /* Enable DEBUG commands, see PROTECTED_ACTION_ALLOWED_* */
@@ -1837,6 +1839,8 @@ struct valkeyServer {
     long long stat_total_writes_processed;             /* Total number of write events processed */
     long long stat_client_qbuf_limit_disconnections;   /* Total number of clients reached query buf length limit */
     long long stat_client_outbuf_limit_disconnections; /* Total number of clients reached output buf length limit */
+    long long stat_total_prefetch_entries;             /* Total number of prefetched dict entries */
+    long long stat_total_prefetch_batches;             /* Total number of prefetched batches */
     /* The following two are used to track instantaneous metrics, like
      * number of operations per second, network traffic. */
     struct {

@@ -533,9 +533,29 @@ int pubsubPublishMessage(robj *channel, robj *message, int sharded) {
  * Pubsub commands implementation
  *----------------------------------------------------------------------------*/
 
+void addPubSubChannel(client *c, pubsubtype type) {
+    int j;
+    struct ClientFlags old_flags = c->flag;
+    c->flag.pushing = 1;
+    int number = (c->argc - 1) * 3;
+
+    if (c->resp == 2)
+        addReply(c, shared.mbulkhdr[number]);
+    else
+        addReplyPushLen(c, number);
+
+    for (j = 1; j < c->argc; j++) {
+        pubsubSubscribeChannel(c, c->argv[j], type);
+        addReply(c, *type.subscribeMsg);
+        addReplyBulk(c, c->argv[j]);
+        addReplyLongLong(c, type.subscriptionCount(c));
+    }
+    if (!old_flags.pushing) c->flag.pushing = 0;
+}
+
+
 /* SUBSCRIBE channel [channel ...] */
 void subscribeCommand(client *c) {
-    int j;
     if (c->flag.deny_blocking && !c->flag.multi) {
         /**
          * A client that has CLIENT_DENY_BLOCKING flag on
@@ -547,23 +567,7 @@ void subscribeCommand(client *c) {
         addReplyError(c, "SUBSCRIBE isn't allowed for a DENY BLOCKING client");
         return;
     }
-
-    struct ClientFlags old_flags = c->flag;
-    c->flag.pushing = 1;
-    int number = (c->argc - 1) * 3;
-
-    if (c->resp == 2)
-        addReply(c, shared.mbulkhdr[number]);
-    else
-        addReplyPushLen(c, number);
-
-    for (j = 1; j < c->argc; j++) {
-        pubsubSubscribeChannel(c, c->argv[j], pubSubType);
-        addReply(c, *pubSubType.subscribeMsg);
-        addReplyBulk(c, c->argv[j]);
-        addReplyLongLong(c, pubSubType.subscriptionCount(c));
-    }
-    if (!old_flags.pushing) c->flag.pushing = 0;
+    addPubSubChannel(c, pubSubType);
 
     markClientAsPubSub(c);
 }
@@ -730,24 +734,8 @@ void ssubscribeCommand(client *c) {
         addReplyError(c, "SSUBSCRIBE isn't allowed for a DENY BLOCKING client");
         return;
     }
-    int j;
 
-    struct ClientFlags old_flags = c->flag;
-    c->flag.pushing = 1;
-    int number = (c->argc - 1) * 3;
-
-    if (c->resp == 2)
-        addReply(c, shared.mbulkhdr[number]);
-    else
-        addReplyPushLen(c, number);
-
-    for (j = 1; j < c->argc; j++) {
-        pubsubSubscribeChannel(c, c->argv[j], pubSubShardType);
-        addReply(c, *pubSubShardType.subscribeMsg);
-        addReplyBulk(c, c->argv[j]);
-        addReplyLongLong(c, pubSubShardType.subscriptionCount(c));
-    }
-    if (!old_flags.pushing) c->flag.pushing = 0;
+    addPubSubChannel(c, pubSubShardType);
     markClientAsPubSub(c);
 }
 

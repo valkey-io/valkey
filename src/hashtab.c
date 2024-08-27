@@ -280,17 +280,27 @@ static inline void freeElement(hashtab *t, void *elem) {
 }
 
 static inline int compareKeys(hashtab *t, const void *key1, const void *key2) {
-    return t->type->keyCompare ? t->type->keyCompare(t, key1, key2)
-                               : key1 != key2;
+    if (t->type->keyCompare != NULL) {
+        return t->type->keyCompare(t, key1, key2);
+    } else {
+        return key1 != key2;
+    }
 }
 
 static inline const void *elementGetKey(hashtab *t, const void *elem) {
-    return t->type->elementGetKey ? t->type->elementGetKey(elem) : elem;
+    if (t->type->elementGetKey != NULL) {
+        return t->type->elementGetKey(elem);
+    } else {
+        return elem;
+    }
 }
 
 static inline uint64_t hashKey(hashtab *t, const void *key) {
-    return t->type->hashFunction ? t->type->hashFunction(key)
-        : hashtabGenHashFunction((const char *)&key, sizeof(key));
+    if (t->type->hashFunction != NULL) {
+        return t->type->hashFunction(key);
+    } else {
+        return hashtabGenHashFunction((const char *)&key, sizeof(key));
+    }
 }
 
 static inline uint64_t hashElement(hashtab *t, const void *elem) {
@@ -403,8 +413,7 @@ static void rehashStep(hashtab *t) {
          * just use idx has the hash, but only if we know that probing didn't
          * push this element away from its primary bucket, so only if the
          * bucket before the current one hasn't ever been full. */
-        if (t->bucketExp[1] < t->bucketExp[0] &&
-            !t->tables[0][prevCursor(idx, expToMask(t->bucketExp[0]))].everfull) {
+        if (t->bucketExp[1] < t->bucketExp[0] && !t->tables[0][prevCursor(idx, expToMask(t->bucketExp[0]))].everfull) {
             hash = idx;
         } else {
             hash = hashElement(t, elem);
@@ -567,7 +576,7 @@ static void hashtabInsert(hashtab *t, uint64_t hash, void *elem) {
     hashtabBucket *b = hashtabFindBucketForInsert(t, hash, &i);
     b->elements[i] = elem;
     b->presence |= (1 << i);
-    b->hashes[i] = highBits(hash);;
+    b->hashes[i] = highBits(hash);
     b->everfull |= bucketIsFull(b);
     t->used[hashtabIsRehashing(t) ? 1 : 0]++;
 }
@@ -809,7 +818,6 @@ int hashtabDelete(hashtab *t, const void *key) {
  * passed to the scan function instead of the actual element.
  */
 size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *privdata, int emit_ref) {
-
     if (hashtabSize(t) == 0) return 0;
 
     /* Prevent elements from being moved around as a side-effect of the scan
@@ -883,7 +891,8 @@ size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *priv
                 /* Continue while bits covered by mask difference is non-zero */
             } while (cursor & (mask0 ^ mask1));
         }
-    } while (in_probe_sequence);
+    }
+    while (in_probe_sequence);
 
     hashtabResumeRehashing(t);
 
@@ -911,10 +920,7 @@ void hashtabDump(hashtab *t) {
 }
 
 void hashtabHistogram(hashtab *t) {
-    //const char *symb = ".:-+x*=#";
-    //const char *symb = ".123456#";
     for (int table = 0; table <= 1; table++) {
-        //printf("Table %d elements per bucket:", table);
         for (size_t idx = 0; idx < numBuckets(t->bucketExp[table]); idx++) {
             hashtabBucket *b = &t->tables[table][idx];
             char c = b->presence == 0 && b->everfull ? 'X' : '0' + __builtin_popcount(b->presence);

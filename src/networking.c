@@ -922,8 +922,8 @@ void setDeferredPushLen(client *c, void *node, long length) {
 }
 
 /* Prepare a client for future writes. This is used so that we can
- * skip a large number of called to prepareClientToWrite when
- * a produces a lot of discrete elements in its output. */
+ * skip a large number of calls to prepareClientToWrite when
+ * a command produces a lot of discrete elements in its output. */
 writePreparedClient *prepareClientForFutureWrites(client *c) {
     if (prepareClientToWrite(c) == C_OK) {
         return (writePreparedClient *)c;

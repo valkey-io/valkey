@@ -591,12 +591,9 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
     /* Sometimes it could be normal that a replica replies to a primary with
      * an error and this function gets called. Actually the error will never
      * be sent because addReply*() against primary clients has no effect...
-     * A notable example is:
      *
-     *    EVAL 'redis.call("incr",KEYS[1]); redis.call("nonexisting")' 1 x
-     *
-     * Where the primary must propagate the first change even if the second
-     * will produce an error. However it is useful to log such events since
+     * It can happen when the versions are different and replica cannot recognize
+     * the commands sent by the primary. However it is useful to log such events since
      * they are rare and may hint at errors in a script or a bug in the server. */
     int ctype = getClientType(c);
     if (ctype == CLIENT_TYPE_PRIMARY || ctype == CLIENT_TYPE_REPLICA || c->id == CLIENT_ID_AOF) {

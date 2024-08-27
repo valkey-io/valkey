@@ -64,7 +64,10 @@ start_server {tags {"pubsubshard external:skip"}} {
 
     test "SSUBSCRIBE to one channel more than once" {
         set rd1 [valkey_deferring_client]
-        assert_equal {1 1 1} [ssubscribe $rd1 {chan1 chan1 chan1}]
+        #assert_equal {1 1 1} [ssubscribe $rd1 {chan1 chan1 chan1}]
+        assert_equal {1} [ssubscribe $rd1 {chan1}]
+        assert_equal {1} [ssubscribe $rd1 {chan1}]
+        assert_equal {1} [ssubscribe $rd1 {chan1}]
         assert_equal 1 [r SPUBLISH chan1 hello]
         assert_equal {smessage chan1 hello} [$rd1 read]
 

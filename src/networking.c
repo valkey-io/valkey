@@ -3239,7 +3239,7 @@ int isClientConnIpV6(client *c) {
 
 /* Concatenate a string representing the state of a client in a human
  * readable format, into the sds string 's'. */
-sds catClientInfoString(sds s, client *client, int mask_sensitive) {
+sds catClientInfoString(sds s, client *client, int hide_user_data) {
     if (!server.crashed) waitForClientIO(client);
     char flags[17], events[3], conninfo[CONN_INFO_LEN], *p;
 
@@ -3292,7 +3292,7 @@ sds catClientInfoString(sds s, client *client, int mask_sensitive) {
         " addr=%s", getClientPeerId(client),
         " laddr=%s", getClientSockname(client),
         " %s", connGetInfo(client->conn, conninfo, sizeof(conninfo)),
-        " name=%s", mask_sensitive ? "*redacted*" : (client->name ? (char*)client->name->ptr : ""),
+        " name=%s", hide_user_data ? "*redacted*" : (client->name ? (char*)client->name->ptr : ""),
         " age=%I", (long long)(commandTimeSnapshot() / 1000 - client->ctime),
         " idle=%I", (long long)(server.unixtime - client->last_interaction),
         " flags=%s", flags,
@@ -3314,7 +3314,7 @@ sds catClientInfoString(sds s, client *client, int mask_sensitive) {
         " tot-mem=%U", (unsigned long long) total_mem,
         " events=%s", events,
         " cmd=%s", client->lastcmd ? client->lastcmd->fullname : "NULL",
-        " user=%s", mask_sensitive ? "*redacted*" : (client->user ? client->user->name : "(superuser)"),
+        " user=%s", hide_user_data ? "*redacted*" : (client->user ? client->user->name : "(superuser)"),
         " redir=%I", (client->flag.tracking) ? (long long) client->client_tracking_redirection : -1,
         " resp=%i", client->resp,
         " lib-name=%s", client->lib_name ? (char*)client->lib_name->ptr : "",
@@ -3326,7 +3326,7 @@ sds catClientInfoString(sds s, client *client, int mask_sensitive) {
     return ret;
 }
 
-sds getAllClientsInfoString(int type, int mask_sensitive) {
+sds getAllClientsInfoString(int type, int hide_user_data) {
     listNode *ln;
     listIter li;
     client *client;
@@ -3336,7 +3336,7 @@ sds getAllClientsInfoString(int type, int mask_sensitive) {
     while ((ln = listNext(&li)) != NULL) {
         client = listNodeValue(ln);
         if (type != -1 && getClientType(client) != type) continue;
-        o = catClientInfoString(o, client, mask_sensitive);
+        o = catClientInfoString(o, client, hide_user_data);
         o = sdscatlen(o, "\n", 1);
     }
     return o;

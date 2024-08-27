@@ -1381,7 +1381,7 @@ typedef struct client {
         net_output_bytes_curr_cmd; /* Total network output bytes sent to this client, by the current command. */
 } client;
 
-/* When a command generates a lot of discrete elements to the client ouptut buffer, it is much faster to
+/* When a command generates a lot of discrete elements to the client output buffer, it is much faster to
  * skip certain types of initialization. This type is used to indicate a client that has been initialized
  * and can be used with addWritePreparedReply* functions. A client can be cast into this type with
  * prepareClientForFutureWrites(client *c). */

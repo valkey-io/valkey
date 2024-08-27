@@ -550,8 +550,8 @@ void subscribeCommand(client *c) {
 
     struct ClientFlags old_flags = c->flag;
     c->flag.pushing = 1;
-    int number = (c->argc-1) * 3;
-    
+    int number = (c->argc - 1) * 3;
+
     if (c->resp == 2)
         addReply(c, shared.mbulkhdr[number]);
     else

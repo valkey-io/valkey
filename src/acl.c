@@ -2678,7 +2678,7 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
     /* if we have a real client from the network, use it (could be missing on module timers) */
     client *realclient = server.current_client ? server.current_client : c;
 
-    le->cinfo = catClientInfoString(sdsempty(), realclient);
+    le->cinfo = catClientInfoString(sdsempty(), realclient, 0);
     le->context = context;
 
     /* Try to match this entry with past ones, to see if we can just

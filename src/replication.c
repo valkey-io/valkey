@@ -1050,7 +1050,7 @@ void syncCommand(client *c) {
             } else {
                 replicationUnsetPrimary();
             }
-            sds client = catClientInfoWithMask(sdsempty(), c, server.hide_user_data_from_log);
+            sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "PRIMARY MODE enabled (failover request from '%s')", client);
             sdsfree(client);
         } else {
@@ -3884,7 +3884,7 @@ void replicaofCommand(client *c) {
     if (!strcasecmp(c->argv[1]->ptr, "no") && !strcasecmp(c->argv[2]->ptr, "one")) {
         if (server.primary_host) {
             replicationUnsetPrimary();
-            sds client = catClientInfoWithMask(sdsempty(), c, server.hide_user_data_from_log);
+            sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "PRIMARY MODE enabled (user request from '%s')", client);
             sdsfree(client);
         }
@@ -3913,7 +3913,7 @@ void replicaofCommand(client *c) {
         /* There was no previous primary or the user specified a different one,
          * we can continue. */
         replicationSetPrimary(c->argv[1]->ptr, port);
-        sds client = catClientInfoWithMask(sdsempty(), c, server.hide_user_data_from_log);
+        sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
         serverLog(LL_NOTICE, "REPLICAOF %s:%d enabled (user request from '%s')", server.primary_host,
                   server.primary_port, client);
         sdsfree(client);

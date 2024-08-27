@@ -1232,7 +1232,7 @@ void AddReplyFromClient(client *dst, client *src) {
      * for some reason the output limits don't reach the same decision (maybe
      * they changed) */
     if (src->flag.close_asap) {
-        sds client = catClientInfoWithMask(sdsempty(), dst, server.hide_user_data_from_log);
+        sds client = catClientInfoString(sdsempty(), dst, server.hide_user_data_from_log);
         freeClientAsync(dst);
         serverLog(LL_WARNING, "Client %s scheduled to be closed ASAP for overcoming of output buffer limits.", client);
         sdsfree(client);
@@ -1789,7 +1789,7 @@ void logInvalidUseAndFreeClientAsync(client *c, const char *fmt, ...) {
     sds info = sdscatvprintf(sdsempty(), fmt, ap);
     va_end(ap);
 
-    sds client = catClientInfoWithMask(sdsempty(), c, server.hide_user_data_from_log);
+    sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
     serverLog(LL_WARNING, "%s, disconnecting it: %s", info, client);
 
     sdsfree(info);
@@ -2225,7 +2225,7 @@ void sendReplyToClient(connection *conn) {
 }
 
 void handleQbLimitReached(client *c) {
-    sds ci = catClientInfoWithMask(sdsempty(), c, server.hide_user_data_from_log), bytes = sdsempty();
+    sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log), bytes = sdsempty();
     bytes = sdscatrepr(bytes, c->querybuf, 64);
     serverLog(LL_WARNING, "Closing client that reached max query buffer length: %s (qbuf initial bytes: %s)", ci,
               bytes);
@@ -2255,7 +2255,7 @@ int handleReadResult(client *c) {
             }
         } else if (c->nread == 0) {
             if (server.verbosity <= LL_VERBOSE) {
-                sds info = catClientInfoWithMask(sdsempty(), c, server.hide_user_data_from_log);
+                sds info = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
                 serverLog(LL_VERBOSE, "Client closed connection %s", info);
                 sdsfree(info);
             }
@@ -2658,7 +2658,7 @@ void processInlineBuffer(client *c) {
 #define PROTO_DUMP_LEN 128
 static void setProtocolError(const char *errstr, client *c) {
     if (server.verbosity <= LL_VERBOSE || c->flag.primary) {
-        sds client = catClientInfoWithMask(sdsempty(), c, server.hide_user_data_from_log);
+        sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
 
         /* Sample some protocol to given an idea about what was inside. */
         char buf[256];
@@ -3239,7 +3239,7 @@ int isClientConnIpV6(client *c) {
 
 /* Concatenate a string representing the state of a client in a human
  * readable format, into the sds string 's'. */
-sds catClientInfoWithMask(sds s, client *client, int mask_sensitive) {
+sds catClientInfoString(sds s, client *client, int mask_sensitive) {
     if (!server.crashed) waitForClientIO(client);
     char flags[17], events[3], conninfo[CONN_INFO_LEN], *p;
 
@@ -3326,11 +3326,7 @@ sds catClientInfoWithMask(sds s, client *client, int mask_sensitive) {
     return ret;
 }
 
-sds catClientInfoString(sds s, client *client) {
-    return catClientInfoWithMask(s, client, 0);
-}
-
-sds getAllClientsInfoWithMask(int type, int mask_sensitive) {
+sds getAllClientsInfoString(int type, int mask_sensitive) {
     listNode *ln;
     listIter li;
     client *client;
@@ -3340,14 +3336,10 @@ sds getAllClientsInfoWithMask(int type, int mask_sensitive) {
     while ((ln = listNext(&li)) != NULL) {
         client = listNodeValue(ln);
         if (type != -1 && getClientType(client) != type) continue;
-        o = catClientInfoWithMask(o, client, mask_sensitive);
+        o = catClientInfoString(o, client, mask_sensitive);
         o = sdscatlen(o, "\n", 1);
     }
     return o;
-}
-
-sds getAllClientsInfoString(int type) {
-    return getAllClientsInfoWithMask(type, 0);
 }
 
 /* Check validity of an attribute that's gonna be shown in CLIENT LIST. */
@@ -3540,7 +3532,7 @@ NULL
         addReplyLongLong(c, c->id);
     } else if (!strcasecmp(c->argv[1]->ptr, "info") && c->argc == 2) {
         /* CLIENT INFO */
-        sds o = catClientInfoString(sdsempty(), c);
+        sds o = catClientInfoString(sdsempty(), c, 0);
         o = sdscatlen(o, "\n", 1);
         addReplyVerbatim(c, o, sdslen(o), "txt");
         sdsfree(o);
@@ -3565,7 +3557,7 @@ NULL
                 }
                 client *cl = lookupClientByID(cid);
                 if (cl) {
-                    o = catClientInfoString(o, cl);
+                    o = catClientInfoString(o, cl, 0);
                     o = sdscatlen(o, "\n", 1);
                 }
             }
@@ -3574,7 +3566,7 @@ NULL
             return;
         }
 
-        if (!o) o = getAllClientsInfoString(type);
+        if (!o) o = getAllClientsInfoString(type, 0);
         addReplyVerbatim(c, o, sdslen(o), "txt");
         sdsfree(o);
     } else if (!strcasecmp(c->argv[1]->ptr, "reply") && c->argc == 3) {
@@ -4411,7 +4403,7 @@ int closeClientOnOutputBufferLimitReached(client *c, int async) {
         (c->flag.close_asap && !(c->flag.protected_rdb_channel)))
         return 0;
     if (checkClientOutputBufferLimits(c)) {
-        sds client = catClientInfoWithMask(sdsempty(), c, server.hide_user_data_from_log);
+        sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
         /* Remove RDB connection protection on COB overrun */
 
         if (async || c->flag.protected_rdb_channel) {
@@ -4745,7 +4737,7 @@ void evictClients(void) {
         listNode *ln = listNext(&bucket_iter);
         if (ln) {
             client *c = ln->value;
-            sds ci = catClientInfoWithMask(sdsempty(), c, server.hide_user_data_from_log);
+            sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "Evicting client: %s", ci);
             freeClient(c);
             sdsfree(ci);

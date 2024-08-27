@@ -1843,7 +1843,7 @@ void logServerInfo(void) {
     }
     serverLogRaw(LL_WARNING | LL_RAW, infostring);
     serverLogRaw(LL_WARNING | LL_RAW, "\n------ CLIENT LIST OUTPUT ------\n");
-    clients = getAllClientsInfoString(-1);
+    clients = getAllClientsInfoWithMask(-1, server.hide_user_data_from_log);
     serverLogRaw(LL_WARNING | LL_RAW, clients);
     sdsfree(infostring);
     sdsfree(clients);
@@ -1878,7 +1878,7 @@ void logCurrentClient(client *cc, const char *title) {
     int j;
 
     serverLog(LL_WARNING | LL_RAW, "\n------ %s CLIENT INFO ------\n", title);
-    client = catClientInfoString(sdsempty(), cc);
+    client = catClientInfoWithMask(sdsempty(), cc, server.hide_user_data_from_log);
     serverLog(LL_WARNING | LL_RAW, "%s\n", client);
     sdsfree(client);
     serverLog(LL_WARNING | LL_RAW, "argc: '%d'\n", cc->argc);

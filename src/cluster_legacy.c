@@ -1198,7 +1198,15 @@ void clusterHandleServerShutdown(void) {
     clusterSaveConfig(1);
 
 #if !defined(__sun)
-    /* Unlock the cluster config file before shutdown, see clusterLockConfig. */
+    /* Unlock the cluster config file before shutdown, see clusterLockConfig.
+     *
+     * This is needed if you shutdown a very large server process, it will take
+     * a while for the OS to release resources and unlock the cluster configuration
+     * file. Therefore, if we immediately try to restart the server process, it
+     * may not be able to acquire the lock on the cluster configuration file and
+     * fail to start. We explicitly releases the lock on the cluster configuration
+     * file on shutdown, rather than relying on the OS to release the lock, which
+     * is a cleaner and safer way to release acquired resources. */
     if (server.cluster_config_file_lock_fd != -1) {
         flock(server.cluster_config_file_lock_fd, LOCK_UN | LOCK_NB);
     }

@@ -348,4 +348,20 @@ void setcpuaffinity(const char *cpulist);
 #endif
 #endif
 
+/* Check for GCC version >= 4.9 */
+#if defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 9))
+#define HAS_BUILTIN_PREFETCH 1
+/* Check for Clang version >= 3.6 */
+#elif defined(__clang__) && (__clang_major__ > 3 || (__clang_major__ == 3 && __clang_minor__ >= 6))
+#define HAS_BUILTIN_PREFETCH 1
+#else
+#define HAS_BUILTIN_PREFETCH 0
+#endif
+
+#if HAS_BUILTIN_PREFETCH
+#define valkey_prefetch(addr) __builtin_prefetch(addr)
+#else
+#define valkey_prefetch(addr) ((void)(addr))
+#endif
+
 #endif

@@ -69,7 +69,7 @@ static inline int _test_assert(int c) {
     TEST_ASSERT(c);
     return 0;
 }
-static unsigned char *pop(unsigned char *lp, int where, uint64_t expected) {
+static unsigned char *pop(unsigned char *lp, int where, void *expected) {
     unsigned char *p, *vstr;
     int64_t vlen;
 
@@ -79,7 +79,7 @@ static unsigned char *pop(unsigned char *lp, int where, uint64_t expected) {
     if (vstr) {
         _test_assert(strcmp((const char *)vstr, (const char *)expected));
     } else {
-        _test_assert(vlen == (int64_t)expected);
+        _test_assert(vlen == *(int64_t *)expected);
     }
 
     return lpDelete(lp, p, &p);
@@ -227,12 +227,14 @@ int test_listpackPop(int argc, char **argv, int flags) {
     UNUSED(flags);
 
     unsigned char *lp;
+    int64_t expected;
 
     lp = createList();
-    lp = pop(lp, 1, 1024);
-    lp = pop(lp, 0, (uint64_t) "hello");
-    lp = pop(lp, 1, (uint64_t) "quux");
-    lp = pop(lp, 1, (uint64_t) "foo");
+    expected = 1024;
+    lp = pop(lp, 1, &expected);
+    lp = pop(lp, 0, "hello");
+    lp = pop(lp, 1, "quux");
+    lp = pop(lp, 1, "foo");
     lpFree(lp);
 
     return 0;

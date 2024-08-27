@@ -256,7 +256,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             foreach test_instance {primary replica} {
                 $primary config set dual-channel-replication-enabled $enable
                 $replica config set dual-channel-replication-enabled $enable
-                test "Online toggle dual-channel-replication-enabled: $enable start, toggle on $test_instance" {    
+                test "Online toggle dual-channel-replication-enabled on $test_instance, starting with '$enable'" {    
                     populate 1000 primary 10000
                     $primary config set rdb-key-save-delay 100000   
 
@@ -268,14 +268,14 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                             [string match "*slave*,state=bg_transfer*,type=main-channel*" [$primary info replication]] &&
                             [s 0 rdb_bgsave_in_progress] eq 1
                         } else {
-                            fail "replica didn't start sync session in time"
+                            fail "replica didn't start a dual-channel sync session in time"
                         }
                     } else {
                         wait_for_condition 500 1000 {
                             [string match "*slave*,state=wait_bgsave*,type=replica*" [$primary info replication]] &&
                             [s 0 rdb_bgsave_in_progress] eq 1
                         } else {
-                            fail "replica didn't start sync session in time"
+                            fail "replica didn't start a normal full sync session in time"
                         }
                     }
                     # Toggle config
@@ -289,7 +289,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                     }
                     $instance config set dual-channel-replication-enabled $new_value
                     # Wait for at least one server cron
-                    after 1
+                    after 1000
 
                     if {$enable == "yes"} {
                         # Verify that dual channel replication sync is still in progress

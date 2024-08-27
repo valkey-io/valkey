@@ -31,6 +31,7 @@
 #include "bio.h"
 #include "rio.h"
 #include "functions.h"
+#include "io_uring.h"
 
 #include <signal.h>
 #include <fcntl.h>
@@ -1012,8 +1013,13 @@ int startAppendOnly(void) {
  * true, and in general it looks just more resilient to retry the write. If
  * there is an actual error condition we'll get it at the next try. */
 ssize_t aofWrite(int fd, const char *buf, size_t len) {
-    ssize_t nwritten = 0, totwritten = 0;
+    ssize_t totwritten = 0;
+    if (server.io_uring_enabled && getAofIOUring()) {
+        totwritten = aofWriteByIOUring(fd, buf, len);
+        return totwritten;
+    }
 
+    ssize_t nwritten = 0;
     while (len) {
         nwritten = write(fd, buf, len);
 
@@ -1026,7 +1032,6 @@ ssize_t aofWrite(int fd, const char *buf, size_t len) {
         buf += nwritten;
         totwritten += nwritten;
     }
-
     return totwritten;
 }
 

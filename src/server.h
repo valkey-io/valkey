@@ -1933,6 +1933,7 @@ struct valkeyServer {
     aofManifest *aof_manifest;          /* Used to track AOFs. */
     int aof_disable_auto_gc;            /* If disable automatically deleting HISTORY type AOFs?
                                            default no. (for testings). */
+    int io_uring_enabled;
 
     /* RDB persistence */
     long long dirty;                      /* Changes to DB from the last save */

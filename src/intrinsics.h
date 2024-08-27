@@ -18,4 +18,4 @@ static inline int32_t builtin_ctzll(uint64_t value) {
 #endif
 }
 
-#endif // __INTRINSICS_H
+#endif /* __INTRINSICS_H */

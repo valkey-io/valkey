@@ -74,7 +74,7 @@ typedef struct {
     /* Hash function. Defaults to hashing the bits in the pointer. */
     uint64_t (*hashFunction)(const void *key);
     /* Compare function, returns 0 if the keys are equal. Defaults to just
-     * comparing the pointes for equality. */
+     * comparing the pointers for equality. */
     int (*keyCompare)(hashtab *t, const void *key1, const void *key2);
     /* Callback to free an element when it's overwritten or deleted.
      * Optional. */

@@ -650,10 +650,10 @@ void listPopRangeAndReplyWithKey(client *c, robj *o, robj *key, int where, long 
  * Note that the purpose is to make the methods small so that the
  * code in the loop can be inlined better to improve performance. */
 void addListQuicklistRangeReply(client *c, robj *o, int from, int rangelen, int reverse) {
-    writeReadyClient *wrc = initClientReply(c);
+    writePreparedClient *wrc = prepareClientForFutureWrites(c);
     if (!wrc) return;
     /* Return the result in form of a multi-bulk reply */
-    addWriteReadyReplyArrayLen(wrc, rangelen);
+    addWritePreparedReplyArrayLen(wrc, rangelen);
 
     int direction = reverse ? AL_START_TAIL : AL_START_HEAD;
     quicklistIter *iter = quicklistGetIteratorAtIdx(o->ptr, direction, from);
@@ -661,9 +661,9 @@ void addListQuicklistRangeReply(client *c, robj *o, int from, int rangelen, int 
         quicklistEntry qe;
         serverAssert(quicklistNext(iter, &qe)); /* fail on corrupt data */
         if (qe.value) {
-            addWriteReadyReplyBulkCBuffer(wrc, qe.value, qe.sz);
+            addwritePreparedReplyBulkCBuffer(wrc, qe.value, qe.sz);
         } else {
-            addWriteReadyReplyBulkLongLong(wrc, qe.longval);
+            addwritePreparedReplyBulkLongLong(wrc, qe.longval);
         }
     }
     quicklistReleaseIterator(iter);
@@ -673,10 +673,10 @@ void addListQuicklistRangeReply(client *c, robj *o, int from, int rangelen, int 
  * Note that the purpose is to make the methods small so that the
  * code in the loop can be inlined better to improve performance. */
 void addListListpackRangeReply(client *c, robj *o, int from, int rangelen, int reverse) {
-    writeReadyClient *wrc = initClientReply(c);
+    writePreparedClient *wrc = prepareClientForFutureWrites(c);
     if (!wrc) return;
     /* Return the result in form of a multi-bulk reply */
-    addWriteReadyReplyArrayLen(wrc, rangelen);
+    addWritePreparedReplyArrayLen(wrc, rangelen);
     unsigned char *p = lpSeek(o->ptr, from);
     unsigned char *vstr;
     unsigned int vlen;
@@ -686,9 +686,9 @@ void addListListpackRangeReply(client *c, robj *o, int from, int rangelen, int r
         serverAssert(p); /* fail on corrupt data */
         vstr = lpGetValue(p, &vlen, &lval);
         if (vstr) {
-            addWriteReadyReplyBulkCBuffer(wrc, vstr, vlen);
+            addwritePreparedReplyBulkCBuffer(wrc, vstr, vlen);
         } else {
-            addWriteReadyReplyBulkLongLong(wrc, lval);
+            addwritePreparedReplyBulkLongLong(wrc, lval);
         }
         p = reverse ? lpPrev(o->ptr, p) : lpNext(o->ptr, p);
     }

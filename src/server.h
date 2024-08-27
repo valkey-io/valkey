@@ -1381,9 +1381,10 @@ typedef struct client {
         net_output_bytes_curr_cmd; /* Total network output bytes sent to this client, by the current command. */
 } client;
 
-/* It is a special type where we know the client is prepared.
- * It is always used together with initClientReply(client *c). */
-typedef client writeReadyClient;
+/* When a command generates a lot of discrete elements to the client ouptut buffer, it is much faster to
+ * skip certain types of initialization. This type is used to indicate a client that has been initialized,
+ * and is returned prepareClientForFutureWrites(client *c). */
+typedef client writePreparedClient;
 
 /* ACL information */
 typedef struct aclInfo {
@@ -2769,7 +2770,7 @@ int processInputBuffer(client *c);
 void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip);
 void readQueryFromClient(connection *conn);
 int prepareClientToWrite(client *c);
-writeReadyClient *initClientReply(client *c);
+writePreparedClient *prepareClientForFutureWrites(client *c);
 void addReplyNull(client *c);
 void addReplyNullArray(client *c);
 void addReplyBool(client *c, int b);
@@ -2779,9 +2780,9 @@ void AddReplyFromClient(client *c, client *src);
 void addReplyBulk(client *c, robj *obj);
 void addReplyBulkCString(client *c, const char *s);
 void addReplyBulkCBuffer(client *c, const void *p, size_t len);
-void addWriteReadyReplyBulkCBuffer(writeReadyClient *c, const void *p, size_t len);
+void addwritePreparedReplyBulkCBuffer(writePreparedClient *c, const void *p, size_t len);
 void addReplyBulkLongLong(client *c, long long ll);
-void addWriteReadyReplyBulkLongLong(writeReadyClient *c, long long ll);
+void addwritePreparedReplyBulkLongLong(writePreparedClient *c, long long ll);
 void addReply(client *c, robj *obj);
 void addReplyStatusLength(client *c, const char *s, size_t len);
 void addReplySds(client *c, sds s);
@@ -2803,7 +2804,7 @@ void addReplyBigNum(client *c, const char *num, size_t len);
 void addReplyHumanLongDouble(client *c, long double d);
 void addReplyLongLong(client *c, long long ll);
 void addReplyArrayLen(client *c, long length);
-void addWriteReadyReplyArrayLen(writeReadyClient *c, long length);
+void addWritePreparedReplyArrayLen(writePreparedClient *c, long length);
 void addReplyMapLen(client *c, long length);
 void addReplySetLen(client *c, long length);
 void addReplyAttributeLen(client *c, long length);

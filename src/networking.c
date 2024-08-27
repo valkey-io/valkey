@@ -921,9 +921,12 @@ void setDeferredPushLen(client *c, void *node, long length) {
     setDeferredAggregateLen(c, node, length, '>');
 }
 
-writeReadyClient *initClientReply(client *c) {
+/* Prepare a client for future writes. This is used so that we can
+ * skip a large number of called to prepareClientToWrite when
+ * a produces a lot of discrete elements in its output. */
+writePreparedClient *prepareClientForFutureWrites(client *c) {
     if (prepareClientToWrite(c) == C_OK) {
-        return (writeReadyClient *)c;
+        return (writePreparedClient *)c;
     }
     return NULL;
 }
@@ -1044,7 +1047,7 @@ void addReplyArrayLen(client *c, long length) {
     addReplyAggregateLen(c, length, '*');
 }
 
-void addWriteReadyReplyArrayLen(writeReadyClient *c, long length) {
+void addWritePreparedReplyArrayLen(writePreparedClient *c, long length) {
     serverAssert(length >= 0);
     _addReplyLongLongWithPrefix(c, length, '*');
 }
@@ -1121,7 +1124,7 @@ void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
     _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
-void addWriteReadyReplyBulkCBuffer(writeReadyClient *c, const void *p, size_t len) {
+void addwritePreparedReplyBulkCBuffer(writePreparedClient *c, const void *p, size_t len) {
     _addReplyLongLongWithPrefix(c, len, '$');
     _addReplyToBufferOrList(c, p, len);
     _addReplyToBufferOrList(c, "\r\n", 2);
@@ -1165,12 +1168,12 @@ void addReplyBulkLongLong(client *c, long long ll) {
     addReplyBulkCBuffer(c, buf, len);
 }
 
-void addWriteReadyReplyBulkLongLong(writeReadyClient *c, long long ll) {
+void addwritePreparedReplyBulkLongLong(writePreparedClient *c, long long ll) {
     char buf[64];
     int len;
 
     len = ll2string(buf, 64, ll);
-    addWriteReadyReplyBulkCBuffer(c, buf, len);
+    addwritePreparedReplyBulkCBuffer(c, buf, len);
 }
 
 /* Reply with a verbatim type having the specified extension.

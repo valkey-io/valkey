@@ -64,24 +64,24 @@ static void stress(int pos, int num, int maxsize, int dnum) {
     }
 }
 
-static unsigned char *pop(unsigned char *lp, int where) {
+/* simple wrapper to used in functions whose return type is not int */
+static inline int _test_assert(int c) {
+    TEST_ASSERT(c);
+    return 0;
+}
+static unsigned char *pop(unsigned char *lp, int where, uint64_t expected) {
     unsigned char *p, *vstr;
     int64_t vlen;
 
     p = lpSeek(lp, where == 0 ? 0 : -1);
     vstr = lpGet(p, &vlen, NULL);
-    if (where == 0)
-        printf("Pop head: ");
-    else
-        printf("Pop tail: ");
 
     if (vstr) {
-        if (vlen && fwrite(vstr, vlen, 1, stdout) == 0) perror("fwrite");
+        _test_assert(strcmp((const char *)vstr, (const char *)expected));
     } else {
-        printf("%lld", (long long)vlen);
+        _test_assert(vlen == (int64_t)expected);
     }
 
-    printf("\n");
     return lpDelete(lp, p, &p);
 }
 
@@ -229,10 +229,10 @@ int test_listpackPop(int argc, char **argv, int flags) {
     unsigned char *lp;
 
     lp = createList();
-    lp = pop(lp, 1);
-    lp = pop(lp, 0);
-    lp = pop(lp, 1);
-    lp = pop(lp, 1);
+    lp = pop(lp, 1, 1024);
+    lp = pop(lp, 0, (uint64_t) "hello");
+    lp = pop(lp, 1, (uint64_t) "quux");
+    lp = pop(lp, 1, (uint64_t) "foo");
     lpFree(lp);
 
     return 0;

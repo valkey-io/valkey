@@ -808,6 +808,21 @@ void randomkeyCommand(client *c) {
     decrRefCount(key);
 }
 
+/* Returns 1 if the pattern can be an exact match in KEYS context. */
+int patternExactMatch(const char *pattern, int length) {
+    for (int i = 0; i < length; i++) {
+        if (pattern[i] == '*' || pattern[i] == '?' || pattern[i] == '[') {
+            /* Wildcard or character class found. Keys can be in anywhere. */
+            return 0;
+        } else if (pattern[i] == '\\') {
+            /* Escaped character. Computing the key name in this case is not
+             * implemented. We would need a temp buffer. */
+            return 0;
+        }
+    }
+    return 1;
+}
+
 void keysCommand(client *c) {
     dictEntry *de;
     sds pattern = c->argv[1]->ptr;
@@ -817,7 +832,27 @@ void keysCommand(client *c) {
     allkeys = (pattern[0] == '*' && plen == 1);
     if (server.cluster_enabled && !allkeys) {
         pslot = patternHashSlot(pattern, plen);
+    } else if (!server.cluster_enabled) {
+        pslot = 0;
     }
+
+    /* Once the pattern can do an exact match, we can convert
+     * it to a kvstoreDictFind to avoid iterating over all data. */
+    if (patternExactMatch(pattern, plen) && pslot != -1) {
+        de = kvstoreDictFind(c->db->keys, pslot, pattern);
+        if (de) {
+            robj keyobj;
+            sds key = dictGetKey(de);
+            initStaticStringObject(keyobj, key);
+            if (!keyIsExpired(c->db, &keyobj)) {
+                addReplyBulkCBuffer(c, key, sdslen(key));
+                numkeys++;
+            }
+        }
+        setDeferredArrayLen(c, replylen, numkeys);
+        return;
+    }
+
     kvstoreDictIterator *kvs_di = NULL;
     kvstoreIterator *kvs_it = NULL;
     if (pslot != -1) {

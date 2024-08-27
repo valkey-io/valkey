@@ -40,7 +40,25 @@ start_server {tags {"keyspace"}} {
         }
         assert_equal [lsort [r keys "{a}*"]] [list "{a}x" "{a}y" "{a}z"]
         assert_equal [lsort [r keys "*{b}*"]] [list "{b}a" "{b}b" "{b}c"]
-    } 
+    }
+
+    test {KEYS with no pattern} {
+        r debug populate 1000
+        r set foo bar
+        r set foo{t} bar
+        r set foo\\ bar
+        r del non-exist
+        assert_equal [r keys foo] {foo}
+        assert_equal [r keys foo{t}] {foo{t}}
+        assert_equal [r keys foo\\] {foo\\}
+        assert_equal [r keys non-exist] {}
+
+        # Make sure the return value is consistent with the * one
+        assert_equal [r keys foo] [r keys *foo]
+        assert_equal [r keys foo{t}] [r keys *foo{t}]
+        assert_equal [r keys foo\\] [r keys *foo\\]
+        assert_equal [r keys non-exist] [r keys *non-exist]
+    } {} {needs:debug}
 
     test {DEL all keys} {
         foreach key [r keys *] {r del $key}
@@ -547,4 +565,39 @@ foreach {type large} [array get largevalue] {
        assert_no_match "*db2:keys=*" [r info keyspace]
        r flushall
     } {OK} {singledb:skip}
+}
+
+start_cluster 1 0 {tags {"keyspace external:skip cluster"}} {
+    # SET keys for random slots, for random noise.
+    set num_keys 0
+    while {$num_keys < 1000} {
+        set random_key [randomInt 163840]
+        r SET $random_key VALUE
+        incr num_keys 1
+    }
+
+    test {KEYS with hashtag in cluster mode} {
+        foreach key {"{a}x" "{a}y" "{a}z" "{b}a" "{b}b" "{b}c"} {
+            r set $key hello
+        }
+        assert_equal [lsort [r keys "{a}*"]] [list "{a}x" "{a}y" "{a}z"]
+        assert_equal [lsort [r keys "*{b}*"]] [list "{b}a" "{b}b" "{b}c"]
+    }
+
+    test {KEYS with no pattern in cluster mode} {
+        r set foo bar
+        r set foo{t} bar
+        r set foo\\ bar
+        r del non-exist
+        assert_equal [r keys foo] {foo}
+        assert_equal [r keys foo{t}] {foo{t}}
+        assert_equal [r keys foo\\] {foo\\}
+        assert_equal [r keys non-exist] {}
+
+        # Make sure the return value is consistent with the * one
+        assert_equal [r keys foo] [r keys *foo]
+        assert_equal [r keys foo{t}] [r keys *foo{t}]
+        assert_equal [r keys foo\\] [r keys *foo\\]
+        assert_equal [r keys non-exist] [r keys *non-exist]
+    }
 }

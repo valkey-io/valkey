@@ -33,8 +33,8 @@
 #include "script.h"
 #include "fpconv_dtoa.h"
 #include "fmtargs.h"
-#include <strings.h>
 #include "io_threads.h"
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <math.h>
@@ -45,6 +45,7 @@ static void setProtocolError(const char *errstr, client *c);
 static void pauseClientsByClient(mstime_t end, int isPauseClientAll);
 int postponeClientRead(client *c);
 char *getClientSockname(client *c);
+
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
 __thread sds thread_shared_qb = NULL;
 
@@ -1500,6 +1501,7 @@ void unlinkClient(client *c) {
             listDelNode(server.clients, c->client_list_node);
             c->client_list_node = NULL;
         }
+        removeClientFromPendingCommandsBatch(c);
 
         /* Check if this is a replica waiting for diskless replication (rdb pipe),
          * in which case it needs to be cleaned from that list */
@@ -4621,6 +4623,12 @@ int postponeClientRead(client *c) {
 }
 
 int processIOThreadsReadDone(void) {
+    if (ProcessingEventsWhileBlocked) {
+        /* When ProcessingEventsWhileBlocked we may call processIOThreadsReadDone recursively.
+         * In this case, there may be some clients left in the batch waiting to be processed. */
+        processClientsCommandsBatch();
+    }
+
     if (listLength(server.clients_pending_io_read) == 0) return 0;
     int processed = 0;
     listNode *ln;
@@ -4639,15 +4647,17 @@ int processIOThreadsReadDone(void) {
         }
         /* memory barrier acquire to get the updated client state */
         atomic_thread_fence(memory_order_acquire);
-        /* Don't post-process-writes to clients that are going to be closed anyway. */
-        if (c->flag.close_asap) continue;
-        /* If a client is protected, don't do anything,
-         * that may trigger read/write error or recreate handler. */
-        if (c->flag.protected) continue;
 
         listUnlinkNode(server.clients_pending_io_read, ln);
         c->flag.pending_read = 0;
         c->io_read_state = CLIENT_IDLE;
+
+        /* Don't post-process-reads from clients that are going to be closed anyway. */
+        if (c->flag.close_asap) continue;
+
+        /* If a client is protected, don't do anything,
+         * that may trigger read/write error or recreate handler. */
+        if (c->flag.protected) continue;
 
         processed++;
         server.stat_io_reads_processed++;
@@ -4676,14 +4686,19 @@ int processIOThreadsReadDone(void) {
         }
 
         size_t list_length_before_command_execute = listLength(server.clients_pending_io_read);
-        if (processPendingCommandAndInputBuffer(c) == C_OK) {
-            beforeNextClient(c);
+        /* try to add the command to the batch */
+        int ret = addCommandToBatchAndProcessIfFull(c);
+        /* If the command was not added to the commands batch, process it immediately */
+        if (ret == C_ERR) {
+            if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
         }
         if (list_length_before_command_execute != listLength(server.clients_pending_io_read)) {
             /* A client was unlink from the list possibly making the next node invalid */
             next = listFirst(server.clients_pending_io_read);
         }
     }
+
+    processClientsCommandsBatch();
 
     return processed;
 }
@@ -4781,6 +4796,18 @@ void ioThreadReadQueryFromClient(void *data) {
         /* The command was found, but the arity is invalid.
          * In this case, we reset the parsed_cmd and will let the main thread handle it. */
         c->io_parsed_cmd = NULL;
+    }
+
+    /* Offload slot calculations to the I/O thread to reduce main-thread load. */
+    if (c->io_parsed_cmd && server.cluster_enabled) {
+        getKeysResult result;
+        initGetKeysResult(&result);
+        int numkeys = getKeysFromCommand(c->io_parsed_cmd, c->argv, c->argc, &result);
+        if (numkeys) {
+            robj *first_key = c->argv[result.keys[0].pos];
+            c->slot = calculateKeySlot(first_key->ptr);
+        }
+        getKeysFreeResult(&result);
     }
 
 done:

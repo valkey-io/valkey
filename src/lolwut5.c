@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2018, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -56,9 +56,9 @@ void lwTranslatePixelsGroup(int byte, char *output) {
     /* Convert to unicode. This is in the U0800-UFFFF range, so we need to
      * emit it like this in three bytes:
      * 1110xxxx 10xxxxxx 10xxxxxx. */
-    output[0] = 0xE0 | (code >> 12);          /* 1110-xxxx */
-    output[1] = 0x80 | ((code >> 6) & 0x3F);  /* 10-xxxxxx */
-    output[2] = 0x80 | (code & 0x3F);         /* 10-xxxxxx */
+    output[0] = 0xE0 | (code >> 12);         /* 1110-xxxx */
+    output[1] = 0x80 | ((code >> 6) & 0x3F); /* 10-xxxxxx */
+    output[2] = 0x80 | (code & 0x3F);        /* 10-xxxxxx */
 }
 
 /* Schotter, the output of LOLWUT of Redis OSS 5, is a computer graphic art piece
@@ -70,31 +70,31 @@ void lwTranslatePixelsGroup(int byte, char *output) {
  * requested by the caller. */
 lwCanvas *lwDrawSchotter(int console_cols, int squares_per_row, int squares_per_col) {
     /* Calculate the canvas size. */
-    int canvas_width = console_cols*2;
+    int canvas_width = console_cols * 2;
     int padding = canvas_width > 4 ? 2 : 0;
-    float square_side = (float)(canvas_width-padding*2) / squares_per_row;
-    int canvas_height = square_side * squares_per_col + padding*2;
+    float square_side = (float)(canvas_width - padding * 2) / squares_per_row;
+    int canvas_height = square_side * squares_per_col + padding * 2;
     lwCanvas *canvas = lwCreateCanvas(canvas_width, canvas_height, 0);
 
     for (int y = 0; y < squares_per_col; y++) {
         for (int x = 0; x < squares_per_row; x++) {
-            int sx = x * square_side + square_side/2 + padding;
-            int sy = y * square_side + square_side/2 + padding;
+            int sx = x * square_side + square_side / 2 + padding;
+            int sy = y * square_side + square_side / 2 + padding;
             /* Rotate and translate randomly as we go down to lower
              * rows. */
             float angle = 0;
             if (y > 1) {
-                float r1 = (float)rand() / (float) RAND_MAX / squares_per_col * y;
-                float r2 = (float)rand() / (float) RAND_MAX / squares_per_col * y;
-                float r3 = (float)rand() / (float) RAND_MAX / squares_per_col * y;
+                float r1 = (float)rand() / (float)RAND_MAX / squares_per_col * y;
+                float r2 = (float)rand() / (float)RAND_MAX / squares_per_col * y;
+                float r3 = (float)rand() / (float)RAND_MAX / squares_per_col * y;
                 if (rand() % 2) r1 = -r1;
                 if (rand() % 2) r2 = -r2;
                 if (rand() % 2) r3 = -r3;
                 angle = r1;
-                sx += r2*square_side/3;
-                sy += r3*square_side/3;
+                sx += r2 * square_side / 3;
+                sy += r3 * square_side / 3;
             }
-            lwDrawSquare(canvas,sx,sy,square_side,angle,1);
+            lwDrawSquare(canvas, sx, sy, square_side, angle, 1);
         }
     }
 
@@ -113,19 +113,19 @@ static sds renderCanvas(lwCanvas *canvas) {
             /* We need to emit groups of 8 bits according to a specific
              * arrangement. See lwTranslatePixelsGroup() for more info. */
             int byte = 0;
-            if (lwGetPixel(canvas,x,y)) byte |= (1<<0);
-            if (lwGetPixel(canvas,x,y+1)) byte |= (1<<1);
-            if (lwGetPixel(canvas,x,y+2)) byte |= (1<<2);
-            if (lwGetPixel(canvas,x+1,y)) byte |= (1<<3);
-            if (lwGetPixel(canvas,x+1,y+1)) byte |= (1<<4);
-            if (lwGetPixel(canvas,x+1,y+2)) byte |= (1<<5);
-            if (lwGetPixel(canvas,x,y+3)) byte |= (1<<6);
-            if (lwGetPixel(canvas,x+1,y+3)) byte |= (1<<7);
+            if (lwGetPixel(canvas, x, y)) byte |= (1 << 0);
+            if (lwGetPixel(canvas, x, y + 1)) byte |= (1 << 1);
+            if (lwGetPixel(canvas, x, y + 2)) byte |= (1 << 2);
+            if (lwGetPixel(canvas, x + 1, y)) byte |= (1 << 3);
+            if (lwGetPixel(canvas, x + 1, y + 1)) byte |= (1 << 4);
+            if (lwGetPixel(canvas, x + 1, y + 2)) byte |= (1 << 5);
+            if (lwGetPixel(canvas, x, y + 3)) byte |= (1 << 6);
+            if (lwGetPixel(canvas, x + 1, y + 3)) byte |= (1 << 7);
             char unicode[3];
-            lwTranslatePixelsGroup(byte,unicode);
-            text = sdscatlen(text,unicode,3);
+            lwTranslatePixelsGroup(byte, unicode);
+            text = sdscatlen(text, unicode, 3);
         }
-        if (y != canvas->height-1) text = sdscatlen(text,"\n",1);
+        if (y != canvas->height - 1) text = sdscatlen(text, "\n", 1);
     }
     return text;
 }
@@ -143,17 +143,11 @@ void lolwut5Command(client *c) {
     long squares_per_col = 12;
 
     /* Parse the optional arguments if any. */
-    if (c->argc > 1 &&
-        getLongFromObjectOrReply(c,c->argv[1],&cols,NULL) != C_OK)
-        return;
+    if (c->argc > 1 && getLongFromObjectOrReply(c, c->argv[1], &cols, NULL) != C_OK) return;
 
-    if (c->argc > 2 &&
-        getLongFromObjectOrReply(c,c->argv[2],&squares_per_row,NULL) != C_OK)
-        return;
+    if (c->argc > 2 && getLongFromObjectOrReply(c, c->argv[2], &squares_per_row, NULL) != C_OK) return;
 
-    if (c->argc > 3 &&
-        getLongFromObjectOrReply(c,c->argv[3],&squares_per_col,NULL) != C_OK)
-        return;
+    if (c->argc > 3 && getLongFromObjectOrReply(c, c->argv[3], &squares_per_col, NULL) != C_OK) return;
 
     /* Limits. We want LOLWUT to be always reasonably fast and cheap to execute
      * so we have maximum number of columns, rows, and output resolution. */
@@ -165,13 +159,12 @@ void lolwut5Command(client *c) {
     if (squares_per_col > 200) squares_per_col = 200;
 
     /* Generate some computer art and reply. */
-    lwCanvas *canvas = lwDrawSchotter(cols,squares_per_row,squares_per_col);
+    lwCanvas *canvas = lwDrawSchotter(cols, squares_per_row, squares_per_col);
     sds rendered = renderCanvas(canvas);
-    rendered = sdscat(rendered,
-        "\nGeorg Nees - schotter, plotter on paper, 1968. Redis ver. ");
-    rendered = sdscat(rendered,VALKEY_VERSION);
-    rendered = sdscatlen(rendered,"\n",1);
-    addReplyVerbatim(c,rendered,sdslen(rendered),"txt");
+    rendered = sdscat(rendered, "\nGeorg Nees - schotter, plotter on paper, 1968. Redis ver. ");
+    rendered = sdscat(rendered, VALKEY_VERSION);
+    rendered = sdscatlen(rendered, "\n", 1);
+    addReplyVerbatim(c, rendered, sdslen(rendered), "txt");
     sdsfree(rendered);
     lwFreeCanvas(canvas);
 }

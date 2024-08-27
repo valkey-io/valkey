@@ -1,12 +1,12 @@
-/* serverassert.c -- Implement the default _serverAssert and _serverPanic which 
+/* serverassert.c -- Implement the default _serverAssert and _serverPanic which
  * simply print stack trace to standard error stream.
- * 
- * This file is shared by those modules that try to print some logs about stack trace 
+ *
+ * This file is shared by those modules that try to print some logs about stack trace
  * but don't have their own implementations of functions in serverassert.h.
  *
  * ----------------------------------------------------------------------------
  *
- * Copyright (c) 2021, Andy Pan <panjf2000@gmail.com> and Redis Labs
+ * Copyright (c) 2021, Andy Pan <panjf2000@gmail.com> and Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -35,19 +35,19 @@
  */
 
 
-#include <stdio.h> 
+#include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
 
 void _serverAssert(const char *estr, const char *file, int line) {
     fprintf(stderr, "=== ASSERTION FAILED ===");
-    fprintf(stderr, "==> %s:%d '%s' is not true",file,line,estr);
+    fprintf(stderr, "==> %s:%d '%s' is not true", file, line, estr);
     raise(SIGSEGV);
 }
 
 void _serverPanic(const char *file, int line, const char *msg, ...) {
     fprintf(stderr, "------------------------------------------------");
     fprintf(stderr, "!!! Software Failure. Press left mouse button to continue");
-    fprintf(stderr, "Guru Meditation: %s #%s:%d",msg,file,line);
+    fprintf(stderr, "Guru Meditation: %s #%s:%d", msg, file, line);
     abort();
 }

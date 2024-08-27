@@ -2,7 +2,7 @@
  *
  * ----------------------------------------------------------------------------
  *
- * Copyright (c) 2011-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2011-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -70,9 +70,4 @@ uint64_t intrev64(uint64_t v);
 #define htonu64(v) intrev64(v)
 #define ntohu64(v) intrev64(v)
 #endif
-
-#ifdef SERVER_TEST
-int endianconvTest(int argc, char *argv[], int flags);
-#endif
-
 #endif

@@ -1,7 +1,7 @@
 /* Listpack -- A lists of strings serialization format
  * https://github.com/antirez/listpack
  *
- * Copyright (c) 2017, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2017, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -42,8 +42,8 @@
 /* We use zmalloc_usable/zrealloc_usable instead of zmalloc/zrealloc
  * to ensure the safe invocation of 'zmalloc_usable_size().
  * See comment in zmalloc_usable_size(). */
-#define lp_malloc(sz) zmalloc_usable(sz,NULL)
-#define lp_realloc(ptr,sz) zrealloc_usable(ptr,sz,NULL)
+#define lp_malloc(sz) zmalloc_usable(sz, NULL)
+#define lp_realloc(ptr, sz) zrealloc_usable(ptr, sz, NULL)
 #define lp_free zfree
 #define lp_malloc_size zmalloc_usable_size
 #endif

@@ -278,21 +278,34 @@ start_server {tags {"info" "external:skip"}} {
             r config resetstat
             for {set j 1} {$j <= 1100} {incr j} {
                 assert_error "$j my error message" {
-                    r eval {return redis.error_reply(string.format('%s my error message', ARGV[1]))} 0 $j
+                    r eval {return server.error_reply(string.format('%s my error message', ARGV[1]))} 0 $j
                 }
             }
-
-            assert_equal [count_log_message 0 "Errorstats stopped adding new errors"] 1
-            assert_equal [count_log_message 0 "Current errors code list"] 1
-            assert_equal "count=1" [errorstat ERRORSTATS_DISABLED]
-
-            # Since we currently have no metrics exposed for server.errors, we use lazyfree
-            # to verify that we only have 128 errors.
-            wait_for_condition 50 100 {
-                [s lazyfreed_objects] eq 128
-            } else {
-                fail "errorstats resetstat lazyfree error"
+            # Validate that custom LUA errors are tracked in `ERRORSTATS_OVERFLOW` when errors
+            # has 128 entries.
+            assert_equal "count=972" [errorstat ERRORSTATS_OVERFLOW]
+            # Validate that non LUA errors continue to be tracked even when we have >=128 entries.
+            assert_error {ERR syntax error} {r set a b c d e f g}
+            assert_equal "count=1" [errorstat ERR]
+            # Validate that custom errors that were already tracked continue to increment when past 128 entries.
+            assert_equal "count=1" [errorstat 1]
+            assert_error "1 my error message" {
+                r eval {return server.error_reply(string.format('1 my error message', ARGV[1]))} 0
             }
+            assert_equal "count=2" [errorstat 1]
+            # Test LUA error variants.
+            assert_error "My error message" {r eval {return server.error_reply('My error message')} 0}
+            assert_error "My error message" {r eval {return {err = 'My error message'}} 0}
+            assert_equal "count=974" [errorstat ERRORSTATS_OVERFLOW]
+            # Function calls that contain custom error messages should call be included in overflow counter
+            r FUNCTION LOAD replace [format "#!lua name=mylib\nserver.register_function('customerrorfn', function() return server.error_reply('My error message') end)"]
+            assert_error "My error message" {r fcall customerrorfn 0}
+            assert_equal "count=975" [errorstat ERRORSTATS_OVERFLOW]
+            # Function calls that contain non lua errors should continue to be tracked normally (in a separate counter).
+            r FUNCTION LOAD replace [format "#!lua name=mylib\nserver.register_function('invalidgetcmd', function() return server.call('get', 'x', 'x', 'x') end)"]
+            assert_error "ERR Wrong number of args*" {r fcall invalidgetcmd 0}
+            assert_equal "count=975" [errorstat ERRORSTATS_OVERFLOW]
+            assert_equal "count=2" [errorstat ERR]
         }
 
         test {stats: eventloop metrics} {
@@ -317,7 +330,7 @@ start_server {tags {"info" "external:skip"}} {
             if {$::verbose} { puts "eventloop metrics cmd_sum1: $cmd_sum1, cmd_sum2: $cmd_sum2" }
             assert_morethan $cmd_sum2 $cmd_sum1
             assert_lessthan $cmd_sum2 [expr $cmd_sum1+15000] ;# we expect about tens of ms here, but allow some tolerance
-        }
+        } {} {io-threads:skip} ; # skip with io-threads as the eventloop metrics are different in that case.
 
         test {stats: instantaneous metrics} {
             r config resetstat
@@ -336,7 +349,8 @@ start_server {tags {"info" "external:skip"}} {
             if {$::verbose} { puts "instantaneous metrics instantaneous_eventloop_duration_usec: $value" }
             assert_morethan $value 0
             assert_lessthan $value [expr $retries*22000] ;# default hz is 10, so duration < 1000 / 10, allow some tolerance
-        }
+        } {} {io-threads:skip} ; # skip with io-threads as the eventloop metrics are different in that case.
+        
 
         test {stats: debug metrics} {
             # make sure debug info is hidden
@@ -410,7 +424,8 @@ start_server {tags {"info" "external:skip"}} {
             set info [r info clients]
             assert_equal [getInfoProperty $info pubsub_clients] {1}
             # non-pubsub clients should not be involved
-            assert_equal {0} [unsubscribe $rd2 {non-exist-chan}]
+            catch {unsubscribe $rd2 {non-exist-chan}} e
+            assert_match {*NOSUB*} $e
             set info [r info clients]
             assert_equal [getInfoProperty $info pubsub_clients] {1}
             # close all clients

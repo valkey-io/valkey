@@ -1,10 +1,11 @@
 .*.swp
 *.o
+*.a
 *.xo
 *.so
 *.d
 *.log
-dump.rdb
+dump*.rdb
 *-benchmark
 *-check-aof
 *-check-rdb
@@ -12,12 +13,13 @@ dump.rdb
 *-cli
 *-sentinel
 *-server
+*-unit-tests
 doc-tools
 release
 misc/*
 src/release.h
 appendonly.aof*
-appendonlydir
+appendonlydir*
 SHORT_TERM_TODO
 release.h
 src/transfer.sh
@@ -41,3 +43,8 @@ Makefile.dep
 compile_commands.json
 redis.code-workspace
 .cache
+.cscope*
+.swp
+nodes*.conf
+tests/cluster/tmp/*
+tests/rdma/rdma-test

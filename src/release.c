@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -52,7 +52,7 @@ const char *serverBuildIdRaw(void) {
 uint64_t serverBuildId(void) {
     char *buildid = REDIS_BUILD_ID_RAW;
 
-    return crc64(0,(unsigned char*)buildid,strlen(buildid));
+    return crc64(0, (unsigned char *)buildid, strlen(buildid));
 }
 
 /* Return a cached value of the build string in order to avoid recomputing
@@ -62,7 +62,7 @@ char *serverBuildIdString(void) {
     static char buf[32];
     static int cached = 0;
     if (!cached) {
-        snprintf(buf,sizeof(buf),"%llx",(unsigned long long) serverBuildId());
+        snprintf(buf, sizeof(buf), "%llx", (unsigned long long)serverBuildId());
         cached = 1;
     }
     return buf;

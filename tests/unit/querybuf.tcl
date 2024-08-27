@@ -24,16 +24,45 @@ start_server {tags {"querybuf slow"}} {
     # The test will run at least 2s to check if client query
     # buffer will be resized when client idle 2s.
     test "query buffer resized correctly" {
-        set rd [valkey_client]
+
+        set rd [valkey_deferring_client]
+
         $rd client setname test_client
+        $rd read
+
+        # Make sure query buff has size of 0 bytes at start as the client uses the shared qb.
+        assert {[client_query_buffer test_client] == 0}
+
+        # Pause cron to prevent premature shrinking (timing issue).
+        r debug pause-cron 1
+
+        # Send partial command to client to make sure it doesn't use the shared qb.
+        $rd write "*3\r\n\$3\r\nset\r\n\$2\r\na"
+        $rd flush
+        # Wait for the client to start using a private query buffer. 
+        wait_for_condition 1000 10 {
+            [client_query_buffer test_client] > 0
+        } else {
+            fail "client should start using a private query buffer"
+        }
+     
+        # send the rest of the command
+        $rd write "a\r\n\$1\r\nb\r\n"
+        $rd flush
+        assert_equal {OK} [$rd read]
+
         set orig_test_client_qbuf [client_query_buffer test_client]
         # Make sure query buff has less than the peak resize threshold (PROTO_RESIZE_THRESHOLD) 32k
         # but at least the basic IO reading buffer size (PROTO_IOBUF_LEN) 16k
-        assert {$orig_test_client_qbuf >= 16384 && $orig_test_client_qbuf < 32768}
+        set MAX_QUERY_BUFFER_SIZE [expr 32768 + 2] ; # 32k + 2, allowing for potential greedy allocation of (16k + 1) * 2 bytes for the query buffer.
+        assert {$orig_test_client_qbuf >= 16384 && $orig_test_client_qbuf <= $MAX_QUERY_BUFFER_SIZE}
+
+        # Allow shrinking to occur
+        r debug pause-cron 0
 
         # Check that the initial query buffer is resized after 2 sec
         wait_for_condition 1000 10 {
-            [client_idle_sec test_client] >= 3 && [client_query_buffer test_client] == 0
+            [client_idle_sec test_client] >= 3 && [client_query_buffer test_client] < $orig_test_client_qbuf
         } else {
             fail "query buffer was not resized"
         }
@@ -63,7 +92,7 @@ start_server {tags {"querybuf slow"}} {
             # Write something smaller, so query buf peak can shrink
             $rd set x [string repeat A 100]
             set new_test_client_qbuf [client_query_buffer test_client]
-            if {$new_test_client_qbuf < $orig_test_client_qbuf} { break } 
+            if {$new_test_client_qbuf < $orig_test_client_qbuf && $new_test_client_qbuf > 0} { break } 
             if {[expr [clock milliseconds] - $t] > 1000} { break }
             after 10
         }
@@ -78,6 +107,11 @@ start_server {tags {"querybuf slow"}} {
         $rd write "*3\r\n\$3\r\nset\r\n\$1\r\na\r\n\$1000000\r\n"
         $rd flush
         
+        after 200
+        # Send the start of the arg and make sure the client is not using shared qb for it rather a private buf of > 1000000 size.
+        $rd write "a" 
+        $rd flush
+
         after 20
         if {[client_query_buffer test_client] < 1000000} {
             fail "query buffer should not be resized when client idle time smaller than 2s"

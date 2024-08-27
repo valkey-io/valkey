@@ -28,6 +28,7 @@
 
 #include "crc64.h"
 #include "crcspeed.h"
+#include "serverassert.h"
 static uint64_t crc64_table[8][256] = {{0}};
 
 #define POLY UINT64_C(0xad93d23594c935a9)
@@ -67,14 +68,33 @@ static uint64_t crc64_table[8][256] = {{0}};
  * \return             The reflected data.
  *****************************************************************************/
 static inline uint_fast64_t crc_reflect(uint_fast64_t data, size_t data_len) {
-    uint_fast64_t ret = data & 0x01;
+    /* only ever called for data_len == 64 in this codebase
+     *
+     * Borrowed from bit twiddling hacks, original in the public domain.
+     * https://graphics.stanford.edu/~seander/bithacks.html#ReverseParallel
+     * Extended to 64 bits, and added byteswap for final 3 steps.
+     * 16-30x 64-bit operations, no comparisons (16 for native byteswap, 30 for pure C)
+     */
 
-    for (size_t i = 1; i < data_len; i++) {
-        data >>= 1;
-        ret = (ret << 1) | (data & 0x01);
-    }
-
-    return ret;
+    assert(data_len <= 64);
+    /* swap odd and even bits */
+    data = ((data >> 1) & 0x5555555555555555ULL) | ((data & 0x5555555555555555ULL) << 1);
+    /* swap consecutive pairs */
+    data = ((data >> 2) & 0x3333333333333333ULL) | ((data & 0x3333333333333333ULL) << 2);
+    /* swap nibbles ... */
+    data = ((data >> 4) & 0x0F0F0F0F0F0F0F0FULL) | ((data & 0x0F0F0F0F0F0F0F0FULL) << 4);
+#if defined(__GNUC__) || defined(__clang__)
+    data = __builtin_bswap64(data);
+#else
+    /* swap bytes */
+    data = ((data >> 8) & 0x00FF00FF00FF00FFULL) | ((data & 0x00FF00FF00FF00FFULL) << 8);
+    /* swap 2-byte long pairs */
+    data = ( data >> 16 &     0xFFFF0000FFFFULL) | ((data &     0xFFFF0000FFFFULL) << 16);
+    /* swap 4-byte quads */
+    data = ( data >> 32 &         0xFFFFFFFFULL) | ((data &         0xFFFFFFFFULL) << 32);
+#endif
+    /* adjust for non-64-bit reversals */
+    return data >> (64 - data_len);
 }
 
 /**
@@ -121,34 +141,3 @@ void crc64_init(void) {
 uint64_t crc64(uint64_t crc, const unsigned char *s, uint64_t l) {
     return crcspeed64native(crc64_table, crc, (void *) s, l);
 }
-
-/* Test main */
-#ifdef SERVER_TEST
-#include <stdio.h>
-
-#define UNUSED(x) (void)(x)
-int crc64Test(int argc, char *argv[], int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    crc64_init();
-    printf("[calcula]: e9c6d914c4b8d9ca == %016" PRIx64 "\n",
-           (uint64_t)_crc64(0, "123456789", 9));
-    printf("[64speed]: e9c6d914c4b8d9ca == %016" PRIx64 "\n",
-           (uint64_t)crc64(0, (unsigned char*)"123456789", 9));
-    char li[] = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed "
-                "do eiusmod tempor incididunt ut labore et dolore magna "
-                "aliqua. Ut enim ad minim veniam, quis nostrud exercitation "
-                "ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis "
-                "aute irure dolor in reprehenderit in voluptate velit esse "
-                "cillum dolore eu fugiat nulla pariatur. Excepteur sint "
-                "occaecat cupidatat non proident, sunt in culpa qui officia "
-                "deserunt mollit anim id est laborum.";
-    printf("[calcula]: c7794709e69683b3 == %016" PRIx64 "\n",
-           (uint64_t)_crc64(0, li, sizeof(li)));
-    printf("[64speed]: c7794709e69683b3 == %016" PRIx64 "\n",
-           (uint64_t)crc64(0, (unsigned char*)li, sizeof(li)));
-    return 0;
-}
-
-#endif

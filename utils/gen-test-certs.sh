@@ -19,7 +19,7 @@ generate_cert() {
     [ -f $keyfile ] || openssl genrsa -out $keyfile 2048
     openssl req \
         -new -sha256 \
-        -subj "/O=Redis Test/CN=$cn" \
+        -subj "/O=Valkey Test/CN=$cn" \
         -key $keyfile | \
         openssl x509 \
             -req -sha256 \
@@ -38,7 +38,7 @@ openssl req \
     -x509 -new -nodes -sha256 \
     -key tests/tls/ca.key \
     -days 3650 \
-    -subj '/O=Redis Test/CN=Certificate Authority' \
+    -subj '/O=Valkey Test/CN=Certificate Authority' \
     -out tests/tls/ca.crt
 
 cat > tests/tls/openssl.cnf <<_END_

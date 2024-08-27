@@ -1,6 +1,6 @@
 /* Synchronous socket and file I/O operations useful across the core.
  *
- * Copyright (c) 2009-2010, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2010, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,7 +33,7 @@
 /* ----------------- Blocking sockets I/O with timeouts --------------------- */
 
 /* The server performs most of the I/O in a nonblocking way, with the exception
- * of the SYNC command where the slave does it in a blocking way, and
+ * of the SYNC command where the replica does it in a blocking way, and
  * the MIGRATE command that must be blocking in order to be atomic from the
  * point of view of the two instances (one migrating the key and one receiving
  * the key). This is why need the following blocking I/O functions.
@@ -51,14 +51,13 @@ ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout) {
     long long start = mstime();
     long long remaining = timeout;
 
-    while(1) {
-        long long wait = (remaining > SYNCIO__RESOLUTION) ?
-                          remaining : SYNCIO__RESOLUTION;
+    while (1) {
+        long long wait = (remaining > SYNCIO__RESOLUTION) ? remaining : SYNCIO__RESOLUTION;
         long long elapsed;
 
         /* Optimistically try to write before checking if the file descriptor
          * is actually writable. At worst we get EAGAIN. */
-        nwritten = write(fd,ptr,size);
+        nwritten = write(fd, ptr, size);
         if (nwritten == -1) {
             if (errno != EAGAIN) return -1;
         } else {
@@ -68,7 +67,7 @@ ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout) {
         if (size == 0) return ret;
 
         /* Wait */
-        aeWait(fd,AE_WRITABLE,wait);
+        aeWait(fd, AE_WRITABLE, wait);
         elapsed = mstime() - start;
         if (elapsed >= timeout) {
             errno = ETIMEDOUT;
@@ -88,14 +87,13 @@ ssize_t syncRead(int fd, char *ptr, ssize_t size, long long timeout) {
     long long remaining = timeout;
 
     if (size == 0) return 0;
-    while(1) {
-        long long wait = (remaining > SYNCIO__RESOLUTION) ?
-                          remaining : SYNCIO__RESOLUTION;
+    while (1) {
+        long long wait = (remaining > SYNCIO__RESOLUTION) ? remaining : SYNCIO__RESOLUTION;
         long long elapsed;
 
         /* Optimistically try to read before checking if the file descriptor
          * is actually readable. At worst we get EAGAIN. */
-        nread = read(fd,ptr,size);
+        nread = read(fd, ptr, size);
         if (nread == 0) return -1; /* short read. */
         if (nread == -1) {
             if (errno != EAGAIN) return -1;
@@ -107,7 +105,7 @@ ssize_t syncRead(int fd, char *ptr, ssize_t size, long long timeout) {
         if (size == 0) return totread;
 
         /* Wait */
-        aeWait(fd,AE_READABLE,wait);
+        aeWait(fd, AE_READABLE, wait);
         elapsed = mstime() - start;
         if (elapsed >= timeout) {
             errno = ETIMEDOUT;
@@ -126,13 +124,13 @@ ssize_t syncReadLine(int fd, char *ptr, ssize_t size, long long timeout) {
     ssize_t nread = 0;
 
     size--;
-    while(size) {
+    while (size) {
         char c;
 
-        if (syncRead(fd,&c,1,timeout) == -1) return -1;
+        if (syncRead(fd, &c, 1, timeout) == -1) return -1;
         if (c == '\n') {
             *ptr = '\0';
-            if (nread && *(ptr-1) == '\r') *(ptr-1) = '\0';
+            if (nread && *(ptr - 1) == '\r') *(ptr - 1) = '\0';
             return nread;
         } else {
             *ptr++ = c;

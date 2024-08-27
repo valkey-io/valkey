@@ -75,16 +75,13 @@
 /* ----- Helpers ----- */
 
 static int reqresShouldLog(client *c) {
-    if (!server.req_res_logfile)
-        return 0;
+    if (!server.req_res_logfile) return 0;
 
     /* Ignore client with streaming non-standard response */
-    if (c->flags & (CLIENT_PUBSUB|CLIENT_MONITOR|CLIENT_SLAVE))
-        return 0;
+    if (c->flag.pubsub || c->flag.monitor || c->flag.replica) return 0;
 
-    /* We only work on masters (didn't implement reqresAppendResponse to work on shared slave buffers) */
-    if (getClientType(c) == CLIENT_TYPE_MASTER)
-        return 0;
+    /* We only work on primaries (didn't implement reqresAppendResponse to work on shared replica buffers) */
+    if (getClientType(c) == CLIENT_TYPE_PRIMARY) return 0;
 
     return 1;
 }
@@ -107,7 +104,7 @@ static size_t reqresAppendBuffer(client *c, void *buf, size_t len) {
 
 static size_t reqresAppendArg(client *c, char *arg, size_t arg_len) {
     char argv_len_buf[LONG_STR_SIZE];
-    size_t argv_len_buf_len = ll2string(argv_len_buf,sizeof(argv_len_buf),(long)arg_len);
+    size_t argv_len_buf_len = ll2string(argv_len_buf, sizeof(argv_len_buf), (long)arg_len);
     size_t ret = reqresAppendBuffer(c, argv_len_buf, argv_len_buf_len);
     ret += reqresAppendBuffer(c, "\r\n", 2);
     ret += reqresAppendBuffer(c, arg, arg_len);
@@ -121,8 +118,7 @@ static size_t reqresAppendArg(client *c, char *arg, size_t arg_len) {
 /* Zero out the clientReqResInfo struct inside the client,
  * and free the buffer if needed */
 void reqresReset(client *c, int free_buf) {
-    if (free_buf && c->reqres.buf)
-        zfree(c->reqres.buf);
+    if (free_buf && c->reqres.buf) zfree(c->reqres.buf);
     memset(&c->reqres, 0, sizeof(c->reqres));
 }
 
@@ -157,11 +153,9 @@ void reqresReset(client *c, int free_buf) {
  * 0, so we would miss the first 5 bytes of the reply.
  **/
 void reqresSaveClientReplyOffset(client *c) {
-    if (!reqresShouldLog(c))
-        return;
+    if (!reqresShouldLog(c)) return;
 
-    if (c->reqres.offset.saved)
-        return;
+    if (c->reqres.offset.saved) return;
 
     c->reqres.offset.saved = 1;
 
@@ -181,22 +175,14 @@ size_t reqresAppendRequest(client *c) {
 
     serverAssert(argc);
 
-    if (!reqresShouldLog(c))
-        return 0;
+    if (!reqresShouldLog(c)) return 0;
 
     /* Ignore commands that have streaming non-standard response */
     sds cmd = argv[0]->ptr;
-    if (!strcasecmp(cmd,"debug") || /* because of DEBUG SEGFAULT */
-        !strcasecmp(cmd,"sync") ||
-        !strcasecmp(cmd,"psync") ||
-        !strcasecmp(cmd,"monitor") ||
-        !strcasecmp(cmd,"subscribe") ||
-        !strcasecmp(cmd,"unsubscribe") ||
-        !strcasecmp(cmd,"ssubscribe") ||
-        !strcasecmp(cmd,"sunsubscribe") ||
-        !strcasecmp(cmd,"psubscribe") ||
-        !strcasecmp(cmd,"punsubscribe"))
-    {
+    if (!strcasecmp(cmd, "debug") || /* because of DEBUG SEGFAULT */
+        !strcasecmp(cmd, "sync") || !strcasecmp(cmd, "psync") || !strcasecmp(cmd, "monitor") ||
+        !strcasecmp(cmd, "subscribe") || !strcasecmp(cmd, "unsubscribe") || !strcasecmp(cmd, "ssubscribe") ||
+        !strcasecmp(cmd, "sunsubscribe") || !strcasecmp(cmd, "psubscribe") || !strcasecmp(cmd, "punsubscribe")) {
         return 0;
     }
 
@@ -208,7 +194,7 @@ size_t reqresAppendRequest(client *c) {
             ret += reqresAppendArg(c, argv[i]->ptr, sdslen(argv[i]->ptr));
         } else if (argv[i]->encoding == OBJ_ENCODING_INT) {
             char buf[LONG_STR_SIZE];
-            size_t len = ll2string(buf,sizeof(buf),(long)argv[i]->ptr);
+            size_t len = ll2string(buf, sizeof(buf), (long)argv[i]->ptr);
             ret += reqresAppendArg(c, buf, len);
         } else {
             serverPanic("Wrong encoding in reqresAppendRequest()");
@@ -220,8 +206,7 @@ size_t reqresAppendRequest(client *c) {
 size_t reqresAppendResponse(client *c) {
     size_t ret = 0;
 
-    if (!reqresShouldLog(c))
-        return 0;
+    if (!reqresShouldLog(c)) return 0;
 
     if (!c->reqres.argv_logged) /* Example: UNSUBSCRIBE */
         return 0;
@@ -243,9 +228,7 @@ size_t reqresAppendResponse(client *c) {
     }
 
     /* Now, append reply bytes from the reply list */
-    if (curr_index > c->reqres.offset.last_node.index ||
-        curr_used > c->reqres.offset.last_node.used)
-    {
+    if (curr_index > c->reqres.offset.last_node.index || curr_used > c->reqres.offset.last_node.used) {
         int i = 0;
         listIter iter;
         listNode *curr;
@@ -267,8 +250,7 @@ size_t reqresAppendResponse(client *c) {
             if (i == c->reqres.offset.last_node.index) {
                 /* Write the potentially incomplete node, which had data from
                  * before the current command started */
-                written = reqresAppendBuffer(c,
-                                             o->buf + c->reqres.offset.last_node.used,
+                written = reqresAppendBuffer(c, o->buf + c->reqres.offset.last_node.used,
                                              o->used - c->reqres.offset.last_node.used);
             } else {
                 /* New node */

@@ -141,6 +141,34 @@ proc wait_for_condition {maxtries delay e _else_ elsescript} {
     }
 }
 
+proc verify_replica_online {master replica_idx max_retry} {
+    set pause 100
+    set count_down $max_retry
+    while {$count_down} {
+        set info [$master info]
+        set pattern *slave$replica_idx:*state=online*
+        if {[string match $pattern $info]} {
+            break
+        } else {
+            incr count_down -1
+            after $pause
+        }
+    }
+    if {$count_down == 0} {
+        set threshold [expr {$max_retry*$pause/1000}]
+        error "assertion:Replica is not in sync after $threshold seconds"
+    } 
+}
+
+proc wait_for_value_to_propegate_to_replica {master replica key} {
+    set val [$master get $key]
+    wait_for_condition 50 500 {
+                ([$replica get $key] eq $val)
+    } else {
+        error "Key $key did not propegate. Expected $val but got [$replica get $key]"
+    }
+}
+
 # try to match a value to a list of patterns that are either regex (starts with "/") or plain string.
 # The caller can specify to use only glob-pattern match
 proc search_pattern_list {value pattern_list {glob_pattern false}} {
@@ -233,6 +261,11 @@ proc test {name code {okpattern undefined} {tags {}}} {
             incr ::num_failed
             send_data_packet $::test_server_fd err [join $details "\n"]
 
+            if {$::exit_on_failure} {
+                puts "Test error (last server port:[srv port], log:[srv stdout]), test will exit now"
+                flush stdout
+                exit 1
+            }
             if {$::stop_on_failure} {
                 puts "Test error (last server port:[srv port], log:[srv stdout]), press enter to teardown the test."
                 flush stdout

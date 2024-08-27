@@ -2,7 +2,7 @@
  * for the Jim's event-loop (Jim is a Tcl interpreter) but later translated
  * it in form of a library for easy reuse.
  *
- * Copyright (c) 2006-2010, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2006-2010, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -52,27 +52,36 @@
 #ifdef HAVE_EVPORT
 #include "ae_evport.c"
 #else
-    #ifdef HAVE_EPOLL
-    #include "ae_epoll.c"
-    #else
-        #ifdef HAVE_KQUEUE
-        #include "ae_kqueue.c"
-        #else
-        #include "ae_select.c"
-        #endif
-    #endif
+#ifdef HAVE_EPOLL
+#include "ae_epoll.c"
+#else
+#ifdef HAVE_KQUEUE
+#include "ae_kqueue.c"
+#else
+#include "ae_select.c"
+#endif
+#endif
 #endif
 
+#define AE_LOCK(eventLoop)                                                                                             \
+    if ((eventLoop)->flags & AE_PROTECT_POLL) {                                                                        \
+        assert(pthread_mutex_lock(&(eventLoop)->poll_mutex) == 0);                                                     \
+    }
+
+#define AE_UNLOCK(eventLoop)                                                                                           \
+    if ((eventLoop)->flags & AE_PROTECT_POLL) {                                                                        \
+        assert(pthread_mutex_unlock(&(eventLoop)->poll_mutex) == 0);                                                   \
+    }
 
 aeEventLoop *aeCreateEventLoop(int setsize) {
     aeEventLoop *eventLoop;
     int i;
 
-    monotonicInit();    /* just in case the calling app didn't initialize */
+    monotonicInit(); /* just in case the calling app didn't initialize */
 
     if ((eventLoop = zmalloc(sizeof(*eventLoop))) == NULL) goto err;
-    eventLoop->events = zmalloc(sizeof(aeFileEvent)*setsize);
-    eventLoop->fired = zmalloc(sizeof(aeFiredEvent)*setsize);
+    eventLoop->events = zmalloc(sizeof(aeFileEvent) * setsize);
+    eventLoop->fired = zmalloc(sizeof(aeFiredEvent) * setsize);
     if (eventLoop->events == NULL || eventLoop->fired == NULL) goto err;
     eventLoop->setsize = setsize;
     eventLoop->timeEventHead = NULL;
@@ -81,12 +90,18 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->maxfd = -1;
     eventLoop->beforesleep = NULL;
     eventLoop->aftersleep = NULL;
+    eventLoop->custompoll = NULL;
     eventLoop->flags = 0;
+    /* Initialize the eventloop mutex with PTHREAD_MUTEX_ERRORCHECK type */
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK);
+    if (pthread_mutex_init(&eventLoop->poll_mutex, &attr) != 0) goto err;
+
     if (aeApiCreate(eventLoop) == -1) goto err;
     /* Events with mask == AE_NONE are not set. So let's initialize the
      * vector with it. */
-    for (i = 0; i < setsize; i++)
-        eventLoop->events[i].mask = AE_NONE;
+    for (i = 0; i < setsize; i++) eventLoop->events[i].mask = AE_NONE;
     return eventLoop;
 
 err:
@@ -123,21 +138,28 @@ void aeSetDontWait(aeEventLoop *eventLoop, int noWait) {
  *
  * Otherwise AE_OK is returned and the operation is successful. */
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize) {
+    AE_LOCK(eventLoop);
+    int ret = AE_OK;
     int i;
 
-    if (setsize == eventLoop->setsize) return AE_OK;
-    if (eventLoop->maxfd >= setsize) return AE_ERR;
-    if (aeApiResize(eventLoop,setsize) == -1) return AE_ERR;
+    if (setsize == eventLoop->setsize) goto done;
+    if (eventLoop->maxfd >= setsize) goto err;
+    if (aeApiResize(eventLoop, setsize) == -1) goto err;
 
-    eventLoop->events = zrealloc(eventLoop->events,sizeof(aeFileEvent)*setsize);
-    eventLoop->fired = zrealloc(eventLoop->fired,sizeof(aeFiredEvent)*setsize);
+    eventLoop->events = zrealloc(eventLoop->events, sizeof(aeFileEvent) * setsize);
+    eventLoop->fired = zrealloc(eventLoop->fired, sizeof(aeFiredEvent) * setsize);
     eventLoop->setsize = setsize;
 
     /* Make sure that if we created new slots, they are initialized with
      * an AE_NONE mask. */
-    for (i = eventLoop->maxfd+1; i < setsize; i++)
-        eventLoop->events[i].mask = AE_NONE;
-    return AE_OK;
+    for (i = eventLoop->maxfd + 1; i < setsize; i++) eventLoop->events[i].mask = AE_NONE;
+    goto done;
+
+err:
+    ret = AE_ERR;
+done:
+    AE_UNLOCK(eventLoop);
+    return ret;
 }
 
 void aeDeleteEventLoop(aeEventLoop *eventLoop) {
@@ -149,8 +171,7 @@ void aeDeleteEventLoop(aeEventLoop *eventLoop) {
     aeTimeEvent *next_te, *te = eventLoop->timeEventHead;
     while (te) {
         next_te = te->next;
-        if (te->finalizerProc)
-            te->finalizerProc(eventLoop, te->clientData);
+        if (te->finalizerProc) te->finalizerProc(eventLoop, te->clientData);
         zfree(te);
         te = next_te;
     }
@@ -161,46 +182,65 @@ void aeStop(aeEventLoop *eventLoop) {
     eventLoop->stop = 1;
 }
 
-int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
-        aeFileProc *proc, void *clientData)
-{
+int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask, aeFileProc *proc, void *clientData) {
+    AE_LOCK(eventLoop);
+    int ret = AE_ERR;
+
     if (fd >= eventLoop->setsize) {
         errno = ERANGE;
-        return AE_ERR;
+        goto done;
     }
     aeFileEvent *fe = &eventLoop->events[fd];
 
-    if (aeApiAddEvent(eventLoop, fd, mask) == -1)
-        return AE_ERR;
+    if (aeApiAddEvent(eventLoop, fd, mask) == -1) goto done;
     fe->mask |= mask;
     if (mask & AE_READABLE) fe->rfileProc = proc;
     if (mask & AE_WRITABLE) fe->wfileProc = proc;
     fe->clientData = clientData;
-    if (fd > eventLoop->maxfd)
-        eventLoop->maxfd = fd;
-    return AE_OK;
+    if (fd > eventLoop->maxfd) eventLoop->maxfd = fd;
+
+    ret = AE_OK;
+
+done:
+    AE_UNLOCK(eventLoop);
+    return ret;
 }
 
-void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask)
-{
-    if (fd >= eventLoop->setsize) return;
+void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask) {
+    AE_LOCK(eventLoop);
+    if (fd >= eventLoop->setsize) goto done;
+
     aeFileEvent *fe = &eventLoop->events[fd];
-    if (fe->mask == AE_NONE) return;
+    if (fe->mask == AE_NONE) goto done;
 
     /* We want to always remove AE_BARRIER if set when AE_WRITABLE
      * is removed. */
     if (mask & AE_WRITABLE) mask |= AE_BARRIER;
 
-    aeApiDelEvent(eventLoop, fd, mask);
+    /* Only remove attached events */
+    mask = mask & fe->mask;
+
     fe->mask = fe->mask & (~mask);
     if (fd == eventLoop->maxfd && fe->mask == AE_NONE) {
         /* Update the max fd */
         int j;
 
-        for (j = eventLoop->maxfd-1; j >= 0; j--)
+        for (j = eventLoop->maxfd - 1; j >= 0; j--)
             if (eventLoop->events[j].mask != AE_NONE) break;
         eventLoop->maxfd = j;
     }
+
+    /* Check whether there are events to be removed.
+     * Note: user may remove the AE_BARRIER without
+     * touching the actual events. */
+    if (mask & (AE_READABLE | AE_WRITABLE)) {
+        /* Must be invoked after the eventLoop mask is modified,
+         * which is required by evport and epoll */
+        aeApiDelEvent(eventLoop, fd, mask);
+    }
+
+done:
+    AE_UNLOCK(eventLoop);
 }
 
 void *aeGetFileClientData(aeEventLoop *eventLoop, int fd) {
@@ -218,10 +258,11 @@ int aeGetFileEvents(aeEventLoop *eventLoop, int fd) {
     return fe->mask;
 }
 
-long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds,
-        aeTimeProc *proc, void *clientData,
-        aeEventFinalizerProc *finalizerProc)
-{
+long long aeCreateTimeEvent(aeEventLoop *eventLoop,
+                            long long milliseconds,
+                            aeTimeProc *proc,
+                            void *clientData,
+                            aeEventFinalizerProc *finalizerProc) {
     long long id = eventLoop->timeEventNextId++;
     aeTimeEvent *te;
 
@@ -235,16 +276,14 @@ long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds,
     te->prev = NULL;
     te->next = eventLoop->timeEventHead;
     te->refcount = 0;
-    if (te->next)
-        te->next->prev = te;
+    if (te->next) te->next->prev = te;
     eventLoop->timeEventHead = te;
     return id;
 }
 
-int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id)
-{
+int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id) {
     aeTimeEvent *te = eventLoop->timeEventHead;
-    while(te) {
+    while (te) {
         if (te->id == id) {
             te->id = AE_DELETED_EVENT_ID;
             return AE_OK;
@@ -269,8 +308,7 @@ static int64_t usUntilEarliestTimer(aeEventLoop *eventLoop) {
 
     aeTimeEvent *earliest = NULL;
     while (te) {
-        if ((!earliest || te->when < earliest->when) && te->id != AE_DELETED_EVENT_ID)
-            earliest = te;
+        if ((!earliest || te->when < earliest->when) && te->id != AE_DELETED_EVENT_ID) earliest = te;
         te = te->next;
     }
 
@@ -285,9 +323,9 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
     long long maxId;
 
     te = eventLoop->timeEventHead;
-    maxId = eventLoop->timeEventNextId-1;
+    maxId = eventLoop->timeEventNextId - 1;
     monotime now = getMonotonicUs();
-    while(te) {
+    while (te) {
         long long id;
 
         /* Remove events scheduled for deletion. */
@@ -304,8 +342,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
                 te->prev->next = te->next;
             else
                 eventLoop->timeEventHead = te->next;
-            if (te->next)
-                te->next->prev = te->prev;
+            if (te->next) te->next->prev = te->prev;
             if (te->finalizerProc) {
                 te->finalizerProc(eventLoop, te->clientData);
                 now = getMonotonicUs();
@@ -345,6 +382,17 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
     return processed;
 }
 
+/* This function provides direct access to the aeApiPoll call.
+ * It is intended to be called from a custom poll function.*/
+int aePoll(aeEventLoop *eventLoop, struct timeval *tvp) {
+    AE_LOCK(eventLoop);
+
+    int ret = aeApiPoll(eventLoop, tvp);
+
+    AE_UNLOCK(eventLoop);
+    return ret;
+}
+
 /* Process every pending file event, then every pending time event
  * (that may be registered by file event callbacks just processed).
  * Without special flags the function sleeps until some file event
@@ -360,8 +408,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
  * if flags has AE_CALL_BEFORE_SLEEP set, the beforesleep callback is called.
  *
  * The function returns the number of events processed. */
-int aeProcessEvents(aeEventLoop *eventLoop, int flags)
-{
+int aeProcessEvents(aeEventLoop *eventLoop, int flags) {
     int processed = 0, numevents;
 
     /* Nothing to do? return ASAP */
@@ -371,34 +418,36 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
      * file events to process as long as we want to process time
      * events, in order to sleep until the next time event is ready
      * to fire. */
-    if (eventLoop->maxfd != -1 ||
-        ((flags & AE_TIME_EVENTS) && !(flags & AE_DONT_WAIT))) {
+    if (eventLoop->maxfd != -1 || ((flags & AE_TIME_EVENTS) && !(flags & AE_DONT_WAIT))) {
         int j;
         struct timeval tv, *tvp = NULL; /* NULL means infinite wait. */
         int64_t usUntilTimer;
 
-        if (eventLoop->beforesleep != NULL && (flags & AE_CALL_BEFORE_SLEEP))
-            eventLoop->beforesleep(eventLoop);
+        if (eventLoop->beforesleep != NULL && (flags & AE_CALL_BEFORE_SLEEP)) eventLoop->beforesleep(eventLoop);
 
-        /* The eventLoop->flags may be changed inside beforesleep.
-         * So we should check it after beforesleep be called. At the same time,
-         * the parameter flags always should have the highest priority.
-         * That is to say, once the parameter flag is set to AE_DONT_WAIT,
-         * no matter what value eventLoop->flags is set to, we should ignore it. */
-        if ((flags & AE_DONT_WAIT) || (eventLoop->flags & AE_DONT_WAIT)) {
-            tv.tv_sec = tv.tv_usec = 0;
-            tvp = &tv;
-        } else if (flags & AE_TIME_EVENTS) {
-            usUntilTimer = usUntilEarliestTimer(eventLoop);
-            if (usUntilTimer >= 0) {
-                tv.tv_sec = usUntilTimer / 1000000;
-                tv.tv_usec = usUntilTimer % 1000000;
+        if (eventLoop->custompoll != NULL) {
+            numevents = eventLoop->custompoll(eventLoop);
+        } else {
+            /* The eventLoop->flags may be changed inside beforesleep.
+             * So we should check it after beforesleep be called. At the same time,
+             * the parameter flags always should have the highest priority.
+             * That is to say, once the parameter flag is set to AE_DONT_WAIT,
+             * no matter what value eventLoop->flags is set to, we should ignore it. */
+            if ((flags & AE_DONT_WAIT) || (eventLoop->flags & AE_DONT_WAIT)) {
+                tv.tv_sec = tv.tv_usec = 0;
                 tvp = &tv;
+            } else if (flags & AE_TIME_EVENTS) {
+                usUntilTimer = usUntilEarliestTimer(eventLoop);
+                if (usUntilTimer >= 0) {
+                    tv.tv_sec = usUntilTimer / 1000000;
+                    tv.tv_usec = usUntilTimer % 1000000;
+                    tvp = &tv;
+                }
             }
+            /* Call the multiplexing API, will return only on timeout or when
+             * some event fires. */
+            numevents = aeApiPoll(eventLoop, tvp);
         }
-        /* Call the multiplexing API, will return only on timeout or when
-         * some event fires. */
-        numevents = aeApiPoll(eventLoop, tvp);
 
         /* Don't process file events if not requested. */
         if (!(flags & AE_FILE_EVENTS)) {
@@ -406,8 +455,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
         }
 
         /* After sleep callback. */
-        if (eventLoop->aftersleep != NULL && flags & AE_CALL_AFTER_SLEEP)
-            eventLoop->aftersleep(eventLoop);
+        if (eventLoop->aftersleep != NULL && flags & AE_CALL_AFTER_SLEEP) eventLoop->aftersleep(eventLoop, numevents);
 
         for (j = 0; j < numevents; j++) {
             int fd = eventLoop->fired[j].fd;
@@ -435,7 +483,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
              * Fire the readable event if the call sequence is not
              * inverted. */
             if (!invert && fe->mask & mask & AE_READABLE) {
-                fe->rfileProc(eventLoop,fd,fe->clientData,mask);
+                fe->rfileProc(eventLoop, fd, fe->clientData, mask);
                 fired++;
                 fe = &eventLoop->events[fd]; /* Refresh in case of resize. */
             }
@@ -443,7 +491,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
             /* Fire the writable event. */
             if (fe->mask & mask & AE_WRITABLE) {
                 if (!fired || fe->wfileProc != fe->rfileProc) {
-                    fe->wfileProc(eventLoop,fd,fe->clientData,mask);
+                    fe->wfileProc(eventLoop, fd, fe->clientData, mask);
                     fired++;
                 }
             }
@@ -452,10 +500,8 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
              * after the writable one. */
             if (invert) {
                 fe = &eventLoop->events[fd]; /* Refresh in case of resize. */
-                if ((fe->mask & mask & AE_READABLE) &&
-                    (!fired || fe->wfileProc != fe->rfileProc))
-                {
-                    fe->rfileProc(eventLoop,fd,fe->clientData,mask);
+                if ((fe->mask & mask & AE_READABLE) && (!fired || fe->wfileProc != fe->rfileProc)) {
+                    fe->rfileProc(eventLoop, fd, fe->clientData, mask);
                     fired++;
                 }
             }
@@ -464,8 +510,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
         }
     }
     /* Check time events */
-    if (flags & AE_TIME_EVENTS)
-        processed += processTimeEvents(eventLoop);
+    if (flags & AE_TIME_EVENTS) processed += processTimeEvents(eventLoop);
 
     return processed; /* return the number of processed file/time events */
 }
@@ -481,7 +526,7 @@ int aeWait(int fd, int mask, long long milliseconds) {
     if (mask & AE_READABLE) pfd.events |= POLLIN;
     if (mask & AE_WRITABLE) pfd.events |= POLLOUT;
 
-    if ((retval = poll(&pfd, 1, milliseconds))== 1) {
+    if ((retval = poll(&pfd, 1, milliseconds)) == 1) {
         if (pfd.revents & POLLIN) retmask |= AE_READABLE;
         if (pfd.revents & POLLOUT) retmask |= AE_WRITABLE;
         if (pfd.revents & POLLERR) retmask |= AE_WRITABLE;
@@ -495,9 +540,7 @@ int aeWait(int fd, int mask, long long milliseconds) {
 void aeMain(aeEventLoop *eventLoop) {
     eventLoop->stop = 0;
     while (!eventLoop->stop) {
-        aeProcessEvents(eventLoop, AE_ALL_EVENTS|
-                                   AE_CALL_BEFORE_SLEEP|
-                                   AE_CALL_AFTER_SLEEP);
+        aeProcessEvents(eventLoop, AE_ALL_EVENTS | AE_CALL_BEFORE_SLEEP | AE_CALL_AFTER_SLEEP);
     }
 }
 
@@ -509,6 +552,20 @@ void aeSetBeforeSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *beforesleep
     eventLoop->beforesleep = beforesleep;
 }
 
-void aeSetAfterSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *aftersleep) {
+void aeSetAfterSleepProc(aeEventLoop *eventLoop, aeAfterSleepProc *aftersleep) {
     eventLoop->aftersleep = aftersleep;
+}
+
+/* This function allows setting a custom poll procedure to be used by the event loop.
+ * The custom poll procedure, if set, will be called instead of the default aeApiPoll */
+void aeSetCustomPollProc(aeEventLoop *eventLoop, aeCustomPollProc *custompoll) {
+    eventLoop->custompoll = custompoll;
+}
+
+void aeSetPollProtect(aeEventLoop *eventLoop, int protect) {
+    if (protect) {
+        eventLoop->flags |= AE_PROTECT_POLL;
+    } else {
+        eventLoop->flags &= ~AE_PROTECT_POLL;
+    }
 }

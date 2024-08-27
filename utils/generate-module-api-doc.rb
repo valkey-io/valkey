@@ -13,25 +13,25 @@ def markdown(s)
     newlines = []
     # Fix some markdown
     lines.each{|l|
-        # Rewrite RM_Xyz() to RedisModule_Xyz().
-        l = l.gsub(/(?<![A-Z_])RM_(?=[A-Z])/, 'RedisModule_')
+        # Rewrite VM_Xyz() to ValkeyModule_Xyz().
+        l = l.gsub(/(?<![A-Z_])VM_(?=[A-Z])/, 'ValkeyModule_')
         # Fix more markdown, except in code blocks indented by 4 spaces, which we
         # don't want to mess with.
         if not l.start_with?('    ')
-            # Add backquotes around RedisModule functions and type where missing.
-            l = l.gsub(/(?<!`)RedisModule[A-z]+(?:\*?\(\))?/){|x| "`#{x}`"}
+            # Add backquotes around ValkeyModule functions and type where missing.
+            l = l.gsub(/(?<!`)ValkeyModule[A-z]+(?:\*?\(\))?/){|x| "`#{x}`"}
             # Add backquotes around c functions like malloc() where missing.
             l = l.gsub(/(?<![`A-z.])[a-z_]+\(\)/, '`\0`')
             # Add backquotes around macro and var names containing underscores.
             l = l.gsub(/(?<![`A-z\*])[A-Za-z]+_[A-Za-z0-9_]+/){|x| "`#{x}`"}
             # Link URLs preceded by space or newline (not already linked)
-            l = l.gsub(/(^| )(https?:\/\/[A-Za-z0-9_\/\.\-]+[A-Za-z0-9\/])/,
+            l = l.gsub(/(^| )(https?:\/\/[A-Za-z0-9_\/\.\?=&+\#\-]+[A-Za-z0-9\/])/,
                        '\1[\2](\2)')
             # Replace double-dash with unicode ndash
             l = l.gsub(/ -- /, ' – ')
         end
         # Link function names to their definition within the page
-        l = l.gsub(/`(RedisModule_[A-z0-9]+)[()]*`/) {|x|
+        l = l.gsub(/`(ValkeyModule_[A-z0-9]+)[()]*`/) {|x|
             $index[$1] ? "[#{x}](\##{$1})" : x
         }
         newlines << l
@@ -69,18 +69,18 @@ end
 # Given the source code array and the index at which an exported symbol was
 # detected, extracts and outputs the documentation.
 def docufy(src,i)
-    m = /RM_[A-z0-9]+/.match(src[i])
-    name = m[0]
-    name = name.sub("RM_","RedisModule_")
+    m = /VM_[A-z0-9]+/.match(src[i])
+    shortname = m[0].sub("VM_","")
+    name = "ValkeyModule_" ++ shortname
     proto = src[i].sub("{","").strip+";\n"
-    proto = proto.sub("RM_","RedisModule_")
+    proto = proto.sub("VM_","ValkeyModule_")
     proto = linebreak_proto(proto, "    ");
     # Add a link target with the function name. (We don't trust the exact id of
     # the generated one, which depends on the Markdown implementation.)
     puts "<span id=\"#{name}\"></span>\n\n"
     puts "### `#{name}`\n\n"
     puts "    #{proto}\n"
-    puts "**Available since:** #{$since[name] or "unreleased"}\n\n"
+    puts "**Available since:** #{$since[shortname] or "unreleased"}\n\n"
     comment = ""
     while true
         i = i-1
@@ -132,7 +132,7 @@ end
 
 def is_func_line(src, i)
   line = src[i]
-  return line =~ /RM_/ &&
+  return line =~ /VM_/ &&
          line[0] != ' ' && line[0] != '#' && line[0] != '/' &&
          src[i-1] =~ /\*\//
 end
@@ -140,11 +140,8 @@ end
 puts "---\n"
 puts "title: \"Modules API reference\"\n"
 puts "linkTitle: \"API reference\"\n"
-puts "weight: 1\n"
 puts "description: >\n"
-puts "    Reference for the Redis Modules API\n"
-puts "aliases:\n"
-puts "    - /topics/modules-api-ref\n"
+puts "    Reference for the Valkey Modules API\n"
 puts "---\n"
 puts "\n"
 puts "<!-- This file is generated from module.c using\n"
@@ -155,22 +152,22 @@ src = File.open(File.dirname(__FILE__) ++ "/../src/module.c").to_a
 $index = {}
 src.each_with_index do |line,i|
     if is_func_line(src, i)
-        line =~ /RM_([A-z0-9]+)/
-        name = "RedisModule_#{$1}"
+        line =~ /VM_([A-z0-9]+)/
+        name = "ValkeyModule_#{$1}"
         $index[name] = true
     end
 end
 
 # Populate the 'since' map (name => version) if we're in a git repo.
-$since = {}
+require "./" ++ File.dirname(__FILE__) ++ '/module-api-since.rb'
 git_dir = File.dirname(__FILE__) ++ "/../.git"
 if File.directory?(git_dir) && `which git` != ""
     `git --git-dir="#{git_dir}" tag --sort=v:refname`.each_line do |version|
         next if version !~ /^(\d+)\.\d+\.\d+?$/ || $1.to_i < 4
         version.chomp!
         `git --git-dir="#{git_dir}" cat-file blob "#{version}:src/module.c"`.each_line do |line|
-            if line =~ /^\w.*[ \*]RM_([A-z0-9]+)/
-                name = "RedisModule_#{$1}"
+            if line =~ /^\w.*[ \*]VM_([A-z0-9]+)/
+                name = $1
                 if ! $since[name]
                     $since[name] = version
                 end

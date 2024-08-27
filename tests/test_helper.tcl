@@ -1,4 +1,4 @@
-# Server test suite. Copyright (C) 2009 Salvatore Sanfilippo antirez@gmail.com
+# Server test suite. Copyright (C) 2009 Redis Ltd.
 # This software is released under the BSD License. See the COPYING file for
 # more information.
 
@@ -41,6 +41,7 @@ set ::traceleaks 0
 set ::valgrind 0
 set ::durable 0
 set ::tls 0
+set ::io_threads 0
 set ::tls_module 0
 set ::stack_logging 0
 set ::verbose 0
@@ -65,6 +66,7 @@ set ::active_servers {} ; # Pids of active server instances.
 set ::dont_clean 0
 set ::dont_pre_clean 0
 set ::wait_server 0
+set ::exit_on_failure 0
 set ::stop_on_failure 0
 set ::dump_logs 0
 set ::loop 0
@@ -221,6 +223,16 @@ proc valkey_client {args} {
     return $client
 }
 
+proc valkey_deferring_client_by_addr {host port} {
+    set client [valkey $host $port 1 $::tls]
+    return $client
+}
+
+proc valkey_client_by_addr {host port} {
+    set client [valkey $host $port 0 $::tls]
+    return $client
+}
+
 # Provide easy access to INFO properties. Same semantic as "proc r".
 proc s {args} {
     set level 0
@@ -373,6 +385,11 @@ proc read_from_test_client fd {
         puts $err
         lappend ::failed_tests $err
         set ::active_clients_task($fd) "(ERR) $data"
+        if {$::exit_on_failure} {
+            puts -nonewline "(Fast fail: test will exit now)"
+            flush stdout
+            exit 1
+        }
         if {$::stop_on_failure} {
             puts -nonewline "(Test stopped, press enter to resume the tests)"
             flush stdout
@@ -459,7 +476,7 @@ proc signal_idle_client fd {
         send_data_packet $fd run [lindex $::all_tests $::next_test]
         lappend ::active_clients $fd
         incr ::next_test
-        if {$::loop && $::next_test == [llength $::all_tests]} {
+        if {$::loop > 1 && $::next_test == [llength $::all_tests]} {
             set ::next_test 0
             incr ::loop -1
         }
@@ -554,11 +571,13 @@ proc print_help_screen {} {
         "--dont-clean       Don't delete valkey log files after the run."
         "--dont-pre-clean   Don't delete existing valkey log files before the run."
         "--no-latency       Skip latency measurements and validation by some tests."
+        "--fastfail         Exit immediately once the first test fails."
         "--stop             Blocks once the first test fails."
         "--loop             Execute the specified set of tests forever."
         "--loops <count>    Execute the specified set of tests several times."
         "--wait-server      Wait after server is started (so that you can attach a debugger)."
         "--dump-logs        Dump server log on test failure."
+        "--io-threads       Run tests with IO threads."
         "--tls              Run tests in TLS mode."
         "--tls-module       Run tests in TLS mode with Valkey module."
         "--host <addr>      Run tests against an external host."
@@ -613,6 +632,8 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         }
     } elseif {$opt eq {--quiet}} {
         set ::quiet 1
+   } elseif {$opt eq {--io-threads}} {
+        set ::io_threads 1
     } elseif {$opt eq {--tls} || $opt eq {--tls-module}} {
         package require tls 1.6
         set ::tls 1
@@ -678,12 +699,18 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         set ::wait_server 1
     } elseif {$opt eq {--dump-logs}} {
         set ::dump_logs 1
+    } elseif {$opt eq {--fastfail}} {
+        set ::exit_on_failure 1
     } elseif {$opt eq {--stop}} {
         set ::stop_on_failure 1
     } elseif {$opt eq {--loop}} {
         set ::loop 2147483647
     } elseif {$opt eq {--loops}} {
         set ::loop $arg
+        if {$::loop <= 0} {
+            puts "Wrong argument: $opt, loops should be greater than 0"
+            exit 1
+        }
         incr j
     } elseif {$opt eq {--timeout}} {
         set ::timeout $arg

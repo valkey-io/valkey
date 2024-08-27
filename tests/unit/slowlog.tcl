@@ -64,8 +64,8 @@ start_server {tags {"slowlog"} overrides {slowlog-log-slower-than 1000000}} {
         r config set slowlog-log-slower-than 0
         r slowlog reset
         catch {r acl setuser "slowlog test user" +get +set} _
-        r config set masteruser ""
-        r config set masterauth ""
+        r config set primaryuser ""
+        r config set primaryauth ""
         r config set requirepass ""
         r config set tls-key-file-pass ""
         r config set tls-client-key-file-pass ""
@@ -81,8 +81,8 @@ start_server {tags {"slowlog"} overrides {slowlog-log-slower-than 1000000}} {
         assert_equal 11 [llength $slowlog_resp]
         assert_equal {slowlog reset} [lindex [lindex $slowlog_resp 10] 3]
         assert_equal {acl setuser (redacted) (redacted) (redacted)} [lindex [lindex $slowlog_resp 9] 3]
-        assert_equal {config set masteruser (redacted)} [lindex [lindex $slowlog_resp 8] 3]
-        assert_equal {config set masterauth (redacted)} [lindex [lindex $slowlog_resp 7] 3]
+        assert_equal {config set primaryuser (redacted)} [lindex [lindex $slowlog_resp 8] 3]
+        assert_equal {config set primaryauth (redacted)} [lindex [lindex $slowlog_resp 7] 3]
         assert_equal {config set requirepass (redacted)} [lindex [lindex $slowlog_resp 6] 3]
         assert_equal {config set tls-key-file-pass (redacted)} [lindex [lindex $slowlog_resp 5] 3]
         assert_equal {config set tls-client-key-file-pass (redacted)} [lindex [lindex $slowlog_resp 4] 3]
@@ -247,5 +247,43 @@ start_server {tags {"slowlog"} overrides {slowlog-log-slower-than 1000000}} {
         assert_equal 1 [llength [regexp -all -inline (?=BLPOP) [r slowlog get]]]
         
         $rd close
+    }
+
+    foreach is_eval {0 1} {
+        test "SLOWLOG - the commands in script are recorded normally - is_eval: $is_eval" {
+            if {$is_eval == 0} {
+                r function load replace "#!lua name=mylib \n redis.register_function('myfunc', function(KEYS, ARGS) server.call('ping') end)"
+            }
+
+            r client setname test-client
+            r config set slowlog-log-slower-than 0
+            r slowlog reset
+
+            if {$is_eval} {
+                r eval "server.call('ping')" 0
+            } else {
+                r fcall myfunc 0
+            }
+            set slowlog_resp [r slowlog get 2]
+            assert_equal 2 [llength $slowlog_resp]
+
+            # The first one is the script command, and the second one is the ping command executed in the script
+            # Each slowlog contains: id, timestamp, execution time, command array, ip:port, client name
+            set script_cmd [lindex $slowlog_resp 0]
+            set ping_cmd [lindex $slowlog_resp 1]
+
+            # Make sure the command are logged.
+            if {$is_eval} {
+                assert_equal {eval server.call('ping') 0} [lindex $script_cmd 3]
+            } else {
+                assert_equal {fcall myfunc 0} [lindex $script_cmd 3]
+            }
+            assert_equal {ping} [lindex $ping_cmd 3]
+
+            # Make sure the client info are the logged.
+            assert_equal [lindex $script_cmd 4] [lindex $ping_cmd 4]
+            assert_equal {test-client} [lindex $script_cmd 5]
+            assert_equal {test-client} [lindex $ping_cmd 5]
+        }
     }
 }

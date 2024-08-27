@@ -31,6 +31,10 @@
             [
                 "7.0.3",
                 "Added `ssub` field."
+            ],
+            [
+                "8.0.0",
+                "Replaced `master` `TYPE` with `primary`. `master` still supported for backward compatibility."
             ]
         ],
         "command_flags": [

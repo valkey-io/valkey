@@ -1,4 +1,4 @@
-# hll-err.rb - Copyright (C) 2014 Salvatore Sanfilippo
+# hll-err.rb - Copyright (C) 2014 Redis Ltd.
 # BSD license, See the COPYING file for more information.
 #
 # Check error of HyperLogLog implementation for different set sizes.

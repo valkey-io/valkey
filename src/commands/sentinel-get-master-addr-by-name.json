@@ -1,12 +1,18 @@
 {
     "GET-MASTER-ADDR-BY-NAME": {
-        "summary": "Returns the port and address of a master instance.",
+        "summary": "Returns the port and address of a primary instance.",
         "complexity": "O(1)",
         "group": "sentinel",
         "since": "2.8.4",
         "arity": 3,
         "container": "SENTINEL",
         "function": "sentinelCommand",
+        "deprecated_since": "8.0.0",
+        "replaced_by": "`SENTINEL GET-PRIMARY-ADDR-BY-NAME`",
+        "doc_flags": [
+            "DEPRECATED"
+        ],
+
         "command_flags": [
             "ADMIN",
             "SENTINEL",
@@ -30,7 +36,7 @@
         },
         "arguments": [
             {
-                "name": "master-name",
+                "name": "primary-name",
                 "type": "string"
             }
         ]

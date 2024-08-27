@@ -1,6 +1,6 @@
 {
     "REPLICATE": {
-        "summary": "Configure a node as replica of a master node.",
+        "summary": "Configure a node as replica of a primary node.",
         "complexity": "O(1)",
         "group": "cluster",
         "since": "3.0.0",

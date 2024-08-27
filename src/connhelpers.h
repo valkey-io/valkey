@@ -1,6 +1,6 @@
 
 /*
- * Copyright (c) 2019, Redis Labs
+ * Copyright (c) 2019, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -85,4 +85,4 @@ static inline int callHandler(connection *conn, ConnectionCallbackFunc handler) 
     return 1;
 }
 
-#endif  /* VALKEY_CONNHELPERS_H */
+#endif /* VALKEY_CONNHELPERS_H */

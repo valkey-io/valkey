@@ -910,6 +910,16 @@ void setDeferredPushLen(client *c, void *node, long length) {
     setDeferredAggregateLen(c, node, length, '>');
 }
 
+/* Prepare a client for future writes. This is used so that we can
+ * skip a large number of calls to prepareClientToWrite when
+ * a command produces a lot of discrete elements in its output. */
+writePreparedClient *prepareClientForFutureWrites(client *c) {
+    if (prepareClientToWrite(c) == C_OK) {
+        return (writePreparedClient *)c;
+    }
+    return NULL;
+}
+
 /* Add a double as a bulk reply */
 void addReplyDouble(client *c, double d) {
     if (c->resp == 3) {
@@ -1026,6 +1036,11 @@ void addReplyArrayLen(client *c, long length) {
     addReplyAggregateLen(c, length, '*');
 }
 
+void addWritePreparedReplyArrayLen(writePreparedClient *c, long length) {
+    serverAssert(length >= 0);
+    _addReplyLongLongWithPrefix(c, length, '*');
+}
+
 void addReplyMapLen(client *c, long length) {
     int prefix = c->resp == 2 ? '*' : '%';
     if (c->resp == 2) length *= 2;
@@ -1098,6 +1113,12 @@ void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
     _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
+void addWritePreparedReplyBulkCBuffer(writePreparedClient *c, const void *p, size_t len) {
+    _addReplyLongLongWithPrefix(c, len, '$');
+    _addReplyToBufferOrList(c, p, len);
+    _addReplyToBufferOrList(c, "\r\n", 2);
+}
+
 /* Add sds to reply (takes ownership of sds and frees it) */
 void addReplyBulkSds(client *c, sds s) {
     if (prepareClientToWrite(c) != C_OK) {
@@ -1134,6 +1155,14 @@ void addReplyBulkLongLong(client *c, long long ll) {
 
     len = ll2string(buf, 64, ll);
     addReplyBulkCBuffer(c, buf, len);
+}
+
+void addWritePreparedReplyBulkLongLong(writePreparedClient *c, long long ll) {
+    char buf[64];
+    int len;
+
+    len = ll2string(buf, 64, ll);
+    addWritePreparedReplyBulkCBuffer(c, buf, len);
 }
 
 /* Reply with a verbatim type having the specified extension.

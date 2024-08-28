@@ -1390,6 +1390,12 @@ typedef struct client {
         net_output_bytes_curr_cmd; /* Total network output bytes sent to this client, by the current command. */
 } client;
 
+/* When a command generates a lot of discrete elements to the client output buffer, it is much faster to
+ * skip certain types of initialization. This type is used to indicate a client that has been initialized
+ * and can be used with addWritePreparedReply* functions. A client can be cast into this type with
+ * prepareClientForFutureWrites(client *c). */
+typedef client writePreparedClient;
+
 /* ACL information */
 typedef struct aclInfo {
     long long user_auth_failures;       /* Auth failure counts on user level */
@@ -2779,6 +2785,7 @@ int processInputBuffer(client *c);
 void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip);
 void readQueryFromClient(connection *conn);
 int prepareClientToWrite(client *c);
+writePreparedClient *prepareClientForFutureWrites(client *c);
 void addReplyNull(client *c);
 void addReplyNullArray(client *c);
 void addReplyBool(client *c, int b);
@@ -2788,7 +2795,9 @@ void AddReplyFromClient(client *c, client *src);
 void addReplyBulk(client *c, robj *obj);
 void addReplyBulkCString(client *c, const char *s);
 void addReplyBulkCBuffer(client *c, const void *p, size_t len);
+void addWritePreparedReplyBulkCBuffer(writePreparedClient *c, const void *p, size_t len);
 void addReplyBulkLongLong(client *c, long long ll);
+void addWritePreparedReplyBulkLongLong(writePreparedClient *c, long long ll);
 void addReply(client *c, robj *obj);
 void addReplyStatusLength(client *c, const char *s, size_t len);
 void addReplySds(client *c, sds s);
@@ -2810,6 +2819,7 @@ void addReplyBigNum(client *c, const char *num, size_t len);
 void addReplyHumanLongDouble(client *c, long double d);
 void addReplyLongLong(client *c, long long ll);
 void addReplyArrayLen(client *c, long length);
+void addWritePreparedReplyArrayLen(writePreparedClient *c, long length);
 void addReplyMapLen(client *c, long length);
 void addReplySetLen(client *c, long length);
 void addReplyAttributeLen(client *c, long length);

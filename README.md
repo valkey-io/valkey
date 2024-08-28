@@ -198,23 +198,9 @@ Use `valkey-cli` to connect to the Valkey server:
     --cacert ./tests/tls/ca.crt
 ```
 
-Specifying `--tls-replication yes` can make a Replica connect to the master.
-Using `--tls-cluster yes` to make Valkey Cluster use TLS across nodes.
+Specifying `--tls-replication yes` makes a replica connect to the primary.
 
-#### TLS Connections
-All socket operations now use a connection abstraction layer, concealing I/O and event handling from the caller.
-
-Multi-threaded I/O isn't supported for TLS because it requires unique handling of AE events, which isn't thread-safe. A better approach might involve managing independent AE loops for I/O threads and associating connections with threads long-term, potentially improving performance.
-
-Currently, synchronize I/O for TLS is implemented in a hackish way, involving blocking sockets and socket-level timeouts, leading to potential inaccuracies and syscall overhead. Transitioning entirely to pure async I/O may be a better solution, especially for replication. Although cluster keys migration could be more challenging, it presents an opportunity for improvement.
-
-#### TLS Multi-port support
-Consider the implications of allowing TLS to be configured on a separate port, making Valkey listening on multiple ports:
-
-1. Startup banner port notification
-2. Proctitle
-3. How slaves announce themselves
-4. Cluster bus port calculation
+Using `--tls-cluster yes` makes Valkey Cluster use TLS across nodes.
 
 Running Valkey with RDMA:
 ------------------

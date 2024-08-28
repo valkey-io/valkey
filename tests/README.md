@@ -21,7 +21,8 @@ enabled using the `--host` and `--port` parameters. When executing against an
 external server, tests tagged `external:skip` are skipped.
 
 There are additional runtime options that can further adjust the test suite to
-match different external server configurations:
+match different external server configurations. All options are listed by
+`./runtest --help`. The following table is just a subset of the options:
 
 | Option               | Impact                                                   |
 | -------------------- | -------------------------------------------------------- |
@@ -29,7 +30,26 @@ match different external server configurations:
 | `--ignore-encoding`  | Skip all checks for specific encoding.  |
 | `--ignore-digest`    | Skip key value digest validations. |
 | `--cluster-mode`     | Run in strict Valkey Cluster compatibility mode. |
-| `--large-memory`     | Enables tests that consume more than 100mb |
+| `--large-memory`     | Enables tests that consume more than 100MB |
+| `--tls`              | Run tests with TLS. See below. |
+| `--tls-module`       | Run tests with TLS, when TLS support is built as a module. |
+| `--help`             | Displays the full set of options. |
+
+Running with TLS requires the following preparations:
+
+* Build Valkey is TLS support, e.g. using `make BUILD_TLS=yes`, or `make BUILD_TLS=module`.
+* Run `./utils/gen-test-certs.sh` to generate a root CA and a server certificate.
+* Install TLS support for TCL, e.g. the `tcl-tls` package on Debian/Ubuntu.
+
+Additional tests
+----------------
+
+Not all tests are included in the `./runtest` scripts. Some additional entry points are provided by the following scripts, which support a subset of the options listed above:
+
+* `./runtest-cluster` runs more extensive tests for Valkey Cluster.
+  Some cluster tests are included in `./runtest`, but not all.
+* `./runtest-sentinel` runs tests of Valkey Sentinel.
+* `./runtests-module` runs tests of the module API.
 
 Debugging
 ---------
@@ -69,7 +89,7 @@ The following compatibility and capability tags are currently used:
 | ---------------------     | --------- |
 | `external:skip`           | Not compatible with external servers. |
 | `cluster:skip`            | Not compatible with `--cluster-mode`. |
-| `large-memory`            | Test that requires more than 100mb |
+| `large-memory`            | Test that requires more than 100MB |
 | `tls:skip`                | Not compatible with `--tls`. |
 | `needs:repl`              | Uses replication and needs to be able to `SYNC` from server. |
 | `needs:debug`             | Uses the `DEBUG` command or other debugging focused commands (like `OBJECT REFCOUNT`). |

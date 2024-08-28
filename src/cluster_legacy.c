@@ -62,7 +62,6 @@ void clusterSendPing(clusterLink *link, int type);
 void clusterSendFail(char *nodename);
 void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request);
 void clusterUpdateState(void);
-int clusterNodeCoversSlot(clusterNode *n, int slot);
 list *clusterGetNodesInMyShard(clusterNode *node);
 int clusterNodeAddReplica(clusterNode *primary, clusterNode *replica);
 int clusterAddSlot(clusterNode *n, int slot);
@@ -93,7 +92,6 @@ void moduleCallClusterReceivers(const char *sender_id,
                                 uint32_t len);
 const char *clusterGetMessageTypeString(int type);
 void removeChannelsInSlot(unsigned int slot);
-unsigned int countKeysInSlot(unsigned int hashslot);
 unsigned int countChannelsInSlot(unsigned int hashslot);
 unsigned int delKeysInSlot(unsigned int hashslot);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
@@ -4262,14 +4260,14 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
      * with CLUSTERMSG_FLAG0_FORCEACK (manual failover). */
     if (clusterNodeIsPrimary(node) || primary == NULL || (!nodeFailed(primary) && !force_ack)) {
         if (clusterNodeIsPrimary(node)) {
-            serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): it is a primary node", node->name,
-                      node->human_nodename);
+            serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: it is a primary node", node->name,
+                      node->human_nodename, (unsigned long long)requestCurrentEpoch);
         } else if (primary == NULL) {
-            serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): I don't know its primary", node->name,
-                      node->human_nodename);
+            serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: I don't know its primary",
+                      node->name, node->human_nodename, (unsigned long long)requestCurrentEpoch);
         } else if (!nodeFailed(primary)) {
-            serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): its primary is up", node->name,
-                      node->human_nodename);
+            serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: its primary is up", node->name,
+                      node->human_nodename, (unsigned long long)requestCurrentEpoch);
         }
         return;
     }
@@ -6273,7 +6271,7 @@ void clusterCommandSetSlot(client *c) {
      * To mitigate this issue, the following order needs to be enforced for slot
      * migration finalization such that the replicas finalize the slot ownership
      * before the primary:
- .   *
+     *
      * 1. Client C issues SETSLOT n NODE B against node B.
      * 2. Primary B replicates `SETSLOT n NODE B` to all of its replicas (e.g., B', B'').
      * 3. Upon replication completion, primary B executes `SETSLOT n NODE B` and
@@ -6293,17 +6291,25 @@ void clusterCommandSetSlot(client *c) {
          * non-replicated behavior.*/
         listIter li;
         listNode *ln;
-        int legacy_replica_found = 0;
+        int num_eligible_replicas = 0;
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
             client *r = ln->value;
-            if (r->replica_version < 0x702ff /* 7.2.255 */) {
-                legacy_replica_found++;
-                break;
+
+            /* We think that when the command comes in, the primary only needs to
+             * wait for the online replicas. The admin can easily check if there
+             * are replicas that are down for an extended period of time. If they
+             * decide to move forward anyways, we should not block it. If a replica
+             * failed right before the replication and was not included in the
+             * replication, it would also unlikely win the election.
+             *
+             * And 0x702ff is 7.2.255, we only support new versions in this case. */
+            if (r->repl_state == REPLICA_STATE_ONLINE && r->replica_version > 0x702ff) {
+                num_eligible_replicas++;
             }
         }
 
-        if (!legacy_replica_found) {
+        if (num_eligible_replicas != 0) {
             forceCommandPropagation(c, PROPAGATE_REPL);
             /* We are a primary and this is the first time we see this `SETSLOT`
              * command. Force-replicate the command to all of our replicas
@@ -6313,7 +6319,7 @@ void clusterCommandSetSlot(client *c) {
              * 2. The repl offset target is set to the primary's current repl offset + 1.
              *    There is no concern of partial replication because replicas always
              *    ack the repl offset at the command boundary. */
-            blockClientForReplicaAck(c, timeout_ms, server.primary_repl_offset + 1, myself->num_replicas, 0);
+            blockClientForReplicaAck(c, timeout_ms, server.primary_repl_offset + 1, num_eligible_replicas, 0);
             /* Mark client as pending command for execution after replication to replicas. */
             c->flag.pending_command = 1;
             replicationRequestAckFromReplicas();
@@ -6322,7 +6328,7 @@ void clusterCommandSetSlot(client *c) {
     }
 
     /* Slot states have been updated on the compatible replicas (if any).
-     * Now exuecte the command on the primary. */
+     * Now execute the command on the primary. */
     if (!strcasecmp(c->argv[3]->ptr, "migrating")) {
         serverLog(LL_NOTICE, "Migrating slot %d to node %.40s (%s)", slot, n->name, n->human_nodename);
         server.cluster->migrating_slots_to[slot] = n;

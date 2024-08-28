@@ -60,12 +60,16 @@ After building Valkey, it is a good idea to test it using:
 
     % make test
 
-If TLS is built, running the tests with TLS enabled (you will need `tcl-tls`
-installed):
+The above runs the main integration tests. Additional tests are started using:
 
-    % ./utils/gen-test-certs.sh
-    % ./runtest --tls
+    % make test-unit     # Unit tests
+    % make test-modules  # Tests of the module API
+    % make test-sentinel # Valkey Sentinel integration tests
+    % make test-cluster  # Valkey Cluster integration tests
 
+More about running the integration tests can be found in
+[tests/README.md](tests/README.md) and for unit tests, see
+[src/unit/README.md](src/unit/README.md).
 
 Fixing build problems with dependencies or cached build options
 ---------

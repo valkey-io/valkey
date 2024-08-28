@@ -31,10 +31,11 @@
 #include "cluster.h"
 #include "cluster_slot_stats.h"
 #include "script.h"
+#include "sds.h"
 #include "fpconv_dtoa.h"
 #include "fmtargs.h"
-#include <strings.h>
 #include "io_threads.h"
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <math.h>
@@ -45,28 +46,20 @@ static void setProtocolError(const char *errstr, client *c);
 static void pauseClientsByClient(mstime_t end, int isPauseClientAll);
 int postponeClientRead(client *c);
 char *getClientSockname(client *c);
+
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
 __thread sds thread_shared_qb = NULL;
 
 typedef enum { PARSE_OK = 0, PARSE_ERR = -1, PARSE_NEEDMORE = -2 } parseResult;
 
-/* Return the size consumed from the allocator, for the specified SDS string,
- * including internal fragmentation. This function is used in order to compute
- * the client output buffer size. */
-size_t sdsZmallocSize(sds s) {
-    void *sh = sdsAllocPtr(s);
-    return zmalloc_size(sh);
-}
-
 /* Return the amount of memory used by the sds string at object->ptr
  * for a string object. This includes internal fragmentation. */
 size_t getStringObjectSdsUsedMemory(robj *o) {
     serverAssertWithInfo(NULL, o, o->type == OBJ_STRING);
-    switch (o->encoding) {
-    case OBJ_ENCODING_RAW: return sdsZmallocSize(o->ptr);
-    case OBJ_ENCODING_EMBSTR: return zmalloc_size(o) - sizeof(robj);
-    default: return 0; /* Just integer encoding for now. */
+    if (o->encoding != OBJ_ENCODING_INT) {
+        return sdsAllocSize(o->ptr);
     }
+    return 0;
 }
 
 /* Return the length of a string object.
@@ -591,12 +584,9 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
     /* Sometimes it could be normal that a replica replies to a primary with
      * an error and this function gets called. Actually the error will never
      * be sent because addReply*() against primary clients has no effect...
-     * A notable example is:
      *
-     *    EVAL 'redis.call("incr",KEYS[1]); redis.call("nonexisting")' 1 x
-     *
-     * Where the primary must propagate the first change even if the second
-     * will produce an error. However it is useful to log such events since
+     * It can happen when the versions are different and replica cannot recognize
+     * the commands sent by the primary. However it is useful to log such events since
      * they are rare and may hint at errors in a script or a bug in the server. */
     int ctype = getClientType(c);
     if (ctype == CLIENT_TYPE_PRIMARY || ctype == CLIENT_TYPE_REPLICA || c->id == CLIENT_ID_AOF) {
@@ -920,6 +910,16 @@ void setDeferredPushLen(client *c, void *node, long length) {
     setDeferredAggregateLen(c, node, length, '>');
 }
 
+/* Prepare a client for future writes. This is used so that we can
+ * skip a large number of calls to prepareClientToWrite when
+ * a command produces a lot of discrete elements in its output. */
+writePreparedClient *prepareClientForFutureWrites(client *c) {
+    if (prepareClientToWrite(c) == C_OK) {
+        return (writePreparedClient *)c;
+    }
+    return NULL;
+}
+
 /* Add a double as a bulk reply */
 void addReplyDouble(client *c, double d) {
     if (c->resp == 3) {
@@ -1036,6 +1036,11 @@ void addReplyArrayLen(client *c, long length) {
     addReplyAggregateLen(c, length, '*');
 }
 
+void addWritePreparedReplyArrayLen(writePreparedClient *c, long length) {
+    serverAssert(length >= 0);
+    _addReplyLongLongWithPrefix(c, length, '*');
+}
+
 void addReplyMapLen(client *c, long length) {
     int prefix = c->resp == 2 ? '*' : '%';
     if (c->resp == 2) length *= 2;
@@ -1108,6 +1113,12 @@ void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
     _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
+void addWritePreparedReplyBulkCBuffer(writePreparedClient *c, const void *p, size_t len) {
+    _addReplyLongLongWithPrefix(c, len, '$');
+    _addReplyToBufferOrList(c, p, len);
+    _addReplyToBufferOrList(c, "\r\n", 2);
+}
+
 /* Add sds to reply (takes ownership of sds and frees it) */
 void addReplyBulkSds(client *c, sds s) {
     if (prepareClientToWrite(c) != C_OK) {
@@ -1144,6 +1155,14 @@ void addReplyBulkLongLong(client *c, long long ll) {
 
     len = ll2string(buf, 64, ll);
     addReplyBulkCBuffer(c, buf, len);
+}
+
+void addWritePreparedReplyBulkLongLong(writePreparedClient *c, long long ll) {
+    char buf[64];
+    int len;
+
+    len = ll2string(buf, 64, ll);
+    addWritePreparedReplyBulkCBuffer(c, buf, len);
 }
 
 /* Reply with a verbatim type having the specified extension.
@@ -1503,6 +1522,7 @@ void unlinkClient(client *c) {
             listDelNode(server.clients, c->client_list_node);
             c->client_list_node = NULL;
         }
+        removeClientFromPendingCommandsBatch(c);
 
         /* Check if this is a replica waiting for diskless replication (rdb pipe),
          * in which case it needs to be cleaned from that list */
@@ -4271,7 +4291,7 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
     size_t mem = getClientOutputBufferMemoryUsage(c);
 
     if (output_buffer_mem_usage != NULL) *output_buffer_mem_usage = mem;
-    mem += c->querybuf ? sdsZmallocSize(c->querybuf) : 0;
+    mem += c->querybuf ? sdsAllocSize(c->querybuf) : 0;
     mem += zmalloc_size(c);
     mem += c->buf_usable_size;
     /* For efficiency (less work keeping track of the argv memory), it doesn't include the used memory
@@ -4624,6 +4644,12 @@ int postponeClientRead(client *c) {
 }
 
 int processIOThreadsReadDone(void) {
+    if (ProcessingEventsWhileBlocked) {
+        /* When ProcessingEventsWhileBlocked we may call processIOThreadsReadDone recursively.
+         * In this case, there may be some clients left in the batch waiting to be processed. */
+        processClientsCommandsBatch();
+    }
+
     if (listLength(server.clients_pending_io_read) == 0) return 0;
     int processed = 0;
     listNode *ln;
@@ -4642,15 +4668,17 @@ int processIOThreadsReadDone(void) {
         }
         /* memory barrier acquire to get the updated client state */
         atomic_thread_fence(memory_order_acquire);
-        /* Don't post-process-writes to clients that are going to be closed anyway. */
-        if (c->flag.close_asap) continue;
-        /* If a client is protected, don't do anything,
-         * that may trigger read/write error or recreate handler. */
-        if (c->flag.protected) continue;
 
         listUnlinkNode(server.clients_pending_io_read, ln);
         c->flag.pending_read = 0;
         c->io_read_state = CLIENT_IDLE;
+
+        /* Don't post-process-reads from clients that are going to be closed anyway. */
+        if (c->flag.close_asap) continue;
+
+        /* If a client is protected, don't do anything,
+         * that may trigger read/write error or recreate handler. */
+        if (c->flag.protected) continue;
 
         processed++;
         server.stat_io_reads_processed++;
@@ -4679,14 +4707,19 @@ int processIOThreadsReadDone(void) {
         }
 
         size_t list_length_before_command_execute = listLength(server.clients_pending_io_read);
-        if (processPendingCommandAndInputBuffer(c) == C_OK) {
-            beforeNextClient(c);
+        /* try to add the command to the batch */
+        int ret = addCommandToBatchAndProcessIfFull(c);
+        /* If the command was not added to the commands batch, process it immediately */
+        if (ret == C_ERR) {
+            if (processPendingCommandAndInputBuffer(c) == C_OK) beforeNextClient(c);
         }
         if (list_length_before_command_execute != listLength(server.clients_pending_io_read)) {
             /* A client was unlink from the list possibly making the next node invalid */
             next = listFirst(server.clients_pending_io_read);
         }
     }
+
+    processClientsCommandsBatch();
 
     return processed;
 }
@@ -4784,6 +4817,18 @@ void ioThreadReadQueryFromClient(void *data) {
         /* The command was found, but the arity is invalid.
          * In this case, we reset the parsed_cmd and will let the main thread handle it. */
         c->io_parsed_cmd = NULL;
+    }
+
+    /* Offload slot calculations to the I/O thread to reduce main-thread load. */
+    if (c->io_parsed_cmd && server.cluster_enabled) {
+        getKeysResult result;
+        initGetKeysResult(&result);
+        int numkeys = getKeysFromCommand(c->io_parsed_cmd, c->argv, c->argc, &result);
+        if (numkeys) {
+            robj *first_key = c->argv[result.keys[0].pos];
+            c->slot = calculateKeySlot(first_key->ptr);
+        }
+        getKeysFreeResult(&result);
     }
 
 done:

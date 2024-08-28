@@ -41,6 +41,7 @@
 #include "threads_mngr.h"
 #include "fmtargs.h"
 #include "io_threads.h"
+#include "sds.h"
 
 #include <time.h>
 #include <signal.h>
@@ -813,7 +814,7 @@ size_t ClientsPeakMemInput[CLIENTS_PEAK_MEM_USAGE_SLOTS] = {0};
 size_t ClientsPeakMemOutput[CLIENTS_PEAK_MEM_USAGE_SLOTS] = {0};
 
 int clientsCronTrackExpansiveClients(client *c, int time_idx) {
-    size_t qb_size = c->querybuf ? sdsZmallocSize(c->querybuf) : 0;
+    size_t qb_size = c->querybuf ? sdsAllocSize(c->querybuf) : 0;
     size_t argv_size = c->argv ? zmalloc_size(c->argv) : 0;
     size_t in_usage = qb_size + c->argv_len_sum + argv_size;
     size_t out_usage = getClientOutputBufferMemoryUsage(c);
@@ -5720,6 +5721,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "io_threaded_writes_processed:%lld\r\n", server.stat_io_writes_processed,
             "io_threaded_freed_objects:%lld\r\n", server.stat_io_freed_objects,
             "io_threaded_poll_processed:%lld\r\n", server.stat_poll_processed_by_io_threads,
+            "io_threaded_total_prefetch_batches:%lld\r\n", server.stat_total_prefetch_batches,
+            "io_threaded_total_prefetch_entries:%lld\r\n", server.stat_total_prefetch_entries,
             "client_query_buffer_limit_disconnections:%lld\r\n", server.stat_client_qbuf_limit_disconnections,
             "client_output_buffer_limit_disconnections:%lld\r\n", server.stat_client_outbuf_limit_disconnections,
             "reply_buffer_shrinks:%lld\r\n", server.stat_reply_buffer_shrinks,

@@ -79,6 +79,7 @@ typedef long long ustime_t; /* microsecond time type. */
                            N-elements flat arrays */
 #include "rax.h"        /* Radix tree */
 #include "connection.h" /* Connection abstraction */
+#include "memory_prefetch.h"
 
 #define VALKEYMODULE_CORE 1
 typedef struct serverObject robj;
@@ -1389,6 +1390,12 @@ typedef struct client {
         net_output_bytes_curr_cmd; /* Total network output bytes sent to this client, by the current command. */
 } client;
 
+/* When a command generates a lot of discrete elements to the client output buffer, it is much faster to
+ * skip certain types of initialization. This type is used to indicate a client that has been initialized
+ * and can be used with addWritePreparedReply* functions. A client can be cast into this type with
+ * prepareClientForFutureWrites(client *c). */
+typedef client writePreparedClient;
+
 /* ACL information */
 typedef struct aclInfo {
     long long user_auth_failures;       /* Auth failure counts on user level */
@@ -1756,6 +1763,7 @@ struct valkeyServer {
     int io_threads_do_reads;                  /* Read and parse from IO threads? */
     int active_io_threads_num;                /* Current number of active IO threads, includes main thread. */
     int events_per_io_thread;                 /* Number of events on the event loop to trigger IO threads activation. */
+    int prefetch_batch_max_size;              /* Maximum number of keys to prefetch in a single batch */
     long long events_processed_while_blocked; /* processEventsWhileBlocked() */
     int enable_protected_configs; /* Enable the modification of protected configs, see PROTECTED_ACTION_ALLOWED_* */
     int enable_debug_cmd;         /* Enable DEBUG commands, see PROTECTED_ACTION_ALLOWED_* */
@@ -1837,6 +1845,8 @@ struct valkeyServer {
     long long stat_total_writes_processed;             /* Total number of write events processed */
     long long stat_client_qbuf_limit_disconnections;   /* Total number of clients reached query buf length limit */
     long long stat_client_outbuf_limit_disconnections; /* Total number of clients reached output buf length limit */
+    long long stat_total_prefetch_entries;             /* Total number of prefetched dict entries */
+    long long stat_total_prefetch_batches;             /* Total number of prefetched batches */
     /* The following two are used to track instantaneous metrics, like
      * number of operations per second, network traffic. */
     struct {
@@ -2775,6 +2785,7 @@ int processInputBuffer(client *c);
 void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip);
 void readQueryFromClient(connection *conn);
 int prepareClientToWrite(client *c);
+writePreparedClient *prepareClientForFutureWrites(client *c);
 void addReplyNull(client *c);
 void addReplyNullArray(client *c);
 void addReplyBool(client *c, int b);
@@ -2784,7 +2795,9 @@ void AddReplyFromClient(client *c, client *src);
 void addReplyBulk(client *c, robj *obj);
 void addReplyBulkCString(client *c, const char *s);
 void addReplyBulkCBuffer(client *c, const void *p, size_t len);
+void addWritePreparedReplyBulkCBuffer(writePreparedClient *c, const void *p, size_t len);
 void addReplyBulkLongLong(client *c, long long ll);
+void addWritePreparedReplyBulkLongLong(writePreparedClient *c, long long ll);
 void addReply(client *c, robj *obj);
 void addReplyStatusLength(client *c, const char *s, size_t len);
 void addReplySds(client *c, sds s);
@@ -2806,6 +2819,7 @@ void addReplyBigNum(client *c, const char *num, size_t len);
 void addReplyHumanLongDouble(client *c, long double d);
 void addReplyLongLong(client *c, long long ll);
 void addReplyArrayLen(client *c, long length);
+void addWritePreparedReplyArrayLen(writePreparedClient *c, long length);
 void addReplyMapLen(client *c, long length);
 void addReplySetLen(client *c, long length);
 void addReplyAttributeLen(client *c, long length);
@@ -2817,7 +2831,6 @@ void addReplyLoadedModules(client *c);
 void copyReplicaOutputBuffer(client *dst, client *src);
 void addListRangeReply(client *c, robj *o, long start, long end, int reverse);
 void deferredAfterErrorReply(client *c, list *errors);
-size_t sdsZmallocSize(sds s);
 size_t getStringObjectSdsUsedMemory(robj *o);
 void freeClientReplyValue(void *o);
 void *dupClientReplyValue(void *o);

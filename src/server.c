@@ -121,6 +121,9 @@ void serverLogRaw(int level, const char *msg) {
     level &= 0xff; /* clear flags */
     if (level < server.verbosity) return;
 
+    /* We open and close the log file in every call to support log rotation.
+     * This allows external processes to move or truncate the log file without
+     * disrupting logging. */
     fp = log_to_stdout ? stdout : fopen(server.logfile, "a");
     if (!fp) return;
 

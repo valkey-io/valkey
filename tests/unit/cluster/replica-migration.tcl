@@ -164,6 +164,7 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
         R 7 config set cluster-allow-replica-migration yes
 
         # Record the current primary node, server 7 will be migrated later.
+        set old_role_response [R 7 role]
         set old_primary_ip [lindex [R 7 role] 1]
         set old_primary_port [lindex [R 7 role] 2]
 
@@ -175,6 +176,15 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
         } result]
         if {$code != 0} {
             fail "valkey-cli --cluster rebalance returns non-zero exit code, output below:\n$result"
+        }
+
+        # Wait for server 7 role response to change.
+        wait_for_condition 1000 50 {
+            [R 7 role] ne $old_role_response
+        } else {
+            puts "R 3 role: [R 3 role]"
+            puts "R 7 role: [R 7 role]"
+            fail "Server 7 role response has not changed"
         }
 
         wait_for_cluster_propagation

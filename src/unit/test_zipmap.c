@@ -22,8 +22,7 @@ static void zipmapRepr(unsigned char *p) {
             if (l != 0 && fwrite(p, l, 1, stdout) == 0) perror("fwrite");
             p += l + e;
             if (e) {
-                while (e--)
-                    ;
+                while (e--);
             }
         }
     }
@@ -133,7 +132,7 @@ int test_zipmapIterateThroughElements(int argc, char *argv[], int flags) {
     unsigned int expected_vlen[] = {3, 3, 3, 6, 5, 0};
     int iter = 0;
 
-    while((i = zipmapNext(i,&key,&klen,&value,&vlen)) != NULL) {
+    while ((i = zipmapNext(i, &key, &klen, &value, &vlen)) != NULL) {
         char *tmp = expected_key[iter];
         TEST_ASSERT(klen == expected_klen[iter]);
         TEST_ASSERT(strncmp((const char *)tmp, (const char *)key, klen) == 0);

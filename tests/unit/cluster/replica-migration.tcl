@@ -287,6 +287,18 @@ proc test_sub_replica {type} {
         verify_log_message -3 "*Start of election*offset 0*" 0
         verify_log_message -7 "*Start of election*offset 0*" 0
 
+        # Wait for the cluster to be ok.
+        wait_for_condition 1000 50 {
+            [CI 3 cluster_state] eq "ok" &&
+            [CI 4 cluster_state] eq "ok" &&
+            [CI 7 cluster_state] eq "ok"
+        } else {
+            puts "R 3: [R 3 cluster info]"
+            puts "R 4: [R 4 cluster info]"
+            puts "R 7: [R 7 cluster info]"
+            fail "Cluster is down"
+        }
+
         # Make sure the key exists and is consistent.
         R 3 readonly
         R 7 readonly

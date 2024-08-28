@@ -3162,8 +3162,6 @@ int clusterProcessPacket(clusterLink *link) {
 
     /* PING, PONG, MEET: process config information. */
     if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_PONG || type == CLUSTERMSG_TYPE_MEET) {
-        int myself_shard_id_changed = 0;
-
         serverLog(LL_DEBUG, "%s packet received: %.40s", clusterGetMessageTypeString(type),
                   link->node ? link->node->name : "NULL");
 
@@ -3318,10 +3316,27 @@ int clusterProcessPacket(clusterLink *link) {
                     clusterNodeAddReplica(sender_claimed_primary, sender);
                     sender->replicaof = sender_claimed_primary;
 
-                    /* The later updateShardId may change myself shard_id, and we
-                     * need to remember whether this change has occurred. */
-                    if (myself != sender && myself->replicaof == sender) {
-                        myself_shard_id_changed = 1;
+                    /* Currently this is the only place where replicaof state can be updated on
+                     * this function, since updateShardId may update myself shard_id and caused
+                     * areInSameShard check failed. Explicitly check for a replication loop before
+                     * attempting the replication chain folding logic. */
+                    if (myself->replicaof && myself->replicaof->replicaof && myself->replicaof->replicaof != myself) {
+                        /* Safeguard against sub-replicas.
+                         *
+                         * A replica's primary can turn itself into a replica if its last slot
+                         * is removed. If no other node takes over the slot, there is nothing
+                         * else to trigger replica migration. In this case, they are not in the
+                         * same shard, so a full sync is required.
+                         *
+                         * Or a replica's primary can turn itself into a replica of its other
+                         * replica during a failover. In this case, they are in the same shard,
+                         * so we can try a psync. */
+                        serverLog(LL_NOTICE, "I'm a sub-replica! Reconfiguring myself as a replica of %.40s from %.40s",
+                                  myself->replicaof->replicaof->name, myself->replicaof->name);
+                        int are_in_same_shard = areInSameShard(myself->replicaof->replicaof, myself);
+                        clusterSetPrimary(myself->replicaof->replicaof, 1, !are_in_same_shard);
+                        /* We will add the CLUSTER_TODO_SAVE_CONFIG flag when we exit the if statement. */
+                        clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
                     }
 
                     /* Update the shard_id when a replica is connected to its
@@ -3389,32 +3404,6 @@ int clusterProcessPacket(clusterLink *link) {
                     }
                 }
             }
-        }
-
-        /* Explicitly check for a replication loop before attempting the replication
-         * chain folding logic. */
-        if (myself->replicaof && myself->replicaof->replicaof && myself->replicaof->replicaof != myself) {
-            /* Safeguard against sub-replicas.
-             *
-             * A replica's primary can turn itself into a replica if its last slot
-             * is removed. If no other node takes over the slot, there is nothing
-             * else to trigger replica migration. In this case, they are not in the
-             * same shard, so a full sync is required.
-             *
-             * Or a replica's primary can turn itself into a replica of its other
-             * replica during a failover. In this case, they are in the same shard,
-             * so we can try a psync. */
-            serverLog(LL_NOTICE, "I'm a sub-replica! Reconfiguring myself as a replica of %.40s from %.40s",
-                      myself->replicaof->replicaof->name, myself->replicaof->name);
-            if (myself_shard_id_changed) {
-                /* If myself shard_id changes during the clusterProcessPacket, myself
-                 * will not be able to psync with the new shard. */
-                clusterSetPrimary(myself->replicaof->replicaof, 1, 1);
-            } else {
-                int are_in_same_shard = areInSameShard(myself->replicaof->replicaof, myself);
-                clusterSetPrimary(myself->replicaof->replicaof, 1, !are_in_same_shard);
-            }
-            clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
         }
 
         /* If our config epoch collides with the sender's try to fix

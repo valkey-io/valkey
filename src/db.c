@@ -948,7 +948,7 @@ void scanCallback(void *privdata, const dictEntry *de) {
         key = sdsdup(keysds);
         if (!data->only_keys) {
             char buf[MAX_LONG_DOUBLE_CHARS];
-            int len = ld2string(buf, sizeof(buf), *(double *)dictGetVal(de), LD_STR_AUTO);
+            int len = ld2string(buf, sizeof(buf), dictGetDoubleVal(de), LD_STR_AUTO);
             val = sdsnewlen(buf, len);
         }
     } else {

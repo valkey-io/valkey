@@ -208,8 +208,8 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
 
             while ((de = dictNext(di)) != NULL) {
                 sds sdsele = dictGetKey(de);
-                double *score = dictGetVal(de);
-                const int len = fpconv_dtoa(*score, buf);
+                double score = dictGetDoubleVal(de);
+                const int len = fpconv_dtoa(score, buf);
                 buf[len] = '\0';
                 memset(eledigest, 0, 20);
                 mixDigest(eledigest, sdsele, sdslen(sdsele));

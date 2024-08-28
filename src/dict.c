@@ -532,6 +532,15 @@ int dictAdd(dict *d, void *key, void *val) {
     return DICT_OK;
 }
 
+/* Add an element with double value to the target hash table */
+int dictAddDoubleVal(dict *d, void *key, double val) {
+    dictEntry *entry = dictAddRaw(d, key, NULL);
+
+    if (!entry) return DICT_ERR;
+    if (!d->type->no_value) dictSetDoubleVal(entry, val);
+    return DICT_OK;
+}
+
 /* Low level add or find:
  * This function adds the entry but instead of setting a value returns the
  * dictEntry structure to the user, that will make sure to fill the value
@@ -906,7 +915,11 @@ void dictSetUnsignedIntegerVal(dictEntry *de, uint64_t val) {
 
 void dictSetDoubleVal(dictEntry *de, double val) {
     assert(entryHasValue(de));
-    de->v.d = val;
+    if (entryIsEmbedded(de)) {
+        decodeEmbeddedEntry(de)->v.d = val;
+    } else {
+        de->v.d = val;
+    }
 }
 
 int64_t dictIncrSignedIntegerVal(dictEntry *de, int64_t val) {
@@ -951,6 +964,9 @@ uint64_t dictGetUnsignedIntegerVal(const dictEntry *de) {
 
 double dictGetDoubleVal(const dictEntry *de) {
     assert(entryHasValue(de));
+    if (entryIsEmbedded(de)) {
+        return decodeEmbeddedEntry(de)->v.d;
+    }
     return de->v.d;
 }
 

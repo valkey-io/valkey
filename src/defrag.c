@@ -276,9 +276,9 @@ void activeDefragZsetEntry(zset *zs, dictEntry *de) {
     double *newscore;
     sds sdsele = dictGetKey(de);
     if ((newsds = activeDefragSds(sdsele))) dictSetKey(zs->dict, de, newsds);
-    newscore = zslDefrag(zs->zsl, *(double *)dictGetVal(de), sdsele, newsds);
+    newscore = zslDefrag(zs->zsl, dictGetDoubleVal(de), sdsele, newsds);
     if (newscore) {
-        dictSetVal(zs->dict, de, newscore);
+        dictSetDoubleVal(de, *newscore);
     }
 }
 

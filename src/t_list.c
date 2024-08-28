@@ -661,9 +661,9 @@ void addListQuicklistRangeReply(client *c, robj *o, int from, int rangelen, int 
         quicklistEntry qe;
         serverAssert(quicklistNext(iter, &qe)); /* fail on corrupt data */
         if (qe.value) {
-            addwritePreparedReplyBulkCBuffer(wpc, qe.value, qe.sz);
+            addWritePreparedReplyBulkCBuffer(wpc, qe.value, qe.sz);
         } else {
-            addwritePreparedReplyBulkLongLong(wpc, qe.longval);
+            addWritePreparedReplyBulkLongLong(wpc, qe.longval);
         }
     }
     quicklistReleaseIterator(iter);
@@ -686,9 +686,9 @@ void addListListpackRangeReply(client *c, robj *o, int from, int rangelen, int r
         serverAssert(p); /* fail on corrupt data */
         vstr = lpGetValue(p, &vlen, &lval);
         if (vstr) {
-            addwritePreparedReplyBulkCBuffer(wpc, vstr, vlen);
+            addWritePreparedReplyBulkCBuffer(wpc, vstr, vlen);
         } else {
-            addwritePreparedReplyBulkLongLong(wpc, lval);
+            addWritePreparedReplyBulkLongLong(wpc, lval);
         }
         p = reverse ? lpPrev(o->ptr, p) : lpNext(o->ptr, p);
     }

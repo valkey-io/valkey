@@ -1124,7 +1124,7 @@ void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
     _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
-void addwritePreparedReplyBulkCBuffer(writePreparedClient *c, const void *p, size_t len) {
+void addWritePreparedReplyBulkCBuffer(writePreparedClient *c, const void *p, size_t len) {
     _addReplyLongLongWithPrefix(c, len, '$');
     _addReplyToBufferOrList(c, p, len);
     _addReplyToBufferOrList(c, "\r\n", 2);
@@ -1168,12 +1168,12 @@ void addReplyBulkLongLong(client *c, long long ll) {
     addReplyBulkCBuffer(c, buf, len);
 }
 
-void addwritePreparedReplyBulkLongLong(writePreparedClient *c, long long ll) {
+void addWritePreparedReplyBulkLongLong(writePreparedClient *c, long long ll) {
     char buf[64];
     int len;
 
     len = ll2string(buf, 64, ll);
-    addwritePreparedReplyBulkCBuffer(c, buf, len);
+    addWritePreparedReplyBulkCBuffer(c, buf, len);
 }
 
 /* Reply with a verbatim type having the specified extension.

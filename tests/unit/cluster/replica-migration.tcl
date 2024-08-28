@@ -103,7 +103,7 @@ proc test_migrated_replica {type} {
         if {$type == "sigstop"} {
             resume_process $primary0_pid
 
-            # Waiting the old primary go online and become a replica.
+            # Wait for the old primary to go online and become a replica.
             wait_for_condition 1000 50 {
                 [s 0 role] eq {slave}
             } else {

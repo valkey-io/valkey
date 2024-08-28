@@ -25,9 +25,17 @@ It is as simple as:
     % make
 
 To build with TLS support, you'll need OpenSSL development libraries (e.g.
-libssl-dev on Debian/Ubuntu) and run:
+libssl-dev on Debian/Ubuntu).
+
+To build TLS support as Valkey built-in:
 
     % make BUILD_TLS=yes
+
+TO build TLS as Valkey module:
+
+    % make BUILD_TLS=module
+
+Note that sentinel mode does not support TLS module.
 
 To build with experimental RDMA support you'll need RDMA development libraries
 (e.g. librdmacm-dev and libibverbs-dev on Debian/Ubuntu). For now, Valkey only
@@ -156,8 +164,41 @@ line, with exactly the same name.
 Running Valkey with TLS:
 ------------------
 
-Please consult the [TLS.md](TLS.md) file for more information on
-how to use Valkey with TLS.
+### Running manually
+To manually run a Valkey server with TLS mode (assuming `./gen-test-certs.sh` was invoked so sample certificates/keys are available):
+
+* TLS built-in mode:
+    ```
+    ./src/valkey-server --tls-port 6379 --port 0 \
+        --tls-cert-file ./tests/tls/valkey.crt \
+        --tls-key-file ./tests/tls/valkey.key \
+        --tls-ca-cert-file ./tests/tls/ca.crt
+    ```
+
+* TLS module mode:
+    ```
+    ./src/valkey-server --tls-port 6379 --port 0 \
+        --tls-cert-file ./tests/tls/valkey.crt \
+        --tls-key-file ./tests/tls/valkey.key \
+        --tls-ca-cert-file ./tests/tls/ca.crt \
+        --loadmodule src/valkey-tls.so
+    ```
+
+Note that you can disable TCP by specifying `--port 0` explicitly.
+It's also possible to have both TCP and TLS available at the same time,
+but you'll have to assign different ports.
+
+Use `valkey-cli` to connect to the Valkey server:
+```
+./src/valkey-cli --tls \
+    --cert ./tests/tls/valkey.crt \
+    --key ./tests/tls/valkey.key \
+    --cacert ./tests/tls/ca.crt
+```
+
+Specifying `--tls-replication yes` makes a replica connect to the primary.
+
+Using `--tls-cluster yes` makes Valkey Cluster use TLS across nodes.
 
 Running Valkey with RDMA:
 ------------------

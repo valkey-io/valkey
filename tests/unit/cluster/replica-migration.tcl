@@ -11,6 +11,14 @@ proc my_slot_allocation {masters replicas} {
     R [expr $masters-1] cluster addslots 0
 }
 
+proc get_my_primary_peer {srv_idx} {
+    set role_response [R $srv_idx role]
+    set primary_ip [lindex $role_response 1]
+    set primary_port [lindex $role_response 2]
+    set primary_peer "$primary_ip:$primary_port"
+    return $primary_peer
+}
+
 proc test_migrated_replica {type} {
     test "Migrated replica reports zero repl offset and rank, and fails to win election - $type" {
         # Write some data to primary 0, slot 1, make a small repl_offset.
@@ -227,11 +235,6 @@ proc test_sub_replica {type} {
         R 3 config set cluster-allow-replica-migration yes
         R 7 config set cluster-allow-replica-migration no
 
-        # Record the current primary node, server 3 will be migrated later.
-        # And server 7 will become a sub-replica that also will be migrated later.
-        set 3_old_role_response [R 3 role]
-        set 7_old_role_response [R 7 role]
-
         # 10s, make sure primary 0 will hang in the save.
         R 0 config set rdb-key-save-delay 100000000
 
@@ -245,27 +248,15 @@ proc test_sub_replica {type} {
             fail "valkey-cli --cluster rebalance returns non-zero exit code, output below:\n$result"
         }
 
-        # Wait for server 3 and server 7 role response to change.
+        # Make sure server 3 and server 7 becomes a replica of primary 0.
         wait_for_condition 1000 50 {
-            [R 3 role] ne $3_old_role_response &&
-            [R 7 role] ne $7_old_role_response
+            [get_my_primary_peer 3] eq $addr &&
+            [get_my_primary_peer 7] eq $addr
         } else {
             puts "R 3 role: [R 3 role]"
             puts "R 7 role: [R 7 role]"
             fail "Server 3 and 7 role response has not changed"
         }
-
-        # Make sure server 3 becomes a replica of primary 0.
-        set new_primary_ip [lindex [R 3 role] 1]
-        set new_primary_port [lindex [R 3 role] 2]
-        assert_equal [s -3 role] {slave}
-        assert_equal "$new_primary_ip:$new_primary_port" $addr
-
-        # And server 7 becomes a replica of primary 0.
-        set new_primary_ip [lindex [R 7 role] 1]
-        set new_primary_port [lindex [R 7 role] 2]
-        assert_equal [s -7 role] {slave}
-        assert_equal "$new_primary_ip:$new_primary_port" $addr
 
         # Make sure server 7 got a sub-replica log.
         verify_log_message -7 "*I'm a sub-replica!*" 0

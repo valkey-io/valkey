@@ -11,8 +11,8 @@ proc my_slot_allocation {masters replicas} {
     R [expr $masters-1] cluster addslots 0
 }
 
-start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
-    test "Migrated replica reports zero repl offset and rank, and fails to win election" {
+proc test_migrated_replica {type} {
+    test "Migrated replica reports zero repl offset and rank, and fails to win election - $type" {
         # Write some data to primary 0, slot 1, make a small repl_offset.
         for {set i 0} {$i < 1024} {incr i} {
             R 0 incr key_991803
@@ -45,8 +45,14 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
         R 3 config set cluster-allow-replica-migration yes
         R 7 config set cluster-allow-replica-migration yes
 
-        # Shutdown primary 0.
-        catch {R 0 shutdown nosave}
+        if {$type == "shutdown"} {
+            # Shutdown primary 0.
+            catch {R 0 shutdown nosave}
+        } elseif {$type == "sigstop"} {
+            # Pause primary 0.
+            set primary0_pid [s 0 process_id]
+            pause_process $primary0_pid
+        }
 
         # Wait for the replica to become a primary, and make sure
         # the other primary become a replica.
@@ -93,11 +99,30 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
             puts "R 7: [R 7 keys *]"
             fail "Key not consistent"
         }
+
+        if {$type == "sigstop"} {
+            resume_process $primary0_pid
+
+            # Wait for the old primary to go online and become a replica.
+            wait_for_condition 1000 50 {
+                [s 0 role] eq {slave}
+            } else {
+                fail "The old primary was not converted into replica"
+            }
+        }
     }
+} ;# proc
+
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+    test_migrated_replica "shutdown"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
 start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
-    test "New non-empty replica reports zero repl offset and rank, and fails to win election" {
+    test_migrated_replica "sigstop"
+} my_slot_allocation cluster_allocate_replicas ;# start_cluster
+
+proc test_nonempty_replica {type} {
+    test "New non-empty replica reports zero repl offset and rank, and fails to win election - $type" {
         # Write some data to primary 0, slot 1, make a small repl_offset.
         for {set i 0} {$i < 1024} {incr i} {
             R 0 incr key_991803
@@ -118,8 +143,14 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
         R 7 config set cluster-allow-replica-migration yes
         R 7 cluster replicate [R 0 cluster myid]
 
-        # Shutdown primary 0.
-        catch {R 0 shutdown nosave}
+        if {$type == "shutdown"} {
+            # Shutdown primary 0.
+            catch {R 0 shutdown nosave}
+        } elseif {$type == "sigstop"} {
+            # Pause primary 0.
+            set primary0_pid [s 0 process_id]
+            pause_process $primary0_pid
+        }
 
         # Wait for the replica to become a primary.
         wait_for_condition 1000 50 {
@@ -155,7 +186,26 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
             puts "R 7: [R 7 get key_991803]"
             fail "Key not consistent"
         }
+
+        if {$type == "sigstop"} {
+            resume_process $primary0_pid
+
+            # Waiting the old primary go online and become a replica.
+            wait_for_condition 1000 50 {
+                [s 0 role] eq {slave}
+            } else {
+                fail "The old primary was not converted into replica"
+            }
+        }
     }
+} ;# proc
+
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+    test_nonempty_replica "shutdown"
+} my_slot_allocation cluster_allocate_replicas ;# start_cluster
+
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+    test_nonempty_replica "sigstop"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
 start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {

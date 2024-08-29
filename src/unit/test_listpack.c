@@ -69,6 +69,7 @@ static inline int _test_assert(int c) {
     TEST_ASSERT(c);
     return 0;
 }
+
 static unsigned char *pop(unsigned char *lp, int where, void *expected) {
     unsigned char *p, *vstr;
     int64_t vlen;

@@ -3345,7 +3345,7 @@ int clusterProcessPacket(clusterLink *link) {
                                   myself->replicaof->replicaof->name, myself->replicaof->name);
                         clusterSetPrimary(myself->replicaof->replicaof, 1,
                                           !areInSameShard(myself->replicaof->replicaof, myself));
-                        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG| CLUSTER_TODO_UPDATE_STATE |
+                        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE |
                                              CLUSTER_TODO_FSYNC_CONFIG);
                     }
 

@@ -3316,10 +3316,20 @@ int clusterProcessPacket(clusterLink *link) {
                     clusterNodeAddReplica(sender_claimed_primary, sender);
                     sender->replicaof = sender_claimed_primary;
 
-                    /* Currently this is the only place where replicaof state can be updated on
-                     * this function, since updateShardId may update myself shard_id and caused
-                     * areInSameShard check failed. Explicitly check for a replication loop before
-                     * attempting the replication chain folding logic. */
+                    /* The chain reduction logic requires correctly establishing the replication relationship.
+                     * A key decision when designating a new primary for 'myself' is determining whether
+                     * 'myself' and the new primary belong to the same shard, which would imply shared
+                     * replication history and allow safe partial synchronization (psync).
+                     *
+                     * This decision hinges on the shard_id, a per-node property that helps verify if the
+                     * two nodes share the same replication history. It's critical not to update 'myself's
+                     * shard_id prematurely during this process. Doing so could incorrectly associate
+                     * 'myself' with the sender's shard_id, leading the subsequent clusterSetPrimary call
+                     * to falsely assume that 'myself' and the new primary have been in the same shard.
+                     * This mistake could result in data loss by incorrectly permitting a psync.
+                     *
+                     * Therefore, it's essential to delay any shard_id updates until after the replication
+                     * relationship has been properly established and verified. */
                     if (myself->replicaof && myself->replicaof->replicaof && myself->replicaof->replicaof != myself) {
                         /* Safeguard against sub-replicas.
                          *

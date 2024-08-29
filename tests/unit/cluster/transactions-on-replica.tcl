@@ -53,6 +53,22 @@ test "MULTI-EXEC with write operations is MOVED" {
     assert {[string range $err 0 8] eq {EXECABORT}}
 }
 
+test "write command is QUEUED, then EXEC shoud be MOVED after failover" {
+    set rr [valkey_client]
+    $rr MULTI
+    assert {[$rr SET foo bar] eq {QUEUED}}
+
+    $replica CLUSTER FAILOVER FORCE
+    wait_replica_online $replica
+
+    catch {$rr EXEC} err
+    assert {[string range $err 0 4] eq {MOVED}} 
+    $rr close
+
+    $primary CLUSTER FAILOVER FORCE
+    wait_replica_online $primary
+}
+
 test "read-only blocking operations from replica" {
     set rd [valkey_deferring_client -1]
     $rd readonly

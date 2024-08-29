@@ -3345,8 +3345,7 @@ int clusterProcessPacket(clusterLink *link) {
                                   myself->replicaof->replicaof->name, myself->replicaof->name);
                         int are_in_same_shard = areInSameShard(myself->replicaof->replicaof, myself);
                         clusterSetPrimary(myself->replicaof->replicaof, 1, !are_in_same_shard);
-                        /* We will add the CLUSTER_TODO_SAVE_CONFIG flag when we exit the if statement. */
-                        clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
+                        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG| CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
                     }
 
                     /* Update the shard_id when a replica is connected to its

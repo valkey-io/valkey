@@ -3343,8 +3343,7 @@ int clusterProcessPacket(clusterLink *link) {
                          * so we can try a psync. */
                         serverLog(LL_NOTICE, "I'm a sub-replica! Reconfiguring myself as a replica of %.40s from %.40s",
                                   myself->replicaof->replicaof->name, myself->replicaof->name);
-                        int are_in_same_shard = areInSameShard(myself->replicaof->replicaof, myself);
-                        clusterSetPrimary(myself->replicaof->replicaof, 1, !are_in_same_shard);
+                        clusterSetPrimary(myself->replicaof->replicaof, 1, !areInSameShard(myself->replicaof->replicaof, myself));
                         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG| CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
                     }
 

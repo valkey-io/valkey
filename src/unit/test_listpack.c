@@ -140,7 +140,6 @@ int test_listpackCreateIntList(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_listpackCreateList(int argc, char **argv, int flags) {
     /* Create list */
     UNUSED(argc);
@@ -155,7 +154,6 @@ int test_listpackCreateList(int argc, char **argv, int flags) {
 
     return 0;
 }
-
 
 int test_listpackLpPrepend(int argc, char **argv, int flags) {
     /* Test lpPrepend */
@@ -174,7 +172,6 @@ int test_listpackLpPrepend(int argc, char **argv, int flags) {
 
     return 0;
 }
-
 
 int test_listpackLpPrependInteger(int argc, char **argv, int flags) {
     /* Test lpPrependInteger */
@@ -197,7 +194,6 @@ int test_listpackLpPrependInteger(int argc, char **argv, int flags) {
 
     return 0;
 }
-
 
 int test_listpackGetELementAtIndex(int argc, char **argv, int flags) {
     /* Get element at index */
@@ -240,7 +236,6 @@ int test_listpackPop(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_listpackGetELementAtIndex2(int argc, char **argv, int flags) {
     /* Get element at index */
     UNUSED(argc);
@@ -260,7 +255,6 @@ int test_listpackGetELementAtIndex2(int argc, char **argv, int flags) {
 
     return 0;
 }
-
 
 int test_listpackIterate0toEnd(int argc, char **argv, int flags) {
     /* Iterate list from 0 to end */
@@ -284,7 +278,6 @@ int test_listpackIterate0toEnd(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_listpackIterate1toEnd(int argc, char **argv, int flags) {
     /* Iterate list from 1 to end */
     UNUSED(argc);
@@ -306,7 +299,6 @@ int test_listpackIterate1toEnd(int argc, char **argv, int flags) {
 
     return 0;
 }
-
 
 int test_listpackIterate2toEnd(int argc, char **argv, int flags) {
     /* Iterate list from 2 to end */
@@ -330,7 +322,6 @@ int test_listpackIterate2toEnd(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_listpackIterateBackToFront(int argc, char **argv, int flags) {
     /* Iterate from back to front */
     UNUSED(argc);
@@ -352,7 +343,6 @@ int test_listpackIterateBackToFront(int argc, char **argv, int flags) {
 
     return 0;
 }
-
 
 int test_listpackIterateBackToFrontWithDelete(int argc, char **argv, int flags) {
     /* Iterate from back to front, deleting all items */
@@ -541,7 +531,6 @@ int test_listpackDeleteWitNumOverflow(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_listpackBatchDelete(int argc, char **argv, int flags) {
     /* Batch delete */
     UNUSED(argc);
@@ -560,7 +549,6 @@ int test_listpackBatchDelete(int argc, char **argv, int flags) {
 
     return 0;
 }
-
 
 int test_listpackDeleteFooWhileIterating(int argc, char **argv, int flags) {
     /* Delete foo while iterating */
@@ -583,7 +571,6 @@ int test_listpackDeleteFooWhileIterating(int argc, char **argv, int flags) {
 
     return 0;
 }
-
 
 int test_listpackReplaceWithSameSize(int argc, char **argv, int flags) {
     /* Replace with same size */
@@ -614,7 +601,6 @@ int test_listpackReplaceWithSameSize(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_listpackReplaceWithDifferentSize(int argc, char **argv, int flags) {
     /* Replace with different size */
     UNUSED(argc);
@@ -638,7 +624,6 @@ int test_listpackReplaceWithDifferentSize(int argc, char **argv, int flags) {
 
     return 0;
 }
-
 
 int test_listpackRegressionGt255Bytes(int argc, char **argv, int flags) {
     /* Regression test for >255 byte strings */
@@ -667,7 +652,6 @@ int test_listpackRegressionGt255Bytes(int argc, char **argv, int flags) {
 
     return 0;
 }
-
 
 int test_listpackCreateLongListAndCheckIndices(int argc, char **argv, int flags) {
     /* Create long list and check indices */
@@ -699,7 +683,6 @@ int test_listpackCreateLongListAndCheckIndices(int argc, char **argv, int flags)
     return 0;
 }
 
-
 int test_listpackCompareStrsWithLpEntries(int argc, char **argv, int flags) {
     /* Compare strings with listpack entries */
     UNUSED(argc);
@@ -721,7 +704,6 @@ int test_listpackCompareStrsWithLpEntries(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_listpackLpMergeEmptyLps(int argc, char **argv, int flags) {
     /* lpMerge two empty listpacks */
     UNUSED(argc);
@@ -738,7 +720,6 @@ int test_listpackLpMergeEmptyLps(int argc, char **argv, int flags) {
 
     return 0;
 }
-
 
 int test_listpackLpMergeLp1Larger(int argc, char **argv, int flags) {
     /* lpMerge two listpacks - first larger than second */
@@ -768,7 +749,6 @@ int test_listpackLpMergeLp1Larger(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_listpackLpMergeLp2Larger(int argc, char **argv, int flags) {
     /* lpMerge two listpacks - second larger than first */
     UNUSED(argc);
@@ -796,7 +776,6 @@ int test_listpackLpMergeLp2Larger(int argc, char **argv, int flags) {
 
     return 0;
 }
-
 
 int test_listpackLpNextRandom(int argc, char **argv, int flags) {
     /* lpNextRandom normal usage */
@@ -833,7 +812,6 @@ int test_listpackLpNextRandom(int argc, char **argv, int flags) {
 
     return 0;
 }
-
 
 int test_listpackLpNextRandomCC(int argc, char **argv, int flags) {
     /* lpNextRandom corner cases */
@@ -898,7 +876,6 @@ int test_listpackLpNextRandomCC(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_listpackRandomPairWithOneElement(int argc, char **argv, int flags) {
     /* Random pair with one element */
     UNUSED(argc);
@@ -916,7 +893,6 @@ int test_listpackRandomPairWithOneElement(int argc, char **argv, int flags) {
 
     return 0;
 }
-
 
 int test_listpackRandomPairWithManyElements(int argc, char **argv, int flags) {
     /* Random pair with many elements */
@@ -945,7 +921,6 @@ int test_listpackRandomPairWithManyElements(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_listpackRandomPairsWithOneElement(int argc, char **argv, int flags) {
     /* Random pairs with one element */
     UNUSED(argc);
@@ -968,7 +943,6 @@ int test_listpackRandomPairsWithOneElement(int argc, char **argv, int flags) {
 
     return 0;
 }
-
 
 int test_listpackRandomPairsWithManyElements(int argc, char **argv, int flags) {
     /* Random pairs with many elements */
@@ -1006,7 +980,6 @@ int test_listpackRandomPairsWithManyElements(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_listpackRandomPairsUniqueWithOneElement(int argc, char **argv, int flags) {
     /* Random pairs unique with one element */
     UNUSED(argc);
@@ -1033,7 +1006,6 @@ int test_listpackRandomPairsUniqueWithOneElement(int argc, char **argv, int flag
 
     return 0;
 }
-
 
 int test_listpackRandomPairsUniqueWithManyElements(int argc, char **argv, int flags) {
     /* Random pairs unique with many elements */
@@ -1072,7 +1044,6 @@ int test_listpackRandomPairsUniqueWithManyElements(int argc, char **argv, int fl
 
     return 0;
 }
-
 
 int test_listpackPushVariousEncodings(int argc, char **argv, int flags) {
     /* push various encodings */
@@ -1133,7 +1104,6 @@ int test_listpackPushVariousEncodings(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_listpackLpFind(int argc, char **argv, int flags) {
     /* Test lpFind */
     UNUSED(argc);
@@ -1151,7 +1121,6 @@ int test_listpackLpFind(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_listpackLpValidateIntegrity(int argc, char **argv, int flags) {
     /* Test lpValidateIntegrity */
     UNUSED(argc);
@@ -1167,7 +1136,6 @@ int test_listpackLpValidateIntegrity(int argc, char **argv, int flags) {
 
     return 0;
 }
-
 
 int test_listpackNumberOfElementsExceedsLP_HDR_NUMELE_UNKNOWN(int argc, char **argv, int flags) {
     /* Test number of elements exceeds LP_HDR_NUMELE_UNKNOWN */
@@ -1191,7 +1159,6 @@ int test_listpackNumberOfElementsExceedsLP_HDR_NUMELE_UNKNOWN(int argc, char **a
 
     return 0;
 }
-
 
 int test_listpackStressWithRandom(int argc, char **argv, int flags) {
     /* Stress with random payloads of different encoding */
@@ -1269,7 +1236,6 @@ int test_listpackStressWithRandom(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_listpackSTressWithVariableSize(int argc, char **argv, int flags) {
     /* Stress with variable listpack size */
     UNUSED(argc);
@@ -1302,7 +1268,6 @@ int test_listpackBenchmarkInit(int argc, char *argv[], int flags) {
     return 0;
 }
 
-
 int test_listpackBenchmarkLpAppend(int argc, char **argv, int flags) {
     /* Benchmark lpAppend */
     UNUSED(argc);
@@ -1327,7 +1292,6 @@ int test_listpackBenchmarkLpAppend(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_listpackBenchmarkLpFindString(int argc, char **argv, int flags) {
     /* Benchmark lpFind string */
     UNUSED(argc);
@@ -1342,7 +1306,6 @@ int test_listpackBenchmarkLpFindString(int argc, char **argv, int flags) {
     printf("Done. usec=%lld\n", usec() - start);
     return 0;
 }
-
 
 int test_listpackBenchmarkLpFindNumber(int argc, char **argv, int flags) {
     /* Benchmark lpFind number */
@@ -1359,7 +1322,6 @@ int test_listpackBenchmarkLpFindNumber(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_listpackBenchmarkLpSeek(int argc, char **argv, int flags) {
     /* Benchmark lpSeek */
     UNUSED(argc);
@@ -1374,7 +1336,6 @@ int test_listpackBenchmarkLpSeek(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_listpackBenchmarkLpValidateIntegrity(int argc, char **argv, int flags) {
     /* Benchmark lpValidateIntegrity */
     UNUSED(argc);
@@ -1388,7 +1349,6 @@ int test_listpackBenchmarkLpValidateIntegrity(int argc, char **argv, int flags) 
     printf("Done. usec=%lld\n", usec() - start);
     return 0;
 }
-
 
 int test_listpackBenchmarkLpCompareWithString(int argc, char **argv, int flags) {
     /* Benchmark lpCompare with string */
@@ -1407,7 +1367,6 @@ int test_listpackBenchmarkLpCompareWithString(int argc, char **argv, int flags) 
     printf("Done. usec=%lld\n", usec() - start);
     return 0;
 }
-
 
 int test_listpackBenchmarkLpCompareWithNumber(int argc, char **argv, int flags) {
     /* Benchmark lpCompare with number */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -42,6 +42,7 @@
 #include "monotonic.h"
 #include "resp_parser.h"
 #include "script_lua.h"
+#include "sds.h"
 
 #include <lua.h>
 #include <lauxlib.h>
@@ -490,7 +491,7 @@ sds luaCreateFunction(client *c, robj *body, int evalsha) {
     l->node = luaScriptsLRUAdd(c, sha, evalsha);
     int retval = dictAdd(lctx.lua_scripts, sha, l);
     serverAssertWithInfo(c ? c : lctx.lua_client, NULL, retval == DICT_OK);
-    lctx.lua_scripts_mem += sdsZmallocSize(sha) + getStringObjectSdsUsedMemory(body);
+    lctx.lua_scripts_mem += sdsAllocSize(sha) + getStringObjectSdsUsedMemory(body);
     incrRefCount(body);
     return sha;
 }
@@ -516,7 +517,7 @@ void luaDeleteFunction(client *c, sds sha) {
     /* We only delete `EVAL` scripts, which must exist in the LRU list. */
     serverAssert(l->node);
     listDelNode(lctx.lua_scripts_lru_list, l->node);
-    lctx.lua_scripts_mem -= sdsZmallocSize(sha) + getStringObjectSdsUsedMemory(l->body);
+    lctx.lua_scripts_mem -= sdsAllocSize(sha) + getStringObjectSdsUsedMemory(l->body);
     dictFreeUnlinkedEntry(lctx.lua_scripts, de);
 }
 

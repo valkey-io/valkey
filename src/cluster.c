@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -748,7 +748,16 @@ int verifyClusterNodeId(const char *name, int length) {
 }
 
 int isValidAuxChar(int c) {
-    return isalnum(c) || (strchr("!#$%&()*+.:;<>?@[]^{|}~", c) == NULL);
+    /* Return true if the character is alphanumeric */
+    if (isalnum(c)) {
+        return 1;
+    }
+
+    /* List of invalid characters */
+    static const char *invalid_charset = "!#$%&()*+;<>?@[]^{|}~";
+
+    /* Return true if the character is NOT in the invalid charset */
+    return strchr(invalid_charset, c) == NULL;
 }
 
 int isValidAuxString(char *s, unsigned int length) {

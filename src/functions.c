@@ -114,12 +114,12 @@ static dict *engines = NULL;
 static functionsLibCtx *curr_functions_lib_ctx = NULL;
 
 static size_t functionMallocSize(functionInfo *fi) {
-    return zmalloc_size(fi) + sdsZmallocSize(fi->name) + (fi->desc ? sdsZmallocSize(fi->desc) : 0) +
+    return zmalloc_size(fi) + sdsAllocSize(fi->name) + (fi->desc ? sdsAllocSize(fi->desc) : 0) +
            fi->li->ei->engine->get_function_memory_overhead(fi->function);
 }
 
 static size_t libraryMallocSize(functionLibInfo *li) {
-    return zmalloc_size(li) + sdsZmallocSize(li->name) + sdsZmallocSize(li->code);
+    return zmalloc_size(li) + sdsAllocSize(li->name) + sdsAllocSize(li->code);
 }
 
 static void engineStatsDispose(dict *d, void *obj) {
@@ -417,7 +417,7 @@ int functionsRegisterEngine(const char *engine_name, engine *engine) {
 
     dictAdd(engines, engine_name_sds, ei);
 
-    engine_cache_memory += zmalloc_size(ei) + sdsZmallocSize(ei->name) + zmalloc_size(engine) +
+    engine_cache_memory += zmalloc_size(ei) + sdsAllocSize(ei->name) + zmalloc_size(engine) +
                            engine->get_engine_memory_overhead(engine->engine_ctx);
 
     return C_OK;

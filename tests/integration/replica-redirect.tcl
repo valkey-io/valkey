@@ -1,5 +1,6 @@
 start_server {tags {needs:repl external:skip}} {
     start_server {} {
+        set primary [srv -1 client]
         set primary_host [srv -1 host]
         set primary_port [srv -1 port]
         set primary_pid [srv -1 pid]
@@ -9,11 +10,7 @@ start_server {tags {needs:repl external:skip}} {
         set replica_pid [srv 0 pid]
 
         r replicaof $primary_host $primary_port
-        wait_for_condition 50 100 {
-            [s 0 master_link_status] eq {up}
-        } else {
-            fail "Replicas not replicating from primary"
-        }
+        wait_replica_online $primary
 
         test {replica allow read command by default} {
             r get foo

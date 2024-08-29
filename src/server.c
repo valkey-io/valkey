@@ -559,12 +559,12 @@ dictType objToDictDictType = {
 /* Same as objToDictDictType, added some kvstore callbacks, it's used
  * for PUBSUB command to track clients subscribing the channels. */
 dictType kvstoreChannelDictType = {
-    dictObjHash,                /* hash function */
-    NULL,                       /* key dup */
-    dictObjKeyCompare,          /* key compare */
-    dictObjectDestructor,       /* key destructor */
-    dictDictDestructor,         /* val destructor */
-    NULL,                       /* allow to expand */
+    dictObjHash,          /* hash function */
+    NULL,                 /* key dup */
+    dictObjKeyCompare,    /* key compare */
+    dictObjectDestructor, /* key destructor */
+    dictDictDestructor,   /* val destructor */
+    NULL,                 /* allow to expand */
     kvstoreDictRehashingStarted,
     kvstoreDictRehashingCompleted,
     kvstoreDictMetadataSize,
@@ -2664,8 +2664,8 @@ void initServer(void) {
      * (which has to be kvstore), see pubsubtype.serverPubSubChannels */
     server.pubsub_channels = kvstoreCreate(&kvstoreChannelDictType, 0, KVSTORE_ALLOCATE_DICTS_ON_DEMAND);
     server.pubsub_patterns = dictCreate(&objToDictDictType);
-    server.pubsubshard_channels =
-        kvstoreCreate(&kvstoreChannelDictType, slot_count_bits, KVSTORE_ALLOCATE_DICTS_ON_DEMAND | KVSTORE_FREE_EMPTY_DICTS);
+    server.pubsubshard_channels = kvstoreCreate(&kvstoreChannelDictType, slot_count_bits,
+                                                KVSTORE_ALLOCATE_DICTS_ON_DEMAND | KVSTORE_FREE_EMPTY_DICTS);
     server.pubsub_clients = 0;
     server.watching_clients = 0;
     server.cronloops = 0;

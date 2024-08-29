@@ -765,6 +765,7 @@ start_server {tags {"introspection"}} {
 
     test {CONFIG SET set immutable} {
         assert_error "ERR *immutable*" {r config set daemonize yes}
+        assert_error "ERR *immutable*" {r config set dir "./"}
     }
 
     test {CONFIG GET hidden configs} {
@@ -898,6 +899,13 @@ start_server {tags {"introspection"}} {
         start_server {config "default.conf" args {--shutdown-on-sigint nosave force now --shutdown-on-sigterm "nosave force"}} {
             assert_match [r config get shutdown-on-sigint] {shutdown-on-sigint {nosave now force}}
             assert_match [r config get shutdown-on-sigterm] {shutdown-on-sigterm {nosave force}}
+        }
+    } {} {external:skip}
+
+    test {valkey-server command line arguments - dir multiple times} {
+        start_server {config "default.conf" args {--dir "./" --dir "./"}} {
+            r config get dir
+            assert_equal {PONG} [r ping]
         }
     } {} {external:skip}
 

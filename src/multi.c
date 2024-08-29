@@ -55,6 +55,13 @@ void freeClientMultiState(client *c) {
     zfree(c->mstate.commands);
 }
 
+void resetClientMultiState(client *c) {
+    if (c->mstate.commands) {
+        freeClientMultiState(c);
+        initClientMultiState(c);
+    }
+}
+
 /* Add a new command into the MULTI commands queue */
 void queueMultiCommand(client *c, uint64_t cmd_flags) {
     multiCmd *mc;
@@ -94,8 +101,7 @@ void queueMultiCommand(client *c, uint64_t cmd_flags) {
 }
 
 void discardTransaction(client *c) {
-    freeClientMultiState(c);
-    initClientMultiState(c);
+    resetClientMultiState(c);
     c->flag.multi = 0;
     c->flag.dirty_cas = 0;
     c->flag.dirty_exec = 0;
@@ -107,10 +113,7 @@ void discardTransaction(client *c) {
 void flagTransaction(client *c) {
     if (c->flag.multi) {
         c->flag.dirty_exec = 1;
-        if (c->mstate.commands) {
-            freeClientMultiState(c);
-            initClientMultiState(c);
-        }
+        resetClientMultiState(c);
     }
 }
 
@@ -397,10 +400,7 @@ void touchWatchedKey(serverDb *db, robj *key) {
         }
 
         c->flag.dirty_cas = 1;
-        if (c->mstate.commands) {
-            freeClientMultiState(c);
-            initClientMultiState(c);
-        }
+        resetClientMultiState(c);
         /* As the client is marked as dirty, there is no point in getting here
          * again in case that key (or others) are modified again (or keep the
          * memory overhead till EXEC). */
@@ -452,10 +452,7 @@ void touchAllWatchedKeysInDb(serverDb *emptied, serverDb *replaced_with) {
                 }
                 client *c = wk->client;
                 c->flag.dirty_cas = 1;
-                if (c->mstate.commands) {
-                    freeClientMultiState(c);
-                    initClientMultiState(c);
-                }
+                resetClientMultiState(c);
                 /* Note - we could potentially call unwatchAllKeys for this specific client in order to reduce
                  * the total number of iterations. BUT this could also free the current next entry pointer
                  * held by the iterator and can lead to use-after-free. */

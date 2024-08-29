@@ -3319,10 +3319,10 @@ int clusterProcessPacket(clusterLink *link) {
                     /* The chain reduction logic requires correctly establishing the replication relationship.
                      * A key decision when designating a new primary for 'myself' is determining whether
                      * 'myself' and the new primary belong to the same shard, which would imply shared
-                     * replication history and allow safe partial synchronization (psync).
+                     * replication history and allow a safe partial synchronization (psync).
                      *
                      * This decision hinges on the shard_id, a per-node property that helps verify if the
-                     * two nodes share the same replication history. It's critical not to update 'myself's
+                     * two nodes share the same replication history. It's critical not to update myself's
                      * shard_id prematurely during this process. Doing so could incorrectly associate
                      * 'myself' with the sender's shard_id, leading the subsequent clusterSetPrimary call
                      * to falsely assume that 'myself' and the new primary have been in the same shard.
@@ -3343,8 +3343,10 @@ int clusterProcessPacket(clusterLink *link) {
                          * so we can try a psync. */
                         serverLog(LL_NOTICE, "I'm a sub-replica! Reconfiguring myself as a replica of %.40s from %.40s",
                                   myself->replicaof->replicaof->name, myself->replicaof->name);
-                        clusterSetPrimary(myself->replicaof->replicaof, 1, !areInSameShard(myself->replicaof->replicaof, myself));
-                        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG| CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
+                        clusterSetPrimary(myself->replicaof->replicaof, 1,
+                                          !areInSameShard(myself->replicaof->replicaof, myself));
+                        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG| CLUSTER_TODO_UPDATE_STATE |
+                                             CLUSTER_TODO_FSYNC_CONFIG);
                     }
 
                     /* Update the shard_id when a replica is connected to its

@@ -53,7 +53,7 @@ test "MULTI-EXEC with write operations is MOVED" {
     assert {[string range $err 0 8] eq {EXECABORT}}
 }
 
-test "write command is QUEUED, then EXEC shoud be MOVED after failover" {
+test "write command is QUEUED, then EXEC should be MOVED after failover" {
     set rr [valkey_client]
     $rr MULTI
     assert {[$rr SET foo bar] eq {QUEUED}}

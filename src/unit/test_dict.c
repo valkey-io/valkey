@@ -124,7 +124,6 @@ int test_dictAddOneKeyTriggerResize(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_dictDeleteKeys(int argc, char **argv, int flags) {
     /* Delete keys until we can trigger shrink in next test */
     UNUSED(argc);

@@ -215,7 +215,6 @@ int test_listpackGetELementAtIndex(int argc, char **argv, int flags) {
     return 0;
 }
 
-
 int test_listpackPop(int argc, char **argv, int flags) {
     /* Pop list */
     UNUSED(argc);

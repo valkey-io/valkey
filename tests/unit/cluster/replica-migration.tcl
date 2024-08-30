@@ -351,7 +351,9 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
 
         # Make sure server 3 lost its replica (server 7) and server 7 becomes a replica of primary 0.
         wait_for_condition 1000 50 {
+            [s -3 role] eq {master} &&
             [s -3 connected_slaves] eq 0 &&
+            [s -7 role] eq {slave} &&
             [get_my_primary_peer 7] eq $addr
         } else {
             puts "R 3 role: [R 3 role]"

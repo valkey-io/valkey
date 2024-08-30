@@ -79,6 +79,9 @@ test "Instance #0, #1, #2 gets converted into a slaves" {
     wait_for_condition 1000 50 {
         [s 0 role] eq {slave} && [s -1 role] eq {slave} && [s -2 role] eq {slave}
     } else {
+        puts "s 0 role: [s 0 role]"
+        puts "s -1 role: [s -1 role]"
+        puts "s -2 role: [s -2 role]"
         fail "Old masters not converted into slaves"
     }
 }

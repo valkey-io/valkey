@@ -9,8 +9,28 @@ start_server {tags {needs:repl external:skip}} {
         set replica_port [srv 0 port]
         set replica_pid [srv 0 pid]
 
-        r replicaof $primary_host $primary_port
-        wait_replica_online $primary
+        test {write command inside MULTI is QUEUED, EXEC should be REDIRECT} {
+            set rr [valkey_client]
+            $rr client capa redirect
+            $rr multi
+            assert_equal "QUEUED" [$rr set foo bar]
+
+            # Change the current instance to be a replica
+            r replicaof $primary_host $primary_port
+            wait_replica_online $primary
+
+            assert_error "REDIRECT*" {$rr exec}
+            $rr close
+        }
+
+        test {write command inside MULTI is REDIRECT, EXEC should be EXECABORT} {
+            set rr [valkey_client]
+            $rr client capa redirect
+            $rr multi
+            assert_error "REDIRECT*" {$rr set foo bar}
+            assert_error "EXECABORT*" {$rr exec}
+            $rr close
+        }
 
         test {replica allow read command by default} {
             r get foo

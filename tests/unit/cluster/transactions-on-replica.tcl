@@ -59,14 +59,22 @@ test "write command is QUEUED, then EXEC should be MOVED after failover" {
     assert {[$rr SET foo bar] eq {QUEUED}}
 
     $replica CLUSTER FAILOVER FORCE
-    wait_replica_online $replica
+    wait_for_condition 50 1000 {
+        [status $primary master_link_status] == "up"
+    } else {
+        fail "FAILOVER failed."
+    }
 
     catch {$rr EXEC} err
     assert {[string range $err 0 4] eq {MOVED}} 
     $rr close
 
     $primary CLUSTER FAILOVER FORCE
-    wait_replica_online $primary
+    wait_for_condition 50 1000 {
+        [status $replica master_link_status] == "up"
+    } else {
+        fail "FAILOVER failed."
+    }
 }
 
 test "read-only blocking operations from replica" {

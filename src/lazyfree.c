@@ -192,7 +192,7 @@ void emptyDbAsync(serverDb *db) {
         flags |= KVSTORE_FREE_EMPTY_DICTS;
     }
     kvstore *oldkeys = db->keys, *oldexpires = db->expires;
-    db->keys = kvstoreCreate(&kvstoreDictType, slot_count_bits, flags);
+    db->keys = kvstoreCreate(&kvstoreKeysDictType, slot_count_bits, flags);
     db->expires = kvstoreCreate(&kvstoreExpiresDictType, slot_count_bits, flags);
     atomic_fetch_add_explicit(&lazyfree_objects, kvstoreSize(oldkeys), memory_order_relaxed);
     bioCreateLazyFreeJob(lazyfreeFreeDatabase, 2, oldkeys, oldexpires);

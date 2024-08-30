@@ -2637,7 +2637,7 @@ extern dictType objectKeyHeapPointerValueDictType;
 extern dictType setDictType;
 extern dictType BenchmarkDictType;
 extern dictType zsetDictType;
-extern dictType kvstoreDictType;
+extern dictType kvstoreKeysDictType;
 extern dictType kvstoreExpiresDictType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;
 extern dictType hashDictType;

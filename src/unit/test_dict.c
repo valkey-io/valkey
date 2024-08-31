@@ -1,8 +1,6 @@
 #include "../dict.c"
 #include "test_help.h"
 
-#define TEST(name) printf("test — %s\n", name);
-
 uint64_t hashCallback(const void *key) {
     return dictGenHashFunction((unsigned char *)key, strlen((char *)key));
 }

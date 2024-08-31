@@ -233,15 +233,7 @@ int test_dictDeleteOneKeyTriggerResizeAgain(int argc, char **argv, int flags) {
     TEST_ASSERT(DICTHT_SIZE(_dict->ht_size_exp[0]) == new_dict_size);
     TEST_ASSERT(DICTHT_SIZE(_dict->ht_size_exp[1]) == 0);
 
-    return 0;
-}
-
-int test_dictRelease(int argc, char **argv, int flags) {
-    /* Restore to original state */
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-
+    /* This is the last one, restore to original state */
     dictRelease(_dict);
 
     return 0;

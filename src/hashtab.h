@@ -112,11 +112,20 @@ typedef struct {
     int safe;
 } hashtabIterator;
 
-/* TODO: stats */
+/* TODO:
+ *
+ * - RehashingInfo
+ * - Stats/debugging (GetStatsMsg, GetStatsHt, CombineStats, FreeStats)
+ * - size_t hashtabMemUsage(t)
+ * - get random and fair-random element
+ * - get some elements (unfair random)
+ * - empty (delete all elements)
+ * - two-phase delete (find position + delete at position) API
+ * - two-phase insert (find position + insert at position) API
+ * - Type flag to disable incremental rehashing.
+ *
+ * Not needed: defrag functions (solved by emit_ref in scan) */
 
-/* Not needed: defrag functions (solved by emit_ref in scan) */
-
-/* TODO: Type flag to disable incremental rehashing. */
 
 /* --- Inline functions --- */
 

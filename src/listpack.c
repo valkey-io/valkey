@@ -471,6 +471,7 @@ unsigned char *lpSkip(unsigned char *p) {
  * already pointed to the last element of the listpack. */
 unsigned char *lpNext(unsigned char *lp, unsigned char *p) {
     assert(p);
+    (void)(lp);
     p = lpSkip(p);
     if (p[0] == LP_EOF) return NULL;
     return p;

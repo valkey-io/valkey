@@ -503,13 +503,13 @@ static int expand(hashtab *t, size_t size, int *malloc_failed) {
 /* Finds an element matching the key. If a match is found, returns a pointer to
  * the bucket containing the matching element and points 'pos_in_bucket' to the
  * index within the bucket. Returns NULL if no matching element was found. */
-static hashtabBucket *hashtabFindBucket(hashtab *t, uint64_t hash, const void *key, int *pos_in_bucket) {
+static hashtabBucket *hashtabFindBucket(hashtab *t, uint64_t hash, const void *key, int *pos_in_bucket, int *table_index) {
     if (hashtabSize(t) == 0) return 0;
     uint8_t h2 = highBits(hash);
     int table;
 
     /* Do some incremental rehashing. */
-    if (hashtabIsRehashing(t) && resize_policy == HASHTAB_RESIZE_ALLOW) {
+    if (hashtabIsRehashing(t) && !t->pauseRehash && resize_policy == HASHTAB_RESIZE_ALLOW) {
         rehashStep(t);
     }
 
@@ -531,6 +531,7 @@ static hashtabBucket *hashtabFindBucket(hashtab *t, uint64_t hash, const void *k
                     if (compareKeys(t, key, elem_key) == 0) {
                         /* It's a match. */
                         if (pos_in_bucket) *pos_in_bucket = pos;
+                        if (table_index) *table_index = table;
                         return b;
                     }
                 }
@@ -569,7 +570,7 @@ static void hashtabInsert(hashtab *t, uint64_t hash, void *elem) {
      * this case we don't do it when looking up existing elements. The reason
      * for doing it on insert is to ensure that we finish rehashing before we
      * need to resize the table again. */
-    if (hashtabIsRehashing(t) && resize_policy == HASHTAB_RESIZE_AVOID) {
+    if (hashtabIsRehashing(t) && !t->pauseRehash && resize_policy == HASHTAB_RESIZE_AVOID) {
         rehashStep(t);
     }
     int i;
@@ -579,6 +580,31 @@ static void hashtabInsert(hashtab *t, uint64_t hash, void *elem) {
     b->hashes[i] = highBits(hash);
     b->everfull |= bucketIsFull(b);
     t->used[hashtabIsRehashing(t) ? 1 : 0]++;
+}
+
+/* A fingerprint of some of the state of the hash table. */
+static uint64_t hashtabFingerprint(hashtab *t) {
+    uint64_t integers[6], hash = 0;
+    integers[0] = (uintptr_t)t->tables[0];
+    integers[1] = t->bucketExp[0];
+    integers[2] = t->used[0];
+    integers[3] = (uintptr_t)t->tables[1];
+    integers[4] = t->bucketExp[1];
+    integers[5] = t->used[1];
+
+    /* Result = hash(hash(hash(int1)+int2)+int3) */
+    for (int j = 0; j < 6; j++) {
+        hash += integers[j];
+        /* Tomas Wang's 64 bit integer hash. */
+        hash = (~hash) + (hash << 21); /* hash = (hash << 21) - hash - 1; */
+        hash = hash ^ (hash >> 24);
+        hash = (hash + (hash << 3)) + (hash << 8); /* hash * 265 */
+        hash = hash ^ (hash >> 14);
+        hash = (hash + (hash << 2)) + (hash << 4); /* hash * 21 */
+        hash = hash ^ (hash >> 28);
+        hash = hash + (hash << 31);
+    }
+    return hash;
 }
 
 /* --- API functions --- */
@@ -725,7 +751,7 @@ int hashtabFind(hashtab *t, const void *key, void **found) {
     if (hashtabSize(t) == 0) return 0;
     uint64_t hash = hashKey(t, key);
     int pos_in_bucket = 0;
-    hashtabBucket *b = hashtabFindBucket(t, hash, key, &pos_in_bucket);
+    hashtabBucket *b = hashtabFindBucket(t, hash, key, &pos_in_bucket, NULL);
     if (b) {
         if (found) *found = b->elements[pos_in_bucket];
         return 1;
@@ -747,7 +773,7 @@ int hashtabAddOrFind(hashtab *t, void *elem, void **existing) {
     const void *key = elementGetKey(t, elem);
     uint64_t hash = hashKey(t, key);
     int pos_in_bucket = 0;
-    hashtabBucket *b = hashtabFindBucket(t, hash, key, &pos_in_bucket);
+    hashtabBucket *b = hashtabFindBucket(t, hash, key, &pos_in_bucket, NULL);
     if (b != NULL) {
         if (existing) *existing = b->elements[pos_in_bucket];
         return 0;
@@ -763,7 +789,7 @@ int hashtabReplace(hashtab *t, void *elem) {
     const void *key = elementGetKey(t, elem);
     int pos_in_bucket = 0;
     uint64_t hash = hashKey(t, key);
-    hashtabBucket *b = hashtabFindBucket(t, hash, key, &pos_in_bucket);
+    hashtabBucket *b = hashtabFindBucket(t, hash, key, &pos_in_bucket, NULL);
     if (b != NULL) {
         freeElement(t, b->elements[pos_in_bucket]);
         b->elements[pos_in_bucket] = elem;
@@ -781,10 +807,15 @@ int hashtabPop(hashtab *t, const void *key, void **popped) {
     if (hashtabSize(t) == 0) return 0;
     uint64_t hash = hashKey(t, key);
     int pos_in_bucket = 0;
-    hashtabBucket *b = hashtabFindBucket(t, hash, key, &pos_in_bucket);
+    int table_index = 0;
+    hashtabBucket *b = hashtabFindBucket(t, hash, key, &pos_in_bucket, &table_index);
     if (b) {
         if (popped) *popped = b->elements[pos_in_bucket];
-        b->presence = ~(1 << pos_in_bucket);
+        assert(b->presence & (1 << pos_in_bucket));
+        b->presence &= ~(1 << pos_in_bucket);
+        assert(!(b->presence & (1 << pos_in_bucket)));
+        t->used[table_index]--;
+        hashtabShrinkIfNeeded(t);
         return 1;
     } else {
         return 0;
@@ -805,23 +836,44 @@ int hashtabDelete(hashtab *t, const void *key) {
 
 /* --- Scan ---
  *
- * We need to use a scan-increment-probing variant of linear probing. When we
- * scan, we need to continue scanning as long a bucket in either of the tables
- * is tombstoned (has ever been full).
+ * Scan is a stateless iterator. It works with a cursor that is returned to the
+ * caller and which should be provided to the next call to continue scanning.
+ * The hash table can be modified in any way between two scan calls. The scan
+ * still continues iterating where it was.
  *
  * A full scan is performed like this: Start with a cursor of 0. The scan
  * callback is invoked for each element scanned and a new cursor is returned.
  * Next time, call this function with the new cursor. Continue until the
  * function returns 0.
  *
- * If emit_ref is non-zero, a pointer to the element's location in the table is
- * passed to the scan function instead of the actual element.
- */
+ * We say that an element is *emitted* when it's passed to the scan callback.
+ *
+ * If 'emit_ref' is non-zero, a pointer to the element's location in the table
+ * is passed to the scan function instead of the actual element. This can be
+ * used for advanced things like reallocating the memory of an element (for the
+ * purpose of defragmentation) and updating the pointer to the element inside
+ * the hash table.
+ *
+ * Scan guarantees:
+ *
+ * - An element that is present in the hash table during an entire full scan
+ *   will be returned (emitted) at least once. (Most of the time exactly once,
+ *   but sometimes twice.)
+ *
+ * - An element that is inserted or deleted during a full scan may or may not be
+ *   returned during the scan.
+ *
+ * The hash table uses a variant of linear probing with a cursor increment
+ * rather than a regular increment of the index when probing. The scan algothitm
+ * needs to continue scanning as long as a bucket in either of the tables has
+ * ever been full. This means that we may wrap around cursor zero and still
+ * continue until we find a bucket where we can stop, so some elements can be
+ * returned twice (in the first and the last scan calls) due to this. */
 size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *privdata, int emit_ref) {
     if (hashtabSize(t) == 0) return 0;
 
-    /* Prevent elements from being moved around as a side-effect of the scan
-     * callback. */
+    /* Prevent elements from being moved around during the scan call, as a
+     * side-effect of the scan callback. */
     hashtabPauseRehashing(t);
 
     /* If any element that hashes to the current bucket may have been inserted
@@ -829,13 +881,17 @@ size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *priv
      * probe sequence in the same scan cycle. Otherwise we may miss those
      * elements if they are rehashed before the next scan call. */
     int in_probe_sequence = 1;
+
+    /* When the cursor reaches zero, may need to continue scanning and advancing
+     * the cursor until the probing chain ends, but when we stop, we return 0 to
+     * indicate that the full scan is completed. */
+    int cursor_passed_zero = 0;
     while (in_probe_sequence) {
         in_probe_sequence = 0; /* Set to 1 if an ever-full bucket is scanned. */
         if (!hashtabIsRehashing(t)) {
+            /* Emit elements at the cursor index. */
             size_t mask = expToMask(t->bucketExp[0]);
             hashtabBucket *b = &t->tables[0][cursor & mask];
-
-            /* Emit entries at cursor */
             int pos;
             for (pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
                 if (b->presence & (1 << pos)) {
@@ -844,9 +900,10 @@ size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *priv
                 }
             }
 
+            /* Do we need to continue scanning? */
             in_probe_sequence |= b->everfull;
 
-            /* Advance cursor */
+            /* Advance cursor. */
             cursor = nextCursor(cursor, mask);
         } else {
             /* Let table0 be the the smaller table and table1 the bigger one. */
@@ -862,7 +919,7 @@ size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *priv
             size_t mask0 = expToMask(t->bucketExp[table0]);
             size_t mask1 = expToMask(t->bucketExp[table1]);
 
-            /* Emit elements in table0 at cursor. */
+            /* Emit elements in table 0. */
             hashtabBucket *b = &t->tables[0][cursor & mask0];
             for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
                 if (b->presence & (1 << pos)) {
@@ -875,7 +932,7 @@ size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *priv
             /* Iterate over indices in larger table that are the expansion of
              * the index pointed to by the cursor in the smaller table. */
             do {
-                /* Emit elements in table1 at cursor. */
+                /* Emit elements in table 1. */
                 b = &t->tables[1][cursor & mask1];
                 for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
                     if (b->presence & (1 << pos)) {
@@ -891,14 +948,135 @@ size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *priv
                 /* Continue while bits covered by mask difference is non-zero */
             } while (cursor & (mask0 ^ mask1));
         }
-    }
-    while (in_probe_sequence);
-
+        if (cursor == 0) {
+            cursor_passed_zero = 1;
+        }
+    } while (in_probe_sequence);
     hashtabResumeRehashing(t);
-
-    return cursor;
+    return cursor_passed_zero ? 0 : cursor;
 }
 
+/* --- Iterator --- */
+
+/* Initiaize a iterator, that is not allowed to insert, delete or even lookup
+ * elements in the hashtab. Only hashtabNext is allowed. Each element is
+ * returned exactly once. Call hashtabResetIterator when you are done. See also
+ * hashtabInitSafeIterator. */
+void hashtabInitIterator(hashtabIterator *iter, hashtab *t) {
+    iter->t = t;
+    iter->table = 0;
+    iter->index = -1;
+    iter->safe = 0;
+}
+
+/* Initialize a safe iterator, which is allowed to modify the dictionary while
+ * iterating. It pauses incremental rehashing to prevent elements from moving
+ * around. Call hashtabNext to fetch each element. You must call
+ * hashtabResetIterator when you are done with a safe iterator.
+ *
+ * Guarantees:
+ *
+ * - Elements that are in the hash table for the entire iteration are returned
+ *   exactly once.
+ *
+ * - Elements that are deleted or replaced using hashtabReplace after they
+ *   have been returned are not returned again.
+ *
+ * - Elements that are replaced using hashtabReplace before they've been
+ *   returned by the iterator will be returned.
+ *
+ * - Elements that are inserted during the iteration may or may not be returned
+ *   by the iterator.
+ */
+void hashtabInitSafeIterator(hashtabIterator *iter, hashtab *t) {
+    hashtabInitIterator(iter, t);
+    iter->safe = 1;
+}
+
+/* Resets a stack-allocated iterator. */
+void hashtabResetIterator(hashtabIterator *iter) {
+    if (!(iter->index == -1 && iter->table == 0)) {
+        if (iter->safe) {
+            hashtabResumeRehashing(iter->t);
+            assert(iter->t->pauseRehash >= 0);
+        } else {
+            assert(iter->fingerprint == hashtabFingerprint(iter->t));
+        }
+    }
+}
+
+/* Allocates and initializes an iterator. */
+hashtabIterator *hashtabCreateIterator(hashtab *t) {
+    hashtabIterator *iter = zmalloc(sizeof(*iter));
+    hashtabInitIterator(iter, t);
+    return iter;
+}
+
+/* Allocates and initializes a safe iterator. */
+hashtabIterator *hashtabCreateSafeIterator(hashtab *t) {
+    hashtabIterator *iter = hashtabCreateIterator(t);
+    iter->safe = 1;
+    return iter;
+}
+
+/* Resets and frees the memory of an allocated iterator, i.e. one created using
+ * hashtabCreate(Safe)Iterator. */
+void hashtabReleaseIterator(hashtabIterator *iter) {
+    hashtabResetIterator(iter);
+    zfree(iter);
+}
+
+/* Points elemptr to the next element and returns 1 if there is a next element.
+ * Returns 0 if there are not more elements. */
+int hashtabNext(hashtabIterator *iter, void **elemptr) {
+    while (1) {
+        if (iter->index == -1 && iter->table == 0) {
+            /* It's the first call to next. */
+            if (iter->safe) {
+                hashtabPauseRehashing(iter->t);
+            } else {
+                iter->fingerprint = hashtabFingerprint(iter->t);
+            }
+            iter->index = 0;
+            /* skip the rehashed slots in table[0] */
+            if (hashtabIsRehashing(iter->t)) {
+                iter->index = iter->t->rehashIdx;
+            }
+            iter->posInBucket = 0;
+        } else {
+            /* Check??? */
+            if (iter->index < iter->t->rehashIdx && iter->table == 0) {
+                printf("Iterator less than rehashIdx");
+            }
+            /* Advance position within bucket, or bucket index, or table. */
+            iter->posInBucket++;
+            if (iter->posInBucket >= ELEMENTS_PER_BUCKET) {
+                iter->posInBucket = 0;
+                iter->index++;
+                if (iter->index >= (long)numBuckets(iter->t->bucketExp[iter->table])) {
+                    iter->index = 0;
+                    if (hashtabIsRehashing(iter->t) && iter->table == 0) {
+                        iter->table++;
+                    } else {
+                        /* Done. */
+                        break;
+                    }
+                }
+            }
+        }
+        hashtabBucket *b = &iter->t->tables[iter->table][iter->index];
+        if (!(b->presence & (1 << iter->posInBucket))) {
+            /* No element here. Skip. */
+            continue;
+        }
+        /* Return the element at this position. */
+        if (elemptr) {
+            *elemptr = b->elements[iter->posInBucket];
+        }
+        return 1;
+    }
+    return 0;
+}
 
 /* --- DEBUG --- */
 void hashtabDump(hashtab *t) {

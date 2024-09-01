@@ -51,9 +51,17 @@ static void freekeyval(hashtab *ht, void *keyval) {
     free(keyval);
 }
 
+/* Hashtab type used for some of the tests. */
+static hashtabType keyval_type = {
+    .elementGetKey = getkey,
+    .hashFunction = hashfunc,
+    .keyCompare = keycmp,
+    .elementDestructor = freekeyval,
+};
+
 /* Prototypes for debugging */
-void hashtabDump(hashtab *s);
-void hashtabHistogram(hashtab *s);
+void hashtabDump(hashtab *t);
+void hashtabHistogram(hashtab *t);
 int hashtabLongestProbingChain(hashtab *t);
 size_t nextCursor(size_t v, size_t mask);
 
@@ -68,20 +76,25 @@ int test_cursor(int argc, char **argv, int flags) {
     return 0;
 }
 
+int test_set_hash_function_seed(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    uint8_t hashseed[16];
+    getRandomBytes(hashseed, sizeof(hashseed));
+    hashtabSetHashFunctionSeed(hashseed);
+    return 0;
+}
+
 int test_add_and_find(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
 
     int count = 200;
-    //hashtabSetResizePolicy(HASHTAB_RESIZE_AVOID);
+    /* hashtabSetResizePolicy(HASHTAB_RESIZE_AVOID); */
 
-    hashtabType keyval_type = {
-        .elementGetKey = getkey,
-        .hashFunction = hashfunc,
-        .keyCompare = keycmp,
-        .elementDestructor = freekeyval,
-    };
     hashtab *t = hashtabCreate(&keyval_type);
     int j;
 
@@ -96,7 +109,6 @@ int test_add_and_find(int argc, char **argv, int flags) {
 
     printf("Bucket fill: ");
     hashtabHistogram(t);
-    //hashtabDump(t);
 
     /* Find */
     for (j = 0; j < count; j++) {
@@ -108,107 +120,241 @@ int test_add_and_find(int argc, char **argv, int flags) {
         assert(!strcmp(val, getval(e)));
     }
 
+    /* Delete */
+    for (j = 0; j < count; j++) {
+        char key[32];
+        snprintf(key, sizeof(key), "%d", j);
+        assert(hashtabDelete(t, key));
+    }
+    //printf("Hello\n");
+
     /* Release memory */
     hashtabRelease(t);
 
     return 0;
 }
 
-#define scan_test_table_size 2000000
 typedef struct {
-    unsigned emitted_element_count[scan_test_table_size];
-    unsigned total_count;
+    long count;
+    uint8_t element_seen[];
 } scandata;
 
 void scanfn(void *privdata, void *element) {
     scandata *data = (scandata *)privdata;
     unsigned long j = (unsigned long)element;
-    data->emitted_element_count[j]++;
-    data->total_count++;
+    data->element_seen[j]++;
+    data->count++;
 }
 
-#define cycle_length_upper_bound 999
 int test_scan(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
 
-    uint8_t hashseed[16];
-    getRandomBytes(hashseed, sizeof(hashseed));
-    hashtabSetHashFunctionSeed(hashseed);
+    long num_elements = (flags & UNIT_TEST_LARGE_MEMORY) ? 10000000 : 2000000;
+    int num_rounds = (flags & UNIT_TEST_ACCURATE) ? 10 : 1;
 
-    unsigned long count = scan_test_table_size;
+    /* A set of longs, i.e. pointer-sized values. */
+    hashtabType type = {0};
+    long j;
+
+    for (int round = 0; round < num_rounds; round++) {
+
+        long count = num_elements * (1 + 2 * (double)round / num_rounds);
+        //long count = num_elements * (round + 100) / 100;
+
+        /* Seed, to make sure each round is different. */
+        test_set_hash_function_seed(argc, argv, flags);
+
+        /* Populate */
+        hashtab *t = hashtabCreate(&type);
+        for (j = 0; j < count; j++) {
+            assert(hashtabAdd(t, (void *)j));
+        }
+
+        /* Scan */
+        scandata *data = calloc(1, sizeof(scandata) + count);
+        unsigned max_elements_per_cycle = 0;
+        unsigned num_cycles = 0;
+        long scanned_count = 0;
+        size_t cursor = 0;
+        do {
+            data->count = 0;
+            cursor = hashtabScan(t, cursor, scanfn, data, 0);
+            if (data->count > max_elements_per_cycle) {
+                max_elements_per_cycle = data->count;
+            }
+            scanned_count += data->count;
+            data->count = 0;
+            num_cycles++;
+        } while (cursor != 0);
+
+        /* Verify every element was returned at least once, but no more than
+         * twice. Elements can be returned twice due to probing chains wrapping
+         * around scan cursor zero. */
+        TEST_ASSERT(scanned_count >= count);
+        TEST_ASSERT(scanned_count < count * 2);
+        for (j = 0; j < count; j++) {
+            assert(data->element_seen[j] >= 1);
+            assert(data->element_seen[j] <= 2);
+        }
+
+        /* Verify some stuff, but just print it for now. */
+        printf("Num elements: %lu; ", count);
+        printf("duplicates emitted: %lu; ", scanned_count - count);
+        printf("max emitted per scan call: %d; ", max_elements_per_cycle);
+        printf("avg emitted per scan call: %.2lf\n", (double)count / num_cycles);
+
+        /* Cleanup */
+        hashtabRelease(t);
+        free(data);
+    }
+    return 0;
+}
+
+int test_iterator(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    long count = 2000000;
 
     /* A set of longs, i.e. pointer-sized values. */
     hashtabType type = {0};
     hashtab *t = hashtabCreate(&type);
-    unsigned long j;
-
-    int max_chainlen_seen = 0;
+    long j;
 
     /* Populate */
     for (j = 0; j < count; j++) {
-        long existing = 0;
-        int ret = hashtabAddOrFind(t, (void *)j, (void**)&existing);
-        /* int ret = hashtabAdd(t, (void *)j); */
-        if (!ret) {
-            /* printf("Add failed for %ld, ret = %d\n", j, ret); */
-            printf("Add failed for %ld, existing = %ld\n", j, existing);
-        }
-        /* Sample some iterations and check for the longest probing chain. This
-         * isn't for the unit test, but for tuning the fill factor and for
-         * debugging. */
-        if (j % (count / 13) == 0) {
-            int longest_chainlen = hashtabLongestProbingChain(t);
-            if (longest_chainlen > max_chainlen_seen) {
-                max_chainlen_seen = longest_chainlen;
-            }
-        }
+        assert(hashtabAdd(t, (void *)j));
     }
 
-    printf("Added %lu elements. Longest chain seen: %d.\n",
-           count, max_chainlen_seen);
-    if (0) {
-        /* Too large output for hugh tables. */
-        printf("Bucket fill: ");
-        hashtabHistogram(t);
+    /* Iterate */
+    uint8_t element_returned[count];
+    memset(element_returned, 0, sizeof element_returned);
+    unsigned num_returned = 0;
+    hashtabIterator iter;
+    hashtabInitIterator(&iter, t);
+    while (hashtabNext(&iter, (void **)&j)) {
+        num_returned++;
+        element_returned[j]++;
     }
+    hashtabResetIterator(&iter);
 
-    scandata data = {0};
-    int elements_per_cycle_count[cycle_length_upper_bound + 1] = {0};
-    assert(elements_per_cycle_count[0] == 0);
-    int num_cycles;
-    size_t cursor = 0;
-    do {
-        data.total_count = 0;
-        cursor = hashtabScan(t, cursor, scanfn, &data, 0);
-        assert(data.total_count <= cycle_length_upper_bound);
-        elements_per_cycle_count[data.total_count]++;
-        num_cycles++;
-    } while (cursor != 0);
-
-    /* Verify every element was returned exactly once. This can be expected
-       since no elements are added or removed during the scan. */
+    /* Check that all elements were returned exactly once. */
+    TEST_ASSERT(num_returned == count);
     for (j = 0; j < count; j++) {
-        assert(data.emitted_element_count[j] == 1);
-    }
-
-    printf("Emitted elements per cycle:");
-    int lines_to_print = 10;
-    for (int i = cycle_length_upper_bound; i >= 0; i--) {
-        if (elements_per_cycle_count[i] > 0) {
-            if (lines_to_print < 10) {
-                printf(",");
-            }
-            printf(" %d", i);
-            if (elements_per_cycle_count[i] > 1) {
-                printf(" (%d times)", elements_per_cycle_count[i]);
-            }
-            if (--lines_to_print == 0) {
-                break;
-            }
+        if (element_returned[j] != 1) {
+            printf("Element %ld returned %d times\n", j, element_returned[j]);
+            return 0;
         }
     }
-    printf(".\n");
+
+    hashtabRelease(t);
+    return 0;
+}
+
+int test_safe_iterator(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    long count = 1000;
+
+    /* A set of longs, i.e. pointer-sized values. */
+    hashtabType type = {0};
+    hashtab *t = hashtabCreate(&type);
+    long j;
+
+    /* Populate */
+    for (j = 0; j < count; j++) {
+        assert(hashtabAdd(t, (void *)j));
+    }
+
+    /* Iterate */
+    uint8_t element_returned[count * 2];
+    memset(element_returned, 0, sizeof element_returned);
+    unsigned num_returned = 0;
+    hashtabIterator iter;
+    hashtabInitSafeIterator(&iter, t);
+    while (hashtabNext(&iter, (void **)&j)) {
+        num_returned++;
+        if (j < 0 || j >= count * 2) {
+            printf("Element %lu returned, max == %lu. Num returned: %u\n",
+                   j, count * 2 - 1, num_returned);
+            printf("Safe %d, table %d, index %lu, pos in bucket %d, rehashing? %d\n",
+                   iter.safe, iter.table, iter.index,
+                   iter.posInBucket, !hashtabIsRehashing(t));
+            hashtabHistogram(t);
+            exit(1);
+        }
+        assert(j >= 0 && j < count * 2);
+        element_returned[j]++;
+        if (j % 4 == 0) {
+            assert(hashtabDelete(t, (void *)j));
+        }
+        /* Add elements x if count <= x < count * 2) */
+        if (j < count) {
+            assert(hashtabAdd(t, (void *)(j + count)));
+        }
+    }
+    hashtabResetIterator(&iter);
+
+    /* Check that all elements present during the whole iteration were returned
+     * exactly once. (Some are deleted after being returned.) */
+    TEST_ASSERT(num_returned >= count);
+    for (j = 0; j < count; j++) {
+        if (element_returned[j] != 1) {
+            printf("Element %ld returned %d times\n", j, element_returned[j]);
+            return 0;
+        }
+    }
+    /* Check that elements inserted during the iteration were returned at most
+     * once. */
+    unsigned long num_optional_returned;
+    for (j = count; j < count * 2; j++) {
+        assert(element_returned[j] <= 1);
+        num_optional_returned += element_returned[j];
+    }
+    printf("Safe iterator returned %lu of the %lu elements inserted while iterating.\n",
+           num_optional_returned, count);
+
+    hashtabRelease(t);
+    return 0;
+}
+
+int test_probing_chain_length(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    unsigned long count = 1000000;
+
+    /* A set of longs, i.e. pointer-sized integer values. */
+    hashtabType type = {0};
+    hashtab *t = hashtabCreate(&type);
+    unsigned long j;
+    for (j = 0; j < count; j++) {
+        assert(hashtabAdd(t, (void *)j));
+    }
+    /* If it's rehashing, add a few more until rehashing is complete. */
+    while (hashtabIsRehashing(t)) {
+        j++;
+        assert(hashtabAdd(t, (void *)j));
+    }
+    TEST_ASSERT(j < count * 2);
+    int max_chainlen_not_rehashing = hashtabLongestProbingChain(t);
+    TEST_ASSERT(max_chainlen_not_rehashing < 100);
+
+    /* Add more until rehashing starts again. */
+    while (!hashtabIsRehashing(t)) {
+        j++;
+        assert(hashtabAdd(t, (void *)j));
+    }
+    TEST_ASSERT(j < count * 2);
+    int max_chainlen_rehashing = hashtabLongestProbingChain(t);
+    TEST_ASSERT(max_chainlen_rehashing < 100);
+
+    hashtabRelease(t);
     return 0;
 }

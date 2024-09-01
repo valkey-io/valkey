@@ -102,7 +102,17 @@ typedef enum {
 
 typedef void(*hashtabScanFunction)(void *privdata, void *element);
 
-/* TODO: Iterator, stats */
+typedef struct {
+    hashtab *t;
+    long index;
+    int table;
+    int posInBucket;
+    /* unsafe iterator fingerprint for misuse detection. */
+    uint64_t fingerprint;
+    int safe;
+} hashtabIterator;
+
+/* TODO: stats */
 
 /* Not needed: defrag functions (solved by emit_ref in scan) */
 
@@ -146,3 +156,11 @@ int hashtabDelete(hashtab *t, const void *key);
 /* Iteration */
 size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *privdata, int emit_ref);
 #endif
+
+void hashtabInitIterator(hashtabIterator *iter, hashtab *t);
+void hashtabInitSafeIterator(hashtabIterator *iter, hashtab *t);
+void hashtabResetIterator(hashtabIterator *iter);
+hashtabIterator *hashtabCreateIterator(hashtab *t);
+hashtabIterator *hashtabCreateSafeIterator(hashtab *t);
+void hashtabReleaseIterator(hashtabIterator *iter);
+int hashtabNext(hashtabIterator *iter, void **elemptr);

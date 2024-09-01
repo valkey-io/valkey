@@ -264,10 +264,9 @@ static inline void connShutdown(connection *conn, int force) {
          * This is useful in situations where we need to terminate the connection
          * immediately, without waiting for any pending operations to complete.
          */
-        shutdown(conn->fd, SHUT_RDWR);
-    } else {
-        conn->type->shutdown(conn);
+        connNonBlock(conn);
     }
+    conn->type->shutdown(conn);
 }
 
 static inline void connClose(connection *conn) {

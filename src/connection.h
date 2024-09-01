@@ -148,6 +148,15 @@ struct connListener {
     void *priv; /* used by connection type specified data */
 };
 
+/* anet-style wrappers to conns */
+int connBlock(connection *conn);
+int connNonBlock(connection *conn);
+int connEnableTcpNoDelay(connection *conn);
+int connDisableTcpNoDelay(connection *conn);
+int connKeepAlive(connection *conn, int interval);
+int connSendTimeout(connection *conn, long long ms);
+int connRecvTimeout(connection *conn, long long ms);
+
 /* The connection module does not deal with listening and accepting sockets,
  * so we assume we have a socket when an incoming connection is created.
  *
@@ -380,15 +389,6 @@ static inline const char *connGetInfo(connection *conn, char *buf, size_t buf_le
     snprintf(buf, buf_len - 1, "fd=%i", conn == NULL ? -1 : conn->fd);
     return buf;
 }
-
-/* anet-style wrappers to conns */
-int connBlock(connection *conn);
-int connNonBlock(connection *conn);
-int connEnableTcpNoDelay(connection *conn);
-int connDisableTcpNoDelay(connection *conn);
-int connKeepAlive(connection *conn, int interval);
-int connSendTimeout(connection *conn, long long ms);
-int connRecvTimeout(connection *conn, long long ms);
 
 /* Get cert for the secure connection */
 static inline sds connGetPeerCert(connection *conn) {

@@ -91,7 +91,7 @@ int test_zipmapIterateThroughElements(int argc, char *argv[], int flags) {
     unsigned char *key, *value;
     unsigned int klen, vlen;
     char *expected_key[] = {"name", "surname", "age", "hello", "foo", "noval"};
-    char *expected_value[] = {"foo", "foo", "foo", "world!", "12345", NULL};
+    char *expected_value[] = {"foo", "foo", "foo", "world!", "12345", ""};
     unsigned int expected_klen[] = {4, 7, 3, 5, 3, 5};
     unsigned int expected_vlen[] = {3, 3, 3, 6, 5, 0};
     int iter = 0;

@@ -1041,6 +1041,16 @@ __attribute__((noinline)) void _serverAssert(const char *estr, const char *file,
     bugReportEnd(0, 0);
 }
 
+/* Checks if the argument at the given index should be redacted from logs. */
+int shouldRedactArg(const client *c, int idx) {
+    serverAssert(idx < c->argc);
+    /* Don't redact if the config is disabled */
+    if (!server.hide_user_data_from_log) return 0;
+    /* first_sensitive_arg_idx value should be changed based on the command type. */
+    int first_sensitive_arg_idx = 1;
+    return idx >= first_sensitive_arg_idx;
+}
+
 void _serverAssertPrintClientInfo(const client *c) {
     int j;
     char conninfo[CONN_INFO_LEN];
@@ -1051,6 +1061,10 @@ void _serverAssertPrintClientInfo(const client *c) {
     serverLog(LL_WARNING, "client->conn = %s", connGetInfo(c->conn, conninfo, sizeof(conninfo)));
     serverLog(LL_WARNING, "client->argc = %d", c->argc);
     for (j = 0; j < c->argc; j++) {
+        if (shouldRedactArg(c, j)) {
+            serverLog(LL_WARNING, "client->argv[%d]: %zu bytes ", j, sdslen((sds)c->argv[j]->ptr));
+            continue;
+        }
         char buf[128];
         char *arg;
 
@@ -1251,6 +1265,10 @@ static void *getAndSetMcontextEip(ucontext_t *uc, void *eip) {
 
 VALKEY_NO_SANITIZE("address")
 void logStackContent(void **sp) {
+    if (server.hide_user_data_from_log) {
+        serverLog(LL_NOTICE, "hide-user-data-from-log is on, skip logging stack content to avoid spilling user data.");
+        return;
+    }
     int i;
     for (i = 15; i >= 0; i--) {
         unsigned long addr = (unsigned long)sp + i;
@@ -1826,7 +1844,7 @@ void logServerInfo(void) {
     }
     serverLogRaw(LL_WARNING | LL_RAW, infostring);
     serverLogRaw(LL_WARNING | LL_RAW, "\n------ CLIENT LIST OUTPUT ------\n");
-    clients = getAllClientsInfoString(-1);
+    clients = getAllClientsInfoString(-1, server.hide_user_data_from_log);
     serverLogRaw(LL_WARNING | LL_RAW, clients);
     sdsfree(infostring);
     sdsfree(clients);
@@ -1861,11 +1879,15 @@ void logCurrentClient(client *cc, const char *title) {
     int j;
 
     serverLog(LL_WARNING | LL_RAW, "\n------ %s CLIENT INFO ------\n", title);
-    client = catClientInfoString(sdsempty(), cc);
+    client = catClientInfoString(sdsempty(), cc, server.hide_user_data_from_log);
     serverLog(LL_WARNING | LL_RAW, "%s\n", client);
     sdsfree(client);
     serverLog(LL_WARNING | LL_RAW, "argc: '%d'\n", cc->argc);
     for (j = 0; j < cc->argc; j++) {
+        if (shouldRedactArg(cc, j)) {
+            serverLog(LL_WARNING | LL_RAW, "client->argv[%d]: %zu bytes ", j, sdslen((sds)cc->argv[j]->ptr));
+            continue;
+        }
         robj *decoded;
         decoded = getDecodedObject(cc->argv[j]);
         sds repr = sdscatrepr(sdsempty(), decoded->ptr, min(sdslen(decoded->ptr), 128));

@@ -872,19 +872,19 @@ void dictTwoPhaseUnlinkFree(dict *d, dictEntry *he, dictEntry **plink, int table
     dictResumeRehashing(d);
 }
 
-/* In the macros below, `de` stands for dict entry, and `k` for key. */
-#define DICT_SET_KEY(de, k)                                                                                            \
-    {                                                                                                                  \
-        if (entryIsNormal(de)) {                                                                                       \
-            dictEntryNormal *_de = decodeEntryNormal(de);                                                              \
-            _de->key = k;                                                                                              \
-        } else if (entryIsNoValue(de)) {                                                                               \
-            dictEntryNoValue *_de = decodeEntryNoValue(de);                                                            \
-            _de->key = k;                                                                                              \
-        } else {                                                                                                       \
-            panic("Entry type not supported");                                                                         \
-        }                                                                                                              \
+static inline void dictSetEntryKey(void *de, char *k) {
+    if (entryIsNormal(de)) {
+        dictEntryNormal *_de = decodeEntryNormal(de);
+        _de->key = k;
+    } else if (entryIsNoValue(de)) {
+        dictEntryNoValue *_de = decodeEntryNoValue(de);
+        _de->key = k;
+    } else {
+        panic("Entry type not supported");
     }
+}
+
+/* In the macros below, `de` stands for dict entry, and `k` for key. */
 #define DICT_SET_VALUE(de, field, val)                                                                                 \
     {                                                                                                                  \
         if (entryIsNormal(de)) {                                                                                       \
@@ -920,7 +920,7 @@ void dictTwoPhaseUnlinkFree(dict *d, dictEntry *he, dictEntry **plink, int table
 
 void dictSetKey(dict *d, dictEntry *de, void *key) {
     void *k = d->type->keyDup ? d->type->keyDup(d, key) : key;
-    DICT_SET_KEY(de, k);
+    dictSetEntryKey(de, k);
 }
 
 void dictSetVal(dict *d, dictEntry *de, void *val) {

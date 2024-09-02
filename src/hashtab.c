@@ -68,9 +68,8 @@
  *   Pieter Noordhuis.
  *
  * - The incremental rehashing and the scan algorithm were adapted for the open
- *   addressing scheme by Viktor Söderqvist.
- */
-
+ *   addressing scheme, including the use of linear probing by scan cursor
+ *   increment, by Viktor Söderqvist. */
 #include "hashtab.h"
 #include "serverassert.h"
 #include "zmalloc.h"
@@ -142,7 +141,24 @@ uint64_t hashtabGenCaseHashFunction(const char *buf, size_t len) {
  *     copy-on-write memory.
  *
  *   - HASHTAB_RESIZE_FORBID: Don't rehash at all. Used in a child process which
- *     doesn't add any keys. */
+ *     doesn't add any keys.
+ *
+ * Incremental rehashing works in the following way: A new table is allocated
+ * and elements are incrementally moved from the old to the new table.
+ *
+ * To avoid affecting copy-on-write , we avoids rehashing when there is a forked
+ * child process.
+ *
+ * With an open addressing scheme, we can't completely forbid resizing the table
+ * if we want to be able to insert elements. It's impossible to insert more
+ * elements than the number of slots, so we need to allow resizing even if the
+ * resize policy is set to HASHTAB_RESIZE_AVOID, but we resize with incremental
+ * rehashing paused, so new elements are added to the new table and the old
+ * elements are rehashed only when the child process is done.
+ *
+ * This also means that we may need to resize even if rehashing is already
+ * started and paused. In the worst case, we need to resize multiple times while
+ * a child process is running. We fast-forward the rehashing in this case. */
 void hashtabSetResizePolicy(hashtabResizePolicy policy) {
     resize_policy = policy;
 }
@@ -203,23 +219,6 @@ static_assert(100 * BUCKET_DIVISOR / BUCKET_FACTOR / ELEMENTS_PER_BUCKET <= MAX_
 static_assert(MAX_FILL_PERCENT_SOFT <= MAX_FILL_PERCENT_HARD, "Soft vs hard fill factor");
 static_assert(MAX_FILL_PERCENT_HARD < 100, "Hard fill factor must be below 100%");
 
-/* Incremental rehashing
- * ---------------------
- *
- * When rehashing, we allocate a new table and incrementally move elements from
- * the old to the new table.
- *
- * To avoid affecting CoW when there is a fork, the dict avoids resizing in this
- * case. With an open addressing scheme, it is impossible to add more elements
- * than the number of slots, so we need to allow resizing even in this case. To
- * avoid affecting CoW, we resize with incremental rehashing paused, so only new
- * elements are added to the new table until the fork is done.
- *
- * This also means that we need to allow resizing even if rehashing is already
- * in progress. In the worst case, we need to resizing multiple times while a
- * fork is running. We can to fast-forward the rehashing in this case.
- */
-
 /* --- Types --- */
 
 /* Open addressing scheme
@@ -253,12 +252,23 @@ static_assert(MAX_FILL_PERCENT_HARD < 100, "Hard fill factor must be below 100%"
  *     everfull  presence  unused  hashes         unused   elements
  */
 
+#if ELEMENTS_PER_BUCKET < 8
+#define METADATA_BITS_TYPE uint8_t
+#elif ELEMENTS_PER_BUCKET < 16
+#define METADATA_BITS_TYPE uint16_t
+#else
+#error "Unexpected value of ELEMENTS_PER_BUCKET"
+#endif
+
 typedef struct {
-    uint8_t everfull : 1;
-    uint8_t presence : ELEMENTS_PER_BUCKET;
+    METADATA_BITS_TYPE everfull : 1;
+    METADATA_BITS_TYPE presence : ELEMENTS_PER_BUCKET;
     uint8_t hashes[ELEMENTS_PER_BUCKET];
     void *elements[ELEMENTS_PER_BUCKET];
 } hashtabBucket;
+
+/* A key property is that the bucket size is one cache line. */
+static_assert(sizeof(hashtabBucket) == 64, "Buckets need to be 64 bytes");
 
 struct hashtab {
     hashtabType *type;
@@ -665,6 +675,14 @@ size_t hashtabSize(hashtab *t) {
     return t->used[0] + t->used[1];
 }
 
+/* Returns the size of the hashtab structures, in bytes (not including the sizes
+ * of the elements, if the elements are pointes to allocated objects). */
+size_t hashtabMemUsage(hashtab *t) {
+    size_t num_buckets = numBuckets(t->bucketExp[0]) + numBuckets(t->bucketExp[1]);
+    size_t metasize = t->type->getMetadataSize ? t->type->getMetadataSize() : 0;
+    return sizeof(hashtab) + metasize + sizeof(hashtabBucket) * num_buckets;
+}
+
 /* Pauses automatic shrinking. This can be called before deleting a lot of
  * elements, to prevent automatic shrinking from being triggered multiple times.
  * Call hashtableResumeAutoShrink afterwards to restore automatic shrinking. */
@@ -700,6 +718,14 @@ int hashtabIsRehashingPaused(hashtab *t) {
 /* Returns 1 if incremental rehashing is in progress, 0 otherwise. */
 int hashtabIsRehashing(hashtab *t) {
     return t->rehashIdx != -1;
+}
+
+/* Provides the old and new table size during rehashing. This function can only
+ * be used when rehashing is in progress. */
+void hashtabRehashingInfo(hashtab *t, size_t *from_size, size_t *to_size) {
+    assert(hashtabIsRehashing(t));
+    *from_size = numBuckets(t->bucketExp[0]);
+    *to_size = numBuckets(t->bucketExp[1]);
 }
 
 /* Return 1 if expand was performed; 0 otherwise. */

@@ -93,7 +93,7 @@ typedef struct {
     unsigned char key_buf[]; /* buffer with embedded key. */
 } dictEntryEmbedded;
 
-/* Validation and helper for `_dictEntryEmbedded` */
+/* Validation and helper for `dictEntryEmbedded` */
 
 static_assert(offsetof(dictEntryEmbedded, v) == 0, "unexpected field offset");
 static_assert(offsetof(dictEntryEmbedded, next) == sizeof(double), "unexpected field offset");

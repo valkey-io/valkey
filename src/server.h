@@ -1868,12 +1868,13 @@ struct valkeyServer {
     durationStats duration_stats[EL_DURATION_TYPE_NUM];
 
     /* Configuration */
-    int verbosity;             /* Loglevel verbosity */
-    int maxidletime;           /* Client timeout in seconds */
-    int tcpkeepalive;          /* Set SO_KEEPALIVE if non-zero. */
-    int active_expire_enabled; /* Can be disabled for testing purposes. */
-    int active_expire_effort;  /* From 1 (default) to 10, active effort. */
-    int lazy_expire_disabled;  /* If > 0, don't trigger lazy expire */
+    int verbosity;               /* Loglevel verbosity */
+    int hide_user_data_from_log; /* Hide or redact user data, or data that may contain user data, from the log. */
+    int maxidletime;             /* Client timeout in seconds */
+    int tcpkeepalive;            /* Set SO_KEEPALIVE if non-zero. */
+    int active_expire_enabled;   /* Can be disabled for testing purposes. */
+    int active_expire_effort;    /* From 1 (default) to 10, active effort. */
+    int lazy_expire_disabled;    /* If > 0, don't trigger lazy expire */
     int active_defrag_enabled;
     int sanitize_dump_payload;    /* Enables deep sanitization for ziplist and listpack in RDB and RESTORE. */
     int skip_checksum_validation; /* Disable checksum validation for RDB and RESTORE payload. */
@@ -2838,8 +2839,8 @@ void *dupClientReplyValue(void *o);
 char *getClientPeerId(client *client);
 char *getClientSockName(client *client);
 int isClientConnIpV6(client *c);
-sds catClientInfoString(sds s, client *client);
-sds getAllClientsInfoString(int type);
+sds catClientInfoString(sds s, client *client, int hide_user_data);
+sds getAllClientsInfoString(int type, int hide_user_data);
 int clientSetName(client *c, robj *name, const char **err);
 void rewriteClientCommandVector(client *c, int argc, ...);
 void rewriteClientCommandArgument(client *c, int i, robj *newval);

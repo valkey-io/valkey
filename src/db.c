@@ -584,8 +584,8 @@ serverDb *initTempDb(void) {
     serverDb *tempDb = zcalloc(sizeof(serverDb) * server.dbnum);
     for (int i = 0; i < server.dbnum; i++) {
         tempDb[i].id = i;
-        tempDb[i].keys = kvstoreCreate(&dbDictType, slot_count_bits, flags);
-        tempDb[i].expires = kvstoreCreate(&dbExpiresDictType, slot_count_bits, flags);
+        tempDb[i].keys = kvstoreCreate(&kvstoreKeysDictType, slot_count_bits, flags);
+        tempDb[i].expires = kvstoreCreate(&kvstoreExpiresDictType, slot_count_bits, flags);
     }
 
     return tempDb;

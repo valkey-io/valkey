@@ -1805,6 +1805,7 @@ struct valkeyServer {
     long long stat_aof_rewrites;                   /* number of aof file rewrites performed */
     long long stat_aofrw_consecutive_failures;     /* The number of consecutive failures of aofrw */
     long long stat_rdb_saves;                      /* number of rdb saves performed */
+    long long stat_last_fork_time;                 /* Last time to start a successful fork(). */
     long long stat_fork_time;                      /* Time needed to perform latest fork() */
     double stat_fork_rate;                         /* Fork rate in GB/sec. */
     long long stat_total_forks;                    /* Total count of fork. */

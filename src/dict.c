@@ -872,17 +872,6 @@ void dictTwoPhaseUnlinkFree(dict *d, dictEntry *he, dictEntry **plink, int table
     dictResumeRehashing(d);
 }
 
-static inline void dictSetEntryKey(void *de, char *key) {
-    if (entryIsNormal(de)) {
-        dictEntryNormal *_de = decodeEntryNormal(de);
-        _de->key = key;
-    } else if (entryIsNoValue(de)) {
-        dictEntryNoValue *_de = decodeEntryNoValue(de);
-        _de->key = key;
-    } else {
-        panic("Entry type not supported");
-    }
-}
 
 /* In the macros below, `de` stands for dict entry. */
 #define DICT_SET_VALUE(de, field, val)                                                                                 \
@@ -920,7 +909,15 @@ static inline void dictSetEntryKey(void *de, char *key) {
 
 void dictSetKey(dict *d, dictEntry *de, void *key) {
     void *k = d->type->keyDup ? d->type->keyDup(d, key) : key;
-    dictSetEntryKey(de, k);
+    if (entryIsNormal(de)) {
+        dictEntryNormal *_de = decodeEntryNormal(de);
+        _de->key = k;
+    } else if (entryIsNoValue(de)) {
+        dictEntryNoValue *_de = decodeEntryNoValue(de);
+        _de->key = k;
+    } else {
+        panic("Entry type not supported");
+    }
 }
 
 void dictSetVal(dict *d, dictEntry *de, void *val) {

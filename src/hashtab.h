@@ -161,6 +161,8 @@ int hashtabAddOrFind(hashtab *t, void *elem, void **existing);
 int hashtabReplace(hashtab *t, void *elem);
 int hashtabPop(hashtab *t, const void *key, void **popped);
 int hashtabDelete(hashtab *t, const void *key);
+void *hashtabFindPositionForInsert(hashtab *t, void *key, void **existing);
+void hashtabInsertAtPosition(hashtab *t, void *elem, void *position);
 
 /* Iteration & scan */
 size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *privdata, int emit_ref);

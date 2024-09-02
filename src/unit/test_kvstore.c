@@ -10,17 +10,15 @@ void freeTestCallback(dict *d, void *val) {
     zfree(val);
 }
 
-dictType KvstoreDictTestType = {
-    hashTestCallback,
-    NULL,
-    NULL,
-    freeTestCallback,
-    NULL,
-    NULL,
-    kvstoreDictRehashingStarted,
-    kvstoreDictRehashingCompleted,
-    kvstoreDictMetadataSize
-};
+dictType KvstoreDictTestType = {hashTestCallback,
+                                NULL,
+                                NULL,
+                                freeTestCallback,
+                                NULL,
+                                NULL,
+                                kvstoreDictRehashingStarted,
+                                kvstoreDictRehashingCompleted,
+                                kvstoreDictMetadataSize};
 
 char *stringFromInt(int value) {
     char buf[32];

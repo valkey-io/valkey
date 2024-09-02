@@ -87,14 +87,8 @@ int test_set_hash_function_seed(int argc, char **argv, int flags) {
     return 0;
 }
 
-int test_add_and_find(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-
-    int count = 200;
-    /* hashtabSetResizePolicy(HASHTAB_RESIZE_AVOID); */
-
+static void add_find_delete_test_helper(int flags) {
+    int count = (flags & UNIT_TEST_ACCURATE) ? 1000000 : 200;
     hashtab *t = hashtabCreate(&keyval_type);
     int j;
 
@@ -107,8 +101,10 @@ int test_add_and_find(int argc, char **argv, int flags) {
         assert(hashtabAdd(t, e));
     }
 
-    printf("Bucket fill: ");
-    hashtabHistogram(t);
+    if (count < 1000) {
+        printf("Bucket fill: ");
+        hashtabHistogram(t);
+    }
 
     /* Find */
     for (j = 0; j < count; j++) {
@@ -124,13 +120,36 @@ int test_add_and_find(int argc, char **argv, int flags) {
     for (j = 0; j < count; j++) {
         char key[32];
         snprintf(key, sizeof(key), "%d", j);
-        assert(hashtabDelete(t, key));
+        if (j % 3 == 0) {
+            /* Test hashtabPop */
+            char val[32];
+            snprintf(val, sizeof(val), "%d", count - j + 42);
+            keyval *e;
+            assert(hashtabPop(t, key, (void **)&e));
+            assert(!strcmp(val, getval(e)));
+            free(e);
+        } else {
+            assert(hashtabDelete(t, key));
+        }
     }
-    //printf("Hello\n");
 
     /* Release memory */
     hashtabRelease(t);
+}    
 
+int test_add_find_delete(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    add_find_delete_test_helper(flags);
+    return 0;
+}
+
+int test_add_find_delete_avoid_resize(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    hashtabSetResizePolicy(HASHTAB_RESIZE_AVOID);
+    add_find_delete_test_helper(flags);
+    hashtabSetResizePolicy(HASHTAB_RESIZE_ALLOW);
     return 0;
 }
 
@@ -200,10 +219,10 @@ int test_scan(int argc, char **argv, int flags) {
         }
 
         /* Verify some stuff, but just print it for now. */
-        printf("Num elements: %lu; ", count);
+        printf("Scanned: %lu; ", count);
         printf("duplicates emitted: %lu; ", scanned_count - count);
-        printf("max emitted per scan call: %d; ", max_elements_per_cycle);
-        printf("avg emitted per scan call: %.2lf\n", (double)count / num_cycles);
+        printf("max emitted per call: %d; ", max_elements_per_cycle);
+        printf("avg emitted per call: %.2lf\n", (double)count / num_cycles);
 
         /* Cleanup */
         hashtabRelease(t);

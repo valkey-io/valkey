@@ -140,7 +140,7 @@ uint64_t hashtabGenCaseHashFunction(const char *buf, size_t len);
 /* Global resize policy */
 void hashtabSetResizePolicy(hashtabResizePolicy policy);
 
-/* Hashtable instance */
+/* Hashtab instance */
 hashtab *hashtabCreate(hashtabType *type);
 void hashtabRelease(hashtab *t);
 hashtabType *hashtabGetType(hashtab *t);
@@ -162,10 +162,8 @@ int hashtabReplace(hashtab *t, void *elem);
 int hashtabPop(hashtab *t, const void *key, void **popped);
 int hashtabDelete(hashtab *t, const void *key);
 
-/* Iteration */
+/* Iteration & scan */
 size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *privdata, int emit_ref);
-#endif
-
 void hashtabInitIterator(hashtabIterator *iter, hashtab *t);
 void hashtabInitSafeIterator(hashtabIterator *iter, hashtab *t);
 void hashtabResetIterator(hashtabIterator *iter);
@@ -173,3 +171,4 @@ hashtabIterator *hashtabCreateIterator(hashtab *t);
 hashtabIterator *hashtabCreateSafeIterator(hashtab *t);
 void hashtabReleaseIterator(hashtabIterator *iter);
 int hashtabNext(hashtabIterator *iter, void **elemptr);
+#endif

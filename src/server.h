@@ -143,7 +143,6 @@ struct hdr_histogram;
 #define DEFAULT_WAIT_BEFORE_RDB_CLIENT_FREE                                                                            \
     60 /* Grace period in seconds for replica main                                                                     \
           channel to establish psync. */
-#define INCREMENTAL_REHASHING_THRESHOLD_US 1000
 #define LOADING_PROCESS_EVENTS_INTERVAL_DEFAULT 100 /* Default: 0.1 seconds */
 
 /* Bucket sizes for client eviction pools. Each bucket stores clients with

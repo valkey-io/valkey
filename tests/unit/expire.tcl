@@ -368,7 +368,7 @@ start_server {tags {"expire"}} {
                 {set foo10 bar}
                 {pexpireat foo10 *}
                 {set foo11 bar}
-                {del foo11}
+                {unlink foo11}
                 {set foo12 bar}
                 {pexpireat foo12 *}
                 {set foo13 bar}
@@ -500,7 +500,7 @@ start_server {tags {"expire"}} {
             {set foo3 bar}
             {pexpireat foo3 *}
             {pexpireat foo3 *}
-            {del foo3}
+            {unlink foo3}
             {set foo4 bar}
             {pexpireat foo4 *}
             {pexpireat foo4 *}
@@ -629,7 +629,7 @@ start_server {tags {"expire"}} {
        r ttl foo
     } {-1} {needs:debug}
 
-    test {GETEX propagate as to replica as PERSIST, DEL, or nothing} {
+    test {GETEX propagate as to replica as PERSIST, UNLINK, or nothing} {
         # In the above tests, many keys with random expiration times are set, flush
         # the DBs to avoid active expiry kicking in and messing the replication streams.
         r flushall
@@ -642,7 +642,7 @@ start_server {tags {"expire"}} {
            {select *}
            {set foo bar PXAT *}
            {persist foo}
-           {del foo}
+           {unlink foo}
         }
         close_replication_stream $repl
     } {} {needs:repl}
@@ -784,7 +784,7 @@ start_server {tags {"expire"}} {
 
         assert_replication_stream $repl {
             {select *}
-            {del foo}
+            {unlink foo}
             {set x 1}
         }
         close_replication_stream $repl
@@ -805,8 +805,8 @@ start_server {tags {"expire"}} {
 
         assert_replication_stream $repl {
             {select *}
-            {del foo*}
-            {del foo*}
+            {unlink foo*}
+            {unlink foo*}
         }
         close_replication_stream $repl
         assert_equal [r debug set-active-expire 1] {OK}
@@ -826,8 +826,8 @@ start_server {tags {"expire"}} {
 
         assert_replication_stream $repl {
             {select *}
-            {del foo*}
-            {del foo*}
+            {unlink foo*}
+            {unlink foo*}
         }
         close_replication_stream $repl
         assert_equal [r debug set-active-expire 1] {OK}

@@ -153,6 +153,46 @@ int test_add_find_delete_avoid_resize(int argc, char **argv, int flags) {
     return 0;
 }
 
+int test_two_phase_insert(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    int count = (flags & UNIT_TEST_ACCURATE) ? 1000000 : 200;
+    hashtab *t = hashtabCreate(&keyval_type);
+    int j;
+
+    /* hashtabFindPositionForInsert + hashtabInsertAtPosition */
+    for (j = 0; j < count; j++) {
+        char key[32], val[32];
+        snprintf(key, sizeof(key), "%d", j);
+        snprintf(val, sizeof(val), "%d", count - j + 42);
+        void *position = hashtabFindPositionForInsert(t, key, NULL);
+        assert(position != NULL);
+        keyval *e = create_keyval(key, val);
+        printf("hashtabInsertAtPosition(%p, %d, %p)\n", t, j, position);
+        hashtabInsertAtPosition(t, e, position);
+    }
+
+    if (count < 1000) {
+        printf("Bucket fill: ");
+        hashtabHistogram(t);
+    }
+
+    /* Find */
+    for (j = 0; j < count; j++) {
+        char key[32], val[32];
+        snprintf(key, sizeof(key), "%d", j);
+        snprintf(val, sizeof(val), "%d", count - j + 42);
+        keyval *e;
+        assert(hashtabFind(t, key, (void **)&e));
+        assert(!strcmp(val, getval(e)));
+    }
+
+    hashtabRelease(t);
+    return 0;
+}
+
 typedef struct {
     long count;
     uint8_t element_seen[];

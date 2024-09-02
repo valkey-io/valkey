@@ -5,7 +5,7 @@
  * tables of power of two in size are used, collisions are handled by
  * chaining. See the source code for more information... :)
  *
- * Copyright (c) 2006-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2006-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -48,6 +48,7 @@
 #include "zmalloc.h"
 #include "serverassert.h"
 #include "monotonic.h"
+#include "config.h"
 
 #ifndef static_assert
 #define static_assert(expr, lit) _Static_assert(expr, lit)
@@ -119,7 +120,6 @@ static void _dictExpandIfNeeded(dict *d);
 static void _dictShrinkIfNeeded(dict *d);
 static signed char _dictNextExp(unsigned long size);
 static int _dictInit(dict *d, dictType *type);
-static dictEntry *dictGetNext(const dictEntry *de);
 static dictEntry **dictGetNextRef(dictEntry *de);
 static void dictSetNext(dictEntry *de, dictEntry *next);
 
@@ -962,7 +962,7 @@ double *dictGetDoubleValPtr(dictEntry *de) {
 
 /* Returns the 'next' field of the entry or NULL if the entry doesn't have a
  * 'next' field. */
-static dictEntry *dictGetNext(const dictEntry *de) {
+dictEntry *dictGetNext(const dictEntry *de) {
     if (entryIsKey(de)) return NULL; /* there's no next */
     if (entryIsNoValue(de)) return decodeEntryNoValue(de)->next;
     if (entryIsEmbedded(de)) return decodeEmbeddedEntry(de)->next;

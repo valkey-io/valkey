@@ -143,6 +143,7 @@ static void clusterSlotStatsUpdateNetworkBytesOutForReplication(long long len) {
     if (c == NULL || !canAddNetworkBytesOut(c)) return;
 
     serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
+    serverAssert(nodeIsPrimary(server.cluster->myself));
     if (len < 0) serverAssert(server.cluster->slot_stats[c->slot].network_bytes_out >= (uint64_t)llabs(len));
     server.cluster->slot_stats[c->slot].network_bytes_out += (len * listLength(server.replicas));
 }

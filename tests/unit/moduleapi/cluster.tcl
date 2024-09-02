@@ -210,7 +210,7 @@ start_cluster 2 2 [list config_lines $modules] {
         # the {lpush before_deleted count_dels_{4oi}} is a post notification job registered when 'count_dels_{4oi}' was removed
         assert_replication_stream $repl {
             {multi}
-            {del count_dels_{4oi}}
+            {unlink count_dels_{4oi}}
             {keyspace.incr_dels}
             {lpush before_deleted count_dels_{4oi}}
             {exec}

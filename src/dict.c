@@ -872,13 +872,13 @@ void dictTwoPhaseUnlinkFree(dict *d, dictEntry *he, dictEntry **plink, int table
     dictResumeRehashing(d);
 }
 
-static inline void dictSetEntryKey(void *de, char *k) {
+static inline void dictSetEntryKey(void *de, char *key) {
     if (entryIsNormal(de)) {
         dictEntryNormal *_de = decodeEntryNormal(de);
-        _de->key = k;
+        _de->key = key;
     } else if (entryIsNoValue(de)) {
         dictEntryNoValue *_de = decodeEntryNoValue(de);
-        _de->key = k;
+        _de->key = key;
     } else {
         panic("Entry type not supported");
     }

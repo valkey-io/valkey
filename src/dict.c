@@ -884,7 +884,7 @@ static inline void dictSetEntryKey(void *de, char *key) {
     }
 }
 
-/* In the macros below, `de` stands for dict entry, and `k` for key. */
+/* In the macros below, `de` stands for dict entry. */
 #define DICT_SET_VALUE(de, field, val)                                                                                 \
     {                                                                                                                  \
         if (entryIsNormal(de)) {                                                                                       \

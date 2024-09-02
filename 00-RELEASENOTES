@@ -10,6 +10,69 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
+Valkey 8.0.0 RC2  -  Released Tue 2 Sep 2024
+================================================================================
+Upgrade urgency LOW: This is the second release candidate of Valkey 8.0, which
+generally includes stability and performance improvements over the first release
+candidate. This release is fully compatible with Redis OSS 7.2.4.
+
+New Features
+============
+* Add support for setting the group on a unix domain socket. (#901)
+* Experimental - RDMA: Support user keepalive command. (#916)
+
+Logging and Tooling Improvements
+================================
+* Improve logging when a cluster is unable to failover. (#780)
+* Add epoch information to failover auth denied logs. (#816)
+* Improve messaging when valkey-cli cluster --fix meet check failed. (#867)
+* Log unexpected $ENDOFF responses in dual channel replication. (#839)
+* Skip IPv6 tests when it is unsupported on TCLSH. (#910)
+* Add a light weight version of DEBUG OBJECT. (#881)
+* Add lfu support for DEBUG OBJECT command, added lfu_freq and
+  lfu_access_time_minutes fields. (#479)
+
+Bug fixes
+=========
+* Correctly expose client infomation in the slowlog when running commands in scripts. (#805)
+* Fix a bug where lastbgsave_status was unecessarily being updated when dual
+  channel replication failed. (#811)
+* Fix a bug which caused dual channel replication to get stuck because of a TLS
+  issue. (#837)
+* Fix a bug which caused bouncing `-REDIRECT` messages during a FAILOVER (#871)
+* Avoid re-establishing replication to a node that is already the primary in `CLUSTER REPLICATE`. (#884)
+* Fix `CLUSTER SETSLOT` with `BLOCK` to only wait for replicas that are online. (#879)
+* Fix `valkey-cli` to make source node ignores NOREPLICAS when doing the last CLUSTER SETSLOT (#928)
+* Exclude '.' and ':' from `isValidAuxChar`'s banned charset to better support
+  IPV6 addresses. (#963)
+* Better handle `-REDIRECT` messages in the MULTI context. (#895)
+
+Performance
+===========
+* Improve multithreaded performance with memory prefetching. (#861)
+* Optimize ZUNION[STORE] command by removing unnecessary accumulator dict. (#829)
+* Optimize linear search of WAIT and WAITAOF when unblocking the client. (#787)
+* Move prepareClientToWrite out of loop for lrange command to remove redundant calls. (#860)
+* Optimize various commands by using sdsAllocSize instead of sdsZmallocSize. (#923)
+* Using intrinsics to optimize counting HyperLogLog trailing bits. (#846)
+* Free client's MULTI state when it becomes dirty to reduce memory usage. (#961)
+* Optimize the fast path of SET if the expiration time has already expired. (#865)
+
+Compatibility Improvements
+==========================
+* Add 4 sentinel command `GET-PRIMARY-ADDR-BY-NAME`, `PRIMARY`, `PRIMARIES`, and
+  `IS-PRIMARY-DOWN-BY-ADDR` to allow clients to use inclusive language. (#789)
+
+Behavior Changes
+================
+* Block unsubscribe related commands for clients that are not in subscribed mode. (#759)
+
+Configuration Changes
+=====================
+* Change repl-backlog-size from 1MB to 10MB by default. (#911)
+* Remove the protected flag from `dual-channel-replication`. (#908)
+
+================================================================================
 Valkey 8.0.0 RC1  -  Released Thu 1 Aug 2024
 ================================================================================
 Upgrade urgency LOW: This is the first release candidate of Valkey 8.0, with

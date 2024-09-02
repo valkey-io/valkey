@@ -1863,7 +1863,7 @@ struct valkeyServer {
 
     /* Configuration */
     int verbosity;               /* Loglevel verbosity */
-    int hide_user_data_from_log; /* In the event of an assertion failure, hide command arguments from the operator */
+    int hide_user_data_from_log; /* Hide or redact user data, or data that may contain user data, from the log. */
     int maxidletime;             /* Client timeout in seconds */
     int tcpkeepalive;            /* Set SO_KEEPALIVE if non-zero. */
     int active_expire_enabled;   /* Can be disabled for testing purposes. */

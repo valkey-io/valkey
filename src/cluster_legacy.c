@@ -6639,7 +6639,7 @@ int clusterCommandSpecial(client *c) {
         }
         resetManualFailover();
         server.cluster->mf_end = mstime() + CLUSTER_MF_TIMEOUT;
-        sds client = catClientInfoString(sdsempty(), c);
+        sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
 
         if (takeover) {
             /* A takeover does not perform any initial check. It just

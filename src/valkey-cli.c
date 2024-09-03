@@ -4219,7 +4219,7 @@ static void clusterManagerOptimizeAntiAffinity(clusterManagerNodeArray *ipnodes,
     if (perfect)
         msg = "[OK] Perfect anti-affinity obtained!";
     else if (score >= 10000)
-        msg = ("[WARNING] Some replicsa are in the same host as their primary");
+        msg = ("[WARNING] Some replicas are in the same host as their primary");
     else
         msg = ("[WARNING] Some replicas of the same primary are in the same host");
     clusterManagerLog(log_level, "%s\n", msg);

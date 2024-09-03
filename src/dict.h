@@ -5,7 +5,7 @@
  * tables of power of two in size are used, collisions are handled by
  * chaining. See the source code for more information... :)
  *
- * Copyright (c) 2006-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2006-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -69,10 +69,6 @@ typedef struct dictType {
     /* Method for copying a given key into a buffer of buf_len. Also used for
      * computing the length of the key + header when buf is NULL. */
     size_t (*embedKey)(unsigned char *buf, size_t buf_len, const void *key, unsigned char *header_size);
-
-
-    /* Data */
-    void *userdata;
 
     /* Flags */
     /* The 'no_value' flag, if set, indicates that values are not used, i.e. the
@@ -229,6 +225,7 @@ void dictInitIterator(dictIterator *iter, dict *d);
 void dictInitSafeIterator(dictIterator *iter, dict *d);
 void dictResetIterator(dictIterator *iter);
 dictEntry *dictNext(dictIterator *iter);
+dictEntry *dictGetNext(const dictEntry *de);
 void dictReleaseIterator(dictIterator *iter);
 dictEntry *dictGetRandomKey(dict *d);
 dictEntry *dictGetFairRandomKey(dict *d);

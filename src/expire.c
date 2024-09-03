@@ -2,7 +2,7 @@
  *
  * ----------------------------------------------------------------------------
  *
- * Copyright (c) 2009-2016, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2016, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -668,17 +668,7 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
     }
 
     if (checkAlreadyExpired(when)) {
-        robj *aux;
-
-        int deleted = dbGenericDelete(c->db, key, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED);
-        serverAssertWithInfo(c, key, deleted);
-        server.dirty++;
-
-        /* Replicate/AOF this as an explicit DEL or UNLINK. */
-        aux = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
-        rewriteClientCommandVector(c, 2, aux, key);
-        signalModifiedKey(c, c->db, key);
-        notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
+        deleteExpiredKeyFromOverwriteAndPropagate(c, key);
         addReply(c, shared.cone);
         return;
     } else {

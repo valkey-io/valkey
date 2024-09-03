@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Redis Labs
+ * Copyright (c) 2019, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -203,9 +203,7 @@ static int connSocketAccept(connection *conn, ConnectionCallbackFunc accept_hand
     if (conn->state != CONN_STATE_ACCEPTING) return C_ERR;
     conn->state = CONN_STATE_CONNECTED;
 
-    connIncrRefs(conn);
     if (!callHandler(conn, accept_handler)) ret = C_ERR;
-    connDecrRefs(conn);
 
     return ret;
 }

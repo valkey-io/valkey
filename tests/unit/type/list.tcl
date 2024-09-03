@@ -1176,7 +1176,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
             {swapdb 1 9}
             {select 9}
             {set somekey1 someval1}
-            {del k}
+            {unlink k}
             {select 1}
             {set somekey2 someval2}
         }
@@ -1220,7 +1220,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
             {rpush k hello}
             {pexpireat k *}
             {exec}
-            {del k}
+            {unlink k}
         }
         close_replication_stream $repl
         # Restore server and client state

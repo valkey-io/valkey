@@ -544,3 +544,26 @@ start_server {tags {"other external:skip"}} {
         }   
     }
 }
+
+set tempFileName [file join [pwd] [pid]]
+if {$::verbose} {
+    puts "Creating temp file $tempFileName"
+}
+set tempFileId [open $tempFileName w]
+set group [dict get [file attributes $tempFileName] -group]
+if {$group != ""} {
+    start_server [list tags {"repl external:skip"} overrides [list unixsocketgroup $group unixsocketperm 744]] {
+        test {test unixsocket options are set correctly} {
+            set socketpath [lindex [r config get unixsocket] 1]
+            set attributes [file attributes $socketpath]
+            set permissions [string range [dict get $attributes -permissions] end-2 end]
+            assert_equal [dict get $attributes -group] $group
+            assert_equal 744 $permissions
+        }
+    }
+}
+if {$::verbose} {
+    puts "Deleting temp file: $tempFileName"
+}
+close $tempFileId
+file delete $tempFileName

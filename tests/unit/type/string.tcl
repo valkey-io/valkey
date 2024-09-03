@@ -607,6 +607,40 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         r set foo bar pxat [expr [clock milliseconds] + 10000]
         assert_range [r ttl foo] 5 10
     }
+
+    test "SET EXAT / PXAT Expiration time is expired" {
+        r debug set-active-expire 0
+        set repl [attach_to_replication_stream]
+
+        # Key exists.
+        r set foo bar
+        r set foo bar exat [expr [clock seconds] - 100]
+        assert_error {ERR no such key} {r debug object foo}
+        r set foo bar
+        r set foo bar pxat [expr [clock milliseconds] - 10000]
+        assert_error {ERR no such key} {r debug object foo}
+
+        # Key does not exist.
+        r del foo
+        r set foo bar exat [expr [clock seconds] - 100]
+        assert_error {ERR no such key} {r debug object foo}
+        r set foo bar pxat [expr [clock milliseconds] - 10000]
+        assert_error {ERR no such key} {r debug object foo}
+
+        r incr foo
+        assert_replication_stream $repl {
+           {select *}
+           {set foo bar}
+           {unlink foo}
+           {set foo bar}
+           {unlink foo}
+           {incr foo}
+        }
+
+        r debug set-active-expire 1
+        close_replication_stream $repl
+    } {} {needs:debug needs:repl}
+
     test {Extended SET using multiple options at once} {
         r set foo val
         assert {[r set foo bar xx px 10000] eq {OK}}

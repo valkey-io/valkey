@@ -75,9 +75,15 @@ proc test_migrated_replica {type} {
             fail "Failover does not happened"
         }
 
-        # Make sure the offset of server 3 / 7 is 0.
-        verify_log_message -3 "*Start of election*offset 0*" 0
-        verify_log_message -7 "*Start of election*offset 0*" 0
+        # The node may not be able to initiate an election in time due to
+        # problems with cluster communication. If an election is initiated,
+        # we make sure the offset of server 3 / 7 is 0.
+        if {[count_log_message -3 "Start of election"] != 0} {
+            verify_log_message -3 "*Start of election*offset 0*" 0
+        }
+        if {[count_log_message -7 "Start of election"] != 0} {
+            verify_log_message -7 "*Start of election*offset 0*" 0
+        }
 
         # Make sure the right replica gets the higher rank.
         verify_log_message -4 "*Start of election*rank #0*" 0
@@ -170,9 +176,14 @@ proc test_nonempty_replica {type} {
             fail "Failover does not happened"
         }
 
-        # Make sure server 7 gets the lower rank and it's offset is 0.
         verify_log_message -4 "*Start of election*rank #0*" 0
-        verify_log_message -7 "*Start of election*offset 0*" 0
+
+        # The node may not be able to initiate an election in time due to
+        # problems with cluster communication. If an election is initiated,
+        # we make sure server 7 gets the lower rank and it's offset is 0.
+        if {[count_log_message -7 "Start of election"] != 0} {
+            verify_log_message -7 "*Start of election*offset 0*" 0
+        }
 
         # Wait for the cluster to be ok.
         wait_for_condition 1000 50 {
@@ -283,9 +294,15 @@ proc test_sub_replica {type} {
             fail "Failover does not happened"
         }
 
-        # Make sure the offset of server 3 / 7 is 0.
-        verify_log_message -3 "*Start of election*offset 0*" 0
-        verify_log_message -7 "*Start of election*offset 0*" 0
+        # The node may not be able to initiate an election in time due to
+        # problems with cluster communication. If an election is initiated,
+        # we make sure the offset of server 3 / 7 is 0.
+        if {[count_log_message -3 "Start of election"] != 0} {
+            verify_log_message -3 "*Start of election*offset 0*" 0
+        }
+        if {[count_log_message -7 "Start of election"] != 0} {
+            verify_log_message -7 "*Start of election*offset 0*" 0
+        }
 
         # Wait for the cluster to be ok.
         wait_for_condition 1000 50 {

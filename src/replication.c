@@ -53,9 +53,9 @@ int replicaPutOnline(client *replica);
 void replicaStartCommandStream(client *replica);
 int cancelReplicationHandshake(int reconnect);
 void replicationSteadyStateInit(void);
-void setupMainConnForPsync(connection *conn);
+void dualChannelSetupMainConnForPsync(connection *conn);
 void dualChannelSyncHandleRdbLoadCompletion(void);
-static void fullSyncWithPrimary(connection *conn);
+static void dualChannelFullSyncWithPrimary(connection *conn);
 
 /* We take a global flag to remember if this instance generated an RDB
  * because of replication, so that we can remove the RDB file in case
@@ -2589,7 +2589,7 @@ int sendCurrentOffsetToReplica(client *replica) {
     return C_OK;
 }
 
-static int dualChannelRepliacationHandleHandshake(connection *conn, char **err) {
+static int dualChannelReplHandleHandshake(connection *conn, char **err) {
     serverLog(LL_DEBUG, "Received first reply from primary using rdb connection.");
     /* AUTH with the primary if required. */
     if (server.primary_auth) {
@@ -2621,7 +2621,7 @@ static int dualChannelRepliacationHandleHandshake(connection *conn, char **err) 
     }
     server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RECEIVE_AUTH_REPLY;
 
-    if (connSetReadHandler(conn, fullSyncWithPrimary) == C_ERR) {
+    if (connSetReadHandler(conn, dualChannelFullSyncWithPrimary) == C_ERR) {
         char conninfo[CONN_INFO_LEN];
         serverLog(LL_WARNING, "Can't create readable event for SYNC: %s (%s)", *err,
                   connGetInfo(conn, conninfo, sizeof(conninfo)));
@@ -2630,7 +2630,7 @@ static int dualChannelRepliacationHandleHandshake(connection *conn, char **err) 
     return C_OK;
 }
 
-static int dualChannelReplicationHandleAuthReply(connection *conn, char **err) {
+static int dualChannelReplHandleAuthReply(connection *conn, char **err) {
     *err = receiveSynchronousResponse(conn);
     if (*err == NULL) {
         serverLog(LL_WARNING, "Primary did not respond to auth command during SYNC handshake");
@@ -2644,7 +2644,7 @@ static int dualChannelReplicationHandleAuthReply(connection *conn, char **err) {
     return C_OK;
 }
 
-static int dualChannelReplicationHandleReplconfReply(connection *conn, char **err) {
+static int dualChannelReplHandleReplconfReply(connection *conn, char **err) {
     *err = receiveSynchronousResponse(conn);
     if (*err == NULL) {
         serverLog(LL_WARNING, "Primary did not respond to replconf command during SYNC handshake");
@@ -2664,7 +2664,7 @@ static int dualChannelReplicationHandleReplconfReply(connection *conn, char **er
     return C_OK;
 }
 
-static int dualChannelReplicationHandleEndOffsetResponse(connection *conn, char **err) {
+static int dualChannelReplHandleEndOffsetResponse(connection *conn, char **err) {
     uint64_t rdb_client_id;
     *err = receiveSynchronousResponse(conn);
     if (*err == NULL) {
@@ -2698,8 +2698,8 @@ static int dualChannelReplicationHandleEndOffsetResponse(connection *conn, char 
      * main connection accordingly.*/
     server.repl_transfer_s->state = CONN_STATE_CONNECTED;
     server.repl_state = REPL_STATE_SEND_HANDSHAKE;
-    serverAssert(connSetReadHandler(server.repl_transfer_s, setupMainConnForPsync) != C_ERR);
-    setupMainConnForPsync(server.repl_transfer_s);
+    serverAssert(connSetReadHandler(server.repl_transfer_s, dualChannelSetupMainConnForPsync) != C_ERR);
+    dualChannelSetupMainConnForPsync(server.repl_transfer_s);
 
     /* As the next block we will receive using this connection is the rdb, we need to prepare
      * the connection accordingly */
@@ -2716,9 +2716,9 @@ static int dualChannelReplicationHandleEndOffsetResponse(connection *conn, char 
 /* Replication: Replica side.
  * This connection handler is used to initialize the RDB connection (dual-channel-replication).
  * Once a replica with dual-channel-replication enabled, denied from PSYNC with its primary,
- * fullSyncWithPrimary begins its role. The connection handler prepares server.repl_rdb_transfer_s
+ * dualChannelFullSyncWithPrimary begins its role. The connection handler prepares server.repl_rdb_transfer_s
  * for a rdb stream, and server.repl_transfer_s for increamental replication data stream. */
-static void fullSyncWithPrimary(connection *conn) {
+static void dualChannelFullSyncWithPrimary(connection *conn) {
     char *err = NULL;
     int ret = 0;
     serverAssert(conn == server.repl_rdb_transfer_s);
@@ -2734,16 +2734,16 @@ static void fullSyncWithPrimary(connection *conn) {
         goto error;
     }
     switch (server.repl_rdb_channel_state) {
-    case REPL_DUAL_CHANNEL_SEND_HANDSHAKE: ret = dualChannelRepliacationHandleHandshake(conn, &err); break;
+    case REPL_DUAL_CHANNEL_SEND_HANDSHAKE: ret = dualChannelReplHandleHandshake(conn, &err); break;
     case REPL_DUAL_CHANNEL_RECEIVE_AUTH_REPLY:
         if (server.primary_auth) {
-            ret = dualChannelReplicationHandleAuthReply(conn, &err);
+            ret = dualChannelReplHandleAuthReply(conn, &err);
             break;
         }
         server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RECEIVE_REPLCONF_REPLY;
         /* fall through */
-    case REPL_DUAL_CHANNEL_RECEIVE_REPLCONF_REPLY: ret = dualChannelReplicationHandleReplconfReply(conn, &err); break;
-    case REPL_DUAL_CHANNEL_RECEIVE_ENDOFF: ret = dualChannelReplicationHandleEndOffsetResponse(conn, &err); break;
+    case REPL_DUAL_CHANNEL_RECEIVE_REPLCONF_REPLY: ret = dualChannelReplHandleReplconfReply(conn, &err); break;
+    case REPL_DUAL_CHANNEL_RECEIVE_ENDOFF: ret = dualChannelReplHandleEndOffsetResponse(conn, &err); break;
     default: break;
     }
     sdsfree(err);
@@ -3207,7 +3207,7 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
     return PSYNC_NOT_SUPPORTED;
 }
 
-int dualChannelReplicationMainConnSendHandshake(connection *conn, char **err) {
+int dualChannelReplMainConnSendHandshake(connection *conn, char **err) {
     char llstr[LONG_STR_SIZE];
     ull2string(llstr, sizeof(llstr), server.rdb_client_id);
     *err = sendCommand(conn, "REPLCONF", "set-rdb-client-id", llstr, NULL);
@@ -3216,7 +3216,7 @@ int dualChannelReplicationMainConnSendHandshake(connection *conn, char **err) {
     return C_OK;
 }
 
-int dualChannelReplicationMainConnReceiveCapaReply(connection *conn, char **err) {
+int dualChannelReplMainConnRecvCapaReply(connection *conn, char **err) {
     *err = receiveSynchronousResponse(conn);
     if (*err == NULL) return C_ERR;
     if ((*err)[0] == '-') {
@@ -3227,7 +3227,7 @@ int dualChannelReplicationMainConnReceiveCapaReply(connection *conn, char **err)
     return C_OK;
 }
 
-int dualChannelReplicationMainConnSendPsync(connection *conn, char **err) {
+int dualChannelReplMainConnSendPsync(connection *conn, char **err) {
     UNUSED(err);
     if (server.debug_pause_after_fork) debugPauseProcess();
     if (replicaTryPartialResynchronization(conn, 0) == PSYNC_WRITE_ERROR) {
@@ -3238,7 +3238,7 @@ int dualChannelReplicationMainConnSendPsync(connection *conn, char **err) {
     return C_OK;
 }
 
-int dualChannelReplicationMainConnReceivePsyncReply(connection *conn, char **err) {
+int dualChannelReplMainConnRecvPsyncReply(connection *conn, char **err) {
     UNUSED(err);
     int psync_result = replicaTryPartialResynchronization(conn, 1);
     if (psync_result == PSYNC_WAIT_REPLY) return C_OK; /* Try again later... */
@@ -3260,36 +3260,33 @@ int dualChannelReplicationMainConnReceivePsyncReply(connection *conn, char **err
 /* Replication: Replica side.
  * This connection handler fires after rdb-connection was initialized. We use it
  * to adjust the replica main for loading incremental changes into the local buffer. */
-void setupMainConnForPsync(connection *conn) {
+void dualChannelSetupMainConnForPsync(connection *conn) {
     char *err = NULL;
     int ret;
 
     switch (server.repl_state) {
-    case REPL_STATE_SEND_HANDSHAKE: ret = dualChannelReplicationMainConnSendHandshake(conn, &err); break;
+    case REPL_STATE_SEND_HANDSHAKE: ret = dualChannelReplMainConnSendHandshake(conn, &err); break;
     case REPL_STATE_RECEIVE_CAPA_REPLY:
-        ret = dualChannelReplicationMainConnReceiveCapaReply(conn, &err);
+        ret = dualChannelReplMainConnRecvCapaReply(conn, &err);
         if (ret == C_ERR) {
             break;
         }
         sdsfree(err);
         err = NULL;
         /* fall through */
-    case REPL_STATE_SEND_PSYNC: ret = dualChannelReplicationMainConnSendPsync(conn, &err); break;
-    case REPL_STATE_RECEIVE_PSYNC_REPLY: ret = dualChannelReplicationMainConnReceivePsyncReply(conn, &err); break;
+    case REPL_STATE_SEND_PSYNC: ret = dualChannelReplMainConnSendPsync(conn, &err); break;
+    case REPL_STATE_RECEIVE_PSYNC_REPLY: ret = dualChannelReplMainConnRecvPsyncReply(conn, &err); break;
     default:
         serverLog(LL_WARNING, "Unexpected replication state: %d", server.repl_state);
         ret = C_ERR;
         break;
     }
     sdsfree(err);
-    if (ret == C_ERR) goto error;
-    return;
 
-error:
-    /* The dual-channel sync session must be aborted for any psync_result other than PSYNC_CONTINUE or PSYNC_WAIT_REPLY.
-     */
-    serverLog(LL_WARNING, "Aborting dual channel sync. Main channel psync result %d", ret);
-    cancelReplicationHandshake(1);
+    if (ret != C_OK) {
+        serverLog(LL_WARNING, "Aborting dual channel sync. Main channel psync result %d", ret);
+        cancelReplicationHandshake(1);
+    }
 }
 
 /*
@@ -3656,7 +3653,7 @@ void syncWithPrimary(connection *conn) {
         /* Create RDB connection */
         server.repl_rdb_transfer_s = connCreate(connTypeOfReplication());
         if (connConnect(server.repl_rdb_transfer_s, server.primary_host, server.primary_port, server.bind_source_addr,
-                        fullSyncWithPrimary) == C_ERR) {
+                        dualChannelFullSyncWithPrimary) == C_ERR) {
             serverLog(LL_WARNING, "Unable to connect to Primary: %s", connGetLastError(server.repl_transfer_s));
             connClose(server.repl_rdb_transfer_s);
             server.repl_rdb_transfer_s = NULL;

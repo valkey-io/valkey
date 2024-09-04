@@ -773,7 +773,9 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
             if (maxelelen < elelen) maxelelen = elelen;
             totelelen += elelen;
             zslInsert(zs->zsl, score, gp->member);
-            serverAssert(dictAddDoubleVal(zs->dict, gp->member, score) == DICT_OK);
+            dictEntry *entry = dictAddRaw(zs->dict, gp->member, NULL);
+            serverAssert(entry != NULL);
+            dictSetDoubleVal(entry, score);
             gp->member = NULL;
         }
 

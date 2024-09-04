@@ -1257,7 +1257,9 @@ void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
                 ele = sdsnewlen((char *)vstr, vlen);
 
             node = zslInsert(zs->zsl, score, ele);
-            serverAssert(dictAddDoubleVal(zs->dict, ele, score) == DICT_OK);
+            dictEntry *entry = dictAddRaw(zs->dict, ele, NULL);
+            serverAssert(entry != NULL);
+            dictSetDoubleVal(entry, score);
             zzlNext(zl, &eptr, &sptr);
         }
 
@@ -1485,7 +1487,9 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
         } else if (!xx) {
             ele = sdsdup(ele);
             zslInsert(zs->zsl, score, ele);
-            serverAssert(dictAddDoubleVal(zs->dict, ele, score) == DICT_OK);
+            dictEntry *entry = dictAddRaw(zs->dict, ele, NULL);
+            serverAssert(entry != NULL);
+            dictSetDoubleVal(entry, score);
             *out_flags |= ZADD_OUT_ADDED;
             if (newscore) *newscore = score;
             return 1;
@@ -1658,7 +1662,10 @@ robj *zsetDup(robj *o) {
             ele = ln->ele;
             sds new_ele = sdsdup(ele);
             zslInsert(new_zs->zsl, ln->score, new_ele);
-            dictAddDoubleVal(new_zs->dict, new_ele, ln->score);
+            dictEntry *entry = dictAddRaw(new_zs->dict, new_ele, NULL);
+            if (entry) {
+                dictSetDoubleVal(entry, ln->score);
+            }
             ln = ln->backward;
         }
     } else {
@@ -2411,7 +2418,10 @@ static void zdiffAlgorithm1(zsetopsrc *src, long setnum, zset *dstzset, size_t *
         if (!exists) {
             tmp = zuiNewSdsFromValue(&zval);
             zslInsert(dstzset->zsl, zval.score, tmp);
-            dictAddDoubleVal(dstzset->dict, tmp, zval.score);
+            dictEntry *entry = dictAddRaw(dstzset->dict, tmp, NULL);
+            if (entry) {
+                dictSetDoubleVal(entry, zval.score);
+            }
             if (sdslen(tmp) > *maxelelen) *maxelelen = sdslen(tmp);
             (*totelelen) += sdslen(tmp);
         }
@@ -2450,7 +2460,10 @@ static void zdiffAlgorithm2(zsetopsrc *src, long setnum, zset *dstzset, size_t *
             if (j == 0) {
                 tmp = zuiNewSdsFromValue(&zval);
                 zslInsert(dstzset->zsl, zval.score, tmp);
-                dictAddDoubleVal(dstzset->dict, tmp, zval.score);
+                dictEntry *entry = dictAddRaw(dstzset->dict, tmp, NULL);
+                if (entry) {
+                    dictSetDoubleVal(entry, zval.score);
+                }
                 cardinality++;
             } else {
                 dictPauseAutoResize(dstzset->dict);
@@ -2703,7 +2716,10 @@ void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIndex, in
                 } else if (j == setnum) {
                     tmp = zuiNewSdsFromValue(&zval);
                     zslInsert(dstzset->zsl, score, tmp);
-                    dictAddDoubleVal(dstzset->dict, tmp, score);
+                    dictEntry *entry = dictAddRaw(dstzset->dict, tmp, NULL);
+                    if (entry) {
+                        dictSetDoubleVal(entry, score);
+                    }
                     totelelen += sdslen(tmp);
                     if (sdslen(tmp) > maxelelen) maxelelen = sdslen(tmp);
                 }

@@ -2038,12 +2038,14 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             totelelen += sdslen(sdsele);
 
             zslInsert(zs->zsl, score, sdsele);
-            if (dictAddDoubleVal(zs->dict, sdsele, score) != DICT_OK) {
+            dictEntry *entry = dictAddRaw(zs->dict, sdsele, NULL);
+            if (entry == NULL) {
                 rdbReportCorruptRDB("Duplicate zset fields detected");
                 decrRefCount(o);
                 /* no need to free 'sdsele', will be released by zslFree together with 'o' */
                 return NULL;
             }
+            dictSetDoubleVal(entry, score);
         }
 
         /* Convert *after* loading, since sorted sets are not stored ordered. */

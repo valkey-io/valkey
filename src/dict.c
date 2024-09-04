@@ -532,15 +532,6 @@ int dictAdd(dict *d, void *key, void *val) {
     return DICT_OK;
 }
 
-/* Add an element with double value to the target hash table */
-int dictAddDoubleVal(dict *d, void *key, double val) {
-    dictEntry *entry = dictAddRaw(d, key, NULL);
-
-    if (!entry) return DICT_ERR;
-    if (!d->type->no_value) dictSetDoubleVal(entry, val);
-    return DICT_OK;
-}
-
 /* Low level add or find:
  * This function adds the entry but instead of setting a value returns the
  * dictEntry structure to the user, that will make sure to fill the value

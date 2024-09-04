@@ -192,7 +192,6 @@ int dictExpand(dict *d, unsigned long size);
 int dictTryExpand(dict *d, unsigned long size);
 int dictShrink(dict *d, unsigned long size);
 int dictAdd(dict *d, void *key, void *val);
-int dictAddDoubleVal(dict *d, void *key, double val);
 dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing);
 void *dictFindPositionForInsert(dict *d, const void *key, dictEntry **existing);
 dictEntry *dictInsertAtPosition(dict *d, void *key, void *position);

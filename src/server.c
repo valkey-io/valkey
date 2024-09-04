@@ -474,26 +474,32 @@ dictType zsetDictType = {
     NULL,              /* allow to expand */
 };
 
-/* Db->dict, keys are sds strings, vals are Objects. */
-dictType dbDictType = {
+/* Kvstore->keys, keys are sds strings, vals are Objects. */
+dictType kvstoreKeysDictType = {
     dictSdsHash,          /* hash function */
     NULL,                 /* key dup */
     dictSdsKeyCompare,    /* key compare */
     NULL,                 /* key is embedded in the dictEntry and freed internally */
     dictObjectDestructor, /* val destructor */
     dictResizeAllowed,    /* allow to resize */
+    kvstoreDictRehashingStarted,
+    kvstoreDictRehashingCompleted,
+    kvstoreDictMetadataSize,
     .embedKey = dictSdsEmbedKey,
     .embedded_entry = 1,
 };
 
-/* Db->expires */
-dictType dbExpiresDictType = {
+/* Kvstore->expires */
+dictType kvstoreExpiresDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
     dictSdsKeyCompare, /* key compare */
     NULL,              /* key destructor */
     NULL,              /* val destructor */
     dictResizeAllowed, /* allow to resize */
+    kvstoreDictRehashingStarted,
+    kvstoreDictRehashingCompleted,
+    kvstoreDictMetadataSize,
 };
 
 /* Command table. sds string -> command struct pointer. */
@@ -540,7 +546,7 @@ dictType keylistDictType = {
 };
 
 /* KeyDict hash table type has unencoded Objects as keys and
- * dicts as values. It's used for PUBSUB command to track clients subscribing the channels. */
+ * dicts as values. It's used for PUBSUB command to track clients subscribing the patterns. */
 dictType objToDictDictType = {
     dictObjHash,          /* hash function */
     NULL,                 /* key dup */
@@ -548,6 +554,20 @@ dictType objToDictDictType = {
     dictObjectDestructor, /* key destructor */
     dictDictDestructor,   /* val destructor */
     NULL                  /* allow to expand */
+};
+
+/* Same as objToDictDictType, added some kvstore callbacks, it's used
+ * for PUBSUB command to track clients subscribing the channels. */
+dictType kvstoreChannelDictType = {
+    dictObjHash,          /* hash function */
+    NULL,                 /* key dup */
+    dictObjKeyCompare,    /* key compare */
+    dictObjectDestructor, /* key destructor */
+    dictDictDestructor,   /* val destructor */
+    NULL,                 /* allow to expand */
+    kvstoreDictRehashingStarted,
+    kvstoreDictRehashingCompleted,
+    kvstoreDictMetadataSize,
 };
 
 /* Modules system dictionary type. Keys are module name,
@@ -2626,8 +2646,8 @@ void initServer(void) {
         flags |= KVSTORE_FREE_EMPTY_DICTS;
     }
     for (j = 0; j < server.dbnum; j++) {
-        server.db[j].keys = kvstoreCreate(&dbDictType, slot_count_bits, flags);
-        server.db[j].expires = kvstoreCreate(&dbExpiresDictType, slot_count_bits, flags);
+        server.db[j].keys = kvstoreCreate(&kvstoreKeysDictType, slot_count_bits, flags);
+        server.db[j].expires = kvstoreCreate(&kvstoreExpiresDictType, slot_count_bits, flags);
         server.db[j].expires_cursor = 0;
         server.db[j].blocking_keys = dictCreate(&keylistDictType);
         server.db[j].blocking_keys_unblock_on_nokey = dictCreate(&objectKeyPointerValueDictType);
@@ -2642,10 +2662,10 @@ void initServer(void) {
     /* Note that server.pubsub_channels was chosen to be a kvstore (with only one dict, which
      * seems odd) just to make the code cleaner by making it be the same type as server.pubsubshard_channels
      * (which has to be kvstore), see pubsubtype.serverPubSubChannels */
-    server.pubsub_channels = kvstoreCreate(&objToDictDictType, 0, KVSTORE_ALLOCATE_DICTS_ON_DEMAND);
+    server.pubsub_channels = kvstoreCreate(&kvstoreChannelDictType, 0, KVSTORE_ALLOCATE_DICTS_ON_DEMAND);
     server.pubsub_patterns = dictCreate(&objToDictDictType);
-    server.pubsubshard_channels =
-        kvstoreCreate(&objToDictDictType, slot_count_bits, KVSTORE_ALLOCATE_DICTS_ON_DEMAND | KVSTORE_FREE_EMPTY_DICTS);
+    server.pubsubshard_channels = kvstoreCreate(&kvstoreChannelDictType, slot_count_bits,
+                                                KVSTORE_ALLOCATE_DICTS_ON_DEMAND | KVSTORE_FREE_EMPTY_DICTS);
     server.pubsub_clients = 0;
     server.watching_clients = 0;
     server.cronloops = 0;
@@ -3943,6 +3963,13 @@ int processCommand(client *c) {
              * and then resume the execution. */
             blockPostponeClient(c);
         } else {
+            if (c->cmd->proc == execCommand) {
+                discardTransaction(c);
+            } else {
+                flagTransaction(c);
+            }
+            c->duration = 0;
+            c->cmd->rejected_calls++;
             addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
         }
         return C_OK;
@@ -6660,7 +6687,6 @@ struct serverTest {
     int failed;
 } serverTests[] = {
     {"quicklist", quicklistTest},
-    {"zipmap", zipmapTest},
     {"dict", dictTest},
     {"listpack", listpackTest},
 };

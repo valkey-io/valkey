@@ -614,6 +614,11 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
 void showLatestBacklog(void) {
     if (server.repl_backlog == NULL) return;
     if (listLength(server.repl_buffer_blocks) == 0) return;
+    if (server.hide_user_data_from_log) {
+        serverLog(LL_NOTICE,
+                  "hide-user-data-from-log is on, skip logging backlog content to avoid spilling user data.");
+        return;
+    }
 
     size_t dumplen = 256;
     if (server.repl_backlog->histlen < (long long)dumplen) dumplen = server.repl_backlog->histlen;
@@ -645,11 +650,13 @@ void replicationFeedStreamFromPrimaryStream(char *buf, size_t buflen) {
     /* Debugging: this is handy to see the stream sent from primary
      * to replicas. Disabled with if(0). */
     if (0) {
-        printf("%zu:", buflen);
-        for (size_t j = 0; j < buflen; j++) {
-            printf("%c", isprint(buf[j]) ? buf[j] : '.');
+        if (server.hide_user_data_from_log) {
+            printf("%zu:", buflen);
+            for (size_t j = 0; j < buflen; j++) {
+                printf("%c", isprint(buf[j]) ? buf[j] : '.');
+            }
+            printf("\n");
         }
-        printf("\n");
     }
 
     /* There must be replication backlog if having attached replicas. */
@@ -1043,7 +1050,7 @@ void syncCommand(client *c) {
             } else {
                 replicationUnsetPrimary();
             }
-            sds client = catClientInfoString(sdsempty(), c);
+            sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "PRIMARY MODE enabled (failover request from '%s')", client);
             sdsfree(client);
         } else {
@@ -3877,7 +3884,7 @@ void replicaofCommand(client *c) {
     if (!strcasecmp(c->argv[1]->ptr, "no") && !strcasecmp(c->argv[2]->ptr, "one")) {
         if (server.primary_host) {
             replicationUnsetPrimary();
-            sds client = catClientInfoString(sdsempty(), c);
+            sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "PRIMARY MODE enabled (user request from '%s')", client);
             sdsfree(client);
         }
@@ -3906,7 +3913,7 @@ void replicaofCommand(client *c) {
         /* There was no previous primary or the user specified a different one,
          * we can continue. */
         replicationSetPrimary(c->argv[1]->ptr, port, 0);
-        sds client = catClientInfoString(sdsempty(), c);
+        sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
         serverLog(LL_NOTICE, "REPLICAOF %s:%d enabled (user request from '%s')", server.primary_host,
                   server.primary_port, client);
         sdsfree(client);

@@ -3312,9 +3312,42 @@ int clusterProcessPacket(clusterLink *link) {
                     if (sender->replicaof) clusterNodeRemoveReplica(sender->replicaof, sender);
                     serverLog(LL_NOTICE, "Node %.40s (%s) is now a replica of node %.40s (%s) in shard %.40s",
                               sender->name, sender->human_nodename, sender_claimed_primary->name,
-                              sender_claimed_primary->human_nodename, sender->shard_id);
+                              sender_claimed_primary->human_nodename, sender_claimed_primary->shard_id);
                     clusterNodeAddReplica(sender_claimed_primary, sender);
                     sender->replicaof = sender_claimed_primary;
+
+                    /* The chain reduction logic requires correctly establishing the replication relationship.
+                     * A key decision when designating a new primary for 'myself' is determining whether
+                     * 'myself' and the new primary belong to the same shard, which would imply shared
+                     * replication history and allow a safe partial synchronization (psync).
+                     *
+                     * This decision hinges on the shard_id, a per-node property that helps verify if the
+                     * two nodes share the same replication history. It's critical not to update myself's
+                     * shard_id prematurely during this process. Doing so could incorrectly associate
+                     * 'myself' with the sender's shard_id, leading the subsequent clusterSetPrimary call
+                     * to falsely assume that 'myself' and the new primary have been in the same shard.
+                     * This mistake could result in data loss by incorrectly permitting a psync.
+                     *
+                     * Therefore, it's essential to delay any shard_id updates until after the replication
+                     * relationship has been properly established and verified. */
+                    if (myself->replicaof && myself->replicaof->replicaof && myself->replicaof->replicaof != myself) {
+                        /* Safeguard against sub-replicas.
+                         *
+                         * A replica's primary can turn itself into a replica if its last slot
+                         * is removed. If no other node takes over the slot, there is nothing
+                         * else to trigger replica migration. In this case, they are not in the
+                         * same shard, so a full sync is required.
+                         *
+                         * Or a replica's primary can turn itself into a replica of its other
+                         * replica during a failover. In this case, they are in the same shard,
+                         * so we can try a psync. */
+                        serverLog(LL_NOTICE, "I'm a sub-replica! Reconfiguring myself as a replica of %.40s from %.40s",
+                                  myself->replicaof->replicaof->name, myself->replicaof->name);
+                        clusterSetPrimary(myself->replicaof->replicaof, 1,
+                                          !areInSameShard(myself->replicaof->replicaof, myself));
+                        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE |
+                                             CLUSTER_TODO_FSYNC_CONFIG);
+                    }
 
                     /* Update the shard_id when a replica is connected to its
                      * primary in the very first time. */
@@ -3381,25 +3414,6 @@ int clusterProcessPacket(clusterLink *link) {
                     }
                 }
             }
-        }
-
-        /* Explicitly check for a replication loop before attempting the replication
-         * chain folding logic. */
-        if (myself->replicaof && myself->replicaof->replicaof && myself->replicaof->replicaof != myself) {
-            /* Safeguard against sub-replicas.
-             *
-             * A replica's primary can turn itself into a replica if its last slot
-             * is removed. If no other node takes over the slot, there is nothing
-             * else to trigger replica migration. In this case, they are not in the
-             * same shard, so a full sync is required.
-             *
-             * Or a replica's primary can turn itself into a replica of its other
-             * replica during a failover. In this case, they are in the same shard,
-             * so we can try a psync. */
-            serverLog(LL_NOTICE, "I'm a sub-replica! Reconfiguring myself as a replica of %.40s from %.40s",
-                      myself->replicaof->replicaof->name, myself->replicaof->name);
-            clusterSetPrimary(myself->replicaof->replicaof, 1, !areInSameShard(myself->replicaof->replicaof, myself));
-            clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
         }
 
         /* If our config epoch collides with the sender's try to fix

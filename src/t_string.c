@@ -317,8 +317,6 @@ void setCommand(client *c) {
 
     c->argv[2] = tryObjectEncoding(c->argv[2]);
     setGenericCommand(c,flags,c->argv[1],c->argv[2],expire,unit,NULL,NULL);
-
-    serverAssert(1==0);
 }
 
 void setnxCommand(client *c) {

@@ -1642,10 +1642,10 @@ void swapdbCommand(client *c) {
         return;
     }
 
-    /* Get the two DBs dbixes. */
-    if (getIntFromObjectOrReply(c, c->argv[1], &id1, "invalid first DB dbix") != C_OK) return;
+    /* Get the two DBs indexes. */
+    if (getIntFromObjectOrReply(c, c->argv[1], &id1, "invalid first DB index") != C_OK) return;
 
-    if (getIntFromObjectOrReply(c, c->argv[2], &id2, "invalid second DB dbix") != C_OK) return;
+    if (getIntFromObjectOrReply(c, c->argv[2], &id2, "invalid second DB index") != C_OK) return;
 
     /* Swap... */
     if (dbSwapDatabases(id1, id2) == C_ERR) {
@@ -2293,9 +2293,9 @@ void getKeysFreeResult(getKeysResult *result) {
  * ZUNION <num-keys> <key> <key> ... <key> <options>
  * ZUNIONSTORE <destkey> <num-keys> <key> <key> ... <key> <options>
  *
- * 'storeKeyOfs': destkey dbix, 0 means destkey not exists.
- * 'keyCountOfs': num-keys dbix.
- * 'firstKeyOfs': firstkey dbix.
+ * 'storeKeyOfs': destkey index, 0 means destkey not exists.
+ * 'keyCountOfs': num-keys index.
+ * 'firstKeyOfs': firstkey index.
  * 'keyStep': the interval of each key, usually this value is 1.
  *
  * The commands using this function have a fully defined keyspec, so returning flags isn't needed. */

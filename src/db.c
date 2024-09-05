@@ -56,7 +56,7 @@ keyStatus expireIfNeeded(serverDb *db, robj *key, int flags);
 int keyIsExpired(serverDb *db, robj *key);
 static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEntry *de);
 
-/* Returns which db dbix should be used with kvstore for a given key. */
+/* Returns which db index should be used with kvstore for a given key. */
 static int getKVStoreIndexForKey(sds key) {
     return server.cluster_enabled ? getKeySlot(key) : 0;
 }
@@ -493,7 +493,7 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
  * may not be the server main DBs (could be a temporary DB).
  *
  * The dbnum can be -1 if all the DBs should be emptied, or the specified
- * DB dbix if we want to empty only a single database.
+ * DB index if we want to empty only a single database.
  * The function returns the number of keys removed from the database(s). */
 long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(dict *)) {
     long long removed = 0;
@@ -790,7 +790,7 @@ void selectCommand(client *c) {
         return;
     }
     if (selectDb(c, id) == C_ERR) {
-        addReplyError(c, "DB dbix is out of range");
+        addReplyError(c, "DB index is out of range");
     } else {
         addReply(c, shared.ok);
     }
@@ -1348,7 +1348,7 @@ void moveCommand(client *c) {
     if (getIntFromObjectOrReply(c, c->argv[2], &dbid, NULL) != C_OK) return;
 
     if (selectDb(c, dbid) == C_ERR) {
-        addReplyError(c, "DB dbix is out of range");
+        addReplyError(c, "DB index is out of range");
         return;
     }
     dst = c->db;
@@ -1411,7 +1411,7 @@ void copyCommand(client *c) {
             if (getIntFromObjectOrReply(c, c->argv[j + 1], &dbid, NULL) != C_OK) return;
 
             if (selectDb(c, dbid) == C_ERR) {
-                addReplyError(c, "DB dbix is out of range");
+                addReplyError(c, "DB index is out of range");
                 return;
             }
             dst = c->db;
@@ -1649,7 +1649,7 @@ void swapdbCommand(client *c) {
 
     /* Swap... */
     if (dbSwapDatabases(id1, id2) == C_ERR) {
-        addReplyError(c, "DB dbix is out of range");
+        addReplyError(c, "DB index is out of range");
         return;
     } else {
         ValkeyModuleSwapDbInfo si = {VALKEYMODULE_SWAPDBINFO_VERSION, id1, id2};

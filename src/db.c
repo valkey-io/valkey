@@ -55,11 +55,7 @@ typedef enum {
 keyStatus expireIfNeeded(serverDb *db, robj *key, int flags);
 int keyIsExpired(serverDb *db, robj *key);
 static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEntry *de);
-
-/* Returns which db index should be used with kvstore for a given key. */
-static int getKVStoreIndexForKey(sds key) {
-    return server.cluster_enabled ? getKeySlot(key) : 0;
-}
+static int getKVStoreIndexForKey(sds key);
 
 /* Update LFU when an object is accessed.
  * Firstly, decrement the counter if the decrement time is reached.
@@ -222,6 +218,11 @@ static void dbAddInternal(serverDb *db, robj *key, robj *val, int update_if_exis
 
 void dbAdd(serverDb *db, robj *key, robj *val) {
     dbAddInternal(db, key, val, 0);
+}
+
+/* Returns which db index should be used with kvstore for a given key. */
+static int getKVStoreIndexForKey(sds key) {
+    return server.cluster_enabled ? getKeySlot(key) : 0;
 }
 
 /* Returns the cluster hash slot for a given key, trying to use the cached slot that

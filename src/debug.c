@@ -1062,7 +1062,7 @@ void _serverAssertPrintClientInfo(const client *c) {
     serverLog(LL_WARNING, "client->argc = %d", c->argc);
     for (j = 0; j < c->argc; j++) {
         if (shouldRedactArg(c, j)) {
-            serverLog(LL_WARNING, "client->argv[%d]: %zu bytes ", j, sdslen((sds)c->argv[j]->ptr));
+            serverLog(LL_WARNING, "client->argv[%d]: %zu bytes", j, sdslen((sds)c->argv[j]->ptr));
             continue;
         }
         char buf[128];
@@ -1885,7 +1885,7 @@ void logCurrentClient(client *cc, const char *title) {
     serverLog(LL_WARNING | LL_RAW, "argc: '%d'\n", cc->argc);
     for (j = 0; j < cc->argc; j++) {
         if (shouldRedactArg(cc, j)) {
-            serverLog(LL_WARNING | LL_RAW, "client->argv[%d]: %zu bytes ", j, sdslen((sds)cc->argv[j]->ptr));
+            serverLog(LL_WARNING | LL_RAW, "argv[%d]: %zu bytes\n", j, sdslen((sds)cc->argv[j]->ptr));
             continue;
         }
         robj *decoded;

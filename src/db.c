@@ -56,6 +56,11 @@ keyStatus expireIfNeeded(serverDb *db, robj *key, int flags);
 int keyIsExpired(serverDb *db, robj *key);
 static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEntry *de);
 
+/* Returns which db index should be used with kvstore for a given key. */
+static int getKVStoreIndexForKey(sds key) {
+    return server.cluster_enabled ? getKeySlot(key) : 0;
+}
+
 /* Update LFU when an object is accessed.
  * Firstly, decrement the counter if the decrement time is reached.
  * Then logarithmically increment the counter, and update the access time. */
@@ -125,7 +130,7 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)) {
             if (!canUseSharedObject() && val->refcount == OBJ_SHARED_REFCOUNT) {
                 val = dupStringObject(val);
-                kvstoreDictSetVal(db->keys, getKeySlot(key->ptr), de, val);
+                kvstoreDictSetVal(db->keys, getKVStoreIndexForKey(key), de, val);
             }
             if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
                 updateLFU(val);
@@ -202,15 +207,15 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
  * if the key already exists, otherwise, it can fall back to dbOverwrite. */
 static void dbAddInternal(serverDb *db, robj *key, robj *val, int update_if_existing) {
     dictEntry *existing;
-    int slot = getKeySlot(key->ptr);
-    dictEntry *de = kvstoreDictAddRaw(db->keys, slot, key->ptr, &existing);
+    int index = getKVStoreIndexForKey(key);
+    dictEntry *de = kvstoreDictAddRaw(db->keys, index, key->ptr, &existing);
     if (update_if_existing && existing) {
         dbSetValue(db, key, val, 1, existing);
         return;
     }
     serverAssertWithInfo(NULL, key, de != NULL);
     initObjectLRUOrLFU(val);
-    kvstoreDictSetVal(db->keys, slot, de, val);
+    kvstoreDictSetVal(db->keys, index, de, val);
     signalKeyAsReady(db, key, val->type);
     notifyKeyspaceEvent(NOTIFY_NEW, "new", key, db->id);
 }
@@ -219,32 +224,27 @@ void dbAdd(serverDb *db, robj *key, robj *val) {
     dbAddInternal(db, key, val, 0);
 }
 
-/* Returns key's hash slot when cluster mode is enabled, or 0 when disabled.
- * The only difference between this function and getKeySlot, is that it's not using cached key slot from the
- * current_client and always calculates CRC hash. This is useful when slot needs to be calculated for a key that user
- * didn't request for, such as in case of eviction. */
-int calculateKeySlot(sds key) {
-    return server.cluster_enabled ? keyHashSlot(key, (int)sdslen(key)) : 0;
-}
-
-/* Return slot-specific dictionary for key based on key's hash slot when cluster mode is enabled, else 0.*/
+/* Returns the cluster hash slot for a given key, trying to use the cached slot that
+ * stored on the server.current_client first. If there is no cached value, it will compute the hash slot
+ * and then cache the value.*/
 int getKeySlot(sds key) {
+    serverAssert(server.cluster_enabled);
     /* This is performance optimization that uses pre-set slot id from the current command,
      * in order to avoid calculation of the key hash.
      *
      * This optimization is only used when current_client flag `CLIENT_EXECUTING_COMMAND` is set.
      * It only gets set during the execution of command under `call` method. Other flows requesting
-     * the key slot would fallback to calculateKeySlot.
+     * the key slot would fallback to keyHashSlot.
      *
      * Modules and scripts executed on the primary may get replicated as multi-execs that operate on multiple slots,
      * so we must always recompute the slot for commands coming from the primary.
      */
     if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command &&
         !server.current_client->flag.primary) {
-        debugServerAssertWithInfo(server.current_client, NULL, calculateKeySlot(key) == server.current_client->slot);
+        debugServerAssertWithInfo(server.current_client, NULL, keyHashSlot(key, (int)sdslen(key)) == server.current_client->slot);
         return server.current_client->slot;
     }
-    int slot = calculateKeySlot(key);
+    int slot = keyHashSlot(key, (int)sdslen(key));
     /* For the case of replicated commands from primary, getNodeByQuery() never gets called,
      * and thus c->slot never gets populated. That said, if this command ends up accessing a key,
      * we are able to backfill c->slot here, where the key's hash calculation is made. */
@@ -267,7 +267,7 @@ int getKeySlot(sds key) {
  * In this case a copy of `key` is copied in kvstore, the caller must ensure the `key` is properly freed.
  */
 int dbAddRDBLoad(serverDb *db, sds key, robj *val) {
-    int slot = getKeySlot(key);
+    int slot = server.cluster_enabled ? getKeySlot(key) : 0;
     dictEntry *de = kvstoreDictAddRaw(db->keys, slot, key, NULL);
     if (de == NULL) return 0;
     initObjectLRUOrLFU(val);
@@ -288,8 +288,7 @@ int dbAddRDBLoad(serverDb *db, sds key, robj *val) {
  *
  * The program is aborted if the key was not already present. */
 static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEntry *de) {
-    int slot = getKeySlot(key->ptr);
-    if (!de) de = kvstoreDictFind(db->keys, slot, key->ptr);
+    if (!de) de = kvstoreDictFind(db->keys, getKVStoreIndexForKey(key), key->ptr);
     serverAssertWithInfo(NULL, key, de != NULL);
     robj *old = dictGetVal(de);
 
@@ -404,8 +403,7 @@ robj *dbRandomKey(serverDb *db) {
 int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
     dictEntry **plink;
     int table;
-    int slot = getKeySlot(key->ptr);
-    dictEntry *de = kvstoreDictTwoPhaseUnlinkFind(db->keys, slot, key->ptr, &plink, &table);
+    dictEntry *de = kvstoreDictTwoPhaseUnlinkFind(db->keys, getKVStoreIndexForKey(key), key->ptr, &plink, &table);
     if (de) {
         robj *val = dictGetVal(de);
         /* RM_StringDMA may call dbUnshareStringValue which may free val, so we
@@ -1664,7 +1662,7 @@ void swapdbCommand(client *c) {
  *----------------------------------------------------------------------------*/
 
 int removeExpire(serverDb *db, robj *key) {
-    return kvstoreDictDelete(db->expires, getKeySlot(key->ptr), key->ptr) == DICT_OK;
+    return kvstoreDictDelete(db->expires, getKVStoreIndexForKey(key), key->ptr) == DICT_OK;
 }
 
 /* Set an expire to the specified key. If the expire is set in the context
@@ -1675,10 +1673,10 @@ void setExpire(client *c, serverDb *db, robj *key, long long when) {
     dictEntry *kde, *de, *existing;
 
     /* Reuse the sds from the main dict in the expire dict */
-    int slot = getKeySlot(key->ptr);
-    kde = kvstoreDictFind(db->keys, slot, key->ptr);
+    int index = getKVStoreIndexForKey(key);
+    kde = kvstoreDictFind(db->keys, index, key->ptr);
     serverAssertWithInfo(NULL, key, kde != NULL);
-    de = kvstoreDictAddRaw(db->expires, slot, dictGetKey(kde), &existing);
+    de = kvstoreDictAddRaw(db->expires, index, dictGetKey(kde), &existing);
     if (existing) {
         dictSetSignedIntegerVal(existing, when);
     } else {
@@ -1883,7 +1881,7 @@ int dbExpandExpires(serverDb *db, uint64_t db_size, int try_expand) {
 }
 
 static dictEntry *dbFindGeneric(kvstore *kvs, void *key) {
-    return kvstoreDictFind(kvs, getKeySlot(key), key);
+    return kvstoreDictFind(kvs, server.cluster_enabled ? getKeySlot(key) : 0, key);
 }
 
 dictEntry *dbFind(serverDb *db, void *key) {

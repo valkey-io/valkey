@@ -2,7 +2,9 @@
 #include <limits.h>
 #include <string.h>
 #include <assert.h>
+#include <math.h>
 #include "test_help.h"
+#include "../mt19937-64.h"
 
 #include "../hashtab.h"
 
@@ -153,6 +155,42 @@ int test_add_find_delete_avoid_resize(int argc, char **argv, int flags) {
     return 0;
 }
 
+int test_probing_chain_length(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    unsigned long count = 1000000;
+
+    /* A set of longs, i.e. pointer-sized integer values. */
+    hashtabType type = {0};
+    hashtab *t = hashtabCreate(&type);
+    unsigned long j;
+    for (j = 0; j < count; j++) {
+        assert(hashtabAdd(t, (void *)j));
+    }
+    /* If it's rehashing, add a few more until rehashing is complete. */
+    while (hashtabIsRehashing(t)) {
+        j++;
+        assert(hashtabAdd(t, (void *)j));
+    }
+    TEST_ASSERT(j < count * 2);
+    int max_chainlen_not_rehashing = hashtabLongestProbingChain(t);
+    TEST_ASSERT(max_chainlen_not_rehashing < 100);
+
+    /* Add more until rehashing starts again. */
+    while (!hashtabIsRehashing(t)) {
+        j++;
+        assert(hashtabAdd(t, (void *)j));
+    }
+    TEST_ASSERT(j < count * 2);
+    int max_chainlen_rehashing = hashtabLongestProbingChain(t);
+    TEST_ASSERT(max_chainlen_rehashing < 100);
+
+    hashtabRelease(t);
+    return 0;
+}
+
 int test_two_phase_insert(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
@@ -170,7 +208,7 @@ int test_two_phase_insert(int argc, char **argv, int flags) {
         void *position = hashtabFindPositionForInsert(t, key, NULL);
         assert(position != NULL);
         keyval *e = create_keyval(key, val);
-        printf("hashtabInsertAtPosition(%p, %d, %p)\n", t, j, position);
+        // printf("hashtabInsertAtPosition(%p, %d, %p)\n", t, j, position);
         hashtabInsertAtPosition(t, e, position);
     }
 
@@ -382,38 +420,85 @@ int test_safe_iterator(int argc, char **argv, int flags) {
     return 0;
 }
 
-int test_probing_chain_length(int argc, char **argv, int flags) {
+int test_random_element(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
 
-    unsigned long count = 1000000;
+    long count = 5000;
+    long num_rounds = (flags & UNIT_TEST_ACCURATE) ? 1000000 : 1000000;
 
-    /* A set of longs, i.e. pointer-sized integer values. */
+    unsigned long long seed;
+    getRandomBytes((void *)&seed, sizeof(seed));
+    init_genrand64(seed);
+    srandom((unsigned)seed);
+
+    /* A set of longs, i.e. pointer-sized values. */
     hashtabType type = {0};
     hashtab *t = hashtabCreate(&type);
-    unsigned long j;
-    for (j = 0; j < count; j++) {
-        assert(hashtabAdd(t, (void *)j));
-    }
-    /* If it's rehashing, add a few more until rehashing is complete. */
-    while (hashtabIsRehashing(t)) {
-        j++;
-        assert(hashtabAdd(t, (void *)j));
-    }
-    TEST_ASSERT(j < count * 2);
-    int max_chainlen_not_rehashing = hashtabLongestProbingChain(t);
-    TEST_ASSERT(max_chainlen_not_rehashing < 100);
 
-    /* Add more until rehashing starts again. */
-    while (!hashtabIsRehashing(t)) {
-        j++;
+    /* Populate */
+    for (long j = 0; j < count; j++) {
         assert(hashtabAdd(t, (void *)j));
     }
-    TEST_ASSERT(j < count * 2);
-    int max_chainlen_rehashing = hashtabLongestProbingChain(t);
-    TEST_ASSERT(max_chainlen_rehashing < 100);
 
+    /* Measure frequency per element */
+    unsigned times_picked[count];
+    memset(times_picked, 0, sizeof(times_picked));
+    for (long i = 0; i < num_rounds; i++) {
+        long element;
+        assert(hashtabFairRandomElement(t, (void**)&element));
+        times_picked[element]++;
+    }
+    if (count < 1000) hashtabHistogram(t);
     hashtabRelease(t);
+
+    /* Fairness measurement
+     * --------------------
+     *
+     * Selecting a single random element: For any element in the hash table, let
+     * X=1 if the we selected the element (success) and X=0 otherwise. With m
+     * elements, our element is sepected with probability p = 1/m, the expected
+     * value is E(X) = 1/m, E(X^2) = 1/m and the variance:
+     *
+     *     Var(X) = E(X^2) - (E(X))^2 = 1/m - 1/(m^2) = (1/m) * (1 - 1/m).
+     *
+     * Repeating the selection of a random element: Let's repeat the experiment
+     * n times and let Y be the number of times our element was selected. This
+     * is a binomial distribution.
+     *
+     *     Y = X_1 + X_2 + ... + X_n
+     *     E(Y) = n/m
+     *
+     * The variance of a sum of independent random variables is the sum of the
+     * variances, so Y has variance np(1−p).
+     *
+     *     Var(Y) = npq = np(1 - p) = (n/m) * (1 - 1/m) = n * (m - 1) / (m * m)
+     */
+    double m = (double)count, n = (double)num_rounds;
+    double expected = n/m;                   /* E(Y) */
+    double variance = n * (m - 1) / (m * m); /* Var(Y) */
+    double std_dev = sqrt(variance);
+
+    /* With large n, the distribution approaches a normal distribution and we
+     * can use p68 = within 1 std dev, p95 = within 2 std dev, p99.7 = within 3
+     * std dev. */
+    long p68 = 0, p95 = 0, p99 = 0, p100 = 0;
+    for (long j = 0; j < count; j++) {
+        double dev = expected - times_picked[j];
+        p68 += (dev >= -std_dev && dev <= std_dev);
+        p95 += (dev >= -std_dev * 2 && dev <= std_dev * 2);
+        p99 += (dev >= -std_dev * 3 && dev <= std_dev * 3);
+        p100 += (dev >= -std_dev * 4 && dev <= std_dev * 4);
+    }
+    printf("Random element fairness test.\n");
+    printf("Picked one of %ld elements, %ld times.\n", count, num_rounds);
+    printf("Expected each element picked %.2lf times, std dev %.3lf\n",
+           expected, std_dev);
+    printf("> Within 1 std dev (p68) = %.2lf%%\n", 100 * p68 / m);
+    printf("> Within 2 std dev (p95) = %.2lf%%\n", 100 * p95 / m);
+    printf("> Within 3 std dev (p99) = %.2lf%%\n", 100 * p99 / m);
+    printf("> Within 4 std dev       = %.2lf%%\n", 100 * p100 / m);
+
     return 0;
 }

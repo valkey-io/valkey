@@ -71,7 +71,8 @@ typedef struct {
     /* If the type of an element is not the same as the type of a key used for
      * lookup, this callback needs to return the key within an element. */
     const void *(*elementGetKey)(const void *element);
-    /* Hash function. Defaults to hashing the bits in the pointer. */
+    /* Hash function. Defaults to hashing the bits in the pointer, effectively
+     * treating the pointer as an integer. */
     uint64_t (*hashFunction)(const void *key);
     /* Compare function, returns 0 if the keys are equal. Defaults to just
      * comparing the pointers for equality. */
@@ -149,6 +150,7 @@ size_t hashtabSize(hashtab *t);
 void hashtabPauseAutoShrink(hashtab *t);
 void hashtabResumeAutoShrink(hashtab *t);
 int hashtabIsRehashing(hashtab *t);
+void hashtabRehashingInfo(hashtab *t, size_t *from_size, size_t *to_size);
 int hashtabExpand(hashtab *t, size_t size);
 int hashtabTryExpand(hashtab *t, size_t size);
 int hashtabExpandIfNeeded(hashtab *t);
@@ -174,3 +176,10 @@ hashtabIterator *hashtabCreateSafeIterator(hashtab *t);
 void hashtabReleaseIterator(hashtabIterator *iter);
 int hashtabNext(hashtabIterator *iter, void **elemptr);
 #endif
+
+/* Random elements */
+int hashtabRandomElement(hashtab *t, void **found);
+int hashtabFairRandomElement(hashtab *t, void **found);
+unsigned hashtabSampleElements(hashtab *t, void **dst, unsigned count);
+
+/* Debug & stats */

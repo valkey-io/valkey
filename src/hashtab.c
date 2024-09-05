@@ -73,6 +73,7 @@
 #include "hashtab.h"
 #include "serverassert.h"
 #include "zmalloc.h"
+#include "mt19937-64.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -200,7 +201,6 @@ void hashtabSetResizePolicy(hashtabResizePolicy policy) {
 #elif SIZE_MAX == UINT32_MAX /* 32-bit version */
 #error "32-bit version disabled (debugging)"
 
-
 #define ELEMENTS_PER_BUCKET 12
 #define BUCKET_FACTOR 7
 #define BUCKET_DIVISOR 64
@@ -219,15 +219,27 @@ static_assert(100 * BUCKET_DIVISOR / BUCKET_FACTOR / ELEMENTS_PER_BUCKET <= MAX_
 static_assert(MAX_FILL_PERCENT_SOFT <= MAX_FILL_PERCENT_HARD, "Soft vs hard fill factor");
 static_assert(MAX_FILL_PERCENT_HARD < 100, "Hard fill factor must be below 100%");
 
+/* --- Random element --- */
+
+#define FAIR_RANDOM_SAMPLE_SIZE (ELEMENTS_PER_BUCKET * 40)
+#define WEAK_RANDOM_SAMPLE_SIZE ELEMENTS_PER_BUCKET
+
+/* If size_t is 64 bits, use a 64 bit PRNG. */
+#if SIZE_MAX >= 0xffffffffffffffff
+#define randomSizeT() ((size_t)genrand64_int64())
+#else
+#define randomSizeT() ((size_t)random())
+#endif
+
 /* --- Types --- */
 
 /* Open addressing scheme
  * ----------------------
  *
- * It uses an open addressing scheme, with buckets of 64 bytes (one cache line).
+ * We use an open addressing scheme, with buckets of 64 bytes (one cache line).
  * Each bucket contains metadata and element slots for a fixed number of
  * elements. In a 64-bit system, there are up to 7 elements per bucket. These
- * are unordered slots and an element can be inserted in any of the free slots.
+ * are unordered and an element can be inserted in any of the free slots.
  * Additionally, the bucket contains metadata for the elements. This includes a
  * few bits of the hash of the key of each element, which are used to rule out
  * false negatives when looking up elements.
@@ -282,6 +294,14 @@ struct hashtab {
     int16_t pauseAutoShrink;  /* Non-zero = automatic resizing disallowed. */
     void *metadata[];
 };
+
+/* Struct for sampling elements using scan, used by random key functions. */
+
+typedef struct {
+    unsigned size; /* Size of the elements array. */
+    unsigned count; /* Number of elements already sampled. */
+    void **elements; /* Array of sampled elements. */
+} scan_samples;
 
 /* --- Internal functions --- */
 
@@ -409,6 +429,19 @@ static size_t prevCursor(size_t v, size_t mask) {
     return v;
 }
 
+/* Returns 1 if cursor A is less then cursor B, compared in cursor next/prev
+ * order, 0 otherwise. This function can be used to compare bucket indexes in
+ * probing order (since probing order is cursor order) and to check if a bucket
+ * has already been rehashed, since incremental rehashing is also performed in
+ * cursor order. */
+static inline int cursorIsLessThan(size_t a, size_t b) {
+    /* Since cursors are advanced in reversed-bits order, we can just reverse
+     * both numbers to compare them. If a cursor with more bits than the other,
+     * it is not significant, since the more significatnt bits become less
+     * significant when reversing. */
+    return rev(a) < rev(b);
+}
+
 /* Rehashes one bucket. */
 static void rehashStep(hashtab *t) {
     assert(hashtabIsRehashing(t));
@@ -449,6 +482,23 @@ static void rehashStep(hashtab *t) {
     if (t->rehashIdx == 0) {
         rehashingCompleted(t);
     }
+}
+
+/* Called internally on lookup and other reads to the table. */
+static inline void rehashStepOnReadIfNeeded(hashtab *t) {
+    if (!hashtabIsRehashing(t) || t->pauseRehash) return;
+    if (resize_policy != HASHTAB_RESIZE_ALLOW) return;
+    rehashStep(t);
+}
+
+/* When inserting or deleting, we first do a find (read) and rehash one step if
+ * resize policy is set to ALLOW, so here we only do it if resize policy is
+ * AVOID. The reason for doing it on insert and delete is to ensure that we
+ * finish rehashing before we need to resize the table again. */
+static inline void rehashStepOnWriteIfNeeded(hashtab *t) {
+    if (!hashtabIsRehashing(t) || t->pauseRehash) return;
+    if (resize_policy != HASHTAB_RESIZE_AVOID) return;
+    rehashStep(t);
 }
 
 /* Allocates a new table and initiates incremental rehashing if necessary.
@@ -524,9 +574,7 @@ static bucket *findBucket(hashtab *t, uint64_t hash, const void *key, int *pos_i
     int table;
 
     /* Do some incremental rehashing. */
-    if (hashtabIsRehashing(t) && !t->pauseRehash && resize_policy == HASHTAB_RESIZE_ALLOW) {
-        rehashStep(t);
-    }
+    rehashStepOnReadIfNeeded(t);
 
     /* Check rehashing destination table first, since it is newer and typically
      * has less 'everfull' flagged buckets. Therefore it needs less probing for
@@ -582,13 +630,7 @@ static bucket *findBucketForInsert(hashtab *t, uint64_t hash, int *pos_in_bucket
  * already exists. This must be ensured by the caller. */
 static void insert(hashtab *t, uint64_t hash, void *elem) {
     hashtabExpandIfNeeded(t);
-    /* If resize policy is AVOID, do some incremental rehashing here, because in
-     * this case we don't do it when looking up existing elements. The reason
-     * for doing it on insert is to ensure that we finish rehashing before we
-     * need to resize the table again. */
-    if (hashtabIsRehashing(t) && !t->pauseRehash && resize_policy == HASHTAB_RESIZE_AVOID) {
-        rehashStep(t);
-    }
+    rehashStepOnWriteIfNeeded(t);
     int pos_in_bucket;
     int table_index;
     bucket *b = findBucketForInsert(t, hash, &pos_in_bucket, &table_index);
@@ -622,6 +664,15 @@ static uint64_t hashtabFingerprint(hashtab *t) {
         hash = hash + (hash << 31);
     }
     return hash;
+}
+
+/* Scan callback function used by hashtabGetSomeElements() for sampling elements
+ * using scan. */
+static void sampleElementsScanFn(void *privdata, void *element) {
+    scan_samples *samples = privdata;
+    if (samples->count < samples->size) {
+        samples->elements[samples->count++] = element;
+    }
 }
 
 /* --- API functions --- */
@@ -728,11 +779,12 @@ int hashtabIsRehashing(hashtab *t) {
 }
 
 /* Provides the old and new table size during rehashing. This function can only
- * be used when rehashing is in progress. */
+ * be used when rehashing is in progress, and from the rehashingStarted and
+ * rehashingCompleted callbacks. */
 void hashtabRehashingInfo(hashtab *t, size_t *from_size, size_t *to_size) {
     assert(hashtabIsRehashing(t));
-    *from_size = numBuckets(t->bucketExp[0]);
-    *to_size = numBuckets(t->bucketExp[1]);
+    *from_size = numBuckets(t->bucketExp[0]) * ELEMENTS_PER_BUCKET;
+    *to_size = numBuckets(t->bucketExp[1]) * ELEMENTS_PER_BUCKET;
 }
 
 /* Return 1 if expand was performed; 0 otherwise. */
@@ -836,13 +888,7 @@ void *hashtabFindPositionForInsert(hashtab *t, void *key, void **existing) {
         return NULL;
     } else {
         hashtabExpandIfNeeded(t);
-        /* If resize policy is AVOID, do some incremental rehashing here, because in
-         * this case we don't do it when looking up existing elements. The reason
-         * for doing it on insert is to ensure that we finish rehashing before we
-         * need to resize the table again. */
-        if (hashtabIsRehashing(t) && !t->pauseRehash && resize_policy == HASHTAB_RESIZE_AVOID) {
-            rehashStep(t);
-        }
+        rehashStepOnWriteIfNeeded(t);
         b = findBucketForInsert(t, hash, &pos_in_bucket, &table_index);
         assert((b->presence & (1 << pos_in_bucket)) == 0);
 
@@ -880,7 +926,7 @@ void hashtabInsertAtPosition(hashtab *t, void *elem, void *position) {
     int pos_in_bucket = encoded & ((1 << BITS_NEEDED_TO_STORE_POS_WITHIN_BUCKET) - 1);
     encoded >>= BITS_NEEDED_TO_STORE_POS_WITHIN_BUCKET;
     size_t bucket_index = encoded;
-    printf("Insert at table=%d, bucket=%lu, pos=%d\n", table_index, bucket_index, pos_in_bucket);
+    // printf("Insert at table=%d, bucket=%lu, pos=%d\n", table_index, bucket_index, pos_in_bucket);
 
     /* Insert the element at this position. */
     bucket *b = &t->tables[table_index][bucket_index];
@@ -943,9 +989,9 @@ int hashtabDelete(hashtab *t, const void *key) {
     }
 }
 
-/* --- Scan ---
- *
- * Scan is a stateless iterator. It works with a cursor that is returned to the
+/* --- Scan --- */
+
+/* Scan is a stateless iterator. It works with a cursor that is returned to the
  * caller and which should be provided to the next call to continue scanning.
  * The hash table can be modified in any way between two scan calls. The scan
  * still continues iterating where it was.
@@ -1028,21 +1074,23 @@ size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *priv
             size_t mask0 = expToMask(t->bucketExp[table0]);
             size_t mask1 = expToMask(t->bucketExp[table1]);
 
-            /* Emit elements in table 0. */
-            bucket *b = &t->tables[0][cursor & mask0];
-            for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
-                if (b->presence & (1 << pos)) {
-                    void *emit = emit_ref ? &b->elements[pos] : b->elements[pos];
-                    fn(privdata, emit);
+            /* Emit elements in table 0, if this bucket hasn't already been rehashed. */
+            if (!cursorIsLessThan(cursor, t->rehashIdx)) {
+                bucket *b = &t->tables[0][cursor & mask0];
+                for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
+                    if (b->presence & (1 << pos)) {
+                        void *emit = emit_ref ? &b->elements[pos] : b->elements[pos];
+                        fn(privdata, emit);
+                    }
                 }
+                in_probe_sequence |= b->everfull;
             }
-            in_probe_sequence |= b->everfull;
 
             /* Iterate over indices in larger table that are the expansion of
              * the index pointed to by the cursor in the smaller table. */
             do {
                 /* Emit elements in table 1. */
-                b = &t->tables[1][cursor & mask1];
+                bucket *b = &t->tables[1][cursor & mask1];
                 for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
                     if (b->presence & (1 << pos)) {
                         void *emit = emit_ref ? &b->elements[pos] : b->elements[pos];
@@ -1068,9 +1116,10 @@ size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *priv
 /* --- Iterator --- */
 
 /* Initiaize a iterator, that is not allowed to insert, delete or even lookup
- * elements in the hashtab. Only hashtabNext is allowed. Each element is
- * returned exactly once. Call hashtabResetIterator when you are done. See also
- * hashtabInitSafeIterator. */
+ * elements in the hashtab, because such operations can trigger incremental
+ * rehashing which moves elements around and confuses the iterator. Only
+ * hashtabNext is allowed. Each element is returned exactly once. Call
+ * hashtabResetIterator when you are done. See also hashtabInitSafeIterator. */
 void hashtabInitIterator(hashtabIterator *iter, hashtab *t) {
     iter->t = t;
     iter->table = 0;
@@ -1153,10 +1202,6 @@ int hashtabNext(hashtabIterator *iter, void **elemptr) {
             }
             iter->posInBucket = 0;
         } else {
-            /* Check??? */
-            if (iter->index < iter->t->rehashIdx && iter->table == 0) {
-                printf("Iterator less than rehashIdx");
-            }
             /* Advance position within bucket, or bucket index, or table. */
             iter->posInBucket++;
             if (iter->posInBucket >= ELEMENTS_PER_BUCKET) {
@@ -1187,7 +1232,59 @@ int hashtabNext(hashtabIterator *iter, void **elemptr) {
     return 0;
 }
 
+/* --- Random elements --- */
+
+/* Points 'found' to a random element in the hash table and returns 1. Returns 0
+ * if the table is empty. */
+int hashtabRandomElement(hashtab *t, void **found) {
+    void *samples[WEAK_RANDOM_SAMPLE_SIZE];
+    unsigned count = hashtabSampleElements(t, (void **)&samples, WEAK_RANDOM_SAMPLE_SIZE);
+    if (count == 0) return 0;
+    unsigned idx = random() % count;
+    *found = samples[idx];
+    return 1;
+}
+
+/* Points 'found' to a random element in the hash table and returns 1. Returns 0
+ * if the table is empty. This one is more fair than hashtabRandomElement(). */
+int hashtabFairRandomElement(hashtab *t, void **found) {
+    void *samples[FAIR_RANDOM_SAMPLE_SIZE];
+    unsigned count = hashtabSampleElements(t, (void **)&samples, FAIR_RANDOM_SAMPLE_SIZE);
+    if (count == 0) return 0;
+    /* if (count < FAIR_RANDOM_SAMPLE_SIZE) { */
+    /*     printf("Only sampled %u of %u!\n", count, FAIR_RANDOM_SAMPLE_SIZE); */
+    /* } */
+    unsigned idx = random() % count;
+    *found = samples[idx];
+    return 1;
+}
+
+/* This function samples a sequence of elements starting at a random location in
+ * the hash table.
+ *
+ * The sampled elements are stored in the array 'dst' which must have space for
+ * at least 'count' elements.te
+ *
+ * The function returns the number of sampled elements, which is 'count' except
+ * if 'count' is greater than the total number of elements in the hash table. */
+unsigned hashtabSampleElements(hashtab *t, void **dst, unsigned count) {
+    /* Adjust count. */
+    if (count > hashtabSize(t)) count = hashtabSize(t);
+    /* Perform incremental rehahing proportional to count. */
+    scan_samples samples;
+    samples.size = count;
+    samples.count = 0;
+    samples.elements = dst;
+    size_t cursor = randomSizeT();
+    while (samples.count < count) {
+        rehashStepOnReadIfNeeded(t);
+        cursor = hashtabScan(t, cursor, sampleElementsScanFn, &samples, 0);
+    }
+    return count;
+}
+
 /* --- DEBUG --- */
+
 void hashtabDump(hashtab *t) {
     for (int table = 0; table <= 1; table++) {
         printf("Table %d, used %lu, exp %d\n", table, t->used[table], t->bucketExp[table]);

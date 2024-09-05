@@ -748,7 +748,7 @@ static rdma_listener *rdmaFdToListener(connListener *listener, int fd) {
     for (int i = 0; i < listener->count; i++) {
         if (listener->fd[i] != fd) continue;
 
-        return (rdma_listener *)listener->priv + i;
+        return (rdma_listener *)listener->priv1 + i;
     }
 
     return NULL;
@@ -1517,7 +1517,7 @@ int connRdmaListen(connListener *listener) {
         bindaddr = default_bindaddr;
     }
 
-    listener->priv = rdma_listener = zcalloc_num(bindaddr_count, sizeof(*rdma_listener));
+    listener->priv1 = rdma_listener = zcalloc_num(bindaddr_count, sizeof(*rdma_listener));
     for (j = 0; j < bindaddr_count; j++) {
         char *addr = bindaddr[j];
         int optional = *addr == '-';
@@ -1736,13 +1736,13 @@ static int rdmaChangeListener(void) {
 
         aeDeleteFileEvent(server.el, listener->fd[i], AE_READABLE);
         listener->fd[i] = -1;
-        struct rdma_listener *rdma_listener = (struct rdma_listener *)listener->priv + i;
+        struct rdma_listener *rdma_listener = (struct rdma_listener *)listener->priv1 + i;
         rdma_destroy_id(rdma_listener->cm_id);
         rdma_destroy_event_channel(rdma_listener->cm_channel);
     }
 
     listener->count = 0;
-    zfree(listener->priv);
+    zfree(listener->priv1);
 
     closeListener(listener);
 

@@ -144,6 +144,7 @@ tags {"needs:debug"} {
 
     test {LATENCY of expire events are correctly collected} {
         r config set latency-monitor-threshold 20
+        r config set lazyfree-lazy-expire no
         r flushdb
         if {$::valgrind} {set count 100000} else {set count 1000000}
         r eval {
@@ -166,6 +167,7 @@ tags {"needs:debug"} {
         }
 
         r config set latency-monitor-threshold 200
+        r config set lazyfree-lazy-expire yes
     }
 
     test {LATENCY HISTORY / RESET with wrong event name is fine} {

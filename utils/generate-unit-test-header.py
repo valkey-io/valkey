@@ -4,7 +4,7 @@ import re
 
 UNIT_DIR = os.path.abspath(os.path.dirname(os.path.abspath(__file__)) + '/../src/unit')
 TEST_FILE = UNIT_DIR + '/test_files.h'
-TEST_PROTOTYPE = '(int (test_[a-zA-Z0-9_]*)\(.*\)).*{'
+TEST_PROTOTYPE = r'(int (test_[a-zA-Z0-9_]*)\(.*\)).*{'
 
 if __name__ == '__main__':
     with open(TEST_FILE, 'w') as output:

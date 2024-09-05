@@ -70,10 +70,6 @@ typedef struct dictType {
      * computing the length of the key + header when buf is NULL. */
     size_t (*embedKey)(unsigned char *buf, size_t buf_len, const void *key, unsigned char *header_size);
 
-
-    /* Data */
-    void *userdata;
-
     /* Flags */
     /* The 'no_value' flag, if set, indicates that values are not used, i.e. the
      * dict is a set. When this flag is set, it's not possible to access the
@@ -229,6 +225,7 @@ void dictInitIterator(dictIterator *iter, dict *d);
 void dictInitSafeIterator(dictIterator *iter, dict *d);
 void dictResetIterator(dictIterator *iter);
 dictEntry *dictNext(dictIterator *iter);
+dictEntry *dictGetNext(const dictEntry *de);
 void dictReleaseIterator(dictIterator *iter);
 dictEntry *dictGetRandomKey(dict *d);
 dictEntry *dictGetFairRandomKey(dict *d);

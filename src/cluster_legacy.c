@@ -62,7 +62,6 @@ void clusterSendPing(clusterLink *link, int type);
 void clusterSendFail(char *nodename);
 void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request);
 void clusterUpdateState(void);
-int clusterNodeCoversSlot(clusterNode *n, int slot);
 list *clusterGetNodesInMyShard(clusterNode *node);
 int clusterNodeAddReplica(clusterNode *primary, clusterNode *replica);
 int clusterAddSlot(clusterNode *n, int slot);
@@ -93,7 +92,6 @@ void moduleCallClusterReceivers(const char *sender_id,
                                 uint32_t len);
 const char *clusterGetMessageTypeString(int type);
 void removeChannelsInSlot(unsigned int slot);
-unsigned int countKeysInSlot(unsigned int hashslot);
 unsigned int countChannelsInSlot(unsigned int hashslot);
 unsigned int delKeysInSlot(unsigned int hashslot);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
@@ -3314,9 +3312,42 @@ int clusterProcessPacket(clusterLink *link) {
                     if (sender->replicaof) clusterNodeRemoveReplica(sender->replicaof, sender);
                     serverLog(LL_NOTICE, "Node %.40s (%s) is now a replica of node %.40s (%s) in shard %.40s",
                               sender->name, sender->human_nodename, sender_claimed_primary->name,
-                              sender_claimed_primary->human_nodename, sender->shard_id);
+                              sender_claimed_primary->human_nodename, sender_claimed_primary->shard_id);
                     clusterNodeAddReplica(sender_claimed_primary, sender);
                     sender->replicaof = sender_claimed_primary;
+
+                    /* The chain reduction logic requires correctly establishing the replication relationship.
+                     * A key decision when designating a new primary for 'myself' is determining whether
+                     * 'myself' and the new primary belong to the same shard, which would imply shared
+                     * replication history and allow a safe partial synchronization (psync).
+                     *
+                     * This decision hinges on the shard_id, a per-node property that helps verify if the
+                     * two nodes share the same replication history. It's critical not to update myself's
+                     * shard_id prematurely during this process. Doing so could incorrectly associate
+                     * 'myself' with the sender's shard_id, leading the subsequent clusterSetPrimary call
+                     * to falsely assume that 'myself' and the new primary have been in the same shard.
+                     * This mistake could result in data loss by incorrectly permitting a psync.
+                     *
+                     * Therefore, it's essential to delay any shard_id updates until after the replication
+                     * relationship has been properly established and verified. */
+                    if (myself->replicaof && myself->replicaof->replicaof && myself->replicaof->replicaof != myself) {
+                        /* Safeguard against sub-replicas.
+                         *
+                         * A replica's primary can turn itself into a replica if its last slot
+                         * is removed. If no other node takes over the slot, there is nothing
+                         * else to trigger replica migration. In this case, they are not in the
+                         * same shard, so a full sync is required.
+                         *
+                         * Or a replica's primary can turn itself into a replica of its other
+                         * replica during a failover. In this case, they are in the same shard,
+                         * so we can try a psync. */
+                        serverLog(LL_NOTICE, "I'm a sub-replica! Reconfiguring myself as a replica of %.40s from %.40s",
+                                  myself->replicaof->replicaof->name, myself->replicaof->name);
+                        clusterSetPrimary(myself->replicaof->replicaof, 1,
+                                          !areInSameShard(myself->replicaof->replicaof, myself));
+                        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE |
+                                             CLUSTER_TODO_FSYNC_CONFIG);
+                    }
 
                     /* Update the shard_id when a replica is connected to its
                      * primary in the very first time. */
@@ -3383,25 +3414,6 @@ int clusterProcessPacket(clusterLink *link) {
                     }
                 }
             }
-        }
-
-        /* Explicitly check for a replication loop before attempting the replication
-         * chain folding logic. */
-        if (myself->replicaof && myself->replicaof->replicaof && myself->replicaof->replicaof != myself) {
-            /* Safeguard against sub-replicas.
-             *
-             * A replica's primary can turn itself into a replica if its last slot
-             * is removed. If no other node takes over the slot, there is nothing
-             * else to trigger replica migration. In this case, they are not in the
-             * same shard, so a full sync is required.
-             *
-             * Or a replica's primary can turn itself into a replica of its other
-             * replica during a failover. In this case, they are in the same shard,
-             * so we can try a psync. */
-            serverLog(LL_NOTICE, "I'm a sub-replica! Reconfiguring myself as a replica of %.40s from %.40s",
-                      myself->replicaof->replicaof->name, myself->replicaof->name);
-            clusterSetPrimary(myself->replicaof->replicaof, 1, !areInSameShard(myself->replicaof->replicaof, myself));
-            clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
         }
 
         /* If our config epoch collides with the sender's try to fix
@@ -4262,14 +4274,14 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
      * with CLUSTERMSG_FLAG0_FORCEACK (manual failover). */
     if (clusterNodeIsPrimary(node) || primary == NULL || (!nodeFailed(primary) && !force_ack)) {
         if (clusterNodeIsPrimary(node)) {
-            serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): it is a primary node", node->name,
-                      node->human_nodename);
+            serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: it is a primary node", node->name,
+                      node->human_nodename, (unsigned long long)requestCurrentEpoch);
         } else if (primary == NULL) {
-            serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): I don't know its primary", node->name,
-                      node->human_nodename);
+            serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: I don't know its primary",
+                      node->name, node->human_nodename, (unsigned long long)requestCurrentEpoch);
         } else if (!nodeFailed(primary)) {
-            serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): its primary is up", node->name,
-                      node->human_nodename);
+            serverLog(LL_WARNING, "Failover auth denied to %.40s (%s) for epoch %llu: its primary is up", node->name,
+                      node->human_nodename, (unsigned long long)requestCurrentEpoch);
         }
         return;
     }
@@ -6273,7 +6285,7 @@ void clusterCommandSetSlot(client *c) {
      * To mitigate this issue, the following order needs to be enforced for slot
      * migration finalization such that the replicas finalize the slot ownership
      * before the primary:
- .   *
+     *
      * 1. Client C issues SETSLOT n NODE B against node B.
      * 2. Primary B replicates `SETSLOT n NODE B` to all of its replicas (e.g., B', B'').
      * 3. Upon replication completion, primary B executes `SETSLOT n NODE B` and
@@ -6293,17 +6305,25 @@ void clusterCommandSetSlot(client *c) {
          * non-replicated behavior.*/
         listIter li;
         listNode *ln;
-        int legacy_replica_found = 0;
+        int num_eligible_replicas = 0;
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
             client *r = ln->value;
-            if (r->replica_version < 0x702ff /* 7.2.255 */) {
-                legacy_replica_found++;
-                break;
+
+            /* We think that when the command comes in, the primary only needs to
+             * wait for the online replicas. The admin can easily check if there
+             * are replicas that are down for an extended period of time. If they
+             * decide to move forward anyways, we should not block it. If a replica
+             * failed right before the replication and was not included in the
+             * replication, it would also unlikely win the election.
+             *
+             * And 0x702ff is 7.2.255, we only support new versions in this case. */
+            if (r->repl_state == REPLICA_STATE_ONLINE && r->replica_version > 0x702ff) {
+                num_eligible_replicas++;
             }
         }
 
-        if (!legacy_replica_found) {
+        if (num_eligible_replicas != 0) {
             forceCommandPropagation(c, PROPAGATE_REPL);
             /* We are a primary and this is the first time we see this `SETSLOT`
              * command. Force-replicate the command to all of our replicas
@@ -6313,7 +6333,7 @@ void clusterCommandSetSlot(client *c) {
              * 2. The repl offset target is set to the primary's current repl offset + 1.
              *    There is no concern of partial replication because replicas always
              *    ack the repl offset at the command boundary. */
-            blockClientForReplicaAck(c, timeout_ms, server.primary_repl_offset + 1, myself->num_replicas, 0);
+            blockClientForReplicaAck(c, timeout_ms, server.primary_repl_offset + 1, num_eligible_replicas, 0);
             /* Mark client as pending command for execution after replication to replicas. */
             c->flag.pending_command = 1;
             replicationRequestAckFromReplicas();
@@ -6322,7 +6342,7 @@ void clusterCommandSetSlot(client *c) {
     }
 
     /* Slot states have been updated on the compatible replicas (if any).
-     * Now exuecte the command on the primary. */
+     * Now execute the command on the primary. */
     if (!strcasecmp(c->argv[3]->ptr, "migrating")) {
         serverLog(LL_NOTICE, "Migrating slot %d to node %.40s (%s)", slot, n->name, n->human_nodename);
         server.cluster->migrating_slots_to[slot] = n;

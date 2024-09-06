@@ -120,14 +120,9 @@ typedef struct {
 
 /* TODO:
  *
- * - RehashingInfo
  * - Stats/debugging (GetStatsMsg, GetStatsHt, CombineStats, FreeStats)
  * - size_t hashtabMemUsage(t)
- * - get random and fair-random element
- * - get some elements (unfair random)
- * - empty (delete all elements)
  * - two-phase delete (find position + delete at position) API
- * - two-phase insert (find position + insert at position) API
  * - Type flag to disable incremental rehashing.
  *
  * Not needed: defrag functions (solved by emit_ref in scan) */
@@ -149,6 +144,7 @@ void hashtabSetResizePolicy(hashtabResizePolicy policy);
 /* Hashtab instance */
 hashtab *hashtabCreate(hashtabType *type);
 void hashtabRelease(hashtab *t);
+void hashtabEmpty(hashtab *t, void(callback)(hashtab *));
 hashtabType *hashtabGetType(hashtab *t);
 void *hashtabMetadata(hashtab *t);
 size_t hashtabSize(hashtab *t);

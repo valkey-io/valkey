@@ -694,16 +694,23 @@ hashtab *hashtabCreate(hashtabType *type) {
     return t;
 }
 
-/* Deletes all the element and frees the table. */
-void hashtabRelease(hashtab *t) {
-    for (int table = 0; table <= 1; table++) {
-        if (t->bucketExp[table] < 0) {
+/* Deletes all the elements. If a callback is provided, it is called from time
+ * to time to indicate progress. */
+void hashtabEmpty(hashtab *t, void(callback)(hashtab *)) {
+    if (hashtabIsRehashing(t)) {
+        /* Pretend rehashing completed. */
+        if (t->type->rehashingCompleted) t->type->rehashingCompleted(t);
+        t->rehashIdx = -1;
+    }
+    for (int table_index = 0; table_index <= 1; table_index++) {
+        if (t->bucketExp[table_index] < 0) {
             continue;
         }
         if (t->type->elementDestructor) {
-            /* We need to free all elements. */
-            for (size_t idx = 0; idx < numBuckets(t->bucketExp[table]); idx++) {
-                bucket *b = &t->tables[table][idx];
+            /* Call the destructor with each element. */
+            for (size_t idx = 0; idx < numBuckets(t->bucketExp[table_index]); idx++) {
+                if (callback && (idx & 65535) == 0) callback(t);
+                bucket *b = &t->tables[table_index][idx];
                 if (b->presence == 0) {
                     continue;
                 }
@@ -714,8 +721,14 @@ void hashtabRelease(hashtab *t) {
                 }
             }
         }
-        zfree(t->tables[table]);
+        zfree(t->tables[table_index]);
+        resetTable(t, table_index);
     }
+}
+
+/* Deletes all the elements and frees the table. */
+void hashtabRelease(hashtab *t) {
+    hashtabEmpty(t, NULL);
     zfree(t);
 }
 

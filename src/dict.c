@@ -1914,7 +1914,7 @@ int dictTest(int argc, char **argv, int flags) {
         retval = dictAdd(dict, stringFromLongLong(current_dict_used), (void *)(current_dict_used));
         assert(retval == DICT_OK);
         current_dict_used++;
-        new_dict_size = 1UL << _dictNextExp(current_dict_used);
+        new_dict_size = 1UL << dictNextExp(current_dict_used);
         assert(dictSize(dict) == current_dict_used);
         assert(DICTHT_SIZE(dict->ht_size_exp[0]) == 16);
         assert(DICTHT_SIZE(dict->ht_size_exp[1]) == new_dict_size);

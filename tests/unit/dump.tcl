@@ -287,6 +287,7 @@ start_server {tags {"dump"}} {
 
             set rd [valkey_deferring_client]
             $rd debug sleep 1.0 ; # Make second server unable to reply.
+            after 100; # wait to make sure DEBUG command was executed.
             set e {}
             catch {r -1 migrate $second_host $second_port key 9 500} e
             assert_match {IOERR*} $e

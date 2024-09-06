@@ -30,6 +30,7 @@
 #include "server.h"
 #include "script.h"
 #include "cluster.h"
+#include "cluster_slot_stats.h"
 
 scriptFlag scripts_flags_def[] = {
     {.flag = SCRIPT_FLAG_NO_WRITES, .str = "no-writes"},
@@ -583,6 +584,7 @@ void scriptCall(scriptRunCtx *run_ctx, sds *err) {
     }
     call(c, call_flags);
     serverAssert(c->flag.blocked == 0);
+    clusterSlotStatsInvalidateSlotIfApplicable(run_ctx);
     return;
 
 error:

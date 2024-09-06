@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,6 +32,7 @@
 #include "latency.h"
 #include "script.h"
 #include "functions.h"
+#include "io_threads.h"
 
 #include <signal.h>
 #include <ctype.h>
@@ -230,15 +231,27 @@ int calculateKeySlot(sds key) {
 int getKeySlot(sds key) {
     /* This is performance optimization that uses pre-set slot id from the current command,
      * in order to avoid calculation of the key hash.
+     *
      * This optimization is only used when current_client flag `CLIENT_EXECUTING_COMMAND` is set.
      * It only gets set during the execution of command under `call` method. Other flows requesting
      * the key slot would fallback to calculateKeySlot.
+     *
+     * Modules and scripts executed on the primary may get replicated as multi-execs that operate on multiple slots,
+     * so we must always recompute the slot for commands coming from the primary.
      */
-    if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command) {
+    if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command &&
+        !server.current_client->flag.primary) {
         debugServerAssertWithInfo(server.current_client, NULL, calculateKeySlot(key) == server.current_client->slot);
         return server.current_client->slot;
     }
-    return calculateKeySlot(key);
+    int slot = calculateKeySlot(key);
+    /* For the case of replicated commands from primary, getNodeByQuery() never gets called,
+     * and thus c->slot never gets populated. That said, if this command ends up accessing a key,
+     * we are able to backfill c->slot here, where the key's hash calculation is made. */
+    if (server.current_client && server.current_client->flag.primary) {
+        server.current_client->slot = slot;
+    }
+    return slot;
 }
 
 /* This is a special version of dbAdd() that is used only when loading
@@ -297,7 +310,10 @@ static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEn
         old = dictGetVal(de);
     }
     kvstoreDictSetVal(db->keys, slot, de, val);
-    if (server.lazyfree_lazy_server_del) {
+    /* For efficiency, let the I/O thread that allocated an object also deallocate it. */
+    if (tryOffloadFreeObjToIOThreads(old) == C_OK) {
+        /* OK */
+    } else if (server.lazyfree_lazy_server_del) {
         freeObjAsync(key, old, db->id);
     } else {
         decrRefCount(old);
@@ -568,8 +584,8 @@ serverDb *initTempDb(void) {
     serverDb *tempDb = zcalloc(sizeof(serverDb) * server.dbnum);
     for (int i = 0; i < server.dbnum; i++) {
         tempDb[i].id = i;
-        tempDb[i].keys = kvstoreCreate(&dbDictType, slot_count_bits, flags);
-        tempDb[i].expires = kvstoreCreate(&dbExpiresDictType, slot_count_bits, flags);
+        tempDb[i].keys = kvstoreCreate(&kvstoreKeysDictType, slot_count_bits, flags);
+        tempDb[i].expires = kvstoreCreate(&kvstoreExpiresDictType, slot_count_bits, flags);
     }
 
     return tempDb;
@@ -1694,6 +1710,19 @@ void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj) {
     signalModifiedKey(NULL, db, keyobj);
     propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
     server.stat_expiredkeys++;
+}
+
+/* Delete the specified expired key from overwriting and propagate the DEL or UNLINK. */
+void deleteExpiredKeyFromOverwriteAndPropagate(client *c, robj *keyobj) {
+    int deleted = dbGenericDelete(c->db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED);
+    serverAssertWithInfo(c, keyobj, deleted);
+    server.dirty++;
+
+    /* Replicate/AOF this as an explicit DEL or UNLINK. */
+    robj *aux = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
+    rewriteClientCommandVector(c, 2, aux, keyobj);
+    signalModifiedKey(c, c->db, keyobj);
+    notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, c->db->id);
 }
 
 /* Propagate an implicit key deletion into replicas and the AOF file.

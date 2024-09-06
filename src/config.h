@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -264,6 +264,15 @@ void setproctitle(const char *fmt, ...);
 #error "Undefined or invalid BYTE_ORDER"
 #endif
 
+/* Cache line alignment */
+#ifndef CACHE_LINE_SIZE
+#if defined(__aarch64__) && defined(__APPLE__)
+#define CACHE_LINE_SIZE 128
+#else
+#define CACHE_LINE_SIZE 64
+#endif /* __aarch64__ && __APPLE__ */
+#endif /* CACHE_LINE_SIZE */
+
 #if (__i386 || __amd64 || __powerpc__) && __GNUC__
 #define GNUC_VERSION (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)
 #if defined(__clang__)
@@ -329,7 +338,7 @@ void setcpuaffinity(const char *cpulist);
 #define HAVE_FADVISE
 #endif
 
-#define IO_THREADS_MAX_NUM 128
+#define IO_THREADS_MAX_NUM 16
 
 #ifndef CACHE_LINE_SIZE
 #if defined(__aarch64__) && defined(__APPLE__)
@@ -337,6 +346,22 @@ void setcpuaffinity(const char *cpulist);
 #else
 #define CACHE_LINE_SIZE 64
 #endif
+#endif
+
+/* Check for GCC version >= 4.9 */
+#if defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 9))
+#define HAS_BUILTIN_PREFETCH 1
+/* Check for Clang version >= 3.6 */
+#elif defined(__clang__) && (__clang_major__ > 3 || (__clang_major__ == 3 && __clang_minor__ >= 6))
+#define HAS_BUILTIN_PREFETCH 1
+#else
+#define HAS_BUILTIN_PREFETCH 0
+#endif
+
+#if HAS_BUILTIN_PREFETCH
+#define valkey_prefetch(addr) __builtin_prefetch(addr)
+#else
+#define valkey_prefetch(addr) ((void)(addr))
 #endif
 
 #endif

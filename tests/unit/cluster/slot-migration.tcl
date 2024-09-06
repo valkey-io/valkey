@@ -216,6 +216,9 @@ proc create_empty_shard {p r} {
     wait_for_role $p master
 }
 
+# Temporarily disable empty shard migration tests while we
+# work to reduce their flakiness. See https://github.com/valkey-io/valkey/issues/858.
+if {0} {
 start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
@@ -291,6 +294,7 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
         wait_for_slot_state 3 "\[609->-$R6_id\]"
         wait_for_slot_state 7 "\[609-<-$R0_id\]"
     }
+}
 }
 
 proc migrate_slot {from to slot} {
@@ -429,5 +433,37 @@ start_cluster 2 0 {tags {tls:skip external:skip cluster regression} overrides {c
 
         # This line should cause the crash
         R 0 MIGRATE 127.0.0.1 [lindex [R 1 CONFIG GET port] 1] $stream_name 0 5000
+    }
+}
+
+start_cluster 3 6 {tags {external:skip cluster} overrides {cluster-node-timeout 1000} } {
+    test "Slot migration is ok when the replicas are down" {
+        # Killing all replicas in primary 0.
+        assert_equal 2 [s 0 connected_slaves]
+        catch {R 3 shutdown nosave}
+        catch {R 6 shutdown nosave}
+        wait_for_condition 50 100 {
+            [s 0 connected_slaves] == 0
+        } else {
+            fail "The replicas in primary 0 are still connecting"
+        }
+
+        # Killing one replica in primary 1.
+        assert_equal 2 [s -1 connected_slaves]
+        catch {R 4 shutdown nosave}
+        wait_for_condition 50 100 {
+            [s -1 connected_slaves] == 1
+        } else {
+            fail "The replica in primary 1 is still connecting"
+        }
+
+        # Check slot migration is ok when the replicas are down.
+        migrate_slot 0 1 0
+        migrate_slot 0 2 1
+        assert_equal {OK} [R 0 CLUSTER SETSLOT 0 NODE [R 1 CLUSTER MYID]]
+        assert_equal {OK} [R 0 CLUSTER SETSLOT 1 NODE [R 2 CLUSTER MYID]]
+        wait_for_slot_state 0 ""
+        wait_for_slot_state 1 ""
+        wait_for_slot_state 2 ""
     }
 }

@@ -128,7 +128,7 @@ foreach call_type {nested normal} {
         # send another command after the blocked one, to make sure we don't attempt to process it
         $rd ping
         $rd flush
-
+        after 100
         # make sure we get BUSY error, and that we didn't get it too early
         assert_error {*BUSY Slow module operation*} {r ping}
         assert_morethan_equal [expr [clock clicks -milliseconds]-$start] $busy_time_limit

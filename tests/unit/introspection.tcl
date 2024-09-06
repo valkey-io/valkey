@@ -533,6 +533,7 @@ start_server {tags {"introspection"}} {
             io-threads
             logfile
             unixsocketperm
+            unixsocketgroup
             replicaof
             slaveof
             requirepass
@@ -558,6 +559,7 @@ start_server {tags {"introspection"}} {
             socket-mark-id
             req-res-logfile
             client-default-resp
+            dual-channel-replication-enabled
         }
 
         if {!$::tls} {

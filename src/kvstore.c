@@ -52,7 +52,7 @@ static dict *kvstoreIteratorNextDict(kvstoreIterator *kvs_it);
 
 struct _kvstore {
     int flags;
-    dictType dtype;
+    dictType *dtype;
     dict **dicts;
     long long num_dicts;
     long long num_dicts_bits;
@@ -86,6 +86,7 @@ struct _kvstoreDictIterator {
 /* Dict metadata for database, used for record the position in rehashing list. */
 typedef struct {
     listNode *rehashing_node; /* list node in rehashing list */
+    kvstore *kvs;
 } kvstoreDictMetadata;
 
 /**********************************/
@@ -93,7 +94,7 @@ typedef struct {
 /**********************************/
 
 /* Get the dictionary pointer based on dict-index. */
-static dict *kvstoreGetDict(kvstore *kvs, int didx) {
+dict *kvstoreGetDict(kvstore *kvs, int didx) {
     return kvs->dicts[didx];
 }
 
@@ -166,7 +167,9 @@ static dict *createDictIfNeeded(kvstore *kvs, int didx) {
     dict *d = kvstoreGetDict(kvs, didx);
     if (d) return d;
 
-    kvs->dicts[didx] = dictCreate(&kvs->dtype);
+    kvs->dicts[didx] = dictCreate(kvs->dtype);
+    kvstoreDictMetadata *metadata = (kvstoreDictMetadata *)dictMetadata(kvs->dicts[didx]);
+    metadata->kvs = kvs;
     kvs->allocated_dicts++;
     return kvs->dicts[didx];
 }
@@ -197,9 +200,9 @@ static void freeDictIfNeeded(kvstore *kvs, int didx) {
  * If there are multiple dicts, updates the bucket count for the given dictionary
  * in a DB, bucket count incremented with the new ht size during the rehashing phase.
  * If there's one dict, bucket count can be retrieved directly from single dict bucket. */
-static void kvstoreDictRehashingStarted(dict *d) {
-    kvstore *kvs = d->type->userdata;
+void kvstoreDictRehashingStarted(dict *d) {
     kvstoreDictMetadata *metadata = (kvstoreDictMetadata *)dictMetadata(d);
+    kvstore *kvs = metadata->kvs;
     listAddNodeTail(kvs->rehashing, d);
     metadata->rehashing_node = listLast(kvs->rehashing);
 
@@ -214,9 +217,9 @@ static void kvstoreDictRehashingStarted(dict *d) {
  *
  * Updates the bucket count for the given dictionary in a DB. It removes
  * the old ht size of the dictionary from the total sum of buckets for a DB.  */
-static void kvstoreDictRehashingCompleted(dict *d) {
-    kvstore *kvs = d->type->userdata;
+void kvstoreDictRehashingCompleted(dict *d) {
     kvstoreDictMetadata *metadata = (kvstoreDictMetadata *)dictMetadata(d);
+    kvstore *kvs = metadata->kvs;
     if (metadata->rehashing_node) {
         listDelNode(kvs->rehashing, metadata->rehashing_node);
         metadata->rehashing_node = NULL;
@@ -230,7 +233,7 @@ static void kvstoreDictRehashingCompleted(dict *d) {
 }
 
 /* Returns the size of the DB dict metadata in bytes. */
-static size_t kvstoreDictMetadataSize(dict *d) {
+size_t kvstoreDictMetadataSize(dict *d) {
     UNUSED(d);
     return sizeof(kvstoreDictMetadata);
 }
@@ -253,19 +256,8 @@ kvstore *kvstoreCreate(dictType *type, int num_dicts_bits, int flags) {
     assert(num_dicts_bits <= 16);
 
     kvstore *kvs = zcalloc(sizeof(*kvs));
-    memcpy(&kvs->dtype, type, sizeof(kvs->dtype));
+    kvs->dtype = type;
     kvs->flags = flags;
-
-    /* kvstore must be the one to set these callbacks, so we make sure the
-     * caller didn't do it */
-    assert(!type->userdata);
-    assert(!type->dictMetadataBytes);
-    assert(!type->rehashingStarted);
-    assert(!type->rehashingCompleted);
-    kvs->dtype.userdata = kvs;
-    kvs->dtype.dictMetadataBytes = kvstoreDictMetadataSize;
-    kvs->dtype.rehashingStarted = kvstoreDictRehashingStarted;
-    kvs->dtype.rehashingCompleted = kvstoreDictRehashingCompleted;
 
     kvs->num_dicts_bits = num_dicts_bits;
     kvs->num_dicts = 1 << kvs->num_dicts_bits;
@@ -760,7 +752,7 @@ void kvstoreDictLUTDefrag(kvstore *kvs, kvstoreDictLUTDefragFunction *defragfn) 
 }
 
 uint64_t kvstoreGetHash(kvstore *kvs, const void *key) {
-    return kvs->dtype.hashFunction(key);
+    return kvs->dtype->hashFunction(key);
 }
 
 void *kvstoreDictFetchValue(kvstore *kvs, int didx, const void *key) {

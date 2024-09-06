@@ -19,8 +19,8 @@ proc fill_up_os_socket_send_buffer_for_repl {idx} {
 
 foreach how {sigterm shutdown} {
     test "Shutting down master waits for replica to catch up ($how)" {
-        start_server {overrides {save ""}} {
-            start_server {overrides {save ""}} {
+        start_server {overrides {save "" repl-backlog-size 1MB}} {
+            start_server {overrides {save "" repl-backlog-size 1MB}} {
                 set master [srv -1 client]
                 set master_host [srv -1 host]
                 set master_port [srv -1 port]
@@ -85,8 +85,8 @@ foreach how {sigterm shutdown} {
 }
 
 test {Shutting down master waits for replica timeout} {
-    start_server {overrides {save ""}} {
-        start_server {overrides {save ""}} {
+    start_server {overrides {save "" repl-backlog-size 1MB}} {
+        start_server {overrides {save "" repl-backlog-size 1MB}} {
             set master [srv -1 client]
             set master_host [srv -1 host]
             set master_port [srv -1 port]
@@ -134,8 +134,8 @@ test {Shutting down master waits for replica timeout} {
 } {} {repl external:skip}
 
 test "Shutting down master waits for replica then fails" {
-    start_server {overrides {save ""}} {
-        start_server {overrides {save ""}} {
+    start_server {overrides {save "" repl-backlog-size 1MB}} {
+        start_server {overrides {save "" repl-backlog-size 1MB}} {
             set master [srv -1 client]
             set master_host [srv -1 host]
             set master_port [srv -1 port]
@@ -156,6 +156,12 @@ test "Shutting down master waits for replica then fails" {
             set rd2 [valkey_deferring_client -1]
             $rd1 shutdown
             $rd2 shutdown
+            wait_for_condition 50 100 {
+                [llength [lsearch -all [split [string trim [$master client list]] "\r\n"] *cmd=shutdown*]] == 2
+            } else {
+                fail "SHUTDOWN not called on all clients"
+            }
+
             set info_clients [$master info clients]
             assert_match "*connected_clients:3*" $info_clients
             assert_match "*blocked_clients:2*" $info_clients
@@ -187,8 +193,8 @@ test "Shutting down master waits for replica then fails" {
 } {} {repl external:skip}
 
 test "Shutting down master waits for replica then aborted" {
-    start_server {overrides {save ""}} {
-        start_server {overrides {save ""}} {
+    start_server {overrides {save "" repl-backlog-size 1MB}} {
+        start_server {overrides {save "" repl-backlog-size 1MB}} {
             set master [srv -1 client]
             set master_host [srv -1 host]
             set master_port [srv -1 port]
@@ -209,6 +215,12 @@ test "Shutting down master waits for replica then aborted" {
             set rd2 [valkey_deferring_client -1]
             $rd1 shutdown
             $rd2 shutdown
+            wait_for_condition 50 100 {
+                [llength [lsearch -all [split [string trim [$master client list]] "\r\n"] *cmd=shutdown*]] == 2
+            } else {
+                fail "SHUTDOWN not called on all clients"
+            }
+
             set info_clients [$master info clients]
             assert_match "*connected_clients:3*" $info_clients
             assert_match "*blocked_clients:2*" $info_clients

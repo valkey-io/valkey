@@ -98,6 +98,35 @@ start_server {} {
         $rd close
         $rd2 close
     }
+
+    start_server {} {
+        test {Setup a new replica} {
+            r replicaof $master_host $master_port
+            wait_for_ofs_sync $master r
+            wait_for_ofs_sync $master $slave
+        }
+
+        test {WAIT in script will work} {
+            # Pause the old replica so it can not catch up the offset.
+            pause_process $slave_pid
+
+            # Primary set a new key and wait the new replica catch up the offset.
+            $master set foo bar
+            wait_for_ofs_sync $master r
+
+            # Wait for the new replica to report the acked offset to the primary.
+            # Because the old replica is paused, so the WAIT can only return 1.
+            # In an earlier version it returned 2, because the fake client's woff
+            # is always 0 so WAIT counted all the replicas.
+            wait_for_condition 50 100 {
+                [$master eval "return server.call('wait', '2', '0')" 0] eq 1
+            } else {
+                fail "WAIT in script does not work as expected."
+            }
+
+            resume_process $slave_pid
+        }
+    }
 }}
 
 

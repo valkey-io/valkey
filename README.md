@@ -1,10 +1,8 @@
 [![codecov](https://codecov.io/gh/valkey-io/valkey/graph/badge.svg?token=KYYSJAYC5F)](https://codecov.io/gh/valkey-io/valkey)
 
-This README is under construction as we work to build a new community driven high performance key-value store.
-
 This project was forked from the open source Redis project right before the transition to their new source available licenses.
 
-This README is just a fast *quick start* document. We are currently working on a more permanent documentation page.
+This README is just a fast *quick start* document. More details can be found under [valkey.io](https://valkey.io/)
 
 What is Valkey?
 --------------
@@ -27,9 +25,23 @@ It is as simple as:
     % make
 
 To build with TLS support, you'll need OpenSSL development libraries (e.g.
-libssl-dev on Debian/Ubuntu) and run:
+libssl-dev on Debian/Ubuntu).
+
+To build TLS support as Valkey built-in:
 
     % make BUILD_TLS=yes
+
+TO build TLS as Valkey module:
+
+    % make BUILD_TLS=module
+
+Note that sentinel mode does not support TLS module.
+
+To build with experimental RDMA support you'll need RDMA development libraries
+(e.g. librdmacm-dev and libibverbs-dev on Debian/Ubuntu). For now, Valkey only
+supports RDMA as connection module mode. Run:
+
+    % make BUILD_RDMA=module
 
 To build with systemd support, you'll need systemd development libraries (such 
 as libsystemd-dev on Debian/Ubuntu or systemd-devel on CentOS) and run:
@@ -48,12 +60,16 @@ After building Valkey, it is a good idea to test it using:
 
     % make test
 
-If TLS is built, running the tests with TLS enabled (you will need `tcl-tls`
-installed):
+The above runs the main integration tests. Additional tests are started using:
 
-    % ./utils/gen-test-certs.sh
-    % ./runtest --tls
+    % make test-unit     # Unit tests
+    % make test-modules  # Tests of the module API
+    % make test-sentinel # Valkey Sentinel integration tests
+    % make test-cluster  # Valkey Cluster integration tests
 
+More about running the integration tests can be found in
+[tests/README.md](tests/README.md) and for unit tests, see
+[src/unit/README.md](src/unit/README.md).
 
 Fixing build problems with dependencies or cached build options
 ---------
@@ -152,8 +168,73 @@ line, with exactly the same name.
 Running Valkey with TLS:
 ------------------
 
-Please consult the [TLS.md](TLS.md) file for more information on
-how to use Valkey with TLS.
+### Running manually
+To manually run a Valkey server with TLS mode (assuming `./gen-test-certs.sh` was invoked so sample certificates/keys are available):
+
+* TLS built-in mode:
+    ```
+    ./src/valkey-server --tls-port 6379 --port 0 \
+        --tls-cert-file ./tests/tls/valkey.crt \
+        --tls-key-file ./tests/tls/valkey.key \
+        --tls-ca-cert-file ./tests/tls/ca.crt
+    ```
+
+* TLS module mode:
+    ```
+    ./src/valkey-server --tls-port 6379 --port 0 \
+        --tls-cert-file ./tests/tls/valkey.crt \
+        --tls-key-file ./tests/tls/valkey.key \
+        --tls-ca-cert-file ./tests/tls/ca.crt \
+        --loadmodule src/valkey-tls.so
+    ```
+
+Note that you can disable TCP by specifying `--port 0` explicitly.
+It's also possible to have both TCP and TLS available at the same time,
+but you'll have to assign different ports.
+
+Use `valkey-cli` to connect to the Valkey server:
+```
+./src/valkey-cli --tls \
+    --cert ./tests/tls/valkey.crt \
+    --key ./tests/tls/valkey.key \
+    --cacert ./tests/tls/ca.crt
+```
+
+Specifying `--tls-replication yes` makes a replica connect to the primary.
+
+Using `--tls-cluster yes` makes Valkey Cluster use TLS across nodes.
+
+Running Valkey with RDMA:
+------------------
+
+Note that Valkey Over RDMA is an experimental feature.
+It may be changed or removed in any minor or major version.
+Currently, it is only supported on Linux.
+
+To manually run a Valkey server with RDMA mode:
+
+    % ./src/valkey-server --protected-mode no \
+         --loadmodule src/valkey-rdma.so bind=192.168.122.100 port=6379
+
+It's possible to change bind address/port of RDMA by runtime command:
+
+    192.168.122.100:6379> CONFIG SET rdma.port 6380
+
+It's also possible to have both RDMA and TCP available, and there is no
+conflict of TCP(6379) and RDMA(6379), Ex:
+
+    % ./src/valkey-server --protected-mode no \
+         --loadmodule src/valkey-rdma.so bind=192.168.122.100 port=6379 \
+         --port 6379
+
+Note that the network card (192.168.122.100 of this example) should support
+RDMA. To test a server supports RDMA or not:
+
+    % rdma res show (a new version iproute2 package)
+Or:
+
+    % ibv_devices
+
 
 Playing with Valkey
 ------------------

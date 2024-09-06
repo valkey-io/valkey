@@ -46,6 +46,14 @@ start_server {tags {"pubsubshard external:skip"}} {
         assert_equal {2} [ssubscribe $rd1 {chan2}]
         assert_equal {3} [ssubscribe $rd1 {chan3}]
         sunsubscribe $rd1
+
+        # wait for the unsubscribe to take effect
+        wait_for_condition 50 100 {
+            [r spublish chan1 hello] eq 0
+        } else {
+            fail "unsubscribe did not take effect"
+        }
+
         assert_equal 0 [r SPUBLISH chan1 hello]
         assert_equal 0 [r SPUBLISH chan2 hello]
         assert_equal 0 [r SPUBLISH chan3 hello]
@@ -66,9 +74,8 @@ start_server {tags {"pubsubshard external:skip"}} {
 
     test "SUNSUBSCRIBE from non-subscribed channels" {
         set rd1 [valkey_deferring_client]
-        assert_equal {0} [sunsubscribe $rd1 {foo}]
-        assert_equal {0} [sunsubscribe $rd1 {bar}]
-        assert_equal {0} [sunsubscribe $rd1 {quux}]
+        catch {sunsubscribe $rd1 {foo}} e
+        assert_match {*NOSUB*} $e
 
         # clean up clients
         $rd1 close

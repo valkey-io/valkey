@@ -5,7 +5,7 @@
  * tables of power of two in size are used, collisions are handled by
  * chaining. See the source code for more information... :)
  *
- * Copyright (c) 2006-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2006-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -70,10 +70,6 @@ typedef struct dictType {
      * computing the length of the key + header when buf is NULL. */
     size_t (*embedKey)(unsigned char *buf, size_t buf_len, const void *key, unsigned char *header_size);
 
-
-    /* Data */
-    void *userdata;
-
     /* Flags */
     /* The 'no_value' flag, if set, indicates that values are not used, i.e. the
      * dict is a set. When this flag is set, it's not possible to access the
@@ -87,6 +83,8 @@ typedef struct dictType {
     /* If embedded_entry flag is set, it indicates that a copy of the key is created and the key is embedded
      * as part of the dict entry. */
     unsigned int embedded_entry : 1;
+    /* Perform rehashing during resizing instead of incrementally rehashing across multiple steps */
+    unsigned int no_incremental_rehash : 1;
 } dictType;
 
 #define DICTHT_SIZE(exp) ((exp) == -1 ? 0 : (unsigned long)1 << (exp))
@@ -227,6 +225,7 @@ void dictInitIterator(dictIterator *iter, dict *d);
 void dictInitSafeIterator(dictIterator *iter, dict *d);
 void dictResetIterator(dictIterator *iter);
 dictEntry *dictNext(dictIterator *iter);
+dictEntry *dictGetNext(const dictEntry *de);
 void dictReleaseIterator(dictIterator *iter);
 dictEntry *dictGetRandomKey(dict *d);
 dictEntry *dictGetFairRandomKey(dict *d);

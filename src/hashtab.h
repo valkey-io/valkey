@@ -55,6 +55,7 @@
  *         function and how to get the key in an element.
  */
 
+#include "fmacros.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -102,6 +103,10 @@ typedef enum {
 } hashtabResizePolicy;
 
 typedef void(*hashtabScanFunction)(void *privdata, void *element);
+
+/* Scan flags */
+#define HASHTAB_SCAN_EMIT_REF (1 << 0)
+#define HASHTAB_SCAN_SINGLE_STEP (1 << 2)
 
 typedef struct {
     hashtab *t;

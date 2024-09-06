@@ -1306,6 +1306,110 @@ unsigned hashtabSampleElements(hashtab *t, void **dst, unsigned count) {
     return count;
 }
 
+/* --- Stats --- */
+
+#define HASHTAB_STATS_VECTLEN 50
+void hashtabFreeStats(hashtabStats *stats) {
+    zfree(stats->clvector);
+    zfree(stats);
+}
+
+void hashtabCombineStats(hashtabStats *from, hashtabStats *into) {
+    into->buckets += from->buckets;
+    into->maxChainLen = (from->maxChainLen > into->maxChainLen) ? from->maxChainLen : into->maxChainLen;
+    into->totalChainLen += from->totalChainLen;
+    into->htSize += from->htSize;
+    into->htUsed += from->htUsed;
+    for (int i = 0; i < HASHTAB_STATS_VECTLEN; i++) {
+        into->clvector[i] += from->clvector[i];
+    }
+}
+
+hashtabStats *hashtabGetStatsHt(hashtab *t, int htidx, int full) {
+    unsigned long *clvector = zcalloc(sizeof(unsigned long) * HASHTAB_STATS_VECTLEN);
+    hashtabStats *stats = zcalloc(sizeof(hashtabStats));
+    stats->htidx = htidx;
+    stats->clvector = clvector;
+    stats->buckets = numBuckets(t->bucketExp[htidx]);
+    stats->htSize = stats->buckets * ELEMENTS_PER_BUCKET;
+    stats->htUsed = t->used[htidx];
+    if (!full) return stats;
+    /* Compute stats. */
+    unsigned long chainlen = 0;
+    for (unsigned long idx = 0; idx < stats->buckets; idx++) {
+        bucket *b = &t->tables[htidx][idx];
+        if (b->everfull) {
+            stats->totalChainLen++;
+            chainlen++;
+        } else {
+            /* End of a chain (even a zero-length chain). */
+            /* Increment length index in chainlength vector. */
+            clvector[(chainlen < HASHTAB_STATS_VECTLEN) ? chainlen : (HASHTAB_STATS_VECTLEN - 1)]++;
+            if (chainlen > stats->maxChainLen) stats->maxChainLen = chainlen;
+            chainlen = 0;
+        }
+    }
+    return stats;
+}
+
+/* Generates human readable stats. */
+size_t hashtabGetStatsMsg(char *buf, size_t bufsize, hashtabStats *stats, int full) {
+    if (stats->htUsed == 0) {
+        return snprintf(buf, bufsize,
+                        "Hash table %d stats (%s):\n"
+                        "No stats available for empty hash tables\n",
+                        stats->htidx, (stats->htidx == 0) ? "main hash table" : "rehashing target");
+    }
+    size_t l = 0;
+    l += snprintf(buf + l, bufsize - l,
+                  "Hash table %d stats (%s):\n"
+                  " table size: %lu\n"
+                  " number of elements: %lu\n",
+                  stats->htidx, (stats->htidx == 0) ? "main hash table" : "rehashing target", stats->htSize,
+                  stats->htUsed);
+    if (full) {
+        l += snprintf(buf + l, bufsize - l,
+                      " buckets: %lu\n"
+                      " max chain length: %lu\n"
+                      " avg chain length (counted): %.02f\n"
+                      " avg chain length (computed): %.02f\n"
+                      " Chain length distribution:\n",
+                      stats->buckets, stats->maxChainLen, (float)stats->totalChainLen / stats->buckets,
+                      (float)stats->htUsed / stats->buckets);
+
+        for (unsigned long i = 0; i < HASHTAB_STATS_VECTLEN - 1; i++) {
+            if (stats->clvector[i] == 0) continue;
+            if (l >= bufsize) break;
+            l += snprintf(buf + l, bufsize - l, "   %ld: %ld (%.02f%%)\n", i, stats->clvector[i],
+                          ((float)stats->clvector[i] / stats->htSize) * 100);
+        }
+    }
+
+    /* Make sure there is a NULL term at the end. */
+    buf[bufsize - 1] = '\0';
+    /* Unlike snprintf(), return the number of characters actually written. */
+    return strlen(buf);
+}
+
+void hashtabGetStats(char *buf, size_t bufsize, hashtab *t, int full) {
+    size_t l;
+    char *orig_buf = buf;
+    size_t orig_bufsize = bufsize;
+
+    hashtabStats *mainHtStats = hashtabGetStatsHt(t, 0, full);
+    l = hashtabGetStatsMsg(buf, bufsize, mainHtStats, full);
+    hashtabFreeStats(mainHtStats);
+    buf += l;
+    bufsize -= l;
+    if (hashtabIsRehashing(t) && bufsize > 0) {
+        hashtabStats *rehashHtStats = hashtabGetStatsHt(t, 1, full);
+        hashtabGetStatsMsg(buf, bufsize, rehashHtStats, full);
+        hashtabFreeStats(rehashHtStats);
+    }
+    /* Make sure there is a NULL term at the end. */
+    orig_buf[orig_bufsize - 1] = '\0';
+}
+
 /* --- DEBUG --- */
 
 void hashtabDump(hashtab *t) {

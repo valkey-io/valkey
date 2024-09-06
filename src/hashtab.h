@@ -118,10 +118,18 @@ typedef struct {
     int safe;
 } hashtabIterator;
 
+typedef struct hashtabStats {
+    int htidx;
+    unsigned long buckets;       /* num buckets */
+    unsigned long maxChainLen;   /* probing chain length */
+    unsigned long totalChainLen; /* buckets with probing flag */
+    unsigned long htSize;        /* buckets * positions-per-bucket */
+    unsigned long htUsed;        /* num elements */
+    unsigned long *clvector;
+} hashtabStats;
+
 /* TODO:
  *
- * - Stats/debugging (GetStatsMsg, GetStatsHt, CombineStats, FreeStats)
- * - size_t hashtabMemUsage(t)
  * - two-phase delete (find position + delete at position) API
  * - Type flag to disable incremental rehashing.
  *
@@ -148,6 +156,7 @@ void hashtabEmpty(hashtab *t, void(callback)(hashtab *));
 hashtabType *hashtabGetType(hashtab *t);
 void *hashtabMetadata(hashtab *t);
 size_t hashtabSize(hashtab *t);
+size_t hashtabMemUsage(hashtab *t);
 void hashtabPauseAutoShrink(hashtab *t);
 void hashtabResumeAutoShrink(hashtab *t);
 int hashtabIsRehashing(hashtab *t);
@@ -184,3 +193,9 @@ int hashtabFairRandomElement(hashtab *t, void **found);
 unsigned hashtabSampleElements(hashtab *t, void **dst, unsigned count);
 
 /* Debug & stats */
+
+void hashtabFreeStats(hashtabStats *stats);
+void hashtabCombineStats(hashtabStats *from, hashtabStats *into);
+hashtabStats *hashtabGetStatsHt(hashtab *t, int htidx, int full);
+size_t hashtabGetStatsMsg(char *buf, size_t bufsize, hashtabStats *stats, int full);
+void hashtabGetStats(char *buf, size_t bufsize, hashtab *t, int full);

@@ -74,6 +74,7 @@
 #include "serverassert.h"
 #include "zmalloc.h"
 #include "mt19937-64.h"
+#include "monotonic.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -1003,12 +1004,6 @@ int hashtabDelete(hashtab *t, const void *key) {
  *
  * We say that an element is *emitted* when it's passed to the scan callback.
  *
- * If 'emit_ref' is non-zero, a pointer to the element's location in the table
- * is passed to the scan function instead of the actual element. This can be
- * used for advanced things like reallocating the memory of an element (for the
- * purpose of defragmentation) and updating the pointer to the element inside
- * the hash table.
- *
  * Scan guarantees:
  *
  * - An element that is present in the hash table during an entire full scan
@@ -1023,13 +1018,32 @@ int hashtabDelete(hashtab *t, const void *key) {
  * needs to continue scanning as long as a bucket in either of the tables has
  * ever been full. This means that we may wrap around cursor zero and still
  * continue until we find a bucket where we can stop, so some elements can be
- * returned twice (in the first and the last scan calls) due to this. */
-size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *privdata, int emit_ref) {
+ * returned twice (in the first and the last scan calls) due to this.
+ *
+ * The 'flags' argument can be used to tweak the behaviour. It's a bitwise-or
+ * (zero means no flags) of the following:
+ *
+ * - HASHTAB_SCAN_EMIT_REF: Emit a pointer to the element's location in the
+ *   table is passed to the scan function instead of the actual element. This
+ *   can be used for advanced things like reallocating the memory of an element
+ *   (for the purpose of defragmentation) and updating the pointer to the
+ *   element inside the hash table.
+ *
+ * - HASHTAB_SCAN_SINGLE_STEP: This flag can be used for selecting fewer
+ *   elements when the scan guarantees don't need to be enforced. With this
+ *   flag, we don't continue scanning complete probing chains, so if rehashing
+ *   happens between calls, elements can be missed. The scan cursor is advanced
+ *   only a single step. */
+size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *privdata, int flags) {
     if (hashtabSize(t) == 0) return 0;
 
     /* Prevent elements from being moved around during the scan call, as a
      * side-effect of the scan callback. */
     hashtabPauseRehashing(t);
+
+    /* Flags. */
+    int emit_ref = (flags & HASHTAB_SCAN_EMIT_REF);
+    int single_step = (flags & HASHTAB_SCAN_SINGLE_STEP);
 
     /* If any element that hashes to the current bucket may have been inserted
      * in another bucket due to probing, we need to continue to cover the whole
@@ -1108,7 +1122,7 @@ size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *priv
         if (cursor == 0) {
             cursor_passed_zero = 1;
         }
-    } while (in_probe_sequence);
+    } while (in_probe_sequence && !single_step);
     hashtabResumeRehashing(t);
     return cursor_passed_zero ? 0 : cursor;
 }
@@ -1251,9 +1265,6 @@ int hashtabFairRandomElement(hashtab *t, void **found) {
     void *samples[FAIR_RANDOM_SAMPLE_SIZE];
     unsigned count = hashtabSampleElements(t, (void **)&samples, FAIR_RANDOM_SAMPLE_SIZE);
     if (count == 0) return 0;
-    /* if (count < FAIR_RANDOM_SAMPLE_SIZE) { */
-    /*     printf("Only sampled %u of %u!\n", count, FAIR_RANDOM_SAMPLE_SIZE); */
-    /* } */
     unsigned idx = random() % count;
     *found = samples[idx];
     return 1;
@@ -1270,7 +1281,6 @@ int hashtabFairRandomElement(hashtab *t, void **found) {
 unsigned hashtabSampleElements(hashtab *t, void **dst, unsigned count) {
     /* Adjust count. */
     if (count > hashtabSize(t)) count = hashtabSize(t);
-    /* Perform incremental rehahing proportional to count. */
     scan_samples samples;
     samples.size = count;
     samples.count = 0;
@@ -1278,7 +1288,7 @@ unsigned hashtabSampleElements(hashtab *t, void **dst, unsigned count) {
     size_t cursor = randomSizeT();
     while (samples.count < count) {
         rehashStepOnReadIfNeeded(t);
-        cursor = hashtabScan(t, cursor, sampleElementsScanFn, &samples, 0);
+        cursor = hashtabScan(t, cursor, sampleElementsScanFn, &samples, HASHTAB_SCAN_SINGLE_STEP);
     }
     return count;
 }

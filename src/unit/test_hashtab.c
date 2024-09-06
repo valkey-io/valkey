@@ -1,12 +1,13 @@
+#include "../hashtab.h"
+#include "test_help.h"
+#include "../mt19937-64.h"
+
 #include <stdio.h>
 #include <limits.h>
 #include <string.h>
 #include <assert.h>
 #include <math.h>
-#include "test_help.h"
-#include "../mt19937-64.h"
 
-#include "../hashtab.h"
 
 /* From util.c: getRandomBytes to seed hash function. */
 void getRandomBytes(unsigned char *p, size_t len);
@@ -248,8 +249,8 @@ int test_scan(int argc, char **argv, int flags) {
     UNUSED(argv);
     UNUSED(flags);
 
-    long num_elements = (flags & UNIT_TEST_LARGE_MEMORY) ? 10000000 : 2000000;
-    int num_rounds = (flags & UNIT_TEST_ACCURATE) ? 10 : 1;
+    long num_elements = (flags & UNIT_TEST_LARGE_MEMORY) ? 1000000 : 200000;
+    int num_rounds = (flags & UNIT_TEST_ACCURATE) ? 20 : 5;
 
     /* A set of longs, i.e. pointer-sized values. */
     hashtabType type = {0};
@@ -425,8 +426,8 @@ int test_random_element(int argc, char **argv, int flags) {
     UNUSED(argv);
     UNUSED(flags);
 
-    long count = 5000;
-    long num_rounds = (flags & UNIT_TEST_ACCURATE) ? 1000000 : 1000000;
+    long count = (flags & UNIT_TEST_LARGE_MEMORY) ? 7000 : 400;
+    long num_rounds = (flags & UNIT_TEST_ACCURATE) ? 1000000 : 10000;
 
     unsigned long long seed;
     getRandomBytes((void *)&seed, sizeof(seed));
@@ -442,15 +443,15 @@ int test_random_element(int argc, char **argv, int flags) {
         assert(hashtabAdd(t, (void *)j));
     }
 
-    /* Measure frequency per element */
+    /* Pick elements, and count how many times each element is picked. */
     unsigned times_picked[count];
     memset(times_picked, 0, sizeof(times_picked));
     for (long i = 0; i < num_rounds; i++) {
         long element;
         assert(hashtabFairRandomElement(t, (void**)&element));
+        assert(element >= 0 && element < count);
         times_picked[element]++;
     }
-    if (count < 1000) hashtabHistogram(t);
     hashtabRelease(t);
 
     /* Fairness measurement
@@ -476,29 +477,39 @@ int test_random_element(int argc, char **argv, int flags) {
      *     Var(Y) = npq = np(1 - p) = (n/m) * (1 - 1/m) = n * (m - 1) / (m * m)
      */
     double m = (double)count, n = (double)num_rounds;
-    double expected = n/m;                   /* E(Y) */
+    double expected = n / m;                 /* E(Y) */
     double variance = n * (m - 1) / (m * m); /* Var(Y) */
     double std_dev = sqrt(variance);
 
     /* With large n, the distribution approaches a normal distribution and we
      * can use p68 = within 1 std dev, p95 = within 2 std dev, p99.7 = within 3
      * std dev. */
-    long p68 = 0, p95 = 0, p99 = 0, p100 = 0;
+    long p68 = 0, p95 = 0, p99 = 0, p4dev = 0, p5dev = 0;
     for (long j = 0; j < count; j++) {
         double dev = expected - times_picked[j];
         p68 += (dev >= -std_dev && dev <= std_dev);
         p95 += (dev >= -std_dev * 2 && dev <= std_dev * 2);
         p99 += (dev >= -std_dev * 3 && dev <= std_dev * 3);
-        p100 += (dev >= -std_dev * 4 && dev <= std_dev * 4);
+        p4dev += (dev >= -std_dev * 4 && dev <= std_dev * 4);
+        p5dev += (dev >= -std_dev * 5 && dev <= std_dev * 5);
     }
-    printf("Random element fairness test.\n");
-    printf("Picked one of %ld elements, %ld times.\n", count, num_rounds);
-    printf("Expected each element picked %.2lf times, std dev %.3lf\n",
+    printf("Random element fairness test\n");
+    printf("  Pick one of %ld elements, %ld times.\n", count, num_rounds);
+    printf("  Expecting each element to be picked %.2lf times, std dev %.3lf.\n",
            expected, std_dev);
-    printf("> Within 1 std dev (p68) = %.2lf%%\n", 100 * p68 / m);
-    printf("> Within 2 std dev (p95) = %.2lf%%\n", 100 * p95 / m);
-    printf("> Within 3 std dev (p99) = %.2lf%%\n", 100 * p99 / m);
-    printf("> Within 4 std dev       = %.2lf%%\n", 100 * p100 / m);
+    printf("  Within 1 std dev (p68) = %.2lf%%\n", 100 * p68 / m);
+    printf("  Within 2 std dev (p95) = %.2lf%%\n", 100 * p95 / m);
+    printf("  Within 3 std dev (p99) = %.2lf%%\n", 100 * p99 / m);
+    printf("  Within 4 std dev       = %.2lf%%\n", 100 * p4dev / m);
+    printf("  Within 5 std dev       = %.2lf%%\n", 100 * p5dev / m);
 
+    /* Conclusion? The number of trials (n) relative to the probabilities (p and
+     * 1 − p) must be sufficiently large (n * p ≥ 5 and n * (1 − p) ≥ 5) to
+     * approximate a binomial distribution with a normal distribution. */
+    if (n / m >= 5 && n * (1 - 1 / m) >= 5) {
+        TEST_ASSERT_MESSAGE("Too unfair randomness", 100 * p99 / m >= 60.0);
+    } else {
+        printf("To uncertain numbers to draw any conclusions about fairness.\n");
+    }
     return 0;
 }

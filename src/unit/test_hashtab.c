@@ -62,6 +62,13 @@ static hashtabType keyval_type = {
     .elementDestructor = freekeyval,
 };
 
+/* Callback for testing hashtabEmpty(). */
+static long empty_callback_call_counter;
+void emptyCallback(hashtab *t) {
+    UNUSED(t);
+    empty_callback_call_counter++;
+}
+
 /* Prototypes for debugging */
 void hashtabDump(hashtab *t);
 void hashtabHistogram(hashtab *t);
@@ -119,8 +126,8 @@ static void add_find_delete_test_helper(int flags) {
         assert(!strcmp(val, getval(e)));
     }
 
-    /* Delete */
-    for (j = 0; j < count; j++) {
+    /* Delete half of them */
+    for (j = 0; j < count / 2; j++) {
         char key[32];
         snprintf(key, sizeof(key), "%d", j);
         if (j % 3 == 0) {
@@ -135,6 +142,11 @@ static void add_find_delete_test_helper(int flags) {
             assert(hashtabDelete(t, key));
         }
     }
+
+    /* Empty, i.e. delete remaining elements, with progress callback. */
+    empty_callback_call_counter = 0;
+    hashtabEmpty(t, emptyCallback);
+    assert(empty_callback_call_counter > 0);
 
     /* Release memory */
     hashtabRelease(t);

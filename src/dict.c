@@ -48,6 +48,7 @@
 #include "zmalloc.h"
 #include "serverassert.h"
 #include "monotonic.h"
+#include "config.h"
 
 #ifndef static_assert
 #define static_assert(expr, lit) _Static_assert(expr, lit)
@@ -93,7 +94,7 @@ typedef struct {
     unsigned char key_buf[]; /* buffer with embedded key. */
 } dictEntryEmbedded;
 
-/* Validation and helper for `_dictEntryEmbedded` */
+/* Validation and helper for `dictEntryEmbedded` */
 
 static_assert(offsetof(dictEntryEmbedded, v) == 0, "unexpected field offset");
 static_assert(offsetof(dictEntryEmbedded, next) == sizeof(double), "unexpected field offset");
@@ -114,7 +115,6 @@ typedef struct {
 } dictEntryNoValue;
 
 /* -------------------------- private prototypes ---------------------------- */
-static dictEntry *dictGetNext(const dictEntry *de);
 static dictEntry **dictGetNextRef(dictEntry *de);
 static void dictSetNext(dictEntry *de, dictEntry *next);
 
@@ -884,19 +884,7 @@ void dictTwoPhaseUnlinkFree(dict *d, dictEntry *he, dictEntry **plink, int table
     dictResumeRehashing(d);
 }
 
-/* In the macros below, `de` stands for dict entry, and `k` for key. */
-#define DICT_SET_KEY(de, k)                                                                                            \
-    {                                                                                                                  \
-        if (entryIsNormal(de)) {                                                                                       \
-            dictEntryNormal *_de = decodeEntryNormal(de);                                                              \
-            _de->key = k;                                                                                              \
-        } else if (entryIsNoValue(de)) {                                                                               \
-            dictEntryNoValue *_de = decodeEntryNoValue(de);                                                            \
-            _de->key = k;                                                                                              \
-        } else {                                                                                                       \
-            assert(!"Entry type not supported");                                                                       \
-        }                                                                                                              \
-    }
+/* In the macros below, `de` stands for dict entry. */
 #define DICT_SET_VALUE(de, field, val)                                                                                 \
     {                                                                                                                  \
         if (entryIsNormal(de)) {                                                                                       \
@@ -906,7 +894,7 @@ void dictTwoPhaseUnlinkFree(dict *d, dictEntry *he, dictEntry **plink, int table
             dictEntryEmbedded *_de = decodeEntryEmbedded(de);                                                          \
             _de->field = val;                                                                                          \
         } else {                                                                                                       \
-            assert(!"Entry type not supported");                                                                       \
+            panic("Entry type not supported");                                                                         \
         }                                                                                                              \
     }
 #define DICT_INCR_VALUE(de, field, val)                                                                                \
@@ -918,22 +906,29 @@ void dictTwoPhaseUnlinkFree(dict *d, dictEntry *he, dictEntry **plink, int table
             dictEntryEmbedded *_de = decodeEntryEmbedded(de);                                                          \
             _de->field += val;                                                                                         \
         } else {                                                                                                       \
-            assert(!"Entry type not supported");                                                                       \
+            panic("Entry type not supported");                                                                         \
         }                                                                                                              \
     }
 #define DICT_GET_VALUE(de, field)                                                                                      \
-    (entryIsNormal(de)                                                                                                 \
-         ? decodeEntryNormal(de)->field                                                                                \
-         : (entryIsEmbedded(de) ? decodeEntryEmbedded(de)->field                                                       \
-                                : (assert(!"Entry type not supported"), ((dictEntryNormal *)de)->field)))
+    (entryIsNormal(de) ? decodeEntryNormal(de)->field                                                                  \
+                       : (entryIsEmbedded(de) ? decodeEntryEmbedded(de)->field                                         \
+                                              : (panic("Entry type not supported"), ((dictEntryNormal *)de)->field)))
 #define DICT_GET_VALUE_PTR(de, field)                                                                                  \
     (entryIsNormal(de)                                                                                                 \
          ? &decodeEntryNormal(de)->field                                                                               \
-         : (entryIsEmbedded(de) ? &decodeEntryEmbedded(de)->field : (assert(!"Entry type not supported"), NULL)))
+         : (entryIsEmbedded(de) ? &decodeEntryEmbedded(de)->field : (panic("Entry type not supported"), NULL)))
 
 void dictSetKey(dict *d, dictEntry *de, void *key) {
     void *k = d->type->keyDup ? d->type->keyDup(d, key) : key;
-    DICT_SET_KEY(de, k);
+    if (entryIsNormal(de)) {
+        dictEntryNormal *_de = decodeEntryNormal(de);
+        _de->key = k;
+    } else if (entryIsNoValue(de)) {
+        dictEntryNoValue *_de = decodeEntryNoValue(de);
+        _de->key = k;
+    } else {
+        panic("Entry type not supported");
+    }
 }
 
 void dictSetVal(dict *d, dictEntry *de, void *val) {
@@ -998,7 +993,7 @@ double *dictGetDoubleValPtr(dictEntry *de) {
 
 /* Returns the 'next' field of the entry or NULL if the entry doesn't have a
  * 'next' field. */
-static dictEntry *dictGetNext(const dictEntry *de) {
+dictEntry *dictGetNext(const dictEntry *de) {
     if (entryIsKey(de)) return NULL; /* there's no next */
     if (entryIsNoValue(de)) return decodeEntryNoValue(de)->next;
     if (entryIsEmbedded(de)) return decodeEntryEmbedded(de)->next;
@@ -1043,7 +1038,7 @@ size_t dictEntryMemUsage(dictEntry *de) {
     else if (entryIsEmbedded(de))
         return zmalloc_size(decodeEntryEmbedded(de));
     else
-        assert(!"Entry type not supported");
+        panic("Entry type not supported");
     return 0;
 }
 

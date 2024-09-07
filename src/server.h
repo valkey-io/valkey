@@ -1939,6 +1939,7 @@ struct valkeyServer {
     int aof_last_write_errno;           /* Valid if aof write/fsync status is ERR */
     int aof_load_truncated;             /* Don't stop on unexpected AOF EOF. */
     int aof_use_rdb_preamble;           /* Specify base AOF to use RDB encoding on AOF rewrites. */
+    int aof_rewrite_use_rdb_preamble;   /* Base AOF to use RDB encoding on AOF rewrites start. */
     _Atomic int aof_bio_fsync_status;   /* Status of AOF fsync in bio job. */
     _Atomic int aof_bio_fsync_errno;    /* Errno of AOF fsync in bio job. */
     aofManifest *aof_manifest;          /* Used to track AOFs. */

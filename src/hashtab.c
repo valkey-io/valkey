@@ -627,6 +627,28 @@ static bucket *findBucketForInsert(hashtab *t, uint64_t hash, int *pos_in_bucket
     }
 }
 
+/* Encode bucket_index, pos_in_bucket, table_index into an opaque pointer. */
+static void *encodePositionInTable(size_t bucket_index, int pos_in_bucket, int table_index) {
+    uintptr_t encoded = bucket_index;
+    encoded <<= BITS_NEEDED_TO_STORE_POS_WITHIN_BUCKET;
+    encoded |= pos_in_bucket;
+    encoded <<= 1;
+    encoded |= table_index;
+    encoded++; /* Add one to make sure we don't return NULL. */
+    return (void *)encoded;
+}
+
+/* Decodes a position in the table encoded using encodePositionInTable(). */
+static void decodePositionInTable(void *encoded_position, size_t *bucket_index, int *pos_in_bucket, int *table_index) {
+    uintptr_t encoded = (uintptr_t)encoded_position;
+    encoded--;
+    *table_index = encoded & 1;
+    encoded >>= 1;
+    *pos_in_bucket = encoded & ((1 << BITS_NEEDED_TO_STORE_POS_WITHIN_BUCKET) - 1);
+    encoded >>= BITS_NEEDED_TO_STORE_POS_WITHIN_BUCKET;
+    *bucket_index = encoded;
+}
+
 /* Helper to insert an element. Doesn't check if an element with a matching key
  * already exists. This must be ensured by the caller. */
 static void insert(hashtab *t, uint64_t hash, void *elem) {
@@ -915,14 +937,8 @@ void *hashtabFindPositionForInsert(hashtab *t, void *key, void **existing) {
         size_t bucket_index = ((uintptr_t)b - (uintptr_t)b0) / sizeof(bucket);
         assert(&t->tables[table_index][bucket_index] == b);
 
-        /* Encode bucket_index, pos_in_bucket, table_index into an opaque pointer. */
-        uintptr_t encoded = bucket_index;
-        encoded <<= BITS_NEEDED_TO_STORE_POS_WITHIN_BUCKET;
-        encoded |= pos_in_bucket;
-        encoded <<= 1;
-        encoded |= table_index;
-        encoded++; /* Add one to make sure we don't return NULL. */
-        return (void *)encoded;
+        /* Encode position as pointer. */
+        return encodePositionInTable(bucket_index, pos_in_bucket, table_index);
     }
 }
 
@@ -932,15 +948,10 @@ void *hashtabFindPositionForInsert(hashtab *t, void *key, void **existing) {
  * hashtabFindPositionForInsert() and hashtabInsertAtPosition(), since even a
  * hashtabFind() may cause incremental rehashing to move elements in memory. */
 void hashtabInsertAtPosition(hashtab *t, void *elem, void *position) {
-    /* Decode position into table_index, bucket_index and pos_in_bucket. */
-    uintptr_t encoded = (uintptr_t)position;
-    encoded--;
-    int table_index = encoded & 1;
-    encoded >>= 1;
-    int pos_in_bucket = encoded & ((1 << BITS_NEEDED_TO_STORE_POS_WITHIN_BUCKET) - 1);
-    encoded >>= BITS_NEEDED_TO_STORE_POS_WITHIN_BUCKET;
-    size_t bucket_index = encoded;
-    // printf("Insert at table=%d, bucket=%lu, pos=%d\n", table_index, bucket_index, pos_in_bucket);
+    /* Decode position. */
+    size_t bucket_index;
+    int table_index, pos_in_bucket;
+    decodePositionInTable(position, &bucket_index, &pos_in_bucket, &table_index);
 
     /* Insert the element at this position. */
     bucket *b = &t->tables[table_index][bucket_index];
@@ -980,9 +991,7 @@ int hashtabPop(hashtab *t, const void *key, void **popped) {
     bucket *b = findBucket(t, hash, key, &pos_in_bucket, &table_index);
     if (b) {
         if (popped) *popped = b->elements[pos_in_bucket];
-        assert(b->presence & (1 << pos_in_bucket));
         b->presence &= ~(1 << pos_in_bucket);
-        assert(!(b->presence & (1 << pos_in_bucket)));
         t->used[table_index]--;
         hashtabShrinkIfNeeded(t);
         return 1;
@@ -1001,6 +1010,74 @@ int hashtabDelete(hashtab *t, const void *key) {
     } else {
         return 0;
     }
+}
+
+/* Two-phase pop: Look up an element, do somthing with it, then delete it
+ * without searching the hash table again.
+ *
+ * hashtabTwoPhasePopFind finds an element in the table and also the position of
+ * the element within the table, so that it can be deleted without looking it up
+ * in the table again. The function returns 1 if an element with a matching key
+ * is found and 0 otherwise.
+ *
+ * If 1 is returned, call 'hashtabTwoPhasePopDelete' with the returned
+ * 'position' afterwards to actually delete the element from the table. These
+ * two functions are designed be used in pair. `hashtabTwoPhasePopFind` pauses
+ * rehashing and `hashtabTwoPhasePopDelete` resumes rehashing.
+ *
+ * While hashtabPop finds and returns an element, the purpose of two-phase pop
+ * is to provide an optimized equivalent of hashtabFind followed by
+ * hashtabDelete, where the first call finds the element but doesn't delete it
+ * from the hash table and the latter doesn't need to look up the element in the
+ * hash table again.
+ *
+ * Example:
+ *
+ *     void *element, *position;
+ *     if (hashtabTwoPhasePopFind(t, key, &element, &position) {
+ *         // do something with the element, then...
+ *         hashtabTwoPhasePopDelete(t, position);
+ *     }
+ */
+int hashtabTwoPhasePopFind(hashtab *t, const void *key, void **found, void **position) {
+    if (hashtabSize(t) == 0) return 0;
+    uint64_t hash = hashKey(t, key);
+    int pos_in_bucket = 0;
+    int table_index = 0;
+    bucket *b = findBucket(t, hash, key, &pos_in_bucket, &table_index);
+    if (b) {
+        hashtabPauseRehashing(t);
+        *found = b->elements[pos_in_bucket];
+
+        /* Compute bucket index from bucket pointer. */
+        void *b0 = &t->tables[table_index][0];
+        size_t bucket_index = ((uintptr_t)b - (uintptr_t)b0) / sizeof(bucket);
+        assert(&t->tables[table_index][bucket_index] == b);
+
+        /* Encode position as pointer. */
+        *position = encodePositionInTable(bucket_index, pos_in_bucket, table_index);
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+/* Deletes the element at the opaque representation of its position, and resumes
+ * rehashing. */
+void hashtabTwoPhasePopDelete(hashtab *t, void *position) {
+    /* Decode position. */
+    size_t bucket_index;
+    int table_index, pos_in_bucket;
+    decodePositionInTable(position, &bucket_index, &pos_in_bucket, &table_index);
+
+    /* Delete the element and resume rehashing. */
+    bucket *b = &t->tables[table_index][bucket_index];
+    assert(b->presence & (1 << pos_in_bucket));
+    freeElement(t, b->elements[pos_in_bucket]);
+    b->presence &= ~(1 << pos_in_bucket);
+    t->used[table_index]--;
+    hashtabShrinkIfNeeded(t);
+    hashtabResumeRehashing(t);
 }
 
 /* --- Scan --- */
@@ -1154,7 +1231,7 @@ void hashtabInitIterator(hashtabIterator *iter, hashtab *t) {
     iter->safe = 0;
 }
 
-/* Initialize a safe iterator, which is allowed to modify the dictionary while
+/* Initialize a safe iterator, which is allowed to modify the hash table while
  * iterating. It pauses incremental rehashing to prevent elements from moving
  * around. Call hashtabNext to fetch each element. You must call
  * hashtabResetIterator when you are done with a safe iterator.

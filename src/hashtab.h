@@ -130,7 +130,6 @@ typedef struct hashtabStats {
 
 /* TODO:
  *
- * - two-phase delete (find position + delete at position) API
  * - Type flag to disable incremental rehashing.
  *
  * Not needed: defrag functions (solved by emit_ref in scan) */
@@ -170,11 +169,13 @@ int hashtabShrinkIfNeeded(hashtab *t);
 int hashtabFind(hashtab *t, const void *key, void **found);
 int hashtabAdd(hashtab *t, void *elem);
 int hashtabAddOrFind(hashtab *t, void *elem, void **existing);
+void *hashtabFindPositionForInsert(hashtab *t, void *key, void **existing);
+void hashtabInsertAtPosition(hashtab *t, void *elem, void *position);
 int hashtabReplace(hashtab *t, void *elem);
 int hashtabPop(hashtab *t, const void *key, void **popped);
 int hashtabDelete(hashtab *t, const void *key);
-void *hashtabFindPositionForInsert(hashtab *t, void *key, void **existing);
-void hashtabInsertAtPosition(hashtab *t, void *elem, void *position);
+int hashtabTwoPhasePopFind(hashtab *t, const void *key, void **found, void **position);
+void hashtabTwoPhasePopDelete(hashtab *t, void *position);
 
 /* Iteration & scan */
 size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *privdata, int emit_ref);

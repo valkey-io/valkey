@@ -168,6 +168,35 @@ int test_add_find_delete_avoid_resize(int argc, char **argv, int flags) {
     return 0;
 }
 
+int test_instant_rehashing(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    long count = 200;
+
+    /* A set of longs, i.e. pointer-sized values. */
+    hashtabType type = {.instant_rehashing = 1};
+    hashtab *t = hashtabCreate(&type);
+    long j;
+
+    /* Populate and check that rehashing is never ongoing. */
+    for (j = 0; j < count; j++) {
+        assert(hashtabAdd(t, (void *)j));
+        assert(!hashtabIsRehashing(t));
+    }
+
+    /* Delete and check that rehashing is never ongoing. */
+    for (j = 0; j < count; j++) {
+        assert(hashtabDelete(t, (void *)j));
+        assert(!hashtabIsRehashing(t));
+    }
+
+    hashtabRelease(t);
+    return 0;
+}
+
+
 int test_probing_chain_length(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);

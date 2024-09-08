@@ -509,6 +509,9 @@ static inline void rehashStepOnWriteIfNeeded(hashtab *t) {
 static int resize(hashtab *t, size_t min_capacity, int *malloc_failed) {
     if (malloc_failed) *malloc_failed = 0;
 
+    /* Adjust mininum size. We don't resize to zero currently. */
+    if (min_capacity == 0) min_capacity = 1;
+
     /* Size of new table. */
     signed char exp = nextBucketExp(min_capacity);
     size_t num_buckets = numBuckets(exp);
@@ -549,6 +552,10 @@ static int resize(hashtab *t, size_t min_capacity, int *malloc_failed) {
     /* If the old table was empty, the rehashing is completed immediately. */
     if (t->tables[0] == NULL || t->used[0] == 0) {
         rehashingCompleted(t);
+    } else if (t->type->instant_rehashing) {
+        while (hashtabIsRehashing(t)) {
+            rehashStep(t);
+        }
     }
     return 1;
 }

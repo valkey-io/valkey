@@ -91,6 +91,8 @@ typedef struct {
     /* Allow a hashtab to carry extra caller-defined metadata. The extra memory
      * is initialized to 0. */
     size_t (*getMetadataSize)(void);
+    /* Flag to disable incremental rehashing */
+    unsigned instant_rehashing : 1;
     /* Allow the caller to store some data here in the type. It's useful for the
      * rehashingStarted and rehashingCompleted callbacks. */
     void *userdata;
@@ -127,15 +129,6 @@ typedef struct hashtabStats {
     unsigned long htUsed;        /* num elements */
     unsigned long *clvector;
 } hashtabStats;
-
-/* TODO:
- *
- * - Type flag to disable incremental rehashing.
- *
- * Not needed: defrag functions (solved by emit_ref in scan) */
-
-
-/* --- Inline functions --- */
 
 /* --- Prototypes --- */
 

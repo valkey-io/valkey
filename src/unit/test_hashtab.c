@@ -204,7 +204,7 @@ int test_probing_chain_length(int argc, char **argv, int flags) {
     return 0;
 }
 
-int test_two_phase_insert(int argc, char **argv, int flags) {
+int test_two_phase_insert_and_pop(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -221,7 +221,6 @@ int test_two_phase_insert(int argc, char **argv, int flags) {
         void *position = hashtabFindPositionForInsert(t, key, NULL);
         assert(position != NULL);
         keyval *e = create_keyval(key, val);
-        // printf("hashtabInsertAtPosition(%p, %d, %p)\n", t, j, position);
         hashtabInsertAtPosition(t, e, position);
     }
 
@@ -230,7 +229,7 @@ int test_two_phase_insert(int argc, char **argv, int flags) {
         hashtabHistogram(t);
     }
 
-    /* Find */
+    /* Check that all elements were inserted. */
     for (j = 0; j < count; j++) {
         char key[32], val[32];
         snprintf(key, sizeof(key), "%d", j);
@@ -239,6 +238,22 @@ int test_two_phase_insert(int argc, char **argv, int flags) {
         assert(hashtabFind(t, key, (void **)&e));
         assert(!strcmp(val, getval(e)));
     }
+
+    /* Test two-phase pop. */
+    for (j = 0; j < count; j++) {
+        char key[32], val[32];
+        snprintf(key, sizeof(key), "%d", j);
+        snprintf(val, sizeof(val), "%d", count - j + 42);
+        keyval *e;
+        void *position;
+        size_t size_before_find = hashtabSize(t);
+        assert(hashtabTwoPhasePopFind(t, key, (void **)&e, &position));
+        assert(!strcmp(val, getval(e)));
+        assert(hashtabSize(t) == size_before_find);
+        hashtabTwoPhasePopDelete(t, position);
+        assert(hashtabSize(t) == size_before_find - 1);
+    }
+    assert(hashtabSize(t) == 0);
 
     hashtabRelease(t);
     return 0;

@@ -522,7 +522,7 @@ void debugCommand(client *c) {
         int flags = !strcasecmp(c->argv[1]->ptr, "restart")
                         ? (RESTART_SERVER_GRACEFULLY | RESTART_SERVER_CONFIG_REWRITE)
                         : RESTART_SERVER_NONE;
-        restartServer(flags, delay);
+        restartServer(c, flags, delay);
         addReplyError(c, "failed to restart the server. Check server logs.");
     } else if (!strcasecmp(c->argv[1]->ptr, "oom")) {
         void *ptr = zmalloc(SIZE_MAX / 2); /* Should trigger an out of memory. */

@@ -6656,25 +6656,27 @@ int clusterCommandSpecial(client *c) {
         }
         resetManualFailover();
         server.cluster->mf_end = mstime() + CLUSTER_MF_TIMEOUT;
+        sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
 
         if (takeover) {
             /* A takeover does not perform any initial check. It just
              * generates a new configuration epoch for this node without
              * consensus, claims the primary's slots, and broadcast the new
              * configuration. */
-            serverLog(LL_NOTICE, "Taking over the primary (user request).");
+            serverLog(LL_NOTICE, "Taking over the primary (user request from '%s').", client);
             clusterBumpConfigEpochWithoutConsensus();
             clusterFailoverReplaceYourPrimary();
         } else if (force) {
             /* If this is a forced failover, we don't need to talk with our
              * primary to agree about the offset. We just failover taking over
              * it without coordination. */
-            serverLog(LL_NOTICE, "Forced failover user request accepted.");
+            serverLog(LL_NOTICE, "Forced failover user request accepted (user request from '%s').", client);
             server.cluster->mf_can_start = 1;
         } else {
-            serverLog(LL_NOTICE, "Manual failover user request accepted.");
+            serverLog(LL_NOTICE, "Manual failover user request accepted (user request from '%s').", client);
             clusterSendMFStart(myself->replicaof);
         }
+        sdsfree(client);
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "set-config-epoch") && c->argc == 3) {
         /* CLUSTER SET-CONFIG-EPOCH <epoch>

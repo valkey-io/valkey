@@ -203,15 +203,15 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
  * if the key already exists, otherwise, it can fall back to dbOverwrite. */
 static void dbAddInternal(serverDb *db, robj *key, robj *val, int update_if_existing) {
     dictEntry *existing;
-    int dbix = getKVStoreIndexForKey(key->ptr);
-    dictEntry *de = kvstoreDictAddRaw(db->keys, dbix, key->ptr, &existing);
+    int dict_index = getKVStoreIndexForKey(key->ptr);
+    dictEntry *de = kvstoreDictAddRaw(db->keys, dict_index, key->ptr, &existing);
     if (update_if_existing && existing) {
         dbSetValue(db, key, val, 1, existing);
         return;
     }
     serverAssertWithInfo(NULL, key, de != NULL);
     initObjectLRUOrLFU(val);
-    kvstoreDictSetVal(db->keys, dbix, de, val);
+    kvstoreDictSetVal(db->keys, dict_index, de, val);
     signalKeyAsReady(db, key, val->type);
     notifyKeyspaceEvent(NOTIFY_NEW, "new", key, db->id);
 }
@@ -220,7 +220,7 @@ void dbAdd(serverDb *db, robj *key, robj *val) {
     dbAddInternal(db, key, val, 0);
 }
 
-/* Returns which db index should be used with kvstore for a given key. */
+/* Returns which dict index should be used with kvstore for a given key. */
 static int getKVStoreIndexForKey(sds key) {
     return server.cluster_enabled ? getKeySlot(key) : 0;
 }
@@ -269,11 +269,11 @@ int getKeySlot(sds key) {
  * In this case a copy of `key` is copied in kvstore, the caller must ensure the `key` is properly freed.
  */
 int dbAddRDBLoad(serverDb *db, sds key, robj *val) {
-    int dbix = server.cluster_enabled ? getKeySlot(key) : 0;
-    dictEntry *de = kvstoreDictAddRaw(db->keys, dbix, key, NULL);
+    int dict_index = server.cluster_enabled ? getKeySlot(key) : 0;
+    dictEntry *de = kvstoreDictAddRaw(db->keys, dict_index, key, NULL);
     if (de == NULL) return 0;
     initObjectLRUOrLFU(val);
-    kvstoreDictSetVal(db->keys, dbix, de, val);
+    kvstoreDictSetVal(db->keys, dict_index, de, val);
     return 1;
 }
 
@@ -290,8 +290,8 @@ int dbAddRDBLoad(serverDb *db, sds key, robj *val) {
  *
  * The program is aborted if the key was not already present. */
 static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEntry *de) {
-    int dbix = getKVStoreIndexForKey(key->ptr);
-    if (!de) de = kvstoreDictFind(db->keys, dbix, key->ptr);
+    int dict_index = getKVStoreIndexForKey(key->ptr);
+    if (!de) de = kvstoreDictFind(db->keys, dict_index, key->ptr);
     serverAssertWithInfo(NULL, key, de != NULL);
     robj *old = dictGetVal(de);
 
@@ -311,7 +311,7 @@ static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEn
         /* Because of RM_StringDMA, old may be changed, so we need get old again */
         old = dictGetVal(de);
     }
-    kvstoreDictSetVal(db->keys, dbix, de, val);
+    kvstoreDictSetVal(db->keys, dict_index, de, val);
     /* For efficiency, let the I/O thread that allocated an object also deallocate it. */
     if (tryOffloadFreeObjToIOThreads(old) == C_OK) {
         /* OK */
@@ -406,8 +406,8 @@ robj *dbRandomKey(serverDb *db) {
 int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
     dictEntry **plink;
     int table;
-    int dbix = getKVStoreIndexForKey(key->ptr);
-    dictEntry *de = kvstoreDictTwoPhaseUnlinkFind(db->keys, dbix, key->ptr, &plink, &table);
+    int dict_index = getKVStoreIndexForKey(key->ptr);
+    dictEntry *de = kvstoreDictTwoPhaseUnlinkFind(db->keys, dict_index, key->ptr, &plink, &table);
     if (de) {
         robj *val = dictGetVal(de);
         /* RM_StringDMA may call dbUnshareStringValue which may free val, so we
@@ -423,13 +423,13 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
         if (async) {
             /* Because of dbUnshareStringValue, the val in de may change. */
             freeObjAsync(key, dictGetVal(de), db->id);
-            kvstoreDictSetVal(db->keys, dbix, de, NULL);
+            kvstoreDictSetVal(db->keys, dict_index, de, NULL);
         }
         /* Deleting an entry from the expires dict will not free the sds of
          * the key, because it is shared with the main dictionary. */
-        kvstoreDictDelete(db->expires, dbix, key->ptr);
+        kvstoreDictDelete(db->expires, dict_index, key->ptr);
 
-        kvstoreDictTwoPhaseUnlinkFree(db->keys, dbix, de, plink, table);
+        kvstoreDictTwoPhaseUnlinkFree(db->keys, dict_index, de, plink, table);
         return 1;
     } else {
         return 0;
@@ -1677,10 +1677,10 @@ void setExpire(client *c, serverDb *db, robj *key, long long when) {
     dictEntry *kde, *de, *existing;
 
     /* Reuse the sds from the main dict in the expire dict */
-    int dbix = getKVStoreIndexForKey(key->ptr);
-    kde = kvstoreDictFind(db->keys, dbix, key->ptr);
+    int dict_index = getKVStoreIndexForKey(key->ptr);
+    kde = kvstoreDictFind(db->keys, dict_index, key->ptr);
     serverAssertWithInfo(NULL, key, kde != NULL);
-    de = kvstoreDictAddRaw(db->expires, dbix, dictGetKey(kde), &existing);
+    de = kvstoreDictAddRaw(db->expires, dict_index, dictGetKey(kde), &existing);
     if (existing) {
         dictSetSignedIntegerVal(existing, when);
     } else {

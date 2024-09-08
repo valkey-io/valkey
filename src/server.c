@@ -1328,7 +1328,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         else if (server.last_sig_received == SIGTERM && server.shutdown_on_sigterm)
             shutdownFlags = server.shutdown_on_sigterm;
 
-        if (prepareForShutdown(shutdownFlags) == C_OK) exit(0);
+        if (prepareForShutdown(NULL, shutdownFlags) == C_OK) exit(0);
     } else if (isShutdownInitiated()) {
         if (server.mstime >= server.shutdown_mstime || isReadyToShutdown()) {
             if (finishShutdown() == C_OK) exit(0);
@@ -1560,7 +1560,7 @@ void whileBlockedCron(void) {
     /* We received a SIGTERM during loading, shutting down here in a safe way,
      * as it isn't ok doing so inside the signal handler. */
     if (server.shutdown_asap && server.loading) {
-        if (prepareForShutdown(SHUTDOWN_NOSAVE) == C_OK) exit(0);
+        if (prepareForShutdown(NULL, SHUTDOWN_NOSAVE) == C_OK) exit(0);
         serverLog(LL_WARNING,
                   "SIGTERM received but errors trying to shut down the server, check the logs for more information");
         server.shutdown_asap = 0;
@@ -2139,7 +2139,7 @@ extern char **environ;
  *
  * On success the function does not return, because the process turns into
  * a different process. On error C_ERR is returned. */
-int restartServer(int flags, mstime_t delay) {
+int restartServer(client *c, int flags, mstime_t delay) {
     int j;
 
     /* Check if we still have accesses to the executable that started this
@@ -2162,7 +2162,7 @@ int restartServer(int flags, mstime_t delay) {
     }
 
     /* Perform a proper shutdown. We don't wait for lagging replicas though. */
-    if (flags & RESTART_SERVER_GRACEFULLY && prepareForShutdown(SHUTDOWN_NOW) != C_OK) {
+    if (flags & RESTART_SERVER_GRACEFULLY && prepareForShutdown(c, SHUTDOWN_NOW) != C_OK) {
         serverLog(LL_WARNING, "Can't restart: error preparing for shutdown");
         return C_ERR;
     }
@@ -4189,7 +4189,12 @@ void closeListeningSockets(int unlink_unix_socket) {
     }
 }
 
-/* Prepare for shutting down the server. Flags:
+/* Prepare for shutting down the server.
+ *
+ * The client *c can be NULL, it may come from a signal. If client is passed in,
+ * it is used to print the client info.
+ *
+ * Flags:
  *
  * - SHUTDOWN_SAVE: Save a database dump even if the server is configured not to
  *   save any dump.
@@ -4212,7 +4217,7 @@ void closeListeningSockets(int unlink_unix_socket) {
  * errors are logged but ignored and C_OK is returned.
  *
  * On success, this function returns C_OK and then it's OK to call exit(0). */
-int prepareForShutdown(int flags) {
+int prepareForShutdown(client *c, int flags) {
     if (isShutdownInitiated()) return C_ERR;
 
     /* When SHUTDOWN is called while the server is loading a dataset in
@@ -4225,7 +4230,13 @@ int prepareForShutdown(int flags) {
 
     server.shutdown_flags = flags;
 
-    serverLog(LL_NOTICE, "User requested shutdown...");
+    if (c != NULL) {
+        sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
+        serverLog(LL_NOTICE, "User requested shutdown... (user request from '%s')", client);
+        sdsfree(client);
+    } else {
+        serverLog(LL_NOTICE, "User requested shutdown...");
+    }
     if (server.supervised_mode == SUPERVISED_SYSTEMD) serverCommunicateSystemd("STOPPING=1\n");
 
     /* If we have any replicas, let them catch up the replication offset before

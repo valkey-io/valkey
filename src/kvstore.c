@@ -255,6 +255,12 @@ kvstore *kvstoreCreate(dictType *type, int num_dicts_bits, int flags) {
      * for the dict cursor, see kvstoreScan */
     assert(num_dicts_bits <= 16);
 
+    /* The dictType of kvstore needs to use the specific callbacks.
+     * If there are any changes in the future, it will need to be modified. */
+    assert(type->rehashingStarted == kvstoreDictRehashingStarted);
+    assert(type->rehashingCompleted == kvstoreDictRehashingCompleted);
+    assert(type->dictMetadataBytes == kvstoreDictMetadataSize);
+
     kvstore *kvs = zcalloc(sizeof(*kvs));
     kvs->dtype = type;
     kvs->flags = flags;

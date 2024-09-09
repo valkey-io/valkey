@@ -277,7 +277,7 @@ static inline dictEntryNormal *decodeEntryNormal(const dictEntry *de) {
 
 /* ----------------------------- API implementation ------------------------- */
 
-/* Reset hash table parameters already initialized with _dictInit()*/
+/* Reset hash table parameters already initialized with dictInit()*/
 static void dictReset(dict *d, int htidx) {
     d->ht_table[htidx] = NULL;
     d->ht_size_exp[htidx] = -1;
@@ -1947,7 +1947,7 @@ int dictTest(int argc, char **argv, int flags) {
         retval = dictDelete(dict, key);
         zfree(key);
         unsigned long oldDictSize = new_dict_size;
-        new_dict_size = 1UL << _dictNextExp(current_dict_used);
+        new_dict_size = 1UL << dictNextExp(current_dict_used);
         assert(retval == DICT_OK);
         assert(dictSize(dict) == current_dict_used);
         assert(DICTHT_SIZE(dict->ht_size_exp[0]) == oldDictSize);
@@ -1992,7 +1992,7 @@ int dictTest(int argc, char **argv, int flags) {
         char *key = stringFromLongLong(current_dict_used);
         retval = dictDelete(dict, key);
         zfree(key);
-        new_dict_size = 1UL << _dictNextExp(current_dict_used);
+        new_dict_size = 1UL << dictNextExp(current_dict_used);
         assert(retval == DICT_OK);
         assert(dictSize(dict) == current_dict_used);
         assert(DICTHT_SIZE(dict->ht_size_exp[0]) == 128);

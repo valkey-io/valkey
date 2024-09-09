@@ -2644,7 +2644,7 @@ static int dualChannelReplHandleAuthReply(connection *conn, char **err) {
     return C_OK;
 }
 
-static int dualChannelReplHandleReplconfReply(connection *conn, char **err) {
+static int dualChannelReplHandleReplconfReply(connection *conn, sds *err) {
     *err = receiveSynchronousResponse(conn);
     if (*err == NULL) {
         serverLog(LL_WARNING, "Primary did not respond to replconf command during SYNC handshake");

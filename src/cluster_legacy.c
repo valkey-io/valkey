@@ -2275,6 +2275,23 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
                 node->tls_port = msg_tls_port;
                 node->cport = ntohs(g->cport);
                 node->flags &= ~CLUSTER_NODE_NOADDR;
+
+                serverLog(LL_NOTICE, "Address updated for node %.40s (%s), now %s:%d", node->name, node->human_nodename,
+                          node->ip, getNodeDefaultClientPort(node));
+
+                /* Check if this is our primary and we have to change the
+                 * replication target as well.
+                 *
+                 * This is needed in case the check in nodeUpdateAddressIfNeeded
+                 * failed due to a race condition. For example, if the replica just
+                 * received a packet from another node that contains new address
+                 * about the primary, we will update primary node address in here,
+                 * when the replica receive the packet from the primary, the check
+                 * in nodeUpdateAddressIfNeeded will fail since the address has been
+                 * updated correctly, and we will not have the opportunity to call
+                 * replicationSetPrimary and update the primary host. */
+                if (nodeIsReplica(myself) && myself->replicaof == node)
+                    replicationSetPrimary(node->ip, getNodeDefaultReplicationPort(node), 0);
             }
         } else if (!node) {
             /* If it's not in NOADDR state and we don't have it, we
@@ -6639,25 +6656,27 @@ int clusterCommandSpecial(client *c) {
         }
         resetManualFailover();
         server.cluster->mf_end = mstime() + CLUSTER_MF_TIMEOUT;
+        sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
 
         if (takeover) {
             /* A takeover does not perform any initial check. It just
              * generates a new configuration epoch for this node without
              * consensus, claims the primary's slots, and broadcast the new
              * configuration. */
-            serverLog(LL_NOTICE, "Taking over the primary (user request).");
+            serverLog(LL_NOTICE, "Taking over the primary (user request from '%s').", client);
             clusterBumpConfigEpochWithoutConsensus();
             clusterFailoverReplaceYourPrimary();
         } else if (force) {
             /* If this is a forced failover, we don't need to talk with our
              * primary to agree about the offset. We just failover taking over
              * it without coordination. */
-            serverLog(LL_NOTICE, "Forced failover user request accepted.");
+            serverLog(LL_NOTICE, "Forced failover user request accepted (user request from '%s').", client);
             server.cluster->mf_can_start = 1;
         } else {
-            serverLog(LL_NOTICE, "Manual failover user request accepted.");
+            serverLog(LL_NOTICE, "Manual failover user request accepted (user request from '%s').", client);
             clusterSendMFStart(myself->replicaof);
         }
+        sdsfree(client);
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "set-config-epoch") && c->argc == 3) {
         /* CLUSTER SET-CONFIG-EPOCH <epoch>

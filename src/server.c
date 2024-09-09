@@ -474,26 +474,32 @@ dictType zsetDictType = {
     NULL,              /* allow to expand */
 };
 
-/* Db->dict, keys are sds strings, vals are Objects. */
-dictType dbDictType = {
+/* Kvstore->keys, keys are sds strings, vals are Objects. */
+dictType kvstoreKeysDictType = {
     dictSdsHash,          /* hash function */
     NULL,                 /* key dup */
     dictSdsKeyCompare,    /* key compare */
     NULL,                 /* key is embedded in the dictEntry and freed internally */
     dictObjectDestructor, /* val destructor */
     dictResizeAllowed,    /* allow to resize */
+    kvstoreDictRehashingStarted,
+    kvstoreDictRehashingCompleted,
+    kvstoreDictMetadataSize,
     .embedKey = dictSdsEmbedKey,
     .embedded_entry = 1,
 };
 
-/* Db->expires */
-dictType dbExpiresDictType = {
+/* Kvstore->expires */
+dictType kvstoreExpiresDictType = {
     dictSdsHash,       /* hash function */
     NULL,              /* key dup */
     dictSdsKeyCompare, /* key compare */
     NULL,              /* key destructor */
     NULL,              /* val destructor */
     dictResizeAllowed, /* allow to resize */
+    kvstoreDictRehashingStarted,
+    kvstoreDictRehashingCompleted,
+    kvstoreDictMetadataSize,
 };
 
 /* Command table. sds string -> command struct pointer. */
@@ -540,7 +546,7 @@ dictType keylistDictType = {
 };
 
 /* KeyDict hash table type has unencoded Objects as keys and
- * dicts as values. It's used for PUBSUB command to track clients subscribing the channels. */
+ * dicts as values. It's used for PUBSUB command to track clients subscribing the patterns. */
 dictType objToDictDictType = {
     dictObjHash,          /* hash function */
     NULL,                 /* key dup */
@@ -548,6 +554,20 @@ dictType objToDictDictType = {
     dictObjectDestructor, /* key destructor */
     dictDictDestructor,   /* val destructor */
     NULL                  /* allow to expand */
+};
+
+/* Same as objToDictDictType, added some kvstore callbacks, it's used
+ * for PUBSUB command to track clients subscribing the channels. */
+dictType kvstoreChannelDictType = {
+    dictObjHash,          /* hash function */
+    NULL,                 /* key dup */
+    dictObjKeyCompare,    /* key compare */
+    dictObjectDestructor, /* key destructor */
+    dictDictDestructor,   /* val destructor */
+    NULL,                 /* allow to expand */
+    kvstoreDictRehashingStarted,
+    kvstoreDictRehashingCompleted,
+    kvstoreDictMetadataSize,
 };
 
 /* Modules system dictionary type. Keys are module name,
@@ -1309,7 +1329,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         else if (server.last_sig_received == SIGTERM && server.shutdown_on_sigterm)
             shutdownFlags = server.shutdown_on_sigterm;
 
-        if (prepareForShutdown(shutdownFlags) == C_OK) exit(0);
+        if (prepareForShutdown(NULL, shutdownFlags) == C_OK) exit(0);
     } else if (isShutdownInitiated()) {
         if (server.mstime >= server.shutdown_mstime || isReadyToShutdown()) {
             if (finishShutdown() == C_OK) exit(0);
@@ -1541,7 +1561,7 @@ void whileBlockedCron(void) {
     /* We received a SIGTERM during loading, shutting down here in a safe way,
      * as it isn't ok doing so inside the signal handler. */
     if (server.shutdown_asap && server.loading) {
-        if (prepareForShutdown(SHUTDOWN_NOSAVE) == C_OK) exit(0);
+        if (prepareForShutdown(NULL, SHUTDOWN_NOSAVE) == C_OK) exit(0);
         serverLog(LL_WARNING,
                   "SIGTERM received but errors trying to shut down the server, check the logs for more information");
         server.shutdown_asap = 0;
@@ -2120,7 +2140,7 @@ extern char **environ;
  *
  * On success the function does not return, because the process turns into
  * a different process. On error C_ERR is returned. */
-int restartServer(int flags, mstime_t delay) {
+int restartServer(client *c, int flags, mstime_t delay) {
     int j;
 
     /* Check if we still have accesses to the executable that started this
@@ -2143,7 +2163,7 @@ int restartServer(int flags, mstime_t delay) {
     }
 
     /* Perform a proper shutdown. We don't wait for lagging replicas though. */
-    if (flags & RESTART_SERVER_GRACEFULLY && prepareForShutdown(SHUTDOWN_NOW) != C_OK) {
+    if (flags & RESTART_SERVER_GRACEFULLY && prepareForShutdown(c, SHUTDOWN_NOW) != C_OK) {
         serverLog(LL_WARNING, "Can't restart: error preparing for shutdown");
         return C_ERR;
     }
@@ -2627,8 +2647,8 @@ void initServer(void) {
         flags |= KVSTORE_FREE_EMPTY_DICTS;
     }
     for (j = 0; j < server.dbnum; j++) {
-        server.db[j].keys = kvstoreCreate(&dbDictType, slot_count_bits, flags);
-        server.db[j].expires = kvstoreCreate(&dbExpiresDictType, slot_count_bits, flags);
+        server.db[j].keys = kvstoreCreate(&kvstoreKeysDictType, slot_count_bits, flags);
+        server.db[j].expires = kvstoreCreate(&kvstoreExpiresDictType, slot_count_bits, flags);
         server.db[j].expires_cursor = 0;
         server.db[j].blocking_keys = dictCreate(&keylistDictType);
         server.db[j].blocking_keys_unblock_on_nokey = dictCreate(&objectKeyPointerValueDictType);
@@ -2643,10 +2663,10 @@ void initServer(void) {
     /* Note that server.pubsub_channels was chosen to be a kvstore (with only one dict, which
      * seems odd) just to make the code cleaner by making it be the same type as server.pubsubshard_channels
      * (which has to be kvstore), see pubsubtype.serverPubSubChannels */
-    server.pubsub_channels = kvstoreCreate(&objToDictDictType, 0, KVSTORE_ALLOCATE_DICTS_ON_DEMAND);
+    server.pubsub_channels = kvstoreCreate(&kvstoreChannelDictType, 0, KVSTORE_ALLOCATE_DICTS_ON_DEMAND);
     server.pubsub_patterns = dictCreate(&objToDictDictType);
-    server.pubsubshard_channels =
-        kvstoreCreate(&objToDictDictType, slot_count_bits, KVSTORE_ALLOCATE_DICTS_ON_DEMAND | KVSTORE_FREE_EMPTY_DICTS);
+    server.pubsubshard_channels = kvstoreCreate(&kvstoreChannelDictType, slot_count_bits,
+                                                KVSTORE_ALLOCATE_DICTS_ON_DEMAND | KVSTORE_FREE_EMPTY_DICTS);
     server.pubsub_clients = 0;
     server.watching_clients = 0;
     server.cronloops = 0;
@@ -4170,7 +4190,12 @@ void closeListeningSockets(int unlink_unix_socket) {
     }
 }
 
-/* Prepare for shutting down the server. Flags:
+/* Prepare for shutting down the server.
+ *
+ * The client *c can be NULL, it may come from a signal. If client is passed in,
+ * it is used to print the client info.
+ *
+ * Flags:
  *
  * - SHUTDOWN_SAVE: Save a database dump even if the server is configured not to
  *   save any dump.
@@ -4193,7 +4218,7 @@ void closeListeningSockets(int unlink_unix_socket) {
  * errors are logged but ignored and C_OK is returned.
  *
  * On success, this function returns C_OK and then it's OK to call exit(0). */
-int prepareForShutdown(int flags) {
+int prepareForShutdown(client *c, int flags) {
     if (isShutdownInitiated()) return C_ERR;
 
     /* When SHUTDOWN is called while the server is loading a dataset in
@@ -4206,7 +4231,13 @@ int prepareForShutdown(int flags) {
 
     server.shutdown_flags = flags;
 
-    serverLog(LL_NOTICE, "User requested shutdown...");
+    if (c != NULL) {
+        sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
+        serverLog(LL_NOTICE, "User requested shutdown... (user request from '%s')", client);
+        sdsfree(client);
+    } else {
+        serverLog(LL_NOTICE, "User requested shutdown...");
+    }
     if (server.supervised_mode == SUPERVISED_SYSTEMD) serverCommunicateSystemd("STOPPING=1\n");
 
     /* If we have any replicas, let them catch up the replication offset before

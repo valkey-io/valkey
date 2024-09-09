@@ -631,9 +631,9 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         assert_replication_stream $repl {
            {select *}
            {set foo bar}
-           {del foo}
+           {unlink foo}
            {set foo bar}
-           {del foo}
+           {unlink foo}
            {incr foo}
         }
 

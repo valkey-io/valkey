@@ -1867,12 +1867,13 @@ struct valkeyServer {
     durationStats duration_stats[EL_DURATION_TYPE_NUM];
 
     /* Configuration */
-    int verbosity;             /* Loglevel verbosity */
-    int maxidletime;           /* Client timeout in seconds */
-    int tcpkeepalive;          /* Set SO_KEEPALIVE if non-zero. */
-    int active_expire_enabled; /* Can be disabled for testing purposes. */
-    int active_expire_effort;  /* From 1 (default) to 10, active effort. */
-    int lazy_expire_disabled;  /* If > 0, don't trigger lazy expire */
+    int verbosity;               /* Loglevel verbosity */
+    int hide_user_data_from_log; /* Hide or redact user data, or data that may contain user data, from the log. */
+    int maxidletime;             /* Client timeout in seconds */
+    int tcpkeepalive;            /* Set SO_KEEPALIVE if non-zero. */
+    int active_expire_enabled;   /* Can be disabled for testing purposes. */
+    int active_expire_effort;    /* From 1 (default) to 10, active effort. */
+    int lazy_expire_disabled;    /* If > 0, don't trigger lazy expire */
     int active_defrag_enabled;
     int sanitize_dump_payload;    /* Enables deep sanitization for ziplist and listpack in RDB and RESTORE. */
     int skip_checksum_validation; /* Disable checksum validation for RDB and RESTORE payload. */
@@ -1937,6 +1938,7 @@ struct valkeyServer {
     int aof_last_write_errno;           /* Valid if aof write/fsync status is ERR */
     int aof_load_truncated;             /* Don't stop on unexpected AOF EOF. */
     int aof_use_rdb_preamble;           /* Specify base AOF to use RDB encoding on AOF rewrites. */
+    int aof_rewrite_use_rdb_preamble;   /* Base AOF to use RDB encoding on AOF rewrites start. */
     _Atomic int aof_bio_fsync_status;   /* Status of AOF fsync in bio job. */
     _Atomic int aof_bio_fsync_errno;    /* Errno of AOF fsync in bio job. */
     aofManifest *aof_manifest;          /* Used to track AOFs. */
@@ -2636,7 +2638,8 @@ extern dictType objectKeyHeapPointerValueDictType;
 extern dictType setDictType;
 extern dictType BenchmarkDictType;
 extern dictType zsetDictType;
-extern dictType dbDictType;
+extern dictType kvstoreKeysDictType;
+extern dictType kvstoreExpiresDictType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;
 extern dictType hashDictType;
 extern dictType stringSetDictType;
@@ -2644,7 +2647,7 @@ extern dictType externalStringType;
 extern dictType sdsHashDictType;
 extern dictType clientDictType;
 extern dictType objToDictDictType;
-extern dictType dbExpiresDictType;
+extern dictType kvstoreChannelDictType;
 extern dictType modulesDictType;
 extern dictType sdsReplyDictType;
 extern dictType keylistDictType;
@@ -2836,8 +2839,8 @@ void *dupClientReplyValue(void *o);
 char *getClientPeerId(client *client);
 char *getClientSockName(client *client);
 int isClientConnIpV6(client *c);
-sds catClientInfoString(sds s, client *client);
-sds getAllClientsInfoString(int type);
+sds catClientInfoString(sds s, client *client, int hide_user_data);
+sds getAllClientsInfoString(int type, int hide_user_data);
 int clientSetName(client *c, robj *name, const char **err);
 void rewriteClientCommandVector(client *c, int argc, ...);
 void rewriteClientCommandArgument(client *c, int i, robj *newval);
@@ -3292,7 +3295,7 @@ void preventCommandAOF(client *c);
 void preventCommandReplication(client *c);
 void slowlogPushCurrentCommand(client *c, struct serverCommand *cmd, ustime_t duration);
 void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int64_t duration_hist);
-int prepareForShutdown(int flags);
+int prepareForShutdown(client *c, int flags);
 void replyToClientsBlockedOnShutdown(void);
 int abortShutdown(void);
 void afterCommand(client *c);
@@ -3337,7 +3340,7 @@ void dismissMemoryInChild(void);
 #define RESTART_SERVER_NONE 0
 #define RESTART_SERVER_GRACEFULLY (1 << 0)     /* Do proper shutdown. */
 #define RESTART_SERVER_CONFIG_REWRITE (1 << 1) /* CONFIG REWRITE before restart.*/
-int restartServer(int flags, mstime_t delay);
+int restartServer(client *c, int flags, mstime_t delay);
 int getKeySlot(sds key);
 int calculateKeySlot(sds key);
 

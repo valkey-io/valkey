@@ -1,6 +1,6 @@
 /* Object implementation.
  *
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,8 +29,11 @@
  */
 
 #include "server.h"
+#include "serverassert.h"
 #include "functions.h"
 #include "intset.h" /* Compact integer set structure */
+#include "zmalloc.h"
+#include "sds.h"
 #include <math.h>
 #include <ctype.h>
 
@@ -89,7 +92,9 @@ robj *createRawStringObject(const char *ptr, size_t len) {
  * an object where the sds string is actually an unmodifiable string
  * allocated in the same chunk as the object itself. */
 robj *createEmbeddedStringObject(const char *ptr, size_t len) {
-    robj *o = zmalloc(sizeof(robj) + sizeof(struct sdshdr8) + len + 1);
+    size_t bufsize = 0;
+    size_t sds_hdrlen = sizeof(struct sdshdr8);
+    robj *o = zmalloc_usable(sizeof(robj) + sds_hdrlen + len + 1, &bufsize);
     struct sdshdr8 *sh = (void *)(o + 1);
 
     o->type = OBJ_STRING;
@@ -99,7 +104,11 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
     o->lru = 0;
 
     sh->len = len;
-    sh->alloc = len;
+    size_t usable = bufsize - (sizeof(robj) + sds_hdrlen + 1);
+    sh->alloc = usable;
+    /* Overflow check. This must not happen as we use embedded strings only
+     * for sds strings that fit into SDS_TYPE_8. */
+    serverAssert(usable == sh->alloc);
     sh->flags = SDS_TYPE_8;
     if (ptr == SDS_NOINIT)
         sh->buf[len] = '\0';
@@ -982,7 +991,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
         if (o->encoding == OBJ_ENCODING_INT) {
             asize = sizeof(*o);
         } else if (o->encoding == OBJ_ENCODING_RAW) {
-            asize = sdsZmallocSize(o->ptr) + sizeof(*o);
+            asize = sdsAllocSize(o->ptr) + sizeof(*o);
         } else if (o->encoding == OBJ_ENCODING_EMBSTR) {
             asize = zmalloc_size((void *)o);
         } else {
@@ -1010,7 +1019,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             asize = sizeof(*o) + sizeof(dict) + (sizeof(struct dictEntry *) * dictBuckets(d));
             while ((de = dictNext(di)) != NULL && samples < sample_size) {
                 ele = dictGetKey(de);
-                elesize += dictEntryMemUsage(de) + sdsZmallocSize(ele);
+                elesize += dictEntryMemUsage(de) + sdsAllocSize(ele);
                 samples++;
             }
             dictReleaseIterator(di);
@@ -1032,7 +1041,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             asize = sizeof(*o) + sizeof(zset) + sizeof(zskiplist) + sizeof(dict) +
                     (sizeof(struct dictEntry *) * dictBuckets(d)) + zmalloc_size(zsl->header);
             while (znode != NULL && samples < sample_size) {
-                elesize += sdsZmallocSize(znode->ele);
+                elesize += sdsAllocSize(znode->ele);
                 elesize += dictEntryMemUsage(NULL) + zmalloc_size(znode);
                 samples++;
                 znode = znode->level[0].forward;
@@ -1051,7 +1060,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             while ((de = dictNext(di)) != NULL && samples < sample_size) {
                 ele = dictGetKey(de);
                 ele2 = dictGetVal(de);
-                elesize += sdsZmallocSize(ele) + sdsZmallocSize(ele2);
+                elesize += sdsAllocSize(ele) + sdsAllocSize(ele2);
                 elesize += dictEntryMemUsage(de);
                 samples++;
             }
@@ -1195,7 +1204,7 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
 
     mem = 0;
     if (server.aof_state != AOF_OFF) {
-        mem += sdsZmallocSize(server.aof_buf);
+        mem += sdsAllocSize(server.aof_buf);
     }
     mh->aof_buffer = mem;
     mem_total += mem;

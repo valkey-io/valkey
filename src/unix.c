@@ -51,7 +51,8 @@ static int connUnixIsLocal(connection *conn) {
 
 static int connUnixListen(connListener *listener) {
     int fd;
-    mode_t *perm = (mode_t *)listener->priv;
+    mode_t *perm = (mode_t *)listener->priv1;
+    char *group = (char *)listener->priv2;
 
     if (listener->bindaddr_count == 0) return C_OK;
 
@@ -61,7 +62,7 @@ static int connUnixListen(connListener *listener) {
         char *addr = listener->bindaddr[j];
 
         unlink(addr); /* don't care if this fails */
-        fd = anetUnixServer(server.neterr, addr, *perm, server.tcp_backlog);
+        fd = anetUnixServer(server.neterr, addr, *perm, server.tcp_backlog, group);
         if (fd == ANET_ERR) {
             serverLog(LL_WARNING, "Failed opening Unix socket: %s", server.neterr);
             exit(1);

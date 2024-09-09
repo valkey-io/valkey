@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -584,8 +584,8 @@ serverDb *initTempDb(void) {
     serverDb *tempDb = zcalloc(sizeof(serverDb) * server.dbnum);
     for (int i = 0; i < server.dbnum; i++) {
         tempDb[i].id = i;
-        tempDb[i].keys = kvstoreCreate(&dbDictType, slot_count_bits, flags);
-        tempDb[i].expires = kvstoreCreate(&dbExpiresDictType, slot_count_bits, flags);
+        tempDb[i].keys = kvstoreCreate(&kvstoreKeysDictType, slot_count_bits, flags);
+        tempDb[i].expires = kvstoreCreate(&kvstoreExpiresDictType, slot_count_bits, flags);
     }
 
     return tempDb;
@@ -1278,7 +1278,7 @@ void shutdownCommand(client *c) {
     }
 
     blockClientShutdown(c);
-    if (prepareForShutdown(flags) == C_OK) exit(0);
+    if (prepareForShutdown(c, flags) == C_OK) exit(0);
     /* If we're here, then shutdown is ongoing (the client is still blocked) or
      * failed (the client has received an error). */
 }
@@ -1710,6 +1710,19 @@ void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj) {
     signalModifiedKey(NULL, db, keyobj);
     propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
     server.stat_expiredkeys++;
+}
+
+/* Delete the specified expired key from overwriting and propagate the DEL or UNLINK. */
+void deleteExpiredKeyFromOverwriteAndPropagate(client *c, robj *keyobj) {
+    int deleted = dbGenericDelete(c->db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED);
+    serverAssertWithInfo(c, keyobj, deleted);
+    server.dirty++;
+
+    /* Replicate/AOF this as an explicit DEL or UNLINK. */
+    robj *aux = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
+    rewriteClientCommandVector(c, 2, aux, keyobj);
+    signalModifiedKey(c, c->db, keyobj);
+    notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, c->db->id);
 }
 
 /* Propagate an implicit key deletion into replicas and the AOF file.

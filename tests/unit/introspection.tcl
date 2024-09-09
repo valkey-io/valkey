@@ -533,6 +533,7 @@ start_server {tags {"introspection"}} {
             io-threads
             logfile
             unixsocketperm
+            unixsocketgroup
             replicaof
             slaveof
             requirepass

@@ -1,6 +1,6 @@
 /* anet.c -- Basic TCP socket stuff made a bit less boring
  *
- * Copyright (c) 2006-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2006-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -45,6 +45,7 @@
 #include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <grp.h>
 
 #include "anet.h"
 #include "config.h"
@@ -505,7 +506,7 @@ int anetTcpNonBlockBestEffortBindConnect(char *err, const char *addr, int port, 
     return anetTcpGenericConnect(err, addr, port, source_addr, ANET_CONNECT_NONBLOCK | ANET_CONNECT_BE_BINDING);
 }
 
-static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len, int backlog, mode_t perm) {
+static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len, int backlog, mode_t perm, char *group) {
     if (bind(s, sa, len) == -1) {
         anetSetError(err, "bind: %s", strerror(errno));
         close(s);
@@ -513,6 +514,22 @@ static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len, int 
     }
 
     if (sa->sa_family == AF_LOCAL && perm) chmod(((struct sockaddr_un *)sa)->sun_path, perm);
+
+    if (sa->sa_family == AF_LOCAL && group != NULL) {
+        struct group *grp;
+        if ((grp = getgrnam(group)) == NULL) {
+            anetSetError(err, "getgrnam error for group '%s': %s", group, strerror(errno));
+            close(s);
+            return ANET_ERR;
+        }
+
+        /* Owner of the socket remains same. */
+        if (chown(((struct sockaddr_un *)sa)->sun_path, -1, grp->gr_gid) == -1) {
+            anetSetError(err, "chown error for group '%s': %s", group, strerror(errno));
+            close(s);
+            return ANET_ERR;
+        }
+    }
 
     if (listen(s, backlog) == -1) {
         anetSetError(err, "listen: %s", strerror(errno));
@@ -553,7 +570,7 @@ static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backl
 
         if (af == AF_INET6 && anetV6Only(err, s) == ANET_ERR) goto error;
         if (anetSetReuseAddr(err, s) == ANET_ERR) goto error;
-        if (anetListen(err, s, p->ai_addr, p->ai_addrlen, backlog, 0) == ANET_ERR) s = ANET_ERR;
+        if (anetListen(err, s, p->ai_addr, p->ai_addrlen, backlog, 0, NULL) == ANET_ERR) s = ANET_ERR;
         goto end;
     }
     if (p == NULL) {
@@ -577,7 +594,7 @@ int anetTcp6Server(char *err, int port, char *bindaddr, int backlog) {
     return _anetTcpServer(err, port, bindaddr, AF_INET6, backlog);
 }
 
-int anetUnixServer(char *err, char *path, mode_t perm, int backlog) {
+int anetUnixServer(char *err, char *path, mode_t perm, int backlog, char *group) {
     int s;
     struct sockaddr_un sa;
 
@@ -593,7 +610,7 @@ int anetUnixServer(char *err, char *path, mode_t perm, int backlog) {
     memset(&sa, 0, sizeof(sa));
     sa.sun_family = AF_LOCAL;
     valkey_strlcpy(sa.sun_path, path, sizeof(sa.sun_path));
-    if (anetListen(err, s, (struct sockaddr *)&sa, sizeof(sa), backlog, perm) == ANET_ERR) return ANET_ERR;
+    if (anetListen(err, s, (struct sockaddr *)&sa, sizeof(sa), backlog, perm, group) == ANET_ERR) return ANET_ERR;
     return s;
 }
 

@@ -1,6 +1,6 @@
 /* Asynchronous replication implementation.
  *
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -614,6 +614,11 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
 void showLatestBacklog(void) {
     if (server.repl_backlog == NULL) return;
     if (listLength(server.repl_buffer_blocks) == 0) return;
+    if (server.hide_user_data_from_log) {
+        serverLog(LL_NOTICE,
+                  "hide-user-data-from-log is on, skip logging backlog content to avoid spilling user data.");
+        return;
+    }
 
     size_t dumplen = 256;
     if (server.repl_backlog->histlen < (long long)dumplen) dumplen = server.repl_backlog->histlen;
@@ -645,11 +650,13 @@ void replicationFeedStreamFromPrimaryStream(char *buf, size_t buflen) {
     /* Debugging: this is handy to see the stream sent from primary
      * to replicas. Disabled with if(0). */
     if (0) {
-        printf("%zu:", buflen);
-        for (size_t j = 0; j < buflen; j++) {
-            printf("%c", isprint(buf[j]) ? buf[j] : '.');
+        if (server.hide_user_data_from_log) {
+            printf("%zu:", buflen);
+            for (size_t j = 0; j < buflen; j++) {
+                printf("%c", isprint(buf[j]) ? buf[j] : '.');
+            }
+            printf("\n");
         }
-        printf("\n");
     }
 
     /* There must be replication backlog if having attached replicas. */
@@ -1043,7 +1050,7 @@ void syncCommand(client *c) {
             } else {
                 replicationUnsetPrimary();
             }
-            sds client = catClientInfoString(sdsempty(), c);
+            sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "PRIMARY MODE enabled (failover request from '%s')", client);
             sdsfree(client);
         } else {
@@ -1994,8 +2001,8 @@ void readSyncBulkPayload(connection *conn) {
 
     /* Static vars used to hold the EOF mark, and the last bytes received
      * from the server: when they match, we reached the end of the transfer. */
-    static char eofmark[CONFIG_RUN_ID_SIZE];
-    static char lastbytes[CONFIG_RUN_ID_SIZE];
+    static char eofmark[RDB_EOF_MARK_SIZE];
+    static char lastbytes[RDB_EOF_MARK_SIZE];
     static int usemark = 0;
 
     /* If repl_transfer_size == -1 we still have to read the bulk length
@@ -2038,10 +2045,10 @@ void readSyncBulkPayload(connection *conn) {
          * At the end of the file the announced delimiter is transmitted. The
          * delimiter is long and random enough that the probability of a
          * collision with the actual file content can be ignored. */
-        if (strncmp(buf + 1, "EOF:", 4) == 0 && strlen(buf + 5) >= CONFIG_RUN_ID_SIZE) {
+        if (strncmp(buf + 1, "EOF:", 4) == 0 && strlen(buf + 5) >= RDB_EOF_MARK_SIZE) {
             usemark = 1;
-            memcpy(eofmark, buf + 5, CONFIG_RUN_ID_SIZE);
-            memset(lastbytes, 0, CONFIG_RUN_ID_SIZE);
+            memcpy(eofmark, buf + 5, RDB_EOF_MARK_SIZE);
+            memset(lastbytes, 0, RDB_EOF_MARK_SIZE);
             /* Set any repl_transfer_size to avoid entering this code path
              * at the next call. */
             server.repl_transfer_size = 0;
@@ -2086,14 +2093,14 @@ void readSyncBulkPayload(connection *conn) {
         if (usemark) {
             /* Update the last bytes array, and check if it matches our
              * delimiter. */
-            if (nread >= CONFIG_RUN_ID_SIZE) {
-                memcpy(lastbytes, buf + nread - CONFIG_RUN_ID_SIZE, CONFIG_RUN_ID_SIZE);
+            if (nread >= RDB_EOF_MARK_SIZE) {
+                memcpy(lastbytes, buf + nread - RDB_EOF_MARK_SIZE, RDB_EOF_MARK_SIZE);
             } else {
-                int rem = CONFIG_RUN_ID_SIZE - nread;
+                int rem = RDB_EOF_MARK_SIZE - nread;
                 memmove(lastbytes, lastbytes + nread, rem);
                 memcpy(lastbytes + rem, buf, nread);
             }
-            if (memcmp(lastbytes, eofmark, CONFIG_RUN_ID_SIZE) == 0) eof_reached = 1;
+            if (memcmp(lastbytes, eofmark, RDB_EOF_MARK_SIZE) == 0) eof_reached = 1;
         }
 
         /* Update the last I/O time for the replication transfer (used in
@@ -2111,7 +2118,7 @@ void readSyncBulkPayload(connection *conn) {
 
         /* Delete the last 40 bytes from the file if we reached EOF. */
         if (usemark && eof_reached) {
-            if (ftruncate(server.repl_transfer_fd, server.repl_transfer_read - CONFIG_RUN_ID_SIZE) == -1) {
+            if (ftruncate(server.repl_transfer_fd, server.repl_transfer_read - RDB_EOF_MARK_SIZE) == -1) {
                 serverLog(LL_WARNING,
                           "Error truncating the RDB file received from the primary "
                           "for SYNC: %s",
@@ -2228,7 +2235,7 @@ void readSyncBulkPayload(connection *conn) {
             loadingFailed = 1;
         } else if (usemark) {
             /* Verify the end mark is correct. */
-            if (!rioRead(&rdb, buf, CONFIG_RUN_ID_SIZE) || memcmp(buf, eofmark, CONFIG_RUN_ID_SIZE) != 0) {
+            if (!rioRead(&rdb, buf, RDB_EOF_MARK_SIZE) || memcmp(buf, eofmark, RDB_EOF_MARK_SIZE) != 0) {
                 serverLog(LL_WARNING, "Replication stream EOF marker is broken");
                 loadingFailed = 1;
             }
@@ -2679,6 +2686,7 @@ static void fullSyncWithPrimary(connection *conn) {
         /* Parse end offset response */
         char *endoff_format = "$ENDOFF:%lld %40s %d %llu";
         if (sscanf(err, endoff_format, &reploffset, primary_replid, &dbid, &rdb_client_id) != 4) {
+            serverLog(LL_WARNING, "Received unexpected $ENDOFF response: %s", err);
             goto error;
         }
         sdsfree(err);
@@ -3725,7 +3733,7 @@ int cancelReplicationHandshake(int reconnect) {
 }
 
 /* Set replication to the specified primary address and port. */
-void replicationSetPrimary(char *ip, int port) {
+void replicationSetPrimary(char *ip, int port, int full_sync_required) {
     int was_primary = server.primary_host == NULL;
 
     sdsfree(server.primary_host);
@@ -3751,11 +3759,20 @@ void replicationSetPrimary(char *ip, int port) {
      * sync with new primary. */
 
     cancelReplicationHandshake(0);
+
     /* Before destroying our primary state, create a cached primary using
      * our own parameters, to later PSYNC with the new primary. */
-    if (was_primary) {
+    if (was_primary && !full_sync_required) {
         replicationDiscardCachedPrimary();
         replicationCachePrimaryUsingMyself();
+    }
+
+    /* If full sync is required, drop the cached primary. Doing so increases
+     * this replica node's election rank (delay) and reduces its chance of
+     * winning the election. If a replica requiring a full sync wins the
+     * election, it will flush valid data in the shard, causing data loss. */
+    if (full_sync_required) {
+        replicationDiscardCachedPrimary();
     }
 
     /* Fire the role change modules event. */
@@ -3867,7 +3884,7 @@ void replicaofCommand(client *c) {
     if (!strcasecmp(c->argv[1]->ptr, "no") && !strcasecmp(c->argv[2]->ptr, "one")) {
         if (server.primary_host) {
             replicationUnsetPrimary();
-            sds client = catClientInfoString(sdsempty(), c);
+            sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
             serverLog(LL_NOTICE, "PRIMARY MODE enabled (user request from '%s')", client);
             sdsfree(client);
         }
@@ -3895,8 +3912,8 @@ void replicaofCommand(client *c) {
         }
         /* There was no previous primary or the user specified a different one,
          * we can continue. */
-        replicationSetPrimary(c->argv[1]->ptr, port);
-        sds client = catClientInfoString(sdsempty(), c);
+        replicationSetPrimary(c->argv[1]->ptr, port, 0);
+        sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
         serverLog(LL_NOTICE, "REPLICAOF %s:%d enabled (user request from '%s')", server.primary_host,
                   server.primary_port, client);
         sdsfree(client);
@@ -4357,9 +4374,9 @@ void waitaofCommand(client *c) {
  * waiting for replica acks. Never call it directly, call unblockClient()
  * instead. */
 void unblockClientWaitingReplicas(client *c) {
-    listNode *ln = listSearchKey(server.clients_waiting_acks, c);
-    serverAssert(ln != NULL);
-    listDelNode(server.clients_waiting_acks, ln);
+    serverAssert(c->bstate.client_waiting_acks_list_node);
+    listDelNode(server.clients_waiting_acks, c->bstate.client_waiting_acks_list_node);
+    c->bstate.client_waiting_acks_list_node = NULL;
     updateStatsOnUnblock(c, 0, 0, 0);
 }
 
@@ -4906,7 +4923,7 @@ void updateFailoverStatus(void) {
                       server.target_replica_port);
             server.failover_state = FAILOVER_IN_PROGRESS;
             /* If timeout has expired force a failover if requested. */
-            replicationSetPrimary(server.target_replica_host, server.target_replica_port);
+            replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0);
             return;
         } else {
             /* Force was not requested, so timeout. */
@@ -4949,6 +4966,6 @@ void updateFailoverStatus(void) {
         serverLog(LL_NOTICE, "Failover target %s:%d is synced, failing over.", server.target_replica_host,
                   server.target_replica_port);
         /* Designated replica is caught up, failover to it. */
-        replicationSetPrimary(server.target_replica_host, server.target_replica_port);
+        replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0);
     }
 }

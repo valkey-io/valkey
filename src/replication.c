@@ -3408,7 +3408,7 @@ void syncWithPrimary(connection *conn) {
      * with REPLICAOF NO ONE we must just return ASAP. */
     if (server.repl_state == REPL_STATE_NONE) {
         connClose(conn);
-        goto cleanup;
+        return;
     }
 
     /* Check for errors in the socket: after a non blocking connect() we
@@ -3430,7 +3430,7 @@ void syncWithPrimary(connection *conn) {
          * that will take care about this. */
         err = sendCommand(conn, "PING", NULL);
         if (err) goto write_error;
-        goto cleanup;
+        return;
     }
 
     /* Receive the PONG command. */
@@ -3448,6 +3448,7 @@ void syncWithPrimary(connection *conn) {
         if (err[0] != '+' && strncmp(err, "-NOAUTH", 7) != 0 && strncmp(err, "-NOPERM", 7) != 0 &&
             strncmp(err, "-ERR operation not permitted", 28) != 0) {
             serverLog(LL_WARNING, "Error reply to PING from primary: '%s'", err);
+            sdsfree(err);
             goto error;
         } else {
             serverLog(LL_NOTICE, "Primary replied to PING, replication can continue...");
@@ -3508,7 +3509,7 @@ void syncWithPrimary(connection *conn) {
         if (err) goto write_error;
 
         server.repl_state = REPL_STATE_RECEIVE_AUTH_REPLY;
-        goto cleanup;
+        return;
     }
 
     if (server.repl_state == REPL_STATE_RECEIVE_AUTH_REPLY && !server.primary_auth)
@@ -3520,10 +3521,13 @@ void syncWithPrimary(connection *conn) {
         if (err == NULL) goto no_response_error;
         if (err[0] == '-') {
             serverLog(LL_WARNING, "Unable to AUTH to PRIMARY: %s", err);
+            sdsfree(err);
             goto error;
         }
+        sdsfree(err);
+        err = NULL;
         server.repl_state = REPL_STATE_RECEIVE_PORT_REPLY;
-        goto cleanup;
+        return;
     }
 
     /* Receive REPLCONF listening-port reply. */
@@ -3538,8 +3542,9 @@ void syncWithPrimary(connection *conn) {
                       "REPLCONF listening-port: %s",
                       err);
         }
+        sdsfree(err);
         server.repl_state = REPL_STATE_RECEIVE_IP_REPLY;
-        goto cleanup;
+        return;
     }
 
     if (server.repl_state == REPL_STATE_RECEIVE_IP_REPLY && !server.replica_announce_ip)
@@ -3557,8 +3562,9 @@ void syncWithPrimary(connection *conn) {
                       "REPLCONF ip-address: %s",
                       err);
         }
+        sdsfree(err);
         server.repl_state = REPL_STATE_RECEIVE_CAPA_REPLY;
-        goto cleanup;
+        return;
     }
 
     /* Receive CAPA reply. */
@@ -3606,7 +3612,7 @@ void syncWithPrimary(connection *conn) {
             goto write_error;
         }
         server.repl_state = REPL_STATE_RECEIVE_PSYNC_REPLY;
-        goto cleanup;
+        return;
     }
 
     /* If reached this point, we should be in REPL_STATE_RECEIVE_PSYNC_REPLY. */
@@ -3619,7 +3625,7 @@ void syncWithPrimary(connection *conn) {
     }
 
     psync_result = replicaTryPartialResynchronization(conn, 1);
-    if (psync_result == PSYNC_WAIT_REPLY) goto cleanup; /* Try again later... */
+    if (psync_result == PSYNC_WAIT_REPLY) return; /* Try again later... */
 
     /* Check the status of the planned failover. We expect PSYNC_CONTINUE,
      * but there is nothing technically wrong with a full resync which
@@ -3629,7 +3635,7 @@ void syncWithPrimary(connection *conn) {
             clearFailoverState();
         } else {
             abortFailover("Failover target rejected psync request");
-            goto cleanup;
+            return;
         }
     }
 
@@ -3648,7 +3654,7 @@ void syncWithPrimary(connection *conn) {
             serverCommunicateSystemd("STATUS=PRIMARY <-> REPLICA sync: Partial Resynchronization accepted. Ready to "
                                      "accept connections in read-write mode.\n");
         }
-        goto cleanup;
+        return;
     }
 
     /* Fall back to SYNC if needed. Otherwise psync_result == PSYNC_FULLRESYNC
@@ -3698,7 +3704,7 @@ void syncWithPrimary(connection *conn) {
             goto error;
         }
         server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_SEND_HANDSHAKE;
-        goto cleanup;
+        return;
     }
     /* Setup the non blocking download of the bulk file. */
     if (connSetReadHandler(conn, readSyncBulkPayload) == C_ERR) {
@@ -3713,7 +3719,7 @@ void syncWithPrimary(connection *conn) {
     server.repl_transfer_read = 0;
     server.repl_transfer_last_fsync_off = 0;
     server.repl_transfer_lastio = server.unixtime;
-    goto cleanup;
+    return;
 
 no_response_error: /* Handle receiveSynchronousResponse() error when primary has no reply */
     serverLog(LL_WARNING, "Primary did not respond to command during SYNC handshake");
@@ -3732,14 +3738,12 @@ error:
     server.repl_transfer_tmpfile = NULL;
     server.repl_transfer_fd = -1;
     server.repl_state = REPL_STATE_CONNECT;
-    goto cleanup;
+    return;
 
 write_error: /* Handle sendCommand() errors. */
     serverLog(LL_WARNING, "Sending command to primary in replication handshake: %s", err);
-    goto error;
-
-cleanup:
     sdsfree(err);
+    goto error;
 }
 
 int connectWithPrimary(void) {

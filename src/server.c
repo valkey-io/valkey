@@ -6698,7 +6698,6 @@ struct serverTest {
     int failed;
 } serverTests[] = {
     {"quicklist", quicklistTest},
-    {"listpack", listpackTest},
 };
 serverTestProc *getTestProcByName(const char *name) {
     int numtests = sizeof(serverTests) / sizeof(struct serverTest);

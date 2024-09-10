@@ -285,6 +285,11 @@ void pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
         serverAssert(dictInsertAtPosition(type.clientPubSubChannels(c), channel, position));
         incrRefCount(channel);
     }
+
+    if (!(c->capa & CLIENT_CAPA_SUBV2)) {
+        /* Notify the client */
+        addReplyPubsubSubscribed(c, channel, type);
+    }
 }
 
 /* Unsubscribe a client from a channel. Returns 1 if the operation succeeded, or
@@ -567,7 +572,12 @@ void subscribeCommand(client *c) {
         addReplyError(c, "SUBSCRIBE isn't allowed for a DENY BLOCKING client");
         return;
     }
-    addPubSubChannel(c, pubSubType);
+
+    if (c->capa & CLIENT_CAPA_SUBV2) {
+        addPubSubChannel(c, pubSubType);
+    } else {
+        for (int j = 1; j < c->argc; j++) pubsubSubscribeChannel(c, c->argv[j], pubSubType);
+    }
 
     markClientAsPubSub(c);
 }
@@ -735,7 +745,11 @@ void ssubscribeCommand(client *c) {
         return;
     }
 
-    addPubSubChannel(c, pubSubShardType);
+    if (c->capa & CLIENT_CAPA_SUBV2) {
+        addPubSubChannel(c, pubSubShardType);
+    } else {
+        for (int j = 1; j < c->argc; j++) pubsubSubscribeChannel(c, c->argv[j], pubSubShardType);
+    }
     markClientAsPubSub(c);
 }
 

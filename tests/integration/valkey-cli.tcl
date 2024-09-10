@@ -204,11 +204,13 @@ start_server {tags {"cli"}} {
 
         # Subscribe to some channels.
         set sub1 "1) \"subscribe\"\n2) \"ch1\"\n3) (integer) 1\n"
-        set sub2 "4) \"subscribe\"\n5) \"ch2\"\n6) (integer) 2\n"
-        set sub3 "7) \"subscribe\"\n8) \"ch3\"\n9) (integer) 3\n"
+	set sub2 "1) \"subscribe\"\n2) \"ch2\"\n3) (integer) 2\n"
+        set sub3 "1) \"subscribe\"\n2) \"ch3\"\n3) (integer) 3\n"
         assert_equal $sub1$sub2$sub3$reading \
             [run_command $fd "subscribe ch1 ch2 ch3"]
 
+        # set sub2 "4) \"subscribe\"\n5) \"ch2\"\n6) (integer) 2\n"
+        # set sub3 "7) \"subscribe\"\n8) \"ch3\"\n9) (integer) 3\n"
         # Receive pubsub message.
         r publish ch2 hello
         set message "1) \"message\"\n2) \"ch2\"\n3) \"hello\"\n"
@@ -239,6 +241,10 @@ start_server {tags {"cli"}} {
         set sub1 "1) \"subscribe\"\n2) \"ch1\"\n3) (integer) 1\n"
         assert_equal $sub1$reading \
             [run_command $fd "subscribe ch1"]
+    }
+
+    test_interactive_cli "Subscribed mode" {
+        	    
     }
 
     test_interactive_nontty_cli "Subscribed mode" {

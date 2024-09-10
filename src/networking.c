@@ -2129,11 +2129,6 @@ int _writeToClient(client *c) {
     return tot_written > 0 ? C_OK : C_ERR;
 }
 
-static void postWriteToReplica(client *c) {
-    serverAssert(inMainThread());
-    if (c->nwritten > 0) c->net_output_bytes += c->nwritten;
-}
-
 static void _postWriteToClient(client *c) {
     if (c->nwritten <= 0) return;
 
@@ -2180,9 +2175,7 @@ int postWriteToClient(client *c) {
     c->io_last_bufpos = 0;
     /* Update total number of writes on server */
     server.stat_total_writes_processed++;
-    if (getClientType(c) == CLIENT_TYPE_REPLICA) {
-        postWriteToReplica(c);
-    } else {
+    if (getClientType(c) != CLIENT_TYPE_REPLICA) {
         _postWriteToClient(c);
     }
 

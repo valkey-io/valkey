@@ -1469,12 +1469,15 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
          * 2. OBJ_ENCODING_LISTPACK
          * 3. OBJ_ENCODING_HT
          * 'dstset_encoding' is used to determine which kind of encoding to use when initialize 'dstset'.
-         * If all sets are all OBJ_ENCODING_INTSET encoding, keep 'dstset' OBJ_ENCODING_INTSET encoding,
-         * Otherwise it is not sensible to create the 'dstset' from intset and then convert.
-         * If one of the set is OBJ_ENCODING_LISTPACK, let's set 'dstset' to hashtable rather than listpack,
-         * the hashtable is more efficient when did find and compare operation compared with the listpack,
-         * the time complexity is O(1) vs O(n). */
-        if (dstset_encoding == OBJ_ENCODING_INTSET &&
+         *
+         * If all sets are all OBJ_ENCODING_INTSET encoding or 'dstkey' is not null, keep 'dstset'
+         * OBJ_ENCODING_INTSET encoding when initialize. Otherwise it is not efficient to create the 'dstset'
+         * from intset and then convert to listpack or hashtable.
+         *
+         * If one of the set is OBJ_ENCODING_LISTPACK, let's set 'dstset' to hashtable default encoding,
+         * the hashtable is more efficient when find and compare than the listpack. The corresponding
+         * time complexity are O(1) vs O(n). */
+        if (!dstkey && dstset_encoding == OBJ_ENCODING_INTSET &&
             (setobj->encoding == OBJ_ENCODING_LISTPACK || setobj->encoding == OBJ_ENCODING_HT)) {
             dstset_encoding = OBJ_ENCODING_HT;
         }

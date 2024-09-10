@@ -15,21 +15,30 @@ source tests/support/util.tcl
 
 set dir [pwd]
 set ::all_tests []
+set ::module_api_all_tests []
 
 set test_dirs {
     unit
     unit/type
     unit/cluster
     integration
+    unit/moduleapi
 }
 
 foreach test_dir $test_dirs {
     set files [glob -nocomplain $dir/tests/$test_dir/*.tcl]
 
-    foreach file $files {
-        lappend ::all_tests $test_dir/[file root [file tail $file]]
+    if {$test_dir eq "unit/moduleapi"} {
+        foreach file $files {
+            lappend ::module_api_all_tests $test_dir/[file root [file tail $file]]
+        }
+    } else {
+        foreach file $files {
+            lappend ::all_tests $test_dir/[file root [file tail $file]]
+        }
     }
 }
+
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0
 
@@ -550,6 +559,7 @@ proc send_data_packet {fd status data {elapsed 0}} {
 
 proc print_help_screen {} {
     puts [join {
+        "--moduleapi        Run the module API tests, this option should only be used in runtest-moduleapi which will build the test module."
         "--valgrind         Run the test over valgrind."
         "--durable          suppress test crashes and keep running"
         "--stack-logging    Enable OSX leaks/malloc stack logging."
@@ -606,6 +616,8 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
             }
         }
         incr j
+    } elseif {$opt eq {--moduleapi}} {
+        set ::all_tests $::module_api_all_tests
     } elseif {$opt eq {--config}} {
         set arg2 [lindex $argv [expr $j+2]]
         lappend ::global_overrides $arg

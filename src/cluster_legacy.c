@@ -3119,9 +3119,10 @@ int clusterProcessPacket(clusterLink *link) {
                  * election, we can reset it since there won't be enough votes and we can start
                  * a new one ASAP. */
                 server.cluster->failover_auth_time = 0;
-                serverLog(LL_WARNING, "I have a failover election for epoch %lld in progress and "
-                                      "received node %.40s (%s) claiming this epoch, resetting the election.",
-                                      sender->configEpoch, sender->name, sender->human_nodename);
+                serverLog(LL_WARNING,
+                          "I have a failover election for epoch %llu in progress and "
+                          "received node %.40s (%s) claiming this epoch, resetting the election.",
+                          (unsigned long long)sender->configEpoch, sender->name, sender->human_nodename);
                 clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
             }
         }

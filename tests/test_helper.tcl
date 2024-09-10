@@ -22,21 +22,19 @@ set test_dirs {
     unit/type
     unit/cluster
     integration
-    unit/moduleapi
 }
 
 foreach test_dir $test_dirs {
     set files [glob -nocomplain $dir/tests/$test_dir/*.tcl]
 
-    if {$test_dir eq "unit/moduleapi"} {
-        foreach file $files {
-            lappend ::module_api_all_tests $test_dir/[file root [file tail $file]]
-        }
-    } else {
-        foreach file $files {
-            lappend ::all_tests $test_dir/[file root [file tail $file]]
-        }
+    foreach file $files {
+        lappend ::all_tests $test_dir/[file root [file tail $file]]
     }
+}
+
+set moduleapi_test_dir unit/moduleapi
+foreach file [glob -nocomplain $dir/tests/$moduleapi_test_dir/*.tcl] {
+   lappend ::module_api_all_tests $moduleapi_test_dir/[file root [file tail $file]]
 }
 
 # Index to the next test to run in the ::all_tests list.

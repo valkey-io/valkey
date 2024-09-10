@@ -3113,6 +3113,17 @@ int clusterProcessPacket(clusterLink *link) {
         if (sender_claims_to_be_primary && sender_claimed_config_epoch > sender->configEpoch) {
             sender->configEpoch = sender_claimed_config_epoch;
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
+
+            if (server.cluster->failover_auth_time && sender->configEpoch == server.cluster->failover_auth_epoch) {
+                /* There are another node has claimed it in this epoch, if we have any ongoing
+                 * election, we can reset it since there won't be enough votes and we can start
+                 * a new one ASAP. */
+                server.cluster->failover_auth_time = 0;
+                serverLog(LL_WARNING, "I have a failover election for epoch %lld in progress and "
+                                      "received node %.40s (%s) claiming this epoch, resetting the election.",
+                                      sender->configEpoch, sender->name, sender->human_nodename);
+                clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
+            }
         }
         /* Update the replication offset info for this node. */
         sender->repl_offset = ntohu64(hdr->offset);

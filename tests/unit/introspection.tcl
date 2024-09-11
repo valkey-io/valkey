@@ -867,8 +867,8 @@ start_server {tags {"introspection"}} {
                     }
                 }
 
-                assert {$out > 0}
-                assert {$out < [expr $value_size + 1000]}
+                assert_morethan $out 0
+                assert_lessthan $out [expr $value_size + 1000]
             }
         }
     } {} {external:skip}

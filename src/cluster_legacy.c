@@ -6383,7 +6383,9 @@ void clusterCommandSetSlot(client *c) {
             server.cluster->migrating_slots_to[slot] = NULL;
         }
 
+        clusterNode *my_primary = clusterNodeGetPrimary(myself);
         int slot_was_mine = server.cluster->slots[slot] == myself;
+        int slot_was_my_primary = server.cluster->slots[slot] == my_primary;
         clusterDelSlot(slot);
         clusterAddSlot(n, slot);
 
@@ -6397,6 +6399,24 @@ void clusterCommandSetSlot(client *c) {
             /* We are migrating to a different shard that has a completely different
              * replication history, so a full sync is required. */
             clusterSetPrimary(n, 1, 1);
+            clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
+        }
+
+        /* If we are a replica and executing the CLUSTER SETSLOT command from
+         * my primary, and my primary left without slots, we should turn into a
+         * replica of the new primary. */
+        if (nodeIsReplica(myself) && slot_was_my_primary && my_primary->numslots == 0 && server.cluster_allow_replica_migration) {
+            serverLog(LL_NOTICE,
+                      "Lost my last slot during slot migration. Reconfiguring myself "
+                      "as a replica of %.40s (%s) in shard %.40s",
+                      n->name, n->human_nodename, n->shard_id);
+            /* We are a replica and the client is actually my primary, the following
+             * clusterSetPrimary will free the client so we need to protect it. */
+            protectClient(c);
+            /* We are migrating to a different shard that has a completely different
+             * replication history, so a full sync is required. */
+            clusterSetPrimary(n, 1, 1);
+            unprotectClient(c);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
         }
 

@@ -2559,6 +2559,7 @@ void freeSharedQueryBuf(void) {
  *
  * * DEBUG RELOAD and similar.
  * * When a Lua script is in -BUSY state.
+ * * A cluster replica doing CLUSTER SETSLOT and doing migration.
  *
  * So the function will protect the client by doing two things:
  *

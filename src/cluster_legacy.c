@@ -6405,7 +6405,8 @@ void clusterCommandSetSlot(client *c) {
         /* If we are a replica and executing the CLUSTER SETSLOT command from
          * my primary, and my primary left without slots, we should turn into a
          * replica of the new primary. */
-        if (nodeIsReplica(myself) && slot_was_my_primary && my_primary->numslots == 0 && server.cluster_allow_replica_migration) {
+        if (nodeIsReplica(myself) && slot_was_my_primary && my_primary->numslots == 0 &&
+            server.cluster_allow_replica_migration) {
             serverLog(LL_NOTICE,
                       "Lost my last slot during slot migration. Reconfiguring myself "
                       "as a replica of %.40s (%s) in shard %.40s",

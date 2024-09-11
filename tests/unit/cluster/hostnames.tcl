@@ -133,7 +133,7 @@ test "Verify the nodes configured with prefer hostname only show hostname for ne
     }
 
     # Grab the ID so we have it for later for validation
-    set primary [R 0 CLUSTER MYID]
+    set primary_id [R 0 CLUSTER MYID]
 
     # Prevent Node 0 and Node 6 from properly meeting,
     # they'll hang in the handshake phase. This allows us to 

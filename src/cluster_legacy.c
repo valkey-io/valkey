@@ -3127,7 +3127,6 @@ int clusterProcessPacket(clusterLink *link) {
                           (unsigned long long)sender->configEpoch, sender->name, sender->human_nodename);
                 clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
             }
-
         }
         /* Update the replication offset info for this node. */
         sender->repl_offset = ntohu64(hdr->offset);
@@ -4418,7 +4417,7 @@ int clusterGetFailedPrimaryRank(void) {
     dictEntry *de;
 
     di = dictGetSafeIterator(server.cluster->nodes);
-    while((de = dictNext(di)) != NULL) {
+    while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
 
         /* Skip nodes that do not need to participate in the rank. */
@@ -4622,8 +4621,7 @@ void clusterHandleReplicaFailover(void) {
                   "Start of election delayed for %lld milliseconds "
                   "(rank #%d, primary rank #%d, offset %lld).",
                   server.cluster->failover_auth_time - mstime(), server.cluster->failover_auth_rank,
-                  server.cluster->failover_failed_primary_rank,
-                  replicationGetReplicaOffset());
+                  server.cluster->failover_failed_primary_rank, replicationGetReplicaOffset());
         /* Now that we have a scheduled election, broadcast our offset
          * to all the other replicas so that they'll updated their offsets
          * if our offset is better. */

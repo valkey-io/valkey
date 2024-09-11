@@ -132,7 +132,7 @@ test "Verify the nodes configured with prefer hostname only show hostname for ne
         R $j config set cluster-announce-hostname "shard-$j.com"
     }
 
-    # Grab the ID so we have it for later for validation
+    # Grab the ID so we have it later for validation
     set primary_id [R 0 CLUSTER MYID]
 
     # Prevent Node 0 and Node 6 from properly meeting,

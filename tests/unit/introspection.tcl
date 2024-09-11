@@ -850,25 +850,42 @@ start_server {tags {"introspection"}} {
     
                 # Wait for replica to be connected before proceeding.
                 wait_for_ofs_sync $primary $replica
+                
+                # Avoid PINGs to make sure tot-net-out is stable.
+                $primary config set repl-ping-replica-period 3600
+
+                # Increase repl timeout to avoid replica disconnecting
+                $primary config set repl-timeout 3600
+                $replica config set repl-timeout 3600
+                
+                # Wait for the replica to receive the command.
+                wait_for_ofs_sync $primary $replica
     
+                # Get the tot-net-out of the replica before sending the command.
+                set info_list [$primary client list]
+                foreach info [split $info_list "\r\n"] {
+                    if {[string match "* flags=S *" $info]} {
+                        set out_before [get_field_in_client_info $info "tot-net-out"]
+                        break
+                    }
+                }
+                                
                 # Send a command to the primary.
                 set value_size 10000
                 $primary set foo [string repeat "a" $value_size]
     
-                # Wait for the replica to receive the command.
-                wait_for_ofs_sync $primary $replica
-    
-                # Get the tot-net-out of the replica.
+                # Get the tot-net-out of the replica after sending the command.
                 set info_list [$primary client list]
                 foreach info [split $info_list "\r\n"] {
                     if {[string match "* flags=S *" $info]} {
-                        set out [get_field_in_client_info $info "tot-net-out"]
+                        set out_after [get_field_in_client_info $info "tot-net-out"]
                         break
                     }
                 }
 
-                assert_morethan $out 0
-                assert_lessthan $out [expr $value_size + 1000]
+                assert_morethan $out_before 0
+                assert_morethan $out_after 0
+                assert_lessthan $out_after [expr $out_before + $value_size + 1000] ; # + 1000 to account for protocol overhead etc
             }
         }
     } {} {external:skip}

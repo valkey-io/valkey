@@ -143,26 +143,14 @@ void evictionPoolAlloc(void) {
  * right. */
 int evictionPoolPopulate(serverDb *db, kvstore *samplekvs, struct evictionPoolEntry *pool) {
     int j, k, count;
-    dictEntry *samples[server.maxmemory_samples];
+    void *samples[server.maxmemory_samples];
 
-    int slot = kvstoreGetFairRandomDictIndex(samplekvs);
-    count = kvstoreDictGetSomeKeys(samplekvs, slot, samples, server.maxmemory_samples);
+    int slot = kvstoreGetFairRandomHashsetIndex(samplekvs);
+    count = kvstoreHashsetSampleElements(samplekvs, slot, (void **)&samples, server.maxmemory_samples);
     for (j = 0; j < count; j++) {
         unsigned long long idle;
-        sds key;
-        robj *o;
-        dictEntry *de;
-
-        de = samples[j];
-        key = dictGetKey(de);
-
-        /* If the dictionary we are sampling from is not the main
-         * dictionary (but the expires one) we need to lookup the key
-         * again in the key dictionary to obtain the value object. */
-        if (server.maxmemory_policy != MAXMEMORY_VOLATILE_TTL) {
-            if (samplekvs != db->keys) de = kvstoreDictFind(db->keys, slot, key);
-            o = dictGetVal(de);
-        }
+        valkey *o = samples[j];
+        sds key = valkeyGetKey(o);
 
         /* Calculate the idle time according to the policy. This is called
          * idle just because the code initially handled LRU, but is in fact
@@ -180,7 +168,7 @@ int evictionPoolPopulate(serverDb *db, kvstore *samplekvs, struct evictionPoolEn
             idle = 255 - LFUDecrAndReturn(o);
         } else if (server.maxmemory_policy == MAXMEMORY_VOLATILE_TTL) {
             /* In this case the sooner the expire the better. */
-            idle = ULLONG_MAX - (long)dictGetVal(de);
+            idle = ULLONG_MAX - valkeyGetExpire(o);
         } else {
             serverPanic("Unknown eviction policy in evictionPoolPopulate()");
         }
@@ -568,7 +556,7 @@ int performEvictions(void) {
         sds bestkey = NULL;
         int bestdbid;
         serverDb *db;
-        dictEntry *de;
+        valkey *valkey;
 
         if (server.maxmemory_policy & (MAXMEMORY_FLAG_LRU | MAXMEMORY_FLAG_LFU) ||
             server.maxmemory_policy == MAXMEMORY_VOLATILE_TTL) {
@@ -592,7 +580,7 @@ int performEvictions(void) {
                     if (current_db_keys == 0) continue;
 
                     total_keys += current_db_keys;
-                    int l = kvstoreNumNonEmptyDicts(kvs);
+                    int l = kvstoreNumNonEmptyHashsets(kvs);
                     /* Do not exceed the number of non-empty slots when looping. */
                     while (l--) {
                         sampled_keys += evictionPoolPopulate(db, kvs, pool);
@@ -617,7 +605,7 @@ int performEvictions(void) {
                     } else {
                         kvs = server.db[bestdbid].expires;
                     }
-                    de = kvstoreDictFind(kvs, pool[k].slot, pool[k].key);
+                    int found = kvstoreHashsetFind(kvs, pool[k].slot, pool[k].key, (void **)&valkey);
 
                     /* Remove the entry from the pool. */
                     if (pool[k].key != pool[k].cached) sdsfree(pool[k].key);
@@ -626,8 +614,8 @@ int performEvictions(void) {
 
                     /* If the key exists, is our pick. Otherwise it is
                      * a ghost and we need to try the next element. */
-                    if (de) {
-                        bestkey = dictGetKey(de);
+                    if (found) {
+                        bestkey = valkeyGetKey(valkey);
                         break;
                     } else {
                         /* Ghost... Iterate again. */
@@ -651,10 +639,10 @@ int performEvictions(void) {
                 } else {
                     kvs = db->expires;
                 }
-                int slot = kvstoreGetFairRandomDictIndex(kvs);
-                de = kvstoreDictGetRandomKey(kvs, slot);
-                if (de) {
-                    bestkey = dictGetKey(de);
+                int slot = kvstoreGetFairRandomHashsetIndex(kvs);
+                int found = kvstoreHashsetRandomElement(kvs, slot, (void **)&valkey);
+                if (found) {
+                    bestkey = valkeyGetKey(valkey);
                     bestdbid = j;
                     break;
                 }

@@ -1,11 +1,11 @@
 /*
  * Index-based KV store implementation
- * This file implements a KV store comprised of an array of dicts (see dict.c)
+ * This file implements a KV store comprised of an array of hash tables (see hashset.c)
  * The purpose of this KV store is to have easy access to all keys that belong
- * in the same dict (i.e. are in the same dict-index)
+ * in the same hash table (i.e. are in the same hashset-index)
  *
  * For example, when the server is running in cluster mode, we use kvstore to save
- * all keys that map to the same hash-slot in a separate dict within the kvstore
+ * all keys that map to the same hash-slot in a separate hash table within the kvstore
  * struct.
  * This enables us to easily access all keys that map to a specific hash-slot.
  *
@@ -40,6 +40,7 @@
 
 #include <string.h>
 #include <stddef.h>
+#include <stdlib.h>
 
 #include "zmalloc.h"
 #include "kvstore.h"
@@ -48,342 +49,335 @@
 
 #define UNUSED(V) ((void)V)
 
-static dict *kvstoreIteratorNextDict(kvstoreIterator *kvs_it);
+static hashset *kvstoreIteratorNextHashset(kvstoreIterator *kvs_it);
 
 struct _kvstore {
     int flags;
-    dictType *dtype;
-    dict **dicts;
-    long long num_dicts;
-    long long num_dicts_bits;
-    list *rehashing;                     /* List of dictionaries in this kvstore that are currently rehashing. */
-    int resize_cursor;                   /* Cron job uses this cursor to gradually resize dictionaries (only used if num_dicts > 1). */
-    int allocated_dicts;                 /* The number of allocated dicts. */
-    int non_empty_dicts;                 /* The number of non-empty dicts. */
+    hashsetType *dtype;
+    hashset **hashsets;
+    long long num_hashsets;
+    long long num_hashsets_bits;
+    list *rehashing;                     /* List of hash tables in this kvstore that are currently rehashing. */
+    int resize_cursor;                   /* Cron job uses this cursor to gradually resize hash tables (only used if num_hashsets > 1). */
+    int allocated_hashsets;              /* The number of allocated hashsets. */
+    int non_empty_hashsets;              /* The number of non-empty hashsets. */
     unsigned long long key_count;        /* Total number of keys in this kvstore. */
-    unsigned long long bucket_count;     /* Total number of buckets in this kvstore across dictionaries. */
-    unsigned long long *dict_size_index; /* Binary indexed tree (BIT) that describes cumulative key frequencies up until
-                                            given dict-index. */
-    size_t overhead_hashtable_lut;       /* The overhead of all dictionaries. */
-    size_t overhead_hashtable_rehashing; /* The overhead of dictionaries rehashing. */
+    unsigned long long bucket_count;     /* Total number of buckets in this kvstore across hash tables. */
+    unsigned long long *hashset_size_index; /* Binary indexed tree (BIT) that describes cumulative key frequencies up until
+                                            given hashset-index. */
+    size_t overhead_hashtable_rehashing; /* Num buckets overhead of hash tables rehashing. */
 };
 
-/* Structure for kvstore iterator that allows iterating across multiple dicts. */
+/* Structure for kvstore iterator that allows iterating across multiple hashsets. */
 struct _kvstoreIterator {
     kvstore *kvs;
     long long didx;
     long long next_didx;
-    dictIterator di;
+    hashsetIterator di;
 };
 
-/* Structure for kvstore dict iterator that allows iterating the corresponding dict. */
-struct _kvstoreDictIterator {
+/* Structure for kvstore hashset iterator that allows iterating the corresponding hashset. */
+struct _kvstoreHashsetIterator {
     kvstore *kvs;
     long long didx;
-    dictIterator di;
+    hashsetIterator di;
 };
 
-/* Dict metadata for database, used for record the position in rehashing list. */
+/* Hashset metadata for database, used for record the position in rehashing list. */
 typedef struct {
     listNode *rehashing_node; /* list node in rehashing list */
     kvstore *kvs;
-} kvstoreDictMetadata;
+} kvstoreHashsetMetadata;
 
 /**********************************/
 /*** Helpers **********************/
 /**********************************/
 
-/* Get the dictionary pointer based on dict-index. */
-dict *kvstoreGetDict(kvstore *kvs, int didx) {
-    return kvs->dicts[didx];
+/* Get the hash table pointer based on hashset-index. */
+hashset *kvstoreGetHashset(kvstore *kvs, int didx) {
+    return kvs->hashsets[didx];
 }
 
-static dict **kvstoreGetDictRef(kvstore *kvs, int didx) {
-    return &kvs->dicts[didx];
+static hashset **kvstoreGetHashsetRef(kvstore *kvs, int didx) {
+    return &kvs->hashsets[didx];
 }
 
-static int kvstoreDictIsRehashingPaused(kvstore *kvs, int didx) {
-    dict *d = kvstoreGetDict(kvs, didx);
-    return d ? dictIsRehashingPaused(d) : 0;
+static int kvstoreHashsetIsRehashingPaused(kvstore *kvs, int didx) {
+    hashset *d = kvstoreGetHashset(kvs, didx);
+    return d ? hashsetIsRehashingPaused(d) : 0;
 }
 
-/* Returns total (cumulative) number of keys up until given dict-index (inclusive).
- * Time complexity is O(log(kvs->num_dicts)). */
+/* Returns total (cumulative) number of keys up until given hashset-index (inclusive).
+ * Time complexity is O(log(kvs->num_hashsets)). */
 static unsigned long long cumulativeKeyCountRead(kvstore *kvs, int didx) {
-    if (kvs->num_dicts == 1) {
+    if (kvs->num_hashsets == 1) {
         assert(didx == 0);
         return kvstoreSize(kvs);
     }
     int idx = didx + 1;
     unsigned long long sum = 0;
     while (idx > 0) {
-        sum += kvs->dict_size_index[idx];
+        sum += kvs->hashset_size_index[idx];
         idx -= (idx & -idx);
     }
     return sum;
 }
 
-static void addDictIndexToCursor(kvstore *kvs, int didx, unsigned long long *cursor) {
-    if (kvs->num_dicts == 1) return;
-    /* didx can be -1 when iteration is over and there are no more dicts to visit. */
+static void addHashsetIndexToCursor(kvstore *kvs, int didx, unsigned long long *cursor) {
+    if (kvs->num_hashsets == 1) return;
+    /* didx can be -1 when iteration is over and there are no more hashsets to visit. */
     if (didx < 0) return;
-    *cursor = (*cursor << kvs->num_dicts_bits) | didx;
+    *cursor = (*cursor << kvs->num_hashsets_bits) | didx;
 }
 
-static int getAndClearDictIndexFromCursor(kvstore *kvs, unsigned long long *cursor) {
-    if (kvs->num_dicts == 1) return 0;
-    int didx = (int)(*cursor & (kvs->num_dicts - 1));
-    *cursor = *cursor >> kvs->num_dicts_bits;
+static int getAndClearHashsetIndexFromCursor(kvstore *kvs, unsigned long long *cursor) {
+    if (kvs->num_hashsets == 1) return 0;
+    int didx = (int)(*cursor & (kvs->num_hashsets - 1));
+    *cursor = *cursor >> kvs->num_hashsets_bits;
     return didx;
 }
 
-/* Updates binary index tree (also known as Fenwick tree), increasing key count for a given dict.
+/* Updates binary index tree (also known as Fenwick tree), increasing key count for a given hashset.
  * You can read more about this data structure here https://en.wikipedia.org/wiki/Fenwick_tree
- * Time complexity is O(log(kvs->num_dicts)). */
+ * Time complexity is O(log(kvs->num_hashsets)). */
 static void cumulativeKeyCountAdd(kvstore *kvs, int didx, long delta) {
     kvs->key_count += delta;
 
-    dict *d = kvstoreGetDict(kvs, didx);
-    size_t dsize = dictSize(d);
-    int non_empty_dicts_delta = dsize == 1 ? 1 : dsize == 0 ? -1
-                                                            : 0;
-    kvs->non_empty_dicts += non_empty_dicts_delta;
+    hashset *s = kvstoreGetHashset(kvs, didx);
+    size_t size = hashsetSize(s);
+    if (delta < 0 && size == 0) {
+        kvs->non_empty_hashsets--; /* It became empty. */
+    } else if (delta > 0 && size == (size_t)delta) {
+        kvs->non_empty_hashsets++; /* It was empty before. */
+    }
 
-    /* BIT does not need to be calculated when there's only one dict. */
-    if (kvs->num_dicts == 1) return;
+    /* BIT does not need to be calculated when there's only one hashset. */
+    if (kvs->num_hashsets == 1) return;
 
     /* Update the BIT */
-    int idx = didx + 1; /* Unlike dict indices, BIT is 1-based, so we need to add 1. */
-    while (idx <= kvs->num_dicts) {
+    int idx = didx + 1; /* Unlike hashset indices, BIT is 1-based, so we need to add 1. */
+    while (idx <= kvs->num_hashsets) {
         if (delta < 0) {
-            assert(kvs->dict_size_index[idx] >= (unsigned long long)labs(delta));
+            assert(kvs->hashset_size_index[idx] >= (unsigned long long)labs(delta));
         }
-        kvs->dict_size_index[idx] += delta;
+        kvs->hashset_size_index[idx] += delta;
         idx += (idx & -idx);
     }
 }
 
-/* Create the dict if it does not exist and return it. */
-static dict *createDictIfNeeded(kvstore *kvs, int didx) {
-    dict *d = kvstoreGetDict(kvs, didx);
+/* Create the hashset if it does not exist and return it. */
+static hashset *createHashsetIfNeeded(kvstore *kvs, int didx) {
+    hashset *d = kvstoreGetHashset(kvs, didx);
     if (d) return d;
 
-    kvs->dicts[didx] = dictCreate(kvs->dtype);
-    kvstoreDictMetadata *metadata = (kvstoreDictMetadata *)dictMetadata(kvs->dicts[didx]);
+    kvs->hashsets[didx] = hashsetCreate(kvs->dtype);
+    kvstoreHashsetMetadata *metadata = (kvstoreHashsetMetadata *)hashsetMetadata(kvs->hashsets[didx]);
     metadata->kvs = kvs;
-    kvs->allocated_dicts++;
-    return kvs->dicts[didx];
+    kvs->allocated_hashsets++;
+    return kvs->hashsets[didx];
 }
 
-/* Called when the dict will delete entries, the function will check
- * KVSTORE_FREE_EMPTY_DICTS to determine whether the empty dict needs
+/* Called when the hashset will delete entries, the function will check
+ * KVSTORE_FREE_EMPTY_HASHSETS to determine whether the empty hashset needs
  * to be freed.
  *
- * Note that for rehashing dicts, that is, in the case of safe iterators
- * and Scan, we won't delete the dict. We will check whether it needs
+ * Note that for rehashing hashsets, that is, in the case of safe iterators
+ * and Scan, we won't delete the hashset. We will check whether it needs
  * to be deleted when we're releasing the iterator. */
-static void freeDictIfNeeded(kvstore *kvs, int didx) {
-    if (!(kvs->flags & KVSTORE_FREE_EMPTY_DICTS) || !kvstoreGetDict(kvs, didx) || kvstoreDictSize(kvs, didx) != 0 ||
-        kvstoreDictIsRehashingPaused(kvs, didx))
+static void freeHashsetIfNeeded(kvstore *kvs, int didx) {
+    if (!(kvs->flags & KVSTORE_FREE_EMPTY_HASHSETS) || !kvstoreGetHashset(kvs, didx) || kvstoreHashsetSize(kvs, didx) != 0 ||
+        kvstoreHashsetIsRehashingPaused(kvs, didx))
         return;
-    dictRelease(kvs->dicts[didx]);
-    kvs->dicts[didx] = NULL;
-    kvs->allocated_dicts--;
+    hashsetRelease(kvs->hashsets[didx]);
+    kvs->hashsets[didx] = NULL;
+    kvs->allocated_hashsets--;
 }
 
-/**********************************/
-/*** dict callbacks ***************/
-/**********************************/
+/*************************************/
+/*** hashset callbacks ***************/
+/*************************************/
 
-/* Adds dictionary to the rehashing list, which allows us
+/* Adds hash table to the rehashing list, which allows us
  * to quickly find rehash targets during incremental rehashing.
  *
- * If there are multiple dicts, updates the bucket count for the given dictionary
+ * If there are multiple hashsets, updates the bucket count for the given hash table
  * in a DB, bucket count incremented with the new ht size during the rehashing phase.
- * If there's one dict, bucket count can be retrieved directly from single dict bucket. */
-void kvstoreDictRehashingStarted(dict *d) {
-    kvstoreDictMetadata *metadata = (kvstoreDictMetadata *)dictMetadata(d);
+ * If there's one hashset, bucket count can be retrieved directly from single hashset bucket. */
+void kvstoreHashsetRehashingStarted(hashset *d) {
+    kvstoreHashsetMetadata *metadata = (kvstoreHashsetMetadata *)hashsetMetadata(d);
     kvstore *kvs = metadata->kvs;
     listAddNodeTail(kvs->rehashing, d);
     metadata->rehashing_node = listLast(kvs->rehashing);
 
-    unsigned long long from, to;
-    dictRehashingInfo(d, &from, &to);
+    size_t from, to;
+    hashsetRehashingInfo(d, &from, &to);
     kvs->bucket_count += to; /* Started rehashing (Add the new ht size) */
-    kvs->overhead_hashtable_lut += to;
     kvs->overhead_hashtable_rehashing += from;
 }
 
-/* Remove dictionary from the rehashing list.
+/* Remove hash table from the rehashing list.
  *
- * Updates the bucket count for the given dictionary in a DB. It removes
- * the old ht size of the dictionary from the total sum of buckets for a DB.  */
-void kvstoreDictRehashingCompleted(dict *d) {
-    kvstoreDictMetadata *metadata = (kvstoreDictMetadata *)dictMetadata(d);
+ * Updates the bucket count for the given hash table in a DB. It removes
+ * the old ht size of the hash table from the total sum of buckets for a DB.  */
+void kvstoreHashsetRehashingCompleted(hashset *d) {
+    kvstoreHashsetMetadata *metadata = (kvstoreHashsetMetadata *)hashsetMetadata(d);
     kvstore *kvs = metadata->kvs;
     if (metadata->rehashing_node) {
         listDelNode(kvs->rehashing, metadata->rehashing_node);
         metadata->rehashing_node = NULL;
     }
 
-    unsigned long long from, to;
-    dictRehashingInfo(d, &from, &to);
+    size_t from, to;
+    hashsetRehashingInfo(d, &from, &to);
     kvs->bucket_count -= from; /* Finished rehashing (Remove the old ht size) */
-    kvs->overhead_hashtable_lut -= from;
     kvs->overhead_hashtable_rehashing -= from;
 }
 
-/* Returns the size of the DB dict metadata in bytes. */
-size_t kvstoreDictMetadataSize(dict *d) {
-    UNUSED(d);
-    return sizeof(kvstoreDictMetadata);
+/* Returns the size of the DB hashset metadata in bytes. */
+size_t kvstoreHashsetMetadataSize(void) {
+    return sizeof(kvstoreHashsetMetadata);
 }
 
 /**********************************/
 /*** API **************************/
 /**********************************/
 
-/* Create an array of dictionaries
- * num_dicts_bits is the log2 of the amount of dictionaries needed (e.g. 0 for 1 dict,
- * 3 for 8 dicts, etc.)
- *
- * The kvstore handles `key` based on `dictType` during initialization:
- * - If `dictType.embedded-entry` is 1, it clones the `key`.
- * - Otherwise, it assumes ownership of the `key`.
+/* Create an array of hash tables
+ * num_hashsets_bits is the log2 of the amount of hash tables needed (e.g. 0 for 1 hashset,
+ * 3 for 8 hashsets, etc.)
  */
-kvstore *kvstoreCreate(dictType *type, int num_dicts_bits, int flags) {
-    /* We can't support more than 2^16 dicts because we want to save 48 bits
-     * for the dict cursor, see kvstoreScan */
-    assert(num_dicts_bits <= 16);
+kvstore *kvstoreCreate(hashsetType *type, int num_hashsets_bits, int flags) {
+    /* We can't support more than 2^16 hashsets because we want to save 48 bits
+     * for the hashset cursor, see kvstoreScan */
+    assert(num_hashsets_bits <= 16);
 
-    /* The dictType of kvstore needs to use the specific callbacks.
+    /* The hashsetType of kvstore needs to use the specific callbacks.
      * If there are any changes in the future, it will need to be modified. */
-    assert(type->rehashingStarted == kvstoreDictRehashingStarted);
-    assert(type->rehashingCompleted == kvstoreDictRehashingCompleted);
-    assert(type->dictMetadataBytes == kvstoreDictMetadataSize);
+    assert(type->rehashingStarted == kvstoreHashsetRehashingStarted);
+    assert(type->rehashingCompleted == kvstoreHashsetRehashingCompleted);
+    assert(type->getMetadataSize == kvstoreHashsetMetadataSize);
 
     kvstore *kvs = zcalloc(sizeof(*kvs));
     kvs->dtype = type;
     kvs->flags = flags;
 
-    kvs->num_dicts_bits = num_dicts_bits;
-    kvs->num_dicts = 1 << kvs->num_dicts_bits;
-    kvs->dicts = zcalloc(sizeof(dict *) * kvs->num_dicts);
-    if (!(kvs->flags & KVSTORE_ALLOCATE_DICTS_ON_DEMAND)) {
-        for (int i = 0; i < kvs->num_dicts; i++) createDictIfNeeded(kvs, i);
+    kvs->num_hashsets_bits = num_hashsets_bits;
+    kvs->num_hashsets = 1 << kvs->num_hashsets_bits;
+    kvs->hashsets = zcalloc(sizeof(hashset *) * kvs->num_hashsets);
+    if (!(kvs->flags & KVSTORE_ALLOCATE_HASHSETS_ON_DEMAND)) {
+        for (int i = 0; i < kvs->num_hashsets; i++) createHashsetIfNeeded(kvs, i);
     }
 
     kvs->rehashing = listCreate();
     kvs->key_count = 0;
-    kvs->non_empty_dicts = 0;
+    kvs->non_empty_hashsets = 0;
     kvs->resize_cursor = 0;
-    kvs->dict_size_index = kvs->num_dicts > 1 ? zcalloc(sizeof(unsigned long long) * (kvs->num_dicts + 1)) : NULL;
+    kvs->hashset_size_index = kvs->num_hashsets > 1 ? zcalloc(sizeof(unsigned long long) * (kvs->num_hashsets + 1)) : NULL;
     kvs->bucket_count = 0;
-    kvs->overhead_hashtable_lut = 0;
     kvs->overhead_hashtable_rehashing = 0;
 
     return kvs;
 }
 
-void kvstoreEmpty(kvstore *kvs, void(callback)(dict *)) {
-    for (int didx = 0; didx < kvs->num_dicts; didx++) {
-        dict *d = kvstoreGetDict(kvs, didx);
+void kvstoreEmpty(kvstore *kvs, void(callback)(hashset *)) {
+    for (int didx = 0; didx < kvs->num_hashsets; didx++) {
+        hashset *d = kvstoreGetHashset(kvs, didx);
         if (!d) continue;
-        kvstoreDictMetadata *metadata = (kvstoreDictMetadata *)dictMetadata(d);
+        kvstoreHashsetMetadata *metadata = (kvstoreHashsetMetadata *)hashsetMetadata(d);
         if (metadata->rehashing_node) metadata->rehashing_node = NULL;
-        dictEmpty(d, callback);
-        freeDictIfNeeded(kvs, didx);
+        hashsetEmpty(d, callback);
+        freeHashsetIfNeeded(kvs, didx);
     }
 
     listEmpty(kvs->rehashing);
 
     kvs->key_count = 0;
-    kvs->non_empty_dicts = 0;
+    kvs->non_empty_hashsets = 0;
     kvs->resize_cursor = 0;
     kvs->bucket_count = 0;
-    if (kvs->dict_size_index) memset(kvs->dict_size_index, 0, sizeof(unsigned long long) * (kvs->num_dicts + 1));
-    kvs->overhead_hashtable_lut = 0;
+    if (kvs->hashset_size_index) memset(kvs->hashset_size_index, 0, sizeof(unsigned long long) * (kvs->num_hashsets + 1));
     kvs->overhead_hashtable_rehashing = 0;
 }
 
 void kvstoreRelease(kvstore *kvs) {
-    for (int didx = 0; didx < kvs->num_dicts; didx++) {
-        dict *d = kvstoreGetDict(kvs, didx);
+    for (int didx = 0; didx < kvs->num_hashsets; didx++) {
+        hashset *d = kvstoreGetHashset(kvs, didx);
         if (!d) continue;
-        kvstoreDictMetadata *metadata = (kvstoreDictMetadata *)dictMetadata(d);
+        kvstoreHashsetMetadata *metadata = (kvstoreHashsetMetadata *)hashsetMetadata(d);
         if (metadata->rehashing_node) metadata->rehashing_node = NULL;
-        dictRelease(d);
+        hashsetRelease(d);
     }
-    zfree(kvs->dicts);
+    zfree(kvs->hashsets);
 
     listRelease(kvs->rehashing);
-    if (kvs->dict_size_index) zfree(kvs->dict_size_index);
+    if (kvs->hashset_size_index) zfree(kvs->hashset_size_index);
 
     zfree(kvs);
 }
 
 unsigned long long int kvstoreSize(kvstore *kvs) {
-    if (kvs->num_dicts != 1) {
+    if (kvs->num_hashsets != 1) {
         return kvs->key_count;
     } else {
-        return kvs->dicts[0] ? dictSize(kvs->dicts[0]) : 0;
+        return kvs->hashsets[0] ? hashsetSize(kvs->hashsets[0]) : 0;
     }
 }
 
-/* This method provides the cumulative sum of all the dictionary buckets
- * across dictionaries in a database. */
+/* This method provides the cumulative sum of all the hash table buckets
+ * across hash tables in a database. */
 unsigned long kvstoreBuckets(kvstore *kvs) {
-    if (kvs->num_dicts != 1) {
+    if (kvs->num_hashsets != 1) {
         return kvs->bucket_count;
     } else {
-        return kvs->dicts[0] ? dictBuckets(kvs->dicts[0]) : 0;
+        return kvs->hashsets[0] ? hashsetBuckets(kvs->hashsets[0]) : 0;
     }
 }
 
 size_t kvstoreMemUsage(kvstore *kvs) {
     size_t mem = sizeof(*kvs);
 
-    unsigned long long keys_count = kvstoreSize(kvs);
-    mem += keys_count * dictEntryMemUsage(NULL) + kvstoreBuckets(kvs) * sizeof(dictEntry *) +
-           kvs->allocated_dicts * (sizeof(dict) + kvstoreDictMetadataSize(NULL));
+    size_t HASHSET_FIXED_SIZE = 42; /* dummy; FIXME: Define in hashset.h */
+    mem += kvstoreBuckets(kvs) * HASHSET_BUCKET_SIZE;
+    mem += kvs->allocated_hashsets * (HASHSET_FIXED_SIZE + kvstoreHashsetMetadataSize());
 
-    /* Values are dict* shared with kvs->dicts */
+    /* Values are hashset* shared with kvs->hashsets */
     mem += listLength(kvs->rehashing) * sizeof(listNode);
 
-    if (kvs->dict_size_index) mem += sizeof(unsigned long long) * (kvs->num_dicts + 1);
+    if (kvs->hashset_size_index) mem += sizeof(unsigned long long) * (kvs->num_hashsets + 1);
 
     return mem;
 }
 
 /*
- * This method is used to iterate over the elements of the entire kvstore specifically across dicts.
+ * This method is used to iterate over the elements of the entire kvstore specifically across hashsets.
  * It's a three pronged approach.
  *
- * 1. It uses the provided cursor `cursor` to retrieve the dict index from it.
- * 2. If the dictionary is in a valid state checked through the provided callback `dictScanValidFunction`,
- *    it performs a dictScan over the appropriate `keyType` dictionary of `db`.
- * 3. If the dict is entirely scanned i.e. the cursor has reached 0, the next non empty dict is discovered.
- *    The dict information is embedded into the cursor and returned.
+ * 1. It uses the provided cursor `cursor` to retrieve the hashset index from it.
+ * 2. If the hash table is in a valid state checked through the provided callback `hashsetScanValidFunction`,
+ *    it performs a hashsetScan over the appropriate `keyType` hash table of `db`.
+ * 3. If the hashset is entirely scanned i.e. the cursor has reached 0, the next non empty hashset is discovered.
+ *    The hashset information is embedded into the cursor and returned.
  *
- * To restrict the scan to a single dict, pass a valid dict index as
+ * To restrict the scan to a single hashset, pass a valid hashset index as
  * 'onlydidx', otherwise pass -1.
  */
 unsigned long long kvstoreScan(kvstore *kvs,
                                unsigned long long cursor,
                                int onlydidx,
-                               dictScanFunction *scan_cb,
-                               kvstoreScanShouldSkipDict *skip_cb,
-                               void *privdata) {
-    unsigned long long _cursor = 0;
-    /* During dictionary traversal, 48 upper bits in the cursor are used for positioning in the HT.
-     * Following lower bits are used for the dict index number, ranging from 0 to 2^num_dicts_bits-1.
-     * Dict index is always 0 at the start of iteration and can be incremented only if there are
-     * multiple dicts. */
-    int didx = getAndClearDictIndexFromCursor(kvs, &cursor);
+                               hashsetScanFunction scan_cb,
+                               kvstoreScanShouldSkipHashset *skip_cb,
+                               void *privdata,
+                               int flags) {
+    unsigned long long next_cursor = 0;
+    /* During hash table traversal, 48 upper bits in the cursor are used for positioning in the HT.
+     * Following lower bits are used for the hashset index number, ranging from 0 to 2^num_hashsets_bits-1.
+     * Hashset index is always 0 at the start of iteration and can be incremented only if there are
+     * multiple hashsets. */
+    int didx = getAndClearHashsetIndexFromCursor(kvs, &cursor);
     if (onlydidx >= 0) {
         if (didx < onlydidx) {
             /* Fast-forward to onlydidx. */
-            assert(onlydidx < kvs->num_dicts);
+            assert(onlydidx < kvs->num_hashsets);
             didx = onlydidx;
             cursor = 0;
         } else if (didx > onlydidx) {
@@ -392,53 +386,56 @@ unsigned long long kvstoreScan(kvstore *kvs,
         }
     }
 
-    dict *d = kvstoreGetDict(kvs, didx);
+    hashset *d = kvstoreGetHashset(kvs, didx);
 
     int skip = !d || (skip_cb && skip_cb(d));
     if (!skip) {
-        _cursor = dictScan(d, cursor, scan_cb, privdata);
-        /* In dictScan, scan_cb may delete entries (e.g., in active expire case). */
-        freeDictIfNeeded(kvs, didx);
+        next_cursor = hashsetScan(d, cursor, scan_cb, privdata, flags);
+        /* In hashsetScan, scan_cb may delete entries (e.g., in active expire case). */
+        freeHashsetIfNeeded(kvs, didx);
     }
-    /* scanning done for the current dictionary or if the scanning wasn't possible, move to the next dict index. */
-    if (_cursor == 0 || skip) {
+    /* scanning done for the current hash table or if the scanning wasn't possible, move to the next hashset index. */
+    if (next_cursor == 0 || skip) {
         if (onlydidx >= 0) return 0;
-        didx = kvstoreGetNextNonEmptyDictIndex(kvs, didx);
+        didx = kvstoreGetNextNonEmptyHashsetIndex(kvs, didx);
     }
     if (didx == -1) {
         return 0;
     }
-    addDictIndexToCursor(kvs, didx, &_cursor);
-    return _cursor;
+    addHashsetIndexToCursor(kvs, didx, &next_cursor);
+    return next_cursor;
 }
 
 /*
  * This functions increases size of kvstore to match desired number.
- * It resizes all individual dictionaries, unless skip_cb indicates otherwise.
+ * It resizes all individual hash tables, unless skip_cb indicates otherwise.
  *
- * Based on the parameter `try_expand`, appropriate dict expand API is invoked.
- * if try_expand is set to 1, `dictTryExpand` is used else `dictExpand`.
- * The return code is either `DICT_OK`/`DICT_ERR` for both the API(s).
- * `DICT_OK` response is for successful expansion. However, `DICT_ERR` response signifies failure in allocation in
- * `dictTryExpand` call and in case of `dictExpand` call it signifies no expansion was performed.
+ * Based on the parameter `try_expand`, appropriate hashset expand API is invoked.
+ * if try_expand is set to 1, `hashsetTryExpand` is used else `hashsetExpand`.
+ * The return code is either 1 or 0 for both the API(s).
+ * 1 response is for successful expansion. However, 0 response signifies failure in allocation in
+ * `hashsetTryExpand` call and in case of `hashsetExpand` call it signifies no expansion was performed.
  */
-int kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipDictIndex *skip_cb) {
-    for (int i = 0; i < kvs->num_dicts; i++) {
-        dict *d = kvstoreGetDict(kvs, i);
+int kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipHashsetIndex *skip_cb) {
+    for (int i = 0; i < kvs->num_hashsets; i++) {
+        hashset *d = kvstoreGetHashset(kvs, i);
         if (!d || (skip_cb && skip_cb(i))) continue;
-        int result = try_expand ? dictTryExpand(d, newsize) : dictExpand(d, newsize);
-        if (try_expand && result == DICT_ERR) return 0;
+        if (try_expand) {
+            if (!hashsetTryExpand(d, newsize)) return 0;
+        } else {
+            hashsetExpand(d, newsize);
+        }
     }
 
     return 1;
 }
 
-/* Returns fair random dict index, probability of each dict being returned is proportional to the number of elements
- * that dictionary holds. This function guarantees that it returns a dict-index of a non-empty dict, unless the entire
- * kvstore is empty. Time complexity of this function is O(log(kvs->num_dicts)). */
-int kvstoreGetFairRandomDictIndex(kvstore *kvs) {
-    unsigned long target = kvstoreSize(kvs) ? (randomULong() % kvstoreSize(kvs)) + 1 : 0;
-    return kvstoreFindDictIndexByKeyIndex(kvs, target);
+/* Returns fair random hashset index, probability of each hashset being returned is proportional to the number of elements
+ * that hash table holds. This function guarantees that it returns a hashset-index of a non-empty hashset, unless the entire
+ * kvstore is empty. Time complexity of this function is O(log(kvs->num_hashsets)). */
+int kvstoreGetFairRandomHashsetIndex(kvstore *kvs) {
+    unsigned long target = kvstoreSize(kvs) ? (random() % kvstoreSize(kvs)) + 1 : 0;
+    return kvstoreFindHashsetIndexByKeyIndex(kvs, target);
 }
 
 void kvstoreGetStats(kvstore *kvs, char *buf, size_t bufsize, int full) {
@@ -447,40 +444,40 @@ void kvstoreGetStats(kvstore *kvs, char *buf, size_t bufsize, int full) {
     size_t l;
     char *orig_buf = buf;
     size_t orig_bufsize = bufsize;
-    dictStats *mainHtStats = NULL;
-    dictStats *rehashHtStats = NULL;
-    dict *d;
+    hashsetStats *mainHtStats = NULL;
+    hashsetStats *rehashHtStats = NULL;
+    hashset *d;
     kvstoreIterator *kvs_it = kvstoreIteratorInit(kvs);
-    while ((d = kvstoreIteratorNextDict(kvs_it))) {
-        dictStats *stats = dictGetStatsHt(d, 0, full);
+    while ((d = kvstoreIteratorNextHashset(kvs_it))) {
+        hashsetStats *stats = hashsetGetStatsHt(d, 0, full);
         if (!mainHtStats) {
             mainHtStats = stats;
         } else {
-            dictCombineStats(stats, mainHtStats);
-            dictFreeStats(stats);
+            hashsetCombineStats(stats, mainHtStats);
+            hashsetFreeStats(stats);
         }
-        if (dictIsRehashing(d)) {
-            stats = dictGetStatsHt(d, 1, full);
+        if (hashsetIsRehashing(d)) {
+            stats = hashsetGetStatsHt(d, 1, full);
             if (!rehashHtStats) {
                 rehashHtStats = stats;
             } else {
-                dictCombineStats(stats, rehashHtStats);
-                dictFreeStats(stats);
+                hashsetCombineStats(stats, rehashHtStats);
+                hashsetFreeStats(stats);
             }
         }
     }
     kvstoreIteratorRelease(kvs_it);
 
     if (mainHtStats && bufsize > 0) {
-        l = dictGetStatsMsg(buf, bufsize, mainHtStats, full);
-        dictFreeStats(mainHtStats);
+        l = hashsetGetStatsMsg(buf, bufsize, mainHtStats, full);
+        hashsetFreeStats(mainHtStats);
         buf += l;
         bufsize -= l;
     }
 
     if (rehashHtStats && bufsize > 0) {
-        l = dictGetStatsMsg(buf, bufsize, rehashHtStats, full);
-        dictFreeStats(rehashHtStats);
+        l = hashsetGetStatsMsg(buf, bufsize, rehashHtStats, full);
+        hashsetFreeStats(rehashHtStats);
         buf += l;
         bufsize -= l;
     }
@@ -488,142 +485,143 @@ void kvstoreGetStats(kvstore *kvs, char *buf, size_t bufsize, int full) {
     if (orig_bufsize) orig_buf[orig_bufsize - 1] = '\0';
 }
 
-/* Finds a dict containing target element in a key space ordered by dict index.
- * Consider this example. Dictionaries are represented by brackets and keys by dots:
+/* Finds a hashset containing target element in a key space ordered by hashset index.
+ * Consider this example. Hash Tables are represented by brackets and keys by dots:
  *  #0   #1   #2     #3    #4
  * [..][....][...][.......][.]
  *                    ^
  *                 target
  *
- * In this case dict #3 contains key that we are trying to find.
+ * In this case hashset #3 contains key that we are trying to find.
  *
- * The return value is 0 based dict-index, and the range of the target is [1..kvstoreSize], kvstoreSize inclusive.
+ * The return value is 0 based hashset-index, and the range of the target is [1..kvstoreSize], kvstoreSize inclusive.
  *
- * To find the dict, we start with the root node of the binary index tree and search through its children
- * from the highest index (2^num_dicts_bits in our case) to the lowest index. At each node, we check if the target
+ * To find the hashset, we start with the root node of the binary index tree and search through its children
+ * from the highest index (2^num_hashsets_bits in our case) to the lowest index. At each node, we check if the target
  * value is greater than the node's value. If it is, we remove the node's value from the target and recursively
  * search for the new target using the current node as the parent.
- * Time complexity of this function is O(log(kvs->num_dicts))
+ * Time complexity of this function is O(log(kvs->num_hashsets))
  */
-int kvstoreFindDictIndexByKeyIndex(kvstore *kvs, unsigned long target) {
-    if (kvs->num_dicts == 1 || kvstoreSize(kvs) == 0) return 0;
+int kvstoreFindHashsetIndexByKeyIndex(kvstore *kvs, unsigned long target) {
+    if (kvs->num_hashsets == 1 || kvstoreSize(kvs) == 0) return 0;
     assert(target <= kvstoreSize(kvs));
 
-    int result = 0, bit_mask = 1 << kvs->num_dicts_bits;
+    int result = 0, bit_mask = 1 << kvs->num_hashsets_bits;
     for (int i = bit_mask; i != 0; i >>= 1) {
         int current = result + i;
         /* When the target index is greater than 'current' node value the we will update
          * the target and search in the 'current' node tree. */
-        if (target > kvs->dict_size_index[current]) {
-            target -= kvs->dict_size_index[current];
+        if (target > kvs->hashset_size_index[current]) {
+            target -= kvs->hashset_size_index[current];
             result = current;
         }
     }
-    /* Adjust the result to get the correct dict:
+    /* Adjust the result to get the correct hashset:
      * 1. result += 1;
-     *    After the calculations, the index of target in dict_size_index should be the next one,
+     *    After the calculations, the index of target in hashset_size_index should be the next one,
      *    so we should add 1.
      * 2. result -= 1;
-     *    Unlike BIT(dict_size_index is 1-based), dict indices are 0-based, so we need to subtract 1.
+     *    Unlike BIT(hashset_size_index is 1-based), hashset indices are 0-based, so we need to subtract 1.
      * As the addition and subtraction cancel each other out, we can simply return the result. */
     return result;
 }
 
-/* Wrapper for kvstoreFindDictIndexByKeyIndex to get the first non-empty dict index in the kvstore. */
-int kvstoreGetFirstNonEmptyDictIndex(kvstore *kvs) {
-    return kvstoreFindDictIndexByKeyIndex(kvs, 1);
+/* Wrapper for kvstoreFindHashsetIndexByKeyIndex to get the first non-empty hashset index in the kvstore. */
+int kvstoreGetFirstNonEmptyHashsetIndex(kvstore *kvs) {
+    return kvstoreFindHashsetIndexByKeyIndex(kvs, 1);
 }
 
-/* Returns next non-empty dict index strictly after given one, or -1 if provided didx is the last one. */
-int kvstoreGetNextNonEmptyDictIndex(kvstore *kvs, int didx) {
-    if (kvs->num_dicts == 1) {
+/* Returns next non-empty hashset index strictly after given one, or -1 if provided didx is the last one. */
+int kvstoreGetNextNonEmptyHashsetIndex(kvstore *kvs, int didx) {
+    if (kvs->num_hashsets == 1) {
         assert(didx == 0);
         return -1;
     }
     unsigned long long next_key = cumulativeKeyCountRead(kvs, didx) + 1;
-    return next_key <= kvstoreSize(kvs) ? kvstoreFindDictIndexByKeyIndex(kvs, next_key) : -1;
+    return next_key <= kvstoreSize(kvs) ? kvstoreFindHashsetIndexByKeyIndex(kvs, next_key) : -1;
 }
 
-int kvstoreNumNonEmptyDicts(kvstore *kvs) {
-    return kvs->non_empty_dicts;
+int kvstoreNumNonEmptyHashsets(kvstore *kvs) {
+    return kvs->non_empty_hashsets;
 }
 
-int kvstoreNumAllocatedDicts(kvstore *kvs) {
-    return kvs->allocated_dicts;
+int kvstoreNumAllocatedHashsets(kvstore *kvs) {
+    return kvs->allocated_hashsets;
 }
 
-int kvstoreNumDicts(kvstore *kvs) {
-    return kvs->num_dicts;
+int kvstoreNumHashsets(kvstore *kvs) {
+    return kvs->num_hashsets;
 }
 
-/* Returns kvstore iterator that can be used to iterate through sub-dictionaries.
+/* Returns kvstore iterator that can be used to iterate through sub-hash tables.
  *
  * The caller should free the resulting kvs_it with kvstoreIteratorRelease. */
 kvstoreIterator *kvstoreIteratorInit(kvstore *kvs) {
     kvstoreIterator *kvs_it = zmalloc(sizeof(*kvs_it));
     kvs_it->kvs = kvs;
     kvs_it->didx = -1;
-    kvs_it->next_didx = kvstoreGetFirstNonEmptyDictIndex(kvs_it->kvs); /* Finds first non-empty dict index. */
-    dictInitSafeIterator(&kvs_it->di, NULL);
+    kvs_it->next_didx = kvstoreGetFirstNonEmptyHashsetIndex(kvs_it->kvs); /* Finds first non-empty hashset index. */
+    hashsetInitSafeIterator(&kvs_it->di, NULL);
     return kvs_it;
 }
 
 /* Free the kvs_it returned by kvstoreIteratorInit. */
 void kvstoreIteratorRelease(kvstoreIterator *kvs_it) {
-    dictIterator *iter = &kvs_it->di;
-    dictResetIterator(iter);
+    hashsetIterator *iter = &kvs_it->di;
+    hashsetResetIterator(iter);
     /* In the safe iterator context, we may delete entries. */
-    freeDictIfNeeded(kvs_it->kvs, kvs_it->didx);
+    freeHashsetIfNeeded(kvs_it->kvs, kvs_it->didx);
     zfree(kvs_it);
 }
 
-/* Returns next dictionary from the iterator, or NULL if iteration is complete. */
-static dict *kvstoreIteratorNextDict(kvstoreIterator *kvs_it) {
+/* Returns next hash table from the iterator, or NULL if iteration is complete. */
+static hashset *kvstoreIteratorNextHashset(kvstoreIterator *kvs_it) {
     if (kvs_it->next_didx == -1) return NULL;
 
-    /* The dict may be deleted during the iteration process, so here need to check for NULL. */
-    if (kvs_it->didx != -1 && kvstoreGetDict(kvs_it->kvs, kvs_it->didx)) {
-        /* Before we move to the next dict, reset the iter of the previous dict. */
-        dictIterator *iter = &kvs_it->di;
-        dictResetIterator(iter);
+    /* The hashset may be deleted during the iteration process, so here need to check for NULL. */
+    if (kvs_it->didx != -1 && kvstoreGetHashset(kvs_it->kvs, kvs_it->didx)) {
+        /* Before we move to the next hashset, reset the iter of the previous hashset. */
+        hashsetIterator *iter = &kvs_it->di;
+        hashsetResetIterator(iter);
         /* In the safe iterator context, we may delete entries. */
-        freeDictIfNeeded(kvs_it->kvs, kvs_it->didx);
+        freeHashsetIfNeeded(kvs_it->kvs, kvs_it->didx);
     }
 
     kvs_it->didx = kvs_it->next_didx;
-    kvs_it->next_didx = kvstoreGetNextNonEmptyDictIndex(kvs_it->kvs, kvs_it->didx);
-    return kvs_it->kvs->dicts[kvs_it->didx];
+    kvs_it->next_didx = kvstoreGetNextNonEmptyHashsetIndex(kvs_it->kvs, kvs_it->didx);
+    return kvs_it->kvs->hashsets[kvs_it->didx];
 }
 
-int kvstoreIteratorGetCurrentDictIndex(kvstoreIterator *kvs_it) {
-    assert(kvs_it->didx >= 0 && kvs_it->didx < kvs_it->kvs->num_dicts);
+int kvstoreIteratorGetCurrentHashsetIndex(kvstoreIterator *kvs_it) {
+    assert(kvs_it->didx >= 0 && kvs_it->didx < kvs_it->kvs->num_hashsets);
     return kvs_it->didx;
 }
 
-/* Returns next entry. */
-dictEntry *kvstoreIteratorNext(kvstoreIterator *kvs_it) {
-    dictEntry *de = kvs_it->di.d ? dictNext(&kvs_it->di) : NULL;
-    if (!de) { /* No current dict or reached the end of the dictionary. */
-        dict *d = kvstoreIteratorNextDict(kvs_it);
-        if (!d) return NULL;
-        dictInitSafeIterator(&kvs_it->di, d);
-        de = dictNext(&kvs_it->di);
+/* Fetches the next element and returns 1. Returns 0 if there are no more elements. */
+int kvstoreIteratorNext(kvstoreIterator *kvs_it, void **next) {
+    if (kvs_it->di.hashset && hashsetNext(&kvs_it->di, next)) {
+        return 1;
+    } else {
+        /* No current hashset or reached the end of the hash table. */
+        hashset *d = kvstoreIteratorNextHashset(kvs_it);
+        if (!d) return 0;
+        hashsetInitSafeIterator(&kvs_it->di, d);
+        return hashsetNext(&kvs_it->di, next);
     }
-    return de;
 }
 
-/* This method traverses through kvstore dictionaries and triggers a resize.
+/* This method traverses through kvstore hash tables and triggers a resize.
  * It first tries to shrink if needed, and if it isn't, it tries to expand. */
-void kvstoreTryResizeDicts(kvstore *kvs, int limit) {
-    if (limit > kvs->num_dicts) limit = kvs->num_dicts;
+void kvstoreTryResizeHashsets(kvstore *kvs, int limit) {
+    if (limit > kvs->num_hashsets) limit = kvs->num_hashsets;
 
     for (int i = 0; i < limit; i++) {
         int didx = kvs->resize_cursor;
-        dict *d = kvstoreGetDict(kvs, didx);
-        if (d && dictShrinkIfNeeded(d) == DICT_ERR) {
-            dictExpandIfNeeded(d);
+        hashset *d = kvstoreGetHashset(kvs, didx);
+        if (d && !hashsetShrinkIfNeeded(d)) {
+            hashsetExpandIfNeeded(d);
         }
-        kvs->resize_cursor = (didx + 1) % kvs->num_dicts;
+        kvs->resize_cursor = (didx + 1) % kvs->num_hashsets;
     }
 }
 
@@ -637,14 +635,14 @@ void kvstoreTryResizeDicts(kvstore *kvs, int limit) {
 uint64_t kvstoreIncrementallyRehash(kvstore *kvs, uint64_t threshold_us) {
     if (listLength(kvs->rehashing) == 0) return 0;
 
-    /* Our goal is to rehash as many dictionaries as we can before reaching threshold_us,
-     * after each dictionary completes rehashing, it removes itself from the list. */
+    /* Our goal is to rehash as many hash tables as we can before reaching threshold_us,
+     * after each hash table completes rehashing, it removes itself from the list. */
     listNode *node;
     monotime timer;
     uint64_t elapsed_us = 0;
     elapsedStart(&timer);
     while ((node = listFirst(kvs->rehashing))) {
-        dictRehashMicroseconds(listNodeValue(node), threshold_us - elapsed_us);
+        hashsetRehashMicroseconds(listNodeValue(node), threshold_us - elapsed_us);
 
         elapsed_us = elapsedUs(timer);
         if (elapsed_us >= threshold_us) {
@@ -654,107 +652,113 @@ uint64_t kvstoreIncrementallyRehash(kvstore *kvs, uint64_t threshold_us) {
     return elapsed_us;
 }
 
+/* Size in bytes of hash tables used by the hashsets. */
 size_t kvstoreOverheadHashtableLut(kvstore *kvs) {
-    return kvs->overhead_hashtable_lut * sizeof(dictEntry *);
+    return kvs->bucket_count * HASHSET_BUCKET_SIZE;
 }
 
 size_t kvstoreOverheadHashtableRehashing(kvstore *kvs) {
-    return kvs->overhead_hashtable_rehashing * sizeof(dictEntry *);
+    return kvs->overhead_hashtable_rehashing * HASHSET_BUCKET_SIZE;
 }
 
-unsigned long kvstoreDictRehashingCount(kvstore *kvs) {
+unsigned long kvstoreHashsetRehashingCount(kvstore *kvs) {
     return listLength(kvs->rehashing);
 }
 
-unsigned long kvstoreDictSize(kvstore *kvs, int didx) {
-    dict *d = kvstoreGetDict(kvs, didx);
+unsigned long kvstoreHashsetSize(kvstore *kvs, int didx) {
+    hashset *d = kvstoreGetHashset(kvs, didx);
     if (!d) return 0;
-    return dictSize(d);
+    return hashsetSize(d);
 }
 
-kvstoreDictIterator *kvstoreGetDictIterator(kvstore *kvs, int didx) {
-    kvstoreDictIterator *kvs_di = zmalloc(sizeof(*kvs_di));
+kvstoreHashsetIterator *kvstoreGetHashsetIterator(kvstore *kvs, int didx) {
+    kvstoreHashsetIterator *kvs_di = zmalloc(sizeof(*kvs_di));
     kvs_di->kvs = kvs;
     kvs_di->didx = didx;
-    dictInitIterator(&kvs_di->di, kvstoreGetDict(kvs, didx));
+    hashsetInitIterator(&kvs_di->di, kvstoreGetHashset(kvs, didx));
     return kvs_di;
 }
 
-kvstoreDictIterator *kvstoreGetDictSafeIterator(kvstore *kvs, int didx) {
-    kvstoreDictIterator *kvs_di = zmalloc(sizeof(*kvs_di));
+kvstoreHashsetIterator *kvstoreGetHashsetSafeIterator(kvstore *kvs, int didx) {
+    kvstoreHashsetIterator *kvs_di = zmalloc(sizeof(*kvs_di));
     kvs_di->kvs = kvs;
     kvs_di->didx = didx;
-    dictInitSafeIterator(&kvs_di->di, kvstoreGetDict(kvs, didx));
+    hashsetInitSafeIterator(&kvs_di->di, kvstoreGetHashset(kvs, didx));
     return kvs_di;
 }
 
-/* Free the kvs_di returned by kvstoreGetDictIterator and kvstoreGetDictSafeIterator. */
-void kvstoreReleaseDictIterator(kvstoreDictIterator *kvs_di) {
-    /* The dict may be deleted during the iteration process, so here need to check for NULL. */
-    if (kvstoreGetDict(kvs_di->kvs, kvs_di->didx)) {
-        dictResetIterator(&kvs_di->di);
+/* Free the kvs_di returned by kvstoreGetHashsetIterator and kvstoreGetHashsetSafeIterator. */
+void kvstoreReleaseHashsetIterator(kvstoreHashsetIterator *kvs_di) {
+    /* The hashset may be deleted during the iteration process, so here need to check for NULL. */
+    if (kvstoreGetHashset(kvs_di->kvs, kvs_di->didx)) {
+        hashsetResetIterator(&kvs_di->di);
         /* In the safe iterator context, we may delete entries. */
-        freeDictIfNeeded(kvs_di->kvs, kvs_di->didx);
+        freeHashsetIfNeeded(kvs_di->kvs, kvs_di->didx);
     }
 
     zfree(kvs_di);
 }
 
-/* Get the next element of the dict through kvstoreDictIterator and dictNext. */
-dictEntry *kvstoreDictIteratorNext(kvstoreDictIterator *kvs_di) {
-    /* The dict may be deleted during the iteration process, so here need to check for NULL. */
-    dict *d = kvstoreGetDict(kvs_di->kvs, kvs_di->didx);
-    if (!d) return NULL;
-
-    return dictNext(&kvs_di->di);
+/* Get the next element of the hashset through kvstoreHashsetIterator and hashsetNext. */
+int kvstoreHashsetIteratorNext(kvstoreHashsetIterator *kvs_di, void **next) {
+    /* The hashset may be deleted during the iteration process, so here need to check for NULL. */
+    hashset *t = kvstoreGetHashset(kvs_di->kvs, kvs_di->didx);
+    if (!t) return 0;
+    return hashsetNext(&kvs_di->di, next);
 }
 
-dictEntry *kvstoreDictGetRandomKey(kvstore *kvs, int didx) {
-    dict *d = kvstoreGetDict(kvs, didx);
-    if (!d) return NULL;
-    return dictGetRandomKey(d);
-}
-
-dictEntry *kvstoreDictGetFairRandomKey(kvstore *kvs, int didx) {
-    dict *d = kvstoreGetDict(kvs, didx);
-    if (!d) return NULL;
-    return dictGetFairRandomKey(d);
-}
-
-unsigned int kvstoreDictGetSomeKeys(kvstore *kvs, int didx, dictEntry **des, unsigned int count) {
-    dict *d = kvstoreGetDict(kvs, didx);
+int kvstoreHashsetRandomElement(kvstore *kvs, int didx, void **element) {
+    hashset *d = kvstoreGetHashset(kvs, didx);
     if (!d) return 0;
-    return dictGetSomeKeys(d, des, count);
+    return hashsetRandomElement(d, element);
 }
 
-int kvstoreDictExpand(kvstore *kvs, int didx, unsigned long size) {
-    dict *d = kvstoreGetDict(kvs, didx);
-    if (!d) return DICT_ERR;
-    return dictExpand(d, size);
-}
-
-unsigned long kvstoreDictScanDefrag(kvstore *kvs,
-                                    int didx,
-                                    unsigned long v,
-                                    dictScanFunction *fn,
-                                    dictDefragFunctions *defragfns,
-                                    void *privdata) {
-    dict *d = kvstoreGetDict(kvs, didx);
+int kvstoreHashsetFairRandomElement(kvstore *kvs, int didx, void **element) {
+    hashset *d = kvstoreGetHashset(kvs, didx);
     if (!d) return 0;
-    return dictScanDefrag(d, v, fn, defragfns, privdata);
+    return hashsetFairRandomElement(d, element);
 }
 
-/* Unlike kvstoreDictScanDefrag(), this method doesn't defrag the data(keys and values)
- * within dict, it only reallocates the memory used by the dict structure itself using
- * the provided allocation function. This feature was added for the active defrag feature.
+unsigned int kvstoreHashsetSampleElements(kvstore *kvs, int didx, void **dst, unsigned int count) {
+    hashset *d = kvstoreGetHashset(kvs, didx);
+    if (!d) return 0;
+    return hashsetSampleElements(d, dst, count);
+}
+
+int kvstoreHashsetExpand(kvstore *kvs, int didx, unsigned long size) {
+    hashset *d = kvstoreGetHashset(kvs, didx);
+    if (!d) return 0;
+    return hashsetExpand(d, size);
+}
+
+unsigned long kvstoreHashsetScan(kvstore *kvs,
+                                 int didx,
+                                 unsigned long v,
+                                 hashsetScanFunction fn,
+                                 void *privdata,
+                                 int flags) {
+    hashset *d = kvstoreGetHashset(kvs, didx);
+    if (!d) return 0;
+    return hashsetScan(d, v, fn, privdata, flags);
+}
+
+/* This function doesn't defrag the data (keys and values) within hashset. It
+ * only reallocates the memory used by the hashset structure itself using the
+ * provided allocation function. This feature was added for the active defrag
+ * feature.
  *
- * The 'defragfn' callback is called with a reference to the dict
- * that callback can reallocate. */
-void kvstoreDictLUTDefrag(kvstore *kvs, kvstoreDictLUTDefragFunction *defragfn) {
-    for (int didx = 0; didx < kvs->num_dicts; didx++) {
-        dict **d = kvstoreGetDictRef(kvs, didx), *newd;
-        if (!*d) continue;
-        if ((newd = defragfn(*d))) *d = newd;
+ * The provided defragfn callback should either return NULL (if reallocation is
+ * not necessary) or reallocate the memory like realloc() would do. */
+void kvstoreHashsetDefragInternals(kvstore *kvs, void *(*defragfn)(void *)) {
+    for (int didx = 0; didx < kvs->num_hashsets; didx++) {
+        hashset **ref = kvstoreGetHashsetRef(kvs, didx), *new;
+        if (!*ref) continue;
+        new = hashsetDefragInternals(*ref, defragfn);
+        if (new) {
+            *ref = new;
+            kvstoreHashsetMetadata *metadata = hashsetMetadata(new);
+            if (metadata->rehashing_node) metadata->rehashing_node->value = new;
+        }
     }
 }
 
@@ -762,68 +766,83 @@ uint64_t kvstoreGetHash(kvstore *kvs, const void *key) {
     return kvs->dtype->hashFunction(key);
 }
 
-void *kvstoreDictFetchValue(kvstore *kvs, int didx, const void *key) {
-    dict *d = kvstoreGetDict(kvs, didx);
-    if (!d) return NULL;
-    return dictFetchValue(d, key);
+/* void *kvstoreHashsetFetchElement(kvstore *kvs, int didx, const void *key) { */
+/*     hashset *t = kvstoreGetHashset(kvs, didx); */
+/*     if (!t) return NULL; */
+/*     return hashsetFetchElement(t, key); */
+/* } */
+
+int kvstoreHashsetFind(kvstore *kvs, int didx, void *key, void **found) {
+    hashset *t = kvstoreGetHashset(kvs, didx);
+    if (!t) return 0;
+    return hashsetFind(t, key, found);
 }
 
-dictEntry *kvstoreDictFind(kvstore *kvs, int didx, void *key) {
-    dict *d = kvstoreGetDict(kvs, didx);
-    if (!d) return NULL;
-    return dictFind(d, key);
+void **kvstoreHashsetFindRef(kvstore *kvs, int didx, const void *key) {
+    hashset *t = kvstoreGetHashset(kvs, didx);
+    if (!t) return NULL;
+    return hashsetFindRef(t, key);
 }
 
-/*
- * The kvstore handles `key` based on `dictType` during initialization:
- * - If `dictType.embedded-entry` is 1, it clones the `key`.
- * - Otherwise, it assumes ownership of the `key`.
- * The caller must ensure the `key` is properly freed.
- *
- * kvstore current usage:
- *
- * 1. keyspace (db.keys) kvstore - creates a copy of the key.
- * 2. expiry (db.expires), pubsub_channels and pubsubshard_channels kvstore - takes ownership of the key.
- */
-dictEntry *kvstoreDictAddRaw(kvstore *kvs, int didx, void *key, dictEntry **existing) {
-    dict *d = createDictIfNeeded(kvs, didx);
-    dictEntry *ret = dictAddRaw(d, key, existing);
+/* was AddRaw */
+int kvstoreHashsetAddOrFind(kvstore *kvs, int didx, void *key, void **existing) {
+    hashset *d = createHashsetIfNeeded(kvs, didx);
+    int ret = hashsetAddOrFind(d, key, existing);
     if (ret) cumulativeKeyCountAdd(kvs, didx, 1);
     return ret;
 }
 
-void kvstoreDictSetKey(kvstore *kvs, int didx, dictEntry *de, void *key) {
-    dict *d = kvstoreGetDict(kvs, didx);
-    dictSetKey(d, de, key);
+int kvstoreHashsetAdd(kvstore *kvs, int didx, void *element) {
+    hashset *d = createHashsetIfNeeded(kvs, didx);
+    int ret = hashsetAdd(d, element);
+    if (ret) cumulativeKeyCountAdd(kvs, didx, 1);
+    return ret;
 }
 
-void kvstoreDictSetVal(kvstore *kvs, int didx, dictEntry *de, void *val) {
-    UNUSED(kvs);
-    UNUSED(didx);
-    dictSetVal(NULL, de, val);
+void *kvstoreHashsetFindPositionForInsert(kvstore *kvs, int didx, void *key, void **existing) {
+    hashset *t = createHashsetIfNeeded(kvs, didx);
+    return hashsetFindPositionForInsert(t, key, existing);
 }
 
-dictEntry *
-kvstoreDictTwoPhaseUnlinkFind(kvstore *kvs, int didx, const void *key, dictEntry ***plink, int *table_index) {
-    dict *d = kvstoreGetDict(kvs, didx);
-    if (!d) return NULL;
-    return dictTwoPhaseUnlinkFind(kvstoreGetDict(kvs, didx), key, plink, table_index);
+/* Must be used together with kvstoreHashsetFindPositionForInsert, with returned
+ * position and with the same didx. */
+void kvstoreHashsetInsertAtPosition(kvstore *kvs, int didx, void *elem, void *position) {
+    hashset *t = kvstoreGetHashset(kvs, didx);
+    hashsetInsertAtPosition(t, elem, position);
+    cumulativeKeyCountAdd(kvs, didx, 1);
 }
 
-void kvstoreDictTwoPhaseUnlinkFree(kvstore *kvs, int didx, dictEntry *he, dictEntry **plink, int table_index) {
-    dict *d = kvstoreGetDict(kvs, didx);
-    dictTwoPhaseUnlinkFree(d, he, plink, table_index);
+void **kvstoreHashsetTwoPhasePopFindRef(kvstore *kvs, int didx, const void *key, void **position) {
+    hashset *s = kvstoreGetHashset(kvs, didx);
+    if (!s) return NULL;
+    return hashsetTwoPhasePopFindRef(s, key, position);
+}
+
+void kvstoreHashsetTwoPhasePopDelete(kvstore *kvs, int didx, void *position) {
+    hashset *d = kvstoreGetHashset(kvs, didx);
+    hashsetTwoPhasePopDelete(d, position);
     cumulativeKeyCountAdd(kvs, didx, -1);
-    freeDictIfNeeded(kvs, didx);
+    freeHashsetIfNeeded(kvs, didx);
 }
 
-int kvstoreDictDelete(kvstore *kvs, int didx, const void *key) {
-    dict *d = kvstoreGetDict(kvs, didx);
-    if (!d) return DICT_ERR;
-    int ret = dictDelete(d, key);
-    if (ret == DICT_OK) {
+int kvstoreHashsetPop(kvstore *kvs, int didx, const void *key, void **popped) {
+    hashset *t = kvstoreGetHashset(kvs, didx);
+    if (!t) return 0;
+    int ret = hashsetPop(t, key, popped);
+    if (ret) {
         cumulativeKeyCountAdd(kvs, didx, -1);
-        freeDictIfNeeded(kvs, didx);
+        freeHashsetIfNeeded(kvs, didx);
+    }
+    return ret;
+}
+
+int kvstoreHashsetDelete(kvstore *kvs, int didx, const void *key) {
+    hashset *t = kvstoreGetHashset(kvs, didx);
+    if (!t) return 0;
+    int ret = hashsetDelete(t, key);
+    if (ret) {
+        cumulativeKeyCountAdd(kvs, didx, -1);
+        freeHashsetIfNeeded(kvs, didx);
     }
     return ret;
 }

@@ -595,7 +595,7 @@ void saddCommand(client *c) {
 
     if (set == NULL) {
         set = setTypeCreate(c->argv[2]->ptr, c->argc - 2);
-        dbAdd(c->db, c->argv[1], set);
+        set = dbAdd(c->db, c->argv[1], set);
     } else {
         setTypeMaybeConvert(set, c->argc - 2);
     }
@@ -674,7 +674,7 @@ void smoveCommand(client *c) {
     /* Create the destination set when it doesn't exist */
     if (!dstset) {
         dstset = setTypeCreate(ele->ptr, 1);
-        dbAdd(c->db, c->argv[2], dstset);
+        dstset = dbAdd(c->db, c->argv[2], dstset);
     }
 
     signalModifiedKey(c, c->db, c->argv[1]);
@@ -919,7 +919,7 @@ void spopWithCountCommand(client *c) {
         setTypeReleaseIterator(si);
 
         /* Assign the new set as the key value. */
-        dbReplaceValue(c->db, c->argv[1], newset);
+        newset = dbReplaceValue(c->db, c->argv[1], newset);
     }
 
     /* Replicate/AOF the remaining elements as an SREM operation */

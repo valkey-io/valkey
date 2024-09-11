@@ -145,45 +145,6 @@ start_server {tags {"maxmemory" "external:skip"}} {
 }
 
 start_server {tags {"maxmemory external:skip"}} {
-    test "Without maxmemory small integers are shared" {
-        r config set maxmemory 0
-        r set a 1
-        assert_refcount_morethan a 1
-    }
-
-    test "With maxmemory and non-LRU policy integers are still shared" {
-        r config set maxmemory 1073741824
-        r config set maxmemory-policy allkeys-random
-        r set a 1
-        assert_refcount_morethan a 1
-    }
-
-    test "With maxmemory and LRU policy integers are not shared" {
-        r config set maxmemory 1073741824
-        r config set maxmemory-policy allkeys-lru
-        r set a 1
-        r config set maxmemory-policy volatile-lru
-        r set b 1
-        assert_refcount 1 a
-        assert_refcount 1 b
-        r config set maxmemory 0
-    }
-
-    test "Shared integers are unshared with maxmemory and LRU policy" {
-        r set a 1
-        r set b 1
-        assert_refcount_morethan a 1
-        assert_refcount_morethan b 1
-        r config set maxmemory 1073741824
-        r config set maxmemory-policy allkeys-lru
-        r get a
-        assert_refcount 1 a
-        r config set maxmemory-policy volatile-lru
-        r get b
-        assert_refcount 1 b
-        r config set maxmemory 0
-    }
-
     foreach policy {
         allkeys-random allkeys-lru allkeys-lfu volatile-lru volatile-lfu volatile-random volatile-ttl
     } {
@@ -265,10 +226,10 @@ start_server {tags {"maxmemory external:skip"}} {
             # make sure to start with a blank instance
             r flushall
             # Get the current memory limit and calculate a new limit.
-            # We just add 100k to the current memory size so that it is
+            # We just add 400KiB to the current memory size so that it is
             # fast for us to reach that limit.
             set used [s used_memory]
-            set limit [expr {$used+100*1024}]
+            set limit [expr {$used+400*1024}]
             r config set maxmemory $limit
             r config set maxmemory-policy $policy
             # Now add keys until the limit is almost reached.

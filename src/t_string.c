@@ -473,7 +473,7 @@ void setrangeCommand(client *c) {
             return;
 
         o = createObject(OBJ_STRING, sdsnewlen(NULL, offset + sdslen(value)));
-        dbAdd(c->db, c->argv[1], o);
+        o = dbAdd(c->db, c->argv[1], o);
     } else {
         size_t olen;
 
@@ -630,9 +630,9 @@ void incrDecrCommand(client *c, long long incr) {
     } else {
         new = createStringObjectFromLongLongForValue(value);
         if (o) {
-            dbReplaceValue(c->db, c->argv[1], new);
+            new = dbReplaceValue(c->db, c->argv[1], new);
         } else {
-            dbAdd(c->db, c->argv[1], new);
+            new = dbAdd(c->db, c->argv[1], new);
         }
     }
     signalModifiedKey(c, c->db, c->argv[1]);
@@ -685,9 +685,9 @@ void incrbyfloatCommand(client *c) {
     }
     new = createStringObjectFromLongDouble(value, 1);
     if (o)
-        dbReplaceValue(c->db, c->argv[1], new);
+        new = dbReplaceValue(c->db, c->argv[1], new);
     else
-        dbAdd(c->db, c->argv[1], new);
+        new = dbAdd(c->db, c->argv[1], new);
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STRING, "incrbyfloat", c->argv[1], c->db->id);
     server.dirty++;
@@ -709,7 +709,7 @@ void appendCommand(client *c) {
     if (o == NULL) {
         /* Create the key */
         c->argv[2] = tryObjectEncoding(c->argv[2]);
-        dbAdd(c->db, c->argv[1], c->argv[2]);
+        c->argv[2] = dbAdd(c->db, c->argv[1], c->argv[2]);
         incrRefCount(c->argv[2]);
         totlen = stringObjectLen(c->argv[2]);
     } else {

@@ -281,7 +281,7 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
  * a different digest. */
 void computeDatasetDigest(unsigned char *final) {
     unsigned char digest[20];
-    dictEntry *de;
+    valkey *o;
     int j;
     uint32_t aux;
 
@@ -297,17 +297,16 @@ void computeDatasetDigest(unsigned char *final) {
         mixDigest(final, &aux, sizeof(aux));
 
         /* Iterate this DB writing every entry */
-        while ((de = kvstoreIteratorNext(kvs_it)) != NULL) {
+        while (kvstoreIteratorNext(kvs_it, (void **)&o)) {
             sds key;
-            robj *keyobj, *o;
+            robj *keyobj;
 
             memset(digest, 0, 20); /* This key-val digest */
-            key = dictGetKey(de);
+            key = valkeyGetKey(o);
             keyobj = createStringObject(key, sdslen(key));
 
             mixDigest(digest, key, sdslen(key));
 
-            o = dictGetVal(de);
             xorObjectDigest(db, keyobj, digest, o);
 
             /* We can finally xor the key-val digest to the final digest */
@@ -608,18 +607,16 @@ void debugCommand(client *c) {
         server.debug_cluster_close_link_on_packet_drop = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "object") && (c->argc == 3 || c->argc == 4)) {
-        dictEntry *de;
         robj *val;
         char *strenc;
 
         int fast = 0;
         if (c->argc == 4 && !strcasecmp(c->argv[3]->ptr, "fast")) fast = 1;
 
-        if ((de = dbFind(c->db, c->argv[2]->ptr)) == NULL) {
+        if ((val = dbFind(c->db, c->argv[2]->ptr)) == NULL) {
             addReplyErrorObject(c, shared.nokeyerr);
             return;
         }
-        val = dictGetVal(de);
         strenc = strEncoding(val->encoding);
 
         char extra[138] = {0};
@@ -667,16 +664,14 @@ void debugCommand(client *c) {
         addReplyStatusLength(c, s, sdslen(s));
         sdsfree(s);
     } else if (!strcasecmp(c->argv[1]->ptr, "sdslen") && c->argc == 3) {
-        dictEntry *de;
         robj *val;
         sds key;
 
-        if ((de = dbFind(c->db, c->argv[2]->ptr)) == NULL) {
+        if ((val = dbFind(c->db, c->argv[2]->ptr)) == NULL) {
             addReplyErrorObject(c, shared.nokeyerr);
             return;
         }
-        val = dictGetVal(de);
-        key = dictGetKey(de);
+        key = valkeyGetKey(val);
 
         if (val->type != OBJ_STRING || !sdsEncodedObject(val)) {
             addReplyError(c, "Not an sds encoded string.");
@@ -746,7 +741,7 @@ void debugCommand(client *c) {
                 val = createStringObject(NULL, valsize);
                 memcpy(val->ptr, buf, valsize <= buflen ? valsize : buflen);
             }
-            dbAdd(c->db, key, val);
+            val = dbAdd(c->db, key, val);
             signalModifiedKey(c, c->db, key);
             decrRefCount(key);
         }
@@ -769,8 +764,7 @@ void debugCommand(client *c) {
 
             /* We don't use lookupKey because a debug command should
              * work on logically expired keys */
-            dictEntry *de;
-            robj *o = ((de = dbFind(c->db, c->argv[j]->ptr)) == NULL) ? NULL : dictGetVal(de);
+            robj *o = dbFind(c->db, c->argv[j]->ptr);
             if (o) xorObjectDigest(c->db, c->argv[j], digest, o);
 
             sds d = sdsempty();
@@ -1905,12 +1899,10 @@ void logCurrentClient(client *cc, const char *title) {
      * selected DB, and if so print info about the associated object. */
     if (cc->argc > 1) {
         robj *val, *key;
-        dictEntry *de;
 
         key = getDecodedObject(cc->argv[1]);
-        de = dbFind(cc->db, key->ptr);
-        if (de) {
-            val = dictGetVal(de);
+        val = dbFind(cc->db, key->ptr);
+        if (val) {
             serverLog(LL_WARNING, "key '%s' found in DB containing the following object:", (char *)key->ptr);
             serverLogObjectDebugInfo(val);
         }

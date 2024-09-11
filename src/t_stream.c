@@ -1839,7 +1839,7 @@ robj *streamTypeLookupWriteOrCreate(client *c, robj *key, int no_create) {
             return NULL;
         }
         o = createStreamObject();
-        dbAdd(c->db, key, o);
+        o = dbAdd(c->db, key, o);
     }
     return o;
 }
@@ -2645,7 +2645,7 @@ void xgroupCommand(client *c) {
         if (s == NULL) {
             serverAssert(mkstream);
             o = createStreamObject();
-            dbAdd(c->db, c->argv[2], o);
+            o = dbAdd(c->db, c->argv[2], o);
             s = o->ptr;
             signalModifiedKey(c, c->db, c->argv[2]);
         }

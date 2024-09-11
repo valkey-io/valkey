@@ -418,21 +418,20 @@ uint64_t dictEncObjHash(const void *key) {
     }
 }
 
-/* Return 1 if currently we allow dict to expand. Dict may allocate huge
- * memory to contain hash buckets when dict expands, that may lead the server to
- * reject user's requests or evict some keys, we can stop dict to expand
- * provisionally if used memory will be over maxmemory after dict expands,
- * but to guarantee the performance of the server, we still allow dict to expand
- * if dict load factor exceeds HASHTABLE_MAX_LOAD_FACTOR. */
-int dictResizeAllowed(size_t moreMem, double usedRatio) {
-    /* for debug purposes: dict is not allowed to be resized. */
+/* Return 1 if we allow a hash table to expand. It may allocate a huge amount of
+ * memory to contain hash buckets when it expands, that may lead the server to
+ * reject user's requests or evict some keys. We can prevent expansion
+ * provisionally if used memory will be over maxmemory after it expands,
+ * but to guarantee the performance of the server, we still allow it to expand
+ * if the load factor exceeds the hard limit defined in hashset.c. */
+int hashsetResizeAllowed(size_t moreMem, double usedRatio) {
+    UNUSED(usedRatio);
+
+    /* For debug purposes, not allowed to be resized. */
     if (!server.dict_resizing) return 0;
 
-    if (usedRatio <= HASHTABLE_MAX_LOAD_FACTOR) {
-        return !overMaxmemoryAfterAlloc(moreMem);
-    } else {
-        return 1;
-    }
+    /* Avoid resizing over max memory. */
+    return !overMaxmemoryAfterAlloc(moreMem);
 }
 
 const void *hashsetCommandGetKey(const void *element) {
@@ -489,32 +488,54 @@ dictType zsetDictType = {
     NULL,              /* allow to expand */
 };
 
+uint64_t hashsetSdsHash(const void *key) {
+    return hashsetGenHashFunction((const char *)key, sdslen((char *)key));
+}
+
+const void *hashsetValkeyObjectGetKey(const void *element) {
+    return valkeyGetKey(element);
+}
+
+int hashsetSdsKeyCompare(hashset *t, const void *key1, const void *key2) {
+    UNUSED(t);
+    const sds sds1 = (const sds)key1, sds2 = (const sds)key2;
+    return sdslen(sds1) != sdslen(sds2) || sdscmp(sds1, sds2);
+}
+
+int hashsetObjKeyCompare(hashset *t, const void *key1, const void *key2) {
+    UNUSED(t);
+    const robj *o1 = key1, *o2 = key2;
+    return hashsetSdsKeyCompare(t, o1->ptr, o2->ptr);
+}
+
+void hashsetObjectDestructor(hashset *t, void *val) {
+    UNUSED(t);
+    if (val == NULL) return; /* Lazy freeing will set value to NULL. */
+    decrRefCount(val);
+}
+
 /* Kvstore->keys, keys are sds strings, vals are Objects. */
-dictType kvstoreKeysDictType = {
-    dictSdsHash,          /* hash function */
-    NULL,                 /* key dup */
-    dictSdsKeyCompare,    /* key compare */
-    NULL,                 /* key is embedded in the dictEntry and freed internally */
-    dictObjectDestructor, /* val destructor */
-    dictResizeAllowed,    /* allow to resize */
-    kvstoreDictRehashingStarted,
-    kvstoreDictRehashingCompleted,
-    kvstoreDictMetadataSize,
-    .embedKey = dictSdsEmbedKey,
-    .embedded_entry = 1,
+hashsetType kvstoreKeysHashsetType = {
+    .elementGetKey = hashsetValkeyObjectGetKey,
+    .hashFunction = hashsetSdsHash,
+    .keyCompare = hashsetSdsKeyCompare,
+    .elementDestructor = hashsetObjectDestructor,
+    .resizeAllowed = hashsetResizeAllowed,
+    .rehashingStarted = kvstoreHashsetRehashingStarted,
+    .rehashingCompleted = kvstoreHashsetRehashingCompleted,
+    .getMetadataSize = kvstoreHashsetMetadataSize,
 };
 
 /* Kvstore->expires */
-dictType kvstoreExpiresDictType = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    NULL,              /* key destructor */
-    NULL,              /* val destructor */
-    dictResizeAllowed, /* allow to resize */
-    kvstoreDictRehashingStarted,
-    kvstoreDictRehashingCompleted,
-    kvstoreDictMetadataSize,
+hashsetType kvstoreExpiresHashsetType = {
+    .elementGetKey = hashsetValkeyObjectGetKey,
+    .hashFunction = hashsetSdsHash,
+    .keyCompare = hashsetSdsKeyCompare,
+    .elementDestructor = NULL, /* shared with keyspace table */
+    .resizeAllowed = hashsetResizeAllowed,
+    .rehashingStarted = kvstoreHashsetRehashingStarted,
+    .rehashingCompleted = kvstoreHashsetRehashingCompleted,
+    .getMetadataSize = kvstoreHashsetMetadataSize,
 };
 
 /* Command set, hashed by sds string, stores serverCommand structs. */
@@ -572,18 +593,34 @@ dictType objToDictDictType = {
     NULL                  /* allow to expand */
 };
 
-/* Same as objToDictDictType, added some kvstore callbacks, it's used
- * for PUBSUB command to track clients subscribing the channels. */
-dictType kvstoreChannelDictType = {
-    dictObjHash,          /* hash function */
-    NULL,                 /* key dup */
-    dictObjKeyCompare,    /* key compare */
-    dictObjectDestructor, /* key destructor */
-    dictDictDestructor,   /* val destructor */
-    NULL,                 /* allow to expand */
-    kvstoreDictRehashingStarted,
-    kvstoreDictRehashingCompleted,
-    kvstoreDictMetadataSize,
+/* Callback used for hash tables where the elements are dicts and the key
+ * (channel name) is stored in each dict's metadata. */
+const void *hashsetChannelsDictGetKey(const void *element) {
+    const dict *d = element;
+    return *((const void **)d->metadata);
+}
+
+void hashsetChannelsDictDestructor(hashset *t, void *element) {
+    UNUSED(t);
+    dict *d = element;
+    robj *channel = *((void **)d->metadata);
+    //robj *channel = (robj *)hashsetChannelsDictGetKey(element);
+    decrRefCount(channel);
+    dictRelease(element);
+}
+
+/* Similar to objToDictDictType, but changed to hashset and added some kvstore
+ * callbacks, it's used for PUBSUB command to track clients subscribing the
+ * channels. The elements are dicts where the keys are clients. The metadata in
+ * each dict stores a pointer to the channel name. */
+hashsetType kvstoreChannelHashsetType = {
+    .elementGetKey = hashsetChannelsDictGetKey,
+    .hashFunction = dictObjHash,
+    .keyCompare = hashsetObjKeyCompare,
+    .elementDestructor = hashsetChannelsDictDestructor,
+    .rehashingStarted = kvstoreHashsetRehashingStarted,
+    .rehashingCompleted = kvstoreHashsetRehashingCompleted,
+    .getMetadataSize = kvstoreHashsetMetadataSize,
 };
 
 /* Modules system dictionary type. Keys are module name,
@@ -640,11 +677,17 @@ dictType sdsHashDictType = {
     NULL                   /* allow to expand */
 };
 
+size_t clientSetDictTypeMetadataBytes(dict *d) {
+    UNUSED(d);
+    return sizeof(void *);
+}
+
 /* Client Set dictionary type. Keys are client, values are not used. */
 dictType clientDictType = {
     dictClientHash,       /* hash function */
     NULL,                 /* key dup */
     dictClientKeyCompare, /* key compare */
+    .dictMetadataBytes = clientSetDictTypeMetadataBytes,
     .no_value = 1         /* no values in this dict */
 };
 
@@ -655,12 +698,16 @@ dictType clientDictType = {
  * for dict.c to resize or rehash the tables accordingly to the fact we have an
  * active fork child running. */
 void updateDictResizePolicy(void) {
-    if (server.in_fork_child != CHILD_TYPE_NONE)
+    if (server.in_fork_child != CHILD_TYPE_NONE) {
         dictSetResizeEnabled(DICT_RESIZE_FORBID);
-    else if (hasActiveChildProcess())
+        hashsetSetResizePolicy(HASHSET_RESIZE_FORBID);
+    } else if (hasActiveChildProcess()) {
         dictSetResizeEnabled(DICT_RESIZE_AVOID);
-    else
+        hashsetSetResizePolicy(HASHSET_RESIZE_AVOID);
+    } else {
         dictSetResizeEnabled(DICT_RESIZE_ENABLE);
+        hashsetSetResizePolicy(HASHSET_RESIZE_ALLOW);
+    }
 }
 
 const char *strChildType(int type) {
@@ -1098,8 +1145,8 @@ void databasesCron(void) {
 
         for (j = 0; j < dbs_per_call; j++) {
             serverDb *db = &server.db[resize_db % server.dbnum];
-            kvstoreTryResizeDicts(db->keys, CRON_DICTS_PER_DB);
-            kvstoreTryResizeDicts(db->expires, CRON_DICTS_PER_DB);
+            kvstoreTryResizeHashsets(db->keys, CRON_DICTS_PER_DB);
+            kvstoreTryResizeHashsets(db->expires, CRON_DICTS_PER_DB);
             resize_db++;
         }
 
@@ -2657,14 +2704,14 @@ void initServer(void) {
 
     /* Create the databases, and initialize other internal state. */
     int slot_count_bits = 0;
-    int flags = KVSTORE_ALLOCATE_DICTS_ON_DEMAND;
+    int flags = KVSTORE_ALLOCATE_HASHSETS_ON_DEMAND;
     if (server.cluster_enabled) {
         slot_count_bits = CLUSTER_SLOT_MASK_BITS;
-        flags |= KVSTORE_FREE_EMPTY_DICTS;
+        flags |= KVSTORE_FREE_EMPTY_HASHSETS;
     }
     for (j = 0; j < server.dbnum; j++) {
-        server.db[j].keys = kvstoreCreate(&kvstoreKeysDictType, slot_count_bits, flags);
-        server.db[j].expires = kvstoreCreate(&kvstoreExpiresDictType, slot_count_bits, flags);
+        server.db[j].keys = kvstoreCreate(&kvstoreKeysHashsetType, slot_count_bits, flags);
+        server.db[j].expires = kvstoreCreate(&kvstoreExpiresHashsetType, slot_count_bits, flags);
         server.db[j].expires_cursor = 0;
         server.db[j].blocking_keys = dictCreate(&keylistDictType);
         server.db[j].blocking_keys_unblock_on_nokey = dictCreate(&objectKeyPointerValueDictType);
@@ -2679,10 +2726,10 @@ void initServer(void) {
     /* Note that server.pubsub_channels was chosen to be a kvstore (with only one dict, which
      * seems odd) just to make the code cleaner by making it be the same type as server.pubsubshard_channels
      * (which has to be kvstore), see pubsubtype.serverPubSubChannels */
-    server.pubsub_channels = kvstoreCreate(&kvstoreChannelDictType, 0, KVSTORE_ALLOCATE_DICTS_ON_DEMAND);
+    server.pubsub_channels = kvstoreCreate(&kvstoreChannelHashsetType, 0, KVSTORE_ALLOCATE_HASHSETS_ON_DEMAND);
     server.pubsub_patterns = dictCreate(&objToDictDictType);
-    server.pubsubshard_channels = kvstoreCreate(&kvstoreChannelDictType, slot_count_bits,
-                                                KVSTORE_ALLOCATE_DICTS_ON_DEMAND | KVSTORE_FREE_EMPTY_DICTS);
+    server.pubsubshard_channels = kvstoreCreate(&kvstoreChannelHashsetType, slot_count_bits,
+                                                KVSTORE_ALLOCATE_HASHSETS_ON_DEMAND | KVSTORE_FREE_EMPTY_HASHSETS);
     server.pubsub_clients = 0;
     server.watching_clients = 0;
     server.cronloops = 0;
@@ -6808,6 +6855,7 @@ int main(int argc, char **argv) {
     uint8_t hashseed[16];
     getRandomBytes(hashseed, sizeof(hashseed));
     dictSetHashFunctionSeed(hashseed);
+    hashsetSetHashFunctionSeed(hashseed);
 
     char *exec_name = strrchr(argv[0], '/');
     if (exec_name == NULL) exec_name = argv[0];

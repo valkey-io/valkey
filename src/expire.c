@@ -46,8 +46,7 @@ static double avg_ttl_factor[16] = {0.98, 0.9604, 0.941192, 0.922368, 0.903921, 
                                     0.833748, 0.817073, 0.800731, 0.784717, 0.769022, 0.753642, 0.738569, 0.723798};
 
 /* Helper function for the activeExpireCycle() function.
- * This function will try to expire the key that is stored in the hash table
- * entry 'de' of the 'expires' hash table of a database.
+ * This function will try to expire the key-value entry 'val'.
  *
  * If the key is found to be expired, it is removed from the database and
  * 1 is returned. Otherwise no operation is performed and 0 is returned.
@@ -56,11 +55,12 @@ static double avg_ttl_factor[16] = {0.98, 0.9604, 0.941192, 0.922368, 0.903921, 
  *
  * The parameter 'now' is the current time in milliseconds as is passed
  * to the function to avoid too many gettimeofday() syscalls. */
-int activeExpireCycleTryExpire(serverDb *db, dictEntry *de, long long now) {
-    long long t = dictGetSignedIntegerVal(de);
+int activeExpireCycleTryExpire(serverDb *db, valkey *val, long long now) {
+    long long t = valkeyGetExpire(val);
+    serverAssert(t >= 0);
     if (now > t) {
         enterExecutionUnit(1, 0);
-        sds key = dictGetKey(de);
+        sds key = valkeyGetKey(val);
         robj *keyobj = createStringObject(key, sdslen(key));
         deleteExpiredKeyAndPropagate(db, keyobj);
         decrRefCount(keyobj);
@@ -127,11 +127,11 @@ typedef struct {
     int ttl_samples;       /* num keys with ttl not yet expired */
 } expireScanData;
 
-void expireScanCallback(void *privdata, const dictEntry *const_de) {
-    dictEntry *de = (dictEntry *)const_de;
+void expireScanCallback(void *privdata, void *element) {
+    valkey *val = element;
     expireScanData *data = privdata;
-    long long ttl = dictGetSignedIntegerVal(de) - data->now;
-    if (activeExpireCycleTryExpire(data->db, de, data->now)) {
+    long long ttl = valkeyGetExpire(val) - data->now;
+    if (activeExpireCycleTryExpire(data->db, val, data->now)) {
         data->expired++;
         /* Propagate the DEL command */
         postExecutionUnitOperations();
@@ -144,13 +144,13 @@ void expireScanCallback(void *privdata, const dictEntry *const_de) {
     data->sampled++;
 }
 
-static inline int isExpiryDictValidForSamplingCb(dict *d) {
-    long long numkeys = dictSize(d);
-    unsigned long buckets = dictBuckets(d);
+static inline int isExpiryTableValidForSamplingCb(hashset *s) {
+    long long numkeys = hashsetSize(s);
+    unsigned long buckets = hashsetBuckets(s);
     /* When there are less than 1% filled buckets, sampling the key
      * space is expensive, so stop here waiting for better times...
      * The dictionary will be resized asap. */
-    if (buckets > DICT_HT_INITIAL_SIZE && (numkeys * 100 / buckets < 1)) {
+    if (buckets > 0 && (numkeys * 100 / buckets < 1)) {
         return C_ERR;
     }
     return C_OK;
@@ -279,14 +279,14 @@ void activeExpireCycle(int type) {
              * is very fast: we are in the cache line scanning a sequential
              * array of NULL pointers, so we can scan a lot more buckets
              * than keys in the same time. */
-            long max_buckets = num * 20;
+            long max_buckets = num * 10;
             long checked_buckets = 0;
 
             int origin_ttl_samples = data.ttl_samples;
 
             while (data.sampled < num && checked_buckets < max_buckets) {
                 db->expires_cursor = kvstoreScan(db->expires, db->expires_cursor, -1, expireScanCallback,
-                                                 isExpiryDictValidForSamplingCb, &data);
+                                                 isExpiryTableValidForSamplingCb, &data, HASHSET_SCAN_SINGLE_STEP);
                 if (db->expires_cursor == 0) {
                     db_done = 1;
                     break;
@@ -422,7 +422,7 @@ void expireReplicaKeys(void) {
         while (dbids && dbid < server.dbnum) {
             if ((dbids & 1) != 0) {
                 serverDb *db = server.db + dbid;
-                dictEntry *expire = dbFindExpires(db, keyname);
+                valkey *expire = dbFindExpires(db, keyname);
                 int expired = 0;
 
                 if (expire && activeExpireCycleTryExpire(server.db + dbid, expire, start)) {

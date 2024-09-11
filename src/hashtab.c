@@ -78,6 +78,7 @@
 
 #include <limits.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -200,7 +201,6 @@ void hashtabSetResizePolicy(hashtabResizePolicy policy) {
 /* When resizing, we get a fill of at most 76.19% (16 / 3 / 7). */
 
 #elif SIZE_MAX == UINT32_MAX /* 32-bit version */
-#error "32-bit version disabled (debugging)"
 
 #define ELEMENTS_PER_BUCKET 12
 #define BUCKET_FACTOR 7
@@ -1499,10 +1499,10 @@ void hashtabGetStats(char *buf, size_t bufsize, hashtab *t, int full) {
 
 void hashtabDump(hashtab *t) {
     for (int table = 0; table <= 1; table++) {
-        printf("Table %d, used %lu, exp %d\n", table, t->used[table], t->bucketExp[table]);
+        printf("Table %d, used %zu, exp %d\n", table, t->used[table], t->bucketExp[table]);
         for (size_t idx = 0; idx < numBuckets(t->bucketExp[table]); idx++) {
             bucket *b = &t->tables[table][idx];
-            printf("Bucket %d:%lu everfull:%d\n", table, idx, b->everfull);
+            printf("Bucket %d:%zu everfull:%d\n", table, idx, b->everfull);
             for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
                 printf("  %d ", pos);
                 if (b->presence & (1 << pos)) {

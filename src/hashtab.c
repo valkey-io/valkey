@@ -509,7 +509,7 @@ static inline void rehashStepOnWriteIfNeeded(hashtab *t) {
 static int resize(hashtab *t, size_t min_capacity, int *malloc_failed) {
     if (malloc_failed) *malloc_failed = 0;
 
-    /* Adjust mininum size. We don't resize to zero currently. */
+    /* Adjust minimum size. We don't resize to zero currently. */
     if (min_capacity == 0) min_capacity = 1;
 
     /* Size of new table. */
@@ -777,7 +777,7 @@ size_t hashtabSize(hashtab *t) {
 }
 
 /* Returns the size of the hashtab structures, in bytes (not including the sizes
- * of the elements, if the elements are pointes to allocated objects). */
+ * of the elements, if the elements are pointers to allocated objects). */
 size_t hashtabMemUsage(hashtab *t) {
     size_t num_buckets = numBuckets(t->bucketExp[0]) + numBuckets(t->bucketExp[1]);
     size_t metasize = t->type->getMetadataSize ? t->type->getMetadataSize() : 0;
@@ -1019,7 +1019,7 @@ int hashtabDelete(hashtab *t, const void *key) {
     }
 }
 
-/* Two-phase pop: Look up an element, do somthing with it, then delete it
+/* Two-phase pop: Look up an element, do something with it, then delete it
  * without searching the hash table again.
  *
  * hashtabTwoPhasePopFind finds an element in the table and also the position of
@@ -1111,7 +1111,7 @@ void hashtabTwoPhasePopDelete(hashtab *t, void *position) {
  *   returned during the scan.
  *
  * The hash table uses a variant of linear probing with a cursor increment
- * rather than a regular increment of the index when probing. The scan algothitm
+ * rather than a regular increment of the index when probing. The scan algorithm
  * needs to continue scanning as long as a bucket in either of the tables has
  * ever been full. This means that we may wrap around cursor zero and still
  * continue until we find a bucket where we can stop, so some elements can be

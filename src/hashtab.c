@@ -287,20 +287,20 @@ static_assert(sizeof(bucket) == 64, "Buckets need to be 64 bytes");
 
 struct hashtab {
     hashtabType *type;
-    ssize_t rehashIdx;        /* -1 = rehashing not in progress. */
-    bucket *tables[2];        /* 0 = main table, 1 = rehashing target.  */
-    size_t used[2];           /* Number of elements in each table. */
-    int8_t bucketExp[2];      /* Exponent for num buckets (num = 1 << exp). */
-    int16_t pauseRehash;      /* Non-zero = rehashing is paused */
-    int16_t pauseAutoShrink;  /* Non-zero = automatic resizing disallowed. */
+    ssize_t rehashIdx;       /* -1 = rehashing not in progress. */
+    bucket *tables[2];       /* 0 = main table, 1 = rehashing target.  */
+    size_t used[2];          /* Number of elements in each table. */
+    int8_t bucketExp[2];     /* Exponent for num buckets (num = 1 << exp). */
+    int16_t pauseRehash;     /* Non-zero = rehashing is paused */
+    int16_t pauseAutoShrink; /* Non-zero = automatic resizing disallowed. */
     void *metadata[];
 };
 
 /* Struct for sampling elements using scan, used by random key functions. */
 
 typedef struct {
-    unsigned size; /* Size of the elements array. */
-    unsigned count; /* Number of elements already sampled. */
+    unsigned size;   /* Size of the elements array. */
+    unsigned count;  /* Number of elements already sampled. */
     void **elements; /* Array of sampled elements. */
 } scan_samples;
 
@@ -1219,7 +1219,8 @@ size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *priv
         if (cursor == 0) {
             cursor_passed_zero = 1;
         }
-    } while (in_probe_sequence && !single_step);
+    }
+    while (in_probe_sequence && !single_step);
     hashtabResumeRehashing(t);
     return cursor_passed_zero ? 0 : cursor;
 }

@@ -4827,7 +4827,7 @@ void ioThreadReadQueryFromClient(void *data) {
         int numkeys = getKeysFromCommand(c->io_parsed_cmd, c->argv, c->argc, &result);
         if (numkeys) {
             robj *first_key = c->argv[result.keys[0].pos];
-            c->slot = calculateKeySlot(first_key->ptr);
+            c->slot = keyHashSlot(first_key->ptr, sdslen(first_key->ptr));
         }
         getKeysFreeResult(&result);
     }

@@ -44,12 +44,24 @@
 /* ===================== Creation and parsing of objects ==================== */
 
 robj *createObject(int type, void *ptr) {
-    robj *o = zmalloc(sizeof(*o));
+    robj *o;
+    /* Prepare space for an 'expire' field and a 'key' pointer, so this object
+     * can be converted to a 'valkey' object (value with a key attached) without
+     * being reallocated. */
+    size_t size = sizeof(*o) + sizeof(long long) + sizeof(void *);
+    o = zmalloc(size);
     o->type = type;
     o->encoding = OBJ_ENCODING_RAW;
     o->ptr = ptr;
     o->refcount = 1;
     o->lru = 0;
+    o->hasexpire = 1;      /* There's an expire field. */
+    o->hasembkey = 0;      /* No embedded actual key contents. */
+    o->hasembkeyptr = 1;   /* There's an embedded key pointer field. */
+    unsigned char *data = (void *)(o + 1);
+    long long expire = -1; /* -1 means no expire */
+    memcpy(data, &expire, sizeof(expire)); /* expire = -1 */
+    memset(data + sizeof(expire), 0, sizeof(void *)); /* embkeyptr = NULL */
     return o;
 }
 
@@ -102,6 +114,9 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
     o->ptr = sh + 1;
     o->refcount = 1;
     o->lru = 0;
+    o->hasexpire = 0;
+    o->hasembkey = 0;
+    o->hasembkeyptr = 0;
 
     sh->len = len;
     size_t usable = bufsize - (sizeof(robj) + sds_hdrlen + 1);
@@ -133,6 +148,101 @@ robj *createStringObject(const char *ptr, size_t len) {
         return createEmbeddedStringObject(ptr, len);
     else
         return createRawStringObject(ptr, len);
+}
+
+sds valkeyGetKey(robj *val) {
+    unsigned char *data = (void *)(val + 1);
+    if (val->hasexpire) {
+        /* Skip expire field */
+        data += sizeof(long long);
+    }
+    if (val->hasembkeyptr) {
+        return *(sds *)data;
+    }
+    if (val->hasembkey) {
+        uint8_t hdr_size = *(uint8_t *)data;
+        data += 1 + hdr_size;
+        return (sds)data;
+    }
+    return NULL;
+}
+
+/* Creates a new object with an embedded key. */
+valkey *valkeyCreate(robj *val, const sds key) {
+    /* A key must not already be embedded. */
+    assert(valkeyGetKey(val) == NULL);
+    if (val->encoding == OBJ_ENCODING_EMBSTR) {
+        /* TODO: If there's space in val's allocation, we can embed the key
+         * there and memmove the the embedded value, without creating a new
+         * object.
+         *
+         * TODO: If key + value are too large (allocation > 64 bytes) we may not
+         * want to embed both of them. We can embed one or the other depending
+         * on sizes. */
+
+        /* Create a new object with val and key embedded. Leave 'val' intact. */
+
+        /* Calculate sizes */
+        size_t key_sds_size = sdscopytobuffer(NULL, 0, key, NULL);
+        size_t val_len = sdslen(val->ptr);
+
+        size_t min_size = sizeof(robj);
+        min_size += sizeof(long long); /* expire */
+        /* Size of embedded key, incl. 1 byte for prefixed sds hdr size. */
+        min_size += 1 + key_sds_size;
+        /* Size of embedded value (EMBSTR) including \0 term. */
+        min_size += sizeof(struct sdshdr8) + val_len + 1;
+
+        size_t bufsize = 0;
+        valkey *o = zmalloc_usable(min_size, &bufsize);
+        o->type = val->type;
+        o->encoding = val->encoding;
+        o->refcount = 1;
+        o->lru = 0;
+        o->hasexpire = 1;
+        o->hasembkey = 1;
+        o->hasembkeyptr = 0;
+
+        /* Set the embedded data. */
+        unsigned char *data = (void *)(o + 1);
+
+        /* Set the expire field. */
+        long long expire = -1;
+        memcpy(data, &expire, sizeof(long long));
+        data += sizeof(long long);
+
+        /* Copy embedded string. */
+        sdscopytobuffer(data + 1, key_sds_size, key, data);
+        data += 1 + key_sds_size;
+
+        /* Copy embedded value (EMBSTR). */
+        struct sdshdr8 *sh = (void *)data;
+        sh->flags = SDS_TYPE_8;
+        sh->len = val_len;
+        size_t capacity = bufsize - (min_size - val_len);
+        sh->alloc = capacity;
+        serverAssert(capacity == sh->alloc); /* Overflow check. */
+        memcpy(sh->buf, val->ptr, val_len);
+        sh->buf[val_len] = '\0';
+
+        o->ptr = sh->buf;
+        return o;
+    } else {
+        /* Set key pointer in val, increment the reference counter and return it
+         * as a new object. */
+        assert(val->refcount == 1 && val->hasembkeyptr && !val->hasembkey);
+        sds dup = sdsdup(key);
+
+        /* Find the correct location in val's data field. */
+        unsigned char *data = (void *)(val + 1);
+        if (val->hasexpire) {
+            /* Skip expire field */
+            data += sizeof(long long);
+        }
+        memcpy((void *)data, (void *)&dup, sizeof(void *));
+        incrRefCount(val);
+        return val;
+    }
 }
 
 /* Same as CreateRawStringObject, can return NULL if allocation fails */
@@ -313,6 +423,9 @@ robj *createModuleObject(moduleType *mt, void *value) {
 void freeStringObject(robj *o) {
     if (o->encoding == OBJ_ENCODING_RAW) {
         sdsfree(o->ptr);
+    }
+    if (o->hasembkeyptr) {
+        sdsfree(valkeyGetKey(o));
     }
 }
 

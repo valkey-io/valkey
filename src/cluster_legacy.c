@@ -1091,6 +1091,7 @@ void clusterInit(void) {
     server.cluster->failover_auth_time = 0;
     server.cluster->failover_auth_count = 0;
     server.cluster->failover_auth_rank = 0;
+    server.cluster->failover_failed_primary_rank = 0;
     server.cluster->failover_auth_epoch = 0;
     server.cluster->cant_failover_reason = CLUSTER_CANT_FAILOVER_NONE;
     server.cluster->lastVoteEpoch = 0;
@@ -3113,6 +3114,20 @@ int clusterProcessPacket(clusterLink *link) {
         if (sender_claims_to_be_primary && sender_claimed_config_epoch > sender->configEpoch) {
             sender->configEpoch = sender_claimed_config_epoch;
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
+
+            /* This change is in #1009, revert it after #1009 get merge. */
+            if (server.cluster->failover_auth_time && sender->configEpoch == server.cluster->failover_auth_epoch) {
+                /* There are another node has claimed it in this epoch, if we have any ongoing
+                 * election, we can reset it since there won't be enough votes and we can start
+                 * a new one ASAP. */
+                server.cluster->failover_auth_time = 0;
+                serverLog(LL_WARNING,
+                          "I have a failover election for epoch %llu in progress and "
+                          "received node %.40s (%s) claiming this epoch, resetting the election.",
+                          (unsigned long long)sender->configEpoch, sender->name, sender->human_nodename);
+                clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
+            }
+
         }
         /* Update the replication offset info for this node. */
         sender->repl_offset = ntohu64(hdr->offset);
@@ -4383,6 +4398,45 @@ int clusterGetReplicaRank(void) {
     return rank;
 }
 
+/* This function returns the "rank" of this instance's primary, in the context
+ * of all failed primary list. The primary node will be ignored if failed time
+ * exceeds cluster-node-timeout * cluster-replica-validity-factor.
+ *
+ * If multiple primary nodes go down at the same time, there is a certain
+ * probability that their replicas will initiate the elections at the same time,
+ * and lead to insufficient votes.
+ *
+ * The failed primary rank is used to add a delay to start an election in order
+ * to avoid simultaneous elections of replicas. */
+int clusterGetFailedPrimaryRank(void) {
+    serverAssert(nodeIsReplica(myself));
+    serverAssert(myself->replicaof);
+
+    int rank = 0;
+    mstime_t now = mstime();
+    dictIterator *di;
+    dictEntry *de;
+
+    di = dictGetSafeIterator(server.cluster->nodes);
+    while((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+
+        /* Skip nodes that do not need to participate in the rank. */
+        if (!nodeFailed(node) || !clusterNodeIsVotingPrimary(node) || node->num_replicas == 0) continue;
+
+        /* If cluster-replica-validity-factor is enabled, skip the invalid nodes. */
+        if (server.cluster_replica_validity_factor) {
+            if ((now - node->fail_time) > (server.cluster_node_timeout * server.cluster_replica_validity_factor))
+                continue;
+        }
+
+        if (memcmp(node->name, myself->replicaof->name, CLUSTER_NAMELEN) < 0) rank++;
+    }
+    dictReleaseIterator(di);
+
+    return rank;
+}
+
 /* This function is called by clusterHandleReplicaFailover() in order to
  * let the replica log why it is not able to failover. Sometimes there are
  * not the conditions, but since the failover function is called again and
@@ -4553,6 +4607,11 @@ void clusterHandleReplicaFailover(void) {
          * Specifically 1 second * rank. This way replicas that have a probably
          * less updated replication offset, are penalized. */
         server.cluster->failover_auth_time += server.cluster->failover_auth_rank * 1000;
+        /* We add another delay that is proportional to the failed primary rank.
+         * Specifically 0.5 second * rank. This way those failed primaries will be
+         * elected in rank to avoid the vote conflicts. */
+        server.cluster->failover_failed_primary_rank = clusterGetFailedPrimaryRank();
+        server.cluster->failover_auth_time += server.cluster->failover_failed_primary_rank * 500;
         /* However if this is a manual failover, no delay is needed. */
         if (server.cluster->mf_end) {
             server.cluster->failover_auth_time = mstime();
@@ -4561,8 +4620,9 @@ void clusterHandleReplicaFailover(void) {
         }
         serverLog(LL_NOTICE,
                   "Start of election delayed for %lld milliseconds "
-                  "(rank #%d, offset %lld).",
+                  "(rank #%d, primary rank #%d, offset %lld).",
                   server.cluster->failover_auth_time - mstime(), server.cluster->failover_auth_rank,
+                  server.cluster->failover_failed_primary_rank,
                   replicationGetReplicaOffset());
         /* Now that we have a scheduled election, broadcast our offset
          * to all the other replicas so that they'll updated their offsets
@@ -4575,6 +4635,9 @@ void clusterHandleReplicaFailover(void) {
      * replicas for the same primary since we computed our election delay.
      * Update the delay if our rank changed.
      *
+     * It is also possible that we received the message that telling a
+     * shard is up. Update the delay if our failed_primary_rank changed.
+     *
      * Not performed if this is a manual failover. */
     if (server.cluster->failover_auth_sent == 0 && server.cluster->mf_end == 0) {
         int newrank = clusterGetReplicaRank();
@@ -4584,6 +4647,15 @@ void clusterHandleReplicaFailover(void) {
             server.cluster->failover_auth_rank = newrank;
             serverLog(LL_NOTICE, "Replica rank updated to #%d, added %lld milliseconds of delay.", newrank,
                       added_delay);
+        }
+
+        int new_failed_primary_rank = clusterGetFailedPrimaryRank();
+        if (new_failed_primary_rank != server.cluster->failover_failed_primary_rank) {
+            long long added_delay = (new_failed_primary_rank - server.cluster->failover_failed_primary_rank) * 500;
+            server.cluster->failover_auth_time += added_delay;
+            server.cluster->failover_failed_primary_rank = new_failed_primary_rank;
+            serverLog(LL_NOTICE, "Failed primary rank updated to #%d, added %lld milliseconds of delay.",
+                      new_failed_primary_rank, added_delay);
         }
     }
 

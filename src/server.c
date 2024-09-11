@@ -3781,9 +3781,9 @@ int commandCheckArity(struct serverCommand *cmd, int argc, sds *err) {
     return 1;
 }
 
-int findDuplicatesOptions(client *c, const char *token) {
+int findDuplicateOptions(client *c, const char *token) {
     int matched = 0;
-    for (int j = 2, k = c->argc - 1; j <= k; j++, k--) {
+    for (int j = 3, k = c->argc - 1; j <= k; j++, k--) {
         if (!strcasecmp(token, c->argv[j]->ptr)) {
             matched++;
         }
@@ -3803,7 +3803,7 @@ int commandCheckArgTokenDuplicacy(client *c, sds *err) {
     if (c->argc <= 4) return 1;
     for (int iter = 0; iter < c->cmd->num_args; iter++) {
         if (c->cmd->args[iter].token && !(c->cmd->args[iter].flags & CMD_ARG_MULTIPLE_TOKEN)) {
-            if (!findDuplicatesOptions(c, c->cmd->args[iter].token)) {
+            if (!findDuplicateOptions(c, c->cmd->args[iter].token)) {
                 if (err) {
                     *err = sdsnew(NULL);
                     *err = sdscatprintf(*err, "duplicate '%s' option for '%s' command", c->cmd->args[iter].token,
@@ -3816,7 +3816,7 @@ int commandCheckArgTokenDuplicacy(client *c, sds *err) {
             for (int subiter = 0; subiter < c->cmd->args[iter].num_args; subiter++) {
                 if (c->cmd->args[iter].subargs[subiter].token &&
                     !(c->cmd->args[iter].subargs[subiter].flags & CMD_ARG_MULTIPLE_TOKEN)) {
-                    if (!findDuplicatesOptions(c, c->cmd->args[iter].subargs[subiter].token)) {
+                    if (!findDuplicateOptions(c, c->cmd->args[iter].subargs[subiter].token)) {
                         if (err) {
                             *err = sdsnew(NULL);
                             *err = sdscatprintf(*err, "duplicate '%s' option for '%s' command",
@@ -3824,12 +3824,8 @@ int commandCheckArgTokenDuplicacy(client *c, sds *err) {
                         }
                         return 0;
                     }
-                } else {
-                    continue;
                 }
             }
-        } else {
-            continue;
         }
     }
     return 1;

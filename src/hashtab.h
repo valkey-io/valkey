@@ -104,7 +104,7 @@ typedef enum {
     HASHTAB_RESIZE_FORBID,
 } hashtabResizePolicy;
 
-typedef void(*hashtabScanFunction)(void *privdata, void *element);
+typedef void (*hashtabScanFunction)(void *privdata, void *element);
 
 /* Scan flags */
 #define HASHTAB_SCAN_EMIT_REF (1 << 0)

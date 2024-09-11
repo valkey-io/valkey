@@ -55,12 +55,12 @@ robj *createObject(int type, void *ptr) {
     o->ptr = ptr;
     o->refcount = 1;
     o->lru = 0;
-    o->hasexpire = 1;      /* There's an expire field. */
-    o->hasembkey = 0;      /* No embedded actual key contents. */
-    o->hasembkeyptr = 1;   /* There's an embedded key pointer field. */
+    o->hasexpire = 1;    /* There's an expire field. */
+    o->hasembkey = 0;    /* No embedded actual key contents. */
+    o->hasembkeyptr = 1; /* There's an embedded key pointer field. */
     unsigned char *data = (void *)(o + 1);
-    long long expire = -1; /* -1 means no expire */
-    memcpy(data, &expire, sizeof(expire)); /* expire = -1 */
+    long long expire = -1;                            /* -1 means no expire */
+    memcpy(data, &expire, sizeof(expire));            /* expire = -1 */
     memset(data + sizeof(expire), 0, sizeof(void *)); /* embkeyptr = NULL */
     return o;
 }

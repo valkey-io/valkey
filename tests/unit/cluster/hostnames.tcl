@@ -136,7 +136,7 @@ test "Verify the nodes configured with prefer hostname only show hostname for ne
     # they'll hang in the handshake phase. This allows us to 
     # test the case where we "know" about it but haven't
     # successfully retrieved information about it yet.
-    R 0 DEBUG DROP-CLUSTER-PACKET-FILTER 0
+    pause_process [srv 0 pid]
     R 6 DEBUG DROP-CLUSTER-PACKET-FILTER 0
 
     # Have a replica meet the isolated node
@@ -174,12 +174,12 @@ test "Verify the nodes configured with prefer hostname only show hostname for ne
 
     # Also make sure we know about the isolated master, we 
     # just can't reach it.
+    resume_process [srv 0 pid]
     set master_id [R 0 CLUSTER MYID]
     assert_match "*$master_id*" [R 6 CLUSTER NODES]
 
     # Stop dropping cluster packets, and make sure everything
     # stabilizes
-    R 0 DEBUG DROP-CLUSTER-PACKET-FILTER -1
     R 6 DEBUG DROP-CLUSTER-PACKET-FILTER -1
 
     # This operation sometimes spikes to around 5 seconds to resolve the state,

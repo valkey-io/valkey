@@ -177,8 +177,7 @@ test "Verify the nodes configured with prefer hostname only show hostname for ne
 
     # Also make sure we know about the isolated master, we 
     # just can't reach it.
-    set master_id [R 0 CLUSTER MYID]
-    assert_match "*$master_id*" [R 6 CLUSTER NODES]
+    assert_match "*$primary_id*" [R 6 CLUSTER NODES]
 
     # Stop dropping cluster packets, and make sure everything
     # stabilizes

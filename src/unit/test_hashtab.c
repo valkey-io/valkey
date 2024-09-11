@@ -150,7 +150,7 @@ static void add_find_delete_test_helper(int flags) {
 
     /* Release memory */
     hashtabRelease(t);
-}    
+}
 
 int test_add_find_delete(int argc, char **argv, int flags) {
     UNUSED(argc);
@@ -313,9 +313,8 @@ int test_scan(int argc, char **argv, int flags) {
     long j;
 
     for (int round = 0; round < num_rounds; round++) {
-
+        /* First round count = num_elements, then some more. */
         long count = num_elements * (1 + 2 * (double)round / num_rounds);
-        //long count = num_elements * (round + 100) / 100;
 
         /* Seed, to make sure each round is different. */
         test_set_hash_function_seed(argc, argv, flags);
@@ -434,10 +433,8 @@ int test_safe_iterator(int argc, char **argv, int flags) {
     while (hashtabNext(&iter, (void **)&j)) {
         num_returned++;
         if (j < 0 || j >= count * 2) {
-            printf("Element %lu returned, max == %lu. Num returned: %u\n",
-                   j, count * 2 - 1, num_returned);
-            printf("Safe %d, table %d, index %lu, pos in bucket %d, rehashing? %d\n",
-                   iter.safe, iter.table, iter.index,
+            printf("Element %lu returned, max == %lu. Num returned: %u\n", j, count * 2 - 1, num_returned);
+            printf("Safe %d, table %d, index %lu, pos in bucket %d, rehashing? %d\n", iter.safe, iter.table, iter.index,
                    iter.posInBucket, !hashtabIsRehashing(t));
             hashtabHistogram(t);
             exit(1);
@@ -470,8 +467,7 @@ int test_safe_iterator(int argc, char **argv, int flags) {
         assert(element_returned[j] <= 1);
         num_optional_returned += element_returned[j];
     }
-    printf("Safe iterator returned %lu of the %lu elements inserted while iterating.\n",
-           num_optional_returned, count);
+    printf("Safe iterator returned %lu of the %lu elements inserted while iterating.\n", num_optional_returned, count);
 
     hashtabRelease(t);
     return 0;
@@ -504,7 +500,7 @@ int test_random_element(int argc, char **argv, int flags) {
     memset(times_picked, 0, sizeof(times_picked));
     for (long i = 0; i < num_rounds; i++) {
         long element;
-        assert(hashtabFairRandomElement(t, (void**)&element));
+        assert(hashtabFairRandomElement(t, (void **)&element));
         assert(element >= 0 && element < count);
         times_picked[element]++;
     }
@@ -551,8 +547,7 @@ int test_random_element(int argc, char **argv, int flags) {
     }
     printf("Random element fairness test\n");
     printf("  Pick one of %ld elements, %ld times.\n", count, num_rounds);
-    printf("  Expecting each element to be picked %.2lf times, std dev %.3lf.\n",
-           expected, std_dev);
+    printf("  Expecting each element to be picked %.2lf times, std dev %.3lf.\n", expected, std_dev);
     printf("  Within 1 std dev (p68) = %.2lf%%\n", 100 * p68 / m);
     printf("  Within 2 std dev (p95) = %.2lf%%\n", 100 * p95 / m);
     printf("  Within 3 std dev (p99) = %.2lf%%\n", 100 * p99 / m);

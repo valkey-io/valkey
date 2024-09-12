@@ -6405,7 +6405,7 @@ void clusterCommandSetSlot(client *c) {
                       "as a replica of %.40s (%s) in shard %.40s",
                       n->name, n->human_nodename, n->shard_id);
             /* `c` is the primary client if `myself` is a replica, prevent it
-             * from being freed by clusterSetPrimary. No need to unprotect it
+             * from being freed by clusterSetPrimary.
              * since we will free it soon. */
             if (nodeIsReplica(myself)) protectClient(c);
             /* We are migrating to a different shard that has a completely different

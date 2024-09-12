@@ -218,7 +218,6 @@ proc create_empty_shard {p r} {
 
 # Temporarily disable empty shard migration tests while we
 # work to reduce their flakiness. See https://github.com/valkey-io/valkey/issues/858.
-if {0} {
 start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
@@ -294,7 +293,6 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
         wait_for_slot_state 3 "\[609->-$R6_id\]"
         wait_for_slot_state 7 "\[609-<-$R0_id\]"
     }
-}
 }
 
 proc migrate_slot {from to slot} {

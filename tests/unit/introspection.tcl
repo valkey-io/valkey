@@ -836,6 +836,60 @@ start_server {tags {"introspection"}} {
         assert_match {*'replicaof "--127.0.0.1"'*wrong number of arguments*} $err
     } {} {external:skip}
 
+    test {tot-net-out for replica client}  {
+        start_server {} {
+            start_server {} {
+                set primary [srv -1 client]
+                set primary_host [srv -1 host]
+                set primary_port [srv -1 port]
+                set primary_pid [srv -1 pid]
+                set replica [srv 0 client]
+                set replica_pid [srv 0 pid]
+    
+                $replica replicaof $primary_host $primary_port
+    
+                # Wait for replica to be connected before proceeding.
+                wait_for_ofs_sync $primary $replica
+                
+                # Avoid PINGs to make sure tot-net-out is stable.
+                $primary config set repl-ping-replica-period 3600
+
+                # Increase repl timeout to avoid replica disconnecting
+                $primary config set repl-timeout 3600
+                $replica config set repl-timeout 3600
+                
+                # Wait for the replica to receive the command.
+                wait_for_ofs_sync $primary $replica
+    
+                # Get the tot-net-out of the replica before sending the command.
+                set info_list [$primary client list]
+                foreach info [split $info_list "\r\n"] {
+                    if {[string match "* flags=S *" $info]} {
+                        set out_before [get_field_in_client_info $info "tot-net-out"]
+                        break
+                    }
+                }
+                                
+                # Send a command to the primary.
+                set value_size 10000
+                $primary set foo [string repeat "a" $value_size]
+    
+                # Get the tot-net-out of the replica after sending the command.
+                set info_list [$primary client list]
+                foreach info [split $info_list "\r\n"] {
+                    if {[string match "* flags=S *" $info]} {
+                        set out_after [get_field_in_client_info $info "tot-net-out"]
+                        break
+                    }
+                }
+
+                assert_morethan $out_before 0
+                assert_morethan $out_after 0
+                assert_lessthan $out_after [expr $out_before + $value_size + 1000] ; # + 1000 to account for protocol overhead etc
+            }
+        }
+    } {} {external:skip}
+
     test {valkey-server command line arguments - allow passing option name and option value in the same arg} {
         start_server {config "default.conf" args {"--maxmemory 700mb" "--maxmemory-policy volatile-lru"}} {
             assert_match [r config get maxmemory] {maxmemory 734003200}

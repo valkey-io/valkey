@@ -6411,6 +6411,7 @@ void clusterCommandSetSlot(client *c) {
             /* We are migrating to a different shard that has a completely different
              * replication history, so a full sync is required. */
             clusterSetPrimary(n, 1, 1);
+            if (nodeIsReplica(myself)) unprotectClient(c);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
         }
 

@@ -45,8 +45,6 @@ start_server {tags {"pubsub network"}} {
         set rd1 [valkey_deferring_client]
 
         # subscribe to two channels
-        #assert_equal {1} [subscribe $rd1 {chan1}]
-        #assert_equal {2} [subscribe $rd1 {chan2}]
 	assert_equal {1 2} [subscribe $rd1 {chan1 chan2}]
         assert_equal 1 [r publish chan1 hello]
         assert_equal 1 [r publish chan2 world]
@@ -85,9 +83,6 @@ start_server {tags {"pubsub network"}} {
 
     test "PUBLISH/SUBSCRIBE after UNSUBSCRIBE without arguments" {
         set rd1 [valkey_deferring_client]
-        #assert_equal {1} [subscribe $rd1 {chan1}]
-        #assert_equal {2} [subscribe $rd1 {chan2}]
-        #assert_equal {3} [subscribe $rd1 {chan3}]
 	assert_equal {1 2 3} [subscribe $rd1 {chan1 chan2 chan3}]
         unsubscribe $rd1
         # wait for the unsubscribe to take effect
@@ -106,9 +101,6 @@ start_server {tags {"pubsub network"}} {
 
     test "SUBSCRIBE to one channel more than once" {
         set rd1 [valkey_deferring_client]
-        #assert_equal {1} [subscribe $rd1 {chan1}]
-        #assert_equal {2} [subscribe $rd1 {chan2}]
-        #assert_equal {3} [subscribe $rd1 {chan3}] 
 	assert_equal {1 1 1} [subscribe $rd1 {chan1 chan1 chan1}]
         assert_equal 1 [r publish chan1 hello]
         assert_equal {message chan1 hello} [$rd1 read]
@@ -132,8 +124,6 @@ start_server {tags {"pubsub network"}} {
 
         # subscribe to two patterns
         assert_equal {1 2} [psubscribe $rd1 {foo.* bar.*}]
-        #assert_equal {1} [psubscribe $rd1 {foo.*}]
-        #assert_equal {2} [psubscribe $rd1 {bar.*}]
         assert_equal 1 [r publish foo.1 hello]
         assert_equal 1 [r publish bar.1 hello]
         assert_equal 0 [r publish foo1 hello]
@@ -491,10 +481,8 @@ start_server {tags {"pubsub network"}} {
         # Note: SUBSCRIBE and UNSUBSCRIBE with multiple channels in the same command,
         # Only one response is returned 
 	# This update matches with Redis response: one command always returns one response
-        #assert_equal "subscribe foo 1 subscribe bar 2 subscribe baz 3" [r subscribe foo bar baz]
-	assert_equal "subscribe foo 1" [r subscribe foo bar baz]
-        assert_equal "subscribe bar 2" [r read]
-        assert_equal "subscribe baz 3" [r read]
+	r client capa subv2
+	assert_equal "subscribe foo 1 subscribe bar 2 subscribe baz 3" [r subscribe foo bar baz]
 
         r multi
         r ping abc

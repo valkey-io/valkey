@@ -59,9 +59,6 @@ test "sunsubscribe without specifying any channel would unsubscribe all shard ch
     set publishclient [valkey_client_by_addr $publishnode(host) $publishnode(port)]
     set subscribeclient [valkey_deferring_client_by_addr $publishnode(host) $publishnode(port)]
 
-    # assert_equal {1} [ssubscribe $subscribeclient {"\{channel.0\}1"}]				
-    # assert_equal {2} [ssubscribe $subscribeclient {"\{channel.0\}2"}]				
-    # assert_equal {3} [ssubscribe $subscribeclient {"\{channel.0\}3"}]				
     set sub_res [ssubscribe $subscribeclient [list "\{channel.0\}1" "\{channel.0\}2" "\{channel.0\}3"]]
     assert_equal [list 1 2 3] $sub_res
 

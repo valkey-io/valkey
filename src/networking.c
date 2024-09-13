@@ -3485,6 +3485,10 @@ void clientCommand(client *c) {
         const char *help[] = {
 "CACHING (YES|NO)",
 "    Enable/disable tracking of the keys for next command in OPTIN/OPTOUT modes.",
+"CAPA <option> [options...]",
+"    The client claims its some capability options. Options are:",
+"    * REDIRECT",
+"      The client can handle redirection during primary and replica failover in standalone mode.",
 "GETREDIR",
 "    Return the client ID we are redirecting to when tracking is enabled.",
 "GETNAME",

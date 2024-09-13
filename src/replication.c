@@ -3740,12 +3740,12 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required) {
     sdsfree(server.primary_host);
     server.primary_host = NULL;
     if (server.primary) {
-    /* When joining 'myself' to a new primary, set the dont_cache_primary flag
-     * if a full sync is required. This happens when 'myself' was previously
-     * part of a different shard from the new primary. Since 'myself' does not
-     * have the replication history of the shard it is joining, clearing the 
-     * cached primary is necessary to ensure proper replication behavior. */
-    server.primary->flag.dont_cache_primary = full_sync_required;
+        /* When joining 'myself' to a new primary, set the dont_cache_primary flag
+         * if a full sync is required. This happens when 'myself' was previously
+         * part of a different shard from the new primary. Since 'myself' does not
+         * have the replication history of the shard it is joining, clearing the
+         * cached primary is necessary to ensure proper replication behavior. */
+        server.primary->flag.dont_cache_primary = full_sync_required;
         freeClient(server.primary);
     }
     disconnectAllBlockedClients(); /* Clients blocked in primary, now replica. */

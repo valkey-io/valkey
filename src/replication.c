@@ -3740,6 +3740,12 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required) {
     sdsfree(server.primary_host);
     server.primary_host = NULL;
     if (server.primary) {
+        /* When joining 'myself' to a new primary, set the dont_cache_primary flag
+         * if a full sync is required. This happens when 'myself' was previously
+         * part of a different shard from the new primary. Since 'myself' does not
+         * have the replication history of the shard it is joining, clearing the
+         * cached primary is necessary to ensure proper replication behavior. */
+        server.primary->flag.dont_cache_primary = full_sync_required;
         freeClient(server.primary);
     }
     disconnectAllBlockedClients(); /* Clients blocked in primary, now replica. */
@@ -3766,14 +3772,6 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required) {
     if (was_primary && !full_sync_required) {
         replicationDiscardCachedPrimary();
         replicationCachePrimaryUsingMyself();
-    }
-
-    /* If full sync is required, drop the cached primary. Doing so increases
-     * this replica node's election rank (delay) and reduces its chance of
-     * winning the election. If a replica requiring a full sync wins the
-     * election, it will flush valid data in the shard, causing data loss. */
-    if (full_sync_required) {
-        replicationDiscardCachedPrimary();
     }
 
     /* Fire the role change modules event. */

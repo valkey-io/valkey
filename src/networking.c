@@ -1671,7 +1671,7 @@ void freeClient(client *c) {
      * some unexpected state, by checking its flags. */
     if (server.primary && c->flag.primary) {
         serverLog(LL_NOTICE, "Connection with primary lost.");
-        if (!(c->flag.protocol_error || c->flag.blocked)) {
+        if (!c->flag.dont_cache_primary && !(c->flag.protocol_error || c->flag.blocked)) {
             c->flag.close_asap = 0;
             c->flag.close_after_reply = 0;
             replicationCachePrimary(c);
@@ -2553,6 +2553,7 @@ void freeSharedQueryBuf(void) {
  *
  * * DEBUG RELOAD and similar.
  * * When a Lua script is in -BUSY state.
+ * * A cluster replica executing CLUSTER SETSLOT during slot migration.
  *
  * So the function will protect the client by doing two things:
  *
@@ -3485,6 +3486,10 @@ void clientCommand(client *c) {
         const char *help[] = {
 "CACHING (YES|NO)",
 "    Enable/disable tracking of the keys for next command in OPTIN/OPTOUT modes.",
+"CAPA <option> [options...]",
+"    The client claims its some capability options. Options are:",
+"    * REDIRECT",
+"      The client can handle redirection during primary and replica failover in standalone mode.",
 "GETREDIR",
 "    Return the client ID we are redirecting to when tracking is enabled.",
 "GETNAME",

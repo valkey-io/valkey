@@ -1939,6 +1939,7 @@ struct valkeyServer {
     int aof_last_write_errno;           /* Valid if aof write/fsync status is ERR */
     int aof_load_truncated;             /* Don't stop on unexpected AOF EOF. */
     int aof_use_rdb_preamble;           /* Specify base AOF to use RDB encoding on AOF rewrites. */
+    int aof_rewrite_use_rdb_preamble;   /* Base AOF to use RDB encoding on AOF rewrites start. */
     _Atomic int aof_bio_fsync_status;   /* Status of AOF fsync in bio job. */
     _Atomic int aof_bio_fsync_errno;    /* Errno of AOF fsync in bio job. */
     aofManifest *aof_manifest;          /* Used to track AOFs. */
@@ -3295,7 +3296,7 @@ void preventCommandAOF(client *c);
 void preventCommandReplication(client *c);
 void slowlogPushCurrentCommand(client *c, struct serverCommand *cmd, ustime_t duration);
 void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int64_t duration_hist);
-int prepareForShutdown(int flags);
+int prepareForShutdown(client *c, int flags);
 void replyToClientsBlockedOnShutdown(void);
 int abortShutdown(void);
 void afterCommand(client *c);
@@ -3340,7 +3341,7 @@ void dismissMemoryInChild(void);
 #define RESTART_SERVER_NONE 0
 #define RESTART_SERVER_GRACEFULLY (1 << 0)     /* Do proper shutdown. */
 #define RESTART_SERVER_CONFIG_REWRITE (1 << 1) /* CONFIG REWRITE before restart.*/
-int restartServer(int flags, mstime_t delay);
+int restartServer(client *c, int flags, mstime_t delay);
 int getKeySlot(sds key);
 int calculateKeySlot(sds key);
 

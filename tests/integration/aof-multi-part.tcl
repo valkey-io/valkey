@@ -746,6 +746,38 @@ tags {"external:skip"} {
         clean_aof_persistence $aof_dirpath
     }
 
+    test {Changing aof-use-rdb-preamble during rewrite process} {
+        start_server_aof [list dir $server_path aof-use-rdb-preamble no] {
+            wait_done_loading r
+
+            assert_equal 1 [check_file_exist $aof_dirpath "${aof_basename}.1${::base_aof_sufix}${::aof_format_suffix}"]
+
+            assert_aof_manifest_content $aof_manifest_file {
+                {file appendonly.aof.1.base.aof seq 1 type b}
+                {file appendonly.aof.1.incr.aof seq 1 type i}
+            }
+
+            r set foo bar
+            r config set rdb-key-save-delay 1000000
+            r bgrewriteaof
+            wait_for_condition 100 10 {
+                [s aof_rewrite_in_progress] eq 1
+            } else {
+                fail "aof rewrite did not start in time"
+            }
+            r config set aof-use-rdb-preamble yes
+            r config set rdb-key-save-delay 0
+            waitForBgrewriteaof r
+
+            assert_aof_manifest_content $aof_manifest_file {
+                {file appendonly.aof.2.base.aof seq 2 type b}
+                {file appendonly.aof.2.incr.aof seq 2 type i}
+            }
+        }
+
+        clean_aof_persistence $aof_dirpath
+    }
+
     # Test Part 2
     #
     # To test whether the AOFRW behaves as expected during the server run.

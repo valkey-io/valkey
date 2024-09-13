@@ -6224,6 +6224,9 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
         return 0;
     }
 
+    /* If 'myself' is a replica, 'c' must be the primary client. */
+    serverAssert(!nodeIsReplica(myself) || c == server.primary);
+
     if ((slot = getSlotOrReply(c, c->argv[2])) == -1) return 0;
 
     if (!strcasecmp(c->argv[3]->ptr, "migrating") && c->argc >= 5) {
@@ -6412,20 +6415,27 @@ void clusterCommandSetSlot(client *c) {
             server.cluster->migrating_slots_to[slot] = NULL;
         }
 
-        int slot_was_mine = server.cluster->slots[slot] == myself;
+        clusterNode *my_primary = clusterNodeGetPrimary(myself);
+        int slot_was_mine = server.cluster->slots[slot] == my_primary;
         clusterDelSlot(slot);
         clusterAddSlot(n, slot);
 
-        /* If we are a primary left without slots, we should turn into a
-         * replica of the new primary. */
-        if (slot_was_mine && n != myself && myself->numslots == 0 && server.cluster_allow_replica_migration) {
+        /* If replica migration is allowed, check if the primary of this shard
+         * loses its last slot and the shard becomes empty. In this case, we
+         * should turn into a replica of the new primary. */
+        if (server.cluster_allow_replica_migration && slot_was_mine && my_primary->numslots == 0) {
+            serverAssert(n != my_primary);
             serverLog(LL_NOTICE,
                       "Lost my last slot during slot migration. Reconfiguring myself "
                       "as a replica of %.40s (%s) in shard %.40s",
                       n->name, n->human_nodename, n->shard_id);
+            /* `c` is the primary client if `myself` is a replica, prevent it
+             * from being freed by clusterSetPrimary. */
+            if (nodeIsReplica(myself)) protectClient(c);
             /* We are migrating to a different shard that has a completely different
              * replication history, so a full sync is required. */
             clusterSetPrimary(n, 1, 1);
+            if (nodeIsReplica(myself)) unprotectClient(c);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
         }
 

@@ -6202,7 +6202,8 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
         return 0;
     }
 
-    if (nodeIsReplica(myself)) serverAssert(c == server.primary);
+    /* If 'myself' is a replica, 'c' must be the primary client. */
+    serverAssert(!nodeIsReplica(myself) || c == server.primary);
 
     if ((slot = getSlotOrReply(c, c->argv[2])) == -1) return 0;
 

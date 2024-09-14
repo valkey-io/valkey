@@ -3137,16 +3137,17 @@ int clusterProcessPacket(clusterLink *link) {
             sender->configEpoch = sender_claimed_config_epoch;
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
 
-            /* This change is in #1009, revert it after #1009 get merge. */
-            if (server.cluster->failover_auth_time && sender->configEpoch == server.cluster->failover_auth_epoch) {
-                /* There are another node has claimed it in this epoch, if we have any ongoing
-                 * election, we can reset it since there won't be enough votes and we can start
-                 * a new one ASAP. */
+            if (server.cluster->failover_auth_time && sender->configEpoch >= server.cluster->failover_auth_epoch) {
+                /* Another node has claimed an epoch greater than or equal to ours.
+                 * If we have an ongoing election,  reset it because we cannot win
+                 * with an epoch smaller than or equal to the incoming claim. This
+                 * allows us to start a new election as soon as possible. */
                 server.cluster->failover_auth_time = 0;
                 serverLog(LL_WARNING,
-                          "I have a failover election for epoch %llu in progress and "
-                          "received node %.40s (%s) claiming this epoch, resetting the election.",
-                          (unsigned long long)sender->configEpoch, sender->name, sender->human_nodename);
+                          "Failover election in progress for epoch %llu, but received a claim from node %.40s (%s) "
+                          "with an equal or higher epoch %llu. Resetting the election since we cannot win.",
+                          (unsigned long long)server.cluster->failover_auth_epoch, sender->name, sender->human_nodename,
+                          (unsigned long long)sender->configEpoch);
                 clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
             }
         }

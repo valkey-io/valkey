@@ -12965,6 +12965,9 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
     disconnectReplicas();
     freeReplicationBacklog();
 
+    /* Stop and kill existing AOF rewriting fork as it is saving outdated data,
+     * we will re-enable it after the rdbLoad. Also killing it will prevent COW
+     * memory issue. */
     if (server.aof_state != AOF_OFF) stopAppendOnly();
 
     /* Kill existing RDB fork as it is saving outdated data. Also killing it
@@ -12983,7 +12986,10 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
     int ret = rdbLoad(stream->data.filename, NULL, RDBFLAGS_NONE);
 
     if (server.current_client) unprotectClient(server.current_client);
-    if (server.aof_state != AOF_OFF) startAppendOnly();
+
+    /* Here we need to decide whether to enable the AOF based on the aof_enabled,
+     * since the previous stopAppendOnly sets aof_state to AOF_OFF. */
+    if (server.aof_enabled) startAppendOnly();
 
     if (ret != RDB_OK) {
         errno = (ret == RDB_NOT_EXIST) ? ENOENT : EIO;

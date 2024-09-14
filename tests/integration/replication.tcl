@@ -1477,3 +1477,43 @@ start_server {tags {"repl external:skip"}} {
         }
     }
 }
+
+start_server {tags {"repl external:skip"}} {
+    set replica [srv 0 client]
+    $replica set replica_key replica_value
+
+    start_server {} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+        $primary set primary_key primary_value
+
+        test {Replica keep the old data if RDB file save fails in disk-based replication} {
+            # Create a folder called 'dump.rdb' to trigger temp-rdb rename failure
+            # and it will cause RDB file save to fail at the rename.
+            set dump_rdb [file join [lindex [$replica config get dir] 1] dump.rdb]
+            if {[file exists $dump_rdb]} { exec rm -f $dump_rdb }
+            exec mkdir -p $dump_rdb
+
+            $replica replicaof $primary_host $primary_port
+
+            # Waiting for the rename to fail.
+            wait_for_log_messages -1 {"*Failed trying to rename the temp DB into dump.rdb*"} 0 1000 10
+
+            # Make sure the replica has not completed sync and keep the old data.
+            assert_equal {} [$replica get primary_key]
+            assert_equal {replica_value} [$replica get replica_key]
+
+            # Remove the test folder and make the rename success
+            exec rm -rf $dump_rdb
+            wait_for_condition 500 100 {
+                [$replica get primary_key] == {primary_value} &&
+                [$replica get replica_key] == {}
+            } else {
+                puts [$primary keys *]
+                puts [$replica keys *]
+                fail "Replication failed."
+            }
+        }
+    }
+}

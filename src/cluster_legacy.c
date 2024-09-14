@@ -1191,6 +1191,28 @@ void clusterInitLast(void) {
     }
 }
 
+/* Called when a cluster node receives SHUTDOWN. */
+void clusterHandleServerShutdown(void) {
+    /* The error logs have been logged in the save function if the save fails. */
+    serverLog(LL_NOTICE, "Saving the cluster configuration file before exiting.");
+    clusterSaveConfig(1);
+
+#if !defined(__sun)
+    /* Unlock the cluster config file before shutdown, see clusterLockConfig.
+     *
+     * This is needed if you shutdown a very large server process, it will take
+     * a while for the OS to release resources and unlock the cluster configuration
+     * file. Therefore, if we immediately try to restart the server process, it
+     * may not be able to acquire the lock on the cluster configuration file and
+     * fail to start. We explicitly releases the lock on the cluster configuration
+     * file on shutdown, rather than relying on the OS to release the lock, which
+     * is a cleaner and safer way to release acquired resources. */
+    if (server.cluster_config_file_lock_fd != -1) {
+        flock(server.cluster_config_file_lock_fd, LOCK_UN | LOCK_NB);
+    }
+#endif /* __sun */
+}
+
 /* Reset a node performing a soft or hard reset:
  *
  * 1) All other nodes are forgotten.
@@ -3170,7 +3192,10 @@ int clusterProcessPacket(clusterLink *link) {
         /* Add this node if it is new for us and the msg type is MEET.
          * In this stage we don't try to add the node with the right
          * flags, replicaof pointer, and so forth, as this details will be
-         * resolved when we'll receive PONGs from the node. */
+         * resolved when we'll receive PONGs from the node. The exception
+         * to this is the flag that indicates extensions are supported, as
+         * we want to send extensions right away in the return PONG in order
+         * to reduce the amount of time needed to stabilize the shard ID. */
         if (!sender && type == CLUSTERMSG_TYPE_MEET) {
             clusterNode *node;
 
@@ -3178,6 +3203,10 @@ int clusterProcessPacket(clusterLink *link) {
             serverAssert(nodeIp2String(node->ip, link, hdr->myip) == C_OK);
             getClientPortFromClusterMsg(hdr, &node->tls_port, &node->tcp_port);
             node->cport = ntohs(hdr->cport);
+            if (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
+                node->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
+            }
+            setClusterNodeToInboundClusterLink(node, link);
             clusterAddNode(node);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
         }
@@ -6209,6 +6238,9 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
         return 0;
     }
 
+    /* If 'myself' is a replica, 'c' must be the primary client. */
+    serverAssert(!nodeIsReplica(myself) || c == server.primary);
+
     if ((slot = getSlotOrReply(c, c->argv[2])) == -1) return 0;
 
     if (!strcasecmp(c->argv[3]->ptr, "migrating") && c->argc >= 5) {
@@ -6397,20 +6429,27 @@ void clusterCommandSetSlot(client *c) {
             server.cluster->migrating_slots_to[slot] = NULL;
         }
 
-        int slot_was_mine = server.cluster->slots[slot] == myself;
+        clusterNode *my_primary = clusterNodeGetPrimary(myself);
+        int slot_was_mine = server.cluster->slots[slot] == my_primary;
         clusterDelSlot(slot);
         clusterAddSlot(n, slot);
 
-        /* If we are a primary left without slots, we should turn into a
-         * replica of the new primary. */
-        if (slot_was_mine && n != myself && myself->numslots == 0 && server.cluster_allow_replica_migration) {
+        /* If replica migration is allowed, check if the primary of this shard
+         * loses its last slot and the shard becomes empty. In this case, we
+         * should turn into a replica of the new primary. */
+        if (server.cluster_allow_replica_migration && slot_was_mine && my_primary->numslots == 0) {
+            serverAssert(n != my_primary);
             serverLog(LL_NOTICE,
                       "Lost my last slot during slot migration. Reconfiguring myself "
                       "as a replica of %.40s (%s) in shard %.40s",
                       n->name, n->human_nodename, n->shard_id);
+            /* `c` is the primary client if `myself` is a replica, prevent it
+             * from being freed by clusterSetPrimary. */
+            if (nodeIsReplica(myself)) protectClient(c);
             /* We are migrating to a different shard that has a completely different
              * replication history, so a full sync is required. */
             clusterSetPrimary(n, 1, 1);
+            if (nodeIsReplica(myself)) unprotectClient(c);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
         }
 

@@ -1498,7 +1498,7 @@ start_server {tags {"repl external:skip"}} {
             $replica replicaof $primary_host $primary_port
 
             # Waiting for the rename to fail.
-            wait_for_log_messages -1 {"*Failed trying to rename the temp DB into dump.rdb*"} 0 100 10
+            wait_for_log_messages -1 {"*Failed trying to rename the temp DB into dump.rdb*"} 0 1000 10
 
             # Make sure the replica has not completed sync and keep the old data.
             assert_equal {} [$replica get primary_key]

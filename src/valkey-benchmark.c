@@ -238,7 +238,7 @@ static redisContext *getRedisContext(const char *ip, int port, const char *hosts
     else
         ctx = redisConnectUnix(hostsocket);
     if (ctx == NULL || ctx->err) {
-        fprintf(stderr, "Could not connect to Redis at ");
+        fprintf(stderr, "Could not connect to server at ");
         char *err = (ctx != NULL ? ctx->errstr : "");
         if (hostsocket == NULL)
             fprintf(stderr, "%s:%d: %s\n", ip, port, err);
@@ -648,7 +648,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
         c->context = redisConnectUnixNonBlock(config.hostsocket);
     }
     if (c->context->err) {
-        fprintf(stderr, "Could not connect to Redis at ");
+        fprintf(stderr, "Could not connect to server at ");
         if (config.hostsocket == NULL || is_cluster_client)
             fprintf(stderr, "%s:%d: %s\n", ip, port, c->context->errstr);
         else

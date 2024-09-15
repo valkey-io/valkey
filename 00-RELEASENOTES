@@ -10,6 +10,43 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
+Valkey 8.0.0 GA  -  Released Sun 15 Sep 2024
+================================================================================
+Upgrade urgency LOW: This is the first release of Valkey 8.0, which includes
+generally includes stability and performance improvements over the second release
+candidate. This release is fully compatible with Redis OSS 7.2.4.
+
+Logging and Tooling Improvements
+================================
+* Added full client info to SHUTDOWN and CLUSTER FAILOVER logs for better traceability
+  of requests. (#875)
+
+Bug fixes
+=========
+* Resolved issues in replicationSetPrimary where the primary node's IP/port updates were
+  not correctly handled in the cluster gossip section. (#965)
+* Fixed AOF base suffix during rewrites when modifying the aof-use-rdb-preamble setting,
+  ensuring correct suffix caching to prevent inconsistencies. (#886)
+* Addressed rare crashes in async IO threads with TLS by preventing concurrent read and
+  write job overlap. (#1011)
+* Prevented AOF from being incorrectly disabled after loading RDB data, ensuring proper
+  re-enabling of AOF. (#1001)
+* Triggered a save of the cluster configuration file before shutdown to prevent
+  inconsistencies caused by unsaved node configuration changes. (#822)
+* Fixed timing issue in CLUSTER SETSLOT to ensure replicas handle migration correctly
+  when receiving the command before the gossip update. (#981)
+
+Performance
+===========
+* Optimized the handling of temporary set objects in SUNION and SDIFF commands, resulting
+  in a 41% performance improvement for SUNION and 27% for SDIFF. (#996)
+
+Behavior Changes
+================
+* Replicas now flush old data after checking RDB file is valid during disk-based replication,
+  preventing partial data loss and ensuring a clean data load. (#926)
+
+================================================================================
 Valkey 8.0.0 RC2  -  Released Tue 2 Sep 2024
 ================================================================================
 Upgrade urgency LOW: This is the second release candidate of Valkey 8.0, which

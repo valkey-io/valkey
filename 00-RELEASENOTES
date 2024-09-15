@@ -12,8 +12,8 @@ SECURITY: There are security fixes in the release.
 ================================================================================
 Valkey 8.0.0 GA  -  Released Sun 15 Sep 2024
 ================================================================================
-Upgrade urgency LOW: This is the first release of Valkey 8.0, which includes
-generally includes stability and performance improvements over the second release
+Upgrade urgency LOW: This is the first release of Valkey 8.0, which
+includes stability and performance improvements over the second release
 candidate. This release is fully compatible with Redis OSS 7.2.4.
 
 Logging and Tooling Improvements

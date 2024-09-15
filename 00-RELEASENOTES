@@ -45,7 +45,7 @@ Performance
 
 Behavior Changes
 ================
-* Replicas now flush old data before loading the RDB file during disk-based replication,
+* Replicas now flush old data after checking RDB file is valid during disk-based replication,
   preventing partial data loss and ensuring a clean data load. (#926)
 
 ================================================================================

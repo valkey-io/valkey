@@ -40,8 +40,6 @@ Performance
 ===========
 * Optimized the handling of temporary set objects in SUNION and SDIFF commands, resulting
   in a 41% performance improvement for SUNION and 27% for SDIFF. (#996)
-* Improved per-slot dictionary performance by checking for cluster mode earlier, reducing
-  overhead in high-pipeline workloads. (#995)
 
 Behavior Changes
 ================

@@ -30,3 +30,4 @@ SortIncludes: false
 AllowAllParametersOfDeclarationOnNextLine: false
 BinPackParameters: false
 AlignAfterOpenBracket: Align
+InsertNewlineAtEOF: true

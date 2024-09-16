@@ -1,8 +1,7 @@
 /* SDSLib 2.0 -- A C dynamic strings library
  *
- * Copyright (c) 2006-2015, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2006-2015, Redis Ltd.
  * Copyright (c) 2015, Oran Agra
- * Copyright (c) 2015, Redis Labs, Inc
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -344,11 +343,7 @@ sds sdsRemoveFreeSpace(sds s, int would_regrow) {
  * if the size is smaller than currently used len, the data will be truncated.
  *
  * The when the would_regrow argument is set to 1, it prevents the use of
- * SDS_TYPE_5, which is desired when the sds is likely to be changed again.
- *
- * The sdsAlloc size will be set to the requested size regardless of the actual
- * allocation size, this is done in order to avoid repeated calls to this
- * function when the caller detects that it has excess space. */
+ * SDS_TYPE_5, which is desired when the sds is likely to be changed again. */
 sds sdsResize(sds s, size_t size, int would_regrow) {
     void *sh, *newsh = NULL;
     char type, oldtype = s[-1] & SDS_TYPE_MASK;

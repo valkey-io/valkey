@@ -132,8 +132,9 @@ start_server {} {
     # with master.
     $master config set repl-timeout 1000
     $replica1 config set repl-timeout 1000
+    $replica1 config set client-output-buffer-limit "replica 1024 0 0"
     $replica2 config set repl-timeout 1000
-    $replica2 config set client-output-buffer-limit "replica 0 0 0"
+    $replica2 config set client-output-buffer-limit "replica 1024 0 0"
     $replica2 config set dual-channel-replication-enabled $dualchannel
 
     $replica1 replicaof $master_host $master_port

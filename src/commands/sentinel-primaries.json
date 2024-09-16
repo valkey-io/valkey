@@ -1,0 +1,26 @@
+{
+    "PRIMARIES": {
+        "summary": "Returns a list of monitored primaries.",
+        "complexity": "O(N) where N is the number of primaries",
+        "group": "sentinel",
+        "since": "8.0.0",
+        "arity": 2,
+        "container": "SENTINEL",
+        "function": "sentinelCommand",
+        "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+        ],
+        "reply_schema": {
+            "type": "array",
+            "description": "List of monitored primaries, and their states.",
+            "items": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "string"
+                }
+            }
+        }
+    }
+}

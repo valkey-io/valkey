@@ -5,6 +5,9 @@
 #include <string.h>
 
 int GET_HELLO(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+
     return ValkeyModule_ReplyWithSimpleString(ctx, "This is update module parameter test module");
 }
 

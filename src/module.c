@@ -13061,7 +13061,7 @@ void moduleCommand(client *c) {
             "    Load a module library from <path>, passing to it any optional arguments.",
             "LOADEX <path> [[CONFIG NAME VALUE] [CONFIG NAME VALUE]] [ARGS ...]",
             "    Load a module library from <path>, while passing it module configurations and optional arguments.",
-	    "SET-ARGUMENT <name> [<arg> ...]",
+            "SET-ARGUMENT <name> [<arg> ...]",
             "    Set module arguments to new values during runtime.",
             "UNLOAD <name>",
             "    Unload a module.",
@@ -13112,11 +13112,11 @@ void moduleCommand(client *c) {
     } else if (!strcasecmp(subcmd, "set-argument") && c->argc >= 3) {
         struct ValkeyModule *module = dictFetchValue(modules, c->argv[2]->ptr);
         if (module != NULL) {
-	    for (int i = 0; i < module->loadmod->argc; i++) {
+            for (int i = 0; i < module->loadmod->argc; i++) {
                 decrRefCount(module->loadmod->argv[i]);
             }
             zfree(module->loadmod->argv);
-	    robj **argv = NULL;
+            robj **argv = NULL;
             int argc = 0;
 
             if (c->argc > 3) {

@@ -1,0 +1,32 @@
+{
+    "SET-ARGUMENT": {
+        "summary": "Sets module arguments to new values during runtime.",
+        "complexity": "O(1)",
+        "group": "server",
+        "since": "8.2.0",
+        "arity": -3,
+        "container": "MODULE",
+        "function": "moduleCommand",
+        "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "NOSCRIPT",
+            "PROTECTED"
+        ],
+        "reply_schema": {
+            "const": "OK"
+        },
+        "arguments": [
+            {
+                "name": "name",
+                "type": "string"
+            },
+            {
+                "name": "arg",
+                "type": "string",
+                "optional": true,
+                "multiple": true
+            }
+        ]
+    }
+}

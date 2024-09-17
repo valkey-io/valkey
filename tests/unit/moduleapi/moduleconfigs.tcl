@@ -1,5 +1,7 @@
 set testmodule [file normalize tests/modules/moduleconfigs.so]
 set testmoduletwo [file normalize tests/modules/moduleconfigstwo.so]
+set testmoduleparameter [file normalize tests/modules/moduleparameter.so]
+
 
 start_server {tags {"modules"}} {
     r module load $testmodule
@@ -243,5 +245,21 @@ start_server {tags {"modules"}} {
             assert_equal [r config get moduleconfigs.memory_numeric] "moduleconfigs.memory_numeric 1024"
         }
     }
+
+    test {Module Set-Argument command work} {
+       r module load $testmoduleparameter
+
+       set t [r module list]
+       set modulename [lmap x [r module list] {dict get $x name}]
+       assert_not_equal [lsearch $modulename myhello] -1
+       string match "" [lmap x [r module list] {dict get $x args}]
+       r module set-argument myhello 1 2 3
+       r config rewrite
+       restart_server 0 true false
+       string match "1 2 3" [lmap x [r module list] {dict get $x args}]
+    }
+
 }
+
+
 

@@ -2636,7 +2636,7 @@ void initServer(void) {
         serverLog(LL_WARNING, "Failed creating the event loop. Error message: '%s'", strerror(errno));
         exit(1);
     }
-    server.db = zmalloc(sizeof(server) * server.dbnum);
+    server.db = zmalloc(sizeof(serverDb) * server.dbnum);
 
     /* Create the databases, and initialize other internal state. */
     int slot_count_bits = 0;

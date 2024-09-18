@@ -97,25 +97,25 @@
 
 #define LP_ENCODING_6BIT_STR_LEN(p) ((p)[0] & 0x3F)
 #define LP_ENCODING_12BIT_STR_LEN(p) ((((p)[0] & 0xF) << 8) | (p)[1])
-#define LP_ENCODING_32BIT_STR_LEN(p)                                                                                   \
+#define LP_ENCODING_32BIT_STR_LEN(p) \
     (((uint32_t)(p)[1] << 0) | ((uint32_t)(p)[2] << 8) | ((uint32_t)(p)[3] << 16) | ((uint32_t)(p)[4] << 24))
 
-#define lpGetTotalBytes(p)                                                                                             \
+#define lpGetTotalBytes(p) \
     (((uint32_t)(p)[0] << 0) | ((uint32_t)(p)[1] << 8) | ((uint32_t)(p)[2] << 16) | ((uint32_t)(p)[3] << 24))
 
 #define lpGetNumElements(p) (((uint32_t)(p)[4] << 0) | ((uint32_t)(p)[5] << 8))
-#define lpSetTotalBytes(p, v)                                                                                          \
-    do {                                                                                                               \
-        (p)[0] = (v) & 0xff;                                                                                           \
-        (p)[1] = ((v) >> 8) & 0xff;                                                                                    \
-        (p)[2] = ((v) >> 16) & 0xff;                                                                                   \
-        (p)[3] = ((v) >> 24) & 0xff;                                                                                   \
+#define lpSetTotalBytes(p, v)        \
+    do {                             \
+        (p)[0] = (v) & 0xff;         \
+        (p)[1] = ((v) >> 8) & 0xff;  \
+        (p)[2] = ((v) >> 16) & 0xff; \
+        (p)[3] = ((v) >> 24) & 0xff; \
     } while (0)
 
-#define lpSetNumElements(p, v)                                                                                         \
-    do {                                                                                                               \
-        (p)[4] = (v) & 0xff;                                                                                           \
-        (p)[5] = ((v) >> 8) & 0xff;                                                                                    \
+#define lpSetNumElements(p, v)      \
+    do {                            \
+        (p)[4] = (v) & 0xff;        \
+        (p)[5] = ((v) >> 8) & 0xff; \
     } while (0)
 
 /* Validates that 'p' is not outside the listpack.
@@ -123,16 +123,16 @@
  * that this element is valid, so it can be freely used.
  * Generally functions such lpNext and lpDelete assume the input pointer is
  * already validated (since it's the return value of another function). */
-#define ASSERT_INTEGRITY(lp, p)                                                                                        \
-    do {                                                                                                               \
-        assert((p) >= (lp) + LP_HDR_SIZE && (p) < (lp) + lpGetTotalBytes((lp)));                                       \
+#define ASSERT_INTEGRITY(lp, p)                                                  \
+    do {                                                                         \
+        assert((p) >= (lp) + LP_HDR_SIZE && (p) < (lp) + lpGetTotalBytes((lp))); \
     } while (0)
 
 /* Similar to the above, but validates the entire element length rather than just
  * it's pointer. */
-#define ASSERT_INTEGRITY_LEN(lp, p, len)                                                                               \
-    do {                                                                                                               \
-        assert((p) >= (lp) + LP_HDR_SIZE && (p) + (len) < (lp) + lpGetTotalBytes((lp)));                               \
+#define ASSERT_INTEGRITY_LEN(lp, p, len)                                                 \
+    do {                                                                                 \
+        assert((p) >= (lp) + LP_HDR_SIZE && (p) + (len) < (lp) + lpGetTotalBytes((lp))); \
     } while (0)
 
 static inline void lpAssertValidEntry(unsigned char *lp, size_t lpbytes, unsigned char *p);

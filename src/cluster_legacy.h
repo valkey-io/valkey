@@ -292,9 +292,8 @@ static_assert(offsetof(clusterMsg, data) == 2256, "unexpected field offset");
 
 /* Message flags better specify the packet content or are used to
  * provide some information about the node state. */
-#define CLUSTERMSG_FLAG0_PAUSED (1 << 0) /* Primary paused for manual failover. */
-#define CLUSTERMSG_FLAG0_FORCEACK                                                                                      \
-    (1 << 1)                               /* Give ACK to AUTH_REQUEST even if                                         \
+#define CLUSTERMSG_FLAG0_PAUSED (1 << 0)   /* Primary paused for manual failover. */
+#define CLUSTERMSG_FLAG0_FORCEACK (1 << 1) /* Give ACK to AUTH_REQUEST even if \
                                               primary is up. */
 #define CLUSTERMSG_FLAG0_EXT_DATA (1 << 2) /* Message contains extension data */
 

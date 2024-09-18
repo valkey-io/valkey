@@ -1522,22 +1522,20 @@ void objectCommand(client *c) {
  * Usage: MEMORY usage <key> */
 void memoryCommand(client *c) {
     if (!strcasecmp(c->argv[1]->ptr, "help") && c->argc == 2) {
-        /* clang-format off */
         const char *help[] = {
-"DOCTOR",
-"    Return memory problems reports.",
-"MALLOC-STATS",
-"    Return internal statistics report from the memory allocator.",
-"PURGE",
-"    Attempt to purge dirty pages for reclamation by the allocator.",
-"STATS",
-"    Return information about the memory usage of the server.",
-"USAGE <key> [SAMPLES <count>]",
-"    Return memory in bytes used by <key> and its value. Nested values are",
-"    sampled up to <count> times (default: 5, 0 means sample all).",
-NULL
+            "DOCTOR",
+            "    Return memory problems reports.",
+            "MALLOC-STATS",
+            "    Return internal statistics report from the memory allocator.",
+            "PURGE",
+            "    Attempt to purge dirty pages for reclamation by the allocator.",
+            "STATS",
+            "    Return information about the memory usage of the server.",
+            "USAGE <key> [SAMPLES <count>]",
+            "    Return memory in bytes used by <key> and its value. Nested values are",
+            "    sampled up to <count> times (default: 5, 0 means sample all).",
+            NULL,
         };
-        /* clang-format on */
         addReplyHelp(c, help);
     } else if (!strcasecmp(c->argv[1]->ptr, "usage") && c->argc >= 3) {
         dictEntry *de;

@@ -103,7 +103,7 @@ static thread_local int thread_index = -1;
  * the reader will see the inconsistency memory on non x86 architecture potentially.
  * For the ARM and PowerPC platform, we can solve this issue by make the memory aligned.
  * For the other architecture, lets fall back to the atomic operation to keep safe. */
-#if defined(__i386__) || defined(__x86_64__) || defined(__amd64__) || defined(__POWERPC__) || defined(__arm__) ||      \
+#if defined(__i386__) || defined(__x86_64__) || defined(__amd64__) || defined(__POWERPC__) || defined(__arm__) || \
     defined(__arm64__)
 static __attribute__((aligned(sizeof(size_t)))) size_t used_memory_thread[MAX_THREADS_NUM];
 #else

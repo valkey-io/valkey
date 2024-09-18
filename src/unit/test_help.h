@@ -30,15 +30,15 @@
 
 #define TEST_PRINT_ERROR(descr) printf("[" KRED "%s - %s:%d" KRESET "] %s\n", __func__, __FILE__, __LINE__, descr)
 
-#define TEST_PRINT_INFO(descr, ...)                                                                                    \
+#define TEST_PRINT_INFO(descr, ...) \
     printf("[" KBLUE "%s - %s:%d" KRESET "] " descr "\n", __func__, __FILE__, __LINE__, __VA_ARGS__)
 
-#define TEST_ASSERT_MESSAGE(descr, _c)                                                                                 \
-    do {                                                                                                               \
-        if (!(_c)) {                                                                                                   \
-            TEST_PRINT_ERROR(descr);                                                                                   \
-            return 1;                                                                                                  \
-        }                                                                                                              \
+#define TEST_ASSERT_MESSAGE(descr, _c) \
+    do {                               \
+        if (!(_c)) {                   \
+            TEST_PRINT_ERROR(descr);   \
+            return 1;                  \
+        }                              \
     } while (0)
 
 #define TEST_ASSERT(_c) TEST_ASSERT_MESSAGE("Failed assertion: " #_c, _c)

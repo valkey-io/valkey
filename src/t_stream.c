@@ -769,7 +769,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
         int64_t primary_fields_count = lpGetInteger(p);
         p = lpNext(lp, p);                                                    /* Skip the first field. */
         for (int64_t j = 0; j < primary_fields_count; j++) p = lpNext(lp, p); /* Skip all primary fields. */
-        p = lpNext(lp, p); /* Skip the zero primary entry terminator. */
+        p = lpNext(lp, p);                                                    /* Skip the zero primary entry terminator. */
 
         /* 'p' is now pointing to the first entry inside the listpack.
          * We have to run entry after entry, marking entries as deleted
@@ -1641,8 +1641,8 @@ void streamPropagateConsumerCreation(client *c, robj *key, robj *groupname, sds 
  * flag.
  */
 #define STREAM_RWR_NOACK (1 << 0) /* Do not create entries in the PEL. */
-#define STREAM_RWR_RAWENTRIES                                                                                          \
-    (1 << 1)                        /* Do not emit protocol for array                                                  \
+#define STREAM_RWR_RAWENTRIES                                         \
+    (1 << 1)                        /* Do not emit protocol for array \
                                        boundaries, just the entries. */
 #define STREAM_RWR_HISTORY (1 << 2) /* Only serve consumer local PEL. */
 size_t streamReplyWithRange(client *c,
@@ -2610,25 +2610,23 @@ void xgroupCommand(client *c) {
 
     /* Dispatch the different subcommands. */
     if (c->argc == 2 && !strcasecmp(opt, "HELP")) {
-        /* clang-format off */
         const char *help[] = {
-"CREATE <key> <groupname> <id|$> [option]",
-"    Create a new consumer group. Options are:",
-"    * MKSTREAM",
-"      Create the empty stream if it does not exist.",
-"    * ENTRIESREAD entries_read",
-"      Set the group's entries_read counter (internal use).",
-"CREATECONSUMER <key> <groupname> <consumer>",
-"    Create a new consumer in the specified group.",
-"DELCONSUMER <key> <groupname> <consumer>",
-"    Remove the specified consumer.",
-"DESTROY <key> <groupname>",
-"    Remove the specified group.",
-"SETID <key> <groupname> <id|$> [ENTRIESREAD entries_read]",
-"    Set the current group ID and entries_read counter.",
-NULL
+            "CREATE <key> <groupname> <id|$> [option]",
+            "    Create a new consumer group. Options are:",
+            "    * MKSTREAM",
+            "      Create the empty stream if it does not exist.",
+            "    * ENTRIESREAD entries_read",
+            "      Set the group's entries_read counter (internal use).",
+            "CREATECONSUMER <key> <groupname> <consumer>",
+            "    Create a new consumer in the specified group.",
+            "DELCONSUMER <key> <groupname> <consumer>",
+            "    Remove the specified consumer.",
+            "DESTROY <key> <groupname>",
+            "    Remove the specified group.",
+            "SETID <key> <groupname> <id|$> [ENTRIESREAD entries_read]",
+            "    Set the current group ID and entries_read counter.",
+            NULL,
         };
-        /* clang-format on */
         addReplyHelp(c, help);
     } else if (!strcasecmp(opt, "CREATE") && (c->argc >= 5 && c->argc <= 8)) {
         streamID id;
@@ -3798,17 +3796,15 @@ void xinfoCommand(client *c) {
 
     /* HELP is special. Handle it ASAP. */
     if (!strcasecmp(c->argv[1]->ptr, "HELP")) {
-        /* clang-format off */
         const char *help[] = {
-"CONSUMERS <key> <groupname>",
-"    Show consumers of <groupname>.",
-"GROUPS <key>",
-"    Show the stream consumer groups.",
-"STREAM <key> [FULL [COUNT <count>]",
-"    Show information about the stream.",
-NULL
+            "CONSUMERS <key> <groupname>",
+            "    Show consumers of <groupname>.",
+            "GROUPS <key>",
+            "    Show the stream consumer groups.",
+            "STREAM <key> [FULL [COUNT <count>]",
+            "    Show information about the stream.",
+            NULL,
         };
-        /* clang-format on */
         addReplyHelp(c, help);
         return;
     }

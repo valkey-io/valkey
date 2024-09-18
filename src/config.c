@@ -51,76 +51,105 @@ typedef struct deprecatedConfig {
     const int argc_max;
 } deprecatedConfig;
 
-configEnum maxmemory_policy_enum[] = {{"volatile-lru", MAXMEMORY_VOLATILE_LRU},
-                                      {"volatile-lfu", MAXMEMORY_VOLATILE_LFU},
-                                      {"volatile-random", MAXMEMORY_VOLATILE_RANDOM},
-                                      {"volatile-ttl", MAXMEMORY_VOLATILE_TTL},
-                                      {"allkeys-lru", MAXMEMORY_ALLKEYS_LRU},
-                                      {"allkeys-lfu", MAXMEMORY_ALLKEYS_LFU},
-                                      {"allkeys-random", MAXMEMORY_ALLKEYS_RANDOM},
-                                      {"noeviction", MAXMEMORY_NO_EVICTION},
-                                      {NULL, 0}};
+configEnum maxmemory_policy_enum[] = {
+    {"volatile-lru", MAXMEMORY_VOLATILE_LRU},
+    {"volatile-lfu", MAXMEMORY_VOLATILE_LFU},
+    {"volatile-random", MAXMEMORY_VOLATILE_RANDOM},
+    {"volatile-ttl", MAXMEMORY_VOLATILE_TTL},
+    {"allkeys-lru", MAXMEMORY_ALLKEYS_LRU},
+    {"allkeys-lfu", MAXMEMORY_ALLKEYS_LFU},
+    {"allkeys-random", MAXMEMORY_ALLKEYS_RANDOM},
+    {"noeviction", MAXMEMORY_NO_EVICTION},
+    {NULL, 0}};
 
-configEnum syslog_facility_enum[] = {{"user", LOG_USER},     {"local0", LOG_LOCAL0},
-                                     {"local1", LOG_LOCAL1}, {"local2", LOG_LOCAL2},
-                                     {"local3", LOG_LOCAL3}, {"local4", LOG_LOCAL4},
-                                     {"local5", LOG_LOCAL5}, {"local6", LOG_LOCAL6},
-                                     {"local7", LOG_LOCAL7}, {NULL, 0}};
+configEnum syslog_facility_enum[] = {
+    {"user", LOG_USER},
+    {"local0", LOG_LOCAL0},
+    {"local1", LOG_LOCAL1},
+    {"local2", LOG_LOCAL2},
+    {"local3", LOG_LOCAL3},
+    {"local4", LOG_LOCAL4},
+    {"local5", LOG_LOCAL5},
+    {"local6", LOG_LOCAL6},
+    {"local7", LOG_LOCAL7},
+    {NULL, 0}};
 
-configEnum loglevel_enum[] = {{"debug", LL_DEBUG},     {"verbose", LL_VERBOSE}, {"notice", LL_NOTICE},
-                              {"warning", LL_WARNING}, {"nothing", LL_NOTHING}, {NULL, 0}};
+configEnum loglevel_enum[] = {
+    {"debug", LL_DEBUG},
+    {"verbose", LL_VERBOSE},
+    {"notice", LL_NOTICE},
+    {"warning", LL_WARNING},
+    {"nothing", LL_NOTHING},
+    {NULL, 0}};
 
-configEnum supervised_mode_enum[] = {{"upstart", SUPERVISED_UPSTART},
-                                     {"systemd", SUPERVISED_SYSTEMD},
-                                     {"auto", SUPERVISED_AUTODETECT},
-                                     {"no", SUPERVISED_NONE},
-                                     {NULL, 0}};
+configEnum supervised_mode_enum[] = {
+    {"upstart", SUPERVISED_UPSTART},
+    {"systemd", SUPERVISED_SYSTEMD},
+    {"auto", SUPERVISED_AUTODETECT},
+    {"no", SUPERVISED_NONE},
+    {NULL, 0}};
 
-configEnum aof_fsync_enum[] = {{"everysec", AOF_FSYNC_EVERYSEC},
-                               {"always", AOF_FSYNC_ALWAYS},
-                               {"no", AOF_FSYNC_NO},
-                               {NULL, 0}};
+configEnum aof_fsync_enum[] = {
+    {"everysec", AOF_FSYNC_EVERYSEC},
+    {"always", AOF_FSYNC_ALWAYS},
+    {"no", AOF_FSYNC_NO},
+    {NULL, 0}};
 
-configEnum shutdown_on_sig_enum[] = {{"default", 0},        {"save", SHUTDOWN_SAVE},   {"nosave", SHUTDOWN_NOSAVE},
-                                     {"now", SHUTDOWN_NOW}, {"force", SHUTDOWN_FORCE}, {NULL, 0}};
+configEnum shutdown_on_sig_enum[] = {
+    {"default", 0},
+    {"save", SHUTDOWN_SAVE},
+    {"nosave", SHUTDOWN_NOSAVE},
+    {"now", SHUTDOWN_NOW},
+    {"force", SHUTDOWN_FORCE},
+    {NULL, 0}};
 
-configEnum repl_diskless_load_enum[] = {{"disabled", REPL_DISKLESS_LOAD_DISABLED},
-                                        {"on-empty-db", REPL_DISKLESS_LOAD_WHEN_DB_EMPTY},
-                                        {"swapdb", REPL_DISKLESS_LOAD_SWAPDB},
-                                        {NULL, 0}};
+configEnum repl_diskless_load_enum[] = {
+    {"disabled", REPL_DISKLESS_LOAD_DISABLED},
+    {"on-empty-db", REPL_DISKLESS_LOAD_WHEN_DB_EMPTY},
+    {"swapdb", REPL_DISKLESS_LOAD_SWAPDB},
+    {NULL, 0}};
 
-configEnum tls_auth_clients_enum[] = {{"no", TLS_CLIENT_AUTH_NO},
-                                      {"yes", TLS_CLIENT_AUTH_YES},
-                                      {"optional", TLS_CLIENT_AUTH_OPTIONAL},
-                                      {NULL, 0}};
+configEnum tls_auth_clients_enum[] = {
+    {"no", TLS_CLIENT_AUTH_NO},
+    {"yes", TLS_CLIENT_AUTH_YES},
+    {"optional", TLS_CLIENT_AUTH_OPTIONAL},
+    {NULL, 0}};
 
-configEnum oom_score_adj_enum[] = {{"no", OOM_SCORE_ADJ_NO},
-                                   {"yes", OOM_SCORE_RELATIVE},
-                                   {"relative", OOM_SCORE_RELATIVE},
-                                   {"absolute", OOM_SCORE_ADJ_ABSOLUTE},
-                                   {NULL, 0}};
+configEnum oom_score_adj_enum[] = {
+    {"no", OOM_SCORE_ADJ_NO},
+    {"yes", OOM_SCORE_RELATIVE},
+    {"relative", OOM_SCORE_RELATIVE},
+    {"absolute", OOM_SCORE_ADJ_ABSOLUTE},
+    {NULL, 0}};
 
-configEnum acl_pubsub_default_enum[] = {{"allchannels", SELECTOR_FLAG_ALLCHANNELS}, {"resetchannels", 0}, {NULL, 0}};
+configEnum acl_pubsub_default_enum[] = {
+    {"allchannels", SELECTOR_FLAG_ALLCHANNELS},
+    {"resetchannels", 0},
+    {NULL, 0}};
 
-configEnum sanitize_dump_payload_enum[] = {{"no", SANITIZE_DUMP_NO},
-                                           {"yes", SANITIZE_DUMP_YES},
-                                           {"clients", SANITIZE_DUMP_CLIENTS},
-                                           {NULL, 0}};
+configEnum sanitize_dump_payload_enum[] = {
+    {"no", SANITIZE_DUMP_NO},
+    {"yes", SANITIZE_DUMP_YES},
+    {"clients", SANITIZE_DUMP_CLIENTS},
+    {NULL, 0}};
 
-configEnum protected_action_enum[] = {{"no", PROTECTED_ACTION_ALLOWED_NO},
-                                      {"yes", PROTECTED_ACTION_ALLOWED_YES},
-                                      {"local", PROTECTED_ACTION_ALLOWED_LOCAL},
-                                      {NULL, 0}};
+configEnum protected_action_enum[] = {
+    {"no", PROTECTED_ACTION_ALLOWED_NO},
+    {"yes", PROTECTED_ACTION_ALLOWED_YES},
+    {"local", PROTECTED_ACTION_ALLOWED_LOCAL},
+    {NULL, 0}};
 
-configEnum cluster_preferred_endpoint_type_enum[] = {{"ip", CLUSTER_ENDPOINT_TYPE_IP},
-                                                     {"hostname", CLUSTER_ENDPOINT_TYPE_HOSTNAME},
-                                                     {"unknown-endpoint", CLUSTER_ENDPOINT_TYPE_UNKNOWN_ENDPOINT},
-                                                     {NULL, 0}};
+configEnum cluster_preferred_endpoint_type_enum[] = {
+    {"ip", CLUSTER_ENDPOINT_TYPE_IP},
+    {"hostname", CLUSTER_ENDPOINT_TYPE_HOSTNAME},
+    {"unknown-endpoint", CLUSTER_ENDPOINT_TYPE_UNKNOWN_ENDPOINT},
+    {NULL, 0}};
 
-configEnum propagation_error_behavior_enum[] = {{"ignore", PROPAGATION_ERR_BEHAVIOR_IGNORE},
-                                                {"panic", PROPAGATION_ERR_BEHAVIOR_PANIC},
-                                                {"panic-on-replicas", PROPAGATION_ERR_BEHAVIOR_PANIC_ON_REPLICAS},
-                                                {NULL, 0}};
+configEnum propagation_error_behavior_enum[] = {
+    {"ignore", PROPAGATION_ERR_BEHAVIOR_IGNORE},
+    {"panic", PROPAGATION_ERR_BEHAVIOR_PANIC},
+    {"panic-on-replicas", PROPAGATION_ERR_BEHAVIOR_PANIC_ON_REPLICAS},
+    {NULL, 0}};
 
 /* Output buffer limits presets. */
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
@@ -1760,10 +1789,10 @@ int rewriteConfig(char *path, int force_write) {
 #define LOADBUF_SIZE 256
 static char loadbuf[LOADBUF_SIZE];
 
-#define embedCommonConfig(config_name, config_alias, config_flags)                                                     \
+#define embedCommonConfig(config_name, config_alias, config_flags) \
     .name = (config_name), .alias = (config_alias), .flags = (config_flags),
 
-#define embedConfigInterface(initfn, setfn, getfn, rewritefn, applyfn)                                                 \
+#define embedConfigInterface(initfn, setfn, getfn, rewritefn, applyfn) \
     .interface = {.init = (initfn), .set = (setfn), .get = (getfn), .rewrite = (rewritefn), .apply = (applyfn)},
 
 /* What follows is the generic config types that are supported. To add a new
@@ -1814,16 +1843,16 @@ static void boolConfigRewrite(standardConfig *config, const char *name, struct r
     rewriteConfigYesNoOption(state, name, val, config->data.yesno.default_value);
 }
 
-#define createBoolConfig(name, alias, flags, config_addr, default, is_valid, apply)                                    \
-    {                                                                                                                  \
-        embedCommonConfig(name, alias, flags)                                                                          \
-            embedConfigInterface(boolConfigInit, boolConfigSet, boolConfigGet, boolConfigRewrite, apply)               \
-                .type = BOOL_CONFIG,                                                                                   \
-          .data.yesno = {                                                                                              \
-              .config = &(config_addr),                                                                                \
-              .default_value = (default),                                                                              \
-              .is_valid_fn = (is_valid),                                                                               \
-          }                                                                                                            \
+#define createBoolConfig(name, alias, flags, config_addr, default, is_valid, apply)                      \
+    {                                                                                                    \
+        embedCommonConfig(name, alias, flags)                                                            \
+            embedConfigInterface(boolConfigInit, boolConfigSet, boolConfigGet, boolConfigRewrite, apply) \
+                .type = BOOL_CONFIG,                                                                     \
+          .data.yesno = {                                                                                \
+              .config = &(config_addr),                                                                  \
+              .default_value = (default),                                                                \
+              .is_valid_fn = (is_valid),                                                                 \
+          }                                                                                              \
     }
 
 /* String Configs */
@@ -1904,30 +1933,30 @@ static void sdsConfigRewrite(standardConfig *config, const char *name, struct re
 #define ALLOW_EMPTY_STRING 0
 #define EMPTY_STRING_IS_NULL 1
 
-#define createStringConfig(name, alias, flags, empty_to_null, config_addr, default, is_valid, apply)                   \
-    {                                                                                                                  \
-        embedCommonConfig(name, alias, flags)                                                                          \
-            embedConfigInterface(stringConfigInit, stringConfigSet, stringConfigGet, stringConfigRewrite, apply)       \
-                .type = STRING_CONFIG,                                                                                 \
-          .data.string = {                                                                                             \
-              .config = &(config_addr),                                                                                \
-              .default_value = (default),                                                                              \
-              .is_valid_fn = (is_valid),                                                                               \
-              .convert_empty_to_null = (empty_to_null),                                                                \
-          }                                                                                                            \
+#define createStringConfig(name, alias, flags, empty_to_null, config_addr, default, is_valid, apply)             \
+    {                                                                                                            \
+        embedCommonConfig(name, alias, flags)                                                                    \
+            embedConfigInterface(stringConfigInit, stringConfigSet, stringConfigGet, stringConfigRewrite, apply) \
+                .type = STRING_CONFIG,                                                                           \
+          .data.string = {                                                                                       \
+              .config = &(config_addr),                                                                          \
+              .default_value = (default),                                                                        \
+              .is_valid_fn = (is_valid),                                                                         \
+              .convert_empty_to_null = (empty_to_null),                                                          \
+          }                                                                                                      \
     }
 
-#define createSDSConfig(name, alias, flags, empty_to_null, config_addr, default, is_valid, apply)                      \
-    {                                                                                                                  \
-        embedCommonConfig(name, alias, flags)                                                                          \
-            embedConfigInterface(sdsConfigInit, sdsConfigSet, sdsConfigGet, sdsConfigRewrite, apply)                   \
-                .type = SDS_CONFIG,                                                                                    \
-          .data.sds = {                                                                                                \
-              .config = &(config_addr),                                                                                \
-              .default_value = (default),                                                                              \
-              .is_valid_fn = (is_valid),                                                                               \
-              .convert_empty_to_null = (empty_to_null),                                                                \
-          }                                                                                                            \
+#define createSDSConfig(name, alias, flags, empty_to_null, config_addr, default, is_valid, apply)    \
+    {                                                                                                \
+        embedCommonConfig(name, alias, flags)                                                        \
+            embedConfigInterface(sdsConfigInit, sdsConfigSet, sdsConfigGet, sdsConfigRewrite, apply) \
+                .type = SDS_CONFIG,                                                                  \
+          .data.sds = {                                                                              \
+              .config = &(config_addr),                                                              \
+              .default_value = (default),                                                            \
+              .is_valid_fn = (is_valid),                                                             \
+              .convert_empty_to_null = (empty_to_null),                                              \
+          }                                                                                          \
     }
 
 /* Enum configs */
@@ -1977,17 +2006,17 @@ static void enumConfigRewrite(standardConfig *config, const char *name, struct r
     rewriteConfigEnumOption(state, name, val, config);
 }
 
-#define createEnumConfig(name, alias, flags, enum, config_addr, default, is_valid, apply)                              \
-    {                                                                                                                  \
-        embedCommonConfig(name, alias, flags)                                                                          \
-            embedConfigInterface(enumConfigInit, enumConfigSet, enumConfigGet, enumConfigRewrite, apply)               \
-                .type = ENUM_CONFIG,                                                                                   \
-          .data.enumd = {                                                                                              \
-              .config = &(config_addr),                                                                                \
-              .default_value = (default),                                                                              \
-              .is_valid_fn = (is_valid),                                                                               \
-              .enum_value = (enum),                                                                                    \
-          }                                                                                                            \
+#define createEnumConfig(name, alias, flags, enum, config_addr, default, is_valid, apply)                \
+    {                                                                                                    \
+        embedCommonConfig(name, alias, flags)                                                            \
+            embedConfigInterface(enumConfigInit, enumConfigSet, enumConfigGet, enumConfigRewrite, apply) \
+                .type = ENUM_CONFIG,                                                                     \
+          .data.enumd = {                                                                                \
+              .config = &(config_addr),                                                                  \
+              .default_value = (default),                                                                \
+              .is_valid_fn = (is_valid),                                                                 \
+              .enum_value = (enum),                                                                      \
+          }                                                                                              \
     }
 
 /* Gets a 'long long val' and sets it into the union, using a macro to get
@@ -2022,30 +2051,30 @@ int setNumericType(standardConfig *config, long long val, const char **err) {
 
 /* Gets a 'long long val' and sets it with the value from the union, using a
  * macro to get compile time type check. */
-#define GET_NUMERIC_TYPE(val)                                                                                          \
-    if (config->data.numeric.numeric_type == NUMERIC_TYPE_INT) {                                                       \
-        val = *(config->data.numeric.config.i);                                                                        \
-    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_UINT) {                                               \
-        val = *(config->data.numeric.config.ui);                                                                       \
-    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_LONG) {                                               \
-        val = *(config->data.numeric.config.l);                                                                        \
-    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG) {                                              \
-        val = *(config->data.numeric.config.ul);                                                                       \
-    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_LONG_LONG) {                                          \
-        if (config->flags & MODULE_CONFIG)                                                                             \
-            val = getModuleNumericConfig(config->privdata);                                                            \
-        else                                                                                                           \
-            val = *(config->data.numeric.config.ll);                                                                   \
-    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG_LONG) {                                         \
-        val = *(config->data.numeric.config.ull);                                                                      \
-    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_SIZE_T) {                                             \
-        val = *(config->data.numeric.config.st);                                                                       \
-    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_SSIZE_T) {                                            \
-        val = *(config->data.numeric.config.sst);                                                                      \
-    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_OFF_T) {                                              \
-        val = *(config->data.numeric.config.ot);                                                                       \
-    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_TIME_T) {                                             \
-        val = *(config->data.numeric.config.tt);                                                                       \
+#define GET_NUMERIC_TYPE(val)                                                  \
+    if (config->data.numeric.numeric_type == NUMERIC_TYPE_INT) {               \
+        val = *(config->data.numeric.config.i);                                \
+    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_UINT) {       \
+        val = *(config->data.numeric.config.ui);                               \
+    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_LONG) {       \
+        val = *(config->data.numeric.config.l);                                \
+    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG) {      \
+        val = *(config->data.numeric.config.ul);                               \
+    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_LONG_LONG) {  \
+        if (config->flags & MODULE_CONFIG)                                     \
+            val = getModuleNumericConfig(config->privdata);                    \
+        else                                                                   \
+            val = *(config->data.numeric.config.ll);                           \
+    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG_LONG) { \
+        val = *(config->data.numeric.config.ull);                              \
+    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_SIZE_T) {     \
+        val = *(config->data.numeric.config.st);                               \
+    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_SSIZE_T) {    \
+        val = *(config->data.numeric.config.sst);                              \
+    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_OFF_T) {      \
+        val = *(config->data.numeric.config.ot);                               \
+    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_TIME_T) {     \
+        val = *(config->data.numeric.config.tt);                               \
     }
 
 /* Numeric configs */
@@ -2187,57 +2216,57 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
     }
 }
 
-#define embedCommonNumericalConfig(name, alias, _flags, lower, upper, config_addr, default, num_conf_flags, is_valid,  \
-                                   apply)                                                                              \
-    {                                                                                                                  \
-        embedCommonConfig(name, alias, _flags)                                                                         \
-            embedConfigInterface(numericConfigInit, numericConfigSet, numericConfigGet, numericConfigRewrite, apply)   \
-                .type = NUMERIC_CONFIG,                                                                                \
-          .data.numeric = {                                                                                            \
-              .lower_bound = (lower),                                                                                  \
-              .upper_bound = (upper),                                                                                  \
-              .default_value = (default),                                                                              \
-              .is_valid_fn = (is_valid),                                                                               \
+#define embedCommonNumericalConfig(name, alias, _flags, lower, upper, config_addr, default, num_conf_flags, is_valid, \
+                                   apply)                                                                             \
+    {                                                                                                                 \
+        embedCommonConfig(name, alias, _flags)                                                                        \
+            embedConfigInterface(numericConfigInit, numericConfigSet, numericConfigGet, numericConfigRewrite, apply)  \
+                .type = NUMERIC_CONFIG,                                                                               \
+          .data.numeric = {                                                                                           \
+              .lower_bound = (lower),                                                                                 \
+              .upper_bound = (upper),                                                                                 \
+              .default_value = (default),                                                                             \
+              .is_valid_fn = (is_valid),                                                                              \
               .flags = (num_conf_flags),
 
-#define createIntConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply)       \
-    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,       \
-                               apply)                                                                                  \
-        .numeric_type = NUMERIC_TYPE_INT,                                                                              \
-  .config.i = &(config_addr)                                                                                           \
-    }                                                                                                                  \
+#define createIntConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
+    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, \
+                               apply)                                                                            \
+        .numeric_type = NUMERIC_TYPE_INT,                                                                        \
+  .config.i = &(config_addr)                                                                                     \
+    }                                                                                                            \
     }
 
-#define createUIntConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply)      \
-    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,       \
-                               apply)                                                                                  \
-        .numeric_type = NUMERIC_TYPE_UINT,                                                                             \
-  .config.ui = &(config_addr)                                                                                          \
-    }                                                                                                                  \
+#define createUIntConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
+    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,  \
+                               apply)                                                                             \
+        .numeric_type = NUMERIC_TYPE_UINT,                                                                        \
+  .config.ui = &(config_addr)                                                                                     \
+    }                                                                                                             \
     }
 
-#define createLongConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply)      \
-    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,       \
-                               apply)                                                                                  \
-        .numeric_type = NUMERIC_TYPE_LONG,                                                                             \
-  .config.l = &(config_addr)                                                                                           \
-    }                                                                                                                  \
+#define createLongConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
+    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,  \
+                               apply)                                                                             \
+        .numeric_type = NUMERIC_TYPE_LONG,                                                                        \
+  .config.l = &(config_addr)                                                                                      \
+    }                                                                                                             \
     }
 
-#define createULongConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply)     \
-    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,       \
-                               apply)                                                                                  \
-        .numeric_type = NUMERIC_TYPE_ULONG,                                                                            \
-  .config.ul = &(config_addr)                                                                                          \
-    }                                                                                                                  \
+#define createULongConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
+    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,   \
+                               apply)                                                                              \
+        .numeric_type = NUMERIC_TYPE_ULONG,                                                                        \
+  .config.ul = &(config_addr)                                                                                      \
+    }                                                                                                              \
     }
 
-#define createLongLongConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply)  \
-    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,       \
-                               apply)                                                                                  \
-        .numeric_type = NUMERIC_TYPE_LONG_LONG,                                                                        \
-  .config.ll = &(config_addr)                                                                                          \
-    }                                                                                                                  \
+#define createLongLongConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
+    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,      \
+                               apply)                                                                                 \
+        .numeric_type = NUMERIC_TYPE_LONG_LONG,                                                                       \
+  .config.ll = &(config_addr)                                                                                         \
+    }                                                                                                                 \
     }
 
 #define createULongLongConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
@@ -2248,40 +2277,40 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
     }                                                                                                                  \
     }
 
-#define createSizeTConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply)     \
-    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,       \
-                               apply)                                                                                  \
-        .numeric_type = NUMERIC_TYPE_SIZE_T,                                                                           \
-  .config.st = &(config_addr)                                                                                          \
-    }                                                                                                                  \
+#define createSizeTConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
+    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,   \
+                               apply)                                                                              \
+        .numeric_type = NUMERIC_TYPE_SIZE_T,                                                                       \
+  .config.st = &(config_addr)                                                                                      \
+    }                                                                                                              \
     }
 
-#define createSSizeTConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply)    \
-    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,       \
-                               apply)                                                                                  \
-        .numeric_type = NUMERIC_TYPE_SSIZE_T,                                                                          \
-  .config.sst = &(config_addr)                                                                                         \
-    }                                                                                                                  \
+#define createSSizeTConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
+    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,    \
+                               apply)                                                                               \
+        .numeric_type = NUMERIC_TYPE_SSIZE_T,                                                                       \
+  .config.sst = &(config_addr)                                                                                      \
+    }                                                                                                               \
     }
 
-#define createTimeTConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply)     \
-    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,       \
-                               apply)                                                                                  \
-        .numeric_type = NUMERIC_TYPE_TIME_T,                                                                           \
-  .config.tt = &(config_addr)                                                                                          \
-    }                                                                                                                  \
+#define createTimeTConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
+    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,   \
+                               apply)                                                                              \
+        .numeric_type = NUMERIC_TYPE_TIME_T,                                                                       \
+  .config.tt = &(config_addr)                                                                                      \
+    }                                                                                                              \
     }
 
-#define createOffTConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply)      \
-    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,       \
-                               apply)                                                                                  \
-        .numeric_type = NUMERIC_TYPE_OFF_T,                                                                            \
-  .config.ot = &(config_addr)                                                                                          \
-    }                                                                                                                  \
+#define createOffTConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
+    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,  \
+                               apply)                                                                             \
+        .numeric_type = NUMERIC_TYPE_OFF_T,                                                                       \
+  .config.ot = &(config_addr)                                                                                     \
+    }                                                                                                             \
     }
 
-#define createSpecialConfig(name, alias, modifiable, setfn, getfn, rewritefn, applyfn)                                 \
-    {.type = SPECIAL_CONFIG,                                                                                           \
+#define createSpecialConfig(name, alias, modifiable, setfn, getfn, rewritefn, applyfn) \
+    {.type = SPECIAL_CONFIG,                                                           \
      embedCommonConfig(name, alias, modifiable) embedConfigInterface(NULL, setfn, getfn, rewritefn, applyfn)}
 
 static int isValidActiveDefrag(int val, const char **err) {
@@ -3054,7 +3083,6 @@ static int applyClientMaxMemoryUsage(const char **err) {
 }
 
 standardConfig static_configs[] = {
-    /* clang-format off */
     /* Bool configs */
     createBoolConfig("rdbchecksum", NULL, IMMUTABLE_CONFIG, server.rdb_checksum, 1, NULL, NULL),
     createBoolConfig("daemonize", NULL, IMMUTABLE_CONFIG, server.daemonize, 0, NULL, NULL),
@@ -3066,7 +3094,7 @@ standardConfig static_configs[] = {
     createBoolConfig("activerehashing", NULL, MODIFIABLE_CONFIG, server.activerehashing, 1, NULL, NULL),
     createBoolConfig("stop-writes-on-bgsave-error", NULL, MODIFIABLE_CONFIG, server.stop_writes_on_bgsave_err, 1, NULL, NULL),
     createBoolConfig("set-proc-title", NULL, IMMUTABLE_CONFIG, server.set_proc_title, 1, NULL, NULL), /* Should setproctitle be used? */
-    createBoolConfig("dynamic-hz", NULL, MODIFIABLE_CONFIG, server.dynamic_hz, 1, NULL, NULL), /* Adapt hz to # of clients.*/
+    createBoolConfig("dynamic-hz", NULL, MODIFIABLE_CONFIG, server.dynamic_hz, 1, NULL, NULL),        /* Adapt hz to # of clients.*/
     createBoolConfig("lazyfree-lazy-eviction", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_eviction, 1, NULL, NULL),
     createBoolConfig("lazyfree-lazy-expire", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_expire, 1, NULL, NULL),
     createBoolConfig("lazyfree-lazy-server-del", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_server_del, 1, NULL, NULL),
@@ -3164,7 +3192,7 @@ standardConfig static_configs[] = {
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.dbnum, 16, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.port, 6379, INTEGER_CONFIG, NULL, updatePort), /* TCP port. */
+    createIntConfig("port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.port, 6379, INTEGER_CONFIG, NULL, updatePort),                    /* TCP port. */
     createIntConfig("io-threads", NULL, DEBUG_CONFIG | IMMUTABLE_CONFIG, 1, 128, server.io_threads_num, 1, INTEGER_CONFIG, NULL, NULL), /* Single threaded by default */
     createIntConfig("events-per-io-thread", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.events_per_io_thread, 2, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("prefetch-batch-max-size", NULL, MODIFIABLE_CONFIG, 0, 128, server.prefetch_batch_max_size, 16, INTEGER_CONFIG, NULL, NULL),
@@ -3173,9 +3201,9 @@ standardConfig static_configs[] = {
     createIntConfig("list-max-listpack-size", "list-max-ziplist-size", MODIFIABLE_CONFIG, INT_MIN, INT_MAX, server.list_max_listpack_size, -2, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("tcp-keepalive", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.tcpkeepalive, 300, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("cluster-migration-barrier", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.cluster_migration_barrier, 1, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("active-defrag-cycle-min", NULL, MODIFIABLE_CONFIG, 1, 99, server.active_defrag_cycle_min, 1, INTEGER_CONFIG, NULL, updateDefragConfiguration), /* Default: 1% CPU min (at lower threshold) */
-    createIntConfig("active-defrag-cycle-max", NULL, MODIFIABLE_CONFIG, 1, 99, server.active_defrag_cycle_max, 25, INTEGER_CONFIG, NULL, updateDefragConfiguration), /* Default: 25% CPU max (at upper threshold) */
-    createIntConfig("active-defrag-threshold-lower", NULL, MODIFIABLE_CONFIG, 0, 1000, server.active_defrag_threshold_lower, 10, INTEGER_CONFIG, NULL, NULL), /* Default: don't defrag when fragmentation is below 10% */
+    createIntConfig("active-defrag-cycle-min", NULL, MODIFIABLE_CONFIG, 1, 99, server.active_defrag_cycle_min, 1, INTEGER_CONFIG, NULL, updateDefragConfiguration),                 /* Default: 1% CPU min (at lower threshold) */
+    createIntConfig("active-defrag-cycle-max", NULL, MODIFIABLE_CONFIG, 1, 99, server.active_defrag_cycle_max, 25, INTEGER_CONFIG, NULL, updateDefragConfiguration),                /* Default: 25% CPU max (at upper threshold) */
+    createIntConfig("active-defrag-threshold-lower", NULL, MODIFIABLE_CONFIG, 0, 1000, server.active_defrag_threshold_lower, 10, INTEGER_CONFIG, NULL, NULL),                       /* Default: don't defrag when fragmentation is below 10% */
     createIntConfig("active-defrag-threshold-upper", NULL, MODIFIABLE_CONFIG, 0, 1000, server.active_defrag_threshold_upper, 100, INTEGER_CONFIG, NULL, updateDefragConfiguration), /* Default: maximum defrag force at 100% fragmentation */
     createIntConfig("lfu-log-factor", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.lfu_log_factor, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("lfu-decay-time", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.lfu_decay_time, 1, INTEGER_CONFIG, NULL, NULL),
@@ -3188,7 +3216,7 @@ standardConfig static_configs[] = {
     createIntConfig("tcp-backlog", NULL, IMMUTABLE_CONFIG, 0, INT_MAX, server.tcp_backlog, 511, INTEGER_CONFIG, NULL, NULL), /* TCP listen backlog. */
     createIntConfig("cluster-port", NULL, IMMUTABLE_CONFIG, 0, 65535, server.cluster_port, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("cluster-announce-bus-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_bus_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort), /* Default: Use +10000 offset. */
-    createIntConfig("cluster-announce-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort), /* Use server.port */
+    createIntConfig("cluster-announce-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort),         /* Use server.port */
     createIntConfig("cluster-announce-tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_tls_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort), /* Use server.tls_port */
     createIntConfig("repl-timeout", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.repl_timeout, 60, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("repl-ping-replica-period", "repl-ping-slave-period", MODIFIABLE_CONFIG, 1, INT_MAX, server.repl_ping_replica_period, 10, INTEGER_CONFIG, NULL, NULL),
@@ -3244,7 +3272,7 @@ standardConfig static_configs[] = {
     createSizeTConfig("stream-node-max-bytes", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.stream_node_max_bytes, 4096, MEMORY_CONFIG, NULL, NULL),
     createSizeTConfig("zset-max-listpack-value", "zset-max-ziplist-value", MODIFIABLE_CONFIG, 0, LONG_MAX, server.zset_max_listpack_value, 64, MEMORY_CONFIG, NULL, NULL),
     createSizeTConfig("hll-sparse-max-bytes", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.hll_sparse_max_bytes, 3000, MEMORY_CONFIG, NULL, NULL),
-    createSizeTConfig("tracking-table-max-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.tracking_table_max_keys, 1000000, INTEGER_CONFIG, NULL, NULL), /* Default: 1 million keys max. */
+    createSizeTConfig("tracking-table-max-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.tracking_table_max_keys, 1000000, INTEGER_CONFIG, NULL, NULL),                                      /* Default: 1 million keys max. */
     createSizeTConfig("client-query-buffer-limit", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.client_max_querybuf_len, 1024 * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Default: 1GB max query buffer. */
     createSSizeTConfig("maxmemory-clients", NULL, MODIFIABLE_CONFIG, -100, SSIZE_MAX, server.maxmemory_clients, 0, MEMORY_CONFIG | PERCENT_CONFIG, NULL, applyClientMaxMemoryUsage),
 
@@ -3286,8 +3314,7 @@ standardConfig static_configs[] = {
     createSpecialConfig("latency-tracking-info-percentiles", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigLatencyTrackingInfoPercentilesOutputOption, getConfigLatencyTrackingInfoPercentilesOutputOption, rewriteConfigLatencyTrackingInfoPercentilesOutputOption, NULL),
 
     /* NULL Terminator, this is dropped when we convert to the runtime array. */
-    {NULL}
-    /* clang-format on */
+    {NULL},
 };
 
 /* Create a new config by copying the passed in config. Returns 1 on success

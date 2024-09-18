@@ -48,7 +48,7 @@
 #endif
 
 #elif defined(USE_JEMALLOC)
-#define ZMALLOC_LIB                                                                                                    \
+#define ZMALLOC_LIB \
     ("jemalloc-" __xstr(JEMALLOC_VERSION_MAJOR) "." __xstr(JEMALLOC_VERSION_MINOR) "." __xstr(JEMALLOC_VERSION_BUGFIX))
 #include <jemalloc/jemalloc.h>
 #if (JEMALLOC_VERSION_MAJOR == 2 && JEMALLOC_VERSION_MINOR >= 1) || (JEMALLOC_VERSION_MAJOR > 2)
@@ -76,7 +76,7 @@
 #define ZMALLOC_LIB "libc"
 #define USE_LIBC 1
 
-#if !defined(NO_MALLOC_USABLE_SIZE) && (defined(__GLIBC__) || defined(__FreeBSD__) || defined(__DragonFly__) ||        \
+#if !defined(NO_MALLOC_USABLE_SIZE) && (defined(__GLIBC__) || defined(__FreeBSD__) || defined(__DragonFly__) || \
                                         defined(__HAIKU__) || defined(USE_MALLOC_USABLE_SIZE))
 
 /* Includes for malloc_usable_size() */

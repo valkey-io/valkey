@@ -195,7 +195,7 @@ static redisContext *getRedisContext(const char *ip, int port, const char *hosts
 static void freeServerConfig(serverConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
-int showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData);
+static long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData);
 
 /* Dict callbacks */
 static uint64_t dictSdsHash(const void *key);
@@ -1607,7 +1607,7 @@ tls_usage,
     exit(exit_status);
 }
 
-int showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(eventLoop);
     UNUSED(id);
     benchmarkThread *thread = (benchmarkThread *)clientData;

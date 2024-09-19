@@ -672,7 +672,7 @@ static void connRdmaEventHandler(struct aeEventLoop *el, int fd, void *clientDat
     }
 }
 
-static int rdmaKeepaliveTimeProc(struct aeEventLoop *el, long long id, void *clientData) {
+static long long rdmaKeepaliveTimeProc(struct aeEventLoop *el, long long id, void *clientData) {
     struct rdma_cm_id *cm_id = clientData;
     RdmaContext *ctx = cm_id->context;
     connection *conn = ctx->conn;

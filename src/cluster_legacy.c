@@ -4476,7 +4476,7 @@ void clusterFailoverReplaceYourPrimary(void) {
 
     if (clusterNodeIsPrimary(myself) || old_primary == NULL) return;
 
-    serverLog(LL_NOTICE, "Setting myself to primary after failover, my old primary is %.40s", old_primary->name);
+    serverLog(LL_NOTICE, "Setting myself to primary in shard %.40s after failover; my old primary is %.40s (%s)", myself->shard_id, old_primary->name, old_primary->human_nodename);
 
     /* 1) Turn this node into a primary. */
     clusterSetNodeAsPrimary(myself);

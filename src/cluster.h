@@ -60,7 +60,7 @@ void clusterPropagatePublish(robj *channel, robj *message, int sharded);
 unsigned long getClusterConnectionsCount(void);
 int isClusterHealthy(void);
 
-sds clusterGenNodesDescription(client *c, int filter, int tls_primary);
+sds clusterGenNodesDescription(client *c, int filter, int tls_primary, clusterNode *node);
 sds genClusterInfoString(void);
 /* handle implementation specific debug cluster commands. Return 1 if handled, 0 otherwise. */
 int handleDebugClusterCommand(client *c);
@@ -73,6 +73,7 @@ int clusterAllowFailoverCmd(client *c);
 void clusterPromoteSelfToPrimary(void);
 int clusterManualFailoverTimeLimit(void);
 
+void clusterCommandNodes(client *c);
 void clusterCommandSlots(client *c);
 void clusterCommandMyId(client *c);
 void clusterCommandMyShardId(client *c);

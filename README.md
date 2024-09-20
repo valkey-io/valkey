@@ -291,6 +291,8 @@ You'll be able to stop and start Valkey using the script named
 
 Code contributions
 -----------------
+[![Open in DevZero](https://assets.devzero.io/open-in-devzero.svg)](https://www.devzero.io/dashboard/recipes/new?repo-url=https://github.com/valkey-io/valkey)
+
 Please see the [CONTRIBUTING.md][2]. For security bugs and vulnerabilities, please see [SECURITY.md][3].
 
 [1]: https://github.com/valkey-io/valkey/blob/unstable/COPYING

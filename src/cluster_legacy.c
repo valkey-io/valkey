@@ -4476,7 +4476,9 @@ void clusterFailoverReplaceYourPrimary(void) {
 
     if (clusterNodeIsPrimary(myself) || old_primary == NULL) return;
 
-    /* 1) Turn this node into a primary . */
+    serverLog(LL_NOTICE, "Setting myself to primary after failover, my old primary is %.40s", old_primary->name);
+
+    /* 1) Turn this node into a primary. */
     clusterSetNodeAsPrimary(myself);
     replicationUnsetPrimary();
 

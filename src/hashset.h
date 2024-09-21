@@ -26,28 +26,28 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef HASHTAB_H
-#define HASHTAB_H
+#ifndef HASHSET_H
+#define HASHSET_H
 
 /* Hash table implementation.
  *
  * This is a cache-friendly hash table implementation. For details about the
- * implementation and documentation of functions, se comments in hashtab.c.
+ * implementation and documentation of functions, se comments in hashset.c.
  *
- * The elements in a hashtab are of a user-defined type, but an element needs to
+ * The elements in a hashset are of a user-defined type, but an element needs to
  * contain a key. It can represent a key-value entry, or it can be just a key,
  * if set semantics are desired.
  *
  * Terminology:
  *
- * hashtab
+ * hashset
  *         An instance of the data structure.
  *
  * key
- *         A key used for looking up an element in the hashtab.
+ *         A key used for looking up an element in the hashset.
  *
  * element
- *         An element in the hashtab. This may be of the same type as the key,
+ *         An element in the hashset. This may be of the same type as the key,
  *         or a struct containing a key and other fields.
  *
  * type
@@ -61,12 +61,12 @@
 
 /* --- Opaque types --- */
 
-typedef struct hashtab hashtab;
+typedef struct hashset hashset;
 
 /* --- Non-opaque types --- */
 
-/* The hashtabType is a set of callbacks for a hashtab. All callbacks are
- * optional. With all callbacks omitted, the hashtab is effectively a set of
+/* The hashsetType is a set of callbacks for a hashset. All callbacks are
+ * optional. With all callbacks omitted, the hashset is effectively a set of
  * pointer-sized integers. */
 typedef struct {
     /* If the type of an element is not the same as the type of a key used for
@@ -77,18 +77,18 @@ typedef struct {
     uint64_t (*hashFunction)(const void *key);
     /* Compare function, returns 0 if the keys are equal. Defaults to just
      * comparing the pointers for equality. */
-    int (*keyCompare)(hashtab *t, const void *key1, const void *key2);
+    int (*keyCompare)(hashset *t, const void *key1, const void *key2);
     /* Callback to free an element when it's overwritten or deleted.
      * Optional. */
-    void (*elementDestructor)(hashtab *t, void *elem);
+    void (*elementDestructor)(hashset *t, void *elem);
     /* Optional callback to control when resizing should be allowed. (Not implemented) */
     int (*resizeAllowed)(size_t moreMem, double usedRatio);
     /* Invoked at the start of rehashing. Both tables are already created. */
-    void (*rehashingStarted)(hashtab *t);
+    void (*rehashingStarted)(hashset *t);
     /* Invoked at the end of rehashing. Both tables still exist and are cleaned
      * up after this callback. */
-    void (*rehashingCompleted)(hashtab *t);
-    /* Allow a hashtab to carry extra caller-defined metadata. The extra memory
+    void (*rehashingCompleted)(hashset *t);
+    /* Allow a hashset to carry extra caller-defined metadata. The extra memory
      * is initialized to 0. */
     size_t (*getMetadataSize)(void);
     /* Flag to disable incremental rehashing */
@@ -96,31 +96,31 @@ typedef struct {
     /* Allow the caller to store some data here in the type. It's useful for the
      * rehashingStarted and rehashingCompleted callbacks. */
     void *userdata;
-} hashtabType;
+} hashsetType;
 
 typedef enum {
-    HASHTAB_RESIZE_ALLOW = 0,
-    HASHTAB_RESIZE_AVOID,
-    HASHTAB_RESIZE_FORBID,
-} hashtabResizePolicy;
+    HASHSET_RESIZE_ALLOW = 0,
+    HASHSET_RESIZE_AVOID,
+    HASHSET_RESIZE_FORBID,
+} hashsetResizePolicy;
 
-typedef void (*hashtabScanFunction)(void *privdata, void *element);
+typedef void (*hashsetScanFunction)(void *privdata, void *element);
 
 /* Scan flags */
-#define HASHTAB_SCAN_EMIT_REF (1 << 0)
-#define HASHTAB_SCAN_SINGLE_STEP (1 << 2)
+#define HASHSET_SCAN_EMIT_REF (1 << 0)
+#define HASHSET_SCAN_SINGLE_STEP (1 << 2)
 
 typedef struct {
-    hashtab *t;
+    hashset *t;
     long index;
     int table;
     int posInBucket;
     /* unsafe iterator fingerprint for misuse detection. */
     uint64_t fingerprint;
     int safe;
-} hashtabIterator;
+} hashsetIterator;
 
-typedef struct hashtabStats {
+typedef struct hashsetStats {
     int htidx;
     unsigned long buckets;       /* num buckets */
     unsigned long maxChainLen;   /* probing chain length */
@@ -128,70 +128,70 @@ typedef struct hashtabStats {
     unsigned long htSize;        /* buckets * positions-per-bucket */
     unsigned long htUsed;        /* num elements */
     unsigned long *clvector;
-} hashtabStats;
+} hashsetStats;
 
 /* --- Prototypes --- */
 
 /* Hash function (global seed) */
-void hashtabSetHashFunctionSeed(const uint8_t *seed);
-uint8_t *hashtabGetHashFunctionSeed(void);
-uint64_t hashtabGenHashFunction(const char *buf, size_t len);
-uint64_t hashtabGenCaseHashFunction(const char *buf, size_t len);
+void hashsetSetHashFunctionSeed(const uint8_t *seed);
+uint8_t *hashsetGetHashFunctionSeed(void);
+uint64_t hashsetGenHashFunction(const char *buf, size_t len);
+uint64_t hashsetGenCaseHashFunction(const char *buf, size_t len);
 
 /* Global resize policy */
-void hashtabSetResizePolicy(hashtabResizePolicy policy);
+void hashsetSetResizePolicy(hashsetResizePolicy policy);
 
-/* Hashtab instance */
-hashtab *hashtabCreate(hashtabType *type);
-void hashtabRelease(hashtab *t);
-void hashtabEmpty(hashtab *t, void(callback)(hashtab *));
-hashtabType *hashtabGetType(hashtab *t);
-void *hashtabMetadata(hashtab *t);
-size_t hashtabSize(hashtab *t);
-size_t hashtabMemUsage(hashtab *t);
-void hashtabPauseAutoShrink(hashtab *t);
-void hashtabResumeAutoShrink(hashtab *t);
-int hashtabIsRehashing(hashtab *t);
-void hashtabRehashingInfo(hashtab *t, size_t *from_size, size_t *to_size);
-int hashtabExpand(hashtab *t, size_t size);
-int hashtabTryExpand(hashtab *t, size_t size);
-int hashtabExpandIfNeeded(hashtab *t);
-int hashtabShrinkIfNeeded(hashtab *t);
+/* Hashset instance */
+hashset *hashsetCreate(hashsetType *type);
+void hashsetRelease(hashset *t);
+void hashsetEmpty(hashset *t, void(callback)(hashset *));
+hashsetType *hashsetGetType(hashset *t);
+void *hashsetMetadata(hashset *t);
+size_t hashsetSize(hashset *t);
+size_t hashsetMemUsage(hashset *t);
+void hashsetPauseAutoShrink(hashset *t);
+void hashsetResumeAutoShrink(hashset *t);
+int hashsetIsRehashing(hashset *t);
+void hashsetRehashingInfo(hashset *t, size_t *from_size, size_t *to_size);
+int hashsetExpand(hashset *t, size_t size);
+int hashsetTryExpand(hashset *t, size_t size);
+int hashsetExpandIfNeeded(hashset *t);
+int hashsetShrinkIfNeeded(hashset *t);
 
 /* Elements */
-int hashtabFind(hashtab *t, const void *key, void **found);
-void **hashtabFindRef(hashtab *t, const void *key);
-/* void *hashtabFetchElement(hashtab *t, const void *key); */
-int hashtabAdd(hashtab *t, void *elem);
-int hashtabAddOrFind(hashtab *t, void *elem, void **existing);
-void *hashtabFindPositionForInsert(hashtab *t, void *key, void **existing);
-void hashtabInsertAtPosition(hashtab *t, void *elem, void *position);
-int hashtabReplace(hashtab *t, void *elem);
-int hashtabPop(hashtab *t, const void *key, void **popped);
-int hashtabDelete(hashtab *t, const void *key);
-int hashtabTwoPhasePopFind(hashtab *t, const void *key, void **found, void **position);
-void hashtabTwoPhasePopDelete(hashtab *t, void *position);
+int hashsetFind(hashset *t, const void *key, void **found);
+void **hashsetFindRef(hashset *t, const void *key);
+/* void *hashsetFetchElement(hashset *t, const void *key); */
+int hashsetAdd(hashset *t, void *elem);
+int hashsetAddOrFind(hashset *t, void *elem, void **existing);
+void *hashsetFindPositionForInsert(hashset *t, void *key, void **existing);
+void hashsetInsertAtPosition(hashset *t, void *elem, void *position);
+int hashsetReplace(hashset *t, void *elem);
+int hashsetPop(hashset *t, const void *key, void **popped);
+int hashsetDelete(hashset *t, const void *key);
+int hashsetTwoPhasePopFind(hashset *t, const void *key, void **found, void **position);
+void hashsetTwoPhasePopDelete(hashset *t, void *position);
 
 /* Iteration & scan */
-size_t hashtabScan(hashtab *t, size_t cursor, hashtabScanFunction fn, void *privdata, int emit_ref);
-void hashtabInitIterator(hashtabIterator *iter, hashtab *t);
-void hashtabInitSafeIterator(hashtabIterator *iter, hashtab *t);
-void hashtabResetIterator(hashtabIterator *iter);
-hashtabIterator *hashtabCreateIterator(hashtab *t);
-hashtabIterator *hashtabCreateSafeIterator(hashtab *t);
-void hashtabReleaseIterator(hashtabIterator *iter);
-int hashtabNext(hashtabIterator *iter, void **elemptr);
+size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *privdata, int emit_ref);
+void hashsetInitIterator(hashsetIterator *iter, hashset *t);
+void hashsetInitSafeIterator(hashsetIterator *iter, hashset *t);
+void hashsetResetIterator(hashsetIterator *iter);
+hashsetIterator *hashsetCreateIterator(hashset *t);
+hashsetIterator *hashsetCreateSafeIterator(hashset *t);
+void hashsetReleaseIterator(hashsetIterator *iter);
+int hashsetNext(hashsetIterator *iter, void **elemptr);
 #endif
 
 /* Random elements */
-int hashtabRandomElement(hashtab *t, void **found);
-int hashtabFairRandomElement(hashtab *t, void **found);
-unsigned hashtabSampleElements(hashtab *t, void **dst, unsigned count);
+int hashsetRandomElement(hashset *t, void **found);
+int hashsetFairRandomElement(hashset *t, void **found);
+unsigned hashsetSampleElements(hashset *t, void **dst, unsigned count);
 
 /* Debug & stats */
 
-void hashtabFreeStats(hashtabStats *stats);
-void hashtabCombineStats(hashtabStats *from, hashtabStats *into);
-hashtabStats *hashtabGetStatsHt(hashtab *t, int htidx, int full);
-size_t hashtabGetStatsMsg(char *buf, size_t bufsize, hashtabStats *stats, int full);
-void hashtabGetStats(char *buf, size_t bufsize, hashtab *t, int full);
+void hashsetFreeStats(hashsetStats *stats);
+void hashsetCombineStats(hashsetStats *from, hashsetStats *into);
+hashsetStats *hashsetGetStatsHt(hashset *t, int htidx, int full);
+size_t hashsetGetStatsMsg(char *buf, size_t bufsize, hashsetStats *stats, int full);
+void hashsetGetStats(char *buf, size_t bufsize, hashset *t, int full);

@@ -160,6 +160,8 @@ int hashtabShrinkIfNeeded(hashtab *t);
 
 /* Elements */
 int hashtabFind(hashtab *t, const void *key, void **found);
+void **hashtabFindRef(hashtab *t, const void *key);
+/* void *hashtabFetchElement(hashtab *t, const void *key); */
 int hashtabAdd(hashtab *t, void *elem);
 int hashtabAddOrFind(hashtab *t, void *elem, void **existing);
 void *hashtabFindPositionForInsert(hashtab *t, void *key, void **existing);

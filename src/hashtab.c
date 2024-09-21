@@ -888,6 +888,26 @@ int hashtabFind(hashtab *t, const void *key, void **found) {
     }
 }
 
+/* Returns a pointer to where an element is stored within the hash table, or
+ * NULL if not found. To get the element, dereference the returned pointer. The
+ * pointer can be used to replace the element with an equivalent element (same
+ * key, same hash value), but note that the pointer may be invalidated by future
+ * accesses to the hash table due to incermental rehashing, so use with care. */
+void **hashtabFindRef(hashtab *t, const void *key) {
+    if (hashtabSize(t) == 0) return NULL;
+    uint64_t hash = hashKey(t, key);
+    int pos_in_bucket = 0;
+    bucket *b = findBucket(t, hash, key, &pos_in_bucket, NULL);
+    return b ? &b->elements[pos_in_bucket] : NULL;
+}
+
+/* /\* A simpler interface to hashtabFind. Returns the matching element or NULL if */
+/*  * not found. Can't be used if NULL is a valid element in the table. *\/ */
+/* void *hashtabFetchElement(hashtab *t, const void *key) { */
+/*     void *element; */
+/*     return hashtabFind(t, key, &element) ? element : NULL; */
+/* } */
+
 /* Adds an element. Returns 1 on success. Returns 0 if there was already an element
  * with the same key. */
 int hashtabAdd(hashtab *t, void *elem) {

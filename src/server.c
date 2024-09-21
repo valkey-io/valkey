@@ -110,7 +110,7 @@ const char *replstateToString(int replstate);
 void nolocks_localtime(struct tm *tmp, time_t t, time_t tz, int dst);
 
 /* Formats the timezone offset into a string.
- * 
+ *
  * Assumes:
  * - size of `buf` is 7 or larger
  * - `timezone` is valid, within the range of [-50400, +43200].
@@ -118,7 +118,7 @@ void nolocks_localtime(struct tm *tmp, time_t t, time_t tz, int dst);
 
 void format_timezone(char *buf, int timezone, int daylight_active) {
     // Adjust the timezone for daylight saving, if active
-    int total_offset = (-1)*timezone + 3600*daylight_active;
+    int total_offset = (-1) * timezone + 3600 * daylight_active;
     int hours = abs(total_offset / 3600);
     int minutes = abs(total_offset % 3600) / 60;
     buf[0] = total_offset >= 0 ? '+' : '-';
@@ -135,9 +135,9 @@ void format_timezone(char *buf, int timezone, int daylight_active) {
 void serverLogRaw(int level, const char *msg) {
     const int syslogLevelMap[] = {LOG_DEBUG, LOG_INFO, LOG_NOTICE, LOG_WARNING};
     const char *c = ".-*#";
-    const char* verbose_level[] = {"debug", "info", "notice", "warning"};
-    const char* roles[] = {"sentinel", "RDB/AOF", "replica", "master"};
-    const char* role_chars = "XCSM";
+    const char *verbose_level[] = {"debug", "info", "notice", "warning"};
+    const char *roles[] = {"sentinel", "RDB/AOF", "replica", "master"};
+    const char *role_chars = "XCSM";
     FILE *fp;
     char buf[64];
     int rawmode = (level & LL_RAW);
@@ -163,25 +163,21 @@ void serverLogRaw(int level, const char *msg) {
         gettimeofday(&tv, NULL);
         struct tm tm;
         nolocks_localtime(&tm, tv.tv_sec, server.timezone, daylight_active);
-        switch(server.log_timestamp_format) {
-            case LOG_TIMESTAMP_DEFAULT:
-                off = strftime(buf,sizeof(buf),"%d %b %Y %H:%M:%S.",&tm);
-                snprintf(buf+off,sizeof(buf)-off,"%03d",(int)tv.tv_usec/1000);
-                break;
+        switch (server.log_timestamp_format) {
+        case LOG_TIMESTAMP_DEFAULT:
+            off = strftime(buf, sizeof(buf), "%d %b %Y %H:%M:%S.", &tm);
+            snprintf(buf + off, sizeof(buf) - off, "%03d", (int)tv.tv_usec / 1000);
+            break;
 
-            case LOG_TIMESTAMP_ISO8601:
-                off = strftime(buf,sizeof(buf),"%Y-%m-%dT%H:%M:%S.",&tm);
-                char tzbuf[7];
-                format_timezone(tzbuf, server.timezone, server.daylight_active);
-                snprintf(buf + off, sizeof(buf) - off, "%03d%s",
-                         (int)tv.tv_usec/1000, tzbuf);
-                break;
+        case LOG_TIMESTAMP_ISO8601:
+            off = strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S.", &tm);
+            char tzbuf[7];
+            format_timezone(tzbuf, server.timezone, server.daylight_active);
+            snprintf(buf + off, sizeof(buf) - off, "%03d%s", (int)tv.tv_usec / 1000, tzbuf);
+            break;
 
-            case LOG_TIMESTAMP_UNIX:
-                snprintf(buf,sizeof(buf),"%ld",tv.tv_sec);
-                break;
-            default:
-                break;
+        case LOG_TIMESTAMP_UNIX: snprintf(buf, sizeof(buf), "%ld", tv.tv_sec); break;
+        default: break;
         }
         int role_index;
         if (server.sentinel_mode) {
@@ -192,17 +188,16 @@ void serverLogRaw(int level, const char *msg) {
             role_index = (server.primary_host ? 2 : 3); /* Slave or Master. */
         }
         switch (server.log_format) {
-            case LOG_FORMAT_LOGFMT: {
-                fprintf(fp, "pid=%d role=%s timestamp=\"%s\" level=%s message=\"%s\"\n",
-                        (int)getpid(),roles[role_index],buf,verbose_level[level],msg);
-                break;
-            }
+        case LOG_FORMAT_LOGFMT: {
+            fprintf(fp, "pid=%d role=%s timestamp=\"%s\" level=%s message=\"%s\"\n", (int)getpid(), roles[role_index],
+                    buf, verbose_level[level], msg);
+            break;
+        }
 
-            default: {
-                fprintf(fp,"%d:%c %s %c %s\n",
-                        (int)getpid(),role_chars[role_index], buf,c[level],msg);
-                break;
-            }
+        default: {
+            fprintf(fp, "%d:%c %s %c %s\n", (int)getpid(), role_chars[role_index], buf, c[level], msg);
+            break;
+        }
         }
     }
     fflush(fp);

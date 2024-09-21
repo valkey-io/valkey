@@ -582,10 +582,7 @@ typedef enum {
 #define PAUSE_ACTION_REPLICA (1 << 4) /* pause replica traffic */
 
 /* Sets log format */
-typedef enum {
-    LOG_FORMAT_DEFAULT = 0,
-    LOG_FORMAT_LOGFMT
-} log_format_type;
+typedef enum { LOG_FORMAT_DEFAULT = 0, LOG_FORMAT_LOGFMT } log_format_type;
 
 /* Sets log timestamp format */
 /* Also update LOG_TIMESTAMP_FORMATS */
@@ -1999,19 +1996,19 @@ struct valkeyServer {
     serverOpArray also_propagate; /* Additional command to propagate. */
     int replication_allowed;      /* Are we allowed to replicate? */
     /* Logging */
-    char *logfile;         /* Path of log file */
-    int syslog_enabled;    /* Is syslog enabled? */
-    char *syslog_ident;    /* Syslog ident */
-    int syslog_facility;   /* Syslog facility */
-    int crashlog_enabled;  /* Enable signal handler for crashlog.
-                            * disable for clean core dumps. */
-    int crashed;           /* True if the server has crashed, used in catClientInfoString
-                            * to indicate that no wait for IO threads is needed. */
-    int memcheck_enabled;  /* Enable memory check on crash. */
-    int use_exit_on_panic; /* Use exit() on panic and assert rather than
-                            * abort(). useful for Valgrind. */
-    int log_format;              /* Print log in specific format */
-    int log_timestamp_format;    /* Timestamp format in log */
+    char *logfile;            /* Path of log file */
+    int syslog_enabled;       /* Is syslog enabled? */
+    char *syslog_ident;       /* Syslog ident */
+    int syslog_facility;      /* Syslog facility */
+    int crashlog_enabled;     /* Enable signal handler for crashlog.
+                               * disable for clean core dumps. */
+    int crashed;              /* True if the server has crashed, used in catClientInfoString
+                               * to indicate that no wait for IO threads is needed. */
+    int memcheck_enabled;     /* Enable memory check on crash. */
+    int use_exit_on_panic;    /* Use exit() on panic and assert rather than
+                               * abort(). useful for Valgrind. */
+    int log_format;           /* Print log in specific format */
+    int log_timestamp_format; /* Timestamp format in log */
     /* Shutdown */
     int shutdown_timeout;    /* Graceful shutdown time limit in seconds. */
     int shutdown_on_sigint;  /* Shutdown flags configured for SIGINT. */

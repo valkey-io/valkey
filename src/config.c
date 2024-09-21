@@ -122,13 +122,11 @@ configEnum propagation_error_behavior_enum[] = {{"ignore", PROPAGATION_ERR_BEHAV
                                                 {"panic-on-replicas", PROPAGATION_ERR_BEHAVIOR_PANIC_ON_REPLICAS},
                                                 {NULL, 0}};
 
-configEnum log_format_enum[] = {{"default", LOG_FORMAT_DEFAULT},
-                                {"logfmt", LOG_FORMAT_LOGFMT},
-                                {NULL, 0}};
+configEnum log_format_enum[] = {{"default", LOG_FORMAT_DEFAULT}, {"logfmt", LOG_FORMAT_LOGFMT}, {NULL, 0}};
 
 configEnum log_timestamp_format_enum[] = {{"default", LOG_TIMESTAMP_DEFAULT},
                                           {"iso8601", LOG_TIMESTAMP_ISO8601},
-                                          {"unix",LOG_TIMESTAMP_UNIX},
+                                          {"unix", LOG_TIMESTAMP_UNIX},
                                           {NULL, 0}};
 
 /* Output buffer limits presets. */

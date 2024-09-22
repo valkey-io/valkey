@@ -2519,6 +2519,7 @@ void resetServerStats(void) {
     server.stat_fork_time = 0;
     server.stat_fork_rate = 0;
     server.stat_total_forks = 0;
+    server.stat_last_fork_time = 0;
     server.stat_rejected_conn = 0;
     server.stat_sync_full = 0;
     server.stat_sync_partial_ok = 0;
@@ -5736,6 +5737,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             "pubsub_patterns:%lu\r\n", dictSize(server.pubsub_patterns),
             "pubsubshard_channels:%llu\r\n", kvstoreSize(server.pubsubshard_channels),
             "latest_fork_usec:%lld\r\n", server.stat_fork_time,
+            "latest_fork_time:%lld\r\n", server.stat_last_fork_time,
             "total_forks:%lld\r\n", server.stat_total_forks,
             "migrate_cached_sockets:%ld\r\n", dictSize(server.migrate_cached_sockets),
             "slave_expires_tracked_keys:%zu\r\n", getReplicaKeyWithExpireCount(),
@@ -6330,6 +6332,7 @@ int serverFork(int purpose) {
         server.stat_fork_time = ustime() - start;
         server.stat_fork_rate =
             (double)zmalloc_used_memory() * 1000000 / server.stat_fork_time / (1024 * 1024 * 1024); /* GB per second. */
+        server.stat_last_fork_time = start;
         latencyAddSampleIfNeeded("fork", server.stat_fork_time / 1000);
 
         /* The child_pid and child_type are only for mutually exclusive children.

@@ -6443,8 +6443,8 @@ void clusterCommandSetSlot(client *c) {
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
         }
 
-        /* If replica migration is not allow, check if the primary of this shard
-         * loses its last slot and the shard become empty. In this case, we will
+        /* If replica migration is not allowed, check if the primary of this shard
+         * loses its last slot and the shard becomes empty. In this case, we will
          * print the exact same log as during the gossip process. */
         if (!server.cluster_allow_replica_migration && nodeIsPrimary(myself) && slot_was_mine && shard_is_empty) {
             serverAssert(n != my_primary);

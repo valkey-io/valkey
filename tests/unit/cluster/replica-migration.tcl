@@ -372,7 +372,7 @@ proc test_cluster_setslot {type} {
             fail "valkey-cli --cluster rebalance returns non-zero exit code, output below:\n$result"
         }
 
-        # Wait for R 3 to report that it is an empty replica (cluster-allow-replica-migration no)
+        # Wait for R 3 to report that it is an empty primary (cluster-allow-replica-migration no)
         wait_for_log_messages -3 {"*I am now an empty primary*"} 0 1000 50
 
         if {$type == "setslot"} {

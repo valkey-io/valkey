@@ -283,7 +283,7 @@ typedef struct {
 } bucket;
 
 /* A key property is that the bucket size is one cache line. */
-static_assert(sizeof(bucket) == 64, "Buckets need to be 64 bytes");
+static_assert(sizeof(bucket) == HASHSET_BUCKET_SIZE, "Bucket size mismatch");
 
 struct hashset {
     hashsetType *type;
@@ -776,6 +776,11 @@ size_t hashsetSize(hashset *t) {
     return t->used[0] + t->used[1];
 }
 
+/* Returns the number of hash table buckets. */
+size_t hashsetBuckets(hashset *t) {
+    return numBuckets(t->bucketExp[0]) + numBuckets(t->bucketExp[1]);
+}
+
 /* Returns the size of the hashset structures, in bytes (not including the sizes
  * of the elements, if the elements are pointers to allocated objects). */
 size_t hashsetMemUsage(hashset *t) {
@@ -821,13 +826,14 @@ int hashsetIsRehashing(hashset *t) {
     return t->rehashIdx != -1;
 }
 
-/* Provides the old and new table size during rehashing. This function can only
- * be used when rehashing is in progress, and from the rehashingStarted and
+/* Provides the number of buckets in the old and new tables during rehashing.
+ * To get the sizes in bytes, multiply by HASHTAB_BUCKET_SIZE. This function can
+ * only be used when rehashing is in progress, and from the rehashingStarted and
  * rehashingCompleted callbacks. */
 void hashsetRehashingInfo(hashset *t, size_t *from_size, size_t *to_size) {
     assert(hashsetIsRehashing(t));
-    *from_size = numBuckets(t->bucketExp[0]) * ELEMENTS_PER_BUCKET;
-    *to_size = numBuckets(t->bucketExp[1]) * ELEMENTS_PER_BUCKET;
+    *from_size = numBuckets(t->bucketExp[0]);
+    *to_size = numBuckets(t->bucketExp[1]);
 }
 
 /* Return 1 if expand was performed; 0 otherwise. */

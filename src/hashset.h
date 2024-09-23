@@ -106,6 +106,9 @@ typedef enum {
 
 typedef void (*hashsetScanFunction)(void *privdata, void *element);
 
+/* Constants */
+#define HASHSET_BUCKET_SIZE 64 /* bytes */
+
 /* Scan flags */
 #define HASHSET_SCAN_EMIT_REF (1 << 0)
 #define HASHSET_SCAN_SINGLE_STEP (1 << 2)
@@ -148,6 +151,7 @@ void hashsetEmpty(hashset *t, void(callback)(hashset *));
 hashsetType *hashsetGetType(hashset *t);
 void *hashsetMetadata(hashset *t);
 size_t hashsetSize(hashset *t);
+size_t hashsetBuckets(hashset *t);
 size_t hashsetMemUsage(hashset *t);
 void hashsetPauseAutoShrink(hashset *t);
 void hashsetResumeAutoShrink(hashset *t);

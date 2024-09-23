@@ -864,7 +864,7 @@ cleanup:
 }
 
 void clusterSaveConfigOrDie(int do_fsync) {
-    if (clusterSaveConfig(do_fsync) == C_ERR) {
+    if (clusterSaveConfig(do_fsync) == C_ERR && server.cluster_configfile_exit) {
         serverLog(LL_WARNING, "Fatal: can't update cluster config file.");
         exit(1);
     }

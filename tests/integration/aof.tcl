@@ -673,3 +673,26 @@ tags {"aof external:skip"} {
         }
     }
 }
+
+# make sure the test infra won't use SELECT
+set old_singledb $::singledb
+set ::singledb 1
+
+tags {"aof cluster external:skip"} {
+    test {Test cluster slots / cluster shards in aof won't crash} {
+        create_aof $aof_dirpath $aof_file {
+            append_to_aof [formatCommand cluster slots]
+            append_to_aof [formatCommand cluster shards]
+        }
+
+        create_aof_manifest $aof_dirpath $aof_manifest_file {
+            append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
+        }
+
+        start_server_aof [list dir $server_path cluster-enabled yes] {
+            assert_equal [r ping] {PONG}
+        }
+    }
+}
+
+set ::singledb $old_singledb

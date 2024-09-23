@@ -20,7 +20,7 @@ int test_cluster_slots(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc
 
 int test_cluster_shards(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argv);
-q
+
     if (argc != 1) return ValkeyModule_WrongArity(ctx);
 
     ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, "CLUSTER", "c", "SHARDS");

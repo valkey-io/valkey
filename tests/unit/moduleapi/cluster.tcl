@@ -240,13 +240,13 @@ start_cluster 3 0 [list config_lines $modules] {
     set node2 [srv -1 client]
     set node3 [srv -2 client]
 
-    test "RM_Call with cluster slots" {
+    test "VM_CALL with cluster slots" {
         assert_equal [lsort [$node1 cluster slots]] [lsort [$node1 test.cluster_slots]]
         assert_equal [lsort [$node2 cluster slots]] [lsort [$node2 test.cluster_slots]]
         assert_equal [lsort [$node3 cluster slots]] [lsort [$node3 test.cluster_slots]]
     }
 
-    test "RM_Call with cluster shards" {
+    test "VM_CALL with cluster shards" {
         assert_equal [lsort [$node1 cluster shards]] [lsort [$node1 test.cluster_shards]]
         assert_equal [lsort [$node2 cluster shards]] [lsort [$node2 test.cluster_shards]]
         assert_equal [lsort [$node3 cluster shards]] [lsort [$node3 test.cluster_shards]]

@@ -653,13 +653,13 @@ void ACLChangeSelectorPerm(aclSelector *selector, struct serverCommand *cmd, int
     ACLSetSelectorCommandBit(selector, id, allow);
     ACLResetFirstArgsForCommand(selector, id);
     if (cmd->subcommands_dict) {
-        dictEntry *de;
-        dictIterator *di = dictGetSafeIterator(cmd->subcommands_dict);
-        while ((de = dictNext(di)) != NULL) {
-            struct serverCommand *sub = (struct serverCommand *)dictGetVal(de);
+        hashsetIterator iter;
+        hashsetInitSafeIterator(&iter, cmd->subcommands_dict);
+        struct serverCommand *sub;
+        while (hashsetNext(&iter, (void**) &sub)) {
             ACLSetSelectorCommandBit(selector, sub->id, allow);
         }
-        dictReleaseIterator(di);
+        hashsetResetIterator(&iter);
     }
 }
 
@@ -669,11 +669,11 @@ void ACLChangeSelectorPerm(aclSelector *selector, struct serverCommand *cmd, int
  * value. Since the category passed by the user may be non existing, the
  * function returns C_ERR if the category was not found, or C_OK if it was
  * found and the operation was performed. */
-void ACLSetSelectorCommandBitsForCategory(dict *commands, aclSelector *selector, uint64_t cflag, int value) {
-    dictIterator *di = dictGetIterator(commands);
-    dictEntry *de;
-    while ((de = dictNext(di)) != NULL) {
-        struct serverCommand *cmd = dictGetVal(de);
+void ACLSetSelectorCommandBitsForCategory(hashset *commands, aclSelector *selector, uint64_t cflag, int value) {
+    hashsetIterator iter;
+    hashsetInitIterator(&iter, commands);
+    struct serverCommand *cmd;
+        while (hashsetNext(&iter, (void**) &cmd)) {
         if (cmd->acl_categories & cflag) {
             ACLChangeSelectorPerm(selector, cmd, value);
         }
@@ -681,7 +681,7 @@ void ACLSetSelectorCommandBitsForCategory(dict *commands, aclSelector *selector,
             ACLSetSelectorCommandBitsForCategory(cmd->subcommands_dict, selector, cflag, value);
         }
     }
-    dictReleaseIterator(di);
+    hashsetResetIterator(&iter);
 }
 
 /* This function is responsible for recomputing the command bits for all selectors of the existing users.
@@ -732,15 +732,15 @@ int ACLSetSelectorCategory(aclSelector *selector, const char *category, int allo
     return C_OK;
 }
 
-void ACLCountCategoryBitsForCommands(dict *commands,
+void ACLCountCategoryBitsForCommands(hashset *commands,
                                      aclSelector *selector,
                                      unsigned long *on,
                                      unsigned long *off,
                                      uint64_t cflag) {
-    dictIterator *di = dictGetIterator(commands);
-    dictEntry *de;
-    while ((de = dictNext(di)) != NULL) {
-        struct serverCommand *cmd = dictGetVal(de);
+    hashsetIterator iter;
+    hashsetInitIterator(&iter, commands);
+    struct serverCommand *cmd;
+    while (hashsetNext(&iter, (void**) &cmd)) {
         if (cmd->acl_categories & cflag) {
             if (ACLGetSelectorCommandBit(selector, cmd->id))
                 (*on)++;
@@ -751,7 +751,7 @@ void ACLCountCategoryBitsForCommands(dict *commands,
             ACLCountCategoryBitsForCommands(cmd->subcommands_dict, selector, on, off, cflag);
         }
     }
-    dictReleaseIterator(di);
+    hashsetResetIterator(&iter);
 }
 
 /* Return the number of commands allowed (on) and denied (off) for the user 'u'
@@ -2754,12 +2754,12 @@ sds getAclErrorMessage(int acl_res, user *user, struct serverCommand *cmd, sds e
  * ==========================================================================*/
 
 /* ACL CAT category */
-void aclCatWithFlags(client *c, dict *commands, uint64_t cflag, int *arraylen) {
-    dictEntry *de;
-    dictIterator *di = dictGetIterator(commands);
+void aclCatWithFlags(client *c, hashset *commands, uint64_t cflag, int *arraylen) {
+    hashsetIterator iter;
+    hashsetInitIterator(&iter, commands);
 
-    while ((de = dictNext(di)) != NULL) {
-        struct serverCommand *cmd = dictGetVal(de);
+    struct serverCommand *cmd;
+    while (hashsetNext(&iter, (void**) &cmd)) {
         if (cmd->flags & CMD_MODULE) continue;
         if (cmd->acl_categories & cflag) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
@@ -2770,7 +2770,7 @@ void aclCatWithFlags(client *c, dict *commands, uint64_t cflag, int *arraylen) {
             aclCatWithFlags(c, cmd->subcommands_dict, cflag, arraylen);
         }
     }
-    dictReleaseIterator(di);
+    hashsetResetIterator(&iter);
 }
 
 /* Add the formatted response from a single selector to the ACL GETUSER

@@ -1298,8 +1298,8 @@ int VM_CreateCommand(ValkeyModuleCtx *ctx,
     cp->serverCmd->arity = cmdfunc ? -1 : -2; /* Default value, can be changed later via dedicated API */
     /* Drain IO queue before modifying commands dictionary to prevent concurrent access while modifying it. */
     drainIOThreadsQueue();
-    serverAssert(dictAdd(server.commands, sdsdup(declared_name), cp->serverCmd) == DICT_OK);
-    serverAssert(dictAdd(server.orig_commands, sdsdup(declared_name), cp->serverCmd) == DICT_OK);
+    serverAssert(hashsetAdd(server.commands, cp->serverCmd));
+    serverAssert(hashsetAdd(server.orig_commands, cp->serverCmd));
     cp->serverCmd->id = ACLGetCommandID(declared_name); /* ID used for ACL. */
     return VALKEYMODULE_OK;
 }
@@ -1441,7 +1441,7 @@ int VM_CreateSubcommand(ValkeyModuleCommand *parent,
         moduleCreateCommandProxy(parent->module, declared_name, fullname, cmdfunc, flags, firstkey, lastkey, keystep);
     cp->serverCmd->arity = -2;
 
-    commandAddSubcommand(parent_cmd, cp->serverCmd, name);
+    commandAddSubcommand(parent_cmd, cp->serverCmd);
     return VALKEYMODULE_OK;
 }
 
@@ -12063,19 +12063,19 @@ int moduleFreeCommand(struct ValkeyModule *module, struct serverCommand *cmd) {
     zfree(cp);
 
     if (cmd->subcommands_dict) {
-        dictEntry *de;
-        dictIterator *di = dictGetSafeIterator(cmd->subcommands_dict);
-        while ((de = dictNext(di)) != NULL) {
-            struct serverCommand *sub = dictGetVal(de);
+        hashsetIterator iter;
+        hashsetInitSafeIterator(&iter, cmd->subcommands_dict);
+        struct serverCommand *sub;
+        while (hashsetNext(&iter, (void**) &sub)) {
             if (moduleFreeCommand(module, sub) != C_OK) continue;
 
-            serverAssert(dictDelete(cmd->subcommands_dict, sub->declared_name) == DICT_OK);
+            serverAssert(hashsetDelete(cmd->subcommands_dict, sub->declared_name));
             sdsfree((sds)sub->declared_name);
             sdsfree(sub->fullname);
             zfree(sub);
         }
-        dictReleaseIterator(di);
-        dictRelease(cmd->subcommands_dict);
+        hashsetResetIterator(&iter);
+        hashsetRelease(cmd->subcommands_dict);
     }
 
     return C_OK;
@@ -12085,19 +12085,19 @@ void moduleUnregisterCommands(struct ValkeyModule *module) {
     /* Drain IO queue before modifying commands dictionary to prevent concurrent access while modifying it. */
     drainIOThreadsQueue();
     /* Unregister all the commands registered by this module. */
-    dictIterator *di = dictGetSafeIterator(server.commands);
-    dictEntry *de;
-    while ((de = dictNext(di)) != NULL) {
-        struct serverCommand *cmd = dictGetVal(de);
+    hashsetIterator iter;
+    hashsetInitSafeIterator(&iter, server.commands);
+    struct serverCommand *cmd;
+    while (hashsetNext(&iter, (void**) &cmd)) {
         if (moduleFreeCommand(module, cmd) != C_OK) continue;
 
-        serverAssert(dictDelete(server.commands, cmd->fullname) == DICT_OK);
-        serverAssert(dictDelete(server.orig_commands, cmd->fullname) == DICT_OK);
+        serverAssert(hashsetDelete(server.commands, cmd->fullname));
+        serverAssert(hashsetDelete(server.orig_commands, cmd->fullname));
         sdsfree((sds)cmd->declared_name);
         sdsfree(cmd->fullname);
         zfree(cmd);
     }
-    dictReleaseIterator(di);
+    hashsetResetIterator(&iter);
 }
 
 /* We parse argv to add sds "NAME VALUE" pairs to the server.module_configs_queue list of configs.

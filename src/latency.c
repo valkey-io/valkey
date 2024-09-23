@@ -527,13 +527,12 @@ void fillCommandCDF(client *c, struct hdr_histogram *histogram) {
 
 /* latencyCommand() helper to produce for all commands,
  * a per command cumulative distribution of latencies. */
-void latencyAllCommandsFillCDF(client *c, dict *commands, int *command_with_data) {
-    dictIterator *di = dictGetSafeIterator(commands);
-    dictEntry *de;
+void latencyAllCommandsFillCDF(client *c, hashset *commands, int *command_with_data) {
+    hashsetIterator iter;
+    hashsetInitSafeIterator(&iter, commands);
     struct serverCommand *cmd;
 
-    while ((de = dictNext(di)) != NULL) {
-        cmd = (struct serverCommand *)dictGetVal(de);
+    while (hashsetNext(&iter, (void**) &cmd)) {
         if (cmd->latency_histogram) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
             fillCommandCDF(c, cmd->latency_histogram);
@@ -544,7 +543,7 @@ void latencyAllCommandsFillCDF(client *c, dict *commands, int *command_with_data
             latencyAllCommandsFillCDF(c, cmd->subcommands_dict, command_with_data);
         }
     }
-    dictReleaseIterator(di);
+    hashsetResetIterator(&iter);
 }
 
 /* latencyCommand() helper to produce for a specific command set,
@@ -566,18 +565,18 @@ void latencySpecificCommandsFillCDF(client *c) {
         }
 
         if (cmd->subcommands_dict) {
-            dictEntry *de;
-            dictIterator *di = dictGetSafeIterator(cmd->subcommands_dict);
+            hashsetIterator iter;
+            hashsetInitSafeIterator(&iter, cmd->subcommands_dict);
 
-            while ((de = dictNext(di)) != NULL) {
-                struct serverCommand *sub = dictGetVal(de);
+            struct serverCommand *sub;
+            while (hashsetNext(&iter, (void**) &sub)) {
                 if (sub->latency_histogram) {
                     addReplyBulkCBuffer(c, sub->fullname, sdslen(sub->fullname));
                     fillCommandCDF(c, sub->latency_histogram);
                     command_with_data++;
                 }
             }
-            dictReleaseIterator(di);
+            hashsetResetIterator(&iter);
         }
     }
     setDeferredMapLen(c, replylen, command_with_data);

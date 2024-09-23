@@ -514,7 +514,7 @@ void loadServerConfigFromString(char *config) {
             /* Otherwise we re-add the command under a different name. */
             if (sdslen(argv[2]) != 0) {
                 sdsfree(cmd->fullname);
-                cmd->fullname = sdsdup(argv[2]); // TODO why doesn't original version store the new command name inside the struct?
+                cmd->fullname = sdsdup(argv[2]);
                 if (!hashsetAdd(server.commands, cmd)) {
                     err = "Target command name already exists";
                     goto loaderr;

@@ -88,11 +88,7 @@ void zlibc_free(void *ptr) {
 #define dallocx(ptr, flags) je_dallocx(ptr, flags)
 #endif
 
-#if __STDC_NO_THREADS__
-#define thread_local __thread
-#else
-#include <threads.h>
-#endif
+#define thread_local _Thread_local
 
 #define MAX_THREADS_NUM (IO_THREADS_MAX_NUM + 3 + 1)
 /* A thread-local storage which keep the current thread's index in the used_memory_thread array. */

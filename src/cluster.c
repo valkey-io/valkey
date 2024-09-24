@@ -422,6 +422,7 @@ void migrateCommand(client *c) {
     int may_retry = 1;
     int write_error = 0;
     int argv_rewritten = 0;
+    int errno_copy = 0;
 
     /* To support the KEYS option we need the following additional state. */
     int first_key = 3; /* Argument index of the first key. */
@@ -710,6 +711,10 @@ try_again:
      * It is very common for the cached socket to get closed, if just reopening
      * it works it's a shame to notify the error to the caller. */
 socket_err:
+    /* Take a copy of 'errno' prior cleanup as it can be overwritten and
+     * use copied variable for re-try check. */
+    errno_copy = errno;
+
     /* Cleanup we want to perform in both the retry and no retry case.
      * Note: Closing the migrate socket will also force SELECT next time. */
     sdsfree(cmd.io.buffer.ptr);
@@ -724,7 +729,7 @@ socket_err:
 
     /* Retry only if it's not a timeout and we never attempted a retry
      * (or the code jumping here did not set may_retry to zero). */
-    if (errno != ETIMEDOUT && may_retry) {
+    if (errno_copy != ETIMEDOUT && may_retry) {
         may_retry = 0;
         goto try_again;
     }

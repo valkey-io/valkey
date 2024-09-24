@@ -2670,7 +2670,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
              * If the sender and myself are in the same shard, try psync. */
             clusterSetPrimary(sender, !are_in_same_shard, !are_in_same_shard);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
-        } else if ((sender_slots >= migrated_our_slots) && !are_in_same_shard) {
+        } else if (nodeIsPrimary(myself) && (sender_slots >= migrated_our_slots) && !are_in_same_shard) {
             /* When all our slots are lost to the sender and the sender belongs to
              * a different shard, this is likely due to a client triggered slot
              * migration. Don't reconfigure this node to migrate to the new shard
@@ -4492,7 +4492,10 @@ void clusterFailoverReplaceYourPrimary(void) {
 
     if (clusterNodeIsPrimary(myself) || old_primary == NULL) return;
 
-    /* 1) Turn this node into a primary . */
+    serverLog(LL_NOTICE, "Setting myself to primary in shard %.40s after failover; my old primary is %.40s (%s)",
+              myself->shard_id, old_primary->name, old_primary->human_nodename);
+
+    /* 1) Turn this node into a primary. */
     clusterSetNodeAsPrimary(myself);
     replicationUnsetPrimary();
 
@@ -6435,11 +6438,12 @@ void clusterCommandSetSlot(client *c) {
         int slot_was_mine = server.cluster->slots[slot] == my_primary;
         clusterDelSlot(slot);
         clusterAddSlot(n, slot);
+        int shard_is_empty = my_primary->numslots == 0;
 
         /* If replica migration is allowed, check if the primary of this shard
          * loses its last slot and the shard becomes empty. In this case, we
          * should turn into a replica of the new primary. */
-        if (server.cluster_allow_replica_migration && slot_was_mine && my_primary->numslots == 0) {
+        if (server.cluster_allow_replica_migration && slot_was_mine && shard_is_empty) {
             serverAssert(n != my_primary);
             serverLog(LL_NOTICE,
                       "Lost my last slot during slot migration. Reconfiguring myself "
@@ -6453,6 +6457,16 @@ void clusterCommandSetSlot(client *c) {
             clusterSetPrimary(n, 1, 1);
             if (nodeIsReplica(myself)) unprotectClient(c);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
+        }
+
+        /* If replica migration is not allowed, check if the primary of this shard
+         * loses its last slot and the shard becomes empty. In this case, we will
+         * print the exact same log as during the gossip process. */
+        if (!server.cluster_allow_replica_migration && nodeIsPrimary(myself) && slot_was_mine && shard_is_empty) {
+            serverAssert(n != my_primary);
+            serverLog(LL_NOTICE,
+                      "My last slot was migrated to node %.40s (%s) in shard %.40s. I am now an empty primary.",
+                      n->name, n->human_nodename, n->shard_id);
         }
 
         /* If this node or this node's primary was importing this slot,

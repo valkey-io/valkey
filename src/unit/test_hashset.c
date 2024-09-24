@@ -327,7 +327,7 @@ int test_scan(int argc, char **argv, int flags) {
 
         /* Scan */
         scandata *data = calloc(1, sizeof(scandata) + count);
-        unsigned max_elements_per_cycle = 0;
+        long max_elements_per_cycle = 0;
         unsigned num_cycles = 0;
         long scanned_count = 0;
         size_t cursor = 0;
@@ -355,7 +355,7 @@ int test_scan(int argc, char **argv, int flags) {
         /* Verify some stuff, but just print it for now. */
         printf("Scanned: %lu; ", count);
         printf("duplicates emitted: %lu; ", scanned_count - count);
-        printf("max emitted per call: %d; ", max_elements_per_cycle);
+        printf("max emitted per call: %ld; ", max_elements_per_cycle);
         printf("avg emitted per call: %.2lf\n", (double)count / num_cycles);
 
         /* Cleanup */
@@ -385,7 +385,7 @@ int test_iterator(int argc, char **argv, int flags) {
     /* Iterate */
     uint8_t element_returned[count];
     memset(element_returned, 0, sizeof element_returned);
-    unsigned num_returned = 0;
+    long num_returned = 0;
     hashsetIterator iter;
     hashsetInitIterator(&iter, t);
     while (hashsetNext(&iter, (void **)&j)) {
@@ -427,13 +427,13 @@ int test_safe_iterator(int argc, char **argv, int flags) {
     /* Iterate */
     uint8_t element_returned[count * 2];
     memset(element_returned, 0, sizeof element_returned);
-    unsigned num_returned = 0;
+    long num_returned = 0;
     hashsetIterator iter;
     hashsetInitSafeIterator(&iter, t);
     while (hashsetNext(&iter, (void **)&j)) {
         num_returned++;
         if (j < 0 || j >= count * 2) {
-            printf("Element %lu returned, max == %lu. Num returned: %u\n", j, count * 2 - 1, num_returned);
+            printf("Element %ld returned, max == %ld. Num returned: %ld\n", j, count * 2 - 1, num_returned);
             printf("Safe %d, table %d, index %lu, pos in bucket %d, rehashing? %d\n", iter.safe, iter.table, iter.index,
                    iter.posInBucket, !hashsetIsRehashing(t));
             hashsetHistogram(t);

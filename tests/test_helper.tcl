@@ -85,6 +85,7 @@ set ::ignoredigest 0
 set ::large_memory 0
 set ::log_req_res 0
 set ::force_resp3 0
+set ::solo_tests_flag 0
 
 # Set to 1 when we are running in client mode. The server test uses a
 # server-client model to run tests simultaneously. The server instance
@@ -370,7 +371,13 @@ proc read_from_test_client fd {
         set all_tests_count [llength $::all_tests]
         set running_tests_count [expr {[llength $::active_clients]-1}]
         set completed_tests_count [expr {$::next_test-$running_tests_count}]
-        puts "\[$completed_tests_count/$all_tests_count [colorstr yellow $status]\]: $data ($elapsed seconds)"
+        # Solo tests are excluded from the completed_tests_count. Ref: #valkey/issues/1017
+        if {!$::solo_tests_flag} {
+            puts "\[$completed_tests_count/$all_tests_count [colorstr yellow $status]\]: $data ($elapsed seconds)" 
+        } else {
+            puts "\[[colorstr yellow $status]\]: $data ($elapsed seconds)"
+            set ::solo_tests_flag 0
+        }
         lappend ::clients_time_history $elapsed $data
         signal_idle_client $fd
         set ::active_clients_task($fd) "(DONE) $data"
@@ -488,6 +495,7 @@ proc signal_idle_client fd {
             incr ::loop -1
         }
     } elseif {[llength $::run_solo_tests] != 0 && [llength $::active_clients] == 0} {
+        incr ::solo_tests_flag
         if {!$::quiet} {
             puts [colorstr bold-white "Testing solo test"]
             set ::active_clients_task($fd) "ASSIGNED: $fd solo test"

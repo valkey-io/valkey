@@ -50,7 +50,11 @@ char *getClientSockname(client *c);
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
 __thread sds thread_shared_qb = NULL;
 
-typedef enum { PARSE_OK = 0, PARSE_ERR = -1, PARSE_NEEDMORE = -2 } parseResult;
+typedef enum {
+    PARSE_OK = 0,
+    PARSE_ERR = -1,
+    PARSE_NEEDMORE = -2,
+} parseResult;
 
 /* Return the amount of memory used by the sds string at object->ptr
  * for a string object. This includes internal fragmentation. */
@@ -3267,7 +3271,6 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
             *p++ = 'S';
     }
 
-    /* clang-format off */
     if (client->flag.primary) *p++ = 'M';
     if (client->flag.pubsub) *p++ = 'P';
     if (client->flag.multi) *p++ = 'x';
@@ -3302,43 +3305,43 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
         replBufBlock *cur = listNodeValue(client->ref_repl_buf_node);
         used_blocks_of_repl_buf = last->id - cur->id + 1;
     }
-    /* clang-format off */
-    sds ret = sdscatfmt(s, FMTARGS(
-        "id=%U", (unsigned long long) client->id,
-        " addr=%s", getClientPeerId(client),
-        " laddr=%s", getClientSockname(client),
-        " %s", connGetInfo(client->conn, conninfo, sizeof(conninfo)),
-        " name=%s", hide_user_data ? "*redacted*" : (client->name ? (char*)client->name->ptr : ""),
-        " age=%I", (long long)(commandTimeSnapshot() / 1000 - client->ctime),
-        " idle=%I", (long long)(server.unixtime - client->last_interaction),
-        " flags=%s", flags,
-        " db=%i", client->db->id,
-        " sub=%i", (int) dictSize(client->pubsub_channels),
-        " psub=%i", (int) dictSize(client->pubsub_patterns),
-        " ssub=%i", (int) dictSize(client->pubsubshard_channels),
-        " multi=%i", (client->flag.multi) ? client->mstate.count : -1,
-        " watch=%i", (int) listLength(client->watched_keys),
-        " qbuf=%U", client->querybuf ? (unsigned long long) sdslen(client->querybuf) : 0,
-        " qbuf-free=%U", client->querybuf ? (unsigned long long) sdsavail(client->querybuf) : 0,
-        " argv-mem=%U", (unsigned long long) client->argv_len_sum,
-        " multi-mem=%U", (unsigned long long) client->mstate.argv_len_sums,
-        " rbs=%U", (unsigned long long) client->buf_usable_size,
-        " rbp=%U", (unsigned long long) client->buf_peak,
-        " obl=%U", (unsigned long long) client->bufpos,
-        " oll=%U", (unsigned long long) listLength(client->reply) + used_blocks_of_repl_buf,
-        " omem=%U", (unsigned long long) obufmem, /* should not include client->buf since we want to see 0 for static clients. */
-        " tot-mem=%U", (unsigned long long) total_mem,
-        " events=%s", events,
-        " cmd=%s", client->lastcmd ? client->lastcmd->fullname : "NULL",
-        " user=%s", hide_user_data ? "*redacted*" : (client->user ? client->user->name : "(superuser)"),
-        " redir=%I", (client->flag.tracking) ? (long long) client->client_tracking_redirection : -1,
-        " resp=%i", client->resp,
-        " lib-name=%s", client->lib_name ? (char*)client->lib_name->ptr : "",
-        " lib-ver=%s", client->lib_ver ? (char*)client->lib_ver->ptr : "",
-        " tot-net-in=%U", client->net_input_bytes,
-        " tot-net-out=%U", client->net_output_bytes,
-        " tot-cmds=%U", client->commands_processed));
-    /* clang-format on */
+    sds ret = sdscatfmt(
+        s,
+        FMTARGS(
+            "id=%U", (unsigned long long)client->id,
+            " addr=%s", getClientPeerId(client),
+            " laddr=%s", getClientSockname(client),
+            " %s", connGetInfo(client->conn, conninfo, sizeof(conninfo)),
+            " name=%s", hide_user_data ? "*redacted*" : (client->name ? (char *)client->name->ptr : ""),
+            " age=%I", (long long)(commandTimeSnapshot() / 1000 - client->ctime),
+            " idle=%I", (long long)(server.unixtime - client->last_interaction),
+            " flags=%s", flags,
+            " db=%i", client->db->id,
+            " sub=%i", (int)dictSize(client->pubsub_channels),
+            " psub=%i", (int)dictSize(client->pubsub_patterns),
+            " ssub=%i", (int)dictSize(client->pubsubshard_channels),
+            " multi=%i", (client->flag.multi) ? client->mstate.count : -1,
+            " watch=%i", (int)listLength(client->watched_keys),
+            " qbuf=%U", client->querybuf ? (unsigned long long)sdslen(client->querybuf) : 0,
+            " qbuf-free=%U", client->querybuf ? (unsigned long long)sdsavail(client->querybuf) : 0,
+            " argv-mem=%U", (unsigned long long)client->argv_len_sum,
+            " multi-mem=%U", (unsigned long long)client->mstate.argv_len_sums,
+            " rbs=%U", (unsigned long long)client->buf_usable_size,
+            " rbp=%U", (unsigned long long)client->buf_peak,
+            " obl=%U", (unsigned long long)client->bufpos,
+            " oll=%U", (unsigned long long)listLength(client->reply) + used_blocks_of_repl_buf,
+            " omem=%U", (unsigned long long)obufmem, /* should not include client->buf since we want to see 0 for static clients. */
+            " tot-mem=%U", (unsigned long long)total_mem,
+            " events=%s", events,
+            " cmd=%s", client->lastcmd ? client->lastcmd->fullname : "NULL",
+            " user=%s", hide_user_data ? "*redacted*" : (client->user ? client->user->name : "(superuser)"),
+            " redir=%I", (client->flag.tracking) ? (long long)client->client_tracking_redirection : -1,
+            " resp=%i", client->resp,
+            " lib-name=%s", client->lib_name ? (char *)client->lib_name->ptr : "",
+            " lib-ver=%s", client->lib_ver ? (char *)client->lib_ver->ptr : "",
+            " tot-net-in=%U", client->net_input_bytes,
+            " tot-net-out=%U", client->net_output_bytes,
+            " tot-cmds=%U", client->commands_processed));
     return ret;
 }
 
@@ -3482,70 +3485,67 @@ void clientCommand(client *c) {
     listIter li;
 
     if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
-        /* clang-format off */
         const char *help[] = {
-"CACHING (YES|NO)",
-"    Enable/disable tracking of the keys for next command in OPTIN/OPTOUT modes.",
-"CAPA <option> [options...]",
-"    The client claims its some capability options. Options are:",
-"    * REDIRECT",
-"      The client can handle redirection during primary and replica failover in standalone mode.",
-"GETREDIR",
-"    Return the client ID we are redirecting to when tracking is enabled.",
-"GETNAME",
-"    Return the name of the current connection.",
-"ID",
-"    Return the ID of the current connection.",
-"INFO",
-"    Return information about the current client connection.",
-"KILL <ip:port>",
-"    Kill connection made from <ip:port>.",
-"KILL <option> <value> [<option> <value> [...]]",
-"    Kill connections. Options are:",
-"    * ADDR (<ip:port>|<unixsocket>:0)",
-"      Kill connections made from the specified address",
-"    * LADDR (<ip:port>|<unixsocket>:0)",
-"      Kill connections made to specified local address",
-"    * TYPE (NORMAL|PRIMARY|REPLICA|PUBSUB)",
-"      Kill connections by type.",
-"    * USER <username>",
-"      Kill connections authenticated by <username>.",
-"    * SKIPME (YES|NO)",
-"      Skip killing current connection (default: yes).",
-"    * ID <client-id>",
-"      Kill connections by client id.",
-"    * MAXAGE <maxage>",
-"      Kill connections older than the specified age.",
-"LIST [options ...]",
-"    Return information about client connections. Options:",
-"    * TYPE (NORMAL|PRIMARY|REPLICA|PUBSUB)",
-"      Return clients of specified type.",
-"UNPAUSE",
-"    Stop the current client pause, resuming traffic.",
-"PAUSE <timeout> [WRITE|ALL]",
-"    Suspend all, or just write, clients for <timeout> milliseconds.",
-"REPLY (ON|OFF|SKIP)",
-"    Control the replies sent to the current connection.",
-"SETNAME <name>",
-"    Assign the name <name> to the current connection.",
-"SETINFO <option> <value>",
-"    Set client meta attr. Options are:",
-"    * LIB-NAME: the client lib name.",
-"    * LIB-VER: the client lib version.",
-"UNBLOCK <clientid> [TIMEOUT|ERROR]",
-"    Unblock the specified blocked client.",
-"TRACKING (ON|OFF) [REDIRECT <id>] [BCAST] [PREFIX <prefix> [...]]",
-"         [OPTIN] [OPTOUT] [NOLOOP]",
-"    Control server assisted client side caching.",
-"TRACKINGINFO",
-"    Report tracking status for the current connection.",
-"NO-EVICT (ON|OFF)",
-"    Protect current client connection from eviction.",
-"NO-TOUCH (ON|OFF)",
-"    Will not touch LRU/LFU stats when this mode is on.",
-NULL
-        };
-        /* clang-format on */
+            "CACHING (YES|NO)",
+            "    Enable/disable tracking of the keys for next command in OPTIN/OPTOUT modes.",
+            "CAPA <option> [options...]",
+            "    The client claims its some capability options. Options are:",
+            "    * REDIRECT",
+            "      The client can handle redirection during primary and replica failover in standalone mode.",
+            "GETREDIR",
+            "    Return the client ID we are redirecting to when tracking is enabled.",
+            "GETNAME",
+            "    Return the name of the current connection.",
+            "ID",
+            "    Return the ID of the current connection.",
+            "INFO",
+            "    Return information about the current client connection.",
+            "KILL <ip:port>",
+            "    Kill connection made from <ip:port>.",
+            "KILL <option> <value> [<option> <value> [...]]",
+            "    Kill connections. Options are:",
+            "    * ADDR (<ip:port>|<unixsocket>:0)",
+            "      Kill connections made from the specified address",
+            "    * LADDR (<ip:port>|<unixsocket>:0)",
+            "      Kill connections made to specified local address",
+            "    * TYPE (NORMAL|PRIMARY|REPLICA|PUBSUB)",
+            "      Kill connections by type.",
+            "    * USER <username>",
+            "      Kill connections authenticated by <username>.",
+            "    * SKIPME (YES|NO)",
+            "      Skip killing current connection (default: yes).",
+            "    * ID <client-id>",
+            "      Kill connections by client id.",
+            "    * MAXAGE <maxage>",
+            "      Kill connections older than the specified age.",
+            "LIST [options ...]",
+            "    Return information about client connections. Options:",
+            "    * TYPE (NORMAL|PRIMARY|REPLICA|PUBSUB)",
+            "      Return clients of specified type.",
+            "UNPAUSE",
+            "    Stop the current client pause, resuming traffic.",
+            "PAUSE <timeout> [WRITE|ALL]",
+            "    Suspend all, or just write, clients for <timeout> milliseconds.",
+            "REPLY (ON|OFF|SKIP)",
+            "    Control the replies sent to the current connection.",
+            "SETNAME <name>",
+            "    Assign the name <name> to the current connection.",
+            "SETINFO <option> <value>",
+            "    Set client meta attr. Options are:",
+            "    * LIB-NAME: the client lib name.",
+            "    * LIB-VER: the client lib version.",
+            "UNBLOCK <clientid> [TIMEOUT|ERROR]",
+            "    Unblock the specified blocked client.",
+            "TRACKING (ON|OFF) [REDIRECT <id>] [BCAST] [PREFIX <prefix> [...]]",
+            "         [OPTIN] [OPTOUT] [NOLOOP]",
+            "    Control server assisted client side caching.",
+            "TRACKINGINFO",
+            "    Report tracking status for the current connection.",
+            "NO-EVICT (ON|OFF)",
+            "    Protect current client connection from eviction.",
+            "NO-TOUCH (ON|OFF)",
+            "    Will not touch LRU/LFU stats when this mode is on.",
+            NULL};
         addReplyHelp(c, help);
     } else if (!strcasecmp(c->argv[1]->ptr, "id") && c->argc == 2) {
         /* CLIENT ID */

@@ -144,7 +144,7 @@ static inline int defaultClientPort(void) {
     return server.tls_cluster ? server.tls_port : server.port;
 }
 
-#define isSlotUnclaimed(slot)                                                                                          \
+#define isSlotUnclaimed(slot) \
     (server.cluster->slots[slot] == NULL || bitmapTestBit(server.cluster->owner_not_claiming_slot, slot))
 
 #define RCVBUF_INIT_LEN 1024
@@ -191,7 +191,10 @@ dictType clusterSdsToListType = {
 };
 
 typedef struct {
-    enum { ITER_DICT, ITER_LIST } type;
+    enum {
+        ITER_DICT,
+        ITER_LIST
+    } type;
     union {
         dictIterator di;
         listIter li;
@@ -4576,7 +4579,7 @@ void clusterHandleReplicaFailover(void) {
      * elapsed, we can setup a new one. */
     if (auth_age > auth_retry_time) {
         server.cluster->failover_auth_time = mstime() +
-                                             500 + /* Fixed delay of 500 milliseconds, let FAIL msg propagate. */
+                                             500 +           /* Fixed delay of 500 milliseconds, let FAIL msg propagate. */
                                              random() % 500; /* Random delay between 0 and 500 milliseconds. */
         server.cluster->failover_auth_count = 0;
         server.cluster->failover_auth_sent = 0;
@@ -5509,10 +5512,14 @@ struct clusterNodeFlags {
 };
 
 static struct clusterNodeFlags clusterNodeFlagsTable[] = {
-    {CLUSTER_NODE_MYSELF, "myself,"}, {CLUSTER_NODE_PRIMARY, "master,"},
-    {CLUSTER_NODE_REPLICA, "slave,"}, {CLUSTER_NODE_PFAIL, "fail?,"},
-    {CLUSTER_NODE_FAIL, "fail,"},     {CLUSTER_NODE_HANDSHAKE, "handshake,"},
-    {CLUSTER_NODE_NOADDR, "noaddr,"}, {CLUSTER_NODE_NOFAILOVER, "nofailover,"}};
+    {CLUSTER_NODE_MYSELF, "myself,"},
+    {CLUSTER_NODE_PRIMARY, "master,"},
+    {CLUSTER_NODE_REPLICA, "slave,"},
+    {CLUSTER_NODE_PFAIL, "fail?,"},
+    {CLUSTER_NODE_FAIL, "fail,"},
+    {CLUSTER_NODE_HANDSHAKE, "handshake,"},
+    {CLUSTER_NODE_NOADDR, "noaddr,"},
+    {CLUSTER_NODE_NOFAILOVER, "nofailover,"}};
 
 /* Concatenate the comma separated list of node flags to the given SDS
  * string 'ci'. */

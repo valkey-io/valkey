@@ -180,15 +180,12 @@ typedef struct ValkeyModuleCtx ValkeyModuleCtx;
 #define VALKEYMODULE_CTX_BLOCKED_TIMEOUT (1 << 3)
 #define VALKEYMODULE_CTX_THREAD_SAFE (1 << 4)
 #define VALKEYMODULE_CTX_BLOCKED_DISCONNECTED (1 << 5)
-#define VALKEYMODULE_CTX_TEMP_CLIENT                                                                                   \
-    (1 << 6) /* Return client object to the pool                                                                       \
-               when the context is destroyed */
-#define VALKEYMODULE_CTX_NEW_CLIENT                                                                                    \
-    (1 << 7) /* Free client object when the                                                                            \
-               context is destroyed */
+#define VALKEYMODULE_CTX_TEMP_CLIENT (1 << 6) /* Return client object to the pool \
+                                                 when the context is destroyed */
+#define VALKEYMODULE_CTX_NEW_CLIENT (1 << 7)  /* Free client object when the \
+                                                 context is destroyed */
 #define VALKEYMODULE_CTX_CHANNELS_POS_REQUEST (1 << 8)
-#define VALKEYMODULE_CTX_COMMAND                                                                                       \
-    (1 << 9) /* Context created to serve a command from call() or AOF (which calls cmd->proc directly) */
+#define VALKEYMODULE_CTX_COMMAND (1 << 9) /* Context created to serve a command from call() or AOF (which calls cmd->proc directly) */
 
 
 /* This represents a key opened with VM_OpenKey(). */
@@ -249,9 +246,8 @@ typedef struct ValkeyModuleCommand ValkeyModuleCommand;
 
 #define VALKEYMODULE_REPLYFLAG_NONE 0
 #define VALKEYMODULE_REPLYFLAG_TOPARSE (1 << 0) /* Protocol must be parsed. */
-#define VALKEYMODULE_REPLYFLAG_NESTED                                                                                  \
-    (1 << 1) /* Nested reply object. No proto                                                                          \
-               or struct free. */
+#define VALKEYMODULE_REPLYFLAG_NESTED (1 << 1)  /* Nested reply object. No proto \
+                                                   or struct free. */
 
 /* Reply of VM_Call() function. The function is filled in a lazy
  * way depending on the function called on the reply structure. By default
@@ -408,7 +404,7 @@ typedef struct ValkeyModuleServerInfoData {
  * In case 'ctx' has no 'module' member (and therefore no module->options),
  * we assume default behavior, that is, the server signals.
  * (see VM_GetThreadSafeContext) */
-#define SHOULD_SIGNAL_MODIFIED_KEYS(ctx)                                                                               \
+#define SHOULD_SIGNAL_MODIFIED_KEYS(ctx) \
     ((ctx)->module ? !((ctx)->module->options & VALKEYMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED) : 1)
 
 /* Server events hooks data structures and defines: this modules API
@@ -5957,7 +5953,7 @@ void VM_CallReplyPromiseSetUnblockHandler(ValkeyModuleCallReply *reply,
 int VM_CallReplyPromiseAbort(ValkeyModuleCallReply *reply, void **private_data) {
     ValkeyModuleAsyncRMCallPromise *promise = callReplyGetPrivateData(reply);
     if (!promise->c)
-        return VALKEYMODULE_ERR; /* Promise can not be aborted, either already aborted or already finished. */
+        return VALKEYMODULE_ERR;                              /* Promise can not be aborted, either already aborted or already finished. */
     if (!(promise->c->flag.blocked)) return VALKEYMODULE_ERR; /* Client is not blocked anymore, can not abort it. */
 
     /* Client is still blocked, remove it from any blocking state and release it. */
@@ -11837,8 +11833,8 @@ int moduleRegisterApi(const char *funcname, void *funcptr) {
 
 /* Register Module APIs under both RedisModule_ and ValkeyModule_ namespaces
  * so that legacy Redis module binaries can continue to function */
-#define REGISTER_API(name)                                                                                             \
-    moduleRegisterApi("ValkeyModule_" #name, (void *)(unsigned long)VM_##name);                                        \
+#define REGISTER_API(name)                                                      \
+    moduleRegisterApi("ValkeyModule_" #name, (void *)(unsigned long)VM_##name); \
     moduleRegisterApi("RedisModule_" #name, (void *)(unsigned long)VM_##name);
 
 /* Global initialization at server startup. */

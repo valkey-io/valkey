@@ -17,7 +17,11 @@ dictEntry *dictGetNext(const dictEntry *de);
 /* Forward declarations of kvstore.c functions */
 dict *kvstoreGetDict(kvstore *kvs, int didx);
 
-typedef enum { HT_IDX_FIRST = 0, HT_IDX_SECOND = 1, HT_IDX_INVALID = -1 } HashTableIndex;
+typedef enum {
+    HT_IDX_FIRST = 0,
+    HT_IDX_SECOND = 1,
+    HT_IDX_INVALID = -1
+} HashTableIndex;
 
 typedef enum {
     PREFETCH_BUCKET,     /* Initial state, determines which hash table to use and prefetch the table's bucket */

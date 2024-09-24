@@ -87,9 +87,9 @@
 #define CLUSTER_MANAGER_MIGRATE_PIPELINE 10
 #define CLUSTER_MANAGER_REBALANCE_THRESHOLD 2
 
-#define CLUSTER_MANAGER_INVALID_HOST_ARG                                                                               \
-    "[ERR] Invalid arguments: you need to pass either a valid "                                                        \
-    "address (ie. 120.0.0.1:7000) or space separated IP "                                                              \
+#define CLUSTER_MANAGER_INVALID_HOST_ARG                        \
+    "[ERR] Invalid arguments: you need to pass either a valid " \
+    "address (ie. 120.0.0.1:7000) or space separated IP "       \
     "and port (ie. 120.0.0.1 7000)\n"
 #define CLUSTER_MANAGER_MODE() (config.cluster_manager_command.name != NULL)
 #define CLUSTER_MANAGER_PRIMARIES_COUNT(nodes, replicas) ((nodes) / ((replicas) + 1))
@@ -97,7 +97,7 @@
 
 #define CLUSTER_MANAGER_NODE_ARRAY_FREE(array) zfree((array)->alloc)
 
-#define CLUSTER_MANAGER_PRINT_REPLY_ERROR(n, err)                                                                      \
+#define CLUSTER_MANAGER_PRINT_REPLY_ERROR(n, err) \
     clusterManagerLogErr("Node %s:%d replied with error:\n%s\n", (n)->ip, (n)->port, (err));
 
 #define clusterManagerLogInfo(...) clusterManagerLog(CLUSTER_MANAGER_LOG_LVL_INFO, __VA_ARGS__)
@@ -157,7 +157,7 @@
 
 /* --latency-dist palettes. */
 int spectrum_palette_color_size = 19;
-int spectrum_palette_color[] = {0,   233, 234, 235, 237, 239, 241, 243, 245, 247,
+int spectrum_palette_color[] = {0, 233, 234, 235, 237, 239, 241, 243, 245, 247,
                                 144, 143, 142, 184, 226, 214, 208, 202, 196};
 
 int spectrum_palette_mono_size = 13;
@@ -2872,155 +2872,153 @@ static void parseEnv(void) {
 static void usage(int err) {
     sds version = cliVersion();
     FILE *target = err ? stderr : stdout;
-    /* clang-format off */
     const char *tls_usage =
 #ifdef USE_OPENSSL
-"  --tls              Establish a secure TLS connection.\n"
-"  --sni <host>       Server name indication for TLS.\n"
-"  --cacert <file>    CA Certificate file to verify with.\n"
-"  --cacertdir <dir>  Directory where trusted CA certificates are stored.\n"
-"                     If neither cacert nor cacertdir are specified, the default\n"
-"                     system-wide trusted root certs configuration will apply.\n"
-"  --insecure         Allow insecure TLS connection by skipping cert validation.\n"
-"  --cert <file>      Client certificate to authenticate with.\n"
-"  --key <file>       Private key file to authenticate with.\n"
-"  --tls-ciphers <list> Sets the list of preferred ciphers (TLSv1.2 and below)\n"
-"                     in order of preference from highest to lowest separated by colon (\":\").\n"
-"                     See the ciphers(1ssl) manpage for more information about the syntax of this string.\n"
+        "  --tls              Establish a secure TLS connection.\n"
+        "  --sni <host>       Server name indication for TLS.\n"
+        "  --cacert <file>    CA Certificate file to verify with.\n"
+        "  --cacertdir <dir>  Directory where trusted CA certificates are stored.\n"
+        "                     If neither cacert nor cacertdir are specified, the default\n"
+        "                     system-wide trusted root certs configuration will apply.\n"
+        "  --insecure         Allow insecure TLS connection by skipping cert validation.\n"
+        "  --cert <file>      Client certificate to authenticate with.\n"
+        "  --key <file>       Private key file to authenticate with.\n"
+        "  --tls-ciphers <list> Sets the list of preferred ciphers (TLSv1.2 and below)\n"
+        "                     in order of preference from highest to lowest separated by colon (\":\").\n"
+        "                     See the ciphers(1ssl) manpage for more information about the syntax of this string.\n"
 #ifdef TLS1_3_VERSION
-"  --tls-ciphersuites <list> Sets the list of preferred ciphersuites (TLSv1.3)\n"
-"                     in order of preference from highest to lowest separated by colon (\":\").\n"
-"                     See the ciphers(1ssl) manpage for more information about the syntax of this string,\n"
-"                     and specifically for TLSv1.3 ciphersuites.\n"
+        "  --tls-ciphersuites <list> Sets the list of preferred ciphersuites (TLSv1.3)\n"
+        "                     in order of preference from highest to lowest separated by colon (\":\").\n"
+        "                     See the ciphers(1ssl) manpage for more information about the syntax of this string,\n"
+        "                     and specifically for TLSv1.3 ciphersuites.\n"
 #endif
 #endif
-"";
+        "";
 
     fprintf(target,
-"valkey-cli %s\n"
-"\n"
-"Usage: valkey-cli [OPTIONS] [cmd [arg [arg ...]]]\n"
-"  -h <hostname>      Server hostname (default: 127.0.0.1).\n"
-"  -p <port>          Server port (default: 6379).\n"
-"  -t <timeout>       Server connection timeout in seconds (decimals allowed).\n"
-"                     Default timeout is 0, meaning no limit, depending on the OS.\n"
-"  -s <socket>        Server socket (overrides hostname and port).\n"
-"  -a <password>      Password to use when connecting to the server.\n"
-"                     You can also use the " CLI_AUTH_ENV " environment\n"
-"                     variable to pass this password more safely\n"
-"                     (if both are used, this argument takes precedence).\n"
-"  --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.\n"
-"  --pass <password>  Alias of -a for consistency with the new --user option.\n"
-"  --askpass          Force user to input password with mask from STDIN.\n"
-"                     If this argument is used, '-a' and " CLI_AUTH_ENV "\n"
-"                     environment variable will be ignored.\n"
-"  -u <uri>           Server URI on format valkey://user:password@host:port/dbnum\n"
-"                     User, password and dbnum are optional. For authentication\n"
-"                     without a username, use username 'default'. For TLS, use\n"
-"                     the scheme 'valkeys'.\n"
-"  -r <repeat>        Execute specified command N times.\n"
-"  -i <interval>      When -r is used, waits <interval> seconds per command.\n"
-"                     It is possible to specify sub-second times like -i 0.1.\n"
-"                     This interval is also used in --scan and --stat per cycle.\n"
-"                     and in --bigkeys, --memkeys, and --hotkeys per 100 cycles.\n"
-"  -n <db>            Database number.\n"
-"  -2                 Start session in RESP2 protocol mode.\n"
-"  -3                 Start session in RESP3 protocol mode.\n"
-"  -x                 Read last argument from STDIN (see example below).\n"
-"  -X                 Read <tag> argument from STDIN (see example below).\n"
-"  -d <delimiter>     Delimiter between response bulks for raw formatting (default: \\n).\n"
-"  -D <delimiter>     Delimiter between responses for raw formatting (default: \\n).\n"
-"  -c                 Enable cluster mode (follow -ASK and -MOVED redirections).\n"
-"  -e                 Return exit error code when command execution fails.\n"
-"  -4                 Prefer IPv4 over IPv6 on DNS lookup.\n"
-"  -6                 Prefer IPv6 over IPv4 on DNS lookup.\n"
-"%s"
-"  --raw              Use raw formatting for replies (default when STDOUT is\n"
-"                     not a tty).\n"
-"  --no-raw           Force formatted output even when STDOUT is not a tty.\n"
-"  --quoted-input     Force input to be handled as quoted strings.\n"
-"  --csv              Output in CSV format.\n"
-"  --json             Output in JSON format (default RESP3, use -2 if you want to use with RESP2).\n"
-"  --quoted-json      Same as --json, but produce ASCII-safe quoted strings, not Unicode.\n"
-"  --show-pushes <yn> Whether to print RESP3 PUSH messages.  Enabled by default when\n"
-"                     STDOUT is a tty but can be overridden with --show-pushes no.\n"
-"  --stat             Print rolling stats about server: mem, clients, ...\n",
-version,tls_usage);
+            "valkey-cli %s\n"
+            "\n"
+            "Usage: valkey-cli [OPTIONS] [cmd [arg [arg ...]]]\n"
+            "  -h <hostname>      Server hostname (default: 127.0.0.1).\n"
+            "  -p <port>          Server port (default: 6379).\n"
+            "  -t <timeout>       Server connection timeout in seconds (decimals allowed).\n"
+            "                     Default timeout is 0, meaning no limit, depending on the OS.\n"
+            "  -s <socket>        Server socket (overrides hostname and port).\n"
+            "  -a <password>      Password to use when connecting to the server.\n"
+            "                     You can also use the " CLI_AUTH_ENV " environment\n"
+            "                     variable to pass this password more safely\n"
+            "                     (if both are used, this argument takes precedence).\n"
+            "  --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.\n"
+            "  --pass <password>  Alias of -a for consistency with the new --user option.\n"
+            "  --askpass          Force user to input password with mask from STDIN.\n"
+            "                     If this argument is used, '-a' and " CLI_AUTH_ENV "\n"
+            "                     environment variable will be ignored.\n"
+            "  -u <uri>           Server URI on format valkey://user:password@host:port/dbnum\n"
+            "                     User, password and dbnum are optional. For authentication\n"
+            "                     without a username, use username 'default'. For TLS, use\n"
+            "                     the scheme 'valkeys'.\n"
+            "  -r <repeat>        Execute specified command N times.\n"
+            "  -i <interval>      When -r is used, waits <interval> seconds per command.\n"
+            "                     It is possible to specify sub-second times like -i 0.1.\n"
+            "                     This interval is also used in --scan and --stat per cycle.\n"
+            "                     and in --bigkeys, --memkeys, and --hotkeys per 100 cycles.\n"
+            "  -n <db>            Database number.\n"
+            "  -2                 Start session in RESP2 protocol mode.\n"
+            "  -3                 Start session in RESP3 protocol mode.\n"
+            "  -x                 Read last argument from STDIN (see example below).\n"
+            "  -X                 Read <tag> argument from STDIN (see example below).\n"
+            "  -d <delimiter>     Delimiter between response bulks for raw formatting (default: \\n).\n"
+            "  -D <delimiter>     Delimiter between responses for raw formatting (default: \\n).\n"
+            "  -c                 Enable cluster mode (follow -ASK and -MOVED redirections).\n"
+            "  -e                 Return exit error code when command execution fails.\n"
+            "  -4                 Prefer IPv4 over IPv6 on DNS lookup.\n"
+            "  -6                 Prefer IPv6 over IPv4 on DNS lookup.\n"
+            "%s"
+            "  --raw              Use raw formatting for replies (default when STDOUT is\n"
+            "                     not a tty).\n"
+            "  --no-raw           Force formatted output even when STDOUT is not a tty.\n"
+            "  --quoted-input     Force input to be handled as quoted strings.\n"
+            "  --csv              Output in CSV format.\n"
+            "  --json             Output in JSON format (default RESP3, use -2 if you want to use with RESP2).\n"
+            "  --quoted-json      Same as --json, but produce ASCII-safe quoted strings, not Unicode.\n"
+            "  --show-pushes <yn> Whether to print RESP3 PUSH messages.  Enabled by default when\n"
+            "                     STDOUT is a tty but can be overridden with --show-pushes no.\n"
+            "  --stat             Print rolling stats about server: mem, clients, ...\n",
+            version, tls_usage);
 
     fprintf(target,
-"  --latency          Enter a special mode continuously sampling latency.\n"
-"                     If you use this mode in an interactive session it runs\n"
-"                     forever displaying real-time stats. Otherwise if --raw or\n"
-"                     --csv is specified, or if you redirect the output to a non\n"
-"                     TTY, it samples the latency for 1 second (you can use\n"
-"                     -i to change the interval), then produces a single output\n"
-"                     and exits.\n"
-"  --latency-history  Like --latency but tracking latency changes over time.\n"
-"                     Default time interval is 15 sec. Change it using -i.\n"
-"  --latency-dist     Shows latency as a spectrum, requires xterm 256 colors.\n"
-"                     Default time interval is 1 sec. Change it using -i.\n"
-"  --lru-test <keys>  Simulate a cache workload with an 80-20 distribution.\n"
-"  --replica          Simulate a replica showing commands received from the primaries.\n"
-"  --rdb <filename>   Transfer an RDB dump from remote server to local file.\n"
-"                     Use filename of \"-\" to write to stdout.\n"
-"  --functions-rdb <filename> Like --rdb but only get the functions (not the keys)\n"
-"                     when getting the RDB dump file.\n"
-"  --pipe             Transfer raw RESP protocol from stdin to server.\n"
-"  --pipe-timeout <n> In --pipe mode, abort with error if after sending all data.\n"
-"                     no reply is received within <n> seconds.\n"
-"                     Default timeout: %d. Use 0 to wait forever.\n",
-    CLI_DEFAULT_PIPE_TIMEOUT);
+            "  --latency          Enter a special mode continuously sampling latency.\n"
+            "                     If you use this mode in an interactive session it runs\n"
+            "                     forever displaying real-time stats. Otherwise if --raw or\n"
+            "                     --csv is specified, or if you redirect the output to a non\n"
+            "                     TTY, it samples the latency for 1 second (you can use\n"
+            "                     -i to change the interval), then produces a single output\n"
+            "                     and exits.\n"
+            "  --latency-history  Like --latency but tracking latency changes over time.\n"
+            "                     Default time interval is 15 sec. Change it using -i.\n"
+            "  --latency-dist     Shows latency as a spectrum, requires xterm 256 colors.\n"
+            "                     Default time interval is 1 sec. Change it using -i.\n"
+            "  --lru-test <keys>  Simulate a cache workload with an 80-20 distribution.\n"
+            "  --replica          Simulate a replica showing commands received from the primaries.\n"
+            "  --rdb <filename>   Transfer an RDB dump from remote server to local file.\n"
+            "                     Use filename of \"-\" to write to stdout.\n"
+            "  --functions-rdb <filename> Like --rdb but only get the functions (not the keys)\n"
+            "                     when getting the RDB dump file.\n"
+            "  --pipe             Transfer raw RESP protocol from stdin to server.\n"
+            "  --pipe-timeout <n> In --pipe mode, abort with error if after sending all data.\n"
+            "                     no reply is received within <n> seconds.\n"
+            "                     Default timeout: %d. Use 0 to wait forever.\n",
+            CLI_DEFAULT_PIPE_TIMEOUT);
     fprintf(target,
-"  --bigkeys          Sample keys looking for keys with many elements (complexity).\n"
-"  --memkeys          Sample keys looking for keys consuming a lot of memory.\n"
-"  --memkeys-samples <n> Sample keys looking for keys consuming a lot of memory.\n"
-"                     And define number of key elements to sample\n"
-"  --hotkeys          Sample keys looking for hot keys.\n"
-"                     only works when maxmemory-policy is *lfu.\n"
-"  --scan             List all keys using the SCAN command.\n"
-"  --pattern <pat>    Keys pattern when using the --scan, --bigkeys or --hotkeys\n"
-"                     options (default: *).\n"
-"  --count <count>    Count option when using the --scan, --bigkeys or --hotkeys (default: 10).\n"
-"  --quoted-pattern <pat> Same as --pattern, but the specified string can be\n"
-"                         quoted, in order to pass an otherwise non binary-safe string.\n"
-"  --intrinsic-latency <sec> Run a test to measure intrinsic system latency.\n"
-"                     The test will run for the specified amount of seconds.\n"
-"  --eval <file>      Send an EVAL command using the Lua script at <file>.\n"
-"  --ldb              Used with --eval enable the Server Lua debugger.\n"
-"  --ldb-sync-mode    Like --ldb but uses the synchronous Lua debugger, in\n"
-"                     this mode the server is blocked and script changes are\n"
-"                     not rolled back from the server memory.\n"
-"  --cluster <command> [args...] [opts...]\n"
-"                     Cluster Manager command and arguments (see below).\n"
-"  --verbose          Verbose mode.\n"
-"  --no-auth-warning  Don't show warning message when using password on command\n"
-"                     line interface.\n"
-"  --help             Output this help and exit.\n"
-"  --version          Output version and exit.\n"
-"\n");
+            "  --bigkeys          Sample keys looking for keys with many elements (complexity).\n"
+            "  --memkeys          Sample keys looking for keys consuming a lot of memory.\n"
+            "  --memkeys-samples <n> Sample keys looking for keys consuming a lot of memory.\n"
+            "                     And define number of key elements to sample\n"
+            "  --hotkeys          Sample keys looking for hot keys.\n"
+            "                     only works when maxmemory-policy is *lfu.\n"
+            "  --scan             List all keys using the SCAN command.\n"
+            "  --pattern <pat>    Keys pattern when using the --scan, --bigkeys or --hotkeys\n"
+            "                     options (default: *).\n"
+            "  --count <count>    Count option when using the --scan, --bigkeys or --hotkeys (default: 10).\n"
+            "  --quoted-pattern <pat> Same as --pattern, but the specified string can be\n"
+            "                         quoted, in order to pass an otherwise non binary-safe string.\n"
+            "  --intrinsic-latency <sec> Run a test to measure intrinsic system latency.\n"
+            "                     The test will run for the specified amount of seconds.\n"
+            "  --eval <file>      Send an EVAL command using the Lua script at <file>.\n"
+            "  --ldb              Used with --eval enable the Server Lua debugger.\n"
+            "  --ldb-sync-mode    Like --ldb but uses the synchronous Lua debugger, in\n"
+            "                     this mode the server is blocked and script changes are\n"
+            "                     not rolled back from the server memory.\n"
+            "  --cluster <command> [args...] [opts...]\n"
+            "                     Cluster Manager command and arguments (see below).\n"
+            "  --verbose          Verbose mode.\n"
+            "  --no-auth-warning  Don't show warning message when using password on command\n"
+            "                     line interface.\n"
+            "  --help             Output this help and exit.\n"
+            "  --version          Output version and exit.\n"
+            "\n");
     /* Using another fprintf call to avoid -Woverlength-strings compile warning */
     fprintf(target,
-"Cluster Manager Commands:\n"
-"  Use --cluster help to list all available cluster manager commands.\n"
-"\n"
-"Examples:\n"
-"  valkey-cli -u valkey://default:PASSWORD@localhost:6379/0\n"
-"  cat /etc/passwd | valkey-cli -x set mypasswd\n"
-"  valkey-cli -D \"\" --raw dump key > key.dump && valkey-cli -X dump_tag restore key2 0 dump_tag replace < key.dump\n"
-"  valkey-cli -r 100 lpush mylist x\n"
-"  valkey-cli -r 100 -i 1 info | grep used_memory_human:\n"
-"  valkey-cli --quoted-input set '\"null-\\x00-separated\"' value\n"
-"  valkey-cli --eval myscript.lua key1 key2 , arg1 arg2 arg3\n"
-"  valkey-cli --scan --pattern '*:12345*'\n"
-"  valkey-cli --scan --pattern '*:12345*' --count 100\n"
-"\n"
-"  (Note: when using --eval the comma separates KEYS[] from ARGV[] items)\n"
-"\n"
-"When no command is given, valkey-cli starts in interactive mode.\n"
-"Type \"help\" in interactive mode for information on available commands\n"
-"and settings.\n"
-"\n");
-    /* clang-format on */
+            "Cluster Manager Commands:\n"
+            "  Use --cluster help to list all available cluster manager commands.\n"
+            "\n"
+            "Examples:\n"
+            "  valkey-cli -u valkey://default:PASSWORD@localhost:6379/0\n"
+            "  cat /etc/passwd | valkey-cli -x set mypasswd\n"
+            "  valkey-cli -D \"\" --raw dump key > key.dump && valkey-cli -X dump_tag restore key2 0 dump_tag replace < key.dump\n"
+            "  valkey-cli -r 100 lpush mylist x\n"
+            "  valkey-cli -r 100 -i 1 info | grep used_memory_human:\n"
+            "  valkey-cli --quoted-input set '\"null-\\x00-separated\"' value\n"
+            "  valkey-cli --eval myscript.lua key1 key2 , arg1 arg2 arg3\n"
+            "  valkey-cli --scan --pattern '*:12345*'\n"
+            "  valkey-cli --scan --pattern '*:12345*' --count 100\n"
+            "\n"
+            "  (Note: when using --eval the comma separates KEYS[] from ARGV[] items)\n"
+            "\n"
+            "When no command is given, valkey-cli starts in interactive mode.\n"
+            "Type \"help\" in interactive mode for information on available commands\n"
+            "and settings.\n"
+            "\n");
     sdsfree(version);
     exit(err);
 }

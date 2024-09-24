@@ -79,8 +79,8 @@ typedef long long ustime_t;
 /* Mask of all VALKEYMODULE_OPEN_KEY_* values. Any new mode should be added to this list.
  * Should not be used directly by the module, use RM_GetOpenKeyModesAll instead.
  * Located here so when we will add new modes we will not forget to update it. */
-#define _VALKEYMODULE_OPEN_KEY_ALL                                                                                     \
-    VALKEYMODULE_READ | VALKEYMODULE_WRITE | VALKEYMODULE_OPEN_KEY_NOTOUCH | VALKEYMODULE_OPEN_KEY_NONOTIFY |          \
+#define _VALKEYMODULE_OPEN_KEY_ALL                                                                            \
+    VALKEYMODULE_READ | VALKEYMODULE_WRITE | VALKEYMODULE_OPEN_KEY_NOTOUCH | VALKEYMODULE_OPEN_KEY_NONOTIFY | \
         VALKEYMODULE_OPEN_KEY_NOSTATS | VALKEYMODULE_OPEN_KEY_NOEXPIRE | VALKEYMODULE_OPEN_KEY_NOEFFECTS
 
 /* List push and pop */
@@ -137,11 +137,10 @@ typedef long long ustime_t;
 #define VALKEYMODULE_HASH_EXISTS (1 << 3)
 #define VALKEYMODULE_HASH_COUNT_ALL (1 << 4)
 
-#define VALKEYMODULE_CONFIG_DEFAULT 0             /* This is the default for a module config. */
-#define VALKEYMODULE_CONFIG_IMMUTABLE (1ULL << 0) /* Can this value only be set at startup? */
-#define VALKEYMODULE_CONFIG_SENSITIVE (1ULL << 1) /* Does this value contain sensitive information */
-#define VALKEYMODULE_CONFIG_HIDDEN                                                                                     \
-    (1ULL << 4) /* This config is hidden in `config get <pattern>` (used for tests/debugging) */
+#define VALKEYMODULE_CONFIG_DEFAULT 0                /* This is the default for a module config. */
+#define VALKEYMODULE_CONFIG_IMMUTABLE (1ULL << 0)    /* Can this value only be set at startup? */
+#define VALKEYMODULE_CONFIG_SENSITIVE (1ULL << 1)    /* Does this value contain sensitive information */
+#define VALKEYMODULE_CONFIG_HIDDEN (1ULL << 4)       /* This config is hidden in `config get <pattern>` (used for tests/debugging) */
 #define VALKEYMODULE_CONFIG_PROTECTED (1ULL << 5)    /* Becomes immutable if enable-protected-configs is enabled. */
 #define VALKEYMODULE_CONFIG_DENY_LOADING (1ULL << 6) /* This config is forbidden during loading. */
 
@@ -231,22 +230,21 @@ This flag should not be used directly by the module.
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes.
  * NOTE: These have to be in sync with NOTIFY_* in server.h */
-#define VALKEYMODULE_NOTIFY_KEYSPACE (1 << 0) /* K */
-#define VALKEYMODULE_NOTIFY_KEYEVENT (1 << 1) /* E */
-#define VALKEYMODULE_NOTIFY_GENERIC (1 << 2)  /* g */
-#define VALKEYMODULE_NOTIFY_STRING (1 << 3)   /* $ */
-#define VALKEYMODULE_NOTIFY_LIST (1 << 4)     /* l */
-#define VALKEYMODULE_NOTIFY_SET (1 << 5)      /* s */
-#define VALKEYMODULE_NOTIFY_HASH (1 << 6)     /* h */
-#define VALKEYMODULE_NOTIFY_ZSET (1 << 7)     /* z */
-#define VALKEYMODULE_NOTIFY_EXPIRED (1 << 8)  /* x */
-#define VALKEYMODULE_NOTIFY_EVICTED (1 << 9)  /* e */
-#define VALKEYMODULE_NOTIFY_STREAM (1 << 10)  /* t */
-#define VALKEYMODULE_NOTIFY_KEY_MISS                                                                                   \
-    (1 << 11) /* m (Note: This one is excluded from VALKEYMODULE_NOTIFY_ALL on purpose) */
-#define VALKEYMODULE_NOTIFY_LOADED (1 << 12) /* module only key space notification, indicate a key loaded from rdb */
-#define VALKEYMODULE_NOTIFY_MODULE (1 << 13) /* d, module key space notification */
-#define VALKEYMODULE_NOTIFY_NEW (1 << 14)    /* n, new key notification */
+#define VALKEYMODULE_NOTIFY_KEYSPACE (1 << 0)  /* K */
+#define VALKEYMODULE_NOTIFY_KEYEVENT (1 << 1)  /* E */
+#define VALKEYMODULE_NOTIFY_GENERIC (1 << 2)   /* g */
+#define VALKEYMODULE_NOTIFY_STRING (1 << 3)    /* $ */
+#define VALKEYMODULE_NOTIFY_LIST (1 << 4)      /* l */
+#define VALKEYMODULE_NOTIFY_SET (1 << 5)       /* s */
+#define VALKEYMODULE_NOTIFY_HASH (1 << 6)      /* h */
+#define VALKEYMODULE_NOTIFY_ZSET (1 << 7)      /* z */
+#define VALKEYMODULE_NOTIFY_EXPIRED (1 << 8)   /* x */
+#define VALKEYMODULE_NOTIFY_EVICTED (1 << 9)   /* e */
+#define VALKEYMODULE_NOTIFY_STREAM (1 << 10)   /* t */
+#define VALKEYMODULE_NOTIFY_KEY_MISS (1 << 11) /* m (Note: This one is excluded from VALKEYMODULE_NOTIFY_ALL on purpose) */
+#define VALKEYMODULE_NOTIFY_LOADED (1 << 12)   /* module only key space notification, indicate a key loaded from rdb */
+#define VALKEYMODULE_NOTIFY_MODULE (1 << 13)   /* d, module key space notification */
+#define VALKEYMODULE_NOTIFY_NEW (1 << 14)      /* n, new key notification */
 
 /* Next notification flag, must be updated when adding new flags above!
 This flag should not be used directly by the module.
@@ -347,10 +345,9 @@ typedef enum {
 } ValkeyModuleCommandArgType;
 
 #define VALKEYMODULE_CMD_ARG_NONE (0)
-#define VALKEYMODULE_CMD_ARG_OPTIONAL (1 << 0) /* The argument is optional (like GET in SET command) */
-#define VALKEYMODULE_CMD_ARG_MULTIPLE (1 << 1) /* The argument may repeat itself (like key in DEL) */
-#define VALKEYMODULE_CMD_ARG_MULTIPLE_TOKEN                                                                            \
-    (1 << 2) /* The argument may repeat itself, and so does its token (like `GET pattern` in SORT) */
+#define VALKEYMODULE_CMD_ARG_OPTIONAL (1 << 0)       /* The argument is optional (like GET in SET command) */
+#define VALKEYMODULE_CMD_ARG_MULTIPLE (1 << 1)       /* The argument may repeat itself (like key in DEL) */
+#define VALKEYMODULE_CMD_ARG_MULTIPLE_TOKEN (1 << 2) /* The argument may repeat itself, and so does its token (like `GET pattern` in SORT) */
 #define _VALKEYMODULE_CMD_ARG_NEXT (1 << 3)
 
 typedef enum {

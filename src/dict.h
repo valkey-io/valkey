@@ -144,15 +144,15 @@ typedef struct {
 #define DICT_HT_INITIAL_SIZE (1 << (DICT_HT_INITIAL_EXP))
 
 /* ------------------------------- Macros ------------------------------------*/
-#define dictFreeVal(d, entry)                                                                                          \
-    do {                                                                                                               \
-        if ((d)->type->valDestructor) (d)->type->valDestructor((d), dictGetVal(entry));                                \
+#define dictFreeVal(d, entry)                                                           \
+    do {                                                                                \
+        if ((d)->type->valDestructor) (d)->type->valDestructor((d), dictGetVal(entry)); \
     } while (0)
 
-#define dictFreeKey(d, entry)                                                                                          \
+#define dictFreeKey(d, entry) \
     if ((d)->type->keyDestructor) (d)->type->keyDestructor((d), dictGetKey(entry))
 
-#define dictCompareKeys(d, key1, key2)                                                                                 \
+#define dictCompareKeys(d, key1, key2) \
     (((d)->type->keyCompare) ? (d)->type->keyCompare((d), key1, key2) : (key1) == (key2))
 
 #define dictMetadata(d) (&(d)->metadata)

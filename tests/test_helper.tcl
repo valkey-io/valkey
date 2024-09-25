@@ -563,7 +563,7 @@ proc send_data_packet {fd status data {elapsed 0}} {
 
 proc print_help_screen {} {
     puts [join {
-        "--cluster          Run the cluster tests, by default cluster tests are run along with all tests."
+        "--cluster          Run the cluster tests, by default cluster tests run along with all tests."
         "--moduleapi        Run the module API tests, this option should only be used in runtest-moduleapi which will build the test module."
         "--valgrind         Run the test over valgrind."
         "--durable          suppress test crashes and keep running"

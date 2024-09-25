@@ -2662,7 +2662,6 @@ static int dualChannelReplHandleReplconfReply(connection *conn, sds *err) {
     return C_OK;
 }
 
-#define C_RETRY -2
 static int dualChannelReplHandleEndOffsetResponse(connection *conn, sds *err) {
     uint64_t rdb_client_id;
     *err = receiveSynchronousResponse(conn);
@@ -2734,12 +2733,12 @@ static void dualChannelFullSyncWithPrimary(connection *conn) {
     switch (server.repl_rdb_channel_state) {
     case REPL_DUAL_CHANNEL_SEND_HANDSHAKE:
         ret = dualChannelReplHandleHandshake(conn, &err);
-        server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RECEIVE_AUTH_REPLY;
+        if (ret == C_OK) server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RECEIVE_AUTH_REPLY;
         break;
     case REPL_DUAL_CHANNEL_RECEIVE_AUTH_REPLY:
         if (server.primary_auth) {
             ret = dualChannelReplHandleAuthReply(conn, &err);
-            server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RECEIVE_REPLCONF_REPLY;
+            if (ret == C_OK) server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RECEIVE_REPLCONF_REPLY;
             /* Wait for next bulk before trying to read replconf reply. */
             break;
         }
@@ -2747,11 +2746,11 @@ static void dualChannelFullSyncWithPrimary(connection *conn) {
         /* fall through */
     case REPL_DUAL_CHANNEL_RECEIVE_REPLCONF_REPLY:
         ret = dualChannelReplHandleReplconfReply(conn, &err);
-        server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RECEIVE_ENDOFF;
+        if (ret == C_OK) server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RECEIVE_ENDOFF;
         break;
     case REPL_DUAL_CHANNEL_RECEIVE_ENDOFF:
         ret = dualChannelReplHandleEndOffsetResponse(conn, &err);
-        if (ret != C_RETRY) server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RDB_LOAD;
+        if (ret == C_OK) server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RDB_LOAD;
         break;
     default: break;
     }
@@ -3285,27 +3284,29 @@ void dualChannelSetupMainConnForPsync(connection *conn) {
     char *err = NULL;
     int ret;
 
+ REPL_STATE_RECEIVE_PING_REPLY && server.repl_state <= REPL_STATE_RECEIVE_PSYNC_REPLY;
+
     switch (server.repl_state) {
     case REPL_STATE_SEND_HANDSHAKE:
         ret = dualChannelReplMainConnSendHandshake(conn, &err);
-        server.repl_state = REPL_STATE_RECEIVE_CAPA_REPLY;
+        if (ret == C_OK) server.repl_state = REPL_STATE_RECEIVE_CAPA_REPLY;
         break;
     case REPL_STATE_RECEIVE_CAPA_REPLY:
         ret = dualChannelReplMainConnRecvCapaReply(conn, &err);
         if (ret == C_ERR) {
             break;
         }
-        server.repl_state = REPL_STATE_SEND_PSYNC;
+        if (ret == C_OK) server.repl_state = REPL_STATE_SEND_PSYNC;
         sdsfree(err);
         err = NULL;
         /* fall through */
     case REPL_STATE_SEND_PSYNC:
         ret = dualChannelReplMainConnSendPsync(conn, &err);
-        server.repl_state = REPL_STATE_RECEIVE_PSYNC_REPLY;
+        if (ret == C_OK) server.repl_state = REPL_STATE_RECEIVE_PSYNC_REPLY;
         break;
     case REPL_STATE_RECEIVE_PSYNC_REPLY:
         ret = dualChannelReplMainConnRecvPsyncReply(conn, &err);
-        if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) server.repl_state = REPL_STATE_TRANSFER;
+        if (ret == C_OK && server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) server.repl_state = REPL_STATE_TRANSFER;
         /*  In case the RDB is already loaded, the repl_state will be set during establishPrimaryConnection. */
         break;
     default:

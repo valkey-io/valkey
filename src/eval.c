@@ -260,6 +260,7 @@ void scriptingInit(int setup) {
     if (lctx.lua_client == NULL) {
         lctx.lua_client = createClient(NULL);
         lctx.lua_client->flag.script = 1;
+        lctx.lua_client->flag.fake = 1;
 
         /* We do not want to allow blocking commands inside Lua */
         lctx.lua_client->flag.deny_blocking = 1;

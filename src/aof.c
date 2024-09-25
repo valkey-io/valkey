@@ -1371,6 +1371,7 @@ struct client *createAOFClient(void) {
      */
     c->raw_flag = 0;
     c->flag.deny_blocking = 1;
+    c->flag.fake = 1;
 
     /* We set the fake client as a replica waiting for the synchronization
      * so that the server will not try to send replies to this client. */

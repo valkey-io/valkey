@@ -412,6 +412,7 @@ int functionsRegisterEngine(const char *engine_name, engine *engine) {
     client *c = createClient(NULL);
     c->flag.deny_blocking = 1;
     c->flag.script = 1;
+    c->flag.fake = 1;
     engineInfo *ei = zmalloc(sizeof(*ei));
     *ei = (engineInfo){
         .name = engine_name_sds,

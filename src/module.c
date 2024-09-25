@@ -652,6 +652,7 @@ client *moduleAllocTempClient(void) {
     } else {
         c = createClient(NULL);
         c->flag.module = 1;
+        c->flag.fake = 1;
         c->user = NULL; /* Root user */
     }
     return c;
@@ -890,8 +891,10 @@ void moduleCreateContext(ValkeyModuleCtx *out_ctx, ValkeyModule *module, int ctx
     out_ctx->flags = ctx_flags;
     if (ctx_flags & VALKEYMODULE_CTX_TEMP_CLIENT)
         out_ctx->client = moduleAllocTempClient();
-    else if (ctx_flags & VALKEYMODULE_CTX_NEW_CLIENT)
+    else if (ctx_flags & VALKEYMODULE_CTX_NEW_CLIENT) {
         out_ctx->client = createClient(NULL);
+        out_ctx->client->flag.fake = 1;
+    }
 
     /* Calculate the initial yield time for long blocked contexts.
      * in loading we depend on the server hz, but in other cases we also wait

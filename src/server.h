@@ -1222,7 +1222,8 @@ typedef struct ClientFlags {
     uint64_t dont_cache_primary : 1;       /* In some cases we don't want to cache the primary. For example, the replica
                                             * knows that it does not need the cache and required a full sync. With this
                                             * flag, we won't cache the primary in freeClient. */
-    uint64_t reserved : 6;                 /* Reserved for future use */
+    uint64_t fake : 1;                     /* This is a fake client without a real connection. */
+    uint64_t reserved : 5;                 /* Reserved for future use */
 } ClientFlags;
 
 typedef struct client {

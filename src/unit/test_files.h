@@ -1,5 +1,4 @@
 /* Do not modify this file, it's automatically generated from utils/generate-unit-test-header.py */
-/* clang-format off */
 typedef int unitTestProc(int argc, char **argv, int flags);
 
 typedef struct unitTest {

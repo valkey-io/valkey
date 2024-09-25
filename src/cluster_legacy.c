@@ -144,7 +144,7 @@ static inline int defaultClientPort(void) {
     return server.tls_cluster ? server.tls_port : server.port;
 }
 
-#define isSlotUnclaimed(slot)                                                                                          \
+#define isSlotUnclaimed(slot) \
     (server.cluster->slots[slot] == NULL || bitmapTestBit(server.cluster->owner_not_claiming_slot, slot))
 
 #define RCVBUF_INIT_LEN 1024
@@ -191,7 +191,10 @@ dictType clusterSdsToListType = {
 };
 
 typedef struct {
-    enum { ITER_DICT, ITER_LIST } type;
+    enum {
+        ITER_DICT,
+        ITER_LIST
+    } type;
     union {
         dictIterator di;
         listIter li;
@@ -2670,7 +2673,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
              * If the sender and myself are in the same shard, try psync. */
             clusterSetPrimary(sender, !are_in_same_shard, !are_in_same_shard);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
-        } else if ((sender_slots >= migrated_our_slots) && !are_in_same_shard) {
+        } else if (nodeIsPrimary(myself) && (sender_slots >= migrated_our_slots) && !are_in_same_shard) {
             /* When all our slots are lost to the sender and the sender belongs to
              * a different shard, this is likely due to a client triggered slot
              * migration. Don't reconfigure this node to migrate to the new shard
@@ -4576,7 +4579,7 @@ void clusterHandleReplicaFailover(void) {
      * elapsed, we can setup a new one. */
     if (auth_age > auth_retry_time) {
         server.cluster->failover_auth_time = mstime() +
-                                             500 + /* Fixed delay of 500 milliseconds, let FAIL msg propagate. */
+                                             500 +           /* Fixed delay of 500 milliseconds, let FAIL msg propagate. */
                                              random() % 500; /* Random delay between 0 and 500 milliseconds. */
         server.cluster->failover_auth_count = 0;
         server.cluster->failover_auth_sent = 0;
@@ -5509,10 +5512,14 @@ struct clusterNodeFlags {
 };
 
 static struct clusterNodeFlags clusterNodeFlagsTable[] = {
-    {CLUSTER_NODE_MYSELF, "myself,"}, {CLUSTER_NODE_PRIMARY, "master,"},
-    {CLUSTER_NODE_REPLICA, "slave,"}, {CLUSTER_NODE_PFAIL, "fail?,"},
-    {CLUSTER_NODE_FAIL, "fail,"},     {CLUSTER_NODE_HANDSHAKE, "handshake,"},
-    {CLUSTER_NODE_NOADDR, "noaddr,"}, {CLUSTER_NODE_NOFAILOVER, "nofailover,"}};
+    {CLUSTER_NODE_MYSELF, "myself,"},
+    {CLUSTER_NODE_PRIMARY, "master,"},
+    {CLUSTER_NODE_REPLICA, "slave,"},
+    {CLUSTER_NODE_PFAIL, "fail?,"},
+    {CLUSTER_NODE_FAIL, "fail,"},
+    {CLUSTER_NODE_HANDSHAKE, "handshake,"},
+    {CLUSTER_NODE_NOADDR, "noaddr,"},
+    {CLUSTER_NODE_NOFAILOVER, "nofailover,"}};
 
 /* Concatenate the comma separated list of node flags to the given SDS
  * string 'ci'. */
@@ -6422,11 +6429,12 @@ void clusterCommandSetSlot(client *c) {
         int slot_was_mine = server.cluster->slots[slot] == my_primary;
         clusterDelSlot(slot);
         clusterAddSlot(n, slot);
+        int shard_is_empty = my_primary->numslots == 0;
 
         /* If replica migration is allowed, check if the primary of this shard
          * loses its last slot and the shard becomes empty. In this case, we
          * should turn into a replica of the new primary. */
-        if (server.cluster_allow_replica_migration && slot_was_mine && my_primary->numslots == 0) {
+        if (server.cluster_allow_replica_migration && slot_was_mine && shard_is_empty) {
             serverAssert(n != my_primary);
             serverLog(LL_NOTICE,
                       "Lost my last slot during slot migration. Reconfiguring myself "
@@ -6440,6 +6448,16 @@ void clusterCommandSetSlot(client *c) {
             clusterSetPrimary(n, 1, 1);
             if (nodeIsReplica(myself)) unprotectClient(c);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
+        }
+
+        /* If replica migration is not allowed, check if the primary of this shard
+         * loses its last slot and the shard becomes empty. In this case, we will
+         * print the exact same log as during the gossip process. */
+        if (!server.cluster_allow_replica_migration && nodeIsPrimary(myself) && slot_was_mine && shard_is_empty) {
+            serverAssert(n != my_primary);
+            serverLog(LL_NOTICE,
+                      "My last slot was migrated to node %.40s (%s) in shard %.40s. I am now an empty primary.",
+                      n->name, n->human_nodename, n->shard_id);
         }
 
         /* If this node or this node's primary was importing this slot,
@@ -6714,6 +6732,9 @@ int clusterCommandSpecial(client *c) {
              * it without coordination. */
             serverLog(LL_NOTICE, "Forced failover user request accepted (user request from '%s').", client);
             server.cluster->mf_can_start = 1;
+            /* We can start a manual failover as soon as possible, setting a flag
+             * here so that we don't need to waiting for the cron to kick in. */
+            clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_MANUALFAILOVER);
         } else {
             serverLog(LL_NOTICE, "Manual failover user request accepted (user request from '%s').", client);
             clusterSendMFStart(myself->replicaof);

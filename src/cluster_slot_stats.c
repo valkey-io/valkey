@@ -8,7 +8,14 @@
 
 #define UNASSIGNED_SLOT 0
 
-typedef enum { KEY_COUNT, CPU_USEC, NETWORK_BYTES_IN, NETWORK_BYTES_OUT, SLOT_STAT_COUNT, INVALID } slotStatType;
+typedef enum {
+    KEY_COUNT,
+    CPU_USEC,
+    NETWORK_BYTES_IN,
+    NETWORK_BYTES_OUT,
+    SLOT_STAT_COUNT,
+    INVALID
+} slotStatType;
 
 /* -----------------------------------------------------------------------------
  * CLUSTER SLOT-STATS command

@@ -44,7 +44,15 @@
 
 /* Globals that are added by the Lua libraries */
 static char *libraries_allow_list[] = {
-    "string", "cjson", "bit", "cmsgpack", "math", "table", "struct", "os", NULL,
+    "string",
+    "cjson",
+    "bit",
+    "cmsgpack",
+    "math",
+    "table",
+    "struct",
+    "os",
+    NULL,
 };
 
 /* Lua API globals */
@@ -58,10 +66,33 @@ static char *redis_api_allow_list[] = {
 
 /* Lua builtins */
 static char *lua_builtins_allow_list[] = {
-    "xpcall",   "tostring",       "getfenv",      "setmetatable", "next",  "assert",    "tonumber",
-    "rawequal", "collectgarbage", "getmetatable", "rawset",       "pcall", "coroutine", "type",
-    "_G",       "select",         "unpack",       "gcinfo",       "pairs", "rawget",    "loadstring",
-    "ipairs",   "_VERSION",       "setfenv",      "load",         "error", NULL,
+    "xpcall",
+    "tostring",
+    "getfenv",
+    "setmetatable",
+    "next",
+    "assert",
+    "tonumber",
+    "rawequal",
+    "collectgarbage",
+    "getmetatable",
+    "rawset",
+    "pcall",
+    "coroutine",
+    "type",
+    "_G",
+    "select",
+    "unpack",
+    "gcinfo",
+    "pairs",
+    "rawget",
+    "loadstring",
+    "ipairs",
+    "_VERSION",
+    "setfenv",
+    "load",
+    "error",
+    NULL,
 };
 
 /* Lua builtins which are not documented on the Lua documentation */

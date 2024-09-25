@@ -88,11 +88,7 @@ void zlibc_free(void *ptr) {
 #define dallocx(ptr, flags) je_dallocx(ptr, flags)
 #endif
 
-#if __STDC_NO_THREADS__
-#define thread_local __thread
-#else
-#include <threads.h>
-#endif
+#define thread_local _Thread_local
 
 #define MAX_THREADS_NUM (IO_THREADS_MAX_NUM + 3 + 1)
 /* A thread-local storage which keep the current thread's index in the used_memory_thread array. */
@@ -103,7 +99,7 @@ static thread_local int thread_index = -1;
  * the reader will see the inconsistency memory on non x86 architecture potentially.
  * For the ARM and PowerPC platform, we can solve this issue by make the memory aligned.
  * For the other architecture, lets fall back to the atomic operation to keep safe. */
-#if defined(__i386__) || defined(__x86_64__) || defined(__amd64__) || defined(__POWERPC__) || defined(__arm__) ||      \
+#if defined(__i386__) || defined(__x86_64__) || defined(__amd64__) || defined(__POWERPC__) || defined(__arm__) || \
     defined(__arm64__)
 static __attribute__((aligned(sizeof(size_t)))) size_t used_memory_thread[MAX_THREADS_NUM];
 #else

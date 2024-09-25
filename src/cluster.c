@@ -1433,7 +1433,7 @@ void clusterCommandSlots(client *c) {
      *           ... continued until done
      */
     int conn_type = 0;
-    if (connIsTLS(c->conn)) conn_type |= CACHE_CONN_TYPE_TLS;
+    if (shouldReturnTlsInfo()) conn_type |= CACHE_CONN_TYPE_TLS;
     if (isClientConnIpV6(c)) conn_type |= CACHE_CONN_TYPE_IPv6;
     if (c->resp == 3) conn_type |= CACHE_CONN_TYPE_RESP3;
 

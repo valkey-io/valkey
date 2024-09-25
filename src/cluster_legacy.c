@@ -6732,6 +6732,9 @@ int clusterCommandSpecial(client *c) {
              * it without coordination. */
             serverLog(LL_NOTICE, "Forced failover user request accepted (user request from '%s').", client);
             server.cluster->mf_can_start = 1;
+            /* We can start a manual failover as soon as possible, setting a flag
+             * here so that we don't need to waiting for the cron to kick in. */
+            clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_MANUALFAILOVER);
         } else {
             serverLog(LL_NOTICE, "Manual failover user request accepted (user request from '%s').", client);
             clusterSendMFStart(myself->replicaof);

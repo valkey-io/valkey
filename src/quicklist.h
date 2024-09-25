@@ -90,9 +90,8 @@ typedef struct quicklistBookmark {
 /* 64-bit */
 #define QL_FILL_BITS 16
 #define QL_COMP_BITS 16
-#define QL_BM_BITS                                                                                                     \
-    4 /* we can encode more, but we rather limit the user                                                              \
-         since they cause performance degradation. */
+#define QL_BM_BITS 4 /* we can encode more, but we rather limit the user \
+                        since they cause performance degradation. */
 #else
 #error unknown arch bits count
 #endif

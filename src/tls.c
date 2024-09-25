@@ -437,7 +437,10 @@ static ConnectionType CT_TLS;
  *
  */
 
-typedef enum { WANT_READ = 1, WANT_WRITE } WantIOType;
+typedef enum {
+    WANT_READ = 1,
+    WANT_WRITE
+} WantIOType;
 
 #define TLS_CONN_FLAG_READ_WANT_WRITE (1 << 0)
 #define TLS_CONN_FLAG_WRITE_WANT_READ (1 << 1)

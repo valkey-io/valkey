@@ -299,7 +299,7 @@ int parseExtendedStringArgumentsOrReply(client *c, int *flags, int *unit, robj *
             addReplyErrorObject(c,shared.syntaxerr);
             return C_ERR;
         }
-        /* clang-format off */
+        /* clang-format on */
     }
     return C_OK;
 }
@@ -311,40 +311,40 @@ void setCommand(client *c) {
     int unit = UNIT_SECONDS;
     int flags = OBJ_NO_FLAGS;
 
-    if (parseExtendedStringArgumentsOrReply(c,&flags,&unit,&expire,COMMAND_SET) != C_OK) {
+    if (parseExtendedStringArgumentsOrReply(c, &flags, &unit, &expire, COMMAND_SET) != C_OK) {
         return;
     }
 
     c->argv[2] = tryObjectEncoding(c->argv[2]);
-    setGenericCommand(c,flags,c->argv[1],c->argv[2],expire,unit,NULL,NULL);
+    setGenericCommand(c, flags, c->argv[1], c->argv[2], expire, unit, NULL, NULL);
 }
 
 void setnxCommand(client *c) {
     c->argv[2] = tryObjectEncoding(c->argv[2]);
-    setGenericCommand(c,OBJ_SET_NX,c->argv[1],c->argv[2],NULL,0,shared.cone,shared.czero);
+    setGenericCommand(c, OBJ_SET_NX, c->argv[1], c->argv[2], NULL, 0, shared.cone, shared.czero);
 }
 
 void setexCommand(client *c) {
     c->argv[3] = tryObjectEncoding(c->argv[3]);
-    setGenericCommand(c,OBJ_EX,c->argv[1],c->argv[3],c->argv[2],UNIT_SECONDS,NULL,NULL);
+    setGenericCommand(c, OBJ_EX, c->argv[1], c->argv[3], c->argv[2], UNIT_SECONDS, NULL, NULL);
 }
 
 void psetexCommand(client *c) {
     c->argv[3] = tryObjectEncoding(c->argv[3]);
-    setGenericCommand(c,OBJ_PX,c->argv[1],c->argv[3],c->argv[2],UNIT_MILLISECONDS,NULL,NULL);
+    setGenericCommand(c, OBJ_PX, c->argv[1], c->argv[3], c->argv[2], UNIT_MILLISECONDS, NULL, NULL);
 }
 
 int getGenericCommand(client *c) {
     robj *o;
 
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp])) == NULL)
+    if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL)
         return C_OK;
 
-    if (checkType(c,o,OBJ_STRING)) {
+    if (checkType(c, o, OBJ_STRING)) {
         return C_ERR;
     }
 
-    addReplyBulk(c,o);
+    addReplyBulk(c, o);
     return C_OK;
 }
 
@@ -377,16 +377,16 @@ void getexCommand(client *c) {
     int unit = UNIT_SECONDS;
     int flags = OBJ_NO_FLAGS;
 
-    if (parseExtendedStringArgumentsOrReply(c,&flags,&unit,&expire,COMMAND_GET) != C_OK) {
+    if (parseExtendedStringArgumentsOrReply(c, &flags, &unit, &expire, COMMAND_GET) != C_OK) {
         return;
     }
 
     robj *o;
 
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp])) == NULL)
+    if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL)
         return;
 
-    if (checkType(c,o,OBJ_STRING)) {
+    if (checkType(c, o, OBJ_STRING)) {
         return;
     }
 
@@ -397,7 +397,7 @@ void getexCommand(client *c) {
     }
 
     /* We need to do this before we expire the key or delete it */
-    addReplyBulk(c,o);
+    addReplyBulk(c, o);
 
     /* This command is never propagated as is. It is either propagated as PEXPIRE[AT],DEL,UNLINK or PERSIST.
      * This why it doesn't need special handling in feedAppendOnlyFile to convert relative expire time to absolute one. */
@@ -406,20 +406,20 @@ void getexCommand(client *c) {
          * has already elapsed so delete the key in that case. */
         deleteExpiredKeyFromOverwriteAndPropagate(c, c->argv[1]);
     } else if (expire) {
-        setExpire(c,c->db,c->argv[1],milliseconds);
+        setExpire(c, c->db, c->argv[1], milliseconds);
         /* Propagate as PXEXPIREAT millisecond-timestamp if there is
          * EX/PX/EXAT/PXAT flag and the key has not expired. */
         robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
-        rewriteClientCommandVector(c,3,shared.pexpireat,c->argv[1],milliseconds_obj);
+        rewriteClientCommandVector(c, 3, shared.pexpireat, c->argv[1], milliseconds_obj);
         decrRefCount(milliseconds_obj);
         signalModifiedKey(c, c->db, c->argv[1]);
-        notifyKeyspaceEvent(NOTIFY_GENERIC,"expire",c->argv[1],c->db->id);
+        notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", c->argv[1], c->db->id);
         server.dirty++;
     } else if (flags & OBJ_PERSIST) {
         if (removeExpire(c->db, c->argv[1])) {
             signalModifiedKey(c, c->db, c->argv[1]);
             rewriteClientCommandVector(c, 2, shared.persist, c->argv[1]);
-            notifyKeyspaceEvent(NOTIFY_GENERIC,"persist",c->argv[1],c->db->id);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "persist", c->argv[1], c->db->id);
             server.dirty++;
         }
     }
@@ -429,7 +429,7 @@ void getdelCommand(client *c) {
     if (getGenericCommand(c) == C_ERR) return;
     if (dbSyncDelete(c->db, c->argv[1])) {
         /* Propagate as DEL command */
-        rewriteClientCommandVector(c,2,shared.del,c->argv[1]);
+        rewriteClientCommandVector(c, 2, shared.del, c->argv[1]);
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         server.dirty++;
@@ -439,12 +439,12 @@ void getdelCommand(client *c) {
 void getsetCommand(client *c) {
     if (getGenericCommand(c) == C_ERR) return;
     c->argv[2] = tryObjectEncoding(c->argv[2]);
-    setKey(c,c->db,c->argv[1],c->argv[2],0);
-    notifyKeyspaceEvent(NOTIFY_STRING,"set",c->argv[1],c->db->id);
+    setKey(c, c->db, c->argv[1], c->argv[2], 0);
+    notifyKeyspaceEvent(NOTIFY_STRING, "set", c->argv[1], c->db->id);
     server.dirty++;
 
     /* Propagate as SET command */
-    rewriteClientCommandArgument(c,0,shared.set);
+    rewriteClientCommandArgument(c, 0, shared.set);
 }
 
 void setrangeCommand(client *c) {
@@ -452,59 +452,59 @@ void setrangeCommand(client *c) {
     long offset;
     sds value = c->argv[3]->ptr;
 
-    if (getLongFromObjectOrReply(c,c->argv[2],&offset,NULL) != C_OK)
+    if (getLongFromObjectOrReply(c, c->argv[2], &offset, NULL) != C_OK)
         return;
 
     if (offset < 0) {
-        addReplyError(c,"offset is out of range");
+        addReplyError(c, "offset is out of range");
         return;
     }
 
-    o = lookupKeyWrite(c->db,c->argv[1]);
+    o = lookupKeyWrite(c->db, c->argv[1]);
     if (o == NULL) {
         /* Return 0 when setting nothing on a non-existing string */
         if (sdslen(value) == 0) {
-            addReply(c,shared.czero);
+            addReply(c, shared.czero);
             return;
         }
 
         /* Return when the resulting string exceeds allowed size */
-        if (checkStringLength(c,offset,sdslen(value)) != C_OK)
+        if (checkStringLength(c, offset, sdslen(value)) != C_OK)
             return;
 
-        o = createObject(OBJ_STRING,sdsnewlen(NULL, offset+sdslen(value)));
-        dbAdd(c->db,c->argv[1],o);
+        o = createObject(OBJ_STRING, sdsnewlen(NULL, offset + sdslen(value)));
+        dbAdd(c->db, c->argv[1], o);
     } else {
         size_t olen;
 
         /* Key exists, check type */
-        if (checkType(c,o,OBJ_STRING))
+        if (checkType(c, o, OBJ_STRING))
             return;
 
         /* Return existing string length when setting nothing */
         olen = stringObjectLen(o);
         if (sdslen(value) == 0) {
-            addReplyLongLong(c,olen);
+            addReplyLongLong(c, olen);
             return;
         }
 
         /* Return when the resulting string exceeds allowed size */
-        if (checkStringLength(c,offset,sdslen(value)) != C_OK)
+        if (checkStringLength(c, offset, sdslen(value)) != C_OK)
             return;
 
         /* Create a copy when the object is shared or encoded. */
-        o = dbUnshareStringValue(c->db,c->argv[1],o);
+        o = dbUnshareStringValue(c->db, c->argv[1], o);
     }
 
     if (sdslen(value) > 0) {
-        o->ptr = sdsgrowzero(o->ptr,offset+sdslen(value));
-        memcpy((char*)o->ptr+offset,value,sdslen(value));
-        signalModifiedKey(c,c->db,c->argv[1]);
+        o->ptr = sdsgrowzero(o->ptr, offset + sdslen(value));
+        memcpy((char *)o->ptr + offset, value, sdslen(value));
+        signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STRING,
-            "setrange",c->argv[1],c->db->id);
+                            "setrange", c->argv[1], c->db->id);
         server.dirty++;
     }
-    addReplyLongLong(c,sdslen(o->ptr));
+    addReplyLongLong(c, sdslen(o->ptr));
 }
 
 void getrangeCommand(client *c) {
@@ -513,16 +513,16 @@ void getrangeCommand(client *c) {
     char *str, llbuf[32];
     size_t strlen;
 
-    if (getLongLongFromObjectOrReply(c,c->argv[2],&start,NULL) != C_OK)
+    if (getLongLongFromObjectOrReply(c, c->argv[2], &start, NULL) != C_OK)
         return;
-    if (getLongLongFromObjectOrReply(c,c->argv[3],&end,NULL) != C_OK)
+    if (getLongLongFromObjectOrReply(c, c->argv[3], &end, NULL) != C_OK)
         return;
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptybulk)) == NULL ||
-        checkType(c,o,OBJ_STRING)) return;
+    if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.emptybulk)) == NULL ||
+        checkType(c, o, OBJ_STRING)) return;
 
     if (o->encoding == OBJ_ENCODING_INT) {
         str = llbuf;
-        strlen = ll2string(llbuf,sizeof(llbuf),(long)o->ptr);
+        strlen = ll2string(llbuf, sizeof(llbuf), (long)o->ptr);
     } else {
         str = o->ptr;
         strlen = sdslen(str);
@@ -530,37 +530,37 @@ void getrangeCommand(client *c) {
 
     /* Convert negative indexes */
     if (start < 0 && end < 0 && start > end) {
-        addReply(c,shared.emptybulk);
+        addReply(c, shared.emptybulk);
         return;
     }
-    if (start < 0) start = strlen+start;
-    if (end < 0) end = strlen+end;
+    if (start < 0) start = strlen + start;
+    if (end < 0) end = strlen + end;
     if (start < 0) start = 0;
     if (end < 0) end = 0;
-    if ((unsigned long long)end >= strlen) end = strlen-1;
+    if ((unsigned long long)end >= strlen) end = strlen - 1;
 
     /* Precondition: end >= 0 && end < strlen, so the only condition where
      * nothing can be returned is: start > end. */
     if (start > end || strlen == 0) {
-        addReply(c,shared.emptybulk);
+        addReply(c, shared.emptybulk);
     } else {
-        addReplyBulkCBuffer(c,(char*)str+start,end-start+1);
+        addReplyBulkCBuffer(c, (char *)str + start, end - start + 1);
     }
 }
 
 void mgetCommand(client *c) {
     int j;
 
-    addReplyArrayLen(c,c->argc-1);
+    addReplyArrayLen(c, c->argc - 1);
     for (j = 1; j < c->argc; j++) {
-        robj *o = lookupKeyRead(c->db,c->argv[j]);
+        robj *o = lookupKeyRead(c->db, c->argv[j]);
         if (o == NULL) {
             addReplyNull(c);
         } else {
             if (o->type != OBJ_STRING) {
                 addReplyNull(c);
             } else {
-                addReplyBulk(c,o);
+                addReplyBulk(c, o);
             }
         }
     }
@@ -578,7 +578,7 @@ void msetGenericCommand(client *c, int nx) {
      * set anything if at least one key already exists. */
     if (nx) {
         for (j = 1; j < c->argc; j += 2) {
-            if (lookupKeyWrite(c->db,c->argv[j]) != NULL) {
+            if (lookupKeyWrite(c->db, c->argv[j]) != NULL) {
                 addReply(c, shared.czero);
                 return;
             }
@@ -587,74 +587,73 @@ void msetGenericCommand(client *c, int nx) {
 
     int setkey_flags = nx ? SETKEY_DOESNT_EXIST : 0;
     for (j = 1; j < c->argc; j += 2) {
-        c->argv[j+1] = tryObjectEncoding(c->argv[j+1]);
+        c->argv[j + 1] = tryObjectEncoding(c->argv[j + 1]);
         setKey(c, c->db, c->argv[j], c->argv[j + 1], setkey_flags);
-        notifyKeyspaceEvent(NOTIFY_STRING,"set",c->argv[j],c->db->id);
+        notifyKeyspaceEvent(NOTIFY_STRING, "set", c->argv[j], c->db->id);
         /* In MSETNX, It could be that we're overriding the same key, we can't be sure it doesn't exist. */
         if (nx)
             setkey_flags = SETKEY_ADD_OR_UPDATE;
     }
-    server.dirty += (c->argc-1)/2;
+    server.dirty += (c->argc - 1) / 2;
     addReply(c, nx ? shared.cone : shared.ok);
 }
 
 void msetCommand(client *c) {
-    msetGenericCommand(c,0);
+    msetGenericCommand(c, 0);
 }
 
 void msetnxCommand(client *c) {
-    msetGenericCommand(c,1);
+    msetGenericCommand(c, 1);
 }
 
 void incrDecrCommand(client *c, long long incr) {
     long long value, oldvalue;
     robj *o, *new;
 
-    o = lookupKeyWrite(c->db,c->argv[1]);
-    if (checkType(c,o,OBJ_STRING)) return;
-    if (getLongLongFromObjectOrReply(c,o,&value,NULL) != C_OK) return;
+    o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_STRING)) return;
+    if (getLongLongFromObjectOrReply(c, o, &value, NULL) != C_OK) return;
 
     oldvalue = value;
-    if ((incr < 0 && oldvalue < 0 && incr < (LLONG_MIN-oldvalue)) ||
-        (incr > 0 && oldvalue > 0 && incr > (LLONG_MAX-oldvalue))) {
-        addReplyError(c,"increment or decrement would overflow");
+    if ((incr < 0 && oldvalue < 0 && incr < (LLONG_MIN - oldvalue)) ||
+        (incr > 0 && oldvalue > 0 && incr > (LLONG_MAX - oldvalue))) {
+        addReplyError(c, "increment or decrement would overflow");
         return;
     }
     value += incr;
 
     if (o && o->refcount == 1 && o->encoding == OBJ_ENCODING_INT &&
         (value < 0 || value >= OBJ_SHARED_INTEGERS) &&
-        value >= LONG_MIN && value <= LONG_MAX)
-    {
+        value >= LONG_MIN && value <= LONG_MAX) {
         new = o;
-        o->ptr = (void*)((long)value);
+        o->ptr = (void *)((long)value);
     } else {
         new = createStringObjectFromLongLongForValue(value);
         if (o) {
-            dbReplaceValue(c->db,c->argv[1],new);
+            dbReplaceValue(c->db, c->argv[1], new);
         } else {
-            dbAdd(c->db,c->argv[1],new);
+            dbAdd(c->db, c->argv[1], new);
         }
     }
-    signalModifiedKey(c,c->db,c->argv[1]);
-    notifyKeyspaceEvent(NOTIFY_STRING,"incrby",c->argv[1],c->db->id);
+    signalModifiedKey(c, c->db, c->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_STRING, "incrby", c->argv[1], c->db->id);
     server.dirty++;
     addReplyLongLong(c, value);
 }
 
 void incrCommand(client *c) {
-    incrDecrCommand(c,1);
+    incrDecrCommand(c, 1);
 }
 
 void decrCommand(client *c) {
-    incrDecrCommand(c,-1);
+    incrDecrCommand(c, -1);
 }
 
 void incrbyCommand(client *c) {
     long long incr;
 
     if (getLongLongFromObjectOrReply(c, c->argv[2], &incr, NULL) != C_OK) return;
-    incrDecrCommand(c,incr);
+    incrDecrCommand(c, incr);
 }
 
 void decrbyCommand(client *c) {
@@ -666,79 +665,79 @@ void decrbyCommand(client *c) {
         addReplyError(c, "decrement would overflow");
         return;
     }
-    incrDecrCommand(c,-incr);
+    incrDecrCommand(c, -incr);
 }
 
 void incrbyfloatCommand(client *c) {
     long double incr, value;
     robj *o, *new;
 
-    o = lookupKeyWrite(c->db,c->argv[1]);
-    if (checkType(c,o,OBJ_STRING)) return;
-    if (getLongDoubleFromObjectOrReply(c,o,&value,NULL) != C_OK ||
-        getLongDoubleFromObjectOrReply(c,c->argv[2],&incr,NULL) != C_OK)
+    o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_STRING)) return;
+    if (getLongDoubleFromObjectOrReply(c, o, &value, NULL) != C_OK ||
+        getLongDoubleFromObjectOrReply(c, c->argv[2], &incr, NULL) != C_OK)
         return;
 
     value += incr;
     if (isnan(value) || isinf(value)) {
-        addReplyError(c,"increment would produce NaN or Infinity");
+        addReplyError(c, "increment would produce NaN or Infinity");
         return;
     }
-    new = createStringObjectFromLongDouble(value,1);
+    new = createStringObjectFromLongDouble(value, 1);
     if (o)
-        dbReplaceValue(c->db,c->argv[1],new);
+        dbReplaceValue(c->db, c->argv[1], new);
     else
-        dbAdd(c->db,c->argv[1],new);
-    signalModifiedKey(c,c->db,c->argv[1]);
-    notifyKeyspaceEvent(NOTIFY_STRING,"incrbyfloat",c->argv[1],c->db->id);
+        dbAdd(c->db, c->argv[1], new);
+    signalModifiedKey(c, c->db, c->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_STRING, "incrbyfloat", c->argv[1], c->db->id);
     server.dirty++;
-    addReplyBulk(c,new);
+    addReplyBulk(c, new);
 
     /* Always replicate INCRBYFLOAT as a SET command with the final value
      * in order to make sure that differences in float precision or formatting
      * will not create differences in replicas or after an AOF restart. */
-    rewriteClientCommandArgument(c,0,shared.set);
-    rewriteClientCommandArgument(c,2,new);
-    rewriteClientCommandArgument(c,3,shared.keepttl);
+    rewriteClientCommandArgument(c, 0, shared.set);
+    rewriteClientCommandArgument(c, 2, new);
+    rewriteClientCommandArgument(c, 3, shared.keepttl);
 }
 
 void appendCommand(client *c) {
     size_t totlen;
     robj *o, *append;
 
-    o = lookupKeyWrite(c->db,c->argv[1]);
+    o = lookupKeyWrite(c->db, c->argv[1]);
     if (o == NULL) {
         /* Create the key */
         c->argv[2] = tryObjectEncoding(c->argv[2]);
-        dbAdd(c->db,c->argv[1],c->argv[2]);
+        dbAdd(c->db, c->argv[1], c->argv[2]);
         incrRefCount(c->argv[2]);
         totlen = stringObjectLen(c->argv[2]);
     } else {
         /* Key exists, check type */
-        if (checkType(c,o,OBJ_STRING))
+        if (checkType(c, o, OBJ_STRING))
             return;
 
         /* "append" is an argument, so always an sds */
         append = c->argv[2];
-        if (checkStringLength(c,stringObjectLen(o),sdslen(append->ptr)) != C_OK)
+        if (checkStringLength(c, stringObjectLen(o), sdslen(append->ptr)) != C_OK)
             return;
 
         /* Append the value */
-        o = dbUnshareStringValue(c->db,c->argv[1],o);
-        o->ptr = sdscatlen(o->ptr,append->ptr,sdslen(append->ptr));
+        o = dbUnshareStringValue(c->db, c->argv[1], o);
+        o->ptr = sdscatlen(o->ptr, append->ptr, sdslen(append->ptr));
         totlen = sdslen(o->ptr);
     }
-    signalModifiedKey(c,c->db,c->argv[1]);
-    notifyKeyspaceEvent(NOTIFY_STRING,"append",c->argv[1],c->db->id);
+    signalModifiedKey(c, c->db, c->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_STRING, "append", c->argv[1], c->db->id);
     server.dirty++;
-    addReplyLongLong(c,totlen);
+    addReplyLongLong(c, totlen);
 }
 
 void strlenCommand(client *c) {
     robj *o;
-    if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
-        checkType(c,o,OBJ_STRING)) return;
-    addReplyLongLong(c,stringObjectLen(o));
+    if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.czero)) == NULL ||
+        checkType(c, o, OBJ_STRING)) return;
+    addReplyLongLong(c, stringObjectLen(o));
 }
 
 /* LCS key1 key2 [LEN] [IDX] [MINMATCHLEN <len>] [WITHMATCHLEN] */
@@ -749,41 +748,39 @@ void lcsCommand(client *c) {
     int getlen = 0, getidx = 0, withmatchlen = 0;
     robj *obja = NULL, *objb = NULL;
 
-    obja = lookupKeyRead(c->db,c->argv[1]);
-    objb = lookupKeyRead(c->db,c->argv[2]);
+    obja = lookupKeyRead(c->db, c->argv[1]);
+    objb = lookupKeyRead(c->db, c->argv[2]);
     if ((obja && obja->type != OBJ_STRING) ||
-        (objb && objb->type != OBJ_STRING))
-    {
+        (objb && objb->type != OBJ_STRING)) {
         addReplyError(c,
-            "The specified keys must contain string values");
+                      "The specified keys must contain string values");
         /* Don't cleanup the objects, we need to do that
          * only after calling getDecodedObject(). */
         obja = NULL;
         objb = NULL;
         goto cleanup;
     }
-    obja = obja ? getDecodedObject(obja) : createStringObject("",0);
-    objb = objb ? getDecodedObject(objb) : createStringObject("",0);
+    obja = obja ? getDecodedObject(obja) : createStringObject("", 0);
+    objb = objb ? getDecodedObject(objb) : createStringObject("", 0);
     a = obja->ptr;
     b = objb->ptr;
 
     for (j = 3; j < (uint32_t)c->argc; j++) {
         char *opt = c->argv[j]->ptr;
-        int moreargs = (c->argc-1) - j;
+        int moreargs = (c->argc - 1) - j;
 
-        if (!strcasecmp(opt,"IDX")) {
+        if (!strcasecmp(opt, "IDX")) {
             getidx = 1;
-        } else if (!strcasecmp(opt,"LEN")) {
+        } else if (!strcasecmp(opt, "LEN")) {
             getlen = 1;
-        } else if (!strcasecmp(opt,"WITHMATCHLEN")) {
+        } else if (!strcasecmp(opt, "WITHMATCHLEN")) {
             withmatchlen = 1;
-        } else if (!strcasecmp(opt,"MINMATCHLEN") && moreargs) {
-            if (getLongLongFromObjectOrReply(c,c->argv[j+1],&minmatchlen,NULL)
-                != C_OK) goto cleanup;
+        } else if (!strcasecmp(opt, "MINMATCHLEN") && moreargs) {
+            if (getLongLongFromObjectOrReply(c, c->argv[j + 1], &minmatchlen, NULL) != C_OK) goto cleanup;
             if (minmatchlen < 0) minmatchlen = 0;
             j++;
         } else {
-            addReplyErrorObject(c,shared.syntaxerr);
+            addReplyErrorObject(c, shared.syntaxerr);
             goto cleanup;
         }
     }
@@ -791,12 +788,12 @@ void lcsCommand(client *c) {
     /* Complain if the user passed ambiguous parameters. */
     if (getlen && getidx) {
         addReplyError(c,
-            "If you want both the length and indexes, please just use IDX.");
+                      "If you want both the length and indexes, please just use IDX.");
         goto cleanup;
     }
 
     /* Detect string truncation or later overflows. */
-    if (sdslen(a) >= UINT32_MAX-1 || sdslen(b) >= UINT32_MAX-1) {
+    if (sdslen(a) >= UINT32_MAX - 1 || sdslen(b) >= UINT32_MAX - 1) {
         addReplyError(c, "String too long for LCS");
         goto cleanup;
     }
@@ -806,13 +803,13 @@ void lcsCommand(client *c) {
     uint32_t alen = sdslen(a);
     uint32_t blen = sdslen(b);
 
-    /* Setup an uint32_t array to store at LCS[i,j] the length of the
-     * LCS A0..i-1, B0..j-1. Note that we have a linear array here, so
-     * we index it as LCS[j+(blen+1)*i] */
-    #define LCS(A,B) lcs[(B)+((A)*(blen+1))]
+/* Setup an uint32_t array to store at LCS[i,j] the length of the
+ * LCS A0..i-1, B0..j-1. Note that we have a linear array here, so
+ * we index it as LCS[j+(blen+1)*i] */
+#define LCS(A, B) lcs[(B) + ((A) * (blen + 1))]
 
     /* Try to allocate the LCS table, and abort on overflow or insufficient memory. */
-    unsigned long long lcssize = (unsigned long long)(alen+1)*(blen+1); /* Can't overflow due to the size limits above. */
+    unsigned long long lcssize = (unsigned long long)(alen + 1) * (blen + 1); /* Can't overflow due to the size limits above. */
     unsigned long long lcsalloc = lcssize * sizeof(uint32_t);
     uint32_t *lcs = NULL;
     if (lcsalloc < SIZE_MAX && lcsalloc / lcssize == sizeof(uint32_t)) {
@@ -833,60 +830,60 @@ void lcsCommand(client *c) {
             if (i == 0 || j == 0) {
                 /* If one substring has length of zero, the
                  * LCS length is zero. */
-                LCS(i,j) = 0;
-            } else if (a[i-1] == b[j-1]) {
+                LCS(i, j) = 0;
+            } else if (a[i - 1] == b[j - 1]) {
                 /* The len LCS (and the LCS itself) of two
                  * sequences with the same final character, is the
                  * LCS of the two sequences without the last char
                  * plus that last char. */
-                LCS(i,j) = LCS(i-1,j-1)+1;
+                LCS(i, j) = LCS(i - 1, j - 1) + 1;
             } else {
                 /* If the last character is different, take the longest
                  * between the LCS of the first string and the second
                  * minus the last char, and the reverse. */
-                uint32_t lcs1 = LCS(i-1,j);
-                uint32_t lcs2 = LCS(i,j-1);
-                LCS(i,j) = lcs1 > lcs2 ? lcs1 : lcs2;
+                uint32_t lcs1 = LCS(i - 1, j);
+                uint32_t lcs2 = LCS(i, j - 1);
+                LCS(i, j) = lcs1 > lcs2 ? lcs1 : lcs2;
             }
         }
     }
 
     /* Store the actual LCS string in "result" if needed. We create
      * it backward, but the length is already known, we store it into idx. */
-    uint32_t idx = LCS(alen,blen);
-    sds result = NULL;        /* Resulting LCS string. */
-    void *arraylenptr = NULL; /* Deferred length of the array for IDX. */
+    uint32_t idx = LCS(alen, blen);
+    sds result = NULL;            /* Resulting LCS string. */
+    void *arraylenptr = NULL;     /* Deferred length of the array for IDX. */
     uint32_t arange_start = alen, /* alen signals that values are not set. */
-             arange_end = 0,
+        arange_end = 0,
              brange_start = 0,
              brange_end = 0;
 
     /* Do we need to compute the actual LCS string? Allocate it in that case. */
     int computelcs = getidx || !getlen;
-    if (computelcs) result = sdsnewlen(SDS_NOINIT,idx);
+    if (computelcs) result = sdsnewlen(SDS_NOINIT, idx);
 
     /* Start with a deferred array if we have to emit the ranges. */
-    uint32_t arraylen = 0;  /* Number of ranges emitted in the array. */
+    uint32_t arraylen = 0; /* Number of ranges emitted in the array. */
     if (getidx) {
-        addReplyMapLen(c,2);
-        addReplyBulkCString(c,"matches");
+        addReplyMapLen(c, 2);
+        addReplyBulkCString(c, "matches");
         arraylenptr = addReplyDeferredLen(c);
     }
 
     i = alen, j = blen;
     while (computelcs && i > 0 && j > 0) {
         int emit_range = 0;
-        if (a[i-1] == b[j-1]) {
+        if (a[i - 1] == b[j - 1]) {
             /* If there is a match, store the character and reduce
              * the indexes to look for a new match. */
-            result[idx-1] = a[i-1];
+            result[idx - 1] = a[i - 1];
 
             /* Track the current range. */
             if (arange_start == alen) {
-                arange_start = i-1;
-                arange_end = i-1;
-                brange_start = j-1;
-                brange_end = j-1;
+                arange_start = i - 1;
+                arange_end = i - 1;
+                brange_start = j - 1;
+                brange_end = j - 1;
             } else {
                 /* Let's see if we can extend the range backward since
                  * it is contiguous. */
@@ -900,12 +897,14 @@ void lcsCommand(client *c) {
             /* Emit the range if we matched with the first byte of
              * one of the two strings. We'll exit the loop ASAP. */
             if (arange_start == 0 || brange_start == 0) emit_range = 1;
-            idx--; i--; j--;
+            idx--;
+            i--;
+            j--;
         } else {
             /* Otherwise reduce i and j depending on the largest
              * LCS between, to understand what direction we need to go. */
-            uint32_t lcs1 = LCS(i-1,j);
-            uint32_t lcs2 = LCS(i,j-1);
+            uint32_t lcs1 = LCS(i - 1, j);
+            uint32_t lcs2 = LCS(i, j - 1);
             if (lcs1 > lcs2)
                 i--;
             else
@@ -918,14 +917,14 @@ void lcsCommand(client *c) {
         if (emit_range) {
             if (minmatchlen == 0 || match_len >= minmatchlen) {
                 if (arraylenptr) {
-                    addReplyArrayLen(c,2+withmatchlen);
-                    addReplyArrayLen(c,2);
-                    addReplyLongLong(c,arange_start);
-                    addReplyLongLong(c,arange_end);
-                    addReplyArrayLen(c,2);
-                    addReplyLongLong(c,brange_start);
-                    addReplyLongLong(c,brange_end);
-                    if (withmatchlen) addReplyLongLong(c,match_len);
+                    addReplyArrayLen(c, 2 + withmatchlen);
+                    addReplyArrayLen(c, 2);
+                    addReplyLongLong(c, arange_start);
+                    addReplyLongLong(c, arange_end);
+                    addReplyArrayLen(c, 2);
+                    addReplyLongLong(c, brange_start);
+                    addReplyLongLong(c, brange_end);
+                    if (withmatchlen) addReplyLongLong(c, match_len);
                     arraylen++;
                 }
             }
@@ -937,13 +936,13 @@ void lcsCommand(client *c) {
 
     /* Reply depending on the given options. */
     if (arraylenptr) {
-        addReplyBulkCString(c,"len");
-        addReplyLongLong(c,LCS(alen,blen));
-        setDeferredArrayLen(c,arraylenptr,arraylen);
+        addReplyBulkCString(c, "len");
+        addReplyLongLong(c, LCS(alen, blen));
+        setDeferredArrayLen(c, arraylenptr, arraylen);
     } else if (getlen) {
-        addReplyLongLong(c,LCS(alen,blen));
+        addReplyLongLong(c, LCS(alen, blen));
     } else {
-        addReplyBulkSds(c,result);
+        addReplyBulkSds(c, result);
         result = NULL;
     }
 
@@ -956,4 +955,3 @@ cleanup:
     if (objb) decrRefCount(objb);
     return;
 }
-

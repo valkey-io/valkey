@@ -54,11 +54,11 @@ void raxDebugShowNode(const char *msg, raxNode *n);
  * debugging on/off in order to enable it only when you suspect there is an
  * operation causing a bug using the function raxSetDebugMsg(). */
 #ifdef RAX_DEBUG_MSG
-#define debugf(...)                                                                                                    \
-    if (raxDebugMsg) {                                                                                                 \
-        printf("%s:%s:%d:\t", __FILE__, __func__, __LINE__);                                                           \
-        printf(__VA_ARGS__);                                                                                           \
-        fflush(stdout);                                                                                                \
+#define debugf(...)                                          \
+    if (raxDebugMsg) {                                       \
+        printf("%s:%s:%d:\t", __FILE__, __func__, __LINE__); \
+        printf(__VA_ARGS__);                                 \
+        fflush(stdout);                                      \
     }
 
 #define debugnode(msg, n) raxDebugShowNode(msg, n)
@@ -153,8 +153,8 @@ static inline void raxStackFree(raxStack *ts) {
 
 /* Return the pointer to the last child pointer in a node. For the compressed
  * nodes this is the only child pointer. */
-#define raxNodeLastChildPtr(n)                                                                                         \
-    ((raxNode **)(((char *)(n)) + raxNodeCurrentLength(n) - sizeof(raxNode *) -                                        \
+#define raxNodeLastChildPtr(n)                                                  \
+    ((raxNode **)(((char *)(n)) + raxNodeCurrentLength(n) - sizeof(raxNode *) - \
                   (((n)->iskey && !(n)->isnull) ? sizeof(void *) : 0)))
 
 /* Return the pointer to the first child pointer. */
@@ -163,9 +163,9 @@ static inline void raxStackFree(raxStack *ts) {
 /* Return the current total size of the node. Note that the second line
  * computes the padding after the string of characters, needed in order to
  * save pointers to aligned addresses. */
-#define raxNodeCurrentLength(n)                                                                                        \
-    (sizeof(raxNode) + (n)->size + raxPadding((n)->size) +                                                             \
-     ((n)->iscompr ? sizeof(raxNode *) : sizeof(raxNode *) * (n)->size) +                                              \
+#define raxNodeCurrentLength(n)                                           \
+    (sizeof(raxNode) + (n)->size + raxPadding((n)->size) +                \
+     ((n)->iscompr ? sizeof(raxNode *) : sizeof(raxNode *) * (n)->size) + \
      (((n)->iskey && !(n)->isnull) * sizeof(void *)))
 
 /* Allocate a new non compressed node with the specified number of children.

@@ -6688,9 +6688,11 @@ static int clusterManagerCommandCreate(int argc, char **argv) {
     if (primaries_count < 3) {
         int ignore_force = 0;
         clusterManagerLogInfo("Requested to create a cluster with %d primaries and "
-                              "%d replicas per primary.\n", primaries_count, replicas);
+                              "%d replicas per primary.\n",
+                              primaries_count, replicas);
         if (!confirmWithYes("Valkey cluster requires at least 3 primary nodes for "
-                            "automatic failover. Are you sure?", ignore_force))
+                            "automatic failover. Are you sure?",
+                            ignore_force))
             return 0;
     }
     clusterManagerLogInfo(">>> Performing hash slots allocation "

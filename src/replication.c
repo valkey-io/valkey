@@ -4224,9 +4224,9 @@ void refreshGoodReplicasCount(void) {
 
 /* return true if status of good replicas is OK. otherwise false */
 int checkGoodReplicasStatus(void) {
-    return server.primary_host ||                /* not a primary status should be OK */
-           !server.repl_min_replicas_max_lag ||  /* Min replica max lag not configured */
-           !server.repl_min_replicas_to_write || /* Min replica to write not configured */
+    return server.primary_host ||                                                /* not a primary status should be OK */
+           !server.repl_min_replicas_max_lag ||                                  /* Min replica max lag not configured */
+           !server.repl_min_replicas_to_write ||                                 /* Min replica to write not configured */
            server.repl_good_replicas_count >= server.repl_min_replicas_to_write; /* check if we have enough replicas */
 }
 

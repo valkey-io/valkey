@@ -1169,20 +1169,20 @@ int bugReportStart(void) {
 
 /* Returns the current eip and set it to the given new value (if its not NULL) */
 static void *getAndSetMcontextEip(ucontext_t *uc, void *eip) {
-#define NOT_SUPPORTED()                                                                                                \
-    do {                                                                                                               \
-        UNUSED(uc);                                                                                                    \
-        UNUSED(eip);                                                                                                   \
-        return NULL;                                                                                                   \
+#define NOT_SUPPORTED() \
+    do {                \
+        UNUSED(uc);     \
+        UNUSED(eip);    \
+        return NULL;    \
     } while (0)
-#define GET_SET_RETURN(target_var, new_val)                                                                            \
-    do {                                                                                                               \
-        void *old_val = (void *)target_var;                                                                            \
-        if (new_val) {                                                                                                 \
-            void **temp = (void **)&target_var;                                                                        \
-            *temp = new_val;                                                                                           \
-        }                                                                                                              \
-        return old_val;                                                                                                \
+#define GET_SET_RETURN(target_var, new_val)     \
+    do {                                        \
+        void *old_val = (void *)target_var;     \
+        if (new_val) {                          \
+            void **temp = (void **)&target_var; \
+            *temp = new_val;                    \
+        }                                       \
+        return old_val;                         \
     } while (0)
 #if defined(__APPLE__) && !defined(MAC_OS_10_6_DETECTED)
 /* OSX < 10.6 */
@@ -1284,10 +1284,10 @@ void logStackContent(void **sp) {
 /* Log dump of processor registers */
 void logRegisters(ucontext_t *uc) {
     serverLog(LL_WARNING | LL_RAW, "\n------ REGISTERS ------\n");
-#define NOT_SUPPORTED()                                                                                                \
-    do {                                                                                                               \
-        UNUSED(uc);                                                                                                    \
-        serverLog(LL_WARNING, "  Dumping of registers not supported for this OS/arch");                                \
+#define NOT_SUPPORTED()                                                                 \
+    do {                                                                                \
+        UNUSED(uc);                                                                     \
+        serverLog(LL_WARNING, "  Dumping of registers not supported for this OS/arch"); \
     } while (0)
 
 /* OSX */

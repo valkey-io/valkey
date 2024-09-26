@@ -36,10 +36,10 @@ char *stringFromLongLong(long long value) {
 dictType BenchmarkDictType = {hashCallback, NULL, compareCallback, freeCallback, NULL, NULL};
 
 #define start_benchmark() start = timeInMilliseconds()
-#define end_benchmark(msg)                                                                                             \
-    do {                                                                                                               \
-        elapsed = timeInMilliseconds() - start;                                                                        \
-        printf(msg ": %ld items in %lld ms\n", count, elapsed);                                                        \
+#define end_benchmark(msg)                                      \
+    do {                                                        \
+        elapsed = timeInMilliseconds() - start;                 \
+        printf(msg ": %ld items in %lld ms\n", count, elapsed); \
     } while (0)
 
 static dict *_dict = NULL;

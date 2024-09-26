@@ -885,37 +885,37 @@ void dictTwoPhaseUnlinkFree(dict *d, dictEntry *he, dictEntry **plink, int table
 }
 
 /* In the macros below, `de` stands for dict entry. */
-#define DICT_SET_VALUE(de, field, val)                                                                                 \
-    {                                                                                                                  \
-        if (entryIsNormal(de)) {                                                                                       \
-            dictEntryNormal *_de = decodeEntryNormal(de);                                                              \
-            _de->field = val;                                                                                          \
-        } else if (entryIsEmbedded(de)) {                                                                              \
-            dictEntryEmbedded *_de = decodeEntryEmbedded(de);                                                          \
-            _de->field = val;                                                                                          \
-        } else {                                                                                                       \
-            panic("Entry type not supported");                                                                         \
-        }                                                                                                              \
+#define DICT_SET_VALUE(de, field, val)                        \
+    {                                                         \
+        if (entryIsNormal(de)) {                              \
+            dictEntryNormal *_de = decodeEntryNormal(de);     \
+            _de->field = val;                                 \
+        } else if (entryIsEmbedded(de)) {                     \
+            dictEntryEmbedded *_de = decodeEntryEmbedded(de); \
+            _de->field = val;                                 \
+        } else {                                              \
+            panic("Entry type not supported");                \
+        }                                                     \
     }
-#define DICT_INCR_VALUE(de, field, val)                                                                                \
-    {                                                                                                                  \
-        if (entryIsNormal(de)) {                                                                                       \
-            dictEntryNormal *_de = decodeEntryNormal(de);                                                              \
-            _de->field += val;                                                                                         \
-        } else if (entryIsEmbedded(de)) {                                                                              \
-            dictEntryEmbedded *_de = decodeEntryEmbedded(de);                                                          \
-            _de->field += val;                                                                                         \
-        } else {                                                                                                       \
-            panic("Entry type not supported");                                                                         \
-        }                                                                                                              \
+#define DICT_INCR_VALUE(de, field, val)                       \
+    {                                                         \
+        if (entryIsNormal(de)) {                              \
+            dictEntryNormal *_de = decodeEntryNormal(de);     \
+            _de->field += val;                                \
+        } else if (entryIsEmbedded(de)) {                     \
+            dictEntryEmbedded *_de = decodeEntryEmbedded(de); \
+            _de->field += val;                                \
+        } else {                                              \
+            panic("Entry type not supported");                \
+        }                                                     \
     }
-#define DICT_GET_VALUE(de, field)                                                                                      \
-    (entryIsNormal(de) ? decodeEntryNormal(de)->field                                                                  \
-                       : (entryIsEmbedded(de) ? decodeEntryEmbedded(de)->field                                         \
+#define DICT_GET_VALUE(de, field)                                              \
+    (entryIsNormal(de) ? decodeEntryNormal(de)->field                          \
+                       : (entryIsEmbedded(de) ? decodeEntryEmbedded(de)->field \
                                               : (panic("Entry type not supported"), ((dictEntryNormal *)de)->field)))
-#define DICT_GET_VALUE_PTR(de, field)                                                                                  \
-    (entryIsNormal(de)                                                                                                 \
-         ? &decodeEntryNormal(de)->field                                                                               \
+#define DICT_GET_VALUE_PTR(de, field)    \
+    (entryIsNormal(de)                   \
+         ? &decodeEntryNormal(de)->field \
          : (entryIsEmbedded(de) ? &decodeEntryEmbedded(de)->field : (panic("Entry type not supported"), NULL)))
 
 void dictSetKey(dict *d, dictEntry *de, void *key) {

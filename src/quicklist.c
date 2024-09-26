@@ -82,11 +82,11 @@ int quicklistSetPackedThreshold(size_t sz) {
 #ifndef REDIS_TEST_VERBOSE
 #define D(...)
 #else
-#define D(...)                                                                                                         \
-    do {                                                                                                               \
-        printf("%s:%s:%d:\t", __FILE__, __func__, __LINE__);                                                           \
-        printf(__VA_ARGS__);                                                                                           \
-        printf("\n");                                                                                                  \
+#define D(...)                                               \
+    do {                                                     \
+        printf("%s:%s:%d:\t", __FILE__, __func__, __LINE__); \
+        printf(__VA_ARGS__);                                 \
+        printf("\n");                                        \
     } while (0)
 #endif
 
@@ -100,22 +100,22 @@ static quicklistNode *_quicklistSplitNode(quicklistNode *node, int offset, int a
 static quicklistNode *_quicklistMergeNodes(quicklist *quicklist, quicklistNode *center);
 
 /* Simple way to give quicklistEntry structs default values with one call. */
-#define initEntry(e)                                                                                                   \
-    do {                                                                                                               \
-        (e)->zi = (e)->value = NULL;                                                                                   \
-        (e)->longval = -123456789;                                                                                     \
-        (e)->quicklist = NULL;                                                                                         \
-        (e)->node = NULL;                                                                                              \
-        (e)->offset = 123456789;                                                                                       \
-        (e)->sz = 0;                                                                                                   \
+#define initEntry(e)                 \
+    do {                             \
+        (e)->zi = (e)->value = NULL; \
+        (e)->longval = -123456789;   \
+        (e)->quicklist = NULL;       \
+        (e)->node = NULL;            \
+        (e)->offset = 123456789;     \
+        (e)->sz = 0;                 \
     } while (0)
 
 /* Reset the quicklistIter to prevent it from being used again after
  * insert, replace, or other against quicklist operation. */
-#define resetIterator(iter)                                                                                            \
-    do {                                                                                                               \
-        (iter)->current = NULL;                                                                                        \
-        (iter)->zi = NULL;                                                                                             \
+#define resetIterator(iter)     \
+    do {                        \
+        (iter)->current = NULL; \
+        (iter)->zi = NULL;      \
     } while (0)
 
 /* Create a new quicklist.
@@ -240,11 +240,11 @@ static int __quicklistCompressNode(quicklistNode *node) {
 }
 
 /* Compress only uncompressed nodes. */
-#define quicklistCompressNode(_node)                                                                                   \
-    do {                                                                                                               \
-        if ((_node) && (_node)->encoding == QUICKLIST_NODE_ENCODING_RAW) {                                             \
-            __quicklistCompressNode((_node));                                                                          \
-        }                                                                                                              \
+#define quicklistCompressNode(_node)                                       \
+    do {                                                                   \
+        if ((_node) && (_node)->encoding == QUICKLIST_NODE_ENCODING_RAW) { \
+            __quicklistCompressNode((_node));                              \
+        }                                                                  \
     } while (0)
 
 /* Uncompress the listpack in 'node' and update encoding details.
@@ -269,20 +269,20 @@ static int __quicklistDecompressNode(quicklistNode *node) {
 }
 
 /* Decompress only compressed nodes. */
-#define quicklistDecompressNode(_node)                                                                                 \
-    do {                                                                                                               \
-        if ((_node) && (_node)->encoding == QUICKLIST_NODE_ENCODING_LZF) {                                             \
-            __quicklistDecompressNode((_node));                                                                        \
-        }                                                                                                              \
+#define quicklistDecompressNode(_node)                                     \
+    do {                                                                   \
+        if ((_node) && (_node)->encoding == QUICKLIST_NODE_ENCODING_LZF) { \
+            __quicklistDecompressNode((_node));                            \
+        }                                                                  \
     } while (0)
 
 /* Force node to not be immediately re-compressible */
-#define quicklistDecompressNodeForUse(_node)                                                                           \
-    do {                                                                                                               \
-        if ((_node) && (_node)->encoding == QUICKLIST_NODE_ENCODING_LZF) {                                             \
-            __quicklistDecompressNode((_node));                                                                        \
-            (_node)->recompress = 1;                                                                                   \
-        }                                                                                                              \
+#define quicklistDecompressNodeForUse(_node)                               \
+    do {                                                                   \
+        if ((_node) && (_node)->encoding == QUICKLIST_NODE_ENCODING_LZF) { \
+            __quicklistDecompressNode((_node));                            \
+            (_node)->recompress = 1;                                       \
+        }                                                                  \
     } while (0)
 
 /* Extract the raw LZF data from this quicklistNode.
@@ -376,18 +376,18 @@ static void __quicklistCompress(const quicklist *quicklist, quicklistNode *node)
  *
  * If the 'recompress' flag of the node is false, we check whether the node is
  * within the range of compress depth before compressing it. */
-#define quicklistCompress(_ql, _node)                                                                                  \
-    do {                                                                                                               \
-        if ((_node)->recompress)                                                                                       \
-            quicklistCompressNode((_node));                                                                            \
-        else                                                                                                           \
-            __quicklistCompress((_ql), (_node));                                                                       \
+#define quicklistCompress(_ql, _node)            \
+    do {                                         \
+        if ((_node)->recompress)                 \
+            quicklistCompressNode((_node));      \
+        else                                     \
+            __quicklistCompress((_ql), (_node)); \
     } while (0)
 
 /* If we previously used quicklistDecompressNodeForUse(), just recompress. */
-#define quicklistRecompressOnly(_node)                                                                                 \
-    do {                                                                                                               \
-        if ((_node)->recompress) quicklistCompressNode((_node));                                                       \
+#define quicklistRecompressOnly(_node)                           \
+    do {                                                         \
+        if ((_node)->recompress) quicklistCompressNode((_node)); \
     } while (0)
 
 /* Insert 'new_node' after 'old_node' if 'after' is 1.
@@ -518,9 +518,9 @@ static int _quicklistNodeAllowMerge(const quicklistNode *a, const quicklistNode 
     return 1;
 }
 
-#define quicklistNodeUpdateSz(node)                                                                                    \
-    do {                                                                                                               \
-        (node)->sz = lpBytes((node)->entry);                                                                           \
+#define quicklistNodeUpdateSz(node)          \
+    do {                                     \
+        (node)->sz = lpBytes((node)->entry); \
     } while (0)
 
 static quicklistNode *__quicklistCreateNode(int container, void *value, size_t sz) {
@@ -627,12 +627,12 @@ void quicklistAppendPlainNode(quicklist *quicklist, unsigned char *data, size_t 
     quicklist->count += node->count;
 }
 
-#define quicklistDeleteIfEmpty(ql, n)                                                                                  \
-    do {                                                                                                               \
-        if ((n)->count == 0) {                                                                                         \
-            __quicklistDelNode((ql), (n));                                                                             \
-            (n) = NULL;                                                                                                \
-        }                                                                                                              \
+#define quicklistDeleteIfEmpty(ql, n)      \
+    do {                                   \
+        if ((n)->count == 0) {             \
+            __quicklistDelNode((ql), (n)); \
+            (n) = NULL;                    \
+        }                                  \
     } while (0)
 
 static void __quicklistDelNode(quicklist *quicklist, quicklistNode *node) {
@@ -1702,17 +1702,17 @@ void quicklistBookmarksClear(quicklist *ql) {
 
 #define yell(str, ...) printf("ERROR! " str "\n\n", __VA_ARGS__)
 
-#define ERROR                                                                                                          \
-    do {                                                                                                               \
-        printf("\tERROR!\n");                                                                                          \
-        err++;                                                                                                         \
+#define ERROR                 \
+    do {                      \
+        printf("\tERROR!\n"); \
+        err++;                \
     } while (0)
 
-#define ERR(x, ...)                                                                                                    \
-    do {                                                                                                               \
-        printf("%s:%s:%d:\t", __FILE__, __func__, __LINE__);                                                           \
-        printf("ERROR! " x "\n", __VA_ARGS__);                                                                         \
-        err++;                                                                                                         \
+#define ERR(x, ...)                                          \
+    do {                                                     \
+        printf("%s:%s:%d:\t", __FILE__, __func__, __LINE__); \
+        printf("ERROR! " x "\n", __VA_ARGS__);               \
+        err++;                                               \
     } while (0)
 
 #define TEST(name) printf("test — %s\n", name);
@@ -1782,9 +1782,9 @@ static int itrprintr_rev(quicklist *ql, int print) {
     return _itrprintr(ql, print, 0);
 }
 
-#define ql_verify(a, b, c, d, e)                                                                                       \
-    do {                                                                                                               \
-        err += _ql_verify((a), (b), (c), (d), (e));                                                                    \
+#define ql_verify(a, b, c, d, e)                    \
+    do {                                            \
+        err += _ql_verify((a), (b), (c), (d), (e)); \
     } while (0)
 
 static int _ql_verify_compress(quicklist *ql) {

@@ -166,14 +166,12 @@ typedef int (*raxNodeCallback)(raxNode **noderef);
 
 /* Radix tree iterator state is encapsulated into this data structure. */
 #define RAX_ITER_STATIC_LEN 128
-#define RAX_ITER_JUST_SEEKED                                                                                           \
-    (1 << 0)                  /* Iterator was just seeked. Return current                                              \
-                                 element for the first iteration and                                                   \
-                                 clear the flag. */
-#define RAX_ITER_EOF (1 << 1) /* End of iteration reached. */
-#define RAX_ITER_SAFE                                                                                                  \
-    (1 << 2) /* Safe iterator, allows operations while                                                                 \
-                iterating. But it is slower. */
+#define RAX_ITER_JUST_SEEKED (1 << 0) /* Iterator was just seeked. Return current \
+                                         element for the first iteration and      \
+                                         clear the flag. */
+#define RAX_ITER_EOF (1 << 1)         /* End of iteration reached. */
+#define RAX_ITER_SAFE (1 << 2)        /* Safe iterator, allows operations while \
+                                         iterating. But it is slower. */
 typedef struct raxIterator {
     int flags;
     rax *rt;            /* Radix tree we are iterating. */

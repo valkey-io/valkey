@@ -15,6 +15,7 @@ source tests/support/util.tcl
 
 set dir [pwd]
 set ::all_tests []
+set ::cluster_all_test []
 set ::module_api_all_tests []
 
 set test_dirs {
@@ -30,6 +31,11 @@ foreach test_dir $test_dirs {
     foreach file $files {
         lappend ::all_tests $test_dir/[file root [file tail $file]]
     }
+}
+
+set cluster_test_dir unit/cluster
+foreach file [glob -nocomplain $dir/tests/$cluster_test_dir/*.tcl] {
+   lappend ::cluster_all_tests $cluster_test_dir/[file root [file tail $file]]
 }
 
 set moduleapi_test_dir unit/moduleapi
@@ -557,6 +563,7 @@ proc send_data_packet {fd status data {elapsed 0}} {
 
 proc print_help_screen {} {
     puts [join {
+        "--cluster          Run the cluster tests, by default cluster tests run along with all tests."
         "--moduleapi        Run the module API tests, this option should only be used in runtest-moduleapi which will build the test module."
         "--valgrind         Run the test over valgrind."
         "--durable          suppress test crashes and keep running"
@@ -614,6 +621,8 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
             }
         }
         incr j
+    } elseif {$opt eq {--cluster}} {
+        set ::all_tests $::cluster_all_tests
     } elseif {$opt eq {--moduleapi}} {
         set ::all_tests $::module_api_all_tests
     } elseif {$opt eq {--config}} {

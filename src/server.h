@@ -3014,6 +3014,9 @@ void trimStringObjectIfNeeded(robj *o, int trim_small_values);
 static inline int canUseSharedObject(void) {
     return server.maxmemory == 0 || !(server.maxmemory_policy & MAXMEMORY_FLAG_NO_SHARED_INTEGERS);
 }
+static inline void calculateMaxAvailableMemory(void) {
+    server.maxmemory_available = (unsigned long long)server.maxmemory / 100.0 * (100 - server.maxmemory_reserved_scale);
+}
 #define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
 
 /* Synchronous I/O with timeout */

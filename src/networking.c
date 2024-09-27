@@ -1052,6 +1052,12 @@ void addReplyMapLen(client *c, long length) {
     addReplyAggregateLen(c, length, prefix);
 }
 
+void addWritePreparedReplyMapLen(writePreparedClient *c, long length) {
+    int prefix = c->resp == 2 ? '*' : '%';
+    if (c->resp == 2) length *= 2;
+    _addReplyLongLongWithPrefix(c, length, prefix);
+}
+
 void addReplySetLen(client *c, long length) {
     int prefix = c->resp == 2 ? '*' : '~';
     addReplyAggregateLen(c, length, prefix);
@@ -1130,6 +1136,13 @@ void addReplyBulkSds(client *c, sds s) {
         sdsfree(s);
         return;
     }
+    _addReplyLongLongWithPrefix(c, sdslen(s), '$');
+    _addReplyToBufferOrList(c, s, sdslen(s));
+    sdsfree(s);
+    _addReplyToBufferOrList(c, "\r\n", 2);
+}
+
+void addWritePreparedReplyBulkSds(writePreparedClient *c, sds s) {
     _addReplyLongLongWithPrefix(c, sdslen(s), '$');
     _addReplyToBufferOrList(c, s, sdslen(s));
     sdsfree(s);

@@ -300,8 +300,7 @@ size_t dictSdsEmbedKey(unsigned char *buf, size_t buf_len, const void *key, uint
     return sdscopytobuffer(buf, buf_len, (sds)key, key_offset);
 }
 
-/* A case insensitive version used for the command lookup table and other
- * places where case insensitive non binary-safe comparison is needed. */
+/* Case insensitive non binary-safe comparison */
 int dictSdsKeyCaseCompare(dict *d, const void *key1, const void *key2) {
     UNUSED(d);
     return strcasecmp(key1, key2) == 0;
@@ -436,13 +435,13 @@ int dictResizeAllowed(size_t moreMem, double usedRatio) {
     }
 }
 
-const void* hashsetCommandGetKey(const void *element) {
-    struct serverCommand* command = (struct serverCommand*) element;
+const void *hashsetCommandGetKey(const void *element) {
+    struct serverCommand *command = (struct serverCommand *)element;
     return command->fullname;
 }
 
-const void* hashsetSubcommandGetKey(const void *element) {
-    struct serverCommand* command = (struct serverCommand*) element;
+const void *hashsetSubcommandGetKey(const void *element) {
+    struct serverCommand *command = (struct serverCommand *)element;
     return command->declared_name;
 }
 
@@ -519,32 +518,18 @@ dictType kvstoreExpiresDictType = {
 };
 
 /* Command set, hashed by sds string, stores serverCommand structs. */
-hashsetType commandSetType = {
-    hashsetCommandGetKey,       // return key (command full name)
-    dictSdsCaseHash,            // hash function
-    hashsetStringKeyCaseCompare,// case insensitive char* key compare
-    NULL,                       // item destructor
-    NULL,                       // resize allowed callback
-    NULL,                       // rehash start callback
-    NULL,                       // rehash end callback
-    NULL,                       // metadata size callback
-    .instant_rehashing = 1,
-    .userdata = NULL
-};
+hashsetType commandSetType = {.elementGetKey = hashsetCommandGetKey,
+                              .hashFunction = dictSdsCaseHash,
+                              .keyCompare = hashsetStringKeyCaseCompare,
+                              .instant_rehashing = 1,
+                              .userdata = NULL};
 
 /* Command set, hashed by char* string, stores serverCommand structs. */
-hashsetType subcommandSetType = {
-    hashsetSubcommandGetKey,    // return key (command declared_name)
-    dictCStrCaseHash,           // hash function
-    hashsetStringKeyCaseCompare,// case insensitive char* key compare
-    NULL,                       // item destructor
-    NULL,                       // resize allowed callback
-    NULL,                       // rehash start callback
-    NULL,                       // rehash end callback
-    NULL,                       // metadata size callback
-    .instant_rehashing = 1,
-    .userdata = NULL
-};
+hashsetType subcommandSetType = {.elementGetKey = hashsetSubcommandGetKey,
+                                 .hashFunction = dictSdsCaseHash,
+                                 .keyCompare = hashsetStringKeyCaseCompare,
+                                 .instant_rehashing = 1,
+                                 .userdata = NULL};
 
 /* Hash type hash table (note that small hashes are represented with listpacks) */
 dictType hashDictType = {
@@ -2991,12 +2976,12 @@ sds catSubCommandFullname(const char *parent_name, const char *sub_name) {
 }
 
 void commandAddSubcommand(struct serverCommand *parent, struct serverCommand *subcommand) {
-    if (!parent->subcommands_dict) parent->subcommands_dict = hashsetCreate(&subcommandSetType);
+    if (!parent->subcommands) parent->subcommands = hashsetCreate(&subcommandSetType);
 
     subcommand->parent = parent;                            /* Assign the parent command */
     subcommand->id = ACLGetCommandID(subcommand->fullname); /* Assign the ID used for ACL. */
 
-    serverAssert(hashsetAdd(parent->subcommands_dict, subcommand));
+    serverAssert(hashsetAdd(parent->subcommands, subcommand));
 }
 
 /* Set implicit ACl categories (see comment above the definition of
@@ -3085,7 +3070,7 @@ void resetCommandTableStats(hashset *commands) {
     hashsetIterator iter;
 
     hashsetInitSafeIterator(&iter, commands);
-    while (hashsetNext(&iter, (void**) &c)) {
+    while (hashsetNext(&iter, (void **)&c)) {
         c->microseconds = 0;
         c->calls = 0;
         c->rejected_calls = 0;
@@ -3094,7 +3079,7 @@ void resetCommandTableStats(hashset *commands) {
             hdr_close(c->latency_histogram);
             c->latency_histogram = NULL;
         }
-        if (c->subcommands_dict) resetCommandTableStats(c->subcommands_dict);
+        if (c->subcommands) resetCommandTableStats(c->subcommands);
     }
     hashsetResetIterator(&iter);
 }
@@ -3144,14 +3129,14 @@ void serverOpArrayFree(serverOpArray *oa) {
 
 int isContainerCommandBySds(sds s) {
     struct serverCommand *base_cmd;
-    int found_command = hashsetFind(server.commands, s, (void**) &base_cmd);
-    int has_subcommands = found_command && base_cmd->subcommands_dict;
+    int found_command = hashsetFind(server.commands, s, (void **)&base_cmd);
+    int has_subcommands = found_command && base_cmd->subcommands;
     return has_subcommands;
 }
 
 struct serverCommand *lookupSubcommand(struct serverCommand *container, sds sub_name) {
     struct serverCommand *subcommand = NULL;
-    hashsetFind(container->subcommands_dict, sub_name, (void**) &subcommand);
+    hashsetFind(container->subcommands, sub_name, (void **)&subcommand);
     return subcommand;
 }
 
@@ -3165,8 +3150,8 @@ struct serverCommand *lookupSubcommand(struct serverCommand *container, sds sub_
  */
 struct serverCommand *lookupCommandLogic(hashset *commands, robj **argv, int argc, int strict) {
     struct serverCommand *base_cmd = NULL;
-    int found_command = hashsetFind(commands, argv[0]->ptr, (void**) &base_cmd);
-    int has_subcommands = found_command && base_cmd->subcommands_dict;
+    int found_command = hashsetFind(commands, argv[0]->ptr, (void **)&base_cmd);
+    int has_subcommands = found_command && base_cmd->subcommands;
     if (argc == 1 || !has_subcommands) {
         if (strict && argc != 1) return NULL;
         /* Note: It is possible that base_cmd->proc==NULL (e.g. CONFIG) */
@@ -4833,20 +4818,20 @@ void addReplyCommandSubCommands(client *c,
                                 struct serverCommand *cmd,
                                 void (*reply_function)(client *, struct serverCommand *),
                                 int use_map) {
-    if (!cmd->subcommands_dict) {
+    if (!cmd->subcommands) {
         addReplySetLen(c, 0);
         return;
     }
 
     if (use_map)
-        addReplyMapLen(c, hashsetSize(cmd->subcommands_dict));
+        addReplyMapLen(c, hashsetSize(cmd->subcommands));
     else
-        addReplyArrayLen(c, hashsetSize(cmd->subcommands_dict));
+        addReplyArrayLen(c, hashsetSize(cmd->subcommands));
 
     hashsetIterator iter;
-    struct serverCommand* sub;
-    hashsetInitSafeIterator(&iter, cmd->subcommands_dict);
-    while (hashsetNext(&iter, (void**) &sub)) {
+    struct serverCommand *sub;
+    hashsetInitSafeIterator(&iter, cmd->subcommands);
+    while (hashsetNext(&iter, (void **)&sub)) {
         if (use_map) addReplyBulkCBuffer(c, sub->fullname, sdslen(sub->fullname));
         reply_function(c, sub);
     }
@@ -4896,7 +4881,7 @@ void addReplyCommandDocs(client *c, struct serverCommand *cmd) {
     if (cmd->reply_schema) maplen++;
 #endif
     if (cmd->args) maplen++;
-    if (cmd->subcommands_dict) maplen++;
+    if (cmd->subcommands) maplen++;
     addReplyMapLen(c, maplen);
 
     if (cmd->summary) {
@@ -4946,7 +4931,7 @@ void addReplyCommandDocs(client *c, struct serverCommand *cmd) {
         addReplyBulkCString(c, "arguments");
         addReplyCommandArgList(c, cmd->args, cmd->num_args);
     }
-    if (cmd->subcommands_dict) {
+    if (cmd->subcommands) {
         addReplyBulkCString(c, "subcommands");
         addReplyCommandSubCommands(c, cmd, addReplyCommandDocs, 1);
     }
@@ -5004,11 +4989,11 @@ void getKeysSubcommand(client *c) {
 /* COMMAND (no args) */
 void commandCommand(client *c) {
     hashsetIterator iter;
-    struct serverCommand* cmd;
+    struct serverCommand *cmd;
 
     addReplyArrayLen(c, hashsetSize(server.commands));
     hashsetInitIterator(&iter, server.commands);
-    while (hashsetNext(&iter, (void**) &cmd)) {
+    while (hashsetNext(&iter, (void **)&cmd)) {
         addReplyCommandInfo(c, cmd);
     }
     hashsetResetIterator(&iter);
@@ -5066,15 +5051,15 @@ void commandListWithFilter(client *c, hashset *commands, commandListFilter filte
     hashsetIterator iter;
     hashsetInitIterator(&iter, commands);
 
-    struct serverCommand* cmd;
-    while (hashsetNext(&iter, (void**) &cmd)) {
+    struct serverCommand *cmd;
+    while (hashsetNext(&iter, (void **)&cmd)) {
         if (!shouldFilterFromCommandList(cmd, &filter)) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
             (*numcmds)++;
         }
 
-        if (cmd->subcommands_dict) {
-            commandListWithFilter(c, cmd->subcommands_dict, filter, numcmds);
+        if (cmd->subcommands) {
+            commandListWithFilter(c, cmd->subcommands, filter, numcmds);
         }
     }
     hashsetResetIterator(&iter);
@@ -5083,15 +5068,15 @@ void commandListWithFilter(client *c, hashset *commands, commandListFilter filte
 /* COMMAND LIST */
 void commandListWithoutFilter(client *c, hashset *commands, int *numcmds) {
     hashsetIterator iter;
-    struct serverCommand* cmd;
+    struct serverCommand *cmd;
     hashsetInitIterator(&iter, commands);
 
-    while (hashsetNext(&iter, (void**) &cmd)) {
+    while (hashsetNext(&iter, (void **)&cmd)) {
         addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
         (*numcmds)++;
 
-        if (cmd->subcommands_dict) {
-            commandListWithoutFilter(c, cmd->subcommands_dict, numcmds);
+        if (cmd->subcommands) {
+            commandListWithoutFilter(c, cmd->subcommands, numcmds);
         }
     }
     hashsetResetIterator(&iter);
@@ -5144,10 +5129,10 @@ void commandInfoCommand(client *c) {
 
     if (c->argc == 2) {
         hashsetIterator iter;
-        struct serverCommand* cmd;
+        struct serverCommand *cmd;
         addReplyArrayLen(c, hashsetSize(server.commands));
         hashsetInitIterator(&iter, server.commands);
-        while (hashsetNext(&iter, (void**) &cmd)) {
+        while (hashsetNext(&iter, (void **)&cmd)) {
             addReplyCommandInfo(c, cmd);
         }
         hashsetResetIterator(&iter);
@@ -5165,10 +5150,10 @@ void commandDocsCommand(client *c) {
     if (c->argc == 2) {
         /* Reply with an array of all commands */
         hashsetIterator iter;
-        struct serverCommand* cmd;
+        struct serverCommand *cmd;
         addReplyMapLen(c, hashsetSize(server.commands));
         hashsetInitIterator(&iter, server.commands);
-        while (hashsetNext(&iter, (void**) &cmd)) {
+        while (hashsetNext(&iter, (void **)&cmd)) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
             addReplyCommandDocs(c, cmd);
         }
@@ -5298,7 +5283,7 @@ sds genValkeyInfoStringCommandStats(sds info, hashset *commands) {
     struct serverCommand *c;
     hashsetIterator iter;
     hashsetInitSafeIterator(&iter, commands);
-    while (hashsetNext(&iter, (void**) &c)) {
+    while (hashsetNext(&iter, (void **)&c)) {
         char *tmpsafe;
         if (c->calls || c->failed_calls || c->rejected_calls) {
             info = sdscatprintf(info,
@@ -5309,8 +5294,8 @@ sds genValkeyInfoStringCommandStats(sds info, hashset *commands) {
                                 c->rejected_calls, c->failed_calls);
             if (tmpsafe != NULL) zfree(tmpsafe);
         }
-        if (c->subcommands_dict) {
-            info = genValkeyInfoStringCommandStats(info, c->subcommands_dict);
+        if (c->subcommands) {
+            info = genValkeyInfoStringCommandStats(info, c->subcommands);
         }
     }
     hashsetResetIterator(&iter);
@@ -5334,15 +5319,15 @@ sds genValkeyInfoStringLatencyStats(sds info, hashset *commands) {
     struct serverCommand *c;
     hashsetIterator iter;
     hashsetInitSafeIterator(&iter, commands);
-    while (hashsetNext(&iter, (void**) &c)) {
+    while (hashsetNext(&iter, (void **)&c)) {
         char *tmpsafe;
         if (c->latency_histogram) {
             info = fillPercentileDistributionLatencies(
                 info, getSafeInfoString(c->fullname, sdslen(c->fullname), &tmpsafe), c->latency_histogram);
             if (tmpsafe != NULL) zfree(tmpsafe);
         }
-        if (c->subcommands_dict) {
-            info = genValkeyInfoStringLatencyStats(info, c->subcommands_dict);
+        if (c->subcommands) {
+            info = genValkeyInfoStringLatencyStats(info, c->subcommands);
         }
     }
     hashsetResetIterator(&iter);

@@ -532,7 +532,7 @@ void latencyAllCommandsFillCDF(client *c, hashset *commands, int *command_with_d
     hashsetInitSafeIterator(&iter, commands);
     struct serverCommand *cmd;
 
-    while (hashsetNext(&iter, (void**) &cmd)) {
+    while (hashsetNext(&iter, (void **)&cmd)) {
         if (cmd->latency_histogram) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
             fillCommandCDF(c, cmd->latency_histogram);
@@ -540,7 +540,7 @@ void latencyAllCommandsFillCDF(client *c, hashset *commands, int *command_with_d
         }
 
         if (cmd->subcommands) {
-            latencyAllCommandsFillCDF(c, cmd->subcommands_dict, command_with_data);
+            latencyAllCommandsFillCDF(c, cmd->subcommands, command_with_data);
         }
     }
     hashsetResetIterator(&iter);
@@ -564,12 +564,12 @@ void latencySpecificCommandsFillCDF(client *c) {
             command_with_data++;
         }
 
-        if (cmd->subcommands_dict) {
+        if (cmd->subcommands) {
             hashsetIterator iter;
-            hashsetInitSafeIterator(&iter, cmd->subcommands_dict);
+            hashsetInitSafeIterator(&iter, cmd->subcommands);
 
             struct serverCommand *sub;
-            while (hashsetNext(&iter, (void**) &sub)) {
+            while (hashsetNext(&iter, (void **)&sub)) {
                 if (sub->latency_histogram) {
                     addReplyBulkCBuffer(c, sub->fullname, sdslen(sub->fullname));
                     fillCommandCDF(c, sub->latency_histogram);

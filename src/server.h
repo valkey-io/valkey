@@ -1677,8 +1677,8 @@ struct valkeyServer {
     int hz;                   /* serverCron() calls frequency in hertz */
     int in_fork_child;        /* indication that this is a fork child */
     serverDb *db;
-    hashset *commands;        /* Command table */
-    hashset *orig_commands;   /* Command table before command renaming. */
+    hashset *commands;      /* Command table */
+    hashset *orig_commands; /* Command table before command renaming. */
     aeEventLoop *el;
     _Atomic AeIoState io_poll_state;     /* Indicates the state of the IO polling. */
     int io_ae_fired_events;              /* Number of poll events received by the IO thread. */
@@ -2559,7 +2559,7 @@ struct serverCommand {
                                     * still maintained (if applicable) so that
                                     * we can still support the reply format of
                                     * COMMAND INFO and COMMAND GETKEYS */
-    hashset *subcommands_dict;        /* A set that holds the subcommands, the key is the subcommand sds name
+    hashset *subcommands;          /* A set that holds the subcommands, the key is the subcommand sds name
                                     * (not the fullname), and the value is the serverCommand structure pointer. */
     struct serverCommand *parent;
     struct ValkeyModuleCommand *module_cmd; /* A pointer to the module command data (NULL if native command) */

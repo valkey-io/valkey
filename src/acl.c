@@ -652,11 +652,11 @@ void ACLChangeSelectorPerm(aclSelector *selector, struct serverCommand *cmd, int
     unsigned long id = cmd->id;
     ACLSetSelectorCommandBit(selector, id, allow);
     ACLResetFirstArgsForCommand(selector, id);
-    if (cmd->subcommands_dict) {
+    if (cmd->subcommands) {
         hashsetIterator iter;
-        hashsetInitSafeIterator(&iter, cmd->subcommands_dict);
+        hashsetInitSafeIterator(&iter, cmd->subcommands);
         struct serverCommand *sub;
-        while (hashsetNext(&iter, (void**) &sub)) {
+        while (hashsetNext(&iter, (void **)&sub)) {
             ACLSetSelectorCommandBit(selector, sub->id, allow);
         }
         hashsetResetIterator(&iter);
@@ -673,12 +673,12 @@ void ACLSetSelectorCommandBitsForCategory(hashset *commands, aclSelector *select
     hashsetIterator iter;
     hashsetInitIterator(&iter, commands);
     struct serverCommand *cmd;
-        while (hashsetNext(&iter, (void**) &cmd)) {
+    while (hashsetNext(&iter, (void **)&cmd)) {
         if (cmd->acl_categories & cflag) {
             ACLChangeSelectorPerm(selector, cmd, value);
         }
-        if (cmd->subcommands_dict) {
-            ACLSetSelectorCommandBitsForCategory(cmd->subcommands_dict, selector, cflag, value);
+        if (cmd->subcommands) {
+            ACLSetSelectorCommandBitsForCategory(cmd->subcommands, selector, cflag, value);
         }
     }
     hashsetResetIterator(&iter);
@@ -740,15 +740,15 @@ void ACLCountCategoryBitsForCommands(hashset *commands,
     hashsetIterator iter;
     hashsetInitIterator(&iter, commands);
     struct serverCommand *cmd;
-    while (hashsetNext(&iter, (void**) &cmd)) {
+    while (hashsetNext(&iter, (void **)&cmd)) {
         if (cmd->acl_categories & cflag) {
             if (ACLGetSelectorCommandBit(selector, cmd->id))
                 (*on)++;
             else
                 (*off)++;
         }
-        if (cmd->subcommands_dict) {
-            ACLCountCategoryBitsForCommands(cmd->subcommands_dict, selector, on, off, cflag);
+        if (cmd->subcommands) {
+            ACLCountCategoryBitsForCommands(cmd->subcommands, selector, on, off, cflag);
         }
     }
     hashsetResetIterator(&iter);
@@ -1163,7 +1163,7 @@ int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
                 return C_ERR;
             }
 
-            if (cmd->subcommands_dict) {
+            if (cmd->subcommands) {
                 /* If user is trying to allow a valid subcommand we can just add its unique ID */
                 cmd = ACLLookupCommand(op + 1);
                 if (cmd == NULL) {
@@ -2759,15 +2759,15 @@ void aclCatWithFlags(client *c, hashset *commands, uint64_t cflag, int *arraylen
     hashsetInitIterator(&iter, commands);
 
     struct serverCommand *cmd;
-    while (hashsetNext(&iter, (void**) &cmd)) {
+    while (hashsetNext(&iter, (void **)&cmd)) {
         if (cmd->flags & CMD_MODULE) continue;
         if (cmd->acl_categories & cflag) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
             (*arraylen)++;
         }
 
-        if (cmd->subcommands_dict) {
-            aclCatWithFlags(c, cmd->subcommands_dict, cflag, arraylen);
+        if (cmd->subcommands) {
+            aclCatWithFlags(c, cmd->subcommands, cflag, arraylen);
         }
     }
     hashsetResetIterator(&iter);

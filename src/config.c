@@ -530,7 +530,6 @@ void loadServerConfigFromString(char *config) {
             loadServerConfig(argv[1], 0, NULL);
         } else if (!strcasecmp(argv[0], "rename-command") && argc == 3) {
             struct serverCommand *cmd = lookupCommandBySds(argv[1]);
-            int retval;
 
             if (!cmd) {
                 err = "No such command in rename-command";
@@ -539,16 +538,13 @@ void loadServerConfigFromString(char *config) {
 
             /* If the target command name is the empty string we just
              * remove it from the command table. */
-            retval = dictDelete(server.commands, argv[1]);
-            serverAssert(retval == DICT_OK);
+            serverAssert(hashsetDelete(server.commands, argv[1]));
 
             /* Otherwise we re-add the command under a different name. */
             if (sdslen(argv[2]) != 0) {
-                sds copy = sdsdup(argv[2]);
-
-                retval = dictAdd(server.commands, copy, cmd);
-                if (retval != DICT_OK) {
-                    sdsfree(copy);
+                sdsfree(cmd->fullname);
+                cmd->fullname = sdsdup(argv[2]);
+                if (!hashsetAdd(server.commands, cmd)) {
                     err = "Target command name already exists";
                     goto loaderr;
                 }

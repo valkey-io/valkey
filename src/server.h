@@ -2559,7 +2559,7 @@ struct serverCommand {
                                     * still maintained (if applicable) so that
                                     * we can still support the reply format of
                                     * COMMAND INFO and COMMAND GETKEYS */
-    hashset *subcommands;          /* A set that holds the subcommands, the key is the subcommand sds name
+    hashset *subcommands_set;      /* A set that holds the subcommands, the key is the subcommand sds name
                                     * (not the fullname), and the value is the serverCommand structure pointer. */
     struct serverCommand *parent;
     struct ValkeyModuleCommand *module_cmd; /* A pointer to the module command data (NULL if native command) */

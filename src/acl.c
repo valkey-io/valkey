@@ -652,9 +652,9 @@ void ACLChangeSelectorPerm(aclSelector *selector, struct serverCommand *cmd, int
     unsigned long id = cmd->id;
     ACLSetSelectorCommandBit(selector, id, allow);
     ACLResetFirstArgsForCommand(selector, id);
-    if (cmd->subcommands) {
+    if (cmd->subcommands_set) {
         hashsetIterator iter;
-        hashsetInitSafeIterator(&iter, cmd->subcommands);
+        hashsetInitSafeIterator(&iter, cmd->subcommands_set);
         struct serverCommand *sub;
         while (hashsetNext(&iter, (void **)&sub)) {
             ACLSetSelectorCommandBit(selector, sub->id, allow);
@@ -677,8 +677,8 @@ void ACLSetSelectorCommandBitsForCategory(hashset *commands, aclSelector *select
         if (cmd->acl_categories & cflag) {
             ACLChangeSelectorPerm(selector, cmd, value);
         }
-        if (cmd->subcommands) {
-            ACLSetSelectorCommandBitsForCategory(cmd->subcommands, selector, cflag, value);
+        if (cmd->subcommands_set) {
+            ACLSetSelectorCommandBitsForCategory(cmd->subcommands_set, selector, cflag, value);
         }
     }
     hashsetResetIterator(&iter);
@@ -747,8 +747,8 @@ void ACLCountCategoryBitsForCommands(hashset *commands,
             else
                 (*off)++;
         }
-        if (cmd->subcommands) {
-            ACLCountCategoryBitsForCommands(cmd->subcommands, selector, on, off, cflag);
+        if (cmd->subcommands_set) {
+            ACLCountCategoryBitsForCommands(cmd->subcommands_set, selector, on, off, cflag);
         }
     }
     hashsetResetIterator(&iter);
@@ -1163,7 +1163,7 @@ int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
                 return C_ERR;
             }
 
-            if (cmd->subcommands) {
+            if (cmd->subcommands_set) {
                 /* If user is trying to allow a valid subcommand we can just add its unique ID */
                 cmd = ACLLookupCommand(op + 1);
                 if (cmd == NULL) {
@@ -2766,8 +2766,8 @@ void aclCatWithFlags(client *c, hashset *commands, uint64_t cflag, int *arraylen
             (*arraylen)++;
         }
 
-        if (cmd->subcommands) {
-            aclCatWithFlags(c, cmd->subcommands, cflag, arraylen);
+        if (cmd->subcommands_set) {
+            aclCatWithFlags(c, cmd->subcommands_set, cflag, arraylen);
         }
     }
     hashsetResetIterator(&iter);

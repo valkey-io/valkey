@@ -1431,7 +1431,7 @@ int VM_CreateSubcommand(ValkeyModuleCommand *parent,
 
     /* Check if the command name is busy within the parent command. */
     sds declared_name = sdsnew(name);
-    if (parent_cmd->subcommands && lookupSubcommand(parent_cmd, declared_name) != NULL) {
+    if (parent_cmd->subcommands_set && lookupSubcommand(parent_cmd, declared_name) != NULL) {
         sdsfree(declared_name);
         return VALKEYMODULE_ERR;
     }
@@ -12062,20 +12062,20 @@ int moduleFreeCommand(struct ValkeyModule *module, struct serverCommand *cmd) {
     moduleFreeArgs(cmd->args, cmd->num_args);
     zfree(cp);
 
-    if (cmd->subcommands) {
+    if (cmd->subcommands_set) {
         hashsetIterator iter;
-        hashsetInitSafeIterator(&iter, cmd->subcommands);
+        hashsetInitSafeIterator(&iter, cmd->subcommands_set);
         struct serverCommand *sub;
         while (hashsetNext(&iter, (void **)&sub)) {
             if (moduleFreeCommand(module, sub) != C_OK) continue;
 
-            serverAssert(hashsetDelete(cmd->subcommands, sub->declared_name));
+            serverAssert(hashsetDelete(cmd->subcommands_set, sub->declared_name));
             sdsfree((sds)sub->declared_name);
             sdsfree(sub->fullname);
             zfree(sub);
         }
         hashsetResetIterator(&iter);
-        hashsetRelease(cmd->subcommands);
+        hashsetRelease(cmd->subcommands_set);
     }
 
     return C_OK;

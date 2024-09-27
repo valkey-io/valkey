@@ -540,7 +540,7 @@ void latencyAllCommandsFillCDF(client *c, hashset *commands, int *command_with_d
         }
 
         if (cmd->subcommands) {
-            latencyAllCommandsFillCDF(c, cmd->subcommands, command_with_data);
+            latencyAllCommandsFillCDF(c, cmd->subcommands_set, command_with_data);
         }
     }
     hashsetResetIterator(&iter);
@@ -564,9 +564,9 @@ void latencySpecificCommandsFillCDF(client *c) {
             command_with_data++;
         }
 
-        if (cmd->subcommands) {
+        if (cmd->subcommands_set) {
             hashsetIterator iter;
-            hashsetInitSafeIterator(&iter, cmd->subcommands);
+            hashsetInitSafeIterator(&iter, cmd->subcommands_set);
 
             struct serverCommand *sub;
             while (hashsetNext(&iter, (void **)&sub)) {

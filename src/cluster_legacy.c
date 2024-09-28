@@ -4515,8 +4515,9 @@ void clusterFailoverReplaceYourPrimary(void) {
  * 3) Perform the failover informing all the other nodes.
  */
 void clusterHandleReplicaFailover(void) {
+    mstime_t now = mstime();
     mstime_t data_age;
-    mstime_t auth_age = mstime() - server.cluster->failover_auth_time;
+    mstime_t auth_age = now - server.cluster->failover_auth_time;
     int needed_quorum = (server.cluster->size / 2) + 1;
     int manual_failover = server.cluster->mf_end != 0 && server.cluster->mf_can_start;
     mstime_t auth_timeout, auth_retry_time;
@@ -4578,7 +4579,7 @@ void clusterHandleReplicaFailover(void) {
     /* If the previous failover attempt timeout and the retry time has
      * elapsed, we can setup a new one. */
     if (auth_age > auth_retry_time) {
-        server.cluster->failover_auth_time = mstime() +
+        server.cluster->failover_auth_time = now +
                                              500 +           /* Fixed delay of 500 milliseconds, let FAIL msg propagate. */
                                              random() % 500; /* Random delay between 0 and 500 milliseconds. */
         server.cluster->failover_auth_count = 0;
@@ -4590,20 +4591,26 @@ void clusterHandleReplicaFailover(void) {
         server.cluster->failover_auth_time += server.cluster->failover_auth_rank * 1000;
         /* However if this is a manual failover, no delay is needed. */
         if (server.cluster->mf_end) {
-            server.cluster->failover_auth_time = mstime();
+            server.cluster->failover_auth_time = now;
             server.cluster->failover_auth_rank = 0;
-            clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
+            /* Reset auth_age since it is outdated now and we can bypass the auth_timeout
+             * check in the next state and start the election ASAP. */
+            auth_age = 0;
         }
         serverLog(LL_NOTICE,
                   "Start of election delayed for %lld milliseconds "
                   "(rank #%d, offset %lld).",
-                  server.cluster->failover_auth_time - mstime(), server.cluster->failover_auth_rank,
+                  server.cluster->failover_auth_time - now, server.cluster->failover_auth_rank,
                   replicationGetReplicaOffset());
         /* Now that we have a scheduled election, broadcast our offset
          * to all the other replicas so that they'll updated their offsets
          * if our offset is better. */
         clusterBroadcastPong(CLUSTER_BROADCAST_LOCAL_REPLICAS);
-        return;
+
+        /* Return ASAP if we can't start the election. Doing this allow us to, for example,
+         * a manual failover, we can get it to the next state ASAP instead of waiting for
+         * the next beforeSleep to kick in. */
+        if (now < server.cluster->failover_auth_time) return;
     }
 
     /* It is possible that we received more updated offsets from other
@@ -4623,7 +4630,7 @@ void clusterHandleReplicaFailover(void) {
     }
 
     /* Return ASAP if we can't still start the election. */
-    if (mstime() < server.cluster->failover_auth_time) {
+    if (now < server.cluster->failover_auth_time) {
         clusterLogCantFailover(CLUSTER_CANT_FAILOVER_WAITING_DELAY);
         return;
     }

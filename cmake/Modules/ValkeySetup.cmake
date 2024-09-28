@@ -20,6 +20,14 @@ function (get_valkey_server_linker_option return_value)
     list(JOIN VALKEY_SERVER_LDFLAGS " " ${value} ${return_value})
 endfunction ()
 
+if (NOT WITH_MALLOC)
+    if (APPLE)
+        set(WITH_MALLOC "libc")
+    elseif (UNIX)
+        set(WITH_MALLOC "jemalloc")
+    endif()
+endif ()
+
 # User may pass different allocator library. Using -DWITH_MALLOC=<libname>, make sure it is a valid value
 if (WITH_MALLOC)
     if ("${WITH_MALLOC}" STREQUAL "jemalloc")
@@ -39,8 +47,6 @@ if (WITH_MALLOC)
     endif ()
     unset(WITH_MALLOC CACHE)
     unset(USE_JEMALLOC CACHE)
-else ()
-    set(MALLOC_LIB "libc")
 endif ()
 
 message(STATUS "Using ${MALLOC_LIB}")
@@ -77,6 +83,10 @@ endif ()
 
 if (APPLE)
     add_valkey_server_linker_option("-ldl")
+elseif (UNIX)
+    add_valkey_server_linker_option("-pthread") 
+    add_valkey_server_linker_option("-ldl") 
+    add_valkey_server_linker_option("-lm")
 endif ()
 
 # Sanitizer
@@ -237,6 +247,9 @@ add_custom_target(
     release_header
     COMMAND sh -c '${CMAKE_SOURCE_DIR}/src/mkreleasehdr.sh'
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
+
+# Common compiler flags
+add_valkey_server_compiler_options("-pedantic")
 
 unset(CMAKE_C_FLAGS CACHE)
 unset(WITH_SANITIZER CACHE)

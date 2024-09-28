@@ -879,6 +879,26 @@ int hashsetShrinkIfNeeded(hashset *t) {
     return resize(t, t->used[0], NULL);
 }
 
+/* Defragment the internal allocations of the hashset by reallocating them. The
+ * provided defragfn callback should either return NULL (if reallocation is not
+ * necessary) or reallocate the memory like realloc() would do.
+ *
+ * Returns NULL if the hashset's top-level struct hasn't been reallocated.
+ * Returns non-NULL if the top-level allocation has been allocated and thus
+ * making the 's' pointer invalid. */
+hashset *hashsetDefragInternals(hashset *s, void *(*defragfn)(void *)) {
+    /* The hashset struct */
+    hashset *s1 = defragfn(s);
+    if (s1 != NULL) s = s1;
+    /* The tables */
+    for (int i = 0; i <= 1; i++) {
+        if (s->tables[i] == NULL) continue;
+        void *table = defragfn(s->tables[i]);
+        if (table != NULL) s->tables[i] = table;
+    }
+    return s1;
+}
+
 /* Returns 1 if an element was found matching the key. Also points *found to it,
  * if found is provided. Returns 0 if no matching element was found. */
 int hashsetFind(hashset *t, const void *key, void **found) {

@@ -23,6 +23,16 @@ function (get_valkey_server_linker_option return_value)
     list(JOIN VALKEY_SERVER_LDFLAGS " " ${value} ${return_value})
 endfunction ()
 
+# Installed executables will have this permissions
+set(VALKEY_EXE_PERMISSIONS
+    OWNER_EXECUTE
+    OWNER_WRITE
+    OWNER_READ
+    GROUP_EXECUTE
+    GROUP_READ
+    WORLD_EXECUTE
+    WORLD_READ)
+
 if (NOT WITH_MALLOC)
     if (APPLE)
         set(WITH_MALLOC "libc")
@@ -277,3 +287,37 @@ unset(CMAKE_C_FLAGS CACHE)
 unset(WITH_SANITIZER CACHE)
 unset(VALKEY_SERVER_LDFLAGS CACHE)
 unset(VALKEY_SERVER_CFLAGS CACHE)
+
+# Helper macro for creating symbolic link so that: link -> source
+macro (valkey_create_symlink source link)
+    install(
+        CODE "execute_process( \
+    COMMAND ${CMAKE_COMMAND} -E create_symlink \
+    ${source} \
+    ${link}   \
+    )")
+endmacro ()
+
+# Helper macro that defines, builds and installs `target`
+# In addition, it creates a symbolic link between the target and `link_name`
+macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
+    add_executable(${target} ${sources})
+    target_link_libraries(${target} ${ld_flags} ${libs})
+
+    if (USE_TLS)
+        # Add required libraries needed for TLS
+        target_link_libraries(${target} OpenSSL::SSL hiredis_ssl)
+    endif ()
+
+    if (USE_JEMALLOC)
+        # Using jemalloc
+        target_link_libraries(${target} jemalloc)
+    endif ()
+
+    # Install cli tool and create a redis symbolic link
+    install(
+        TARGETS ${target}
+        DESTINATION ${INSTALL_BIN_PATH}
+        PERMISSIONS ${VALKEY_EXE_PERMISSIONS})
+    valkey_create_symlink(${INSTALL_BIN_PATH}/${target} ${INSTALL_BIN_PATH}/${link_name})
+endmacro ()

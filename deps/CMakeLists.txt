@@ -1,16 +1,21 @@
 add_subdirectory(jemalloc)
 add_subdirectory(lua)
 
-# Pass options to HiRedis CMakeLists.txt
-set(BUILD_SHARED_LIBS OFF)
-set(DISABLE_TESTS ON)
+# Set hiredis options. We need to disable the defaults set in the OPTION(..) we do this by setting them in the CACHE
+set(BUILD_SHARED_LIBS
+    OFF
+    CACHE BOOL "Build shared libraries")
+set(DISABLE_TESTS
+    ON
+    CACHE BOOL "If tests should be compiled or not")
 if (USE_TLS)
     message(STATUS "Building hiredis_ssl")
-    set(ENABLE_SSL ON)
+    set(ENABLE_SSL
+        ON
+        CACHE BOOL "Should we test SSL connections")
 endif ()
 
 add_subdirectory(hiredis)
-
 add_subdirectory(linenoise)
 add_subdirectory(fpconv)
 add_subdirectory(hdr_histogram)

@@ -16,9 +16,6 @@ macro (add_valkey_server_linker_option value)
     list(APPEND VALKEY_SERVER_LDFLAGS ${value})
 endmacro ()
 
-# Options
-option(WITH_TLS "Build valkey-server with TLS support" OFF)
-
 function (get_valkey_server_linker_option return_value)
     list(JOIN VALKEY_SERVER_LDFLAGS " " ${value} ${return_value})
 endfunction ()
@@ -134,7 +131,7 @@ if (USE_JEMALLOC)
 endif ()
 
 # Build the source file list
-set(VALKEY_SERVER_SRCS
+set(VALKEY_LIB_SRCS
     ${CMAKE_SOURCE_DIR}/src/threads_mngr.c
     ${CMAKE_SOURCE_DIR}/src/adlist.c
     ${CMAKE_SOURCE_DIR}/src/quicklist.c
@@ -142,7 +139,6 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/anet.c
     ${CMAKE_SOURCE_DIR}/src/dict.c
     ${CMAKE_SOURCE_DIR}/src/kvstore.c
-    ${CMAKE_SOURCE_DIR}/src/server.c
     ${CMAKE_SOURCE_DIR}/src/sds.c
     ${CMAKE_SOURCE_DIR}/src/zmalloc.c
     ${CMAKE_SOURCE_DIR}/src/lzf_c.c

@@ -7,6 +7,10 @@ if (APPLE)
     set(CMAKE_C_COMPILER "/usr/bin/clang")
 endif ()
 
+# Options
+option(WITH_TLS "Build valkey-server with TLS support" OFF)
+option(BUILD_TESTS "Build valkey-unit-tests" OFF)
+
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 project("valkey")
 
@@ -16,3 +20,5 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 include(ValkeySetup)
 add_subdirectory(src)
+
+unset(BUILD_TESTS CACHE)

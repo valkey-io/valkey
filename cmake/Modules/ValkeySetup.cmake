@@ -5,6 +5,9 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 # Generate compile_commands.json file for IDEs code completion support
 set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
 
+set(VALKEY_SERVER_CFLAGS "")
+set(VALKEY_SERVER_LDFLAGS "")
+
 macro (add_valkey_server_compiler_options value)
     set(VALKEY_SERVER_CFLAGS "${VALKEY_SERVER_CFLAGS} ${value}")
 endmacro ()
@@ -25,7 +28,7 @@ if (NOT WITH_MALLOC)
         set(WITH_MALLOC "libc")
     elseif (UNIX)
         set(WITH_MALLOC "jemalloc")
-    endif()
+    endif ()
 endif ()
 
 # User may pass different allocator library. Using -DWITH_MALLOC=<libname>, make sure it is a valid value
@@ -84,8 +87,8 @@ endif ()
 if (APPLE)
     add_valkey_server_linker_option("-ldl")
 elseif (UNIX)
-    add_valkey_server_linker_option("-pthread") 
-    add_valkey_server_linker_option("-ldl") 
+    add_valkey_server_linker_option("-pthread")
+    add_valkey_server_linker_option("-ldl")
     add_valkey_server_linker_option("-lm")
 endif ()
 
@@ -242,6 +245,25 @@ set(VALKEY_CLI_SRCS
     ${CMAKE_SOURCE_DIR}/src/mt19937-64.c
     ${CMAKE_SOURCE_DIR}/src/strl.c
     ${CMAKE_SOURCE_DIR}/src/cli_commands.c)
+
+set(VALKEY_BENCHMARK_SRCS
+    ${CMAKE_SOURCE_DIR}/src/ae.c
+    ${CMAKE_SOURCE_DIR}/src/anet.c
+    ${CMAKE_SOURCE_DIR}/src/valkey-benchmark.c
+    ${CMAKE_SOURCE_DIR}/src/adlist.c
+    ${CMAKE_SOURCE_DIR}/src/dict.c
+    ${CMAKE_SOURCE_DIR}/src/zmalloc.c
+    ${CMAKE_SOURCE_DIR}/src/serverassert.c
+    ${CMAKE_SOURCE_DIR}/src/release.c
+    ${CMAKE_SOURCE_DIR}/src/crcspeed.c
+    ${CMAKE_SOURCE_DIR}/src/crccombine.c
+    ${CMAKE_SOURCE_DIR}/src/crc64.c
+    ${CMAKE_SOURCE_DIR}/src/siphash.c
+    ${CMAKE_SOURCE_DIR}/src/crc16.c
+    ${CMAKE_SOURCE_DIR}/src/monotonic.c
+    ${CMAKE_SOURCE_DIR}/src/cli_common.c
+    ${CMAKE_SOURCE_DIR}/src/mt19937-64.c
+    ${CMAKE_SOURCE_DIR}/src/strl.c)
 
 add_custom_target(
     release_header

@@ -298,12 +298,10 @@ macro (valkey_create_symlink source link)
     )")
 endmacro ()
 
-# Helper macro that defines, builds and installs `target`
-# In addition, it creates a symbolic link between the target and `link_name`
+# Helper macro that defines, builds and installs `target` In addition, it creates a symbolic link between the target and
+# `link_name`
 macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
     add_executable(${target} ${sources})
-    target_link_libraries(${target} ${ld_flags} ${libs})
-
     if (USE_TLS)
         # Add required libraries needed for TLS
         target_link_libraries(${target} OpenSSL::SSL hiredis_ssl)
@@ -313,6 +311,9 @@ macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
         # Using jemalloc
         target_link_libraries(${target} jemalloc)
     endif ()
+
+    # Place this line last to ensure that ${ld_flags} is placed last on the linker line
+    target_link_libraries(${target} ${libs} ${ld_flags})
 
     # Install cli tool and create a redis symbolic link
     install(

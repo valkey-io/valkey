@@ -32,9 +32,7 @@ list(APPEND BENCH_LIBS "hdr_histogram")
 valkey_build_and_install_bin(valkey-benchmark "${VALKEY_BENCHMARK_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${BENCH_LIBS}"
                              "redis-benchmark")
 
-# ===---------------------
-# Target: valkey-sentinel
-# ===---------------------
-
-# This is just a symbolic link
+# Targets: valkey-sentinel, valkey-check-aof and valkey-check-rdb are just symbolic links
 valkey_create_symlink("${INSTALL_BIN_PATH}/valkey-server" "${INSTALL_BIN_PATH}/valkey-sentinel")
+valkey_create_symlink("${INSTALL_BIN_PATH}/valkey-server" "${INSTALL_BIN_PATH}/valkey-check-rdb")
+valkey_create_symlink("${INSTALL_BIN_PATH}/valkey-server" "${INSTALL_BIN_PATH}/valkey-check-aof")

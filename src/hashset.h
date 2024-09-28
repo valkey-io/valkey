@@ -114,7 +114,7 @@ typedef void (*hashsetScanFunction)(void *privdata, void *element);
 #define HASHSET_SCAN_SINGLE_STEP (1 << 2)
 
 typedef struct {
-    hashset *t;
+    hashset *hashset;
     long index;
     int table;
     int posInBucket;
@@ -156,7 +156,9 @@ size_t hashsetMemUsage(hashset *t);
 void hashsetPauseAutoShrink(hashset *t);
 void hashsetResumeAutoShrink(hashset *t);
 int hashsetIsRehashing(hashset *t);
+int hashsetIsRehashingPaused(hashset *t);
 void hashsetRehashingInfo(hashset *t, size_t *from_size, size_t *to_size);
+int hashsetRehashMicroseconds(hashset *s, uint64_t us);
 int hashsetExpand(hashset *t, size_t size);
 int hashsetTryExpand(hashset *t, size_t size);
 int hashsetExpandIfNeeded(hashset *t);
@@ -178,7 +180,7 @@ int hashsetTwoPhasePopFind(hashset *t, const void *key, void **found, void **pos
 void hashsetTwoPhasePopDelete(hashset *t, void *position);
 
 /* Iteration & scan */
-size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *privdata, int emit_ref);
+size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *privdata, int flags);
 void hashsetInitIterator(hashsetIterator *iter, hashset *t);
 void hashsetInitSafeIterator(hashsetIterator *iter, hashset *t);
 void hashsetResetIterator(hashsetIterator *iter);

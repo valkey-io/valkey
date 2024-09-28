@@ -836,6 +836,22 @@ void hashsetRehashingInfo(hashset *t, size_t *from_size, size_t *to_size) {
     *to_size = numBuckets(t->bucketExp[1]);
 }
 
+int hashsetRehashMicroseconds(hashset *s, uint64_t us) {
+    if (s->pauseRehash > 0) return 0;
+    if (resize_policy != HASHSET_RESIZE_ALLOW) return 0;
+
+    monotime timer;
+    elapsedStart(&timer);
+    int rehashes = 0;
+
+    while (hashsetIsRehashing(s)) {
+        rehashStep(s);
+        rehashes++;
+        if (rehashes % 128 == 0 && elapsedUs(timer) >= us) break;
+    }
+    return rehashes;
+}
+
 /* Return 1 if expand was performed; 0 otherwise. */
 int hashsetExpand(hashset *t, size_t size) {
     return expand(t, size, NULL);
@@ -1115,8 +1131,9 @@ int hashsetTwoPhasePopFind(hashset *t, const void *key, void **found, void **pos
     }
 }
 
-/* Deletes the element at the opaque representation of its position, and resumes
- * rehashing. */
+/* Clears the position of the element in the hashset and resumes rehashing. The
+ * element destructor is NOT called. The position is an opaque representation of
+ * its position as found using hashsetTwoPhasePopFind(). */
 void hashsetTwoPhasePopDelete(hashset *t, void *position) {
     /* Decode position. */
     size_t bucket_index;
@@ -1126,7 +1143,6 @@ void hashsetTwoPhasePopDelete(hashset *t, void *position) {
     /* Delete the element and resume rehashing. */
     bucket *b = &t->tables[table_index][bucket_index];
     assert(b->presence & (1 << pos_in_bucket));
-    freeElement(t, b->elements[pos_in_bucket]);
     b->presence &= ~(1 << pos_in_bucket);
     t->used[table_index]--;
     hashsetShrinkIfNeeded(t);
@@ -1278,8 +1294,8 @@ size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *priv
  * rehashing which moves elements around and confuses the iterator. Only
  * hashsetNext is allowed. Each element is returned exactly once. Call
  * hashsetResetIterator when you are done. See also hashsetInitSafeIterator. */
-void hashsetInitIterator(hashsetIterator *iter, hashset *t) {
-    iter->t = t;
+void hashsetInitIterator(hashsetIterator *iter, hashset *s) {
+    iter->hashset = s;
     iter->table = 0;
     iter->index = -1;
     iter->safe = 0;
@@ -1313,10 +1329,10 @@ void hashsetInitSafeIterator(hashsetIterator *iter, hashset *t) {
 void hashsetResetIterator(hashsetIterator *iter) {
     if (!(iter->index == -1 && iter->table == 0)) {
         if (iter->safe) {
-            hashsetResumeRehashing(iter->t);
-            assert(iter->t->pauseRehash >= 0);
+            hashsetResumeRehashing(iter->hashset);
+            assert(iter->hashset->pauseRehash >= 0);
         } else {
-            assert(iter->fingerprint == hashsetFingerprint(iter->t));
+            assert(iter->fingerprint == hashsetFingerprint(iter->hashset));
         }
     }
 }
@@ -1349,14 +1365,14 @@ int hashsetNext(hashsetIterator *iter, void **elemptr) {
         if (iter->index == -1 && iter->table == 0) {
             /* It's the first call to next. */
             if (iter->safe) {
-                hashsetPauseRehashing(iter->t);
+                hashsetPauseRehashing(iter->hashset);
             } else {
-                iter->fingerprint = hashsetFingerprint(iter->t);
+                iter->fingerprint = hashsetFingerprint(iter->hashset);
             }
             iter->index = 0;
             /* skip the rehashed slots in table[0] */
-            if (hashsetIsRehashing(iter->t)) {
-                iter->index = iter->t->rehashIdx;
+            if (hashsetIsRehashing(iter->hashset)) {
+                iter->index = iter->hashset->rehashIdx;
             }
             iter->posInBucket = 0;
         } else {
@@ -1365,9 +1381,9 @@ int hashsetNext(hashsetIterator *iter, void **elemptr) {
             if (iter->posInBucket >= ELEMENTS_PER_BUCKET) {
                 iter->posInBucket = 0;
                 iter->index++;
-                if (iter->index >= (long)numBuckets(iter->t->bucketExp[iter->table])) {
+                if (iter->index >= (long)numBuckets(iter->hashset->bucketExp[iter->table])) {
                     iter->index = 0;
-                    if (hashsetIsRehashing(iter->t) && iter->table == 0) {
+                    if (hashsetIsRehashing(iter->hashset) && iter->table == 0) {
                         iter->table++;
                     } else {
                         /* Done. */
@@ -1376,7 +1392,7 @@ int hashsetNext(hashsetIterator *iter, void **elemptr) {
                 }
             }
         }
-        bucket *b = &iter->t->tables[iter->table][iter->index];
+        bucket *b = &iter->hashset->tables[iter->table][iter->index];
         if (!(b->presence & (1 << iter->posInBucket))) {
             /* No element here. Skip. */
             continue;

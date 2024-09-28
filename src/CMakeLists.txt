@@ -31,3 +31,10 @@ list(APPEND BENCH_LIBS "hiredis")
 list(APPEND BENCH_LIBS "hdr_histogram")
 valkey_build_and_install_bin(valkey-benchmark "${VALKEY_BENCHMARK_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${BENCH_LIBS}"
                              "redis-benchmark")
+
+# ===---------------------
+# Target: valkey-sentinel
+# ===---------------------
+
+# This is just a symbolic link
+valkey_create_symlink("${INSTALL_BIN_PATH}/valkey-server" "${INSTALL_BIN_PATH}/valkey-sentinel")

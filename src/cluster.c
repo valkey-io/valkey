@@ -108,7 +108,7 @@ ConnectionType *connTypeOfCluster(void) {
     return connectionTypeTcp();
 }
 
-/* delete unowned keys from database at server start up after loading persistence files. */
+/* Delete unowned keys from database at server start up after loading persistence files. */
 void delUnownedKeys(void) {
     if (!server.cluster_enabled) {
         return;

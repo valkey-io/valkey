@@ -34,7 +34,12 @@ start_server {tags {"modules"}} {
         }
     }
 
-    test "Unload the module - test" {
+    test "Busy module name" {
+        assert_error {ERR Error loading the extension. Please check the server logs.} {r module load $testmodule}
+        verify_log_message 0 "*Module name is busy*" 0
+    }
+
+    test "Unload the module - basics" {
         assert_equal {OK} [r module unload test]
     }
 }

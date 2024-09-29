@@ -3284,8 +3284,6 @@ void dualChannelSetupMainConnForPsync(connection *conn) {
     char *err = NULL;
     int ret;
 
- REPL_STATE_RECEIVE_PING_REPLY && server.repl_state <= REPL_STATE_RECEIVE_PSYNC_REPLY;
-
     switch (server.repl_state) {
     case REPL_STATE_SEND_HANDSHAKE:
         ret = dualChannelReplMainConnSendHandshake(conn, &err);
@@ -3306,7 +3304,8 @@ void dualChannelSetupMainConnForPsync(connection *conn) {
         break;
     case REPL_STATE_RECEIVE_PSYNC_REPLY:
         ret = dualChannelReplMainConnRecvPsyncReply(conn, &err);
-        if (ret == C_OK && server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) server.repl_state = REPL_STATE_TRANSFER;
+        if (ret == C_OK && server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE)
+            server.repl_state = REPL_STATE_TRANSFER;
         /*  In case the RDB is already loaded, the repl_state will be set during establishPrimaryConnection. */
         break;
     default:

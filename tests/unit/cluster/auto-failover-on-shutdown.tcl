@@ -18,7 +18,7 @@ proc test_main {how} {
         # Pause a replica so it has no chance to catch up with the offset.
         pause_process $replica1_pid
 
-        # Primary write some data to increse the offset.
+        # Primary write some data to increase the offset.
         for {set i 0} {$i < 10} {incr i} {
             $primary incr key_991803
         }

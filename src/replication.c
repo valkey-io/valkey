@@ -2738,8 +2738,10 @@ static void fullSyncWithPrimary(connection *conn) {
 
 error:
     sdsfree(err);
-    connClose(conn);
-    server.repl_transfer_s = NULL;
+    if (server.repl_transfer_s) {
+        connClose(server.repl_transfer_s);
+        server.repl_transfer_s = NULL;
+    }
     if (server.repl_rdb_transfer_s) {
         connClose(server.repl_rdb_transfer_s);
         server.repl_rdb_transfer_s = NULL;

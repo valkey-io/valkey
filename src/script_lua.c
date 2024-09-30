@@ -361,7 +361,7 @@ static void redisProtocolToLuaType_Map(struct ReplyParser *parser, void *ctx, si
         }
         lua_newtable(lua);
         lua_pushstring(lua, "map");
-        lua_newtable(lua);
+        lua_createtable(lua, 0, len);
     }
     for (size_t j = 0; j < len; j++) {
         parseReply(parser, lua);
@@ -383,7 +383,7 @@ static void redisProtocolToLuaType_Set(struct ReplyParser *parser, void *ctx, si
         }
         lua_newtable(lua);
         lua_pushstring(lua, "set");
-        lua_newtable(lua);
+        lua_createtable(lua, 0, len);
     }
     for (size_t j = 0; j < len; j++) {
         parseReply(parser, lua);
@@ -412,7 +412,7 @@ static void redisProtocolToLuaType_Array(struct ReplyParser *parser, void *ctx, 
              * to push elements to the stack. On failure, exit with panic. */
             serverPanic("lua stack limit reach when parsing server.call reply");
         }
-        lua_newtable(lua);
+        lua_createtable(lua, len, 0);
     }
     for (size_t j = 0; j < len; j++) {
         if (lua) lua_pushnumber(lua, j + 1);
@@ -1534,7 +1534,7 @@ void luaRegisterServerAPI(lua_State *lua) {
 static void luaCreateArray(lua_State *lua, robj **elev, int elec) {
     int j;
 
-    lua_newtable(lua);
+    lua_createtable(lua, elec, 0);
     for (j = 0; j < elec; j++) {
         lua_pushlstring(lua, (char *)elev[j]->ptr, sdslen(elev[j]->ptr));
         lua_rawseti(lua, -2, j + 1);

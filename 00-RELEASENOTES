@@ -12,6 +12,20 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
+Valkey 7.2.7  -  Released Tue 01 Oct 2024
+================================================================================
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you
+apply as soon as possible.
+
+Bug fixes
+=========
+* Prevented AOF from being incorrectly disabled after loading RDB data, ensuring
+  proper re-enabling of AOF. (#1001)
+* Resolved issues in replicationSetPrimary where the primary node's IP/port
+  updates were not correctly handled in the cluster gossip section. (#965)
+
+================================================================================
 Valkey 7.2.6 GA  -  Released Tue 30 July 2024
 ================================================================================
 

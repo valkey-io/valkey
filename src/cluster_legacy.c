@@ -3506,10 +3506,14 @@ int clusterProcessPacket(clusterLink *link) {
          * a non zero number of slots, and its currentEpoch is greater or
          * equal to epoch where this node started the election. */
         if (clusterNodeIsVotingPrimary(sender) && sender_claimed_current_epoch >= server.cluster->failover_auth_epoch) {
-            server.cluster->failover_auth_count++;
-            /* Maybe we reached a quorum here, set a flag to make sure
-             * we check ASAP. */
-            clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
+            /* todo: see if this needed. */
+            /* My primary has already voted for me, so don't count it anymore. */
+            if (!(sender == myself->replicaof && server.cluster->mf_is_primary_failover)) {
+                server.cluster->failover_auth_count++;
+                /* Maybe we reached a quorum here, set a flag to make sure
+                 * we check ASAP. */
+                clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
+            }
         }
     } else if (type == CLUSTERMSG_TYPE_MFSTART) {
         /* This message is acceptable only if I'm a primary and the sender
@@ -4592,6 +4596,11 @@ void clusterHandleReplicaFailover(void) {
         if (server.cluster->mf_end) {
             server.cluster->failover_auth_time = mstime();
             server.cluster->failover_auth_rank = 0;
+            /* todo: see if this is needed. */
+            /* This is a failover triggered by my primary, let's counts its vote. */
+            if (server.cluster->mf_is_primary_failover) {
+                server.cluster->failover_auth_count++;
+            }
             clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
         }
         serverLog(LL_NOTICE,
@@ -4816,6 +4825,7 @@ void resetManualFailover(void) {
     }
     server.cluster->mf_end = 0; /* No manual failover in progress. */
     server.cluster->mf_can_start = 0;
+    server.cluster->mf_is_primary_failover = 0;
     server.cluster->mf_replica = NULL;
     server.cluster->mf_primary_offset = -1;
 }
@@ -4844,6 +4854,7 @@ void clusterHandleManualFailover(void) {
         /* Our replication offset matches the primary replication offset
          * announced after clients were paused. We can start the failover. */
         server.cluster->mf_can_start = 1;
+        server.cluster->mf_is_primary_failover = 0;
         serverLog(LL_NOTICE, "All primary replication stream processed, "
                              "manual failover can start.");
         clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
@@ -6730,8 +6741,13 @@ int clusterCommandSpecial(client *c) {
             /* If this is a forced failover, we don't need to talk with our
              * primary to agree about the offset. We just failover taking over
              * it without coordination. */
-            serverLog(LL_NOTICE, "Forced failover user request accepted (user request from '%s').", client);
+            if (c == server.primary) {
+                serverLog(LL_NOTICE, "Forced failover primary request accepted (primary request from '%s').", client);
+            } else {
+                serverLog(LL_NOTICE, "Forced failover user request accepted (user request from '%s').", client);
+            }
             server.cluster->mf_can_start = 1;
+            server.cluster->mf_is_primary_failover = 1;
             /* We can start a manual failover as soon as possible, setting a flag
              * here so that we don't need to waiting for the cron to kick in. */
             clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_MANUALFAILOVER);

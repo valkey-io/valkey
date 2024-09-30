@@ -4306,6 +4306,7 @@ int finishShutdown(void) {
     int force = server.shutdown_flags & SHUTDOWN_FORCE;
 
     /* Log a warning for each replica that is lagging. */
+    client *best_replica = NULL;
     listIter replicas_iter;
     listNode *replicas_list_node;
     int num_replicas = 0, num_lagging_replicas = 0;
@@ -4319,6 +4320,14 @@ int finishShutdown(void) {
             serverLog(LL_NOTICE, "Lagging replica %s reported offset %lld behind master, lag=%ld, state=%s.",
                       replicationGetReplicaName(replica), server.primary_repl_offset - replica->repl_ack_off, lag,
                       replstateToString(replica->repl_state));
+        }
+        /* Find the best replica, that is, the replica with the largest offset. */
+        if (replica->repl_state == REPLICA_STATE_ONLINE) {
+            if (best_replica == NULL) {
+                best_replica = replica;
+            } else if (replica->repl_ack_off > best_replica->repl_ack_off) {
+                best_replica = replica;
+            }
         }
     }
     if (num_replicas > 0) {
@@ -4418,6 +4427,21 @@ int finishShutdown(void) {
     /* Best effort flush of replica output buffers, so that we hopefully
      * send them pending writes. */
     flushReplicasOutputBuffers();
+
+    if (server.auto_failover_on_shutdown && server.cluster_enabled && best_replica) {
+        /* Sending a CLUSTER FAILOVER FORCE to the best replica. */
+        const char *buf = "*3\r\n$7\r\nCLUSTER\r\n$8\r\nFAILOVER\r\n$5\r\nFORCE\r\n";
+        if (connWrite(best_replica->conn, buf, strlen(buf)) == (int)strlen(buf)) {
+            serverLog(LL_NOTICE, "Sending CLUSTER FAILOVER FORCE to replica %s succeeded.",
+                      replicationGetReplicaName(best_replica));
+        } else {
+            serverLog(LL_WARNING, "Failed to send CLUSTER FAILOVER FORCE to replica: %s", strerror(errno));
+        }
+    }
+
+    if (server.auto_failover_on_shutdown && server.cluster_enabled && !best_replica) {
+        serverLog(LL_WARNING, "Unable to find a replica to perform an auto failover on shutdown.");
+    }
 
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);

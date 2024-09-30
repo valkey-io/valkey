@@ -10,6 +10,23 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
+Valkey 8.0.1  -  Released Tue 1 Oct 2024
+================================================================================
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you
+apply as soon as possible.
+
+Bug fixes
+=========
+* Fix a build issue with RDMA when using additional make parameters. (#1074)
+* Fix an issue where `CLUSTER SLOTS` might return the wrong tcp or tls port when called
+  from inside a script or from a module. (#1072)
+* Fix a crash when `CLUSTER SLOTS` or `CLUSTER SHARDS` is called from inside
+  a script or from a module. (#1063)
+* Fix a build issue on systems where `<threads.h>` is unavailable. (#1053)
+* Fix an issue with the default `sentinel.conf` being invalid. (#1040)
+
+================================================================================
 Valkey 8.0.0 GA  -  Released Sun 15 Sep 2024
 ================================================================================
 Upgrade urgency LOW: This is the first release of Valkey 8.0, which

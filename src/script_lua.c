@@ -135,8 +135,8 @@ static char *deny_list[] = {
     NULL,
 };
 
-static int server_math_random (lua_State *L);
-static int server_math_randomseed (lua_State *L);
+static int server_math_random(lua_State *L);
+static int server_math_randomseed(lua_State *L);
 static void redisProtocolToLuaType_Int(void *ctx, long long val, const char *proto, size_t proto_len);
 static void
 redisProtocolToLuaType_BulkString(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len);
@@ -160,7 +160,7 @@ static void redisProtocolToLuaType_VerbatimString(void *ctx,
                                                   size_t proto_len);
 static void redisProtocolToLuaType_Attribute(struct ReplyParser *parser, void *ctx, size_t len, const char *proto);
 
-static void luaReplyToServerReply(client *c, client* script_client, lua_State *lua);
+static void luaReplyToServerReply(client *c, client *script_client, lua_State *lua);
 
 /*
  * Save the give pointer on Lua registry, used to save the Lua context and
@@ -611,8 +611,8 @@ int luaError(lua_State *lua) {
 
 /* Reply to client 'c' converting the top element in the Lua stack to a
  * server reply. As a side effect the element is consumed from the stack.  */
-static void luaReplyToServerReply(client *c, client* script_client, lua_State *lua) {
-    int t = lua_type(lua,-1);
+static void luaReplyToServerReply(client *c, client *script_client, lua_State *lua) {
+    int t = lua_type(lua, -1);
 
     if (!lua_checkstack(lua, 4)) {
         /* Increase the Lua stack if needed to make sure there is enough room
@@ -734,7 +734,7 @@ static void luaReplyToServerReply(client *c, client* script_client, lua_State *l
             lua_pushnil(lua); /* Use nil to start iteration. */
             while (lua_next(lua, -2)) {
                 /* Stack now: table, key, value */
-                lua_pushvalue(lua, -2);        /* Dup key before consuming. */
+                lua_pushvalue(lua, -2);                       /* Dup key before consuming. */
                 luaReplyToServerReply(c, script_client, lua); /* Return key. */
                 luaReplyToServerReply(c, script_client, lua); /* Return value. */
                 /* Stack now: table, key. */
@@ -757,8 +757,8 @@ static void luaReplyToServerReply(client *c, client* script_client, lua_State *l
             lua_pushnil(lua); /* Use nil to start iteration. */
             while (lua_next(lua, -2)) {
                 /* Stack now: table, key, true */
-                lua_pop(lua,1);                               /* Discard the boolean value. */
-                lua_pushvalue(lua,-1);                        /* Dup key before consuming. */
+                lua_pop(lua, 1);                              /* Discard the boolean value. */
+                lua_pushvalue(lua, -1);                       /* Dup key before consuming. */
                 luaReplyToServerReply(c, script_client, lua); /* Return key. */
                 /* Stack now: table, key. */
                 setlen++;
@@ -1411,7 +1411,7 @@ void luaRegisterVersion(lua_State *lua) {
     lua_settable(lua, -3);
 }
 
-void luaRegisterLogFunction(lua_State* lua) {
+void luaRegisterLogFunction(lua_State *lua) {
     /* server.log and log levels. */
     lua_pushstring(lua, "log");
     lua_pushcfunction(lua, luaLogCommand);
@@ -1435,11 +1435,11 @@ void luaRegisterLogFunction(lua_State* lua) {
 }
 
 /*
- * Adds server.* functions/fields to lua such as server.call etc.  
- * This function only handles fields common between Functions and LUA scripting.  
- * scriptingInit() and functionsInit() may add additional fields specific to each.    
+ * Adds server.* functions/fields to lua such as server.call etc.
+ * This function only handles fields common between Functions and LUA scripting.
+ * scriptingInit() and functionsInit() may add additional fields specific to each.
  */
-void luaRegisterServerAPI(lua_State* lua) {
+void luaRegisterServerAPI(lua_State *lua) {
     /* In addition to registering server.call/pcall API, we will throw a customer message when a script accesses
      * undefined global variable. LUA stores global variables in the global table, accessible to us on stack at virtual
      * index = LUA_GLOBALSINDEX. We will set __index handler in global table's metatable to a custom C function to
@@ -1456,7 +1456,7 @@ void luaRegisterServerAPI(lua_State* lua) {
     luaLoadLibraries(lua);
 
     /* Before Redis OSS 7, Lua used to return error messages as strings from pcall function. With Valkey (or Redis OSS 7), Lua now returns
-     * error messages as tables. To keep backwards compatibility, we wrap the Lua pcall function with our own 
+     * error messages as tables. To keep backwards compatibility, we wrap the Lua pcall function with our own
      * implementation of C function that converts table to string. */
     lua_pushcfunction(lua, luaRedisPcall);
     lua_setglobal(lua, "pcall");
@@ -1479,9 +1479,9 @@ void luaRegisterServerAPI(lua_State* lua) {
 
     /* Add server.setresp function to allow LUA scripts to change the RESP version for server.call and server.pcall
      * invocations. */
-    lua_pushstring(lua,"setresp");
-    lua_pushcfunction(lua,luaSetResp);
-    lua_settable(lua,-3);
+    lua_pushstring(lua, "setresp");
+    lua_pushcfunction(lua, luaSetResp);
+    lua_settable(lua, -3);
 
     /* Add server.sha1hex function.  */
     lua_pushstring(lua, "sha1hex");
@@ -1534,17 +1534,17 @@ void luaRegisterServerAPI(lua_State* lua) {
      * This is not a deep copy but is enough for our purpose here. */
     lua_getglobal(lua, SERVER_API_NAME);
     lua_setglobal(lua, REDIS_API_NAME);
-    
+
     /* Replace math.random and math.randomseed with custom implementations. */
-    lua_getglobal(lua,"math");
-    lua_pushstring(lua,"random");
-    lua_pushcfunction(lua,server_math_random);
-    lua_settable(lua,-3);
+    lua_getglobal(lua, "math");
+    lua_pushstring(lua, "random");
+    lua_pushcfunction(lua, server_math_random);
+    lua_settable(lua, -3);
     lua_pushstring(lua, "randomseed");
     lua_pushcfunction(lua, server_math_randomseed);
-    lua_settable(lua,-3);
+    lua_settable(lua, -3);
     /* overwrite value of global variable 'math' with this modified math table present on top of stack. */
-    lua_setglobal(lua,"math");
+    lua_setglobal(lua, "math");
 }
 
 /* Set an array of String Objects as a Lua array (table) stored into a
@@ -1570,14 +1570,14 @@ static void luaCreateArray(lua_State *lua, robj **elev, int elec) {
 /* The following implementation is the one shipped with Lua itself but with
  * rand() replaced by serverLrand48(). */
 static int server_math_random(lua_State *L) {
-  /* the `%' avoids the (rare) case of r==1, and is needed also because on
-     some systems (SunOS!) `rand()' may return a value larger than RAND_MAX */
-  lua_Number r = (lua_Number)(serverLrand48()%SERVER_LRAND48_MAX) /
-                                (lua_Number)SERVER_LRAND48_MAX;
-  switch (lua_gettop(L)) {  /* check number of arguments */
-    case 0: {  /* no arguments */
-      lua_pushnumber(L, r);  /* Number between 0 and 1 */
-      break;
+    /* the `%' avoids the (rare) case of r==1, and is needed also because on
+       some systems (SunOS!) `rand()' may return a value larger than RAND_MAX */
+    lua_Number r = (lua_Number)(serverLrand48() % SERVER_LRAND48_MAX) /
+                   (lua_Number)SERVER_LRAND48_MAX;
+    switch (lua_gettop(L)) {  /* check number of arguments */
+    case 0: {                 /* no arguments */
+        lua_pushnumber(L, r); /* Number between 0 and 1 */
+        break;
     }
     case 1: { /* only upper limit */
         int u = luaL_checkint(L, 1);

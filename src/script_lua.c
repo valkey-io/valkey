@@ -866,7 +866,7 @@ static robj **luaArgsToServerArgv(lua_State *lua, int *argc, int *argv_len) {
      * integers as well). */
     if (j != *argc) {
         freeLuaServerArgv(lua_argv, j, lua_argv_size);
-        luaPushError(lua, "Lua redis lib command arguments must be strings or integers");
+        luaPushError(lua, "Command arguments must be strings or integers");
         return NULL;
     }
 

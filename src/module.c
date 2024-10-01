@@ -12204,7 +12204,7 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
         } else {
             /* If there is no ctx.module, this means that our ValkeyModule_Init call failed,
              * and currently init will only fail on busy name. */
-            serverLog(LL_WARNING, "Module %s initialization failed. Module name is busy", path);
+            serverLog(LL_WARNING, "Module %s initialization failed. Module name is busy.", path);
         }
         moduleFreeContext(&ctx);
         dlclose(handle);

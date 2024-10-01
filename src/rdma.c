@@ -672,7 +672,7 @@ static void connRdmaEventHandler(struct aeEventLoop *el, int fd, void *clientDat
     }
 }
 
-static int rdmaKeepaliveTimeProc(struct aeEventLoop *el, long long id, void *clientData) {
+static long long rdmaKeepaliveTimeProc(struct aeEventLoop *el, long long id, void *clientData) {
     struct rdma_cm_id *cm_id = clientData;
     RdmaContext *ctx = cm_id->context;
     connection *conn = ctx->conn;
@@ -1501,6 +1501,26 @@ end:
     return ret;
 }
 
+static int connRdmaIsLocal(connection *conn) {
+    rdma_connection *rdma_conn = (rdma_connection *)conn;
+    struct sockaddr *laddr = rdma_get_local_addr(rdma_conn->cm_id);
+    struct sockaddr *raddr = rdma_get_peer_addr(rdma_conn->cm_id);
+    struct sockaddr_in *lsa4, *rsa4;
+    struct sockaddr_in6 *lsa6, *rsa6;
+
+    if (laddr->sa_family == AF_INET) {
+        lsa4 = (struct sockaddr_in *)laddr;
+        rsa4 = (struct sockaddr_in *)raddr;
+        return !memcmp(&lsa4->sin_addr, &rsa4->sin_addr, sizeof(lsa4->sin_addr));
+    } else if (laddr->sa_family == AF_INET6) {
+        lsa6 = (struct sockaddr_in6 *)laddr;
+        rsa6 = (struct sockaddr_in6 *)raddr;
+        return !memcmp(&lsa6->sin6_addr, &rsa6->sin6_addr, sizeof(lsa6->sin6_addr));
+    }
+
+    return -1;
+}
+
 int connRdmaListen(connListener *listener) {
     int j, ret;
     char **bindaddr = listener->bindaddr;
@@ -1673,6 +1693,7 @@ static ConnectionType CT_RDMA = {
     .ae_handler = connRdmaEventHandler,
     .accept_handler = connRdmaAcceptHandler,
     //.cluster_accept_handler = NULL,
+    .is_local = connRdmaIsLocal,
     .listen = connRdmaListen,
     .addr = connRdmaAddr,
 

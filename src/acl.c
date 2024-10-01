@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2018, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -2678,7 +2678,7 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
     /* if we have a real client from the network, use it (could be missing on module timers) */
     client *realclient = server.current_client ? server.current_client : c;
 
-    le->cinfo = catClientInfoString(sdsempty(), realclient);
+    le->cinfo = catClientInfoString(sdsempty(), realclient, 0);
     le->context = context;
 
     /* Try to match this entry with past ones, to see if we can just
@@ -3117,37 +3117,35 @@ void aclCommand(client *c) {
 
         addReply(c, shared.ok);
     } else if (c->argc == 2 && !strcasecmp(sub, "help")) {
-        /* clang-format off */
         const char *help[] = {
-"CAT [<category>]",
-"    List all commands that belong to <category>, or all command categories",
-"    when no category is specified.",
-"DELUSER <username> [<username> ...]",
-"    Delete a list of users.",
-"DRYRUN <username> <command> [<arg> ...]",
-"    Returns whether the user can execute the given command without executing the command.",
-"GETUSER <username>",
-"    Get the user's details.",
-"GENPASS [<bits>]",
-"    Generate a secure 256-bit user password. The optional `bits` argument can",
-"    be used to specify a different size.",
-"LIST",
-"    Show users details in config file format.",
-"LOAD",
-"    Reload users from the ACL file.",
-"LOG [<count> | RESET]",
-"    Show the ACL log entries.",
-"SAVE",
-"    Save the current config to the ACL file.",
-"SETUSER <username> <attribute> [<attribute> ...]",
-"    Create or modify a user with the specified attributes.",
-"USERS",
-"    List all the registered usernames.",
-"WHOAMI",
-"    Return the current connection username.",
-NULL
+            "CAT [<category>]",
+            "    List all commands that belong to <category>, or all command categories",
+            "    when no category is specified.",
+            "DELUSER <username> [<username> ...]",
+            "    Delete a list of users.",
+            "DRYRUN <username> <command> [<arg> ...]",
+            "    Returns whether the user can execute the given command without executing the command.",
+            "GETUSER <username>",
+            "    Get the user's details.",
+            "GENPASS [<bits>]",
+            "    Generate a secure 256-bit user password. The optional `bits` argument can",
+            "    be used to specify a different size.",
+            "LIST",
+            "    Show users details in config file format.",
+            "LOAD",
+            "    Reload users from the ACL file.",
+            "LOG [<count> | RESET]",
+            "    Show the ACL log entries.",
+            "SAVE",
+            "    Save the current config to the ACL file.",
+            "SETUSER <username> <attribute> [<attribute> ...]",
+            "    Create or modify a user with the specified attributes.",
+            "USERS",
+            "    List all the registered usernames.",
+            "WHOAMI",
+            "    Return the current connection username.",
+            NULL,
         };
-        /* clang-format on */
         addReplyHelp(c, help);
     } else {
         addReplySubcommandSyntaxError(c);

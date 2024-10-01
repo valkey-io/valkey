@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2013, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
 #include "server.h"
 
 /* This file implements keyspace events notification via Pub/Sub and
- * described at https://redis.io/topics/notifications. */
+ * described at https://valkey.io/topics/notifications */
 
 /* Turn a string representing notification classes into an integer
  * representing notification classes flags xored.

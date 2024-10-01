@@ -27,6 +27,9 @@ start_server {} {
     # Make sure replica3 is synchronized with master
     $replica3 replicaof $master_host $master_port
     wait_for_sync $replica3
+    if {$dualchannel == "yes"} {
+        wait_for_ofs_sync $master $replica3
+    }
 
     # Generating RDB will take some 100 seconds
     $master config set rdb-key-save-delay 1000000
@@ -129,8 +132,9 @@ start_server {} {
     # with master.
     $master config set repl-timeout 1000
     $replica1 config set repl-timeout 1000
+    $replica1 config set client-output-buffer-limit "replica 1024 0 0"
     $replica2 config set repl-timeout 1000
-    $replica2 config set client-output-buffer-limit "replica 0 0 0"
+    $replica2 config set client-output-buffer-limit "replica 1024 0 0"
     $replica2 config set dual-channel-replication-enabled $dualchannel
 
     $replica1 replicaof $master_host $master_port

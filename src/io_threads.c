@@ -1,3 +1,9 @@
+/*
+ * Copyright Valkey Contributors.
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ */
+
 #include "io_threads.h"
 
 static __thread int thread_id = 0; /* Thread local var */
@@ -164,9 +170,9 @@ void waitForClientIO(client *c) {
 void adjustIOThreadsByEventLoad(int numevents, int increase_only) {
     if (server.io_threads_num == 1) return; /* All I/O is being done by the main thread. */
     debugServerAssertWithInfo(NULL, NULL, server.io_threads_num > 1);
-
-    int target_threads =
-        server.events_per_io_thread == 0 ? server.io_threads_num : numevents / server.events_per_io_thread;
+    /* When events_per_io_thread is set to 0, we offload all events to the IO threads.
+     * This is used mainly for testing purposes. */
+    int target_threads = server.events_per_io_thread == 0 ? (numevents + 1) : numevents / server.events_per_io_thread;
 
     target_threads = max(1, min(target_threads, server.io_threads_num));
 
@@ -302,6 +308,8 @@ void initIOThreads(void) {
     if (server.io_threads_num == 1) return;
 
     serverAssert(server.io_threads_num <= IO_THREADS_MAX_NUM);
+
+    prefetchCommandsBatchInit();
 
     /* Spawn and initialize the I/O threads. */
     for (int i = 1; i < server.io_threads_num; i++) {

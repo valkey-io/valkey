@@ -1,6 +1,6 @@
 /* blocked.c - generic support for blocking operations like BLPOP & WAIT.
  *
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -64,6 +64,7 @@
 #include "slowlog.h"
 #include "latency.h"
 #include "monotonic.h"
+#include "cluster_slot_stats.h"
 
 /* forward declarations */
 static void unblockClientWaitingData(client *c);
@@ -75,10 +76,13 @@ static void releaseBlockedEntry(client *c, dictEntry *de, int remove_key);
 void initClientBlockingState(client *c) {
     c->bstate.btype = BLOCKED_NONE;
     c->bstate.timeout = 0;
+    c->bstate.unblock_on_nokey = 0;
     c->bstate.keys = dictCreate(&objectKeyHeapPointerValueDictType);
     c->bstate.numreplicas = 0;
+    c->bstate.numlocal = 0;
     c->bstate.reploffset = 0;
-    c->bstate.unblock_on_nokey = 0;
+    c->bstate.generic_blocked_list_node = NULL;
+    c->bstate.module_blocked_handle = NULL;
     c->bstate.async_rm_call_handle = NULL;
 }
 
@@ -101,10 +105,11 @@ void blockClient(client *c, int btype) {
  * he will attempt to reprocess the command which will update the statistics.
  * However in case the client was timed out or in case of module blocked client is being unblocked
  * the command will not be reprocessed and we need to make stats update.
- * This function will make updates to the commandstats, slowlog and monitors.*/
+ * This function will make updates to the commandstats, slot-stats, slowlog and monitors.*/
 void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int had_errors) {
     const ustime_t total_cmd_duration = c->duration + blocked_us + reply_us;
     c->lastcmd->microseconds += total_cmd_duration;
+    clusterSlotStatsAddCpuDuration(c, total_cmd_duration);
     c->lastcmd->calls++;
     c->commands_processed++;
     server.stat_numcommands++;
@@ -189,8 +194,9 @@ void unblockClient(client *c, int queue_for_reprocessing) {
         if (moduleClientIsBlockedOnKeys(c)) unblockClientWaitingData(c);
         unblockClientFromModule(c);
     } else if (c->bstate.btype == BLOCKED_POSTPONE) {
-        listDelNode(server.postponed_clients, c->postponed_list_node);
-        c->postponed_list_node = NULL;
+        serverAssert(c->bstate.postponed_list_node);
+        listDelNode(server.postponed_clients, c->bstate.postponed_list_node);
+        c->bstate.postponed_list_node = NULL;
     } else if (c->bstate.btype == BLOCKED_SHUTDOWN) {
         /* No special cleanup. */
     } else {
@@ -593,6 +599,11 @@ void blockClientForReplicaAck(client *c, mstime_t timeout, long long offset, lon
     c->bstate.numreplicas = numreplicas;
     c->bstate.numlocal = numlocal;
     listAddNodeHead(server.clients_waiting_acks, c);
+    /* Note that we remember the linked list node where the client is stored,
+     * this way removing the client in unblockClientWaitingReplicas() will not
+     * require a linear scan, but just a constant time operation. */
+    serverAssert(c->bstate.client_waiting_acks_list_node == NULL);
+    c->bstate.client_waiting_acks_list_node = listFirst(server.clients_waiting_acks);
     blockClient(c, BLOCKED_WAIT);
 }
 
@@ -603,7 +614,8 @@ void blockPostponeClient(client *c) {
     c->bstate.timeout = 0;
     blockClient(c, BLOCKED_POSTPONE);
     listAddNodeTail(server.postponed_clients, c);
-    c->postponed_list_node = listLast(server.postponed_clients);
+    serverAssert(c->bstate.postponed_list_node == NULL);
+    c->bstate.postponed_list_node = listLast(server.postponed_clients);
     /* Mark this client to execute its command */
     c->flag.pending_command = 1;
 }

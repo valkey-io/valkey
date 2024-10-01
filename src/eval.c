@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -42,6 +42,7 @@
 #include "monotonic.h"
 #include "resp_parser.h"
 #include "script_lua.h"
+#include "sds.h"
 
 #include <lua.h>
 #include <lauxlib.h>
@@ -259,6 +260,7 @@ void scriptingInit(int setup) {
     if (lctx.lua_client == NULL) {
         lctx.lua_client = createClient(NULL);
         lctx.lua_client->flag.script = 1;
+        lctx.lua_client->flag.fake = 1;
 
         /* We do not want to allow blocking commands inside Lua */
         lctx.lua_client->flag.deny_blocking = 1;
@@ -490,7 +492,7 @@ sds luaCreateFunction(client *c, robj *body, int evalsha) {
     l->node = luaScriptsLRUAdd(c, sha, evalsha);
     int retval = dictAdd(lctx.lua_scripts, sha, l);
     serverAssertWithInfo(c ? c : lctx.lua_client, NULL, retval == DICT_OK);
-    lctx.lua_scripts_mem += sdsZmallocSize(sha) + getStringObjectSdsUsedMemory(body);
+    lctx.lua_scripts_mem += sdsAllocSize(sha) + getStringObjectSdsUsedMemory(body);
     incrRefCount(body);
     return sha;
 }
@@ -516,7 +518,7 @@ void luaDeleteFunction(client *c, sds sha) {
     /* We only delete `EVAL` scripts, which must exist in the LRU list. */
     serverAssert(l->node);
     listDelNode(lctx.lua_scripts_lru_list, l->node);
-    lctx.lua_scripts_mem -= sdsZmallocSize(sha) + getStringObjectSdsUsedMemory(l->body);
+    lctx.lua_scripts_mem -= sdsAllocSize(sha) + getStringObjectSdsUsedMemory(l->body);
     dictFreeUnlinkedEntry(lctx.lua_scripts, de);
 }
 
@@ -666,27 +668,25 @@ void evalShaRoCommand(client *c) {
 
 void scriptCommand(client *c) {
     if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
-        /* clang-format off */
         const char *help[] = {
-"DEBUG (YES|SYNC|NO)",
-"    Set the debug mode for subsequent scripts executed.",
-"EXISTS <sha1> [<sha1> ...]",
-"    Return information about the existence of the scripts in the script cache.",
-"FLUSH [ASYNC|SYNC]",
-"    Flush the Lua scripts cache. Very dangerous on replicas.",
-"    When called without the optional mode argument, the behavior is determined",
-"     by the lazyfree-lazy-user-flush configuration directive. Valid modes are:",
-"    * ASYNC: Asynchronously flush the scripts cache.",
-"    * SYNC: Synchronously flush the scripts cache.",
-"KILL",
-"    Kill the currently executing Lua script.",
-"LOAD <script>",
-"    Load a script into the scripts cache without executing it.",
-"SHOW <sha1>",
-"    Show a script from the scripts cache.",
-NULL
+            "DEBUG (YES|SYNC|NO)",
+            "    Set the debug mode for subsequent scripts executed.",
+            "EXISTS <sha1> [<sha1> ...]",
+            "    Return information about the existence of the scripts in the script cache.",
+            "FLUSH [ASYNC|SYNC]",
+            "    Flush the Lua scripts cache. Very dangerous on replicas.",
+            "    When called without the optional mode argument, the behavior is determined",
+            "     by the lazyfree-lazy-user-flush configuration directive. Valid modes are:",
+            "    * ASYNC: Asynchronously flush the scripts cache.",
+            "    * SYNC: Synchronously flush the scripts cache.",
+            "KILL",
+            "    Kill the currently executing Lua script.",
+            "LOAD <script>",
+            "    Load a script into the scripts cache without executing it.",
+            "SHOW <sha1>",
+            "    Show a script from the scripts cache.",
+            NULL,
         };
-        /* clang-format on */
         addReplyHelp(c, help);
     } else if (c->argc >= 2 && !strcasecmp(c->argv[1]->ptr, "flush")) {
         int async = 0;

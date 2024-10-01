@@ -2,7 +2,7 @@
  *
  * ----------------------------------------------------------------------------
  *
- * Copyright (c) 2009-2016, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2016, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -447,7 +447,7 @@ int overMaxmemoryAfterAlloc(size_t moremem) {
  * eviction cycles until the "maxmemory" condition has resolved or there are no
  * more evictable items.  */
 static int isEvictionProcRunning = 0;
-static int evictionTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+static long long evictionTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(eventLoop);
     UNUSED(id);
     UNUSED(clientData);

@@ -1,6 +1,6 @@
 /* CLI (command line interface) common methods
  *
- * Copyright (c) 2020, Redis Labs
+ * Copyright (c) 2020, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without

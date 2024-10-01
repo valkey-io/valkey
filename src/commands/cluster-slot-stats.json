@@ -35,6 +35,15 @@
                         "properties": {
                             "key-count": {
                                 "type": "integer"
+                            },
+                            "cpu-usec": {
+                                "type": "integer"
+                            },
+                            "network-bytes-in": {
+                                "type": "integer"
+                            },
+                            "network-bytes-out": {
+                                "type": "integer"
                             }
                         }
                     }

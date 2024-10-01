@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -35,6 +35,7 @@
 
 #include "server.h"
 #include "cluster.h"
+#include "cluster_slot_stats.h"
 
 #include <ctype.h>
 
@@ -261,6 +262,8 @@ void restoreCommand(client *c) {
     if (ttl && !absttl) ttl += commandTimeSnapshot();
     if (ttl && checkAlreadyExpired(ttl)) {
         if (deleted) {
+            /* Here we don't use deleteExpiredKeyFromOverwriteAndPropagate because
+             * strictly speaking, the `delete` is triggered by the `replace`. */
             robj *aux = server.lazyfree_lazy_server_del ? shared.unlink : shared.del;
             rewriteClientCommandVector(c, 2, aux, key);
             signalModifiedKey(c, c->db, key);
@@ -419,6 +422,7 @@ void migrateCommand(client *c) {
     int may_retry = 1;
     int write_error = 0;
     int argv_rewritten = 0;
+    int errno_copy = 0;
 
     /* To support the KEYS option we need the following additional state. */
     int first_key = 3; /* Argument index of the first key. */
@@ -707,6 +711,10 @@ try_again:
      * It is very common for the cached socket to get closed, if just reopening
      * it works it's a shame to notify the error to the caller. */
 socket_err:
+    /* Take a copy of 'errno' prior cleanup as it can be overwritten and
+     * use copied variable for re-try check. */
+    errno_copy = errno;
+
     /* Cleanup we want to perform in both the retry and no retry case.
      * Note: Closing the migrate socket will also force SELECT next time. */
     sdsfree(cmd.io.buffer.ptr);
@@ -721,7 +729,7 @@ socket_err:
 
     /* Retry only if it's not a timeout and we never attempted a retry
      * (or the code jumping here did not set may_retry to zero). */
-    if (errno != ETIMEDOUT && may_retry) {
+    if (errno_copy != ETIMEDOUT && may_retry) {
         may_retry = 0;
         goto try_again;
     }
@@ -747,7 +755,16 @@ int verifyClusterNodeId(const char *name, int length) {
 }
 
 int isValidAuxChar(int c) {
-    return isalnum(c) || (strchr("!#$%&()*+.:;<>?@[]^{|}~", c) == NULL);
+    /* Return true if the character is alphanumeric */
+    if (isalnum(c)) {
+        return 1;
+    }
+
+    /* List of invalid characters */
+    static const char *invalid_charset = "!#$%&()*+;<>?@[]^{|}~";
+
+    /* Return true if the character is NOT in the invalid charset */
+    return strchr(invalid_charset, c) == NULL;
 }
 
 int isValidAuxString(char *s, unsigned int length) {
@@ -819,6 +836,8 @@ void clusterCommandHelp(client *c) {
         "SLOTS",
         "    Return information about slots range mappings. Each range is made of:",
         "    start, end, primary and replicas IP addresses, ports and ids",
+        "SLOT-STATS",
+        "    Return an array of slot usage statistics for slots assigned to the current node.",
         "SHARDS",
         "    Return information about slot range mappings and the nodes associated with them.",
         NULL};
@@ -1414,7 +1433,7 @@ void clusterCommandSlots(client *c) {
      *           ... continued until done
      */
     int conn_type = 0;
-    if (connIsTLS(c->conn)) conn_type |= CACHE_CONN_TYPE_TLS;
+    if (shouldReturnTlsInfo()) conn_type |= CACHE_CONN_TYPE_TLS;
     if (isClientConnIpV6(c)) conn_type |= CACHE_CONN_TYPE_IPv6;
     if (c->resp == 3) conn_type |= CACHE_CONN_TYPE_RESP3;
 
@@ -1460,4 +1479,13 @@ void readonlyCommand(client *c) {
 void readwriteCommand(client *c) {
     c->flag.readonly = 0;
     addReply(c, shared.ok);
+}
+
+/* Resets transient cluster stats that we expose via INFO or other means that we want
+ * to reset via CONFIG RESETSTAT. The function is also used in order to
+ * initialize these fields in clusterInit() at server startup. */
+void resetClusterStats(void) {
+    if (!server.cluster_enabled) return;
+
+    clusterSlotStatResetAll();
 }

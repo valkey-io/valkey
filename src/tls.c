@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Redis Labs
+ * Copyright (c) 2019, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -437,7 +437,10 @@ static ConnectionType CT_TLS;
  *
  */
 
-typedef enum { WANT_READ = 1, WANT_WRITE } WantIOType;
+typedef enum {
+    WANT_READ = 1,
+    WANT_WRITE
+} WantIOType;
 
 #define TLS_CONN_FLAG_READ_WANT_WRITE (1 << 0)
 #define TLS_CONN_FLAG_WRITE_WANT_READ (1 << 1)
@@ -570,7 +573,7 @@ static int updateStateAfterSSLIO(tls_connection *conn, int ret_value, int update
         } else {
             if (ssl_err == SSL_ERROR_ZERO_RETURN || ((ssl_err == SSL_ERROR_SYSCALL && !errno))) {
                 conn->c.state = CONN_STATE_CLOSED;
-                return -1;
+                return 0;
             } else {
                 conn->c.state = CONN_STATE_ERROR;
                 return -1;

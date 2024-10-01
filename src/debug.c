@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2009-2020, Salvatore Sanfilippo <antirez at gmail dot com>
- * Copyright (c) 2020, Redis Labs, Inc
+ * Copyright (c) 2009-2020, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -38,6 +37,7 @@
 #include "cluster.h"
 #include "threads_mngr.h"
 #include "io_threads.h"
+#include "sds.h"
 
 #include <arpa/inet.h>
 #include <signal.h>
@@ -426,8 +426,10 @@ void debugCommand(client *c) {
             "MALLCTL-STR <key> [<val>]",
             "    Get or set a malloc tuning string.",
 #endif
-            "OBJECT <key>",
+            "OBJECT <key> [fast]",
             "    Show low level info about `key` and associated value.",
+            "    Some fields of the default behavior may be time consuming to fetch,",
+            "    and `fast` can be passed to avoid fetching them.",
             "DROP-CLUSTER-PACKET-FILTER <packet-type>",
             "    Drop all packets that match the filtered type. Set to -1 allow all packets.",
             "CLOSE-CLUSTER-LINK-ON-PACKET-DROP <0|1>",
@@ -495,8 +497,8 @@ void debugCommand(client *c) {
             "    In case RESET is provided the peak reset time will be restored to the default value",
             "REPLYBUFFER RESIZING <0|1>",
             "    Enable or disable the reply buffer resize cron job",
-            "SLEEP-AFTER-FORK-SECONDS <seconds>",
-            "    Stop the server's main process for <seconds> after forking.",
+            "PAUSE-AFTER-FORK <0|1>",
+            "    Stop the server's main process after fork.",
             "DELAY-RDB-CLIENT-FREE-SECOND <seconds>",
             "    Grace period in seconds for replica main channel to establish psync.",
             "DICT-RESIZING <0|1>",
@@ -520,7 +522,7 @@ void debugCommand(client *c) {
         int flags = !strcasecmp(c->argv[1]->ptr, "restart")
                         ? (RESTART_SERVER_GRACEFULLY | RESTART_SERVER_CONFIG_REWRITE)
                         : RESTART_SERVER_NONE;
-        restartServer(flags, delay);
+        restartServer(c, flags, delay);
         addReplyError(c, "failed to restart the server. Check server logs.");
     } else if (!strcasecmp(c->argv[1]->ptr, "oom")) {
         void *ptr = zmalloc(SIZE_MAX / 2); /* Should trigger an out of memory. */
@@ -604,10 +606,13 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "close-cluster-link-on-packet-drop") && c->argc == 3) {
         server.debug_cluster_close_link_on_packet_drop = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "object") && c->argc == 3) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "object") && (c->argc == 3 || c->argc == 4)) {
         dictEntry *de;
         robj *val;
         char *strenc;
+
+        int fast = 0;
+        if (c->argc == 4 && !strcasecmp(c->argv[3]->ptr, "fast")) fast = 1;
 
         if ((de = dbFind(c->db, c->argv[2]->ptr)) == NULL) {
             addReplyErrorObject(c, shared.nokeyerr);
@@ -639,22 +644,27 @@ void debugCommand(client *c) {
             used = snprintf(nextra, remaining, " ql_compressed:%d", compressed);
             nextra += used;
             remaining -= used;
-            /* Add total uncompressed size */
-            unsigned long sz = 0;
-            for (quicklistNode *node = ql->head; node; node = node->next) {
-                sz += node->sz;
+            if (!fast) {
+                /* Add total uncompressed size */
+                unsigned long sz = 0;
+                for (quicklistNode *node = ql->head; node; node = node->next) {
+                    sz += node->sz;
+                }
+                used = snprintf(nextra, remaining, " ql_uncompressed_size:%lu", sz);
+                nextra += used;
+                remaining -= used;
             }
-            used = snprintf(nextra, remaining, " ql_uncompressed_size:%lu", sz);
-            nextra += used;
-            remaining -= used;
         }
 
-        addReplyStatusFormat(c,
-                             "Value at:%p refcount:%d "
-                             "encoding:%s serializedlength:%zu "
-                             "lru:%d lru_seconds_idle:%llu%s",
-                             (void *)val, val->refcount, strenc, rdbSavedObjectLen(val, c->argv[2], c->db->id),
-                             val->lru, estimateObjectIdleTime(val) / 1000, extra);
+        sds s = sdsempty();
+        s = sdscatprintf(s, "Value at:%p refcount:%d encoding:%s", (void *)val, val->refcount, strenc);
+        if (!fast) s = sdscatprintf(s, " serializedlength:%zu", rdbSavedObjectLen(val, c->argv[2], c->db->id));
+        /* Either lru or lfu field could work correctly which depends on server.maxmemory_policy. */
+        s = sdscatprintf(s, " lru:%d lru_seconds_idle:%llu", val->lru, estimateObjectIdleTime(val) / 1000);
+        s = sdscatprintf(s, " lfu_freq:%lu lfu_access_time_minutes:%u", LFUDecrAndReturn(val), val->lru >> 8);
+        s = sdscatprintf(s, "%s", extra);
+        addReplyStatusLength(c, s, sdslen(s));
+        sdsfree(s);
     } else if (!strcasecmp(c->argv[1]->ptr, "sdslen") && c->argc == 3) {
         dictEntry *de;
         robj *val;
@@ -673,7 +683,7 @@ void debugCommand(client *c) {
             addReplyStatusFormat(c,
                                  "key_sds_len:%lld, key_sds_avail:%lld, key_zmalloc: %lld, "
                                  "val_sds_len:%lld, val_sds_avail:%lld, val_zmalloc: %lld",
-                                 (long long)sdslen(key), (long long)sdsavail(key), (long long)sdsZmallocSize(key),
+                                 (long long)sdslen(key), (long long)sdsavail(key), (long long)sdsAllocSize(key),
                                  (long long)sdslen(val->ptr), (long long)sdsavail(val->ptr),
                                  (long long)getStringObjectSdsUsedMemory(val));
         }
@@ -995,13 +1005,8 @@ void debugCommand(client *c) {
             return;
         }
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "sleep-after-fork-seconds") && c->argc == 3) {
-        double sleep_after_fork_seconds;
-        if (getDoubleFromObjectOrReply(c, c->argv[2], &sleep_after_fork_seconds, NULL) != C_OK) {
-            addReply(c, shared.err);
-            return;
-        }
-        server.debug_sleep_after_fork_us = (int)(sleep_after_fork_seconds * 1e6);
+    } else if (!strcasecmp(c->argv[1]->ptr, "pause-after-fork") && c->argc == 3) {
+        server.debug_pause_after_fork = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "delay-rdb-client-free-seconds") && c->argc == 3) {
         server.wait_before_rdb_client_free = atoi(c->argv[2]->ptr);
@@ -1036,6 +1041,16 @@ __attribute__((noinline)) void _serverAssert(const char *estr, const char *file,
     bugReportEnd(0, 0);
 }
 
+/* Checks if the argument at the given index should be redacted from logs. */
+int shouldRedactArg(const client *c, int idx) {
+    serverAssert(idx < c->argc);
+    /* Don't redact if the config is disabled */
+    if (!server.hide_user_data_from_log) return 0;
+    /* first_sensitive_arg_idx value should be changed based on the command type. */
+    int first_sensitive_arg_idx = 1;
+    return idx >= first_sensitive_arg_idx;
+}
+
 void _serverAssertPrintClientInfo(const client *c) {
     int j;
     char conninfo[CONN_INFO_LEN];
@@ -1046,6 +1061,10 @@ void _serverAssertPrintClientInfo(const client *c) {
     serverLog(LL_WARNING, "client->conn = %s", connGetInfo(c->conn, conninfo, sizeof(conninfo)));
     serverLog(LL_WARNING, "client->argc = %d", c->argc);
     for (j = 0; j < c->argc; j++) {
+        if (shouldRedactArg(c, j)) {
+            serverLog(LL_WARNING, "client->argv[%d]: %zu bytes", j, sdslen((sds)c->argv[j]->ptr));
+            continue;
+        }
         char buf[128];
         char *arg;
 
@@ -1150,20 +1169,20 @@ int bugReportStart(void) {
 
 /* Returns the current eip and set it to the given new value (if its not NULL) */
 static void *getAndSetMcontextEip(ucontext_t *uc, void *eip) {
-#define NOT_SUPPORTED()                                                                                                \
-    do {                                                                                                               \
-        UNUSED(uc);                                                                                                    \
-        UNUSED(eip);                                                                                                   \
-        return NULL;                                                                                                   \
+#define NOT_SUPPORTED() \
+    do {                \
+        UNUSED(uc);     \
+        UNUSED(eip);    \
+        return NULL;    \
     } while (0)
-#define GET_SET_RETURN(target_var, new_val)                                                                            \
-    do {                                                                                                               \
-        void *old_val = (void *)target_var;                                                                            \
-        if (new_val) {                                                                                                 \
-            void **temp = (void **)&target_var;                                                                        \
-            *temp = new_val;                                                                                           \
-        }                                                                                                              \
-        return old_val;                                                                                                \
+#define GET_SET_RETURN(target_var, new_val)     \
+    do {                                        \
+        void *old_val = (void *)target_var;     \
+        if (new_val) {                          \
+            void **temp = (void **)&target_var; \
+            *temp = new_val;                    \
+        }                                       \
+        return old_val;                         \
     } while (0)
 #if defined(__APPLE__) && !defined(MAC_OS_10_6_DETECTED)
 /* OSX < 10.6 */
@@ -1246,6 +1265,10 @@ static void *getAndSetMcontextEip(ucontext_t *uc, void *eip) {
 
 VALKEY_NO_SANITIZE("address")
 void logStackContent(void **sp) {
+    if (server.hide_user_data_from_log) {
+        serverLog(LL_NOTICE, "hide-user-data-from-log is on, skip logging stack content to avoid spilling user data.");
+        return;
+    }
     int i;
     for (i = 15; i >= 0; i--) {
         unsigned long addr = (unsigned long)sp + i;
@@ -1261,10 +1284,10 @@ void logStackContent(void **sp) {
 /* Log dump of processor registers */
 void logRegisters(ucontext_t *uc) {
     serverLog(LL_WARNING | LL_RAW, "\n------ REGISTERS ------\n");
-#define NOT_SUPPORTED()                                                                                                \
-    do {                                                                                                               \
-        UNUSED(uc);                                                                                                    \
-        serverLog(LL_WARNING, "  Dumping of registers not supported for this OS/arch");                                \
+#define NOT_SUPPORTED()                                                                 \
+    do {                                                                                \
+        UNUSED(uc);                                                                     \
+        serverLog(LL_WARNING, "  Dumping of registers not supported for this OS/arch"); \
     } while (0)
 
 /* OSX */
@@ -1821,7 +1844,7 @@ void logServerInfo(void) {
     }
     serverLogRaw(LL_WARNING | LL_RAW, infostring);
     serverLogRaw(LL_WARNING | LL_RAW, "\n------ CLIENT LIST OUTPUT ------\n");
-    clients = getAllClientsInfoString(-1);
+    clients = getAllClientsInfoString(-1, server.hide_user_data_from_log);
     serverLogRaw(LL_WARNING | LL_RAW, clients);
     sdsfree(infostring);
     sdsfree(clients);
@@ -1856,11 +1879,15 @@ void logCurrentClient(client *cc, const char *title) {
     int j;
 
     serverLog(LL_WARNING | LL_RAW, "\n------ %s CLIENT INFO ------\n", title);
-    client = catClientInfoString(sdsempty(), cc);
+    client = catClientInfoString(sdsempty(), cc, server.hide_user_data_from_log);
     serverLog(LL_WARNING | LL_RAW, "%s\n", client);
     sdsfree(client);
     serverLog(LL_WARNING | LL_RAW, "argc: '%d'\n", cc->argc);
     for (j = 0; j < cc->argc; j++) {
+        if (shouldRedactArg(cc, j)) {
+            serverLog(LL_WARNING | LL_RAW, "argv[%d]: %zu bytes\n", j, sdslen((sds)cc->argv[j]->ptr));
+            continue;
+        }
         robj *decoded;
         decoded = getDecodedObject(cc->argv[j]);
         sds repr = sdscatrepr(sdsempty(), decoded->ptr, min(sdslen(decoded->ptr), 128));
@@ -2304,6 +2331,12 @@ void applyWatchdogPeriod(void) {
         if (server.watchdog_period < min_period) server.watchdog_period = min_period;
         watchdogScheduleSignal(server.watchdog_period); /* Adjust the current timer. */
     }
+}
+
+void debugPauseProcess(void) {
+    serverLog(LL_NOTICE, "Process is about to stop.");
+    raise(SIGSTOP);
+    serverLog(LL_NOTICE, "Process has been continued.");
 }
 
 /* Positive input is sleep time in microseconds. Negative input is fractions

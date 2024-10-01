@@ -1,4 +1,4 @@
-# Server test suite. Copyright (C) 2009 Salvatore Sanfilippo antirez@gmail.com
+# Server test suite. Copyright (C) 2009 Redis Ltd.
 # This software is released under the BSD License. See the COPYING file for
 # more information.
 
@@ -15,6 +15,8 @@ source tests/support/util.tcl
 
 set dir [pwd]
 set ::all_tests []
+set ::cluster_all_test []
+set ::module_api_all_tests []
 
 set test_dirs {
     unit
@@ -30,6 +32,17 @@ foreach test_dir $test_dirs {
         lappend ::all_tests $test_dir/[file root [file tail $file]]
     }
 }
+
+set cluster_test_dir unit/cluster
+foreach file [glob -nocomplain $dir/tests/$cluster_test_dir/*.tcl] {
+   lappend ::cluster_all_tests $cluster_test_dir/[file root [file tail $file]]
+}
+
+set moduleapi_test_dir unit/moduleapi
+foreach file [glob -nocomplain $dir/tests/$moduleapi_test_dir/*.tcl] {
+   lappend ::module_api_all_tests $moduleapi_test_dir/[file root [file tail $file]]
+}
+
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0
 
@@ -41,6 +54,7 @@ set ::traceleaks 0
 set ::valgrind 0
 set ::durable 0
 set ::tls 0
+set ::io_threads 0
 set ::tls_module 0
 set ::stack_logging 0
 set ::verbose 0
@@ -519,7 +533,7 @@ proc the_end {} {
     }
 }
 
-# The client is not even driven (the test server is instead) as we just need
+# The client is not event driven (the test server is instead) as we just need
 # to read the command, execute, reply... all this in a loop.
 proc test_client_main server_port {
     set ::test_server_fd [socket localhost $server_port]
@@ -549,6 +563,8 @@ proc send_data_packet {fd status data {elapsed 0}} {
 
 proc print_help_screen {} {
     puts [join {
+        "--cluster          Run the cluster tests, by default cluster tests run along with all tests."
+        "--moduleapi        Run the module API tests, this option should only be used in runtest-moduleapi which will build the test module."
         "--valgrind         Run the test over valgrind."
         "--durable          suppress test crashes and keep running"
         "--stack-logging    Enable OSX leaks/malloc stack logging."
@@ -576,6 +592,7 @@ proc print_help_screen {} {
         "--loops <count>    Execute the specified set of tests several times."
         "--wait-server      Wait after server is started (so that you can attach a debugger)."
         "--dump-logs        Dump server log on test failure."
+        "--io-threads       Run tests with IO threads."
         "--tls              Run tests in TLS mode."
         "--tls-module       Run tests in TLS mode with Valkey module."
         "--host <addr>      Run tests against an external host."
@@ -604,6 +621,10 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
             }
         }
         incr j
+    } elseif {$opt eq {--cluster}} {
+        set ::all_tests $::cluster_all_tests
+    } elseif {$opt eq {--moduleapi}} {
+        set ::all_tests $::module_api_all_tests
     } elseif {$opt eq {--config}} {
         set arg2 [lindex $argv [expr $j+2]]
         lappend ::global_overrides $arg
@@ -630,6 +651,8 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         }
     } elseif {$opt eq {--quiet}} {
         set ::quiet 1
+   } elseif {$opt eq {--io-threads}} {
+        set ::io_threads 1
     } elseif {$opt eq {--tls} || $opt eq {--tls-module}} {
         package require tls 1.6
         set ::tls 1

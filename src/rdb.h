@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -79,9 +79,8 @@
 #define RDB_TYPE_HASH 4
 #define RDB_TYPE_ZSET_2 5        /* ZSET version 2 with doubles stored in binary. */
 #define RDB_TYPE_MODULE_PRE_GA 6 /* Used in 4.0 release candidates */
-#define RDB_TYPE_MODULE_2                                                                                              \
-    7 /* Module value with annotations for parsing without                                                             \
-         the generating module being loaded. */
+#define RDB_TYPE_MODULE_2 7      /* Module value with annotations for parsing without \
+                                    the generating module being loaded. */
 #define RDB_TYPE_HASH_ZIPMAP 9
 #define RDB_TYPE_LIST_ZIPLIST 10
 #define RDB_TYPE_SET_INTSET 11

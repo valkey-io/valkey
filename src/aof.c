@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -423,7 +423,7 @@ void aofManifestFreeAndUpdate(aofManifest *am) {
  *  appendonly.aof.1.base.aof  (server.aof_use_rdb_preamble is no)
  *  appendonly.aof.1.base.rdb  (server.aof_use_rdb_preamble is yes)
  */
-sds getNewBaseFileNameAndMarkPreAsHistory(aofManifest *am) {
+sds getNewBaseFileNameAndMarkPreAsHistory(aofManifest *am, int aof_use_rdb_preamble) {
     serverAssert(am != NULL);
     if (am->base_aof_info) {
         serverAssert(am->base_aof_info->file_type == AOF_FILE_TYPE_BASE);
@@ -431,7 +431,7 @@ sds getNewBaseFileNameAndMarkPreAsHistory(aofManifest *am) {
         listAddNodeHead(am->history_aof_list, am->base_aof_info);
     }
 
-    char *format_suffix = server.aof_use_rdb_preamble ? RDB_FORMAT_SUFFIX : AOF_FORMAT_SUFFIX;
+    char *format_suffix = aof_use_rdb_preamble ? RDB_FORMAT_SUFFIX : AOF_FORMAT_SUFFIX;
 
     aofInfo *ai = aofInfoCreate();
     ai->file_name = sdscatprintf(sdsempty(), "%s.%lld%s%s", server.aof_filename, ++am->curr_base_file_seq,
@@ -712,7 +712,7 @@ void aofOpenIfNeededOnServerStart(void) {
     /* If we start with an empty dataset, we will force create a BASE file. */
     size_t incr_aof_len = listLength(server.aof_manifest->incr_aof_list);
     if (!server.aof_manifest->base_aof_info && !incr_aof_len) {
-        sds base_name = getNewBaseFileNameAndMarkPreAsHistory(server.aof_manifest);
+        sds base_name = getNewBaseFileNameAndMarkPreAsHistory(server.aof_manifest, server.aof_use_rdb_preamble);
         sds base_filepath = makePath(server.aof_dirname, base_name);
         if (rewriteAppendOnlyFile(base_filepath) != C_OK) {
             exit(1);
@@ -931,18 +931,23 @@ void killAppendOnlyChild(void) {
  * at runtime using the CONFIG command. */
 void stopAppendOnly(void) {
     serverAssert(server.aof_state != AOF_OFF);
-    flushAppendOnlyFile(1);
-    if (valkey_fsync(server.aof_fd) == -1) {
-        serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
-    } else {
-        server.aof_last_fsync = server.mstime;
+    if (server.aof_fd != -1) {
+        flushAppendOnlyFile(1);
+        if (valkey_fsync(server.aof_fd) == -1) {
+            serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
+        } else {
+            server.aof_last_fsync = server.mstime;
+        }
+        close(server.aof_fd);
     }
-    close(server.aof_fd);
 
     server.aof_fd = -1;
     server.aof_selected_db = -1;
     server.aof_state = AOF_OFF;
-    server.aof_rewrite_scheduled = 0;
+    if (server.aof_rewrite_scheduled) {
+        server.aof_rewrite_scheduled = 0;
+        serverLog(LL_NOTICE, "AOF was disabled but there is a scheduled AOF background, cancel it.");
+    }
     server.aof_last_incr_size = 0;
     server.aof_last_incr_fsync_offset = 0;
     server.fsynced_reploff = -1;
@@ -1366,6 +1371,7 @@ struct client *createAOFClient(void) {
      */
     c->raw_flag = 0;
     c->flag.deny_blocking = 1;
+    c->flag.fake = 1;
 
     /* We set the fake client as a replica waiting for the synchronization
      * so that the server will not try to send replies to this client. */
@@ -2440,6 +2446,7 @@ int rewriteAppendOnlyFileBackground(void) {
         serverLog(LL_NOTICE, "Background append only file rewriting started by pid %ld", (long)childpid);
         server.aof_rewrite_scheduled = 0;
         server.aof_rewrite_time_start = time(NULL);
+        server.aof_rewrite_use_rdb_preamble = server.aof_use_rdb_preamble;
         return C_OK;
     }
     return C_OK; /* unreached */
@@ -2453,6 +2460,7 @@ void bgrewriteaofCommand(client *c) {
         /* When manually triggering AOFRW we reset the count
          * so that it can be executed immediately. */
         server.stat_aofrw_consecutive_failures = 0;
+        serverLog(LL_NOTICE, "Background append only file rewriting scheduled.");
         addReplyStatus(c, "Background append only file rewriting scheduled");
     } else if (rewriteAppendOnlyFileBackground() == C_OK) {
         addReplyStatus(c, "Background append only file rewriting started");
@@ -2551,7 +2559,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
 
         /* Get a new BASE file name and mark the previous (if we have)
          * as the HISTORY type. */
-        sds new_base_filename = getNewBaseFileNameAndMarkPreAsHistory(temp_am);
+        sds new_base_filename = getNewBaseFileNameAndMarkPreAsHistory(temp_am, server.aof_rewrite_use_rdb_preamble);
         serverAssert(new_base_filename != NULL);
         new_base_filepath = makePath(server.aof_dirname, new_base_filename);
 

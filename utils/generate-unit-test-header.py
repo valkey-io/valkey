@@ -4,7 +4,7 @@ import re
 
 UNIT_DIR = os.path.abspath(os.path.dirname(os.path.abspath(__file__)) + '/../src/unit')
 TEST_FILE = UNIT_DIR + '/test_files.h'
-TEST_PROTOTYPE = '(int (test_[a-zA-Z0-9_]*)\(.*\)).*{'
+TEST_PROTOTYPE = r'(int (test_[a-zA-Z0-9_]*)\(.*\)).*{'
 
 if __name__ == '__main__':
     with open(TEST_FILE, 'w') as output:
@@ -26,7 +26,6 @@ if __name__ == '__main__':
                     test_suites.append({'file': file, 'tests': tests})
         test_suites.sort(key=lambda test_suite: test_suite['file'])
         output.write("""/* Do not modify this file, it's automatically generated from utils/generate-unit-test-header.py */
-/* clang-format off */
 typedef int unitTestProc(int argc, char **argv, int flags);
 
 typedef struct unitTest {

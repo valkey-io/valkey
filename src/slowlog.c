@@ -10,7 +10,7 @@
  *
  * ----------------------------------------------------------------------------
  *
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -131,20 +131,18 @@ void slowlogReset(void) {
  * slow log. */
 void slowlogCommand(client *c) {
     if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
-        /* clang-format off */
         const char *help[] = {
-"GET [<count>]",
-"    Return top <count> entries from the slowlog (default: 10, -1 mean all).",
-"    Entries are made of:",
-"    id, timestamp, time in microseconds, arguments array, client IP and port,",
-"    client name",
-"LEN",
-"    Return the length of the slowlog.",
-"RESET",
-"    Reset the slowlog.",
-NULL
+            "GET [<count>]",
+            "    Return top <count> entries from the slowlog (default: 10, -1 mean all).",
+            "    Entries are made of:",
+            "    id, timestamp, time in microseconds, arguments array, client IP and port,",
+            "    client name",
+            "LEN",
+            "    Return the length of the slowlog.",
+            "RESET",
+            "    Reset the slowlog.",
+            NULL,
         };
-        /* clang-format on */
         addReplyHelp(c, help);
     } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "reset")) {
         slowlogReset();

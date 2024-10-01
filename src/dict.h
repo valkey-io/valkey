@@ -5,7 +5,7 @@
  * tables of power of two in size are used, collisions are handled by
  * chaining. See the source code for more information... :)
  *
- * Copyright (c) 2006-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2006-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -69,10 +69,6 @@ typedef struct dictType {
     /* Method for copying a given key into a buffer of buf_len. Also used for
      * computing the length of the key + header when buf is NULL. */
     size_t (*embedKey)(unsigned char *buf, size_t buf_len, const void *key, unsigned char *header_size);
-
-
-    /* Data */
-    void *userdata;
 
     /* Flags */
     /* The 'no_value' flag, if set, indicates that values are not used, i.e. the
@@ -148,15 +144,15 @@ typedef struct {
 #define DICT_HT_INITIAL_SIZE (1 << (DICT_HT_INITIAL_EXP))
 
 /* ------------------------------- Macros ------------------------------------*/
-#define dictFreeVal(d, entry)                                                                                          \
-    do {                                                                                                               \
-        if ((d)->type->valDestructor) (d)->type->valDestructor((d), dictGetVal(entry));                                \
+#define dictFreeVal(d, entry)                                                           \
+    do {                                                                                \
+        if ((d)->type->valDestructor) (d)->type->valDestructor((d), dictGetVal(entry)); \
     } while (0)
 
-#define dictFreeKey(d, entry)                                                                                          \
+#define dictFreeKey(d, entry) \
     if ((d)->type->keyDestructor) (d)->type->keyDestructor((d), dictGetKey(entry))
 
-#define dictCompareKeys(d, key1, key2)                                                                                 \
+#define dictCompareKeys(d, key1, key2) \
     (((d)->type->keyCompare) ? (d)->type->keyCompare((d), key1, key2) : (key1) == (key2))
 
 #define dictMetadata(d) (&(d)->metadata)
@@ -229,6 +225,7 @@ void dictInitIterator(dictIterator *iter, dict *d);
 void dictInitSafeIterator(dictIterator *iter, dict *d);
 void dictResetIterator(dictIterator *iter);
 dictEntry *dictNext(dictIterator *iter);
+dictEntry *dictGetNext(const dictEntry *de);
 void dictReleaseIterator(dictIterator *iter);
 dictEntry *dictGetRandomKey(dict *d);
 dictEntry *dictGetFairRandomKey(dict *d);
@@ -252,9 +249,5 @@ size_t dictGetStatsMsg(char *buf, size_t bufsize, dictStats *stats, int full);
 dictStats *dictGetStatsHt(dict *d, int htidx, int full);
 void dictCombineStats(dictStats *from, dictStats *into);
 void dictFreeStats(dictStats *stats);
-
-#ifdef SERVER_TEST
-int dictTest(int argc, char *argv[], int flags);
-#endif
 
 #endif /* __DICT_H */

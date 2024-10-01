@@ -34,7 +34,11 @@
 
 #define LOAD_TIMEOUT_MS 500
 
-typedef enum { restorePolicy_Flush, restorePolicy_Append, restorePolicy_Replace } restorePolicy;
+typedef enum {
+    restorePolicy_Flush,
+    restorePolicy_Append,
+    restorePolicy_Replace
+} restorePolicy;
 
 static size_t engine_cache_memory = 0;
 
@@ -114,12 +118,12 @@ static dict *engines = NULL;
 static functionsLibCtx *curr_functions_lib_ctx = NULL;
 
 static size_t functionMallocSize(functionInfo *fi) {
-    return zmalloc_size(fi) + sdsZmallocSize(fi->name) + (fi->desc ? sdsZmallocSize(fi->desc) : 0) +
+    return zmalloc_size(fi) + sdsAllocSize(fi->name) + (fi->desc ? sdsAllocSize(fi->desc) : 0) +
            fi->li->ei->engine->get_function_memory_overhead(fi->function);
 }
 
 static size_t libraryMallocSize(functionLibInfo *li) {
-    return zmalloc_size(li) + sdsZmallocSize(li->name) + sdsZmallocSize(li->code);
+    return zmalloc_size(li) + sdsAllocSize(li->name) + sdsAllocSize(li->code);
 }
 
 static void engineStatsDispose(dict *d, void *obj) {
@@ -408,6 +412,7 @@ int functionsRegisterEngine(const char *engine_name, engine *engine) {
     client *c = createClient(NULL);
     c->flag.deny_blocking = 1;
     c->flag.script = 1;
+    c->flag.fake = 1;
     engineInfo *ei = zmalloc(sizeof(*ei));
     *ei = (engineInfo){
         .name = engine_name_sds,
@@ -417,7 +422,7 @@ int functionsRegisterEngine(const char *engine_name, engine *engine) {
 
     dictAdd(engines, engine_name_sds, ei);
 
-    engine_cache_memory += zmalloc_size(ei) + sdsZmallocSize(ei->name) + zmalloc_size(engine) +
+    engine_cache_memory += zmalloc_size(ei) + sdsAllocSize(ei->name) + zmalloc_size(engine) +
                            engine->get_engine_memory_overhead(engine->engine_ctx);
 
     return C_OK;
@@ -819,46 +824,45 @@ void functionFlushCommand(client *c) {
 
 /* FUNCTION HELP */
 void functionHelpCommand(client *c) {
-    /* clang-format off */
     const char *help[] = {
-"LOAD [REPLACE] <FUNCTION CODE>",
-"    Create a new library with the given library name and code.",
-"DELETE <LIBRARY NAME>",
-"    Delete the given library.",
-"LIST [LIBRARYNAME PATTERN] [WITHCODE]",
-"    Return general information on all the libraries:",
-"    * Library name",
-"    * The engine used to run the Library",
-"    * Functions list",
-"    * Library code (if WITHCODE is given)",
-"    It also possible to get only function that matches a pattern using LIBRARYNAME argument.",
-"STATS",
-"    Return information about the current function running:",
-"    * Function name",
-"    * Command used to run the function",
-"    * Duration in MS that the function is running",
-"    If no function is running, return nil",
-"    In addition, returns a list of available engines.",
-"KILL",
-"    Kill the current running function.",
-"FLUSH [ASYNC|SYNC]",
-"    Delete all the libraries.",
-"    When called without the optional mode argument, the behavior is determined by the",
-"    lazyfree-lazy-user-flush configuration directive. Valid modes are:",
-"    * ASYNC: Asynchronously flush the libraries.",
-"    * SYNC: Synchronously flush the libraries.",
-"DUMP",
-"    Return a serialized payload representing the current libraries, can be restored using FUNCTION RESTORE command",
-"RESTORE <PAYLOAD> [FLUSH|APPEND|REPLACE]",
-"    Restore the libraries represented by the given payload, it is possible to give a restore policy to",
-"    control how to handle existing libraries (default APPEND):",
-"    * FLUSH: delete all existing libraries.",
-"    * APPEND: appends the restored libraries to the existing libraries. On collision, abort.",
-"    * REPLACE: appends the restored libraries to the existing libraries, On collision, replace the old",
-"      libraries with the new libraries (notice that even on this option there is a chance of failure",
-"      in case of functions name collision with another library).",
-NULL };
-    /* clang-format on */
+        "LOAD [REPLACE] <FUNCTION CODE>",
+        "    Create a new library with the given library name and code.",
+        "DELETE <LIBRARY NAME>",
+        "    Delete the given library.",
+        "LIST [LIBRARYNAME PATTERN] [WITHCODE]",
+        "    Return general information on all the libraries:",
+        "    * Library name",
+        "    * The engine used to run the Library",
+        "    * Functions list",
+        "    * Library code (if WITHCODE is given)",
+        "    It also possible to get only function that matches a pattern using LIBRARYNAME argument.",
+        "STATS",
+        "    Return information about the current function running:",
+        "    * Function name",
+        "    * Command used to run the function",
+        "    * Duration in MS that the function is running",
+        "    If no function is running, return nil",
+        "    In addition, returns a list of available engines.",
+        "KILL",
+        "    Kill the current running function.",
+        "FLUSH [ASYNC|SYNC]",
+        "    Delete all the libraries.",
+        "    When called without the optional mode argument, the behavior is determined by the",
+        "    lazyfree-lazy-user-flush configuration directive. Valid modes are:",
+        "    * ASYNC: Asynchronously flush the libraries.",
+        "    * SYNC: Synchronously flush the libraries.",
+        "DUMP",
+        "    Return a serialized payload representing the current libraries, can be restored using FUNCTION RESTORE command",
+        "RESTORE <PAYLOAD> [FLUSH|APPEND|REPLACE]",
+        "    Restore the libraries represented by the given payload, it is possible to give a restore policy to",
+        "    control how to handle existing libraries (default APPEND):",
+        "    * FLUSH: delete all existing libraries.",
+        "    * APPEND: appends the restored libraries to the existing libraries. On collision, abort.",
+        "    * REPLACE: appends the restored libraries to the existing libraries, On collision, replace the old",
+        "      libraries with the new libraries (notice that even on this option there is a chance of failure",
+        "      in case of functions name collision with another library).",
+        NULL,
+    };
     addReplyHelp(c, help);
 }
 

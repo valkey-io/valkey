@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,6 +29,7 @@
 
 #include "server.h"
 #include "cluster.h"
+#include "cluster_slot_stats.h"
 
 /* Structure to hold the pubsub related metadata. Currently used
  * for pubsub and pubsubshard feature. */
@@ -475,13 +476,13 @@ int pubsubPublishMessageInternal(robj *channel, robj *message, pubsubtype type) 
     int receivers = 0;
     dictEntry *de;
     dictIterator *di;
-    unsigned int slot = 0;
+    int slot = -1;
 
     /* Send to clients listening for that channel */
     if (server.cluster_enabled && type.shard) {
         slot = keyHashSlot(channel->ptr, sdslen(channel->ptr));
     }
-    de = kvstoreDictFind(*type.serverPubSubChannels, slot, channel);
+    de = kvstoreDictFind(*type.serverPubSubChannels, (slot == -1) ? 0 : slot, channel);
     if (de) {
         dict *clients = dictGetVal(de);
         dictEntry *entry;
@@ -489,6 +490,7 @@ int pubsubPublishMessageInternal(robj *channel, robj *message, pubsubtype type) 
         while ((entry = dictNext(iter)) != NULL) {
             client *c = dictGetKey(entry);
             addReplyPubsubMessage(c, channel, message, *type.messageBulk);
+            clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(c, slot);
             updateClientMemUsageAndBucket(c);
             receivers++;
         }
@@ -665,7 +667,8 @@ void pubsubCommand(client *c) {
         int j;
         addReplyArrayLen(c, (c->argc - 2) * 2);
         for (j = 2; j < c->argc; j++) {
-            unsigned int slot = calculateKeySlot(c->argv[j]->ptr);
+            sds key = c->argv[j]->ptr;
+            unsigned int slot = server.cluster_enabled ? keyHashSlot(key, (int)sdslen(key)) : 0;
             dict *clients = kvstoreDictFetchValue(server.pubsubshard_channels, slot, c->argv[j]);
 
             addReplyBulk(c, c->argv[j]);

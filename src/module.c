@@ -12197,7 +12197,7 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
     moduleCreateContext(&ctx, NULL, VALKEYMODULE_CTX_TEMP_CLIENT); /* We pass NULL since we don't have a module yet. */
     if (onload((void *)&ctx, module_argv, module_argc) == VALKEYMODULE_ERR) {
         if (ctx.module) {
-            serverLog(LL_WARNING, "Module %s initialization failed. Module not loaded", path);
+            serverLog(LL_WARNING, "Module %s initialization failed. Module not loaded.", path);
             moduleUnregisterCleanup(ctx.module);
             moduleRemoveCateogires(ctx.module);
             moduleFreeModuleStructure(ctx.module);

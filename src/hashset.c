@@ -527,12 +527,12 @@ static int resize(hashset *t, size_t min_capacity, int *malloc_failed) {
     }
 
     size_t alloc_size = num_buckets * sizeof(bucket);
-    double fill_factor = (double)min_capacity / (double)numBuckets(old_exp) * ELEMENTS_PER_BUCKET;
-    if (t->type->resizeAllowed &&
-        !t->type->resizeAllowed(alloc_size, fill_factor) &&
-        fill_factor * 100 < MAX_FILL_PERCENT_HARD) {
-        /* Resize callback says no. */
-        return 0;
+    if (t->type->resizeAllowed) {
+        double fill_factor = (double)min_capacity / ((double)numBuckets(old_exp) * ELEMENTS_PER_BUCKET);
+        if (fill_factor * 100 < MAX_FILL_PERCENT_HARD && !t->type->resizeAllowed(alloc_size, fill_factor)) {
+            /* Resize callback says no. */
+            return 0;
+        }
     }
 
     /* We can't resize if rehashing is already ongoing. Fast-forward ongoing

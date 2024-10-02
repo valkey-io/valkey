@@ -116,6 +116,11 @@ start_server {tags {"acl external:skip"}} {
         assert_match "*NOPERM*key*" $err
     }
 
+    test {Validate read and write permissions format} {
+        catch {r ACL SETUSER key-permission-RW %~} err
+        set err
+    } {ERR Error in ACL SETUSER modifier '%~': Syntax error}
+
     test {Test separate read and write permissions on different selectors are not additive} {
         r ACL SETUSER key-permission-RW-selector on nopass "(%R~read* +@all)" "(%W~write* +@all)"
         $r2 auth key-permission-RW-selector password

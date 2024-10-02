@@ -36,7 +36,7 @@ jobs:
   build-valkey:
     # Capture source tarball and generate checksum for it
     name: Build package ${{ matrix.distro.target }} ${{ matrix.distro.arch }}
-    runs-on: 'ubuntu-latest'
+    runs-on: "ubuntu-latest"
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(inputs.build_matrix) }}
@@ -51,9 +51,9 @@ jobs:
         with:
           arch: aarch64
           distro: ${{matrix.distro.target}}
-          install: apt-get update && apt-get install -y build-essential libssl-dev
-          run: make -C src all BUILD_TLS=yes
-      
+          install: apt-get update && apt-get install -y build-essential libssl-dev libsystemd-dev
+          run: make -C src all BUILD_TLS=yes USE_SYSTEMD=yes
+
       - name: Create Tarball and SHA256sums
         run: |
           TAR_FILE_NAME=valkey-${{inputs.version}}-${{matrix.distro.platform}}-${{ matrix.distro.arch}}

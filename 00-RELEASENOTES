@@ -25,6 +25,13 @@ Bug fixes
 * Resolved issues in replicationSetPrimary where the primary node's IP/port
   updates were not correctly handled in the cluster gossip section. (#965)
 
+Security fixes
+==============
+
+* (CVE-2024-31449) Lua library commands may lead to stack overflow and potential RCE.
+* (CVE-2024-31227) Potential Denial-of-service due to malformed ACL selectors.
+* (CVE-2024-31228) Potential Denial-of-service due to unbounded pattern matching.
+
 ================================================================================
 Valkey 7.2.6 GA  -  Released Tue 30 July 2024
 ================================================================================

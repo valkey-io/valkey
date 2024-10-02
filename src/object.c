@@ -952,29 +952,6 @@ char *strEncoding(int encoding) {
 /* =========================== Memory introspection ========================= */
 
 
-/* This is a helper function with the goal of estimating the memory
- * size of a radix tree that is used to store Stream IDs.
- *
- * Note: to guess the size of the radix tree is not trivial, so we
- * approximate it considering 16 bytes of data overhead for each
- * key (the ID), and then adding the number of bare nodes, plus some
- * overhead due by the data and child pointers. This secret recipe
- * was obtained by checking the average radix tree created by real
- * workloads, and then adjusting the constants to get numbers that
- * more or less match the real memory usage.
- *
- * Actually the number of nodes and keys may be different depending
- * on the insertion speed and thus the ability of the radix tree
- * to compress prefixes. */
-size_t streamRadixTreeMemoryUsage(rax *rax) {
-    size_t size = sizeof(*rax);
-    size = rax->numele * sizeof(streamID);
-    size += rax->numnodes * sizeof(raxNode);
-    /* Add a fixed overhead due to the aux data pointer, children, ... */
-    size += rax->numnodes * sizeof(long) * 30;
-    return size;
-}
-
 /* Returns the size in bytes consumed by the key's value in RAM.
  * Note that the returned value is just an approximation, especially in the
  * case of aggregated data types where only "sample_size" elements
@@ -1072,7 +1049,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
     } else if (o->type == OBJ_STREAM) {
         stream *s = o->ptr;
         asize = sizeof(*o) + sizeof(*s);
-        asize += streamRadixTreeMemoryUsage(s->rax);
+        asize += raxAllocSize(s->rax);
 
         /* Now we have to add the listpacks. The last listpack is often non
          * complete, so we estimate the size of the first N listpacks, and
@@ -1112,7 +1089,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             while (raxNext(&ri)) {
                 streamCG *cg = ri.data;
                 asize += sizeof(*cg);
-                asize += streamRadixTreeMemoryUsage(cg->pel);
+                asize += raxAllocSize(cg->pel);
                 asize += sizeof(streamNACK) * raxSize(cg->pel);
 
                 /* For each consumer we also need to add the basic data
@@ -1124,7 +1101,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
                     streamConsumer *consumer = cri.data;
                     asize += sizeof(*consumer);
                     asize += sdslen(consumer->name);
-                    asize += streamRadixTreeMemoryUsage(consumer->pel);
+                    asize += raxAllocSize(consumer->pel);
                     /* Don't count NACKs again, they are shared with the
                      * consumer group PEL. */
                 }

@@ -539,8 +539,8 @@ int test_raxRandomWalk(int argc, char **argv, int flags) {
     UNUSED(flags);
 
     rax *t = raxNew();
-    char *toadd[] = {"alligator", "alien",   "byword",     "chromodynamic", "romane", "romanus", "romulus", "rubens",
-                     "ruber",     "rubicon", "rubicundus", "all",           "rub",    "by",      NULL};
+    char *toadd[] = {"alligator", "alien", "byword", "chromodynamic", "romane", "romanus", "romulus", "rubens",
+                     "ruber", "rubicon", "rubicundus", "all", "rub", "by", NULL};
 
     long numele;
     for (numele = 0; toadd[numele] != NULL; numele++) {
@@ -582,8 +582,8 @@ int test_raxIteratorUnitTests(int argc, char **argv, int flags) {
     UNUSED(flags);
 
     rax *t = raxNew();
-    char *toadd[] = {"alligator", "alien",   "byword",     "chromodynamic", "romane", "romanus", "romulus", "rubens",
-                     "ruber",     "rubicon", "rubicundus", "all",           "rub",    "by",      NULL};
+    char *toadd[] = {"alligator", "alien", "byword", "chromodynamic", "romane", "romanus", "romulus", "rubens",
+                     "ruber", "rubicon", "rubicundus", "all", "rub", "by", NULL};
 
     for (int x = 0; x < 10000; x++) genrand64_int64();
 

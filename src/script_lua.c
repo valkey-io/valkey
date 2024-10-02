@@ -1440,7 +1440,7 @@ void luaRegisterLogFunction(lua_State *lua) {
  * scriptingInit() and functionsInit() may add additional fields specific to each.
  */
 void luaRegisterServerAPI(lua_State *lua) {
-    /* In addition to registering server.call/pcall API, we will throw a customer message when a script accesses
+    /* In addition to registering server.call/pcall API, we will throw a custom message when a script accesses
      * undefined global variable. LUA stores global variables in the global table, accessible to us on stack at virtual
      * index = LUA_GLOBALSINDEX. We will set __index handler in global table's metatable to a custom C function to
      * achieve this - handled by luaSetAllowListProtection. Refer to https://www.lua.org/pil/13.4.1.html for

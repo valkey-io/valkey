@@ -1249,7 +1249,7 @@ size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *priv
 
             /* Emit elements in table 0, if this bucket hasn't already been rehashed. */
             if (!cursorIsLessThan(cursor, t->rehashIdx)) {
-                bucket *b = &t->tables[0][cursor & mask0];
+                bucket *b = &t->tables[table0][cursor & mask0];
                 for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
                     if (b->presence & (1 << pos)) {
                         void *emit = emit_ref ? &b->elements[pos] : b->elements[pos];
@@ -1263,7 +1263,7 @@ size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *priv
              * the index pointed to by the cursor in the smaller table. */
             do {
                 /* Emit elements in table 1. */
-                bucket *b = &t->tables[1][cursor & mask1];
+                bucket *b = &t->tables[table1][cursor & mask1];
                 for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
                     if (b->presence & (1 << pos)) {
                         void *emit = emit_ref ? &b->elements[pos] : b->elements[pos];
@@ -1284,6 +1284,7 @@ size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *priv
     }
     while (in_probe_sequence && !single_step);
     hashsetResumeRehashing(t);
+    rehashStepOnReadIfNeeded(t);
     return cursor_passed_zero ? 0 : cursor;
 }
 
@@ -1447,7 +1448,6 @@ unsigned hashsetSampleElements(hashset *t, void **dst, unsigned count) {
     samples.elements = dst;
     size_t cursor = randomSizeT();
     while (samples.count < count) {
-        rehashStepOnReadIfNeeded(t);
         cursor = hashsetScan(t, cursor, sampleElementsScanFn, &samples, HASHSET_SCAN_SINGLE_STEP);
     }
     return count;

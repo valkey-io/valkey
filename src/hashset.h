@@ -81,7 +81,7 @@ typedef struct {
     /* Callback to free an element when it's overwritten or deleted.
      * Optional. */
     void (*elementDestructor)(hashset *t, void *elem);
-    /* Optional callback to control when resizing should be allowed. (Not implemented) */
+    /* Optional callback to control when resizing should be allowed. */
     int (*resizeAllowed)(size_t moreMem, double usedRatio);
     /* Invoked at the start of rehashing. Both tables are already created. */
     void (*rehashingStarted)(hashset *t);

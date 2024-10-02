@@ -526,6 +526,15 @@ static int resize(hashset *t, size_t min_capacity, int *malloc_failed) {
         return 0;
     }
 
+    size_t alloc_size = num_buckets * sizeof(bucket);
+    double fill_factor = (double)min_capacity / (double)numBuckets(old_exp) * ELEMENTS_PER_BUCKET;
+    if (t->type->resizeAllowed &&
+        !t->type->resizeAllowed(alloc_size, fill_factor) &&
+        fill_factor * 100 < MAX_FILL_PERCENT_HARD) {
+        /* Resize callback says no. */
+        return 0;
+    }
+
     /* We can't resize if rehashing is already ongoing. Fast-forward ongoing
      * rehashing before we continue. */
     while (hashsetIsRehashing(t)) {
@@ -535,13 +544,13 @@ static int resize(hashset *t, size_t min_capacity, int *malloc_failed) {
     /* Allocate the new hash table. */
     bucket *new_table;
     if (malloc_failed) {
-        new_table = ztrycalloc(num_buckets * sizeof(bucket));
+        new_table = ztrycalloc(alloc_size);
         if (new_table == NULL) {
             *malloc_failed = 1;
             return 0;
         }
     } else {
-        new_table = zcalloc(num_buckets * sizeof(bucket));
+        new_table = zcalloc(alloc_size);
     }
     t->bucketExp[1] = exp;
     t->tables[1] = new_table;

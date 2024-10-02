@@ -26,6 +26,13 @@ Bug fixes
 * Fix a build issue on systems where `<threads.h>` is unavailable. (#1053)
 * Fix an issue with the default `sentinel.conf` being invalid. (#1040)
 
+Security fixes
+==============
+
+* (CVE-2024-31449) Lua library commands may lead to stack overflow and potential RCE.
+* (CVE-2024-31227) Potential Denial-of-service due to malformed ACL selectors.
+* (CVE-2024-31228) Potential Denial-of-service due to unbounded pattern matching.
+
 ================================================================================
 Valkey 8.0.0 GA  -  Released Sun 15 Sep 2024
 ================================================================================

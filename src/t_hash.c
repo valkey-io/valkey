@@ -321,7 +321,7 @@ void hashTypeInitIterator(robj *subject, hashTypeIterator *hi) {
     }
 }
 
-void hashTypeReleaseIterator(hashTypeIterator *hi) {
+void hashTypeResetIterator(hashTypeIterator *hi) {
     if (hi->encoding == OBJ_ENCODING_HT) dictResetIterator(&hi->di);
 }
 
@@ -463,13 +463,13 @@ void hashTypeConvertListpack(robj *o, int enc) {
             ret = dictAdd(dict, key, value);
             if (ret != DICT_OK) {
                 sdsfree(key);
-                sdsfree(value);               /* Needed for gcc ASAN */
-                hashTypeReleaseIterator(&hi); /* Needed for gcc ASAN */
+                sdsfree(value);             /* Needed for gcc ASAN */
+                hashTypeResetIterator(&hi); /* Needed for gcc ASAN */
                 serverLogHexDump(LL_WARNING, "listpack with dup elements dump", o->ptr, lpBytes(o->ptr));
                 serverPanic("Listpack corruption detected");
             }
         }
-        hashTypeReleaseIterator(&hi);
+        hashTypeResetIterator(&hi);
         zfree(o->ptr);
         o->encoding = OBJ_ENCODING_HT;
         o->ptr = dict;
@@ -523,7 +523,7 @@ robj *hashTypeDup(robj *o) {
             /* Add a field-value pair to a new hash object. */
             dictAdd(d, newfield, newvalue);
         }
-        hashTypeReleaseIterator(&hi);
+        hashTypeResetIterator(&hi);
 
         hobj = createObject(OBJ_HASH, d);
         hobj->encoding = OBJ_ENCODING_HT;
@@ -836,7 +836,7 @@ void genericHgetallCommand(client *c, int flags) {
         }
     }
 
-    hashTypeReleaseIterator(&hi);
+    hashTypeResetIterator(&hi);
 
     /* Make sure we returned the right number of elements. */
     if (flags & OBJ_HASH_KEY && flags & OBJ_HASH_VALUE) count /= 2;
@@ -977,7 +977,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             addHashIteratorCursorToReply(c, &hi, OBJ_HASH_KEY);
             if (withvalues) addHashIteratorCursorToReply(c, &hi, OBJ_HASH_VALUE);
         }
-        hashTypeReleaseIterator(&hi);
+        hashTypeResetIterator(&hi);
         return;
     }
 
@@ -1028,7 +1028,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             serverAssert(ret == DICT_OK);
         }
         serverAssert(dictSize(d) == size);
-        hashTypeReleaseIterator(&hi);
+        hashTypeResetIterator(&hi);
 
         /* Remove random elements to reach the right count. */
         while (size > count) {

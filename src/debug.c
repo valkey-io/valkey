@@ -236,7 +236,7 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
             sdsfree(sdsele);
             xorDigest(digest, eledigest, 20);
         }
-        hashTypeReleaseIterator(&hi);
+        hashTypeResetIterator(&hi);
     } else if (o->type == OBJ_STREAM) {
         streamIterator si;
         streamIteratorStart(&si, o->ptr, NULL, NULL, 0);

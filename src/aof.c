@@ -1957,20 +1957,20 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
 
             if (!rioWriteBulkCount(r, '*', 2 + cmd_items * 2) || !rioWriteBulkString(r, "HMSET", 5) ||
                 !rioWriteBulkObject(r, key)) {
-                hashTypeReleaseIterator(&hi);
+                hashTypeResetIterator(&hi);
                 return 0;
             }
         }
 
         if (!rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_KEY) || !rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_VALUE)) {
-            hashTypeReleaseIterator(&hi);
+            hashTypeResetIterator(&hi);
             return 0;
         }
         if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
         items--;
     }
 
-    hashTypeReleaseIterator(&hi);
+    hashTypeResetIterator(&hi);
 
     return 1;
 }

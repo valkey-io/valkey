@@ -1369,7 +1369,7 @@ char *ldbRespToHuman_Double(sds *o, char *reply) {
 /* Log a RESP reply as debugger output, in a human readable format.
  * If the resulting string is longer than 'len' plus a few more chars
  * used as prefix, it gets truncated. */
-void ldbLogServerReply(char *reply) {
+void ldbLogRespReply(char *reply) {
     sds log = sdsnew("<reply> ");
     ldbRespToHuman(&log, reply);
     ldbLogWithMaxLen(log);
@@ -1522,7 +1522,7 @@ void ldbServer(lua_State *lua, sds *argv, int argc) {
          * given by the user (without the first argument) and we also push the 'server' global table and
          * 'server.call' function so:
          * (1 (server table)) + (1 (server.call function)) + (argc - 1 (all arguments without the first)) = argc + 1*/
-        ldbLogServerReply("max lua stack reached");
+        ldbLogRespReply("max lua stack reached");
         return;
     }
 

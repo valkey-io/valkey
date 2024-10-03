@@ -980,7 +980,7 @@ static int luaServerGenericCommand(lua_State *lua, int raise_error) {
 
     /* If the debugger is active, log the reply from the server. */
     if (ldbIsEnabled())
-        ldbLogServerReply(reply);
+        ldbLogRespReply(reply);
 
     if (reply != c->buf) sdsfree(reply);
     c->reply_bytes = 0;

@@ -463,7 +463,7 @@ void hashTypeConvertListpack(robj *o, int enc) {
             ret = dictAdd(dict, key, value);
             if (ret != DICT_OK) {
                 sdsfree(key);
-                sdsfree(value);              /* Needed for gcc ASAN */
+                sdsfree(value);               /* Needed for gcc ASAN */
                 hashTypeReleaseIterator(&hi); /* Needed for gcc ASAN */
                 serverLogHexDump(LL_WARNING, "listpack with dup elements dump", o->ptr, lpBytes(o->ptr));
                 serverPanic("Listpack corruption detected");

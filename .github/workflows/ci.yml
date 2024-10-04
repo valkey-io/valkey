@@ -17,7 +17,7 @@ jobs:
       - name: make
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
-        run: make all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes
+        run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes
       - name: test
         run: |
           sudo apt-get install tcl8.6 tclx
@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: make
         # build with TLS module just for compilation coverage
-        run: make SANITIZER=address SERVER_CFLAGS='-Werror' BUILD_TLS=module
+        run: make -j4 SANITIZER=address SERVER_CFLAGS='-Werror' BUILD_TLS=module
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx -y
       - name: test
@@ -55,7 +55,7 @@ jobs:
       - name: make
         run: |
           sudo apt-get install librdmacm-dev libibverbs-dev
-          make BUILD_RDMA=module
+          make -j4 BUILD_RDMA=module
       - name: clone-rxe-kmod
         run: |
           mkdir -p tests/rdma/rxe
@@ -76,14 +76,14 @@ jobs:
       - name: make
         run: |
           apt-get update && apt-get install -y build-essential
-          make SERVER_CFLAGS='-Werror'
+          make -j4 SERVER_CFLAGS='-Werror'
 
   build-macos-latest:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: make
-        run: make SERVER_CFLAGS='-Werror'
+        run: make -j3 SERVER_CFLAGS='-Werror'
 
   build-32bit:
     runs-on: ubuntu-latest
@@ -92,14 +92,14 @@ jobs:
       - name: make
         run: |
           sudo apt-get update && sudo apt-get install libc6-dev-i386
-          make SERVER_CFLAGS='-Werror' 32bit
+          make -j4 SERVER_CFLAGS='-Werror' 32bit
 
   build-libc-malloc:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: make
-        run: make SERVER_CFLAGS='-Werror' MALLOC=libc
+        run: make -j4 SERVER_CFLAGS='-Werror' MALLOC=libc
 
   build-almalinux8-jemalloc:
     runs-on: ubuntu-latest
@@ -110,7 +110,7 @@ jobs:
       - name: make
         run: |
           dnf -y install epel-release gcc make procps-ng which
-          make -j SERVER_CFLAGS='-Werror'
+          make -j4 SERVER_CFLAGS='-Werror'
 
   format-yaml:
     runs-on: ubuntu-latest

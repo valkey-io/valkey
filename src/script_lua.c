@@ -59,7 +59,7 @@ static char *libraries_allow_list[] = {
 static char *server_api_allow_list[] = {
     SERVER_API_NAME,
     REDIS_API_NAME,
-    "__redis__err__handler",   /* Backwards compatible error handler */
+    "__redis__err__handler",  /* Backwards compatible error handler */
     "__server__err__handler", /* error handler for eval, currently located on globals.
                                 Should move to registry. */
     NULL,

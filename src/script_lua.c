@@ -56,10 +56,11 @@ static char *libraries_allow_list[] = {
 };
 
 /* Lua API globals */
-static char *redis_api_allow_list[] = {
+static char *server_api_allow_list[] = {
     SERVER_API_NAME,
     REDIS_API_NAME,
-    "__redis__err__handler", /* error handler for eval, currently located on globals.
+    "__redis__err__handler",  /* Backwards compatible error handler */
+    "__server__err__handler", /* error handler for eval, currently located on globals.
                                 Should move to registry. */
     NULL,
 };
@@ -117,7 +118,7 @@ static char *lua_builtins_removed_after_initialization_allow_list[] = {
  * after that the global table is locked so not need to check anything.*/
 static char **allow_lists[] = {
     libraries_allow_list,
-    redis_api_allow_list,
+    server_api_allow_list,
     lua_builtins_allow_list,
     lua_builtins_not_documented_allow_list,
     lua_builtins_removed_after_initialization_allow_list,
@@ -135,8 +136,8 @@ static char *deny_list[] = {
     NULL,
 };
 
-static int redis_math_random(lua_State *L);
-static int redis_math_randomseed(lua_State *L);
+static int server_math_random(lua_State *L);
+static int server_math_randomseed(lua_State *L);
 static void redisProtocolToLuaType_Int(void *ctx, long long val, const char *proto, size_t proto_len);
 static void
 redisProtocolToLuaType_BulkString(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len);
@@ -159,7 +160,8 @@ static void redisProtocolToLuaType_VerbatimString(void *ctx,
                                                   const char *proto,
                                                   size_t proto_len);
 static void redisProtocolToLuaType_Attribute(struct ReplyParser *parser, void *ctx, size_t len, const char *proto);
-static void luaReplyToRedisReply(client *c, client *script_client, lua_State *lua);
+
+static void luaReplyToServerReply(client *c, client *script_client, lua_State *lua);
 
 /*
  * Save the give pointer on Lua registry, used to save the Lua context and
@@ -204,7 +206,7 @@ void *luaGetFromRegistry(lua_State *lua, const char *name) {
 
 /* Take a server reply in the RESP format and convert it into a
  * Lua type. Thanks to this function, and the introduction of not connected
- * clients, it is trivial to implement the redis() lua function.
+ * clients, it is trivial to implement the server() lua function.
  *
  * Basically we take the arguments, execute the command in the context
  * of a non connected client, then take the generated reply and convert it
@@ -610,7 +612,7 @@ int luaError(lua_State *lua) {
 
 /* Reply to client 'c' converting the top element in the Lua stack to a
  * server reply. As a side effect the element is consumed from the stack.  */
-static void luaReplyToRedisReply(client *c, client *script_client, lua_State *lua) {
+static void luaReplyToServerReply(client *c, client *script_client, lua_State *lua) {
     int t = lua_type(lua, -1);
 
     if (!lua_checkstack(lua, 4)) {
@@ -733,9 +735,9 @@ static void luaReplyToRedisReply(client *c, client *script_client, lua_State *lu
             lua_pushnil(lua); /* Use nil to start iteration. */
             while (lua_next(lua, -2)) {
                 /* Stack now: table, key, value */
-                lua_pushvalue(lua, -2);                      /* Dup key before consuming. */
-                luaReplyToRedisReply(c, script_client, lua); /* Return key. */
-                luaReplyToRedisReply(c, script_client, lua); /* Return value. */
+                lua_pushvalue(lua, -2);                       /* Dup key before consuming. */
+                luaReplyToServerReply(c, script_client, lua); /* Return key. */
+                luaReplyToServerReply(c, script_client, lua); /* Return value. */
                 /* Stack now: table, key. */
                 maplen++;
             }
@@ -756,9 +758,9 @@ static void luaReplyToRedisReply(client *c, client *script_client, lua_State *lu
             lua_pushnil(lua); /* Use nil to start iteration. */
             while (lua_next(lua, -2)) {
                 /* Stack now: table, key, true */
-                lua_pop(lua, 1);                             /* Discard the boolean value. */
-                lua_pushvalue(lua, -1);                      /* Dup key before consuming. */
-                luaReplyToRedisReply(c, script_client, lua); /* Return key. */
+                lua_pop(lua, 1);                              /* Discard the boolean value. */
+                lua_pushvalue(lua, -1);                       /* Dup key before consuming. */
+                luaReplyToServerReply(c, script_client, lua); /* Return key. */
                 /* Stack now: table, key. */
                 setlen++;
             }
@@ -780,7 +782,7 @@ static void luaReplyToRedisReply(client *c, client *script_client, lua_State *lu
                 lua_pop(lua, 1);
                 break;
             }
-            luaReplyToRedisReply(c, script_client, lua);
+            luaReplyToServerReply(c, script_client, lua);
             mbulklen++;
         }
         setDeferredArrayLen(c, replylen, mbulklen);
@@ -793,7 +795,7 @@ static void luaReplyToRedisReply(client *c, client *script_client, lua_State *lu
 /* ---------------------------------------------------------------------------
  * Lua server.* functions implementations.
  * ------------------------------------------------------------------------- */
-void freeLuaRedisArgv(robj **argv, int argc, int argv_len);
+void freeLuaServerArgv(robj **argv, int argc, int argv_len);
 
 /* Cached argv array across calls. */
 static robj **lua_argv = NULL;
@@ -803,7 +805,7 @@ static int lua_argv_size = 0;
 static robj *lua_args_cached_objects[LUA_CMD_OBJCACHE_SIZE];
 static size_t lua_args_cached_objects_len[LUA_CMD_OBJCACHE_SIZE];
 
-static robj **luaArgsToRedisArgv(lua_State *lua, int *argc, int *argv_len) {
+static robj **luaArgsToServerArgv(lua_State *lua, int *argc, int *argv_len) {
     int j;
     /* Require at least one argument */
     *argc = lua_gettop(lua);
@@ -864,7 +866,7 @@ static robj **luaArgsToRedisArgv(lua_State *lua, int *argc, int *argv_len) {
      * is not a string or an integer (lua_isstring() return true for
      * integers as well). */
     if (j != *argc) {
-        freeLuaRedisArgv(lua_argv, j, lua_argv_size);
+        freeLuaServerArgv(lua_argv, j, lua_argv_size);
         luaPushError(lua, "Command arguments must be strings or integers");
         return NULL;
     }
@@ -872,7 +874,7 @@ static robj **luaArgsToRedisArgv(lua_State *lua, int *argc, int *argv_len) {
     return lua_argv;
 }
 
-void freeLuaRedisArgv(robj **argv, int argc, int argv_len) {
+void freeLuaServerArgv(robj **argv, int argc, int argv_len) {
     int j;
     for (j = 0; j < argc; j++) {
         robj *o = argv[j];
@@ -899,7 +901,7 @@ void freeLuaRedisArgv(robj **argv, int argc, int argv_len) {
     }
 }
 
-static int luaRedisGenericCommand(lua_State *lua, int raise_error) {
+static int luaServerGenericCommand(lua_State *lua, int raise_error) {
     int j;
     scriptRunCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
     serverAssert(rctx); /* Only supported inside script invocation */
@@ -907,7 +909,7 @@ static int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     client *c = rctx->c;
     sds reply;
 
-    c->argv = luaArgsToRedisArgv(lua, &c->argc, &c->argv_len);
+    c->argv = luaArgsToServerArgv(lua, &c->argc, &c->argv_len);
     if (c->argv == NULL) {
         return raise_error ? luaError(lua) : 1;
     }
@@ -915,7 +917,7 @@ static int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     static int inuse = 0; /* Recursive calls detection. */
 
     /* By using Lua debug hooks it is possible to trigger a recursive call
-     * to luaRedisGenericCommand(), which normally should never happen.
+     * to luaServerGenericCommand(), which normally should never happen.
      * To make this function reentrant is futile and makes it slower, but
      * we should at least detect such a misuse, and abort. */
     if (inuse) {
@@ -978,7 +980,8 @@ static int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     redisProtocolToLuaType(lua, reply);
 
     /* If the debugger is active, log the reply from the server. */
-    if (ldbIsEnabled()) ldbLogRespReply(reply);
+    if (ldbIsEnabled())
+        ldbLogRespReply(reply);
 
     if (reply != c->buf) sdsfree(reply);
     c->reply_bytes = 0;
@@ -986,7 +989,7 @@ static int luaRedisGenericCommand(lua_State *lua, int raise_error) {
 cleanup:
     /* Clean up. Command code may have changed argv/argc so we use the
      * argv/argc of the client instead of the local variables. */
-    freeLuaRedisArgv(c->argv, c->argc, c->argv_len);
+    freeLuaServerArgv(c->argv, c->argc, c->argv_len);
     c->argc = c->argv_len = 0;
     c->user = NULL;
     c->argv = NULL;
@@ -1032,12 +1035,12 @@ static int luaRedisPcall(lua_State *lua) {
 
 /* server.call() */
 static int luaRedisCallCommand(lua_State *lua) {
-    return luaRedisGenericCommand(lua, 1);
+    return luaServerGenericCommand(lua, 1);
 }
 
 /* server.pcall() */
 static int luaRedisPCallCommand(lua_State *lua) {
-    return luaRedisGenericCommand(lua, 0);
+    return luaServerGenericCommand(lua, 0);
 }
 
 /* This adds server.sha1hex(string) to Lua scripts using the same hashing
@@ -1137,7 +1140,7 @@ static int luaRedisAclCheckCmdPermissionsCommand(lua_State *lua) {
     int raise_error = 0;
 
     int argc, argv_len;
-    robj **argv = luaArgsToRedisArgv(lua, &argc, &argv_len);
+    robj **argv = luaArgsToServerArgv(lua, &argc, &argv_len);
 
     /* Require at least one argument */
     if (argv == NULL) return luaError(lua);
@@ -1156,7 +1159,7 @@ static int luaRedisAclCheckCmdPermissionsCommand(lua_State *lua) {
         }
     }
 
-    freeLuaRedisArgv(argv, argc, argv_len);
+    freeLuaServerArgv(argv, argc, argv_len);
     if (raise_error)
         return luaError(lua);
     else
@@ -1432,44 +1435,61 @@ void luaRegisterLogFunction(lua_State *lua) {
     lua_settable(lua, -3);
 }
 
+/*
+ * Adds server.* functions/fields to lua such as server.call etc.
+ * This function only handles fields common between Functions and LUA scripting.
+ * scriptingInit() and functionsInit() may add additional fields specific to each.
+ */
 void luaRegisterServerAPI(lua_State *lua) {
+    /* In addition to registering server.call/pcall API, we will throw a custom message when a script accesses
+     * undefined global variable. LUA stores global variables in the global table, accessible to us on stack at virtual
+     * index = LUA_GLOBALSINDEX. We will set __index handler in global table's metatable to a custom C function to
+     * achieve this - handled by luaSetAllowListProtection. Refer to https://www.lua.org/pil/13.4.1.html for
+     * documentation on __index and https://www.lua.org/pil/contents.html#13 for documentation on metatables. We need to
+     * pass global table to lua invocations as parameters. To achieve this, lua_pushvalue invocation brings global
+     * variable table to the top of the stack by pushing value from global index onto the stack. And lua_pop invocation
+     * after luaSetAllowListProtection removes it - resetting the stack to its original state. */
     lua_pushvalue(lua, LUA_GLOBALSINDEX);
     luaSetAllowListProtection(lua);
     lua_pop(lua, 1);
 
+    /* Add default C functions provided in deps/lua codebase to handle basic data types such as table, string etc. */
     luaLoadLibraries(lua);
 
+    /* Before Redis OSS 7, Lua used to return error messages as strings from pcall function. With Valkey (or Redis OSS 7), Lua now returns
+     * error messages as tables. To keep backwards compatibility, we wrap the Lua pcall function with our own
+     * implementation of C function that converts table to string. */
     lua_pushcfunction(lua, luaRedisPcall);
     lua_setglobal(lua, "pcall");
 
-    /* Register the commands table and fields */
+    /* Create a top level table object on the stack to temporarily hold fields for 'server' table. We will name it as
+     * 'server' and send it to LUA at the very end. Also add 'call' and 'pcall' functions to the table. */
     lua_newtable(lua);
-
-    /* server.call */
     lua_pushstring(lua, "call");
     lua_pushcfunction(lua, luaRedisCallCommand);
     lua_settable(lua, -3);
-
-    /* server.pcall */
     lua_pushstring(lua, "pcall");
     lua_pushcfunction(lua, luaRedisPCallCommand);
     lua_settable(lua, -3);
 
+    /* Add server.log function and debug level constants. LUA scripts use it to print messages to server log. */
     luaRegisterLogFunction(lua);
 
+    /* Add SERVER_VERSION_NUM, SERVER_VERSION and SERVER_NAME fields with appropriate values. */
     luaRegisterVersion(lua);
 
-    /* server.setresp */
+    /* Add server.setresp function to allow LUA scripts to change the RESP version for server.call and server.pcall
+     * invocations. */
     lua_pushstring(lua, "setresp");
     lua_pushcfunction(lua, luaSetResp);
     lua_settable(lua, -3);
 
-    /* server.sha1hex */
+    /* Add server.sha1hex function.  */
     lua_pushstring(lua, "sha1hex");
     lua_pushcfunction(lua, luaRedisSha1hexCommand);
     lua_settable(lua, -3);
 
-    /* server.error_reply and server.status_reply */
+    /* Add server.error_reply and server.status_reply functions. */
     lua_pushstring(lua, "error_reply");
     lua_pushcfunction(lua, luaRedisErrorReplyCommand);
     lua_settable(lua, -3);
@@ -1477,7 +1497,7 @@ void luaRegisterServerAPI(lua_State *lua) {
     lua_pushcfunction(lua, luaRedisStatusReplyCommand);
     lua_settable(lua, -3);
 
-    /* server.set_repl and associated flags. */
+    /* Add server.set_repl function and associated flags. */
     lua_pushstring(lua, "set_repl");
     lua_pushcfunction(lua, luaRedisSetReplCommand);
     lua_settable(lua, -3);
@@ -1502,7 +1522,7 @@ void luaRegisterServerAPI(lua_State *lua) {
     lua_pushnumber(lua, PROPAGATE_AOF | PROPAGATE_REPL);
     lua_settable(lua, -3);
 
-    /* server.acl_check_cmd */
+    /* Add server.acl_check_cmd function. */
     lua_pushstring(lua, "acl_check_cmd");
     lua_pushcfunction(lua, luaRedisAclCheckCmdPermissionsCommand);
     lua_settable(lua, -3);
@@ -1515,17 +1535,16 @@ void luaRegisterServerAPI(lua_State *lua) {
      * This is not a deep copy but is enough for our purpose here. */
     lua_getglobal(lua, SERVER_API_NAME);
     lua_setglobal(lua, REDIS_API_NAME);
-    /* Replace math.random and math.randomseed with our implementations. */
+
+    /* Replace math.random and math.randomseed with custom implementations. */
     lua_getglobal(lua, "math");
-
     lua_pushstring(lua, "random");
-    lua_pushcfunction(lua, redis_math_random);
+    lua_pushcfunction(lua, server_math_random);
     lua_settable(lua, -3);
-
     lua_pushstring(lua, "randomseed");
-    lua_pushcfunction(lua, redis_math_randomseed);
+    lua_pushcfunction(lua, server_math_randomseed);
     lua_settable(lua, -3);
-
+    /* overwrite value of global variable 'math' with this modified math table present on top of stack. */
     lua_setglobal(lua, "math");
 }
 
@@ -1551,10 +1570,11 @@ static void luaCreateArray(lua_State *lua, robj **elev, int elec) {
 
 /* The following implementation is the one shipped with Lua itself but with
  * rand() replaced by serverLrand48(). */
-static int redis_math_random(lua_State *L) {
+static int server_math_random(lua_State *L) {
     /* the `%' avoids the (rare) case of r==1, and is needed also because on
        some systems (SunOS!) `rand()' may return a value larger than RAND_MAX */
-    lua_Number r = (lua_Number)(serverLrand48() % REDIS_LRAND48_MAX) / (lua_Number)REDIS_LRAND48_MAX;
+    lua_Number r = (lua_Number)(serverLrand48() % SERVER_LRAND48_MAX) /
+                   (lua_Number)SERVER_LRAND48_MAX;
     switch (lua_gettop(L)) {  /* check number of arguments */
     case 0: {                 /* no arguments */
         lua_pushnumber(L, r); /* Number between 0 and 1 */
@@ -1578,7 +1598,7 @@ static int redis_math_random(lua_State *L) {
     return 1;
 }
 
-static int redis_math_randomseed(lua_State *L) {
+static int server_math_randomseed(lua_State *L) {
     serverSrand48(luaL_checkint(L, 1));
     return 0;
 }
@@ -1741,7 +1761,7 @@ void luaCallFunction(scriptRunCtx *run_ctx,
     } else {
         /* On success convert the Lua return value into RESP, and
          * send it to * the client. */
-        luaReplyToRedisReply(c, run_ctx->c, lua); /* Convert and consume the reply. */
+        luaReplyToServerReply(c, run_ctx->c, lua); /* Convert and consume the reply. */
     }
 
     /* Perform some cleanup that we need to do both on error and success. */

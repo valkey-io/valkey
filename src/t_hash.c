@@ -819,6 +819,7 @@ void genericHgetallCommand(client *c, int flags) {
     if ((o = lookupKeyReadOrReply(c, c->argv[1], emptyResp)) == NULL || checkType(c, o, OBJ_HASH)) return;
 
     writePreparedClient *wpc = prepareClientForFutureWrites(c);
+    if (!wpc) return;
     /* We return a map if the user requested keys and values, like in the
      * HGETALL case. Otherwise to use a flat array makes more sense. */
     length = hashTypeLength(o);
@@ -923,6 +924,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
     }
 
     writePreparedClient *wpc = prepareClientForFutureWrites(c);
+    if (!wpc) return;
     /* CASE 1: The count was negative, so the extraction method is just:
      * "return N random elements" sampling the whole set every time.
      * This case is trivial and can be served without auxiliary data

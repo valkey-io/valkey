@@ -307,8 +307,7 @@ unsigned long hashTypeLength(const robj *o) {
     return length;
 }
 
-hashTypeIterator *hashTypeInitIterator(robj *subject) {
-    hashTypeIterator *hi = zmalloc(sizeof(hashTypeIterator));
+void hashTypeInitIterator(robj *subject, hashTypeIterator *hi) {
     hi->subject = subject;
     hi->encoding = subject->encoding;
 
@@ -316,16 +315,14 @@ hashTypeIterator *hashTypeInitIterator(robj *subject) {
         hi->fptr = NULL;
         hi->vptr = NULL;
     } else if (hi->encoding == OBJ_ENCODING_HT) {
-        hi->di = dictGetIterator(subject->ptr);
+        dictInitIterator(&hi->di, subject->ptr);
     } else {
         serverPanic("Unknown hash encoding");
     }
-    return hi;
 }
 
-void hashTypeReleaseIterator(hashTypeIterator *hi) {
-    if (hi->encoding == OBJ_ENCODING_HT) dictReleaseIterator(hi->di);
-    zfree(hi);
+void hashTypeResetIterator(hashTypeIterator *hi) {
+    if (hi->encoding == OBJ_ENCODING_HT) dictResetIterator(&hi->di);
 }
 
 /* Move to the next entry in the hash. Return C_OK when the next entry
@@ -358,7 +355,7 @@ int hashTypeNext(hashTypeIterator *hi) {
         hi->fptr = fptr;
         hi->vptr = vptr;
     } else if (hi->encoding == OBJ_ENCODING_HT) {
-        if ((hi->de = dictNext(hi->di)) == NULL) return C_ERR;
+        if ((hi->de = dictNext(&hi->di)) == NULL) return C_ERR;
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -448,31 +445,31 @@ void hashTypeConvertListpack(robj *o, int enc) {
         /* Nothing to do... */
 
     } else if (enc == OBJ_ENCODING_HT) {
-        hashTypeIterator *hi;
+        hashTypeIterator hi;
         dict *dict;
         int ret;
 
-        hi = hashTypeInitIterator(o);
+        hashTypeInitIterator(o, &hi);
         dict = dictCreate(&hashDictType);
 
         /* Presize the dict to avoid rehashing */
         dictExpand(dict, hashTypeLength(o));
 
-        while (hashTypeNext(hi) != C_ERR) {
+        while (hashTypeNext(&hi) != C_ERR) {
             sds key, value;
 
-            key = hashTypeCurrentObjectNewSds(hi, OBJ_HASH_KEY);
-            value = hashTypeCurrentObjectNewSds(hi, OBJ_HASH_VALUE);
+            key = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_KEY);
+            value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
             ret = dictAdd(dict, key, value);
             if (ret != DICT_OK) {
                 sdsfree(key);
-                sdsfree(value);              /* Needed for gcc ASAN */
-                hashTypeReleaseIterator(hi); /* Needed for gcc ASAN */
+                sdsfree(value);             /* Needed for gcc ASAN */
+                hashTypeResetIterator(&hi); /* Needed for gcc ASAN */
                 serverLogHexDump(LL_WARNING, "listpack with dup elements dump", o->ptr, lpBytes(o->ptr));
                 serverPanic("Listpack corruption detected");
             }
         }
-        hashTypeReleaseIterator(hi);
+        hashTypeResetIterator(&hi);
         zfree(o->ptr);
         o->encoding = OBJ_ENCODING_HT;
         o->ptr = dict;
@@ -498,7 +495,7 @@ void hashTypeConvert(robj *o, int enc) {
  * The resulting object always has refcount set to 1 */
 robj *hashTypeDup(robj *o) {
     robj *hobj;
-    hashTypeIterator *hi;
+    hashTypeIterator hi;
 
     serverAssert(o->type == OBJ_HASH);
 
@@ -513,20 +510,20 @@ robj *hashTypeDup(robj *o) {
         dict *d = dictCreate(&hashDictType);
         dictExpand(d, dictSize((const dict *)o->ptr));
 
-        hi = hashTypeInitIterator(o);
-        while (hashTypeNext(hi) != C_ERR) {
+        hashTypeInitIterator(o, &hi);
+        while (hashTypeNext(&hi) != C_ERR) {
             sds field, value;
             sds newfield, newvalue;
             /* Extract a field-value pair from an original hash object.*/
-            field = hashTypeCurrentFromHashTable(hi, OBJ_HASH_KEY);
-            value = hashTypeCurrentFromHashTable(hi, OBJ_HASH_VALUE);
+            field = hashTypeCurrentFromHashTable(&hi, OBJ_HASH_KEY);
+            value = hashTypeCurrentFromHashTable(&hi, OBJ_HASH_VALUE);
             newfield = sdsdup(field);
             newvalue = sdsdup(value);
 
             /* Add a field-value pair to a new hash object. */
             dictAdd(d, newfield, newvalue);
         }
-        hashTypeReleaseIterator(hi);
+        hashTypeResetIterator(&hi);
 
         hobj = createObject(OBJ_HASH, d);
         hobj->encoding = OBJ_ENCODING_HT;
@@ -812,7 +809,7 @@ static void addHashIteratorCursorToReply(client *c, hashTypeIterator *hi, int wh
 
 void genericHgetallCommand(client *c, int flags) {
     robj *o;
-    hashTypeIterator *hi;
+    hashTypeIterator hi;
     int length, count = 0;
 
     robj *emptyResp = (flags & OBJ_HASH_KEY && flags & OBJ_HASH_VALUE) ? shared.emptymap[c->resp] : shared.emptyarray;
@@ -827,19 +824,19 @@ void genericHgetallCommand(client *c, int flags) {
         addReplyArrayLen(c, length);
     }
 
-    hi = hashTypeInitIterator(o);
-    while (hashTypeNext(hi) != C_ERR) {
+    hashTypeInitIterator(o, &hi);
+    while (hashTypeNext(&hi) != C_ERR) {
         if (flags & OBJ_HASH_KEY) {
-            addHashIteratorCursorToReply(c, hi, OBJ_HASH_KEY);
+            addHashIteratorCursorToReply(c, &hi, OBJ_HASH_KEY);
             count++;
         }
         if (flags & OBJ_HASH_VALUE) {
-            addHashIteratorCursorToReply(c, hi, OBJ_HASH_VALUE);
+            addHashIteratorCursorToReply(c, &hi, OBJ_HASH_VALUE);
             count++;
         }
     }
 
-    hashTypeReleaseIterator(hi);
+    hashTypeResetIterator(&hi);
 
     /* Make sure we returned the right number of elements. */
     if (flags & OBJ_HASH_KEY && flags & OBJ_HASH_VALUE) count /= 2;
@@ -973,13 +970,14 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
      * The number of requested elements is greater than the number of
      * elements inside the hash: simply return the whole hash. */
     if (count >= size) {
-        hashTypeIterator *hi = hashTypeInitIterator(hash);
-        while (hashTypeNext(hi) != C_ERR) {
+        hashTypeIterator hi;
+        hashTypeInitIterator(hash, &hi);
+        while (hashTypeNext(&hi) != C_ERR) {
             if (withvalues && c->resp > 2) addReplyArrayLen(c, 2);
-            addHashIteratorCursorToReply(c, hi, OBJ_HASH_KEY);
-            if (withvalues) addHashIteratorCursorToReply(c, hi, OBJ_HASH_VALUE);
+            addHashIteratorCursorToReply(c, &hi, OBJ_HASH_KEY);
+            if (withvalues) addHashIteratorCursorToReply(c, &hi, OBJ_HASH_VALUE);
         }
-        hashTypeReleaseIterator(hi);
+        hashTypeResetIterator(&hi);
         return;
     }
 
@@ -1015,21 +1013,22 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         /* Hashtable encoding (generic implementation) */
         dict *d = dictCreate(&sdsReplyDictType);
         dictExpand(d, size);
-        hashTypeIterator *hi = hashTypeInitIterator(hash);
+        hashTypeIterator hi;
+        hashTypeInitIterator(hash, &hi);
 
         /* Add all the elements into the temporary dictionary. */
-        while ((hashTypeNext(hi)) != C_ERR) {
+        while ((hashTypeNext(&hi)) != C_ERR) {
             int ret = DICT_ERR;
             sds key, value = NULL;
 
-            key = hashTypeCurrentObjectNewSds(hi, OBJ_HASH_KEY);
-            if (withvalues) value = hashTypeCurrentObjectNewSds(hi, OBJ_HASH_VALUE);
+            key = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_KEY);
+            if (withvalues) value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
             ret = dictAdd(d, key, value);
 
             serverAssert(ret == DICT_OK);
         }
         serverAssert(dictSize(d) == size);
-        hashTypeReleaseIterator(hi);
+        hashTypeResetIterator(&hi);
 
         /* Remove random elements to reach the right count. */
         while (size > count) {

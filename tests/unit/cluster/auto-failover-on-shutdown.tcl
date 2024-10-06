@@ -6,6 +6,9 @@ proc shutdown_on_how {srv_id how} {
     }
 }
 
+# We will start a cluster with 3 primary nodes and 4 replicas, the primary 1 will have 2 replicas.
+# We will pause the replica 1, and then shutdown the primary 1, and making replica 2 to become
+# the new primary.
 proc test_main {how} {
     test "auto-failover-on-shutdown will always pick a best replica and send CLUSTER FAILOVER - $how" {
         set primary [srv 0 client]

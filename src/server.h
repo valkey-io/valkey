@@ -2844,6 +2844,7 @@ void evictClients(void);
 int listenToPort(connListener *fds);
 void pauseActions(pause_purpose purpose, mstime_t end, uint32_t actions_bitmask);
 void unpauseActions(pause_purpose purpose);
+int isPausedPurpose(pause_purpose purpose);
 uint32_t isPausedActions(uint32_t action_bitmask);
 uint32_t isPausedActionsWithUpdate(uint32_t action_bitmask);
 void updatePausedActions(void);

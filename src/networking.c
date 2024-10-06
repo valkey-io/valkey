@@ -4536,7 +4536,7 @@ static void pauseClientsByClient(mstime_t endTime, int isPauseClientAll) {
 }
 
 /* Pause actions up to the specified unixtime (in ms) for a given type of
- * commands.
+ * purpose.
  *
  * A main use case of this function is to allow pausing replication traffic
  * so that a failover without data loss to occur. Replicas will continue to receive
@@ -4548,9 +4548,9 @@ static void pauseClientsByClient(mstime_t endTime, int isPauseClientAll) {
  * The function always succeed, even if there is already a pause in progress.
  * The new paused_actions of a given 'purpose' will override the old ones and
  * end time will be updated if new end time is bigger than currently configured */
-void pauseActions(pause_purpose purpose, mstime_t end, uint32_t actions) {
+void pauseActions(pause_purpose purpose, mstime_t end, uint32_t actions_bitmask) {
     /* Manage pause type and end time per pause purpose. */
-    server.client_pause_per_purpose[purpose].paused_actions = actions;
+    server.client_pause_per_purpose[purpose].paused_actions = actions_bitmask;
 
     /* If currently configured end time bigger than new one, then keep it */
     if (server.client_pause_per_purpose[purpose].end < end) server.client_pause_per_purpose[purpose].end = end;
@@ -4571,6 +4571,11 @@ void unpauseActions(pause_purpose purpose) {
     server.client_pause_per_purpose[purpose].end = 0;
     server.client_pause_per_purpose[purpose].paused_actions = 0;
     updatePausedActions();
+}
+
+/* Returns 1 if the specified purpose is currently pausing. */
+int isPausedPurpose(pause_purpose purpose) {
+    return server.client_pause_per_purpose[purpose].end != 0;
 }
 
 /* Returns bitmask of paused actions */

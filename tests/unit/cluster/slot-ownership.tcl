@@ -59,3 +59,40 @@ start_cluster 2 2 {tags {external:skip cluster}} {
         }
     }
 }
+
+start_cluster 3 1 {tags {external:skip cluster} overrides {shutdown-timeout 100}} {
+    test "Primary will not crash when processing dirty slots during shutdown waiting" {
+        R 0 set FOO 0
+
+        # Pause the replica.
+        pause_process [srv -3 pid]
+
+        # Incr the key and immediately shutdown the primary.
+        R 0 incr FOO
+        exec kill -SIGTERM [srv 0 pid]
+        wait_for_condition 50 100 {
+            [s 0 shutdown_in_milliseconds] > 0
+        } else {
+            fail "Primary not indicating ongoing shutdown."
+        }
+
+        # Move the slot to other primary
+        R 1 cluster bumpepoch
+        R 1 cluster setslot [R 1 cluster keyslot FOO] node [R 1 cluster myid]
+
+        # Waiting for dirty slot update.
+        wait_for_log_messages 0 {"*Deleting keys in dirty slot*"} 0 1000 10
+
+        # Resume the replica and make sure primary exits normally instead of crashing.
+        resume_process [srv -3 pid]
+        wait_for_log_messages 0 {"*Valkey is now ready to exit, bye bye*"} 0 1000 10
+
+        # Make sure that the replica will become the new primary and does not own the key.
+        wait_for_condition 1000 50 {
+            [s -3 role] eq {master}
+        } else {
+            fail "The replica was not converted into primary"
+        }
+        assert_error {ERR no such key} {R 3 debug object foo}
+    }
+}

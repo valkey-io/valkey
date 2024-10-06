@@ -221,21 +221,22 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
             serverPanic("Unknown sorted set encoding");
         }
     } else if (o->type == OBJ_HASH) {
-        hashTypeIterator *hi = hashTypeInitIterator(o);
-        while (hashTypeNext(hi) != C_ERR) {
+        hashTypeIterator hi;
+        hashTypeInitIterator(o, &hi);
+        while (hashTypeNext(&hi) != C_ERR) {
             unsigned char eledigest[20];
             sds sdsele;
 
             memset(eledigest, 0, 20);
-            sdsele = hashTypeCurrentObjectNewSds(hi, OBJ_HASH_KEY);
+            sdsele = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_KEY);
             mixDigest(eledigest, sdsele, sdslen(sdsele));
             sdsfree(sdsele);
-            sdsele = hashTypeCurrentObjectNewSds(hi, OBJ_HASH_VALUE);
+            sdsele = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
             mixDigest(eledigest, sdsele, sdslen(sdsele));
             sdsfree(sdsele);
             xorDigest(digest, eledigest, 20);
         }
-        hashTypeReleaseIterator(hi);
+        hashTypeResetIterator(&hi);
     } else if (o->type == OBJ_STREAM) {
         streamIterator si;
         streamIteratorStart(&si, o->ptr, NULL, NULL, 0);

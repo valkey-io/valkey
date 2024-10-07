@@ -723,8 +723,7 @@ unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uin
 
         /* The next call to lpGetWithSize could read at most 8 bytes past `p`
          * We use the slower validation call only when necessary. */
-        if (p + 8 < lp + lp_bytes)
-            assert(p >= lp + LP_HDR_SIZE && p < lp + lp_bytes);
+        if (p + 8 < lp + lp_bytes) assert(p >= lp + LP_HDR_SIZE && p < lp + lp_bytes);
         if (p[0] == LP_EOF) break;
     }
 

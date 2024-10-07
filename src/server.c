@@ -2623,7 +2623,7 @@ void initServer(void) {
     resetReplicationBuffer();
 
     if (server.maxmemory) {
-        calculateMaxAvailableMemory();
+        updateMaxAvailableMemory();
     }
 
     /* Make sure the locale is set on startup based on the config file. */

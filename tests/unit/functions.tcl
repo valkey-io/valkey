@@ -956,7 +956,7 @@ start_server {tags {"scripting"}} {
     test {FUNCTION - test function list libraryname multiple times} {
         catch {r function list withcode libraryname foo libraryname foo} e
         set _ $e
-    } {*Unknown argument libraryname*}
+    } {*ERR duplicate*}
 
     test {FUNCTION - verify OOM on function load and function restore} {
         r function flush

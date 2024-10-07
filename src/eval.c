@@ -136,7 +136,7 @@ void sha1hex(char *digest, char *script, size_t len) {
     digest[40] = '\0';
 }
 
-/* server.breakpoint()
+/* Adds server.breakpoint() function used by lua debugger.
  *
  * Allows to stop execution during a debugging session from within
  * the Lua code implementation, like if a breakpoint was set in the code
@@ -151,7 +151,7 @@ int luaServerBreakpointCommand(lua_State *lua) {
     return 1;
 }
 
-/* server.debug()
+/* Adds server.debug() function used by lua debugger
  *
  * Log a string message into the output console.
  * Can take multiple arguments that will be separated by commas.
@@ -168,7 +168,7 @@ int luaServerDebugCommand(lua_State *lua) {
     return 0;
 }
 
-/* server.replicate_commands()
+/* Adds server.replicate_commands()
  *
  * DEPRECATED: Now do nothing and always return true.
  * Turn on single commands replication if the script never called
@@ -208,7 +208,8 @@ void scriptingInit(int setup) {
 
     luaRegisterServerAPI(lua);
 
-    /* register debug commands */
+    /* register debug commands. we only need to add it under 'server' as 'redis' is effectively aliased to 'server'
+     * table at this point. */
     lua_getglobal(lua, "server");
 
     /* server.breakpoint */
@@ -235,7 +236,7 @@ void scriptingInit(int setup) {
     {
         char *errh_func = "local dbg = debug\n"
                           "debug = nil\n"
-                          "function __redis__err__handler(err)\n"
+                          "function __server__err__handler(err)\n"
                           "  local i = dbg.getinfo(2,'nSl')\n"
                           "  if i and i.what == 'C' then\n"
                           "    i = dbg.getinfo(3,'nSl')\n"
@@ -251,6 +252,9 @@ void scriptingInit(int setup) {
                           "end\n";
         luaL_loadbuffer(lua, errh_func, strlen(errh_func), "@err_handler_def");
         lua_pcall(lua, 0, 0, 0);
+        /* Duplicate the function with __redis__err_handler name for backwards compatibility */
+        lua_getglobal(lua, "__server__err__handler");
+        lua_setglobal(lua, "__redis__err__handler");
     }
 
     /* Create the (non connected) client that we use to execute server commands
@@ -577,7 +581,7 @@ void evalGenericCommand(client *c, int evalsha) {
         evalCalcFunctionName(evalsha, c->argv[1]->ptr, funcname);
 
     /* Push the pcall error handler function on the stack. */
-    lua_getglobal(lua, "__redis__err__handler");
+    lua_getglobal(lua, "__server__err__handler");
 
     /* Try to lookup the Lua function */
     lua_getfield(lua, LUA_REGISTRYINDEX, funcname);
@@ -1525,7 +1529,8 @@ void ldbServer(lua_State *lua, sds *argv, int argc) {
     lua_getglobal(lua, "server");
     lua_pushstring(lua, "call");
     lua_gettable(lua, -2); /* Stack: server, server.call */
-    for (j = 1; j < argc; j++) lua_pushlstring(lua, argv[j], sdslen(argv[j]));
+    for (j = 1; j < argc; j++)
+        lua_pushlstring(lua, argv[j], sdslen(argv[j]));
     ldb.step = 1;                   /* Force server.call() to log. */
     lua_pcall(lua, argc - 1, 1, 0); /* Stack: server, result */
     ldb.step = 0;                   /* Disable logging. */

@@ -361,7 +361,7 @@ start_server {overrides {save ""}} {
 
 exec cp -f tests/assets/scriptbackup.rdb $server_path
 start_server [list overrides [list "dir" $server_path "dbfilename" "scriptbackup.rdb" "appendonly" "no"]] {
-    # the script is: "return redis.call('set', 'foo', 'bar')""
+    # the script is: "return server.call('set', 'foo', 'bar')""
     # its sha1   is: a0c38691e9fffe4563723c32ba77a34398e090e6
     test {script won't load anymore if it's in rdb} {
         assert_equal [r script exists a0c38691e9fffe4563723c32ba77a34398e090e6] 0
@@ -389,21 +389,21 @@ start_server {} {
 
         # repeat with script
         assert_error {MISCONF *} {r eval {
-            return redis.call('set','x',1)
+            return server.call('set','x',1)
             } 1 x
         }
         assert_equal {x} [r eval {
-            return redis.call('get','x')
+            return server.call('get','x')
             } 1 x
         ]
 
         # again with script using shebang
         assert_error {MISCONF *} {r eval {#!lua
-            return redis.call('set','x',1)
+            return server.call('set','x',1)
             } 1 x
         }
         assert_equal {x} [r eval {#!lua flags=no-writes
-            return redis.call('get','x')
+            return server.call('get','x')
             } 1 x
         ]
 

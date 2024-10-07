@@ -1,5 +1,5 @@
 foreach is_eval {0 1} {
-foreach script_compatibility_api {server redis} {
+foreach script_compatibility_api {server valkey} {
 
 # We run the tests using both the server APIs, e.g. server.call(), and valkey APIs, e.g. redis.call(),
 # in order to ensure compatibility.

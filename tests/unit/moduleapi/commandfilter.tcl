@@ -38,15 +38,15 @@ start_server {tags {"modules"}} {
         r lrange log-key 0 -1
     } "{ping @log}"
 
-    test {Command Filter applies on Lua redis.call()} {
+    test {Command Filter applies on Lua server.call()} {
         r del log-key
-        r eval "redis.call('ping', '@log')" 0
+        r eval "server.call('ping', '@log')" 0
         r lrange log-key 0 -1
     } "{ping @log}"
 
-    test {Command Filter applies on Lua redis.call() that calls a module} {
+    test {Command Filter applies on Lua server.call() that calls a module} {
         r del log-key
-        r eval "redis.call('commandfilter.ping')" 0
+        r eval "server.call('commandfilter.ping')" 0
         r lrange log-key 0 -1
     } "{ping @log}"
 
@@ -88,7 +88,7 @@ start_server {tags {"modules"}} {
         r commandfilter.ping
         assert_equal {} [r lrange log-key 0 -1]
 
-        r eval "redis.call('commandfilter.ping')" 0
+        r eval "server.call('commandfilter.ping')" 0
         assert_equal {} [r lrange log-key 0 -1]
     }
 
@@ -107,11 +107,11 @@ test {RM_CommandFilterArgInsert and script argv caching} {
         r module load $testmodule log-key 0
         r del mylist
         # command with 6 args
-        r eval {redis.call('rpush', KEYS[1], 'elem1', 'elem2', 'elem3', 'elem4')} 1 mylist
+        r eval {server.call('rpush', KEYS[1], 'elem1', 'elem2', 'elem3', 'elem4')} 1 mylist
         # command with 3 args that is changed to 4
-        r eval {redis.call('rpush', KEYS[1], '@insertafter')} 1 mylist
+        r eval {server.call('rpush', KEYS[1], '@insertafter')} 1 mylist
         # command with 6 args again
-        r eval {redis.call('rpush', KEYS[1], 'elem1', 'elem2', 'elem3', 'elem4')} 1 mylist
+        r eval {server.call('rpush', KEYS[1], 'elem1', 'elem2', 'elem3', 'elem4')} 1 mylist
         assert_equal [r lrange mylist 0 -1] {elem1 elem2 elem3 elem4 @insertafter --inserted-after-- elem1 elem2 elem3 elem4}
     }
 }

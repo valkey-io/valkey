@@ -159,7 +159,7 @@ void timerHandlerEval(ValkeyModuleCtx *ctx, void *data) {
 
     ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx,"INCRBY","cc!","timer-eval-start","1");
     ValkeyModule_FreeCallReply(reply);
-    reply = ValkeyModule_Call(ctx, "EVAL", "cccc!", "redis.call('set',KEYS[1],ARGV[1])", "1", "foo", "bar");
+    reply = ValkeyModule_Call(ctx, "EVAL", "cccc!", "server.call('set',KEYS[1],ARGV[1])", "1", "foo", "bar");
     ValkeyModule_FreeCallReply(reply);
 
     ValkeyModule_Replicate(ctx, "INCR", "c", "timer-eval-middle");

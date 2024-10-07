@@ -217,7 +217,7 @@ start_server {tags {"tracking network logreqres:skip"}} {
         assert_equal "1" [$rd_sg GET key1]
 
         # For write command in script, invalid key should not be tracked with NOLOOP flag
-        $rd_sg eval "return redis.call('set', 'key1', '2')" 1 key1
+        $rd_sg eval "return server.call('set', 'key1', '2')" 1 key1
         assert_equal "2" [$rd_sg GET key1]
         $rd_sg CLIENT TRACKING off
     }
@@ -228,12 +228,12 @@ start_server {tags {"tracking network logreqres:skip"}} {
         $rd_sg MSET key2{t} 1 key2{t} 1
 
         # If a script doesn't call any read command, don't track any keys
-        r EVAL "redis.call('set', 'key3{t}', 'bar')" 2 key1{t} key2{t} 
+        r EVAL "server.call('set', 'key3{t}', 'bar')" 2 key1{t} key2{t} 
         $rd_sg MSET key2{t} 2 key1{t} 2
         assert_equal "PONG" [r ping]
 
         # If a script calls a read command, just the read keys
-        r EVAL "redis.call('get', 'key2{t}')" 2 key1{t} key2{t}
+        r EVAL "server.call('get', 'key2{t}')" 2 key1{t} key2{t}
         $rd_sg MSET key2{t} 2 key3{t} 2
         assert_equal {invalidate key2{t}} [r read]
         assert_equal "PONG" [r ping]
@@ -241,12 +241,12 @@ start_server {tags {"tracking network logreqres:skip"}} {
         # RO variants work like the normal variants
 
         # If a RO script doesn't call any read command, don't track any keys
-        r EVAL_RO "redis.call('ping')" 2 key1{t} key2{t}
+        r EVAL_RO "server.call('ping')" 2 key1{t} key2{t}
         $rd_sg MSET key2{t} 2 key1{t} 2
         assert_equal "PONG" [r ping]
 
         # If a RO script calls a read command, just the read keys
-        r EVAL_RO "redis.call('get', 'key2{t}')" 2 key1{t} key2{t}
+        r EVAL_RO "server.call('get', 'key2{t}')" 2 key1{t} key2{t}
         $rd_sg MSET key2{t} 2 key3{t} 2
         assert_equal {invalidate key2{t}} [r read]
         assert_equal "PONG" [r ping]

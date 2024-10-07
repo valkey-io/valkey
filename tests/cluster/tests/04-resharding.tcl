@@ -110,7 +110,7 @@ test "Cluster consistency during live resharding" {
         } elseif {$listid % 3 == 1} {
             $cluster_plaintext rpush $key $ele
         } else {
-            $cluster eval {redis.call("rpush",KEYS[1],ARGV[1])} 1 $key $ele
+            $cluster eval {server.call("rpush",KEYS[1],ARGV[1])} 1 $key $ele
         }
         lappend content($key) $ele
 

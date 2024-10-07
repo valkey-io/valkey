@@ -446,9 +446,9 @@ tags "modules" {
                     set repl [attach_to_replication_stream]
 
                     assert_equal [ $master eval { \
-                        redis.call("propagate-test.simple"); \
-                        redis.call("set", "x", "y"); \
-                        redis.call("propagate-test.mixed"); return "OK" } 0 ] {OK}
+                        server.call("propagate-test.simple"); \
+                        server.call("set", "x", "y"); \
+                        server.call("propagate-test.mixed"); return "OK" } 0 ] {OK}
 
                     assert_replication_stream $repl {
                         {multi}
@@ -731,15 +731,15 @@ tags "modules aof" {
             
             r config resetstat
             r set foo bar
-            r EVAL {return redis.call('SET', KEYS[1], ARGV[1])} 1 foo bar2
+            r EVAL {return server.call('SET', KEYS[1], ARGV[1])} 1 foo bar2
             r test.rm_call_replicate set foo bar3
-            r EVAL {return redis.call('test.rm_call_replicate',ARGV[1],KEYS[1],ARGV[2])} 1 foo set bar4
+            r EVAL {return server.call('test.rm_call_replicate',ARGV[1],KEYS[1],ARGV[2])} 1 foo set bar4
             
             r multi
             r set foo bar5
-            r EVAL {return redis.call('SET', KEYS[1], ARGV[1])} 1 foo bar6
+            r EVAL {return server.call('SET', KEYS[1], ARGV[1])} 1 foo bar6
             r test.rm_call_replicate set foo bar7
-            r EVAL {return redis.call('test.rm_call_replicate',ARGV[1],KEYS[1],ARGV[2])} 1 foo set bar8
+            r EVAL {return server.call('test.rm_call_replicate',ARGV[1],KEYS[1],ARGV[2])} 1 foo set bar8
             r exec
 
             assert_match {*calls=8,*,rejected_calls=0,failed_calls=0} [cmdrstat set r]

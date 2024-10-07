@@ -179,8 +179,8 @@ foreach command {SORT SORT_RO} {
         r zadd zset 10 d
         r zadd zset 3 e
         r eval {
-            return {redis.call('sort',KEYS[1],'by','nosort','asc'),
-                    redis.call('sort',KEYS[1],'by','nosort','desc')}
+            return {server.call('sort',KEYS[1],'by','nosort','asc'),
+                    server.call('sort',KEYS[1],'by','nosort','desc')}
         } 1 zset
     } {{a c e b d} {d b e c a}}
 

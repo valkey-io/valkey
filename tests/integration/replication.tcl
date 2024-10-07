@@ -1479,7 +1479,7 @@ start_server {tags {"repl external:skip"}} {
 }
 
 foreach dualchannel {yes no} {
-    test "replica actually flushes db if use diskless load with flushdb dual-channel-replication-enabled=$dualchannel" {
+    test "replica actually flushes db if use diskless load with flush-before-load dual-channel-replication-enabled=$dualchannel" {
         start_server {tags {"repl"}} {
             set replica [srv 0 client]
             set replica_log [srv 0 stdout]
@@ -1503,7 +1503,7 @@ foreach dualchannel {yes no} {
                 $master config set rdb-key-save-delay 10000
                 # Set up replica
                 $replica config set save ""
-                $replica config set repl-diskless-load flushdb
+                $replica config set repl-diskless-load flush-before-load
                 $replica config set dual-channel-replication-enabled $dualchannel
                 # Start the replication process...
                 $replica replicaof $master_host $master_port

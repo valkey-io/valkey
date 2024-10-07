@@ -107,7 +107,7 @@ configEnum repl_diskless_load_enum[] = {
     {"disabled", REPL_DISKLESS_LOAD_DISABLED},
     {"on-empty-db", REPL_DISKLESS_LOAD_WHEN_DB_EMPTY},
     {"swapdb", REPL_DISKLESS_LOAD_SWAPDB},
-    {"flushdb", REPL_DISKLESS_LOAD_FLUSHDB},
+    {"flush-before-load", REPL_DISKLESS_LOAD_FLUSH_BEFORE_LOAD},
     {NULL, 0}};
 
 configEnum tls_auth_clients_enum[] = {

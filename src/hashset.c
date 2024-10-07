@@ -1490,21 +1490,36 @@ hashsetStats *hashsetGetStatsHt(hashset *t, int htidx, int full) {
     stats->htSize = stats->buckets * ELEMENTS_PER_BUCKET;
     stats->htUsed = t->used[htidx];
     if (!full) return stats;
-    /* Compute stats. */
+    /* Compute stats about probing chain lengths. */
     unsigned long chainlen = 0;
-    for (unsigned long idx = 0; idx < stats->buckets; idx++) {
+    size_t mask = expToMask(t->bucketExp[htidx]);
+    /* Find a suitable place to start: not in the middle of a probing chain. */
+    size_t start_idx;
+    for (start_idx = 0; start_idx <= mask; start_idx++) {
+        bucket *b = &t->tables[htidx][start_idx];
+        if (!b->everfull) break;
+    }
+    size_t idx = start_idx;
+    do {
+        idx = nextCursor(idx, mask);
         bucket *b = &t->tables[htidx][idx];
         if (b->everfull) {
             stats->totalChainLen++;
             chainlen++;
         } else {
             /* End of a chain (even a zero-length chain). */
-            /* Increment length index in chainlength vector. */
-            clvector[(chainlen < HASHSET_STATS_VECTLEN) ? chainlen : (HASHSET_STATS_VECTLEN - 1)]++;
+            /* Keys hashing to each bucket in this chain has a probe length
+             * depending on the bucket they hash to. Keys hashing to this bucket
+             * have probing length 0, keys hashing to the previos bucket has
+             * probling length 1, and so on. */
+            for (unsigned long i = 0; i <= chainlen; i++) {
+                int index = (i < HASHSET_STATS_VECTLEN) ? i : HASHSET_STATS_VECTLEN - 1;
+                clvector[index]++;
+            }
             if (chainlen > stats->maxChainLen) stats->maxChainLen = chainlen;
             chainlen = 0;
         }
-    }
+    } while (idx != start_idx);
     return stats;
 }
 
@@ -1526,19 +1541,19 @@ size_t hashsetGetStatsMsg(char *buf, size_t bufsize, hashsetStats *stats, int fu
     if (full) {
         l += snprintf(buf + l, bufsize - l,
                       " buckets: %lu\n"
-                      " max chain length: %lu\n"
-                      " avg chain length (counted): %.02f\n"
-                      " avg chain length (computed): %.02f\n"
-                      " Chain length distribution:\n",
-                      stats->buckets, stats->maxChainLen, (float)stats->totalChainLen / stats->buckets,
-                      (float)stats->htUsed / stats->buckets);
-
+                      " max probing length: %lu\n"
+                      " avg probing length: %.02f\n"
+                      " probing length distribution:\n",
+                      stats->buckets, stats->maxChainLen, (float)stats->totalChainLen / stats->buckets);
+        unsigned long chain_length_sum = 0;
         for (unsigned long i = 0; i < HASHSET_STATS_VECTLEN - 1; i++) {
             if (stats->clvector[i] == 0) continue;
             if (l >= bufsize) break;
+            chain_length_sum += stats->clvector[i];
             l += snprintf(buf + l, bufsize - l, "   %ld: %ld (%.02f%%)\n", i, stats->clvector[i],
-                          ((float)stats->clvector[i] / stats->htSize) * 100);
+                          ((float)stats->clvector[i] / stats->buckets) * 100);
         }
+        assert(chain_length_sum == stats->buckets);
     }
 
     /* Make sure there is a NULL term at the end. */

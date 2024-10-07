@@ -227,12 +227,8 @@ static clusterNode *clusterNodeIterNext(ClusterNodeIterator *iter) {
         /* Return the value associated with the node, or NULL if no more nodes */
         return ln ? listNodeValue(ln) : NULL;
     }
-    /* This line is unreachable but added to avoid compiler warnings */
-    default: {
-        serverPanic("bad type");
-        return NULL;
     }
-    }
+    serverPanic("Unknown iterator type %d", iter->type);
 }
 
 static void clusterNodeIterReset(ClusterNodeIterator *iter) {

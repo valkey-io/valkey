@@ -3252,10 +3252,16 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
      * 2. The primary waits for the replica to replicate before exiting, see
      * `shutdown-timeout` in conf for more details. In this case, if the primary
      * has lost a slot during the SIGTERM waiting, it will delete all the keys
-     * and replicates DEL to its replica. */
+     * and replicates DEL to its replica.
+     *
+     * 3. The primary waits for the replica to replicate during a manual failover.
+     * In this case, if the primary has lost a slot during the pausing, it will
+     * delete all the keys and replicates DEL to its replica. */
     int is_pause_replica_action = isPausedActions(PAUSE_ACTION_REPLICA);
     int is_pause_shutdown_purpose = isPausedPurpose(PAUSE_DURING_SHUTDOWN);
-    serverAssert(!is_pause_replica_action || server.client_pause_in_transaction || is_pause_shutdown_purpose);
+    int is_pause_failover_purpose = isPausedPurpose(PAUSE_DURING_FAILOVER);
+    serverAssert(!is_pause_replica_action || server.client_pause_in_transaction || is_pause_shutdown_purpose ||
+                 is_pause_failover_purpose);
 
     if (server.aof_state != AOF_OFF && target & PROPAGATE_AOF) feedAppendOnlyFile(dbid, argv, argc);
     if (target & PROPAGATE_REPL) replicationFeedReplicas(dbid, argv, argc);

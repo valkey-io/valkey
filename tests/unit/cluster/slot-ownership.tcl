@@ -97,3 +97,30 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {shutdown-timeout 100}
         assert_error {ERR no such key} {R 3 debug object foo}
     }
 }
+
+start_cluster 3 1 {tags {external:skip cluster}} {
+    test "Primary will not crash when processing dirty slots during manual failover pausing" {
+        R 0 set FOO 0
+
+        # Set primaries to drop the FAILOVER_AUTH_REQUEST packets, so that
+        # primary 0 will pause until the failover times out.
+        R 1 debug drop-cluster-packet-filter 5
+        R 2 debug drop-cluster-packet-filter 5
+
+        # Replica doint the manual failover.
+        R 3 cluster failover
+
+        # Move the slot to other primary
+        R 1 cluster bumpepoch
+        R 1 cluster setslot [R 1 cluster keyslot FOO] node [R 1 cluster myid]
+
+        # Waiting for dirty slot update.
+        wait_for_log_messages 0 {"*Deleting keys in dirty slot*"} 0 1000 10
+
+        # Make sure primary doesn't crash when deleting the keys.
+        R 0 ping
+
+        R 1 debug drop-cluster-packet-filter -1
+        R 2 debug drop-cluster-packet-filter -1
+    }
+}

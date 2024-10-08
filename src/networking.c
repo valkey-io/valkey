@@ -1044,7 +1044,7 @@ void addReplyArrayLen(client *c, long length) {
 }
 
 void addWritePreparedReplyArrayLen(writePreparedClient *wpc, long length) {
-    client *c = (client *) wpc;
+    client *c = (client *)wpc;
     serverAssert(length >= 0);
     _addReplyLongLongWithPrefix(c, length, '*');
 }
@@ -1056,7 +1056,7 @@ void addReplyMapLen(client *c, long length) {
 }
 
 void addWritePreparedReplyMapLen(writePreparedClient *wpc, long length) {
-    client *c = (client *) wpc;
+    client *c = (client *)wpc;
     int prefix = c->resp == 2 ? '*' : '%';
     if (c->resp == 2) length *= 2;
     _addReplyLongLongWithPrefix(c, length, prefix);
@@ -1129,7 +1129,7 @@ void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
 }
 
 void addWritePreparedReplyBulkCBuffer(writePreparedClient *wpc, const void *p, size_t len) {
-    client *c = (client *) wpc;
+    client *c = (client *)wpc;
     _addReplyLongLongWithPrefix(c, len, '$');
     _addReplyToBufferOrList(c, p, len);
     _addReplyToBufferOrList(c, "\r\n", 2);

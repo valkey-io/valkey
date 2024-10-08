@@ -874,7 +874,7 @@ void hscanCommand(client *c) {
 }
 
 static void hrandfieldReplyWithListpack(writePreparedClient *wpc, unsigned int count, listpackEntry *keys, listpackEntry *vals) {
-    client *c = (client *) wpc;
+    client *c = (client *)wpc;
     for (unsigned long i = 0; i < count; i++) {
         if (vals && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
         if (keys[i].sval)

@@ -107,7 +107,7 @@ start_cluster 3 1 {tags {external:skip cluster}} {
         R 1 debug drop-cluster-packet-filter 5
         R 2 debug drop-cluster-packet-filter 5
 
-        # Replica doint the manual failover.
+        # Replica doing the manual failover.
         R 3 cluster failover
 
         # Move the slot to other primary

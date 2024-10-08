@@ -1144,7 +1144,8 @@ void addReplyBulkSds(client *c, sds s) {
     _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
-void addWritePreparedReplyBulkSds(writePreparedClient *c, sds s) {
+void addWritePreparedReplyBulkSds(writePreparedClient *wpc, sds s) {
+    client *c = (client *)wpc;
     _addReplyLongLongWithPrefix(c, sdslen(s), '$');
     _addReplyToBufferOrList(c, s, sdslen(s));
     sdsfree(s);

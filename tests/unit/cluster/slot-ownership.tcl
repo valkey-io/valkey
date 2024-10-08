@@ -68,6 +68,7 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {shutdown-timeout 100}
         pause_process [srv -3 pid]
 
         # Incr the key and immediately shutdown the primary.
+        # The primary waits for the replica to replicate before exiting.
         R 0 incr FOO
         exec kill -SIGTERM [srv 0 pid]
         wait_for_condition 50 100 {

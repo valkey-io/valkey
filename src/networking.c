@@ -4573,7 +4573,7 @@ void unpauseActions(pause_purpose purpose) {
     updatePausedActions();
 }
 
-/* Returns 1 if the specified purpose is currently pausing. */
+/* Returns 1 if clients are currently paused for the specified purpose. */
 int isPausedPurpose(pause_purpose purpose) {
     return server.client_pause_per_purpose[purpose].end != 0;
 }

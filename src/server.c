@@ -3243,7 +3243,7 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
      * replica pause (otherwise data may be lost during a failover) */
     int is_pause_replica_action = isPausedActions(PAUSE_ACTION_REPLICA);
     int is_pause_shutdown_purpose = isPausedPurpose(PAUSE_DURING_SHUTDOWN);
-    serverAssert(!(is_pause_replica_action && !is_pause_shutdown_purpose && !server.client_pause_in_transaction));
+    serverAssert(!is_pause_replica_action || is_pause_shutdown_purpose || server.client_pause_in_transaction);
 
     if (server.aof_state != AOF_OFF && target & PROPAGATE_AOF) feedAppendOnlyFile(dbid, argv, argc);
     if (target & PROPAGATE_REPL) replicationFeedReplicas(dbid, argv, argc);

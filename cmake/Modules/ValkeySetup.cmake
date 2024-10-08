@@ -74,6 +74,19 @@ if (WITH_TLS)
     unset(WITH_TLS CACHE)
 endif ()
 
+if (WITH_RDMA)
+    # RDMA support (Linux only)
+    if (LINUX AND NOT APPLE)
+        add_valkey_server_compiler_options("-DUSE_RDMA=2")
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(VALKEY_RDMA REQUIRED librdmacm)
+        pkg_check_modules(VALKEY_IBVERBS REQUIRED libibverbs)
+        list(APPEND RDMA_LIBS "${RDMA_LIBRARIES};${IBVERBS_LIBRARIES}")
+    else ()
+        message(WARNING "RDMA is only supported on Linux platforms")
+    endif ()
+endif ()
+
 set(BUILDING_ARM64 0)
 set(BUILDING_ARM32 0)
 
@@ -92,8 +105,10 @@ if (BUILDING_ARM64)
 endif ()
 
 if (APPLE)
+    add_valkey_server_linker_option("-rdynamic")
     add_valkey_server_linker_option("-ldl")
 elseif (UNIX)
+    add_valkey_server_linker_option("-rdynamic")
     add_valkey_server_linker_option("-pthread")
     add_valkey_server_linker_option("-ldl")
     add_valkey_server_linker_option("-lm")
@@ -271,6 +286,8 @@ set(VALKEY_BENCHMARK_SRCS
     ${CMAKE_SOURCE_DIR}/src/mt19937-64.c
     ${CMAKE_SOURCE_DIR}/src/strl.c)
 
+set(VALKEY_RDMA_MODULE_SRCS ${CMAKE_SOURCE_DIR}/src/rdma.c)
+
 add_custom_target(
     release_header
     COMMAND sh -c '${CMAKE_SOURCE_DIR}/src/mkreleasehdr.sh'
@@ -294,6 +311,15 @@ macro (valkey_create_symlink source link)
     )")
 endmacro ()
 
+# Install a binary
+macro (valkey_install_bin target)
+    # Install cli tool and create a redis symbolic link
+    install(
+        TARGETS ${target}
+        DESTINATION ${INSTALL_BIN_PATH}
+        PERMISSIONS ${VALKEY_EXE_PERMISSIONS})
+endmacro ()
+
 # Helper macro that defines, builds and installs `target` In addition, it creates a symbolic link between the target and
 # `link_name`
 macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
@@ -312,9 +338,6 @@ macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
     target_link_libraries(${target} ${libs} ${ld_flags})
 
     # Install cli tool and create a redis symbolic link
-    install(
-        TARGETS ${target}
-        DESTINATION ${INSTALL_BIN_PATH}
-        PERMISSIONS ${VALKEY_EXE_PERMISSIONS})
+    valkey_install_bin(${target})
     valkey_create_symlink(${INSTALL_BIN_PATH}/${target} ${INSTALL_BIN_PATH}/${link_name})
 endmacro ()

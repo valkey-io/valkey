@@ -10,6 +10,7 @@ endif ()
 # Options
 option(WITH_TLS "Build valkey-server with TLS support" OFF)
 option(BUILD_TESTS "Build valkey-unit-tests" OFF)
+option(WITH_RDMA "Build valkey-rdma module" OFF)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 project("valkey")

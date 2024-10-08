@@ -40,4 +40,15 @@ else ()
     valkey_create_symlink("${INSTALL_BIN_PATH}/valkey-server" "${INSTALL_BIN_PATH}/valkey-sentinel")
     valkey_create_symlink("${INSTALL_BIN_PATH}/valkey-server" "${INSTALL_BIN_PATH}/valkey-check-rdb")
     valkey_create_symlink("${INSTALL_BIN_PATH}/valkey-server" "${INSTALL_BIN_PATH}/valkey-check-aof")
+
+    # Target valkey-rdma
+    if (WITH_RDMA)
+        set(MODULE_NAME "valkey-rdma")
+        add_library(${MODULE_NAME} SHARED "${VALKEY_RDMA_MODULE_SRCS}")
+        target_compile_options(${MODULE_NAME} PUBLIC -DBUILD_RDMA_MODULE -DUSE_RDMA=1)
+        target_link_libraries(${MODULE_NAME} "${RDMA_LIBS}")
+        # remove the "lib" prefix from the module
+        set_target_properties(${MODULE_NAME} PROPERTIES PREFIX "")
+        valkey_install_bin(${MODULE_NAME})
+    endif ()
 endif ()

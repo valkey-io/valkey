@@ -7,7 +7,10 @@ add_library(valkeylib STATIC "${VALKEY_LIB_SRCS}")
 
 if (BUILD_TESTS)
     # Build unit tests only
+    message(STATUS "Building unit tests")
     add_definitions(-DSERVER_TEST=1)
+    add_definitions(-DVALKEY_USE_TEST_MAIN)
+    add_definitions(-DVALKEY_USE_TEST_SERVER_ASSERT)
     add_subdirectory(unit)
 else ()
     # Target: valkey-server

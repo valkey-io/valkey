@@ -1022,7 +1022,7 @@ void debugCommand(client *c) {
 
 /* =========================== Crash handling  ============================== */
 
-#ifndef SERVER_TEST
+#ifndef VALKEY_USE_TEST_SERVER_ASSERT
 __attribute__((noinline)) void _serverAssert(const char *estr, const char *file, int line) {
     int new_report = bugReportStart();
     serverLog(LL_WARNING, "=== %sASSERTION FAILED ===", new_report ? "" : "RECURSIVE ");

@@ -158,8 +158,7 @@ add_custom_target(generate_commands_def DEPENDS ${CMAKE_SOURCE_DIR}/src/commands
 add_custom_target(
     release_header
     COMMAND sh -c '${CMAKE_SOURCE_DIR}/src/mkreleasehdr.sh'
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src"
-    DEPENDS ${CMAKE_SOURCE_DIR}/src/release.h)
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
 
 # Build the source file list
 set(VALKEY_LIB_SRCS

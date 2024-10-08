@@ -3240,10 +3240,22 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
     if (!shouldPropagate(target)) return;
 
     /* This needs to be unreachable since the dataset should be fixed during
-     * replica pause (otherwise data may be lost during a failover) */
+     * replica pause (otherwise data may be lost during a failover).
+     *
+     * Thought, there are exceptions:
+     *
+     * 1. We allow write commands that were queued up before and after to
+     * execute, if a CLIENT PAUSE executed during a transaction, we will
+     * track the state, the CLIENT PAUSE takes effect only after a transaction
+     * has finished.
+     *
+     * 2. The primary waits for the replica to replicate before exiting, see
+     * `shutdown-timeout` in conf for more details. In this case, if the primary
+     * has lost a slot during the SIGTERM waiting, it will delete all the keys
+     * and replicates DEL to its replica. */
     int is_pause_replica_action = isPausedActions(PAUSE_ACTION_REPLICA);
     int is_pause_shutdown_purpose = isPausedPurpose(PAUSE_DURING_SHUTDOWN);
-    serverAssert(!is_pause_replica_action || is_pause_shutdown_purpose || server.client_pause_in_transaction);
+    serverAssert(!is_pause_replica_action || server.client_pause_in_transaction || is_pause_shutdown_purpose);
 
     if (server.aof_state != AOF_OFF && target & PROPAGATE_AOF) feedAppendOnlyFile(dbid, argv, argc);
     if (target & PROPAGATE_REPL) replicationFeedReplicas(dbid, argv, argc);

@@ -874,8 +874,9 @@ void hscanCommand(client *c) {
 }
 
 static void hrandfieldReplyWithListpack(writePreparedClient *wpc, unsigned int count, listpackEntry *keys, listpackEntry *vals) {
+    client *c = (client *) wpc;
     for (unsigned long i = 0; i < count; i++) {
-        if (vals && wpc->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
+        if (vals && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
         if (keys[i].sval)
             addWritePreparedReplyBulkCBuffer(wpc, keys[i].sval, keys[i].slen);
         else
@@ -939,8 +940,8 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
                 key = dictGetKey(de);
                 value = dictGetVal(de);
                 if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
-                addWritePreparedReplyBulkCBuffer(c, key, sdslen(key));
-                if (withvalues) addWritePreparedReplyBulkCBuffer(c, value, sdslen(value));
+                addWritePreparedReplyBulkCBuffer(wpc, key, sdslen(key));
+                if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value, sdslen(value));
                 if (c->flag.close_asap) break;
             }
         } else if (hash->encoding == OBJ_ENCODING_LISTPACK) {

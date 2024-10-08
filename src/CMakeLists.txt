@@ -4,6 +4,8 @@ set(INSTALL_BIN_PATH ${CMAKE_INSTALL_PREFIX}/bin)
 
 # Create a library from Valkey sources
 add_library(valkeylib STATIC "${VALKEY_LIB_SRCS}")
+add_dependencies(valkeylib release_header)
+add_dependencies(valkeylib generate_commands_def)
 
 if (BUILD_TESTS)
     # Build unit tests only
@@ -26,18 +28,19 @@ else ()
     set(VALKEY_SERVER_SRCS "${CMAKE_SOURCE_DIR}/src/server.c")
     valkey_build_and_install_bin(valkey-server "${VALKEY_SERVER_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${SERVER_LIBS}"
                                  "redis-server")
-    add_dependencies(valkey-server release_header)
 
     # Target: valkey-cli
     list(APPEND CLI_LIBS "hiredis")
     list(APPEND CLI_LIBS "linenoise")
     valkey_build_and_install_bin(valkey-cli "${VALKEY_CLI_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${CLI_LIBS}" "redis-cli")
+    add_dependencies(valkey-cli generate_commands_def)
 
     # Target: valkey-benchmark
     list(APPEND BENCH_LIBS "hiredis")
     list(APPEND BENCH_LIBS "hdr_histogram")
     valkey_build_and_install_bin(valkey-benchmark "${VALKEY_BENCHMARK_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${BENCH_LIBS}"
                                  "redis-benchmark")
+    add_dependencies(valkey-benchmark generate_commands_def)
 
     # Targets: valkey-sentinel, valkey-check-aof and valkey-check-rdb are just symbolic links
     valkey_create_symlink("${INSTALL_BIN_PATH}/valkey-server" "${INSTALL_BIN_PATH}/valkey-sentinel")

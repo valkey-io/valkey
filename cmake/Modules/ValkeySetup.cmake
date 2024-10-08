@@ -145,6 +145,22 @@ if (USE_JEMALLOC)
     include_directories("${CMAKE_SOURCE_DIR}/deps/jemalloc/include")
 endif ()
 
+# Add custom rule for generating commands.c file form the json files
+file(GLOB COMMAND_FILES_JSON "${CMAKE_SOURCE_DIR}/src/commands/*.json")
+add_custom_command(
+    OUTPUT ${CMAKE_SOURCE_DIR}/src/commands.def
+    DEPENDS ${COMMAND_FILES_JSON}
+    COMMAND ${CMAKE_SOURCE_DIR}/utils/generate-command-code.py
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
+add_custom_target(generate_commands_def DEPENDS ${CMAKE_SOURCE_DIR}/src/commands.def)
+
+# Generate release.h file (always)
+add_custom_target(
+    release_header
+    COMMAND sh -c '${CMAKE_SOURCE_DIR}/src/mkreleasehdr.sh'
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src"
+    DEPENDS ${CMAKE_SOURCE_DIR}/src/release.h)
+
 # Build the source file list
 set(VALKEY_LIB_SRCS
     ${CMAKE_SOURCE_DIR}/src/threads_mngr.c
@@ -287,11 +303,6 @@ set(VALKEY_BENCHMARK_SRCS
     ${CMAKE_SOURCE_DIR}/src/strl.c)
 
 set(VALKEY_RDMA_MODULE_SRCS ${CMAKE_SOURCE_DIR}/src/rdma.c)
-
-add_custom_target(
-    release_header
-    COMMAND sh -c '${CMAKE_SOURCE_DIR}/src/mkreleasehdr.sh'
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
 
 # Common compiler flags
 add_valkey_server_compiler_options("-pedantic")

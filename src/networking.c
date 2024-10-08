@@ -4548,9 +4548,9 @@ static void pauseClientsByClient(mstime_t endTime, int isPauseClientAll) {
  * The function always succeed, even if there is already a pause in progress.
  * The new paused_actions of a given 'purpose' will override the old ones and
  * end time will be updated if new end time is bigger than currently configured */
-void pauseActions(pause_purpose purpose, mstime_t end, uint32_t actions_bitmask) {
+void pauseActions(pause_purpose purpose, mstime_t end, uint32_t actions) {
     /* Manage pause type and end time per pause purpose. */
-    server.client_pause_per_purpose[purpose].paused_actions = actions_bitmask;
+    server.client_pause_per_purpose[purpose].paused_actions = actions;
 
     /* If currently configured end time bigger than new one, then keep it */
     if (server.client_pause_per_purpose[purpose].end < end) server.client_pause_per_purpose[purpose].end = end;

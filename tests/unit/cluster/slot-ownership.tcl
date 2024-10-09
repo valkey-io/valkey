@@ -61,7 +61,7 @@ start_cluster 2 2 {tags {external:skip cluster}} {
 }
 
 start_cluster 3 1 {tags {external:skip cluster} overrides {shutdown-timeout 100}} {
-    test "Primary will not crash when processing dirty slots during shutdown waiting" {
+    test "Primary lost a slot during the shutdown waiting" {
         R 0 set FOO 0
 
         # Pause the replica.
@@ -99,7 +99,7 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {shutdown-timeout 100}
 }
 
 start_cluster 3 1 {tags {external:skip cluster}} {
-    test "Primary will not crash when processing dirty slots during manual failover pausing" {
+    test "Primary lost a slot during the manual failover pausing" {
         R 0 set FOO 0
 
         # Set primaries to drop the FAILOVER_AUTH_REQUEST packets, so that
@@ -122,5 +122,25 @@ start_cluster 3 1 {tags {external:skip cluster}} {
 
         R 1 debug drop-cluster-packet-filter -1
         R 2 debug drop-cluster-packet-filter -1
+    }
+}
+
+start_cluster 3 1 {tags {external:skip cluster}} {
+    test "Primary lost a slot during the client pause command" {
+        R 0 set FOO 0
+
+        R 0 client pause 1000000000 write
+
+        # Move the slot to other primary
+        R 1 cluster bumpepoch
+        R 1 cluster setslot [R 1 cluster keyslot FOO] node [R 1 cluster myid]
+
+        # Waiting for dirty slot update.
+        wait_for_log_messages 0 {"*Deleting keys in dirty slot*"} 0 1000 10
+
+        # Make sure primary doesn't crash when deleting the keys.
+        R 0 ping
+
+        R 0 client unpause
     }
 }

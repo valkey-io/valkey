@@ -12194,11 +12194,15 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
     ValkeyModuleCtx ctx;
     moduleCreateContext(&ctx, NULL, VALKEYMODULE_CTX_TEMP_CLIENT); /* We pass NULL since we don't have a module yet. */
     if (onload((void *)&ctx, module_argv, module_argc) == VALKEYMODULE_ERR) {
-        serverLog(LL_WARNING, "Module %s initialization failed. Module not loaded", path);
         if (ctx.module) {
+            serverLog(LL_WARNING, "Module %s initialization failed. Module not loaded.", path);
             moduleUnregisterCleanup(ctx.module);
             moduleRemoveCateogires(ctx.module);
             moduleFreeModuleStructure(ctx.module);
+        } else {
+            /* If there is no ctx.module, this means that our ValkeyModule_Init call failed,
+             * and currently init will only fail on busy name. */
+            serverLog(LL_WARNING, "Module %s initialization failed. Module name is busy.", path);
         }
         moduleFreeContext(&ctx);
         dlclose(handle);

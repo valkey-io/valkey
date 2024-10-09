@@ -144,8 +144,7 @@ start_server {tags {"modules acl"}} {
     }
 
     test {test if ACL CAT output for the new category is correct} {
-        set cmds_in_cat [r ACL CAT foocategory]
-        assert {$cmds_in_cat eq {aclcheck.module.command.test.add.new.aclcategories}}
+        assert_equal [r ACL CAT foocategory] aclcheck.module.command.test.add.new.aclcategories
     }
 
     test {test permission compaction and simplification for categories added by a module} {

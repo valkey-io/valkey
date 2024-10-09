@@ -6068,6 +6068,7 @@ unsigned int delKeysInSlot(unsigned int hashslot) {
     kvstoreReleaseDictIterator(kvs_di);
 
     server.server_del_keys_in_slot = 0;
+    serverAssert(server.execution_nesting == 0);
     return j;
 }
 

@@ -1,8 +1,8 @@
 ## Introduction
 Valkey uses a very simple C testing framework, built up over time but now based loosely off of [Unity](https://www.throwtheswitch.org/unity).
 
-All test files being test_ in the unit directory.
-A single test file can have multiple individual tests, and they must be of the form `int test_<test_name>(int argc, char *argv[], int flags) {`, where test_name is the name of the test.
+All test files being test_ in the unit directory, E.g. test_example.c.
+A single test file can have multiple individual tests, and they must be of the form `int test_example<test_name>(int argc, char *argv[], int flags) {`, where test_name is the name of the test.
 The test name must be globally unique.
 A test will be marked as successful if returns 0, and will be marked failed in all other cases.
 

@@ -6,7 +6,7 @@
 #include "../util.h"
 #include "test_help.h"
 
-int test_string2ll(int argc, char **argv, int flags) {
+int test_utilString2ll(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -67,7 +67,7 @@ int test_string2ll(int argc, char **argv, int flags) {
     return 0;
 }
 
-int test_string2l(int argc, char **argv, int flags) {
+int test_utilString2l(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -122,7 +122,7 @@ int test_string2l(int argc, char **argv, int flags) {
     return 0;
 }
 
-int test_ll2string(int argc, char **argv, int flags) {
+int test_util_ll2string(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -169,7 +169,7 @@ int test_ll2string(int argc, char **argv, int flags) {
     return 0;
 }
 
-int test_ld2string(int argc, char **argv, int flags) {
+int test_util_ld2string(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -186,7 +186,7 @@ int test_ld2string(int argc, char **argv, int flags) {
     return 0;
 }
 
-int test_fixedpoint_d2string(int argc, char **argv, int flags) {
+int test_utilFixedpoint_d2string(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -253,7 +253,7 @@ int test_fixedpoint_d2string(int argc, char **argv, int flags) {
     return 0;
 }
 
-int test_version2num(int argc, char **argv, int flags) {
+int test_utilVersion2num(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -283,13 +283,13 @@ static int cache_exist(int fd) {
 }
 #endif
 
-int test_reclaimFilePageCache(int argc, char **argv, int flags) {
+int test_utilReclaimFilePageCache(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
 
 #if defined(__linux__)
-    char *tmpfile = "/tmp/redis-reclaim-cache-test";
+    char *tmpfile = "/tmp/valkey-reclaim-cache-test";
     int fd = open(tmpfile, O_RDWR | O_CREAT, 0644);
     TEST_ASSERT(fd >= 0);
 

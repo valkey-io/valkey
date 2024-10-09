@@ -280,7 +280,7 @@ start_server {tags {"pause network"}} {
         wait_for_condition 1000 10 {
             [expr $evicted_keys + 1] eq [s 0 evicted_keys]
         } else {
-            fail "The old primary was not converted into replica"
+            fail "Key is not evicted"
         }
 
         r config set maxmemory 0

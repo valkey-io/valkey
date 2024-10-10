@@ -365,6 +365,67 @@ int test_scan(int argc, char **argv, int flags) {
     return 0;
 }
 
+void scanrehashfn(void *privdata, void *element) {
+    scandata *data = (scandata *)privdata;
+    unsigned long j = (unsigned long)element;
+    if (j < (unsigned long) data->count) {
+        data->element_seen[j]++;
+    }
+}
+
+int test_scan_with_rehash(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    int num_rounds = (flags & UNIT_TEST_ACCURATE) ? 1000 : 100;
+    int num_elements_inspected = 100;
+
+    /* A set of longs, i.e. pointer-sized values. */
+    hashsetType type = {0};
+    long j;
+
+    for (int round = 0; round < num_rounds; round++) {
+        const long count = num_elements_inspected + 1 + (rand() % 1000);
+
+        /* Seed, to make sure each round is different. */
+        test_set_hash_function_seed(argc, argv, flags);
+
+        /* Populate */
+        hashset *t = hashsetCreate(&type);
+        for (j = 0; j < count; j++) {
+            assert(hashsetAdd(t, (void *)j));
+        }
+
+        /* Scan */
+        scandata *data = calloc(1, sizeof(scandata) + num_elements_inspected);
+        data->count = num_elements_inspected;
+        unsigned num_cycles = 0;
+        unsigned rehash_cycle = rand() % 10;
+        size_t cursor = 0;
+        do {
+            cursor = hashsetScan(t, cursor, scanrehashfn, data, 0);
+            num_cycles++;
+            if (num_cycles == rehash_cycle) {
+                for (j = num_elements_inspected; j < count; j++) {
+                    hashsetDelete(t, (void *)j);
+                }
+            }
+        } while (cursor != 0);
+
+        /* Verify every element that was not deleted was returned at least once */
+        for (j = 1; j < num_elements_inspected; j++) {
+            assert(data->element_seen[j] >= 1);
+            assert(data->element_seen[j] <= 3);
+        }
+
+        /* Cleanup */
+        hashsetRelease(t);
+        free(data);
+    }
+    return 0;
+}
+
 int test_iterator(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);

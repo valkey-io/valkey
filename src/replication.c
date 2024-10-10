@@ -2622,7 +2622,7 @@ static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
 
     if (connSetReadHandler(conn, dualChannelFullSyncWithPrimary) == C_ERR) {
         char conninfo[CONN_INFO_LEN];
-        serverLog(LL_WARNING, "Can't create readable event for SYNC: %s (%s)", *err,
+        serverLog(LL_WARNING, "Can't create readable event for SYNC: %s (%s)", strerror(errno),
                   connGetInfo(conn, conninfo, sizeof(conninfo)));
         return C_ERR;
     }
@@ -3315,7 +3315,7 @@ void dualChannelSetupMainConnForPsync(connection *conn) {
     }
 
     if (ret == C_ERR) {
-        serverLog(LL_WARNING, "Aborting dual channel sync. Main channel psync result %d, %s", ret, err);
+        serverLog(LL_WARNING, "Aborting dual channel sync. Main channel psync result %d %s", ret, err ? err : "");
         cancelReplicationHandshake(1);
     }
     sdsfree(err);

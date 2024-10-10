@@ -368,7 +368,7 @@ int test_scan(int argc, char **argv, int flags) {
 void scanrehashfn(void *privdata, void *element) {
     scandata *data = (scandata *)privdata;
     unsigned long j = (unsigned long)element;
-    if (j < (unsigned long) data->count) {
+    if (j < (unsigned long)data->count) {
         data->element_seen[j]++;
     }
 }

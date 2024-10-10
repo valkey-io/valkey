@@ -1273,7 +1273,7 @@ size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *priv
 
             if ((growing && !ahead_rehash) || (!growing && !behind_rehash)) {
                 /* Iterate over indices in larger table that are the expansion of
-                * the index pointed to by the cursor in the smaller table. */
+                 * the index pointed to by the cursor in the smaller table. */
                 size_t big_table_cursor = cursor;
                 do {
                     /* Emit elements in bigger table. */

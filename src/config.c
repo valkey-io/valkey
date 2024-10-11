@@ -3245,6 +3245,7 @@ standardConfig static_configs[] = {
     /* Unsigned Long configs */
     createULongConfig("active-defrag-max-scan-fields", NULL, MODIFIABLE_CONFIG, 1, LONG_MAX, server.active_defrag_max_scan_fields, 1000, INTEGER_CONFIG, NULL, NULL), /* Default: keys with more than 1000 fields will be processed separately */
     createULongConfig("slowlog-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.slowlog_max_len, 128, INTEGER_CONFIG, NULL, NULL),
+    createULongConfig("bigkeylog-bucket-size", NULL, IMMUTABLE_CONFIG, 0, LONG_MAX, server.bigkeylog_bucket_size, 128, INTEGER_CONFIG, NULL, NULL),
     createULongConfig("acllog-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.acllog_max_len, 128, INTEGER_CONFIG, NULL, NULL),
     createULongConfig("cluster-blacklist-ttl", NULL, MODIFIABLE_CONFIG, 0, ULONG_MAX, server.cluster_blacklist_ttl, 60, INTEGER_CONFIG, NULL, NULL),
 
@@ -3253,6 +3254,7 @@ standardConfig static_configs[] = {
     createLongLongConfig("cluster-node-timeout", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.cluster_node_timeout, 15000, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("cluster-ping-interval", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, LLONG_MAX, server.cluster_ping_interval, 0, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("slowlog-log-slower-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.slowlog_log_slower_than, 10000, INTEGER_CONFIG, NULL, NULL),
+    createLongLongConfig("bigkeylog-num-elements-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.bigkeylog_num_elements_larger_than, 10000, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("latency-monitor-threshold", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.latency_monitor_threshold, 0, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("proto-max-bulk-len", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.proto_max_bulk_len, 512ll * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Bulk request max size */
     createLongLongConfig("stream-node-max-entries", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.stream_node_max_entries, 100, INTEGER_CONFIG, NULL, NULL),

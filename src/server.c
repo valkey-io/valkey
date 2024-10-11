@@ -32,6 +32,7 @@
 #include "cluster.h"
 #include "cluster_slot_stats.h"
 #include "slowlog.h"
+#include "bigkeylog.h"
 #include "bio.h"
 #include "latency.h"
 #include "mt19937-64.h"
@@ -2764,6 +2765,7 @@ void initServer(void) {
         exit(1);
     }
     slowlogInit();
+    bigkeylogInit();
     latencyMonitorInit();
     initSharedQueryBuf();
 
@@ -3315,6 +3317,10 @@ void slowlogPushCurrentCommand(client *c, struct serverCommand *cmd, ustime_t du
     c = scriptIsRunning() ? scriptGetCaller() : c;
 
     slowlogPushEntryIfNeeded(c, argv, argc, duration);
+}
+
+void bigkeylogPush(robj *keyobj, long long num_elements) {
+    bigkeylogPushEntryIfNeeded(keyobj, num_elements);
 }
 
 /* This function is called in order to update the total command histogram duration.

@@ -2389,10 +2389,10 @@ void readSyncBulkPayload(connection *conn) {
     } else {
         replicationCreatePrimaryClient(server.repl_transfer_s, rsi.repl_stream_db);
         server.repl_state = REPL_STATE_CONNECTED;
+        server.repl_down_since = 0;
         /* Send the initial ACK immediately to put this replica in online state. */
         replicationSendAck();
     }
-    server.repl_down_since = 0;
 
     /* Fire the primary link modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE, VALKEYMODULE_SUBEVENT_PRIMARY_LINK_UP, NULL);

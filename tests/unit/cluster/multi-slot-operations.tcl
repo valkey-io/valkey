@@ -109,7 +109,7 @@ test "DELSLOTSRANGE command with several boundary conditions test suite" {
 } cluster_allocate_with_continuous_slots_local
 
 start_cluster 1 0 {tags {external:skip cluster}} {
-    test "Regression test for multi-exec with RANDOMKEY accessing the wrong per-slot dicitonary" {
+    test "Regression test for multi-exec with RANDOMKEY accessing the wrong per-slot dictionary" {
         R 0 SETEX FOO 10000 BAR
         R 0 SETEX FIZZ 10000 BUZZ
 

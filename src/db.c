@@ -52,7 +52,9 @@ typedef enum {
     KEY_DELETED    /* The key was deleted now. */
 } keyStatus;
 
+keyStatus expireIfNeededWithSlot(serverDb *db, robj *key, int flags, int slot);
 keyStatus expireIfNeeded(serverDb *db, robj *key, int flags);
+int keyIsExpiredWithSlot(serverDb *db, robj *key, int slot);
 int keyIsExpired(serverDb *db, robj *key);
 static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEntry *de);
 static int getKVStoreIndexForKey(sds key);
@@ -381,7 +383,7 @@ robj *dbRandomKey(serverDb *db) {
 
         key = dictGetKey(de);
         keyobj = createStringObject(key, sdslen(key));
-        if (dbFindExpires(db, key)) {
+        if (dbFindExpiresWithSlot(db, key, randomSlot)) {
             if (allvolatile && server.primary_host && --maxtries == 0) {
                 /* If the DB is composed only of keys with an expire set,
                  * it could happen that all the keys are already logically
@@ -393,7 +395,7 @@ robj *dbRandomKey(serverDb *db) {
                  * return a key name that may be already expired. */
                 return keyobj;
             }
-            if (expireIfNeeded(db, keyobj, 0) != KEY_VALID) {
+            if (expireIfNeededWithSlot(db, keyobj, 0, randomSlot) != KEY_VALID) {
                 decrRefCount(keyobj);
                 continue; /* search for another key. This expired. */
             }
@@ -1693,12 +1695,19 @@ void setExpire(client *c, serverDb *db, robj *key, long long when) {
 
 /* Return the expire time of the specified key, or -1 if no expire
  * is associated with this key (i.e. the key is non volatile) */
-long long getExpire(serverDb *db, robj *key) {
+long long getExpireWithSlot(serverDb *db, robj *key, int slot) {
     dictEntry *de;
 
-    if ((de = dbFindExpires(db, key->ptr)) == NULL) return -1;
+    if ((de = dbFindExpiresWithSlot(db, key->ptr, slot)) == NULL) return -1;
 
     return dictGetSignedIntegerVal(de);
+}
+
+/* Return the expire time of the specified key, or -1 if no expire
+ * is associated with this key (i.e. the key is non volatile) */
+long long getExpire(serverDb *db, robj *key) {
+    int slot = server.cluster_enabled ? getKeySlot(key->ptr) : 0;
+    return getExpireWithSlot(db, key, slot);
 }
 
 /* Delete the specified expired key and propagate expire. */
@@ -1765,12 +1774,11 @@ void propagateDeletion(serverDb *db, robj *key, int lazy) {
     decrRefCount(argv[1]);
 }
 
-/* Check if the key is expired. */
-int keyIsExpired(serverDb *db, robj *key) {
+int keyIsExpiredWithSlot(serverDb *db, robj *key, int slot) {
     /* Don't expire anything while loading. It will be done later. */
     if (server.loading) return 0;
 
-    mstime_t when = getExpire(db, key);
+    mstime_t when = getExpireWithSlot(db, key, slot);
     mstime_t now;
 
     if (when < 0) return 0; /* No expire for this key */
@@ -1782,39 +1790,15 @@ int keyIsExpired(serverDb *db, robj *key) {
     return now > when;
 }
 
-/* This function is called when we are going to perform some operation
- * in a given key, but such key may be already logically expired even if
- * it still exists in the database. The main way this function is called
- * is via lookupKey*() family of functions.
- *
- * The behavior of the function depends on the replication role of the
- * instance, because by default replicas do not delete expired keys. They
- * wait for DELs from the primary for consistency matters. However even
- * replicas will try to have a coherent return value for the function,
- * so that read commands executed in the replica side will be able to
- * behave like if the key is expired even if still present (because the
- * primary has yet to propagate the DEL).
- *
- * In primary as a side effect of finding a key which is expired, such
- * key will be evicted from the database. Also this may trigger the
- * propagation of a DEL/UNLINK command in AOF / replication stream.
- *
- * On replicas, this function does not delete expired keys by default, but
- * it still returns KEY_EXPIRED if the key is logically expired. To force deletion
- * of logically expired keys even on replicas, use the EXPIRE_FORCE_DELETE_EXPIRED
- * flag. Note though that if the current client is executing
- * replicated commands from the primary, keys are never considered expired.
- *
- * On the other hand, if you just want expiration check, but need to avoid
- * the actual key deletion and propagation of the deletion, use the
- * EXPIRE_AVOID_DELETE_EXPIRED flag.
- *
- * The return value of the function is KEY_VALID if the key is still valid.
- * The function returns KEY_EXPIRED if the key is expired BUT not deleted,
- * or returns KEY_DELETED if the key is expired and deleted. */
-keyStatus expireIfNeeded(serverDb *db, robj *key, int flags) {
+/* Check if the key is expired. */
+int keyIsExpired(serverDb *db, robj *key) {
+    int slot = server.cluster_enabled ? getKeySlot(key->ptr) : 0;
+    return keyIsExpiredWithSlot(db, key, slot);
+}
+
+keyStatus expireIfNeededWithSlot(serverDb *db, robj *key, int flags, int slot) {
     if (server.lazy_expire_disabled) return KEY_VALID;
-    if (!keyIsExpired(db, key)) return KEY_VALID;
+    if (!keyIsExpiredWithSlot(db, key, slot)) return KEY_VALID;
 
     /* If we are running in the context of a replica, instead of
      * evicting the expired key from the database, we return ASAP:
@@ -1854,6 +1838,41 @@ keyStatus expireIfNeeded(serverDb *db, robj *key, int flags) {
         decrRefCount(key);
     }
     return KEY_DELETED;
+}
+
+/* This function is called when we are going to perform some operation
+ * in a given key, but such key may be already logically expired even if
+ * it still exists in the database. The main way this function is called
+ * is via lookupKey*() family of functions.
+ *
+ * The behavior of the function depends on the replication role of the
+ * instance, because by default replicas do not delete expired keys. They
+ * wait for DELs from the primary for consistency matters. However even
+ * replicas will try to have a coherent return value for the function,
+ * so that read commands executed in the replica side will be able to
+ * behave like if the key is expired even if still present (because the
+ * primary has yet to propagate the DEL).
+ *
+ * In primary as a side effect of finding a key which is expired, such
+ * key will be evicted from the database. Also this may trigger the
+ * propagation of a DEL/UNLINK command in AOF / replication stream.
+ *
+ * On replicas, this function does not delete expired keys by default, but
+ * it still returns KEY_EXPIRED if the key is logically expired. To force deletion
+ * of logically expired keys even on replicas, use the EXPIRE_FORCE_DELETE_EXPIRED
+ * flag. Note though that if the current client is executing
+ * replicated commands from the primary, keys are never considered expired.
+ *
+ * On the other hand, if you just want expiration check, but need to avoid
+ * the actual key deletion and propagation of the deletion, use the
+ * EXPIRE_AVOID_DELETE_EXPIRED flag.
+ *
+ * The return value of the function is KEY_VALID if the key is still valid.
+ * The function returns KEY_EXPIRED if the key is expired BUT not deleted,
+ * or returns KEY_DELETED if the key is expired and deleted. */
+keyStatus expireIfNeeded(serverDb *db, robj *key, int flags) {
+    int slot = server.cluster_enabled ? getKeySlot(key->ptr) : 0;
+    return expireIfNeededWithSlot(db, key, flags, slot);
 }
 
 /* CB passed to kvstoreExpand.
@@ -1897,16 +1916,26 @@ int dbExpandExpires(serverDb *db, uint64_t db_size, int try_expand) {
     return dbExpandGeneric(db->expires, db_size, try_expand);
 }
 
-static dictEntry *dbFindGeneric(kvstore *kvs, void *key) {
-    return kvstoreDictFind(kvs, server.cluster_enabled ? getKeySlot(key) : 0, key);
+static dictEntry *dbFindGenericWithSlot(kvstore *kvs, void *key, int slot) {
+    return kvstoreDictFind(kvs, slot, key);
+}
+
+dictEntry *dbFindWithSlot(serverDb *db, void *key, int slot) {
+    return dbFindGenericWithSlot(db->keys, key, slot);
 }
 
 dictEntry *dbFind(serverDb *db, void *key) {
-    return dbFindGeneric(db->keys, key);
+    int slot = server.cluster_enabled ? getKeySlot(key) : 0;
+    return dbFindWithSlot(db, key, slot);
+}
+
+dictEntry *dbFindExpiresWithSlot(serverDb *db, void *key, int slot) {
+    return dbFindGenericWithSlot(db->expires, key, slot);
 }
 
 dictEntry *dbFindExpires(serverDb *db, void *key) {
-    return dbFindGeneric(db->expires, key);
+    int slot = server.cluster_enabled ? getKeySlot(key) : 0;
+    return dbFindExpiresWithSlot(db, key, slot);
 }
 
 unsigned long long dbSize(serverDb *db) {

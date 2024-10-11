@@ -107,3 +107,15 @@ test "DELSLOTSRANGE command with several boundary conditions test suite" {
     assert_match "*9829 11000*12001 12100*12201 13104*" [$master4 CLUSTER SLOTS]
 }
 } cluster_allocate_with_continuous_slots_local
+
+start_cluster 1 0 {tags {external:skip cluster}} {
+    test "Regression test for multi-exec with RANDOMKEY accessing the wrong per-slot dicitonary" {
+        R 0 SETEX FOO 10000 BAR
+        R 0 SETEX FIZZ 10000 BUZZ
+
+        R 0 MULTI
+        R 0 GET FOO
+        R 0 RANDOMKEY
+        R 0 EXEC
+    }
+}

@@ -3338,6 +3338,7 @@ int calculateKeySlot(sds key);
 int dbExpand(serverDb *db, uint64_t db_size, int try_expand);
 int dbExpandExpires(serverDb *db, uint64_t db_size, int try_expand);
 dictEntry *dbFind(serverDb *db, void *key);
+dictEntry *dbFindExpiresWithSlot(serverDb *db, void *key, int slot);
 dictEntry *dbFindExpires(serverDb *db, void *key);
 unsigned long long dbSize(serverDb *db);
 unsigned long long dbScan(serverDb *db, unsigned long long cursor, dictScanFunction *scan_cb, void *privdata);

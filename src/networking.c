@@ -1043,7 +1043,8 @@ void addReplyArrayLen(client *c, long length) {
     addReplyAggregateLen(c, length, '*');
 }
 
-void addWritePreparedReplyArrayLen(writePreparedClient *c, long length) {
+void addWritePreparedReplyArrayLen(writePreparedClient *wpc, long length) {
+    client *c = (client *)wpc;
     serverAssert(length >= 0);
     _addReplyLongLongWithPrefix(c, length, '*');
 }
@@ -1052,6 +1053,13 @@ void addReplyMapLen(client *c, long length) {
     int prefix = c->resp == 2 ? '*' : '%';
     if (c->resp == 2) length *= 2;
     addReplyAggregateLen(c, length, prefix);
+}
+
+void addWritePreparedReplyMapLen(writePreparedClient *wpc, long length) {
+    client *c = (client *)wpc;
+    int prefix = c->resp == 2 ? '*' : '%';
+    if (c->resp == 2) length *= 2;
+    _addReplyLongLongWithPrefix(c, length, prefix);
 }
 
 void addReplySetLen(client *c, long length) {
@@ -1120,7 +1128,8 @@ void addReplyBulkCBuffer(client *c, const void *p, size_t len) {
     _addReplyToBufferOrList(c, "\r\n", 2);
 }
 
-void addWritePreparedReplyBulkCBuffer(writePreparedClient *c, const void *p, size_t len) {
+void addWritePreparedReplyBulkCBuffer(writePreparedClient *wpc, const void *p, size_t len) {
+    client *c = (client *)wpc;
     _addReplyLongLongWithPrefix(c, len, '$');
     _addReplyToBufferOrList(c, p, len);
     _addReplyToBufferOrList(c, "\r\n", 2);
@@ -1132,6 +1141,14 @@ void addReplyBulkSds(client *c, sds s) {
         sdsfree(s);
         return;
     }
+    _addReplyLongLongWithPrefix(c, sdslen(s), '$');
+    _addReplyToBufferOrList(c, s, sdslen(s));
+    sdsfree(s);
+    _addReplyToBufferOrList(c, "\r\n", 2);
+}
+
+void addWritePreparedReplyBulkSds(writePreparedClient *wpc, sds s) {
+    client *c = (client *)wpc;
     _addReplyLongLongWithPrefix(c, sdslen(s), '$');
     _addReplyToBufferOrList(c, s, sdslen(s));
     sdsfree(s);
@@ -1164,12 +1181,12 @@ void addReplyBulkLongLong(client *c, long long ll) {
     addReplyBulkCBuffer(c, buf, len);
 }
 
-void addWritePreparedReplyBulkLongLong(writePreparedClient *c, long long ll) {
+void addWritePreparedReplyBulkLongLong(writePreparedClient *wpc, long long ll) {
     char buf[64];
     int len;
 
     len = ll2string(buf, 64, ll);
-    addWritePreparedReplyBulkCBuffer(c, buf, len);
+    addWritePreparedReplyBulkCBuffer(wpc, buf, len);
 }
 
 /* Reply with a verbatim type having the specified extension.

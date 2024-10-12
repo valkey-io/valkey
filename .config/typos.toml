@@ -20,6 +20,7 @@ extend-ignore-re = [
     "D4C4DAA4", # sha1.c
     "Georg Nees",
     "\\[l\\]ist", # eval.c
+    "LKE", # test_rax.c
 ]
 
 [type.tcl]

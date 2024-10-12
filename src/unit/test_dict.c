@@ -36,10 +36,10 @@ char *stringFromLongLong(long long value) {
 dictType BenchmarkDictType = {hashCallback, NULL, compareCallback, freeCallback, NULL, NULL};
 
 #define start_benchmark() start = timeInMilliseconds()
-#define end_benchmark(msg)                                                                                             \
-    do {                                                                                                               \
-        elapsed = timeInMilliseconds() - start;                                                                        \
-        printf(msg ": %ld items in %lld ms\n", count, elapsed);                                                        \
+#define end_benchmark(msg)                                      \
+    do {                                                        \
+        elapsed = timeInMilliseconds() - start;                 \
+        printf(msg ": %ld items in %lld ms\n", count, elapsed); \
     } while (0)
 
 static dict *_dict = NULL;
@@ -107,7 +107,7 @@ int test_dictAddOneKeyTriggerResize(int argc, char **argv, int flags) {
     retval = dictAdd(_dict, stringFromLongLong(current_dict_used), (void *)(current_dict_used));
     TEST_ASSERT(retval == DICT_OK);
     current_dict_used++;
-    new_dict_size = 1UL << _dictNextExp(current_dict_used);
+    new_dict_size = 1UL << dictNextExp(current_dict_used);
     TEST_ASSERT(dictSize(_dict) == current_dict_used);
     TEST_ASSERT(DICTHT_SIZE(_dict->ht_size_exp[0]) == 16);
     TEST_ASSERT(DICTHT_SIZE(_dict->ht_size_exp[1]) == new_dict_size);
@@ -154,7 +154,7 @@ int test_dictDeleteOneKeyTriggerResize(int argc, char **argv, int flags) {
     retval = dictDelete(_dict, key);
     zfree(key);
     unsigned long oldDictSize = new_dict_size;
-    new_dict_size = 1UL << _dictNextExp(current_dict_used);
+    new_dict_size = 1UL << dictNextExp(current_dict_used);
     TEST_ASSERT(retval == DICT_OK);
     TEST_ASSERT(dictSize(_dict) == current_dict_used);
     TEST_ASSERT(DICTHT_SIZE(_dict->ht_size_exp[0]) == oldDictSize);
@@ -220,7 +220,7 @@ int test_dictDeleteOneKeyTriggerResizeAgain(int argc, char **argv, int flags) {
     char *key = stringFromLongLong(current_dict_used);
     retval = dictDelete(_dict, key);
     zfree(key);
-    new_dict_size = 1UL << _dictNextExp(current_dict_used);
+    new_dict_size = 1UL << dictNextExp(current_dict_used);
     TEST_ASSERT(retval == DICT_OK);
     TEST_ASSERT(dictSize(_dict) == current_dict_used);
     TEST_ASSERT(DICTHT_SIZE(_dict->ht_size_exp[0]) == 128);

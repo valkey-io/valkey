@@ -219,8 +219,6 @@ start_cluster 2 2 [list config_lines $modules] {
     }
 }
 
-}
-
 set testmodule [file normalize tests/modules/basics.so]
 set modules [list loadmodule $testmodule]
 start_cluster 3 0 [list config_lines $modules] {
@@ -234,3 +232,25 @@ start_cluster 3 0 [list config_lines $modules] {
         assert_equal {PONG} [$node3 PING]
     }
 }
+
+set testmodule [file normalize tests/modules/cluster.so]
+set modules [list loadmodule $testmodule]
+start_cluster 3 0 [list config_lines $modules] {
+    set node1 [srv 0 client]
+    set node2 [srv -1 client]
+    set node3 [srv -2 client]
+
+    test "VM_CALL with cluster slots" {
+        assert_equal [lsort [$node1 cluster slots]] [lsort [$node1 test.cluster_slots]]
+        assert_equal [lsort [$node2 cluster slots]] [lsort [$node2 test.cluster_slots]]
+        assert_equal [lsort [$node3 cluster slots]] [lsort [$node3 test.cluster_slots]]
+    }
+
+    test "VM_CALL with cluster shards" {
+        assert_equal [lsort [$node1 cluster shards]] [lsort [$node1 test.cluster_shards]]
+        assert_equal [lsort [$node2 cluster shards]] [lsort [$node2 test.cluster_shards]]
+        assert_equal [lsort [$node3 cluster shards]] [lsort [$node3 test.cluster_shards]]
+    }
+}
+
+} ;# end tag

@@ -191,14 +191,13 @@
 #include "endianconv.h"
 #include "serverassert.h"
 
-#define ZIP_END 255 /* Special "end of ziplist" entry. */
-#define ZIP_BIG_PREVLEN                                                                                                \
-    254 /* ZIP_BIG_PREVLEN - 1 is the max number of bytes of                                                           \
-           the previous entry, for the "prevlen" field prefixing                                                       \
-           each entry, to be represented with just a single byte.                                                      \
-           Otherwise it is represented as FE AA BB CC DD, where                                                        \
-           AA BB CC DD are a 4 bytes unsigned integer                                                                  \
-           representing the previous entry len. */
+#define ZIP_END 255         /* Special "end of ziplist" entry. */
+#define ZIP_BIG_PREVLEN 254 /* ZIP_BIG_PREVLEN - 1 is the max number of bytes of      \
+                               the previous entry, for the "prevlen" field prefixing  \
+                               each entry, to be represented with just a single byte. \
+                               Otherwise it is represented as FE AA BB CC DD, where   \
+                               AA BB CC DD are a 4 bytes unsigned integer             \
+                               representing the previous entry len. */
 
 /* Different encoding/length possibilities */
 #define ZIP_STR_MASK 0xc0
@@ -214,11 +213,10 @@
 
 /* 4 bit integer immediate encoding |1111xxxx| with xxxx between
  * 0001 and 1101. */
-#define ZIP_INT_IMM_MASK                                                                                               \
-    0x0f                     /* Mask to extract the 4 bits value. To add                                               \
-                                one is needed to reconstruct the value. */
-#define ZIP_INT_IMM_MIN 0xf1 /* 11110001 */
-#define ZIP_INT_IMM_MAX 0xfd /* 11111101 */
+#define ZIP_INT_IMM_MASK 0x0f /* Mask to extract the 4 bits value. To add \
+                                 one is needed to reconstruct the value. */
+#define ZIP_INT_IMM_MIN 0xf1  /* 11110001 */
+#define ZIP_INT_IMM_MAX 0xfd  /* 11111101 */
 
 #define INT24_MAX 0x7fffff
 #define INT24_MIN (-INT24_MAX - 1)
@@ -263,10 +261,10 @@
  * always pushed one at a time. When UINT16_MAX is reached we want the count
  * to stay there to signal that a full scan is needed to get the number of
  * items inside the ziplist. */
-#define ZIPLIST_INCR_LENGTH(zl, incr)                                                                                  \
-    {                                                                                                                  \
-        if (intrev16ifbe(ZIPLIST_LENGTH(zl)) < UINT16_MAX)                                                             \
-            ZIPLIST_LENGTH(zl) = intrev16ifbe(intrev16ifbe(ZIPLIST_LENGTH(zl)) + incr);                                \
+#define ZIPLIST_INCR_LENGTH(zl, incr)                                                   \
+    {                                                                                   \
+        if (intrev16ifbe(ZIPLIST_LENGTH(zl)) < UINT16_MAX)                              \
+            ZIPLIST_LENGTH(zl) = intrev16ifbe(intrev16ifbe(ZIPLIST_LENGTH(zl)) + incr); \
     }
 
 /* Don't let ziplists grow over 1GB in any case, don't wanna risk overflow in
@@ -302,20 +300,20 @@ typedef struct zlentry {
                                     is, this points to prev-entry-len field. */
 } zlentry;
 
-#define ZIPLIST_ENTRY_ZERO(zle)                                                                                        \
-    {                                                                                                                  \
-        (zle)->prevrawlensize = (zle)->prevrawlen = 0;                                                                 \
-        (zle)->lensize = (zle)->len = (zle)->headersize = 0;                                                           \
-        (zle)->encoding = 0;                                                                                           \
-        (zle)->p = NULL;                                                                                               \
+#define ZIPLIST_ENTRY_ZERO(zle)                              \
+    {                                                        \
+        (zle)->prevrawlensize = (zle)->prevrawlen = 0;       \
+        (zle)->lensize = (zle)->len = (zle)->headersize = 0; \
+        (zle)->encoding = 0;                                 \
+        (zle)->p = NULL;                                     \
     }
 
 /* Extract the encoding from the byte pointed by 'ptr' and set it into
  * 'encoding' field of the zlentry structure. */
-#define ZIP_ENTRY_ENCODING(ptr, encoding)                                                                              \
-    do {                                                                                                               \
-        (encoding) = ((ptr)[0]);                                                                                       \
-        if ((encoding) < ZIP_STR_MASK) (encoding) &= ZIP_STR_MASK;                                                     \
+#define ZIP_ENTRY_ENCODING(ptr, encoding)                          \
+    do {                                                           \
+        (encoding) = ((ptr)[0]);                                   \
+        if ((encoding) < ZIP_STR_MASK) (encoding) &= ZIP_STR_MASK; \
     } while (0)
 
 #define ZIP_ENCODING_SIZE_INVALID 0xff
@@ -332,9 +330,9 @@ static inline unsigned int zipEncodingLenSize(unsigned char encoding) {
     return ZIP_ENCODING_SIZE_INVALID;
 }
 
-#define ZIP_ASSERT_ENCODING(encoding)                                                                                  \
-    do {                                                                                                               \
-        assert(zipEncodingLenSize(encoding) != ZIP_ENCODING_SIZE_INVALID);                                             \
+#define ZIP_ASSERT_ENCODING(encoding)                                      \
+    do {                                                                   \
+        assert(zipEncodingLenSize(encoding) != ZIP_ENCODING_SIZE_INVALID); \
     } while (0)
 
 /* Return bytes needed to store integer encoded by 'encoding' */
@@ -404,41 +402,41 @@ unsigned int zipStoreEntryEncoding(unsigned char *p, unsigned char encoding, uns
  * variable will hold the number of bytes required to encode the entry
  * length, and the 'len' variable will hold the entry length.
  * On invalid encoding error, lensize is set to 0. */
-#define ZIP_DECODE_LENGTH(ptr, encoding, lensize, len)                                                                 \
-    do {                                                                                                               \
-        if ((encoding) < ZIP_STR_MASK) {                                                                               \
-            if ((encoding) == ZIP_STR_06B) {                                                                           \
-                (lensize) = 1;                                                                                         \
-                (len) = (ptr)[0] & 0x3f;                                                                               \
-            } else if ((encoding) == ZIP_STR_14B) {                                                                    \
-                (lensize) = 2;                                                                                         \
-                (len) = (((ptr)[0] & 0x3f) << 8) | (ptr)[1];                                                           \
-            } else if ((encoding) == ZIP_STR_32B) {                                                                    \
-                (lensize) = 5;                                                                                         \
-                (len) = ((uint32_t)(ptr)[1] << 24) | ((uint32_t)(ptr)[2] << 16) | ((uint32_t)(ptr)[3] << 8) |          \
-                        ((uint32_t)(ptr)[4]);                                                                          \
-            } else {                                                                                                   \
-                (lensize) = 0; /* bad encoding, should be covered by a previous */                                     \
-                (len) = 0;     /* ZIP_ASSERT_ENCODING / zipEncodingLenSize, or  */                                     \
-                               /* match the lensize after this macro with 0.    */                                     \
-            }                                                                                                          \
-        } else {                                                                                                       \
-            (lensize) = 1;                                                                                             \
-            if ((encoding) == ZIP_INT_8B)                                                                              \
-                (len) = 1;                                                                                             \
-            else if ((encoding) == ZIP_INT_16B)                                                                        \
-                (len) = 2;                                                                                             \
-            else if ((encoding) == ZIP_INT_24B)                                                                        \
-                (len) = 3;                                                                                             \
-            else if ((encoding) == ZIP_INT_32B)                                                                        \
-                (len) = 4;                                                                                             \
-            else if ((encoding) == ZIP_INT_64B)                                                                        \
-                (len) = 8;                                                                                             \
-            else if (encoding >= ZIP_INT_IMM_MIN && encoding <= ZIP_INT_IMM_MAX)                                       \
-                (len) = 0; /* 4 bit immediate */                                                                       \
-            else                                                                                                       \
-                (lensize) = (len) = 0; /* bad encoding */                                                              \
-        }                                                                                                              \
+#define ZIP_DECODE_LENGTH(ptr, encoding, lensize, len)                                                        \
+    do {                                                                                                      \
+        if ((encoding) < ZIP_STR_MASK) {                                                                      \
+            if ((encoding) == ZIP_STR_06B) {                                                                  \
+                (lensize) = 1;                                                                                \
+                (len) = (ptr)[0] & 0x3f;                                                                      \
+            } else if ((encoding) == ZIP_STR_14B) {                                                           \
+                (lensize) = 2;                                                                                \
+                (len) = (((ptr)[0] & 0x3f) << 8) | (ptr)[1];                                                  \
+            } else if ((encoding) == ZIP_STR_32B) {                                                           \
+                (lensize) = 5;                                                                                \
+                (len) = ((uint32_t)(ptr)[1] << 24) | ((uint32_t)(ptr)[2] << 16) | ((uint32_t)(ptr)[3] << 8) | \
+                        ((uint32_t)(ptr)[4]);                                                                 \
+            } else {                                                                                          \
+                (lensize) = 0; /* bad encoding, should be covered by a previous */                            \
+                (len) = 0;     /* ZIP_ASSERT_ENCODING / zipEncodingLenSize, or  */                            \
+                               /* match the lensize after this macro with 0.    */                            \
+            }                                                                                                 \
+        } else {                                                                                              \
+            (lensize) = 1;                                                                                    \
+            if ((encoding) == ZIP_INT_8B)                                                                     \
+                (len) = 1;                                                                                    \
+            else if ((encoding) == ZIP_INT_16B)                                                               \
+                (len) = 2;                                                                                    \
+            else if ((encoding) == ZIP_INT_24B)                                                               \
+                (len) = 3;                                                                                    \
+            else if ((encoding) == ZIP_INT_32B)                                                               \
+                (len) = 4;                                                                                    \
+            else if ((encoding) == ZIP_INT_64B)                                                               \
+                (len) = 8;                                                                                    \
+            else if (encoding >= ZIP_INT_IMM_MIN && encoding <= ZIP_INT_IMM_MAX)                              \
+                (len) = 0; /* 4 bit immediate */                                                              \
+            else                                                                                              \
+                (lensize) = (len) = 0; /* bad encoding */                                                     \
+        }                                                                                                     \
     } while (0)
 
 /* Encode the length of the previous entry and write it to "p". This only
@@ -471,13 +469,13 @@ unsigned int zipStorePrevEntryLength(unsigned char *p, unsigned int len) {
 
 /* Return the number of bytes used to encode the length of the previous
  * entry. The length is returned by setting the var 'prevlensize'. */
-#define ZIP_DECODE_PREVLENSIZE(ptr, prevlensize)                                                                       \
-    do {                                                                                                               \
-        if ((ptr)[0] < ZIP_BIG_PREVLEN) {                                                                              \
-            (prevlensize) = 1;                                                                                         \
-        } else {                                                                                                       \
-            (prevlensize) = 5;                                                                                         \
-        }                                                                                                              \
+#define ZIP_DECODE_PREVLENSIZE(ptr, prevlensize) \
+    do {                                         \
+        if ((ptr)[0] < ZIP_BIG_PREVLEN) {        \
+            (prevlensize) = 1;                   \
+        } else {                                 \
+            (prevlensize) = 5;                   \
+        }                                        \
     } while (0)
 
 /* Return the length of the previous element, and the number of bytes that
@@ -487,14 +485,14 @@ unsigned int zipStorePrevEntryLength(unsigned char *p, unsigned int len) {
  * The length of the previous entry is stored in 'prevlen', the number of
  * bytes needed to encode the previous entry length are stored in
  * 'prevlensize'. */
-#define ZIP_DECODE_PREVLEN(ptr, prevlensize, prevlen)                                                                  \
-    do {                                                                                                               \
-        ZIP_DECODE_PREVLENSIZE(ptr, prevlensize);                                                                      \
-        if ((prevlensize) == 1) {                                                                                      \
-            (prevlen) = (ptr)[0];                                                                                      \
-        } else { /* prevlensize == 5 */                                                                                \
-            (prevlen) = ((ptr)[4] << 24) | ((ptr)[3] << 16) | ((ptr)[2] << 8) | ((ptr)[1]);                            \
-        }                                                                                                              \
+#define ZIP_DECODE_PREVLEN(ptr, prevlensize, prevlen)                                       \
+    do {                                                                                    \
+        ZIP_DECODE_PREVLENSIZE(ptr, prevlensize);                                           \
+        if ((prevlensize) == 1) {                                                           \
+            (prevlen) = (ptr)[0];                                                           \
+        } else { /* prevlensize == 5 */                                                     \
+            (prevlen) = ((ptr)[4] << 24) | ((ptr)[3] << 16) | ((ptr)[2] << 8) | ((ptr)[1]); \
+        }                                                                                   \
     } while (0)
 
 /* Given a pointer 'p' to the prevlen info that prefixes an entry, this

@@ -50,11 +50,11 @@ aofManifest *aofManifestCreate(void);
 void aofManifestFree(aofManifest *am);
 aofManifest *aofLoadManifestFromFile(sds am_filepath);
 
-#define ERROR(...)                                                                                                     \
-    {                                                                                                                  \
-        char __buf[1024];                                                                                              \
-        snprintf(__buf, sizeof(__buf), __VA_ARGS__);                                                                   \
-        snprintf(error, sizeof(error), "0x%16llx: %s", (long long)epos, __buf);                                        \
+#define ERROR(...)                                                              \
+    {                                                                           \
+        char __buf[1024];                                                       \
+        snprintf(__buf, sizeof(__buf), __VA_ARGS__);                            \
+        snprintf(error, sizeof(error), "0x%16llx: %s", (long long)epos, __buf); \
     }
 
 static char error[1044];

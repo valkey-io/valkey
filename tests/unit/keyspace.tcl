@@ -547,4 +547,10 @@ foreach {type large} [array get largevalue] {
        assert_no_match "*db2:keys=*" [r info keyspace]
        r flushall
     } {OK} {singledb:skip}
+
+    test {Regression for pattern matching very long nested loops} {
+        r flushdb
+        r SET [string repeat "a" 50000] 1
+        r KEYS [string repeat "*?" 50000]
+    } {}
 }

@@ -131,9 +131,10 @@ typedef struct raxNode {
 } raxNode;
 
 typedef struct rax {
-    raxNode *head;
-    uint64_t numele;
-    uint64_t numnodes;
+    raxNode *head;     /* Pointer to root node of tree */
+    uint64_t numele;   /* Number of keys in the tree */
+    uint64_t numnodes; /* Number of rax nodes in the tree */
+    size_t alloc_size; /* Total allocation size of the tree in bytes */
 } rax;
 
 /* Stack data structure used by raxLowWalk() in order to, optionally, return
@@ -166,14 +167,12 @@ typedef int (*raxNodeCallback)(raxNode **noderef);
 
 /* Radix tree iterator state is encapsulated into this data structure. */
 #define RAX_ITER_STATIC_LEN 128
-#define RAX_ITER_JUST_SEEKED                                                                                           \
-    (1 << 0)                  /* Iterator was just seeked. Return current                                              \
-                                 element for the first iteration and                                                   \
-                                 clear the flag. */
-#define RAX_ITER_EOF (1 << 1) /* End of iteration reached. */
-#define RAX_ITER_SAFE                                                                                                  \
-    (1 << 2) /* Safe iterator, allows operations while                                                                 \
-                iterating. But it is slower. */
+#define RAX_ITER_JUST_SEEKED (1 << 0) /* Iterator was just seeked. Return current \
+                                         element for the first iteration and      \
+                                         clear the flag. */
+#define RAX_ITER_EOF (1 << 1)         /* End of iteration reached. */
+#define RAX_ITER_SAFE (1 << 2)        /* Safe iterator, allows operations while \
+                                         iterating. But it is slower. */
 typedef struct raxIterator {
     int flags;
     rax *rt;            /* Radix tree we are iterating. */
@@ -205,6 +204,7 @@ void raxStop(raxIterator *it);
 int raxEOF(raxIterator *it);
 void raxShow(rax *rax);
 uint64_t raxSize(rax *rax);
+size_t raxAllocSize(rax *rax);
 unsigned long raxTouch(raxNode *n);
 void raxSetDebugMsg(int onoff);
 

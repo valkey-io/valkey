@@ -15,6 +15,8 @@ source tests/support/util.tcl
 
 set dir [pwd]
 set ::all_tests []
+set ::cluster_all_test []
+set ::module_api_all_tests []
 
 set test_dirs {
     unit
@@ -30,6 +32,17 @@ foreach test_dir $test_dirs {
         lappend ::all_tests $test_dir/[file root [file tail $file]]
     }
 }
+
+set cluster_test_dir unit/cluster
+foreach file [glob -nocomplain $dir/tests/$cluster_test_dir/*.tcl] {
+   lappend ::cluster_all_tests $cluster_test_dir/[file root [file tail $file]]
+}
+
+set moduleapi_test_dir unit/moduleapi
+foreach file [glob -nocomplain $dir/tests/$moduleapi_test_dir/*.tcl] {
+   lappend ::module_api_all_tests $moduleapi_test_dir/[file root [file tail $file]]
+}
+
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0
 
@@ -78,6 +91,7 @@ set ::ignoredigest 0
 set ::large_memory 0
 set ::log_req_res 0
 set ::force_resp3 0
+set ::solo_tests_count 0
 
 # Set to 1 when we are running in client mode. The server test uses a
 # server-client model to run tests simultaneously. The server instance
@@ -360,9 +374,10 @@ proc read_from_test_client fd {
         signal_idle_client $fd
     } elseif {$status eq {done}} {
         set elapsed [expr {[clock seconds]-$::clients_start_time($fd)}]
-        set all_tests_count [llength $::all_tests]
+        set all_tests_count [expr {[llength $::all_tests]+$::solo_tests_count}]
         set running_tests_count [expr {[llength $::active_clients]-1}]
-        set completed_tests_count [expr {$::next_test-$running_tests_count}]
+        set completed_solo_tests_count [expr {$::solo_tests_count-[llength $::run_solo_tests]}]
+        set completed_tests_count [expr {$::next_test-$running_tests_count+$completed_solo_tests_count}]
         puts "\[$completed_tests_count/$all_tests_count [colorstr yellow $status]\]: $data ($elapsed seconds)"
         lappend ::clients_time_history $elapsed $data
         signal_idle_client $fd
@@ -414,6 +429,7 @@ proc read_from_test_client fd {
         set ::active_clients_task($fd) "(KILLED SERVER) pid:$data"
     } elseif {$status eq {run_solo}} {
         lappend ::run_solo_tests $data
+        incr ::solo_tests_count
     } else {
         if {!$::quiet} {
             puts "\[$status\]: $data"
@@ -520,7 +536,7 @@ proc the_end {} {
     }
 }
 
-# The client is not even driven (the test server is instead) as we just need
+# The client is not event driven (the test server is instead) as we just need
 # to read the command, execute, reply... all this in a loop.
 proc test_client_main server_port {
     set ::test_server_fd [socket localhost $server_port]
@@ -550,6 +566,8 @@ proc send_data_packet {fd status data {elapsed 0}} {
 
 proc print_help_screen {} {
     puts [join {
+        "--cluster          Run the cluster tests, by default cluster tests run along with all tests."
+        "--moduleapi        Run the module API tests, this option should only be used in runtest-moduleapi which will build the test module."
         "--valgrind         Run the test over valgrind."
         "--durable          suppress test crashes and keep running"
         "--stack-logging    Enable OSX leaks/malloc stack logging."
@@ -606,6 +624,10 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
             }
         }
         incr j
+    } elseif {$opt eq {--cluster}} {
+        set ::all_tests $::cluster_all_tests
+    } elseif {$opt eq {--moduleapi}} {
+        set ::all_tests $::module_api_all_tests
     } elseif {$opt eq {--config}} {
         set arg2 [lindex $argv [expr $j+2]]
         lappend ::global_overrides $arg

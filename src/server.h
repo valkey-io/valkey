@@ -567,6 +567,12 @@ typedef enum {
 #define PAUSE_ACTION_EVICT (1 << 3)
 #define PAUSE_ACTION_REPLICA (1 << 4) /* pause replica traffic */
 
+/* Sets log format */
+typedef enum { LOG_FORMAT_LEGACY = 0, LOG_FORMAT_LOGFMT} log_format_type;
+
+/* Sets log timestamp format */
+typedef enum { LOG_TIMESTAMP_LEGACY = 0, LOG_TIMESTAMP_ISO8601, LOG_TIMESTAMP_MILLISECONDS} log_timestamp_type;
+
 /* common sets of actions to pause/unpause */
 #define PAUSE_ACTIONS_CLIENT_WRITE_SET \
     (PAUSE_ACTION_CLIENT_WRITE | PAUSE_ACTION_EXPIRE | PAUSE_ACTION_EVICT | PAUSE_ACTION_REPLICA)
@@ -1982,6 +1988,8 @@ struct valkeyServer {
     int memcheck_enabled;  /* Enable memory check on crash. */
     int use_exit_on_panic; /* Use exit() on panic and assert rather than
                             * abort(). useful for Valgrind. */
+    int log_format;           /* Print log in specific format */
+    int log_timestamp_format; /* Timestamp format in log */
     /* Shutdown */
     int shutdown_timeout;    /* Graceful shutdown time limit in seconds. */
     int shutdown_on_sigint;  /* Shutdown flags configured for SIGINT. */

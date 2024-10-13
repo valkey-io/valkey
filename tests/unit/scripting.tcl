@@ -1297,6 +1297,7 @@ start_server {tags {"scripting"}} {
         $rd close
         $rd2 close
         $r3 close
+        r config set appendonly no
         r DEBUG set-disable-deny-scripts 0
     } {OK} {external:skip needs:debug}
 

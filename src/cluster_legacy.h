@@ -375,8 +375,6 @@ typedef struct slotRange {
     int end_slot;
 } slotRange;
 
-// list *createSlotRangeList(void);
-
 /* Slot sync state. Used in clusterSlotSyncLink struct sync_state for links to remember
  * what to do next. */
 typedef enum {

@@ -2,6 +2,18 @@
 #include "cluster.h"
 #include "cluster_legacy.h"
 
+/* The following functions are declared here as they will be used in this file
+ * but they are defined in other files. */
+void delkeysNotOwnedByMySelf(list *slot_ranges);
+void clusterUpdateState(void);
+void clusterSaveConfigOrDie(int do_fsync);
+
+/* The following functions are declared here as they will be used by others
+ * before the definition, we will define them in this file later. */
+void setSlotSyncImporting(list *slot_ranges, clusterNode *node);
+void clearSlotSyncImporting(list *slot_ranges);
+void syncWithSlotOwner(connection *conn);
+
 /* -----------------------------------------------------------------------------
  * Cluster functions related to slot range and slot range list.
  * -------------------------------------------------------------------------- */
@@ -112,6 +124,38 @@ void freeSlotSyncConn(clusterSlotSyncLink *link) {
     }
 }
 
+int initSlotSyncLink(clusterSlotSyncLink *link, clusterNode *n) {
+    link->ctime = mstime();
+    strncpy(link->nodename, n->name, CLUSTER_NAMELEN);
+    getRandomHexChars(link->linkname, sizeof(link->linkname));
+
+    link->client = NULL;
+    link->transfer_total_size = -1;
+    link->transfer_read_size = 0;
+    link->transfer_last_fsync_off = 0;
+    link->transfer_lastio = server.unixtime;
+    link->transfer_tmpfile_fd = -1;
+    link->transfer_tmpfile_name = NULL;
+    link->slot_mf_ready = 0;
+    link->slot_mf_end = 0;
+    link->slot_mf_lag = 0;
+
+    link->sync_state = CLUSTER_SLOTSYNC_STATE_CONNECTING;
+    link->sync_conn = connCreate(connTypeOfCluster());
+    if (connConnect(link->sync_conn, n->ip, getNodeDefaultClientPort(n),
+                    server.bind_source_addr, syncWithSlotOwner) == C_ERR) {
+        serverLog(LL_WARNING,"Unable to connect to slot MASTER: %s",
+                  connGetLastError(link->sync_conn));
+        freeSlotSyncConn(link);
+        return C_ERR;
+    }
+    connSetReadHandler(link->sync_conn, syncWithSlotOwner);
+    setSlotSyncImporting(link->slot_ranges, n);
+    connSetPrivateData(link->sync_conn, link);
+    serverLog(LL_WARNING, "Start slot sync from:%.40s.", link->nodename);
+    return C_OK;
+}
+
 void resetSlotSyncLink(clusterSlotSyncLink *link, int reconn) {
     /* If we have created the client, the connection fd is owned by the client,
      * we should not close the fd here. */
@@ -182,6 +226,19 @@ void clearClusterSlotSyncLinkList(void) {
     listEmpty(server.cluster->slotsync_links);
 }
 
+int isSlotInClusterSlotSyncLinkList(int slot) {
+    listNode *ln;
+    listIter li;
+    listRewind(server.cluster->slotsync_links, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        clusterSlotSyncLink *link = ln->value;
+        if (isSlotInSlotRangeList(slot, link->slot_ranges)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 sds slotSyncStateToStr(slotSyncState state) {
     const char *desc = NULL;
     switch (state) {
@@ -225,7 +282,98 @@ void addReplySlotSyncLinksDescription(client *c) {
 }
 
 void clusterKillSlotSyncLink(client *c, char *linkid) {
-    /* TODO: supply in next commit */
-    UNUSED(linkid);
-    addReplyError(c, "The kill action is not supported");
+
+    listNode *ln;
+    listIter li;
+    listRewind(server.cluster->slotsync_links, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        clusterSlotSyncLink *link = ln->value;
+        if (!strncmp(link->linkname, linkid, CLUSTER_NAMELEN)) {
+            /* Remove keys not owned by myself. */
+            delkeysNotOwnedByMySelf(link->slot_ranges);
+
+            /* Clear all importing state for this link. */
+            clearSlotSyncImporting(link->slot_ranges);
+
+            /* Free this link and the client which bound with it. */
+            if (link->client) {
+                link->client->slotsync_link = NULL;
+                freeClientAsync(link->client);
+            }
+            listDelNode(server.cluster->slotsync_links, ln);
+            addReply(c,shared.ok);
+
+            /* Update state and save config. */
+            clusterUpdateState();
+            clusterSaveConfigOrDie(1);
+            return;
+        }
+    }
+    addReplyError(c, "There's no such link.");
+}
+
+/* -----------------------------------------------------------------------------
+ * Cluster functions related to slot sync importing.
+ * -------------------------------------------------------------------------- */
+
+void setSlotSyncImporting(list *slot_ranges, clusterNode *node) {
+    listNode *ln;
+    listIter li;
+    listRewind(slot_ranges, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotRange *range = ln->value;
+        for(int i = range->start_slot; i <= range->end_slot; i++){
+            server.cluster->importing_slots_from[i] = node;
+        }
+    }
+}
+
+void clearSlotSyncImporting(list *slot_ranges) {
+    setSlotSyncImporting(slot_ranges, NULL);
+}
+
+sds formatSlotSyncImportingSlots(void) {
+    sds ci = sdsempty();
+    int start = -1;
+    listNode *ln;
+    listIter li;
+    listRewind(server.cluster->slotsync_links, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        clusterSlotSyncLink *link = ln->value;
+        char *link_node = link->nodename;
+        char *importing_node = NULL;
+        for (int j = 0; j < CLUSTER_SLOTS; j++) {
+            int bit = 0;
+            if (server.cluster->importing_slots_from[j]) {
+                importing_node = server.cluster->importing_slots_from[j]->name;
+                if (strncmp(importing_node, link_node, CLUSTER_NAMELEN) == 0) {
+                    bit =1;
+                }
+            }
+
+            if (bit && start == -1) {
+                start = j;
+            }
+
+            if (start != -1 && (!bit || j == CLUSTER_SLOTS-1)) {
+                if (bit && j == CLUSTER_SLOTS-1) j++;
+
+                if (start == j-1) {
+                    ci = sdscatprintf(ci," [%d-<-%.40s]", start, server.cluster->importing_slots_from[start]->name);
+                } else {
+                    ci = sdscatprintf(ci," [%d-%d<-%.40s]", start, j-1, server.cluster->importing_slots_from[start]->name);
+                }
+                start = -1;
+            }
+        }
+    }
+    return ci;
+}
+
+/* -----------------------------------------------------------------------------
+ * Cluster functions related to slot sync handshake and rdb transfer.
+ * -------------------------------------------------------------------------- */
+
+void syncWithSlotOwner(connection *conn) {
+    UNUSED(conn);
 }

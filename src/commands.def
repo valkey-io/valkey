@@ -1030,6 +1030,34 @@ const char *CLUSTER_SLOTS_Tips[] = {
 #define CLUSTER_SLOTS_Keyspecs NULL
 #endif
 
+/********** CLUSTER SLOTSYNC ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* CLUSTER SLOTSYNC history */
+#define CLUSTER_SLOTSYNC_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* CLUSTER SLOTSYNC tips */
+#define CLUSTER_SLOTSYNC_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* CLUSTER SLOTSYNC key specs */
+#define CLUSTER_SLOTSYNC_Keyspecs NULL
+#endif
+
+/* CLUSTER SLOTSYNC slot_range_block argument table */
+struct COMMAND_ARG CLUSTER_SLOTSYNC_slot_range_block_Subargs[] = {
+{MAKE_ARG("start-slot",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("end-slot",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* CLUSTER SLOTSYNC argument table */
+struct COMMAND_ARG CLUSTER_SLOTSYNC_Args[] = {
+{MAKE_ARG("slot-range-block",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=CLUSTER_SLOTSYNC_slot_range_block_Subargs},
+};
+
 /* CLUSTER command table */
 struct COMMAND_STRUCT CLUSTER_Subcommands[] = {
 {MAKE_CMD("addslots","Assigns new hash slots to a node.","O(N) where N is the total number of hash slot arguments","3.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_ADDSLOTS_History,0,CLUSTER_ADDSLOTS_Tips,0,clusterCommand,-3,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_ADDSLOTS_Keyspecs,0,NULL,1),.args=CLUSTER_ADDSLOTS_Args},
@@ -1062,6 +1090,7 @@ struct COMMAND_STRUCT CLUSTER_Subcommands[] = {
 {MAKE_CMD("slot-stats","Return an array of slot usage statistics for slots assigned to the current node.","O(N) where N is the total number of slots based on arguments. O(N*log(N)) with ORDERBY subcommand.","8.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_SLOT_STATS_History,0,CLUSTER_SLOT_STATS_Tips,2,clusterSlotStatsCommand,-4,CMD_STALE|CMD_LOADING,0,CLUSTER_SLOT_STATS_Keyspecs,0,NULL,1),.args=CLUSTER_SLOT_STATS_Args},
 {MAKE_CMD("slotlink","Manage the slot sync links","O(N) where N is the total number of the slot sync links.","8.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_SLOTLINK_History,0,CLUSTER_SLOTLINK_Tips,0,clusterCommand,-3,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_SLOTLINK_Keyspecs,0,NULL,1),.args=CLUSTER_SLOTLINK_Args},
 {MAKE_CMD("slots","Returns the mapping of cluster slots to nodes.","O(N) where N is the total number of Cluster nodes","3.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_SLOTS_History,2,CLUSTER_SLOTS_Tips,1,clusterCommand,2,CMD_LOADING|CMD_STALE,0,CLUSTER_SLOTS_Keyspecs,0,NULL,0)},
+{MAKE_CMD("slotsync","Trigger a slot sync task for the specified hash slots","O(N) where N is the total number of the slots between the start slot and end slot arguments.","4.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_SLOTSYNC_History,0,CLUSTER_SLOTSYNC_Tips,0,clusterCommand,-4,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_SLOTSYNC_Keyspecs,0,NULL,1),.args=CLUSTER_SLOTSYNC_Args},
 {0}
 };
 

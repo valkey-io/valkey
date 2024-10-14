@@ -128,6 +128,9 @@ static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now);
  * but they are defined in cluster_slotsync.c */
 void initClusterSlotSyncLinkList(void);
 void clearClusterSlotSyncLinkList(void);
+int isSlotInClusterSlotSyncLinkList(int slot);
+int initSlotSyncLink(clusterSlotSyncLink *link, clusterNode *node);
+sds formatSlotSyncImportingSlots(void);
 void addReplySlotSyncLinksDescription(client *c);
 void clusterKillSlotSyncLink(client *c, char *linkid);
 
@@ -5943,10 +5946,20 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
      * we are migrating to other instances or importing from other
      * instances. */
     if (node->flags & CLUSTER_NODE_MYSELF) {
+        int slotsync_link_count = 0;
+        if (server.cluster->slotsync_links) {
+            slotsync_link_count = listLength(server.cluster->slotsync_links);
+        }
+        if (slotsync_link_count > 0) {
+            sds importing_info = formatSlotSyncImportingSlots();
+            ci = sdscatsds(ci, importing_info);
+            sdsfree(importing_info);
+        }
+
         for (j = 0; j < CLUSTER_SLOTS; j++) {
             if (server.cluster->migrating_slots_to[j]) {
                 ci = sdscatprintf(ci, " [%d->-%.40s]", j, server.cluster->migrating_slots_to[j]->name);
-            } else if (server.cluster->importing_slots_from[j]) {
+            } else if (server.cluster->importing_slots_from[j] && slotsync_link_count == 0) {
                 ci = sdscatprintf(ci, " [%d-<-%.40s]", j, server.cluster->importing_slots_from[j]->name);
             }
         }
@@ -6346,6 +6359,22 @@ void removeChannelsInSlot(unsigned int slot) {
     if (countChannelsInSlot(slot) == 0) return;
 
     pubsubShardUnsubscribeAllChannelsInSlot(slot);
+}
+
+/* Remove all the keys in the hash slots that are in the given slot range list
+ * and not owned by myself now. */
+void delkeysNotOwnedByMySelf(list *slot_ranges) {
+    listNode *ln;
+    listIter li;
+    listRewind(slot_ranges,&li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotRange *range = ln->value;
+        for (int i = range->start_slot; i <= range->end_slot; i++) {
+            if (server.cluster->slots[i] != myself) {
+                delKeysInSlot(i);
+            }
+        }
+    }
 }
 
 /* Remove all the keys in the specified hash slot.
@@ -7139,6 +7168,76 @@ int clusterCommandSpecial(client *c) {
             addReplyError(c, "Invalid CLUSTER SLOTLINK action or number of arguments");
             return 1;
         }
+    } else if ((!strcasecmp(c->argv[1]->ptr,"slotsync")) && (c->argc > 2 && c->argc % 2 == 0)) {
+        /* CLUSTER SLOTSYNC <start slot> <end slot> [<start slot> <end slot> ...] */
+        if (!nodeIsPrimary(myself)) {
+            addReplyError(c,"Myself should be a primary.");
+            return 1;
+        }
+
+        /* Build the slot range list by the command arguments. */
+        list *slot_ranges = createSlotRangeList();
+        clusterNode *n = NULL;
+        int startslot, endslot;
+        for (int i = 2; i < c->argc; i+=2) {
+            /* Get the current slot range. */
+            if ((startslot = getSlotOrReply(c,c->argv[i])) == C_ERR) {
+                listRelease(slot_ranges);
+                return 1;
+            }
+            if ((endslot = getSlotOrReply(c,c->argv[i+1])) == C_ERR) {
+                listRelease(slot_ranges);
+                return 1;
+            }
+            if (startslot > endslot) {
+                addReplyErrorFormat(c,"start slot number %d is greater than end slot number %d",
+                                    startslot, endslot);
+                listRelease(slot_ranges);
+                return 1;
+            }
+            /* Check if the current slot range is ready to do the slot sync. */
+            for (int j = startslot; j <= endslot; j++) {
+                if (server.cluster->slots[j] == NULL) {
+                    addReplyErrorFormat(c,"Cluster is down, slot:%d no node served", j);
+                    listRelease(slot_ranges);
+                    return 1;
+                }
+                if (!n) {
+                    n = server.cluster->slots[j];
+                } else if (n != server.cluster->slots[j]) {
+                    addReplyErrorFormat(c,"The slot ranges can not cross node:%d", j);
+                    listRelease(slot_ranges);
+                    return 1;
+                }
+                if (n == myself) {
+                    addReplyErrorFormat(c,"Slot:%d is served by myself", j);
+                    listRelease(slot_ranges);
+                    return 1;
+                }
+                if (isSlotInClusterSlotSyncLinkList(j)) {
+                    addReplyErrorFormat(c,"Slot:%d already in slot sync", j);
+                    listRelease(slot_ranges);
+                    return 1;
+                }
+            }
+            serverLog(LL_WARNING,"Slots ready to sync: [%d-%d]", startslot, endslot);
+            /* Add the current slot range to the range list. */
+            slotRange *new_range = zmalloc(sizeof(slotRange));
+            new_range->start_slot = startslot;
+            new_range->end_slot = endslot;
+            listAddNodeTail(slot_ranges, new_range);
+        }
+        if (!n) {
+            addReplyError(c,"Can not find valid node served the slot ranges.");
+            listRelease(slot_ranges);
+            return 1;
+        }
+        /* Create and initialize the slot sync link. */
+        clusterSlotSyncLink *link = zmalloc(sizeof(clusterSlotSyncLink));
+        link->slot_ranges = slot_ranges;
+        initSlotSyncLink(link, n);
+        listAddNodeTail(server.cluster->slotsync_links, link);
+        addReply(c, shared.ok);
     } else {
         return 0;
     }

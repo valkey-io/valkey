@@ -140,5 +140,6 @@ void resetClusterStats(void);
 int isSlotRangeListSame(list *lx, list *ly);
 int isSlotInSlotRangeList(int slot, list *slot_ranges);
 void onSlotSyncClientClose(void *link);
+list *createSlotRangeList(void);
 
 #endif /* __CLUSTER_H */

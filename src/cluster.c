@@ -843,6 +843,8 @@ void clusterCommandHelp(client *c) {
         "    Return information about slot range mappings and the nodes associated with them.",
         "SLOTLINK (LIST|KILL <link-id>)",
         "    Manage the slot sync links.",
+        "SLOTSYNC <start slot> <end slot> [<start slot> <end slot> ...]",
+        "    Trigger a slot sync task for the specified hash slots.",
         NULL};
 
     addExtendedReplyHelp(c, help, clusterCommandExtendedHelp());

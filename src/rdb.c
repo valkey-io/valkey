@@ -2006,7 +2006,6 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
         while (zsetlen--) {
             sds sdsele;
             double score;
-            zskiplistNode *znode;
 
             if ((sdsele = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) {
                 decrRefCount(o);
@@ -2038,13 +2037,15 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             if (sdslen(sdsele) > maxelelen) maxelelen = sdslen(sdsele);
             totelelen += sdslen(sdsele);
 
-            znode = zslInsert(zs->zsl, score, sdsele);
-            if (dictAdd(zs->dict, sdsele, &znode->score) != DICT_OK) {
+            zslInsert(zs->zsl, score, sdsele);
+            dictEntry *entry = dictAddRaw(zs->dict, sdsele, NULL);
+            if (entry == NULL) {
                 rdbReportCorruptRDB("Duplicate zset fields detected");
                 decrRefCount(o);
                 /* no need to free 'sdsele', will be released by zslFree together with 'o' */
                 return NULL;
             }
+            dictSetDoubleVal(entry, score);
         }
 
         /* Convert *after* loading, since sorted sets are not stored ordered. */

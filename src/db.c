@@ -404,11 +404,10 @@ robj *dbRandomKey(serverDb *db) {
     }
 }
 
-/* Helper for sync and async delete. */
-int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
+int dbGenericDeleteWithSlot(serverDb *db, robj *key, int async, int flags, int slot) {
     dictEntry **plink;
     int table;
-    int dict_index = getKVStoreIndexForKey(key->ptr);
+    int dict_index = slot;
     dictEntry *de = kvstoreDictTwoPhaseUnlinkFind(db->keys, dict_index, key->ptr, &plink, &table);
     if (de) {
         robj *val = dictGetVal(de);
@@ -436,6 +435,12 @@ int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
     } else {
         return 0;
     }
+}
+
+/* Helper for sync and async delete. */
+int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
+    int slot = server.cluster_enabled ? getKeySlot(key->ptr) : 0;
+    return dbGenericDeleteWithSlot(db, key, async, flags, slot);
 }
 
 /* Delete a key, value, and associated expiration entry if any, from the DB */
@@ -1710,17 +1715,22 @@ long long getExpire(serverDb *db, robj *key) {
     return getExpireWithSlot(db, key, slot);
 }
 
-/* Delete the specified expired key and propagate expire. */
-void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj) {
+void deleteExpiredKeyAndPropagateWithSlot(serverDb *db, robj *keyobj, int slot) {
     mstime_t expire_latency;
     latencyStartMonitor(expire_latency);
-    dbGenericDelete(db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED);
+    dbGenericDeleteWithSlot(db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED, slot);
     latencyEndMonitor(expire_latency);
     latencyAddSampleIfNeeded("expire-del", expire_latency);
     notifyKeyspaceEvent(NOTIFY_EXPIRED, "expired", keyobj, db->id);
     signalModifiedKey(NULL, db, keyobj);
     propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
     server.stat_expiredkeys++;
+}
+
+/* Delete the specified expired key and propagate expire. */
+void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj) {
+    int slot = server.cluster_enabled ? getKeySlot(keyobj->ptr) : 0;
+    deleteExpiredKeyAndPropagateWithSlot(db, keyobj, slot);
 }
 
 /* Delete the specified expired key from overwriting and propagate the DEL or UNLINK. */
@@ -1833,7 +1843,7 @@ keyStatus expireIfNeededWithSlot(serverDb *db, robj *key, int flags, int slot) {
         key = createStringObject(key->ptr, sdslen(key->ptr));
     }
     /* Delete the key */
-    deleteExpiredKeyAndPropagate(db, key);
+    deleteExpiredKeyAndPropagateWithSlot(db, key, slot);
     if (static_key) {
         decrRefCount(key);
     }
@@ -1916,12 +1926,8 @@ int dbExpandExpires(serverDb *db, uint64_t db_size, int try_expand) {
     return dbExpandGeneric(db->expires, db_size, try_expand);
 }
 
-static dictEntry *dbFindGenericWithSlot(kvstore *kvs, void *key, int slot) {
-    return kvstoreDictFind(kvs, slot, key);
-}
-
 dictEntry *dbFindWithSlot(serverDb *db, void *key, int slot) {
-    return dbFindGenericWithSlot(db->keys, key, slot);
+    return kvstoreDictFind(db->keys, slot, key);
 }
 
 dictEntry *dbFind(serverDb *db, void *key) {
@@ -1930,7 +1936,7 @@ dictEntry *dbFind(serverDb *db, void *key) {
 }
 
 dictEntry *dbFindExpiresWithSlot(serverDb *db, void *key, int slot) {
-    return dbFindGenericWithSlot(db->expires, key, slot);
+    return kvstoreDictFind(db->expires, slot, key);
 }
 
 dictEntry *dbFindExpires(serverDb *db, void *key) {

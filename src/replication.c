@@ -2752,14 +2752,18 @@ static void dualChannelFullSyncWithPrimary(connection *conn) {
         ret = dualChannelReplHandleEndOffsetResponse(conn, &err);
         if (ret == C_OK) server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_RDB_LOAD;
         break;
-    default: break;
+    default:
+        serverPanic("Unexpected dual replication state: %d", server.repl_rdb_channel_state);
     }
-    sdsfree(err);
     if (ret == C_ERR) goto error;
+    sdsfree(err);
     return;
 
 error:
-    sdsfree(err);
+    if (err) {
+        serverLog(LL_WARNING, "Dual channel sync failed with error %s", err);
+        sdsfree(err);
+    }
     if (server.repl_transfer_s) {
         connClose(server.repl_transfer_s);
         server.repl_transfer_s = NULL;
@@ -3309,9 +3313,7 @@ void dualChannelSetupMainConnForPsync(connection *conn) {
         /*  In case the RDB is already loaded, the repl_state will be set during establishPrimaryConnection. */
         break;
     default:
-        serverLog(LL_WARNING, "Unexpected replication state: %d", server.repl_state);
-        ret = C_ERR;
-        break;
+        serverPanic("Unexpected replication state: %d", server.repl_state);
     }
 
     if (ret == C_ERR) {

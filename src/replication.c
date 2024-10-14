@@ -2471,7 +2471,7 @@ char *sendCommand(connection *conn, ...) {
     size_t argslen = 0;
     char *arg;
 
-    /* Create the command to send to the primarprimaryuse binary
+    /* Create the command to send to the primary, we use binary
      * protocol to make sure correct arguments are sent. This function
      * is not safe for all binary data. */
     va_start(ap, conn);
@@ -2610,7 +2610,7 @@ static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
             return C_ERR;
         }
     }
-    /* Send replica lisening port to primary for clarification */
+    /* Send replica listening port to primary for clarification */
     sds portstr = getReplicaPortString();
     *err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port", portstr,
                        NULL);
@@ -2714,7 +2714,7 @@ static int dualChannelReplHandleEndOffsetResponse(connection *conn, sds *err) {
  * This connection handler is used to initialize the RDB connection (dual-channel-replication).
  * Once a replica with dual-channel-replication enabled, denied from PSYNC with its primary,
  * dualChannelFullSyncWithPrimary begins its role. The connection handler prepares server.repl_rdb_transfer_s
- * for a rdb stream, and server.repl_transfer_s for increamental replication data stream. */
+ * for a rdb stream, and server.repl_transfer_s for incremental replication data stream. */
 static void dualChannelFullSyncWithPrimary(connection *conn) {
     char *err = NULL;
     int ret = 0;
@@ -2913,7 +2913,7 @@ int streamReplDataBufToDb(client *c) {
 
 /* Replication: Replica side.
  * After done loading the snapshot using the rdb-channel prepare this replica for steady state by
- * initializing the primary client, amd stream local increamental buffer into memory. */
+ * initializing the primary client, amd stream local incremental buffer into memory. */
 void dualChannelSyncSuccess(void) {
     server.primary_initial_offset = server.repl_provisional_primary.reploff;
     replicationResurrectProvisionalPrimary();
@@ -3264,10 +3264,10 @@ int dualChannelReplMainConnRecvPsyncReply(connection *conn, sds *err) {
     if (psync_result == PSYNC_WAIT_REPLY) return C_OK; /* Try again later... */
 
     if (psync_result == PSYNC_CONTINUE) {
-        serverLog(LL_NOTICE, "Primary <-> REPLICA sync: Primary accepted a Partial Resynchronization%s",
+        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Primary accepted a Partial Resynchronization%s",
                   server.repl_rdb_transfer_s != NULL ? ", RDB load in background." : ".");
         if (server.supervised_mode == SUPERVISED_SYSTEMD) {
-            serverCommunicateSystemd("STATUS=Primary <-> REPLICA sync: Partial Resynchronization accepted. Ready to "
+            serverCommunicateSystemd("STATUS=PRIMARY <-> REPLICA sync: Partial Resynchronization accepted. Ready to "
                                      "accept connections in read-write mode.\n");
         }
         dualChannelSyncHandlePsync();
@@ -3328,7 +3328,7 @@ void dualChannelSetupMainConnForPsync(connection *conn) {
  *  - Reduce primary memory load. We do that by moving the COB tracking to the replica side. This also decrease
  *    the chance for COB overruns. Note that primary's input buffer limits at the replica side are less restricted
  *    then primary's COB as the replica plays less critical part in the replication group. While increasing the
- *    primary’s COB may end up with primary reaching swap and clients suffering, at replica side we’re more at
+ *    primary's COB may end up with primary reaching swap and clients suffering, at replica side we're more at
  *    ease with it. Larger COB means better chance to sync successfully.
  *  - Reduce primary main process CPU load. By opening a new, dedicated channel for the RDB transfer, child
  *    processes can have direct access to the new channel. Due to TLS connection restrictions, this was not
@@ -3365,21 +3365,21 @@ void dualChannelSetupMainConnForPsync(connection *conn) {
  * │RECEIVE_AUTH_REPLY │        │ │  └───────┬───────────────────────┘ │ └──┬────────────────┘   │
  * └────────┬──────────┘        │ │          │+OK                      │    │+OK                 │
  *          │+OK                │ │  ┌───────▼───────────────────────┐ │ ┌──▼────────────────┐   │
- * ┌────────▼──────────┐        │ │  │DUAL_CHANNEL_RECEIVE_REPLCONF_.│ │ │SEND_PSYNC         │   │
+ * ┌────────▼──────────┐        │ │  │DUAL_CHANNEL_RECEIVE_REPLCONF_REPLY│SEND_PSYNC         │   │
  * │RECEIVE_PORT_REPLY │        │ │  └───────┬───────────────────────┘ │ └──┬────────────────┘   │
  * └────────┬──────────┘        │ │          │+OK                      │    │PSYNC use snapshot  │
- *          │+OK                │ │  ┌───────▼────────────────┐        │    │end-offset provided │
- * ┌────────▼──────────┐        │ │  │DUAL_CHANNEL_RECEIVE_EN.│        │    │by the primary      │
- * │RECEIVE_IP_REPLY   │        │ │  └───────┬────────────────┘        │ ┌──▼────────────────┐   │
+ *          │+OK                │ │  ┌───────▼───────────────────┐     │    │end-offset provided │
+ * ┌────────▼──────────┐        │ │  │DUAL_CHANNEL_RECEIVE_ENDOFF│     │    │by the primary      │
+ * │RECEIVE_IP_REPLY   │        │ │  └───────┬───────────────────┘     │ ┌──▼────────────────┐   │
  * └────────┬──────────┘        │ │          │$ENDOFF                  │ │RECEIVE_PSYNC_REPLY│   │
- *          │+OK                │ │          ├─────────────────────────┘ └──┬────────────────┘   │
- * ┌────────▼──────────┐        │ │          │                              │+CONTINUE           │
- * │RECEIVE_IP_REPLY   │        │ │  ┌───────▼───────────────┐           ┌──▼────────────────┐   │
- * └────────┬──────────┘        │ │  │DUAL_CHANNEL_RDB_LOAD  │           │TRANSFER           │   │
+ *          │                   │ │          ├─────────────────────────┘ └──┬────────────────┘   │
+ *          │                   │ │          │                              │+CONTINUE           │
+ *          │                   │ │  ┌───────▼───────────────┐           ┌──▼────────────────┐   │
+ *          │                   │ │  │DUAL_CHANNEL_RDB_LOAD  │           │TRANSFER           │   │
  *          │+OK                │ │  └───────┬───────────────┘           └─────┬─────────────┘   │
  * ┌────────▼──────────┐        │ │          │Done loading                     │                 │
  * │RECEIVE_CAPA_REPLY │        │ │  ┌───────▼───────────────┐                 │                 │
- * └────────┬──────────┘        │ │  │DUAL_CHANNEL_RDB_LOADE.│                 │                 │
+ * └────────┬──────────┘        │ │  │DUAL_CHANNEL_RDB_LOADED│                 │                 │
  *          │                   │ │  └───────┬───────────────┘                 │                 │
  * ┌────────▼───┐               │ │          │                                 │                 │
  * │SEND_PSYNC  │               │ │          │Replica loads local replication  │                 │

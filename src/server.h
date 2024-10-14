@@ -1380,7 +1380,7 @@ typedef struct client {
  * skip certain types of initialization. This type is used to indicate a client that has been initialized
  * and can be used with addWritePreparedReply* functions. A client can be cast into this type with
  * prepareClientForFutureWrites(client *c). */
-typedef client writePreparedClient;
+typedef struct writePreparedClient writePreparedClient;
 
 /* ACL information */
 typedef struct aclInfo {
@@ -1746,7 +1746,6 @@ struct valkeyServer {
     _Atomic uint64_t next_client_id;          /* Next client unique ID. Incremental. */
     int protected_mode;                       /* Don't accept external connections. */
     int io_threads_num;                       /* Number of IO threads to use. */
-    int io_threads_do_reads;                  /* Read and parse from IO threads? */
     int active_io_threads_num;                /* Current number of active IO threads, includes main thread. */
     int events_per_io_thread;                 /* Number of events on the event loop to trigger IO threads activation. */
     int prefetch_batch_max_size;              /* Maximum number of keys to prefetch in a single batch */
@@ -2791,6 +2790,7 @@ void addReply(client *c, robj *obj);
 void addReplyStatusLength(client *c, const char *s, size_t len);
 void addReplySds(client *c, sds s);
 void addReplyBulkSds(client *c, sds s);
+void addWritePreparedReplyBulkSds(writePreparedClient *c, sds s);
 void setDeferredReplyBulkSds(client *c, void *node, sds s);
 void addReplyErrorObject(client *c, robj *err);
 void addReplyOrErrorObject(client *c, robj *reply);
@@ -2810,6 +2810,7 @@ void addReplyLongLong(client *c, long long ll);
 void addReplyArrayLen(client *c, long length);
 void addWritePreparedReplyArrayLen(writePreparedClient *c, long length);
 void addReplyMapLen(client *c, long length);
+void addWritePreparedReplyMapLen(writePreparedClient *c, long length);
 void addReplySetLen(client *c, long length);
 void addReplyAttributeLen(client *c, long length);
 void addReplyPushLen(client *c, long length);

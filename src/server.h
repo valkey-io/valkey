@@ -1183,6 +1183,9 @@ typedef struct client {
     blockingState *bstate;            /* Blocking state, lazily initialized when first needed */
     /* Slotsync data, todo maybe need to move it into ClientReplicationData or a new struct. */
     void *slotsync_link;                       /* Pointer to the slotsync link. */
+    list *slotsync_slots;                      /* List of slot ranges that the client interested. */
+    long long slotsync_sent_bytes;             /* todo */
+    long long slotsync_recv_bytes;             /* todo */
     /* Output buffer and reply handling */
     long duration;                       /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     char *buf;                           /* Output buffer */
@@ -1422,9 +1425,10 @@ typedef struct rdbSaveInfo {
     int repl_id_is_set;                   /* True if repl_id field is set. */
     char repl_id[CONFIG_RUN_ID_SIZE + 1]; /* Replication ID. */
     long long repl_offset;                /* Replication offset. */
+    list *slot_ranges;                    /* todo */
 } rdbSaveInfo;
 
-#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1}
+#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1, NULL}
 
 struct malloc_stats {
     size_t zmalloc_used;

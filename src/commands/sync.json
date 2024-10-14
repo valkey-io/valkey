@@ -3,7 +3,7 @@
         "summary": "An internal command used in replication.",
         "group": "server",
         "since": "1.0.0",
-        "arity": 1,
+        "arity": -1,
         "function": "syncCommand",
         "command_flags": [
             "NO_ASYNC_LOADING",

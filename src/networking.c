@@ -205,6 +205,9 @@ client *createClient(connection *conn) {
     c->duration = 0;
     clientSetDefaultAuth(c);
     c->slotsync_link = NULL;
+    c->slotsync_slots = createSlotRangeList();
+    c->slotsync_sent_bytes = 0;
+    c->slotsync_recv_bytes = 0;
     c->reply = listCreate();
     c->deferred_reply_errors = NULL;
     c->reply_bytes = 0;
@@ -1762,6 +1765,7 @@ void freeClient(client *c) {
 
     /* Free slot sync structures. */
     if (c->slotsync_link) onSlotSyncClientClose(c->slotsync_link);
+    listRelease(c->slotsync_slots);
 
     /* Release other dynamically allocated client structure fields,
      * and finally release the client structure itself. */

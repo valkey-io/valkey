@@ -952,7 +952,7 @@ need_full_resync:
  *    started.
  *
  * Returns C_OK on success or C_ERR otherwise. */
-int startBgsaveForReplication(int mincapa, int req) {
+int startBgsaveForReplication(int mincapa, int req, list* slots) {
     int retval;
     int socket_target = 0;
     listIter li;
@@ -970,7 +970,9 @@ int startBgsaveForReplication(int mincapa, int req) {
               (req & REPLICA_REQ_RDB_CHANNEL) ? "dual-channel" : "normal sync");
 
     rdbSaveInfo rsi, *rsiptr;
+    rsi.slot_ranges = slots;
     rsiptr = rdbPopulateSaveInfo(&rsi);
+    rsiptr->slot_ranges = slots;
     /* Only do rdbSave* when rsiptr is not NULL,
      * otherwise replica will miss repl-stream-db. */
     if (rsiptr) {
@@ -1002,6 +1004,11 @@ int startBgsaveForReplication(int mincapa, int req) {
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
             client *replica = ln->value;
+
+            /* Check replica has the exact slot ranges. */
+            if (!isSlotRangeListSame(replica->slotsync_slots, rsi.slot_ranges)) {
+                continue;
+            }
 
             if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
                 replica->repl_data->repl_state = REPL_STATE_NONE;
@@ -1041,6 +1048,26 @@ void syncCommand(client *c) {
 
     /* Wait for any IO pending operation to finish before changing the client state to replica */
     waitForClientIO(c);
+
+    if (!strcasecmp(c->argv[0]->ptr, "sync")) {
+        if ((c->argc % 2) == 0) {
+            addReplyError(c,"wrong number of arguments for SYNC");
+            return;
+        }
+
+        for (int i = 1; i < c->argc; i+=2) {
+            slotRange *new_range = zmalloc(sizeof(slotRange));
+            if ((new_range->start_slot = getSlotOrReply(c,c->argv[i])) == C_ERR) {
+                zfree(new_range);
+                return;
+            }
+            if ((new_range->end_slot = getSlotOrReply(c,c->argv[i+1])) == C_ERR) {
+                zfree(new_range);
+                return;
+            }
+            listAddNodeTail(c->slotsync_slots, new_range);
+        }
+    }
 
     /* Check if this is a failover request to a replica with the same replid and
      * become a primary if so. */
@@ -1182,10 +1209,19 @@ void syncCommand(client *c) {
 
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
+            /* If the new client is a replica in slot sync mode, we can't reuse
+             * any replica in the waiting list. */
+            if (listLength(c->slotsync_slots) != 0) {
+                ln = NULL;
+                break;
+            }
+
             replica = ln->value;
             /* If the client needs a buffer of commands, we can't use
-             * a replica without replication buffer. */
+             * a replica without replication buffer. What's more, we
+             * can't use a replica in slot sync mode either. */
             if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
+                listLength(replica->slotsync_slots) == 0 &&
                 (!(replica->flag.repl_rdbonly) || (c->flag.repl_rdbonly)))
                 break;
         }
@@ -1224,7 +1260,7 @@ void syncCommand(client *c) {
             /* We don't have a BGSAVE in progress, let's start one. Diskless
              * or disk-based mode is determined by replica's capacity. */
             if (!hasActiveChildProcess()) {
-                startBgsaveForReplication(c->repl_data->replica_capa, c->repl_data->replica_req);
+                startBgsaveForReplication(c->repl_data->replica_capa, c->repl_data->replica_req, c->slotsync_slots);
             } else {
                 serverLog(LL_NOTICE, "No BGSAVE in progress, but another BG operation is active. "
                                      "BGSAVE for replication delayed");
@@ -4838,7 +4874,7 @@ void replicationCron(void) {
     replication_cron_loops++; /* Incremented with frequency 1 HZ. */
 }
 
-int shouldStartChildReplication(int *mincapa_out, int *req_out) {
+int shouldStartChildReplication(int *mincapa_out, int *req_out, list **slots_out) {
     /* We should start a BGSAVE good for replication if we have replicas in
      * WAIT_BGSAVE_START state.
      *
@@ -4850,6 +4886,7 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out) {
         int replicas_waiting = 0;
         int mincapa;
         int req;
+        list *slots = NULL;
         int first = 1;
         listNode *ln;
         listIter li;
@@ -4861,6 +4898,7 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out) {
                 if (first) {
                     /* Get first replica's requirements */
                     req = replica->repl_data->replica_req;
+                    slots = replica->slotsync_slots;
                 } else if (req != replica->repl_data->replica_req) {
                     /* Skip replicas that don't match */
                     continue;
@@ -4879,6 +4917,7 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out) {
                                  max_idle >= server.repl_diskless_sync_delay)) {
             if (mincapa_out) *mincapa_out = mincapa;
             if (req_out) *req_out = req;
+            if (slots) *slots_out = slots;
             return 1;
         }
     }
@@ -4889,12 +4928,13 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out) {
 void replicationStartPendingFork(void) {
     int mincapa = -1;
     int req = -1;
+    list *slots = NULL;
 
-    if (shouldStartChildReplication(&mincapa, &req)) {
+    if (shouldStartChildReplication(&mincapa, &req, &slots)) {
         /* Start the BGSAVE. The called function may start a
          * BGSAVE with socket target or disk target depending on the
          * configuration and replicas capabilities and requirements. */
-        startBgsaveForReplication(mincapa, req);
+        startBgsaveForReplication(mincapa, req, slots);
     }
 }
 

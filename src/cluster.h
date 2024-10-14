@@ -126,6 +126,7 @@ int clusterRedirectBlockedClientIfNeeded(client *c);
 void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_code);
 void migrateCloseTimedoutSockets(void);
 unsigned int keyHashSlot(char *key, int keylen);
+int getSlotOrReply(client *c, robj *o);
 int patternHashSlot(char *pattern, int length);
 int isValidAuxString(char *s, unsigned int length);
 void migrateCommand(client *c);
@@ -139,6 +140,7 @@ void resetClusterStats(void);
 /* ---------------------- API exported outside cluster_slotsync.c ----------- */
 int isSlotRangeListSame(list *lx, list *ly);
 int isSlotInSlotRangeList(int slot, list *slot_ranges);
+int isKeyInSlotRanges(robj *key, list *slot_ranges);
 void onSlotSyncClientClose(void *link);
 list *createSlotRangeList(void);
 

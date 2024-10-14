@@ -3042,6 +3042,20 @@ client *moduleGetReplyClient(ValkeyModuleCtx *ctx) {
     }
 }
 
+ValkeyModuleRunTimeArgs *VM_GetRunTimeArgs(ValkeyModuleCtx *ctx) {
+    client *c = moduleGetReplyClient(ctx);
+    if (c == NULL) return NULL;
+
+    ValkeyModuleRunTimeArgs *args = zmalloc(sizeof(struct ValkeyModuleRunTimeArgs));
+    int argc = ctx->module->loadmod->argc;
+    args->argv = argc ? zmalloc(sizeof(robj *) * argc) : NULL;
+    args->argc = argc;
+    for (int i = 0; i < argc; i++) {
+        args->argv[i] = (char *)ctx->module->loadmod->argv[i]->ptr;
+    }
+    return args;
+}
+
 /* Send an integer reply to the client, with the specified `long long` value.
  * The function always returns VALKEYMODULE_OK. */
 int VM_ReplyWithLongLong(ValkeyModuleCtx *ctx, long long ll) {
@@ -13595,6 +13609,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(SetModuleAttribs);
     REGISTER_API(IsModuleNameBusy);
     REGISTER_API(WrongArity);
+    REGISTER_API(GetRunTimeArgs);
     REGISTER_API(ReplyWithLongLong);
     REGISTER_API(ReplyWithError);
     REGISTER_API(ReplyWithErrorFormat);

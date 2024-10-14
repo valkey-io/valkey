@@ -476,7 +476,7 @@ sds getLastIncrAofName(aofManifest *am) {
     }
 
     /* Or return the last one. */
-    listNode *lastnode = listIndex(am->incr_aof_list, -1);
+    listNode *lastnode = listLast(am->incr_aof_list);
     aofInfo *ai = listNodeValue(lastnode);
     return ai->file_name;
 }

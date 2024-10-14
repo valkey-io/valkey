@@ -174,7 +174,7 @@ void serverLogRaw(int level, const char *msg) {
             break;
 
         case LOG_TIMESTAMP_MILLISECONDS:
-            snprintf(buf, sizeof(buf), "%ld.%03d", tv.tv_sec, (int)tv.tv_usec / 1000);
+            snprintf(buf, sizeof(buf), "%lld", (long long)tv.tv_sec * 1000 + (long long)tv.tv_usec / 1000);
             break;
         }
         int role_index;

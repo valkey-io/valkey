@@ -841,6 +841,8 @@ void clusterCommandHelp(client *c) {
         "    Return an array of slot usage statistics for slots assigned to the current node.",
         "SHARDS",
         "    Return information about slot range mappings and the nodes associated with them.",
+        "SLOTLINK (LIST|KILL <link-id>)",
+        "    Manage the slot sync links.",
         NULL};
 
     addExtendedReplyHelp(c, help, clusterCommandExtendedHelp());

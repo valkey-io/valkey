@@ -1,0 +1,34 @@
+{
+    "SLOTLINK": {
+        "summary": "Manage the slot sync links",
+        "complexity": "O(N) where N is the total number of the slot sync links.",
+        "group": "cluster",
+        "since": "8.0.0",
+        "arity": -3,
+        "container": "CLUSTER",
+        "function": "clusterCommand",
+        "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+        ],
+        "arguments": [
+            {
+                "name": "subcommand",
+                "type": "oneof",
+                "arguments": [
+                    {
+                        "name": "list",
+                        "type": "pure-token",
+                        "token": "LIST"
+                    },
+                    {
+                        "name": "link-id",
+                        "type": "string",
+                        "token": "KILL"
+                    }
+                ]
+            }
+        ]
+    }
+}

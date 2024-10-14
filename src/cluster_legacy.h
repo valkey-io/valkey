@@ -369,6 +369,59 @@ typedef struct slotStat {
     uint64_t network_bytes_out;
 } slotStat;
 
+/* A structure used to represent a slot range. */
+typedef struct slotRange {
+    int start_slot;
+    int end_slot;
+} slotRange;
+
+// list *createSlotRangeList(void);
+
+/* Slot sync state. Used in clusterSlotSyncLink struct sync_state for links to remember
+ * what to do next. */
+typedef enum {
+    CLUSTER_SLOTSYNC_STATE_NONE = 0,
+    CLUSTER_SLOTSYNC_STATE_TOCONNECT,   /* Need to reconnect with the slot owner */
+    CLUSTER_SLOTSYNC_STATE_CONNECTING,  /* In connecting with the slot owner */
+    /* --- Handshake states, must be ordered --- */
+    CLUSTER_SLOTSYNC_STATE_SEND_AUTH,   /* Need to send AUTH */
+    CLUSTER_SLOTSYNC_STATE_RECV_AUTH,   /* Wait for AUTH reply */
+    CLUSTER_SLOTSYNC_STATE_SEND_CAPA,   /* Need to send REPLCONF capa */
+    CLUSTER_SLOTSYNC_STATE_RECV_CAPA,   /* Wait for REPLCONF reply */
+    CLUSTER_SLOTSYNC_STATE_WAIT_SCHED,  /* Wait for schedule to avod oncurrency bug */
+    CLUSTER_SLOTSYNC_STATE_SEND_SYNC,   /* Need to send SYNC */
+    /* --- End of handshake states --- */
+    CLUSTER_SLOTSYNC_STATE_RECV_RDB,    /* Receiving the filtered rdb */
+    CLUSTER_SLOTSYNC_STATE_CONNECTED,   /* Synced with the slot owner */
+    CLUSTER_SLOTSYNC_STATE_FAILED,      /* Meet unexpected error and retry will not work */
+} slotSyncState;
+
+/* Encapsulate everything needed to talk with the slot sync source node. */
+typedef struct clusterSlotSyncLink {
+    mstime_t ctime;                 /* Link creation time */
+    connection *sync_conn;          /* Connection to slot sync source node */
+    client* client;
+    char linkname[CLUSTER_NAMELEN]; /* Name of this link */
+    char nodename[CLUSTER_NAMELEN]; /* Name of the slot sync source node */
+
+    slotSyncState sync_state;       /* Sync state */
+    list* slot_ranges;              /* List of the slot ranges we want to sync */
+
+    /* The following fields are used by slot sync RDB transfer. */
+    int transfer_tmpfile_fd;        /* Descriptor of the tmpfile to store slot sync RDB */
+    char* transfer_tmpfile_name;    /* Name of the tmpfile to store slot sync RDB */
+    int64_t transfer_total_size;    /* Total size of the slot sync RDB file */
+    int64_t transfer_read_size;     /* Amount of read from the slot sync RDB file */
+    off_t transfer_last_fsync_off;  /* Offset when we fsync-ed last time */
+    time_t transfer_lastio;         /* Unix time of the latest read, for timeout */
+
+    /* The following fields are used by slot failover. */
+    int slot_mf_ready;              /* If is ready to do slot manual failover */
+    mstime_t slot_mf_end;           /* Slot manual failover time limit (ms unixtime) */
+    long long slot_mf_lag;          /* Lag bytes with the slot sync source node */
+} clusterSlotSyncLink;
+// list *createSlotSyncLinkList(void);
+
 struct clusterState {
     clusterNode *myself; /* This node */
     uint64_t currentEpoch;
@@ -381,6 +434,7 @@ struct clusterState {
     clusterNode *migrating_slots_to[CLUSTER_SLOTS];
     clusterNode *importing_slots_from[CLUSTER_SLOTS];
     clusterNode *slots[CLUSTER_SLOTS];
+    list *slotsync_links;   /* The linked list stores all slot sync links. */
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;      /* Time of previous or next election. */
     int failover_auth_count;          /* Number of votes received so far. */

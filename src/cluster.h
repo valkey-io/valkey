@@ -29,6 +29,7 @@
 #define CLUSTER_REDIR_DOWN_RO_STATE 7 /* -CLUSTERDOWN, allow reads. */
 
 typedef struct _clusterNode clusterNode;
+// struct clusterSlotSyncLink;
 struct clusterState;
 
 /* Flags that a module can set in order to prevent certain Cluster
@@ -134,4 +135,10 @@ int isNodeAvailable(clusterNode *node);
 long long getNodeReplicationOffset(clusterNode *node);
 sds aggregateClientOutputBuffer(client *c);
 void resetClusterStats(void);
+
+/* ---------------------- API exported outside cluster_slotsync.c ----------- */
+int isSlotRangeListSame(list *lx, list *ly);
+int isSlotInSlotRangeList(int slot, list *slot_ranges);
+void onSlotSyncClientClose(void *link);
+
 #endif /* __CLUSTER_H */

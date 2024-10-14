@@ -1181,6 +1181,8 @@ typedef struct client {
     ClientModuleData *module_data;    /* Required for Module operations. lazily initialized when first needed */
     multiState *mstate;               /* MULTI/EXEC state, lazily initialized when first needed */
     blockingState *bstate;            /* Blocking state, lazily initialized when first needed */
+    /* Slotsync data, todo maybe need to move it into ClientReplicationData or a new struct. */
+    void *slotsync_link;                       /* Pointer to the slotsync link. */
     /* Output buffer and reply handling */
     long duration;                       /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     char *buf;                           /* Output buffer */

@@ -124,6 +124,13 @@ sds clusterEncodeOpenSlotsAuxField(int rdbflags);
 int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now);
 
+/* The following functions are declared here as they will be used in this file
+ * but they are defined in cluster_slotsync.c */
+void initClusterSlotSyncLinkList(void);
+void clearClusterSlotSyncLinkList(void);
+void addReplySlotSyncLinksDescription(client *c);
+void clusterKillSlotSyncLink(client *c, char *linkid);
+
 /* Only primaries that own slots have voting rights.
  * Returns 1 if the node has voting rights, otherwise returns 0. */
 static inline int clusterNodeIsVotingPrimary(clusterNode *n) {
@@ -1187,6 +1194,9 @@ void clusterInit(void) {
     serverAssert(rdbRegisterAuxField("cluster-slot-states", clusterEncodeOpenSlotsAuxField,
                                      clusterDecodeOpenSlotsAuxField) == C_OK);
 
+    /* Initialize data for the slot sync. */
+    initClusterSlotSyncLinkList();
+
     /* Set myself->port/cport/pport to my listening ports, we'll just need to
      * discover the IP address via MEET messages. */
     deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport);
@@ -1296,6 +1306,9 @@ void clusterReset(int hard) {
 
     /* Empty the nodes blacklist. */
     dictEmpty(server.cluster->nodes_black_list, NULL);
+
+    /* Clear all states about slot sync. */
+    clearClusterSlotSyncLinkList();
 
     /* Hard reset only: set epochs to 0, change node ID. */
     if (hard) {
@@ -7115,6 +7128,17 @@ int clusterCommandSpecial(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "links") && c->argc == 2) {
         /* CLUSTER LINKS */
         addReplyClusterLinksDescription(c);
+    } else if (!strcasecmp(c->argv[1]->ptr, "slotlink") && (c->argc > 2)) {
+        /* CLUSTER SLOTLINK LIST */
+        /* CLUSTER SLOTLINK KILL <linkid> */
+        if (!strcasecmp(c->argv[2]->ptr, "list")) {
+            addReplySlotSyncLinksDescription(c);
+        } else if (!strcasecmp(c->argv[2]->ptr, "kill") && (c->argc == 4)) {
+            clusterKillSlotSyncLink(c, c->argv[3]->ptr);
+        } else {
+            addReplyError(c, "Invalid CLUSTER SLOTLINK action or number of arguments");
+            return 1;
+        }
     } else {
         return 0;
     }

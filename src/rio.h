@@ -57,7 +57,7 @@ struct _rio {
      * all the data that was read or written so far. The method should be
      * designed so that can be called with the current checksum, and the buf
      * and len fields pointing to the new block of data to add to the checksum
-     * computation. 
+     * computation.
      * The method should return -1 to indicate that the rio operation should be
      * terminated, or a non-negative value to continue processing. */
     int (*update_cksum)(struct _rio *, const void *buf, size_t len);

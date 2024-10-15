@@ -1943,6 +1943,7 @@ void restartAOFAfterSYNC(void) {
 static int useDisklessLoad(void) {
     /* compute boolean decision to use diskless load */
     int enabled = server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB ||
+                  server.repl_diskless_load == REPL_DISKLESS_LOAD_FLUSH_BEFORE_LOAD ||
                   (server.repl_diskless_load == REPL_DISKLESS_LOAD_WHEN_DB_EMPTY && dbTotalServerKeyCount() == 0);
 
     if (enabled) {
@@ -2180,11 +2181,6 @@ void readSyncBulkPayload(connection *conn) {
         temp_functions_lib_ctx = functionsLibCtxCreate();
 
         moduleFireServerEvent(VALKEYMODULE_EVENT_REPL_ASYNC_LOAD, VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_STARTED, NULL);
-    } else {
-        replicationAttachToNewPrimary();
-
-        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
-        emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
     }
 
     /* Before loading the DB into memory we need to delete the readable
@@ -2193,7 +2189,6 @@ void readSyncBulkPayload(connection *conn) {
      * time for non blocking loading. */
     connSetReadHandler(conn, NULL);
 
-    serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
     rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
     if (use_diskless_load) {
         rio rdb;
@@ -2213,6 +2208,14 @@ void readSyncBulkPayload(connection *conn) {
             dbarray = diskless_load_tempDb;
             functions_lib_ctx = temp_functions_lib_ctx;
         } else {
+            /* We will soon start loading the RDB from socket, the replication history is changed,
+             * we must discard the cached primary structure and force resync of sub-replicas. */
+            replicationAttachToNewPrimary();
+
+            /* Even though we are on-empty-db and the database is empty, we still call emptyData. */
+            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
+            emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+
             dbarray = server.db;
             functions_lib_ctx = functionsLibCtxGetCurrent();
             functionsLibCtxClear(functions_lib_ctx);
@@ -2224,6 +2227,8 @@ void readSyncBulkPayload(connection *conn) {
          * We'll restore it when the RDB is received. */
         connBlock(conn);
         connRecvTimeout(conn, server.repl_timeout * 1000);
+
+        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
         startLoading(server.repl_transfer_size, RDBFLAGS_REPLICATION, asyncLoading);
 
         int loadingFailed = 0;
@@ -2256,6 +2261,7 @@ void readSyncBulkPayload(connection *conn) {
                 serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding temporary DB in background");
             } else {
                 /* Remove the half-loaded data in case we started with an empty replica. */
+                serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
                 emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
             }
 
@@ -2332,6 +2338,17 @@ void readSyncBulkPayload(connection *conn) {
             return;
         }
 
+        /* We will soon start loading the RDB from disk, the replication history is changed,
+         * we must discard the cached primary structure and force resync of sub-replicas. */
+        replicationAttachToNewPrimary();
+
+        /* Empty the databases only after the RDB file is ok, that is, before the RDB file
+         * is actually loaded, in case we encounter an error and drop the replication stream
+         * and leave an empty database. */
+        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
+        emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+
+        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
         if (rdbLoad(server.rdb_filename, &rsi, RDBFLAGS_REPLICATION) != RDB_OK) {
             serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization "
                                   "DB from disk, check server logs.");
@@ -2344,6 +2361,7 @@ void readSyncBulkPayload(connection *conn) {
             }
 
             /* If disk-based RDB loading fails, remove the half-loaded dataset. */
+            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
             emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
 
             /* Note that there's no point in restarting the AOF on sync failure,
@@ -2452,7 +2470,7 @@ char *sendCommand(connection *conn, ...) {
     size_t argslen = 0;
     char *arg;
 
-    /* Create the command to send to the primarprimaryuse binary
+    /* Create the command to send to the primary, we use binary
      * protocol to make sure correct arguments are sent. This function
      * is not safe for all binary data. */
     va_start(ap, conn);
@@ -2574,7 +2592,7 @@ int sendCurrentOffsetToReplica(client *replica) {
  * This connection handler is used to initialize the RDB connection (dual-channel-replication).
  * Once a replica with dual-channel-replication enabled, denied from PSYNC with its primary,
  * fullSyncWithPrimary begins its role. The connection handler prepares server.repl_rdb_transfer_s
- * for a rdb stream, and server.repl_transfer_s for increamental replication data stream. */
+ * for a rdb stream, and server.repl_transfer_s for incremental replication data stream. */
 static void fullSyncWithPrimary(connection *conn) {
     char *err = NULL;
     serverAssert(conn == server.repl_rdb_transfer_s);
@@ -2611,7 +2629,7 @@ static void fullSyncWithPrimary(connection *conn) {
                 return;
             }
         }
-        /* Send replica lisening port to primary for clarification */
+        /* Send replica listening port to primary for clarification */
         sds portstr = getReplicaPortString();
         err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port",
                           portstr, NULL);
@@ -2721,8 +2739,10 @@ static void fullSyncWithPrimary(connection *conn) {
 
 error:
     sdsfree(err);
-    connClose(conn);
-    server.repl_transfer_s = NULL;
+    if (server.repl_transfer_s) {
+        connClose(server.repl_transfer_s);
+        server.repl_transfer_s = NULL;
+    }
     if (server.repl_rdb_transfer_s) {
         connClose(server.repl_rdb_transfer_s);
         server.repl_rdb_transfer_s = NULL;
@@ -2805,7 +2825,8 @@ void bufferReplData(connection *conn) {
             remaining_bytes = readIntoReplDataBlock(conn, tail, remaining_bytes);
         }
         if (readlen && remaining_bytes == 0) {
-            if (server.pending_repl_data.len > server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes) {
+            if (server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes &&
+                server.pending_repl_data.len > server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes) {
                 serverLog(LL_NOTICE, "Replication buffer limit reached, stopping buffering.");
                 /* Stop accumulating primary commands. */
                 connSetReadHandler(conn, NULL);
@@ -2872,7 +2893,7 @@ int streamReplDataBufToDb(client *c) {
 
 /* Replication: Replica side.
  * After done loading the snapshot using the rdb-channel prepare this replica for steady state by
- * initializing the primary client, amd stream local increamental buffer into memory. */
+ * initializing the primary client, amd stream local incremental buffer into memory. */
 void dualChannelSyncSuccess(void) {
     server.primary_initial_offset = server.repl_provisional_primary.reploff;
     replicationResurrectProvisionalPrimary();
@@ -3216,10 +3237,10 @@ void setupMainConnForPsync(connection *conn) {
     if (psync_result == PSYNC_WAIT_REPLY) return; /* Try again later... */
 
     if (psync_result == PSYNC_CONTINUE) {
-        serverLog(LL_NOTICE, "Primary <-> REPLICA sync: Primary accepted a Partial Resynchronization%s",
+        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Primary accepted a Partial Resynchronization%s",
                   server.repl_rdb_transfer_s != NULL ? ", RDB load in background." : ".");
         if (server.supervised_mode == SUPERVISED_SYSTEMD) {
-            serverCommunicateSystemd("STATUS=Primary <-> REPLICA sync: Partial Resynchronization accepted. Ready to "
+            serverCommunicateSystemd("STATUS=PRIMARY <-> REPLICA sync: Partial Resynchronization accepted. Ready to "
                                      "accept connections in read-write mode.\n");
         }
         dualChannelSyncHandlePsync();
@@ -3241,7 +3262,7 @@ error:
  *  - Reduce primary memory load. We do that by moving the COB tracking to the replica side. This also decrease
  *    the chance for COB overruns. Note that primary's input buffer limits at the replica side are less restricted
  *    then primary's COB as the replica plays less critical part in the replication group. While increasing the
- *    primary’s COB may end up with primary reaching swap and clients suffering, at replica side we’re more at
+ *    primary's COB may end up with primary reaching swap and clients suffering, at replica side we're more at
  *    ease with it. Larger COB means better chance to sync successfully.
  *  - Reduce primary main process CPU load. By opening a new, dedicated channel for the RDB transfer, child
  *    processes can have direct access to the new channel. Due to TLS connection restrictions, this was not
@@ -3278,21 +3299,21 @@ error:
  * │RECEIVE_AUTH_REPLY │        │ │  └───────┬───────────────────────┘ │ └──┬────────────────┘   │
  * └────────┬──────────┘        │ │          │+OK                      │    │+OK                 │
  *          │+OK                │ │  ┌───────▼───────────────────────┐ │ ┌──▼────────────────┐   │
- * ┌────────▼──────────┐        │ │  │DUAL_CHANNEL_RECEIVE_REPLCONF_.│ │ │SEND_PSYNC         │   │
+ * ┌────────▼──────────┐        │ │  │DUAL_CHANNEL_RECEIVE_REPLCONF_REPLY│SEND_PSYNC         │   │
  * │RECEIVE_PORT_REPLY │        │ │  └───────┬───────────────────────┘ │ └──┬────────────────┘   │
  * └────────┬──────────┘        │ │          │+OK                      │    │PSYNC use snapshot  │
- *          │+OK                │ │  ┌───────▼────────────────┐        │    │end-offset provided │
- * ┌────────▼──────────┐        │ │  │DUAL_CHANNEL_RECEIVE_EN.│        │    │by the primary      │
- * │RECEIVE_IP_REPLY   │        │ │  └───────┬────────────────┘        │ ┌──▼────────────────┐   │
+ *          │+OK                │ │  ┌───────▼───────────────────┐     │    │end-offset provided │
+ * ┌────────▼──────────┐        │ │  │DUAL_CHANNEL_RECEIVE_ENDOFF│     │    │by the primary      │
+ * │RECEIVE_IP_REPLY   │        │ │  └───────┬───────────────────┘     │ ┌──▼────────────────┐   │
  * └────────┬──────────┘        │ │          │$ENDOFF                  │ │RECEIVE_PSYNC_REPLY│   │
- *          │+OK                │ │          ├─────────────────────────┘ └──┬────────────────┘   │
- * ┌────────▼──────────┐        │ │          │                              │+CONTINUE           │
- * │RECEIVE_IP_REPLY   │        │ │  ┌───────▼───────────────┐           ┌──▼────────────────┐   │
- * └────────┬──────────┘        │ │  │DUAL_CHANNEL_RDB_LOAD  │           │TRANSFER           │   │
+ *          │                   │ │          ├─────────────────────────┘ └──┬────────────────┘   │
+ *          │                   │ │          │                              │+CONTINUE           │
+ *          │                   │ │  ┌───────▼───────────────┐           ┌──▼────────────────┐   │
+ *          │                   │ │  │DUAL_CHANNEL_RDB_LOAD  │           │TRANSFER           │   │
  *          │+OK                │ │  └───────┬───────────────┘           └─────┬─────────────┘   │
  * ┌────────▼──────────┐        │ │          │Done loading                     │                 │
  * │RECEIVE_CAPA_REPLY │        │ │  ┌───────▼───────────────┐                 │                 │
- * └────────┬──────────┘        │ │  │DUAL_CHANNEL_RDB_LOADE.│                 │                 │
+ * └────────┬──────────┘        │ │  │DUAL_CHANNEL_RDB_LOADED│                 │                 │
  *          │                   │ │  └───────┬───────────────┘                 │                 │
  * ┌────────▼───┐               │ │          │                                 │                 │
  * │SEND_PSYNC  │               │ │          │Replica loads local replication  │                 │
@@ -3739,6 +3760,12 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required) {
     sdsfree(server.primary_host);
     server.primary_host = NULL;
     if (server.primary) {
+        /* When joining 'myself' to a new primary, set the dont_cache_primary flag
+         * if a full sync is required. This happens when 'myself' was previously
+         * part of a different shard from the new primary. Since 'myself' does not
+         * have the replication history of the shard it is joining, clearing the
+         * cached primary is necessary to ensure proper replication behavior. */
+        server.primary->flag.dont_cache_primary = full_sync_required;
         freeClient(server.primary);
     }
     disconnectAllBlockedClients(); /* Clients blocked in primary, now replica. */
@@ -3765,14 +3792,6 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required) {
     if (was_primary && !full_sync_required) {
         replicationDiscardCachedPrimary();
         replicationCachePrimaryUsingMyself();
-    }
-
-    /* If full sync is required, drop the cached primary. Doing so increases
-     * this replica node's election rank (delay) and reduces its chance of
-     * winning the election. If a replica requiring a full sync wins the
-     * election, it will flush valid data in the shard, causing data loss. */
-    if (full_sync_required) {
-        replicationDiscardCachedPrimary();
     }
 
     /* Fire the role change modules event. */
@@ -4207,9 +4226,9 @@ void refreshGoodReplicasCount(void) {
 
 /* return true if status of good replicas is OK. otherwise false */
 int checkGoodReplicasStatus(void) {
-    return server.primary_host ||                /* not a primary status should be OK */
-           !server.repl_min_replicas_max_lag ||  /* Min replica max lag not configured */
-           !server.repl_min_replicas_to_write || /* Min replica to write not configured */
+    return server.primary_host ||                                                /* not a primary status should be OK */
+           !server.repl_min_replicas_max_lag ||                                  /* Min replica max lag not configured */
+           !server.repl_min_replicas_to_write ||                                 /* Min replica to write not configured */
            server.repl_good_replicas_count >= server.repl_min_replicas_to_write; /* check if we have enough replicas */
 }
 

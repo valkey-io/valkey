@@ -195,7 +195,7 @@ static redisContext *getRedisContext(const char *ip, int port, const char *hosts
 static void freeServerConfig(serverConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
-int showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData);
+static long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData);
 
 /* Dict callbacks */
 static uint64_t dictSdsHash(const void *key);
@@ -238,7 +238,7 @@ static redisContext *getRedisContext(const char *ip, int port, const char *hosts
     else
         ctx = redisConnectUnix(hostsocket);
     if (ctx == NULL || ctx->err) {
-        fprintf(stderr, "Could not connect to Redis at ");
+        fprintf(stderr, "Could not connect to server at ");
         char *err = (ctx != NULL ? ctx->errstr : "");
         if (hostsocket == NULL)
             fprintf(stderr, "%s:%d: %s\n", ip, port, err);
@@ -648,7 +648,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
         c->context = redisConnectUnixNonBlock(config.hostsocket);
     }
     if (c->context->err) {
-        fprintf(stderr, "Could not connect to Redis at ");
+        fprintf(stderr, "Could not connect to server at ");
         if (config.hostsocket == NULL || is_cluster_client)
             fprintf(stderr, "%s:%d: %s\n", ip, port, c->context->errstr);
         else
@@ -1511,103 +1511,100 @@ invalid:
     printf("Invalid option \"%s\" or option argument missing\n\n", argv[i]);
 
 usage:
-    /* clang-format off */
     tls_usage =
 #ifdef USE_OPENSSL
-" --tls              Establish a secure TLS connection.\n"
-" --sni <host>       Server name indication for TLS.\n"
-" --cacert <file>    CA Certificate file to verify with.\n"
-" --cacertdir <dir>  Directory where trusted CA certificates are stored.\n"
-"                    If neither cacert nor cacertdir are specified, the default\n"
-"                    system-wide trusted root certs configuration will apply.\n"
-" --insecure         Allow insecure TLS connection by skipping cert validation.\n"
-" --cert <file>      Client certificate to authenticate with.\n"
-" --key <file>       Private key file to authenticate with.\n"
-" --tls-ciphers <list> Sets the list of preferred ciphers (TLSv1.2 and below)\n"
-"                    in order of preference from highest to lowest separated by colon (\":\").\n"
-"                    See the ciphers(1ssl) manpage for more information about the syntax of this string.\n"
+        " --tls              Establish a secure TLS connection.\n"
+        " --sni <host>       Server name indication for TLS.\n"
+        " --cacert <file>    CA Certificate file to verify with.\n"
+        " --cacertdir <dir>  Directory where trusted CA certificates are stored.\n"
+        "                    If neither cacert nor cacertdir are specified, the default\n"
+        "                    system-wide trusted root certs configuration will apply.\n"
+        " --insecure         Allow insecure TLS connection by skipping cert validation.\n"
+        " --cert <file>      Client certificate to authenticate with.\n"
+        " --key <file>       Private key file to authenticate with.\n"
+        " --tls-ciphers <list> Sets the list of preferred ciphers (TLSv1.2 and below)\n"
+        "                    in order of preference from highest to lowest separated by colon (\":\").\n"
+        "                    See the ciphers(1ssl) manpage for more information about the syntax of this string.\n"
 #ifdef TLS1_3_VERSION
-" --tls-ciphersuites <list> Sets the list of preferred ciphersuites (TLSv1.3)\n"
-"                    in order of preference from highest to lowest separated by colon (\":\").\n"
-"                    See the ciphers(1ssl) manpage for more information about the syntax of this string,\n"
-"                    and specifically for TLSv1.3 ciphersuites.\n"
+        " --tls-ciphersuites <list> Sets the list of preferred ciphersuites (TLSv1.3)\n"
+        "                    in order of preference from highest to lowest separated by colon (\":\").\n"
+        "                    See the ciphers(1ssl) manpage for more information about the syntax of this string,\n"
+        "                    and specifically for TLSv1.3 ciphersuites.\n"
 #endif
 #endif
-"";
+        "";
 
     printf(
-"%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
-"Usage: valkey-benchmark [OPTIONS] [COMMAND ARGS...]\n\n"
-"Options:\n"
-" -h <hostname>      Server hostname (default 127.0.0.1)\n"
-" -p <port>          Server port (default 6379)\n"
-" -s <socket>        Server socket (overrides host and port)\n"
-" -a <password>      Password for Valkey Auth\n"
-" --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.\n"
-" -u <uri>           Server URI on format valkey://user:password@host:port/dbnum\n"
-"                    User, password and dbnum are optional. For authentication\n"
-"                    without a username, use username 'default'. For TLS, use\n"
-"                    the scheme 'valkeys'.\n"
-" -c <clients>       Number of parallel connections (default 50).\n"
-"                    Note: If --cluster is used then number of clients has to be\n"
-"                    the same or higher than the number of nodes.\n"
-" -n <requests>      Total number of requests (default 100000)\n"
-" -d <size>          Data size of SET/GET value in bytes (default 3)\n"
-" --dbnum <db>       SELECT the specified db number (default 0)\n"
-" -3                 Start session in RESP3 protocol mode.\n"
-" --threads <num>    Enable multi-thread mode.\n"
-" --cluster          Enable cluster mode.\n"
-"                    If the command is supplied on the command line in cluster\n"
-"                    mode, the key must contain \"{tag}\". Otherwise, the\n"
-"                    command will not be sent to the right cluster node.\n"
-" --enable-tracking  Send CLIENT TRACKING on before starting benchmark.\n"
-" -k <boolean>       1=keep alive 0=reconnect (default 1)\n"
-" -r <keyspacelen>   Use random keys for SET/GET/INCR, random values for SADD,\n"
-"                    random members and scores for ZADD.\n"
-"                    Using this option the benchmark will expand the string\n"
-"                    __rand_int__ inside an argument with a 12 digits number in\n"
-"                    the specified range from 0 to keyspacelen-1. The\n"
-"                    substitution changes every time a command is executed.\n"
-"                    Default tests use this to hit random keys in the specified\n"
-"                    range.\n"
-"                    Note: If -r is omitted, all commands in a benchmark will\n"
-"                    use the same key.\n"
-" -P <numreq>        Pipeline <numreq> requests. Default 1 (no pipeline).\n"
-" -q                 Quiet. Just show query/sec values\n"
-" --precision        Number of decimal places to display in latency output (default 0)\n"
-" --csv              Output in CSV format\n"
-" -l                 Loop. Run the tests forever\n"
-" -t <tests>         Only run the comma separated list of tests. The test\n"
-"                    names are the same as the ones produced as output.\n"
-"                    The -t option is ignored if a specific command is supplied\n"
-"                    on the command line.\n"
-" -I                 Idle mode. Just open N idle connections and wait.\n"
-" -x                 Read last argument from STDIN.\n"
-" --seed <num>       Set the seed for random number generator. Default seed is based on time.\n",
-tls_usage,
-" --help             Output this help and exit.\n"
-" --version          Output version and exit.\n\n"
-"Examples:\n\n"
-" Run the benchmark with the default configuration against 127.0.0.1:6379:\n"
-"   $ valkey-benchmark\n\n"
-" Use 20 parallel clients, for a total of 100k requests, against 192.168.1.1:\n"
-"   $ valkey-benchmark -h 192.168.1.1 -p 6379 -n 100000 -c 20\n\n"
-" Fill 127.0.0.1:6379 with about 1 million keys only using the SET test:\n"
-"   $ valkey-benchmark -t set -n 1000000 -r 100000000\n\n"
-" Benchmark 127.0.0.1:6379 for a few commands producing CSV output:\n"
-"   $ valkey-benchmark -t ping,set,get -n 100000 --csv\n\n"
-" Benchmark a specific command line:\n"
-"   $ valkey-benchmark -r 10000 -n 10000 eval 'return redis.call(\"ping\")' 0\n\n"
-" Fill a list with 10000 random elements:\n"
-"   $ valkey-benchmark -r 10000 -n 10000 lpush mylist __rand_int__\n\n"
-" On user specified command lines __rand_int__ is replaced with a random integer\n"
-" with a range of values selected by the -r option.\n"
-    );
-    /* clang-format on */
+        "%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
+        "Usage: valkey-benchmark [OPTIONS] [COMMAND ARGS...]\n\n"
+        "Options:\n"
+        " -h <hostname>      Server hostname (default 127.0.0.1)\n"
+        " -p <port>          Server port (default 6379)\n"
+        " -s <socket>        Server socket (overrides host and port)\n"
+        " -a <password>      Password for Valkey Auth\n"
+        " --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.\n"
+        " -u <uri>           Server URI on format valkey://user:password@host:port/dbnum\n"
+        "                    User, password and dbnum are optional. For authentication\n"
+        "                    without a username, use username 'default'. For TLS, use\n"
+        "                    the scheme 'valkeys'.\n"
+        " -c <clients>       Number of parallel connections (default 50).\n"
+        "                    Note: If --cluster is used then number of clients has to be\n"
+        "                    the same or higher than the number of nodes.\n"
+        " -n <requests>      Total number of requests (default 100000)\n"
+        " -d <size>          Data size of SET/GET value in bytes (default 3)\n"
+        " --dbnum <db>       SELECT the specified db number (default 0)\n"
+        " -3                 Start session in RESP3 protocol mode.\n"
+        " --threads <num>    Enable multi-thread mode.\n"
+        " --cluster          Enable cluster mode.\n"
+        "                    If the command is supplied on the command line in cluster\n"
+        "                    mode, the key must contain \"{tag}\". Otherwise, the\n"
+        "                    command will not be sent to the right cluster node.\n"
+        " --enable-tracking  Send CLIENT TRACKING on before starting benchmark.\n"
+        " -k <boolean>       1=keep alive 0=reconnect (default 1)\n"
+        " -r <keyspacelen>   Use random keys for SET/GET/INCR, random values for SADD,\n"
+        "                    random members and scores for ZADD.\n"
+        "                    Using this option the benchmark will expand the string\n"
+        "                    __rand_int__ inside an argument with a 12 digits number in\n"
+        "                    the specified range from 0 to keyspacelen-1. The\n"
+        "                    substitution changes every time a command is executed.\n"
+        "                    Default tests use this to hit random keys in the specified\n"
+        "                    range.\n"
+        "                    Note: If -r is omitted, all commands in a benchmark will\n"
+        "                    use the same key.\n"
+        " -P <numreq>        Pipeline <numreq> requests. Default 1 (no pipeline).\n"
+        " -q                 Quiet. Just show query/sec values\n"
+        " --precision        Number of decimal places to display in latency output (default 0)\n"
+        " --csv              Output in CSV format\n"
+        " -l                 Loop. Run the tests forever\n"
+        " -t <tests>         Only run the comma separated list of tests. The test\n"
+        "                    names are the same as the ones produced as output.\n"
+        "                    The -t option is ignored if a specific command is supplied\n"
+        "                    on the command line.\n"
+        " -I                 Idle mode. Just open N idle connections and wait.\n"
+        " -x                 Read last argument from STDIN.\n"
+        " --seed <num>       Set the seed for random number generator. Default seed is based on time.\n",
+        tls_usage,
+        " --help             Output this help and exit.\n"
+        " --version          Output version and exit.\n\n"
+        "Examples:\n\n"
+        " Run the benchmark with the default configuration against 127.0.0.1:6379:\n"
+        "   $ valkey-benchmark\n\n"
+        " Use 20 parallel clients, for a total of 100k requests, against 192.168.1.1:\n"
+        "   $ valkey-benchmark -h 192.168.1.1 -p 6379 -n 100000 -c 20\n\n"
+        " Fill 127.0.0.1:6379 with about 1 million keys only using the SET test:\n"
+        "   $ valkey-benchmark -t set -n 1000000 -r 100000000\n\n"
+        " Benchmark 127.0.0.1:6379 for a few commands producing CSV output:\n"
+        "   $ valkey-benchmark -t ping,set,get -n 100000 --csv\n\n"
+        " Benchmark a specific command line:\n"
+        "   $ valkey-benchmark -r 10000 -n 10000 eval 'return redis.call(\"ping\")' 0\n\n"
+        " Fill a list with 10000 random elements:\n"
+        "   $ valkey-benchmark -r 10000 -n 10000 lpush mylist __rand_int__\n\n"
+        " On user specified command lines __rand_int__ is replaced with a random integer\n"
+        " with a range of values selected by the -r option.\n");
     exit(exit_status);
 }
 
-int showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(eventLoop);
     UNUSED(id);
     benchmarkThread *thread = (benchmarkThread *)clientData;

@@ -31,7 +31,7 @@ To build TLS support as Valkey built-in:
 
     % make BUILD_TLS=yes
 
-TO build TLS as Valkey module:
+To build TLS as Valkey module:
 
     % make BUILD_TLS=module
 

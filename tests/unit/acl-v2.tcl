@@ -42,19 +42,19 @@ start_server {tags {"acl external:skip"}} {
 
     test {Test selector syntax error reports the error in the selector context} {
         catch {r ACL SETUSER selector-syntax on (this-is-invalid)} e
-        assert_match "*ERR Error in ACL SETUSER modifier '(*)*Syntax*" $e
+        assert_match "ERR Error in ACL SETUSER modifier '(*)*Syntax*" $e
 
         catch {r ACL SETUSER selector-syntax on (&* &fail)} e
-        assert_match "*ERR Error in ACL SETUSER modifier '(*)*Adding a pattern after the*" $e
+        assert_match "ERR Error in ACL SETUSER modifier '(*)*Adding a pattern after the*" $e
 
         catch {r ACL SETUSER selector-syntax on (+PING (+SELECT (+DEL} e
-        assert_match "*ERR Unmatched parenthesis in acl selector*" $e
+        assert_match "ERR Unmatched parenthesis in acl selector*" $e
 
         catch {r ACL SETUSER selector-syntax on (+PING (+SELECT (+DEL ) ) ) } e
-        assert_match "*ERR Error in ACL SETUSER modifier*" $e
+        assert_match "ERR Error in ACL SETUSER modifier*" $e
 
         catch {r ACL SETUSER selector-syntax on (+PING (+SELECT (+DEL ) } e
-        assert_match "*ERR Error in ACL SETUSER modifier*" $e
+        assert_match "ERR Error in ACL SETUSER modifier*" $e
 
         assert_equal "" [r ACL GETUSER selector-syntax]
     }
@@ -75,11 +75,11 @@ start_server {tags {"acl external:skip"}} {
 
         # Test invalid selector syntax
         catch {r ACL SETUSER invalid-selector " () "} err
-        assert_match "*ERR*Syntax error*" $err
+        assert_match "ERR*Syntax error*" $err
         catch {r ACL SETUSER invalid-selector (} err
-        assert_match "*Unmatched parenthesis*" $err
+        assert_match "ERR*Unmatched parenthesis*" $err
         catch {r ACL SETUSER invalid-selector )} err
-        assert_match "*ERR*Syntax error" $err
+        assert_match "ERR*Syntax error*" $err
     }
 
     test {Test separate read permission} {
@@ -115,6 +115,11 @@ start_server {tags {"acl external:skip"}} {
         catch {$r2 copy write read} err
         assert_match "*NOPERM*key*" $err
     }
+
+    test {Validate read and write permissions format} {
+        catch {r ACL SETUSER key-permission-RW %~} err
+        set err
+    } {ERR Error in ACL SETUSER modifier '%~': Syntax error}
 
     test {Test separate read and write permissions on different selectors are not additive} {
         r ACL SETUSER key-permission-RW-selector on nopass "(%R~read* +@all)" "(%W~write* +@all)"

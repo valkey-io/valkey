@@ -33,6 +33,6 @@
 int32_t serverLrand48(void);
 void serverSrand48(int32_t seedval);
 
-#define REDIS_LRAND48_MAX INT32_MAX
+#define SERVER_LRAND48_MAX INT32_MAX
 
 #endif

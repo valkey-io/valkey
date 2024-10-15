@@ -697,8 +697,8 @@ proc start_server {options {code undefined}} {
             dict set srv "skipleaks" 1
             kill_server $srv
 
-            if {$::dump_logs && $assertion} {
-                # if we caught an assertion ($::num_failed isn't incremented yet)
+            if {$::dump_logs} {
+                # crash or assertion ($::num_failed isn't incremented yet)
                 # this happens when the test spawns a server and not the other way around
                 dump_server_log $srv
             } else {

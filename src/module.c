@@ -180,15 +180,12 @@ typedef struct ValkeyModuleCtx ValkeyModuleCtx;
 #define VALKEYMODULE_CTX_BLOCKED_TIMEOUT (1 << 3)
 #define VALKEYMODULE_CTX_THREAD_SAFE (1 << 4)
 #define VALKEYMODULE_CTX_BLOCKED_DISCONNECTED (1 << 5)
-#define VALKEYMODULE_CTX_TEMP_CLIENT                                                                                   \
-    (1 << 6) /* Return client object to the pool                                                                       \
-               when the context is destroyed */
-#define VALKEYMODULE_CTX_NEW_CLIENT                                                                                    \
-    (1 << 7) /* Free client object when the                                                                            \
-               context is destroyed */
+#define VALKEYMODULE_CTX_TEMP_CLIENT (1 << 6) /* Return client object to the pool \
+                                                 when the context is destroyed */
+#define VALKEYMODULE_CTX_NEW_CLIENT (1 << 7)  /* Free client object when the \
+                                                 context is destroyed */
 #define VALKEYMODULE_CTX_CHANNELS_POS_REQUEST (1 << 8)
-#define VALKEYMODULE_CTX_COMMAND                                                                                       \
-    (1 << 9) /* Context created to serve a command from call() or AOF (which calls cmd->proc directly) */
+#define VALKEYMODULE_CTX_COMMAND (1 << 9) /* Context created to serve a command from call() or AOF (which calls cmd->proc directly) */
 
 
 /* This represents a key opened with VM_OpenKey(). */
@@ -249,9 +246,8 @@ typedef struct ValkeyModuleCommand ValkeyModuleCommand;
 
 #define VALKEYMODULE_REPLYFLAG_NONE 0
 #define VALKEYMODULE_REPLYFLAG_TOPARSE (1 << 0) /* Protocol must be parsed. */
-#define VALKEYMODULE_REPLYFLAG_NESTED                                                                                  \
-    (1 << 1) /* Nested reply object. No proto                                                                          \
-               or struct free. */
+#define VALKEYMODULE_REPLYFLAG_NESTED (1 << 1)  /* Nested reply object. No proto \
+                                                   or struct free. */
 
 /* Reply of VM_Call() function. The function is filled in a lazy
  * way depending on the function called on the reply structure. By default
@@ -408,7 +404,7 @@ typedef struct ValkeyModuleServerInfoData {
  * In case 'ctx' has no 'module' member (and therefore no module->options),
  * we assume default behavior, that is, the server signals.
  * (see VM_GetThreadSafeContext) */
-#define SHOULD_SIGNAL_MODIFIED_KEYS(ctx)                                                                               \
+#define SHOULD_SIGNAL_MODIFIED_KEYS(ctx) \
     ((ctx)->module ? !((ctx)->module->options & VALKEYMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED) : 1)
 
 /* Server events hooks data structures and defines: this modules API
@@ -656,6 +652,7 @@ client *moduleAllocTempClient(void) {
     } else {
         c = createClient(NULL);
         c->flag.module = 1;
+        c->flag.fake = 1;
         c->user = NULL; /* Root user */
     }
     return c;
@@ -894,8 +891,10 @@ void moduleCreateContext(ValkeyModuleCtx *out_ctx, ValkeyModule *module, int ctx
     out_ctx->flags = ctx_flags;
     if (ctx_flags & VALKEYMODULE_CTX_TEMP_CLIENT)
         out_ctx->client = moduleAllocTempClient();
-    else if (ctx_flags & VALKEYMODULE_CTX_NEW_CLIENT)
+    else if (ctx_flags & VALKEYMODULE_CTX_NEW_CLIENT) {
         out_ctx->client = createClient(NULL);
+        out_ctx->client->flag.fake = 1;
+    }
 
     /* Calculate the initial yield time for long blocked contexts.
      * in loading we depend on the server hz, but in other cases we also wait
@@ -5957,7 +5956,7 @@ void VM_CallReplyPromiseSetUnblockHandler(ValkeyModuleCallReply *reply,
 int VM_CallReplyPromiseAbort(ValkeyModuleCallReply *reply, void **private_data) {
     ValkeyModuleAsyncRMCallPromise *promise = callReplyGetPrivateData(reply);
     if (!promise->c)
-        return VALKEYMODULE_ERR; /* Promise can not be aborted, either already aborted or already finished. */
+        return VALKEYMODULE_ERR;                              /* Promise can not be aborted, either already aborted or already finished. */
     if (!(promise->c->flag.blocked)) return VALKEYMODULE_ERR; /* Client is not blocked anymore, can not abort it. */
 
     /* Client is still blocked, remove it from any blocking state and release it. */
@@ -9114,7 +9113,7 @@ typedef struct ValkeyModuleTimer {
 
 /* This is the timer handler that is called by the main event loop. We schedule
  * this timer to be called when the nearest of our module timers will expire. */
-int moduleTimerHandler(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+long long moduleTimerHandler(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(eventLoop);
     UNUSED(id);
     UNUSED(clientData);
@@ -10841,10 +10840,8 @@ size_t VM_MallocSizeString(ValkeyModuleString *str) {
  * it does not include the allocation size of the keys and values.
  */
 size_t VM_MallocSizeDict(ValkeyModuleDict *dict) {
-    size_t size = sizeof(ValkeyModuleDict) + sizeof(rax);
-    size += dict->rax->numnodes * sizeof(raxNode);
-    /* For more info about this weird line, see streamRadixTreeMemoryUsage */
-    size += dict->rax->numnodes * sizeof(long) * 30;
+    size_t size = sizeof(ValkeyModuleDict);
+    size += raxAllocSize(dict->rax);
     return size;
 }
 
@@ -11837,8 +11834,8 @@ int moduleRegisterApi(const char *funcname, void *funcptr) {
 
 /* Register Module APIs under both RedisModule_ and ValkeyModule_ namespaces
  * so that legacy Redis module binaries can continue to function */
-#define REGISTER_API(name)                                                                                             \
-    moduleRegisterApi("ValkeyModule_" #name, (void *)(unsigned long)VM_##name);                                        \
+#define REGISTER_API(name)                                                      \
+    moduleRegisterApi("ValkeyModule_" #name, (void *)(unsigned long)VM_##name); \
     moduleRegisterApi("RedisModule_" #name, (void *)(unsigned long)VM_##name);
 
 /* Global initialization at server startup. */
@@ -12197,11 +12194,15 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
     ValkeyModuleCtx ctx;
     moduleCreateContext(&ctx, NULL, VALKEYMODULE_CTX_TEMP_CLIENT); /* We pass NULL since we don't have a module yet. */
     if (onload((void *)&ctx, module_argv, module_argc) == VALKEYMODULE_ERR) {
-        serverLog(LL_WARNING, "Module %s initialization failed. Module not loaded", path);
         if (ctx.module) {
+            serverLog(LL_WARNING, "Module %s initialization failed. Module not loaded.", path);
             moduleUnregisterCleanup(ctx.module);
             moduleRemoveCateogires(ctx.module);
             moduleFreeModuleStructure(ctx.module);
+        } else {
+            /* If there is no ctx.module, this means that our ValkeyModule_Init call failed,
+             * and currently init will only fail on busy name. */
+            serverLog(LL_WARNING, "Module %s initialization failed. Module name is busy.", path);
         }
         moduleFreeContext(&ctx);
         dlclose(handle);
@@ -12965,6 +12966,9 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
     disconnectReplicas();
     freeReplicationBacklog();
 
+    /* Stop and kill existing AOF rewriting fork as it is saving outdated data,
+     * we will re-enable it after the rdbLoad. Also killing it will prevent COW
+     * memory issue. */
     if (server.aof_state != AOF_OFF) stopAppendOnly();
 
     /* Kill existing RDB fork as it is saving outdated data. Also killing it
@@ -12983,7 +12987,10 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
     int ret = rdbLoad(stream->data.filename, NULL, RDBFLAGS_NONE);
 
     if (server.current_client) unprotectClient(server.current_client);
-    if (server.aof_state != AOF_OFF) startAppendOnly();
+
+    /* Here we need to decide whether to enable the AOF based on the aof_enabled,
+     * since the previous stopAppendOnly sets aof_state to AOF_OFF. */
+    if (server.aof_enabled) startAppendOnly();
 
     if (ret != RDB_OK) {
         errno = (ret == RDB_NOT_EXIST) ? ENOENT : EIO;

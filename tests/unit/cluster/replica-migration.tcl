@@ -75,9 +75,15 @@ proc test_migrated_replica {type} {
             fail "Failover does not happened"
         }
 
-        # Make sure the offset of server 3 / 7 is 0.
-        verify_log_message -3 "*Start of election*offset 0*" 0
-        verify_log_message -7 "*Start of election*offset 0*" 0
+        # The node may not be able to initiate an election in time due to
+        # problems with cluster communication. If an election is initiated,
+        # we make sure the offset of server 3 / 7 is 0.
+        if {[count_log_message -3 "Start of election"] != 0} {
+            verify_log_message -3 "*Start of election*offset 0*" 0
+        }
+        if {[count_log_message -7 "Start of election"] != 0} {
+            verify_log_message -7 "*Start of election*offset 0*" 0
+        }
 
         # Make sure the right replica gets the higher rank.
         verify_log_message -4 "*Start of election*rank #0*" 0
@@ -170,9 +176,14 @@ proc test_nonempty_replica {type} {
             fail "Failover does not happened"
         }
 
-        # Make sure server 7 gets the lower rank and it's offset is 0.
         verify_log_message -4 "*Start of election*rank #0*" 0
-        verify_log_message -7 "*Start of election*offset 0*" 0
+
+        # The node may not be able to initiate an election in time due to
+        # problems with cluster communication. If an election is initiated,
+        # we make sure server 7 gets the lower rank and it's offset is 0.
+        if {[count_log_message -7 "Start of election"] != 0} {
+            verify_log_message -7 "*Start of election*offset 0*" 0
+        }
 
         # Wait for the cluster to be ok.
         wait_for_condition 1000 50 {
@@ -283,9 +294,15 @@ proc test_sub_replica {type} {
             fail "Failover does not happened"
         }
 
-        # Make sure the offset of server 3 / 7 is 0.
-        verify_log_message -3 "*Start of election*offset 0*" 0
-        verify_log_message -7 "*Start of election*offset 0*" 0
+        # The node may not be able to initiate an election in time due to
+        # problems with cluster communication. If an election is initiated,
+        # we make sure the offset of server 3 / 7 is 0.
+        if {[count_log_message -3 "Start of election"] != 0} {
+            verify_log_message -3 "*Start of election*offset 0*" 0
+        }
+        if {[count_log_message -7 "Start of election"] != 0} {
+            verify_log_message -7 "*Start of election*offset 0*" 0
+        }
 
         # Wait for the cluster to be ok.
         wait_for_condition 1000 50 {
@@ -334,10 +351,16 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
     test_sub_replica "sigstop"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
 
-start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
-    test "valkey-cli make source node ignores NOREPLICAS error when doing the last CLUSTER SETSLOT" {
+proc test_cluster_setslot {type} {
+    test "valkey-cli make source node ignores NOREPLICAS error when doing the last CLUSTER SETSLOT - $type" {
         R 3 config set cluster-allow-replica-migration no
         R 7 config set cluster-allow-replica-migration yes
+
+        if {$type == "setslot"} {
+            # Make R 7 drop the PING message so that we have a higher
+            # chance to trigger the migration from CLUSTER SETSLOT.
+            R 7 DEBUG DROP-CLUSTER-PACKET-FILTER 1
+        }
 
         # Move slot 0 from primary 3 to primary 0.
         set addr "[srv 0 host]:[srv 0 port]"
@@ -347,6 +370,13 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
         } result]
         if {$code != 0} {
             fail "valkey-cli --cluster rebalance returns non-zero exit code, output below:\n$result"
+        }
+
+        # Wait for R 3 to report that it is an empty primary (cluster-allow-replica-migration no)
+        wait_for_log_messages -3 {"*I am now an empty primary*"} 0 1000 50
+
+        if {$type == "setslot"} {
+            R 7 DEBUG DROP-CLUSTER-PACKET-FILTER -1
         }
 
         # Make sure server 3 lost its replica (server 7) and server 7 becomes a replica of primary 0.
@@ -361,4 +391,12 @@ start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 
             fail "Server 3 and 7 role response has not changed"
         }
     }
+}
+
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+    test_cluster_setslot "gossip"
+} my_slot_allocation cluster_allocate_replicas ;# start_cluster
+
+start_cluster 4 4 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+    test_cluster_setslot "setslot"
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster

@@ -64,21 +64,19 @@ typedef struct sentinelAddr {
 #define SRI_PRIMARY (1 << 0)
 #define SRI_REPLICA (1 << 1)
 #define SRI_SENTINEL (1 << 2)
-#define SRI_S_DOWN (1 << 3) /* Subjectively down (no quorum). */
-#define SRI_O_DOWN (1 << 4) /* Objectively down (confirmed by others). */
-#define SRI_PRIMARY_DOWN                                                                                               \
-    (1 << 5) /* A Sentinel with this flag set thinks that                                                              \
-                 its primary is down. */
-#define SRI_FAILOVER_IN_PROGRESS                                                                                       \
-    (1 << 6)                           /* Failover is in progress for                                                  \
-                                          this primary. */
-#define SRI_PROMOTED (1 << 7)          /* Replica selected for promotion. */
-#define SRI_RECONF_SENT (1 << 8)       /* REPLICAOF <newprimary> sent. */
-#define SRI_RECONF_INPROG (1 << 9)     /* Replica synchronization in progress. */
-#define SRI_RECONF_DONE (1 << 10)      /* Replica synchronized with new primary. */
-#define SRI_FORCE_FAILOVER (1 << 11)   /* Force failover with primary up. */
-#define SRI_SCRIPT_KILL_SENT (1 << 12) /* SCRIPT KILL already sent on -BUSY */
-#define SRI_PRIMARY_REBOOT (1 << 13)   /* Primary was detected as rebooting */
+#define SRI_S_DOWN (1 << 3)               /* Subjectively down (no quorum). */
+#define SRI_O_DOWN (1 << 4)               /* Objectively down (confirmed by others). */
+#define SRI_PRIMARY_DOWN (1 << 5)         /* A Sentinel with this flag set thinks that \
+                                             its primary is down. */
+#define SRI_FAILOVER_IN_PROGRESS (1 << 6) /* Failover is in progress for \
+                                             this primary. */
+#define SRI_PROMOTED (1 << 7)             /* Replica selected for promotion. */
+#define SRI_RECONF_SENT (1 << 8)          /* REPLICAOF <newprimary> sent. */
+#define SRI_RECONF_INPROG (1 << 9)        /* Replica synchronization in progress. */
+#define SRI_RECONF_DONE (1 << 10)         /* Replica synchronized with new primary. */
+#define SRI_FORCE_FAILOVER (1 << 11)      /* Force failover with primary up. */
+#define SRI_SCRIPT_KILL_SENT (1 << 12)    /* SCRIPT KILL already sent on -BUSY */
+#define SRI_PRIMARY_REBOOT (1 << 13)      /* Primary was detected as rebooting */
 /* Note: when adding new flags, please check the flags section in addReplySentinelValkeyInstance. */
 
 /* Note: times are in milliseconds. */
@@ -467,9 +465,17 @@ void sentinelConfigSetCommand(client *c);
 
 /* this array is used for sentinel config lookup, which need to be loaded
  * before monitoring primaries config to avoid dependency issues */
-const char *preMonitorCfgName[] = {"announce-ip",   "announce-port",     "deny-scripts-reconfig",
-                                   "sentinel-user", "sentinel-pass",     "current-epoch",
-                                   "myid",          "resolve-hostnames", "announce-hostnames"};
+const char *preMonitorCfgName[] = {
+    "announce-ip",
+    "announce-port",
+    "deny-scripts-reconfig",
+    "sentinel-user",
+    "sentinel-pass",
+    "current-epoch",
+    "myid",
+    "resolve-hostnames",
+    "announce-hostnames",
+};
 
 /* This function overwrites a few normal server config default with Sentinel
  * specific defaults. */
@@ -3033,8 +3039,16 @@ void sentinelConfigSetCommand(client *c) {
     int drop_conns = 0;
     char *option;
     robj *val;
-    char *options[] = {"announce-ip",   "sentinel-user",      "sentinel-pass", "resolve-hostnames",
-                       "announce-port", "announce-hostnames", "loglevel",      NULL};
+    char *options[] = {
+        "announce-ip",
+        "sentinel-user",
+        "sentinel-pass",
+        "resolve-hostnames",
+        "announce-port",
+        "announce-hostnames",
+        "loglevel",
+        NULL,
+    };
     static dict *options_dict = NULL;
     if (!options_dict) {
         options_dict = dictCreate(&stringSetDictType);
@@ -3675,57 +3689,55 @@ int sentinelIsQuorumReachable(sentinelValkeyInstance *primary, int *usableptr) {
 
 void sentinelCommand(client *c) {
     if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
-        /* clang-format off */
         const char *help[] = {
-"CKQUORUM <primary-name>",
-"    Check if the current Sentinel configuration is able to reach the quorum",
-"    needed to failover a primary and the majority needed to authorize the",
-"    failover.",
-"CONFIG SET param value [param value ...]",
-"    Set a global Sentinel configuration parameter.",
-"CONFIG GET <param> [param param param ...]",
-"    Get global Sentinel configuration parameter.",
-"DEBUG [<param> <value> ...]",
-"    Show a list of configurable time parameters and their values (milliseconds).",
-"    Or update current configurable parameters values (one or more).",
-"GET-PRIMARY-ADDR-BY-NAME <primary-name>",
-"    Return the ip and port number of the primary with that name.",
-"FAILOVER <primary-name>",
-"    Manually failover a primary node without asking for agreement from other",
-"    Sentinels",
-"FLUSHCONFIG",
-"    Force Sentinel to rewrite its configuration on disk, including the current",
-"    Sentinel state.",
-"INFO-CACHE <primary-name>",
-"    Return last cached INFO output from primaries and all its replicas.",
-"IS-PRIMARY-DOWN-BY-ADDR <ip> <port> <current-epoch> <runid>",
-"    Check if the primary specified by ip:port is down from current Sentinel's",
-"    point of view.",
-"PRIMARY <primary-name>",
-"    Show the state and info of the specified primary.",
-"PRIMARIES",
-"    Show a list of monitored primaries and their state.",
-"MONITOR <name> <ip> <port> <quorum>",
-"    Start monitoring a new primary with the specified name, ip, port and quorum.",
-"MYID",
-"    Return the ID of the Sentinel instance.",
-"PENDING-SCRIPTS",
-"    Get pending scripts information.",
-"REMOVE <primary-name>",
-"    Remove primary from Sentinel's monitor list.",
-"REPLICAS <primary-name>",
-"    Show a list of replicas for this primary and their states.",
-"RESET <pattern>",
-"    Reset primaries for specific primary name matching this pattern.",
-"SENTINELS <primary-name>",
-"    Show a list of Sentinel instances for this primary and their state.",
-"SET <primary-name> <option> <value> [<option> <value> ...]",
-"    Set configuration parameters for certain primaries.",
-"SIMULATE-FAILURE [CRASH-AFTER-ELECTION] [CRASH-AFTER-PROMOTION] [HELP]",
-"    Simulate a Sentinel crash.",
-NULL
+            "CKQUORUM <primary-name>",
+            "    Check if the current Sentinel configuration is able to reach the quorum",
+            "    needed to failover a primary and the majority needed to authorize the",
+            "    failover.",
+            "CONFIG SET param value [param value ...]",
+            "    Set a global Sentinel configuration parameter.",
+            "CONFIG GET <param> [param param param ...]",
+            "    Get global Sentinel configuration parameter.",
+            "DEBUG [<param> <value> ...]",
+            "    Show a list of configurable time parameters and their values (milliseconds).",
+            "    Or update current configurable parameters values (one or more).",
+            "GET-PRIMARY-ADDR-BY-NAME <primary-name>",
+            "    Return the ip and port number of the primary with that name.",
+            "FAILOVER <primary-name>",
+            "    Manually failover a primary node without asking for agreement from other",
+            "    Sentinels",
+            "FLUSHCONFIG",
+            "    Force Sentinel to rewrite its configuration on disk, including the current",
+            "    Sentinel state.",
+            "INFO-CACHE <primary-name>",
+            "    Return last cached INFO output from primaries and all its replicas.",
+            "IS-PRIMARY-DOWN-BY-ADDR <ip> <port> <current-epoch> <runid>",
+            "    Check if the primary specified by ip:port is down from current Sentinel's",
+            "    point of view.",
+            "PRIMARY <primary-name>",
+            "    Show the state and info of the specified primary.",
+            "PRIMARIES",
+            "    Show a list of monitored primaries and their state.",
+            "MONITOR <name> <ip> <port> <quorum>",
+            "    Start monitoring a new primary with the specified name, ip, port and quorum.",
+            "MYID",
+            "    Return the ID of the Sentinel instance.",
+            "PENDING-SCRIPTS",
+            "    Get pending scripts information.",
+            "REMOVE <primary-name>",
+            "    Remove primary from Sentinel's monitor list.",
+            "REPLICAS <primary-name>",
+            "    Show a list of replicas for this primary and their states.",
+            "RESET <pattern>",
+            "    Reset primaries for specific primary name matching this pattern.",
+            "SENTINELS <primary-name>",
+            "    Show a list of Sentinel instances for this primary and their state.",
+            "SET <primary-name> <option> <value> [<option> <value> ...]",
+            "    Set configuration parameters for certain primaries.",
+            "SIMULATE-FAILURE [CRASH-AFTER-ELECTION] [CRASH-AFTER-PROMOTION] [HELP]",
+            "    Simulate a Sentinel crash.",
+            NULL,
         };
-        /* clang-format on */
         addReplyHelp(c, help);
     } else if (!strcasecmp(c->argv[1]->ptr, "primaries") || !strcasecmp(c->argv[1]->ptr, "masters")) {
         /* SENTINEL PRIMARIES */

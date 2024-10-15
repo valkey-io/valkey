@@ -144,7 +144,7 @@ static inline int defaultClientPort(void) {
     return server.tls_cluster ? server.tls_port : server.port;
 }
 
-#define isSlotUnclaimed(slot)                                                                                          \
+#define isSlotUnclaimed(slot) \
     (server.cluster->slots[slot] == NULL || bitmapTestBit(server.cluster->owner_not_claiming_slot, slot))
 
 #define RCVBUF_INIT_LEN 1024
@@ -191,7 +191,10 @@ dictType clusterSdsToListType = {
 };
 
 typedef struct {
-    enum { ITER_DICT, ITER_LIST } type;
+    enum {
+        ITER_DICT,
+        ITER_LIST
+    } type;
     union {
         dictIterator di;
         listIter li;
@@ -224,12 +227,8 @@ static clusterNode *clusterNodeIterNext(ClusterNodeIterator *iter) {
         /* Return the value associated with the node, or NULL if no more nodes */
         return ln ? listNodeValue(ln) : NULL;
     }
-    /* This line is unreachable but added to avoid compiler warnings */
-    default: {
-        serverPanic("bad type");
-        return NULL;
     }
-    }
+    serverPanic("Unknown iterator type %d", iter->type);
 }
 
 static void clusterNodeIterReset(ClusterNodeIterator *iter) {
@@ -1189,6 +1188,28 @@ void clusterInitLast(void) {
     if (createSocketAcceptHandler(&server.clistener, clusterAcceptHandler) != C_OK) {
         serverPanic("Unrecoverable error creating Cluster socket accept handler.");
     }
+}
+
+/* Called when a cluster node receives SHUTDOWN. */
+void clusterHandleServerShutdown(void) {
+    /* The error logs have been logged in the save function if the save fails. */
+    serverLog(LL_NOTICE, "Saving the cluster configuration file before exiting.");
+    clusterSaveConfig(1);
+
+#if !defined(__sun)
+    /* Unlock the cluster config file before shutdown, see clusterLockConfig.
+     *
+     * This is needed if you shutdown a very large server process, it will take
+     * a while for the OS to release resources and unlock the cluster configuration
+     * file. Therefore, if we immediately try to restart the server process, it
+     * may not be able to acquire the lock on the cluster configuration file and
+     * fail to start. We explicitly releases the lock on the cluster configuration
+     * file on shutdown, rather than relying on the OS to release the lock, which
+     * is a cleaner and safer way to release acquired resources. */
+    if (server.cluster_config_file_lock_fd != -1) {
+        flock(server.cluster_config_file_lock_fd, LOCK_UN | LOCK_NB);
+    }
+#endif /* __sun */
 }
 
 /* Reset a node performing a soft or hard reset:
@@ -2648,7 +2669,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
              * If the sender and myself are in the same shard, try psync. */
             clusterSetPrimary(sender, !are_in_same_shard, !are_in_same_shard);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
-        } else if ((sender_slots >= migrated_our_slots) && !are_in_same_shard) {
+        } else if (nodeIsPrimary(myself) && (sender_slots >= migrated_our_slots) && !are_in_same_shard) {
             /* When all our slots are lost to the sender and the sender belongs to
              * a different shard, this is likely due to a client triggered slot
              * migration. Don't reconfigure this node to migrate to the new shard
@@ -3156,7 +3177,10 @@ int clusterProcessPacket(clusterLink *link) {
         /* Add this node if it is new for us and the msg type is MEET.
          * In this stage we don't try to add the node with the right
          * flags, replicaof pointer, and so forth, as this details will be
-         * resolved when we'll receive PONGs from the node. */
+         * resolved when we'll receive PONGs from the node. The exception
+         * to this is the flag that indicates extensions are supported, as
+         * we want to send extensions right away in the return PONG in order
+         * to reduce the amount of time needed to stabilize the shard ID. */
         if (!sender && type == CLUSTERMSG_TYPE_MEET) {
             clusterNode *node;
 
@@ -3164,6 +3188,10 @@ int clusterProcessPacket(clusterLink *link) {
             serverAssert(nodeIp2String(node->ip, link, hdr->myip) == C_OK);
             getClientPortFromClusterMsg(hdr, &node->tls_port, &node->tcp_port);
             node->cport = ntohs(hdr->cport);
+            if (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
+                node->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
+            }
+            setClusterNodeToInboundClusterLink(node, link);
             clusterAddNode(node);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
         }
@@ -4447,7 +4475,10 @@ void clusterFailoverReplaceYourPrimary(void) {
 
     if (clusterNodeIsPrimary(myself) || old_primary == NULL) return;
 
-    /* 1) Turn this node into a primary . */
+    serverLog(LL_NOTICE, "Setting myself to primary in shard %.40s after failover; my old primary is %.40s (%s)",
+              myself->shard_id, old_primary->name, old_primary->human_nodename);
+
+    /* 1) Turn this node into a primary. */
     clusterSetNodeAsPrimary(myself);
     replicationUnsetPrimary();
 
@@ -4544,7 +4575,7 @@ void clusterHandleReplicaFailover(void) {
      * elapsed, we can setup a new one. */
     if (auth_age > auth_retry_time) {
         server.cluster->failover_auth_time = mstime() +
-                                             500 + /* Fixed delay of 500 milliseconds, let FAIL msg propagate. */
+                                             500 +           /* Fixed delay of 500 milliseconds, let FAIL msg propagate. */
                                              random() % 500; /* Random delay between 0 and 500 milliseconds. */
         server.cluster->failover_auth_count = 0;
         server.cluster->failover_auth_sent = 0;
@@ -5477,10 +5508,14 @@ struct clusterNodeFlags {
 };
 
 static struct clusterNodeFlags clusterNodeFlagsTable[] = {
-    {CLUSTER_NODE_MYSELF, "myself,"}, {CLUSTER_NODE_PRIMARY, "master,"},
-    {CLUSTER_NODE_REPLICA, "slave,"}, {CLUSTER_NODE_PFAIL, "fail?,"},
-    {CLUSTER_NODE_FAIL, "fail,"},     {CLUSTER_NODE_HANDSHAKE, "handshake,"},
-    {CLUSTER_NODE_NOADDR, "noaddr,"}, {CLUSTER_NODE_NOFAILOVER, "nofailover,"}};
+    {CLUSTER_NODE_MYSELF, "myself,"},
+    {CLUSTER_NODE_PRIMARY, "master,"},
+    {CLUSTER_NODE_REPLICA, "slave,"},
+    {CLUSTER_NODE_PFAIL, "fail?,"},
+    {CLUSTER_NODE_FAIL, "fail,"},
+    {CLUSTER_NODE_HANDSHAKE, "handshake,"},
+    {CLUSTER_NODE_NOADDR, "noaddr,"},
+    {CLUSTER_NODE_NOFAILOVER, "nofailover,"}};
 
 /* Concatenate the comma separated list of node flags to the given SDS
  * string 'ci'. */
@@ -6195,6 +6230,9 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
         return 0;
     }
 
+    /* If 'myself' is a replica, 'c' must be the primary client. */
+    serverAssert(!nodeIsReplica(myself) || c == server.primary);
+
     if ((slot = getSlotOrReply(c, c->argv[2])) == -1) return 0;
 
     if (!strcasecmp(c->argv[3]->ptr, "migrating") && c->argc >= 5) {
@@ -6383,21 +6421,39 @@ void clusterCommandSetSlot(client *c) {
             server.cluster->migrating_slots_to[slot] = NULL;
         }
 
-        int slot_was_mine = server.cluster->slots[slot] == myself;
+        clusterNode *my_primary = clusterNodeGetPrimary(myself);
+        int slot_was_mine = server.cluster->slots[slot] == my_primary;
         clusterDelSlot(slot);
         clusterAddSlot(n, slot);
+        int shard_is_empty = my_primary->numslots == 0;
 
-        /* If we are a primary left without slots, we should turn into a
-         * replica of the new primary. */
-        if (slot_was_mine && n != myself && myself->numslots == 0 && server.cluster_allow_replica_migration) {
+        /* If replica migration is allowed, check if the primary of this shard
+         * loses its last slot and the shard becomes empty. In this case, we
+         * should turn into a replica of the new primary. */
+        if (server.cluster_allow_replica_migration && slot_was_mine && shard_is_empty) {
+            serverAssert(n != my_primary);
             serverLog(LL_NOTICE,
                       "Lost my last slot during slot migration. Reconfiguring myself "
                       "as a replica of %.40s (%s) in shard %.40s",
                       n->name, n->human_nodename, n->shard_id);
+            /* `c` is the primary client if `myself` is a replica, prevent it
+             * from being freed by clusterSetPrimary. */
+            if (nodeIsReplica(myself)) protectClient(c);
             /* We are migrating to a different shard that has a completely different
              * replication history, so a full sync is required. */
             clusterSetPrimary(n, 1, 1);
+            if (nodeIsReplica(myself)) unprotectClient(c);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
+        }
+
+        /* If replica migration is not allowed, check if the primary of this shard
+         * loses its last slot and the shard becomes empty. In this case, we will
+         * print the exact same log as during the gossip process. */
+        if (!server.cluster_allow_replica_migration && nodeIsPrimary(myself) && slot_was_mine && shard_is_empty) {
+            serverAssert(n != my_primary);
+            serverLog(LL_NOTICE,
+                      "My last slot was migrated to node %.40s (%s) in shard %.40s. I am now an empty primary.",
+                      n->name, n->human_nodename, n->shard_id);
         }
 
         /* If this node or this node's primary was importing this slot,
@@ -6672,6 +6728,9 @@ int clusterCommandSpecial(client *c) {
              * it without coordination. */
             serverLog(LL_NOTICE, "Forced failover user request accepted (user request from '%s').", client);
             server.cluster->mf_can_start = 1;
+            /* We can start a manual failover as soon as possible, setting a flag
+             * here so that we don't need to waiting for the cron to kick in. */
+            clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_MANUALFAILOVER);
         } else {
             serverLog(LL_NOTICE, "Manual failover user request accepted (user request from '%s').", client);
             clusterSendMFStart(myself->replicaof);

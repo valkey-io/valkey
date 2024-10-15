@@ -5,8 +5,8 @@
  * Cluster exported API.
  *----------------------------------------------------------------------------*/
 
-#define CLUSTER_SLOT_MASK_BITS 14                   /* Number of bits used for slot id. */
-#define CLUSTER_SLOTS (1 << CLUSTER_SLOT_MASK_BITS) /* Total number of slots in cluster mode, which is 16384. */
+#define CLUSTER_SLOT_MASK_BITS 14                                   /* Number of bits used for slot id. */
+#define CLUSTER_SLOTS (1 << CLUSTER_SLOT_MASK_BITS)                 /* Total number of slots in cluster mode, which is 16384. */
 #define CLUSTER_SLOT_MASK ((unsigned long long)(CLUSTER_SLOTS - 1)) /* Bit mask for slot id stored in LSB. */
 #define CLUSTER_OK 0                                                /* Everything looks ok */
 #define CLUSTER_FAIL 1                                              /* The cluster can't work */
@@ -39,6 +39,7 @@ void clusterInitLast(void);
 void clusterCron(void);
 void clusterBeforeSleep(void);
 int verifyClusterConfigWithData(void);
+void clusterHandleServerShutdown(void);
 
 int clusterSendModuleMessageToTarget(const char *target,
                                      uint64_t module_id,
@@ -83,7 +84,6 @@ int getNodeDefaultClientPort(clusterNode *n);
 clusterNode *getMyClusterNode(void);
 int getClusterSize(void);
 int getMyShardSlotCount(void);
-int handleDebugClusterCommand(client *c);
 int clusterNodePending(clusterNode *node);
 int clusterNodeIsPrimary(clusterNode *n);
 char **getClusterNodesList(size_t *numnodes);

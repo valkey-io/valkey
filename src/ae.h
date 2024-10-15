@@ -42,12 +42,11 @@
 #define AE_NONE 0     /* No events registered. */
 #define AE_READABLE 1 /* Fire when descriptor is readable. */
 #define AE_WRITABLE 2 /* Fire when descriptor is writable. */
-#define AE_BARRIER                                                                                                     \
-    4 /* With WRITABLE, never fire the event if the                                                                    \
-         READABLE event already fired in the same event                                                                \
-         loop iteration. Useful when you want to persist                                                               \
-         things to disk before sending replies, and want                                                               \
-         to do that in a group fashion. */
+#define AE_BARRIER 4  /* With WRITABLE, never fire the event if the      \
+                         READABLE event already fired in the same event  \
+                         loop iteration. Useful when you want to persist \
+                         things to disk before sending replies, and want \
+                         to do that in a group fashion. */
 
 #define AE_FILE_EVENTS (1 << 0)
 #define AE_TIME_EVENTS (1 << 1)
@@ -68,7 +67,7 @@ struct aeEventLoop;
 
 /* Types and data structures */
 typedef void aeFileProc(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask);
-typedef int aeTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData);
+typedef long long aeTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData);
 typedef void aeEventFinalizerProc(struct aeEventLoop *eventLoop, void *clientData);
 typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
 typedef void aeAfterSleepProc(struct aeEventLoop *eventLoop, int numevents);

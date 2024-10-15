@@ -56,10 +56,10 @@ struct _kvstore {
     dict **dicts;
     long long num_dicts;
     long long num_dicts_bits;
-    list *rehashing;     /* List of dictionaries in this kvstore that are currently rehashing. */
-    int resize_cursor;   /* Cron job uses this cursor to gradually resize dictionaries (only used if num_dicts > 1). */
-    int allocated_dicts; /* The number of allocated dicts. */
-    int non_empty_dicts; /* The number of non-empty dicts. */
+    list *rehashing;                     /* List of dictionaries in this kvstore that are currently rehashing. */
+    int resize_cursor;                   /* Cron job uses this cursor to gradually resize dictionaries (only used if num_dicts > 1). */
+    int allocated_dicts;                 /* The number of allocated dicts. */
+    int non_empty_dicts;                 /* The number of non-empty dicts. */
     unsigned long long key_count;        /* Total number of keys in this kvstore. */
     unsigned long long bucket_count;     /* Total number of buckets in this kvstore across dictionaries. */
     unsigned long long *dict_size_index; /* Binary indexed tree (BIT) that describes cumulative key frequencies up until
@@ -145,7 +145,8 @@ static void cumulativeKeyCountAdd(kvstore *kvs, int didx, long delta) {
 
     dict *d = kvstoreGetDict(kvs, didx);
     size_t dsize = dictSize(d);
-    int non_empty_dicts_delta = dsize == 1 ? 1 : dsize == 0 ? -1 : 0;
+    int non_empty_dicts_delta = dsize == 1 ? 1 : dsize == 0 ? -1
+                                                            : 0;
     kvs->non_empty_dicts += non_empty_dicts_delta;
 
     /* BIT does not need to be calculated when there's only one dict. */
@@ -254,6 +255,12 @@ kvstore *kvstoreCreate(dictType *type, int num_dicts_bits, int flags) {
     /* We can't support more than 2^16 dicts because we want to save 48 bits
      * for the dict cursor, see kvstoreScan */
     assert(num_dicts_bits <= 16);
+
+    /* The dictType of kvstore needs to use the specific callbacks.
+     * If there are any changes in the future, it will need to be modified. */
+    assert(type->rehashingStarted == kvstoreDictRehashingStarted);
+    assert(type->rehashingCompleted == kvstoreDictRehashingCompleted);
+    assert(type->dictMetadataBytes == kvstoreDictMetadataSize);
 
     kvstore *kvs = zcalloc(sizeof(*kvs));
     kvs->dtype = type;

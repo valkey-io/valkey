@@ -135,12 +135,12 @@ int memtest_addressing(unsigned long *l, size_t bytes, int interactive) {
  * In this test we can't call rand() since the system may be completely
  * unable to handle library calls, so we have to resort to our own
  * PRNG that only uses local state. We use an xorshift* PRNG. */
-#define xorshift64star_next()                                                                                          \
-    do {                                                                                                               \
-        rseed ^= rseed >> 12;                                                                                          \
-        rseed ^= rseed << 25;                                                                                          \
-        rseed ^= rseed >> 27;                                                                                          \
-        rout = rseed * UINT64_C(2685821657736338717);                                                                  \
+#define xorshift64star_next()                         \
+    do {                                              \
+        rseed ^= rseed >> 12;                         \
+        rseed ^= rseed << 25;                         \
+        rseed ^= rseed >> 27;                         \
+        rout = rseed * UINT64_C(2685821657736338717); \
     } while (0)
 
 void memtest_fill_random(unsigned long *l, size_t bytes, int interactive) {

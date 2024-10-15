@@ -307,8 +307,7 @@ unsigned long hashTypeLength(const robj *o) {
     return length;
 }
 
-hashTypeIterator *hashTypeInitIterator(robj *subject) {
-    hashTypeIterator *hi = zmalloc(sizeof(hashTypeIterator));
+void hashTypeInitIterator(robj *subject, hashTypeIterator *hi) {
     hi->subject = subject;
     hi->encoding = subject->encoding;
 
@@ -316,16 +315,14 @@ hashTypeIterator *hashTypeInitIterator(robj *subject) {
         hi->fptr = NULL;
         hi->vptr = NULL;
     } else if (hi->encoding == OBJ_ENCODING_HT) {
-        hi->di = dictGetIterator(subject->ptr);
+        dictInitIterator(&hi->di, subject->ptr);
     } else {
         serverPanic("Unknown hash encoding");
     }
-    return hi;
 }
 
-void hashTypeReleaseIterator(hashTypeIterator *hi) {
-    if (hi->encoding == OBJ_ENCODING_HT) dictReleaseIterator(hi->di);
-    zfree(hi);
+void hashTypeResetIterator(hashTypeIterator *hi) {
+    if (hi->encoding == OBJ_ENCODING_HT) dictResetIterator(&hi->di);
 }
 
 /* Move to the next entry in the hash. Return C_OK when the next entry
@@ -358,7 +355,7 @@ int hashTypeNext(hashTypeIterator *hi) {
         hi->fptr = fptr;
         hi->vptr = vptr;
     } else if (hi->encoding == OBJ_ENCODING_HT) {
-        if ((hi->de = dictNext(hi->di)) == NULL) return C_ERR;
+        if ((hi->de = dictNext(&hi->di)) == NULL) return C_ERR;
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -448,31 +445,31 @@ void hashTypeConvertListpack(robj *o, int enc) {
         /* Nothing to do... */
 
     } else if (enc == OBJ_ENCODING_HT) {
-        hashTypeIterator *hi;
+        hashTypeIterator hi;
         dict *dict;
         int ret;
 
-        hi = hashTypeInitIterator(o);
+        hashTypeInitIterator(o, &hi);
         dict = dictCreate(&hashDictType);
 
         /* Presize the dict to avoid rehashing */
         dictExpand(dict, hashTypeLength(o));
 
-        while (hashTypeNext(hi) != C_ERR) {
+        while (hashTypeNext(&hi) != C_ERR) {
             sds key, value;
 
-            key = hashTypeCurrentObjectNewSds(hi, OBJ_HASH_KEY);
-            value = hashTypeCurrentObjectNewSds(hi, OBJ_HASH_VALUE);
+            key = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_KEY);
+            value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
             ret = dictAdd(dict, key, value);
             if (ret != DICT_OK) {
                 sdsfree(key);
-                sdsfree(value);              /* Needed for gcc ASAN */
-                hashTypeReleaseIterator(hi); /* Needed for gcc ASAN */
+                sdsfree(value);             /* Needed for gcc ASAN */
+                hashTypeResetIterator(&hi); /* Needed for gcc ASAN */
                 serverLogHexDump(LL_WARNING, "listpack with dup elements dump", o->ptr, lpBytes(o->ptr));
                 serverPanic("Listpack corruption detected");
             }
         }
-        hashTypeReleaseIterator(hi);
+        hashTypeResetIterator(&hi);
         zfree(o->ptr);
         o->encoding = OBJ_ENCODING_HT;
         o->ptr = dict;
@@ -498,7 +495,7 @@ void hashTypeConvert(robj *o, int enc) {
  * The resulting object always has refcount set to 1 */
 robj *hashTypeDup(robj *o) {
     robj *hobj;
-    hashTypeIterator *hi;
+    hashTypeIterator hi;
 
     serverAssert(o->type == OBJ_HASH);
 
@@ -513,20 +510,20 @@ robj *hashTypeDup(robj *o) {
         dict *d = dictCreate(&hashDictType);
         dictExpand(d, dictSize((const dict *)o->ptr));
 
-        hi = hashTypeInitIterator(o);
-        while (hashTypeNext(hi) != C_ERR) {
+        hashTypeInitIterator(o, &hi);
+        while (hashTypeNext(&hi) != C_ERR) {
             sds field, value;
             sds newfield, newvalue;
             /* Extract a field-value pair from an original hash object.*/
-            field = hashTypeCurrentFromHashTable(hi, OBJ_HASH_KEY);
-            value = hashTypeCurrentFromHashTable(hi, OBJ_HASH_VALUE);
+            field = hashTypeCurrentFromHashTable(&hi, OBJ_HASH_KEY);
+            value = hashTypeCurrentFromHashTable(&hi, OBJ_HASH_VALUE);
             newfield = sdsdup(field);
             newvalue = sdsdup(value);
 
             /* Add a field-value pair to a new hash object. */
             dictAdd(d, newfield, newvalue);
         }
-        hashTypeReleaseIterator(hi);
+        hashTypeResetIterator(&hi);
 
         hobj = createObject(OBJ_HASH, d);
         hobj->encoding = OBJ_ENCODING_HT;
@@ -791,7 +788,7 @@ void hstrlenCommand(client *c) {
     addReplyLongLong(c, hashTypeGetValueLength(o, c->argv[2]->ptr));
 }
 
-static void addHashIteratorCursorToReply(client *c, hashTypeIterator *hi, int what) {
+static void addHashIteratorCursorToReply(writePreparedClient *wpc, hashTypeIterator *hi, int what) {
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *vstr = NULL;
         unsigned int vlen = UINT_MAX;
@@ -799,12 +796,12 @@ static void addHashIteratorCursorToReply(client *c, hashTypeIterator *hi, int wh
 
         hashTypeCurrentFromListpack(hi, what, &vstr, &vlen, &vll);
         if (vstr)
-            addReplyBulkCBuffer(c, vstr, vlen);
+            addWritePreparedReplyBulkCBuffer(wpc, vstr, vlen);
         else
-            addReplyBulkLongLong(c, vll);
+            addWritePreparedReplyBulkLongLong(wpc, vll);
     } else if (hi->encoding == OBJ_ENCODING_HT) {
         sds value = hashTypeCurrentFromHashTable(hi, what);
-        addReplyBulkCBuffer(c, value, sdslen(value));
+        addWritePreparedReplyBulkCBuffer(wpc, value, sdslen(value));
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -812,34 +809,36 @@ static void addHashIteratorCursorToReply(client *c, hashTypeIterator *hi, int wh
 
 void genericHgetallCommand(client *c, int flags) {
     robj *o;
-    hashTypeIterator *hi;
+    hashTypeIterator hi;
     int length, count = 0;
 
     robj *emptyResp = (flags & OBJ_HASH_KEY && flags & OBJ_HASH_VALUE) ? shared.emptymap[c->resp] : shared.emptyarray;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], emptyResp)) == NULL || checkType(c, o, OBJ_HASH)) return;
 
+    writePreparedClient *wpc = prepareClientForFutureWrites(c);
+    if (!wpc) return;
     /* We return a map if the user requested keys and values, like in the
      * HGETALL case. Otherwise to use a flat array makes more sense. */
     length = hashTypeLength(o);
     if (flags & OBJ_HASH_KEY && flags & OBJ_HASH_VALUE) {
-        addReplyMapLen(c, length);
+        addWritePreparedReplyMapLen(wpc, length);
     } else {
-        addReplyArrayLen(c, length);
+        addWritePreparedReplyArrayLen(wpc, length);
     }
 
-    hi = hashTypeInitIterator(o);
-    while (hashTypeNext(hi) != C_ERR) {
+    hashTypeInitIterator(o, &hi);
+    while (hashTypeNext(&hi) != C_ERR) {
         if (flags & OBJ_HASH_KEY) {
-            addHashIteratorCursorToReply(c, hi, OBJ_HASH_KEY);
+            addHashIteratorCursorToReply(wpc, &hi, OBJ_HASH_KEY);
             count++;
         }
         if (flags & OBJ_HASH_VALUE) {
-            addHashIteratorCursorToReply(c, hi, OBJ_HASH_VALUE);
+            addHashIteratorCursorToReply(wpc, &hi, OBJ_HASH_VALUE);
             count++;
         }
     }
 
-    hashTypeReleaseIterator(hi);
+    hashTypeResetIterator(&hi);
 
     /* Make sure we returned the right number of elements. */
     if (flags & OBJ_HASH_KEY && flags & OBJ_HASH_VALUE) count /= 2;
@@ -874,18 +873,19 @@ void hscanCommand(client *c) {
     scanGenericCommand(c, o, cursor);
 }
 
-static void hrandfieldReplyWithListpack(client *c, unsigned int count, listpackEntry *keys, listpackEntry *vals) {
+static void hrandfieldReplyWithListpack(writePreparedClient *wpc, unsigned int count, listpackEntry *keys, listpackEntry *vals) {
+    client *c = (client *)wpc;
     for (unsigned long i = 0; i < count; i++) {
-        if (vals && c->resp > 2) addReplyArrayLen(c, 2);
+        if (vals && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
         if (keys[i].sval)
-            addReplyBulkCBuffer(c, keys[i].sval, keys[i].slen);
+            addWritePreparedReplyBulkCBuffer(wpc, keys[i].sval, keys[i].slen);
         else
-            addReplyBulkLongLong(c, keys[i].lval);
+            addWritePreparedReplyBulkLongLong(wpc, keys[i].lval);
         if (vals) {
             if (vals[i].sval)
-                addReplyBulkCBuffer(c, vals[i].sval, vals[i].slen);
+                addWritePreparedReplyBulkCBuffer(wpc, vals[i].sval, vals[i].slen);
             else
-                addReplyBulkLongLong(c, vals[i].lval);
+                addWritePreparedReplyBulkLongLong(wpc, vals[i].lval);
         }
     }
 }
@@ -921,6 +921,8 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         return;
     }
 
+    writePreparedClient *wpc = prepareClientForFutureWrites(c);
+    if (!wpc) return;
     /* CASE 1: The count was negative, so the extraction method is just:
      * "return N random elements" sampling the whole set every time.
      * This case is trivial and can be served without auxiliary data
@@ -928,18 +930,18 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
      * elements in random order. */
     if (!uniq || count == 1) {
         if (withvalues && c->resp == 2)
-            addReplyArrayLen(c, count * 2);
+            addWritePreparedReplyArrayLen(wpc, count * 2);
         else
-            addReplyArrayLen(c, count);
+            addWritePreparedReplyArrayLen(wpc, count);
         if (hash->encoding == OBJ_ENCODING_HT) {
             sds key, value;
             while (count--) {
                 dictEntry *de = dictGetFairRandomKey(hash->ptr);
                 key = dictGetKey(de);
                 value = dictGetVal(de);
-                if (withvalues && c->resp > 2) addReplyArrayLen(c, 2);
-                addReplyBulkCBuffer(c, key, sdslen(key));
-                if (withvalues) addReplyBulkCBuffer(c, value, sdslen(value));
+                if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
+                addWritePreparedReplyBulkCBuffer(wpc, key, sdslen(key));
+                if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value, sdslen(value));
                 if (c->flag.close_asap) break;
             }
         } else if (hash->encoding == OBJ_ENCODING_LISTPACK) {
@@ -953,7 +955,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
                 sample_count = count > limit ? limit : count;
                 count -= sample_count;
                 lpRandomPairs(hash->ptr, sample_count, keys, vals);
-                hrandfieldReplyWithListpack(c, sample_count, keys, vals);
+                hrandfieldReplyWithListpack(wpc, sample_count, keys, vals);
                 if (c->flag.close_asap) break;
             }
             zfree(keys);
@@ -965,21 +967,22 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
     /* Initiate reply count, RESP3 responds with nested array, RESP2 with flat one. */
     long reply_size = count < size ? count : size;
     if (withvalues && c->resp == 2)
-        addReplyArrayLen(c, reply_size * 2);
+        addWritePreparedReplyArrayLen(wpc, reply_size * 2);
     else
-        addReplyArrayLen(c, reply_size);
+        addWritePreparedReplyArrayLen(wpc, reply_size);
 
     /* CASE 2:
      * The number of requested elements is greater than the number of
      * elements inside the hash: simply return the whole hash. */
     if (count >= size) {
-        hashTypeIterator *hi = hashTypeInitIterator(hash);
-        while (hashTypeNext(hi) != C_ERR) {
-            if (withvalues && c->resp > 2) addReplyArrayLen(c, 2);
-            addHashIteratorCursorToReply(c, hi, OBJ_HASH_KEY);
-            if (withvalues) addHashIteratorCursorToReply(c, hi, OBJ_HASH_VALUE);
+        hashTypeIterator hi;
+        hashTypeInitIterator(hash, &hi);
+        while (hashTypeNext(&hi) != C_ERR) {
+            if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
+            addHashIteratorCursorToReply(wpc, &hi, OBJ_HASH_KEY);
+            if (withvalues) addHashIteratorCursorToReply(wpc, &hi, OBJ_HASH_VALUE);
         }
-        hashTypeReleaseIterator(hi);
+        hashTypeResetIterator(&hi);
         return;
     }
 
@@ -996,7 +999,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         keys = zmalloc(sizeof(listpackEntry) * count);
         if (withvalues) vals = zmalloc(sizeof(listpackEntry) * count);
         serverAssert(lpRandomPairsUnique(hash->ptr, count, keys, vals) == count);
-        hrandfieldReplyWithListpack(c, count, keys, vals);
+        hrandfieldReplyWithListpack(wpc, count, keys, vals);
         zfree(keys);
         zfree(vals);
         return;
@@ -1015,21 +1018,22 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         /* Hashtable encoding (generic implementation) */
         dict *d = dictCreate(&sdsReplyDictType);
         dictExpand(d, size);
-        hashTypeIterator *hi = hashTypeInitIterator(hash);
+        hashTypeIterator hi;
+        hashTypeInitIterator(hash, &hi);
 
         /* Add all the elements into the temporary dictionary. */
-        while ((hashTypeNext(hi)) != C_ERR) {
+        while ((hashTypeNext(&hi)) != C_ERR) {
             int ret = DICT_ERR;
             sds key, value = NULL;
 
-            key = hashTypeCurrentObjectNewSds(hi, OBJ_HASH_KEY);
-            if (withvalues) value = hashTypeCurrentObjectNewSds(hi, OBJ_HASH_VALUE);
+            key = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_KEY);
+            if (withvalues) value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
             ret = dictAdd(d, key, value);
 
             serverAssert(ret == DICT_OK);
         }
         serverAssert(dictSize(d) == size);
-        hashTypeReleaseIterator(hi);
+        hashTypeResetIterator(&hi);
 
         /* Remove random elements to reach the right count. */
         while (size > count) {
@@ -1049,9 +1053,9 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         while ((de = dictNext(di)) != NULL) {
             sds key = dictGetKey(de);
             sds value = dictGetVal(de);
-            if (withvalues && c->resp > 2) addReplyArrayLen(c, 2);
-            addReplyBulkSds(c, key);
-            if (withvalues) addReplyBulkSds(c, value);
+            if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
+            addWritePreparedReplyBulkSds(wpc, key);
+            if (withvalues) addWritePreparedReplyBulkSds(wpc, value);
         }
 
         dictReleaseIterator(di);
@@ -1082,7 +1086,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             added++;
 
             /* We can reply right away, so that we don't need to store the value in the dict. */
-            if (withvalues && c->resp > 2) addReplyArrayLen(c, 2);
+            if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
             hashReplyFromListpackEntry(c, &key);
             if (withvalues) hashReplyFromListpackEntry(c, &value);
         }

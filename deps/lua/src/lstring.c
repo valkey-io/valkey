@@ -94,19 +94,19 @@ uint32_t murmur32(const uint8_t* key, size_t len, uint32_t seed) {
   }
 
   const uint8_t* tail = (const uint8_t*) (key + nblocks * 4);
-    uint32_t k1 = 0;
-    switch (len & 3) {
-      case 3:
-        k1 ^= tail[2] << 16;
-      case 2:
-        k1 ^= tail[1] << 8;
-      case 1:
-        k1 ^= tail[0];
-        k1 *= c1;
-        k1 = (k1 << r1) | (k1 >> (32 - r1));
-        k1 *= c2;
-        hash ^= k1;
-    }
+  uint32_t k1 = 0;
+  switch (len & 3) {
+    case 3:
+      k1 ^= tail[2] << 16;
+    case 2:
+      k1 ^= tail[1] << 8;
+    case 1:
+      k1 ^= tail[0];
+      k1 *= c1;
+      k1 = (k1 << r1) | (k1 >> (32 - r1));
+      k1 *= c2;
+      hash ^= k1;
+  }
   
     hash ^= len;
     hash ^= (hash >> 16);

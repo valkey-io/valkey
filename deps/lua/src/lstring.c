@@ -120,7 +120,7 @@ uint32_t murmur32(const uint8_t* key, size_t len, uint32_t seed) {
 
 TString *luaS_newlstr (lua_State *L, const char *str, size_t l) {
   GCObject *o;
-  unsigned int h = murmur32((uint8_t *)str, l, (uint32_t)l); /* seed */
+  unsigned int h = murmur32((uint8_t *)str, l, (uint32_t)l);
   for (o = G(L)->strt.hash[lmod(h, G(L)->strt.size)];
        o != NULL;
        o = o->gch.next) {

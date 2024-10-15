@@ -1090,12 +1090,13 @@ void databasesCron(void) {
         /* Rehash */
         if (server.activerehashing) {
             uint64_t elapsed_us = 0;
+            uint64_t threshold_us = 1 * 1000000 / server.hz / 100;
             for (j = 0; j < dbs_per_call; j++) {
                 serverDb *db = &server.db[rehash_db % server.dbnum];
-                elapsed_us += kvstoreIncrementallyRehash(db->keys, INCREMENTAL_REHASHING_THRESHOLD_US - elapsed_us);
-                if (elapsed_us >= INCREMENTAL_REHASHING_THRESHOLD_US) break;
-                elapsed_us += kvstoreIncrementallyRehash(db->expires, INCREMENTAL_REHASHING_THRESHOLD_US - elapsed_us);
-                if (elapsed_us >= INCREMENTAL_REHASHING_THRESHOLD_US) break;
+                elapsed_us += kvstoreIncrementallyRehash(db->keys, threshold_us - elapsed_us);
+                if (elapsed_us >= threshold_us) break;
+                elapsed_us += kvstoreIncrementallyRehash(db->expires, threshold_us - elapsed_us);
+                if (elapsed_us >= threshold_us) break;
                 rehash_db++;
             }
         }

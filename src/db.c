@@ -58,6 +58,7 @@ int keyIsExpiredWithSlot(serverDb *db, robj *key, int slot);
 int keyIsExpired(serverDb *db, robj *key);
 static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEntry *de);
 static int getKVStoreIndexForKey(sds key);
+dictEntry *dbFindExpiresWithSlot(serverDb *db, void *key, int slot);
 
 /* Update LFU when an object is accessed.
  * Firstly, decrement the counter if the decrement time is reached.
@@ -439,8 +440,8 @@ int dbGenericDeleteWithSlot(serverDb *db, robj *key, int async, int flags, int s
 
 /* Helper for sync and async delete. */
 int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
-    int slot = server.cluster_enabled ? getKeySlot(key->ptr) : 0;
-    return dbGenericDeleteWithSlot(db, key, async, flags, slot);
+    int dict_index = getKVStoreIndexForKey(key->ptr);
+    return dbGenericDeleteWithSlot(db, key, async, flags, dict_index);
 }
 
 /* Delete a key, value, and associated expiration entry if any, from the DB */
@@ -1711,8 +1712,8 @@ long long getExpireWithSlot(serverDb *db, robj *key, int slot) {
 /* Return the expire time of the specified key, or -1 if no expire
  * is associated with this key (i.e. the key is non volatile) */
 long long getExpire(serverDb *db, robj *key) {
-    int slot = server.cluster_enabled ? getKeySlot(key->ptr) : 0;
-    return getExpireWithSlot(db, key, slot);
+    int dict_index = getKVStoreIndexForKey(key->ptr);
+    return getExpireWithSlot(db, key, dict_index);
 }
 
 void deleteExpiredKeyAndPropagateWithSlot(serverDb *db, robj *keyobj, int slot) {
@@ -1802,8 +1803,8 @@ int keyIsExpiredWithSlot(serverDb *db, robj *key, int slot) {
 
 /* Check if the key is expired. */
 int keyIsExpired(serverDb *db, robj *key) {
-    int slot = server.cluster_enabled ? getKeySlot(key->ptr) : 0;
-    return keyIsExpiredWithSlot(db, key, slot);
+    int dict_index = getKVStoreIndexForKey(key->ptr);
+    return keyIsExpiredWithSlot(db, key, dict_index);
 }
 
 keyStatus expireIfNeededWithSlot(serverDb *db, robj *key, int flags, int slot) {
@@ -1881,8 +1882,8 @@ keyStatus expireIfNeededWithSlot(serverDb *db, robj *key, int flags, int slot) {
  * The function returns KEY_EXPIRED if the key is expired BUT not deleted,
  * or returns KEY_DELETED if the key is expired and deleted. */
 keyStatus expireIfNeeded(serverDb *db, robj *key, int flags) {
-    int slot = server.cluster_enabled ? getKeySlot(key->ptr) : 0;
-    return expireIfNeededWithSlot(db, key, flags, slot);
+    int dict_index = getKVStoreIndexForKey(key->ptr);
+    return expireIfNeededWithSlot(db, key, flags, dict_index);
 }
 
 /* CB passed to kvstoreExpand.

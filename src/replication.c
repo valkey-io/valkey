@@ -2691,6 +2691,7 @@ static int dualChannelReplHandleEndOffsetResponse(connection *conn, sds *err) {
     server.repl_provisional_primary.reploff = reploffset;
     server.repl_provisional_primary.read_reploff = reploffset;
     server.repl_provisional_primary.dbid = dbid;
+    server.repl_provisional_primary.close_asap = 0;
 
     /* Now that we have the snapshot end-offset, we can ask for psync from that offset. Prepare the
      * main connection accordingly.*/
@@ -2823,6 +2824,7 @@ int readIntoReplDataBlock(connection *conn, replDataBufBlock *data_block, size_t
     }
     if (nread == 0) {
         serverLog(LL_VERBOSE, "Provisional primary closed connection");
+        server.repl_provisional_primary.close_asap = 1;
         cancelReplicationHandshake(1);
         return C_ERR;
     }

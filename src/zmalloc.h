@@ -107,6 +107,15 @@
 #define HAVE_DEFRAG
 #endif
 
+/* The zcalloc symbol is a symbol name already used by zlib, which is defining
+ * other names using the "z" prefix specific to zlib. In practice, linking
+ * valkey with a static openssl, which itself might depend on a static libz
+ * will result in link time error rejecting multiple symbol definitions. */
+#define zmalloc valkey_malloc
+#define zcalloc valkey_calloc
+#define zrealloc valkey_realloc
+#define zfree valkey_free
+
 /* 'noinline' attribute is intended to prevent the `-Wstringop-overread` warning
  * when using gcc-12 later with LTO enabled. It may be removed once the
  * bug[https://gcc.gnu.org/bugzilla/show_bug.cgi?id=96503] is fixed. */

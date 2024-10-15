@@ -6,6 +6,7 @@
 
 
 #include <string.h>
+#include <stdint.h>
 
 #define lstring_c
 #define LUA_CORE
@@ -71,14 +72,55 @@ static TString *newlstr (lua_State *L, const char *str, size_t l,
   return ts;
 }
 
+uint32_t murmur32(const uint8_t* key, size_t len, uint32_t seed) {
+  static const uint32_t c1 = 0xcc9e2d51;
+  static const uint32_t c2 = 0x1b873593;
+  static const uint32_t r1 = 15;
+  static const uint32_t r2 = 13;
+  static const uint32_t m = 5;
+  static const uint32_t n = 0xe6546b64;
+  uint32_t hash = seed;
+
+  const int nblocks = len / 4;
+  const uint32_t* blocks = (const uint32_t*) key;
+  for (int i = 0; i < nblocks; i++) {
+    uint32_t k = blocks[i];
+    k *= c1;
+    k = (k << r1) | (k >> (32 - r1));
+    k *= c2;
+
+    hash ^= k;
+    hash = ((hash << r2) | (hash >> (32 - r2))) * m + n;
+  }
+
+  const uint8_t* tail = (const uint8_t*) (key + nblocks * 4);
+  uint32_t k1 = 0;
+  switch (len & 3) {
+    case 3:
+      k1 ^= tail[2] << 16;
+    case 2:
+      k1 ^= tail[1] << 8;
+    case 1:
+      k1 ^= tail[0];
+      k1 *= c1;
+      k1 = (k1 << r1) | (k1 >> (32 - r1));
+      k1 *= c2;
+      hash ^= k1;
+  }
+  
+    hash ^= len;
+    hash ^= (hash >> 16);
+    hash *= 0x85ebca6b;
+    hash ^= (hash >> 13);
+    hash *= 0xc2b2ae35;
+    hash ^= (hash >> 16);
+  
+    return hash;
+  }
 
 TString *luaS_newlstr (lua_State *L, const char *str, size_t l) {
   GCObject *o;
-  unsigned int h = cast(unsigned int, l);  /* seed */
-  size_t step = 1;
-  size_t l1;
-  for (l1=l; l1>=step; l1-=step)  /* compute hash */
-    h = h ^ ((h<<5)+(h>>2)+cast(unsigned char, str[l1-1]));
+  unsigned int h = murmur32((uint8_t *)str, l, (uint32_t)l);
   for (o = G(L)->strt.hash[lmod(h, G(L)->strt.size)];
        o != NULL;
        o = o->gch.next) {

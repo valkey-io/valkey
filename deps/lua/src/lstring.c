@@ -79,7 +79,7 @@ uint32_t murmur32(const uint8_t* key, size_t len, uint32_t seed) {
   static const uint32_t r2 = 13;
   static const uint32_t m = 5;
   static const uint32_t n = 0xe6546b64;
-  uint32_t hash = seed; // static seed 
+  uint32_t hash = seed;
 
   const int nblocks = len / 4;
   const uint32_t* blocks = (const uint32_t*) key;

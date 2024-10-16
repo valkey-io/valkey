@@ -35,6 +35,7 @@
 #include "fpconv_dtoa.h"
 #include "fmtargs.h"
 #include "io_threads.h"
+#include "io_uring.h"
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -2466,6 +2467,83 @@ int processIOThreadsWriteDone(void) {
     return processed;
 }
 
+/* If client is suitable to use io_uring to handle the write request. */
+static inline int _canWriteUsingIOUring(client *c) {
+    if (server.io_uring_enabled && server.io_threads_num == 1) {
+        /* Currently, we only use io_uring to handle the static buffer write requests.
+         * If io-threads or tls is enabled, skip the io_uring. */
+        return connIsTLS(c->conn) == 0 && getClientType(c) != CLIENT_TYPE_REPLICA && listLength(c->reply) == 0 &&
+               c->bufpos > 0;
+    }
+    return 0;
+}
+
+/* Check the completed io_uring event and update the state. */
+static int _checkPendingIOUringWriteState(client *c) {
+    /* Note that where synchronous system calls will return -1 on
+     * failure and set errno to the actual error value,
+     * io_uring never uses errno. Instead it returns the negated
+     * errno directly in the CQE res field. */
+    if (c->nwritten <= 0) {
+        if (c->nwritten != -EAGAIN) {
+            c->conn->last_errno = -(c->nwritten);
+            /* Don't overwrite the state of a connection that is not already
+             * connected, not to mess with handler callbacks. */
+            if (c->nwritten != -EINTR && c->conn->state == CONN_STATE_CONNECTED) c->conn->state = CONN_STATE_ERROR;
+        }
+        if (connGetState(c->conn) != CONN_STATE_CONNECTED) {
+            serverLog(LL_VERBOSE, "Error writing to client: %s", connGetLastError(c->conn));
+            freeClientAsync(c);
+        }
+        return IO_URING_ERR;
+    }
+
+    c->sentlen += c->nwritten;
+    /* If the buffer was sent, set bufpos to zero to continue with
+     * the remainder of the reply. */
+    if ((int)c->sentlen == c->bufpos) {
+        c->bufpos = 0;
+        c->sentlen = 0;
+    }
+    server.stat_net_output_bytes += c->nwritten;
+    c->net_output_bytes += c->nwritten;
+
+    /* For clients representing masters we don't count sending data
+     * as an interaction, since we always send REPLCONF ACK commands
+     * that take some time to just fill the socket output buffer.
+     * We just rely on data / pings received for timeout detection. */
+    if (!c->flag.primary) c->last_interaction = server.unixtime;
+
+    return IO_URING_OK;
+}
+
+static void _postIOUringWrite(void) {
+    listIter li;
+    listNode *ln;
+    listRewind(server.clients_pending_write, &li);
+    while ((ln = listNext(&li))) {
+        client *c = listNodeValue(ln);
+        listUnlinkNode(server.clients_pending_write, ln);
+
+        if (_checkPendingIOUringWriteState(c) == IO_URING_ERR) continue;
+        if (!clientHasPendingReplies(c)) {
+            c->sentlen = 0;
+            /* Close connection after entire reply has been sent. */
+            if (c->flag.close_after_reply) {
+                freeClientAsync(c);
+                continue;
+            }
+        }
+        /* Update client's memory usage after writing.*/
+        updateClientMemUsageAndBucket(c);
+    }
+}
+
+void setClientLastWritten(void *data, int res) {
+    client *c = data;
+    c->nwritten = res;
+}
+
 /* This function is called just before entering the event loop, in the hope
  * we can just write the replies to the client output buffer without any
  * need to use a syscall in order to install the writable event handler,
@@ -2485,33 +2563,65 @@ int handleClientsWithPendingWrites(void) {
     while ((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
         c->flag.pending_write = 0;
-        listUnlinkNode(server.clients_pending_write, ln);
 
         /* If a client is protected, don't do anything,
          * that may trigger write error or recreate handler. */
-        if (c->flag.protected) continue;
+        if (c->flag.protected) {
+            listUnlinkNode(server.clients_pending_write, ln);
+            continue;
+        }
 
         /* Don't write to clients that are going to be closed anyway. */
-        if (c->flag.close_asap) continue;
+        if (c->flag.close_asap) {
+            listUnlinkNode(server.clients_pending_write, ln);
+            continue;
+        }
 
-        if (!clientHasPendingReplies(c)) continue;
+        if (!clientHasPendingReplies(c)) {
+            listUnlinkNode(server.clients_pending_write, ln);
+            continue;
+        }
 
         /* If we can send the client to the I/O thread, let it handle the write. */
-        if (trySendWriteToIOThreads(c) == C_OK) continue;
+        if (server.io_threads_num > 1) {
+            listUnlinkNode(server.clients_pending_write, ln);
+            if (trySendWriteToIOThreads(c) == C_OK) {
+                continue;
+            }
+        }
 
         /* We can't write to the client while IO operation is in progress. */
-        if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) continue;
+        if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) {
+            if (server.io_threads_num == 1) {
+                listUnlinkNode(server.clients_pending_write, ln);
+            }
+            continue;
+        }
 
         processed++;
+        if (_canWriteUsingIOUring(c)) {
+            if (ioUringPrepWrite(c, c->conn->fd, c->buf + c->sentlen, c->bufpos - c->sentlen) == IO_URING_ERR) {
+                listUnlinkNode(server.clients_pending_write, ln);
+                continue;
+            }
+        } else {
+            if (server.io_threads_num == 1) {
+                listUnlinkNode(server.clients_pending_write, ln);
+            }
+            /* Try to write buffers to the client socket. */
+            if (writeToClient(c) == C_ERR) continue;
 
-        /* Try to write buffers to the client socket. */
-        if (writeToClient(c) == C_ERR) continue;
-
-        /* If after the synchronous writes above we still have data to
-         * output to the client, we need to install the writable handler. */
-        if (clientHasPendingReplies(c)) {
-            installClientWriteHandler(c);
+            /* If after the synchronous writes above we still have data to
+             * output to the client, we need to install the writable handler. */
+            if (clientHasPendingReplies(c)) {
+                installClientWriteHandler(c);
+            }
         }
+    }
+
+    if (server.io_uring_enabled && server.io_threads_num == 1 && listLength(server.clients_pending_write) > 0) {
+        ioUringWaitWriteBarrier(setClientLastWritten);
+        _postIOUringWrite();
     }
     return processed;
 }

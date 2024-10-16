@@ -52,13 +52,13 @@ typedef enum {
     KEY_DELETED    /* The key was deleted now. */
 } keyStatus;
 
-keyStatus expireIfNeededWithDbIndex(serverDb *db, robj *key, int flags, int slot);
+keyStatus expireIfNeededWithDbIndex(serverDb *db, robj *key, int flags, int db_index);
 keyStatus expireIfNeeded(serverDb *db, robj *key, int flags);
-int keyIsExpiredWithDbIndex(serverDb *db, robj *key, int slot);
+int keyIsExpiredWithDbIndex(serverDb *db, robj *key, int db_index);
 int keyIsExpired(serverDb *db, robj *key);
 static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEntry *de);
 static int getKVStoreIndexForKey(sds key);
-dictEntry *dbFindExpiresWithDbIndex(serverDb *db, void *key, int slot);
+dictEntry *dbFindExpiresWithDbIndex(serverDb *db, void *key, int db_index);
 
 /* Update LFU when an object is accessed.
  * Firstly, decrement the counter if the decrement time is reached.
@@ -206,15 +206,15 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
  * if the key already exists, otherwise, it can fall back to dbOverwrite. */
 static void dbAddInternal(serverDb *db, robj *key, robj *val, int update_if_existing) {
     dictEntry *existing;
-    int dict_index = getKVStoreIndexForKey(key->ptr);
-    dictEntry *de = kvstoreDictAddRaw(db->keys, dict_index, key->ptr, &existing);
+    int db_index = getKVStoreIndexForKey(key->ptr);
+    dictEntry *de = kvstoreDictAddRaw(db->keys, db_index, key->ptr, &existing);
     if (update_if_existing && existing) {
         dbSetValue(db, key, val, 1, existing);
         return;
     }
     serverAssertWithInfo(NULL, key, de != NULL);
     initObjectLRUOrLFU(val);
-    kvstoreDictSetVal(db->keys, dict_index, de, val);
+    kvstoreDictSetVal(db->keys, db_index, de, val);
     signalKeyAsReady(db, key, val->type);
     notifyKeyspaceEvent(NOTIFY_NEW, "new", key, db->id);
 }
@@ -272,11 +272,11 @@ int getKeySlot(sds key) {
  * In this case a copy of `key` is copied in kvstore, the caller must ensure the `key` is properly freed.
  */
 int dbAddRDBLoad(serverDb *db, sds key, robj *val) {
-    int dict_index = server.cluster_enabled ? getKeySlot(key) : 0;
-    dictEntry *de = kvstoreDictAddRaw(db->keys, dict_index, key, NULL);
+    int db_index = getKVStoreIndexForKey(key);
+    dictEntry *de = kvstoreDictAddRaw(db->keys, db_index, key, NULL);
     if (de == NULL) return 0;
     initObjectLRUOrLFU(val);
-    kvstoreDictSetVal(db->keys, dict_index, de, val);
+    kvstoreDictSetVal(db->keys, db_index, de, val);
     return 1;
 }
 
@@ -293,8 +293,8 @@ int dbAddRDBLoad(serverDb *db, sds key, robj *val) {
  *
  * The program is aborted if the key was not already present. */
 static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEntry *de) {
-    int dict_index = getKVStoreIndexForKey(key->ptr);
-    if (!de) de = kvstoreDictFind(db->keys, dict_index, key->ptr);
+    int db_index = getKVStoreIndexForKey(key->ptr);
+    if (!de) de = kvstoreDictFind(db->keys, db_index, key->ptr);
     serverAssertWithInfo(NULL, key, de != NULL);
     robj *old = dictGetVal(de);
 
@@ -314,7 +314,7 @@ static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEn
         /* Because of RM_StringDMA, old may be changed, so we need get old again */
         old = dictGetVal(de);
     }
-    kvstoreDictSetVal(db->keys, dict_index, de, val);
+    kvstoreDictSetVal(db->keys, db_index, de, val);
     /* For efficiency, let the I/O thread that allocated an object also deallocate it. */
     if (tryOffloadFreeObjToIOThreads(old) == C_OK) {
         /* OK */
@@ -378,13 +378,13 @@ robj *dbRandomKey(serverDb *db) {
     while (1) {
         sds key;
         robj *keyobj;
-        int randomSlot = kvstoreGetFairRandomDictIndex(db->keys);
-        de = kvstoreDictGetFairRandomKey(db->keys, randomSlot);
+        int randomDbIndex = kvstoreGetFairRandomDictIndex(db->keys);
+        de = kvstoreDictGetFairRandomKey(db->keys, randomDbIndex);
         if (de == NULL) return NULL;
 
         key = dictGetKey(de);
         keyobj = createStringObject(key, sdslen(key));
-        if (dbFindExpiresWithDbIndex(db, key, randomSlot)) {
+        if (dbFindExpiresWithDbIndex(db, key, randomDbIndex)) {
             if (allvolatile && server.primary_host && --maxtries == 0) {
                 /* If the DB is composed only of keys with an expire set,
                  * it could happen that all the keys are already logically
@@ -396,7 +396,7 @@ robj *dbRandomKey(serverDb *db) {
                  * return a key name that may be already expired. */
                 return keyobj;
             }
-            if (expireIfNeededWithDbIndex(db, keyobj, 0, randomSlot) != KEY_VALID) {
+            if (expireIfNeededWithDbIndex(db, keyobj, 0, randomDbIndex) != KEY_VALID) {
                 decrRefCount(keyobj);
                 continue; /* search for another key. This expired. */
             }
@@ -405,11 +405,10 @@ robj *dbRandomKey(serverDb *db) {
     }
 }
 
-int dbGenericDeleteWithDbIndex(serverDb *db, robj *key, int async, int flags, int slot) {
+int dbGenericDeleteWithDbIndex(serverDb *db, robj *key, int async, int flags, int db_index) {
     dictEntry **plink;
     int table;
-    int dict_index = slot;
-    dictEntry *de = kvstoreDictTwoPhaseUnlinkFind(db->keys, dict_index, key->ptr, &plink, &table);
+    dictEntry *de = kvstoreDictTwoPhaseUnlinkFind(db->keys, db_index, key->ptr, &plink, &table);
     if (de) {
         robj *val = dictGetVal(de);
         /* RM_StringDMA may call dbUnshareStringValue which may free val, so we
@@ -425,13 +424,13 @@ int dbGenericDeleteWithDbIndex(serverDb *db, robj *key, int async, int flags, in
         if (async) {
             /* Because of dbUnshareStringValue, the val in de may change. */
             freeObjAsync(key, dictGetVal(de), db->id);
-            kvstoreDictSetVal(db->keys, dict_index, de, NULL);
+            kvstoreDictSetVal(db->keys, db_index, de, NULL);
         }
         /* Deleting an entry from the expires dict will not free the sds of
          * the key, because it is shared with the main dictionary. */
-        kvstoreDictDelete(db->expires, dict_index, key->ptr);
+        kvstoreDictDelete(db->expires, db_index, key->ptr);
 
-        kvstoreDictTwoPhaseUnlinkFree(db->keys, dict_index, de, plink, table);
+        kvstoreDictTwoPhaseUnlinkFree(db->keys, db_index, de, plink, table);
         return 1;
     } else {
         return 0;
@@ -440,8 +439,8 @@ int dbGenericDeleteWithDbIndex(serverDb *db, robj *key, int async, int flags, in
 
 /* Helper for sync and async delete. */
 int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
-    int dict_index = getKVStoreIndexForKey(key->ptr);
-    return dbGenericDeleteWithDbIndex(db, key, async, flags, dict_index);
+    int db_index = getKVStoreIndexForKey(key->ptr);
+    return dbGenericDeleteWithDbIndex(db, key, async, flags, db_index);
 }
 
 /* Delete a key, value, and associated expiration entry if any, from the DB */
@@ -1685,10 +1684,10 @@ void setExpire(client *c, serverDb *db, robj *key, long long when) {
     dictEntry *kde, *de, *existing;
 
     /* Reuse the sds from the main dict in the expire dict */
-    int dict_index = getKVStoreIndexForKey(key->ptr);
-    kde = kvstoreDictFind(db->keys, dict_index, key->ptr);
+    int db_index = getKVStoreIndexForKey(key->ptr);
+    kde = kvstoreDictFind(db->keys, db_index, key->ptr);
     serverAssertWithInfo(NULL, key, kde != NULL);
-    de = kvstoreDictAddRaw(db->expires, dict_index, dictGetKey(kde), &existing);
+    de = kvstoreDictAddRaw(db->expires, db_index, dictGetKey(kde), &existing);
     if (existing) {
         dictSetSignedIntegerVal(existing, when);
     } else {
@@ -1701,10 +1700,10 @@ void setExpire(client *c, serverDb *db, robj *key, long long when) {
 
 /* Return the expire time of the specified key, or -1 if no expire
  * is associated with this key (i.e. the key is non volatile) */
-long long getExpireWithDbIndex(serverDb *db, robj *key, int slot) {
+long long getExpireWithDbIndex(serverDb *db, robj *key, int db_index) {
     dictEntry *de;
 
-    if ((de = dbFindExpiresWithDbIndex(db, key->ptr, slot)) == NULL) return -1;
+    if ((de = dbFindExpiresWithDbIndex(db, key->ptr, db_index)) == NULL) return -1;
 
     return dictGetSignedIntegerVal(de);
 }
@@ -1712,14 +1711,14 @@ long long getExpireWithDbIndex(serverDb *db, robj *key, int slot) {
 /* Return the expire time of the specified key, or -1 if no expire
  * is associated with this key (i.e. the key is non volatile) */
 long long getExpire(serverDb *db, robj *key) {
-    int dict_index = getKVStoreIndexForKey(key->ptr);
-    return getExpireWithDbIndex(db, key, dict_index);
+    int db_index = getKVStoreIndexForKey(key->ptr);
+    return getExpireWithDbIndex(db, key, db_index);
 }
 
-void deleteExpiredKeyAndPropagateWithDbIndex(serverDb *db, robj *keyobj, int slot) {
+void deleteExpiredKeyAndPropagateWithDbIndex(serverDb *db, robj *keyobj, int db_index) {
     mstime_t expire_latency;
     latencyStartMonitor(expire_latency);
-    dbGenericDeleteWithDbIndex(db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED, slot);
+    dbGenericDeleteWithDbIndex(db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED, db_index);
     latencyEndMonitor(expire_latency);
     latencyAddSampleIfNeeded("expire-del", expire_latency);
     notifyKeyspaceEvent(NOTIFY_EXPIRED, "expired", keyobj, db->id);
@@ -1730,8 +1729,8 @@ void deleteExpiredKeyAndPropagateWithDbIndex(serverDb *db, robj *keyobj, int slo
 
 /* Delete the specified expired key and propagate expire. */
 void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj) {
-    int slot = server.cluster_enabled ? getKeySlot(keyobj->ptr) : 0;
-    deleteExpiredKeyAndPropagateWithDbIndex(db, keyobj, slot);
+    int db_index = getKVStoreIndexForKey(keyobj->ptr);
+    deleteExpiredKeyAndPropagateWithDbIndex(db, keyobj, db_index);
 }
 
 /* Delete the specified expired key from overwriting and propagate the DEL or UNLINK. */
@@ -1785,11 +1784,11 @@ void propagateDeletion(serverDb *db, robj *key, int lazy) {
     decrRefCount(argv[1]);
 }
 
-int keyIsExpiredWithDbIndex(serverDb *db, robj *key, int slot) {
+int keyIsExpiredWithDbIndex(serverDb *db, robj *key, int db_index) {
     /* Don't expire anything while loading. It will be done later. */
     if (server.loading) return 0;
 
-    mstime_t when = getExpireWithDbIndex(db, key, slot);
+    mstime_t when = getExpireWithDbIndex(db, key, db_index);
     mstime_t now;
 
     if (when < 0) return 0; /* No expire for this key */
@@ -1803,13 +1802,13 @@ int keyIsExpiredWithDbIndex(serverDb *db, robj *key, int slot) {
 
 /* Check if the key is expired. */
 int keyIsExpired(serverDb *db, robj *key) {
-    int dict_index = getKVStoreIndexForKey(key->ptr);
-    return keyIsExpiredWithDbIndex(db, key, dict_index);
+    int db_index = getKVStoreIndexForKey(key->ptr);
+    return keyIsExpiredWithDbIndex(db, key, db_index);
 }
 
-keyStatus expireIfNeededWithDbIndex(serverDb *db, robj *key, int flags, int slot) {
+keyStatus expireIfNeededWithDbIndex(serverDb *db, robj *key, int flags, int db_index) {
     if (server.lazy_expire_disabled) return KEY_VALID;
-    if (!keyIsExpiredWithDbIndex(db, key, slot)) return KEY_VALID;
+    if (!keyIsExpiredWithDbIndex(db, key, db_index)) return KEY_VALID;
 
     /* If we are running in the context of a replica, instead of
      * evicting the expired key from the database, we return ASAP:
@@ -1844,7 +1843,7 @@ keyStatus expireIfNeededWithDbIndex(serverDb *db, robj *key, int flags, int slot
         key = createStringObject(key->ptr, sdslen(key->ptr));
     }
     /* Delete the key */
-    deleteExpiredKeyAndPropagateWithDbIndex(db, key, slot);
+    deleteExpiredKeyAndPropagateWithDbIndex(db, key, db_index);
     if (static_key) {
         decrRefCount(key);
     }
@@ -1882,8 +1881,8 @@ keyStatus expireIfNeededWithDbIndex(serverDb *db, robj *key, int flags, int slot
  * The function returns KEY_EXPIRED if the key is expired BUT not deleted,
  * or returns KEY_DELETED if the key is expired and deleted. */
 keyStatus expireIfNeeded(serverDb *db, robj *key, int flags) {
-    int dict_index = getKVStoreIndexForKey(key->ptr);
-    return expireIfNeededWithDbIndex(db, key, flags, dict_index);
+    int db_index = getKVStoreIndexForKey(key->ptr);
+    return expireIfNeededWithDbIndex(db, key, flags, db_index);
 }
 
 /* CB passed to kvstoreExpand.
@@ -1927,22 +1926,22 @@ int dbExpandExpires(serverDb *db, uint64_t db_size, int try_expand) {
     return dbExpandGeneric(db->expires, db_size, try_expand);
 }
 
-dictEntry *dbFindWithDbIndex(serverDb *db, void *key, int slot) {
-    return kvstoreDictFind(db->keys, slot, key);
+dictEntry *dbFindWithDbIndex(serverDb *db, void *key, int db_index) {
+    return kvstoreDictFind(db->keys, db_index, key);
 }
 
 dictEntry *dbFind(serverDb *db, void *key) {
-    int slot = server.cluster_enabled ? getKeySlot(key) : 0;
-    return dbFindWithDbIndex(db, key, slot);
+    int db_index = getKVStoreIndexForKey(key);
+    return dbFindWithDbIndex(db, key, db_index);
 }
 
-dictEntry *dbFindExpiresWithDbIndex(serverDb *db, void *key, int slot) {
-    return kvstoreDictFind(db->expires, slot, key);
+dictEntry *dbFindExpiresWithDbIndex(serverDb *db, void *key, int db_index) {
+    return kvstoreDictFind(db->expires, db_index, key);
 }
 
 dictEntry *dbFindExpires(serverDb *db, void *key) {
-    int slot = server.cluster_enabled ? getKeySlot(key) : 0;
-    return dbFindExpiresWithDbIndex(db, key, slot);
+    int db_index = getKVStoreIndexForKey(key);
+    return dbFindExpiresWithDbIndex(db, key, db_index);
 }
 
 unsigned long long dbSize(serverDb *db) {

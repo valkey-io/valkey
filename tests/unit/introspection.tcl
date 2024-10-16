@@ -763,6 +763,7 @@ start_server {tags {"introspection"}} {
 
     test {CONFIG SET set immutable} {
         assert_error "ERR *immutable*" {r config set daemonize yes}
+        assert_error "ERR *immutable*" {r config set dir "./"}
     }
 
     test {CONFIG GET hidden configs} {
@@ -950,13 +951,20 @@ start_server {tags {"introspection"}} {
         }
     } {} {external:skip}
 
+    test {valkey-server command line arguments - dir multiple times} {
+        start_server {config "default.conf" args {--dir "./" --dir "./"}} {
+            r config get dir
+            assert_equal {PONG} [r ping]
+        }
+    } {} {external:skip}
+
     # Config file at this point is at a weird state, and includes all
     # known keywords. Might be a good idea to avoid adding tests here.
 }
 
 start_server {tags {"introspection external:skip"} overrides {enable-protected-configs {no} enable-debug-command {no}}} {
     test {cannot modify protected configuration - no} {
-        assert_error "ERR *protected*" {r config set dir somedir}
+        assert_error "ERR *protected*" {r config set dbfilename somedbfilename.rdb}
         assert_error "ERR *DEBUG command not allowed*" {r DEBUG HELP}
     } {} {needs:debug}
 }
@@ -972,7 +980,7 @@ start_server {config "minimal.conf" tags {"introspection external:skip"} overrid
         if {$myaddr != "" && ![string match {127.*} $myaddr]} {
             # Non-loopback client should fail
             set r2 [get_nonloopback_client]
-            assert_error "ERR *protected*" {$r2 config set dir somedir}
+            assert_error "ERR *protected*" {$r2 config set dbfilename somedbfilename.rdb}
             assert_error "ERR *DEBUG command not allowed*" {$r2 DEBUG HELP}
         }
     } {} {needs:debug}
@@ -995,7 +1003,7 @@ test {config during loading} {
         assert_equal [lindex [r config get loglevel] 1] debug
 
         # verify some configs are forbidden during loading
-        assert_error {LOADING*} {r config set dir asdf}
+        assert_error {LOADING*} {r config set appendonly yes}
 
         # make sure it's still loading
         assert_equal [s loading] 1

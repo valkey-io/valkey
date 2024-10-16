@@ -1,11 +1,13 @@
 #include "server.h"
 #include "cluster.h"
 #include "cluster_legacy.h"
+#include "bio.h"
 
 /* The following functions are declared here as they will be used in this file
  * but they are defined in other files. */
 char *sendCommand(connection *conn, ...);
 char *receiveSynchronousResponse(connection *conn);
+int useDisklessLoad(void);
 void delkeysNotOwnedByMySelf(list *slot_ranges);
 void clusterUpdateState(void);
 void clusterSaveConfigOrDie(int do_fsync);
@@ -600,6 +602,336 @@ void continueSlotSync(clusterSlotSyncLink *link) {
     link->sync_state = CLUSTER_SLOTSYNC_STATE_TOCONNECT;
 }
 
+#define SLOTSYNC_MAX_WRITTEN_BEFORE_FSYNC (8<<20)  /* 8MB */
+#define SLOTSYNC_DEFAULT_LAG 20000000000           /* Just a value large enough */
 void readSlotSyncBulkPayload(connection *conn) {
-    UNUSED(conn);
+    clusterSlotSyncLink *link = connGetPrivateData(conn);
+    char buf[PROTO_IOBUF_LEN];
+    ssize_t nread, readlen, nwritten;
+    int use_diskless_load = useDisklessLoad();
+    char rdbpath[1024];
+    off_t left;
+
+    if (server.loading == 1) {
+        serverLog(LL_NOTICE, "Waiting prev loading finish");
+        return;
+    }
+
+    /* Static vars used to hold the EOF mark, and the last bytes received
+     * from the server: when they match, we reached the end of the transfer. */
+    static char eofmark[CONFIG_RUN_ID_SIZE];
+    static char lastbytes[CONFIG_RUN_ID_SIZE];
+    static int usemark = 0;
+
+    /* If transfer_total_size == -1, we still have to read the bulk length
+     * from the master reply. */
+    if (link->transfer_total_size == -1) {
+        if (connSyncReadLine(conn,buf,1024,server.repl_syncio_timeout*1000) == -1) {
+            serverLog(LL_WARNING,
+                      "I/O error reading bulk count from MASTER: %s",
+                      strerror(errno));
+            goto error;
+        }
+
+        if (buf[0] == '-') {
+            serverLog(LL_WARNING,
+                      "MASTER aborted replication with an error: %s",
+                      buf+1);
+            goto error;
+        } else if (buf[0] == '\0') {
+            /* At this stage just a newline works as a PING in order to take
+             * the connection live. So we refresh our last interaction
+             * timestamp. */
+            link->transfer_lastio = server.unixtime;
+            return;
+        } else if (buf[0] != '$') {
+            serverLog(LL_WARNING,"Bad protocol from slot owner, the first byte is not '$' "
+                                 "(we received '%s'), are you sure the host and port are right?", buf);
+            goto error;
+        }
+
+        /* There are two possible forms for the bulk payload. One is the
+         * usual $<count> bulk format. The other is used for diskless transfers
+         * when the master does not know beforehand the size of the file to
+         * transfer. In the latter case, the following format is used:
+         *
+         * $EOF:<40 bytes delimiter>
+         *
+         * At the end of the file the announced delimiter is transmitted. The
+         * delimiter is long and random enough that the probability of a
+         * collision with the actual file content can be ignored. */
+        if (strncmp(buf+1,"EOF:",4) == 0 && strlen(buf+5) >= CONFIG_RUN_ID_SIZE) {
+            usemark = 1;
+            memcpy(eofmark,buf+5,CONFIG_RUN_ID_SIZE);
+            memset(lastbytes,0,CONFIG_RUN_ID_SIZE);
+            /* Set any transfer_total_size to avoid entering this code path
+             * at the next call. */
+            link->transfer_total_size = 0;
+            serverLog(LL_NOTICE,
+                      "Cluster slot sync: receiving streamed RDB from master with EOF %s",
+                      use_diskless_load? "to parser":"to disk");
+        } else {
+            usemark = 0;
+            link->transfer_total_size = strtol(buf+1,NULL,10);
+            serverLog(LL_NOTICE,
+                      "Cluster slot sync: receiving %lld bytes from master %s",
+                      (long long) link->transfer_total_size,
+                      use_diskless_load? "to parser":"to disk");
+        }
+        return;
+    }
+
+    if (!use_diskless_load) {
+        /* Read the data from the socket, store it to a file and search
+         * for the EOF. */
+        if (usemark) {
+            readlen = sizeof(buf);
+        } else {
+            left = link->transfer_total_size - link->transfer_read_size;
+            readlen = (left < (signed)sizeof(buf)) ? left : (signed)sizeof(buf);
+        }
+
+        nread = connRead(conn,buf,readlen);
+        if (nread <= 0) {
+            if (connGetState(conn) == CONN_STATE_CONNECTED) {
+                /* equivalent to EAGAIN */
+                return;
+            }
+            serverLog(LL_WARNING,"I/O error trying to sync with slot owner: %s",
+                      (nread == -1) ? strerror(errno) : "connection lost");
+            goto error;
+        }
+        server.stat_net_input_bytes += nread;
+
+        /* When a mark is used, we want to detect EOF asap in order to avoid
+         * writing the EOF mark into the file... */
+        int eof_reached = 0;
+
+        if (usemark) {
+            /* Update the last bytes array, and check if it matches our
+             * delimiter. */
+            if (nread >= CONFIG_RUN_ID_SIZE) {
+                memcpy(lastbytes,buf+nread-CONFIG_RUN_ID_SIZE,
+                       CONFIG_RUN_ID_SIZE);
+            } else {
+                int rem = CONFIG_RUN_ID_SIZE-nread;
+                memmove(lastbytes,lastbytes+nread,rem);
+                memcpy(lastbytes+rem,buf,nread);
+            }
+            if (memcmp(lastbytes,eofmark,CONFIG_RUN_ID_SIZE) == 0)
+                eof_reached = 1;
+        }
+
+        /* Update the last I/O time for the replication transfer (used in
+         * order to detect timeouts during replication), and write what we
+         * got from the socket to the dump file on disk. */
+        link->transfer_lastio = server.unixtime;
+        if ((nwritten = write(link->transfer_tmpfile_fd,buf,nread)) != nread) {
+            serverLog(LL_WARNING,
+                      "Write error or short write writing to the DB dump file "
+                      "needed for Cluster slot synchronization: %s",
+                      (nwritten == -1) ? strerror(errno) : "short write");
+            goto error;
+        }
+        link->transfer_read_size += nread;
+
+        /* Delete the last 40 bytes from the file if we reached EOF. */
+        if (usemark && eof_reached) {
+            if (ftruncate(link->transfer_tmpfile_fd,
+                          link->transfer_read_size - CONFIG_RUN_ID_SIZE) == -1)
+            {
+                serverLog(LL_WARNING,
+                          "Error truncating the RDB file received from the master "
+                          "for SYNC: %s", strerror(errno));
+                goto error;
+            }
+        }
+
+        /* Sync data on disk from time to time, otherwise at the end of the
+         * transfer we may suffer a big delay as the memory buffers are copied
+         * into the actual disk. */
+        if (link->transfer_read_size >=
+            link->transfer_last_fsync_off + SLOTSYNC_MAX_WRITTEN_BEFORE_FSYNC)
+        {
+            off_t sync_size = link->transfer_read_size -
+                              link->transfer_last_fsync_off;
+            rdb_fsync_range(link->transfer_tmpfile_fd,
+                            link->transfer_last_fsync_off, sync_size);
+            link->transfer_last_fsync_off += sync_size;
+        }
+
+        /* Check if the transfer is now complete */
+        if (!usemark) {
+            if (link->transfer_read_size == link->transfer_total_size)
+                eof_reached = 1;
+        }
+
+        /* If the transfer is yet not complete, we need to read more, so
+         * return ASAP and wait for the handler to be called again. */
+        if (!eof_reached) return;
+    }
+
+    /* We reach this point in one of the following cases:
+     *
+     * 1. The replica is using diskless replication, that is, it reads data
+     *    directly from the socket to the Redis memory, without using
+     *    a temporary RDB file on disk. In that case we just block and
+     *    read everything from the socket.
+     *
+     * 2. Or when we are done reading from the socket to the RDB file, in
+     *    such case we want just to read the RDB file in memory. */
+
+    /* We need to stop any AOF rewriting child before flusing and parsing
+     * the RDB, otherwise we'll create a copy-on-write disaster. */
+    if (server.aof_state != AOF_OFF) stopAppendOnly();
+
+    /* Before loading the DB into memory we need to delete the readable
+     * handler, otherwise it will get called recursively since
+     * rdbLoad() will call the event loop to process events from time to
+     * time for non blocking loading. */
+    connSetReadHandler(conn, NULL);
+    serverLog(LL_NOTICE, "Cluster slot sync: Loading DB in memory");
+    rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+    if (use_diskless_load) {
+        rio rdb;
+        int async = 0; /* Do not use async loading. */
+        rioInitWithConn(&rdb,conn,link->transfer_total_size);
+
+        /* Put the socket in blocking mode to simplify RDB transfer.
+         * We'll restore it when the RDB is received. */
+        connBlock(conn);
+        connRecvTimeout(conn, server.repl_timeout*1000);
+        startLoading(link->transfer_total_size, RDBFLAGS_REPLICATION, async);
+
+        if (rdbLoadRio(&rdb,RDBFLAGS_REPLICATION,&rsi) != C_OK) {
+            /* RDB loading failed. */
+            stopLoading(0);
+            serverLog(LL_WARNING,
+                      "Failed trying to load the slot owner synchronization DB "
+                      "from socket");
+            rioFreeConn(&rdb, NULL);
+
+            /* Note that there's no point in restarting the AOF on SYNC
+             * failure, it'll be restarted when sync succeeds or the replica
+             * gets promoted. */
+            goto error;
+        }
+
+        /* Verify the end mark is correct. */
+        if (usemark) {
+            if (!rioRead(&rdb,buf,CONFIG_RUN_ID_SIZE) ||
+                memcmp(buf,eofmark,CONFIG_RUN_ID_SIZE) != 0)
+            {
+                stopLoading(0);
+                serverLog(LL_WARNING,"Replication stream EOF marker is broken");
+                rioFreeConn(&rdb, NULL);
+                goto error;
+            }
+        }
+
+        stopLoading(1);
+
+        /* Cleanup and restore the socket to the original state to continue
+         * with the normal replication. */
+        rioFreeConn(&rdb, NULL);
+        connNonBlock(conn);
+        connRecvTimeout(conn,0);
+    } else {
+        /* Ensure background save doesn't overwrite synced data */
+        if (server.child_type == CHILD_TYPE_RDB) {
+            serverLog(LL_NOTICE,
+                      "Replica is about to load the RDB file received from the "
+                      "master, but there is a pending RDB child running. "
+                      "Killing process %ld and removing its temp file to avoid "
+                      "any race",
+                      (long) server.child_pid);
+            killRDBChild();
+        }
+
+        /* Make sure the new file (also used for persistence) is fully synced
+         * (not covered by earlier calls to rdb_fsync_range). */
+        if (fsync(link->transfer_tmpfile_fd) == -1) {
+            serverLog(LL_WARNING,
+                      "Failed trying to sync the temp DB to disk in "
+                      "Cluster slot synchronization: %s",
+                      strerror(errno));
+            goto error;
+        }
+
+        /* Rename rdb like renaming rewrite aof asynchronously. */
+        sprintf(rdbpath, "%s_slot", server.rdb_filename);
+        int old_rdb_fd = open(rdbpath,O_RDONLY|O_NONBLOCK);
+        if (rename(link->transfer_tmpfile_name, rdbpath) == -1) {
+            serverLog(LL_WARNING,
+                      "Failed trying to rename the temp DB into %s in "
+                      "Cluster slot synchronization: %s",
+                      rdbpath, strerror(errno));
+            if (old_rdb_fd != -1) close(old_rdb_fd);
+            goto error;
+        }
+        /* Close old rdb asynchronously. */
+        if (old_rdb_fd != -1) bioCreateCloseJob(old_rdb_fd, 0, 1);
+
+        if (rdbLoad(rdbpath,&rsi,RDBFLAGS_REPLICATION) != C_OK) {
+            serverLog(LL_WARNING,
+                      "Failed trying to load the MASTER synchronization "
+                      "DB from disk");
+            if (server.rdb_del_sync_files && allPersistenceDisabled()) {
+                serverLog(LL_NOTICE,"Removing the RDB file obtained from "
+                                    "the master. This replica has persistence "
+                                    "disabled");
+                bg_unlink(rdbpath);
+            }
+
+            /* Note that there's no point in restarting the AOF on sync failure,
+               it'll be restarted when sync succeeds or replica promoted. */
+            goto error;
+        }
+
+        /* Cleanup. */
+        if (server.rdb_del_sync_files && allPersistenceDisabled()) {
+            serverLog(LL_NOTICE,"Removing the RDB file obtained from "
+                                "the master. This replica has persistence "
+                                "disabled");
+            bg_unlink(rdbpath);
+        }
+
+        zfree(link->transfer_tmpfile_name);
+        close(link->transfer_tmpfile_fd);
+        link->transfer_tmpfile_fd = -1;
+        link->transfer_tmpfile_name = NULL;
+    }
+
+    /* Mark the synchronization has done. */
+    link->sync_state = CLUSTER_SLOTSYNC_STATE_CONNECTED;
+
+    /* Set to a value large enough after first init. */
+    link->slot_mf_lag = SLOTSYNC_DEFAULT_LAG;
+
+    /* Create client */
+    client* client = createClient(link->sync_conn);
+    client->flag.authenticated = 1;
+    client->slotsync_link = link;
+    client->slotsync_slots = listDup(link->slot_ranges);
+    client->flag.reply_off = 0;
+    link->client = client;
+
+    moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE, VALKEYMODULE_SUBEVENT_PRIMARY_LINK_UP, NULL);
+
+    serverLog(LL_NOTICE, "Cluster slot sync: Finished with success");
+    if (server.supervised_mode == SUPERVISED_SYSTEMD) {
+        serverCommunicateSystemd("STATUS=Cluster slot sync: Finished with success. "
+                                "Ready to accept connections in read-write mode.\n");
+    }
+
+    /* Restart the AOF subsystem now that we finished the sync. This
+     * will trigger an AOF rewrite, and when done will start appending
+     * to the new file. */
+    if (server.aof_enabled) restartAOFAfterSYNC();
+    return;
+
+    error:
+    /* Reset the link state to TOCONNECT, the cron will retry start next time. */
+    resetSlotSyncLinkForReconnect(link);
+    return;
 }

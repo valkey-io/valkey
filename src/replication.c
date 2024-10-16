@@ -2059,7 +2059,7 @@ void restartAOFAfterSYNC(void) {
     }
 }
 
-static int useDisklessLoad(void) {
+int useDisklessLoad(void) {
     /* compute boolean decision to use diskless load */
     int enabled = server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB ||
                   server.repl_diskless_load == REPL_DISKLESS_LOAD_FLUSH_BEFORE_LOAD ||

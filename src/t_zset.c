@@ -1803,7 +1803,7 @@ void zaddGenericCommand(client *c, int flags) {
     if (zobj == NULL) {
         if (xx) goto reply_to_client; /* No key + XX option: nothing to do. */
         zobj = zsetTypeCreate(elements, maxelelen);
-        dbAdd(c->db, key, zobj);
+        zobj = dbAdd(c->db, key, zobj);
     } else {
         zsetTypeMaybeConvert(zobj, elements, maxelelen);
     }

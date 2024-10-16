@@ -6034,16 +6034,16 @@ void removeChannelsInSlot(unsigned int slot) {
 /* Remove all the keys in the specified hash slot.
  * The number of removed items is returned. */
 unsigned int delKeysInSlot(unsigned int hashslot) {
-    if (!kvstoreDictSize(server.db->keys, hashslot)) return 0;
+    if (!kvstoreHashsetSize(server.db->keys, hashslot)) return 0;
 
     unsigned int j = 0;
 
-    kvstoreDictIterator *kvs_di = NULL;
-    dictEntry *de = NULL;
-    kvs_di = kvstoreGetDictSafeIterator(server.db->keys, hashslot);
-    while ((de = kvstoreDictIteratorNext(kvs_di)) != NULL) {
+    kvstoreHashsetIterator *kvs_di = NULL;
+    valkey *valkey = NULL;
+    kvs_di = kvstoreGetHashsetSafeIterator(server.db->keys, hashslot);
+    while (kvstoreHashsetIteratorNext(kvs_di, (void **)&valkey)) {
         enterExecutionUnit(1, 0);
-        sds sdskey = dictGetKey(de);
+        sds sdskey = valkeyGetKey(valkey);
         robj *key = createStringObject(sdskey, sdslen(sdskey));
         dbDelete(&server.db[0], key);
         propagateDeletion(&server.db[0], key, server.lazyfree_lazy_server_del);
@@ -6058,14 +6058,14 @@ unsigned int delKeysInSlot(unsigned int hashslot) {
         j++;
         server.dirty++;
     }
-    kvstoreReleaseDictIterator(kvs_di);
+    kvstoreReleaseHashsetIterator(kvs_di);
 
     return j;
 }
 
 /* Get the count of the channels for a given slot. */
 unsigned int countChannelsInSlot(unsigned int hashslot) {
-    return kvstoreDictSize(server.pubsubshard_channels, hashslot);
+    return kvstoreHashsetSize(server.pubsubshard_channels, hashslot);
 }
 
 clusterNode *getMyClusterNode(void) {

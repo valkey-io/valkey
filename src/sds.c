@@ -194,12 +194,12 @@ sds sdsdup(const sds s) {
 /*
  * This method returns the minimum amount of bytes required to store the sds (header + data + NULL terminator).
  */
-static inline size_t sdsminlen(sds s) {
+static inline size_t sdsminlen(const sds s) {
     return sdslen(s) + sdsHdrSize(s[-1]) + 1;
 }
 
 /* This method copies the sds `s` into `buf` which is the target character buffer. */
-size_t sdscopytobuffer(unsigned char *buf, size_t buf_len, sds s, uint8_t *hdr_size) {
+size_t sdscopytobuffer(unsigned char *buf, size_t buf_len, const sds s, uint8_t *hdr_size) {
     size_t required_keylen = sdsminlen(s);
     if (buf == NULL) {
         return required_keylen;

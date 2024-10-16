@@ -186,14 +186,14 @@ void freeObjAsync(robj *key, robj *obj, int dbid) {
  * lazy freeing. */
 void emptyDbAsync(serverDb *db) {
     int slot_count_bits = 0;
-    int flags = KVSTORE_ALLOCATE_DICTS_ON_DEMAND;
+    int flags = KVSTORE_ALLOCATE_HASHSETS_ON_DEMAND;
     if (server.cluster_enabled) {
         slot_count_bits = CLUSTER_SLOT_MASK_BITS;
-        flags |= KVSTORE_FREE_EMPTY_DICTS;
+        flags |= KVSTORE_FREE_EMPTY_HASHSETS;
     }
     kvstore *oldkeys = db->keys, *oldexpires = db->expires;
-    db->keys = kvstoreCreate(&kvstoreKeysDictType, slot_count_bits, flags);
-    db->expires = kvstoreCreate(&kvstoreExpiresDictType, slot_count_bits, flags);
+    db->keys = kvstoreCreate(&kvstoreKeysHashsetType, slot_count_bits, flags);
+    db->expires = kvstoreCreate(&kvstoreExpiresHashsetType, slot_count_bits, flags);
     atomic_fetch_add_explicit(&lazyfree_objects, kvstoreSize(oldkeys), memory_order_relaxed);
     bioCreateLazyFreeJob(lazyfreeFreeDatabase, 2, oldkeys, oldexpires);
 }

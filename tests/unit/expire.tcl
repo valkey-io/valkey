@@ -847,7 +847,7 @@ start_cluster 1 0 {tags {"expire external:skip cluster"}} {
 
         # hashslot(foo) is 12182
         # fill data across different slots with expiration
-        for {set j 1} {$j <= 100} {incr j} {
+        for {set j 1} {$j <= 1000} {incr j} {
             r psetex "{foo}$j" 500 a
         }
         # hashslot(key) is 12539
@@ -858,7 +858,7 @@ start_cluster 1 0 {tags {"expire external:skip cluster"}} {
         r debug dict-resizing 0
 
         # delete data to have lot's (99%) of empty buckets (slot 12182 should be skipped)
-        for {set j 1} {$j <= 99} {incr j} {
+        for {set j 1} {$j <= 999} {incr j} {
             r del "{foo}$j"
         }
 
@@ -884,7 +884,9 @@ start_cluster 1 0 {tags {"expire external:skip cluster"}} {
         r debug dict-resizing 1
 
         # put some data into slot 12182 and trigger the resize
+        # by deleting it to trigger shrink
         r psetex "{foo}0" 500 a
+        r del "{foo}0"
 
         # Verify all keys have expired
         wait_for_condition 400 100 {

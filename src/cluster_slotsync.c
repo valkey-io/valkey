@@ -2,6 +2,7 @@
 #include "cluster.h"
 #include "cluster_legacy.h"
 #include "bio.h"
+#include "module.h"
 
 /* The following functions are declared here as they will be used in this file
  * but they are defined in other files. */
@@ -19,6 +20,7 @@ void clearSlotSyncImporting(list *slot_ranges);
 void syncWithSlotOwner(connection *conn);
 void continueSlotSync(clusterSlotSyncLink *link);
 void readSlotSyncBulkPayload(connection *conn);
+clusterNode *getClusterNodeBySlotList(list *slot_ranges, int *cross_node);
 
 /* -----------------------------------------------------------------------------
  * Cluster functions related to slot range and slot range list.
@@ -125,6 +127,44 @@ int isKeyInSlotRanges(robj *key, list *slot_ranges) {
 
     /* Get the slot of this key and check if the slot in the specified range. */
     int slot = keyHashSlot((char*)key->ptr, sdslen(key->ptr));
+    return isSlotInSlotRangeList(slot, slot_ranges);
+}
+
+/* This function is called by replicationFeedReplicas if some of the replicas are
+ * in slot sync mode. In such a case, we should only feed it the commands which
+ * associated with the specified slots.
+ *
+ * Returns 1 if all the keys in the command are belongs to the same slot and the
+ * slot is in the specified slot ranges, 0 otherwise. */
+int isCommandInSlotRanges(int argc, robj **argv, list *slot_ranges) {
+    /* Extract all the keys from the command. */
+    struct serverCommand *cmd = lookupCommand(argv, argc);
+    getKeysResult result;
+    initGetKeysResult(&result);
+    int numkeys = getKeysFromCommand(cmd, argv, argc, &result);
+
+    /* Check if all the keys are in the same slot and get this slot. */
+    robj *firstkey = NULL;
+    keyReference *keyindex = result.keys;
+    int slot = -1;
+    for (int j = 0; j < numkeys; j++) {
+        robj *thiskey = argv[keyindex[j].pos];
+        int thisslot = keyHashSlot((char*)thiskey->ptr, sdslen(thiskey->ptr));
+
+        if (firstkey == NULL) {
+            firstkey = thiskey;
+            slot = thisslot;
+        } else {
+            if (slot != thisslot) {
+                getKeysFreeResult(&result);
+                serverLog(LL_WARNING, "Cross slot '%s' '%s' ", (char*)(argv[0]->ptr), (char*)(argv[j]->ptr));
+                return 0;
+            }
+        }
+    }
+    getKeysFreeResult(&result);
+
+    /* Check if the slot in the specified range. */
     return isSlotInSlotRangeList(slot, slot_ranges);
 }
 
@@ -934,4 +974,135 @@ void readSlotSyncBulkPayload(connection *conn) {
     /* Reset the link state to TOCONNECT, the cron will retry start next time. */
     resetSlotSyncLinkForReconnect(link);
     return;
+}
+
+/* -----------------------------------------------------------------------------
+ * Cluster functions related to slot sync messages exchange.
+ * -------------------------------------------------------------------------- */
+
+void slotLinkSendMessage(client *c, const char *option, long long value) {
+    if (!server.cluster_enabled) return;
+    if (!c) return;
+    if (!c->slotsync_slots || listLength(c->slotsync_slots) == 0) return;
+
+    struct ClientFlags old_flags = c->flag;
+
+    c->flag.reply_off = 0;
+    c->flag.primary_force_reply = 1;
+    addReplyArrayLen(c, 3);
+    addReplyBulkCString(c, "REPLCONF");
+    addReplyBulkCString(c, option);
+    addReplyBulkLongLong(c, value);
+    c->flag.primary_force_reply = 0;
+    c->flag.reply_off = old_flags.reply_off;
+}
+
+/* Replica --> Primary: REPLCONF SLOTONLINE <recv_bytes>
+ *
+ * Replica (slotsync client) send this message to inform the primary (slotsync server)
+ * the amount of replication stream that it has processed so far in incremental
+ * propagation stage. */
+void slotLinkSendOnline(client* c) {
+    slotLinkSendMessage(c, "SLOTONLINE", c->slotsync_recv_bytes);
+}
+
+void replyToSlotSyncReplica(client* c, sds reply) {
+    if (!c) return;
+
+    c->slotsync_sent_bytes += sdslen(reply);
+    addReplySds(c,reply);  /* The sds 'reply' will be freed in addReplySds(). */
+}
+
+/* Primary --> Replica: REPLCONF SLOTDIFF <diff_bytes>
+ *
+ * Primary (slotsync server) send this message to inform the replica (slotsync client)
+ * the lag between them. */
+void replySlotOffsetToReplica(client* c, long long offset) {
+    sds soffset = sdscatprintf(sdsempty(), "%llu", offset);
+    sds reply = sdscatprintf(sdsempty(), "*3\r\n$8\r\nREPLCONF\r\n$8\r\nSLOTDIFF\r\n$%lu\r\n%s\r\n",
+                             sdslen(soffset), soffset);
+    sdsfree(soffset);
+    replyToSlotSyncReplica(c, reply);
+}
+
+/* -----------------------------------------------------------------------------
+ * Cluster functions related to slot sync cron jobs.
+ * -------------------------------------------------------------------------- */
+
+void clusterSlotSyncCron(void) {
+    if (server.cluster->state == CLUSTER_FAIL) {
+        return;
+    }
+
+    clusterSlotSyncLink *link;
+    listNode *ln;
+    listIter li;
+    listRewind(server.cluster->slotsync_links, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        link = ln->value;
+
+        if (link->sync_state == CLUSTER_SLOTSYNC_STATE_TOCONNECT) {
+            /* Firstly we delete the keys in the slots to avoid key corrupt. */
+            delkeysNotOwnedByMySelf(link->slot_ranges);
+
+            /* Check if the slots are in the same target node. */
+            int cross_node = 0;
+            clusterNode *n = getClusterNodeBySlotList(link->slot_ranges, &cross_node);
+            if (!n) {
+                /* If cross node, this slot sync will never success. */
+                if (cross_node) {
+                    serverLog(LL_WARNING,"Slot sync removed: slots cross node.");
+                    clearSlotSyncImporting(link->slot_ranges);
+                    listDelNode(server.cluster->slotsync_links, ln);
+                }
+                return;
+            }
+
+            /* The target node should not be myself. */
+            if (n == server.cluster->myself) {
+                serverLog(LL_WARNING,"Slot sync removed: slot owned by myself.");
+                clearSlotSyncImporting(link->slot_ranges);
+                listDelNode(server.cluster->slotsync_links, ln);
+                return;
+            }
+
+            /* Really do the reconnect for this link. */
+            initSlotSyncLink(link, n);
+        } else if (link->sync_state == CLUSTER_SLOTSYNC_STATE_WAIT_SCHED) {
+            if (clusterGetSlotSyncLinkRank(link) == 0) {
+                link->sync_state = CLUSTER_SLOTSYNC_STATE_SEND_SYNC;
+                continueSlotSync(link);
+            }
+        } else if (link->sync_state == CLUSTER_SLOTSYNC_STATE_CONNECTED) {
+            if (link->client && link->slot_mf_end == 0) {
+                slotLinkSendOnline(link->client);
+            }
+        }
+    }
+}
+
+clusterNode *getClusterNodeBySlotList(list *slot_ranges, int *cross_node) {
+    clusterNode *n = NULL;
+    listNode *ln;
+    listIter li;
+    listRewind(slot_ranges,&li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotRange *range = ln->value;
+        for (int i = range->start_slot; i <= range->end_slot; i++) {
+            /* If the cluster is not fine, should not do slot sync. */
+            if (server.cluster->slots[i] == NULL) {
+                return NULL;
+            }
+
+            if (!n) {
+                n = server.cluster->slots[i];
+            }
+
+            if (n != server.cluster->slots[i]) {
+                *cross_node = 1;
+                return NULL;
+            }
+        }
+    }
+    return n;
 }

@@ -1186,6 +1186,7 @@ typedef struct client {
     list *slotsync_slots;                      /* List of slot ranges that the client interested. */
     long long slotsync_sent_bytes;             /* todo */
     long long slotsync_recv_bytes;             /* todo */
+    int slotsync_failed;                       /* todo */
     /* Output buffer and reply handling */
     long duration;                       /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     char *buf;                           /* Output buffer */
@@ -2731,6 +2732,7 @@ int handleClientsWithPendingWrites(void);
 void adjustThreadedIOIfNeeded(void);
 int clientHasPendingReplies(client *c);
 int updateClientMemUsageAndBucket(client *c);
+int isNormalReplicaClient(client *c);
 void removeClientFromMemUsageBucket(client *c, int allow_eviction);
 void unlinkClient(client *c);
 void removeFromServerClientList(client *c);

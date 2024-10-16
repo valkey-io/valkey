@@ -525,7 +525,10 @@ void feedReplicationBuffer(char *s, size_t len) {
  * Instead if the instance is a replica and has sub-replicas attached, we use
  * replicationFeedStreamFromPrimaryStream() */
 void replicationFeedReplicas(int dictid, robj **argv, int argc) {
+    listNode *ln;
+    listIter li;
     int j, len;
+    long long change_offset;
     char llstr[LONG_STR_SIZE];
 
     /* In case we propagate a command that doesn't touch keys (PING, REPLCONF) we
@@ -571,17 +574,40 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
                 OBJ_STRING, sdscatprintf(sdsempty(), "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n", dictid_len, llstr));
         }
 
+        change_offset = server.primary_repl_offset;
+
         feedReplicationBufferWithObject(selectcmd);
+
+        change_offset = server.primary_repl_offset - change_offset;
 
         /* Although the SELECT command is not associated with any slot,
          * its per-slot network-bytes-out accumulation is made by the above function call.
          * To cancel-out this accumulation, below adjustment is made. */
         clusterSlotStatsDecrNetworkBytesOutForReplication(sdslen(selectcmd->ptr));
 
+        /* Also add it to the output buffer of the slaves which are in the slots
+         * sync mode if any, we should do this as these special replicas will not
+         * use the global replication buffer. */
+        listRewind(server.replicas,&li);
+        while ((ln = listNext(&li))) {
+            client *replica = ln->value;
+
+            /* Skip the replicas which are not in the right status. */
+            if (!canFeedReplicaReplBuffer(replica)) continue;
+
+            /* Skip the slaves which are not in the slot sync mode. */
+            if (!replica->slotsync_slots || listLength(replica->slotsync_slots) == 0) continue;
+
+            addReply(replica, selectcmd);
+            replica->slotsync_sent_bytes += change_offset;
+        }
+
         if (dictid < 0 || dictid >= PROTO_SHARED_SELECT_CMDS) decrRefCount(selectcmd);
 
         server.replicas_eldb = dictid;
     }
+
+    change_offset = server.primary_repl_offset;
 
     /* Write the command to the replication buffer if any. */
     char aux[LONG_STR_SIZE + 3];
@@ -606,6 +632,31 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
         feedReplicationBuffer(aux, len + 3);
         feedReplicationBufferWithObject(argv[j]);
         feedReplicationBuffer(aux + len + 1, 2);
+    }
+
+    change_offset = server.primary_repl_offset - change_offset;
+
+    /* Also write the command to the output buffer of the replicas that are in the
+     * slot sync mode. We should do this here as these special replicas will not
+     * use the global replication buffer. */
+    listRewind(server.replicas, &li);
+    while ((ln = listNext(&li))) {
+        client *replica = ln->value;
+
+        /* Skip the replicas which are not in the right status. */
+        if (!canFeedReplicaReplBuffer(replica)) continue;
+
+        /* Skip the replicas which are not in the slot sync mode. */
+        if (!replica->slotsync_slots || listLength(replica->slotsync_slots) == 0) continue;
+
+        /* Skip the command which is not in this slave's sync slot ranges. */
+        if (!isCommandInSlotRanges(argc, argv, replica->slotsync_slots)) continue;
+
+        addReplyArrayLen(replica, argc);
+        for (j = 0; j < argc; j++) {
+            addReplyBulk(replica, argv[j]);
+        }
+        replica->slotsync_sent_bytes += change_offset;
     }
 }
 
@@ -1293,6 +1344,8 @@ void initClientReplicationData(client *c) {
 }
 
 void freeClientReplicationData(client *c) {
+
+
     if (!c->repl_data) return;
     freeReplicaReferencedReplBuffer(c);
     /* Primary/replica cleanup Case 1:
@@ -1527,6 +1580,58 @@ void replconfCommand(client *c) {
                 return;
             }
             c->repl_data->associated_rdb_client_id = (uint64_t)client_id;
+        } else if (!strcasecmp(c->argv[j]->ptr,"slotonline")) {
+            /* REPLCONF SLOTONLINE is used by slave(slotsync client) to inform
+             * the master(slotsync server) the amount of replication stream
+             * that it processed so far in incremental propagation stage. */
+
+            /* Only works in cluster mode. */
+            if (!server.cluster_enabled) return;
+
+            /* Only works for a slave in slotsync mode. */
+            if (!(c->flag.replica) || !c->slotsync_slots || listLength(c->slotsync_slots) == 0) return;
+
+            /* If this was a diskless replication, we need to really put
+             * the replica online when the first ACK is received (which
+             * confirms slave is online and ready to get more data). */
+            if (c->repl_data->repl_start_cmd_stream_on_ack && c->repl_data->repl_state == REPLICA_STATE_ONLINE) {
+                replicaStartCommandStream(c);
+                sds slots = reprSlotRangeListWithHyphen(c->slotsync_slots);
+                serverLog(LL_NOTICE, "Recv slotonline, put slotsync link online. slots:%s", slots);
+                sdsfree(slots);
+            } else if (c->repl_data->repl_state == REPLICA_STATE_ONLINE) {
+                long long recv_bytes = 0;
+                if ((getLongLongFromObject(c->argv[j+1], &recv_bytes) != C_OK)) {
+                    return;
+                }
+                /* Notify offset to the slave. */
+                replySlotOffsetToReplica(c, c->slotsync_sent_bytes - recv_bytes);
+            }
+            return;
+        } else if (!strcasecmp(c->argv[j]->ptr,"slotdiff")) {
+            /* REPLCONF SLOTDIFF is used by master(slotsync server) to inform
+             * the slave(slotsync client) the lag between them. */
+
+            /* Only works in cluster mode. */
+            if (!server.cluster_enabled) return;
+
+            long long diffbytes = 0;
+            if ((getLongLongFromObject(c->argv[j+1], &diffbytes) != C_OK)) {
+                return;
+            }
+
+            clusterSlotSyncLink *link = c->slotsync_link;
+            if (!link) return;
+
+            if (!c->slotsync_failed) {
+                link->slot_mf_lag = diffbytes;
+                return;
+            }
+
+            if (link->slot_mf_lag >= 0) {
+                serverLog(LL_WARNING, "Slot sync already failed, link lag is %lld, but it shoud be less than 0",
+                          link->slot_mf_lag);
+            }
         } else {
             addReplyErrorFormat(c, "Unrecognized REPLCONF option: %s", (char *)c->argv[j]->ptr);
             return;

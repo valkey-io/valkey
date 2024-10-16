@@ -4180,6 +4180,19 @@ int processCommand(client *c) {
         if (server.current_client == NULL) return C_ERR;
 
         if (out_of_memory && is_denyoom_command) {
+            /* If slot sync is in progress, we should reset the lag bytes here
+             * as the CC(Controller Center of CRS) will decide whether to launch
+             * slot failover operation according to the lag bytes. */
+            if (c->slotsync_link != NULL) {
+                clusterSlotSyncLink *link = c->slotsync_link;
+                if (!c->slotsync_failed) {
+                    serverLog(LL_WARNING, "Cluster slot sync failed result from OOM, link lag: %lld",
+                              link->slot_mf_lag);
+                    link->slot_mf_lag = -1;
+                    c->slotsync_failed = 1;
+                }
+            }
+
             rejectCommand(c, shared.oomerr);
             return C_OK;
         }

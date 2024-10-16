@@ -1177,12 +1177,17 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         }
     }
 
+    /* If the client was bound with a slot sync link, mark it as asking. */
+    if (c->slotsync_link && isSlotInSlotRangeList(slot, c->slotsync_slots)) {
+        c->flag.asking = 1;
+    }
+
     /* If we are receiving the slot, and the client correctly flagged the
      * request as "ASKING", we can serve the request. However if the request
      * involves multiple keys and we don't have them all, the only option is
      * to send a TRYAGAIN error. */
     if (importing_slot && (c->flag.asking || cmd_flags & CMD_ASKING)) {
-        if (multiple_keys && missing_keys) {
+        if (multiple_keys && missing_keys && !c->slotsync_link) {
             if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
             return NULL;
         } else {

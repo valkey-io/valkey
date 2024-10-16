@@ -208,6 +208,7 @@ client *createClient(connection *conn) {
     c->slotsync_slots = createSlotRangeList();
     c->slotsync_sent_bytes = 0;
     c->slotsync_recv_bytes = 0;
+    c->slotsync_failed = 0;
     c->reply = listCreate();
     c->deferred_reply_errors = NULL;
     c->reply_bytes = 0;
@@ -459,7 +460,7 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
      * replication link that caused a reply to be generated we'll simply disconnect it.
      * Note this is the simplest way to check a command added a response. Replication links are used to write data but
      * not for responses, so we should normally never get here on a replica client. */
-    if (getClientType(c) == CLIENT_TYPE_REPLICA) {
+    if (isNormalReplicaClient(c)) {
         sds cmdname = c->lastcmd ? c->lastcmd->fullname : NULL;
         logInvalidUseAndFreeClientAsync(c, "Replica generated a reply to command '%s'",
                                         cmdname ? cmdname : "<unknown>");
@@ -804,7 +805,7 @@ void *addReplyDeferredLen(client *c) {
      * replication link that caused a reply to be generated we'll simply disconnect it.
      * Note this is the simplest way to check a command added a response. Replication links are used to write data but
      * not for responses, so we should normally never get here on a replica client. */
-    if (getClientType(c) == CLIENT_TYPE_REPLICA) {
+    if (isNormalReplicaClient(c)) {
         sds cmdname = c->lastcmd ? c->lastcmd->fullname : NULL;
         logInvalidUseAndFreeClientAsync(c, "Replica generated a reply to command '%s'",
                                         cmdname ? cmdname : "<unknown>");
@@ -1355,7 +1356,7 @@ void copyReplicaOutputBuffer(client *dst, client *src) {
 /* Return true if the specified client has pending reply buffers to write to
  * the socket. */
 int clientHasPendingReplies(client *c) {
-    if (getClientType(c) == CLIENT_TYPE_REPLICA) {
+    if (isNormalReplicaClient(c)) {
         /* Replicas use global shared replication buffer instead of
          * private output buffer. */
         serverAssert(c->bufpos == 0 && listLength(c->reply) == 0);
@@ -1371,6 +1372,24 @@ int clientHasPendingReplies(client *c) {
     } else {
         return c->bufpos || listLength(c->reply);
     }
+}
+
+/* Return 1 if client connected from a slave and not in slot sync mode.
+ *
+ * In such a case, the client will use the global replication buffer and
+ * this will make its behavior different from other ones. */
+int isNormalReplicaClient(client *c) {
+    /* The client did not connect from a slave. */
+    if (getClientType(c) != CLIENT_TYPE_REPLICA) {
+        return 0;
+    }
+
+    /* The client is in slot sync mode. */
+    if (c->slotsync_slots && listLength(c->slotsync_slots) != 0) {
+        return 0;
+    }
+
+    return 1;
 }
 
 void clientAcceptHandler(connection *conn) {
@@ -1710,6 +1729,7 @@ void freeClient(client *c) {
 
     /* Log link disconnection with replica */
     if (getClientType(c) == CLIENT_TYPE_REPLICA) {
+        // todo slot sync log
         if (c->flag.repl_rdb_channel)
             dualChannelServerLog(LL_NOTICE, "Replica %s rdb channel disconnected.", replicationGetReplicaName(c));
         else
@@ -2212,7 +2232,7 @@ int writeToClient(client *c) {
     c->nwritten = 0;
     c->write_flags = 0;
 
-    if (getClientType(c) == CLIENT_TYPE_REPLICA) {
+    if (isNormalReplicaClient(c)) {
         writeToReplica(c);
     } else {
         _writeToClient(c);
@@ -3195,7 +3215,11 @@ void readQueryFromClient(connection *conn) {
     readToQueryBuf(c);
 
     if (handleReadResult(c) == C_OK) {
-        if (processInputBuffer(c) == C_ERR) return;
+        if (processInputBuffer(c) == C_ERR) {
+            return;
+        } else if (!c->slotsync_failed) {
+            c->slotsync_recv_bytes += c->nread;
+        }
     }
     beforeNextClient(c);
 }
@@ -4437,7 +4461,7 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
  * the caller wishes. The main usage of this function currently is
  * enforcing the client output length limits. */
 size_t getClientOutputBufferMemoryUsage(client *c) {
-    if (getClientType(c) == CLIENT_TYPE_REPLICA) {
+    if (isNormalReplicaClient(c)) {
         size_t repl_buf_size = 0;
         size_t repl_node_num = 0;
         size_t repl_node_size = sizeof(listNode) + sizeof(replBufBlock);

@@ -138,10 +138,14 @@ sds aggregateClientOutputBuffer(client *c);
 void resetClusterStats(void);
 
 /* ---------------------- API exported outside cluster_slotsync.c ----------- */
+sds reprSlotRangeListWithHyphen(list *slot_ranges);
+sds reprSlotRangeListWithBlank(list *slot_ranges);
 int isSlotRangeListSame(list *lx, list *ly);
 int isSlotInSlotRangeList(int slot, list *slot_ranges);
 int isKeyInSlotRanges(robj *key, list *slot_ranges);
-void onSlotSyncClientClose(void *link);
+int isCommandInSlotRanges(int argc, robj **argv, list *slot_ranges);
+void onSlotSyncClientClose(void *o);
+void replySlotOffsetToReplica(client* c, long long offset);
 list *createSlotRangeList(void);
 
 #endif /* __CLUSTER_H */

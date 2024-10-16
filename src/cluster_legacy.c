@@ -133,6 +133,7 @@ int initSlotSyncLink(clusterSlotSyncLink *link, clusterNode *node);
 sds formatSlotSyncImportingSlots(void);
 void addReplySlotSyncLinksDescription(client *c);
 void clusterKillSlotSyncLink(client *c, char *linkid);
+void clusterSlotSyncCron(void);
 
 /* Only primaries that own slots have voting rights.
  * Returns 1 if the node has voting rights, otherwise returns 0. */
@@ -5215,6 +5216,9 @@ void clusterCron(void) {
     iteration++; /* Number of times this function was called so far. */
 
     clusterUpdateMyselfHostname();
+
+    /* Do something for slot sync. */
+    clusterSlotSyncCron();
 
     /* Clear so clusterNodeCronHandleReconnect can count the number of nodes in PFAIL. */
     server.cluster->stats_pfail_nodes = 0;

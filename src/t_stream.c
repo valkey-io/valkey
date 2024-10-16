@@ -2062,6 +2062,7 @@ void xaddCommand(client *c) {
     /* We need to signal to blocked clients that there is new data on this
      * stream. */
     signalKeyAsReady(c->db, c->argv[1], OBJ_STREAM);
+    bigkeylogPush(c->argv[1], s->length);
 }
 
 /* XRANGE/XREVRANGE actual implementation.

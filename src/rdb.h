@@ -133,6 +133,9 @@
 #define RDBFLAGS_ALLOW_DUP (1 << 2)    /* Allow duplicated keys when loading.*/
 #define RDBFLAGS_FEED_REPL (1 << 3)    /* Feed replication stream when loading.*/
 #define RDBFLAGS_KEEP_CACHE (1 << 4)   /* Don't reclaim cache after rdb file is generated */
+#define RDBFLAGS_SLOT_SYNC (1 << 5)    /* Load/save for SLOT SYNC, this is a hint that
+                                        * we are targeting slot rdb. In this case, we
+                                        * can load multiple slot RDBs. */
 
 /* When rdbLoadObject() returns NULL, the err flag is
  * set to hold the type of error that occurred */

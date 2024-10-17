@@ -883,9 +883,9 @@ void readSlotSyncBulkPayload(connection *conn) {
          * We'll restore it when the RDB is received. */
         connBlock(conn);
         connRecvTimeout(conn, server.repl_timeout*1000);
-        startLoading(link->transfer_total_size, RDBFLAGS_REPLICATION, async);
+        startLoading(link->transfer_total_size, RDBFLAGS_REPLICATION | RDBFLAGS_SLOT_SYNC, async);
 
-        if (rdbLoadRio(&rdb,RDBFLAGS_REPLICATION,&rsi) != C_OK) {
+        if (rdbLoadRio(&rdb, RDBFLAGS_REPLICATION | RDBFLAGS_SLOT_SYNC, &rsi) != C_OK) {
             /* RDB loading failed. */
             stopLoading(0);
             serverLog(LL_WARNING,
@@ -959,7 +959,7 @@ void readSlotSyncBulkPayload(connection *conn) {
         /* Close old rdb asynchronously. */
         if (old_rdb_fd != -1) bioCreateCloseJob(old_rdb_fd, 0, 1);
 
-        if (rdbLoad(rdbpath,&rsi,RDBFLAGS_REPLICATION) != C_OK) {
+        if (rdbLoad(rdbpath, &rsi, RDBFLAGS_REPLICATION | RDBFLAGS_SLOT_SYNC) != C_OK) {
             serverLog(LL_WARNING,
                       "Failed trying to load the MASTER synchronization "
                       "DB from disk");

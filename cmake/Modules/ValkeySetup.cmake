@@ -176,34 +176,48 @@ if (USE_JEMALLOC)
     include_directories("${CMAKE_SOURCE_DIR}/deps/jemalloc/include")
 endif ()
 
-# Add custom rule for generating commands.c file form the json files
 find_program(PYTHON_EXE python3)
 if (PYTHON_EXE)
+    # Python based code generation
     message(STATUS "Found python3: ${PYTHON_EXE}")
     # Rule for generating commands.def file from json files
     message(STATUS "Adding target generate_commands_def")
     file(GLOB COMMAND_FILES_JSON "${CMAKE_SOURCE_DIR}/src/commands/*.json")
     add_custom_command(
-        OUTPUT ${CMAKE_SOURCE_DIR}/src/commands.def
+        OUTPUT ${CMAKE_BINARY_DIR}/commands_def_generated
         DEPENDS ${COMMAND_FILES_JSON}
         COMMAND ${PYTHON_EXE} ${CMAKE_SOURCE_DIR}/utils/generate-command-code.py
+        COMMAND touch ${CMAKE_BINARY_DIR}/commands_def_generated
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
-    add_custom_target(generate_commands_def DEPENDS ${CMAKE_SOURCE_DIR}/src/commands.def)
+    add_custom_target(generate_commands_def DEPENDS ${CMAKE_BINARY_DIR}/commands_def_generated)
 
     # Rule for generating fmtargs.h
-    message(STATUS "Adding target fmtargs_h")
+    message(STATUS "Adding target generate_fmtargs_h")
     add_custom_command(
-        OUTPUT ${CMAKE_SOURCE_DIR}/src/fmtargs.h
+        OUTPUT ${CMAKE_BINARY_DIR}/fmtargs_generated
         DEPENDS ${CMAKE_SOURCE_DIR}/utils/generate-fmtargs.py
         COMMAND sed '/Everything/,$$d' fmtargs.h > fmtargs.h.tmp
         COMMAND ${PYTHON_EXE} ${CMAKE_SOURCE_DIR}/utils/generate-fmtargs.py >> fmtargs.h.tmp
         COMMAND mv fmtargs.h.tmp fmtargs.h
+        COMMAND touch ${CMAKE_BINARY_DIR}/fmtargs_generated
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
-    add_custom_target(fmtargs_h DEPENDS ${CMAKE_SOURCE_DIR}/src/fmtargs.h)
+    add_custom_target(generate_fmtargs_h DEPENDS ${CMAKE_BINARY_DIR}/fmtargs_generated)
+
+    # Rule for generating test_files.h
+    message(STATUS "Adding target generate_test_files_h")
+    file(GLOB UNIT_TEST_SRCS "${CMAKE_SOURCE_DIR}/src/unit/*.c")
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/test_files_generated
+        DEPENDS "${UNIT_TEST_SRCS};${CMAKE_SOURCE_DIR}/utils/generate-unit-test-header.py"
+        COMMAND ${PYTHON_EXE} ${CMAKE_SOURCE_DIR}/utils/generate-unit-test-header.py
+        COMMAND touch ${CMAKE_BINARY_DIR}/test_files_generated
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
+    add_custom_target(generate_test_files_h DEPENDS ${CMAKE_BINARY_DIR}/test_files_generated)
 else ()
     # Fake targets
     add_custom_target(generate_commands_def)
-    add_custom_target(fmtargs_h)
+    add_custom_target(generate_fmtargs_h)
+    add_custom_target(generate_test_files_h)
 endif ()
 
 # Generate release.h file (always)
@@ -388,10 +402,6 @@ endmacro ()
 # `link_name`
 macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
     add_executable(${target} ${sources})
-    if (USE_TLS)
-        # Add required libraries needed for TLS
-        target_link_libraries(${target} OpenSSL::SSL hiredis_ssl)
-    endif ()
 
     if (USE_JEMALLOC)
         # Using jemalloc
@@ -400,6 +410,11 @@ macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
 
     # Place this line last to ensure that ${ld_flags} is placed last on the linker line
     target_link_libraries(${target} ${libs} ${ld_flags})
+    target_link_libraries(${target} hiredis)
+    if (USE_TLS)
+        # Add required libraries needed for TLS
+        target_link_libraries(${target} OpenSSL::SSL hiredis_ssl)
+    endif ()
 
     # Install cli tool and create a redis symbolic link
     valkey_install_bin(${target})

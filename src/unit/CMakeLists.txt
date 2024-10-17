@@ -6,6 +6,8 @@ set(UNIT_TEST_SRCS "${UNIT_TEST_SRCS}")
 get_valkey_server_linker_option(VALKEY_SERVER_LDFLAGS)
 
 add_executable(valkey-unit-tests ${UNIT_TEST_SRCS})
+add_dependencies(valkey-unit-tests generate_test_files_h)
+
 if (USE_TLS)
     # Add required libraries needed for TLS
     target_link_libraries(valkey-unit-tests OpenSSL::SSL hiredis_ssl)

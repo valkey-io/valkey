@@ -3310,7 +3310,7 @@ void serverLogFromHandler(int level, const char *fmt, ...) __attribute__((format
 void serverLogFromHandler(int level, const char *fmt, ...);
 void _serverLog(int level, const char *fmt, ...);
 #endif
-void serverLogRaw(int level, const char *msg);
+void serverLogRaw(int level, char *msg);
 void serverLogRawFromHandler(int level, const char *msg);
 void usage(void);
 void updateDictResizePolicy(void);

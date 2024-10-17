@@ -127,9 +127,30 @@ void formatTimezone(char *buf, size_t buflen, int timezone, int daylight_active)
     buf[6] = '\0';
 }
 
+/* Modifies the input string by:
+ *      removing \r and \n
+ *      replacing " with '
+ * 
+ * Parameters:
+ *   msg - A string which will be modified in place. */
+void filterInvalidLogfmtChar(char *msg) {
+    if (msg == NULL) return;
+
+    int src = 0, dst = 0;
+    while (msg[src] != '\0') {
+        if (msg[src] == '"') {
+            msg[dst++] = '\'';
+        } else if (msg[src] != '\n' && msg[src] != '\r') {
+            msg[dst++] = msg[src];
+        }
+        src++;
+    }
+    msg[dst] = '\0';
+}
+
 /* Low level logging. To use only for very big messages, otherwise
  * serverLog() is to prefer. */
-void serverLogRaw(int level, const char *msg) {
+void serverLogRaw(int level, char *msg) {
     const int syslogLevelMap[] = {LOG_DEBUG, LOG_INFO, LOG_NOTICE, LOG_WARNING};
     const char *c = ".-*#";
     const char *verbose_level[] = {"debug", "info", "notice", "warning"};
@@ -187,6 +208,7 @@ void serverLogRaw(int level, const char *msg) {
         }
         switch (server.log_format) {
         case LOG_FORMAT_LOGFMT:
+            filterInvalidLogfmtChar(msg);
             fprintf(fp, "pid=%d role=%s timestamp=\"%s\" level=%s message=\"%s\"\n", (int)getpid(), roles[role_index],
                     buf, verbose_level[level], msg);
             break;

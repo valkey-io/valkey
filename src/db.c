@@ -378,13 +378,13 @@ robj *dbRandomKey(serverDb *db) {
     while (1) {
         sds key;
         robj *keyobj;
-        int randomDbIndex = kvstoreGetFairRandomDictIndex(db->keys);
-        de = kvstoreDictGetFairRandomKey(db->keys, randomDbIndex);
+        int randomDictIndex = kvstoreGetFairRandomDictIndex(db->keys);
+        de = kvstoreDictGetFairRandomKey(db->keys, randomDictIndex);
         if (de == NULL) return NULL;
 
         key = dictGetKey(de);
         keyobj = createStringObject(key, sdslen(key));
-        if (dbFindExpiresWithDictIndex(db, key, randomDbIndex)) {
+        if (dbFindExpiresWithDictIndex(db, key, randomDictIndex)) {
             if (allvolatile && server.primary_host && --maxtries == 0) {
                 /* If the DB is composed only of keys with an expire set,
                  * it could happen that all the keys are already logically
@@ -396,7 +396,7 @@ robj *dbRandomKey(serverDb *db) {
                  * return a key name that may be already expired. */
                 return keyobj;
             }
-            if (expireIfNeededWithDictIndex(db, keyobj, 0, randomDbIndex) != KEY_VALID) {
+            if (expireIfNeededWithDictIndex(db, keyobj, 0, randomDictIndex) != KEY_VALID) {
                 decrRefCount(keyobj);
                 continue; /* search for another key. This expired. */
             }

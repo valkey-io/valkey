@@ -1546,9 +1546,14 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
  * older than the global node timeout. Note that anyway for a node to be
  * flagged as FAIL we need to have a local PFAIL state that is at least
  * older than the global node timeout, so we don't just trust the number
- * of failure reports from other nodes. */
+ * of failure reports from other nodes.
+ *
+ * If the reporting node loses its voting right during this time, we will
+ * also clear its report. */
 void clusterNodeCleanupFailureReports(clusterNode *node) {
     list *l = node->fail_reports;
+    if (!listLength(l)) return;
+
     listNode *ln;
     listIter li;
     clusterNodeFailReport *fr;
@@ -1558,7 +1563,11 @@ void clusterNodeCleanupFailureReports(clusterNode *node) {
     listRewind(l, &li);
     while ((ln = listNext(&li)) != NULL) {
         fr = ln->value;
-        if (now - fr->time > maxtime) listDelNode(l, ln);
+        if (now - fr->time > maxtime) {
+            listDelNode(l, ln);
+        } else if (!clusterNodeIsVotingPrimary(fr->node)) {
+            listDelNode(l, ln);
+        }
     }
 }
 
@@ -1575,6 +1584,8 @@ void clusterNodeCleanupFailureReports(clusterNode *node) {
  * Otherwise 0 is returned. */
 int clusterNodeDelFailureReport(clusterNode *node, clusterNode *sender) {
     list *l = node->fail_reports;
+    if (!listLength(l)) return 0;
+
     listNode *ln;
     listIter li;
     clusterNodeFailReport *fr;
@@ -2246,9 +2257,9 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
         if (node && node != myself) {
             /* We already know this node.
                Handle failure reports, only when the sender is a voting primary. */
-            if (sender && clusterNodeIsVotingPrimary(sender)) {
+            if (sender) {
                 if (flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) {
-                    if (clusterNodeAddFailureReport(node, sender)) {
+                    if (clusterNodeIsVotingPrimary(sender) && clusterNodeAddFailureReport(node, sender)) {
                         serverLog(LL_NOTICE, "Node %.40s (%s) reported node %.40s (%s) as not reachable.", sender->name,
                                   sender->human_nodename, node->name, node->human_nodename);
                     }

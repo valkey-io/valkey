@@ -44,7 +44,7 @@ serverSortOperation *createSortOperation(int type, robj *pattern) {
 }
 
 /* Return 1 if pattern is the special pattern '#'. */
-int isReturnSubstPattern(sds pattern) {
+static int isReturnSubstPattern(sds pattern) {
     return pattern[0] == '#' && pattern[1] == '\0';
 }
 

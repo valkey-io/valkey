@@ -147,6 +147,11 @@ typedef long long ustime_t;
 #define VALKEYMODULE_CONFIG_MEMORY (1ULL << 7)   /* Indicates if this value can be set as a memory value */
 #define VALKEYMODULE_CONFIG_BITFLAGS (1ULL << 8) /* Indicates if this value can be set as a multiple enum values */
 
+typedef struct ValkeyModuleRunTimeArgs {
+    int argc;
+    char **argv;
+} ValkeyModuleRunTimeArgs;
+
 /* StreamID type. */
 typedef struct ValkeyModuleStreamID {
     uint64_t ms;
@@ -967,6 +972,7 @@ VALKEYMODULE_API void (*ValkeyModule_SetModuleAttribs)(ValkeyModuleCtx *ctx, con
     VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_IsModuleNameBusy)(const char *name) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_WrongArity)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API struct ValkeyModuleRunTimeArgs *(*ValkeyModule_GetRunTimeArgs)(ValkeyModuleCtx *ctx)VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithLongLong)(ValkeyModuleCtx *ctx, long long ll) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_GetSelectedDb)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_SelectDb)(ValkeyModuleCtx *ctx, int newid) VALKEYMODULE_ATTR;
@@ -1673,6 +1679,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(SetModuleAttribs);
     VALKEYMODULE_GET_API(IsModuleNameBusy);
     VALKEYMODULE_GET_API(WrongArity);
+    VALKEYMODULE_GET_API(GetRunTimeArgs);
     VALKEYMODULE_GET_API(ReplyWithLongLong);
     VALKEYMODULE_GET_API(ReplyWithError);
     VALKEYMODULE_GET_API(ReplyWithErrorFormat);

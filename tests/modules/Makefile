@@ -58,6 +58,7 @@ TEST_MODULES = \
     eventloop.so \
     moduleconfigs.so \
     moduleconfigstwo.so \
+    moduleparameter.so \
     publish.so \
     usercall.so \
     postnotifications.so \

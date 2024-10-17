@@ -104,9 +104,9 @@ static thread_local int thread_index = -1;
     defined(__arm64__)
 static __attribute__((aligned(CACHE_LINE_SIZE))) size_t used_memory_thread_padded[MAX_THREADS_NUM + PADDING_ELEMENT_NUM];
 #else
-static __attribute__((aligned(CACHE_LINE_SIZE))) _Atomic size_t __used_memory_thread[MAX_THREADS_NUM + PADDING_ELEMENT_NUM];
+static __attribute__((aligned(CACHE_LINE_SIZE))) _Atomic size_t used_memory_thread_padded[MAX_THREADS_NUM + PADDING_ELEMENT_NUM];
 #endif
-static size_t *used_memory_thread = &__used_memory_thread[PADDING_ELEMENT_NUM];
+static size_t *used_memory_thread = &used_memory_thread_padded[PADDING_ELEMENT_NUM];
 static atomic_int total_active_threads = 0;
 /* This is a simple protection. It's used only if some modules create a lot of threads. */
 static atomic_size_t used_memory_for_additional_threads = 0;

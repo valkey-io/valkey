@@ -3208,6 +3208,12 @@ void readToQueryBuf(client *c) {
 
 void readQueryFromClient(connection *conn) {
     client *c = connGetPrivateData(conn);
+
+    if (server.loading == 1 && c->slotsync_link != NULL) {
+        serverLog(LL_NOTICE, "waiting prev loading finish");
+        return;
+    }
+
     /* Check if we can send the client to be handled by the IO-thread */
     if (postponeClientRead(c)) return;
 

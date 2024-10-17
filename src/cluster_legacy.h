@@ -432,6 +432,8 @@ struct clusterState {
     clusterNode *migrating_slots_to[CLUSTER_SLOTS];
     clusterNode *importing_slots_from[CLUSTER_SLOTS];
     clusterNode *slots[CLUSTER_SLOTS];
+    int16_t pending_del_slots[CLUSTER_SLOTS];
+    int16_t pending_del_slot_count;
     list *slotsync_links;   /* The linked list stores all slot sync links. */
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;      /* Time of previous or next election. */

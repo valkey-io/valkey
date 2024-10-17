@@ -152,6 +152,7 @@ int isCommandInSlotRanges(int argc, robj **argv, list *slot_ranges);
 void onSlotSyncClientClose(void *o);
 void replySlotOffsetToReplica(client *c, long long offset);
 void replySlotReadyToReplica(client *c);
+void clusterSlotPendingDelete(void);
 list *createSlotRangeList(void);
 
 #endif /* __CLUSTER_H */

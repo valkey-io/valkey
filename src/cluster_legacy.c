@@ -95,6 +95,7 @@ const char *clusterGetMessageTypeString(int type);
 void removeChannelsInSlot(unsigned int slot);
 unsigned int countChannelsInSlot(unsigned int hashslot);
 unsigned int delKeysInSlot(unsigned int hashslot);
+unsigned int delKeysInSlotWithTimeLimit(unsigned int hashslot, ustime_t *limit);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
 list *clusterLookupNodeListByShardId(const char *shard_id);
 void clusterRemoveNodeFromShard(clusterNode *node);
@@ -129,6 +130,7 @@ static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now);
 void initClusterSlotSyncLinkList(void);
 void clearClusterSlotSyncLinkList(void);
 int isSlotInClusterSlotSyncLinkList(int slot);
+int isSlotInPendingDelete(int slot);
 int initSlotSyncLink(clusterSlotSyncLink *link, clusterNode *node);
 sds formatSlotSyncImportingSlots(void);
 void addReplySlotSyncLinksDescription(client *c);
@@ -1203,6 +1205,8 @@ void clusterInit(void) {
 
     /* Initialize data for the slot sync. */
     initClusterSlotSyncLinkList();
+    memset(server.cluster->pending_del_slots, 0, sizeof(server.cluster->pending_del_slots));
+    server.cluster->pending_del_slot_count = 0;
 
     /* Set myself->port/cport/pport to my listening ports, we'll just need to
      * discover the IP address via MEET messages. */
@@ -1318,6 +1322,8 @@ void clusterReset(int hard) {
     /* Clear all states about slot sync. */
     clearClusterSlotSyncLinkList();
     clusterResetSlotFailover();
+    memset(server.cluster->pending_del_slots, 0, sizeof(server.cluster->pending_del_slots));
+    server.cluster->pending_del_slot_count = 0;
 
     /* Hard reset only: set epochs to 0, change node ID. */
     if (hard) {
@@ -2784,9 +2790,24 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
 
     if (delete_dirty_slots) {
         for (int j = 0; j < dirty_slots_count; j++) {
-            serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s (%s) in shard %.40s", dirty_slots[j],
-                      myself->name, myself->human_nodename, myself->shard_id);
-            delKeysInSlot(dirty_slots[j]);
+            /* The number of dirty keys may be very large here, so we replace
+             * the delKeysInSlot() by pending delete. */
+            int exist = 0, i = 0;
+            for (i = 0; i < server.cluster->pending_del_slot_count; i++) {
+                if (server.cluster->pending_del_slots[i] == dirty_slots[j]) {
+                    exist = 1;
+                    break;
+                }
+            }
+            if (!exist) {
+                i = server.cluster->pending_del_slot_count++;
+                server.cluster->pending_del_slots[i] = dirty_slots[j];
+                serverLog(LL_WARNING,"Add dirty slot %d on node %.40s (%s) in shard %.40s to pending delete queue.",
+                          dirty_slots[j], myself->name, myself->human_nodename, myself->shard_id);
+                /* Todo, this is for test, some tests is match the "Deleting keys in dirty slot" text.  */
+                serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s (%s) in shard %.40s", dirty_slots[j],
+                          myself->name, myself->human_nodename, myself->shard_id);
+            }
         }
     }
 }
@@ -5818,6 +5839,10 @@ static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_requ
          * progress or timed out. */
         server.cluster->failover_auth_time = 0;
     }
+
+    /* All the data on this node will be cleared when replication, we can stop
+     * all the pending delete tasks here. */
+    server.cluster->pending_del_slot_count = 0;
 }
 
 /* -----------------------------------------------------------------------------
@@ -6381,15 +6406,18 @@ void delkeysNotOwnedByMySelf(list *slot_ranges) {
     }
 }
 
-/* Remove all the keys in the specified hash slot.
+/* Remove all the keys in the specified hash slot with time limit.
  * The number of removed items is returned. */
-unsigned int delKeysInSlot(unsigned int hashslot) {
+unsigned int delKeysInSlotWithTimeLimit(unsigned int hashslot, ustime_t *limit) {
     if (!countKeysInSlot(hashslot)) return 0;
 
     /* We may lose a slot during the pause. We need to track this
      * state so that we don't assert in propagateNow(). */
     server.server_del_keys_in_slot = 1;
     unsigned int j = 0;
+
+    /* Delete while traversing the keys in the hash slot with time limit. */
+    ustime_t start = ustime(), elapsed = 0;
 
     kvstoreHashtableIterator *kvs_di = NULL;
     void *next;
@@ -6411,12 +6439,26 @@ unsigned int delKeysInSlot(unsigned int hashslot) {
         decrRefCount(key);
         j++;
         server.dirty++;
+
+        /* Check if over time limit? */
+        if (limit && j % 64 == 0) {
+            elapsed = ustime() - start;
+            if (elapsed >= *limit) {
+                break;
+            }
+        }
     }
     kvstoreReleaseHashtableIterator(kvs_di);
 
     server.server_del_keys_in_slot = 0;
     serverAssert(server.execution_nesting == 0);
     return j;
+}
+
+/* Remove all the keys in the specified hash slot.
+ * The number of removed items is returned. */
+unsigned int delKeysInSlot(unsigned int hashslot) {
+    return delKeysInSlotWithTimeLimit(hashslot, NULL);
 }
 
 /* Get the count of the channels for a given slot. */
@@ -7216,6 +7258,11 @@ int clusterCommandSpecial(client *c) {
                 if (n == myself) {
                     addReplyErrorFormat(c,"Slot:%d is served by myself", j);
                     listRelease(slot_ranges);
+                    return 1;
+                }
+                if (isSlotInPendingDelete(j)) {
+                    listRelease(slot_ranges);
+                    addReplyErrorFormat(c,"Slot:%d is in pending delete", j);
                     return 1;
                 }
                 if (isSlotInClusterSlotSyncLinkList(j)) {

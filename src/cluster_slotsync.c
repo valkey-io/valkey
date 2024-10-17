@@ -16,6 +16,7 @@ void clusterCloseAllSlots(void);
 int clusterDelSlot(int slot);
 int clusterAddSlot(clusterNode *n, int slot);
 int clusterBumpConfigEpochWithoutConsensus(void);
+unsigned int delKeysInSlotWithTimeLimit(unsigned int hashslot, ustime_t *limit);
 
 /* The following functions are declared here as they will be used by others
  * before the definition, we will define them in this file later. */
@@ -1342,4 +1343,57 @@ void notifyClientsCloseSlotSyncLink(void) {
             replyCloseSlotLinkToReplica(replica);
         }
     }
+}
+
+/* -----------------------------------------------------------------------------
+ * Cluster functions related to slot pending delete.
+ * -------------------------------------------------------------------------- */
+
+#define CLUSTER_SLOTCALC_CYCLE_TIME_PERC 20
+void clusterSlotPendingDelete(void) {
+    if (!server.cluster->pending_del_slot_count) return;
+
+    /* Make sure there is no slotsync replica exists before we delete any slot.
+     * This is not a necessary condition, but it can protect the slot data if
+     * there are bugs in slotsync. */
+    listNode *ln;
+    listIter li;
+    listRewind(server.replicas, &li);
+    while ((ln = listNext(&li))) {
+        client *replica = ln->value;
+        if (replica->slotsync_slots && listLength(replica->slotsync_slots) > 0) {
+            return;
+        }
+    }
+
+    /* Limit the cpu. */
+    ustime_t timelimit = CLUSTER_SLOTCALC_CYCLE_TIME_PERC * 1000000 / server.hz / 100;
+
+    /* Handle the pending delete slots one by one with time limit. */
+    int i = server.cluster->pending_del_slot_count - 1;
+    for (; i >= 0; i--) {
+        delKeysInSlotWithTimeLimit(server.cluster->pending_del_slots[i], &timelimit);
+        if (timelimit <= 0) {
+            break;
+        }
+    }
+
+    /* Mark the already done pending delete slots. */
+    while (server.cluster->pending_del_slot_count > 0) {
+        i = server.cluster->pending_del_slot_count - 1;
+        if (countKeysInSlot(server.cluster->pending_del_slots[i]) == 0) {
+            server.cluster->pending_del_slot_count--;
+        } else {
+            break;
+        }
+    }
+}
+
+int isSlotInPendingDelete(int slot) {
+    for (int i = 0; i < server.cluster->pending_del_slot_count; i++) {
+        if (server.cluster->pending_del_slots[i] == slot) {
+            return 1;
+        }
+    }
+    return 0;
 }

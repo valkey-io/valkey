@@ -33,6 +33,7 @@ start_server {
         assert_equal {0 1} [r smismember myset bla foo]
         assert_equal {0} [r smismember myset bla]
         assert_equal "bar $initelems($type)" [lsort [r smembers myset]]
+        r memory usage myset
     }
     }
 
@@ -51,6 +52,7 @@ start_server {
         assert_equal {0 1} [r smismember myset 18 16]
         assert_equal {0} [r smismember myset 18]
         assert_equal {16 17} [lsort [r smembers myset]]
+        r memory usage myset
     }
 
     test {SMISMEMBER SMEMBERS SCARD against non set} {
@@ -1028,111 +1030,6 @@ foreach type {single multiple single_multiple} {
         }
         r srem $myset {*}$members
     }
-
-    proc verify_rehashing_completed_key {myset table_size keys} {
-        set htstats [r debug HTSTATS-KEY $myset]
-        assert {![string match {*rehashing target*} $htstats]}
-        return {[string match {*table size: $table_size*number of elements: $keys*} $htstats]}
-    }
-
-    test "SRANDMEMBER with a dict containing long chain" {
-        set origin_save [config_get_set save ""]
-        set origin_max_lp [config_get_set set-max-listpack-entries 0]
-        set origin_save_delay [config_get_set rdb-key-save-delay 2147483647]
-
-        # 1) Create a hash set with 100000 members.
-        set members {}
-        for {set i 0} {$i < 100000} {incr i} {
-            lappend members [format "m:%d" $i]
-        }
-        create_set myset $members
-
-        # 2) Wait for the hash set rehashing to finish.
-        while {[is_rehashing myset]} {
-            r srandmember myset 100
-        }
-
-        # 3) Turn off the rehashing of this set, and remove the members to 500.
-        r bgsave
-        rem_hash_set_top_N myset [expr {[r scard myset] - 500}]
-        assert_equal [r scard myset] 500
-
-        # 4) Kill RDB child process to restart rehashing.
-        set pid1 [get_child_pid 0]
-        catch {exec kill -9 $pid1}
-        waitForBgsave r
-
-        # 5) Let the set hash to start rehashing
-        r spop myset 1
-        assert [is_rehashing myset]
-
-        # 6) Verify that when rdb saving is in progress, rehashing will still be performed (because
-        # the ratio is extreme) by waiting for it to finish during an active bgsave.
-        r bgsave
-
-        while {[is_rehashing myset]} {
-            r srandmember myset 1
-        }
-        if {$::verbose} {
-            puts [r debug HTSTATS-KEY myset full]
-        }
-
-        set pid1 [get_child_pid 0]
-        catch {exec kill -9 $pid1}
-        waitForBgsave r
-
-        # 7) Check that eventually, SRANDMEMBER returns all elements.
-        array set allmyset {}
-        foreach ele [r smembers myset] {
-            set allmyset($ele) 1
-        }
-        unset -nocomplain auxset
-        set iterations 1000
-        while {$iterations != 0} {
-            incr iterations -1
-            set res [r srandmember myset -10]
-            foreach ele $res {
-                set auxset($ele) 1
-            }
-            if {[lsort [array names allmyset]] eq
-                [lsort [array names auxset]]} {
-                break;
-            }
-        }
-        assert {$iterations != 0}
-
-        # 8) Remove the members to 30 in order to calculate the value of Chi-Square Distribution,
-        #    otherwise we would need more iterations.
-        rem_hash_set_top_N myset [expr {[r scard myset] - 30}]
-        assert_equal [r scard myset] 30
-        
-        # Hash set rehashing would be completed while removing members from the `myset`
-        # We also check the size and members in the hash table.
-        verify_rehashing_completed_key myset 64 30
-
-        # Now that we have a hash set with only one long chain bucket.
-        set htstats [r debug HTSTATS-KEY myset full]
-        assert {[regexp {different slots: ([0-9]+)} $htstats - different_slots]}
-        assert {[regexp {max chain length: ([0-9]+)} $htstats - max_chain_length]}
-        assert {$different_slots == 1 && $max_chain_length == 30}
-
-        # 9) Use positive count (PATH 4) to get 10 elements (out of 30) each time.
-        unset -nocomplain allkey
-        set iterations 1000
-        while {$iterations != 0} {
-            incr iterations -1
-            set res [r srandmember myset 10]
-            foreach ele $res {
-                lappend allkey $ele
-            }
-        }
-        # validate even distribution of random sampling (df = 29, 73 means 0.00001 probability)
-        assert_lessthan [chi_square_value $allkey] 73
-
-        r config set save $origin_save
-        r config set set-max-listpack-entries $origin_max_lp
-        r config set rdb-key-save-delay $origin_save_delay
-    } {OK} {needs:debug slow}
 
     proc setup_move {} {
         r del myset3{t} myset4{t}

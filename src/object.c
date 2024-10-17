@@ -251,9 +251,9 @@ robj *createListListpackObject(void) {
 }
 
 robj *createSetObject(void) {
-    dict *d = dictCreate(&setDictType);
-    robj *o = createObject(OBJ_SET, d);
-    o->encoding = OBJ_ENCODING_HT;
+    hashset *hs = hashsetCreate(&setHashsetType);
+    robj *o = createObject(OBJ_SET, hs);
+    o->encoding = OBJ_ENCODING_HASHSET;
     return o;
 }
 
@@ -328,7 +328,7 @@ void freeListObject(robj *o) {
 
 void freeSetObject(robj *o) {
     switch (o->encoding) {
-    case OBJ_ENCODING_HT: dictRelease((dict *)o->ptr); break;
+    case OBJ_ENCODING_HASHSET: hashsetRelease((hashset *)o->ptr); break;
     case OBJ_ENCODING_INTSET:
     case OBJ_ENCODING_LISTPACK: zfree(o->ptr); break;
     default: serverPanic("Unknown set encoding type");
@@ -437,23 +437,22 @@ void dismissListObject(robj *o, size_t size_hint) {
 
 /* See dismissObject() */
 void dismissSetObject(robj *o, size_t size_hint) {
-    if (o->encoding == OBJ_ENCODING_HT) {
-        dict *set = o->ptr;
-        serverAssert(dictSize(set) != 0);
+    if (o->encoding == OBJ_ENCODING_HASHSET) {
+        hashset *set = o->ptr;
+        serverAssert(hashsetSize(set) != 0);
         /* We iterate all nodes only when average member size is bigger than a
          * page size, and there's a high chance we'll actually dismiss something. */
-        if (size_hint / dictSize(set) >= server.page_size) {
-            dictEntry *de;
-            dictIterator *di = dictGetIterator(set);
-            while ((de = dictNext(di)) != NULL) {
-                dismissSds(dictGetKey(de));
+        if (size_hint / hashsetSize(set) >= server.page_size) {
+            hashsetIterator iter;
+            hashsetInitIterator(&iter, set);
+            sds item;
+            while (hashsetNext(&iter, (void **)(&item))) {
+                dismissSds(item);
             }
-            dictReleaseIterator(di);
+            hashsetResetIterator(&iter);
         }
 
-        /* Dismiss hash table memory. */
-        dismissMemory(set->ht_table[0], DICTHT_SIZE(set->ht_size_exp[0]) * sizeof(dictEntry *));
-        dismissMemory(set->ht_table[1], DICTHT_SIZE(set->ht_size_exp[1]) * sizeof(dictEntry *));
+        dismissHashset(set);
     } else if (o->encoding == OBJ_ENCODING_INTSET) {
         dismissMemory(o->ptr, intsetBlobLen((intset *)o->ptr));
     } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
@@ -939,6 +938,7 @@ char *strEncoding(int encoding) {
     case OBJ_ENCODING_RAW: return "raw";
     case OBJ_ENCODING_INT: return "int";
     case OBJ_ENCODING_HT: return "hashtable";
+    case OBJ_ENCODING_HASHSET: return "hashtable";
     case OBJ_ENCODING_QUICKLIST: return "quicklist";
     case OBJ_ENCODING_LISTPACK: return "listpack";
     case OBJ_ENCODING_INTSET: return "intset";
@@ -990,17 +990,19 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             serverPanic("Unknown list encoding");
         }
     } else if (o->type == OBJ_SET) {
-        if (o->encoding == OBJ_ENCODING_HT) {
-            d = o->ptr;
-            di = dictGetIterator(d);
-            asize = sizeof(*o) + sizeof(dict) + (sizeof(struct dictEntry *) * dictBuckets(d));
-            while ((de = dictNext(di)) != NULL && samples < sample_size) {
-                ele = dictGetKey(de);
-                elesize += dictEntryMemUsage(de) + sdsAllocSize(ele);
+        if (o->encoding == OBJ_ENCODING_HASHSET) {
+            hashset *set = o->ptr;
+            asize = sizeof(*o) + hashsetMemUsage(set);
+            
+            hashsetIterator iter;
+            hashsetInitIterator(&iter, set);
+            sds element;
+            while (hashsetNext(&iter, (void**)&element) && samples < sample_size) {
+                elesize += sdsAllocSize(element);
                 samples++;
             }
-            dictReleaseIterator(di);
-            if (samples) asize += (double)elesize / samples * dictSize(d);
+            hashsetResetIterator(&iter);
+            if (samples) asize += (double)elesize / samples * hashsetSize(set);
         } else if (o->encoding == OBJ_ENCODING_INTSET) {
             asize = sizeof(*o) + zmalloc_size(o->ptr);
         } else if (o->encoding == OBJ_ENCODING_LISTPACK) {

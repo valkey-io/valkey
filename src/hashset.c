@@ -71,6 +71,7 @@
  *   addressing scheme, including the use of linear probing by scan cursor
  *   increment, by Viktor Söderqvist. */
 #include "hashset.h"
+#include "server.h"
 #include "serverassert.h"
 #include "zmalloc.h"
 #include "mt19937-64.h"
@@ -814,12 +815,12 @@ void *hashsetMetadata(hashset *t) {
 }
 
 /* Returns the number of elements stored. */
-size_t hashsetSize(hashset *t) {
+size_t hashsetSize(const hashset *t) {
     return t->used[0] + t->used[1];
 }
 
 /* Returns the number of hash table buckets. */
-size_t hashsetBuckets(hashset *t) {
+size_t hashsetBuckets(const hashset *t) {
     return numBuckets(t->bucketExp[0]) + numBuckets(t->bucketExp[1]);
 }
 
@@ -960,6 +961,15 @@ hashset *hashsetDefragInternals(hashset *s, void *(*defragfn)(void *)) {
         if (table != NULL) s->tables[i] = table;
     }
     return s1;
+}
+
+/* Used to release memory to OS to avoid unnecessary CoW.
+ * Called when we've forked and memory won't be used again.
+ * See dismissObject() */
+void dismissHashset(hashset *t) {
+    for (int i = 0; i < 2; i++) {
+        dismissMemory(t->tables[i], numBuckets(t->bucketExp[i]) * sizeof(bucket *));
+    }
 }
 
 /* Returns 1 if an element was found matching the key. Also points *found to it,
@@ -1311,16 +1321,14 @@ size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *priv
 
             /* Emit elements in the smaller table, if this bucket hasn't already
              * been rehashed. */
-            if (table0 == 0 && !cursorIsLessThan(cursor, t->rehashIdx)) {
-                bucket *b = &t->tables[table0][cursor & mask0];
-                for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
-                    if (b->presence & (1 << pos)) {
-                        void *emit = emit_ref ? &b->elements[pos] : b->elements[pos];
-                        fn(privdata, emit);
-                    }
+            bucket *b = &t->tables[table0][cursor & mask0];
+            for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
+                if (b->presence & (1 << pos)) {
+                    void *emit = emit_ref ? &b->elements[pos] : b->elements[pos];
+                    fn(privdata, emit);
                 }
-                in_probe_sequence |= b->everfull;
             }
+            in_probe_sequence |= b->everfull;
 
             /* Iterate over indices in larger table that are the expansion of
              * the index pointed to by the cursor in the smaller table. */
@@ -1431,6 +1439,10 @@ int hashsetNext(hashsetIterator *iter, void **elemptr) {
             } else {
                 iter->fingerprint = hashsetFingerprint(iter->hashset);
             }
+            if (!iter->hashset->tables[0]) {
+                /* Empty table - we're done */
+                break;
+            }
             iter->index = 0;
             /* skip the rehashed slots in table[0] */
             if (hashsetIsRehashing(iter->hashset)) {
@@ -1442,8 +1454,8 @@ int hashsetNext(hashsetIterator *iter, void **elemptr) {
             iter->posInBucket++;
             if (iter->posInBucket >= ELEMENTS_PER_BUCKET) {
                 iter->posInBucket = 0;
-                iter->index++;
-                if (iter->index >= (long)numBuckets(iter->hashset->bucketExp[iter->table])) {
+                iter->index = nextCursor(iter->index, expToMask(iter->hashset->bucketExp[iter->table]));
+                if (iter->index == 0) {
                     iter->index = 0;
                     if (hashsetIsRehashing(iter->hashset) && iter->table == 0) {
                         iter->table++;
@@ -1511,7 +1523,6 @@ unsigned hashsetSampleElements(hashset *t, void **dst, unsigned count) {
     while (samples.count < count) {
         cursor = hashsetScan(t, cursor, sampleElementsScanFn, &samples, HASHSET_SCAN_SINGLE_STEP);
     }
-    rehashStepOnReadIfNeeded(t);
     return count;
 }
 

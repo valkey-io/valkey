@@ -150,8 +150,8 @@ void hashsetRelease(hashset *t);
 void hashsetEmpty(hashset *t, void(callback)(hashset *));
 hashsetType *hashsetGetType(hashset *t);
 void *hashsetMetadata(hashset *t);
-size_t hashsetSize(hashset *t);
-size_t hashsetBuckets(hashset *t);
+size_t hashsetSize(const hashset *t);
+size_t hashsetBuckets(const hashset *t);
 size_t hashsetProbeCounter(hashset *t, int table);
 size_t hashsetMemUsage(hashset *t);
 void hashsetPauseAutoShrink(hashset *t);
@@ -165,6 +165,7 @@ int hashsetTryExpand(hashset *t, size_t size);
 int hashsetExpandIfNeeded(hashset *t);
 int hashsetShrinkIfNeeded(hashset *t);
 hashset *hashsetDefragInternals(hashset *t, void *(*defragfn)(void *));
+void dismissHashset(hashset *set);
 
 /* Elements */
 int hashsetFind(hashset *t, const void *key, void **found);

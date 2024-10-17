@@ -1011,6 +1011,15 @@ void readSlotSyncBulkPayload(connection *conn) {
                                 "Ready to accept connections in read-write mode.\n");
     }
 
+    /* After loading a new slot RDB, if we have any replicas nodes, they need to
+     * be full sync again. Otherwise, the replica will maintain the psync and lose
+     * all the data corresponding to the slot RDB.
+     *
+     * Disconnect all the replicas to force our replicas to resync with us.
+     * Free the replication backlog and not allow our chained replicas to PSYNC. */
+    disconnectReplicas();
+    freeReplicationBacklog();
+
     /* Restart the AOF subsystem now that we finished the sync. This
      * will trigger an AOF rewrite, and when done will start appending
      * to the new file. */

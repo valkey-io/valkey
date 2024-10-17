@@ -21,7 +21,7 @@ def PrintSuccCaseResult(info):
 def GetAllRedisPids():
     pids = []
     try:
-        command='ps aux | grep redis-server | grep 9... | grep -v grep'
+        command='ps aux | grep valkey-server | grep 9... | grep -v grep'
         processInfos = subprocess.check_output(command, shell=True)
     except Exception as e:
         return pids

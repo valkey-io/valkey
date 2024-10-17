@@ -2804,6 +2804,9 @@ int setGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *
     result->numkeys = 1;
 
     for (int i = 3; i < argc; i++) {
+        /* Bug: see the new_arg comment in isCommandInSlotRanges for more details. */
+        /* if (!sdsEncodedObject(argv[i])) continue; */
+
         char *arg = argv[i]->ptr;
         if ((arg[0] == 'g' || arg[0] == 'G') && (arg[1] == 'e' || arg[1] == 'E') && (arg[2] == 't' || arg[2] == 'T') &&
             arg[3] == '\0') {

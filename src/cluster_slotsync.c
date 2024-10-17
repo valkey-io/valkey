@@ -143,11 +143,39 @@ int isKeyInSlotRanges(robj *key, list *slot_ranges) {
  * Returns 1 if all the keys in the command are belongs to the same slot and the
  * slot is in the specified slot ranges, 0 otherwise. */
 int isCommandInSlotRanges(int argc, robj **argv, list *slot_ranges) {
-    /* Extract all the keys from the command. */
     struct serverCommand *cmd = lookupCommand(argv, argc);
+    if (!cmd) return 0; /* In case of the argv is from DEBUG REPLICATE. */
+
+    /* This function may be called after the command is executed.
+     * At this time, the arg in argv may be rewritten and the encoding
+     * may be an INT. In this case, we need to decode it into a string
+     * object because in getKeysFromCommand, all the arg is a string. */
+    robj **new_argv = NULL;
+    for (int i = 0; i < argc; i++) {
+        if (!sdsEncodedObject(argv[i])) {
+            new_argv = zmalloc(sizeof(robj*) * (argc));
+            break;
+        }
+    }
+    if (new_argv) {
+        for (int i = 0; i < argc; i++)
+            new_argv[i] = getDecodedObject(argv[i]);
+    }
+
+    /* Extract all the keys from the command. */
     getKeysResult result;
     initGetKeysResult(&result);
-    int numkeys = getKeysFromCommand(cmd, argv, argc, &result);
+    int numkeys = getKeysFromCommand(cmd, new_argv ? new_argv : argv, argc, &result);
+
+    /* Free the new argv. */
+    if (new_argv) {
+        for (int i = 0; i < argc; i++)
+            decrRefCount(new_argv[i]);
+        zfree(new_argv);
+    }
+
+    /* If slot_ranges is NULL, that is a debug path. */
+    if (slot_ranges == NULL) return 0;
 
     /* Check if all the keys are in the same slot and get this slot. */
     robj *firstkey = NULL;

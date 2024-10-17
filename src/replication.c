@@ -535,6 +535,9 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
      * pass dbid=-1 that indicate there is no need to replicate `select` command. */
     serverAssert(dictid == -1 || (dictid >= 0 && dictid < server.dbnum));
 
+    /* A debug path to cover the isCommandInSlotRanges function to avoid issues. */
+    if (server.enable_debug_assert) isCommandInSlotRanges(argc, argv, NULL);
+
     /* If the instance is not a top level primary, return ASAP: we'll just proxy
      * the stream of data we receive from our primary instead, in order to
      * propagate *identical* replication stream. In this way this replica can

@@ -368,6 +368,7 @@ struct clusterState {
     clusterNode *myself; /* This node */
     uint64_t currentEpoch;
     int state;              /* CLUSTER_OK, CLUSTER_FAIL, ... */
+    int fail_reason;        /* Why the cluster state changes to fail. */
     int size;               /* Num of primary nodes with at least one slot */
     dict *nodes;            /* Hash table of name -> clusterNode structures */
     dict *shards;           /* Hash table of shard_id -> list (of nodes) structures */

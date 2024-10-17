@@ -1216,7 +1216,7 @@ void clientsCron(void) {
 void databasesCron(void) {
     /* Expire keys by random sampling. Not required for replicas
      * as primary will synthesize DELs for us. */
-    if (server.active_expire_enabled) {
+    if (server.active_expire_enabled && !isSlotSyncInProgress()) {
         if (!iAmPrimary()) {
             expireReplicaKeys();
         } else if (!server.import_mode) {
@@ -1803,7 +1803,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
-    if (server.active_expire_enabled && !server.import_mode && iAmPrimary()) activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
+    if (server.active_expire_enabled && !server.import_mode && iAmPrimary() && !isSlotSyncInProgress())
+        activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
     if (moduleCount()) {
         moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP, VALKEYMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP, NULL);
@@ -6868,6 +6869,10 @@ int serverIsSupervised(int mode) {
 int iAmPrimary(void) {
     return ((!server.cluster_enabled && server.primary_host == NULL) ||
             (server.cluster_enabled && clusterNodeIsPrimary(getMyClusterNode())));
+}
+
+int isSlotSyncInProgress(void) {
+    return server.cluster_enabled && server.cluster->slotsync_links && listLength(server.cluster->slotsync_links);
 }
 
 /* Main is marked as weak so that unit tests can use their own main function. */

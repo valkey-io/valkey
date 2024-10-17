@@ -1959,8 +1959,11 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
      *
      * When replicating commands from the primary, keys are never considered
      * expired. */
-    if (server.primary_host != NULL) {
+    if (server.primary_host != NULL || isSlotSyncInProgress()) {
         if (server.current_client && (server.current_client->flag.primary)) return KEY_VALID;
+        /* When replicating commands from the slot sync source node,
+         * keys are never considered expired. */
+        if (server.current_client->slotsync_link) return 0;
         if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return KEY_EXPIRED;
     } else if (server.import_mode) {
         /* If we are running in the import mode on a primary, instead of

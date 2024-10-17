@@ -1,3 +1,5 @@
+include(CheckIncludeFiles)
+
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
@@ -133,6 +135,14 @@ else ()
     else ()
         add_valkey_server_compiler_options("-flto=auto")
     endif ()
+endif ()
+
+# Check for Atomic
+check_include_files(stdatomic.h HAVE_C11_ATOMIC)
+if (HAVE_C11_ATOMIC)
+    add_valkey_server_compiler_options("-std=gnu11")
+else ()
+    add_valkey_server_compiler_options("-std=c99")
 endif ()
 
 # Sanitizer
@@ -340,6 +350,7 @@ unset(WITH_SANITIZER CACHE)
 unset(VALKEY_SERVER_LDFLAGS CACHE)
 unset(VALKEY_SERVER_CFLAGS CACHE)
 unset(PYTHON_EXE CACHE)
+unset(HAVE_C11_ATOMIC CACHE)
 
 # Helper macro for creating symbolic link so that: link -> source
 macro (valkey_create_symlink source link)

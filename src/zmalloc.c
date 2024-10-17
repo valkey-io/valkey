@@ -102,7 +102,7 @@ static thread_local int thread_index = -1;
  * For the other architecture, lets fall back to the atomic operation to keep safe. */
 #if defined(__i386__) || defined(__x86_64__) || defined(__amd64__) || defined(__POWERPC__) || defined(__arm__) || \
     defined(__arm64__)
-static __attribute__((aligned(CACHE_LINE_SIZE))) size_t __used_memory_thread[MAX_THREADS_NUM + PADDING_ELEMENT_NUM];
+static __attribute__((aligned(CACHE_LINE_SIZE))) size_t used_memory_thread_padded[MAX_THREADS_NUM + PADDING_ELEMENT_NUM];
 #else
 static __attribute__((aligned(CACHE_LINE_SIZE))) _Atomic size_t __used_memory_thread[MAX_THREADS_NUM + PADDING_ELEMENT_NUM];
 #endif

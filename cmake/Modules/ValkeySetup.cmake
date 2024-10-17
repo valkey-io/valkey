@@ -146,13 +146,21 @@ if (USE_JEMALLOC)
 endif ()
 
 # Add custom rule for generating commands.c file form the json files
-file(GLOB COMMAND_FILES_JSON "${CMAKE_SOURCE_DIR}/src/commands/*.json")
-add_custom_command(
-    OUTPUT ${CMAKE_SOURCE_DIR}/src/commands.def
-    DEPENDS ${COMMAND_FILES_JSON}
-    COMMAND ${CMAKE_SOURCE_DIR}/utils/generate-command-code.py
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
-add_custom_target(generate_commands_def DEPENDS ${CMAKE_SOURCE_DIR}/src/commands.def)
+find_program(PYTHON_EXE python3)
+if (PYTHON_EXE)
+    message(STATUS "Found python3: ${PYTHON_EXE}")
+    message(STATUS "Adding target generate_commands_def")
+    file(GLOB COMMAND_FILES_JSON "${CMAKE_SOURCE_DIR}/src/commands/*.json")
+    add_custom_command(
+        OUTPUT ${CMAKE_SOURCE_DIR}/src/commands.def
+        DEPENDS ${COMMAND_FILES_JSON}
+        COMMAND ${CMAKE_SOURCE_DIR}/utils/generate-command-code.py
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
+    add_custom_target(generate_commands_def DEPENDS ${CMAKE_SOURCE_DIR}/src/commands.def)
+else ()
+    # Fake target (generate_commands_def is referenced by other CMakeLists.txt files)
+    add_custom_target(generate_commands_def)
+endif ()
 
 # Generate release.h file (always)
 add_custom_target(
@@ -310,6 +318,7 @@ unset(CMAKE_C_FLAGS CACHE)
 unset(WITH_SANITIZER CACHE)
 unset(VALKEY_SERVER_LDFLAGS CACHE)
 unset(VALKEY_SERVER_CFLAGS CACHE)
+unset(PYTHON_EXE CACHE)
 
 # Helper macro for creating symbolic link so that: link -> source
 macro (valkey_create_symlink source link)

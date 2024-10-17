@@ -6721,6 +6721,7 @@ serverTestProc *getTestProcByName(const char *name) {
 }
 #endif
 
+#ifndef VALKEY_USE_TEST_MAIN
 int main(int argc, char **argv) {
     struct timeval tv;
     int j;
@@ -7064,5 +7065,5 @@ int main(int argc, char **argv) {
     aeDeleteEventLoop(server.el);
     return 0;
 }
-
+#endif // VALKEY_USE_TEST_MAIN
 /* The End */

@@ -90,7 +90,7 @@ void zlibc_free(void *ptr) {
 
 #define thread_local _Thread_local
 
-#define PADDING_ELEMENT_NUM CACHE_LINE_SIZE / sizeof(size_t) - 1
+#define PADDING_ELEMENT_NUM (CACHE_LINE_SIZE / sizeof(size_t) - 1)
 #define MAX_THREADS_NUM (IO_THREADS_MAX_NUM + 3 + 1)
 /* A thread-local storage which keep the current thread's index in the used_memory_thread array. */
 static thread_local int thread_index = -1;

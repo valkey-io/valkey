@@ -49,6 +49,7 @@
  *   addressing scheme, including the use of linear probing by scan cursor
  *   increment, by Viktor Söderqvist. */
 #include "hashset.h"
+#include "server.h"
 #include "serverassert.h"
 #include "zmalloc.h"
 #include "mt19937-64.h"
@@ -810,12 +811,12 @@ void *hashsetMetadata(hashset *s) {
 }
 
 /* Returns the number of elements stored. */
-size_t hashsetSize(hashset *s) {
+size_t hashsetSize(const hashset *s) {
     return s->used[0] + s->used[1];
 }
 
 /* Returns the number of hash table buckets. */
-size_t hashsetBuckets(hashset *s) {
+size_t hashsetBuckets(const hashset *s) {
     return numBuckets(s->bucket_exp[0]) + numBuckets(s->bucket_exp[1]);
 }
 
@@ -956,6 +957,15 @@ hashset *hashsetDefragInternals(hashset *s, void *(*defragfn)(void *)) {
         if (table != NULL) s->tables[i] = table;
     }
     return s1;
+}
+
+/* Used to release memory to OS to avoid unnecessary CoW.
+ * Called when we've forked and memory won't be used again.
+ * See dismissObject() */
+void dismissHashset(hashset *t) {
+    for (int i = 0; i < 2; i++) {
+        dismissMemory(t->tables[i], numBuckets(t->bucketExp[i]) * sizeof(bucket *));
+    }
 }
 
 /* Returns 1 if an element was found matching the key. Also points *found to it,
@@ -1299,18 +1309,16 @@ size_t hashsetScan(hashset *s, size_t cursor, hashsetScanFunction fn, void *priv
 
             /* Emit elements in the smaller table, if this bucket hasn't already
              * been rehashed. */
-            if (table_small == 0 && !cursorIsLessThan(cursor, s->rehash_idx)) {
-                bucket *b = &s->tables[table_small][cursor & mask_small];
-                if (b->presence) {
-                    for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
-                        if (isPositionFilled(b, pos)) {
-                            void *emit = emit_ref ? &b->elements[pos] : b->elements[pos];
-                            fn(privdata, emit);
-                        }
+            bucket *b = &s->tables[table_small][cursor & mask_small];
+            if (b->presence) {
+                for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
+                    if (isPositionFilled(b, pos)) {
+                        void *emit = emit_ref ? &b->elements[pos] : b->elements[pos];
+                        fn(privdata, emit);
                     }
                 }
-                in_probe_sequence |= b->everfull;
             }
+            in_probe_sequence |= b->everfull;
 
             /* Iterate over indices in larger table that are the expansion of
              * the index pointed to by the cursor in the smaller table. */

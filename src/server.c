@@ -286,6 +286,7 @@ void dictDictDestructor(dict *d, void *val) {
     dictRelease((dict *)val);
 }
 
+/* Returns 1 when keys match */
 int dictSdsKeyCompare(dict *d, const void *key1, const void *key2) {
     int l1, l2;
     UNUSED(d);
@@ -294,6 +295,16 @@ int dictSdsKeyCompare(dict *d, const void *key1, const void *key2) {
     l2 = sdslen((sds)key2);
     if (l1 != l2) return 0;
     return memcmp(key1, key2, l1) == 0;
+}
+
+/* Returns 0 when keys match */
+int hashsetSdsKeyCompare(hashset *hs, const void *key1, const void *key2) {
+    UNUSED(hs);
+
+    size_t l1 = sdslen((sds)key1);
+    size_t l2 = sdslen((sds)key2);
+    if (l1 != l2) return 1;
+    return memcmp(key1, key2, l1);
 }
 
 size_t dictSdsEmbedKey(unsigned char *buf, size_t buf_len, const void *key, uint8_t *key_offset) {
@@ -319,6 +330,11 @@ void dictObjectDestructor(dict *d, void *val) {
 }
 
 void dictSdsDestructor(dict *d, void *val) {
+    UNUSED(d);
+    sdsfree(val);
+}
+
+void hashsetSdsDestructor(hashset *d, void *val) {
     UNUSED(d);
     sdsfree(val);
 }
@@ -467,17 +483,11 @@ dictType objectKeyHeapPointerValueDictType = {
     NULL                  /* allow to expand */
 };
 
-/* Set dictionary type. Keys are SDS strings, values are not used. */
-dictType setDictType = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    dictSdsDestructor, /* key destructor */
-    NULL,              /* val destructor */
-    NULL,              /* allow to expand */
-    .no_value = 1,     /* no values in this dict */
-    .keys_are_odd = 1  /* an SDS string is always an odd pointer */
-};
+/* Set hashset type. Items are SDS strings */
+hashsetType setHashsetType = {
+    .hashFunction = dictSdsHash,
+    .keyCompare = hashsetSdsKeyCompare,
+    .elementDestructor = hashsetSdsDestructor};
 
 /* Sorted sets hash (note: a skiplist is used in addition to the hash table) */
 dictType zsetDictType = {
@@ -548,6 +558,11 @@ dictType sdsReplyDictType = {
     NULL,              /* val destructor */
     NULL               /* allow to expand */
 };
+
+/* Hashset type without destructor */
+hashsetType sdsReplyHashsetType = {
+    .hashFunction = dictSdsCaseHash,
+    .keyCompare = hashsetSdsKeyCompare};
 
 /* Keylist hash table type has unencoded Objects as keys and
  * lists as values. It's used for blocking operations (BLPOP) and to

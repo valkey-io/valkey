@@ -12,6 +12,10 @@ int useDisklessLoad(void);
 void delkeysNotOwnedByMySelf(list *slot_ranges);
 void clusterUpdateState(void);
 void clusterSaveConfigOrDie(int do_fsync);
+void clusterCloseAllSlots(void);
+int clusterDelSlot(int slot);
+int clusterAddSlot(clusterNode *n, int slot);
+int clusterBumpConfigEpochWithoutConsensus(void);
 
 /* The following functions are declared here as they will be used by others
  * before the definition, we will define them in this file later. */
@@ -21,6 +25,7 @@ void syncWithSlotOwner(connection *conn);
 void continueSlotSync(clusterSlotSyncLink *link);
 void readSlotSyncBulkPayload(connection *conn);
 clusterNode *getClusterNodeBySlotList(list *slot_ranges, int *cross_node);
+void notifyClientsCloseSlotSyncLink(void);
 
 /* -----------------------------------------------------------------------------
  * Cluster functions related to slot range and slot range list.
@@ -1006,6 +1011,23 @@ void slotLinkSendOnline(client* c) {
     slotLinkSendMessage(c, "SLOTONLINE", c->slotsync_recv_bytes);
 }
 
+/* Replica --> Primary: REPLCONF SLOTFAILOVER 0
+ *
+ * Replica (slotsync client) send this message to inform the primary (slotsync server)
+ * to pause clients for slot failover. */
+void slotLinkSendFailover(client* c) {
+    slotLinkSendMessage(c, "SLOTFAILOVER", 0);
+}
+
+/* Replica --> Primary: REPLCONF SLOTACK <recv_bytes>
+ *
+ * Replica (slotsync client) send this message to inform the primary (slotsync server)
+ * the amount of replication stream that it has processed so far in slot failover
+ * stage. */
+void slotLinkSendAck(client* c) {
+    slotLinkSendMessage(c, "SLOTACK", c->slotsync_recv_bytes);
+}
+
 void replyToSlotSyncReplica(client* c, sds reply) {
     if (!c) return;
 
@@ -1016,13 +1038,149 @@ void replyToSlotSyncReplica(client* c, sds reply) {
 /* Primary --> Replica: REPLCONF SLOTDIFF <diff_bytes>
  *
  * Primary (slotsync server) send this message to inform the replica (slotsync client)
- * the lag between them. */
+ * the replication stream lag. */
 void replySlotOffsetToReplica(client* c, long long offset) {
     sds soffset = sdscatprintf(sdsempty(), "%llu", offset);
     sds reply = sdscatprintf(sdsempty(), "*3\r\n$8\r\nREPLCONF\r\n$8\r\nSLOTDIFF\r\n$%lu\r\n%s\r\n",
                              sdslen(soffset), soffset);
     sdsfree(soffset);
     replyToSlotSyncReplica(c, reply);
+}
+
+/* Primary --> Replica: REPLCONF SLOTREADY 0
+ *
+ * Primary (slotsync server) send this message to inform the replica (slotsync client)
+ * the replication stream lag became zero and is ready for the replica to takeover
+ * the slots now. */
+void replySlotReadyToReplica(client* c) {
+    sds reply = sdscatprintf(sdsempty(), "*3\r\n$8\r\nREPLCONF\r\n$9\r\nSLOTREADY\r\n$1\r\n0\r\n");
+    replyToSlotSyncReplica(c, reply);
+}
+
+/* Primary --> Replica: CLUSTER INTERNALCLOSESLOTLINK
+ *
+ * Primary (slotsync server) send this message to inform the replica (slotsync client)
+ * to close the slotsync link that bound with this client. */
+void replyCloseSlotLinkToReplica(client* c) {
+    sds reply = sdscatprintf(sdsempty(), "*2\r\n$7\r\nCLUSTER\r\n$21\r\nINTERNALCLOSESLOTLINK\r\n");
+    replyToSlotSyncReplica(c, reply);
+}
+
+/* -----------------------------------------------------------------------------
+ * Cluster functions related to slot failover.
+ * -------------------------------------------------------------------------- */
+
+/* Initialize the state of a new slot failover at the 'client' side and send the
+ * REPLCONF SLOTFAILOVER to the 'server' side.
+ *
+ * Note: 'client' here means the promoter of the slot failover and 'server' here
+ *       means the original owner of the slots. */
+void clusterInitSlotFailover(void) {
+    listNode *ln;
+    listIter li;
+    listRewind(server.cluster->slotsync_links, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        clusterSlotSyncLink *link = ln->value;
+        link->slot_mf_ready = 0;
+        link->slot_mf_end = mstime() + CLUSTER_MF_TIMEOUT;
+        slotLinkSendFailover(link->client);
+    }
+    server.cluster->slot_mf_end = mstime() + CLUSTER_MF_TIMEOUT;
+    serverLog(LL_NOTICE, "Slot failover is initialized. slot_mf_end=%lld", server.cluster->slot_mf_end);
+}
+
+/* This function implements the final part of manual slot failovers,
+ * where the replica grabs all the slotsync link's hash slots, and
+ * propagates the new configuration.
+ *
+ * Note that it's up to the caller to be sure that the node got a new
+ * configuration epoch already. */
+void clusterSlotFailoverReplace(void) {
+    /* If the cluster is failed, can not do slot failover. */
+    if (server.cluster->state == CLUSTER_FAIL) {
+        return;
+    }
+
+    /* 1) Clear the importing state for all the slots. */
+    clusterCloseAllSlots();
+
+    /* 2) Claim all the slots in the slotsync links to myself. */
+    listNode *ln;
+    listIter li;
+    listRewind(server.cluster->slotsync_links, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        clusterSlotSyncLink *link = ln->value;
+
+        listNode *ln2;
+        listIter li2;
+        listRewind(link->slot_ranges, &li2);
+        while ((ln2 = listNext(&li2)) != NULL) {
+            slotRange *range = ln2->value;
+            for (int i = range->start_slot; i<= range->end_slot; i++) {
+                clusterDelSlot(i);
+                clusterAddSlot(server.cluster->myself,i);
+            }
+        }
+    }
+
+    /* 3) Update state and save config. */
+    clusterUpdateState();
+    clusterSaveConfigOrDie(1);
+
+    /* 4) Pong all the other nodes so that they can update the state accordingly
+     *    and detect that we switched to master role. */
+    clusterBroadcastPong(CLUSTER_BROADCAST_ALL);
+}
+
+/* Reset the slot failover state. This works for both 'client' and 'server' side
+ * as all the state about slot failover is cleared.
+ *
+ * Note:
+ * 1. 'client' here means the promoter of the slot failover and 'server' here
+ *    means the original owner of the slots.
+ * 2. The function can be used to abort a slot failover in progress or to reset
+ *    the state after a successful slot failover.
+ */
+void clusterResetSlotFailover(void) {
+    listIter li;
+    listNode *ln;
+
+    /* For the 'client' side. */
+    listRewind(server.cluster->slotsync_links, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        clusterSlotSyncLink *link = ln->value;
+        link->slot_mf_ready = 0;
+        link->slot_mf_end = 0;
+    }
+
+    /* For the 'server' side. */
+    listRewind(server.replicas, &li);
+    while ((ln = listNext(&li))) {
+        client *replica = listNodeValue(ln);
+        replica->slotsync_mf_end = 0;
+    }
+
+    /* For both 'client' side and 'server' side. */
+    server.cluster->slot_mf_end = 0;
+    serverLog(LL_NOTICE, "Slot failover has been reset.");
+}
+
+int getSlotFailoverReplicaIngressCount(void) {
+    int ret = 0;
+    listNode *ln;
+    listIter li;
+    listRewind(server.replicas,&li);
+    while ((ln = listNext(&li))) {
+        client *replica = listNodeValue(ln);
+        if (replica->slotsync_mf_end) {
+            int cross_node = 0;
+            clusterNode *n = getClusterNodeBySlotList(replica->slotsync_slots, &cross_node);
+            if (cross_node || n == server.cluster->myself) {
+                ret++;
+            }
+        }
+    }
+    return ret;
 }
 
 /* -----------------------------------------------------------------------------
@@ -1079,6 +1237,73 @@ void clusterSlotSyncCron(void) {
             }
         }
     }
+
+    if (server.cluster->slot_mf_end) {
+        /* Check if the slot failover timed out. */
+        if (server.cluster->slot_mf_end < mstime()) {
+            serverLog(LL_WARNING, "Manual slot failover timed out.");
+            updatePausedActions();
+            clusterResetSlotFailover();
+            return;
+        }
+
+        /* Something we should do for slot failover at the 'client' side.
+         * ('client' here means the promoter of the slot failover.) */
+        {
+            /* Get the total number of the slotsync links that slot failover are
+             * in progress and count how many of them are ready. */
+            int mf_link_cnt = 0, ready_link_cnt = 0;
+            listRewind(server.cluster->slotsync_links, &li);
+            while ((ln = listNext(&li)) != NULL) {
+                link = ln->value;
+
+                /* Count the links that slot failover are in progress. */
+                if (!link->slot_mf_end) {
+                    continue;
+                } else {
+                    mf_link_cnt++;
+                }
+
+                /* Count the links that are ready to do slot failover. */
+                if (link->sync_state == CLUSTER_SLOTSYNC_STATE_CONNECTED) {
+                    /* Keep to send ack until this link marked slot ready. */
+                    if (!link->slot_mf_ready) {
+                        slotLinkSendAck(link->client);
+                    } else {
+                        ready_link_cnt++;
+                    }
+                }
+            }
+
+            /* Do the slot failover when all the slotsync links are ready. */
+            if (mf_link_cnt && mf_link_cnt == ready_link_cnt) {
+                serverLog(LL_WARNING,"All cluster slotsync links are ready!");
+                clusterBumpConfigEpochWithoutConsensus();
+                clusterSlotFailoverReplace();
+                clusterResetSlotFailover();
+            } else {
+                static long long count = 0;
+                if (count++ % 10 == 0) {
+                    serverLog(LL_NOTICE,"Slot failover status: wait_links=%d, ready_links=%d",
+                              mf_link_cnt, ready_link_cnt);
+                }
+            }
+        }
+
+        /* Something we should do for slot failover at the 'server' side.
+         * ('server' here means the original owner of the slots.) */
+        {
+            /* We need to check if all the slot failover are finished. */
+            if (getSlotFailoverReplicaIngressCount() == 0) {
+                /* Unpause the clients. */
+                unpauseActions(PAUSE_DURING_FAILOVER);
+                /* Free slot failover replicas. */
+                notifyClientsCloseSlotSyncLink();
+                /* Reset slot failover state. */
+                clusterResetSlotFailover();
+            }
+        }
+    }
 }
 
 clusterNode *getClusterNodeBySlotList(list *slot_ranges, int *cross_node) {
@@ -1105,4 +1330,16 @@ clusterNode *getClusterNodeBySlotList(list *slot_ranges, int *cross_node) {
         }
     }
     return n;
+}
+
+void notifyClientsCloseSlotSyncLink(void) {
+    listIter li;
+    listNode *ln;
+    listRewind(server.replicas, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        client *replica = listNodeValue(ln);
+        if (replica->slotsync_mf_end) {
+            replyCloseSlotLinkToReplica(replica);
+        }
+    }
 }

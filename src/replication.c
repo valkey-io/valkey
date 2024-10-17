@@ -1610,7 +1610,7 @@ void replconfCommand(client *c) {
             return;
         } else if (!strcasecmp(c->argv[j]->ptr,"slotdiff")) {
             /* REPLCONF SLOTDIFF is used by master(slotsync server) to inform
-             * the slave(slotsync client) the lag between them. */
+             * the slave(slotsync client) the replication stream lag. */
 
             /* Only works in cluster mode. */
             if (!server.cluster_enabled) return;
@@ -1632,6 +1632,79 @@ void replconfCommand(client *c) {
                 serverLog(LL_WARNING, "Slot sync already failed, link lag is %lld, but it shoud be less than 0",
                           link->slot_mf_lag);
             }
+        } else if (!strcasecmp(c->argv[j]->ptr,"slotfailover")) {
+            /* REPLCONF SLOTFAILOVER is used by slave(slotsync client) to inform
+             * the master(slotsync server) to pause clients for slot failover. */
+
+            /* Only works in cluster mode. */
+            if (!server.cluster_enabled) return;
+
+            /* Only works for a slave in slotsync mode. */
+            if (!(c->flag.replica) || !c->slotsync_slots || listLength(c->slotsync_slots) == 0) return;
+
+            /* Skip if slot failover already in progress. */
+            if (c->slotsync_mf_end) return;
+
+            /* Pause clients if not paused. */
+            pauseActions(PAUSE_DURING_FAILOVER, mstime() + CLUSTER_MF_TIMEOUT * 2, PAUSE_ACTIONS_CLIENT_WRITE_SET);
+
+            mstime_t mf_end = mstime() + CLUSTER_MF_TIMEOUT;
+            server.cluster->slot_mf_end = mf_end;
+            c->slotsync_mf_end = mf_end;
+
+            sds slots = reprSlotRangeListWithHyphen(c->slotsync_slots);
+            serverLog(LL_NOTICE, "Recv slotfailover request. slots:%s", slots);
+            sdsfree(slots);
+            return;
+        } else if (!strcasecmp(c->argv[j]->ptr,"slotack")) {
+            /* REPLCONF SLOTACK is used by slave(slotsync client) to inform
+             * the master(slotsync server) the amount of replication stream
+             * that it processed so far in slot failover stage. */
+
+            /* Only works in cluster mode. */
+            if (!server.cluster_enabled) return;
+
+            /* Only works for a slave in slotsync mode. */
+            if (!(c->flag.replica) || !c->slotsync_slots || listLength(c->slotsync_slots) == 0) return;
+
+            /* Only works when slot failover in progress. */
+            if (!c->slotsync_mf_end) return;
+
+            long long recv_bytes = 0;
+            if ((getLongLongFromObject(c->argv[j+1], &recv_bytes) != C_OK)) {
+                return;
+            }
+
+            sds slots = reprSlotRangeListWithHyphen(c->slotsync_slots);
+            if (c->slotsync_sent_bytes == recv_bytes) {
+                /* All the sent bytes have been recieved by this slotsync slave,
+                 * we can notify it to takeover the slots now. */
+                serverLog(LL_WARNING,"Recv slotack success!! %llu=%llu slots:%s",
+                          c->slotsync_sent_bytes, recv_bytes, slots);
+                replySlotReadyToReplica(c);
+            } else {
+                serverLog(LL_WARNING,"Recv slotack not equal. %llu=%llu slots:%s",
+                          c->slotsync_sent_bytes, recv_bytes, slots);
+            }
+            sdsfree(slots);
+            return;
+        } else if (!strcasecmp(c->argv[j]->ptr,"slotready")) {
+            /* REPLCONF SLOTREADY is used by master(slotsync server) to inform
+             * the slave(slotsync client) the replication stream lag is zero
+             * and is ready for the slave to takeover the slots now. */
+
+            /* Only works in cluster mode. */
+            if (!server.cluster_enabled) return;
+
+            /* Mark myself is ready to takeover the slots. */
+            clusterSlotSyncLink *link = c->slotsync_link;
+            if (link && link->slot_mf_end && (mstime() < link->slot_mf_end)) {
+                link->slot_mf_ready = 1;
+                sds slots = reprSlotRangeListWithHyphen(c->slotsync_slots);
+                serverLog(LL_WARNING,"Recv slotfailover ready! slots:%s", slots);
+                sdsfree(slots);
+            }
+            return;
         } else {
             addReplyErrorFormat(c, "Unrecognized REPLCONF option: %s", (char *)c->argv[j]->ptr);
             return;

@@ -845,6 +845,8 @@ void clusterCommandHelp(client *c) {
         "    Manage the slot sync links.",
         "SLOTSYNC <start slot> <end slot> [<start slot> <end slot> ...]",
         "    Trigger a slot sync task for the specified hash slots.",
+        "SLOTFAILOVER [TAKEOVER]",
+        "    Trigger a slot failover for the hash slots that in the slot links.",
         NULL};
 
     addExtendedReplyHelp(c, help, clusterCommandExtendedHelp());

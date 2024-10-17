@@ -39,6 +39,10 @@ struct clusterState;
 #define CLUSTER_MODULE_FLAG_NO_FAILOVER (1 << 1)
 #define CLUSTER_MODULE_FLAG_NO_REDIRECTION (1 << 2)
 
+/* For clusterBroadcastPong */
+#define CLUSTER_BROADCAST_ALL 0            /* All known instances. */
+#define CLUSTER_BROADCAST_LOCAL_REPLICAS 1 /* All replicas in my primary-replicas ring. */
+
 /* ---------------------- API exported outside cluster.c -------------------- */
 /* functions requiring mechanism specific implementations */
 void clusterInit(void);
@@ -63,6 +67,7 @@ void clusterUpdateMyselfAnnouncedPorts(void);
 void clusterUpdateMyselfHumanNodename(void);
 
 void clusterPropagatePublish(robj *channel, robj *message, int sharded);
+void clusterBroadcastPong(int target);
 
 unsigned long getClusterConnectionsCount(void);
 int isClusterHealthy(void);
@@ -145,7 +150,8 @@ int isSlotInSlotRangeList(int slot, list *slot_ranges);
 int isKeyInSlotRanges(robj *key, list *slot_ranges);
 int isCommandInSlotRanges(int argc, robj **argv, list *slot_ranges);
 void onSlotSyncClientClose(void *o);
-void replySlotOffsetToReplica(client* c, long long offset);
+void replySlotOffsetToReplica(client *c, long long offset);
+void replySlotReadyToReplica(client *c);
 list *createSlotRangeList(void);
 
 #endif /* __CLUSTER_H */

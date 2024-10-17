@@ -1,0 +1,25 @@
+
+{
+    "SLOTFAILOVER": {
+        "summary": "Trigger a slot failover for the hash slots that in the slot links",
+        "complexity": "O(N) where N is the total number of the slot sync links.",
+        "group": "cluster",
+        "since": "8.0.0",
+        "arity": -2,
+        "container": "CLUSTER",
+        "function": "clusterCommand",
+        "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+        ],
+        "arguments": [
+            {
+                "name": "takeover",
+                "token": "TAKEOVER",
+                "type": "pure-token",
+                "optional": true
+            }
+        ]
+    }
+}

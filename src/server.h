@@ -1187,6 +1187,7 @@ typedef struct client {
     long long slotsync_sent_bytes;             /* todo */
     long long slotsync_recv_bytes;             /* todo */
     int slotsync_failed;                       /* todo */
+    mstime_t slotsync_mf_end;                  /* todo */
     /* Output buffer and reply handling */
     long duration;                       /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     char *buf;                           /* Output buffer */

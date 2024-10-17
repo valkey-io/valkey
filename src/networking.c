@@ -209,6 +209,7 @@ client *createClient(connection *conn) {
     c->slotsync_sent_bytes = 0;
     c->slotsync_recv_bytes = 0;
     c->slotsync_failed = 0;
+    c->slotsync_mf_end = 0;
     c->reply = listCreate();
     c->deferred_reply_errors = NULL;
     c->reply_bytes = 0;

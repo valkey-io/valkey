@@ -134,6 +134,9 @@ sds formatSlotSyncImportingSlots(void);
 void addReplySlotSyncLinksDescription(client *c);
 void clusterKillSlotSyncLink(client *c, char *linkid);
 void clusterSlotSyncCron(void);
+void clusterInitSlotFailover(void);
+void clusterSlotFailoverReplace(void);
+void clusterResetSlotFailover(void);
 
 /* Only primaries that own slots have voting rights.
  * Returns 1 if the node has voting rights, otherwise returns 0. */
@@ -1207,6 +1210,7 @@ void clusterInit(void) {
 
     server.cluster->mf_end = 0;
     server.cluster->mf_replica = NULL;
+    server.cluster->slot_mf_end = 0;
     for (int conn_type = 0; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
         server.cached_cluster_slot_info[conn_type] = NULL;
     }
@@ -1313,6 +1317,7 @@ void clusterReset(int hard) {
 
     /* Clear all states about slot sync. */
     clearClusterSlotSyncLinkList();
+    clusterResetSlotFailover();
 
     /* Hard reset only: set epochs to 0, change node ID. */
     if (hard) {
@@ -4225,12 +4230,7 @@ void clusterSendPing(clusterLink *link, int type) {
  *
  * The 'target' argument specifies the receiving instances using the
  * defines below:
- *
- * CLUSTER_BROADCAST_ALL -> All known instances.
- * CLUSTER_BROADCAST_LOCAL_REPLICAS -> All replicas in my primary-replicas ring.
  */
-#define CLUSTER_BROADCAST_ALL 0
-#define CLUSTER_BROADCAST_LOCAL_REPLICAS 1
 void clusterBroadcastPong(int target) {
     dictIterator *di;
     dictEntry *de;
@@ -7242,6 +7242,60 @@ int clusterCommandSpecial(client *c) {
         initSlotSyncLink(link, n);
         listAddNodeTail(server.cluster->slotsync_links, link);
         addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr,"slotfailover") && (c->argc == 2 || c->argc == 3)) {
+        /* CLUSTER SLOTFAILOVER [TAKEOVER] */
+        int takeover = 0;
+        if (c->argc == 3) {
+            if (!strcasecmp(c->argv[2]->ptr,"takeover")) {
+                takeover = 1;
+            } else {
+                addReply(c,shared.syntaxerr);
+                return 1;
+            }
+        }
+        if (listLength(server.cluster->slotsync_links) == 0) {
+            addReplyError(c, "There is no slot link can failover.");
+            return 1;
+        }
+        if (server.cluster->slot_mf_end) {
+            addReplyError(c, "There is a slot failover in progress.");
+            return 1;
+        }
+        /* Check if all the slot sync links are connected. */
+        listNode *ln;
+        listIter li;
+        listRewind(server.cluster->slotsync_links, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            clusterSlotSyncLink *link = ln->value;
+            if (link->sync_state != CLUSTER_SLOTSYNC_STATE_CONNECTED) {
+                addReplyError(c,"There is a slot link not connected.");
+                return 1;
+            }
+        }
+        if (takeover) {
+            clusterBumpConfigEpochWithoutConsensus();
+            clusterSlotFailoverReplace();
+            clearClusterSlotSyncLinkList();
+        } else {
+            clusterInitSlotFailover();
+        }
+        addReply(c,shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "InternalCloseSlotLink")) {
+        /* CLUSTER INTERNALCLOSESLOTLINK */
+        listNode *ln = listSearchKey(server.cluster->slotsync_links, c->slotsync_link);
+        if (ln == NULL) {
+            serverLog(LL_WARNING, "InternalCloseSlotLink fail, this client is not in slotsync_links");
+            return 1;
+        }
+        clusterSlotSyncLink *link = ln->value;
+        if (link == NULL || link->client != c) {
+            serverLog(LL_WARNING, "InternalCloseSlotLink fail, invalid slotlink or client not eual c");
+            return 1;
+        }
+        /* If reached here, "link->client == c" */
+        c->slotsync_link = NULL;
+        freeClientAsync(c);
+        listDelNode(server.cluster->slotsync_links, ln);
     } else {
         return 0;
     }

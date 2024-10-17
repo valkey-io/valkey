@@ -1040,6 +1040,12 @@ int startBgsaveForReplication(int mincapa, int req, list* slots) {
         retval = C_ERR;
     }
 
+    /* Simulate bgsave error. */
+    if (testInjectError("crs-bgsave-error")) {
+        serverLog(LL_WARNING, "inject crs-bgsave-error");
+        retval = C_ERR;
+    }
+
     /* If we succeeded to start a BGSAVE with disk target, let's remember
      * this fact, so that we can later delete the file if needed. Note
      * that we don't set the flag to 1 if the feature is disabled, otherwise
@@ -1649,6 +1655,12 @@ void replconfCommand(client *c) {
             pauseActions(PAUSE_DURING_FAILOVER, mstime() + CLUSTER_MF_TIMEOUT * 2, PAUSE_ACTIONS_CLIENT_WRITE_SET);
 
             mstime_t mf_end = mstime() + CLUSTER_MF_TIMEOUT;
+            char *val = getInjectOptionValue("crs-cluster-mf-timeout");
+            if (val) {
+                mf_end = mstime() + atoi(val);
+                zfree(val);
+                serverLog(LL_WARNING, "crs-cluster-mf-timeout: %d", atoi(val));
+            }
             server.cluster->slot_mf_end = mf_end;
             c->slotsync_mf_end = mf_end;
 

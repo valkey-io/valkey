@@ -1629,6 +1629,12 @@ int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
         if (retval == C_OK) {
             sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
         }
+        char *val = getInjectOptionValue("crs-bgsave-pause-time");
+        if (val) {
+            sleep(atoi(val));
+            zfree(val);
+            serverLog(LL_WARNING, "crs-bgsave-pause-time: %d", atoi(val));
+        }
         exitFromChild((retval == C_OK) ? 0 : 1);
     } else {
         /* Parent */
@@ -3421,6 +3427,12 @@ int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
     int retval;
     struct stat sb;
     int rdb_fd;
+
+    /* Simulate rdbLoad error. */
+    if (testInjectError("crs-rdbload-error")) {
+        serverLog(LL_WARNING, "inject crs-rdbload-error");
+        return RDB_FAILED;
+    }
 
     fp = fopen(filename, "r");
     if (fp == NULL) {

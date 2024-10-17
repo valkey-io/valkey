@@ -153,6 +153,8 @@ void onSlotSyncClientClose(void *o);
 void replySlotOffsetToReplica(client *c, long long offset);
 void replySlotReadyToReplica(client *c);
 void clusterSlotPendingDelete(void);
+int testInjectError(const char *error);
+char *getInjectOptionValue(const char *option);
 list *createSlotRangeList(void);
 
 #endif /* __CLUSTER_H */

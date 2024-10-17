@@ -180,17 +180,30 @@ endif ()
 find_program(PYTHON_EXE python3)
 if (PYTHON_EXE)
     message(STATUS "Found python3: ${PYTHON_EXE}")
+    # Rule for generating commands.def file from json files
     message(STATUS "Adding target generate_commands_def")
     file(GLOB COMMAND_FILES_JSON "${CMAKE_SOURCE_DIR}/src/commands/*.json")
     add_custom_command(
         OUTPUT ${CMAKE_SOURCE_DIR}/src/commands.def
         DEPENDS ${COMMAND_FILES_JSON}
-        COMMAND ${CMAKE_SOURCE_DIR}/utils/generate-command-code.py
+        COMMAND ${PYTHON_EXE} ${CMAKE_SOURCE_DIR}/utils/generate-command-code.py
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
     add_custom_target(generate_commands_def DEPENDS ${CMAKE_SOURCE_DIR}/src/commands.def)
+
+    # Rule for generating fmtargs.h
+    message(STATUS "Adding target fmtargs_h")
+    add_custom_command(
+        OUTPUT ${CMAKE_SOURCE_DIR}/src/fmtargs.h
+        DEPENDS ${CMAKE_SOURCE_DIR}/utils/generate-fmtargs.py
+        COMMAND sed '/Everything/,$$d' fmtargs.h > fmtargs.h.tmp
+        COMMAND ${PYTHON_EXE} ${CMAKE_SOURCE_DIR}/utils/generate-fmtargs.py >> fmtargs.h.tmp
+        COMMAND mv fmtargs.h.tmp fmtargs.h
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
+    add_custom_target(fmtargs_h DEPENDS ${CMAKE_SOURCE_DIR}/src/fmtargs.h)
 else ()
-    # Fake target (generate_commands_def is referenced by other CMakeLists.txt files)
+    # Fake targets
     add_custom_target(generate_commands_def)
+    add_custom_target(fmtargs_h)
 endif ()
 
 # Generate release.h file (always)

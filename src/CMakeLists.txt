@@ -4,6 +4,7 @@ set(INSTALL_BIN_PATH ${CMAKE_INSTALL_PREFIX}/bin)
 
 # Create a library from Valkey sources
 add_library(valkeylib STATIC "${VALKEY_LIB_SRCS}")
+add_dependencies(valkeylib fmtargs_h)
 add_dependencies(valkeylib release_header)
 add_dependencies(valkeylib generate_commands_def)
 
@@ -26,21 +27,39 @@ else ()
     list(APPEND SERVER_LIBS "hdr_histogram")
     list(APPEND SERVER_LIBS "hiredis")
     set(VALKEY_SERVER_SRCS "${CMAKE_SOURCE_DIR}/src/server.c")
-    valkey_build_and_install_bin(valkey-server "${VALKEY_SERVER_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${SERVER_LIBS}"
-                                 "redis-server")
+    valkey_build_and_install_bin(
+        valkey-server
+        "${VALKEY_SERVER_SRCS}"
+        "${VALKEY_SERVER_LDFLAGS}"
+        "${SERVER_LIBS}"
+        "redis-server"
+    )
 
     # Target: valkey-cli
     list(APPEND CLI_LIBS "hiredis")
     list(APPEND CLI_LIBS "linenoise")
-    valkey_build_and_install_bin(valkey-cli "${VALKEY_CLI_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${CLI_LIBS}" "redis-cli")
+    valkey_build_and_install_bin(
+        valkey-cli
+        "${VALKEY_CLI_SRCS}"
+        "${VALKEY_SERVER_LDFLAGS}"
+        "${CLI_LIBS}"
+        "redis-cli"
+    )
     add_dependencies(valkey-cli generate_commands_def)
+    add_dependencies(valkey-cli fmtargs_h)
 
     # Target: valkey-benchmark
     list(APPEND BENCH_LIBS "hiredis")
     list(APPEND BENCH_LIBS "hdr_histogram")
-    valkey_build_and_install_bin(valkey-benchmark "${VALKEY_BENCHMARK_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${BENCH_LIBS}"
-                                 "redis-benchmark")
+    valkey_build_and_install_bin(
+        valkey-benchmark
+        "${VALKEY_BENCHMARK_SRCS}"
+        "${VALKEY_SERVER_LDFLAGS}"
+        "${BENCH_LIBS}"
+        "redis-benchmark"
+    )
     add_dependencies(valkey-benchmark generate_commands_def)
+    add_dependencies(valkey-benchmark fmtargs_h)
 
     # Targets: valkey-sentinel, valkey-check-aof and valkey-check-rdb are just symbolic links
     valkey_create_symlink("${INSTALL_BIN_PATH}/valkey-server" "${INSTALL_BIN_PATH}/valkey-sentinel")

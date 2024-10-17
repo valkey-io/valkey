@@ -20,6 +20,15 @@ function (get_valkey_server_linker_option return_value)
     list(JOIN VALKEY_SERVER_LDFLAGS " " ${value} ${return_value})
 endfunction ()
 
+# Determine if we are building in Release or Debug mode
+if (CMAKE_BUILD_TYPE MATCHES Debug OR CMAKE_BUILD_TYPE MATCHES DebugFull)
+    set(VALKEY_DEBUG_BUILD 1)
+    message(STATUS "Building in debug mode")
+else ()
+    set(VALKEY_DEBUG_BUILD 0)
+    message(STATUS "Building in release mode")
+endif ()
+
 # Installed executables will have this permissions
 set(VALKEY_EXE_PERMISSIONS
     OWNER_EXECUTE
@@ -112,6 +121,18 @@ elseif (UNIX)
     add_valkey_server_linker_option("-pthread")
     add_valkey_server_linker_option("-ldl")
     add_valkey_server_linker_option("-lm")
+endif ()
+
+if (VALKEY_DEBUG_BUILD)
+    # Debug build, use enable "-fno-omit-frame-pointer"
+    add_valkey_server_compiler_options("-fno-omit-frame-pointer")
+else ()
+    # Release build. Enable LTO
+    if (APPLE)
+        add_valkey_server_compiler_options("-flto")
+    else ()
+        add_valkey_server_compiler_options("-flto=auto")
+    endif ()
 endif ()
 
 # Sanitizer

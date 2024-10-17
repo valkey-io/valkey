@@ -318,6 +318,30 @@ else
 	LIBCRYPTO_LIBS=-lcrypto
 endif
 
+# WASM Support
+WASM_STATIC_LIB=
+ifeq ($(BUILD_WITH_WASM),yes)
+	WASMTIME_ROOT?=../deps/wasmtime-c-api
+
+	WASM_LIB_EXISTS=$(shell test -f $(WASMTIME_ROOT)/lib/libwasmtime.a && echo $$?)
+	ifeq ($(WASM_LIB_EXISTS),0)
+		WASM_STATIC_LIB= $(WASMTIME_ROOT)/lib/libwasmtime.a
+		WASM_CFLAGS+= -I$(WASMTIME_ROOT)/include -DWASM_ENABLED -Wno-strict-prototypes
+	else
+		ifneq ($(MAKECMDGOALS), clean)
+		ifneq ($(MAKECMDGOALS), distclean)
+		ifneq ($(MAKECMDGOALS), download-wasm-binary-deps)
+			ifeq ($(WASMTIME_ROOT), ../deps/wasmtime-c-api)
+$(error "WASMTIME library cannot be found in '$(WASMTIME_ROOT)', please run 'make download-wasm-binary-deps' to download wasmtime library.")
+			else
+$(error "WASMTIME library cannot be found in '$(WASMTIME_ROOT)'.")
+			endif
+		endif
+		endif
+		endif
+  endif
+endif
+
 BUILD_NO:=0
 BUILD_YES:=1
 BUILD_MODULE:=2
@@ -467,6 +491,7 @@ persist-settings: distclean
 	echo SERVER_LDFLAGS=$(SERVER_LDFLAGS) >> .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
+	echo BUILD_WITH_WASM=$(BUILD_WITH_WASM) >> .make-settings
 	-(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))
 
 .PHONY: persist-settings
@@ -486,7 +511,7 @@ endif
 
 # valkey-server
 $(SERVER_NAME): $(ENGINE_SERVER_OBJ)
-	$(SERVER_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
+	$(SERVER_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(WASM_STATIC_LIB) $(FINAL_LIBS)
 
 # Valkey static library, used to compile against for unit testing
 $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
@@ -535,6 +560,9 @@ DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_
 
 unit/%.o: unit/%.c .make-prerequisites
 	$(SERVER_CC) -MMD -o $@ -c $<
+
+wasm.o: wasm.c
+	$(SERVER_CC) $(WASM_CFLAGS) -MMD -o $@ -c $<
 
 # The following files are checked in and don't normally need to be rebuilt. They
 # are built only if python is available and their prereqs are modified.
@@ -639,3 +667,8 @@ uninstall:
 	$(call MAYBE_UNINSTALL_REDIS_SYMLINK,$(INSTALL_BIN),$(ENGINE_CHECK_RDB_NAME))
 	$(call MAYBE_UNINSTALL_REDIS_SYMLINK,$(INSTALL_BIN),$(ENGINE_CHECK_AOF_NAME))
 	$(call MAYBE_UNINSTALL_REDIS_SYMLINK,$(INSTALL_BIN),$(ENGINE_SENTINEL_NAME))
+
+download-wasm-binary-deps:
+	cd ../deps; $(MAKE) $@
+
+.PHONY: download-wasm-binary-deps

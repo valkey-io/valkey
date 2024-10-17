@@ -1109,9 +1109,11 @@ void syncCommand(client *c) {
         }
 
         if (primaryTryPartialResynchronization(c, psync_offset) == C_OK) {
+            serverLog(LL_NOTICE, "===> completed partial resync");
             server.stat_sync_partial_ok++;
             return; /* No full resync needed, return. */
         } else {
+            serverLog(LL_NOTICE, "===> completed partial resync with failure");
             char *primary_replid = c->argv[1]->ptr;
 
             /* Increment stats for failed PSYNCs, but only if the
@@ -1271,6 +1273,9 @@ void syncCommand(client *c) {
  * - rdb-channel <1|0>
  * Used to identify the client as a replica's rdb connection in an dual channel
  * sync session.
+ *
+ * - repl-diskless-load <1|0>
+ * Replica is capable of load data from replication stream, request to skip checksum.
  * */
 void replconfCommand(client *c) {
     int j;
@@ -1313,6 +1318,13 @@ void replconfCommand(client *c) {
                  * replconf option. */
                 c->replica_capa |= REPLICA_CAPA_DUAL_CHANNEL;
             }
+         } else if (!strcasecmp(c->argv[j]->ptr, "repl-diskless-load")) {
+            /* REPLCONF repl-diskless-load is used to identify the client is capable of
+             * load directly without creating rdb file */
+            long rdb_diskless_load = 0;
+            if (getRangeLongFromObjectOrReply(c, c->argv[j + 1], 0, 1, &rdb_diskless_load, NULL) != C_OK) return;
+            if (rdb_diskless_load == 1)
+                c->replica_req |= REPLICA_REQ_CHKSUM_SKIP;
         } else if (!strcasecmp(c->argv[j]->ptr, "ack")) {
             /* REPLCONF ACK is used by replica to inform the primary the amount
              * of replication stream that it processed so far. It is an
@@ -2632,7 +2644,7 @@ static void fullSyncWithPrimary(connection *conn) {
         /* Send replica lisening port to primary for clarification */
         sds portstr = getReplicaPortString();
         err = sendCommand(conn, "REPLCONF", "capa", "eof", "rdb-only", "1", "rdb-channel", "1", "listening-port",
-                          portstr, NULL);
+                          portstr, "repl-diskless-load", useDisklessLoad() ? "1" : "0", NULL);
         sdsfree(portstr);
         if (err) {
             serverLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", err);
@@ -3424,6 +3436,11 @@ void syncWithPrimary(connection *conn) {
          * Skip REPLCONF ip-address if there is no replica-announce-ip option set. */
         if (server.replica_announce_ip) {
             err = sendCommand(conn, "REPLCONF", "ip-address", server.replica_announce_ip, NULL);
+            if (err) goto write_error;
+        }
+
+        if (useDisklessLoad()) {
+            err = sendCommand(conn, "REPLCONF", "repl-diskless-load", "1", NULL);
             if (err) goto write_error;
         }
 

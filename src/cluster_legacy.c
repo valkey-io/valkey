@@ -6648,6 +6648,11 @@ int clusterCommandSpecial(client *c) {
             return 1;
         }
 
+        if (server.pseudo_replica) {
+            addReplyError(c, "CLUSTER REPLICATE not allowed in pseudo-replica mode.");
+            return 1;
+        }
+
         /* If the instance is currently a primary, it should have no assigned
          * slots nor keys to accept to replicate some other node.
          * Replicas can switch to another primary without issues. */

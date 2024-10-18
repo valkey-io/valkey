@@ -276,7 +276,7 @@ struct standardConfig {
     void *privdata;          /* privdata for this config, for module configs this is a ModuleConfig struct */
 };
 
-dict *configs = NULL; /* Runtime config values */
+static dict *configs = NULL; /* Runtime config values */
 
 /* Lookup a config by the provided sds string name, or return NULL
  * if the config does not exist */
@@ -290,7 +290,7 @@ static standardConfig *lookupConfig(sds name) {
  *----------------------------------------------------------------------------*/
 
 /* Get enum value from name. If there is no match INT_MIN is returned. */
-int configEnumGetValue(configEnum *ce, sds *argv, int argc, int bitflags) {
+static int configEnumGetValue(configEnum *ce, sds *argv, int argc, int bitflags) {
     if (argc == 0 || (!bitflags && argc != 1)) return INT_MIN;
     int values = 0;
     for (int i = 0; i < argc; i++) {

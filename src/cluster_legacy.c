@@ -654,7 +654,7 @@ int clusterLoadConfig(char *filename) {
             } else if (!strcasecmp(s, "handshake")) {
                 n->flags |= CLUSTER_NODE_HANDSHAKE;
             } else if (!strcasecmp(s, "noaddr")) {
-                n->flags |= CLUSTER_NODE_NOADDR;
+                n->flags |= (CLUSTER_NODE_NOADDR | CLUSTER_NODE_FAIL);
             } else if (!strcasecmp(s, "nofailover")) {
                 n->flags |= CLUSTER_NODE_NOFAILOVER;
             } else if (!strcasecmp(s, "noflags")) {
@@ -3250,13 +3250,20 @@ int clusterProcessPacket(clusterLink *link) {
                           "having flags %d",
                           link->node->name, link->node->human_nodename, link->node->shard_id,
                           (int)(now - (link->node->ctime)), link->node->flags);
-                link->node->flags |= CLUSTER_NODE_NOADDR;
+                /* We also mark the node as fail because we have disconnected from it,
+                 * and will not reconnect, and obviously we will not gossip NOADDR nodes.
+                 * Marking it as FAIL can help us advance the state, such as the cluster
+                 * state becomes FAIL or the replica can do the failover. Otherwise, the
+                 * NOADDR node will provide an invalid address in redirection and confuse
+                 * the client, and the replica will not initiate a failover since the node
+                 * is not actually in FAIL state. */
+                link->node->flags |= (CLUSTER_NODE_NOADDR | CLUSTER_NODE_FAIL);
                 link->node->ip[0] = '\0';
                 link->node->tcp_port = 0;
                 link->node->tls_port = 0;
                 link->node->cport = 0;
                 freeClusterLink(link);
-                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
                 return 0;
             }
         }

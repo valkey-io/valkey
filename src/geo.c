@@ -765,7 +765,6 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         }
 
         for (i = 0; i < returned_items; i++) {
-            zskiplistNode *znode;
             geoPoint *gp = ga->array + i;
             gp->dist /= shape.conversion; /* Fix according to unit. */
             double score = storedist ? gp->dist : gp->score;
@@ -773,8 +772,10 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
 
             if (maxelelen < elelen) maxelelen = elelen;
             totelelen += elelen;
-            znode = zslInsert(zs->zsl, score, gp->member);
-            serverAssert(dictAdd(zs->dict, gp->member, &znode->score) == DICT_OK);
+            zslInsert(zs->zsl, score, gp->member);
+            dictEntry *entry = dictAddRaw(zs->dict, gp->member, NULL);
+            serverAssert(entry != NULL);
+            dictSetDoubleVal(entry, score);
             gp->member = NULL;
         }
 

@@ -1,30 +1,3 @@
-/* Copyright (c) 2024-present, Valkey contributors
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *    * Redistributions of source code must retain the above copyright notice,
- *      this list of conditions and the following disclaimer.
- *    * Redistributions in binary form must reproduce the above copyright
- *      notice, this list of conditions and the following disclaimer in the
- *      documentation and/or other materials provided with the distribution.
- *    * Neither the name of the copyright holder nor the names of its
- *      contributors may be used to endorse or promote products derived from
- *      this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
 
 #ifndef HASHSET_H
 #define HASHSET_H
@@ -43,12 +16,13 @@
  * hashset
  *         An instance of the data structure.
  *
- * key
- *         A key used for looking up an element in the hashset.
- *
  * element
  *         An element in the hashset. This may be of the same type as the key,
  *         or a struct containing a key and other fields.
+ * key
+ *         The part of the element used for looking the element up in the hashset. 
+ *         May be the entire element or one of the structs within the element.
+ *
  *
  * type
  *         A struct containing callbacks, such as hash function, key comparison
@@ -80,8 +54,8 @@ typedef struct {
     int (*keyCompare)(hashset *t, const void *key1, const void *key2);
     /* Callback to free an element when it's overwritten or deleted.
      * Optional. */
-    void (*elementDestructor)(hashset *t, void *elem);
-    /* Optional callback to control when resizing should be allowed. */
+    void (*elementDestructor)(hashset *t, void *element);
+    /* Callback to control when resizing should be allowed. */
     int (*resizeAllowed)(size_t moreMem, double usedRatio);
     /* Invoked at the start of rehashing. Both tables are already created. */
     void (*rehashingStarted)(hashset *t);

@@ -72,16 +72,16 @@ static hashsetType keyval_type = {
 
 /* Callback for testing hashsetEmpty(). */
 static long empty_callback_call_counter;
-void emptyCallback(hashset *t) {
-    UNUSED(t);
+void emptyCallback(hashset *s) {
+    UNUSED(s);
     empty_callback_call_counter++;
 }
 
 /* Prototypes for debugging */
-void hashsetDump(hashset *t);
-void hashsetHistogram(hashset *t);
-void hashsetProbeMap(hashset *t);
-int hashsetLongestProbingChain(hashset *t);
+void hashsetDump(hashset *s);
+void hashsetHistogram(hashset *s);
+void hashsetProbeMap(hashset *s);
+int hashsetLongestProbingChain(hashset *s);
 size_t nextCursor(size_t v, size_t mask);
 
 int test_cursor(int argc, char **argv, int flags) {
@@ -105,7 +105,7 @@ int test_set_hash_function_seed(int argc, char **argv, int flags) {
 
 static void add_find_delete_test_helper(int flags) {
     int count = (flags & UNIT_TEST_ACCURATE) ? 1000000 : 200;
-    hashset *t = hashsetCreate(&keyval_type);
+    hashset *s = hashsetCreate(&keyval_type);
     int j;
 
     /* Add */
@@ -114,12 +114,12 @@ static void add_find_delete_test_helper(int flags) {
         snprintf(key, sizeof(key), "%d", j);
         snprintf(val, sizeof(val), "%d", count - j + 42);
         keyval *e = create_keyval(key, val);
-        assert(hashsetAdd(t, e));
+        assert(hashsetAdd(s, e));
     }
 
     if (count < 1000) {
         printf("Bucket fill: ");
-        hashsetHistogram(t);
+        hashsetHistogram(s);
     }
 
     /* Find */
@@ -128,7 +128,7 @@ static void add_find_delete_test_helper(int flags) {
         snprintf(key, sizeof(key), "%d", j);
         snprintf(val, sizeof(val), "%d", count - j + 42);
         keyval *e;
-        assert(hashsetFind(t, key, (void **)&e));
+        assert(hashsetFind(s, key, (void **)&e));
         assert(!strcmp(val, getval(e)));
     }
 
@@ -141,21 +141,21 @@ static void add_find_delete_test_helper(int flags) {
             char val[32];
             snprintf(val, sizeof(val), "%d", count - j + 42);
             keyval *e;
-            assert(hashsetPop(t, key, (void **)&e));
+            assert(hashsetPop(s, key, (void **)&e));
             assert(!strcmp(val, getval(e)));
             free(e);
         } else {
-            assert(hashsetDelete(t, key));
+            assert(hashsetDelete(s, key));
         }
     }
 
     /* Empty, i.e. delete remaining elements, with progress callback. */
     empty_callback_call_counter = 0;
-    hashsetEmpty(t, emptyCallback);
+    hashsetEmpty(s, emptyCallback);
     assert(empty_callback_call_counter > 0);
 
     /* Release memory */
-    hashsetRelease(t);
+    hashsetRelease(s);
 }
 
 int test_add_find_delete(int argc, char **argv, int flags) {
@@ -183,22 +183,22 @@ int test_instant_rehashing(int argc, char **argv, int flags) {
 
     /* A set of longs, i.e. pointer-sized values. */
     hashsetType type = {.instant_rehashing = 1};
-    hashset *t = hashsetCreate(&type);
+    hashset *s = hashsetCreate(&type);
     long j;
 
     /* Populate and check that rehashing is never ongoing. */
     for (j = 0; j < count; j++) {
-        assert(hashsetAdd(t, (void *)j));
-        assert(!hashsetIsRehashing(t));
+        assert(hashsetAdd(s, (void *)j));
+        assert(!hashsetIsRehashing(s));
     }
 
     /* Delete and check that rehashing is never ongoing. */
     for (j = 0; j < count; j++) {
-        assert(hashsetDelete(t, (void *)j));
-        assert(!hashsetIsRehashing(t));
+        assert(hashsetDelete(s, (void *)j));
+        assert(!hashsetIsRehashing(s));
     }
 
-    hashsetRelease(t);
+    hashsetRelease(s);
     return 0;
 }
 
@@ -212,30 +212,30 @@ int test_probing_chain_length(int argc, char **argv, int flags) {
 
     /* A set of longs, i.e. pointer-sized integer values. */
     hashsetType type = {0};
-    hashset *t = hashsetCreate(&type);
+    hashset *s = hashsetCreate(&type);
     unsigned long j;
     for (j = 0; j < count; j++) {
-        assert(hashsetAdd(t, (void *)j));
+        assert(hashsetAdd(s, (void *)j));
     }
     /* If it's rehashing, add a few more until rehashing is complete. */
-    while (hashsetIsRehashing(t)) {
+    while (hashsetIsRehashing(s)) {
         j++;
-        assert(hashsetAdd(t, (void *)j));
+        assert(hashsetAdd(s, (void *)j));
     }
     TEST_ASSERT(j < count * 2);
-    int max_chainlen_not_rehashing = hashsetLongestProbingChain(t);
+    int max_chainlen_not_rehashing = hashsetLongestProbingChain(s);
     TEST_ASSERT(max_chainlen_not_rehashing < 100);
 
     /* Add more until rehashing starts again. */
-    while (!hashsetIsRehashing(t)) {
+    while (!hashsetIsRehashing(s)) {
         j++;
-        assert(hashsetAdd(t, (void *)j));
+        assert(hashsetAdd(s, (void *)j));
     }
     TEST_ASSERT(j < count * 2);
-    int max_chainlen_rehashing = hashsetLongestProbingChain(t);
+    int max_chainlen_rehashing = hashsetLongestProbingChain(s);
     TEST_ASSERT(max_chainlen_rehashing < 100);
 
-    hashsetRelease(t);
+    hashsetRelease(s);
     return 0;
 }
 
@@ -245,7 +245,7 @@ int test_two_phase_insert_and_pop(int argc, char **argv, int flags) {
     UNUSED(flags);
 
     int count = (flags & UNIT_TEST_ACCURATE) ? 1000000 : 200;
-    hashset *t = hashsetCreate(&keyval_type);
+    hashset *s = hashsetCreate(&keyval_type);
     int j;
 
     /* hashsetFindPositionForInsert + hashsetInsertAtPosition */
@@ -253,15 +253,15 @@ int test_two_phase_insert_and_pop(int argc, char **argv, int flags) {
         char key[32], val[32];
         snprintf(key, sizeof(key), "%d", j);
         snprintf(val, sizeof(val), "%d", count - j + 42);
-        void *position = hashsetFindPositionForInsert(t, key, NULL);
+        void *position = hashsetFindPositionForInsert(s, key, NULL);
         assert(position != NULL);
         keyval *e = create_keyval(key, val);
-        hashsetInsertAtPosition(t, e, position);
+        hashsetInsertAtPosition(s, e, position);
     }
 
     if (count < 1000) {
         printf("Bucket fill: ");
-        hashsetHistogram(t);
+        hashsetHistogram(s);
     }
 
     /* Check that all elements were inserted. */
@@ -270,7 +270,7 @@ int test_two_phase_insert_and_pop(int argc, char **argv, int flags) {
         snprintf(key, sizeof(key), "%d", j);
         snprintf(val, sizeof(val), "%d", count - j + 42);
         keyval *e;
-        assert(hashsetFind(t, key, (void **)&e));
+        assert(hashsetFind(s, key, (void **)&e));
         assert(!strcmp(val, getval(e)));
     }
 
@@ -280,18 +280,18 @@ int test_two_phase_insert_and_pop(int argc, char **argv, int flags) {
         snprintf(key, sizeof(key), "%d", j);
         snprintf(val, sizeof(val), "%d", count - j + 42);
         void *position;
-        size_t size_before_find = hashsetSize(t);
-        void **ref = hashsetTwoPhasePopFindRef(t, key, &position);
+        size_t size_before_find = hashsetSize(s);
+        void **ref = hashsetTwoPhasePopFindRef(s, key, &position);
         assert(ref != NULL);
         keyval *e = *ref;
         assert(!strcmp(val, getval(e)));
-        assert(hashsetSize(t) == size_before_find);
-        hashsetTwoPhasePopDelete(t, position);
-        assert(hashsetSize(t) == size_before_find - 1);
+        assert(hashsetSize(s) == size_before_find);
+        hashsetTwoPhasePopDelete(s, position);
+        assert(hashsetSize(s) == size_before_find - 1);
     }
-    assert(hashsetSize(t) == 0);
+    assert(hashsetSize(s) == 0);
 
-    hashsetRelease(t);
+    hashsetRelease(s);
     return 0;
 }
 
@@ -327,9 +327,9 @@ int test_scan(int argc, char **argv, int flags) {
         randomSeed();
 
         /* Populate */
-        hashset *t = hashsetCreate(&type);
+        hashset *s = hashsetCreate(&type);
         for (j = 0; j < count; j++) {
-            assert(hashsetAdd(t, (void *)j));
+            assert(hashsetAdd(s, (void *)j));
         }
 
         /* Scan */
@@ -340,7 +340,7 @@ int test_scan(int argc, char **argv, int flags) {
         size_t cursor = 0;
         do {
             data->count = 0;
-            cursor = hashsetScan(t, cursor, scanfn, data, 0);
+            cursor = hashsetScan(s, cursor, scanfn, data, 0);
             if (data->count > max_elements_per_cycle) {
                 max_elements_per_cycle = data->count;
             }
@@ -366,7 +366,7 @@ int test_scan(int argc, char **argv, int flags) {
         printf("avg emitted per call: %.2lf\n", (double)count / num_cycles);
 
         /* Cleanup */
-        hashsetRelease(t);
+        hashsetRelease(s);
         free(data);
     }
     return 0;
@@ -381,12 +381,12 @@ int test_iterator(int argc, char **argv, int flags) {
 
     /* A set of longs, i.e. pointer-sized values. */
     hashsetType type = {0};
-    hashset *t = hashsetCreate(&type);
+    hashset *s = hashsetCreate(&type);
     long j;
 
     /* Populate */
     for (j = 0; j < count; j++) {
-        assert(hashsetAdd(t, (void *)j));
+        assert(hashsetAdd(s, (void *)j));
     }
 
     /* Iterate */
@@ -394,7 +394,7 @@ int test_iterator(int argc, char **argv, int flags) {
     memset(element_returned, 0, sizeof element_returned);
     long num_returned = 0;
     hashsetIterator iter;
-    hashsetInitIterator(&iter, t);
+    hashsetInitIterator(&iter, s);
     while (hashsetNext(&iter, (void **)&j)) {
         num_returned++;
         assert(j >= 0 && j < count);
@@ -411,7 +411,7 @@ int test_iterator(int argc, char **argv, int flags) {
         }
     }
 
-    hashsetRelease(t);
+    hashsetRelease(s);
     return 0;
 }
 
@@ -424,12 +424,12 @@ int test_safe_iterator(int argc, char **argv, int flags) {
 
     /* A set of longs, i.e. pointer-sized values. */
     hashsetType type = {0};
-    hashset *t = hashsetCreate(&type);
+    hashset *s = hashsetCreate(&type);
     long j;
 
     /* Populate */
     for (j = 0; j < count; j++) {
-        assert(hashsetAdd(t, (void *)j));
+        assert(hashsetAdd(s, (void *)j));
     }
 
     /* Iterate */
@@ -437,24 +437,24 @@ int test_safe_iterator(int argc, char **argv, int flags) {
     memset(element_returned, 0, sizeof element_returned);
     long num_returned = 0;
     hashsetIterator iter;
-    hashsetInitSafeIterator(&iter, t);
+    hashsetInitSafeIterator(&iter, s);
     while (hashsetNext(&iter, (void **)&j)) {
         num_returned++;
         if (j < 0 || j >= count * 2) {
             printf("Element %ld returned, max == %ld. Num returned: %ld\n", j, count * 2 - 1, num_returned);
             printf("Safe %d, table %d, index %lu, pos in bucket %d, rehashing? %d\n", iter.safe, iter.table, iter.index,
-                   iter.posInBucket, !hashsetIsRehashing(t));
-            hashsetHistogram(t);
+                   iter.posInBucket, !hashsetIsRehashing(s));
+            hashsetHistogram(s);
             exit(1);
         }
         assert(j >= 0 && j < count * 2);
         element_returned[j]++;
         if (j % 4 == 0) {
-            assert(hashsetDelete(t, (void *)j));
+            assert(hashsetDelete(s, (void *)j));
         }
         /* Add elements x if count <= x < count * 2) */
         if (j < count) {
-            assert(hashsetAdd(t, (void *)(j + count)));
+            assert(hashsetAdd(s, (void *)(j + count)));
         }
     }
     hashsetResetIterator(&iter);
@@ -477,7 +477,7 @@ int test_safe_iterator(int argc, char **argv, int flags) {
     }
     printf("Safe iterator returned %lu of the %lu elements inserted while iterating.\n", num_optional_returned, count);
 
-    hashsetRelease(t);
+    hashsetRelease(s);
     return 0;
 }
 
@@ -492,11 +492,11 @@ int test_random_element(int argc, char **argv, int flags) {
 
     /* A set of longs, i.e. pointer-sized values. */
     hashsetType type = {0};
-    hashset *t = hashsetCreate(&type);
+    hashset *s = hashsetCreate(&type);
 
     /* Populate */
     for (long j = 0; j < count; j++) {
-        assert(hashsetAdd(t, (void *)j));
+        assert(hashsetAdd(s, (void *)j));
     }
 
     /* Pick elements, and count how many times each element is picked. */
@@ -504,11 +504,11 @@ int test_random_element(int argc, char **argv, int flags) {
     memset(times_picked, 0, sizeof(times_picked));
     for (long i = 0; i < num_rounds; i++) {
         long element;
-        assert(hashsetFairRandomElement(t, (void **)&element));
+        assert(hashsetFairRandomElement(s, (void **)&element));
         assert(element >= 0 && element < count);
         times_picked[element]++;
     }
-    hashsetRelease(t);
+    hashsetRelease(s);
 
     /* Fairness measurement
      * --------------------
@@ -593,11 +593,11 @@ int test_full_probe(int argc, char **argv, int flags) {
 
     /* A set of longs, i.e. pointer-sized values. */
     hashsetType type = {0};
-    hashset *t = hashsetCreate(&type);
+    hashset *s = hashsetCreate(&type);
 
     /* Populate */
     for (long j = 0; j < count; j++) {
-        assert(hashsetAdd(t, (void *)j));
+        assert(hashsetAdd(s, (void *)j));
     }
 
     /* Scan and delete (simulates eviction), then add some more, repeat. */
@@ -607,24 +607,24 @@ int test_full_probe(int argc, char **argv, int flags) {
     data->capacity = max_samples;
 
     for (int r = 0; r < num_rounds; r++) {
-        size_t probes = hashsetProbeCounter(t, 0);
-        size_t buckets = hashsetBuckets(t);
+        size_t probes = hashsetProbeCounter(s, 0);
+        size_t buckets = hashsetBuckets(s);
         assert(probes < buckets);
 
         /* Empty the next buckets. */
         data->count = 0;
-        cursor = hashsetScan(t, cursor, sample_scanfn, data, HASHSET_SCAN_SINGLE_STEP);
+        cursor = hashsetScan(s, cursor, sample_scanfn, data, HASHSET_SCAN_SINGLE_STEP);
         long n = data->count;
         for (long i = 0; i < n; i++) {
-            int deleted = hashsetDelete(t, (void *)data->elements[i]);
+            int deleted = hashsetDelete(s, (void *)data->elements[i]);
             if (!deleted) n--; /* Duplicate retuned by scan. */
         }
 
         /* Add the same number of elements back */
         while (n > 0) {
-            n -= hashsetAdd(t, (void *)random());
+            n -= hashsetAdd(s, (void *)random());
         }
     }
-    hashsetRelease(t);
+    hashsetRelease(s);
     return 0;
 }

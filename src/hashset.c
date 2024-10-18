@@ -285,38 +285,38 @@ typedef struct {
 
 /* --- Internal functions --- */
 
-static bucket *findBucketForInsert(hashset *t, uint64_t hash, int *pos_in_bucket, int *table_index);
+static bucket *findBucketForInsert(hashset *s, uint64_t hash, int *pos_in_bucket, int *table_index);
 
-static inline void freeElement(hashset *t, void *elem) {
-    if (t->type->elementDestructor) t->type->elementDestructor(t, elem);
+static inline void freeElement(hashset *s, void *element) {
+    if (s->type->elementDestructor) s->type->elementDestructor(s, element);
 }
 
-static inline int compareKeys(hashset *t, const void *key1, const void *key2) {
-    if (t->type->keyCompare != NULL) {
-        return t->type->keyCompare(t, key1, key2);
+static inline int compareKeys(hashset *s, const void *key1, const void *key2) {
+    if (s->type->keyCompare != NULL) {
+        return s->type->keyCompare(s, key1, key2);
     } else {
         return key1 != key2;
     }
 }
 
-static inline const void *elementGetKey(hashset *t, const void *elem) {
-    if (t->type->elementGetKey != NULL) {
-        return t->type->elementGetKey(elem);
+static inline const void *elementGetKey(hashset *s, const void *element) {
+    if (s->type->elementGetKey != NULL) {
+        return s->type->elementGetKey(element);
     } else {
         return elem;
     }
 }
 
-static inline uint64_t hashKey(hashset *t, const void *key) {
-    if (t->type->hashFunction != NULL) {
-        return t->type->hashFunction(key);
+static inline uint64_t hashKey(hashset *s, const void *key) {
+    if (s->type->hashFunction != NULL) {
+        return s->type->hashFunction(key);
     } else {
         return hashsetGenHashFunction((const char *)&key, sizeof(key));
     }
 }
 
-static inline uint64_t hashElement(hashset *t, const void *elem) {
-    return hashKey(t, elementGetKey(t, elem));
+static inline uint64_t hashElement(hashset *s, const void *element) {
+    return hashKey(s, elementGetKey(s, element));
 }
 
 
@@ -330,11 +330,11 @@ static inline int bucketIsFull(bucket *b) {
     return b->presence == (1 << ELEMENTS_PER_BUCKET) - 1;
 }
 
-static void resetTable(hashset *t, int table_idx) {
-    t->tables[table_idx] = NULL;
-    t->used[table_idx] = 0;
-    t->bucketExp[table_idx] = -1;
-    t->everfulls[table_idx] = 0;
+static void resetTable(hashset *s, int table_idx) {
+    s->tables[table_idx] = NULL;
+    s->used[table_idx] = 0;
+    s->bucketExp[table_idx] = -1;
+    s->everfulls[table_idx] = 0;
 }
 
 static inline size_t numBuckets(int exp) {
@@ -358,15 +358,15 @@ static signed char nextBucketExp(size_t min_capacity) {
 }
 
 /* Swaps the tables and frees the old table. */
-static void rehashingCompleted(hashset *t) {
-    if (t->type->rehashingCompleted) t->type->rehashingCompleted(t);
-    if (t->tables[0]) zfree(t->tables[0]);
-    t->bucketExp[0] = t->bucketExp[1];
-    t->tables[0] = t->tables[1];
-    t->used[0] = t->used[1];
-    t->everfulls[0] = t->everfulls[1];
-    resetTable(t, 1);
-    t->rehashIdx = -1;
+static void rehashingCompleted(hashset *s) {
+    if (s->type->rehashingCompleted) s->type->rehashingCompleted(s);
+    if (s->tables[0]) zfree(s->tables[0]);
+    s->bucketExp[0] = s->bucketExp[1];
+    s->tables[0] = s->tables[1];
+    s->used[0] = s->used[1];
+    s->everfulls[0] = s->everfulls[1];
+    resetTable(s, 1);
+    s->rehashIdx = -1;
 }
 
 /* Reverse bits, adapted to use bswap, from
@@ -426,14 +426,14 @@ static inline int cursorIsLessThan(size_t a, size_t b) {
 }
 
 /* Rehashes one bucket. */
-static void rehashStep(hashset *t) {
-    assert(hashsetIsRehashing(t));
-    size_t idx = t->rehashIdx;
-    bucket *b = &t->tables[0][idx];
+static void rehashStep(hashset *s) {
+    assert(hashsetIsRehashing(s));
+    size_t idx = s->rehashIdx;
+    bucket *b = &s->tables[0][idx];
     int pos;
     for (pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
         if (!(b->presence & (1 << pos))) continue; /* empty */
-        void *elem = b->elements[pos];
+        void *element = b->elements[pos];
         uint8_t h2 = b->hashes[pos];
         /* Insert into table 1. */
         uint64_t hash;
@@ -441,22 +441,22 @@ static void rehashStep(hashset *t) {
          * just use idx has the hash, but only if we know that probing didn't
          * push this element away from its primary bucket, so only if the
          * bucket before the current one hasn't ever been full. */
-        if (t->bucketExp[1] < t->bucketExp[0] && !t->tables[0][prevCursor(idx, expToMask(t->bucketExp[0]))].everfull) {
+        if (s->bucketExp[1] < s->bucketExp[0] && !s->tables[0][prevCursor(idx, expToMask(s->bucketExp[0]))].everfull) {
             hash = idx;
         } else {
-            hash = hashElement(t, elem);
+            hash = hashElement(s, element);
         }
         int pos_in_dst_bucket;
-        bucket *dst = findBucketForInsert(t, hash, &pos_in_dst_bucket, NULL);
+        bucket *dst = findBucketForInsert(s, hash, &pos_in_dst_bucket, NULL);
         dst->elements[pos_in_dst_bucket] = elem;
         dst->hashes[pos_in_dst_bucket] = h2;
         dst->presence |= (1 << pos_in_dst_bucket);
         if (!dst->everfull && bucketIsFull(dst)) {
             dst->everfull = 1;
-            t->everfulls[1]++;
+            s->everfulls[1]++;
         }
-        t->used[0]--;
-        t->used[1]++;
+        s->used[0]--;
+        s->used[1]++;
     }
     /* Mark the source bucket as empty. */
     b->presence = 0;
@@ -464,34 +464,34 @@ static void rehashStep(hashset *t) {
      * complete probing chains. Other alternatives are (1) just rehashIdx++ or
      * (2) in reverse scan order and clear the tombstones while doing so.
      * (Alternative is to do rehashIdx++.) */
-    t->rehashIdx = nextCursor(t->rehashIdx, expToMask(t->bucketExp[0]));
-    if (t->rehashIdx == 0) {
-        rehashingCompleted(t);
+    s->rehashIdx = nextCursor(s->rehashIdx, expToMask(s->bucketExp[0]));
+    if (s->rehashIdx == 0) {
+        rehashingCompleted(s);
     }
 }
 
 /* Called internally on lookup and other reads to the table. */
-static inline void rehashStepOnReadIfNeeded(hashset *t) {
-    if (!hashsetIsRehashing(t) || t->pauseRehash) return;
+static inline void rehashStepOnReadIfNeeded(hashset *s) {
+    if (!hashsetIsRehashing(s) || s->pauseRehash) return;
     if (resize_policy != HASHSET_RESIZE_ALLOW) return;
-    rehashStep(t);
+    rehashStep(s);
 }
 
 /* When inserting or deleting, we first do a find (read) and rehash one step if
  * resize policy is set to ALLOW, so here we only do it if resize policy is
  * AVOID. The reason for doing it on insert and delete is to ensure that we
  * finish rehashing before we need to resize the table again. */
-static inline void rehashStepOnWriteIfNeeded(hashset *t) {
-    if (!hashsetIsRehashing(t) || t->pauseRehash) return;
+static inline void rehashStepOnWriteIfNeeded(hashset *s) {
+    if (!hashsetIsRehashing(s) || s->pauseRehash) return;
     if (resize_policy != HASHSET_RESIZE_AVOID) return;
-    rehashStep(t);
+    rehashStep(s);
 }
 
 /* Allocates a new table and initiates incremental rehashing if necessary.
  * Returns 1 on resize (success), 0 on no resize (failure). If 0 is returned and
  * 'malloc_failed' is provided, it is set to 1 if allocation failed. If
  * 'malloc_failed' is not provided, an allocation failure triggers a panic. */
-static int resize(hashset *t, size_t min_capacity, int *malloc_failed) {
+static int resize(hashset *s, size_t min_capacity, int *malloc_failed) {
     if (malloc_failed) *malloc_failed = 0;
 
     /* Adjust minimum size. We don't resize to zero currently. */
@@ -506,19 +506,19 @@ static int resize(hashset *t, size_t min_capacity, int *malloc_failed) {
         return 0;
     }
 
-    signed char old_exp = t->bucketExp[hashsetIsRehashing(t) ? 1 : 0];
+    signed char old_exp = s->bucketExp[hashsetIsRehashing(s) ? 1 : 0];
     size_t alloc_size = num_buckets * sizeof(bucket);
     if (exp == old_exp) {
         /* The only time we want to allow resize to the same size is when we
          * have too many tombstones and need to rehash to improve probing
          * performance. */
-        if (hashsetIsRehashing(t)) return 0;
-        size_t old_num_buckets = numBuckets(t->bucketExp[0]);
-        if (t->everfulls[0] < old_num_buckets / 2) return 0;
-        if (t->everfulls[0] != old_num_buckets && t->everfulls[0] < 10) return 0;
-    } else if (t->type->resizeAllowed) {
+        if (hashsetIsRehashing(s)) return 0;
+        size_t old_num_buckets = numBuckets(s->bucketExp[0]);
+        if (s->everfulls[0] < old_num_buckets / 2) return 0;
+        if (s->everfulls[0] != old_num_buckets && s->everfulls[0] < 10) return 0;
+    } else if (s->type->resizeAllowed) {
         double fill_factor = (double)min_capacity / ((double)numBuckets(old_exp) * ELEMENTS_PER_BUCKET);
-        if (fill_factor * 100 < MAX_FILL_PERCENT_HARD && !t->type->resizeAllowed(alloc_size, fill_factor)) {
+        if (fill_factor * 100 < MAX_FILL_PERCENT_HARD && !s->type->resizeAllowed(alloc_size, fill_factor)) {
             /* Resize callback says no. */
             return 0;
         }
@@ -526,8 +526,8 @@ static int resize(hashset *t, size_t min_capacity, int *malloc_failed) {
 
     /* We can't resize if rehashing is already ongoing. Fast-forward ongoing
      * rehashing before we continue. */
-    while (hashsetIsRehashing(t)) {
-        rehashStep(t);
+    while (hashsetIsRehashing(s)) {
+        rehashStep(s);
     }
 
     /* Allocate the new hash table. */
@@ -541,18 +541,18 @@ static int resize(hashset *t, size_t min_capacity, int *malloc_failed) {
     } else {
         new_table = zcalloc(alloc_size);
     }
-    t->bucketExp[1] = exp;
-    t->tables[1] = new_table;
-    t->used[1] = 0;
-    t->rehashIdx = 0;
-    if (t->type->rehashingStarted) t->type->rehashingStarted(t);
+    s->bucketExp[1] = exp;
+    s->tables[1] = new_table;
+    s->used[1] = 0;
+    s->rehashIdx = 0;
+    if (s->type->rehashingStarted) s->type->rehashingStarted(s);
 
     /* If the old table was empty, the rehashing is completed immediately. */
-    if (t->tables[0] == NULL || t->used[0] == 0) {
-        rehashingCompleted(t);
-    } else if (t->type->instant_rehashing) {
-        while (hashsetIsRehashing(t)) {
-            rehashStep(t);
+    if (s->tables[0] == NULL || s->used[0] == 0) {
+        rehashingCompleted(s);
+    } else if (s->type->instant_rehashing) {
+        while (hashsetIsRehashing(s)) {
+            rehashStep(s);
         }
     }
     return 1;
@@ -560,12 +560,12 @@ static int resize(hashset *t, size_t min_capacity, int *malloc_failed) {
 
 /* Probing is slow when there are too many tombstones. Resize to the same size
  * to trigger rehashing and cleaning up tombstones. */
-static int cleanUpTombstonesIfNeeded(hashset *t) {
-    if (hashsetIsRehashing(t) || resize_policy == HASHSET_RESIZE_FORBID) {
+static int cleanUpTombstonesIfNeeded(hashset *s) {
+    if (hashsetIsRehashing(s) || resize_policy == HASHSET_RESIZE_FORBID) {
         return 0;
     }
-    if (t->everfulls[0] * 100 >= numBuckets(t->bucketExp[0]) * MAX_FILL_PERCENT_SOFT) {
-        return resize(t, t->used[0], NULL);
+    if (s->everfulls[0] * 100 >= numBuckets(s->bucketExp[0]) * MAX_FILL_PERCENT_SOFT) {
+        return resize(s, s->used[0], NULL);
     }
     return 0;
 }
@@ -573,11 +573,11 @@ static int cleanUpTombstonesIfNeeded(hashset *t) {
 /* Returns 1 if the table is expanded, 0 if not expanded. If 0 is returned and
  * 'malloc_failed' is proveded, it is set to 1 if malloc failed and 0
  * otherwise. */
-static int expand(hashset *t, size_t size, int *malloc_failed) {
-    if (size < hashsetSize(t)) {
+static int expand(hashset *s, size_t size, int *malloc_failed) {
+    if (size < hashsetSize(s)) {
         return 0;
     }
-    return resize(t, size, malloc_failed);
+    return resize(s, size, malloc_failed);
 }
 
 /* Finds an element matching the key. If a match is found, returns a pointer to
@@ -586,31 +586,31 @@ static int expand(hashset *t, size_t size, int *malloc_failed) {
  *
  * If 'table_index' is provided, it is set to the index of the table (0 or 1)
  * the returned bucket belongs to. */
-static bucket *findBucket(hashset *t, uint64_t hash, const void *key, int *pos_in_bucket, int *table_index) {
-    if (hashsetSize(t) == 0) return 0;
+static bucket *findBucket(hashset *s, uint64_t hash, const void *key, int *pos_in_bucket, int *table_index) {
+    if (hashsetSize(s) == 0) return 0;
     uint8_t h2 = highBits(hash);
     int table;
 
     /* Do some incremental rehashing. */
-    rehashStepOnReadIfNeeded(t);
+    rehashStepOnReadIfNeeded(s);
 
     /* Check rehashing destination table first, since it is newer and typically
      * has less 'everfull' flagged buckets. Therefore it needs less probing for
      * lookup. */
     for (table = 1; table >= 0; table--) {
-        if (t->used[table] == 0) continue;
-        size_t mask = expToMask(t->bucketExp[table]);
+        if (s->used[table] == 0) continue;
+        size_t mask = expToMask(s->bucketExp[table]);
         size_t bucket_idx = hash & mask;
         size_t start_bucket_idx = bucket_idx;
         while (1) {
-            bucket *b = &t->tables[table][bucket_idx];
+            bucket *b = &s->tables[table][bucket_idx];
             /* Find candidate elements with presence flag set and matching h2 hash. */
             for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
                 if ((b->presence & (1 << pos)) && b->hashes[pos] == h2) {
                     /* It's a candidate. */
-                    void *elem = b->elements[pos];
-                    const void *elem_key = elementGetKey(t, elem);
-                    if (compareKeys(t, key, elem_key) == 0) {
+                    void *element = b->elements[pos];
+                    const void *elem_key = elementGetKey(s, element);
+                    if (compareKeys(s, key, elem_key) == 0) {
                         /* It's a match. */
                         if (pos_in_bucket) *pos_in_bucket = pos;
                         if (table_index) *table_index = table;
@@ -633,13 +633,13 @@ static bucket *findBucket(hashset *t, uint64_t hash, const void *key, int *pos_i
 }
 
 /* Find an empty position in the table for inserting an element with the given hash. */
-static bucket *findBucketForInsert(hashset *t, uint64_t hash, int *pos_in_bucket, int *table_index) {
-    int table = hashsetIsRehashing(t) ? 1 : 0;
-    assert(t->tables[table]);
-    size_t mask = expToMask(t->bucketExp[table]);
+static bucket *findBucketForInsert(hashset *s, uint64_t hash, int *pos_in_bucket, int *table_index) {
+    int table = hashsetIsRehashing(s) ? 1 : 0;
+    assert(s->tables[table]);
+    size_t mask = expToMask(s->bucketExp[table]);
     size_t bucket_idx = hash & mask;
     while (1) {
-        bucket *b = &t->tables[table][bucket_idx];
+        bucket *b = &s->tables[table][bucket_idx];
         for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
             if (b->presence & (1 << pos)) continue; /* busy */
             if (pos_in_bucket) *pos_in_bucket = pos;
@@ -674,32 +674,32 @@ static void decodePositionInTable(void *encoded_position, size_t *bucket_index, 
 
 /* Helper to insert an element. Doesn't check if an element with a matching key
  * already exists. This must be ensured by the caller. */
-static void insert(hashset *t, uint64_t hash, void *elem) {
-    hashsetExpandIfNeeded(t);
-    rehashStepOnWriteIfNeeded(t);
+static void insert(hashset *s, uint64_t hash, void *element) {
+    hashsetExpandIfNeeded(s);
+    rehashStepOnWriteIfNeeded(s);
     int pos_in_bucket;
     int table_index;
-    bucket *b = findBucketForInsert(t, hash, &pos_in_bucket, &table_index);
+    bucket *b = findBucketForInsert(s, hash, &pos_in_bucket, &table_index);
     b->elements[pos_in_bucket] = elem;
     b->presence |= (1 << pos_in_bucket);
     b->hashes[pos_in_bucket] = highBits(hash);
-    t->used[table_index]++;
+    s->used[table_index]++;
     if (!b->everfull && bucketIsFull(b)) {
         b->everfull = 1;
-        t->everfulls[table_index]++;
-        cleanUpTombstonesIfNeeded(t);
+        s->everfulls[table_index]++;
+        cleanUpTombstonesIfNeeded(s);
     }
 }
 
 /* A fingerprint of some of the state of the hash table. */
-static uint64_t hashsetFingerprint(hashset *t) {
+static uint64_t hashsetFingerprint(hashset *s) {
     uint64_t integers[6], hash = 0;
-    integers[0] = (uintptr_t)t->tables[0];
-    integers[1] = t->bucketExp[0];
-    integers[2] = t->used[0];
-    integers[3] = (uintptr_t)t->tables[1];
-    integers[4] = t->bucketExp[1];
-    integers[5] = t->used[1];
+    integers[0] = (uintptr_t)s->tables[0];
+    integers[1] = s->bucketExp[0];
+    integers[2] = s->used[0];
+    integers[3] = (uintptr_t)s->tables[1];
+    integers[4] = s->bucketExp[1];
+    integers[5] = s->used[1];
 
     /* Result = hash(hash(hash(int1)+int2)+int3) */
     for (int j = 0; j < 6; j++) {
@@ -730,135 +730,135 @@ static void sampleElementsScanFn(void *privdata, void *element) {
 /* Allocates and initializes a new hashtable specified by the given type. */
 hashset *hashsetCreate(hashsetType *type) {
     size_t metasize = type->getMetadataSize ? type->getMetadataSize() : 0;
-    hashset *t = zmalloc(sizeof(*t) + metasize);
+    hashset *s = zmalloc(sizeof(*s) + metasize);
     if (metasize > 0) {
-        memset(&t->metadata, 0, metasize);
+        memset(&s->metadata, 0, metasize);
     }
-    t->type = type;
-    t->rehashIdx = -1;
-    t->pauseRehash = 0;
-    t->pauseAutoShrink = 0;
-    resetTable(t, 0);
-    resetTable(t, 1);
-    return t;
+    s->type = type;
+    s->rehashIdx = -1;
+    s->pauseRehash = 0;
+    s->pauseAutoShrink = 0;
+    resetTable(s, 0);
+    resetTable(s, 1);
+    return s;
 }
 
 /* Deletes all the elements. If a callback is provided, it is called from time
  * to time to indicate progress. */
-void hashsetEmpty(hashset *t, void(callback)(hashset *)) {
-    if (hashsetIsRehashing(t)) {
+void hashsetEmpty(hashset *s, void(callback)(hashset *)) {
+    if (hashsetIsRehashing(s)) {
         /* Pretend rehashing completed. */
-        if (t->type->rehashingCompleted) t->type->rehashingCompleted(t);
-        t->rehashIdx = -1;
+        if (s->type->rehashingCompleted) s->type->rehashingCompleted(s);
+        s->rehashIdx = -1;
     }
     for (int table_index = 0; table_index <= 1; table_index++) {
-        if (t->bucketExp[table_index] < 0) {
+        if (s->bucketExp[table_index] < 0) {
             continue;
         }
-        if (t->type->elementDestructor) {
+        if (s->type->elementDestructor) {
             /* Call the destructor with each element. */
-            for (size_t idx = 0; idx < numBuckets(t->bucketExp[table_index]); idx++) {
-                if (callback && (idx & 65535) == 0) callback(t);
-                bucket *b = &t->tables[table_index][idx];
+            for (size_t idx = 0; idx < numBuckets(s->bucketExp[table_index]); idx++) {
+                if (callback && (idx & 65535) == 0) callback(s);
+                bucket *b = &s->tables[table_index][idx];
                 if (b->presence == 0) {
                     continue;
                 }
                 for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
                     if (b->presence & (1 << pos)) {
-                        t->type->elementDestructor(t, b->elements[pos]);
+                        s->type->elementDestructor(s, b->elements[pos]);
                     }
                 }
             }
         }
-        zfree(t->tables[table_index]);
-        resetTable(t, table_index);
+        zfree(s->tables[table_index]);
+        resetTable(s, table_index);
     }
 }
 
 /* Deletes all the elements and frees the table. */
-void hashsetRelease(hashset *t) {
-    hashsetEmpty(t, NULL);
-    zfree(t);
+void hashsetRelease(hashset *s) {
+    hashsetEmpty(s, NULL);
+    zfree(s);
 }
 
 /* Returns the type of the hashtable. */
-hashsetType *hashsetGetType(hashset *t) {
-    return t->type;
+hashsetType *hashsetGetType(hashset *s) {
+    return s->type;
 }
 
 /* Returns a pointer to the table's metadata (userdata) section. */
-void *hashsetMetadata(hashset *t) {
-    return &t->metadata;
+void *hashsetMetadata(hashset *s) {
+    return &s->metadata;
 }
 
 /* Returns the number of elements stored. */
-size_t hashsetSize(hashset *t) {
-    return t->used[0] + t->used[1];
+size_t hashsetSize(hashset *s) {
+    return s->used[0] + s->used[1];
 }
 
 /* Returns the number of hash table buckets. */
-size_t hashsetBuckets(hashset *t) {
-    return numBuckets(t->bucketExp[0]) + numBuckets(t->bucketExp[1]);
+size_t hashsetBuckets(hashset *s) {
+    return numBuckets(s->bucketExp[0]) + numBuckets(s->bucketExp[1]);
 }
 
 /* Returns the number of buckets that have the probe flag (tombstone) set. */
-size_t hashsetProbeCounter(hashset *t, int table) {
-    return t->everfulls[table];
+size_t hashsetProbeCounter(hashset *s, int table) {
+    return s->everfulls[table];
 }
 
 /* Returns the size of the hashset structures, in bytes (not including the sizes
  * of the elements, if the elements are pointers to allocated objects). */
-size_t hashsetMemUsage(hashset *t) {
-    size_t num_buckets = numBuckets(t->bucketExp[0]) + numBuckets(t->bucketExp[1]);
-    size_t metasize = t->type->getMetadataSize ? t->type->getMetadataSize() : 0;
+size_t hashsetMemUsage(hashset *s) {
+    size_t num_buckets = numBuckets(s->bucketExp[0]) + numBuckets(s->bucketExp[1]);
+    size_t metasize = s->type->getMetadataSize ? s->type->getMetadataSize() : 0;
     return sizeof(hashset) + metasize + sizeof(bucket) * num_buckets;
 }
 
 /* Pauses automatic shrinking. This can be called before deleting a lot of
  * elements, to prevent automatic shrinking from being triggered multiple times.
  * Call hashtableResumeAutoShrink afterwards to restore automatic shrinking. */
-void hashsetPauseAutoShrink(hashset *t) {
-    t->pauseAutoShrink++;
+void hashsetPauseAutoShrink(hashset *s) {
+    s->pauseAutoShrink++;
 }
 
 /* Re-enables automatic shrinking, after it has been paused. If you have deleted
  * many elements while automatic shrinking was paused, you may want to call
  * hashsetShrinkIfNeeded. */
-void hashsetResumeAutoShrink(hashset *t) {
-    t->pauseAutoShrink--;
-    if (t->pauseAutoShrink == 0) {
-        hashsetShrinkIfNeeded(t);
+void hashsetResumeAutoShrink(hashset *s) {
+    s->pauseAutoShrink--;
+    if (s->pauseAutoShrink == 0) {
+        hashsetShrinkIfNeeded(s);
     }
 }
 
 /* Pauses incremental rehashing. */
-void hashsetPauseRehashing(hashset *t) {
-    t->pauseRehash++;
+void hashsetPauseRehashing(hashset *s) {
+    s->pauseRehash++;
 }
 
 /* Resumes incremental rehashing, after pausing it. */
-void hashsetResumeRehashing(hashset *t) {
-    t->pauseRehash--;
+void hashsetResumeRehashing(hashset *s) {
+    s->pauseRehash--;
 }
 
 /* Returns 1 if incremental rehashing is paused, 0 if it isn't. */
-int hashsetIsRehashingPaused(hashset *t) {
-    return t->pauseRehash > 0;
+int hashsetIsRehashingPaused(hashset *s) {
+    return s->pauseRehash > 0;
 }
 
 /* Returns 1 if incremental rehashing is in progress, 0 otherwise. */
-int hashsetIsRehashing(hashset *t) {
-    return t->rehashIdx != -1;
+int hashsetIsRehashing(hashset *s) {
+    return s->rehashIdx != -1;
 }
 
 /* Provides the number of buckets in the old and new tables during rehashing.
  * To get the sizes in bytes, multiply by HASHTAB_BUCKET_SIZE. This function can
  * only be used when rehashing is in progress, and from the rehashingStarted and
  * rehashingCompleted callbacks. */
-void hashsetRehashingInfo(hashset *t, size_t *from_size, size_t *to_size) {
-    assert(hashsetIsRehashing(t));
-    *from_size = numBuckets(t->bucketExp[0]);
-    *to_size = numBuckets(t->bucketExp[1]);
+void hashsetRehashingInfo(hashset *s, size_t *from_size, size_t *to_size) {
+    assert(hashsetIsRehashing(s));
+    *from_size = numBuckets(s->bucketExp[0]);
+    *to_size = numBuckets(s->bucketExp[1]);
 }
 
 int hashsetRehashMicroseconds(hashset *s, uint64_t us) {
@@ -878,46 +878,46 @@ int hashsetRehashMicroseconds(hashset *s, uint64_t us) {
 }
 
 /* Return 1 if expand was performed; 0 otherwise. */
-int hashsetExpand(hashset *t, size_t size) {
-    return expand(t, size, NULL);
+int hashsetExpand(hashset *s, size_t size) {
+    return expand(s, size, NULL);
 }
 
 /* Returns 1 if expand was performed or if expand is not needed. Returns 0 if
  * expand failed due to memory allocation failure. */
-int hashsetTryExpand(hashset *t, size_t size) {
+int hashsetTryExpand(hashset *s, size_t size) {
     int malloc_failed = 0;
-    return expand(t, size, &malloc_failed) || !malloc_failed;
+    return expand(s, size, &malloc_failed) || !malloc_failed;
 }
 
 /* Expanding is done automatically on insertion, but less eagerly if resize
  * policy is set to AVOID or FORBID. After restoring resize policy to ALLOW, you
  * may want to call hashsetExpandIfNeeded. Returns 1 if expanding, 0 if not
  * expanding. */
-int hashsetExpandIfNeeded(hashset *t) {
-    size_t min_capacity = t->used[0] + t->used[1] + 1;
-    size_t num_buckets = numBuckets(t->bucketExp[hashsetIsRehashing(t) ? 1 : 0]);
+int hashsetExpandIfNeeded(hashset *s) {
+    size_t min_capacity = s->used[0] + s->used[1] + 1;
+    size_t num_buckets = numBuckets(s->bucketExp[hashsetIsRehashing(s) ? 1 : 0]);
     size_t current_capacity = num_buckets * ELEMENTS_PER_BUCKET;
     unsigned max_fill_percent = resize_policy == HASHSET_RESIZE_AVOID ? MAX_FILL_PERCENT_HARD : MAX_FILL_PERCENT_SOFT;
     if (min_capacity * 100 <= current_capacity * max_fill_percent) {
         return 0;
     }
-    return resize(t, min_capacity, NULL);
+    return resize(s, min_capacity, NULL);
 }
 
 /* Shrinking is done automatically on deletion, but less eagerly if resize
  * policy is set to AVOID and not at all if set to FORBID. After restoring
  * resize policy to ALLOW, you may want to call hashsetShrinkIfNeeded. */
-int hashsetShrinkIfNeeded(hashset *t) {
+int hashsetShrinkIfNeeded(hashset *s) {
     /* Don't shrink if rehashing is already in progress. */
-    if (hashsetIsRehashing(t) || resize_policy == HASHSET_RESIZE_FORBID) {
+    if (hashsetIsRehashing(s) || resize_policy == HASHSET_RESIZE_FORBID) {
         return 0;
     }
-    size_t current_capacity = numBuckets(t->bucketExp[0]) * ELEMENTS_PER_BUCKET;
+    size_t current_capacity = numBuckets(s->bucketExp[0]) * ELEMENTS_PER_BUCKET;
     unsigned min_fill_percent = resize_policy == HASHSET_RESIZE_AVOID ? MIN_FILL_PERCENT_HARD : MIN_FILL_PERCENT_SOFT;
-    if (t->used[0] * 100 > current_capacity * min_fill_percent) {
+    if (s->used[0] * 100 > current_capacity * min_fill_percent) {
         return 0;
     }
-    return resize(t, t->used[0], NULL);
+    return resize(s, s->used[0], NULL);
 }
 
 /* Defragment the internal allocations of the hashset by reallocating them. The
@@ -942,11 +942,11 @@ hashset *hashsetDefragInternals(hashset *s, void *(*defragfn)(void *)) {
 
 /* Returns 1 if an element was found matching the key. Also points *found to it,
  * if found is provided. Returns 0 if no matching element was found. */
-int hashsetFind(hashset *t, const void *key, void **found) {
-    if (hashsetSize(t) == 0) return 0;
-    uint64_t hash = hashKey(t, key);
+int hashsetFind(hashset *s, const void *key, void **found) {
+    if (hashsetSize(s) == 0) return 0;
+    uint64_t hash = hashKey(s, key);
     int pos_in_bucket = 0;
-    bucket *b = findBucket(t, hash, key, &pos_in_bucket, NULL);
+    bucket *b = findBucket(s, hash, key, &pos_in_bucket, NULL);
     if (b) {
         if (found) *found = b->elements[pos_in_bucket];
         return 1;
@@ -960,40 +960,40 @@ int hashsetFind(hashset *t, const void *key, void **found) {
  * pointer can be used to replace the element with an equivalent element (same
  * key, same hash value), but note that the pointer may be invalidated by future
  * accesses to the hash table due to incermental rehashing, so use with care. */
-void **hashsetFindRef(hashset *t, const void *key) {
-    if (hashsetSize(t) == 0) return NULL;
-    uint64_t hash = hashKey(t, key);
+void **hashsetFindRef(hashset *s, const void *key) {
+    if (hashsetSize(s) == 0) return NULL;
+    uint64_t hash = hashKey(s, key);
     int pos_in_bucket = 0;
-    bucket *b = findBucket(t, hash, key, &pos_in_bucket, NULL);
+    bucket *b = findBucket(s, hash, key, &pos_in_bucket, NULL);
     return b ? &b->elements[pos_in_bucket] : NULL;
 }
 
 /* /\* A simpler interface to hashsetFind. Returns the matching element or NULL if */
 /*  * not found. Can't be used if NULL is a valid element in the table. *\/ */
-/* void *hashsetFetchElement(hashset *t, const void *key) { */
+/* void *hashsetFetchElement(hashset *s, const void *key) { */
 /*     void *element; */
-/*     return hashsetFind(t, key, &element) ? element : NULL; */
+/*     return hashsetFind(s, key, &element) ? element : NULL; */
 /* } */
 
 /* Adds an element. Returns 1 on success. Returns 0 if there was already an element
  * with the same key. */
-int hashsetAdd(hashset *t, void *elem) {
-    return hashsetAddOrFind(t, elem, NULL);
+int hashsetAdd(hashset *s, void *element) {
+    return hashsetAddOrFind(s, element, NULL);
 }
 
 /* Adds an element and returns 1 on success. Returns 0 if there was already an
  * element with the same key and, if an 'existing' pointer is provided, it is
  * pointed to the existing element. */
-int hashsetAddOrFind(hashset *t, void *elem, void **existing) {
-    const void *key = elementGetKey(t, elem);
-    uint64_t hash = hashKey(t, key);
+int hashsetAddOrFind(hashset *s, void *element, void **existing) {
+    const void *key = elementGetKey(s, element);
+    uint64_t hash = hashKey(s, key);
     int pos_in_bucket = 0;
-    bucket *b = findBucket(t, hash, key, &pos_in_bucket, NULL);
+    bucket *b = findBucket(s, hash, key, &pos_in_bucket, NULL);
     if (b != NULL) {
         if (existing) *existing = b->elements[pos_in_bucket];
         return 0;
     } else {
-        insert(t, hash, elem);
+        insert(s, hash, element);
         return 1;
     }
 }
@@ -1009,17 +1009,17 @@ int hashsetAddOrFind(hashset *t, void *elem, void **existing) {
  *
  * If a non-NULL pointer is returned, this pointer can be passed as the
  * 'position' argument to hashsetInsertAtPosition to insert an element. */
-void *hashsetFindPositionForInsert(hashset *t, void *key, void **existing) {
-    uint64_t hash = hashKey(t, key);
+void *hashsetFindPositionForInsert(hashset *s, void *key, void **existing) {
+    uint64_t hash = hashKey(s, key);
     int pos_in_bucket, table_index;
-    bucket *b = findBucket(t, hash, key, &pos_in_bucket, NULL);
+    bucket *b = findBucket(s, hash, key, &pos_in_bucket, NULL);
     if (b != NULL) {
         if (existing) *existing = b->elements[pos_in_bucket];
         return NULL;
     } else {
-        hashsetExpandIfNeeded(t);
-        rehashStepOnWriteIfNeeded(t);
-        b = findBucketForInsert(t, hash, &pos_in_bucket, &table_index);
+        hashsetExpandIfNeeded(s);
+        rehashStepOnWriteIfNeeded(s);
+        b = findBucketForInsert(s, hash, &pos_in_bucket, &table_index);
         assert((b->presence & (1 << pos_in_bucket)) == 0);
 
         /* Store the hash bits now, so we don't need to compute the hash again
@@ -1027,9 +1027,9 @@ void *hashsetFindPositionForInsert(hashset *t, void *key, void **existing) {
         b->hashes[pos_in_bucket] = highBits(hash);
 
         /* Compute bucket index from bucket pointer. */
-        void *b0 = &t->tables[table_index][0];
+        void *b0 = &s->tables[table_index][0];
         size_t bucket_index = ((uintptr_t)b - (uintptr_t)b0) / sizeof(bucket);
-        assert(&t->tables[table_index][bucket_index] == b);
+        assert(&s->tables[table_index][bucket_index] == b);
 
         /* Encode position as pointer. */
         return encodePositionInTable(bucket_index, pos_in_bucket, table_index);
@@ -1041,39 +1041,39 @@ void *hashsetFindPositionForInsert(hashset *t, void *key, void **existing) {
  * finding the position. You must not access the hashset in any way between
  * hashsetFindPositionForInsert() and hashsetInsertAtPosition(), since even a
  * hashsetFind() may cause incremental rehashing to move elements in memory. */
-void hashsetInsertAtPosition(hashset *t, void *elem, void *position) {
+void hashsetInsertAtPosition(hashset *s, void *element, void *position) {
     /* Decode position. */
     size_t bucket_index;
     int table_index, pos_in_bucket;
     decodePositionInTable(position, &bucket_index, &pos_in_bucket, &table_index);
 
     /* Insert the element at this position. */
-    bucket *b = &t->tables[table_index][bucket_index];
+    bucket *b = &s->tables[table_index][bucket_index];
     assert((b->presence & (1 << pos_in_bucket)) == 0);
     b->presence |= (1 << pos_in_bucket);
     b->elements[pos_in_bucket] = elem;
-    t->used[table_index]++;
+    s->used[table_index]++;
     /* Hash bits are already set by hashsetFindPositionForInsert. */
     if (!b->everfull && bucketIsFull(b)) {
         b->everfull = 1;
-        t->everfulls[table_index]++;
-        cleanUpTombstonesIfNeeded(t);
+        s->everfulls[table_index]++;
+        cleanUpTombstonesIfNeeded(s);
     }
 }
 
 /* Add or overwrite. Returns 1 if an new element was inserted, 0 if an existing
  * element was overwritten. */
-int hashsetReplace(hashset *t, void *elem) {
-    const void *key = elementGetKey(t, elem);
+int hashsetReplace(hashset *s, void *element) {
+    const void *key = elementGetKey(s, element);
     int pos_in_bucket = 0;
-    uint64_t hash = hashKey(t, key);
-    bucket *b = findBucket(t, hash, key, &pos_in_bucket, NULL);
+    uint64_t hash = hashKey(s, key);
+    bucket *b = findBucket(s, hash, key, &pos_in_bucket, NULL);
     if (b != NULL) {
-        freeElement(t, b->elements[pos_in_bucket]);
+        freeElement(s, b->elements[pos_in_bucket]);
         b->elements[pos_in_bucket] = elem;
         return 0;
     } else {
-        insert(t, hash, elem);
+        insert(s, hash, element);
         return 1;
     }
 }
@@ -1081,17 +1081,17 @@ int hashsetReplace(hashset *t, void *elem) {
 /* Removes the element with the matching key and returns it. The element
  * destructor is not called. Returns 1 and points 'popped' to the element if a
  * matching element was found. Returns 0 if no matching element was found. */
-int hashsetPop(hashset *t, const void *key, void **popped) {
-    if (hashsetSize(t) == 0) return 0;
-    uint64_t hash = hashKey(t, key);
+int hashsetPop(hashset *s, const void *key, void **popped) {
+    if (hashsetSize(s) == 0) return 0;
+    uint64_t hash = hashKey(s, key);
     int pos_in_bucket = 0;
     int table_index = 0;
-    bucket *b = findBucket(t, hash, key, &pos_in_bucket, &table_index);
+    bucket *b = findBucket(s, hash, key, &pos_in_bucket, &table_index);
     if (b) {
         if (popped) *popped = b->elements[pos_in_bucket];
         b->presence &= ~(1 << pos_in_bucket);
-        t->used[table_index]--;
-        hashsetShrinkIfNeeded(t);
+        s->used[table_index]--;
+        hashsetShrinkIfNeeded(s);
         return 1;
     } else {
         return 0;
@@ -1100,10 +1100,10 @@ int hashsetPop(hashset *t, const void *key, void **popped) {
 
 /* Deletes the element with the matching key. Returns 1 if an element was
  * deleted, 0 if no matching element was found. */
-int hashsetDelete(hashset *t, const void *key) {
+int hashsetDelete(hashset *s, const void *key) {
     void *elem;
-    if (hashsetPop(t, key, &elem)) {
-        freeElement(t, elem);
+    if (hashsetPop(s, key, &element)) {
+        freeElement(s, element);
         return 1;
     } else {
         return 0;
@@ -1133,29 +1133,29 @@ int hashsetDelete(hashset *t, const void *key) {
  * Example:
  *
  *     void *position;
- *     void **ref = hashsetTwoPhasePopFindRef(t, key, &position)
+ *     void **ref = hashsetTwoPhasePopFindRef(s, key, &position)
  *     if (ref != NULL) {
  *         void *element = *ref;
  *         // do something with the element, then...
- *         hashsetTwoPhasePopDelete(t, position);
+ *         hashsetTwoPhasePopDelete(s, position);
  *     }
  */
 
 /* Like hashsetTwoPhasePopFind, but returns a pointer to where the element is
  * stored in the table, or NULL if no matching element is found. */
-void **hashsetTwoPhasePopFindRef(hashset *t, const void *key, void **position) {
-    if (hashsetSize(t) == 0) return NULL;
-    uint64_t hash = hashKey(t, key);
+void **hashsetTwoPhasePopFindRef(hashset *s, const void *key, void **position) {
+    if (hashsetSize(s) == 0) return NULL;
+    uint64_t hash = hashKey(s, key);
     int pos_in_bucket = 0;
     int table_index = 0;
-    bucket *b = findBucket(t, hash, key, &pos_in_bucket, &table_index);
+    bucket *b = findBucket(s, hash, key, &pos_in_bucket, &table_index);
     if (b) {
-        hashsetPauseRehashing(t);
+        hashsetPauseRehashing(s);
 
         /* Compute bucket index from bucket pointer. */
-        void *b0 = &t->tables[table_index][0];
+        void *b0 = &s->tables[table_index][0];
         size_t bucket_index = ((uintptr_t)b - (uintptr_t)b0) / sizeof(bucket);
-        assert(&t->tables[table_index][bucket_index] == b);
+        assert(&s->tables[table_index][bucket_index] == b);
 
         /* Encode position as pointer. */
         *position = encodePositionInTable(bucket_index, pos_in_bucket, table_index);
@@ -1168,19 +1168,19 @@ void **hashsetTwoPhasePopFindRef(hashset *t, const void *key, void **position) {
 /* Clears the position of the element in the hashset and resumes rehashing. The
  * element destructor is NOT called. The position is an opaque representation of
  * its position as found using hashsetTwoPhasePopFindRef(). */
-void hashsetTwoPhasePopDelete(hashset *t, void *position) {
+void hashsetTwoPhasePopDelete(hashset *s, void *position) {
     /* Decode position. */
     size_t bucket_index;
     int table_index, pos_in_bucket;
     decodePositionInTable(position, &bucket_index, &pos_in_bucket, &table_index);
 
     /* Delete the element and resume rehashing. */
-    bucket *b = &t->tables[table_index][bucket_index];
+    bucket *b = &s->tables[table_index][bucket_index];
     assert(b->presence & (1 << pos_in_bucket));
     b->presence &= ~(1 << pos_in_bucket);
-    t->used[table_index]--;
-    hashsetShrinkIfNeeded(t);
-    hashsetResumeRehashing(t);
+    s->used[table_index]--;
+    hashsetShrinkIfNeeded(s);
+    hashsetResumeRehashing(s);
 }
 
 /* --- Scan --- */
@@ -1227,12 +1227,12 @@ void hashsetTwoPhasePopDelete(hashset *t, void *position) {
  *   flag, we don't continue scanning complete probing chains, so if rehashing
  *   happens between calls, elements can be missed. The scan cursor is advanced
  *   only a single step. */
-size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *privdata, int flags) {
-    if (hashsetSize(t) == 0) return 0;
+size_t hashsetScan(hashset *s, size_t cursor, hashsetScanFunction fn, void *privdata, int flags) {
+    if (hashsetSize(s) == 0) return 0;
 
     /* Prevent elements from being moved around during the scan call, as a
      * side-effect of the scan callback. */
-    hashsetPauseRehashing(t);
+    hashsetPauseRehashing(s);
 
     /* Flags. */
     int emit_ref = (flags & HASHSET_SCAN_EMIT_REF);
@@ -1252,14 +1252,14 @@ size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *priv
     /* Mask the start cursor to the bigger of the tables, so we can detect if we
      * come back to the start cursor and break the loop. It can happen if enough
      * tombstones (in both tables while rehashing) make us continue scanning. */
-    cursor = cursor & (expToMask(t->bucketExp[0]) | expToMask(t->bucketExp[1]));
+    cursor = cursor & (expToMask(s->bucketExp[0]) | expToMask(s->bucketExp[1]));
     size_t start_cursor = cursor;
     do {
         in_probe_sequence = 0; /* Set to 1 if an ever-full bucket is scanned. */
-        if (!hashsetIsRehashing(t)) {
+        if (!hashsetIsRehashing(s)) {
             /* Emit elements at the cursor index. */
-            size_t mask = expToMask(t->bucketExp[0]);
-            bucket *b = &t->tables[0][cursor & mask];
+            size_t mask = expToMask(s->bucketExp[0]);
+            bucket *b = &s->tables[0][cursor & mask];
             int pos;
             for (pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
                 if (b->presence & (1 << pos)) {
@@ -1275,7 +1275,7 @@ size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *priv
             cursor = nextCursor(cursor, mask);
         } else {
             int table_small, table_large;
-            if (t->bucketExp[0] <= t->bucketExp[1]) {
+            if (s->bucketExp[0] <= s->bucketExp[1]) {
                 table_small = 0;
                 table_large = 1;
             } else {
@@ -1283,13 +1283,13 @@ size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *priv
                 table_large = 0;
             }
 
-            size_t mask_small = expToMask(t->bucketExp[table_small]);
-            size_t mask_large = expToMask(t->bucketExp[table_large]);
+            size_t mask_small = expToMask(s->bucketExp[table_small]);
+            size_t mask_large = expToMask(s->bucketExp[table_large]);
 
             /* Emit elements in the smaller table, if this bucket hasn't already
              * been rehashed. */
-            if (table_small == 0 && !cursorIsLessThan(cursor, t->rehashIdx)) {
-                bucket *b = &t->tables[table_small][cursor & mask_small];
+            if (table_small == 0 && !cursorIsLessThan(cursor, s->rehashIdx)) {
+                bucket *b = &s->tables[table_small][cursor & mask_small];
                 if (b->presence) {
                     for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
                         if (b->presence & (1 << pos)) {
@@ -1305,7 +1305,7 @@ size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *priv
              * the index pointed to by the cursor in the smaller table. */
             do {
                 /* Emit elements in bigger table. */
-                bucket *b = &t->tables[table_large][cursor & mask_large];
+                bucket *b = &s->tables[table_large][cursor & mask_large];
                 if (b->presence) {
                     for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
                         if (b->presence & (1 << pos)) {
@@ -1326,7 +1326,7 @@ size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *priv
             cursor_passed_zero = 1;
         }
     } while (in_probe_sequence && !single_step && cursor != start_cursor);
-    hashsetResumeRehashing(t);
+    hashsetResumeRehashing(s);
     return cursor_passed_zero ? 0 : cursor;
 }
 
@@ -1363,8 +1363,8 @@ void hashsetInitIterator(hashsetIterator *iter, hashset *s) {
  * - Elements that are inserted during the iteration may or may not be returned
  *   by the iterator.
  */
-void hashsetInitSafeIterator(hashsetIterator *iter, hashset *t) {
-    hashsetInitIterator(iter, t);
+void hashsetInitSafeIterator(hashsetIterator *iter, hashset *s) {
+    hashsetInitIterator(iter, s);
     iter->safe = 1;
 }
 
@@ -1381,15 +1381,15 @@ void hashsetResetIterator(hashsetIterator *iter) {
 }
 
 /* Allocates and initializes an iterator. */
-hashsetIterator *hashsetCreateIterator(hashset *t) {
+hashsetIterator *hashsetCreateIterator(hashset *s) {
     hashsetIterator *iter = zmalloc(sizeof(*iter));
-    hashsetInitIterator(iter, t);
+    hashsetInitIterator(iter, s);
     return iter;
 }
 
 /* Allocates and initializes a safe iterator. */
-hashsetIterator *hashsetCreateSafeIterator(hashset *t) {
-    hashsetIterator *iter = hashsetCreateIterator(t);
+hashsetIterator *hashsetCreateSafeIterator(hashset *s) {
+    hashsetIterator *iter = hashsetCreateIterator(s);
     iter->safe = 1;
     return iter;
 }
@@ -1455,9 +1455,9 @@ int hashsetNext(hashsetIterator *iter, void **elemptr) {
 
 /* Points 'found' to a random element in the hash table and returns 1. Returns 0
  * if the table is empty. */
-int hashsetRandomElement(hashset *t, void **found) {
+int hashsetRandomElement(hashset *s, void **found) {
     void *samples[WEAK_RANDOM_SAMPLE_SIZE];
-    unsigned count = hashsetSampleElements(t, (void **)&samples, WEAK_RANDOM_SAMPLE_SIZE);
+    unsigned count = hashsetSampleElements(s, (void **)&samples, WEAK_RANDOM_SAMPLE_SIZE);
     if (count == 0) return 0;
     unsigned idx = random() % count;
     *found = samples[idx];
@@ -1466,9 +1466,9 @@ int hashsetRandomElement(hashset *t, void **found) {
 
 /* Points 'found' to a random element in the hash table and returns 1. Returns 0
  * if the table is empty. This one is more fair than hashsetRandomElement(). */
-int hashsetFairRandomElement(hashset *t, void **found) {
+int hashsetFairRandomElement(hashset *s, void **found) {
     void *samples[FAIR_RANDOM_SAMPLE_SIZE];
-    unsigned count = hashsetSampleElements(t, (void **)&samples, FAIR_RANDOM_SAMPLE_SIZE);
+    unsigned count = hashsetSampleElements(s, (void **)&samples, FAIR_RANDOM_SAMPLE_SIZE);
     if (count == 0) return 0;
     unsigned idx = random() % count;
     *found = samples[idx];
@@ -1483,18 +1483,18 @@ int hashsetFairRandomElement(hashset *t, void **found) {
  *
  * The function returns the number of sampled elements, which is 'count' except
  * if 'count' is greater than the total number of elements in the hash table. */
-unsigned hashsetSampleElements(hashset *t, void **dst, unsigned count) {
+unsigned hashsetSampleElements(hashset *s, void **dst, unsigned count) {
     /* Adjust count. */
-    if (count > hashsetSize(t)) count = hashsetSize(t);
+    if (count > hashsetSize(s)) count = hashsetSize(s);
     scan_samples samples;
     samples.size = count;
     samples.count = 0;
     samples.elements = dst;
     size_t cursor = randomSizeT();
     while (samples.count < count) {
-        cursor = hashsetScan(t, cursor, sampleElementsScanFn, &samples, HASHSET_SCAN_SINGLE_STEP);
+        cursor = hashsetScan(s, cursor, sampleElementsScanFn, &samples, HASHSET_SCAN_SINGLE_STEP);
     }
-    rehashStepOnReadIfNeeded(t);
+    rehashStepOnReadIfNeeded(s);
     return count;
 }
 
@@ -1517,28 +1517,28 @@ void hashsetCombineStats(hashsetStats *from, hashsetStats *into) {
     }
 }
 
-hashsetStats *hashsetGetStatsHt(hashset *t, int htidx, int full) {
+hashsetStats *hashsetGetStatsHt(hashset *s, int htidx, int full) {
     unsigned long *clvector = zcalloc(sizeof(unsigned long) * HASHSET_STATS_VECTLEN);
     hashsetStats *stats = zcalloc(sizeof(hashsetStats));
     stats->htidx = htidx;
     stats->clvector = clvector;
-    stats->buckets = numBuckets(t->bucketExp[htidx]);
+    stats->buckets = numBuckets(s->bucketExp[htidx]);
     stats->htSize = stats->buckets * ELEMENTS_PER_BUCKET;
-    stats->htUsed = t->used[htidx];
+    stats->htUsed = s->used[htidx];
     if (!full) return stats;
     /* Compute stats about probing chain lengths. */
     unsigned long chainlen = 0;
-    size_t mask = expToMask(t->bucketExp[htidx]);
+    size_t mask = expToMask(s->bucketExp[htidx]);
     /* Find a suitable place to start: not in the middle of a probing chain. */
     size_t start_idx;
     for (start_idx = 0; start_idx <= mask; start_idx++) {
-        bucket *b = &t->tables[htidx][start_idx];
+        bucket *b = &s->tables[htidx][start_idx];
         if (!b->everfull) break;
     }
     size_t idx = start_idx;
     do {
         idx = nextCursor(idx, mask);
-        bucket *b = &t->tables[htidx][idx];
+        bucket *b = &s->tables[htidx][idx];
         if (b->everfull) {
             stats->totalChainLen++;
             chainlen++;
@@ -1598,18 +1598,18 @@ size_t hashsetGetStatsMsg(char *buf, size_t bufsize, hashsetStats *stats, int fu
     return strlen(buf);
 }
 
-void hashsetGetStats(char *buf, size_t bufsize, hashset *t, int full) {
+void hashsetGetStats(char *buf, size_t bufsize, hashset *s, int full) {
     size_t l;
     char *orig_buf = buf;
     size_t orig_bufsize = bufsize;
 
-    hashsetStats *mainHtStats = hashsetGetStatsHt(t, 0, full);
+    hashsetStats *mainHtStats = hashsetGetStatsHt(s, 0, full);
     l = hashsetGetStatsMsg(buf, bufsize, mainHtStats, full);
     hashsetFreeStats(mainHtStats);
     buf += l;
     bufsize -= l;
-    if (hashsetIsRehashing(t) && bufsize > 0) {
-        hashsetStats *rehashHtStats = hashsetGetStatsHt(t, 1, full);
+    if (hashsetIsRehashing(s) && bufsize > 0) {
+        hashsetStats *rehashHtStats = hashsetGetStatsHt(s, 1, full);
         hashsetGetStatsMsg(buf, bufsize, rehashHtStats, full);
         hashsetFreeStats(rehashHtStats);
     }
@@ -1619,17 +1619,17 @@ void hashsetGetStats(char *buf, size_t bufsize, hashset *t, int full) {
 
 /* --- DEBUG --- */
 
-void hashsetDump(hashset *t) {
+void hashsetDump(hashset *s) {
     for (int table = 0; table <= 1; table++) {
         printf("Table %d, used %zu, exp %d, buckets %zu, everfulls %zu\n",
-               table, t->used[table], t->bucketExp[table], numBuckets(t->bucketExp[table]), t->everfulls[table]);
-        for (size_t idx = 0; idx < numBuckets(t->bucketExp[table]); idx++) {
-            bucket *b = &t->tables[table][idx];
+               table, s->used[table], s->bucketExp[table], numBuckets(s->bucketExp[table]), s->everfulls[table]);
+        for (size_t idx = 0; idx < numBuckets(s->bucketExp[table]); idx++) {
+            bucket *b = &s->tables[table][idx];
             printf("Bucket %d:%zu everfull:%d\n", table, idx, b->everfull);
             for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
                 printf("  %d ", pos);
                 if (b->presence & (1 << pos)) {
-                    printf("h2 %02x, key \"%s\"\n", b->hashes[pos], (const char *)elementGetKey(t, b->elements[pos]));
+                    printf("h2 %02x, key \"%s\"\n", b->hashes[pos], (const char *)elementGetKey(s, b->elements[pos]));
                 } else {
                     printf("(empty)\n");
                 }
@@ -1638,10 +1638,10 @@ void hashsetDump(hashset *t) {
     }
 }
 
-void hashsetHistogram(hashset *t) {
+void hashsetHistogram(hashset *s) {
     for (int table = 0; table <= 1; table++) {
-        for (size_t idx = 0; idx < numBuckets(t->bucketExp[table]); idx++) {
-            bucket *b = &t->tables[table][idx];
+        for (size_t idx = 0; idx < numBuckets(s->bucketExp[table]); idx++) {
+            bucket *b = &s->tables[table][idx];
             char c = b->presence == 0 && b->everfull ? 'X' : '0' + __builtin_popcount(b->presence);
             printf("%c", c);
         }
@@ -1650,10 +1650,10 @@ void hashsetHistogram(hashset *t) {
     printf("\n");
 }
 
-void hashsetProbeMap(hashset *t) {
+void hashsetProbeMap(hashset *s) {
     for (int table = 0; table <= 1; table++) {
-        for (size_t idx = 0; idx < numBuckets(t->bucketExp[table]); idx++) {
-            bucket *b = &t->tables[table][idx];
+        for (size_t idx = 0; idx < numBuckets(s->bucketExp[table]); idx++) {
+            bucket *b = &s->tables[table][idx];
             char c = b->everfull ? 'X' : 'o';
             printf("%c", c);
         }
@@ -1662,18 +1662,18 @@ void hashsetProbeMap(hashset *t) {
     printf("\n");
 }
 
-int hashsetLongestProbingChain(hashset *t) {
+int hashsetLongestProbingChain(hashset *s) {
     int maxlen = 0;
     for (int table = 0; table <= 1; table++) {
-        if (t->bucketExp[table] < 0) {
+        if (s->bucketExp[table] < 0) {
             continue; /* table not used */
         }
         size_t cursor = 0;
-        size_t mask = expToMask(t->bucketExp[table]);
+        size_t mask = expToMask(s->bucketExp[table]);
         int chainlen = 0;
         do {
             assert(cursor <= mask);
-            bucket *b = &t->tables[table][cursor];
+            bucket *b = &s->tables[table][cursor];
             if (b->everfull) {
                 if (++chainlen > maxlen) {
                     maxlen = chainlen;

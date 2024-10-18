@@ -613,18 +613,18 @@ start_server {tags {"maxmemory" "external:skip"}} {
 }
 
 start_server {tags {"maxmemory" "external:skip"}} {
-    test {Pseudo-replica mode should forbid eviction} {
+    test {Import mode should forbid eviction} {
         r set key val
-        r config set pseudo-replica yes
-        assert_equal [r replconf pseudo-master 1] {OK}  
+        r config set import-mode yes
+        assert_equal [r client import-source on] {OK}  
         r config set maxmemory-policy allkeys-lru
         r config set maxmemory 1      
 
         assert_equal [r dbsize] {1}
         assert_error {OOM command not allowed*} {r set key1 val1}
 
-        assert_equal [r replconf pseudo-master 0] {OK}  
-        r config set pseudo-replica no
+        assert_equal [r client import-source off] {OK}  
+        r config set import-mode no
 
         assert_equal [r dbsize] {0}
     }

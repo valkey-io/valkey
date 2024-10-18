@@ -833,11 +833,11 @@ start_server {tags {"expire"}} {
         assert_equal [r debug set-active-expire 1] {OK}
     } {} {needs:debug}
 
-    test {Pseudo-replica mode should forbid active expiration} {
+    test {Import mode should forbid active expiration} {
         r flushall
 
-        r config set pseudo-replica yes
-        assert_equal [r replconf pseudo-master 1] {OK}
+        r config set import-mode yes
+        assert_equal [r client import-source on] {OK}
 
         r set foo1 bar PX 1
         r set foo2 bar PX 1
@@ -845,8 +845,8 @@ start_server {tags {"expire"}} {
 
         assert_equal [r dbsize] {2}
 
-        assert_equal [r replconf pseudo-master 0] {OK}
-        r config set pseudo-replica no
+        assert_equal [r client import-source off] {OK}
+        r config set import-mode no
 
         # Verify all keys have expired
         wait_for_condition 40 100 {
@@ -856,12 +856,12 @@ start_server {tags {"expire"}} {
         }
     }
 
-    test {Pseudo-replica mode should forbid lazy expiration} {
+    test {Import mode should forbid lazy expiration} {
         r flushall
         r debug set-active-expire 0 
 
-        r config set pseudo-replica yes
-        assert_equal [r replconf pseudo-master 1] {OK}
+        r config set import-mode yes
+        assert_equal [r client import-source on] {OK}
 
         r set foo1 1 PX 1
         after 10
@@ -869,8 +869,8 @@ start_server {tags {"expire"}} {
         r get foo1
         assert_equal [r dbsize] {1}
 
-        assert_equal [r replconf pseudo-master 0] {OK}
-        r config set pseudo-replica no
+        assert_equal [r client import-source off] {OK}
+        r config set import-mode no
 
         r get foo1
 
@@ -879,11 +879,11 @@ start_server {tags {"expire"}} {
         assert_equal [r debug set-active-expire 1] {OK}
     } {} {needs:debug}
 
-    test {RANDOMKEY can return expired key in Pseudo-replica mode} {
+    test {RANDOMKEY can return expired key in import mode} {
         r flushall
 
-        r config set pseudo-replica yes
-        assert_equal [r replconf pseudo-master 1] {OK}
+        r config set import-mode yes
+        assert_equal [r client import-source on] {OK}
 
         r set foo1 bar PX 1
         after 10
@@ -896,8 +896,8 @@ start_server {tags {"expire"}} {
 
         assert_equal [r randomkey] {foo1}
 
-        assert_equal [r replconf pseudo-master 0] {OK}
-        r config set pseudo-replica no
+        assert_equal [r client import-source off] {OK}
+        r config set import-mode no
 
         # Verify all keys have expired
         wait_for_condition 40 100 {

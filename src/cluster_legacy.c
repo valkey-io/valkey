@@ -6648,8 +6648,8 @@ int clusterCommandSpecial(client *c) {
             return 1;
         }
 
-        if (server.pseudo_replica) {
-            addReplyError(c, "CLUSTER REPLICATE not allowed in pseudo-replica mode.");
+        if (server.import_mode) {
+            addReplyError(c, "CLUSTER REPLICATE not allowed in import mode.");
             return 1;
         }
 

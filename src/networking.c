@@ -3567,6 +3567,9 @@ void clientCommand(client *c) {
             "    Protect current client connection from eviction.",
             "NO-TOUCH (ON|OFF)",
             "    Will not touch LRU/LFU stats when this mode is on.",
+            "PSEUDO-PRIMARY (ON|OFF)",
+            "    Set this connection behaving like a primary if server.import_mode is true.",
+            "    Sync tools can set their connections into 'pseudo-primary' state to visit expired keys.",
             NULL};
         addReplyHelp(c, help);
     } else if (!strcasecmp(c->argv[1]->ptr, "id") && c->argc == 2) {
@@ -4040,6 +4043,22 @@ void clientCommand(client *c) {
             }
         }
         addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "import-source")) {
+        /* CLIENT IMPORT-SOURCE ON|OFF */
+        if (!server.import_mode) {
+            addReplyError(c, "Server is not in import mode");
+            return;
+        }
+        if (!strcasecmp(c->argv[2]->ptr, "on")) {
+            c->flag.import_source = 1;
+            addReply(c, shared.ok);
+        } else if (!strcasecmp(c->argv[2]->ptr, "off")) {
+            c->flag.import_source = 0;
+            addReply(c, shared.ok);
+        } else {
+            addReplyErrorObject(c, shared.syntaxerr);
+            return;
+        }
     } else {
         addReplySubcommandSyntaxError(c);
     }

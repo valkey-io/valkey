@@ -1,6 +1,6 @@
 {
     "IMPORT-SOURCE": {
-        "summary": "Allow this client to import data.",
+        "summary": "Mark this client as importing source when server is in import mode.",
         "complexity": "O(1)",
         "group": "connection",
         "since": "8.2.0",

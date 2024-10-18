@@ -3961,6 +3961,11 @@ void replicaofCommand(client *c) {
         return;
     }
 
+    if (server.import_mode) {
+        addReplyError(c, "REPLICAOF not allowed in import mode.");
+        return;
+    }
+
     if (server.failover_state != NO_FAILOVER) {
         addReplyError(c, "REPLICAOF not allowed while failing over.");
         return;

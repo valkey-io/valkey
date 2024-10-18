@@ -22,4 +22,10 @@ set(CMAKE_C_EXTENSIONS OFF)
 include(ValkeySetup)
 add_subdirectory(src)
 
+# Include the packaging module - first
+include(Packaging)
+
+# Clear variables declared on this file from the cache
+unset(WITH_TLS CACHE)
 unset(BUILD_TESTS CACHE)
+unset(WITH_RDMA CACHE)

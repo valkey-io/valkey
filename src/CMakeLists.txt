@@ -44,9 +44,9 @@ else ()
     add_dependencies(valkey-benchmark generate_fmtargs_h)
 
     # Targets: valkey-sentinel, valkey-check-aof and valkey-check-rdb are just symbolic links
-    valkey_create_symlink("${INSTALL_BIN_PATH}/valkey-server" "${INSTALL_BIN_PATH}/valkey-sentinel")
-    valkey_create_symlink("${INSTALL_BIN_PATH}/valkey-server" "${INSTALL_BIN_PATH}/valkey-check-rdb")
-    valkey_create_symlink("${INSTALL_BIN_PATH}/valkey-server" "${INSTALL_BIN_PATH}/valkey-check-aof")
+    valkey_create_symlink("valkey-server" "valkey-sentinel")
+    valkey_create_symlink("valkey-server" "valkey-check-rdb")
+    valkey_create_symlink("valkey-server" "valkey-check-aof")
 
     # Target valkey-rdma
     if (WITH_RDMA)

@@ -7,9 +7,22 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 # Generate compile_commands.json file for IDEs code completion support
 set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
 
+# Installed executables will have this permissions
+set(VALKEY_EXE_PERMISSIONS
+    OWNER_EXECUTE
+    OWNER_WRITE
+    OWNER_READ
+    GROUP_EXECUTE
+    GROUP_READ
+    WORLD_EXECUTE
+    WORLD_READ)
+
 set(VALKEY_SERVER_CFLAGS "")
 set(VALKEY_SERVER_LDFLAGS "")
 
+# ----------------------------------------------------
+# Helper functions & macros
+# ----------------------------------------------------
 macro (add_valkey_server_compiler_options value)
     set(VALKEY_SERVER_CFLAGS "${VALKEY_SERVER_CFLAGS} ${value}")
 endmacro ()
@@ -18,8 +31,66 @@ macro (add_valkey_server_linker_option value)
     list(APPEND VALKEY_SERVER_LDFLAGS ${value})
 endmacro ()
 
-function (get_valkey_server_linker_option return_value)
+macro (get_valkey_server_linker_option return_value)
     list(JOIN VALKEY_SERVER_LDFLAGS " " ${value} ${return_value})
+endmacro ()
+
+# Helper function for creating symbolic link so that: link -> source
+macro (valkey_create_symlink source link)
+    install(
+        CODE "execute_process(                      \
+    COMMAND /bin/bash ${CMAKE_BINARY_DIR}/CreateSymlink.sh \
+    ${source} \
+    ${link}   \
+    )"
+        COMPONENT "valkey")
+endmacro ()
+
+# Install a binary
+macro (valkey_install_bin target)
+    # Install cli tool and create a redis symbolic link
+    install(
+        TARGETS ${target}
+        DESTINATION ${CMAKE_INSTALL_BINDIR}
+        PERMISSIONS ${VALKEY_EXE_PERMISSIONS}
+        COMPONENT "valkey")
+endmacro ()
+
+# Helper function that defines, builds and installs `target` In addition, it creates a symbolic link between the target
+# and `link_name`
+macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
+    add_executable(${target} ${sources})
+
+    if (USE_JEMALLOC)
+        # Using jemalloc
+        target_link_libraries(${target} jemalloc)
+    endif ()
+
+    # Place this line last to ensure that ${ld_flags} is placed last on the linker line
+    target_link_libraries(${target} ${libs} ${ld_flags})
+    target_link_libraries(${target} hiredis)
+    if (USE_TLS)
+        # Add required libraries needed for TLS
+        target_link_libraries(${target} OpenSSL::SSL hiredis_ssl)
+    endif ()
+
+    # Install cli tool and create a redis symbolic link
+    valkey_install_bin(${target})
+    valkey_create_symlink(${target} ${link_name})
+endmacro ()
+
+# Return the current host distro name. For example: ubuntu, debian, amzn etc
+function (valkey_get_distro_name DISTRO_NAME)
+    execute_process(
+        COMMAND /bin/bash "-c" "cat /etc/os-release |grep ^ID=|cut -d = -f 2"
+        OUTPUT_VARIABLE _OUT_VAR
+        OUTPUT_STRIP_TRAILING_WHITESPACE)
+    # clean the output
+    string(REPLACE "\"" "" _OUT_VAR "${_OUT_VAR}")
+    string(REPLACE "." "" _OUT_VAR "${_OUT_VAR}")
+    set(${DISTRO_NAME}
+        "${_OUT_VAR}"
+        PARENT_SCOPE)
 endfunction ()
 
 # Determine if we are building in Release or Debug mode
@@ -31,15 +102,13 @@ else ()
     message(STATUS "Building in release mode")
 endif ()
 
-# Installed executables will have this permissions
-set(VALKEY_EXE_PERMISSIONS
-    OWNER_EXECUTE
-    OWNER_WRITE
-    OWNER_READ
-    GROUP_EXECUTE
-    GROUP_READ
-    WORLD_EXECUTE
-    WORLD_READ)
+# ----------------------------------------------------
+# Helper functions - end
+# ----------------------------------------------------
+
+# ----------------------------------------------------
+# Build options (allocator, tls, rdma et al)
+# ----------------------------------------------------
 
 if (NOT WITH_MALLOC)
     if (APPLE)
@@ -66,8 +135,6 @@ if (WITH_MALLOC)
     else ()
         message(FATAL_ERROR "WITH_MALLOC can be one of: jemalloc, libc, tcmalloc or tcmalloc_minimal")
     endif ()
-    unset(WITH_MALLOC CACHE)
-    unset(USE_JEMALLOC CACHE)
 endif ()
 
 message(STATUS "Using ${MALLOC_LIB}")
@@ -82,7 +149,6 @@ if (WITH_TLS)
     add_valkey_server_compiler_options("-DUSE_OPENSSL=1")
     add_valkey_server_compiler_options("-DBUILD_TLS_MODULE=0")
     set(USE_TLS 1)
-    unset(WITH_TLS CACHE)
 endif ()
 
 if (WITH_RDMA)
@@ -176,6 +242,16 @@ if (USE_JEMALLOC)
     include_directories("${CMAKE_SOURCE_DIR}/deps/jemalloc/include")
 endif ()
 
+# Common compiler flags
+add_valkey_server_compiler_options("-pedantic")
+
+# ----------------------------------------------------
+# Build options (allocator, tls, rdma et al) - end
+# ----------------------------------------------------
+
+# -------------------------------------------------
+# Code Generation section
+# -------------------------------------------------
 find_program(PYTHON_EXE python3)
 if (PYTHON_EXE)
     # Python based code generation
@@ -226,7 +302,13 @@ add_custom_target(
     COMMAND sh -c '${CMAKE_SOURCE_DIR}/src/mkreleasehdr.sh'
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
 
-# Build the source file list
+# -------------------------------------------------
+# Code Generation section - end
+# -------------------------------------------------
+
+# -------------------------------------------------
+# Define the sources to be built
+# -------------------------------------------------
 set(VALKEY_LIB_SRCS
     ${CMAKE_SOURCE_DIR}/src/threads_mngr.c
     ${CMAKE_SOURCE_DIR}/src/adlist.c
@@ -369,54 +451,17 @@ set(VALKEY_BENCHMARK_SRCS
 
 set(VALKEY_RDMA_MODULE_SRCS ${CMAKE_SOURCE_DIR}/src/rdma.c)
 
-# Common compiler flags
-add_valkey_server_compiler_options("-pedantic")
+# -------------------------------------------------
+# Define the sources to be built - end
+# -------------------------------------------------
 
+# Clear the below variables from the cache
 unset(CMAKE_C_FLAGS CACHE)
 unset(WITH_SANITIZER CACHE)
 unset(VALKEY_SERVER_LDFLAGS CACHE)
 unset(VALKEY_SERVER_CFLAGS CACHE)
 unset(PYTHON_EXE CACHE)
 unset(HAVE_C11_ATOMIC CACHE)
-
-# Helper macro for creating symbolic link so that: link -> source
-macro (valkey_create_symlink source link)
-    install(
-        CODE "execute_process( \
-    COMMAND ${CMAKE_COMMAND} -E create_symlink \
-    ${source} \
-    ${link}   \
-    )")
-endmacro ()
-
-# Install a binary
-macro (valkey_install_bin target)
-    # Install cli tool and create a redis symbolic link
-    install(
-        TARGETS ${target}
-        DESTINATION ${INSTALL_BIN_PATH}
-        PERMISSIONS ${VALKEY_EXE_PERMISSIONS})
-endmacro ()
-
-# Helper macro that defines, builds and installs `target` In addition, it creates a symbolic link between the target and
-# `link_name`
-macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
-    add_executable(${target} ${sources})
-
-    if (USE_JEMALLOC)
-        # Using jemalloc
-        target_link_libraries(${target} jemalloc)
-    endif ()
-
-    # Place this line last to ensure that ${ld_flags} is placed last on the linker line
-    target_link_libraries(${target} ${libs} ${ld_flags})
-    target_link_libraries(${target} hiredis)
-    if (USE_TLS)
-        # Add required libraries needed for TLS
-        target_link_libraries(${target} OpenSSL::SSL hiredis_ssl)
-    endif ()
-
-    # Install cli tool and create a redis symbolic link
-    valkey_install_bin(${target})
-    valkey_create_symlink(${INSTALL_BIN_PATH}/${target} ${INSTALL_BIN_PATH}/${link_name})
-endmacro ()
+unset(USE_TLS CACHE)
+unset(WITH_MALLOC CACHE)
+unset(USE_JEMALLOC CACHE)

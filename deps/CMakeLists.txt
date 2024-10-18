@@ -19,3 +19,8 @@ add_subdirectory(hiredis)
 add_subdirectory(linenoise)
 add_subdirectory(fpconv)
 add_subdirectory(hdr_histogram)
+
+# Clear any cached variables passed to hiredis from the cache
+unset(BUILD_SHARED_LIBS CACHE)
+unset(DISABLE_TESTS CACHE)
+unset(ENABLE_SSL CACHE)

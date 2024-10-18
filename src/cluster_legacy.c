@@ -3134,6 +3134,22 @@ int clusterProcessPacket(clusterLink *link) {
         if (sender_claims_to_be_primary && sender_claimed_config_epoch > sender->configEpoch) {
             sender->configEpoch = sender_claimed_config_epoch;
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
+
+            if (server.cluster->failover_auth_time && sender->configEpoch >= server.cluster->failover_auth_epoch) {
+                /* Another node has claimed an epoch greater than or equal to ours.
+                 * If we have an ongoing election, reset it because we cannot win
+                 * with an epoch smaller than or equal to the incoming claim. This
+                 * allows us to start a new election as soon as possible. */
+                server.cluster->failover_auth_time = 0;
+                serverLog(LL_WARNING,
+                          "Failover election in progress for epoch %llu, but received a claim from node %.40s (%s) "
+                          "with an equal or higher epoch %llu. Resetting the election since we cannot win.",
+                          (unsigned long long)server.cluster->failover_auth_epoch, sender->name, sender->human_nodename,
+                          (unsigned long long)sender->configEpoch);
+                /* Maybe we could start a new election, set a flag here to make sure
+                 * we check as soon as possible, instead of waiting for a cron. */
+                clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
+            }
         }
         /* Update the replication offset info for this node. */
         sender->repl_offset = ntohu64(hdr->offset);

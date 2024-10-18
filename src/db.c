@@ -385,7 +385,7 @@ robj *dbRandomKey(serverDb *db) {
         key = dictGetKey(de);
         keyobj = createStringObject(key, sdslen(key));
         if (dbFindExpiresWithDictIndex(db, key, randomDictIndex)) {
-            if (allvolatile && (server.primary_host || server.pseudo_replica) && --maxtries == 0) {
+            if (allvolatile && (server.primary_host || server.import_mode) && --maxtries == 0) {
                 /* If the DB is composed only of keys with an expire set,
                  * it could happen that all the keys are already logically
                  * expired in the repilca, so the function cannot stop because
@@ -1826,8 +1826,8 @@ keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, int flags, int di
     if (server.primary_host != NULL) {
         if (server.current_client && (server.current_client->flag.primary)) return KEY_VALID;
         if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return KEY_EXPIRED;
-    } else if (server.pseudo_replica) {
-        if (server.current_client && (server.current_client->flag.pseudo_master)) return KEY_VALID;
+    } else if (server.import_mode) {
+        if (server.current_client && (server.current_client->flag.import_source)) return KEY_VALID;
         if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return KEY_EXPIRED;
     }
 

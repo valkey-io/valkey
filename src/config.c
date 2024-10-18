@@ -2331,9 +2331,9 @@ static int isValidActiveDefrag(int val, const char **err) {
     return 1;
 }
 
-static int isValidPseudoReplica(int val, const char **err) {
+static int isValidImportMode(int val, const char **err) {
     if (server.primary_host && val) {
-        *err = "Server is already a replica";
+        *err = "Server is already in replica mode";
         return 0;
     }
     return 1;
@@ -2957,8 +2957,8 @@ static int setConfigReplicaOfOption(standardConfig *config, sds *argv, int argc,
         return 0;
     }
 
-    if (server.pseudo_replica) {
-        *err = "REPLICAOF not allowed in pseudo-replica mode";
+    if (server.import_mode) {
+        *err = "REPLICAOF not allowed in import mode";
         return 0;
     }
 
@@ -3149,7 +3149,7 @@ standardConfig static_configs[] = {
     createBoolConfig("enable-debug-assert", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, server.enable_debug_assert, 0, NULL, NULL),
     createBoolConfig("cluster-slot-stats-enabled", NULL, MODIFIABLE_CONFIG, server.cluster_slot_stats_enabled, 0, NULL, NULL),
     createBoolConfig("hide-user-data-from-log", NULL, MODIFIABLE_CONFIG, server.hide_user_data_from_log, 1, NULL, NULL),
-    createBoolConfig("pseudo-replica", NULL, MODIFIABLE_CONFIG, server.pseudo_replica, 0, isValidPseudoReplica, NULL),
+    createBoolConfig("import-mode", NULL, MODIFIABLE_CONFIG, server.import_mode, 0, isValidImportMode, NULL),
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.acl_filename, "", NULL, NULL),

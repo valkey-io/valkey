@@ -1272,10 +1272,6 @@ void syncCommand(client *c) {
  * - rdb-channel <1|0>
  * Used to identify the client as a replica's rdb connection in an dual channel
  * sync session.
- *
- * - pseudo-master <0|1>
- * Set this connection behaving like a master if server.pseudo_replica is true.
- * Sync tools can set their connections into 'pseudo-master' state to visit expired keys.
  * */
 void replconfCommand(client *c) {
     int j;
@@ -1422,16 +1418,6 @@ void replconfCommand(client *c) {
                 return;
             }
             c->associated_rdb_client_id = (uint64_t)client_id;
-        } else if (!strcasecmp(c->argv[j]->ptr, "pseudo-master")) {
-            long pseudo_master = 0;
-            if (getRangeLongFromObjectOrReply(c, c->argv[j + 1],
-                                              0, 1, &pseudo_master, NULL) != C_OK)
-                return;
-            if (pseudo_master == 1) {
-                c->flag.pseudo_master = 1;
-            } else {
-                c->flag.pseudo_master = 0;
-            }
         } else {
             addReplyErrorFormat(c, "Unrecognized REPLCONF option: %s", (char *)c->argv[j]->ptr);
             return;
@@ -3975,8 +3961,8 @@ void replicaofCommand(client *c) {
         return;
     }
 
-    if (server.pseudo_replica) {
-        addReplyError(c, "REPLICAOF not allowed in pseudo-replica mode.");
+    if (server.import_mode) {
+        addReplyError(c, "REPLICAOF not allowed in import mode.");
         return;
     }
 

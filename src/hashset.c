@@ -303,7 +303,7 @@ static inline const void *elementGetKey(hashset *s, const void *element) {
     if (s->type->elementGetKey != NULL) {
         return s->type->elementGetKey(element);
     } else {
-        return elem;
+        return element;
     }
 }
 
@@ -448,7 +448,7 @@ static void rehashStep(hashset *s) {
         }
         int pos_in_dst_bucket;
         bucket *dst = findBucketForInsert(s, hash, &pos_in_dst_bucket, NULL);
-        dst->elements[pos_in_dst_bucket] = elem;
+        dst->elements[pos_in_dst_bucket] = element;
         dst->hashes[pos_in_dst_bucket] = h2;
         dst->presence |= (1 << pos_in_dst_bucket);
         if (!dst->everfull && bucketIsFull(dst)) {
@@ -680,7 +680,7 @@ static void insert(hashset *s, uint64_t hash, void *element) {
     int pos_in_bucket;
     int table_index;
     bucket *b = findBucketForInsert(s, hash, &pos_in_bucket, &table_index);
-    b->elements[pos_in_bucket] = elem;
+    b->elements[pos_in_bucket] = element;
     b->presence |= (1 << pos_in_bucket);
     b->hashes[pos_in_bucket] = highBits(hash);
     s->used[table_index]++;
@@ -1044,7 +1044,7 @@ void hashsetInsertAtPosition(hashset *s, void *element, void *position) {
     bucket *b = &s->tables[table_index][bucket_index];
     assert((b->presence & (1 << pos_in_bucket)) == 0);
     b->presence |= (1 << pos_in_bucket);
-    b->elements[pos_in_bucket] = elem;
+    b->elements[pos_in_bucket] = element;
     s->used[table_index]++;
     /* Hash bits are already set by hashsetFindPositionForInsert. */
     if (!b->everfull && bucketIsFull(b)) {
@@ -1063,7 +1063,7 @@ int hashsetReplace(hashset *s, void *element) {
     bucket *b = findBucket(s, hash, key, &pos_in_bucket, NULL);
     if (b != NULL) {
         freeElement(s, b->elements[pos_in_bucket]);
-        b->elements[pos_in_bucket] = elem;
+        b->elements[pos_in_bucket] = element;
         return 0;
     } else {
         insert(s, hash, element);
@@ -1094,7 +1094,7 @@ int hashsetPop(hashset *s, const void *key, void **popped) {
 /* Deletes the element with the matching key. Returns 1 if an element was
  * deleted, 0 if no matching element was found. */
 int hashsetDelete(hashset *s, const void *key) {
-    void *elem;
+    void *element;
     if (hashsetPop(s, key, &element)) {
         freeElement(s, element);
         return 1;

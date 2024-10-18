@@ -968,13 +968,6 @@ void **hashsetFindRef(hashset *s, const void *key) {
     return b ? &b->elements[pos_in_bucket] : NULL;
 }
 
-/* /\* A simpler interface to hashsetFind. Returns the matching element or NULL if */
-/*  * not found. Can't be used if NULL is a valid element in the table. *\/ */
-/* void *hashsetFetchElement(hashset *s, const void *key) { */
-/*     void *element; */
-/*     return hashsetFind(s, key, &element) ? element : NULL; */
-/* } */
-
 /* Adds an element. Returns 1 on success. Returns 0 if there was already an element
  * with the same key. */
 int hashsetAdd(hashset *s, void *element) {

@@ -100,7 +100,8 @@ typedef struct hashsetStats {
     unsigned long totalChainLen; /* buckets with probing flag */
     unsigned long htSize;        /* buckets * positions-per-bucket */
     unsigned long htUsed;        /* num elements */
-    unsigned long *clvector;
+    unsigned long *clvector;     /* (probing-)chain length vector; element i is
+                                  * the number of probing chains of length i. */
 } hashsetStats;
 
 /* --- Prototypes --- */

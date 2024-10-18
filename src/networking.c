@@ -3567,9 +3567,9 @@ void clientCommand(client *c) {
             "    Protect current client connection from eviction.",
             "NO-TOUCH (ON|OFF)",
             "    Will not touch LRU/LFU stats when this mode is on.",
-            "PSEUDO-PRIMARY (ON|OFF)",
-            "    Set this connection behaving like a primary if server.import_mode is true.",
-            "    Sync tools can set their connections into 'pseudo-primary' state to visit expired keys.",
+            "IMPORY-SOURCE (ON|OFF)",
+            "    Set this connection as importing source when server.import_mode is true.",
+            "    Sync tools can set their connections into this state to visit expired keys.",
             NULL};
         addReplyHelp(c, help);
     } else if (!strcasecmp(c->argv[1]->ptr, "id") && c->argc == 2) {

@@ -45,7 +45,7 @@ start_server {tags {"pubsub network"}} {
         set rd1 [valkey_deferring_client]
 
         # subscribe to two channels
-        assert_equal {1 2} [subscribe $rd1 {chan1 chan2}]
+	assert_equal {1 2} [subscribe $rd1 {chan1 chan2}]
         assert_equal 1 [r publish chan1 hello]
         assert_equal 1 [r publish chan2 world]
         assert_equal {message chan1 hello} [$rd1 read]
@@ -83,7 +83,7 @@ start_server {tags {"pubsub network"}} {
 
     test "PUBLISH/SUBSCRIBE after UNSUBSCRIBE without arguments" {
         set rd1 [valkey_deferring_client]
-        assert_equal {1 2 3} [subscribe $rd1 {chan1 chan2 chan3}]
+	assert_equal {1 2 3} [subscribe $rd1 {chan1 chan2 chan3}]
         unsubscribe $rd1
         # wait for the unsubscribe to take effect
         wait_for_condition 50 100 {
@@ -101,7 +101,7 @@ start_server {tags {"pubsub network"}} {
 
     test "SUBSCRIBE to one channel more than once" {
         set rd1 [valkey_deferring_client]
-        assert_equal {1 1 1} [subscribe $rd1 {chan1 chan1 chan1}]
+	assert_equal {1 1 1} [subscribe $rd1 {chan1 chan1 chan1}]
         assert_equal 1 [r publish chan1 hello]
         assert_equal {message chan1 hello} [$rd1 read]
 
@@ -479,13 +479,10 @@ start_server {tags {"pubsub network"}} {
         r hello 3
 
         # Note: SUBSCRIBE and UNSUBSCRIBE with multiple channels in the same command,
-        # breaks the multi response, see Redis OSS issue: https://github.com/redis/redis/issues/12207
-        # this is just a temporary sanity test to detect unintended breakage.
-
-        # subscribe for 3 channels actually emits 3 "responses"
-        assert_equal "subscribe foo 1" [r subscribe foo bar baz]
-        assert_equal "subscribe bar 2" [r read]
-        assert_equal "subscribe baz 3" [r read]
+        # Only one response is returned 
+	# This update matches with Redis response: one command always returns one response
+	r client capa subv2
+	assert_equal "subscribe foo 1 subscribe bar 2 subscribe baz 3" [r subscribe foo bar baz]
 
         r multi
         r ping abc

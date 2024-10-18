@@ -1296,27 +1296,28 @@ size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *priv
             /* Advance cursor. */
             cursor = nextCursor(cursor, mask);
         } else {
-            /* Let table0 be the the smaller table and table1 the bigger one. */
-            int table0, table1;
+            int table_small, table_large;
             if (t->bucketExp[0] <= t->bucketExp[1]) {
-                table0 = 0;
-                table1 = 1;
+                table_small = 0;
+                table_large = 1;
             } else {
-                table0 = 1;
-                table1 = 0;
+                table_small = 1;
+                table_large = 0;
             }
 
-            size_t mask0 = expToMask(t->bucketExp[table0]);
-            size_t mask1 = expToMask(t->bucketExp[table1]);
+            size_t mask_small = expToMask(t->bucketExp[table_small]);
+            size_t mask_large = expToMask(t->bucketExp[table_large]);
 
             /* Emit elements in the smaller table, if this bucket hasn't already
              * been rehashed. */
-            if (table0 == 0 && !cursorIsLessThan(cursor, t->rehashIdx)) {
-                bucket *b = &t->tables[table0][cursor & mask0];
-                for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
-                    if (b->presence & (1 << pos)) {
-                        void *emit = emit_ref ? &b->elements[pos] : b->elements[pos];
-                        fn(privdata, emit);
+            if (table_small == 0 && !cursorIsLessThan(cursor, t->rehashIdx)) {
+                bucket *b = &t->tables[table_small][cursor & mask_small];
+                if (b->presence) {
+                    for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
+                        if (b->presence & (1 << pos)) {
+                            void *emit = emit_ref ? &b->elements[pos] : b->elements[pos];
+                            fn(privdata, emit);
+                        }
                     }
                 }
                 in_probe_sequence |= b->everfull;
@@ -1325,21 +1326,23 @@ size_t hashsetScan(hashset *t, size_t cursor, hashsetScanFunction fn, void *priv
             /* Iterate over indices in larger table that are the expansion of
              * the index pointed to by the cursor in the smaller table. */
             do {
-                /* Emit elements in table 1. */
-                bucket *b = &t->tables[table1][cursor & mask1];
-                for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
-                    if (b->presence & (1 << pos)) {
-                        void *emit = emit_ref ? &b->elements[pos] : b->elements[pos];
-                        fn(privdata, emit);
+                /* Emit elements in bigger table. */
+                bucket *b = &t->tables[table_large][cursor & mask_large];
+                if (b->presence) {
+                    for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
+                        if (b->presence & (1 << pos)) {
+                            void *emit = emit_ref ? &b->elements[pos] : b->elements[pos];
+                            fn(privdata, emit);
+                        }
                     }
                 }
                 in_probe_sequence |= b->everfull;
 
                 /* Increment the reverse cursor not covered by the smaller mask.*/
-                cursor = nextCursor(cursor, mask1);
+                cursor = nextCursor(cursor, mask_large);
 
                 /* Continue while bits covered by mask difference is non-zero */
-            } while ((cursor & (mask0 ^ mask1)) && cursor != start_cursor);
+            } while (cursor & (mask_small ^ mask_large) && cursor != start_cursor);
         }
         if (cursor == 0) {
             cursor_passed_zero = 1;
@@ -1431,8 +1434,11 @@ int hashsetNext(hashsetIterator *iter, void **elemptr) {
             } else {
                 iter->fingerprint = hashsetFingerprint(iter->hashset);
             }
+            if (iter->hashset->tables[0] == NULL) {
+                /* empty hashset, we're done */
+                break;
+            }
             iter->index = 0;
-            /* skip the rehashed slots in table[0] */
             if (hashsetIsRehashing(iter->hashset)) {
                 iter->index = iter->hashset->rehashIdx;
             }
@@ -1442,9 +1448,8 @@ int hashsetNext(hashsetIterator *iter, void **elemptr) {
             iter->posInBucket++;
             if (iter->posInBucket >= ELEMENTS_PER_BUCKET) {
                 iter->posInBucket = 0;
-                iter->index++;
-                if (iter->index >= (long)numBuckets(iter->hashset->bucketExp[iter->table])) {
-                    iter->index = 0;
+                iter->index = nextCursor(iter->index, expToMask(iter->hashset->bucketExp[iter->table]));
+                if (iter->index == 0) {
                     if (hashsetIsRehashing(iter->hashset) && iter->table == 0) {
                         iter->table++;
                     } else {

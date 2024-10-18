@@ -3567,8 +3567,8 @@ void clientCommand(client *c) {
             "    Protect current client connection from eviction.",
             "NO-TOUCH (ON|OFF)",
             "    Will not touch LRU/LFU stats when this mode is on.",
-            "IMPORY-SOURCE (ON|OFF)",
-            "    Set this connection as importing source when server.import_mode is true.",
+            "IMPORT-SOURCE (ON|OFF)",
+            "    Mark this connection as importing source when server.import_mode is true.",
             "    Sync tools can set their connections into this state to visit expired keys.",
             NULL};
         addReplyHelp(c, help);

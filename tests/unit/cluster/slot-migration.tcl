@@ -14,17 +14,61 @@ proc get_cluster_role {srv_idx} {
     return $role
 }
 
+proc get_myself_primary_flags {srv_idx} {
+    set flags [dict get [cluster_get_myself_primary $srv_idx] flags]
+    return $flags
+}
+
+proc get_myself_primary_linkstate {srv_idx} {
+    set linkstate [dict get [cluster_get_myself_primary $srv_idx] linkstate]
+    return $linkstate
+}
+
 proc wait_for_role {srv_idx role} {
+    # Wait for the role, make sure the replication role matches.
     wait_for_condition 100 100 {
         [lindex [split [R $srv_idx ROLE] " "] 0] eq $role
     } else {
+        puts "R $srv_idx ROLE: [R $srv_idx ROLE]"
         fail "R $srv_idx didn't assume the replication $role in time"
     }
+
+    if {$role eq "slave"} {
+        # Wait for the replication link, make sure the replication link is normal.
+        wait_for_condition 100 100 {
+            [s -$srv_idx master_link_status] eq "up"
+        } else {
+            puts "R $srv_idx INFO REPLICATION: [R $srv_idx INFO REPLICATION]"
+            fail "R $srv_idx didn't assume the replication link in time"
+        }
+    }
+
+    # Wait for the cluster role, make sure the cluster role matches.
     wait_for_condition 100 100 {
         [get_cluster_role $srv_idx] eq $role
     } else {
+        puts "R $srv_idx CLUSTER NODES: [R $srv_idx CLUSTER NODES]"
         fail "R $srv_idx didn't assume the cluster $role in time"
     }
+
+    if {$role eq "slave"} {
+        # Wait for the flags, make sure the primary node is not failed.
+        wait_for_condition 100 100 {
+            [get_myself_primary_flags $srv_idx] eq "master"
+        } else {
+            puts "R $srv_idx CLUSTER NODES: [R $srv_idx CLUSTER NODES]"
+            fail "R $srv_idx didn't assume the primary state in time"
+        }
+
+        # Wait for the cluster link, make sure that the cluster connection is normal.
+        wait_for_condition 100 100 {
+            [get_myself_primary_linkstate $srv_idx] eq "connected"
+        } else {
+            puts "R $srv_idx CLUSTER NODES: [R $srv_idx CLUSTER NODES]"
+            fail "R $srv_idx didn't assume the cluster primary link in time"
+        }
+    }
+
     wait_for_cluster_propagation
 }
 

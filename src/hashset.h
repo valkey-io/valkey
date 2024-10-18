@@ -19,9 +19,8 @@
  *         An element in the hashset. This may be of the same type as the key,
  *         or a struct containing a key and other fields.
  * key
- *         The part of the element used for looking the element up in the hashset. 
- *         May be the entire element or one of the structs within the element.
- *
+ *         The part of the element used for looking the element up in the hashset.
+ *         May be the entire element or a struct field within the element.
  *
  * type
  *         A struct containing callbacks, such as hash function, key comparison

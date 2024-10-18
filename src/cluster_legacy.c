@@ -4439,6 +4439,12 @@ void clusterLogCantFailover(int reason) {
         time(NULL) - lastlog_time < CLUSTER_CANT_FAILOVER_RELOG_PERIOD)
         return;
 
+    /* If data age is too old, this log may be printed repeatedly since it
+     * can not be automatically recovered. In this case, limit its frequency. */
+    if (reason == server.cluster->cant_failover_reason && reason == CLUSTER_CANT_FAILOVER_DATA_AGE &&
+        time(NULL) - lastlog_time < 10 * CLUSTER_CANT_FAILOVER_RELOG_PERIOD)
+        return;
+
     server.cluster->cant_failover_reason = reason;
 
     switch (reason) {

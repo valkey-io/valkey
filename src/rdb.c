@@ -3689,6 +3689,21 @@ void bgsaveCommand(client *c) {
     if (c->argc > 1) {
         if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "schedule")) {
             schedule = 1;
+        } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "cancel")) {
+            /* Terminates an in progress BGSAVE */
+            if (server.child_type == CHILD_TYPE_RDB) {
+                /* There is an ongoing bgsave */
+                serverLog(LL_NOTICE, "Background saving will be aborted due to user request");
+                killRDBChild();
+                addReplyStatus(c, "Background saving cancelled");
+            } else if (server.rdb_bgsave_scheduled == 1) {
+                serverLog(LL_NOTICE, "Scheduled background saving will be cancelled due to user request");
+                server.rdb_bgsave_scheduled = 0;
+                addReplyStatus(c, "Scheduled background saving cancelled");
+            } else {
+                addReplyError(c, "Background saving is currently not in progress or scheduled");
+            }
+            return;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
@@ -3703,6 +3718,11 @@ void bgsaveCommand(client *c) {
     } else if (hasActiveChildProcess() || server.in_exec) {
         if (schedule || server.in_exec) {
             server.rdb_bgsave_scheduled = 1;
+            if (schedule) {
+                serverLog(LL_NOTICE, "Background saving scheduled due to user request");
+            } else {
+                serverLog(LL_NOTICE, "Background saving scheduled to run after transaction execution");
+            }
             addReplyStatus(c, "Background saving scheduled");
         } else {
             addReplyError(c, "Another child process is active (AOF?): can't BGSAVE right now. "

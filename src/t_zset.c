@@ -1841,6 +1841,7 @@ cleanup:
     if (added || updated) {
         signalModifiedKey(c, c->db, key);
         notifyKeyspaceEvent(NOTIFY_ZSET, incr ? "zincr" : "zadd", key, c->db->id);
+        bigkeylogPush(key, zsetLength(zobj));
     }
 }
 

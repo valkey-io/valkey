@@ -6,10 +6,14 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-replica-no-fa
         # and other nodes will set it to NOADDR.
         R 0 cluster reset hard
         wait_for_log_messages -1 {"*PONG contains mismatching sender ID*"} 0 1000 10
-        assert_equal [cluster_has_flag [cluster_get_node_by_id 1 $primary0_id] noaddr] 1
+        wait_for_condition 1000 10 {
+            [cluster_has_flag [cluster_get_node_by_id 1 $primary0_id] noaddr] eq 1 &&
+            [cluster_has_flag [cluster_get_node_by_id 1 $primary0_id] fail] eq 1
+        } else {
+            fail "The node is not marked with the correct flag"
+        }
 
         # Also we will set the node to FAIL, so the cluster will eventually be down.
-        assert_equal [cluster_has_flag [cluster_get_node_by_id 1 $primary0_id] fail] 1
         wait_for_condition 1000 50 {
             [CI 1 cluster_state] eq {fail} &&
             [CI 2 cluster_state] eq {fail} &&
@@ -34,7 +38,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-replica-no-fa
             [CI 4 cluster_state] eq {ok} &&
             [CI 5 cluster_state] eq {ok}
         } else {
-            fail "Cluster doesn't ok"
+            fail "Cluster doesn't stabilize"
         }
     }
 } ;# start_cluster

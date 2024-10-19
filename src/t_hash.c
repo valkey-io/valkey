@@ -615,6 +615,7 @@ void hsetCommand(client *c) {
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
     server.dirty += (c->argc - 2) / 2;
+    bigkeylogPush(c->argv[1], hashTypeLength(o));
 }
 
 void hincrbyCommand(client *c) {

@@ -277,6 +277,14 @@ proc cluster_get_myself id {
     return {}
 }
 
+# Returns the parsed "myself's primary" node entry as a dictionary.
+proc cluster_get_myself_primary id {
+    set myself [cluster_get_myself $id]
+    set replicaof [dict get $myself slaveof]
+    set node [cluster_get_node_by_id $id $replicaof]
+    return $node
+}
+
 # Get a specific node by ID by parsing the CLUSTER NODES output
 # of the instance Number 'instance_id'
 proc cluster_get_node_by_id {instance_id node_id} {

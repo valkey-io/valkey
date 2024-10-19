@@ -64,3 +64,36 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
     }
 
 } ;# start_cluster
+
+
+start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
+    test "Primaries will not time out then they are elected in the same epoch" {
+        # Since we have the delay time, so these node may not initiate the
+        # election at the same time (same epoch). But if they do, we make
+        # sure there is no failover timeout.
+
+        # Killing there primary nodes.
+        pause_process [srv 0 pid]
+        pause_process [srv -1 pid]
+        pause_process [srv -2 pid]
+
+        # Wait for the failover
+        wait_for_condition 1000 50 {
+            [s -7 role] == "master" &&
+            [s -8 role] == "master" &&
+            [s -9 role] == "master"
+        } else {
+            fail "No failover detected"
+        }
+
+        # Make sure there is no failover timeout.
+        verify_no_log_message -7 "*Failover attempt expired*" 0
+        verify_no_log_message -8 "*Failover attempt expired*" 0
+        verify_no_log_message -9 "*Failover attempt expired*" 0
+
+        # Resuming these primary nodes, speed up the shutdown.
+        resume_process [srv 0 pid]
+        resume_process [srv -1 pid]
+        resume_process [srv -2 pid]
+    }
+} ;# start_cluster

@@ -194,8 +194,8 @@ start_server {tags {"cli"}} {
         assert_equal "bar" [r get key]
     }
 
-    test_interactive_cli "Subscribed mode" {
-        if {$::force_resp3} {
+    test_interactive_cli "Subscribed mode -- deprecated" {
+	if {$::force_resp3} {
             run_command $fd "hello 3"
         }
 
@@ -206,6 +206,32 @@ start_server {tags {"cli"}} {
         set sub1 "1) \"subscribe\"\n2) \"ch1\"\n3) (integer) 1\n"
         set sub2 "1) \"subscribe\"\n2) \"ch2\"\n3) (integer) 2\n"
         set sub3 "1) \"subscribe\"\n2) \"ch3\"\n3) (integer) 3\n"
+        assert_equal $sub1$sub2$sub3$reading \
+            [run_command $fd "subscribe ch1 ch2 ch3"]
+
+        # Unsubscribe all.
+        set unsub1 "1) \"unsubscribe\"\n2) \"ch1\"\n3) (integer) 2\n"
+        set unsub2 "1) \"unsubscribe\"\n2) \"ch2\"\n3) (integer) 1\n"
+        set unsub3 "1) \"unsubscribe\"\n2) \"ch3\"\n3) (integer) 0\n"
+        assert_equal $erase$unsub1$unsub2$unsub3$reading \
+            [run_command $fd "unsubscribe ch1 ch2 ch3"]
+
+    }
+
+    test_interactive_cli "Subscribed mode" {
+        if {$::force_resp3} {
+            run_command $fd "hello 3"
+        }
+
+        set reading "Reading messages... (press Ctrl-C to quit or any key to type command)\r"
+        set erase "\033\[K"; # Erases the "Reading messages..." line.
+
+        run_command $fd "client capa subv2"
+
+        # Subscribe to some channels.
+        set sub1 "1) \"subscribe\"\n2) \"ch1\"\n3) (integer) 1\n"
+        set sub2 "4) \"subscribe\"\n5) \"ch2\"\n6) (integer) 2\n"
+        set sub3 "7) \"subscribe\"\n8) \"ch3\"\n9) (integer) 3\n"
         assert_equal $sub1$sub2$sub3$reading \
             [run_command $fd "subscribe ch1 ch2 ch3"]
 

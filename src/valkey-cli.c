@@ -272,6 +272,7 @@ static struct config {
     char *test_hint_file;
     int prefer_ipv4; /* Prefer IPv4 over IPv6 on DNS lookup. */
     int prefer_ipv6; /* Prefer IPv6 over IPv4 on DNS lookup. */
+    int pubsub_version;
 } config;
 
 /* User preferences. */
@@ -2345,6 +2346,15 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
         config.output = OUTPUT_RAW;
     }
 
+    if (!strcasecmp(command, "client") && argc >= 3 && !strcasecmp(argv[1], "capa")) {
+        for (int index = 2; index < argc; index++) {
+            if (!strcasecmp(argv[index], "subv2")) {
+                config.pubsub_version = 2;
+                break;
+            }
+        }
+    }
+
     /* Setup argument length */
     argvlen = zmalloc(argc * sizeof(size_t));
     for (j = 0; j < argc; j++) argvlen[j] = sdslen(argv[j]);
@@ -2375,7 +2385,11 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
              * an in-band message is received, but these commands are confirmed
              * using push replies only. There is one push reply per channel if
              * channels are specified, otherwise at least one. */
-            num_expected_pubsub_push = argc > 1 ? argc - 1 : 1;
+            if (config.pubsub_version == 2) {
+                num_expected_pubsub_push = 1;
+            } else {
+                num_expected_pubsub_push = argc > 1 ? argc - 1 : 1;
+            }
             /* Unset our default PUSH handler so this works in RESP2/RESP3 */
             redisSetPushCallback(context, NULL);
         }
@@ -9537,6 +9551,7 @@ int main(int argc, char **argv) {
     config.server_version = NULL;
     config.prefer_ipv4 = 0;
     config.prefer_ipv6 = 0;
+    config.pubsub_version = 1;
     config.cluster_manager_command.name = NULL;
     config.cluster_manager_command.argc = 0;
     config.cluster_manager_command.argv = NULL;

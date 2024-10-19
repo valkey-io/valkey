@@ -2086,6 +2086,8 @@ struct valkeyServer {
     ssize_t maxmemory_clients;                  /* Memory limit for total client buffers */
     int maxmemory_policy;                       /* Policy for key eviction */
     int maxmemory_samples;                      /* Precision of random sampling */
+    int maxmemory_reserved_scale;               /* Percent of the maxmemory value */
+    unsigned long long maxmemory_available;     /* Max memory to store data */
     int maxmemory_eviction_tenacity;            /* Aggressiveness of eviction processing */
     int lfu_log_factor;                         /* LFU logarithmic counter factor. */
     int lfu_decay_time;                         /* LFU counter decay factor. */
@@ -3019,6 +3021,9 @@ unsigned long long estimateObjectIdleTime(robj *o);
 void trimStringObjectIfNeeded(robj *o, int trim_small_values);
 static inline int canUseSharedObject(void) {
     return server.maxmemory == 0 || !(server.maxmemory_policy & MAXMEMORY_FLAG_NO_SHARED_INTEGERS);
+}
+static inline void updateMaxAvailableMemory(void) {
+    server.maxmemory_available = (unsigned long long)server.maxmemory / 100.0 * (100 - server.maxmemory_reserved_scale);
 }
 #define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
 

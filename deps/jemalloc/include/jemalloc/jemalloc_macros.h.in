@@ -147,7 +147,3 @@
 #else
 #  define JEMALLOC_SYS_NOTHROW JEMALLOC_NOTHROW
 #endif
-
-/* This version of Jemalloc, modified for Redis, has the je_get_defrag_hint()
- * function. */
-#define JEMALLOC_FRAG_HINT

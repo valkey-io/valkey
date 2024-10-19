@@ -84,7 +84,6 @@ void zlibc_free(void *ptr) {
 #define calloc(count, size) je_calloc(count, size)
 #define realloc(ptr, size) je_realloc(ptr, size)
 #define free(ptr) je_free(ptr)
-#define mallocx(size, flags) je_mallocx(size, flags)
 #define dallocx(ptr, flags) je_dallocx(ptr, flags)
 #endif
 
@@ -206,25 +205,6 @@ void *zmalloc_usable(size_t size, size_t *usable) {
     if (usable) *usable = usable_size;
     return ptr;
 }
-
-/* Allocation and free functions that bypass the thread cache
- * and go straight to the allocator arena bins.
- * Currently implemented only for jemalloc. Used for online defragmentation. */
-#ifdef HAVE_DEFRAG
-void *zmalloc_no_tcache(size_t size) {
-    if (size >= SIZE_MAX / 2) zmalloc_oom_handler(size);
-    void *ptr = mallocx(size + PREFIX_SIZE, MALLOCX_TCACHE_NONE);
-    if (!ptr) zmalloc_oom_handler(size);
-    update_zmalloc_stat_alloc(zmalloc_size(ptr));
-    return ptr;
-}
-
-void zfree_no_tcache(void *ptr) {
-    if (ptr == NULL) return;
-    update_zmalloc_stat_free(zmalloc_size(ptr));
-    dallocx(ptr, MALLOCX_TCACHE_NONE);
-}
-#endif
 
 /* Try allocating memory and zero it, and return NULL if failed.
  * '*usable' is set to the usable size if non NULL. */
@@ -683,52 +663,7 @@ size_t zmalloc_get_rss(void) {
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)
 
-/* Compute the total memory wasted in fragmentation of inside small arena bins.
- * Done by summing the memory in unused regs in all slabs of all small bins. */
-size_t zmalloc_get_frag_smallbins(void) {
-    unsigned nbins;
-    size_t sz, frag = 0;
-    char buf[100];
-
-    sz = sizeof(unsigned);
-    assert(!je_mallctl("arenas.nbins", &nbins, &sz, NULL, 0));
-    for (unsigned j = 0; j < nbins; j++) {
-        size_t curregs, curslabs, reg_size;
-        uint32_t nregs;
-
-        /* The size of the current bin */
-        snprintf(buf, sizeof(buf), "arenas.bin.%d.size", j);
-        sz = sizeof(size_t);
-        assert(!je_mallctl(buf, &reg_size, &sz, NULL, 0));
-
-        /* Number of used regions in the bin */
-        snprintf(buf, sizeof(buf), "stats.arenas." STRINGIFY(MALLCTL_ARENAS_ALL) ".bins.%d.curregs", j);
-        sz = sizeof(size_t);
-        assert(!je_mallctl(buf, &curregs, &sz, NULL, 0));
-
-        /* Number of regions per slab */
-        snprintf(buf, sizeof(buf), "arenas.bin.%d.nregs", j);
-        sz = sizeof(uint32_t);
-        assert(!je_mallctl(buf, &nregs, &sz, NULL, 0));
-
-        /* Number of current slabs in the bin */
-        snprintf(buf, sizeof(buf), "stats.arenas." STRINGIFY(MALLCTL_ARENAS_ALL) ".bins.%d.curslabs", j);
-        sz = sizeof(size_t);
-        assert(!je_mallctl(buf, &curslabs, &sz, NULL, 0));
-
-        /* Calculate the fragmentation bytes for the current bin and add it to the total. */
-        frag += ((nregs * curslabs) - curregs) * reg_size;
-    }
-
-    return frag;
-}
-
-int zmalloc_get_allocator_info(size_t *allocated,
-                               size_t *active,
-                               size_t *resident,
-                               size_t *retained,
-                               size_t *muzzy,
-                               size_t *frag_smallbins_bytes) {
+int zmalloc_get_allocator_info(size_t *allocated, size_t *active, size_t *resident, size_t *retained, size_t *muzzy) {
     uint64_t epoch = 1;
     size_t sz;
     *allocated = *resident = *active = 0;
@@ -763,8 +698,6 @@ int zmalloc_get_allocator_info(size_t *allocated,
         *muzzy = pmuzzy * page;
     }
 
-    /* Total size of consumed meomry in unused regs in small bins (AKA external fragmentation). */
-    *frag_smallbins_bytes = zmalloc_get_frag_smallbins();
     return 1;
 }
 
@@ -789,13 +722,8 @@ int jemalloc_purge(void) {
 
 #else
 
-int zmalloc_get_allocator_info(size_t *allocated,
-                               size_t *active,
-                               size_t *resident,
-                               size_t *retained,
-                               size_t *muzzy,
-                               size_t *frag_smallbins_bytes) {
-    *allocated = *resident = *active = *frag_smallbins_bytes = 0;
+int zmalloc_get_allocator_info(size_t *allocated, size_t *active, size_t *resident, size_t *retained, size_t *muzzy) {
+    *allocated = *resident = *active = 0;
     if (retained) *retained = 0;
     if (muzzy) *muzzy = 0;
     return 1;

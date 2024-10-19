@@ -2069,8 +2069,7 @@ struct valkeyServer {
      * the server->primary client structure. */
     char primary_replid[CONFIG_RUN_ID_SIZE + 1]; /* Primary PSYNC runid. */
     long long primary_initial_offset;            /* Primary PSYNC offset. */
-    int repl_replica_lazy_flush;                 /* Lazy FLUSHALL before loading DB?
-                                                  * Lazy FLUSHALL before resetting? */
+    int repl_replica_lazy_flush;                 /* Lazy FLUSHALL before loading DB? */
     /* Synchronous replication. */
     list *clients_waiting_acks; /* Clients waiting in WAIT or WAITAOF. */
     int get_ack_from_replicas;  /* If true we send REPLCONF GETACK. */

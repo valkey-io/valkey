@@ -3244,19 +3244,21 @@ int clusterProcessPacket(clusterLink *link) {
             } else if (memcmp(link->node->name, hdr->sender, CLUSTER_NAMELEN) != 0) {
                 /* If the reply has a non matching node ID we
                  * disconnect this node and set it as not having an associated
-                 * address. */
+                 * address. This can happen if the node did CLUSTER RESET and changed
+                 * its node ID. In this case, the old node ID will not come back.
+                 *
+                 * We will also mark the node as fail because we have disconnected from it,
+                 * and will not reconnect, and obviously we will not gossip NOADDR nodes.
+                 * Marking it as FAIL can help us advance the state, such as the cluster
+                 * state becomes FAIL or the replica can do the failover. Otherwise, the
+                 * NOADDR node will provide an invalid address in redirection and confuse
+                 * the clients, and the replica will never initiate a failover since the
+                 * node is not actually in FAIL state. */
                 serverLog(LL_NOTICE,
                           "PONG contains mismatching sender ID. About node %.40s (%s) in shard %.40s added %d ms ago, "
                           "having flags %d",
                           link->node->name, link->node->human_nodename, link->node->shard_id,
                           (int)(now - (link->node->ctime)), link->node->flags);
-                /* We also mark the node as fail because we have disconnected from it,
-                 * and will not reconnect, and obviously we will not gossip NOADDR nodes.
-                 * Marking it as FAIL can help us advance the state, such as the cluster
-                 * state becomes FAIL or the replica can do the failover. Otherwise, the
-                 * NOADDR node will provide an invalid address in redirection and confuse
-                 * the client, and the replica will not initiate a failover since the node
-                 * is not actually in FAIL state. */
                 link->node->flags |= (CLUSTER_NODE_NOADDR | CLUSTER_NODE_FAIL);
                 link->node->ip[0] = '\0';
                 link->node->tcp_port = 0;

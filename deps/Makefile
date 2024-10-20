@@ -74,6 +74,12 @@ fpconv: .make-prerequisites
 
 .PHONY: fpconv
 
+download-wasm-binary-deps: .make-prerequisites
+	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
+	cd wasmtime-c-api && $(MAKE)
+
+.PHONY: download-wasm-binary-deps
+
 ifeq ($(uname_S),SunOS)
 	# Make isinf() available
 	LUA_CFLAGS= -D__C99FEATURES__=1

@@ -443,7 +443,7 @@ int test_safe_iterator(int argc, char **argv, int flags) {
         if (j < 0 || j >= count * 2) {
             printf("Element %ld returned, max == %ld. Num returned: %ld\n", j, count * 2 - 1, num_returned);
             printf("Safe %d, table %d, index %lu, pos in bucket %d, rehashing? %d\n", iter.safe, iter.table, iter.index,
-                   iter.posInBucket, !hashsetIsRehashing(s));
+                   iter.pos_in_bucket, !hashsetIsRehashing(s));
             hashsetHistogram(s);
             exit(1);
         }

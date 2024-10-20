@@ -178,12 +178,16 @@ void hashsetSetResizePolicy(hashsetResizePolicy policy) {
 #define BUCKET_DIVISOR 16
 /* When resizing, we get a fill of at most 76.19% (16 / 3 / 7). */
 
+#define randomSizeT() ((size_t)genrand64_int64())
+
 #elif SIZE_MAX == UINT32_MAX /* 32-bit version */
 
 #define ELEMENTS_PER_BUCKET 12
 #define BUCKET_FACTOR 7
 #define BUCKET_DIVISOR 64
 /* When resizing, we get a fill of at most 76.19% (64 / 7 / 12). */
+
+#define randomSizeT() ((size_t)random())
 
 #else
 #error "Only 64-bit or 32-bit architectures are supported"
@@ -202,13 +206,6 @@ static_assert(MAX_FILL_PERCENT_HARD < 100, "Hard fill factor must be below 100%"
 
 #define FAIR_RANDOM_SAMPLE_SIZE (ELEMENTS_PER_BUCKET * 40)
 #define WEAK_RANDOM_SAMPLE_SIZE ELEMENTS_PER_BUCKET
-
-/* If size_t is 64 bits, use a 64 bit PRNG. */
-#if SIZE_MAX >= 0xffffffffffffffff
-#define randomSizeT() ((size_t)genrand64_int64())
-#else
-#define randomSizeT() ((size_t)random())
-#endif
 
 /* --- Types --- */
 
@@ -330,6 +327,10 @@ static inline int bucketIsFull(bucket *b) {
     return b->presence == (1 << ELEMENTS_PER_BUCKET) - 1;
 }
 
+/* Returns non-zero if the position within the bucket is occupied. */
+static inline int isPositionFilled(bucket *b, int position) {
+    return b->presence & (1 << position);
+}
 static void resetTable(hashset *s, int table_idx) {
     s->tables[table_idx] = NULL;
     s->used[table_idx] = 0;
@@ -432,7 +433,7 @@ static void rehashStep(hashset *s) {
     bucket *b = &s->tables[0][idx];
     int pos;
     for (pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
-        if (!(b->presence & (1 << pos))) continue; /* empty */
+        if (!isPositionFilled(b, pos)) continue; /* empty */
         void *element = b->elements[pos];
         uint8_t h2 = b->hashes[pos];
         /* Insert into table 1. */
@@ -441,7 +442,8 @@ static void rehashStep(hashset *s) {
          * just use idx has the hash, but only if we know that probing didn't
          * push this element away from its primary bucket, so only if the
          * bucket before the current one hasn't ever been full. */
-        if (s->bucketExp[1] < s->bucketExp[0] && !s->tables[0][prevCursor(idx, expToMask(s->bucketExp[0]))].everfull) {
+        if (s->bucketExp[1] <= s->bucketExp[0] &&
+            !s->tables[0][prevCursor(idx, expToMask(s->bucketExp[0]))].everfull) {
             hash = idx;
         } else {
             hash = hashElement(s, element);
@@ -460,10 +462,8 @@ static void rehashStep(hashset *s) {
     }
     /* Mark the source bucket as empty. */
     b->presence = 0;
-    /* Bucket done. Advance to the next bucket in probing order, to cover
-     * complete probing chains. Other alternatives are (1) just rehashIdx++ or
-     * (2) in reverse scan order and clear the tombstones while doing so.
-     * (Alternative is to do rehashIdx++.) */
+    /* Bucket done. Advance to the next bucket in probing order. We rehash in
+     * this order to be able to skip already rehashed buckets in scan. */
     s->rehashIdx = nextCursor(s->rehashIdx, expToMask(s->bucketExp[0]));
     if (s->rehashIdx == 0) {
         rehashingCompleted(s);
@@ -558,9 +558,9 @@ static int resize(hashset *s, size_t min_capacity, int *malloc_failed) {
     return 1;
 }
 
-/* Probing is slow when there are too many tombstones. Resize to the same size
- * to trigger rehashing and cleaning up tombstones. */
-static int cleanUpTombstonesIfNeeded(hashset *s) {
+/* Probing is slow when there are too long probing chains, i.e. too many
+ * tombstones. Resize to the same size to trigger rehashing. */
+static int cleanUpProbingChainsIfNeeded(hashset *s) {
     if (hashsetIsRehashing(s) || resize_policy == HASHSET_RESIZE_FORBID) {
         return 0;
     }
@@ -606,13 +606,14 @@ static bucket *findBucket(hashset *s, uint64_t hash, const void *key, int *pos_i
             bucket *b = &s->tables[table][bucket_idx];
             /* Find candidate elements with presence flag set and matching h2 hash. */
             for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
-                if ((b->presence & (1 << pos)) && b->hashes[pos] == h2) {
+                if (isPositionFilled(b, pos) && b->hashes[pos] == h2) {
                     /* It's a candidate. */
                     void *element = b->elements[pos];
                     const void *elem_key = elementGetKey(s, element);
                     if (compareKeys(s, key, elem_key) == 0) {
                         /* It's a match. */
-                        if (pos_in_bucket) *pos_in_bucket = pos;
+                        assert(pos_in_bucket != NULL);
+                        *pos_in_bucket = pos;
                         if (table_index) *table_index = table;
                         return b;
                     }
@@ -623,8 +624,9 @@ static bucket *findBucket(hashset *s, uint64_t hash, const void *key, int *pos_i
             if (!b->everfull) break;
             bucket_idx = nextCursor(bucket_idx, mask);
             if (bucket_idx == start_bucket_idx) {
-                /* We probed the whole table. This should be extremely rare but
-                 * theoretically it can happen. */
+                /* We probed the whole table. It can happen that all buckets
+                 * have the 'everfull' bit set. This can only happen for small
+                 * tables and then rehashing is already in progress. */
                 break;
             }
         }
@@ -641,8 +643,9 @@ static bucket *findBucketForInsert(hashset *s, uint64_t hash, int *pos_in_bucket
     while (1) {
         bucket *b = &s->tables[table][bucket_idx];
         for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
-            if (b->presence & (1 << pos)) continue; /* busy */
-            if (pos_in_bucket) *pos_in_bucket = pos;
+            if (isPositionFilled(b, pos)) continue; /* busy */
+            assert(pos_in_bucket != NULL);
+            *pos_in_bucket = pos;
             if (table_index) *table_index = table;
             return b;
         }
@@ -687,11 +690,11 @@ static void insert(hashset *s, uint64_t hash, void *element) {
     if (!b->everfull && bucketIsFull(b)) {
         b->everfull = 1;
         s->everfulls[table_index]++;
-        cleanUpTombstonesIfNeeded(s);
+        cleanUpProbingChainsIfNeeded(s);
     }
 }
 
-/* A fingerprint of some of the state of the hash table. */
+/* A 63-bit fingerprint of some of the state of the hash table. */
 static uint64_t hashsetFingerprint(hashset *s) {
     uint64_t integers[6], hash = 0;
     integers[0] = (uintptr_t)s->tables[0];
@@ -713,6 +716,9 @@ static uint64_t hashsetFingerprint(hashset *s) {
         hash = hash ^ (hash >> 28);
         hash = hash + (hash << 31);
     }
+
+    /* Clear the highest bit. We only want 63 bits. */
+    hash &= 0x7fffffffffffffff;
     return hash;
 }
 
@@ -764,7 +770,7 @@ void hashsetEmpty(hashset *s, void(callback)(hashset *)) {
                     continue;
                 }
                 for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
-                    if (b->presence & (1 << pos)) {
+                    if (isPositionFilled(b, pos)) {
                         s->type->elementDestructor(s, b->elements[pos]);
                     }
                 }
@@ -1013,7 +1019,7 @@ void *hashsetFindPositionForInsert(hashset *s, void *key, void **existing) {
         hashsetExpandIfNeeded(s);
         rehashStepOnWriteIfNeeded(s);
         b = findBucketForInsert(s, hash, &pos_in_bucket, &table_index);
-        assert((b->presence & (1 << pos_in_bucket)) == 0);
+        assert(!isPositionFilled(b, pos_in_bucket));
 
         /* Store the hash bits now, so we don't need to compute the hash again
          * when hashsetInsertAtPosition() is called. */
@@ -1042,7 +1048,7 @@ void hashsetInsertAtPosition(hashset *s, void *element, void *position) {
 
     /* Insert the element at this position. */
     bucket *b = &s->tables[table_index][bucket_index];
-    assert((b->presence & (1 << pos_in_bucket)) == 0);
+    assert(!isPositionFilled(b, pos_in_bucket));
     b->presence |= (1 << pos_in_bucket);
     b->elements[pos_in_bucket] = element;
     s->used[table_index]++;
@@ -1050,7 +1056,7 @@ void hashsetInsertAtPosition(hashset *s, void *element, void *position) {
     if (!b->everfull && bucketIsFull(b)) {
         b->everfull = 1;
         s->everfulls[table_index]++;
-        cleanUpTombstonesIfNeeded(s);
+        cleanUpProbingChainsIfNeeded(s);
     }
 }
 
@@ -1169,7 +1175,7 @@ void hashsetTwoPhasePopDelete(hashset *s, void *position) {
 
     /* Delete the element and resume rehashing. */
     bucket *b = &s->tables[table_index][bucket_index];
-    assert(b->presence & (1 << pos_in_bucket));
+    assert(isPositionFilled(b, pos_in_bucket));
     b->presence &= ~(1 << pos_in_bucket);
     s->used[table_index]--;
     hashsetShrinkIfNeeded(s);
@@ -1210,10 +1216,10 @@ void hashsetTwoPhasePopDelete(hashset *s, void *position) {
  * (zero means no flags) of the following:
  *
  * - HASHSET_SCAN_EMIT_REF: Emit a pointer to the element's location in the
- *   table is passed to the scan function instead of the actual element. This
- *   can be used for advanced things like reallocating the memory of an element
- *   (for the purpose of defragmentation) and updating the pointer to the
- *   element inside the hash table.
+ *   table to the scan function instead of the actual element. This can be used
+ *   for advanced things like reallocating the memory of an element (for the
+ *   purpose of defragmentation) and updating the pointer to the element inside
+ *   the hash table.
  *
  * - HASHSET_SCAN_SINGLE_STEP: This flag can be used for selecting fewer
  *   elements when the scan guarantees don't need to be enforced. With this
@@ -1255,7 +1261,7 @@ size_t hashsetScan(hashset *s, size_t cursor, hashsetScanFunction fn, void *priv
             bucket *b = &s->tables[0][cursor & mask];
             int pos;
             for (pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
-                if (b->presence & (1 << pos)) {
+                if (isPositionFilled(b, pos)) {
                     void *emit = emit_ref ? &b->elements[pos] : b->elements[pos];
                     fn(privdata, emit);
                 }
@@ -1285,7 +1291,7 @@ size_t hashsetScan(hashset *s, size_t cursor, hashsetScanFunction fn, void *priv
                 bucket *b = &s->tables[table_small][cursor & mask_small];
                 if (b->presence) {
                     for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
-                        if (b->presence & (1 << pos)) {
+                        if (isPositionFilled(b, pos)) {
                             void *emit = emit_ref ? &b->elements[pos] : b->elements[pos];
                             fn(privdata, emit);
                         }
@@ -1301,7 +1307,7 @@ size_t hashsetScan(hashset *s, size_t cursor, hashsetScanFunction fn, void *priv
                 bucket *b = &s->tables[table_large][cursor & mask_large];
                 if (b->presence) {
                     for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
-                        if (b->presence & (1 << pos)) {
+                        if (isPositionFilled(b, pos)) {
                             void *emit = emit_ref ? &b->elements[pos] : b->elements[pos];
                             fn(privdata, emit);
                         }
@@ -1621,7 +1627,7 @@ void hashsetDump(hashset *s) {
             printf("Bucket %d:%zu everfull:%d\n", table, idx, b->everfull);
             for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
                 printf("  %d ", pos);
-                if (b->presence & (1 << pos)) {
+                if (isPositionFilled(b, pos)) {
                     printf("h2 %02x, key \"%s\"\n", b->hashes[pos], (const char *)elementGetKey(s, b->elements[pos]));
                 } else {
                     printf("(empty)\n");

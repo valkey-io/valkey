@@ -87,9 +87,9 @@ typedef struct {
     long index;
     int table;
     int posInBucket;
+    uint64_t safe : 1;
     /* unsafe iterator fingerprint for misuse detection. */
-    uint64_t fingerprint;
-    int safe;
+    uint64_t fingerprint : 63;
 } hashsetIterator;
 
 typedef struct hashsetStats {

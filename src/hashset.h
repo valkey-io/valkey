@@ -34,6 +34,7 @@
 /* --- Opaque types --- */
 
 typedef struct hashset hashset;
+typedef struct hashsetStats hashsetStats;
 
 /* --- Non-opaque types --- */
 
@@ -86,22 +87,11 @@ typedef struct {
     hashset *hashset;
     long index;
     int table;
-    int posInBucket;
+    int pos_in_bucket;
     uint64_t safe : 1;
     /* unsafe iterator fingerprint for misuse detection. */
     uint64_t fingerprint : 63;
 } hashsetIterator;
-
-typedef struct hashsetStats {
-    int htidx;
-    unsigned long buckets;       /* num buckets */
-    unsigned long maxChainLen;   /* probing chain length */
-    unsigned long totalChainLen; /* buckets with probing flag */
-    unsigned long htSize;        /* buckets * positions-per-bucket */
-    unsigned long htUsed;        /* num elements */
-    unsigned long *clvector;     /* (probing-)chain length vector; element i is
-                                  * the number of probing chains of length i. */
-} hashsetStats;
 
 /* --- Prototypes --- */
 

@@ -3783,6 +3783,56 @@ int commandCheckArity(struct serverCommand *cmd, int argc, sds *err) {
     return 1;
 }
 
+int findDuplicateOptions(client *c, const char *token) {
+    int matched = 0;
+    for (int j = 3, k = c->argc - 1; j <= k; j++, k--) {
+        if (!strcasecmp(token, c->argv[j]->ptr)) {
+            matched++;
+        }
+        if (j != k && !strcasecmp(token, c->argv[k]->ptr)) {
+            matched++;
+        }
+        if (matched > 1) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Check if c->cmd has duplicate options, fills `err` with details in case it has.
+ * Return 1 if no duplicate options are found. */
+int commandCheckArgTokenDuplicacy(client *c, sds *err) {
+    if (c->argc <= 4) return 1;
+    for (int iter = 0; iter < c->cmd->num_args; iter++) {
+        if (c->cmd->args[iter].token && !(c->cmd->args[iter].flags & CMD_ARG_MULTIPLE_TOKEN)) {
+            if (!findDuplicateOptions(c, c->cmd->args[iter].token)) {
+                if (err) {
+                    *err = sdsnew(NULL);
+                    *err = sdscatprintf(*err, "duplicate '%s' option for '%s' command", c->cmd->args[iter].token,
+                                        c->cmd->fullname);
+                }
+                return 0;
+            }
+        }
+        if (c->cmd->args[iter].subargs) {
+            for (int subiter = 0; subiter < c->cmd->args[iter].num_args; subiter++) {
+                if (c->cmd->args[iter].subargs[subiter].token &&
+                    !(c->cmd->args[iter].subargs[subiter].flags & CMD_ARG_MULTIPLE_TOKEN)) {
+                    if (!findDuplicateOptions(c, c->cmd->args[iter].subargs[subiter].token)) {
+                        if (err) {
+                            *err = sdsnew(NULL);
+                            *err = sdscatprintf(*err, "duplicate '%s' option for '%s' command",
+                                                c->cmd->args[iter].subargs[subiter].token, c->cmd->fullname);
+                        }
+                        return 0;
+                    }
+                }
+            }
+        }
+    }
+    return 1;
+}
+
 /* If we're executing a script, try to extract a set of command flags from
  * it, in case it declared them. Note this is just an attempt, we don't yet
  * know the script command is well formed.*/
@@ -3854,6 +3904,10 @@ int processCommand(client *c) {
             return C_OK;
         }
         if (!commandCheckArity(c->cmd, c->argc, &err)) {
+            rejectCommandSds(c, err);
+            return C_OK;
+        }
+        if (c->cmd->arity != c->argc && c->cmd->args && !commandCheckArgTokenDuplicacy(c, &err)) {
             rejectCommandSds(c, err);
             return C_OK;
         }

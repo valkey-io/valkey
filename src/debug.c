@@ -1023,6 +1023,7 @@ void debugCommand(client *c) {
 
 /* =========================== Crash handling  ============================== */
 
+#ifndef VALKEY_USE_TEST_SERVER_ASSERT
 __attribute__((noinline)) void _serverAssert(const char *estr, const char *file, int line) {
     int new_report = bugReportStart();
     serverLog(LL_WARNING, "=== %sASSERTION FAILED ===", new_report ? "" : "RECURSIVE ");
@@ -1041,6 +1042,7 @@ __attribute__((noinline)) void _serverAssert(const char *estr, const char *file,
     removeSigSegvHandlers();
     bugReportEnd(0, 0);
 }
+#endif
 
 /* Checks if the argument at the given index should be redacted from logs. */
 int shouldRedactArg(const client *c, int idx) {

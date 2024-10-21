@@ -1174,7 +1174,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             }            
 
             $primary debug log "killing replica main connection"
-            set replica_main_conn_id [get_client_id_by_last_cmd $primary "sync"]
+            set replica_main_conn_id [get_client_id_by_last_cmd $primary "psync"]
             assert {$replica_main_conn_id != ""}
             set loglines [count_log_lines -1]
             $primary client kill id $replica_main_conn_id
@@ -1195,5 +1195,69 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             }    
         }
         stop_write_load $load_handle
+    }
+}
+
+
+start_server {tags {"dual-channel-replication external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    set loglines [count_log_lines 0]
+
+    $primary config set repl-diskless-sync yes
+    $primary config set dual-channel-replication-enabled yes
+    $primary config set loglevel debug
+    $primary config set repl-diskless-sync-delay 5; # allow catch failed sync before retry
+
+    # Generating RDB will cost 100 sec to generate
+    $primary debug populate 1000000 primary 1
+    $primary config set rdb-key-save-delay -1000
+    
+    start_server {} {
+        set replica [srv 0 client]
+        set replica_host [srv 0 host]
+        set replica_port [srv 0 port]
+        set replica_log [srv 0 stdout]
+        
+        $replica config set dual-channel-replication-enabled yes
+        $replica config set loglevel debug
+        $replica config set repl-timeout 10
+        $replica config set repl-diskless-load flush-before-load
+
+        test "Replica notice main-connection killed during rdb load callback" {; # https://github.com/valkey-io/valkey/issues/1152
+            set loglines [count_log_lines 0]
+            $replica replicaof $primary_host $primary_port
+            # Wait for sync session to start
+            wait_for_condition 500 1000 {
+                [string match "*slave*,state=wait_bgsave*,type=rdb-channel*" [$primary info replication]] &&
+                [string match "*slave*,state=bg_transfer*,type=main-channel*" [$primary info replication]] &&
+                [s -1 rdb_bgsave_in_progress] eq 1
+            } else {
+                fail "replica didn't start sync session in time"
+            }
+            wait_for_log_messages 0 {"*Loading RDB produced by Valkey version*"} $loglines 1000 10
+            $primary set key val
+            set replica_main_conn_id [get_client_id_by_last_cmd $primary "psync"]
+            $primary debug log "killing replica main connection $replica_main_conn_id"
+            assert {$replica_main_conn_id != ""}
+            set loglines [count_log_lines 0]
+            $primary client kill id $replica_main_conn_id
+            # Wait for primary to abort the sync
+            wait_for_condition 50 1000 {
+                [string match {*replicas_waiting_psync:0*} [$primary info replication]]
+            } else {
+                fail "Primary did not free repl buf block after sync failure"
+            }
+            wait_for_log_messages 0 {"*Primary main connection dropped during RDB load callback*"} $loglines 1000 10
+            # Replica should retry
+            wait_for_condition 500 1000 {
+                [string match "*slave*,state=wait_bgsave*,type=rdb-channel*" [$primary info replication]] &&
+                [string match "*slave*,state=bg_transfer*,type=main-channel*" [$primary info replication]] &&
+                [s -1 rdb_bgsave_in_progress] eq 1
+            } else {
+                fail "replica didn't retry after connection close"
+            }    
+        }
     }
 }

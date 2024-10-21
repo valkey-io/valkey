@@ -2045,6 +2045,7 @@ struct valkeyServer {
         long long reploff;
         long long read_reploff;
         int dbid;
+        uint64_t close_asap : 1;
     } repl_provisional_primary;
     client *cached_primary;             /* Cached primary to be reused for PSYNC. */
     int repl_syncio_timeout;            /* Timeout for synchronous I/O calls */

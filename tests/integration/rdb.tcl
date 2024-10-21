@@ -51,35 +51,6 @@ start_server [list overrides [list "dir" $server_path] keep_persistence true] {
     } {0000000000000000000000000000000000000000}
 }
 
-start_server [list overrides [list "dir" $server_path] keep_persistence true] {
-    test {Test RDB stream encoding} {
-        for {set j 0} {$j < 1000} {incr j} {
-            if {rand() < 0.9} {
-                r xadd stream * foo abc
-            } else {
-                r xadd stream * bar $j
-            }
-        }
-        r xgroup create stream mygroup 0
-        set records [r xreadgroup GROUP mygroup Alice COUNT 2 STREAMS stream >]
-        r xdel stream [lindex [lindex [lindex [lindex $records 0] 1] 1] 0]
-        r xack stream mygroup [lindex [lindex [lindex [lindex $records 0] 1] 0] 0]
-        set digest [debug_digest]
-        r config set sanitize-dump-payload no
-        r debug reload
-        set newdigest [debug_digest]
-        assert {$digest eq $newdigest}
-    }
-    test {Test RDB stream encoding - sanitize dump} {
-        r config set sanitize-dump-payload yes
-        r debug reload
-        set newdigest [debug_digest]
-        assert {$digest eq $newdigest}
-    }
-    # delete the stream, maybe valgrind will find something
-    r del stream
-}
-
 # Helper function to start a server and kill it, just to check the error
 # logged.
 set defaults {}

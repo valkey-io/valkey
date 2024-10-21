@@ -12,7 +12,7 @@
                 "Added the `SCHEDULE` option."
             ],
             [
-                "8.0.0",
+                "8.1.0",
                 "Added the `CANCEL` option."
             ]
         ],
@@ -37,7 +37,7 @@
                         "name": "cancel",
                         "token": "CANCEL",
                         "type": "pure-token",
-                        "since": "8.0.0"
+                        "since": "8.1.0"
                     }
                 ]
             }

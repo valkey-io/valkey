@@ -37,7 +37,7 @@
                         "name": "cancel",
                         "token": "CANCEL",
                         "type": "pure-token",
-                        "since": "8.0.0"
+                        "since": "8.1.0"
                     }
                 ]
             }

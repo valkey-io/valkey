@@ -6408,7 +6408,7 @@ struct COMMAND_STRUCT ACL_Subcommands[] = {
 /* BGSAVE history */
 commandHistory BGSAVE_History[] = {
 {"3.2.2","Added the `SCHEDULE` option."},
-{"8.0.0","Added the `CANCEL` option."},
+{"8.1.0","Added the `CANCEL` option."},
 };
 #endif
 
@@ -6425,7 +6425,7 @@ commandHistory BGSAVE_History[] = {
 /* BGSAVE operation argument table */
 struct COMMAND_ARG BGSAVE_operation_Subargs[] = {
 {MAKE_ARG("schedule",ARG_TYPE_PURE_TOKEN,-1,"SCHEDULE",NULL,"3.2.2",CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("cancel",ARG_TYPE_PURE_TOKEN,-1,"CANCEL",NULL,"8.0.0",CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("cancel",ARG_TYPE_PURE_TOKEN,-1,"CANCEL",NULL,"8.1.0",CMD_ARG_NONE,0,NULL)},
 };
 
 /* BGSAVE argument table */

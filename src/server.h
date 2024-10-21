@@ -2072,7 +2072,7 @@ struct valkeyServer {
     long long primary_initial_offset;            /* Primary PSYNC offset. */
     int repl_replica_lazy_flush;                 /* Lazy FLUSHALL before loading DB? */
     /* Import Mode */
-    int import_mode; /* If true, server is in import mode and forbid expiration and evcition. */
+    int import_mode; /* If true, server is in import mode and forbid expiration and eviction. */
     /* Synchronous replication. */
     list *clients_waiting_acks; /* Clients waiting in WAIT or WAITAOF. */
     int get_ack_from_replicas;  /* If true we send REPLCONF GETACK. */

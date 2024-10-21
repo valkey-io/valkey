@@ -3568,8 +3568,9 @@ void clientCommand(client *c) {
             "NO-TOUCH (ON|OFF)",
             "    Will not touch LRU/LFU stats when this mode is on.",
             "IMPORT-SOURCE (ON|OFF)",
-            "    Mark this connection as importing source when server.import_mode is true.",
-            "    Sync tools can set their connections into this state to visit expired keys.",
+            "    Mark this connection as an import source if server.import_mode is true.",
+            "    Sync tools can set their connections into 'import-source' state to visit",
+            "    expired keys.",
             NULL};
         addReplyHelp(c, help);
     } else if (!strcasecmp(c->argv[1]->ptr, "id") && c->argc == 2) {

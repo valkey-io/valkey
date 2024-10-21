@@ -2929,13 +2929,13 @@ int rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         loadingAbsProgress(r->processed_bytes);
         processEventsWhileBlocked();
         processModuleLoadingProgressEvent(0);
+        if (server.repl_provisional_primary.close_asap == 1) {
+            serverLog(LL_WARNING, "Primary main connection dropped during RDB load callback");
+            return -1;
+        }
     }
     if (server.repl_state == REPL_STATE_TRANSFER && rioCheckType(r) == RIO_TYPE_CONN) {
         server.stat_net_repl_input_bytes += len;
-    }
-    if (server.repl_provisional_primary.close_asap == 1) {
-        serverLog(LL_WARNING, "Primary main connection dropped during RDB load callback");
-        return -1;
     }
     return 0;
 }

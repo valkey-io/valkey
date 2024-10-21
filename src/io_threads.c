@@ -319,7 +319,7 @@ void initIOThreads(void) {
 
 int trySendReadToIOThreads(client *c) {
     if (server.active_io_threads_num <= 1) return C_ERR;
-    /* If IO thread is areadty reading, return C_OK to make sure the main thread will not handle it. */
+    /* If IO thread is already reading, return C_OK to make sure the main thread will not handle it. */
     if (c->io_read_state != CLIENT_IDLE) return C_OK;
     /* Currently, replica/master writes are not offloaded and are processed synchronously. */
     if (c->flag.primary || getClientType(c) == CLIENT_TYPE_REPLICA) return C_ERR;

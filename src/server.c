@@ -894,9 +894,10 @@ void updateClientMemoryUsage(client *c) {
 }
 
 int clientEvictionAllowed(client *c) {
-    if (server.maxmemory_clients == 0 || c->flag.no_evict || !c->conn) {
+    if (server.maxmemory_clients == 0 || c->flag.no_evict || c->flag.fake) {
         return 0;
     }
+    serverAssert(c->conn);
     int type = getClientType(c);
     return (type == CLIENT_TYPE_NORMAL || type == CLIENT_TYPE_PUBSUB);
 }

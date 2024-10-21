@@ -109,11 +109,69 @@ const char *replstateToString(int replstate);
  * function of the server may be called from other threads. */
 void nolocks_localtime(struct tm *tmp, time_t t, time_t tz, int dst);
 
+/* Formats the timezone offset into a string. daylight_active indicates whether dst is active (1)
+ * or not (0). */
+void formatTimezone(char *buf, size_t buflen, int timezone, int daylight_active) {
+    serverAssert(buflen >= 7);
+    serverAssert(timezone >= -50400 && timezone <= 43200);
+    // Adjust the timezone for daylight saving, if active
+    int total_offset = (-1) * timezone + 3600 * daylight_active;
+    int hours = abs(total_offset / 3600);
+    int minutes = abs(total_offset % 3600) / 60;
+    buf[0] = total_offset >= 0 ? '+' : '-';
+    buf[1] = '0' + hours / 10;
+    buf[2] = '0' + hours % 10;
+    buf[3] = ':';
+    buf[4] = '0' + minutes / 10;
+    buf[5] = '0' + minutes % 10;
+    buf[6] = '\0';
+}
+
+bool hasInvalidLogfmtChar(const char *msg) {
+    if (msg == NULL) return false;
+
+    for (int i = 0; msg[i] != '\0'; i++) {
+        if (msg[i] == '"' || msg[i] == '\n' || msg[i] == '\r') {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Modifies the input string by:
+ *      replacing \r and \n with whitespace
+ *      replacing " with '
+ *
+ * Parameters:
+ *   safemsg    - A char pointer where the modified message will be stored
+ *   safemsglen - size of safemsg
+ *   msg        - The original message */
+void filterInvalidLogfmtChar(char *safemsg, size_t safemsglen, const char *msg) {
+    serverAssert(safemsglen == LOG_MAX_LEN);
+    if (msg == NULL) return;
+
+    size_t index = 0;
+    while (index < safemsglen - 1 && msg[index] != '\0') {
+        if (msg[index] == '"') {
+            safemsg[index] = '\'';
+        } else if (msg[index] == '\n' || msg[index] == '\r') {
+            safemsg[index] = ' ';
+        } else {
+            safemsg[index] = msg[index];
+        }
+        index++;
+    }
+    safemsg[index] = '\0';
+}
+
 /* Low level logging. To use only for very big messages, otherwise
  * serverLog() is to prefer. */
 void serverLogRaw(int level, const char *msg) {
     const int syslogLevelMap[] = {LOG_DEBUG, LOG_INFO, LOG_NOTICE, LOG_WARNING};
     const char *c = ".-*#";
+    const char *verbose_level[] = {"debug", "info", "notice", "warning"};
+    const char *roles[] = {"sentinel", "RDB/AOF", "replica", "primary"};
+    const char *role_chars = "XCSM";
     FILE *fp;
     char buf[64];
     int rawmode = (level & LL_RAW);
@@ -133,23 +191,54 @@ void serverLogRaw(int level, const char *msg) {
     } else {
         int off;
         struct timeval tv;
-        int role_char;
         pid_t pid = getpid();
         int daylight_active = atomic_load_explicit(&server.daylight_active, memory_order_relaxed);
 
         gettimeofday(&tv, NULL);
         struct tm tm;
         nolocks_localtime(&tm, tv.tv_sec, server.timezone, daylight_active);
-        off = strftime(buf, sizeof(buf), "%d %b %Y %H:%M:%S.", &tm);
-        snprintf(buf + off, sizeof(buf) - off, "%03d", (int)tv.tv_usec / 1000);
-        if (server.sentinel_mode) {
-            role_char = 'X'; /* Sentinel. */
-        } else if (pid != server.pid) {
-            role_char = 'C'; /* RDB / AOF writing child. */
-        } else {
-            role_char = (server.primary_host ? 'S' : 'M'); /* replica or Primary. */
+        switch (server.log_timestamp_format) {
+        case LOG_TIMESTAMP_LEGACY:
+            off = strftime(buf, sizeof(buf), "%d %b %Y %H:%M:%S.", &tm);
+            snprintf(buf + off, sizeof(buf) - off, "%03d", (int)tv.tv_usec / 1000);
+            break;
+
+        case LOG_TIMESTAMP_ISO8601:
+            off = strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S.", &tm);
+            char tzbuf[7];
+            formatTimezone(tzbuf, sizeof(tzbuf), server.timezone, server.daylight_active);
+            snprintf(buf + off, sizeof(buf) - off, "%03d%s", (int)tv.tv_usec / 1000, tzbuf);
+            break;
+
+        case LOG_TIMESTAMP_MILLISECONDS:
+            snprintf(buf, sizeof(buf), "%lld", (long long)tv.tv_sec * 1000 + (long long)tv.tv_usec / 1000);
+            break;
         }
-        fprintf(fp, "%d:%c %s %c %s\n", (int)getpid(), role_char, buf, c[level], msg);
+        int role_index;
+        if (server.sentinel_mode) {
+            role_index = 0; /* Sentinel. */
+        } else if (pid != server.pid) {
+            role_index = 1; /* RDB / AOF writing child. */
+        } else {
+            role_index = (server.primary_host ? 2 : 3); /* Replica or Primary. */
+        }
+        switch (server.log_format) {
+        case LOG_FORMAT_LOGFMT:
+            if (hasInvalidLogfmtChar(msg)) {
+                char safemsg[LOG_MAX_LEN];
+                filterInvalidLogfmtChar(safemsg, LOG_MAX_LEN, msg);
+                fprintf(fp, "pid=%d role=%s timestamp=\"%s\" level=%s message=\"%s\"\n", (int)getpid(), roles[role_index],
+                        buf, verbose_level[level], safemsg);
+            } else {
+                fprintf(fp, "pid=%d role=%s timestamp=\"%s\" level=%s message=\"%s\"\n", (int)getpid(), roles[role_index],
+                        buf, verbose_level[level], msg);
+            }
+            break;
+
+        case LOG_FORMAT_LEGACY:
+            fprintf(fp, "%d:%c %s %c %s\n", (int)getpid(), role_chars[role_index], buf, c[level], msg);
+            break;
+        }
     }
     fflush(fp);
 

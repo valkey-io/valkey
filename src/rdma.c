@@ -1569,6 +1569,23 @@ int connRdmaListen(connListener *listener) {
     return C_OK;
 }
 
+static void connRdmaCloseListener(connListener *listener) {
+    /* Close old servers */
+    for (int i = 0; i < listener->count; i++) {
+        if (listener->fd[i] == -1) continue;
+
+        aeDeleteFileEvent(server.el, listener->fd[i], AE_READABLE);
+        listener->fd[i] = -1;
+        struct rdma_listener *rdma_listener = &rdma_listeners[i];
+        rdma_destroy_id(rdma_listener->cm_id);
+        rdma_destroy_event_channel(rdma_listener->cm_channel);
+    }
+
+    listener->count = 0;
+    zfree(rdma_listeners);
+    rdma_listeners = NULL;
+}
+
 static int connRdmaAddr(connection *conn, char *ip, size_t ip_len, int *port, int remote) {
     rdma_connection *rdma_conn = (rdma_connection *)conn;
     struct rdma_cm_id *cm_id = rdma_conn->cm_id;
@@ -1697,6 +1714,7 @@ static ConnectionType CT_RDMA = {
     //.cluster_accept_handler = NULL,
     .is_local = connRdmaIsLocal,
     .listen = connRdmaListen,
+    .closeListener = connRdmaCloseListener,
     .addr = connRdmaAddr,
 
     /* create/close connection */
@@ -1753,23 +1771,7 @@ ConnectionType *connectionTypeRdma(void) {
 static int rdmaChangeListener(void) {
     struct connListener *listener = rdmaListener();
 
-    /* Close old servers */
-    for (int i = 0; i < listener->count; i++) {
-        if (listener->fd[i] == -1) continue;
-
-        aeDeleteFileEvent(server.el, listener->fd[i], AE_READABLE);
-        listener->fd[i] = -1;
-        struct rdma_listener *rdma_listener = &rdma_listeners[i];
-        rdma_destroy_id(rdma_listener->cm_id);
-        rdma_destroy_event_channel(rdma_listener->cm_channel);
-    }
-
-    listener->count = 0;
-    zfree(rdma_listeners);
-    rdma_listeners = NULL;
-
-    closeListener(listener);
-
+    connRdmaCloseListener(listener);
     /* Just close the server if port disabled */
     if (listener->port == 0) {
         if (server.set_proc_title) serverSetProcTitle(NULL);

@@ -2641,7 +2641,7 @@ static int applyBind(const char **err) {
     tcp_listener->ct = connectionByType(CONN_TYPE_SOCKET);
     if (changeListener(tcp_listener) == C_ERR) {
         *err = "Failed to bind to specified addresses.";
-        if (tls_listener) closeListener(tls_listener); /* failed with TLS together */
+        if (tls_listener) connCloseListener(tls_listener); /* failed with TLS together */
         return 0;
     }
 
@@ -2653,7 +2653,7 @@ static int applyBind(const char **err) {
         tls_listener->ct = connectionByType(CONN_TYPE_TLS);
         if (changeListener(tls_listener) == C_ERR) {
             *err = "Failed to bind to specified addresses.";
-            closeListener(tcp_listener); /* failed with TCP together */
+            connCloseListener(tcp_listener); /* failed with TCP together */
             return 0;
         }
     }

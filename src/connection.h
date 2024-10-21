@@ -79,6 +79,7 @@ typedef struct ConnectionType {
     int (*addr)(connection *conn, char *ip, size_t ip_len, int *port, int remote);
     int (*is_local)(connection *conn);
     int (*listen)(connListener *listener);
+    void (*closeListener)(connListener *listener);
 
     /* create/shutdown/close connection */
     connection *(*conn_create)(void);
@@ -440,6 +441,13 @@ int connTypeProcessPendingData(void);
 /* Listen on an initialized listener */
 static inline int connListen(connListener *listener) {
     return listener->ct->listen(listener);
+}
+
+/* Close a listened listener */
+static inline void connCloseListener(connListener *listener) {
+    if (listener->count) {
+        listener->ct->closeListener(listener);
+    }
 }
 
 /* Get accept_handler of a connection type */

@@ -339,6 +339,19 @@ static int connSocketListen(connListener *listener) {
     return listenToPort(listener);
 }
 
+static void connSocketCloseListener(connListener *listener) {
+    int j;
+
+    for (j = 0; j < listener->count; j++) {
+        if (listener->fd[j] == -1) continue;
+
+        aeDeleteFileEvent(server.el, listener->fd[j], AE_READABLE);
+        close(listener->fd[j]);
+    }
+
+    listener->count = 0;
+}
+
 static int connSocketBlockingConnect(connection *conn, const char *addr, int port, long long timeout) {
     int fd = anetTcpNonBlockConnect(NULL, addr, port);
     if (fd == -1) {
@@ -395,6 +408,7 @@ static ConnectionType CT_Socket = {
     .addr = connSocketAddr,
     .is_local = connSocketIsLocal,
     .listen = connSocketListen,
+    .closeListener = connSocketCloseListener,
 
     /* create/shutdown/close connection */
     .conn_create = connCreateSocket,

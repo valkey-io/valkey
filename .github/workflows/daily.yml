@@ -607,6 +607,7 @@ jobs:
       !contains(github.event.inputs.skipjobs, 'sanitizer')
     timeout-minutes: 14400
     strategy:
+      fail-fast: false
       matrix:
         compiler: [gcc, clang]
     env:
@@ -659,6 +660,7 @@ jobs:
       !contains(github.event.inputs.skipjobs, 'sanitizer')
     timeout-minutes: 14400
     strategy:
+      fail-fast: false
       matrix:
         compiler: [gcc, clang]
     env:
@@ -1001,6 +1003,7 @@ jobs:
 
   build-macos:
     strategy:
+      fail-fast: false
       matrix:
         os: [macos-12, macos-14]
     runs-on: ${{ matrix.os }}

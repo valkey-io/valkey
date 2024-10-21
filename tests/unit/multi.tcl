@@ -919,3 +919,15 @@ start_server {overrides {appendonly {yes} appendfilename {appendonly.aof} append
         r get foo
     } {}
 }
+
+start_cluster 1 0 {tags {"external:skip cluster"}} {
+    test "Regression test for multi-exec with RANDOMKEY accessing the wrong per-slot dictionary" {
+        R 0 SETEX FOO 10000 BAR
+        R 0 SETEX FIZZ 10000 BUZZ
+
+        R 0 MULTI
+        R 0 DEL FOO
+        R 0 RANDOMKEY
+        assert_equal [R 0 EXEC] {1 FIZZ}
+    }
+}

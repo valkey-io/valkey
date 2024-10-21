@@ -500,7 +500,11 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         $primary config set dual-channel-replication-enabled yes
         $primary config set repl-backlog-size $backlog_size
         $primary config set loglevel debug
-        $primary config set repl-timeout 10
+        if {$::valgrind} {
+            $primary config set repl-timeout 100
+        } else {
+            $primary config set repl-timeout 10
+        }
         $primary config set rdb-key-save-delay 200
         populate 10000 primary 10000
         
@@ -510,7 +514,11 @@ start_server {tags {"dual-channel-replication external:skip"}} {
 
         $replica config set dual-channel-replication-enabled yes
         $replica config set loglevel debug
-        $replica config set repl-timeout 10
+        if {$::valgrind} {
+            $primary config set repl-timeout 100
+        } else {
+            $primary config set repl-timeout 10
+        }
         # Pause replica after primary fork
         $replica debug pause-after-fork 1
 
@@ -834,11 +842,11 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     $primary config set dual-channel-replication-enabled yes
     $primary config set loglevel debug
     $primary config set repl-diskless-sync-delay 5
-    
+    $primary config set client-output-buffer-limit "replica 0 0 0"
+
     # Generating RDB will cost 5s(10000 * 0.0005s)
     $primary debug populate 10000 primary 1
     $primary config set rdb-key-save-delay 500
-
     $primary config set dual-channel-replication-enabled $dualchannel
 
     start_server {} {

@@ -1090,12 +1090,13 @@ void databasesCron(void) {
         /* Rehash */
         if (server.activerehashing) {
             uint64_t elapsed_us = 0;
+            uint64_t threshold_us = 1 * 1000000 / server.hz / 100;
             for (j = 0; j < dbs_per_call; j++) {
                 serverDb *db = &server.db[rehash_db % server.dbnum];
-                elapsed_us += kvstoreIncrementallyRehash(db->keys, INCREMENTAL_REHASHING_THRESHOLD_US - elapsed_us);
-                if (elapsed_us >= INCREMENTAL_REHASHING_THRESHOLD_US) break;
-                elapsed_us += kvstoreIncrementallyRehash(db->expires, INCREMENTAL_REHASHING_THRESHOLD_US - elapsed_us);
-                if (elapsed_us >= INCREMENTAL_REHASHING_THRESHOLD_US) break;
+                elapsed_us += kvstoreIncrementallyRehash(db->keys, threshold_us - elapsed_us);
+                if (elapsed_us >= threshold_us) break;
+                elapsed_us += kvstoreIncrementallyRehash(db->expires, threshold_us - elapsed_us);
+                if (elapsed_us >= threshold_us) break;
                 rehash_db++;
             }
         }
@@ -1612,12 +1613,12 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         processed += connTypeProcessPendingData();
         if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE) flushAppendOnlyFile(0);
         processed += handleClientsWithPendingWrites();
-        int last_procssed = 0;
+        int last_processed = 0;
         do {
             /* Try to process all the pending IO events. */
-            last_procssed = processIOThreadsReadDone() + processIOThreadsWriteDone();
-            processed += last_procssed;
-        } while (last_procssed != 0);
+            last_processed = processIOThreadsReadDone() + processIOThreadsWriteDone();
+            processed += last_processed;
+        } while (last_processed != 0);
         processed += freeClientsInAsyncFreeQueue();
         server.events_processed_while_blocked += processed;
         return;
@@ -2817,8 +2818,7 @@ void initListeners(void) {
         listener->bindaddr = &server.unixsocket;
         listener->bindaddr_count = 1;
         listener->ct = connectionByType(CONN_TYPE_UNIX);
-        listener->priv1 = &server.unixsocketperm; /* Unix socket specified */
-        listener->priv2 = server.unixsocketgroup; /* Unix socket group specified */
+        listener->priv = &server.unix_ctx_config; /* Unix socket specified */
     }
 
     /* create all the configured listener, and add handler to start to accept */
@@ -3911,7 +3911,7 @@ int processCommand(client *c) {
         (c->cmd->proc == execCommand && (c->mstate.cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE)));
     int is_deny_async_loading_command = (cmd_flags & CMD_NO_ASYNC_LOADING) ||
                                         (c->cmd->proc == execCommand && (c->mstate.cmd_flags & CMD_NO_ASYNC_LOADING));
-    int obey_client = mustObeyClient(c);
+    const int obey_client = mustObeyClient(c);
 
     if (authRequired(c)) {
         /* AUTH and HELLO and no auth commands are valid even in
@@ -3944,7 +3944,7 @@ int processCommand(client *c) {
      * However we don't perform the redirection if:
      * 1) The sender of this command is our primary.
      * 2) The command has no key arguments. */
-    if (server.cluster_enabled && !mustObeyClient(c) &&
+    if (server.cluster_enabled && !obey_client &&
         !(!(c->cmd->flags & CMD_MOVABLE_KEYS) && c->cmd->key_specs_num == 0 && c->cmd->proc != execCommand)) {
         int error_code;
         clusterNode *n = getNodeByQuery(c, c->cmd, c->argv, c->argc, &c->slot, &error_code);
@@ -3961,7 +3961,7 @@ int processCommand(client *c) {
         }
     }
 
-    if (!server.cluster_enabled && c->capa & CLIENT_CAPA_REDIRECT && server.primary_host && !mustObeyClient(c) &&
+    if (!server.cluster_enabled && c->capa & CLIENT_CAPA_REDIRECT && server.primary_host && !obey_client &&
         (is_write_command || (is_read_command && !c->flag.readonly))) {
         if (server.failover_state == FAILOVER_IN_PROGRESS) {
             /* During the FAILOVER process, when conditions are met (such as

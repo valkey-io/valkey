@@ -393,6 +393,7 @@ struct clusterState {
                                    or -1 if still not received. */
     int mf_can_start;            /* If non-zero signal that the manual failover
                                     can start requesting primary vote. */
+    int mf_is_primary_failover;  /* The manual failover was triggered by my primary. */
     /* The following fields are used by primaries to take state on elections. */
     uint64_t lastVoteEpoch; /* Epoch of the last vote granted. */
     int todo_before_sleep;  /* Things to do in clusterBeforeSleep(). */

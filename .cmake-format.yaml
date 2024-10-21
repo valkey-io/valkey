@@ -35,7 +35,7 @@ format:
   line_ending: unix
   _help_command_case:
     - Format command names consistently as 'lower' or 'upper' case
-  command_case: canonical
+  command_case: lower
   _help_keyword_case:
     - Format keywords consistently as 'lower' or 'upper' case
   keyword_case: unchanged

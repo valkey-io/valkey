@@ -8,7 +8,7 @@ set(BUILD_SHARED_LIBS
 set(DISABLE_TESTS
     ON
     CACHE BOOL "If tests should be compiled or not")
-if (USE_TLS)
+if (USE_TLS) # Module or no module
     message(STATUS "Building hiredis_ssl")
     set(ENABLE_SSL
         ON

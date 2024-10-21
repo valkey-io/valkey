@@ -3,14 +3,17 @@ cmake_minimum_required(VERSION 3.20)
 # Must be done first
 if (APPLE)
     # Force clang compiler on macOS
-    set(CMAKE_CXX_COMPILER "/usr/bin/clang++")
-    set(CMAKE_C_COMPILER "/usr/bin/clang")
+    find_program(CLANGPP "clang++")
+    find_program(CLANG "clang")
+    if (CLANG AND CLANGPP)
+        message(STATUS "Found ${CLANGPP}, ${CLANG}")
+        set(CMAKE_CXX_COMPILER ${CLANGPP})
+        set(CMAKE_C_COMPILER ${CLANG})
+    endif ()
 endif ()
 
 # Options
-option(WITH_TLS "Build valkey-server with TLS support" OFF)
 option(BUILD_TESTS "Build valkey-unit-tests" OFF)
-option(WITH_RDMA "Build valkey-rdma module" OFF)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 project("valkey")
@@ -25,7 +28,7 @@ add_subdirectory(src)
 # Include the packaging module
 include(Packaging)
 
-# Clear variables declared on this file from the cache
-unset(WITH_TLS CACHE)
+# Clear cached variables defined on this file
 unset(BUILD_TESTS CACHE)
-unset(WITH_RDMA CACHE)
+unset(CLANGPP CACHE)
+unset(CLANG CACHE)

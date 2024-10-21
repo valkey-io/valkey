@@ -2,8 +2,8 @@
 # Define the sources to be built
 # -------------------------------------------------
 
-# libvalkeylib.a sources
-set(VALKEY_LIB_SRCS
+# valkey-server source files
+set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/threads_mngr.c
     ${CMAKE_SOURCE_DIR}/src/adlist.c
     ${CMAKE_SOURCE_DIR}/src/quicklist.c
@@ -102,6 +102,7 @@ set(VALKEY_LIB_SRCS
     ${CMAKE_SOURCE_DIR}/src/strl.c
     ${CMAKE_SOURCE_DIR}/src/connection.c
     ${CMAKE_SOURCE_DIR}/src/unix.c
+    ${CMAKE_SOURCE_DIR}/src/server.c
     ${CMAKE_SOURCE_DIR}/src/logreqres.c)
 
 # valkey-cli
@@ -145,5 +146,8 @@ set(VALKEY_BENCHMARK_SRCS
     ${CMAKE_SOURCE_DIR}/src/mt19937-64.c
     ${CMAKE_SOURCE_DIR}/src/strl.c)
 
-# valkey-rdmo module
+# valkey-rdma module
 set(VALKEY_RDMA_MODULE_SRCS ${CMAKE_SOURCE_DIR}/src/rdma.c)
+
+# valkey-tls module
+set(VALKEY_TLS_MODULE_SRCS ${CMAKE_SOURCE_DIR}/src/tls.c)

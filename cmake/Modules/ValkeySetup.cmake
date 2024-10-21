@@ -1,4 +1,5 @@
 include(CheckIncludeFiles)
+include(Utils)
 
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
@@ -91,33 +92,29 @@ macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
     valkey_create_symlink(${target} ${link_name})
 endmacro ()
 
-# Return the current host distro name. For example: ubuntu, debian, amzn etc
-function (valkey_get_distro_name DISTRO_NAME)
-    if (LINUX AND NOT APPLE)
-        execute_process(
-            COMMAND /bin/bash "-c" "cat /etc/os-release |grep ^ID=|cut -d = -f 2"
-            OUTPUT_VARIABLE _OUT_VAR
-            OUTPUT_STRIP_TRAILING_WHITESPACE)
-        # clean the output
-        string(REPLACE "\"" "" _OUT_VAR "${_OUT_VAR}")
-        string(REPLACE "." "" _OUT_VAR "${_OUT_VAR}")
-        set(${DISTRO_NAME}
-            "${_OUT_VAR}"
-            PARENT_SCOPE)
-    elseif (APPLE)
-        set(${DISTRO_NAME}
-            "darwin"
-            PARENT_SCOPE)
-    elseif (IS_FREEBSD)
-        set(${DISTRO_NAME}
-            "freebsd"
-            PARENT_SCOPE)
-    else ()
-        set(${DISTRO_NAME}
-            "unknown"
-            PARENT_SCOPE)
+# Helper function that defines, builds and installs `target` module.
+macro (valkey_build_and_install_module target sources ld_flags libs)
+    add_library(${target} SHARED ${sources})
+
+    if (USE_JEMALLOC)
+        # Using jemalloc
+        target_link_libraries(${target} jemalloc)
     endif ()
-endfunction ()
+
+    # Place this line last to ensure that ${ld_flags} is placed last on the linker line
+    target_link_libraries(${target} ${libs} ${ld_flags})
+    if (USE_TLS)
+        # Add required libraries needed for TLS
+        target_link_libraries(${target} OpenSSL::SSL hiredis_ssl)
+    endif ()
+
+    if (IS_FREEBSD)
+        target_link_libraries(${target} execinfo)
+    endif ()
+
+    # Install cli tool and create a redis symbolic link
+    valkey_install_bin(${target})
+endmacro ()
 
 # Determine if we are building in Release or Debug mode
 if (CMAKE_BUILD_TYPE MATCHES Debug OR CMAKE_BUILD_TYPE MATCHES DebugFull)
@@ -167,24 +164,39 @@ message(STATUS "Using ${MALLOC_LIB}")
 
 # TLS support
 if (WITH_TLS)
+    valkey_parse_build_option(${WITH_TLS} USE_TLS)
     find_package(OpenSSL REQUIRED)
     message(STATUS "OpenSSL include dir: ${OPENSSL_INCLUDE_DIR}")
     message(STATUS "OpenSSL libraries: ${OPENSSL_LIBRARIES}")
 
     include_directories(${OPENSSL_INCLUDE_DIR})
-    add_valkey_server_compiler_options("-DUSE_OPENSSL=1")
-    add_valkey_server_compiler_options("-DBUILD_TLS_MODULE=0")
-    set(USE_TLS 1)
+
+    if (USE_TLS EQUAL 1)
+        add_valkey_server_compiler_options("-DUSE_OPENSSL=1")
+        add_valkey_server_compiler_options("-DBUILD_TLS_MODULE=0")
+    elseif (USE_TLS EQUAL 2)
+        # Build TLS as a module
+        add_valkey_server_compiler_options("-DUSE_OPENSSL=2")
+    endif ()
 endif ()
 
 if (WITH_RDMA)
     # RDMA support (Linux only)
     if (LINUX AND NOT APPLE)
-        add_valkey_server_compiler_options("-DUSE_RDMA=2")
-        find_package(PkgConfig REQUIRED)
-        pkg_check_modules(VALKEY_RDMA REQUIRED librdmacm)
-        pkg_check_modules(VALKEY_IBVERBS REQUIRED libibverbs)
-        list(APPEND RDMA_LIBS "${RDMA_LIBRARIES};${IBVERBS_LIBRARIES}")
+        valkey_parse_build_option(${WITH_RDMA} USE_RDMA)
+        if (USE_RDMA EQUAL 2) # Module
+            message(STATUS "Building RDMA as module")
+            add_valkey_server_compiler_options("-DUSE_RDMA=2")
+            find_package(PkgConfig REQUIRED)
+            pkg_check_modules(VALKEY_RDMA REQUIRED librdmacm)
+            pkg_check_modules(VALKEY_IBVERBS REQUIRED libibverbs)
+            list(APPEND RDMA_LIBS "${RDMA_LIBRARIES};${IBVERBS_LIBRARIES}")
+        elseif (USE_RDMA EQUAL 1)
+            # RDMA can only be built as a module. So disable it
+            message(WARN "WITH_RDMA can be on of: [no | 0 | module], but '${WITH_RDMA}' was provided")
+            message(STATUS "RDMA build is disabled")
+            set(USE_RDMA 0)
+        endif ()
     else ()
         message(WARNING "RDMA is only supported on Linux platforms")
     endif ()
@@ -345,5 +357,8 @@ unset(VALKEY_SERVER_CFLAGS CACHE)
 unset(PYTHON_EXE CACHE)
 unset(HAVE_C11_ATOMIC CACHE)
 unset(USE_TLS CACHE)
+unset(USE_RDMA CACHE)
+unset(WITH_TLS CACHE)
+unset(WITH_RDMA CACHE)
 unset(WITH_MALLOC CACHE)
 unset(USE_JEMALLOC CACHE)

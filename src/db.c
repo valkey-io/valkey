@@ -59,6 +59,7 @@ int keyIsExpired(serverDb *db, robj *key);
 static void dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, dictEntry *de);
 static int getKVStoreIndexForKey(sds key);
 dictEntry *dbFindExpiresWithDictIndex(serverDb *db, void *key, int dict_index);
+dictEntry *dbFindWithDictIndex(serverDb *db, void *key, int dict_index);
 
 /* Update LFU when an object is accessed.
  * Firstly, decrement the counter if the decrement time is reached.
@@ -97,7 +98,7 @@ void updateLFU(robj *val) {
  * expired on replicas even if the primary is lagging expiring our key via DELs
  * in the replication link. */
 robj *lookupKey(serverDb *db, robj *key, int flags) {
-    int dict_index = getKVStoreIndexForKey(key);
+    int dict_index = getKVStoreIndexForKey(key->ptr);
     dictEntry *de = dbFindWithDictIndex(db, key->ptr, dict_index);
     robj *val = NULL;
     if (de) {

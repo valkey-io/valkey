@@ -1054,7 +1054,7 @@ void clientsCron(void) {
 void databasesCron(void) {
     /* Expire keys by random sampling. Not required for replicas
      * as primary will synthesize DELs for us. */
-    if (server.active_expire_enabled) {
+    if (server.active_expire_enabled && !server.import_mode) {
         if (iAmPrimary()) {
             activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
         } else {
@@ -1651,7 +1651,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
-    if (server.active_expire_enabled && iAmPrimary()) activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
+    if (server.active_expire_enabled && !server.import_mode && iAmPrimary()) activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
     if (moduleCount()) {
         moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP, VALKEYMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP, NULL);
@@ -2057,6 +2057,7 @@ void initServerConfig(void) {
     server.extended_redis_compat = 0;
     server.pause_cron = 0;
     server.dict_resizing = 1;
+    server.import_mode = 0;
 
     server.latency_tracking_info_percentiles_len = 3;
     server.latency_tracking_info_percentiles = zmalloc(sizeof(double) * (server.latency_tracking_info_percentiles_len));

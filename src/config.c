@@ -1533,10 +1533,27 @@ void rewriteConfigOOMScoreAdjValuesOption(standardConfig *config, const char *na
 }
 
 /* Rewrite the bind option. */
-void rewriteConfigBindOption(standardConfig *config, const char *name, struct rewriteConfigState *state) {
+static void rewriteConfigBindOption(standardConfig *config, const char *name, struct rewriteConfigState *state, char **bindaddr, int bindaddr_count) {
     UNUSED(config);
     int force = 1;
     sds line, addresses;
+
+    /* Rewrite as bind <addr1> <addr2> ... <addrN> */
+    if (bindaddr_count > 0)
+        addresses = sdsjoin(bindaddr, bindaddr_count, " ");
+    else
+        addresses = sdsnew("\"\"");
+    line = sdsnew(name);
+    line = sdscatlen(line, " ", 1);
+    line = sdscatsds(line, addresses);
+    sdsfree(addresses);
+
+    rewriteConfigRewriteLine(state, name, line, force);
+}
+
+/* Rewrite the bind option. */
+static void rewriteConfigSocketBindOption(standardConfig *config, const char *name, struct rewriteConfigState *state) {
+    UNUSED(config);
     int is_default = 0;
 
     /* Compare server.bindaddr with CONFIG_DEFAULT_BINDADDR */
@@ -1556,17 +1573,7 @@ void rewriteConfigBindOption(standardConfig *config, const char *name, struct re
         return;
     }
 
-    /* Rewrite as bind <addr1> <addr2> ... <addrN> */
-    if (server.bindaddr_count > 0)
-        addresses = sdsjoin(server.bindaddr, server.bindaddr_count, " ");
-    else
-        addresses = sdsnew("\"\"");
-    line = sdsnew(name);
-    line = sdscatlen(line, " ", 1);
-    line = sdscatsds(line, addresses);
-    sdsfree(addresses);
-
-    rewriteConfigRewriteLine(state, name, line, force);
+    rewriteConfigBindOption(config, name, state, server.bindaddr, server.bindaddr_count);
 }
 
 /* Rewrite the loadmodule option. */
@@ -2919,8 +2926,9 @@ static sds getConfigNotifyKeyspaceEventsOption(standardConfig *config) {
     return keyspaceEventsFlagsToString(server.notify_keyspace_events);
 }
 
-static int setConfigBindOption(standardConfig *config, sds *argv, int argc, const char **err) {
+static int setConfigBindOption(standardConfig *config, sds *argv, int argc, const char **err, char **bindaddr, int *bindaddr_count) {
     UNUSED(config);
+    int orig_bindaddr_count = *bindaddr_count;
     int j;
 
     if (argc > CONFIG_BINDADDR_MAX) {
@@ -2932,13 +2940,19 @@ static int setConfigBindOption(standardConfig *config, sds *argv, int argc, cons
     if (argc == 1 && sdslen(argv[0]) == 0) argc = 0;
 
     /* Free old bind addresses */
-    for (j = 0; j < server.bindaddr_count; j++) {
-        zfree(server.bindaddr[j]);
+    for (j = 0; j < orig_bindaddr_count; j++) {
+        zfree(bindaddr[j]);
     }
-    for (j = 0; j < argc; j++) server.bindaddr[j] = zstrdup(argv[j]);
-    server.bindaddr_count = argc;
+    for (j = 0; j < argc; j++) bindaddr[j] = zstrdup(argv[j]);
+    *bindaddr_count = argc;
 
     return 1;
+}
+
+static int setConfigSocketBindOption(standardConfig *config, sds *argv, int argc, const char **err) {
+    UNUSED(config);
+
+    return setConfigBindOption(config, argv, argc, err, server.bindaddr, &server.bindaddr_count);
 }
 
 static int setConfigReplicaOfOption(standardConfig *config, sds *argv, int argc, const char **err) {
@@ -3310,7 +3324,7 @@ standardConfig static_configs[] = {
     createSpecialConfig("client-output-buffer-limit", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigClientOutputBufferLimitOption, getConfigClientOutputBufferLimitOption, rewriteConfigClientOutputBufferLimitOption, NULL),
     createSpecialConfig("oom-score-adj-values", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigOOMScoreAdjValuesOption, getConfigOOMScoreAdjValuesOption, rewriteConfigOOMScoreAdjValuesOption, updateOOMScoreAdj),
     createSpecialConfig("notify-keyspace-events", NULL, MODIFIABLE_CONFIG, setConfigNotifyKeyspaceEventsOption, getConfigNotifyKeyspaceEventsOption, rewriteConfigNotifyKeyspaceEventsOption, NULL),
-    createSpecialConfig("bind", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigBindOption, getConfigBindOption, rewriteConfigBindOption, applyBind),
+    createSpecialConfig("bind", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigSocketBindOption, getConfigBindOption, rewriteConfigSocketBindOption, applyBind),
     createSpecialConfig("replicaof", "slaveof", IMMUTABLE_CONFIG | MULTI_ARG_CONFIG, setConfigReplicaOfOption, getConfigReplicaOfOption, rewriteConfigReplicaOfOption, NULL),
     createSpecialConfig("latency-tracking-info-percentiles", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigLatencyTrackingInfoPercentilesOutputOption, getConfigLatencyTrackingInfoPercentilesOutputOption, rewriteConfigLatencyTrackingInfoPercentilesOutputOption, NULL),
 

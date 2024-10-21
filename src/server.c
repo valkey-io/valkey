@@ -3242,7 +3242,7 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
     /* This needs to be unreachable since the dataset should be fixed during
      * replica pause (otherwise data may be lost during a failover).
      *
-     * Thought, there are exceptions:
+     * Though, there are exceptions:
      *
      * 1. We allow write commands that were queued up before and after to
      *    execute, if a CLIENT PAUSE executed during a transaction, we will

@@ -10,9 +10,10 @@
 
 #define VALKEYMODULE_CORE_MODULE
 #include "server.h"
-
-#if defined USE_RDMA && defined __linux__ /* currently RDMA is only supported on Linux */
 #include "connection.h"
+
+#if defined __linux__ /* currently RDMA is only supported on Linux */
+#if (USE_RDMA == 1 /* BUILD_YES */) || ((USE_RDMA == 2 /* BUILD_MODULE */) && (BUILD_RDMA_MODULE == 2))
 #include "connhelpers.h"
 
 #include <assert.h>
@@ -1761,7 +1762,20 @@ ConnectionType *connectionTypeRdma(void) {
     return ct_rdma;
 }
 
-#ifdef BUILD_RDMA_MODULE
+int RegisterConnectionTypeRdma(void) {
+    return connTypeRegister(&CT_RDMA);
+}
+
+#else
+
+int RegisterConnectionTypeRdma(void) {
+    serverLog(LL_VERBOSE, "Connection type %s not builtin", CONN_TYPE_RDMA);
+    return C_ERR;
+}
+
+#endif
+
+#if BUILD_RDMA_MODULE == 2 /* BUILD_MODULE */
 
 #include "release.h"
 
@@ -1799,4 +1813,11 @@ int ValkeyModule_OnUnload(void *arg) {
 
 #endif /* BUILD_RDMA_MODULE */
 
-#endif /* USE_RDMA && __linux__ */
+#else /* __linux__ */
+
+int RegisterConnectionTypeRdma(void) {
+    serverLog(LL_VERBOSE, "Connection type %s is supported on Linux only", CONN_TYPE_RDMA);
+    return C_ERR;
+}
+
+#endif /* __linux__ */

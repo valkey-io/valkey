@@ -38,8 +38,13 @@ To build TLS as Valkey module:
 Note that sentinel mode does not support TLS module.
 
 To build with experimental RDMA support you'll need RDMA development libraries
-(e.g. librdmacm-dev and libibverbs-dev on Debian/Ubuntu). For now, Valkey only
-supports RDMA as connection module mode. Run:
+(e.g. librdmacm-dev and libibverbs-dev on Debian/Ubuntu).
+
+To build RDMA support as Valkey built-in:
+
+    % make BUILD_RDMA=yes
+
+To build RDMA as Valkey module:
 
     % make BUILD_RDMA=module
 

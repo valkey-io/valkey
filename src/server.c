@@ -2808,6 +2808,17 @@ void initListeners(void) {
         listener->priv = &server.unix_ctx_config; /* Unix socket specified */
     }
 
+    if (server.rdma_ctx_config.port != 0) {
+        conn_index = connectionIndexByType(CONN_TYPE_RDMA);
+        if (conn_index < 0) serverPanic("Failed finding connection listener of %s", CONN_TYPE_RDMA);
+        listener = &server.listeners[conn_index];
+        listener->bindaddr = server.rdma_ctx_config.bindaddr;
+        listener->bindaddr_count = server.rdma_ctx_config.bindaddr_count;
+        listener->port = server.rdma_ctx_config.port;
+        listener->ct = connectionByType(CONN_TYPE_RDMA);
+        listener->priv = &server.rdma_ctx_config;
+    }
+
     /* create all the configured listener, and add handler to start to accept */
     int listen_fds = 0;
     for (int j = 0; j < CONN_TYPE_MAX; j++) {

@@ -2955,6 +2955,66 @@ static int setConfigSocketBindOption(standardConfig *config, sds *argv, int argc
     return setConfigBindOption(config, argv, argc, err, server.bindaddr, &server.bindaddr_count);
 }
 
+static int setConfigRdmaBindOption(standardConfig *config, sds *argv, int argc, const char **err) {
+    UNUSED(config);
+
+    return setConfigBindOption(config, argv, argc, err, server.rdma_ctx_config.bindaddr, &server.rdma_ctx_config.bindaddr_count);
+}
+
+static sds getConfigRdmaBindOption(standardConfig *config) {
+    UNUSED(config);
+    return sdsjoin(server.rdma_ctx_config.bindaddr, server.rdma_ctx_config.bindaddr_count, " ");
+}
+
+static void rewriteConfigRdmaBindOption(standardConfig *config, const char *name, struct rewriteConfigState *state) {
+    UNUSED(config);
+
+    if (server.rdma_ctx_config.bindaddr_count) {
+        rewriteConfigBindOption(config, name, state, server.rdma_ctx_config.bindaddr,
+                                server.rdma_ctx_config.bindaddr_count);
+    }
+}
+
+static int applyRdmaBind(const char **err) {
+    connListener *rdma_listener = listenerByType(CONN_TYPE_RDMA);
+
+    if (!rdma_listener) {
+        *err = "No RDMA building support.";
+        return 0;
+    }
+
+    rdma_listener->bindaddr = server.rdma_ctx_config.bindaddr;
+    rdma_listener->bindaddr_count = server.rdma_ctx_config.bindaddr_count;
+    rdma_listener->port = server.rdma_ctx_config.port;
+    rdma_listener->ct = connectionByType(CONN_TYPE_RDMA);
+    if (changeListener(rdma_listener) == C_ERR) {
+        *err = "Failed to bind to specified addresses for RDMA.";
+        return 0;
+    }
+
+    return 1;
+}
+
+static int updateRdmaPort(const char **err) {
+    connListener *listener = listenerByType(CONN_TYPE_RDMA);
+
+    if (listener != NULL) {
+        *err = "No RDMA building support.";
+        return 0;
+    }
+
+    listener->bindaddr = server.rdma_ctx_config.bindaddr;
+    listener->bindaddr_count = server.rdma_ctx_config.bindaddr_count;
+    listener->port = server.rdma_ctx_config.port;
+    listener->ct = connectionByType(CONN_TYPE_RDMA);
+    if (changeListener(listener) == C_ERR) {
+        *err = "Unable to listen on this port for RDMA. Check server logs.";
+        return 0;
+    }
+
+    return 1;
+}
+
 static int setConfigReplicaOfOption(standardConfig *config, sds *argv, int argc, const char **err) {
     UNUSED(config);
 
@@ -3245,6 +3305,9 @@ standardConfig static_configs[] = {
     createIntConfig("watchdog-period", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.watchdog_period, 0, INTEGER_CONFIG, NULL, updateWatchdogPeriod),
     createIntConfig("shutdown-timeout", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.shutdown_timeout, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("repl-diskless-sync-max-replicas", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.repl_diskless_sync_max_replicas, 0, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("rdma-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.rdma_ctx_config.port, 0, INTEGER_CONFIG, NULL, updateRdmaPort),
+    createIntConfig("rdma-rx-size", NULL, IMMUTABLE_CONFIG, 64 * 1024, 16 * 1024 * 1024, server.rdma_ctx_config.rx_size, 1024 * 1024, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("rdma-comp-vector", NULL, IMMUTABLE_CONFIG, -1, 1024, server.rdma_ctx_config.comp_vector, -1, INTEGER_CONFIG, NULL, NULL),
 
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
@@ -3325,6 +3388,7 @@ standardConfig static_configs[] = {
     createSpecialConfig("oom-score-adj-values", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigOOMScoreAdjValuesOption, getConfigOOMScoreAdjValuesOption, rewriteConfigOOMScoreAdjValuesOption, updateOOMScoreAdj),
     createSpecialConfig("notify-keyspace-events", NULL, MODIFIABLE_CONFIG, setConfigNotifyKeyspaceEventsOption, getConfigNotifyKeyspaceEventsOption, rewriteConfigNotifyKeyspaceEventsOption, NULL),
     createSpecialConfig("bind", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigSocketBindOption, getConfigBindOption, rewriteConfigSocketBindOption, applyBind),
+    createSpecialConfig("rdma-bind", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigRdmaBindOption, getConfigRdmaBindOption, rewriteConfigRdmaBindOption, applyRdmaBind),
     createSpecialConfig("replicaof", "slaveof", IMMUTABLE_CONFIG | MULTI_ARG_CONFIG, setConfigReplicaOfOption, getConfigReplicaOfOption, rewriteConfigReplicaOfOption, NULL),
     createSpecialConfig("latency-tracking-info-percentiles", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigLatencyTrackingInfoPercentilesOutputOption, getConfigLatencyTrackingInfoPercentilesOutputOption, rewriteConfigLatencyTrackingInfoPercentilesOutputOption, NULL),
 

@@ -486,7 +486,7 @@ robj *lookupStringForBitCommand(client *c, uint64_t maxbit, int *dirty) {
 
     if (o == NULL) {
         o = createObject(OBJ_STRING, sdsnewlen(NULL, byte + 1));
-        dbAdd(c->db, c->argv[1], o);
+        o = dbAdd(c->db, c->argv[1], o);
         if (dirty) *dirty = 1;
     } else {
         o = dbUnshareStringValue(c->db, c->argv[1], o);
@@ -772,9 +772,8 @@ void bitopCommand(client *c) {
     /* Store the computed value into the target key */
     if (maxlen) {
         o = createObject(OBJ_STRING, res);
-        setKey(c, c->db, targetkey, o, 0);
+        o = setKey(c, c->db, targetkey, o, 0);
         notifyKeyspaceEvent(NOTIFY_STRING, "set", targetkey, c->db->id);
-        decrRefCount(o);
         server.dirty++;
     } else if (dbDelete(c->db, targetkey)) {
         signalModifiedKey(c, c->db, targetkey);

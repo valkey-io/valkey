@@ -43,14 +43,58 @@
 
 /* ===================== Creation and parsing of objects ==================== */
 
-robj *createObject(int type, void *ptr) {
-    robj *o = zmalloc(sizeof(*o));
+/* Creates an object, optionally with embedded key and expire fields. The key
+ * and expire fields can be omitted by passing NULL and -1, respectively. */
+robj *createObjectWithKeyAndExpire(int type, void *ptr, const sds key, long long expire) {
+    /* Calculate sizes */
+    size_t key_sds_size = 0;
+    size_t min_size = sizeof(robj);
+    if (expire != -1) {
+        min_size += sizeof(long long);
+    }
+    if (key != NULL) {
+        /* Size of embedded key, incl. 1 byte for prefixed sds hdr size. */
+        key_sds_size = sdscopytobuffer(NULL, 0, key, NULL);
+        min_size += 1 + key_sds_size;
+    }
+    /* Allocate and set the declared fields. */
+    size_t bufsize = 0;
+    robj *o = zmalloc_usable(min_size, &bufsize);
     o->type = type;
     o->encoding = OBJ_ENCODING_RAW;
     o->ptr = ptr;
     o->refcount = 1;
     o->lru = 0;
+    o->hasexpire = (expire != -1);
+    o->hasembkey = (key != NULL);
+
+    /* If the allocation has enough space for an expire field, add it even if we
+     * don't need it now. Then we don't need to realloc if it's needed later. */
+    if (key != NULL && !o->hasexpire && bufsize >= min_size + sizeof(long long)) {
+        o->hasexpire = 1;
+        min_size += sizeof(long long);
+    }
+
+    /* The memory after the struct where we embedded data. */
+    unsigned char *data = (void *)(o + 1);
+
+    /* Set the expire field. */
+    if (o->hasexpire) {
+        *(long long *)data = expire;
+        data += sizeof(long long);
+    }
+
+    /* Copy embedded key. */
+    if (o->hasembkey) {
+        sdscopytobuffer(data + 1, key_sds_size, key, data);
+        data += 1 + key_sds_size;
+    }
+
     return o;
+}
+
+robj *createObject(int type, void *ptr) {
+    return createObjectWithKeyAndExpire(type, ptr, NULL, -1);
 }
 
 void initObjectLRUOrLFU(robj *o) {
@@ -88,37 +132,83 @@ robj *createRawStringObject(const char *ptr, size_t len) {
     return createObject(OBJ_STRING, sdsnewlen(ptr, len));
 }
 
+/* Creates a new embedded string object and copies the content of key, val and
+ * expire to the new object. LRU is set to 0. */
+static valkey *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
+                                                          size_t val_len,
+                                                          const sds key,
+                                                          long long expire) {
+    /* Calculate sizes */
+    size_t key_sds_size = 0;
+    size_t min_size = sizeof(robj);
+    if (expire != -1) {
+        min_size += sizeof(long long);
+    }
+    if (key != NULL) {
+        /* Size of embedded key, incl. 1 byte for prefixed sds hdr size. */
+        key_sds_size = sdscopytobuffer(NULL, 0, key, NULL);
+        min_size += 1 + key_sds_size;
+    }
+    /* Size of embedded value (EMBSTR) including \0 term. */
+    min_size += sizeof(struct sdshdr8) + val_len + 1;
+
+    /* Allocate and set the declared fields. */
+    size_t bufsize = 0;
+    valkey *o = zmalloc_usable(min_size, &bufsize);
+    o->type = OBJ_STRING;
+    o->encoding = OBJ_ENCODING_EMBSTR;
+    o->refcount = 1;
+    o->lru = 0;
+    o->hasexpire = (expire != -1);
+    o->hasembkey = (key != NULL);
+
+    /* If the allocation has enough space for an expire field, add it even if we
+     * don't need it now. Then we don't need to realloc if it's needed later. */
+    if (!o->hasexpire && bufsize >= min_size + sizeof(long long)) {
+        o->hasexpire = 1;
+        min_size += sizeof(long long);
+    }
+
+    /* The memory after the struct where we embedded data. */
+    unsigned char *data = (void *)(o + 1);
+
+    /* Set the expire field. */
+    if (o->hasexpire) {
+        *(long long *)data = expire;
+        data += sizeof(long long);
+    }
+
+    /* Copy embedded key. */
+    if (o->hasembkey) {
+        sdscopytobuffer(data + 1, key_sds_size, key, data);
+        data += 1 + key_sds_size;
+    }
+
+    /* Copy embedded value (EMBSTR). */
+    struct sdshdr8 *sh = (void *)data;
+    sh->flags = SDS_TYPE_8;
+    sh->len = val_len;
+    size_t capacity = bufsize - (min_size - val_len);
+    sh->alloc = capacity;
+    serverAssert(capacity == sh->alloc); /* Overflow check. */
+    if (val_ptr == SDS_NOINIT) {
+        sh->buf[val_len] = '\0';
+    } else if (val_ptr != NULL) {
+        memcpy(sh->buf, val_ptr, val_len);
+        sh->buf[val_len] = '\0';
+    } else {
+        memset(sh->buf, 0, val_len + 1);
+    }
+    o->ptr = sh->buf;
+
+    return o;
+}
+
 /* Create a string object with encoding OBJ_ENCODING_EMBSTR, that is
  * an object where the sds string is actually an unmodifiable string
  * allocated in the same chunk as the object itself. */
 robj *createEmbeddedStringObject(const char *ptr, size_t len) {
-    size_t bufsize = 0;
-    size_t sds_hdrlen = sizeof(struct sdshdr8);
-    robj *o = zmalloc_usable(sizeof(robj) + sds_hdrlen + len + 1, &bufsize);
-    struct sdshdr8 *sh = (void *)(o + 1);
-
-    o->type = OBJ_STRING;
-    o->encoding = OBJ_ENCODING_EMBSTR;
-    o->ptr = sh + 1;
-    o->refcount = 1;
-    o->lru = 0;
-
-    sh->len = len;
-    size_t usable = bufsize - (sizeof(robj) + sds_hdrlen + 1);
-    sh->alloc = usable;
-    /* Overflow check. This must not happen as we use embedded strings only
-     * for sds strings that fit into SDS_TYPE_8. */
-    serverAssert(usable == sh->alloc);
-    sh->flags = SDS_TYPE_8;
-    if (ptr == SDS_NOINIT)
-        sh->buf[len] = '\0';
-    else if (ptr) {
-        memcpy(sh->buf, ptr, len);
-        sh->buf[len] = '\0';
-    } else {
-        memset(sh->buf, 0, len + 1);
-    }
-    return o;
+    return createEmbeddedStringObjectWithKeyAndExpire(ptr, len, NULL, -1);
 }
 
 /* Create a string object with EMBSTR encoding if it is smaller than
@@ -133,6 +223,96 @@ robj *createStringObject(const char *ptr, size_t len) {
         return createEmbeddedStringObject(ptr, len);
     else
         return createRawStringObject(ptr, len);
+}
+
+robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const sds key, long long expire) {
+    /* When to embed? Embed when the sum is up to 64 bytes. There may be better
+     * heuristics, e.g. we can look at the jemalloc sizes (16-byte intervals up
+     * to 128 bytes). */
+    size_t size = sizeof(robj);
+    size += (key != NULL) * (sdslen(key) + 3); /* hdr size (1) + hdr (1) + nullterm (1) */
+    size += (expire != -1) * sizeof(long long);
+    size += 4 + len; /* embstr header (3) + nullterm (1) */
+    if (size <= 64) {
+        return createEmbeddedStringObjectWithKeyAndExpire(ptr, len, key, expire);
+    } else {
+        return createObjectWithKeyAndExpire(OBJ_STRING, sdsnewlen(ptr, len), key, expire);
+    }
+}
+
+sds objectGetKey(const valkey *val) {
+    unsigned char *data = (void *)(val + 1);
+    if (val->hasexpire) {
+        /* Skip expire field */
+        data += sizeof(long long);
+    }
+    if (val->hasembkey) {
+        uint8_t hdr_size = *(uint8_t *)data;
+        data += 1 + hdr_size;
+        return (sds)data;
+    }
+    return NULL;
+}
+
+long long objectGetExpire(const valkey *val) {
+    unsigned char *data = (void *)(val + 1);
+    if (val->hasexpire) {
+        return *(long long *)data;
+    } else {
+        return -1;
+    }
+}
+
+/* This functions may reallocate the value. The new allocation is returned and
+ * the old object's reference counter is decremented and possibly freed. Use the
+ * returned object instead of 'val' after calling this function. */
+valkey *objectSetExpire(valkey *val, long long expire) {
+    if (val->hasexpire) {
+        /* Update existing expire field. */
+        unsigned char *data = (void *)(val + 1);
+        *(long long *)data = expire;
+        return val;
+    } else if (expire == -1) {
+        return val;
+    } else {
+        return objectSetKeyAndExpire(val, objectGetKey(val), expire);
+    }
+}
+
+/* This functions may reallocate the value. The new allocation is returned and
+ * the old object's reference counter is decremented and possibly freed. Use the
+ * returned object instead of 'val' after calling this function. */
+valkey *objectSetKeyAndExpire(valkey *val, sds key, long long expire) {
+    if (val->type == OBJ_STRING && val->encoding == OBJ_ENCODING_EMBSTR) {
+        valkey *new = createStringObjectWithKeyAndExpire(val->ptr, sdslen(val->ptr), key, expire);
+        new->lru = val->lru;
+        decrRefCount(val);
+        return new;
+    }
+
+    /* Create a new object with embedded key. Reuse ptr if possible. */
+    void *ptr;
+    if (val->refcount == 1) {
+        /* Reuse the ptr. There are no other references to val. */
+        ptr = val->ptr;
+        val->ptr = NULL;
+    } else if (val->type == OBJ_STRING && val->encoding == OBJ_ENCODING_INT) {
+        /* The pointer is not allocated memory. We can just copy the pointer. */
+        ptr = val->ptr;
+    } else if (val->type == OBJ_STRING && val->encoding == OBJ_ENCODING_RAW) {
+        /* Dup the string. */
+        ptr = sdsdup(val->ptr);
+    } else {
+        serverAssert(val->type != OBJ_STRING);
+        /* There are multiple references to this non-string object. Most types
+         * can be duplicated, but for a module type is not always possible. */
+        serverPanic("Not implemented");
+    }
+    valkey *new = createObjectWithKeyAndExpire(val->type, ptr, key, expire);
+    new->encoding = val->encoding;
+    new->lru = val->lru;
+    decrRefCount(val);
+    return new;
 }
 
 /* Same as CreateRawStringObject, can return NULL if allocation fails */
@@ -185,7 +365,7 @@ robj *createStringObjectFromLongLong(long long value) {
  * configured to evict based on LFU/LRU, so we want LFU/LRU values
  * specific for each key. */
 robj *createStringObjectFromLongLongForValue(long long value) {
-    if (server.maxmemory == 0 || !(server.maxmemory_policy & MAXMEMORY_FLAG_NO_SHARED_INTEGERS)) {
+    if (canUseSharedObject()) {
         /* If the maxmemory policy permits, we can still return shared integers */
         return createStringObjectFromLongLongWithOptions(value, LL2STROBJ_AUTO);
     } else {
@@ -381,15 +561,17 @@ void incrRefCount(robj *o) {
 
 void decrRefCount(robj *o) {
     if (o->refcount == 1) {
-        switch (o->type) {
-        case OBJ_STRING: freeStringObject(o); break;
-        case OBJ_LIST: freeListObject(o); break;
-        case OBJ_SET: freeSetObject(o); break;
-        case OBJ_ZSET: freeZsetObject(o); break;
-        case OBJ_HASH: freeHashObject(o); break;
-        case OBJ_MODULE: freeModuleObject(o); break;
-        case OBJ_STREAM: freeStreamObject(o); break;
-        default: serverPanic("Unknown object type"); break;
+        if (o->ptr != NULL) {
+            switch (o->type) {
+            case OBJ_STRING: freeStringObject(o); break;
+            case OBJ_LIST: freeListObject(o); break;
+            case OBJ_SET: freeSetObject(o); break;
+            case OBJ_ZSET: freeZsetObject(o); break;
+            case OBJ_HASH: freeHashObject(o); break;
+            case OBJ_MODULE: freeModuleObject(o); break;
+            case OBJ_STREAM: freeStreamObject(o); break;
+            default: serverPanic("Unknown object type"); break;
+            }
         }
         zfree(o);
     } else {
@@ -1194,7 +1376,7 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
 
     for (j = 0; j < server.dbnum; j++) {
         serverDb *db = server.db + j;
-        if (!kvstoreNumAllocatedDicts(db->keys)) continue;
+        if (!kvstoreNumAllocatedHashsets(db->keys)) continue;
 
         unsigned long long keyscount = kvstoreSize(db->keys);
 
@@ -1216,8 +1398,8 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
         mh->overhead_db_hashtable_lut += kvstoreOverheadHashtableLut(db->expires);
         mh->overhead_db_hashtable_rehashing += kvstoreOverheadHashtableRehashing(db->keys);
         mh->overhead_db_hashtable_rehashing += kvstoreOverheadHashtableRehashing(db->expires);
-        mh->db_dict_rehashing_count += kvstoreDictRehashingCount(db->keys);
-        mh->db_dict_rehashing_count += kvstoreDictRehashingCount(db->expires);
+        mh->db_dict_rehashing_count += kvstoreHashsetRehashingCount(db->keys);
+        mh->db_dict_rehashing_count += kvstoreHashsetRehashingCount(db->expires);
     }
 
     mh->overhead_total = mem_total;
@@ -1515,7 +1697,6 @@ void memoryCommand(client *c) {
         };
         addReplyHelp(c, help);
     } else if (!strcasecmp(c->argv[1]->ptr, "usage") && c->argc >= 3) {
-        dictEntry *de;
         long long samples = OBJ_COMPUTE_SIZE_DEF_SAMPLES;
         for (int j = 3; j < c->argc; j++) {
             if (!strcasecmp(c->argv[j]->ptr, "samples") && j + 1 < c->argc) {
@@ -1531,12 +1712,12 @@ void memoryCommand(client *c) {
                 return;
             }
         }
-        if ((de = dbFind(c->db, c->argv[2]->ptr)) == NULL) {
+        valkey *obj = dbFind(c->db, c->argv[2]->ptr);
+        if (obj == NULL) {
             addReplyNull(c);
             return;
         }
-        size_t usage = objectComputeSize(c->argv[2], dictGetVal(de), samples, c->db->id);
-        usage += dictEntryMemUsage(de);
+        size_t usage = objectComputeSize(c->argv[2], obj, samples, c->db->id);
         addReplyLongLong(c, usage);
     } else if (!strcasecmp(c->argv[1]->ptr, "stats") && c->argc == 2) {
         struct serverMemOverhead *mh = getMemoryOverheadData();

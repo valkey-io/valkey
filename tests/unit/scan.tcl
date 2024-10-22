@@ -69,6 +69,7 @@ proc test_scan {type} {
             if {$cur == 0} break
         }
 
+        set keys [lsort -unique $keys]
         assert_equal 0 [llength $keys]
 
         # Check strings are included
@@ -82,6 +83,7 @@ proc test_scan {type} {
             if {$cur == 0} break
         }
 
+        set keys [lsort -unique $keys]
         assert_equal 1000 [llength $keys]
 
         # Check all three args work together
@@ -95,6 +97,7 @@ proc test_scan {type} {
             if {$cur == 0} break
         }
 
+        set keys [lsort -unique $keys]
         assert_equal 1000 [llength $keys]
     }
 
@@ -142,6 +145,7 @@ proc test_scan {type} {
             if {$cur == 0} break
         }
 
+        set keys [lsort -unique $keys]
         assert_equal 1000 [llength $keys]
 
         # make sure that expired key have been removed by scan command
@@ -175,6 +179,7 @@ proc test_scan {type} {
             if {$cur == 0} break
         }
 
+        set keys [lsort -unique $keys]
         assert_equal 1000 [llength $keys]
 
         # make sure that only the expired key in the type match will been removed by scan command

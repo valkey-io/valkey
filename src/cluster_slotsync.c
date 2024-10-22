@@ -1382,7 +1382,7 @@ void clusterSlotSyncCron(void) {
          * ('server' here means the original owner of the slots.) */
         {
             /* We need to check if all the slot failover are finished. */
-            if (getSlotFailoverReplicaIngressCount() == 0) {
+            if (isPausedActionsWithUpdate(PAUSE_ACTION_REPLICA) && getSlotFailoverReplicaIngressCount() == 0) {
                 /* Unpause the clients. */
                 unpauseActions(PAUSE_DURING_FAILOVER);
                 /* Free slot failover replicas. */

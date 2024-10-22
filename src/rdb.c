@@ -3076,9 +3076,9 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             if ((db_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             if ((expires_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             if (!server.cluster_enabled) {
-                /* Ignore RDB_OPCODE_RESIZEDB in ValKey-8.0 CME: ValKey 8.0 uses dict per slot. Using resize opcode might
+                /* Ignore RDB_OPCODE_RESIZEDB in Valkey cluster: Since Valkey 8, it uses dictionary per slot. Using resize opcode might
                  * expand all the replica's dictionaries, including dictionaries of unowned slots. This causes memory
-                 * overhead when syncing from ValKey-7 primaries. */
+                 * overhead when syncing from Valkey 7 primaries. */
                 should_expand_db = 1;
             }
             continue; /* Read next opcode. */

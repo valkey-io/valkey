@@ -4436,15 +4436,19 @@ void clusterLogCantFailover(int reason) {
 
     /* Don't log if we have the same reason for some time. */
     if (reason == server.cluster->cant_failover_reason &&
-        time(NULL) - lastlog_time < CLUSTER_CANT_FAILOVER_RELOG_PERIOD)
+    time_t now = time(NULL);
+    
+    /* General logging suppression if the same reason has occurred recently. */
+    if (now - lastlog_time < CLUSTER_CANT_FAILOVER_RELOG_PERIOD) {
         return;
+    }
 
-    /* If data age is too old, this log may be printed repeatedly since it
-     * can not be automatically recovered. In this case, limit its frequency. */
-    if (reason == server.cluster->cant_failover_reason && reason == CLUSTER_CANT_FAILOVER_DATA_AGE &&
-        time(NULL) - lastlog_time < 10 * CLUSTER_CANT_FAILOVER_RELOG_PERIOD)
+    /* Special case: If the failure reason is due to data age, log 10 times less frequently. */
+    if (reason == CLUSTER_CANT_FAILOVER_DATA_AGE &&
+        now - lastlog_time < 10 * CLUSTER_CANT_FAILOVER_RELOG_PERIOD) {
         return;
-
+    }
+}
     server.cluster->cant_failover_reason = reason;
 
     switch (reason) {

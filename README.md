@@ -5,13 +5,11 @@ This project was forked from the open source Redis project right before the tran
 This README is just a fast *quick start* document. More details can be found under [valkey.io](https://valkey.io/)
 
 # What is Valkey?
---------------
 
 Valkey is a high-performance data structure server that primarily serves key/value workloads.
 It supports a wide range of native structures and an extensible plugin system for adding new data structures and access patterns.
 
 # Building Valkey using `Makefile`
----
 
 Valkey can be compiled and used on Linux, OSX, OpenBSD, NetBSD, FreeBSD.
 We support big endian and little endian architectures, and both 32 bit

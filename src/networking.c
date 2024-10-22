@@ -2184,7 +2184,7 @@ int postWriteToClient(client *c) {
     c->io_last_bufpos = 0;
     /* Update total number of writes on server */
     server.stat_total_writes_processed++;
-    if (getClientType(c) != CLIENT_TYPE_REPLICA) {
+    if (!isNormalReplicaClient(c)) {
         _postWriteToClient(c);
     } else {
         server.stat_net_repl_output_bytes += c->nwritten > 0 ? c->nwritten : 0;

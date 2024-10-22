@@ -1024,12 +1024,14 @@ void readSlotSyncBulkPayload(connection *conn) {
     /* Set to a value large enough after first init. */
     link->slot_mf_lag = SLOTSYNC_DEFAULT_LAG;
 
-    /* Create client */
+    /* Create a client, here we don't mark the client as a primary for some reasons.
+     * This client is used to receive the subsequent slot replication buffer, and
+     * we set reply_off indicates that it does not need reply. */
     client* client = createClient(link->sync_conn);
     client->flag.authenticated = 1;
+    client->flag.reply_off = 1;
     client->slotsync_link = link;
     client->slotsync_slots = listDup(link->slot_ranges);
-    client->flag.reply_off = 0;
     link->client = client;
 
     moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE, VALKEYMODULE_SUBEVENT_PRIMARY_LINK_UP, NULL);

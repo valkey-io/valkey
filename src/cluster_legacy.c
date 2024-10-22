@@ -5287,13 +5287,13 @@ void clusterLogWhyFail(int reason) {
     char *msg;
     switch (reason) {
     case CLUSTER_FAIL_NOT_FULL_COVERAGE:
-        msg = "Detect there is at least a hash slot uncovered (no available node is serving it). "
-              "Please check the 'cluster-require-full-coverage' configuration option.";
+        msg = "At least one hash slot is not served by any available node.  "
+              "Please check the 'cluster-require-full-coverage' configuration.";
         break;
-    case CLUSTER_FAIL_MINORITY_PARTITION: msg = "In a minority partition."; break;
+    case CLUSTER_FAIL_MINORITY_PARTITION: msg = "I am part of a minority partition."; break;
     default: msg = "Unknown reason code."; break;
     }
-    serverLog(LL_NOTICE, "Currently cluster unable to work: %s", msg);
+    serverLog(LL_WARNING, "Cluster is currently down: %s", msg);
     server.cluster->fail_reason = reason;
 }
 

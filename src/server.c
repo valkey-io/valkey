@@ -604,7 +604,6 @@ void hashsetChannelsDictDestructor(hashset *t, void *element) {
     UNUSED(t);
     dict *d = element;
     robj *channel = *((void **)d->metadata);
-    //robj *channel = (robj *)hashsetChannelsDictGetKey(element);
     decrRefCount(channel);
     dictRelease(element);
 }
@@ -688,7 +687,7 @@ dictType clientDictType = {
     NULL,                 /* key dup */
     dictClientKeyCompare, /* key compare */
     .dictMetadataBytes = clientSetDictTypeMetadataBytes,
-    .no_value = 1         /* no values in this dict */
+    .no_value = 1 /* no values in this dict */
 };
 
 /* This function is called once a background process of some kind terminates,

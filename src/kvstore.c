@@ -57,15 +57,15 @@ struct _kvstore {
     hashset **hashsets;
     long long num_hashsets;
     long long num_hashsets_bits;
-    list *rehashing;                     /* List of hash tables in this kvstore that are currently rehashing. */
-    int resize_cursor;                   /* Cron job uses this cursor to gradually resize hash tables (only used if num_hashsets > 1). */
-    int allocated_hashsets;              /* The number of allocated hashsets. */
-    int non_empty_hashsets;              /* The number of non-empty hashsets. */
-    unsigned long long key_count;        /* Total number of keys in this kvstore. */
-    unsigned long long bucket_count;     /* Total number of buckets in this kvstore across hash tables. */
+    list *rehashing;                        /* List of hash tables in this kvstore that are currently rehashing. */
+    int resize_cursor;                      /* Cron job uses this cursor to gradually resize hash tables (only used if num_hashsets > 1). */
+    int allocated_hashsets;                 /* The number of allocated hashsets. */
+    int non_empty_hashsets;                 /* The number of non-empty hashsets. */
+    unsigned long long key_count;           /* Total number of keys in this kvstore. */
+    unsigned long long bucket_count;        /* Total number of buckets in this kvstore across hash tables. */
     unsigned long long *hashset_size_index; /* Binary indexed tree (BIT) that describes cumulative key frequencies up until
                                             given hashset-index. */
-    size_t overhead_hashtable_rehashing; /* Num buckets overhead of hash tables rehashing. */
+    size_t overhead_hashtable_rehashing;    /* Num buckets overhead of hash tables rehashing. */
 };
 
 /* Structure for kvstore iterator that allows iterating across multiple hashsets. */

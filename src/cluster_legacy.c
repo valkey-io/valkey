@@ -4433,22 +4433,19 @@ int clusterGetReplicaRank(void) {
 void clusterLogCantFailover(int reason) {
     char *msg;
     static time_t lastlog_time = 0;
-
-    /* Don't log if we have the same reason for some time. */
-    if (reason == server.cluster->cant_failover_reason &&
     time_t now = time(NULL);
-    
+
     /* General logging suppression if the same reason has occurred recently. */
-    if (now - lastlog_time < CLUSTER_CANT_FAILOVER_RELOG_PERIOD) {
+    if (reason == server.cluster->cant_failover_reason && now - lastlog_time < CLUSTER_CANT_FAILOVER_RELOG_PERIOD) {
         return;
     }
 
     /* Special case: If the failure reason is due to data age, log 10 times less frequently. */
-    if (reason == CLUSTER_CANT_FAILOVER_DATA_AGE &&
+    if (reason == server.cluster->cant_failover_reason && reason == CLUSTER_CANT_FAILOVER_DATA_AGE &&
         now - lastlog_time < 10 * CLUSTER_CANT_FAILOVER_RELOG_PERIOD) {
         return;
     }
-}
+
     server.cluster->cant_failover_reason = reason;
 
     switch (reason) {

@@ -6720,7 +6720,7 @@ serverTestProc *getTestProcByName(const char *name) {
 }
 #endif
 
-#ifndef VALKEY_USE_TEST_MAIN
+#ifndef VALKEY_USE_TEST_MAIN /* avoid this function when building valkey-unit-tests for macOS */
 int main(int argc, char **argv) {
     struct timeval tv;
     int j;
@@ -7064,5 +7064,5 @@ int main(int argc, char **argv) {
     aeDeleteEventLoop(server.el);
     return 0;
 }
-#endif // VALKEY_USE_TEST_MAIN
+#endif /* VALKEY_USE_TEST_MAIN */
 /* The End */

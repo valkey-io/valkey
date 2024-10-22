@@ -281,27 +281,15 @@ You'll be able to stop and start Valkey using the script named
 
 # Building using `CMake`
 
-In addition to the traditional `Makefile` build, Valkey supports an alternative, **experimental** build system using `CMake`
+In addition to the traditional `Makefile` build, Valkey supports an alternative, **experimental**, build system using `CMake`.
 
 To build and install `Valkey`, in `Release` mode (an optimized build), type this into your terminal:
 
-For Linux:
-
 ```bash
 mkdir build-release
 cd $_
 cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/valkey
-sudo make -j$(nproc) install
-# Valkey is now installed under /opt/valkey
-```
-
-For macOS:
-
-```bash
-mkdir build-release
-cd $_
-cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/valkey
-sudo make -j$(sysctl -n hw.ncpu) install
+sudo make install
 # Valkey is now installed under /opt/valkey
 ```
 
@@ -313,8 +301,9 @@ Other options supported by Valkey's `CMake` build system:
 - `-DWITH_RDMA=<off|module>` enable RDMA module build (only module mode supported)
 - `-DWITH_MALLOC=<libc|jemalloc|tcmalloc|tcmalloc_minimal>` choose the allocator to use. Default on Linux: `jemalloc`, for other OS: `libc`
 - `-DWITH_SANITIZER=<address|thread|undefined>` build with address sanitizer enabled
-- `-DBUILD_UNIT_TESTS=[1|0]`  when enabled, the build will produce the executable `valkey-unit-tests`
-- `-DBUILD_TEST_MODULES=[1|0]`  when enabled, the build will include the modules located under the `tests/modules` folder
+- `-DBUILD_UNIT_TESTS=[1|0]`  when set, the build will produce the executable `valkey-unit-tests`
+- `-DBUILD_TEST_MODULES=[1|0]`  when set, the build will include the modules located under the `tests/modules` folder
+- `-DBUILD_EXAMPLE_MODULES=[1|0]`  when set, the build will include the example modules located under the `src/modules` folder
 
 ## Common flags
 

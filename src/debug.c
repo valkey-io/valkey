@@ -1023,7 +1023,7 @@ void debugCommand(client *c) {
 
 /* =========================== Crash handling  ============================== */
 
-#ifndef VALKEY_USE_TEST_SERVER_ASSERT
+#ifndef VALKEY_USE_TEST_SERVER_ASSERT /* avoid this function when building valkey-unit-tests for macOS */
 __attribute__((noinline)) void _serverAssert(const char *estr, const char *file, int line) {
     int new_report = bugReportStart();
     serverLog(LL_WARNING, "=== %sASSERTION FAILED ===", new_report ? "" : "RECURSIVE ");

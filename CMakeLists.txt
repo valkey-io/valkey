@@ -15,6 +15,7 @@ endif ()
 # Options
 option(BUILD_UNIT_TESTS "Build valkey-unit-tests" OFF)
 option(BUILD_TEST_MODULES "Build all test modules" OFF)
+option(BUILD_EXAMPLE_MODULES "Build example modules" OFF)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 project("valkey")
@@ -38,3 +39,4 @@ unset(BUILD_RDMA_MODULE CACHE)
 unset(BUILD_TLS_MODULE CACHE)
 unset(BUILD_UNIT_TESTS CACHE)
 unset(BUILD_TEST_MODULES CACHE)
+unset(BUILD_EXAMPLE_MODULES CACHE)

@@ -558,6 +558,7 @@ start_server {tags {"introspection"}} {
             req-res-logfile
             client-default-resp
             dual-channel-replication-enabled
+            io-uring-enabled
         }
 
         if {!$::tls} {

@@ -6043,7 +6043,7 @@ unsigned int delKeysInSlot(unsigned int hashslot) {
     kvs_di = kvstoreGetHashsetSafeIterator(server.db->keys, hashslot);
     while (kvstoreHashsetIteratorNext(kvs_di, (void **)&valkey)) {
         enterExecutionUnit(1, 0);
-        sds sdskey = valkeyGetKey(valkey);
+        sds sdskey = objectGetKey(valkey);
         robj *key = createStringObject(sdskey, sdslen(sdskey));
         dbDelete(&server.db[0], key);
         propagateDeletion(&server.db[0], key, server.lazyfree_lazy_server_del);

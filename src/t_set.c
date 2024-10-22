@@ -1383,7 +1383,7 @@ void sinterGenericCommand(client *c,
                  * frequent reallocs. Therefore, we shrink it now. */
                 dstset->ptr = lpShrinkToFit(dstset->ptr);
             }
-            setKey(c, c->db, dstkey, dstset, 0);
+            dstset = setKey(c, c->db, dstkey, dstset, 0);
             addReplyLongLong(c, setTypeSize(dstset));
             notifyKeyspaceEvent(NOTIFY_SET, "sinterstore", dstkey, c->db->id);
             server.dirty++;
@@ -1394,8 +1394,8 @@ void sinterGenericCommand(client *c,
                 signalModifiedKey(c, c->db, dstkey);
                 notifyKeyspaceEvent(NOTIFY_GENERIC, "del", dstkey, c->db->id);
             }
+            decrRefCount(dstset);
         }
-        decrRefCount(dstset);
     } else {
         setDeferredSetLen(c, replylen, cardinality);
     }
@@ -1607,7 +1607,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
         /* If we have a target key where to store the resulting set
          * create this key with the result set inside */
         if (setTypeSize(dstset) > 0) {
-            setKey(c, c->db, dstkey, dstset, 0);
+            dstset = setKey(c, c->db, dstkey, dstset, 0);
             addReplyLongLong(c, setTypeSize(dstset));
             notifyKeyspaceEvent(NOTIFY_SET, op == SET_OP_UNION ? "sunionstore" : "sdiffstore", dstkey, c->db->id);
             server.dirty++;
@@ -1618,8 +1618,8 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
                 signalModifiedKey(c, c->db, dstkey);
                 notifyKeyspaceEvent(NOTIFY_GENERIC, "del", dstkey, c->db->id);
             }
+            decrRefCount(dstset);
         }
-        decrRefCount(dstset);
     }
     zfree(sets);
 }

@@ -2782,7 +2782,7 @@ void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIndex, in
     if (dstkey) {
         if (dstzset->zsl->length) {
             zsetConvertToListpackIfNeeded(dstobj, maxelelen, totelelen);
-            setKey(c, c->db, dstkey, dstobj, 0);
+            dstobj = setKey(c, c->db, dstkey, dstobj, 0);
             addReplyLongLong(c, zsetLength(dstobj));
             notifyKeyspaceEvent(
                 NOTIFY_ZSET, (op == SET_OP_UNION) ? "zunionstore" : (op == SET_OP_INTER ? "zinterstore" : "zdiffstore"),
@@ -2795,8 +2795,8 @@ void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIndex, in
                 notifyKeyspaceEvent(NOTIFY_GENERIC, "del", dstkey, c->db->id);
                 server.dirty++;
             }
+            decrRefCount(dstobj);
         }
-        decrRefCount(dstobj);
     } else if (cardinality_only) {
         addReplyLongLong(c, cardinality);
     } else {
@@ -2985,7 +2985,7 @@ static void zrangeResultEmitLongLongForStore(zrange_result_handler *handler, lon
 
 static void zrangeResultFinalizeStore(zrange_result_handler *handler, size_t result_count) {
     if (result_count) {
-        setKey(handler->client, handler->client->db, handler->dstkey, handler->dstobj, 0);
+        handler->dstobj = setKey(handler->client, handler->client->db, handler->dstkey, handler->dstobj, 0);
         addReplyLongLong(handler->client, result_count);
         notifyKeyspaceEvent(NOTIFY_ZSET, "zrangestore", handler->dstkey, handler->client->db->id);
         server.dirty++;
@@ -2996,8 +2996,8 @@ static void zrangeResultFinalizeStore(zrange_result_handler *handler, size_t res
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", handler->dstkey, handler->client->db->id);
             server.dirty++;
         }
+        decrRefCount(handler->dstobj);
     }
-    decrRefCount(handler->dstobj);
 }
 
 /* Initialize the consumer interface type with the requested type. */

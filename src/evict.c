@@ -150,7 +150,7 @@ int evictionPoolPopulate(serverDb *db, kvstore *samplekvs, struct evictionPoolEn
     for (j = 0; j < count; j++) {
         unsigned long long idle;
         valkey *o = samples[j];
-        sds key = valkeyGetKey(o);
+        sds key = objectGetKey(o);
 
         /* Calculate the idle time according to the policy. This is called
          * idle just because the code initially handled LRU, but is in fact
@@ -168,7 +168,7 @@ int evictionPoolPopulate(serverDb *db, kvstore *samplekvs, struct evictionPoolEn
             idle = 255 - LFUDecrAndReturn(o);
         } else if (server.maxmemory_policy == MAXMEMORY_VOLATILE_TTL) {
             /* In this case the sooner the expire the better. */
-            idle = ULLONG_MAX - valkeyGetExpire(o);
+            idle = ULLONG_MAX - objectGetExpire(o);
         } else {
             serverPanic("Unknown eviction policy in evictionPoolPopulate()");
         }
@@ -615,7 +615,7 @@ int performEvictions(void) {
                     /* If the key exists, is our pick. Otherwise it is
                      * a ghost and we need to try the next element. */
                     if (found) {
-                        bestkey = valkeyGetKey(valkey);
+                        bestkey = objectGetKey(valkey);
                         break;
                     } else {
                         /* Ghost... Iterate again. */
@@ -642,7 +642,7 @@ int performEvictions(void) {
                 int slot = kvstoreGetFairRandomHashsetIndex(kvs);
                 int found = kvstoreHashsetRandomElement(kvs, slot, (void **)&valkey);
                 if (found) {
-                    bestkey = valkeyGetKey(valkey);
+                    bestkey = objectGetKey(valkey);
                     bestdbid = j;
                     break;
                 }

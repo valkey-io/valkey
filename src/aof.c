@@ -2225,11 +2225,10 @@ int rewriteAppendOnlyFileRio(rio *aof) {
             long long expiretime;
             size_t aof_bytes_before_key = aof->processed_bytes;
 
-            keystr = valkeyGetKey(o);
+            keystr = objectGetKey(o);
             initStaticStringObject(key, keystr);
 
-            //expiretime = getExpire(db, &key);
-            expiretime = valkeyGetExpire(o);
+            expiretime = objectGetExpire(o);
 
             /* Save the key and associated value */
             if (o->type == OBJ_STRING) {

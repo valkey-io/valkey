@@ -56,11 +56,11 @@ static double avg_ttl_factor[16] = {0.98, 0.9604, 0.941192, 0.922368, 0.903921, 
  * The parameter 'now' is the current time in milliseconds as is passed
  * to the function to avoid too many gettimeofday() syscalls. */
 int activeExpireCycleTryExpire(serverDb *db, valkey *val, long long now) {
-    long long t = valkeyGetExpire(val);
+    long long t = objectGetExpire(val);
     serverAssert(t >= 0);
     if (now > t) {
         enterExecutionUnit(1, 0);
-        sds key = valkeyGetKey(val);
+        sds key = objectGetKey(val);
         robj *keyobj = createStringObject(key, sdslen(key));
         deleteExpiredKeyAndPropagate(db, keyobj);
         decrRefCount(keyobj);
@@ -130,7 +130,7 @@ typedef struct {
 void expireScanCallback(void *privdata, void *element) {
     valkey *val = element;
     expireScanData *data = privdata;
-    long long ttl = valkeyGetExpire(val) - data->now;
+    long long ttl = objectGetExpire(val) - data->now;
     if (activeExpireCycleTryExpire(data->db, val, data->now)) {
         data->expired++;
         /* Propagate the DEL command */
@@ -616,14 +616,16 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
     }
     when += basetime;
 
+    robj *obj = lookupKeyWrite(c->db, key);
+
     /* No key, return zero. */
-    if (lookupKeyWrite(c->db, key) == NULL) {
+    if (obj == NULL) {
         addReply(c, shared.czero);
         return;
     }
 
     if (flag) {
-        current_expire = getExpire(c->db, key);
+        current_expire = objectGetExpire(obj);
 
         /* NX option is set, check current expiry */
         if (flag & EXPIRE_NX) {
@@ -671,7 +673,7 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
         addReply(c, shared.cone);
         return;
     } else {
-        setExpire(c, c->db, key, when);
+        obj = setExpire(c, c->db, key, when);
         addReply(c, shared.cone);
         /* Propagate as PEXPIREAT millisecond-timestamp
          * Only rewrite the command arg if not already PEXPIREAT */

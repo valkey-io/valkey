@@ -869,7 +869,7 @@ struct ValkeyModuleDigest {
 #define LRU_CLOCK_MAX ((1 << LRU_BITS) - 1) /* Max value of obj->lru */
 #define LRU_CLOCK_RESOLUTION 1000           /* LRU clock resolution in ms */
 
-#define OBJ_REFCOUNT_BITS 29
+#define OBJ_REFCOUNT_BITS 30
 #define OBJ_SHARED_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 1) /* Global object never destroyed. */
 #define OBJ_STATIC_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 2) /* Object allocated in the stack. */
 #define OBJ_FIRST_SPECIAL_REFCOUNT OBJ_STATIC_REFCOUNT
@@ -881,7 +881,6 @@ struct serverObject {
                               * and most significant 16 bits access time). */
     unsigned hasexpire : 1;
     unsigned hasembkey : 1;
-    unsigned hasembkeyptr : 1;
     unsigned refcount : OBJ_REFCOUNT_BITS;
     void *ptr;
 };
@@ -900,6 +899,8 @@ char *getObjectTypeName(robj *);
         _var.refcount = OBJ_STATIC_REFCOUNT; \
         _var.type = OBJ_STRING;              \
         _var.encoding = OBJ_ENCODING_RAW;    \
+        _var.hasexpire = 0;                  \
+        _var.hasembkey = 0;                  \
         _var.ptr = _ptr;                     \
     } while (0)
 
@@ -3018,11 +3019,11 @@ static inline int canUseSharedObject(void) {
 #define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
 
 /* Objects with key attached, AKA valkey objects */
-valkey *objectConvertToValkey(robj *val, const sds key);
-valkey *valkeyCreate(robj *val, const sds key);
-sds valkeyGetKey(const valkey *val);
-long long valkeyGetExpire(const valkey *val);
-void valkeySetExpire(valkey *val, long long expire);
+valkey *createObjectWithKeyAndExpire(int type, void *ptr, const sds key, long long expire);
+valkey *objectSetKeyAndExpire(valkey *val, sds key, long long expire);
+valkey *objectSetExpire(valkey *val, long long expire);
+sds objectGetKey(const valkey *val);
+long long objectGetExpire(const valkey *val);
 
 /* Synchronous I/O with timeout */
 ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout);
@@ -3511,7 +3512,7 @@ void deleteExpiredKeyFromOverwriteAndPropagate(client *c, robj *keyobj);
 void propagateDeletion(serverDb *db, robj *key, int lazy);
 int keyIsExpired(serverDb *db, robj *key);
 long long getExpire(serverDb *db, robj *key);
-void setExpire(client *c, serverDb *db, robj *key, long long when);
+robj *setExpire(client *c, serverDb *db, robj *key, long long when);
 int checkAlreadyExpired(long long when);
 robj *lookupKeyRead(serverDb *db, robj *key);
 robj *lookupKeyWrite(serverDb *db, robj *key);
@@ -3540,7 +3541,7 @@ valkey *dbReplaceValue(serverDb *db, robj *key, robj *val);
 #define SETKEY_ALREADY_EXIST 4
 #define SETKEY_DOESNT_EXIST 8
 #define SETKEY_ADD_OR_UPDATE 16 /* Key most likely doesn't exists */
-void setKey(client *c, serverDb *db, robj *key, robj *val, int flags);
+robj *setKey(client *c, serverDb *db, robj *key, robj *val, int flags);
 robj *dbRandomKey(serverDb *db);
 int dbGenericDelete(serverDb *db, robj *key, int async, int flags);
 int dbSyncDelete(serverDb *db, robj *key);

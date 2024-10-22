@@ -1358,7 +1358,7 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
             last_slot = curr_slot;
             sdsfree(slot_info);
         }
-        sds keystr = valkeyGetKey(o);
+        sds keystr = objectGetKey(o);
         robj key;
         long long expire;
         size_t rdb_bytes_before_key = rdb->processed_bytes;
@@ -3318,7 +3318,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
 
             /* Set the expire time if needed */
             if (expiretime != -1) {
-                setExpire(NULL, db, &keyobj, expiretime);
+                val = setExpire(NULL, db, &keyobj, expiretime);
             }
 
             /* Set usage information (for eviction). */

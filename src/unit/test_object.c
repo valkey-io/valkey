@@ -16,19 +16,19 @@ int test_valkey_from_embstr(int argc, char **argv, int flags) {
     robj *val = createStringObject("bar", strlen("bar"));
     TEST_ASSERT(val->encoding == OBJ_ENCODING_EMBSTR);
 
-    /* Prevent objectConvertToValkey from freeing val when converting it. */
+    /* Prevent objectSetKeyAndExpire from freeing the old val when reallocating it. */
     incrRefCount(val);
 
     /* Create valkey: val with key. */
-    valkey *valkey = objectConvertToValkey(val, key);
+    valkey *valkey = objectSetKeyAndExpire(val, key, -1);
     TEST_ASSERT(valkey->encoding == OBJ_ENCODING_EMBSTR);
-    TEST_ASSERT(valkeyGetKey(valkey) != NULL);
+    TEST_ASSERT(objectGetKey(valkey) != NULL);
 
     /* Check embedded key "foo" */
-    TEST_ASSERT(sdslen(valkeyGetKey(valkey)) == 3);
+    TEST_ASSERT(sdslen(objectGetKey(valkey)) == 3);
     TEST_ASSERT(sdslen(key) == 3);
-    TEST_ASSERT(sdscmp(valkeyGetKey(valkey), key) == 0);
-    TEST_ASSERT(strcmp(valkeyGetKey(valkey), "foo") == 0);
+    TEST_ASSERT(sdscmp(objectGetKey(valkey), key) == 0);
+    TEST_ASSERT(strcmp(objectGetKey(valkey), "foo") == 0);
 
     /* Check embedded value "bar" (EMBSTR content) */
     TEST_ASSERT(sdscmp(valkey->ptr, val->ptr) == 0);

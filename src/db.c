@@ -111,10 +111,10 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         int expire_flags = 0;
         if (flags & LOOKUP_WRITE && !is_ro_replica) expire_flags |= EXPIRE_FORCE_DELETE_EXPIRED;
         if (flags & LOOKUP_NOEXPIRE) expire_flags |= EXPIRE_AVOID_DELETE_EXPIRED;
-        /* FIXME: The valkeyGetExpire check below is a quick-and-dirty
+        /* FIXME: The objectGetExpire check below is a quick-and-dirty
          * optimization. TODO: Come up with a better abstraction, like passing
          * val to expireIfNeeded or a new variant of it. */
-        if (valkeyGetExpire(val) != -1 && expireIfNeeded(db, key, expire_flags) != KEY_VALID) {
+        if (objectGetExpire(val) != -1 && expireIfNeeded(db, key, expire_flags) != KEY_VALID) {
             /* The key is no longer valid. */
             val = NULL;
         }
@@ -226,7 +226,7 @@ static valkey *dbAddInternal(serverDb *db, robj *key, robj *val, int update_if_e
     }
 
     /* Not existing. Convert val to valkey object and insert. */
-    val = objectConvertToValkey(val, key->ptr);
+    val = objectSetKeyAndExpire(val, key->ptr, -1);
     initObjectLRUOrLFU(val);
     kvstoreHashsetAdd(db->keys, dict_index, val);
     signalKeyAsReady(db, key, val->type);
@@ -288,7 +288,7 @@ valkey *dbAddRDBLoad(serverDb *db, sds key, robj *val) {
     int dict_index = getKVStoreIndexForKey(key);
     void *pos = kvstoreHashsetFindPositionForInsert(db->keys, dict_index, key, NULL);
     if (pos == NULL) return NULL;
-    val = objectConvertToValkey(val, key);
+    val = objectSetKeyAndExpire(val, key, -1);
     kvstoreHashsetInsertAtPosition(db->keys, dict_index, val, pos);
     initObjectLRUOrLFU(val);
     return val;
@@ -334,12 +334,11 @@ static valkey *dbSetValue(serverDb *db, robj *key, robj *val, int overwrite, voi
         old = *oldref;
     }
     /* Replace the old value at its location in the key space. */
-    valkey *new = objectConvertToValkey(val, key->ptr);
+    long long expire = objectGetExpire(old);
+    valkey *new = objectSetKeyAndExpire(val, key->ptr, expire);
     *oldref = new;
     /* Replace the old value at its location in the expire space. */
-    long long expire = valkeyGetExpire(old);
     if (expire >= 0) {
-        valkeySetExpire(new, expire);
         int dict_index = getKVStoreIndexForKey(key->ptr);
         void **expireref = kvstoreHashsetFindRef(db->expires, dict_index, key->ptr);
         serverAssert(expireref != NULL);
@@ -365,7 +364,11 @@ valkey *dbReplaceValue(serverDb *db, robj *key, robj *val) {
 /* High level Set operation. This function can be used in order to set
  * a key, whatever it was existing or not, to a new object.
  *
- * 1) The ref count of the value object is incremented.
+ * 1) The ref count of the value object is *not* incremented. The value
+ *    may be reallocated when adding it to the database. A pointer to
+ *    the reallocated object is returned. If you need to retain 'val',
+ *    increment its reference counter before calling this function.
+ *    Otherwise, use the returned value instead of 'val' after this call.
  * 2) clients WATCHing for the destination key notified.
  * 3) The expire time of the key is reset (the key is made persistent),
  *    unless 'SETKEY_KEEPTTL' is enabled in flags.
@@ -375,7 +378,7 @@ valkey *dbReplaceValue(serverDb *db, robj *key, robj *val) {
  * All the new keys in the database should be created via this interface.
  * The client 'c' argument may be set to NULL if the operation is performed
  * in a context where there is no clear client performing the operation. */
-void setKey(client *c, serverDb *db, robj *key, robj *val, int flags) {
+robj *setKey(client *c, serverDb *db, robj *key, robj *val, int flags) {
     int keyfound = 0;
 
     if (flags & SETKEY_ALREADY_EXIST)
@@ -385,7 +388,6 @@ void setKey(client *c, serverDb *db, robj *key, robj *val, int flags) {
     else if (!(flags & SETKEY_DOESNT_EXIST))
         keyfound = (lookupKeyWrite(db, key) != NULL);
 
-    incrRefCount(val);
     if (!keyfound) {
         val = dbAdd(db, key, val);
     } else if (keyfound < 0) {
@@ -395,6 +397,7 @@ void setKey(client *c, serverDb *db, robj *key, robj *val, int flags) {
     }
     if (!(flags & SETKEY_KEEPTTL)) removeExpire(db, key);
     if (!(flags & SETKEY_NO_SIGNAL)) signalModifiedKey(c, db, key);
+    return val;
 }
 
 /* Return a random key, in form of an Object.
@@ -413,7 +416,7 @@ robj *dbRandomKey(serverDb *db) {
         int ok = kvstoreHashsetFairRandomElement(db->keys, randomDictIndex, (void **)&valkey);
         if (!ok) return NULL;
 
-        key = valkeyGetKey(valkey);
+        key = objectGetKey(valkey);
         keyobj = createStringObject(key, sdslen(key));
         if (dbFindExpiresWithDictIndex(db, key, randomDictIndex)) {
             if (allvolatile && server.primary_host && --maxtries == 0) {
@@ -456,7 +459,7 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
         /* Delete from keys and expires tables. This will not free the object.
          * (The expires table has no destructor callback.) */
         kvstoreHashsetTwoPhasePopDelete(db->keys, dict_index, plink);
-        if (valkeyGetExpire(val) != -1) {
+        if (objectGetExpire(val) != -1) {
             int deleted = kvstoreHashsetDelete(db->expires, dict_index, key->ptr);
             serverAssert(deleted);
         } else {
@@ -879,7 +882,7 @@ void keysCommand(client *c) {
     }
     robj keyobj;
     while (kvs_di ? kvstoreHashsetIteratorNext(kvs_di, (void **)&val) : kvstoreIteratorNext(kvs_it, (void **)&val)) {
-        sds key = valkeyGetKey(val);
+        sds key = objectGetKey(val);
 
         if (allkeys || stringmatchlen(pattern, plen, key, sdslen(key), 0)) {
             initStaticStringObject(keyobj, key);
@@ -932,7 +935,7 @@ void keysScanCallback(void *privdata, void *element) {
         if (!objectTypeCompare(obj, data->type)) return;
     }
 
-    sds key = valkeyGetKey(obj);
+    sds key = objectGetKey(obj);
 
     /* Filter element if its key does not match the pattern. */
     if (data->pattern) {
@@ -1382,7 +1385,7 @@ void renameGenericCommand(client *c, int nx) {
     }
     dbDelete(c->db, c->argv[1]);
     o = dbAdd(c->db, c->argv[2], o);
-    if (expire != -1) setExpire(c, c->db, c->argv[2], expire);
+    if (expire != -1) o = setExpire(c, c->db, c->argv[2], expire);
     signalModifiedKey(c, c->db, c->argv[1]);
     signalModifiedKey(c, c->db, c->argv[2]);
     notifyKeyspaceEvent(NOTIFY_GENERIC, "rename_from", c->argv[1], c->db->id);
@@ -1448,7 +1451,7 @@ void moveCommand(client *c) {
     dbDelete(src, c->argv[1]); /* ref counter = 1 */
 
     o = dbAdd(dst, c->argv[1], o);
-    if (expire != -1) setExpire(c, dst, c->argv[1], expire);
+    if (expire != -1) o = setExpire(c, dst, c->argv[1], expire);
 
     /* OK! key moved */
     signalModifiedKey(c, src, c->argv[1]);
@@ -1549,7 +1552,7 @@ void copyCommand(client *c) {
     }
 
     newobj = dbAdd(dst, newkey, newobj);
-    if (expire != -1) setExpire(c, dst, newkey, expire);
+    if (expire != -1) newobj = setExpire(c, dst, newkey, expire);
 
     /* OK! key copied */
     signalModifiedKey(c, dst, c->argv[2]);
@@ -1735,8 +1738,9 @@ int removeExpire(serverDb *db, robj *key) {
     valkey *val;
     int dict_index = getKVStoreIndexForKey(key->ptr);
     if (kvstoreHashsetPop(db->expires, dict_index, key->ptr, (void **)&val)) {
-        valkeySetExpire(val, -1);
-        serverAssert(getExpire(db, key) == -1);
+        valkey *newval = objectSetExpire(val, -1);
+        serverAssert(newval == val);
+        debugServerAssert(getExpire(db, key) == -1);
         return 1;
     }
     return 0;
@@ -1746,23 +1750,37 @@ int removeExpire(serverDb *db, robj *key) {
  * of an user calling a command 'c' is the client, otherwise 'c' is set
  * to NULL. The 'when' parameter is the absolute unix time in milliseconds
  * after which the key will no longer be considered valid. */
-void setExpire(client *c, serverDb *db, robj *key, long long when) {
+robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     /* TODO: Add val as a parameter to this function, to avoid looking it up. */
     valkey *val;
 
-    /* Reuse the object from the main dict in the expire dict */
+    /* Reuse the object from the main dict in the expire dict. When setting
+     * expire in an robj, it's potentially reallocated. We need to updates the
+     * pointer(s) to it. */
     int dict_index = getKVStoreIndexForKey(key->ptr);
-    int found = kvstoreHashsetFind(db->keys, dict_index, key->ptr, (void **)&val);
-    serverAssertWithInfo(NULL, key, found);
-    long long old_when = valkeyGetExpire(val);
-    valkeySetExpire(val, when);
-    if (old_when < 0) {
-        int added = kvstoreHashsetAdd(db->expires, dict_index, val);
+    void **valref = kvstoreHashsetFindRef(db->keys, dict_index, key->ptr);
+    serverAssertWithInfo(NULL, key, valref != NULL);
+    val = *valref;
+    long long old_when = objectGetExpire(val);
+    valkey *newval = objectSetExpire(val, when);
+    if (old_when != -1) {
+        /* Val already had an expire field, so it was not reallocated. */
+        serverAssert(newval == val);
+        /* It already exists in set of keys with expire. */
+        serverAssert(!kvstoreHashsetAdd(db->expires, dict_index, newval));
+    } else {
+        /* No old expire. Update the pointer in the keys hashtab, if needed, and
+         * add it to the expires hashset. */
+        if (newval != val) {
+            val = *valref = newval;
+        }
+        int added = kvstoreHashsetAdd(db->expires, dict_index, newval);
         serverAssert(added);
     }
 
     int writable_replica = server.primary_host && server.repl_replica_ro == 0;
     if (c && writable_replica && !c->flag.primary) rememberReplicaKeyWithExpire(db, key);
+    return val;
 }
 
 /* Return the expire time of the specified key, or -1 if no expire
@@ -1772,7 +1790,7 @@ long long getExpireWithDictIndex(serverDb *db, robj *key, int dict_index) {
 
     if ((val = dbFindExpiresWithDictIndex(db, key->ptr, dict_index)) == NULL) return -1;
 
-    return valkeyGetExpire(val);
+    return objectGetExpire(val);
 }
 
 /* Return the expire time of the specified key, or -1 if no expire

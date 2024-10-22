@@ -278,7 +278,7 @@ void restoreCommand(client *c) {
     /* Create the key and set the TTL if any */
     obj = dbAdd(c->db, key, obj);
     if (ttl) {
-        setExpire(c, c->db, key, ttl);
+        obj = setExpire(c, c->db, key, ttl);
         if (!absttl) {
             /* Propagate TTL as absolute timestamp */
             robj *ttl_obj = createStringObjectFromLongLong(ttl);
@@ -913,7 +913,7 @@ void clusterCommand(client *c) {
         kvs_di = kvstoreGetHashsetIterator(server.db->keys, slot);
         for (unsigned int i = 0; i < numkeys; i++) {
             serverAssert(kvstoreHashsetIteratorNext(kvs_di, (void **)&valkey));
-            sds sdskey = valkeyGetKey(valkey);
+            sds sdskey = objectGetKey(valkey);
             addReplyBulkCBuffer(c, sdskey, sdslen(sdskey));
         }
         kvstoreReleaseHashsetIterator(kvs_di);

@@ -4174,7 +4174,7 @@ int VM_SetExpire(ValkeyModuleKey *key, mstime_t expire) {
         return VALKEYMODULE_ERR;
     if (expire != VALKEYMODULE_NO_EXPIRE) {
         expire += commandTimeSnapshot();
-        setExpire(key->ctx->client, key->db, key->key, expire);
+        key->value = setExpire(key->ctx->client, key->db, key->key, expire);
     } else {
         removeExpire(key->db, key->key);
     }
@@ -4203,7 +4203,7 @@ int VM_SetAbsExpire(ValkeyModuleKey *key, mstime_t expire) {
     if (!(key->mode & VALKEYMODULE_WRITE) || key->value == NULL || (expire < 0 && expire != VALKEYMODULE_NO_EXPIRE))
         return VALKEYMODULE_ERR;
     if (expire != VALKEYMODULE_NO_EXPIRE) {
-        setExpire(key->ctx->client, key->db, key->key, expire);
+        key->value = setExpire(key->ctx->client, key->db, key->key, expire);
     } else {
         removeExpire(key->db, key->key);
     }
@@ -4264,8 +4264,8 @@ int VM_GetToDbIdFromOptCtx(ValkeyModuleKeyOptCtx *ctx) {
 int VM_StringSet(ValkeyModuleKey *key, ValkeyModuleString *str) {
     if (!(key->mode & VALKEYMODULE_WRITE) || key->iter) return VALKEYMODULE_ERR;
     VM_DeleteKey(key);
-    setKey(key->ctx->client, key->db, key->key, str, SETKEY_NO_SIGNAL);
-    key->value = str;
+    incrRefCount(str);
+    key->value = setKey(key->ctx->client, key->db, key->key, str, SETKEY_NO_SIGNAL);
     return VALKEYMODULE_OK;
 }
 
@@ -4344,9 +4344,8 @@ int VM_StringTruncate(ValkeyModuleKey *key, size_t newlen) {
     if (key->value == NULL) {
         /* Empty key: create it with the new size. */
         robj *o = createObject(OBJ_STRING, sdsnewlen(NULL, newlen));
-        setKey(key->ctx->client, key->db, key->key, o, SETKEY_NO_SIGNAL);
+        o = setKey(key->ctx->client, key->db, key->key, o, SETKEY_NO_SIGNAL);
         key->value = o;
-        decrRefCount(o);
     } else {
         /* Unshare and resize. */
         key->value = dbUnshareStringValue(key->db, key->key, key->value);
@@ -6911,8 +6910,7 @@ int VM_ModuleTypeSetValue(ValkeyModuleKey *key, moduleType *mt, void *value) {
     if (!(key->mode & VALKEYMODULE_WRITE) || key->iter) return VALKEYMODULE_ERR;
     VM_DeleteKey(key);
     robj *o = createModuleObject(mt, value);
-    setKey(key->ctx->client, key->db, key->key, o, SETKEY_NO_SIGNAL);
-    decrRefCount(o);
+    o = setKey(key->ctx->client, key->db, key->key, o, SETKEY_NO_SIGNAL);
     key->value = o;
     return VALKEYMODULE_OK;
 }
@@ -10881,7 +10879,7 @@ typedef struct ValkeyModuleScanCursor {
 static void moduleScanCallback(void *privdata, void *element) {
     ScanCBData *data = privdata;
     valkey *val = element;
-    sds key = valkeyGetKey(val);
+    sds key = objectGetKey(val);
     ValkeyModuleString *keyname = createObject(OBJ_STRING, sdsdup(key));
 
     /* Setup the key handle. */

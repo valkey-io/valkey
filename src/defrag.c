@@ -335,7 +335,7 @@ void activeDefragQuickListNodes(quicklist *ql) {
  * part of the main dictionary scan. this is needed in order to prevent latency
  * spikes when handling large items */
 void defragLater(serverDb *db, valkey *obj) {
-    sds key = sdsdup(valkeyGetKey(obj));
+    sds key = sdsdup(objectGetKey(obj));
     listAddNodeTail(db->defrag_later, key);
 }
 
@@ -637,7 +637,7 @@ void defragStream(serverDb *db, valkey *ob) {
  */
 void defragModule(serverDb *db, valkey *obj) {
     serverAssert(obj->type == OBJ_MODULE);
-    void *sds_key_passed_as_robj = valkeyGetKey(obj);
+    void *sds_key_passed_as_robj = objectGetKey(obj);
     /* Fun fact (and a bug since forever): The key is passed to
      * moduleDefragValue as an sds string, but the parameter is declared to be
      * an robj and it's passed as such to the module type defrag callbacks.
@@ -659,8 +659,8 @@ void defragKey(defragCtx *ctx, valkey **elemref) {
     /* TODO: Only lookup the expire table when the object has actually been
      * reallocated. A trick is hashsetFindRefByKeyAndOldValue(s, key, ob). */
     void **expireref = NULL;
-    if (valkeyGetExpire(ob) >= 0) {
-        expireref = kvstoreHashsetFindRef(db->expires, slot, valkeyGetKey(ob));
+    if (objectGetExpire(ob) >= 0) {
+        expireref = kvstoreHashsetFindRef(db->expires, slot, objectGetKey(ob));
         serverAssert(expireref != NULL);
     }
 
@@ -812,7 +812,7 @@ int defragLaterItem(valkey *ob, unsigned long *cursor, long long endtime, int db
         } else if (ob->type == OBJ_STREAM) {
             return scanLaterStreamListpacks(ob, cursor, endtime);
         } else if (ob->type == OBJ_MODULE) {
-            void *sds_key_passed_as_robj = valkeyGetKey(ob);
+            void *sds_key_passed_as_robj = objectGetKey(ob);
             /* Fun fact (and a bug since forever): The key is passed to
              * moduleLateDefrag as an sds string, but the parameter is declared
              * to be an robj and it's passed as such to the module type defrag
@@ -1041,7 +1041,6 @@ void activeDefragCycle(void) {
         } defragStage;
         defragStage defrag_stages[] = {
             {db->keys, defragScanCallback, db},
-            //{db->expires, scanCallbackCountScanned, NULL},
             {server.pubsub_channels, defragPubsubScanCallback,
              &(defragPubSubCtx){server.pubsub_channels, getClientPubSubChannels}},
             {server.pubsubshard_channels, defragPubsubScanCallback,

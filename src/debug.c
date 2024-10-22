@@ -302,7 +302,7 @@ void computeDatasetDigest(unsigned char *final) {
             robj *keyobj;
 
             memset(digest, 0, 20); /* This key-val digest */
-            key = valkeyGetKey(o);
+            key = objectGetKey(o);
             keyobj = createStringObject(key, sdslen(key));
 
             mixDigest(digest, key, sdslen(key));
@@ -671,7 +671,7 @@ void debugCommand(client *c) {
             addReplyErrorObject(c, shared.nokeyerr);
             return;
         }
-        key = valkeyGetKey(val);
+        key = objectGetKey(val);
 
         if (val->type != OBJ_STRING || !sdsEncodedObject(val)) {
             addReplyError(c, "Not an sds encoded string.");

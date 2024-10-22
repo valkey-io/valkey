@@ -493,7 +493,7 @@ uint64_t hashsetSdsHash(const void *key) {
 }
 
 const void *hashsetValkeyObjectGetKey(const void *element) {
-    return valkeyGetKey(element);
+    return objectGetKey(element);
 }
 
 int hashsetSdsKeyCompare(hashset *t, const void *key1, const void *key2) {

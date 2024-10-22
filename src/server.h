@@ -3346,9 +3346,7 @@ int calculateKeySlot(sds key);
 
 /* kvstore wrappers */
 int dbExpand(serverDb *db, uint64_t db_size, int try_expand);
-int dbExpand_CreateIfMissing(serverDb *db, uint64_t db_size, int try_expand);
 int dbExpandExpires(serverDb *db, uint64_t db_size, int try_expand);
-int dbExpandExpires_CreateIfMissing(serverDb *db, uint64_t db_size, int try_expand);
 dictEntry *dbFind(serverDb *db, void *key);
 dictEntry *dbFindExpires(serverDb *db, void *key);
 unsigned long long dbSize(serverDb *db);

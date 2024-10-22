@@ -26,7 +26,6 @@ unsigned long long kvstoreScan(kvstore *kvs,
                                kvstoreScanShouldSkipDict *skip_cb,
                                void *privdata);
 int kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipDictIndex *skip_cb);
-int kvstoreExpandGeneric(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipDictIndex *skip_cb, int create_if_missing);
 int kvstoreGetFairRandomDictIndex(kvstore *kvs);
 void kvstoreGetStats(kvstore *kvs, char *buf, size_t bufsize, int full);
 

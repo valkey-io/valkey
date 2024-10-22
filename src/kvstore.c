@@ -418,26 +418,20 @@ unsigned long long kvstoreScan(kvstore *kvs,
  *
  * Based on the parameter `try_expand`, appropriate dict expand API is invoked.
  * if try_expand is set to 1, `dictTryExpand` is used else `dictExpand`.
- * if create_if_missing is set to 1, the dictionary will be created if it doesn't exist before doing the
- * expansion.
  * The return code is either `DICT_OK`/`DICT_ERR` for both the API(s).
  * `DICT_OK` response is for successful expansion. However, `DICT_ERR` response signifies failure in allocation in
  * `dictTryExpand` call and in case of `dictExpand` call it signifies no expansion was performed.
  */
-int kvstoreExpandGeneric(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipDictIndex *skip_cb, int create_if_missing) {
+int kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipDictIndex *skip_cb) {
     for (int i = 0; i < kvs->num_dicts; i++) {
-        dict *d = kvstoreGetDict(kvs, i);
-        if (!d && create_if_missing) d = createDictIfNeeded(kvs, i);
+        /* If the dictionary doesn't exist, create it */
+        dict *d = createDictIfNeeded(kvs, i);
         if (!d || (skip_cb && skip_cb(i))) continue;
         int result = try_expand ? dictTryExpand(d, newsize) : dictExpand(d, newsize);
         if (try_expand && result == DICT_ERR) return 0;
     }
 
     return 1;
-}
-
-int kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipDictIndex *skip_cb) {
-    return kvstoreExpandGeneric(kvs, newsize, try_expand, skip_cb, 0);
 }
 
 /* Returns fair random dict index, probability of each dict being returned is proportional to the number of elements

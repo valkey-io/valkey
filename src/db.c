@@ -1902,7 +1902,7 @@ static int dbExpandSkipSlot(int slot) {
  * `DICT_OK` response is for successful expansion. However ,`DICT_ERR` response signifies failure in allocation in
  * `dictTryExpand` call and in case of `dictExpand` call it signifies no expansion was performed.
  */
-static int dbExpandGeneric(kvstore *kvs, uint64_t db_size, int try_expand, int create_if_missing) {
+static int dbExpandGeneric(kvstore *kvs, uint64_t db_size, int try_expand) {
     int ret;
     if (server.cluster_enabled) {
         /* We don't know exact number of keys that would fall into each slot, but we can
@@ -1910,28 +1910,20 @@ static int dbExpandGeneric(kvstore *kvs, uint64_t db_size, int try_expand, int c
         int slots = getMyShardSlotCount();
         if (slots == 0) return C_OK;
         db_size = db_size / slots;
-        ret = kvstoreExpandGeneric(kvs, db_size, try_expand, dbExpandSkipSlot, create_if_missing);
+        ret = kvstoreExpand(kvs, db_size, try_expand, dbExpandSkipSlot);
     } else {
-        ret = kvstoreExpandGeneric(kvs, db_size, try_expand, NULL, create_if_missing);
+        ret = kvstoreExpand(kvs, db_size, try_expand, NULL);
     }
 
     return ret ? C_OK : C_ERR;
 }
 
 int dbExpand(serverDb *db, uint64_t db_size, int try_expand) {
-    return dbExpandGeneric(db->keys, db_size, try_expand, 0);
-}
-
-int dbExpand_CreateIfMissing(serverDb *db, uint64_t db_size, int try_expand) {
-    return dbExpandGeneric(db->keys, db_size, try_expand, 1);
+    return dbExpandGeneric(db->keys, db_size, try_expand);
 }
 
 int dbExpandExpires(serverDb *db, uint64_t db_size, int try_expand) {
-    return dbExpandGeneric(db->expires, db_size, try_expand, 0);
-}
-
-int dbExpandExpires_CreateIfMissing(serverDb *db, uint64_t db_size, int try_expand) {
-    return dbExpandGeneric(db->expires, db_size, try_expand, 1);
+    return dbExpandGeneric(db->expires, db_size, try_expand);
 }
 
 dictEntry *dbFindWithDictIndex(serverDb *db, void *key, int dict_index) {

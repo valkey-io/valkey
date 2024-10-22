@@ -3253,9 +3253,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         /* If there is no slot info, it means that it's either not cluster mode or we are trying to load a legacy RDB
          * file. In either cases we want to resize the db accordingly. */
         if (should_expand_db) {
-            // The db dictionary might not be created yet, so we need to create it if it's missing.
-            dbExpand_CreateIfMissing(db, db_size, 0);
-            dbExpandExpires_CreateIfMissing(db, expires_size, 0);
+            dbExpand(db, db_size, 0);
+            dbExpandExpires(db, expires_size, 0);
             should_expand_db = 0;
         }
 

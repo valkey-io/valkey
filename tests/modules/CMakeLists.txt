@@ -42,7 +42,7 @@ list(APPEND MODULES_LIST "crash")
 list(APPEND MODULES_LIST "cluster")
 
 foreach (MODULE_NAME ${MODULES_LIST})
-    message(STATUS "Bulding test module: ${MODULE_NAME}")
+    message(STATUS "Building test module: ${MODULE_NAME}")
     add_library(${MODULE_NAME} SHARED "${CMAKE_SOURCE_DIR}/tests/modules/${MODULE_NAME}.c")
     target_include_directories(${MODULE_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/src")
     if (LINUX AND NOT APPLE)

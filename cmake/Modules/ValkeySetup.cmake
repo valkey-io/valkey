@@ -164,6 +164,7 @@ message(STATUS "Using ${MALLOC_LIB}")
 
 # TLS support
 if (WITH_TLS)
+    set(BUILD_TLS_MODULE 0)
     valkey_parse_build_option(${WITH_TLS} USE_TLS)
     find_package(OpenSSL REQUIRED)
     message(STATUS "OpenSSL include dir: ${OPENSSL_INCLUDE_DIR}")
@@ -177,10 +178,12 @@ if (WITH_TLS)
     elseif (USE_TLS EQUAL 2)
         # Build TLS as a module
         add_valkey_server_compiler_options("-DUSE_OPENSSL=2")
+        set(BUILD_TLS_MODULE 1)
     endif ()
 endif ()
 
 if (WITH_RDMA)
+    set(BUILD_RDMA_MODULE 0)
     # RDMA support (Linux only)
     if (LINUX AND NOT APPLE)
         valkey_parse_build_option(${WITH_RDMA} USE_RDMA)
@@ -188,9 +191,16 @@ if (WITH_RDMA)
             message(STATUS "Building RDMA as module")
             add_valkey_server_compiler_options("-DUSE_RDMA=2")
             find_package(PkgConfig REQUIRED)
-            pkg_check_modules(VALKEY_RDMA REQUIRED librdmacm)
-            pkg_check_modules(VALKEY_IBVERBS REQUIRED libibverbs)
-            list(APPEND RDMA_LIBS "${RDMA_LIBRARIES};${IBVERBS_LIBRARIES}")
+
+            # Locate librdmacm & libibverbs, fail if we can't find them
+            pkg_check_modules(RDMACM REQUIRED librdmacm)
+            pkg_check_modules(IBVERBS REQUIRED libibverbs)
+
+            message(STATUS "${RDMACM_LINK_LIBRARIES};${IBVERBS_LINK_LIBRARIES}")
+            list(APPEND RDMA_LIBS "${RDMACM_LIBRARIES};${IBVERBS_LIBRARIES}")
+            unset(RDMACM_LINK_LIBRARIES CACHE)
+            unset(IBVERBS_LINK_LIBRARIES CACHE)
+            set(BUILD_RDMA_MODULE 1)
         elseif (USE_RDMA EQUAL 1)
             # RDMA can only be built as a module. So disable it
             message(WARN "WITH_RDMA can be on of: [no | 0 | module], but '${WITH_RDMA}' was provided")

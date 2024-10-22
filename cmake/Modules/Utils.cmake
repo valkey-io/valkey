@@ -62,8 +62,8 @@ endfunction ()
 # If ARG is valid, return its number where:
 #
 # ~~~
-# - `no` | `0`  => return `0`
-# - `yes` | `1`  => return  `1`
+# - `no` | `0` | `off` => return `0`
+# - `yes` | `1` | `on` => return  `1`
 # - `module` => return  `2`
 # ~~~
 function (valkey_parse_build_option OPTION_VALUE OUT_ARG_ENUM)

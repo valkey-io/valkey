@@ -13,7 +13,8 @@ if (APPLE)
 endif ()
 
 # Options
-option(BUILD_TESTS "Build valkey-unit-tests" OFF)
+option(BUILD_UNIT_TESTS "Build valkey-unit-tests" OFF)
+option(BUILD_TEST_MODULES "Build all test modules" OFF)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 project("valkey")
@@ -24,11 +25,16 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 include(ValkeySetup)
 add_subdirectory(src)
+add_subdirectory(tests)
 
 # Include the packaging module
 include(Packaging)
 
-# Clear cached variables defined on this file
+# Clear cached variables from the cache
 unset(BUILD_TESTS CACHE)
 unset(CLANGPP CACHE)
 unset(CLANG CACHE)
+unset(BUILD_RDMA_MODULE CACHE)
+unset(BUILD_TLS_MODULE CACHE)
+unset(BUILD_UNIT_TESTS CACHE)
+unset(BUILD_TEST_MODULES CACHE)

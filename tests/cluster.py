@@ -12,7 +12,7 @@ import shutil
 
 class RedisCluster:
     def __init__(self, password, base_port=9000, shard_size=3, have_slave=True, diskless=False, repl_diskless_load="",
-                 arbiter_size=0, slave_count=0):
+                 arbiter_size=0, slave_count=0, cluster_node_timeout=5000):
         self.password = password
         self.base_port = base_port
         self.shard_size = shard_size
@@ -33,6 +33,7 @@ class RedisCluster:
         self.arbiters = []
         self.ports = []
         self.instance_arbiter_enabled = False
+        self.cluster_node_timeout = cluster_node_timeout
 
     def start_cluster(self):
         self.__start_master_process()
@@ -243,7 +244,7 @@ class RedisCluster:
             'appendonly': 'no',
             'databases': '256',
             'cluster-enabled': 'yes',
-            'cluster-node-timeout': '5000',
+            'cluster-node-timeout': str(self.cluster_node_timeout),
             'logfile': 'log/' + str(port) + '-redis.log',
             'cluster-config-file': 'conf/' + str(port) + '-nodes.conf'
         }

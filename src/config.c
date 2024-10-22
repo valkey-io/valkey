@@ -2218,6 +2218,21 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
     }
 }
 
+sds getConfigValue(sds config_name) {
+    standardConfig *config = lookupConfig(config_name);
+    switch (config->type) {
+    case BOOL_CONFIG:
+        return boolConfigGet(config);
+    case SDS_CONFIG:
+        return sdsConfigGet(config);
+    case NUMERIC_CONFIG:
+        return numericConfigGet(config);
+    case ENUM_CONFIG:
+        return enumConfigGet(config);
+    default: serverPanic("Config type of module config is not allowed.");
+    }
+}
+
 #define embedCommonNumericalConfig(name, alias, _flags, lower, upper, config_addr, default, num_conf_flags, is_valid, \
                                    apply)                                                                             \
     {                                                                                                                 \

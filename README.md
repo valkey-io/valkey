@@ -281,7 +281,7 @@ You'll be able to stop and start Valkey using the script named
 
 # Building using `CMake`
 
-In addition to the traditional `Makefile` build, Valkey supports an alternaive, **experimental** build system using `CMake`
+In addition to the traditional `Makefile` build, Valkey supports an alternative, **experimental** build system using `CMake`
 
 To build and install `Valkey`, in `Release` mode (an optimized build), type this into your terminal:
 

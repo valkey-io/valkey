@@ -4451,7 +4451,7 @@ void clusterLogCantFailover(int reason) {
     case CLUSTER_CANT_FAILOVER_WAITING_DELAY: msg = "Waiting the delay before I can start a new failover."; break;
     case CLUSTER_CANT_FAILOVER_EXPIRED: msg = "Failover attempt expired."; break;
     case CLUSTER_CANT_FAILOVER_WAITING_VOTES: msg = "Waiting for votes, but majority still not reached."; break;
-    default: msg = "Unknown reason code."; break;
+    default: serverPanic("Unknown cant failover reason code."); break;
     }
     lastlog_time = time(NULL);
     serverLog(LL_NOTICE, "Currently unable to failover: %s", msg);
@@ -5284,6 +5284,8 @@ void clusterCloseAllSlots(void) {
  * -------------------------------------------------------------------------- */
 
 void clusterLogWhyFail(int reason) {
+    if (reason == CLUSTER_FAIL_NONE) return;
+
     char *msg;
     switch (reason) {
     case CLUSTER_FAIL_NOT_FULL_COVERAGE:
@@ -5291,7 +5293,7 @@ void clusterLogWhyFail(int reason) {
               "Please check the 'cluster-require-full-coverage' configuration.";
         break;
     case CLUSTER_FAIL_MINORITY_PARTITION: msg = "I am part of a minority partition."; break;
-    default: msg = "Unknown reason code."; break;
+    default: serverPanic("Unknown fail reason code."); break;
     }
     serverLog(LL_WARNING, "Cluster is currently down: %s", msg);
     server.cluster->fail_reason = reason;

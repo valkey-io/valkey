@@ -472,15 +472,25 @@ void zmalloc_set_oom_handler(void (*oom_handler)(size_t)) {
     zmalloc_oom_handler = oom_handler;
 }
 
-/* Use 'MADV_DONTNEED' to release memory to operating system quickly.
- * We do that in a fork child process to avoid CoW when the parent modifies
- * these shared pages. */
-void zmadvise_dontneed(void *ptr) {
+/* Try to release pages back to the OS directly using 'MADV_DONTNEED' (bypassing
+ * the allocator) in a fork child process to avoid CoW when the parent modifies
+ * those shared pages. For small allocations, we can't release any full page,
+ * so in an effort to avoid getting the size of the allocation from the
+ * allocator (malloc_size) when we already know it's small, we check the
+ * size_hint. If the size is not already known, passing a size_hint of 0 will
+ * lead the checking the real size of the allocation.
+ * Also please note that the size may be not accurate, so in order to make this
+ * solution effective, the judgement for releasing memory pages should not be
+ * too strict. */
+void zmadvise_dontneed(void *ptr, size_t size_hint) {
 #if defined(USE_JEMALLOC) && defined(__linux__)
+    if (ptr == NULL) return;
+
     static size_t page_size = 0;
     if (page_size == 0) page_size = sysconf(_SC_PAGESIZE);
     size_t page_size_mask = page_size - 1;
 
+    if (size_hint && size_hint / 2 < page_size) return;
     size_t real_size = zmalloc_size(ptr);
     if (real_size < page_size) return;
 
@@ -494,6 +504,7 @@ void zmadvise_dontneed(void *ptr) {
     }
 #else
     (void)(ptr);
+    (void)(size_hint);
 #endif
 }
 

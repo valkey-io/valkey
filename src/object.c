@@ -542,7 +542,7 @@ void dismissStreamObject(robj *o, size_t size_hint) {
  * modifies any keys due to write traffic, it'll cause CoW which consume
  * physical memory. In the child process, after serializing the key and value,
  * the data is definitely not accessed again, so to avoid unnecessary CoW, we
- * try to release their memory back to OS. see dismissMemory().
+ * try to release their memory back to OS. see zmadvise_dontneed().
  *
  * Because of the cost of iterating all node/field/member/entry of complex data
  * types, we iterate and dismiss them only when approximate average we estimate
@@ -993,11 +993,11 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
         if (o->encoding == OBJ_ENCODING_HASHSET) {
             hashset *set = o->ptr;
             asize = sizeof(*o) + hashsetMemUsage(set);
-            
+
             hashsetIterator iter;
             hashsetInitIterator(&iter, set);
             sds element;
-            while (hashsetNext(&iter, (void**)&element) && samples < sample_size) {
+            while (hashsetNext(&iter, (void **)&element) && samples < sample_size) {
                 elesize += sdsAllocSize(element);
                 samples++;
             }

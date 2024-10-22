@@ -6409,27 +6409,7 @@ void sendChildInfo(childInfoType info_type, size_t keys, char *pname) {
     sendChildInfoGeneric(info_type, keys, -1, pname);
 }
 
-/* Try to release pages back to the OS directly (bypassing the allocator),
- * in an effort to decrease CoW during fork. For small allocations, we can't
- * release any full page, so in an effort to avoid getting the size of the
- * allocation from the allocator (malloc_size) when we already know it's small,
- * we check the size_hint. If the size is not already known, passing a size_hint
- * of 0 will lead the checking the real size of the allocation.
- * Also please note that the size may be not accurate, so in order to make this
- * solution effective, the judgement for releasing memory pages should not be
- * too strict. */
-void dismissMemory(void *ptr, size_t size_hint) {
-    if (ptr == NULL) return;
-
-    /* madvise(MADV_DONTNEED) can not release pages if the size of memory
-     * is too small, we try to release only for the memory which the size
-     * is more than half of page size. */
-    if (size_hint && size_hint <= server.page_size / 2) return;
-
-    zmadvise_dontneed(ptr);
-}
-
-/* Dismiss big chunks of memory inside a client structure, see dismissMemory() */
+/* Dismiss big chunks of memory inside a client structure, see zmadvise_dontneed() */
 void dismissClientMemory(client *c) {
     /* Dismiss client query buffer and static reply buffer. */
     dismissMemory(c->buf, c->buf_usable_size);
@@ -6460,7 +6440,7 @@ void dismissClientMemory(client *c) {
 /* In the child process, we don't need some buffers anymore, and these are
  * likely to change in the parent when there's heavy write traffic.
  * We dismiss them right away, to avoid CoW.
- * see dismissMemory(). */
+ * see zmadvise_dontneed(). */
 void dismissMemoryInChild(void) {
     /* madvise(MADV_DONTNEED) may not work if Transparent Huge Pages is enabled. */
     if (server.thp_enabled) return;

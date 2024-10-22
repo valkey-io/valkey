@@ -49,7 +49,6 @@
  *   addressing scheme, including the use of linear probing by scan cursor
  *   increment, by Viktor Söderqvist. */
 #include "hashset.h"
-#include "server.h"
 #include "serverassert.h"
 #include "zmalloc.h"
 #include "mt19937-64.h"
@@ -961,10 +960,10 @@ hashset *hashsetDefragInternals(hashset *s, void *(*defragfn)(void *)) {
 
 /* Used to release memory to OS to avoid unnecessary CoW.
  * Called when we've forked and memory won't be used again.
- * See dismissObject() */
+ * See zmadvise_dontneed() */
 void dismissHashset(hashset *t) {
     for (int i = 0; i < 2; i++) {
-        dismissMemory(t->tables[i], numBuckets(t->bucketExp[i]) * sizeof(bucket *));
+        zmadvise_dontneed(t->tables[i], numBuckets(t->bucketExp[i]) * sizeof(bucket *));
     }
 }
 

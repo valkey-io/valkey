@@ -82,6 +82,8 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "connection.h" /* Connection abstraction */
 #include "memory_prefetch.h"
 
+#define dismissMemory zmadvise_dontneed
+
 #define VALKEYMODULE_CORE 1
 typedef struct serverObject robj;
 #include "valkeymodule.h" /* Modules API defines. */
@@ -3329,7 +3331,6 @@ void rejectCommandFormat(client *c, const char *fmt, ...);
 void *activeDefragAlloc(void *ptr);
 robj *activeDefragStringOb(robj *ob);
 void dismissSds(sds s);
-void dismissMemory(void *ptr, size_t size_hint);
 void dismissMemoryInChild(void);
 
 #define RESTART_SERVER_NONE 0

@@ -103,7 +103,7 @@
 /* We can enable the server defrag capabilities only if we are using Jemalloc
  * and the version used is our special version modified for the server having
  * the ability to return per-allocation fragmentation hints. */
-#if defined(USE_JEMALLOC) && defined(JEMALLOC_FRAG_HINT)
+#if defined(USE_JEMALLOC)
 #define HAVE_DEFRAG
 #endif
 
@@ -138,12 +138,7 @@ __attribute__((malloc)) char *zstrdup(const char *s);
 size_t zmalloc_used_memory(void);
 void zmalloc_set_oom_handler(void (*oom_handler)(size_t));
 size_t zmalloc_get_rss(void);
-int zmalloc_get_allocator_info(size_t *allocated,
-                               size_t *active,
-                               size_t *resident,
-                               size_t *retained,
-                               size_t *muzzy,
-                               size_t *frag_smallbins_bytes);
+int zmalloc_get_allocator_info(size_t *allocated, size_t *active, size_t *resident, size_t *retained, size_t *muzzy);
 void set_jemalloc_bg_thread(int enable);
 int jemalloc_purge(void);
 size_t zmalloc_get_private_dirty(long pid);
@@ -152,11 +147,6 @@ size_t zmalloc_get_memory_size(void);
 void zlibc_free(void *ptr);
 void zlibc_trim(void);
 void zmadvise_dontneed(void *ptr);
-
-#ifdef HAVE_DEFRAG
-void zfree_no_tcache(void *ptr);
-__attribute__((malloc)) void *zmalloc_no_tcache(size_t size);
-#endif
 
 #ifndef HAVE_MALLOC_SIZE
 size_t zmalloc_size(void *ptr);

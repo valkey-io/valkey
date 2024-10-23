@@ -235,6 +235,7 @@ class RedisCluster:
 
     def __get_default_conf(self, port, is_master=True):
         default_conf = {
+            "dual-channel-replication-enabled": "yes",
             "enable-debug-command": "yes",
             'dir': self.root_dir,
             'port': str(port),
@@ -252,11 +253,11 @@ class RedisCluster:
             default_conf['requirepass'] = self.password
             default_conf['masterauth'] = self.password
         if self.diskless:
-            if is_master:
-                default_conf['repl-diskless-sync'] = 'yes'
-            else:
-                if self.repl_diskless_load != "":
-                    default_conf['repl-diskless-load'] = self.repl_diskless_load
+            default_conf["repl-diskless-sync"] = "yes"
+        else:
+            default_conf["repl-diskless-sync"] = "no"
+        if self.repl_diskless_load != "":
+            default_conf["repl-diskless-load"] = self.repl_diskless_load
         if self.instance_arbiter_enabled:
             default_conf["cluster-instance-arbiter-enabled"] = "yes"
         return default_conf

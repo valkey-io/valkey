@@ -859,6 +859,7 @@ int replicationSetupReplicaForFullResync(client *replica, long long offset) {
     char buf[128];
     int buflen;
 
+    // todo check if see var has side effect.
     replica->repl_data->psync_initial_offset = offset;
     replica->repl_data->repl_state = REPLICA_STATE_WAIT_BGSAVE_END;
     /* We are going to accumulate the incremental changes for this
@@ -996,6 +997,9 @@ need_full_resync:
  * of the replicas waiting for this BGSAVE, so represents the replica capabilities
  * all the replicas support. Can be tested via REPLICA_CAPA_* macros.
  *
+ * The slot_ranges argument is used for slot sync. If its length is 0, it means
+ * normal sync. Otherwise, it stores the slot ranges that need sync.
+ *
  * Side effects, other than starting a BGSAVE:
  *
  * 1) Handle the replicas in WAIT_START state, by preparing them for a full
@@ -1006,7 +1010,7 @@ need_full_resync:
  *    started.
  *
  * Returns C_OK on success or C_ERR otherwise. */
-int startBgsaveForReplication(int mincapa, int req, list* slots) {
+int startBgsaveForReplication(int mincapa, int req, list *slot_ranges) {
     int retval;
     int socket_target = 0;
     listIter li;
@@ -1024,9 +1028,9 @@ int startBgsaveForReplication(int mincapa, int req, list* slots) {
               (req & REPLICA_REQ_RDB_CHANNEL) ? "dual-channel" : "normal sync");
 
     rdbSaveInfo rsi, *rsiptr;
-    rsi.slot_ranges = slots;
     rsiptr = rdbPopulateSaveInfo(&rsi);
-    rsiptr->slot_ranges = slots;
+    // todo check the slot_ranges pointer when the client disconnected
+    rsiptr->slot_ranges = slot_ranges;
     /* Only do rdbSave* when rsiptr is not NULL,
      * otherwise replica will miss repl-stream-db. */
     if (rsiptr) {
@@ -1066,9 +1070,7 @@ int startBgsaveForReplication(int mincapa, int req, list* slots) {
             client *replica = ln->value;
 
             /* Check replica has the exact slot ranges. */
-            if (!isSlotRangeListSame(replica->slotsync_slots, rsi.slot_ranges)) {
-                continue;
-            }
+            if (!isSlotRangeListSame(replica->slotsync_slots, slot_ranges)) continue;
 
             if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
                 replica->repl_data->repl_state = REPL_STATE_NONE;
@@ -1108,26 +1110,6 @@ void syncCommand(client *c) {
 
     /* Wait for any IO pending operation to finish before changing the client state to replica */
     waitForClientIO(c);
-
-    if (!strcasecmp(c->argv[0]->ptr, "sync")) {
-        if ((c->argc % 2) == 0) {
-            addReplyError(c,"wrong number of arguments for SYNC");
-            return;
-        }
-
-        for (int i = 1; i < c->argc; i+=2) {
-            slotRange *new_range = zmalloc(sizeof(slotRange));
-            if ((new_range->start_slot = getSlotOrReply(c,c->argv[i])) == C_ERR) {
-                zfree(new_range);
-                return;
-            }
-            if ((new_range->end_slot = getSlotOrReply(c,c->argv[i+1])) == C_ERR) {
-                zfree(new_range);
-                return;
-            }
-            listAddNodeTail(c->slotsync_slots, new_range);
-        }
-    }
 
     /* Check if this is a failover request to a replica with the same replid and
      * become a primary if so. */
@@ -1227,13 +1209,60 @@ void syncCommand(client *c) {
             }
         }
     } else {
+        if ((!server.cluster_enabled && c->argc != 1) || (server.cluster_enabled && (c->argc % 2) == 0)) {
+            addReplyErrorArity(c);
+            return;
+        }
+
+        /* Handling slot sync requests. */
+        if (c->argc >= 3) {
+            list *slot_ranges = createSlotRangeList();
+            int startslot, endslot;
+            for (int i = 1; i < c->argc; i += 2) {
+                /* Get the current slot range. */
+                if ((startslot = getSlotOrReply(c, c->argv[i])) == -1) {
+                    listRelease(slot_ranges);
+                    return;
+                }
+                if ((endslot = getSlotOrReply(c, c->argv[i + 1])) == -1) {
+                    listRelease(slot_ranges);
+                    return;
+                }
+                if (startslot > endslot) {
+                    addReplyErrorFormat(c, "Start slot number %d is greater than end slot number %d.", startslot, endslot);
+                    listRelease(slot_ranges);
+                    return;
+                }
+                /* Check if the current slot range is ready to do the slot sync. */
+                for (int j = startslot; j <= endslot; j++) {
+                    if (isSlotInSlotRangeList(j, slot_ranges) || isSlotInSlotRangeList(j, c->slotsync_slots)) {
+                        addReplyErrorFormat(c, "Slot %d is already in slot sync.", j);
+                        listRelease(slot_ranges);
+                        return;
+                    }
+                }
+                /* Add the current slot range to the range list. */
+                slotRange *new_range = zmalloc(sizeof(slotRange));
+                new_range->start_slot = startslot;
+                new_range->end_slot = endslot;
+                listAddNodeTail(slot_ranges, new_range);
+                serverLog(LL_NOTICE, "Syncing slot range [%d-%d]", startslot, endslot);
+            }
+
+            listJoin(c->slotsync_slots, slot_ranges);
+            listRelease(slot_ranges);
+        }
+
         /* If a replica uses SYNC, we are dealing with an old implementation
          * of the replication protocol (like valkey-cli --replica). Flag the client
          * so that we don't expect to receive REPLCONF ACK feedbacks. */
         c->flag.pre_psync = 1;
     }
 
-    /* Full resynchronization. */
+    /* Full resynchronization.
+     *
+     * Even slot sync is considered a full sync here, since full slot data synchronization
+     * is required, which requires fork. */
     server.stat_sync_full++;
 
     /* Setup the replica as one waiting for BGSAVE to start. The following code
@@ -1242,6 +1271,7 @@ void syncCommand(client *c) {
     if (server.repl_disable_tcp_nodelay) connDisableTcpNoDelay(c->conn); /* Non critical if it fails. */
     c->repl_data->repldbfd = -1;
     c->flag.replica = 1;
+    if (listLength(c->slotsync_slots)) c->flag.slot_sync = 1;
     listAddNodeTail(server.replicas, c);
 
     /* Create the replication backlog if needed. */
@@ -1269,7 +1299,7 @@ void syncCommand(client *c) {
 
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
-            /* If the new client is a replica in slot sync mode, we can't reuse
+            /* If the client is a replica in slot sync mode, we can't reuse
              * any replica in the waiting list. */
             if (listLength(c->slotsync_slots) != 0) {
                 ln = NULL;
@@ -1311,7 +1341,8 @@ void syncCommand(client *c) {
 
         /* CASE 3: There is no BGSAVE is in progress. */
     } else {
-        if (server.repl_diskless_sync && (c->repl_data->replica_capa & REPLICA_CAPA_EOF) && server.repl_diskless_sync_delay) {
+        if (server.repl_diskless_sync && (c->repl_data->replica_capa & REPLICA_CAPA_EOF)
+            && server.repl_diskless_sync_delay && listLength(c->slotsync_slots) != 0) {
             /* Diskless replication RDB child is created inside
              * replicationCron() since we want to delay its start a
              * few seconds to wait for more replicas to arrive. */

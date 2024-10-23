@@ -119,7 +119,7 @@ class TestSlotSync(unittest.TestCase):
         try:
             nodes = conn.cluster('slotsync 0 1')
         except Exception as e:
-            assert "0 no node served" in str(e)
+            assert "Slot 0 has no node served" in str(e)
         # 4. 同步自身已经分配的slot
         # conn = redis.StrictRedis(host='127.0.0.1', port=9000, decode_responses=True)
         # try:
@@ -137,7 +137,7 @@ class TestSlotSync(unittest.TestCase):
         try:
             nodes = conn.cluster('slotsync 0 0')
         except Exception as e:
-            assert "Slot:0 is served by myself" in str(e)
+            assert "Slot 0 is served by myself" in str(e)
         # 6. slotlink 命令语法检查
         try:
             conn.cluster('slotlink xxx')
@@ -580,7 +580,7 @@ class TestSlotSync(unittest.TestCase):
         try:
             conn.execute_command('sync 0 10 15')
         except Exception as e:
-            assert str(e) == 'wrong number of arguments for SYNC'
+            assert str(e) == 'wrong number of arguments'
         try:
             conn.execute_command('sync x 10')
         except Exception as e:

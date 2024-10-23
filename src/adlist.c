@@ -380,7 +380,7 @@ void listRotateHeadToTail(list *list) {
 }
 
 /* Add all the elements of the list 'o' at the end of the
- * list 'l'. The list 'other' remains empty but otherwise valid. */
+ * list 'l'. The list 'o' remains empty but otherwise valid. */
 void listJoin(list *l, list *o) {
     if (o->len == 0) return;
 

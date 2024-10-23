@@ -957,6 +957,9 @@ typedef struct serverDb {
 /* forward declaration for functions ctx */
 typedef struct functionsLibCtx functionsLibCtx;
 
+/* forward declaration for bigkeylogEntry */
+typedef struct bigkeylogEntry bigkeylogEntry;
+
 /* Holding object that need to be populated during
  * rdb loading. On loading end it is possible to decide
  * whether not to set those objects on their rightful place.
@@ -1807,6 +1810,9 @@ struct valkeyServer {
     long long slowlog_entry_id;                    /* SLOWLOG current entry ID */
     long long slowlog_log_slower_than;             /* SLOWLOG time limit (to get logged) */
     unsigned long slowlog_max_len;                 /* SLOWLOG max number of items logged */
+    bigkeylogEntry *bigkeylog;                     /* BIGKEYLOG entry consists of buckets */
+    unsigned long bigkeylog_bucket_size;           /* BIGKEYLOG max number of items logged */
+    long long bigkeylog_num_elements_larger_than;  /* BIGKEYLOG logs keys whose number of elements is larger than this value */
     struct malloc_stats cron_malloc_stats;         /* sampled in serverCron(). */
     long long stat_net_input_bytes;                /* Bytes read from network. */
     long long stat_net_output_bytes;               /* Bytes written to network. */
@@ -3294,6 +3300,7 @@ void preventCommandPropagation(client *c);
 void preventCommandAOF(client *c);
 void preventCommandReplication(client *c);
 void slowlogPushCurrentCommand(client *c, struct serverCommand *cmd, ustime_t duration);
+void bigkeylogPush(robj *keyobj, long long num_lements);
 void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int64_t duration_hist);
 int prepareForShutdown(client *c, int flags);
 void replyToClientsBlockedOnShutdown(void);
@@ -3764,6 +3771,7 @@ void bgsaveCommand(client *c);
 void bgrewriteaofCommand(client *c);
 void shutdownCommand(client *c);
 void slowlogCommand(client *c);
+void bigkeylogCommand(client *c);
 void moveCommand(client *c);
 void copyCommand(client *c);
 void renameCommand(client *c);

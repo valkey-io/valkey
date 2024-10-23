@@ -418,7 +418,6 @@ typedef struct clusterSlotSyncLink {
     mstime_t slot_mf_end;           /* Slot manual failover time limit (ms unixtime) */
     long long slot_mf_lag;          /* Lag bytes with the slot sync source node */
 } clusterSlotSyncLink;
-// list *createSlotSyncLinkList(void);
 
 struct clusterState {
     clusterNode *myself; /* This node */

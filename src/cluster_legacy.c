@@ -131,10 +131,11 @@ void initClusterSlotSyncLinkList(void);
 void clearClusterSlotSyncLinkList(void);
 int isSlotInClusterSlotSyncLinkList(int slot);
 int isSlotInPendingDelete(int slot);
-int initSlotSyncLink(clusterSlotSyncLink *link, clusterNode *node);
+clusterSlotSyncLink *createSlotSyncLink(void);
+void initSlotSyncLink(clusterSlotSyncLink *link, clusterNode *node, list *slot_ranges);
 sds formatSlotSyncImportingSlots(void);
-void addReplySlotSyncLinksDescription(client *c);
-void clusterKillSlotSyncLink(client *c, char *linkid);
+void clusterCommandSlotLinkList(client *c);
+void clusterCommandSlotLinkKill(client *c, const char *linkname);
 void clusterSlotSyncCron(void);
 void clusterInitSlotFailover(void);
 void clusterSlotFailoverReplace(void);
@@ -7203,100 +7204,100 @@ int clusterCommandSpecial(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "links") && c->argc == 2) {
         /* CLUSTER LINKS */
         addReplyClusterLinksDescription(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "slotlink") && (c->argc > 2)) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "slotlink") && (c->argc == 3 || c->argc == 4)) {
         /* CLUSTER SLOTLINK LIST */
-        /* CLUSTER SLOTLINK KILL <linkid> */
-        if (!strcasecmp(c->argv[2]->ptr, "list")) {
-            addReplySlotSyncLinksDescription(c);
+        /* CLUSTER SLOTLINK KILL <linkname> */
+        if (!strcasecmp(c->argv[2]->ptr, "list") && (c->argc == 3)) {
+            clusterCommandSlotLinkList(c);
         } else if (!strcasecmp(c->argv[2]->ptr, "kill") && (c->argc == 4)) {
-            clusterKillSlotSyncLink(c, c->argv[3]->ptr);
+            clusterCommandSlotLinkKill(c, c->argv[3]->ptr);
         } else {
-            addReplyError(c, "Invalid CLUSTER SLOTLINK action or number of arguments");
+            addReplyErrorObject(c, shared.syntaxerr);
             return 1;
         }
-    } else if ((!strcasecmp(c->argv[1]->ptr,"slotsync")) && (c->argc > 2 && c->argc % 2 == 0)) {
-        /* CLUSTER SLOTSYNC <start slot> <end slot> [<start slot> <end slot> ...] */
+    } else if ((!strcasecmp(c->argv[1]->ptr, "slotsync")) && (c->argc > 2 && c->argc % 2 == 0)) {
+        /* CLUSTER SLOTSYNC <start slot> <end slot> [<start slot> <end slot> ...]
+         *
+         * This command is sent to the target node, which must be a primary node, and
+         * it will try to synchronize slot data from the slot owner. */
         if (!nodeIsPrimary(myself)) {
-            addReplyError(c,"Myself should be a primary.");
+            addReplyError(c, "Myself should be a primary.");
             return 1;
         }
 
+        clusterNode *n = NULL;
+
         /* Build the slot range list by the command arguments. */
         list *slot_ranges = createSlotRangeList();
-        clusterNode *n = NULL;
         int startslot, endslot;
-        for (int i = 2; i < c->argc; i+=2) {
+        for (int i = 2; i < c->argc; i += 2) {
             /* Get the current slot range. */
-            if ((startslot = getSlotOrReply(c,c->argv[i])) == C_ERR) {
+            if ((startslot = getSlotOrReply(c, c->argv[i])) == -1) {
                 listRelease(slot_ranges);
                 return 1;
             }
-            if ((endslot = getSlotOrReply(c,c->argv[i+1])) == C_ERR) {
+            if ((endslot = getSlotOrReply(c, c->argv[i + 1])) == -1) {
                 listRelease(slot_ranges);
                 return 1;
             }
             if (startslot > endslot) {
-                addReplyErrorFormat(c,"start slot number %d is greater than end slot number %d",
-                                    startslot, endslot);
+                addReplyErrorFormat(c, "Start slot number %d is greater than end slot number %d.", startslot, endslot);
                 listRelease(slot_ranges);
                 return 1;
             }
             /* Check if the current slot range is ready to do the slot sync. */
             for (int j = startslot; j <= endslot; j++) {
                 if (server.cluster->slots[j] == NULL) {
-                    addReplyErrorFormat(c,"Cluster is down, slot:%d no node served", j);
+                    addReplyErrorFormat(c, "Slot %d has no node served.", j);
                     listRelease(slot_ranges);
                     return 1;
                 }
                 if (!n) {
                     n = server.cluster->slots[j];
                 } else if (n != server.cluster->slots[j]) {
-                    addReplyErrorFormat(c,"The slot ranges can not cross node:%d", j);
+                    addReplyErrorFormat(c, "The slot ranges can not cross nodes, please check slot: %d.", j);
                     listRelease(slot_ranges);
                     return 1;
                 }
                 if (n == myself) {
-                    addReplyErrorFormat(c,"Slot:%d is served by myself", j);
+                    addReplyErrorFormat(c, "Slot %d is served by myself.", j);
                     listRelease(slot_ranges);
                     return 1;
                 }
                 if (isSlotInPendingDelete(j)) {
                     listRelease(slot_ranges);
-                    addReplyErrorFormat(c,"Slot:%d is in pending delete", j);
+                    addReplyErrorFormat(c, "Slot %d is in pending delete list.", j);
                     return 1;
                 }
                 if (isSlotInClusterSlotSyncLinkList(j)) {
-                    addReplyErrorFormat(c,"Slot:%d already in slot sync", j);
+                    addReplyErrorFormat(c, "Slot %d is already in slot sync.", j);
                     listRelease(slot_ranges);
                     return 1;
                 }
             }
-            serverLog(LL_WARNING,"Slots ready to sync: [%d-%d]", startslot, endslot);
             /* Add the current slot range to the range list. */
             slotRange *new_range = zmalloc(sizeof(slotRange));
             new_range->start_slot = startslot;
             new_range->end_slot = endslot;
             listAddNodeTail(slot_ranges, new_range);
+            serverLog(LL_NOTICE, "Syncing slot range [%d-%d] from node %.40s (%s)",
+                      startslot, endslot, n->name, n->human_nodename);
         }
-        if (!n) {
-            addReplyError(c,"Can not find valid node served the slot ranges.");
-            listRelease(slot_ranges);
-            return 1;
-        }
+        serverAssert(n);
+
         /* Create and initialize the slot sync link. */
-        clusterSlotSyncLink *link = zmalloc(sizeof(clusterSlotSyncLink));
-        link->slot_ranges = slot_ranges;
-        initSlotSyncLink(link, n);
+        clusterSlotSyncLink *link = createSlotSyncLink();
+        initSlotSyncLink(link, n, slot_ranges);
         listAddNodeTail(server.cluster->slotsync_links, link);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr,"slotfailover") && (c->argc == 2 || c->argc == 3)) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "slotfailover") && (c->argc == 2 || c->argc == 3)) {
         /* CLUSTER SLOTFAILOVER [TAKEOVER] */
         int takeover = 0;
         if (c->argc == 3) {
-            if (!strcasecmp(c->argv[2]->ptr,"takeover")) {
+            if (!strcasecmp(c->argv[2]->ptr, "takeover")) {
                 takeover = 1;
             } else {
-                addReply(c,shared.syntaxerr);
+                addReplyErrorObject(c, shared.syntaxerr);
                 return 1;
             }
         }
@@ -7315,20 +7316,29 @@ int clusterCommandSpecial(client *c) {
         while ((ln = listNext(&li)) != NULL) {
             clusterSlotSyncLink *link = ln->value;
             if (link->sync_state != CLUSTER_SLOTSYNC_STATE_CONNECTED) {
-                addReplyError(c,"There is a slot link not connected.");
+                addReplyErrorFormat(c, "Slot sync link %.40s is not connected.", link->linkname);
                 return 1;
             }
         }
+
+        sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
+
         if (takeover) {
+            serverLog(LL_NOTICE, "Taking over the slots (user request from '%s').", client);
             clusterBumpConfigEpochWithoutConsensus();
             clusterSlotFailoverReplace();
             clearClusterSlotSyncLinkList();
         } else {
+            serverLog(LL_NOTICE, "Manual slot failover user request accepted (user request from '%s').", client);
             clusterInitSlotFailover();
         }
-        addReply(c,shared.ok);
+
+        sdsfree(client);
+        addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "InternalCloseSlotLink")) {
-        /* CLUSTER INTERNALCLOSESLOTLINK */
+        /* CLUSTER INTERNALCLOSESLOTLINK
+         *
+         * Note: this command does not reply anything. */
         listNode *ln = listSearchKey(server.cluster->slotsync_links, c->slotsync_link);
         if (ln == NULL) {
             serverLog(LL_WARNING, "InternalCloseSlotLink fail, this client is not in slotsync_links");
@@ -7336,7 +7346,7 @@ int clusterCommandSpecial(client *c) {
         }
         clusterSlotSyncLink *link = ln->value;
         if (link == NULL || link->client != c) {
-            serverLog(LL_WARNING, "InternalCloseSlotLink fail, invalid slotlink or client not eual c");
+            serverLog(LL_WARNING, "InternalCloseSlotLink fail, invalid slotlink or client not equal c");
             return 1;
         }
         /* If reached here, "link->client == c" */

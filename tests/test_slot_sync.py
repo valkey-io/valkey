@@ -142,7 +142,15 @@ class TestSlotSync(unittest.TestCase):
         try:
             conn.cluster('slotlink xxx')
         except Exception as e:
-            assert str(e) == 'Invalid CLUSTER SLOTLINK action or number of arguments'
+            assert str(e) == "syntax error"
+        try:
+            conn.cluster('slotlink list xxx')
+        except Exception as e:
+            assert str(e) == "syntax error"
+        try:
+            conn.cluster('slotlink kill')
+        except Exception as e:
+            assert str(e) == "syntax error"
         util.StopAllRedis()
         time.sleep(1)
         util.PrintSuccCaseResult("TestCase 1: OK")
@@ -381,7 +389,7 @@ class TestSlotSync(unittest.TestCase):
         try:
             conn.cluster('slotfailover')
         except Exception as e:
-            assert "slot link not connected" in str(e)
+            assert "is not connected" in str(e)
         # 5.切换slot
         query = 1
         while query:
@@ -1056,7 +1064,7 @@ class TestSlotSync(unittest.TestCase):
         try:
             conn.cluster('slotfailover')
         except Exception as e:
-            assert "slot link not connected" in str(e)
+            assert "is not connected" in str(e)
         # 5.切换slot
         query = 1
         while query:
@@ -1127,7 +1135,7 @@ class TestSlotSync(unittest.TestCase):
         try:
             conn.cluster('slotfailover')
         except Exception as e:
-            assert "slot link not connected" in str(e)
+            assert "is not connected" in str(e)
         # 5.切换slot
         query = 1
         while query:
@@ -1296,8 +1304,8 @@ class TestSlotSync(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    # suite = unittest.TestSuite()
-    # test_cases = [
+    suite = unittest.TestSuite()
+    test_cases = [
         # TestSlotSync("test_case01"),
         # TestSlotSync("test_case02"),
         # TestSlotSync("test_case03"),
@@ -1324,9 +1332,9 @@ if __name__ == "__main__":
         # TestSlotSync("test_case24"),
         # TestSlotSync("test_case25"),
         # TestSlotSync("test_case26"),
-        # TestSlotSync("test_case27"),
-    # ]
-    # suite.addTests(test_cases)
-    # unittest.TextTestRunner().run(suite)
+        TestSlotSync("test_case27"),
+    ]
+    suite.addTests(test_cases)
+    unittest.TextTestRunner().run(suite)
 
-    unittest.main()
+    # unittest.main()

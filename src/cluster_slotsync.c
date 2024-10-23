@@ -27,6 +27,7 @@ void continueSlotSync(clusterSlotSyncLink *link);
 void readSlotSyncBulkPayload(connection *conn);
 clusterNode *getClusterNodeBySlotList(list *slot_ranges, int *cross_node);
 void notifyClientsCloseSlotSyncLink(void);
+void clusterDoBeforeSleep(int flags);
 
 /* -----------------------------------------------------------------------------
  * Cluster functions related to slot range and slot range list.
@@ -53,14 +54,14 @@ list *createSlotRangeList(void) {
 }
 
 /* Represent the given slot range list with the given separator. */
-sds representSlotRangeList(list *slot_ranges, const char sep) {
+sds representSlotRangeList(list *slot_ranges, const char separator) {
     sds res = sdsempty();
     listNode *ln;
     listIter li;
     listRewind(slot_ranges, &li);
     while ((ln = listNext(&li)) != NULL) {
         slotRange *range = ln->value;
-        res = sdscatprintf(res, "%d%c%d ", range->start_slot, sep, range->end_slot);
+        res = sdscatprintf(res, "%d%c%d ", range->start_slot, separator, range->end_slot);
     }
     return res;
 }
@@ -77,14 +78,10 @@ sds reprSlotRangeListWithBlank(list *slot_ranges) {
 
 /* Returns 1 if the two given slot range lists are the same, 0 otherwise. */
 int isSlotRangeListSame(list *lx, list *ly) {
-    if (listLength(lx) != listLength(ly)) {
-        return 0;
-    }
+    if (listLength(lx) != listLength(ly)) return 0;
 
     int len = listLength(lx);
-    if (len == 0) {
-        return 1;
-    }
+    if (len == 0) return 1;
 
     listNode *lnx, *lny;
     listIter lix, liy;
@@ -95,8 +92,7 @@ int isSlotRangeListSame(list *lx, list *ly) {
         lny = listNext(&liy);
         slotRange *range_x = (slotRange*)lnx->value;
         slotRange *range_y = (slotRange*)lny->value;
-        if (range_x->start_slot != range_y->start_slot ||
-            range_x->end_slot != range_y->end_slot) {
+        if (range_x->start_slot != range_y->start_slot || range_x->end_slot != range_y->end_slot) {
             return 0;
         }
     }
@@ -106,6 +102,7 @@ int isSlotRangeListSame(list *lx, list *ly) {
 /* Returns 1 if the given slot is in the specified slot ranges, 0 otherwise. */
 int isSlotInSlotRangeList(int slot, list *slot_ranges) {
     if (slot < 0) {
+        // todo check when slot will < 0
         return 0;
     }
 
@@ -127,10 +124,7 @@ int isSlotInSlotRangeList(int slot, list *slot_ranges) {
  *
  * Returns 1 if the given key is in the specified slot ranges, 0 otherwise. */
 int isKeyInSlotRanges(robj *key, list *slot_ranges) {
-    if (!key || !slot_ranges) {
-        return 0;
-    }
-
+    // maybe this can optimize.
     /* Get the slot of this key and check if the slot in the specified range. */
     int slot = keyHashSlot((char*)key->ptr, sdslen(key->ptr));
     return isSlotInSlotRangeList(slot, slot_ranges);
@@ -206,6 +200,11 @@ int isCommandInSlotRanges(int argc, robj **argv, list *slot_ranges) {
  * Cluster functions related to slot sync link.
  * -------------------------------------------------------------------------- */
 
+clusterSlotSyncLink *createSlotSyncLink(void) {
+    clusterSlotSyncLink *link = zmalloc(sizeof(clusterSlotSyncLink));
+    return link;
+}
+
 /* Free the clusterSlotSyncLink.sync_conn, close the connection fd.
  *
  * Note: If we have created the client, the connection fd is owned by the client
@@ -218,9 +217,9 @@ void freeSlotSyncConn(clusterSlotSyncLink *link) {
     }
 }
 
-int initSlotSyncLink(clusterSlotSyncLink *link, clusterNode *n) {
+void initSlotSyncLink(clusterSlotSyncLink *link, clusterNode *node, list *slot_ranges) {
     link->ctime = mstime();
-    strncpy(link->nodename, n->name, CLUSTER_NAMELEN);
+    strncpy(link->nodename, node->name, CLUSTER_NAMELEN);
     getRandomHexChars(link->linkname, sizeof(link->linkname));
 
     link->client = NULL;
@@ -230,24 +229,26 @@ int initSlotSyncLink(clusterSlotSyncLink *link, clusterNode *n) {
     link->transfer_lastio = server.unixtime;
     link->transfer_tmpfile_fd = -1;
     link->transfer_tmpfile_name = NULL;
+    if (slot_ranges) link->slot_ranges = slot_ranges;
     link->slot_mf_ready = 0;
     link->slot_mf_end = 0;
     link->slot_mf_lag = 0;
 
     link->sync_state = CLUSTER_SLOTSYNC_STATE_CONNECTING;
     link->sync_conn = connCreate(connTypeOfCluster());
-    if (connConnect(link->sync_conn, n->ip, getNodeDefaultClientPort(n),
-                    server.bind_source_addr, syncWithSlotOwner) == C_ERR) {
-        serverLog(LL_WARNING,"Unable to connect to slot MASTER: %s",
+    if (connConnect(link->sync_conn, node->ip, getNodeDefaultClientPort(node), server.bind_source_addr,
+                    syncWithSlotOwner) == C_ERR) {
+        serverLog(LL_WARNING, "Unable to connect to slot owner %.40s (%s): %s", node->name, node->human_nodename,
                   connGetLastError(link->sync_conn));
         freeSlotSyncConn(link);
-        return C_ERR;
+        return;
     }
+
     connSetReadHandler(link->sync_conn, syncWithSlotOwner);
-    setSlotSyncImporting(link->slot_ranges, n);
     connSetPrivateData(link->sync_conn, link);
-    serverLog(LL_WARNING, "Start slot sync from:%.40s.", link->nodename);
-    return C_OK;
+    setSlotSyncImporting(link->slot_ranges, node);
+    serverLog(LL_NOTICE, "Init slot sync link %.40s from node %.40s (%s).", link->linkname, node->name,
+              node->human_nodename);
 }
 
 void resetSlotSyncLink(clusterSlotSyncLink *link, int reconn) {
@@ -334,37 +335,36 @@ int isSlotInClusterSlotSyncLinkList(int slot) {
     return 0;
 }
 
-sds slotSyncStateToStr(slotSyncState state) {
-    const char *desc = NULL;
+const char *slotSyncStateToString(slotSyncState state) {
     switch (state) {
-        case CLUSTER_SLOTSYNC_STATE_NONE: desc = "none"; break;
-        case CLUSTER_SLOTSYNC_STATE_TOCONNECT: desc = "to_connect"; break;
-        case CLUSTER_SLOTSYNC_STATE_CONNECTING: desc = "connecting"; break;
-        case CLUSTER_SLOTSYNC_STATE_SEND_AUTH: desc = "send_auth"; break;
-        case CLUSTER_SLOTSYNC_STATE_RECV_AUTH: desc = "recv_auth"; break;
-        case CLUSTER_SLOTSYNC_STATE_SEND_CAPA: desc = "send_capa"; break;
-        case CLUSTER_SLOTSYNC_STATE_RECV_CAPA: desc = "recv_capa"; break;
-        case CLUSTER_SLOTSYNC_STATE_WAIT_SCHED: desc = "wait_sched"; break;
-        case CLUSTER_SLOTSYNC_STATE_SEND_SYNC: desc = "send_sync"; break;
-        case CLUSTER_SLOTSYNC_STATE_RECV_RDB: desc = "recv_rdb"; break;
-        case CLUSTER_SLOTSYNC_STATE_CONNECTED: desc = "connected"; break;
-        case CLUSTER_SLOTSYNC_STATE_FAILED: desc = "failed"; break;
-        default: desc = "unknow";
+    case CLUSTER_SLOTSYNC_STATE_NONE: return "none";
+    case CLUSTER_SLOTSYNC_STATE_TOCONNECT: return "to_connect";
+    case CLUSTER_SLOTSYNC_STATE_CONNECTING: return "connecting";
+    case CLUSTER_SLOTSYNC_STATE_SEND_AUTH: return "send_auth";
+    case CLUSTER_SLOTSYNC_STATE_RECV_AUTH: return "recv_auth";
+    case CLUSTER_SLOTSYNC_STATE_SEND_CAPA: return "send_capa";
+    case CLUSTER_SLOTSYNC_STATE_RECV_CAPA: return "recv_capa";
+    case CLUSTER_SLOTSYNC_STATE_WAIT_SCHED: return "wait_sched";
+    case CLUSTER_SLOTSYNC_STATE_SEND_SYNC: return "send_sync";
+    case CLUSTER_SLOTSYNC_STATE_RECV_RDB: return "recv_rdb";
+    case CLUSTER_SLOTSYNC_STATE_CONNECTED: return "connected";
+    case CLUSTER_SLOTSYNC_STATE_FAILED: return "failed";
+    default: serverPanic("Unknown slot sync state.");
     }
-    return sdsnew(desc);
 }
 
 sds representSlotSyncLink(clusterSlotSyncLink *link) {
-    sds sync_state = slotSyncStateToStr(link->sync_state);
+    // todo use dict?
     sds slot_ranges = reprSlotRangeListWithHyphen(link->slot_ranges);
     sds desc = sdscatprintf(sdsempty(), "id:%.40s node:%.40s state:%s lag:%lld slot:%s",
-                            link->linkname, link->nodename, sync_state, link->slot_mf_lag, slot_ranges);
+                            link->linkname, link->nodename, slotSyncStateToString(link->sync_state), link->slot_mf_lag,
+                            slot_ranges);
     sdsfree(slot_ranges);
-    sdsfree(sync_state);
     return desc;
 }
 
-void addReplySlotSyncLinksDescription(client *c) {
+/* See representSlotSyncLink for the format. */
+void clusterCommandSlotLinkList(client *c) {
     addReplyArrayLen(c, listLength(server.cluster->slotsync_links));
 
     listNode *ln;
@@ -376,15 +376,16 @@ void addReplySlotSyncLinksDescription(client *c) {
     }
 }
 
-void clusterKillSlotSyncLink(client *c, char *linkid) {
-
+void clusterCommandSlotLinkKill(client *c, const char *linkname) {
     listNode *ln;
     listIter li;
     listRewind(server.cluster->slotsync_links, &li);
     while ((ln = listNext(&li)) != NULL) {
         clusterSlotSyncLink *link = ln->value;
-        if (!strncmp(link->linkname, linkid, CLUSTER_NAMELEN)) {
+
+        if (!strncmp(link->linkname, linkname, CLUSTER_NAMELEN)) {
             /* Remove keys not owned by myself. */
+            // todo unlink?
             delkeysNotOwnedByMySelf(link->slot_ranges);
 
             /* Clear all importing state for this link. */
@@ -396,14 +397,14 @@ void clusterKillSlotSyncLink(client *c, char *linkid) {
                 freeClientAsync(link->client);
             }
             listDelNode(server.cluster->slotsync_links, ln);
-            addReply(c,shared.ok);
 
             /* Update state and save config. */
-            clusterUpdateState();
-            clusterSaveConfigOrDie(1);
+            clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
+            addReply(c, shared.ok);
             return;
         }
     }
+
     addReplyError(c, "There's no such link.");
 }
 
@@ -452,7 +453,7 @@ void setSlotSyncImporting(list *slot_ranges, clusterNode *node) {
     listRewind(slot_ranges, &li);
     while ((ln = listNext(&li)) != NULL) {
         slotRange *range = ln->value;
-        for(int i = range->start_slot; i <= range->end_slot; i++){
+        for (int i = range->start_slot; i <= range->end_slot; i++){
             server.cluster->importing_slots_from[i] = node;
         }
     }
@@ -505,9 +506,8 @@ sds formatSlotSyncImportingSlots(void) {
  * -------------------------------------------------------------------------- */
 
 void syncWithSlotOwner(connection *conn) {
-    clusterSlotSyncLink* link = connGetPrivateData(conn);
+    clusterSlotSyncLink *link = connGetPrivateData(conn);
     char *err = NULL;
-    int sockerr = 0;
 
     /* Simulate IO error. */
     if (testInjectError("crs-io-error-beforce-slot-sync")) {
@@ -518,8 +518,7 @@ void syncWithSlotOwner(connection *conn) {
     /* Check for errors in the socket: after a non blocking connect() we
      * may find that the socket is in error state. */
     if (connGetState(conn) != CONN_STATE_CONNECTED) {
-        serverLog(LL_WARNING,"Error condition on socket for slot sync: %s",
-                  strerror(sockerr));
+        serverLog(LL_WARNING, "Error condition on socket for slot sync: %s", connGetLastError(conn));
         goto error;
     }
 
@@ -527,10 +526,9 @@ void syncWithSlotOwner(connection *conn) {
      *
      * Set the read/write event handler. */
     if (link->sync_state == CLUSTER_SLOTSYNC_STATE_CONNECTING) {
-        serverLog(LL_NOTICE,"Non blocking connect for slotsync fired the event.");
+        serverLog(LL_NOTICE, "Non blocking connect for slot sync fired the event.");
         connSetWriteHandler(conn, NULL);
         connSetReadHandler(conn, syncWithSlotOwner);
-
         if (server.primary_auth) {
             link->sync_state = CLUSTER_SLOTSYNC_STATE_SEND_AUTH;
         } else {
@@ -546,7 +544,7 @@ void syncWithSlotOwner(connection *conn) {
 
     /* CLUSTER_SLOTSYNC_STATE: SEND_AUTH ==> RECV_AUTH
      *
-     * AUTH with the slot owner if required.*/
+     * AUTH with the slot owner if needed. */
     if (link->sync_state == CLUSTER_SLOTSYNC_STATE_SEND_AUTH) {
         err = sendCommand(conn, "AUTH", server.primary_auth, NULL);
         if (err) goto write_error;
@@ -561,23 +559,28 @@ void syncWithSlotOwner(connection *conn) {
         err = receiveSynchronousResponse(conn);
         if (err == NULL) goto no_response_error;
         if (err[0] == '-') {
-            serverLog(LL_WARNING,"Unable to AUTH to MASTER: %s",err);
+            serverLog(LL_WARNING, "Unable to AUTH to slot owner: %s", err);
             sdsfree(err);
+            err = NULL;
             connClose(conn);
             link->sync_state = CLUSTER_SLOTSYNC_STATE_FAILED;
             return;
         }
         sdsfree(err);
+        err = NULL;
         link->sync_state = CLUSTER_SLOTSYNC_STATE_SEND_CAPA;
     }
 
+    // todo may need to confirm whether the slot owner supports slot migration.
+    // like support SYNC xxx xxx
     /* CLUSTER_SLOTSYNC_STATE: SEND_CAPA ==> RECV_CAPA
      *
      * Inform the slot owner of our capabilities. */
     if (link->sync_state == CLUSTER_SLOTSYNC_STATE_SEND_CAPA) {
-        err = sendCommand(conn,"REPLCONF","capa","eof",NULL);
+        err = sendCommand(conn, "REPLCONF", "capa", "eof", NULL);
         if (err) goto write_error;
         sdsfree(err);
+        err = NULL;
         link->sync_state = CLUSTER_SLOTSYNC_STATE_RECV_CAPA;
         return;
     }
@@ -588,13 +591,12 @@ void syncWithSlotOwner(connection *conn) {
     if (link->sync_state == CLUSTER_SLOTSYNC_STATE_RECV_CAPA) {
         err = receiveSynchronousResponse(conn);
         if (err == NULL) goto no_response_error;
-        /* Ignore the error if any, not all the Redis versions support
-         * REPLCONF capa. */
+        /* Ignore the error if any, not all the versions support REPLCONF capa. */
         if (err[0] == '-') {
-            serverLog(LL_NOTICE,"(Non critical) Master does not understand "
-                                "REPLCONF capa: %s", err);
+            serverLog(LL_NOTICE, "(Non critical) Slot owner does not understand REPLCONF capa: %s", err);
         }
         sdsfree(err);
+        err = NULL;
         link->sync_state = CLUSTER_SLOTSYNC_STATE_WAIT_SCHED;
     }
 
@@ -602,17 +604,17 @@ void syncWithSlotOwner(connection *conn) {
      *
      * Wait other slotsync links. */
     if (link->sync_state == CLUSTER_SLOTSYNC_STATE_WAIT_SCHED) {
-        if (clusterGetSlotSyncLinkRank(link) > 0) {
-            return;
-        } else {
+        if (clusterGetSlotSyncLinkRank(link) == 0) {
             link->sync_state = CLUSTER_SLOTSYNC_STATE_SEND_SYNC;
+        } else {
+            return;
         }
     }
     continueSlotSync(link);
     return;
 
-    no_response_error: /* Handle receiveSynchronousResponse() error when master has no reply. */
-    serverLog(LL_WARNING, "Master did not respond to command during slotsync handshake");
+no_response_error: /* Handle receiveSynchronousResponse() error when slot owner has no reply. */
+    serverLog(LL_WARNING, "Slot owner did not respond to command during slotsync handshake.");
     /* Fall through to regular error handling */
 
 error:
@@ -625,12 +627,11 @@ error:
 write_error: /* Handle sendCommand() errors. */
     serverLog(LL_WARNING,"Sending command to target handshake: %s", err);
     sdsfree(err);
+    err = NULL;
     goto error;
 }
 
 void continueSlotSync(clusterSlotSyncLink *link) {
-    if (!link) return;
-
     char tmpfile[256];
     int tmpfd = -1;
     int maxtries = 5;
@@ -652,8 +653,8 @@ void continueSlotSync(clusterSlotSyncLink *link) {
             goto error;
         }
 
-        if (connSyncWrite(link->sync_conn, sync_cmd, sdslen(sync_cmd), server.repl_syncio_timeout*1000) == -1) {
-            serverLog(LL_WARNING,"I/O error writing to MASTER: %s",strerror(errno));
+        if (connSyncWrite(link->sync_conn, sync_cmd, sdslen(sync_cmd), server.repl_syncio_timeout * 1000) == -1) {
+            serverLog(LL_WARNING, "I/O error writing to slot owner: %s", connGetLastError(link->sync_conn));
             sdsfree(slot_ranges);
             sdsfree(sync_cmd);
             goto error;
@@ -663,24 +664,24 @@ void continueSlotSync(clusterSlotSyncLink *link) {
         link->sync_state = CLUSTER_SLOTSYNC_STATE_RECV_RDB;
     }
 
-    /* Prepare a suitable temp file for rdb transfer. */
+    /* Prepare a suitable temp file for slot rdb transfer. */
     while (maxtries--) {
-        snprintf(tmpfile,256,"temp-%d.%ld.rdb",(int)server.unixtime,(long int)getpid());
-        tmpfd = open(tmpfile,O_CREAT|O_WRONLY|O_EXCL,0644);
+        snprintf(tmpfile,256, "temp-%d.%ld.rdb", (int)server.unixtime, (long int)getpid());
+        tmpfd = open(tmpfile, O_CREAT | O_WRONLY | O_EXCL, 0644);
         if (tmpfd != -1) break;
         sleep(1);
     }
     if (tmpfd == -1) {
-        serverLog(LL_WARNING,"Opening the temp file needed for slot synchronization: %s",strerror(errno));
+        serverLog(LL_WARNING, "Opening the temp file needed for slot synchronization: %s", strerror(errno));
         goto error;
     }
 
     /* Change the read event handler from syncWithSlotOwner() to readSlotSyncBulkPayload(). */
     if (link->sync_state == CLUSTER_SLOTSYNC_STATE_RECV_RDB) {
         if (connSetReadHandler(link->sync_conn, readSlotSyncBulkPayload) == C_ERR) {
-            serverLog(LL_WARNING,
-                      "Can't create readable event for slot SYNC: %s (fd=%d)",
-                      strerror(errno),link->sync_conn->fd);
+            char conninfo[CONN_INFO_LEN];
+            serverLog(LL_WARNING, "Can't create readable event for slot sync: %s (%s)", strerror(errno),
+                      connGetInfo(link->sync_conn, conninfo, sizeof(conninfo)));
             goto error;
         }
     }
@@ -715,24 +716,20 @@ void readSlotSyncBulkPayload(connection *conn) {
 
     /* Static vars used to hold the EOF mark, and the last bytes received
      * from the server: when they match, we reached the end of the transfer. */
-    static char eofmark[CONFIG_RUN_ID_SIZE];
-    static char lastbytes[CONFIG_RUN_ID_SIZE];
+    static char eofmark[RDB_EOF_MARK_SIZE];
+    static char lastbytes[RDB_EOF_MARK_SIZE];
     static int usemark = 0;
 
     /* If transfer_total_size == -1, we still have to read the bulk length
-     * from the master reply. */
+     * from the slot owner reply. */
     if (link->transfer_total_size == -1) {
-        if (connSyncReadLine(conn,buf,1024,server.repl_syncio_timeout*1000) == -1) {
-            serverLog(LL_WARNING,
-                      "I/O error reading bulk count from MASTER: %s",
-                      strerror(errno));
+        if (connSyncReadLine(conn, buf, 1024, server.repl_syncio_timeout * 1000) == -1) {
+            serverLog(LL_WARNING, "I/O error reading bulk count from slot owner: %s", connGetLastError(conn));
             goto error;
         }
 
         if (buf[0] == '-') {
-            serverLog(LL_WARNING,
-                      "MASTER aborted replication with an error: %s",
-                      buf+1);
+            serverLog(LL_WARNING, "Slot owner aborted replication with an error: %s", buf + 1);
             goto error;
         } else if (buf[0] == '\0') {
             /* At this stage just a newline works as a PING in order to take
@@ -756,23 +753,20 @@ void readSlotSyncBulkPayload(connection *conn) {
          * At the end of the file the announced delimiter is transmitted. The
          * delimiter is long and random enough that the probability of a
          * collision with the actual file content can be ignored. */
-        if (strncmp(buf+1,"EOF:",4) == 0 && strlen(buf+5) >= CONFIG_RUN_ID_SIZE) {
+        if (strncmp(buf+1, "EOF:", 4) == 0 && strlen(buf + 5) >= RDB_EOF_MARK_SIZE) {
             usemark = 1;
-            memcpy(eofmark,buf+5,CONFIG_RUN_ID_SIZE);
-            memset(lastbytes,0,CONFIG_RUN_ID_SIZE);
+            memcpy(eofmark, buf + 5, RDB_EOF_MARK_SIZE);
+            memset(lastbytes, 0, RDB_EOF_MARK_SIZE);
             /* Set any transfer_total_size to avoid entering this code path
              * at the next call. */
             link->transfer_total_size = 0;
-            serverLog(LL_NOTICE,
-                      "Cluster slot sync: receiving streamed RDB from master with EOF %s",
-                      use_diskless_load? "to parser":"to disk");
+            serverLog(LL_NOTICE, "Cluster slot sync: receiving streamed RDB from slot owner with EOF %s",
+                      use_diskless_load ? "to parser": "to disk");
         } else {
             usemark = 0;
             link->transfer_total_size = strtol(buf+1,NULL,10);
-            serverLog(LL_NOTICE,
-                      "Cluster slot sync: receiving %lld bytes from master %s",
-                      (long long) link->transfer_total_size,
-                      use_diskless_load? "to parser":"to disk");
+            serverLog(LL_NOTICE, "Cluster slot sync: receiving %lld bytes from slot owner %s",
+                      (long long)link->transfer_total_size, use_diskless_load ? "to parser" : "to disk");
         }
         return;
     }
@@ -798,10 +792,11 @@ void readSlotSyncBulkPayload(connection *conn) {
                 /* equivalent to EAGAIN */
                 return;
             }
-            serverLog(LL_WARNING,"I/O error trying to sync with slot owner: %s",
-                      (nread == -1) ? strerror(errno) : "connection lost");
+            serverLog(LL_WARNING, "I/O error trying to sync with slot owner: %s",
+                      (nread == -1) ? connGetLastError(conn) : "connection lost");
             goto error;
         }
+        // check stat_net_repl_input_bytes?
         server.stat_net_input_bytes += nread;
 
         /* When a mark is used, we want to detect EOF asap in order to avoid
@@ -811,15 +806,14 @@ void readSlotSyncBulkPayload(connection *conn) {
         if (usemark) {
             /* Update the last bytes array, and check if it matches our
              * delimiter. */
-            if (nread >= CONFIG_RUN_ID_SIZE) {
-                memcpy(lastbytes,buf+nread-CONFIG_RUN_ID_SIZE,
-                       CONFIG_RUN_ID_SIZE);
+            if (nread >= RDB_EOF_MARK_SIZE) {
+                memcpy(lastbytes, buf + nread - RDB_EOF_MARK_SIZE, RDB_EOF_MARK_SIZE);
             } else {
-                int rem = CONFIG_RUN_ID_SIZE-nread;
-                memmove(lastbytes,lastbytes+nread,rem);
-                memcpy(lastbytes+rem,buf,nread);
+                int rem = RDB_EOF_MARK_SIZE - nread;
+                memmove(lastbytes, lastbytes + nread, rem);
+                memcpy(lastbytes + rem, buf, nread);
             }
-            if (memcmp(lastbytes,eofmark,CONFIG_RUN_ID_SIZE) == 0)
+            if (memcmp(lastbytes, eofmark, RDB_EOF_MARK_SIZE) == 0)
                 eof_reached = 1;
         }
 
@@ -835,7 +829,7 @@ void readSlotSyncBulkPayload(connection *conn) {
         if ((nwritten = write(link->transfer_tmpfile_fd,buf,nread)) != nread) {
             serverLog(LL_WARNING,
                       "Write error or short write writing to the DB dump file "
-                      "needed for Cluster slot synchronization: %s",
+                      "needed for cluster slot synchronization: %s",
                       (nwritten == -1) ? strerror(errno) : "short write");
             goto error;
         }
@@ -848,11 +842,9 @@ void readSlotSyncBulkPayload(connection *conn) {
 
         /* Delete the last 40 bytes from the file if we reached EOF. */
         if (usemark && eof_reached) {
-            if (ftruncate(link->transfer_tmpfile_fd,
-                          link->transfer_read_size - CONFIG_RUN_ID_SIZE) == -1)
-            {
+            if (ftruncate(link->transfer_tmpfile_fd, link->transfer_read_size - RDB_EOF_MARK_SIZE) == -1) {
                 serverLog(LL_WARNING,
-                          "Error truncating the RDB file received from the master "
+                          "Error truncating the RDB file received from the slot owner "
                           "for SYNC: %s", strerror(errno));
                 goto error;
             }
@@ -861,20 +853,15 @@ void readSlotSyncBulkPayload(connection *conn) {
         /* Sync data on disk from time to time, otherwise at the end of the
          * transfer we may suffer a big delay as the memory buffers are copied
          * into the actual disk. */
-        if (link->transfer_read_size >=
-            link->transfer_last_fsync_off + SLOTSYNC_MAX_WRITTEN_BEFORE_FSYNC)
-        {
-            off_t sync_size = link->transfer_read_size -
-                              link->transfer_last_fsync_off;
-            rdb_fsync_range(link->transfer_tmpfile_fd,
-                            link->transfer_last_fsync_off, sync_size);
+        if (link->transfer_read_size >= link->transfer_last_fsync_off + SLOTSYNC_MAX_WRITTEN_BEFORE_FSYNC) {
+            off_t sync_size = link->transfer_read_size - link->transfer_last_fsync_off;
+            rdb_fsync_range(link->transfer_tmpfile_fd, link->transfer_last_fsync_off, sync_size);
             link->transfer_last_fsync_off += sync_size;
         }
 
         /* Check if the transfer is now complete */
         if (!usemark) {
-            if (link->transfer_read_size == link->transfer_total_size)
-                eof_reached = 1;
+            if (link->transfer_read_size == link->transfer_total_size) eof_reached = 1;
         }
 
         /* If the transfer is yet not complete, we need to read more, so
@@ -906,7 +893,7 @@ void readSlotSyncBulkPayload(connection *conn) {
     if (use_diskless_load) {
         rio rdb;
         int async = 0; /* Do not use async loading. */
-        rioInitWithConn(&rdb,conn,link->transfer_total_size);
+        rioInitWithConn(&rdb, conn, link->transfer_total_size);
 
         /* Put the socket in blocking mode to simplify RDB transfer.
          * We'll restore it when the RDB is received. */
@@ -917,9 +904,7 @@ void readSlotSyncBulkPayload(connection *conn) {
         if (rdbLoadRio(&rdb, RDBFLAGS_REPLICATION | RDBFLAGS_SLOT_SYNC, &rsi) != C_OK) {
             /* RDB loading failed. */
             stopLoading(0);
-            serverLog(LL_WARNING,
-                      "Failed trying to load the slot owner synchronization DB "
-                      "from socket");
+            serverLog(LL_WARNING, "Failed trying to load the slot owner synchronization DB from socket");
             rioFreeConn(&rdb, NULL);
 
             /* Note that there's no point in restarting the AOF on SYNC
@@ -930,9 +915,7 @@ void readSlotSyncBulkPayload(connection *conn) {
 
         /* Verify the end mark is correct. */
         if (usemark) {
-            if (!rioRead(&rdb,buf,CONFIG_RUN_ID_SIZE) ||
-                memcmp(buf,eofmark,CONFIG_RUN_ID_SIZE) != 0)
-            {
+            if (!rioRead(&rdb,buf,RDB_EOF_MARK_SIZE) || memcmp(buf,eofmark,RDB_EOF_MARK_SIZE) != 0) {
                 stopLoading(0);
                 serverLog(LL_WARNING,"Replication stream EOF marker is broken");
                 rioFreeConn(&rdb, NULL);
@@ -993,9 +976,9 @@ void readSlotSyncBulkPayload(connection *conn) {
                       "Failed trying to load the MASTER synchronization "
                       "DB from disk");
             if (server.rdb_del_sync_files && allPersistenceDisabled()) {
-                serverLog(LL_NOTICE,"Removing the RDB file obtained from "
-                                    "the master. This replica has persistence "
-                                    "disabled");
+                serverLog(LL_NOTICE, "Removing the RDB file obtained from "
+                                     "the slot owner. This replica has persistence "
+                                     "disabled");
                 bg_unlink(rdbpath);
             }
 
@@ -1006,9 +989,9 @@ void readSlotSyncBulkPayload(connection *conn) {
 
         /* Cleanup. */
         if (server.rdb_del_sync_files && allPersistenceDisabled()) {
-            serverLog(LL_NOTICE,"Removing the RDB file obtained from "
-                                "the master. This replica has persistence "
-                                "disabled");
+            serverLog(LL_NOTICE, "Removing the RDB file obtained from "
+                                 "the slot owner. This replica has persistence "
+                                 "disabled");
             bg_unlink(rdbpath);
         }
 
@@ -1042,6 +1025,7 @@ void readSlotSyncBulkPayload(connection *conn) {
                                 "Ready to accept connections in read-write mode.\n");
     }
 
+    // todo fixme
     /* After loading a new slot RDB, if we have any replicas nodes, they need to
      * be full sync again. Otherwise, the replica will maintain the psync and lose
      * all the data corresponding to the slot RDB.
@@ -1186,6 +1170,7 @@ void clusterInitSlotFailover(void) {
 void clusterSlotFailoverReplace(void) {
     /* If the cluster is failed, can not do slot failover. */
     if (server.cluster->state == CLUSTER_FAIL) {
+        serverLog(LL_WARNING, "Cluster is down, can not do slot failover.");
         return;
     }
 
@@ -1313,7 +1298,7 @@ void clusterSlotSyncCron(void) {
             }
 
             /* Really do the reconnect for this link. */
-            initSlotSyncLink(link, n);
+            initSlotSyncLink(link, n, NULL);
         } else if (link->sync_state == CLUSTER_SLOTSYNC_STATE_WAIT_SCHED) {
             if (clusterGetSlotSyncLinkRank(link) == 0) {
                 link->sync_state = CLUSTER_SLOTSYNC_STATE_SEND_SYNC;

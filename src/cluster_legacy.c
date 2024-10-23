@@ -5805,6 +5805,8 @@ const char *clusterGetMessageTypeString(int type) {
     return "unknown";
 }
 
+/* Get the slot from robj and return it. If the slot is not valid,
+ * return -1 and send an error to the client. */
 int getSlotOrReply(client *c, robj *o) {
     long long slot;
 
@@ -6530,7 +6532,7 @@ int clusterCommandSpecial(client *c) {
         memset(slots, 0, CLUSTER_SLOTS);
         /* Check that all the arguments are parseable.*/
         for (j = 2; j < c->argc; j++) {
-            if ((slot = getSlotOrReply(c, c->argv[j])) == C_ERR) {
+            if ((slot = getSlotOrReply(c, c->argv[j])) == -1) {
                 zfree(slots);
                 return 1;
             }
@@ -6563,11 +6565,11 @@ int clusterCommandSpecial(client *c) {
         /* Check that all the arguments are parseable and that all the
          * slots are not already busy. */
         for (j = 2; j < c->argc; j += 2) {
-            if ((startslot = getSlotOrReply(c, c->argv[j])) == C_ERR) {
+            if ((startslot = getSlotOrReply(c, c->argv[j])) == -1) {
                 zfree(slots);
                 return 1;
             }
-            if ((endslot = getSlotOrReply(c, c->argv[j + 1])) == C_ERR) {
+            if ((endslot = getSlotOrReply(c, c->argv[j + 1])) == -1) {
                 zfree(slots);
                 return 1;
             }

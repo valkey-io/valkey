@@ -279,8 +279,8 @@ void clusterSlotStatsCommand(client *c) {
     if (c->argc == 5 && !strcasecmp(c->argv[2]->ptr, "slotsrange")) {
         /* CLUSTER SLOT-STATS SLOTSRANGE start-slot end-slot */
         int startslot, endslot;
-        if ((startslot = getSlotOrReply(c, c->argv[3])) == C_ERR ||
-            (endslot = getSlotOrReply(c, c->argv[4])) == C_ERR) {
+        if ((startslot = getSlotOrReply(c, c->argv[3])) == -1 ||
+            (endslot = getSlotOrReply(c, c->argv[4])) == -1) {
             return;
         }
         if (startslot > endslot) {

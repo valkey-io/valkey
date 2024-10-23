@@ -1,4 +1,4 @@
-/* The ziplist is a specially encoded dually linked list that is designed
+/* The ziplist is a specially encoded doubly linked list that is designed
  * to be very memory efficient. It stores both strings and integer values,
  * where integers are encoded as actual integers instead of a series of
  * characters. It allows push and pop operations on either side of the list

@@ -438,48 +438,61 @@ static inline int cursorIsLessThan(size_t a, size_t b) {
     return rev(a) < rev(b);
 }
 
-/* Rehashes one bucket. */
+/* Rehashes buckets, following potential probe chains. This means that between
+ * rehash steps, any element that hashes to an already-rehashed bucket has been
+ * rehashed, even if it was moved to a different bucket due to open addressing.
+ * Knowing this allows scan to skip already-rehashed buckets. */
 static void rehashStep(hashset *s) {
     assert(hashsetIsRehashing(s));
     size_t idx = s->rehash_idx;
-    bucket *b = &s->tables[0][idx];
-    int pos;
-    for (pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
-        if (!isPositionFilled(b, pos)) continue; /* empty */
-        void *element = b->elements[pos];
-        uint8_t h2 = b->hashes[pos];
-        /* Insert into table 1. */
-        uint64_t hash;
-        /* When shrinking, it's possible to avoid computing the hash. We can
-         * just use idx has the hash, but only if we know that probing didn't
-         * push this element away from its primary bucket, so only if the
-         * bucket before the current one hasn't ever been full. */
-        if (s->bucket_exp[1] <= s->bucket_exp[0] &&
-            !s->tables[0][prevCursor(idx, expToMask(s->bucket_exp[0]))].everfull) {
-            hash = idx;
-        } else {
-            hash = hashElement(s, element);
+    uint8_t prev_bucket_everfull = s->tables[0][prevCursor(idx, expToMask(s->bucket_exp[0]))].everfull;
+    while (1) {
+        bucket *b = &s->tables[0][idx];
+        if (b->presence) {
+            for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
+                if (!isPositionFilled(b, pos)) continue; /* empty */
+                void *element = b->elements[pos];
+                uint8_t h2 = b->hashes[pos];
+                /* Insert into table 1. */
+                uint64_t hash;
+                /* When shrinking, it's possible to avoid computing the hash. We can
+                 * just use idx has the hash, but only if we know that probing didn't
+                 * push this element away from its primary bucket, so only if the
+                 * bucket before the current one hasn't ever been full. */
+                if (s->bucket_exp[1] <= s->bucket_exp[0] && !prev_bucket_everfull) {
+                    hash = idx;
+                } else {
+                    hash = hashElement(s, element);
+                }
+                int pos_in_dst_bucket;
+                bucket *dst = findBucketForInsert(s, hash, &pos_in_dst_bucket, NULL);
+                dst->elements[pos_in_dst_bucket] = element;
+                dst->hashes[pos_in_dst_bucket] = h2;
+                dst->presence |= (1 << pos_in_dst_bucket);
+                if (!dst->everfull && bucketIsFull(dst)) {
+                    dst->everfull = 1;
+                    s->everfulls[1]++;
+                }
+                s->used[0]--;
+                s->used[1]++;
+            }
         }
-        int pos_in_dst_bucket;
-        bucket *dst = findBucketForInsert(s, hash, &pos_in_dst_bucket, NULL);
-        dst->elements[pos_in_dst_bucket] = element;
-        dst->hashes[pos_in_dst_bucket] = h2;
-        dst->presence |= (1 << pos_in_dst_bucket);
-        if (!dst->everfull && bucketIsFull(dst)) {
-            dst->everfull = 1;
-            s->everfulls[1]++;
+        /* Mark the source bucket as empty. */
+        b->presence = 0;
+        /* Bucket done. Advance to the next bucket in probing order. We rehash in
+         * this order to be able to skip already rehashed buckets in scan. */
+        idx = nextCursor(idx, expToMask(s->bucket_exp[0]));
+        if (idx == 0) {
+            rehashingCompleted(s);
+            return;
         }
-        s->used[0]--;
-        s->used[1]++;
+
+        /* exit loop if not in probe sequence */
+        if (!b->everfull) break;
+        prev_bucket_everfull = 1;
     }
-    /* Mark the source bucket as empty. */
-    b->presence = 0;
-    /* Bucket done. Advance to the next bucket in probing order. We rehash in
-     * this order to be able to skip already rehashed buckets in scan. */
-    s->rehash_idx = nextCursor(s->rehash_idx, expToMask(s->bucket_exp[0]));
-    if (s->rehash_idx == 0) {
-        rehashingCompleted(s);
-    }
+
+    s->rehash_idx = idx;
 }
 
 /* Called internally on lookup and other reads to the table. */
@@ -1260,10 +1273,13 @@ size_t hashsetScan(hashset *s, size_t cursor, hashsetScanFunction fn, void *priv
      * indicate that the full scan is completed. */
     int cursor_passed_zero = 0;
 
-    /* Mask the start cursor to the bigger of the tables, so we can detect if we
+    /* Mask the start cursor to the smaller of the tables, so we can detect if we
      * come back to the start cursor and break the loop. It can happen if enough
      * tombstones (in both tables while rehashing) make us continue scanning. */
-    cursor = cursor & (expToMask(s->bucket_exp[0]) | expToMask(s->bucket_exp[1]));
+    cursor &= expToMask(s->bucket_exp[0]);
+    if (hashsetIsRehashing(s)) {
+        cursor &= expToMask(s->bucket_exp[1]);
+    }
     size_t start_cursor = cursor;
     do {
         in_probe_sequence = 0; /* Set to 1 if an ever-full bucket is scanned. */
@@ -1297,9 +1313,9 @@ size_t hashsetScan(hashset *s, size_t cursor, hashsetScanFunction fn, void *priv
             size_t mask_small = expToMask(s->bucket_exp[table_small]);
             size_t mask_large = expToMask(s->bucket_exp[table_large]);
 
-            /* Emit elements in the smaller table, if this bucket hasn't already
-             * been rehashed. */
-            if (table_small == 0 && !cursorIsLessThan(cursor, s->rehash_idx)) {
+            /* Emit elements in the smaller table if it's the new table or if
+             * this bucket hasn't been rehashed yet. */
+            if (table_small == 1 || !cursorIsLessThan(cursor, s->rehash_idx)) {
                 bucket *b = &s->tables[table_small][cursor & mask_small];
                 if (b->presence) {
                     for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
@@ -1312,26 +1328,32 @@ size_t hashsetScan(hashset *s, size_t cursor, hashsetScanFunction fn, void *priv
                 in_probe_sequence |= b->everfull;
             }
 
-            /* Iterate over indices in larger table that are the expansion of
-             * the index pointed to by the cursor in the smaller table. */
-            do {
-                /* Emit elements in bigger table. */
-                bucket *b = &s->tables[table_large][cursor & mask_large];
-                if (b->presence) {
-                    for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
-                        if (isPositionFilled(b, pos)) {
-                            void *emit = emit_ref ? &b->elements[pos] : b->elements[pos];
-                            fn(privdata, emit);
+            /* Emit elements in the larger table if it's the new table or if
+             * these buckets haven't been rehashed yet. */
+            if (table_large == 1 || !cursorIsLessThan(cursor, s->rehash_idx)) {
+                /* Iterate over indices in larger table that are the expansion
+                 * of the index pointed to by the cursor in the smaller table. */
+                size_t large_cursor = cursor;
+                do {
+                    /* Emit elements in bigger table. */
+                    bucket *b = &s->tables[table_large][large_cursor & mask_large];
+                    if (b->presence) {
+                        for (int pos = 0; pos < ELEMENTS_PER_BUCKET; pos++) {
+                            if (isPositionFilled(b, pos)) {
+                                void *emit = emit_ref ? &b->elements[pos] : b->elements[pos];
+                                fn(privdata, emit);
+                            }
                         }
                     }
-                }
-                in_probe_sequence |= b->everfull;
+                    in_probe_sequence |= b->everfull;
 
-                /* Increment the reverse cursor not covered by the smaller mask.*/
-                cursor = nextCursor(cursor, mask_large);
+                    /* Increment the reverse cursor not covered by the smaller mask.*/
+                    large_cursor = nextCursor(large_cursor, mask_large);
 
-                /* Continue while bits covered by mask difference is non-zero */
-            } while (cursor & (mask_small ^ mask_large) && cursor != start_cursor);
+                    /* Continue while bits covered by mask difference is non-zero */
+                } while (large_cursor & (mask_small ^ mask_large));
+            }
+            cursor = nextCursor(cursor, mask_small);
         }
         if (cursor == 0) {
             cursor_passed_zero = 1;
@@ -1651,24 +1673,32 @@ void hashsetDump(hashset *s) {
 }
 
 void hashsetHistogram(hashset *s) {
-    for (int table = 0; table <= 1; table++) {
-        for (size_t idx = 0; idx < numBuckets(s->bucket_exp[table]); idx++) {
-            bucket *b = &s->tables[table][idx];
+    for (int table = 0; table <= 1 && s->bucket_exp[table] >= 0; table++) {
+        size_t mask = expToMask(s->bucket_exp[table]);
+        size_t cursor = 0;
+        do {
+            bucket *b = &s->tables[table][cursor];
             char c = b->presence == 0 && b->everfull ? 'X' : '0' + __builtin_popcount(b->presence);
             printf("%c", c);
-        }
+
+            cursor = nextCursor(cursor, mask);
+        } while (cursor != 0);
         if (table == 0) printf(" ");
     }
     printf("\n");
 }
 
 void hashsetProbeMap(hashset *s) {
-    for (int table = 0; table <= 1; table++) {
-        for (size_t idx = 0; idx < numBuckets(s->bucket_exp[table]); idx++) {
-            bucket *b = &s->tables[table][idx];
+    for (int table = 0; table <= 1 && s->bucket_exp[table] >= 0; table++) {
+        size_t mask = expToMask(s->bucket_exp[table]);
+        size_t cursor = 0;
+        do {
+            bucket *b = &s->tables[table][cursor];
             char c = b->everfull ? 'X' : 'o';
             printf("%c", c);
-        }
+
+            cursor = nextCursor(cursor, mask);
+        } while (cursor != 0);
         if (table == 0) printf(" ");
     }
     printf("\n");

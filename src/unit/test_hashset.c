@@ -372,6 +372,160 @@ int test_scan(int argc, char **argv, int flags) {
     return 0;
 }
 
+typedef struct {
+    uint64_t value;
+    uint64_t hash;
+} mock_hash_element;
+
+static mock_hash_element *mock_hash_element_create(uint64_t value, uint64_t hash) {
+    mock_hash_element *element = malloc(sizeof(mock_hash_element));
+    element->value = value;
+    element->hash = hash;
+    return element;
+}
+
+static uint64_t mock_hash_element_get_hash(const void *element) {
+    if (element == NULL) return 0UL;
+    mock_hash_element *mock = (mock_hash_element *)element;
+    return (mock->hash != 0) ? mock->hash : mock->value;
+}
+
+typedef struct scan_data_list_t {
+    struct scan_data_list_t *next;
+    size_t cursor;
+    uint64_t chain_hash;
+    uint8_t element_seen[];
+} scan_data_list;
+
+static void scan_data_list_scan_function(void *privdata, void *element) {
+    scan_data_list *scan_data = (scan_data_list *)privdata;
+    mock_hash_element *mock_element = (mock_hash_element *)element;
+
+    if (mock_element->hash != scan_data->chain_hash) return;
+    if (mock_element->value == -1UL) return;
+    scan_data->element_seen[mock_element->value]++;
+}
+
+int test_scan_with_rehashed_long_chain(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    /* creates hashset with elements displaced due to open addressing, such that
+     * on a rehash they will move "backwards" */
+
+    const size_t num_random_elements = 128;
+    const size_t num_chained_elements = 40;
+
+    const size_t buckets_to_displace = 6;
+    const size_t bucket_size = 7; // for 64 bit
+    const size_t num_chain_base_elements = buckets_to_displace * bucket_size;
+
+    hashsetType type = {
+        .hashFunction = mock_hash_element_get_hash,
+        .elementDestructor = freekeyval,
+    };
+
+    /* Seed, to make sure each round is different. */
+    randomSeed();
+
+    hashset *s = hashsetCreate(&type);
+    hashsetExpand(s, num_random_elements + num_chained_elements + num_chain_base_elements);
+    /* add background random elements (helps to keep fill between limits,
+     * prevent unwanted rehash) */
+    for (size_t i = 0; i < num_random_elements; i++) {
+        hashsetAdd(s, mock_hash_element_create((uint64_t)genrand64_int64(), 0));
+    }
+    size_t initial_buckets = hashsetBuckets(s);
+
+    /* create long chain */
+    randomSeed();
+    uint64_t chain_hash = (uint64_t)genrand64_int64();
+    /* make base of chain */
+    mock_hash_element *chain_base[num_chain_base_elements];
+    if (chain_hash == 0) chain_hash++;
+    for (size_t i = 0; i < num_chain_base_elements; i++) {
+        chain_base[i] = mock_hash_element_create(-1, chain_hash);
+        hashsetAdd(s, chain_base[i]);
+    }
+    /* add elements to end of chain */
+    for (size_t i = 0; i < num_chained_elements; i++) {
+        hashsetAdd(s, mock_hash_element_create(i, chain_hash));
+    }
+    /* delete base of chain. This means that elements remaining on the end of
+     * the chain should move "backwards" on a rehash. */
+    for (size_t i = 0; i < num_chain_base_elements; i++) {
+        hashsetDelete(s, chain_base[i]);
+    }
+
+    printf("Bucket fill: ");
+    hashsetHistogram(s);
+    printf("probe map  : ");
+    hashsetProbeMap(s);
+
+    /* unexpected rehash would invalidate the test */
+    assert(hashsetBuckets(s) == initial_buckets);
+
+    /* create a "train" of scans such that there is a scan paused at every
+     * cursor position where hashsetScan() pauses while incremental rehash is in
+     * progress */
+    scan_data_list *scan_list = NULL;
+    int any_scan_finished = 0;
+    while (1) {
+        /* insert new scan start of list */
+        scan_data_list *new = (scan_data_list *)calloc(1, sizeof(scan_data_list) + num_chained_elements);
+        new->next = scan_list;
+        new->chain_hash = chain_hash;
+        new->cursor = hashsetScan(s, 0, scan_data_list_scan_function, new, 0);
+        scan_list = new;
+
+        /* step forward all scans */
+        for (scan_data_list *current = scan_list; current != NULL; current = current->next) {
+            if (current->cursor == 0) {
+                any_scan_finished = 1;
+            } else {
+                current->cursor = hashsetScan(s, current->cursor, scan_data_list_scan_function, current, 0);
+            }
+        }
+
+        if (!hashsetIsRehashing(s)) {
+            if (any_scan_finished) {
+                /* begin a rehash by adding elements */
+                while (!hashsetIsRehashing(s)) {
+                    hashsetAdd(s, mock_hash_element_create((uint64_t)genrand64_int64(), 0));
+                }
+            }
+        } else {
+            /* continue rehash by one step */
+            hashsetFind(s, NULL, NULL);
+
+            /* stop when rehashing finishes */
+            if (!hashsetIsRehashing(s)) {
+                break;
+            }
+        }
+    }
+
+    /* ensure that scans didn't miss any of the probe chained elements */
+    for (scan_data_list *current = scan_list; current != NULL; current = current->next) {
+        /* finish scan if needed */
+        while (current->cursor != 0) {
+            current->cursor = hashsetScan(s, current->cursor, scan_data_list_scan_function, current, 0);
+        }
+
+        for (size_t i = 0; i < num_chained_elements; i++) {
+            TEST_ASSERT(current->element_seen[i] > 0);
+        }
+    }
+
+    for (scan_data_list *current = scan_list; current != NULL;) {
+        scan_data_list *next = current->next;
+        free(current);
+        current = next;
+    }
+    hashsetRelease(s);
+    return 0;
+}
+
 int test_iterator(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);

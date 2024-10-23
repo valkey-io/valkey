@@ -11007,8 +11007,8 @@ static void moduleScanKeyCallback(void *privdata, const dictEntry *de) {
         sds val = dictGetVal(de);
         value = createStringObject(val, sdslen(val));
     } else if (o->type == OBJ_ZSET) {
-        double *val = (double *)dictGetVal(de);
-        value = createStringObjectFromLongDouble(*val, 0);
+        double val = dictGetDoubleVal(de);
+        value = createStringObjectFromLongDouble(val, 0);
     }
 
     data->fn(data->key, field, value, data->user_data);

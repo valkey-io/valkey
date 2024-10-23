@@ -1893,7 +1893,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
 
         while ((de = dictNext(di)) != NULL) {
             sds ele = dictGetKey(de);
-            double *score = dictGetVal(de);
+            double score = dictGetDoubleVal(de);
 
             if (count == 0) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : items;
@@ -1904,7 +1904,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
                     return 0;
                 }
             }
-            if (!rioWriteBulkDouble(r, *score) || !rioWriteBulkString(r, ele, sdslen(ele))) {
+            if (!rioWriteBulkDouble(r, score) || !rioWriteBulkString(r, ele, sdslen(ele))) {
                 dictReleaseIterator(di);
                 return 0;
             }

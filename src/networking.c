@@ -167,6 +167,7 @@ client *createClient(connection *conn) {
     c->nread = 0;
     c->read_flags = 0;
     c->write_flags = 0;
+    c->io_checked = 0;
     c->cmd = c->lastcmd = c->realcmd = c->io_parsed_cmd = NULL;
     c->cur_script = NULL;
     c->multibulklen = 0;
@@ -4830,6 +4831,13 @@ void ioThreadReadQueryFromClient(void *data) {
     /* Empty command - Multibulk processing could see a <= 0 length. */
     if (c->argc == 0) {
         goto done;
+    }
+
+    /* Handle possible security attacks. */
+    if (!strcasecmp(c->argv[0]->ptr, "host:") || !strcasecmp(c->argv[0]->ptr, "post")) {
+        c->io_checked = IO_CHECKED_NOT_SECURITY;
+    } else {
+        c->io_checked = IO_CHECKED_SECURITY;
     }
 
     /* Lookup command offload */

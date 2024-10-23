@@ -1148,6 +1148,12 @@ typedef enum {
     CLIENT_COMPLETED_IO = 2 /* IO-thread sets this state after completing IO operation. */
 } clientIOState;
 
+typedef enum {
+    IO_NOT_CHECKED = 0,         /* Initial state: io thread doesn't check anything yet. */
+    IO_CHECKED_SECURITY = 1,    /* IO checked, there is no possible security attacks. */
+    IO_CHECKED_NOT_SECURITY = 2 /* IO checked, there is possible security attacks. */
+} ioCheckedState;
+
 typedef struct ClientFlags {
     uint64_t primary : 1;                  /* This client is a primary */
     uint64_t replica : 1;                  /* This client is a replica */
@@ -1251,6 +1257,9 @@ typedef struct client {
     size_t argv_len_sum;                 /* Sum of lengths of objects in argv list. */
     volatile uint8_t io_read_state;      /* Indicate the IO read state of the client */
     volatile uint8_t io_write_state;     /* Indicate the IO write state of the client */
+    uint8_t io_checked;                  /* Indicate if the logic is already covered in io-thread,
+                                          * then reduce the logic in main thread.
+                                          * For example, the possible security attacks check of command. */
     uint8_t cur_tid;                     /* ID of IO thread currently performing IO for this client */
     int nread;                           /* Number of bytes of the last read. */
     int nwritten;                        /* Number of bytes of the last write. */

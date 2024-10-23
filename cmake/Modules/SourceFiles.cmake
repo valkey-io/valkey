@@ -151,6 +151,3 @@ set(VALKEY_RDMA_MODULE_SRCS ${CMAKE_SOURCE_DIR}/src/rdma.c)
 
 # valkey-tls module
 set(VALKEY_TLS_MODULE_SRCS ${CMAKE_SOURCE_DIR}/src/tls.c)
-
-# rdma-test source files
-set(VALKEY_RDMA_MODULE_TEST_SRCS ${CMAKE_SOURCE_DIR}/tests/rdma/rdma-test.c)

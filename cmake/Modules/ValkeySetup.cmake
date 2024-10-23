@@ -1,4 +1,5 @@
 include(CheckIncludeFiles)
+include(ProcessorCount)
 include(Utils)
 
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
@@ -7,6 +8,9 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 # Generate compile_commands.json file for IDEs code completion support
 set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
+
+processorcount(VALKEY_PROCESSOR_COUNT)
+message(STATUS "Processor count: ${VALKEY_PROCESSOR_COUNT}")
 
 # Installed executables will have this permissions
 set(VALKEY_EXE_PERMISSIONS

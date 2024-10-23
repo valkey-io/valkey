@@ -13,7 +13,8 @@ if (NOT EXISTS ${JEMALLOC_INSTALL_DIR}/lib/libjemalloc.a)
             --with-version=5.3.0-0-g0 --with-lg-quantum=3 --disable-cache-oblivious --with-jemalloc-prefix=je_ \
             --enable-static --disable-shared --prefix=${JEMALLOC_INSTALL_DIR}"
         WORKING_DIRECTORY ${JEMALLOC_SRC_DIR} COMMAND_ERROR_IS_FATAL ANY)
-    execute_process(COMMAND make -j4 lib/libjemalloc.a install WORKING_DIRECTORY "${JEMALLOC_SRC_DIR}")
+    execute_process(COMMAND make -j${VALKEY_PROCESSOR_COUNT} lib/libjemalloc.a install
+                    WORKING_DIRECTORY "${JEMALLOC_SRC_DIR}")
 endif ()
 
 # Import the compiled library as a CMake target

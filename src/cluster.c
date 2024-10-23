@@ -108,6 +108,22 @@ ConnectionType *connTypeOfCluster(void) {
     return connectionTypeTcp();
 }
 
+/* Delete unowned keys from database at server start up after loading persistence files. */
+void delUnownedKeys(void) {
+    if (!server.cluster_enabled) {
+        return;
+    }
+    clusterNode *primary = clusterNodeGetPrimary(server.cluster->myself);
+    for (unsigned int i = 0; i < CLUSTER_SLOTS; i++) {
+        if (server.cluster->slots[i] != primary) {
+            unsigned int deleted = delKeysInSlot(i);
+            if (deleted > 0) {
+                serverLog(LL_VERBOSE, "Deleted %u keys from unowned slot: %d after loading RDB", deleted, i);
+            }
+        }
+    }
+}
+
 /* -----------------------------------------------------------------------------
  * DUMP, RESTORE and MIGRATE commands
  * -------------------------------------------------------------------------- */

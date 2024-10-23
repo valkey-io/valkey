@@ -3703,6 +3703,8 @@ unsigned long LFUDecrAndReturn(robj *o);
 int performEvictions(void);
 void startEvictionTimeProc(void);
 
+void delUnownedKeys(void);
+
 /* Keys hashing / comparison functions for dict.c hash tables. */
 uint64_t dictSdsHash(const void *key);
 uint64_t dictSdsCaseHash(const void *key);

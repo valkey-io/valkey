@@ -456,9 +456,9 @@ static void rehashStep(hashset *s) {
                 /* Insert into table 1. */
                 uint64_t hash;
                 /* When shrinking, it's possible to avoid computing the hash. We can
-                * just use idx has the hash, but only if we know that probing didn't
-                * push this element away from its primary bucket, so only if the
-                * bucket before the current one hasn't ever been full. */
+                 * just use idx has the hash, but only if we know that probing didn't
+                 * push this element away from its primary bucket, so only if the
+                 * bucket before the current one hasn't ever been full. */
                 if (s->bucket_exp[1] <= s->bucket_exp[0] && !prev_bucket_everfull) {
                     hash = idx;
                 } else {
@@ -480,7 +480,7 @@ static void rehashStep(hashset *s) {
         /* Mark the source bucket as empty. */
         b->presence = 0;
         /* Bucket done. Advance to the next bucket in probing order. We rehash in
-        * this order to be able to skip already rehashed buckets in scan. */
+         * this order to be able to skip already rehashed buckets in scan. */
         idx = nextCursor(idx, expToMask(s->bucket_exp[0]));
         if (idx == 0) {
             rehashingCompleted(s);
@@ -1331,7 +1331,7 @@ size_t hashsetScan(hashset *s, size_t cursor, hashsetScanFunction fn, void *priv
             /* Emit elements in the larger table if it's the new table or if
              * these buckets haven't been rehashed yet. */
             if (table_large == 1 || !cursorIsLessThan(cursor, s->rehash_idx)) {
-                /* Iterate over indices in larger table that are the expansion 
+                /* Iterate over indices in larger table that are the expansion
                  * of the index pointed to by the cursor in the smaller table. */
                 size_t large_cursor = cursor;
                 do {
@@ -1680,7 +1680,7 @@ void hashsetHistogram(hashset *s) {
             bucket *b = &s->tables[table][cursor];
             char c = b->presence == 0 && b->everfull ? 'X' : '0' + __builtin_popcount(b->presence);
             printf("%c", c);
-            
+
             cursor = nextCursor(cursor, mask);
         } while (cursor != 0);
         if (table == 0) printf(" ");
@@ -1696,7 +1696,7 @@ void hashsetProbeMap(hashset *s) {
             bucket *b = &s->tables[table][cursor];
             char c = b->everfull ? 'X' : 'o';
             printf("%c", c);
-            
+
             cursor = nextCursor(cursor, mask);
         } while (cursor != 0);
         if (table == 0) printf(" ");

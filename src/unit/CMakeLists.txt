@@ -7,13 +7,15 @@ get_valkey_server_linker_option(VALKEY_SERVER_LDFLAGS)
 
 # Build unit tests only
 message(STATUS "Building unit tests")
-
 list(APPEND COMPILE_DEFINITIONS "SERVER_TEST=1")
-if (APPLE)
-    list(APPEND COMPILE_DEFINITIONS "VALKEY_USE_TEST_MAIN")
-    list(APPEND COMPILE_DEFINITIONS "VALKEY_USE_TEST_SERVER_ASSERT")
+if (BUILD_TLS_MODULE)
+    # TLS as a module
+    list(APPEND COMPILE_DEFINITIONS "USE_OPENSSL=2")
+else (USE_TLS)
+    # Built-in TLS support
+    list(APPEND COMPILE_DEFINITIONS "USE_OPENSSL=1")
+    list(APPEND COMPILE_DEFINITIONS "BUILD_TLS_MODULE=0")
 endif ()
-list(APPEND COMPILE_FLAGS "-std=gnu11")
 
 # Build Valkey sources as a static library for the test
 add_library(valkeylib STATIC ${VALKEY_SERVER_SRCS})
@@ -28,11 +30,6 @@ add_dependencies(valkey-unit-tests generate_test_files_h)
 if (UNIX AND NOT APPLE)
     # Avoid duplicate symbols on non macOS
     target_link_options(valkey-unit-tests PRIVATE "-Wl,--allow-multiple-definition")
-endif ()
-
-if (USE_TLS)
-    # Add required libraries needed for TLS
-    target_link_libraries(valkey-unit-tests OpenSSL::SSL hiredis_ssl)
 endif ()
 
 if (USE_JEMALLOC)
@@ -52,3 +49,8 @@ target_link_libraries(
     hdr_histogram
     hiredis
     ${VALKEY_SERVER_LDFLAGS})
+
+if (USE_TLS)
+    # Add required libraries needed for TLS
+    target_link_libraries(valkey-unit-tests OpenSSL::SSL hiredis_ssl)
+endif ()

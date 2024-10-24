@@ -6720,8 +6720,8 @@ serverTestProc *getTestProcByName(const char *name) {
 }
 #endif
 
-#ifndef VALKEY_USE_TEST_MAIN /* avoid this function when building valkey-unit-tests for macOS */
-int main(int argc, char **argv) {
+/* Make main a weak symbol so it can be overriden during link time, e.g. test_main.c overides it */
+int __attribute__((weak)) main(int argc, char **argv) {
     struct timeval tv;
     int j;
     char config_from_stdin = 0;
@@ -7064,5 +7064,4 @@ int main(int argc, char **argv) {
     aeDeleteEventLoop(server.el);
     return 0;
 }
-#endif /* VALKEY_USE_TEST_MAIN */
 /* The End */

@@ -17,6 +17,11 @@ add_dependencies(valkey-server generate_commands_def)
 add_dependencies(valkey-server generate_fmtargs_h)
 add_dependencies(valkey-server release_header)
 
+if (VALKEY_RELEASE_BUILD)
+    # Enable LTO for Release build
+    set_property(TARGET valkey-server PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+endif ()
+
 # Target: valkey-cli
 list(APPEND CLI_LIBS "linenoise")
 valkey_build_and_install_bin(valkey-cli "${VALKEY_CLI_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${CLI_LIBS}" "redis-cli")

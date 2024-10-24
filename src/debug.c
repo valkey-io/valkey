@@ -1022,9 +1022,8 @@ void debugCommand(client *c) {
 }
 
 /* =========================== Crash handling  ============================== */
-
-#ifndef VALKEY_USE_TEST_SERVER_ASSERT /* avoid this function when building valkey-unit-tests for macOS */
-__attribute__((noinline)) void _serverAssert(const char *estr, const char *file, int line) {
+/* Make serverAssert a weak symbol so it can be overriden during link time    */
+__attribute__((noinline, weak)) void _serverAssert(const char *estr, const char *file, int line) {
     int new_report = bugReportStart();
     serverLog(LL_WARNING, "=== %sASSERTION FAILED ===", new_report ? "" : "RECURSIVE ");
     serverLog(LL_WARNING, "==> %s:%d '%s' is not true", file, line, estr);
@@ -1042,7 +1041,6 @@ __attribute__((noinline)) void _serverAssert(const char *estr, const char *file,
     removeSigSegvHandlers();
     bugReportEnd(0, 0);
 }
-#endif
 
 /* Checks if the argument at the given index should be redacted from logs. */
 int shouldRedactArg(const client *c, int idx) {

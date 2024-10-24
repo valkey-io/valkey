@@ -1082,6 +1082,7 @@ void clusterInit(void) {
     server.cluster->myself = NULL;
     server.cluster->currentEpoch = 0;
     server.cluster->state = CLUSTER_FAIL;
+    server.cluster->fail_reason = CLUSTER_FAIL_NONE;
     server.cluster->size = 0;
     server.cluster->todo_before_sleep = 0;
     server.cluster->nodes = dictCreate(&clusterNodesDictType);
@@ -4457,7 +4458,7 @@ void clusterLogCantFailover(int reason) {
     case CLUSTER_CANT_FAILOVER_WAITING_DELAY: msg = "Waiting the delay before I can start a new failover."; break;
     case CLUSTER_CANT_FAILOVER_EXPIRED: msg = "Failover attempt expired."; break;
     case CLUSTER_CANT_FAILOVER_WAITING_VOTES: msg = "Waiting for votes, but majority still not reached."; break;
-    default: msg = "Unknown reason code."; break;
+    default: serverPanic("Unknown cant failover reason code.");
     }
     lastlog_time = time(NULL);
     serverLog(LL_NOTICE, "Currently unable to failover: %s", msg);
@@ -5289,6 +5290,31 @@ void clusterCloseAllSlots(void) {
  * Cluster state evaluation function
  * -------------------------------------------------------------------------- */
 
+const char *getClusterFailReasonString(void) {
+    switch (server.cluster->fail_reason) {
+    case CLUSTER_FAIL_NONE: return "none";
+    case CLUSTER_FAIL_NOT_FULL_COVERAGE: return "not-full-coverage";
+    case CLUSTER_FAIL_MINORITY_PARTITION: return "minority-partition";
+    default: serverPanic("Unknown fail reason code.");
+    }
+}
+
+void clusterLogFailReason(int reason) {
+    if (reason == CLUSTER_FAIL_NONE) return;
+
+    char *msg;
+    switch (reason) {
+    case CLUSTER_FAIL_NOT_FULL_COVERAGE:
+        msg = "At least one hash slot is not served by any available node. "
+              "Please check the 'cluster-require-full-coverage' configuration.";
+        break;
+    case CLUSTER_FAIL_MINORITY_PARTITION: msg = "I am part of a minority partition."; break;
+    default: serverPanic("Unknown fail reason code.");
+    }
+    server.cluster->fail_reason = reason;
+    serverLog(LL_WARNING, "Cluster is currently down: %s", msg);
+}
+
 /* The following are defines that are only used in the evaluation function
  * and are based on heuristics. Actually the main point about the rejoin and
  * writable delay is that they should be a few orders of magnitude larger
@@ -5298,7 +5324,7 @@ void clusterCloseAllSlots(void) {
 #define CLUSTER_WRITABLE_DELAY 2000
 
 void clusterUpdateState(void) {
-    int j, new_state;
+    int j, new_state, new_reason;
     int reachable_primaries = 0;
     static mstime_t among_minority_time;
     static mstime_t first_call_time = 0;
@@ -5319,12 +5345,14 @@ void clusterUpdateState(void) {
     /* Start assuming the state is OK. We'll turn it into FAIL if there
      * are the right conditions. */
     new_state = CLUSTER_OK;
+    new_reason = CLUSTER_FAIL_NONE;
 
     /* Check if all the slots are covered. */
     if (server.cluster_require_full_coverage) {
         for (j = 0; j < CLUSTER_SLOTS; j++) {
             if (server.cluster->slots[j] == NULL || server.cluster->slots[j]->flags & (CLUSTER_NODE_FAIL)) {
                 new_state = CLUSTER_FAIL;
+                new_reason = CLUSTER_FAIL_NOT_FULL_COVERAGE;
                 break;
             }
         }
@@ -5359,6 +5387,7 @@ void clusterUpdateState(void) {
 
         if (reachable_primaries < needed_quorum) {
             new_state = CLUSTER_FAIL;
+            new_reason = CLUSTER_FAIL_MINORITY_PARTITION;
             among_minority_time = mstime();
         }
     }
@@ -5382,7 +5411,15 @@ void clusterUpdateState(void) {
         serverLog(new_state == CLUSTER_OK ? LL_NOTICE : LL_WARNING, "Cluster state changed: %s",
                   new_state == CLUSTER_OK ? "ok" : "fail");
         server.cluster->state = new_state;
+
+        /* Cluster state changes from ok to fail, print a log. */
+        if (new_state == CLUSTER_FAIL) clusterLogFailReason(new_reason);
     }
+
+    /* Cluster state is still fail, but the reason has changed, print a log. */
+    if (new_state == CLUSTER_FAIL && new_reason != server.cluster->fail_reason) clusterLogFailReason(new_reason);
+
+    if (new_state == CLUSTER_OK) server.cluster->fail_reason = CLUSTER_FAIL_NONE;
 }
 
 /* This function is called after the node startup in order to verify that data
@@ -5995,6 +6032,7 @@ sds genClusterInfoString(void) {
 
     info = sdscatprintf(info,
                         "cluster_state:%s\r\n"
+                        "cluster_fail_reason:%s\r\n"
                         "cluster_slots_assigned:%d\r\n"
                         "cluster_slots_ok:%d\r\n"
                         "cluster_slots_pfail:%d\r\n"
@@ -6003,7 +6041,8 @@ sds genClusterInfoString(void) {
                         "cluster_size:%d\r\n"
                         "cluster_current_epoch:%llu\r\n"
                         "cluster_my_epoch:%llu\r\n",
-                        statestr[server.cluster->state], slots_assigned, slots_ok, slots_pfail, slots_fail,
+                        statestr[server.cluster->state], getClusterFailReasonString(),
+                        slots_assigned, slots_ok, slots_pfail, slots_fail,
                         dictSize(server.cluster->nodes), server.cluster->size,
                         (unsigned long long)server.cluster->currentEpoch, (unsigned long long)nodeEpoch(myself));
 

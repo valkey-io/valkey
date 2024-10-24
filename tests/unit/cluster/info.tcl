@@ -41,3 +41,40 @@ test "errorstats: rejected call due to MOVED Redirection" {
 }
 
 } ;# start_cluster
+
+start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 1000}} {
+    test "fail reason changed" {
+        # Kill one primary, so the cluster fail with not-full-coverage.
+        pause_process [srv 0 pid]
+        wait_for_condition 1000 50 {
+            [CI 1 cluster_state] eq {fail} &&
+            [CI 2 cluster_state] eq {fail} &&
+            [CI 1 cluster_fail_reason] eq {not-full-coverage} &&
+            [CI 2 cluster_fail_reason] eq {not-full-coverage}
+        } else {
+            fail "Cluster doesn't fail or the fail reason is not changed"
+        }
+
+        # Kill one more primary, so the cluster fail with not-full-coverage.
+        pause_process [srv -1 pid]
+        wait_for_condition 1000 50 {
+            [CI 2 cluster_state] eq {fail} &&
+            [CI 2 cluster_fail_reason] eq {minority-partition}
+        } else {
+            fail "Cluster doesn't fail or the fail reason is not changed"
+        }
+
+        resume_process [srv 0 pid]
+        resume_process [srv -1 pid]
+        wait_for_condition 1000 50 {
+            [CI 0 cluster_state] eq {ok} &&
+            [CI 1 cluster_state] eq {ok} &&
+            [CI 2 cluster_state] eq {ok} &&
+            [CI 0 cluster_fail_reason] eq {none} &&
+            [CI 1 cluster_fail_reason] eq {none} &&
+            [CI 2 cluster_fail_reason] eq {none}
+        } else {
+            fail "Cluster doesn't stabilize"
+        }
+    }
+}

@@ -600,7 +600,7 @@ int test_random_element_with_long_chain(int argc, char **argv, int flags) {
      */
 
     /* In a thousand runs the worst deviation seen was 0.018 +/- 0.01.
-     * This means the true deviation was at least 0.008. */
+     * This means the true deviation was at least 0.008 or 0.8% */
     const double acceptable_probability_deviation = 0.015;
 
     const size_t num_chained_elements = 64;
@@ -649,7 +649,7 @@ int test_random_element_with_long_chain(int argc, char **argv, int flags) {
     hashsetProbeMap(s);
 
 
-    printf("Taking %ld random samples\n", num_samples);
+    printf("Taking %zu random samples\n", num_samples);
     size_t count_chain_element_picked = 0;
     for (size_t i = 0; i < num_samples; i++) {
         mock_hash_element *element;

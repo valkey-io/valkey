@@ -654,7 +654,7 @@ int clusterLoadConfig(char *filename) {
             } else if (!strcasecmp(s, "handshake")) {
                 n->flags |= CLUSTER_NODE_HANDSHAKE;
             } else if (!strcasecmp(s, "noaddr")) {
-                n->flags |= CLUSTER_NODE_NOADDR;
+                n->flags |= (CLUSTER_NODE_NOADDR | CLUSTER_NODE_FAIL);
             } else if (!strcasecmp(s, "nofailover")) {
                 n->flags |= CLUSTER_NODE_NOFAILOVER;
             } else if (!strcasecmp(s, "noflags")) {
@@ -3244,7 +3244,9 @@ int clusterProcessPacket(clusterLink *link) {
             } else if (memcmp(link->node->name, hdr->sender, CLUSTER_NAMELEN) != 0) {
                 /* If the reply has a non matching node ID we
                  * disconnect this node and set it as not having an associated
-                 * address. */
+                 * address. This can happen if the node did CLUSTER RESET and changed
+                 * its node ID. In this case, the old node ID will not come back. */
+                clusterNode *noaddr_node = link->node;
                 serverLog(LL_NOTICE,
                           "PONG contains mismatching sender ID. About node %.40s (%s) in shard %.40s added %d ms ago, "
                           "having flags %d",
@@ -3256,7 +3258,19 @@ int clusterProcessPacket(clusterLink *link) {
                 link->node->tls_port = 0;
                 link->node->cport = 0;
                 freeClusterLink(link);
-                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+                /* We will also mark the node as fail because we have disconnected from it,
+                 * and will not reconnect, and obviously we will not gossip NOADDR nodes.
+                 * Marking it as FAIL can help us advance the state, such as the cluster
+                 * state becomes FAIL or the replica can do the failover. Otherwise, the
+                 * NOADDR node will provide an invalid address in redirection and confuse
+                 * the clients, and the replica will never initiate a failover since the
+                 * node is not actually in FAIL state. */
+                if (!nodeFailed(noaddr_node)) {
+                    noaddr_node->flags |= CLUSTER_NODE_FAIL;
+                    noaddr_node->fail_time = now;
+                    clusterSendFail(noaddr_node->name);
+                }
+                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
                 return 0;
             }
         }

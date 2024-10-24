@@ -39,6 +39,13 @@
                         "items": {
                             "type": "string"
                         }
+                    },
+                    "configs": {
+                        "type": "array",
+                        "description": "Module configs.",
+                        "items": {
+                            "type": "string"
+                        }
                     }
                 }
             }

@@ -12356,7 +12356,7 @@ void addReplyLoadedModules(client *c) {
         sds name = dictGetKey(de);
         struct ValkeyModule *module = dictGetVal(de);
         sds path = module->loadmod->path;
-        addReplyMapLen(c, 4);
+        addReplyMapLen(c, 5);
         addReplyBulkCString(c, "name");
         addReplyBulkCBuffer(c, name, sdslen(name));
         addReplyBulkCString(c, "ver");
@@ -12367,6 +12367,20 @@ void addReplyLoadedModules(client *c) {
         addReplyArrayLen(c, module->loadmod->argc);
         for (int i = 0; i < module->loadmod->argc; i++) {
             addReplyBulk(c, module->loadmod->argv[i]);
+        }
+        addReplyBulkCString(c, "configs");
+        addReplyArrayLen(c, listLength(module->module_configs) * 2);
+        listIter li;
+        listNode *ln;
+        listRewind(module->module_configs, &li);
+        while ((ln = listNext(&li))) {
+            ModuleConfig *module_config = listNodeValue(ln);
+            sds config_name = sdscatfmt(sdsempty(), "%s.%s", module->name, module_config->name);
+            addReplyBulkCBuffer(c, config_name, sdslen(config_name));
+            sds config_value = getConfigValue(config_name);
+            addReplyBulkCBuffer(c, config_value, sdslen(config_value));
+            sdsfree(config_name);
+            sdsfree(config_value);
         }
     }
     dictReleaseIterator(di);

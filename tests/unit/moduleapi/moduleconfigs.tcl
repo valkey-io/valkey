@@ -15,6 +15,16 @@ start_server {tags {"modules"}} {
         assert_equal [r config get moduleconfigs.numeric] "moduleconfigs.numeric -1"
     }
 
+     test {check config value output correctly from module list} {
+        set config_value [lindex [lmap x [r module list] {dict get $x configs}] 0]
+        assert_equal [lindex $config_value 0] "moduleconfigs.mutable_bool"
+        assert_equal [lindex $config_value 1] "yes"
+        assert_equal [lindex $config_value 2] "moduleconfigs.immutable_bool"
+        assert_equal [lindex $config_value 3] "no"
+        assert_equal [lindex $config_value 4] "moduleconfigs.string"
+        assert_equal [lindex $config_value 5] "secret password"
+    }
+
     test {Config set commands work} {
         # Make sure that config sets work during runtime
         r config set moduleconfigs.mutable_bool no

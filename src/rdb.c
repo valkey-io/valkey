@@ -1355,6 +1355,7 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
                 sdsfree(slot_info);
                 goto werr;
             }
+            written += res;
             last_slot = curr_slot;
             sdsfree(slot_info);
         }

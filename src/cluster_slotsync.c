@@ -78,6 +78,8 @@ sds reprSlotRangeListWithBlank(list *slot_ranges) {
 
 /* Returns 1 if the two given slot range lists are the same, 0 otherwise. */
 int isSlotRangeListSame(list *lx, list *ly) {
+    if (lx == ly) return 1;
+    if (lx == NULL || ly == NULL) return 0;
     if (listLength(lx) != listLength(ly)) return 0;
 
     int len = listLength(lx);
@@ -1017,6 +1019,7 @@ void readSlotSyncBulkPayload(connection *conn) {
     client->flag.reply_off = 1;
     client->slotsync_link = link;
     client->slotsync_slots = listDup(link->slot_ranges);
+    client->flag.slot_sync_primary = 1;
     link->client = client;
 
     moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE, VALKEYMODULE_SUBEVENT_PRIMARY_LINK_UP, NULL);
@@ -1056,7 +1059,7 @@ error:
 void slotLinkSendMessage(client *c, const char *option, long long value) {
     if (!server.cluster_enabled) return;
     if (!c) return;
-    if (!c->slotsync_slots || listLength(c->slotsync_slots) == 0) return;
+    if (!c->flag.slot_sync_primary || c->flag.slot_sync_replica) return;
 
     struct ClientFlags old_flags = c->flag;
 
@@ -1425,8 +1428,10 @@ void notifyClientsCloseSlotSyncLink(void) {
 
 #define CLUSTER_SLOTCALC_CYCLE_TIME_PERC 20
 void clusterSlotPendingDelete(void) {
+    // todo add a info fields if needed to track this info.
     if (!server.cluster->pending_del_slot_count) return;
 
+    // todo see if this needed.
     /* Make sure there is no slotsync replica exists before we delete any slot.
      * This is not a necessary condition, but it can protect the slot data if
      * there are bugs in slotsync. */
@@ -1435,7 +1440,8 @@ void clusterSlotPendingDelete(void) {
     listRewind(server.replicas, &li);
     while ((ln = listNext(&li))) {
         client *replica = ln->value;
-        if (replica->slotsync_slots && listLength(replica->slotsync_slots) > 0) {
+        if (replica->flag.slot_sync_replica) {
+            serverLog(LL_WARNING, "skip pending delete");
             return;
         }
     }

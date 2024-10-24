@@ -954,20 +954,6 @@ void clusterCommand(client *c) {
     }
 }
 
-/* Check if some of my slaves are in slotsync mode. */
-int slotsyncInProgress(void) {
-    listNode *ln;
-    listIter li;
-    listRewind(server.replicas, &li);
-    while((ln = listNext(&li)) != NULL) {
-        client *slave = listNodeValue(ln);
-        if (listLength(slave->slotsync_slots)) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 /* Return the pointer to the cluster node that is able to serve the command.
  * For the function to succeed the command should only target either:
  *

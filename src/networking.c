@@ -205,7 +205,7 @@ client *createClient(connection *conn) {
     c->duration = 0;
     clientSetDefaultAuth(c);
     c->slotsync_link = NULL;
-    c->slotsync_slots = createSlotRangeList();
+    c->slotsync_slots = NULL;
     c->slotsync_sent_bytes = 0;
     c->slotsync_recv_bytes = 0;
     c->slotsync_failed = 0;
@@ -1386,7 +1386,7 @@ int isNormalReplicaClient(client *c) {
     }
 
     /* The client is in slot sync mode. */
-    if (c->slotsync_slots && listLength(c->slotsync_slots) != 0) {
+    if (c->flag.slot_sync_replica) {
         return 0;
     }
 
@@ -1786,7 +1786,7 @@ void freeClient(client *c) {
 
     /* Free slot sync structures. */
     if (c->slotsync_link) onSlotSyncClientClose(c->slotsync_link);
-    listRelease(c->slotsync_slots);
+    if (c->slotsync_slots) listRelease(c->slotsync_slots);
 
     /* Release other dynamically allocated client structure fields,
      * and finally release the client structure itself. */

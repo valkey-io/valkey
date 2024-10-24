@@ -1087,8 +1087,9 @@ typedef struct ClientFlags {
                                             * flag, we won't cache the primary in freeClient. */
     uint64_t fake : 1;                     /* This is a fake client without a real connection. */
     uint64_t import_source : 1;            /* This client is importing data to server and can visit expired key. */
-    uint64_t slot_sync : 1;                /* This is a replica running in slot sync mode. */
-    uint64_t reserved : 3;                 /* Reserved for future use */
+    uint64_t slot_sync_primary : 1;        /* This is a primary running in slot sync mode. */
+    uint64_t slot_sync_replica : 1;        /* This is a replica running in slot sync mode. */
+    uint64_t reserved : 2;                 /* Reserved for future use */
 } ClientFlags;
 
 typedef struct ClientPubSubData {

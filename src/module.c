@@ -3042,6 +3042,20 @@ client *moduleGetReplyClient(ValkeyModuleCtx *ctx) {
     }
 }
 
+ValkeyModuleRunTimeArgs *VM_GetRunTimeArgs(ValkeyModuleCtx *ctx) {
+    client *c = moduleGetReplyClient(ctx);
+    if (c == NULL) return NULL;
+
+    ValkeyModuleRunTimeArgs *args = zmalloc(sizeof(struct ValkeyModuleRunTimeArgs));
+    int argc = ctx->module->loadmod->argc;
+    args->argv = argc ? zmalloc(sizeof(robj *) * argc) : NULL;
+    args->argc = argc;
+    for (int i = 0; i < argc; i++) {
+        args->argv[i] = (char *)ctx->module->loadmod->argv[i]->ptr;
+    }
+    return args;
+}
+
 /* Send an integer reply to the client, with the specified `long long` value.
  * The function always returns VALKEYMODULE_OK. */
 int VM_ReplyWithLongLong(ValkeyModuleCtx *ctx, long long ll) {
@@ -13032,11 +13046,22 @@ int VM_RdbSave(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
     return VALKEYMODULE_OK;
 }
 
+
+void updateModuleRunTimeArgument(struct ValkeyModule *module, void **argv, int argc) {
+    module->loadmod->argv = argc ? zmalloc(sizeof(robj *) * argc) : NULL;
+    module->loadmod->argc = argc;
+    for (int i = 0; i < argc; i++) {
+        module->loadmod->argv[i] = argv[i];
+        incrRefCount(module->loadmod->argv[i]);
+    }
+}
+
 /* MODULE command.
  *
  * MODULE LIST
  * MODULE LOAD <path> [args...]
  * MODULE LOADEX <path> [[CONFIG NAME VALUE] [CONFIG NAME VALUE]] [ARGS ...]
+ * MODULE SET-ARGUMENT <name> [args...]
  * MODULE UNLOAD <name>
  */
 void moduleCommand(client *c) {
@@ -13050,6 +13075,8 @@ void moduleCommand(client *c) {
             "    Load a module library from <path>, passing to it any optional arguments.",
             "LOADEX <path> [[CONFIG NAME VALUE] [CONFIG NAME VALUE]] [ARGS ...]",
             "    Load a module library from <path>, while passing it module configurations and optional arguments.",
+            "SET-ARGUMENT <name> [<arg> ...]",
+            "    Set module arguments to new values during runtime.",
             "UNLOAD <name>",
             "    Unload a module.",
             NULL};
@@ -13096,6 +13123,28 @@ void moduleCommand(client *c) {
         }
     } else if (!strcasecmp(subcmd, "list") && c->argc == 2) {
         addReplyLoadedModules(c);
+    } else if (!strcasecmp(subcmd, "set-argument") && c->argc >= 3) {
+        struct ValkeyModule *module = dictFetchValue(modules, c->argv[2]->ptr);
+        if (module != NULL) {
+            for (int i = 0; i < module->loadmod->argc; i++) {
+                decrRefCount(module->loadmod->argv[i]);
+            }
+            zfree(module->loadmod->argv);
+            robj **argv = NULL;
+            int argc = 0;
+
+            if (c->argc > 3) {
+                argc = c->argc - 3;
+                argv = &c->argv[3];
+            }
+            updateModuleRunTimeArgument(module, (void **)argv, argc);
+
+            addReply(c, shared.ok);
+        } else {
+            addReplyError(c, "Error set arguments for module: no such module with that name ");
+            serverLog(LL_WARNING, "Error set arguments for module %s: no such module with that name",
+                      (sds)c->argv[2]->ptr);
+        }
     } else {
         addReplySubcommandSyntaxError(c);
         return;
@@ -13560,6 +13609,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(SetModuleAttribs);
     REGISTER_API(IsModuleNameBusy);
     REGISTER_API(WrongArity);
+    REGISTER_API(GetRunTimeArgs);
     REGISTER_API(ReplyWithLongLong);
     REGISTER_API(ReplyWithError);
     REGISTER_API(ReplyWithErrorFormat);

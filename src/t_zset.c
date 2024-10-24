@@ -2007,9 +2007,7 @@ typedef struct {
                 int ii;
             } is;
             struct {
-                dict *dict;
-                dictIterator *di;
-                dictEntry *de;
+                hashsetIterator *iter;
             } ht;
             struct {
                 unsigned char *lp;
@@ -2064,10 +2062,8 @@ void zuiInitIterator(zsetopsrc *op) {
         if (op->encoding == OBJ_ENCODING_INTSET) {
             it->is.is = op->subject->ptr;
             it->is.ii = 0;
-        } else if (op->encoding == OBJ_ENCODING_HT) {
-            it->ht.dict = op->subject->ptr;
-            it->ht.di = dictGetIterator(op->subject->ptr);
-            it->ht.de = dictNext(it->ht.di);
+        } else if (op->encoding == OBJ_ENCODING_HASHSET) {
+            it->ht.iter = hashsetCreateIterator(op->subject->ptr);
         } else if (op->encoding == OBJ_ENCODING_LISTPACK) {
             it->lp.lp = op->subject->ptr;
             it->lp.p = lpFirst(it->lp.lp);
@@ -2104,8 +2100,8 @@ void zuiClearIterator(zsetopsrc *op) {
         iterset *it = &op->iter.set;
         if (op->encoding == OBJ_ENCODING_INTSET) {
             UNUSED(it); /* skip */
-        } else if (op->encoding == OBJ_ENCODING_HT) {
-            dictReleaseIterator(it->ht.di);
+        } else if (op->encoding == OBJ_ENCODING_HASHSET) {
+            hashsetReleaseIterator(it->ht.iter);
         } else if (op->encoding == OBJ_ENCODING_LISTPACK) {
             UNUSED(it);
         } else {
@@ -2173,13 +2169,9 @@ int zuiNext(zsetopsrc *op, zsetopval *val) {
 
             /* Move to next element. */
             it->is.ii++;
-        } else if (op->encoding == OBJ_ENCODING_HT) {
-            if (it->ht.de == NULL) return 0;
-            val->ele = dictGetKey(it->ht.de);
+        } else if (op->encoding == OBJ_ENCODING_HASHSET) {
+            if (!hashsetNext(it->ht.iter, (void **)&(val->ele))) return 0;
             val->score = 1.0;
-
-            /* Move to next element. */
-            it->ht.de = dictNext(it->ht.di);
         } else if (op->encoding == OBJ_ENCODING_LISTPACK) {
             if (it->lp.p == NULL) return 0;
             val->estr = lpGetValue(it->lp.p, &val->elen, &val->ell);

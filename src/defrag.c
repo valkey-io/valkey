@@ -34,6 +34,7 @@
  */
 
 #include "server.h"
+#include "hashset.h"
 #include <stddef.h>
 
 #ifdef HAVE_DEFRAG
@@ -309,6 +310,20 @@ void activeDefragSdsDict(dict *d, int val_type) {
     } while (cursor != 0);
 }
 
+void activeDefragSdsHashsetCallback(void *privdata, void *element_ref) {
+    UNUSED(privdata);
+    sds *sds_ref = (sds *)element_ref;
+    sds new_sds = activeDefragSds(*sds_ref);
+    if (new_sds != NULL) *sds_ref = new_sds;
+}
+
+void activeDefragSdsHashset(hashset *hs) {
+    unsigned long cursor = 0;
+    do {
+        cursor = hashsetScan(hs, cursor, activeDefragSdsHashsetCallback, NULL, HASHSET_SCAN_EMIT_REF);
+    } while (cursor != 0);
+}
+
 /* Defrag a list of ptr, sds or robj string values */
 void activeDefragList(list *l, int val_type) {
     listNode *ln, *newln;
@@ -441,11 +456,9 @@ void scanCallbackCountScanned(void *privdata, const dictEntry *de) {
 }
 
 void scanLaterSet(robj *ob, unsigned long *cursor) {
-    if (ob->type != OBJ_SET || ob->encoding != OBJ_ENCODING_HT) return;
-    dict *d = ob->ptr;
-    dictDefragFunctions defragfns = {.defragAlloc = activeDefragAlloc,
-                                     .defragKey = (dictDefragAllocFunction *)activeDefragSds};
-    *cursor = dictScanDefrag(d, *cursor, scanCallbackCountScanned, &defragfns, NULL);
+    if (ob->type != OBJ_SET || ob->encoding != OBJ_ENCODING_HASHSET) return;
+    hashset *hs = ob->ptr;
+    *cursor = hashsetScan(hs, *cursor, activeDefragSdsHashsetCallback, NULL, HASHSET_SCAN_EMIT_REF);
 }
 
 void scanLaterHash(robj *ob, unsigned long *cursor) {
@@ -508,15 +521,16 @@ void defragHash(serverDb *db, dictEntry *kde) {
 
 void defragSet(serverDb *db, dictEntry *kde) {
     robj *ob = dictGetVal(kde);
-    dict *d, *newd;
-    serverAssert(ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HT);
-    d = ob->ptr;
-    if (dictSize(d) > server.active_defrag_max_scan_fields)
+    serverAssert(ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HASHSET);
+    hashset *hs = ob->ptr;
+    if (hashsetSize(hs) > server.active_defrag_max_scan_fields) {
         defragLater(db, kde);
-    else
-        activeDefragSdsDict(d, DEFRAG_SDS_DICT_NO_VAL);
-    /* defrag the dict struct and tables */
-    if ((newd = dictDefragTables(ob->ptr))) ob->ptr = newd;
+    } else {
+        activeDefragSdsHashset(hs);
+    }
+    /* defrag the hashset struct and members */
+    hashset *newHashset = hashsetDefragInternals(hs, activeDefragAlloc);
+    if (newHashset) ob->ptr = newHashset;
 }
 
 /* Defrag callback for radix tree iterator, called for each node,
@@ -704,7 +718,7 @@ void defragKey(defragCtx *ctx, dictEntry *de) {
             serverPanic("Unknown list encoding");
         }
     } else if (ob->type == OBJ_SET) {
-        if (ob->encoding == OBJ_ENCODING_HT) {
+        if (ob->encoding == OBJ_ENCODING_HASHSET) {
             defragSet(db, de);
         } else if (ob->encoding == OBJ_ENCODING_INTSET || ob->encoding == OBJ_ENCODING_LISTPACK) {
             void *newptr, *ptr = ob->ptr;

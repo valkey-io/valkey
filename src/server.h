@@ -82,6 +82,8 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "connection.h" /* Connection abstraction */
 #include "memory_prefetch.h"
 
+#define dismissMemory zmadvise_dontneed
+
 #define VALKEYMODULE_CORE 1
 typedef struct serverObject robj;
 #include "valkeymodule.h" /* Modules API defines. */
@@ -866,6 +868,7 @@ struct ValkeyModuleDigest {
 #define OBJ_ENCODING_QUICKLIST 9  /* Encoded as linked list of listpacks */
 #define OBJ_ENCODING_STREAM 10    /* Encoded as a radix tree of listpacks */
 #define OBJ_ENCODING_LISTPACK 11  /* Encoded as a listpack */
+#define OBJ_ENCODING_HASHSET 12   /* Encoded as a hashset */
 
 #define LRU_BITS 24
 #define LRU_CLOCK_MAX ((1 << LRU_BITS) - 1) /* Max value of obj->lru */
@@ -2590,7 +2593,7 @@ typedef struct {
     robj *subject;
     int encoding;
     int ii; /* intset iterator */
-    dictIterator *di;
+    hashsetIterator *hashset_iterator;
     unsigned char *lpi; /* listpack iterator */
 } setTypeIterator;
 
@@ -2621,7 +2624,7 @@ extern struct valkeyServer server;
 extern struct sharedObjectsStruct shared;
 extern dictType objectKeyPointerValueDictType;
 extern dictType objectKeyHeapPointerValueDictType;
-extern dictType setDictType;
+extern hashsetType setHashsetType;
 extern dictType BenchmarkDictType;
 extern dictType zsetDictType;
 extern dictType kvstoreKeysDictType;
@@ -2636,6 +2639,7 @@ extern dictType objToDictDictType;
 extern dictType kvstoreChannelDictType;
 extern dictType modulesDictType;
 extern dictType sdsReplyDictType;
+extern hashsetType sdsReplyHashsetType;
 extern dictType keylistDictType;
 extern dict *modules;
 
@@ -3327,7 +3331,6 @@ void rejectCommandFormat(client *c, const char *fmt, ...);
 void *activeDefragAlloc(void *ptr);
 robj *activeDefragStringOb(robj *ob);
 void dismissSds(sds s);
-void dismissMemory(void *ptr, size_t size_hint);
 void dismissMemoryInChild(void);
 
 #define RESTART_SERVER_NONE 0

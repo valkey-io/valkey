@@ -884,7 +884,7 @@ int objectTypeCompare(robj *o, long long target) {
 }
 /* This callback is used by scanGenericCommand in order to collect elements
  * returned by the dictionary iterator into a list. */
-void scanCallback(void *privdata, const dictEntry *de) {
+void dictScanCallback(void *privdata, const dictEntry *de) {
     scanData *data = (scanData *)privdata;
     list *keys = data->keys;
     robj *o = data->o;
@@ -911,8 +911,6 @@ void scanCallback(void *privdata, const dictEntry *de) {
 
     if (o == NULL) {
         key = keysds;
-    } else if (o->type == OBJ_SET) {
-        key = keysds;
     } else if (o->type == OBJ_HASH) {
         key = keysds;
         if (!data->only_keys) {
@@ -926,11 +924,35 @@ void scanCallback(void *privdata, const dictEntry *de) {
             val = sdsnewlen(buf, len);
         }
     } else {
-        serverPanic("Type not handled in SCAN callback.");
+        serverPanic("Type not handled in dict SCAN callback.");
     }
 
     listAddNodeTail(keys, key);
     if (val) listAddNodeTail(keys, val);
+}
+
+void hashsetScanCallback(void *privdata, void *voidElement) {
+    scanData *data = (scanData *)privdata;
+    sds key = (sds)voidElement;
+
+    list *keys = data->keys;
+    robj *o = data->o;
+    data->sampled++;
+
+    /* o and typename can not have values at the same time. */
+    serverAssert(!((data->type != LLONG_MAX) && o));
+
+    // currently only implemented for SET scan
+    serverAssert(o && o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HASHSET);
+
+    /* Filter element if it does not match the pattern. */
+    if (data->pattern) {
+        if (!stringmatchlen(data->pattern, sdslen(data->pattern), key, sdslen(key), 0)) {
+            return;
+        }
+    }
+
+    listAddNodeTail(keys, key);
 }
 
 /* Try to parse a SCAN cursor stored at object 'o':
@@ -996,7 +1018,6 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     sds typename = NULL;
     long long type = LLONG_MAX;
     int patlen = 0, use_pattern = 0, only_keys = 0;
-    dict *ht;
 
     /* Object must be NULL (to iterate keys names), or the type of the object
      * must be Set, Sorted Set, or Hash. */
@@ -1065,34 +1086,37 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
      * just return everything inside the object in a single call, setting the
      * cursor to zero to signal the end of the iteration. */
 
-    /* Handle the case of a hash table. */
-    ht = NULL;
+    /* Handle the case of a dict or hashset. */
+    dict *dictTable = NULL;
+    hashset *hashsetTable = NULL;
     if (o == NULL) {
-        ht = NULL;
-    } else if (o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HT) {
-        ht = o->ptr;
+        dictTable = NULL;
+    } else if (o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HASHSET) {
+        hashsetTable = o->ptr;
     } else if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HT) {
-        ht = o->ptr;
+        dictTable = o->ptr;
     } else if (o->type == OBJ_ZSET && o->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = o->ptr;
-        ht = zs->dict;
+        dictTable = zs->dict;
     }
 
     list *keys = listCreate();
     /* Set a free callback for the contents of the collected keys list.
-     * For the main keyspace dict, and when we scan a key that's dict encoded
-     * (we have 'ht'), we don't need to define free method because the strings
-     * in the list are just a shallow copy from the pointer in the dictEntry.
+     * For the main keyspace dict, when we scan a key that's dict encoded
+     * (we have 'dictTable'), or when we scan a key that's hashset encoded
+     * (we have 'hashsetTable') we don't need to define free method because the
+     * strings in the list are just a shallow copy from the pointer in the
+     * dictEntry.
      * When scanning a key with other encodings (e.g. listpack), we need to
      * free the temporary strings we add to that list.
      * The exception to the above is ZSET, where we do allocate temporary
      * strings even when scanning a dict. */
-    if (o && (!ht || o->type == OBJ_ZSET)) {
+    if (o && ((!dictTable && !hashsetTable) || o->type == OBJ_ZSET)) {
         listSetFreeMethod(keys, (void (*)(void *))sdsfree);
     }
 
     /* For main dictionary scan or data structure using hashtable. */
-    if (!o || ht) {
+    if (!o || dictTable || hashsetTable) {
         /* We set the max number of iterations to ten times the specified
          * COUNT, so if the hash table is in a pathological state (very
          * sparsely populated) we avoid to block too much time at the cost
@@ -1130,9 +1154,11 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             /* In cluster mode there is a separate dictionary for each slot.
              * If cursor is empty, we should try exploring next non-empty slot. */
             if (o == NULL) {
-                cursor = kvstoreScan(c->db->keys, cursor, onlydidx, scanCallback, NULL, &data);
+                cursor = kvstoreScan(c->db->keys, cursor, onlydidx, dictScanCallback, NULL, &data);
+            } else if (dictTable) {
+                cursor = dictScan(dictTable, cursor, dictScanCallback, &data);
             } else {
-                cursor = dictScan(ht, cursor, scanCallback, &data);
+                cursor = hashsetScan(hashsetTable, cursor, hashsetScanCallback, &data, 0);
             }
         } while (cursor && maxiterations-- && data.sampled < count);
     } else if (o->type == OBJ_SET) {

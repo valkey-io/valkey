@@ -577,7 +577,9 @@ void syncWithSlotOwner(connection *conn) {
      *
      * Inform the slot owner of our capabilities. */
     if (link->sync_state == CLUSTER_SLOTSYNC_STATE_SEND_CAPA) {
-        err = sendCommand(conn, "REPLCONF", "capa", "eof", NULL);
+        sds portstr = getReplicaPortString();
+        err = sendCommand(conn, "REPLCONF", "capa", "eof", "listening-port", portstr, NULL);
+        sdsfree(portstr);
         if (err) goto write_error;
         sdsfree(err);
         err = NULL;

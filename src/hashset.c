@@ -961,9 +961,9 @@ hashset *hashsetDefragInternals(hashset *s, void *(*defragfn)(void *)) {
 /* Used to release memory to OS to avoid unnecessary CoW.
  * Called when we've forked and memory won't be used again.
  * See zmadvise_dontneed() */
-void dismissHashset(hashset *t) {
+void dismissHashset(hashset *s) {
     for (int i = 0; i < 2; i++) {
-        zmadvise_dontneed(t->tables[i], numBuckets(t->bucketExp[i]) * sizeof(bucket *));
+        zmadvise_dontneed(s->tables[i], numBuckets(s->bucket_exp[i]) * sizeof(bucket *));
     }
 }
 

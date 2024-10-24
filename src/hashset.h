@@ -125,7 +125,7 @@ int hashsetTryExpand(hashset *s, size_t size);
 int hashsetExpandIfNeeded(hashset *s);
 int hashsetShrinkIfNeeded(hashset *s);
 hashset *hashsetDefragInternals(hashset *s, void *(*defragfn)(void *));
-void dismissHashset(hashset *set);
+void dismissHashset(hashset *s);
 
 /* Elements */
 int hashsetFind(hashset *s, const void *key, void **found);

@@ -6720,7 +6720,8 @@ serverTestProc *getTestProcByName(const char *name) {
 }
 #endif
 
-int main(int argc, char **argv) {
+/* Make main a weak symbol so it can be overridden during link time, e.g. test_main.c overrides it */
+int __attribute__((weak)) main(int argc, char **argv) {
     struct timeval tv;
     int j;
     char config_from_stdin = 0;
@@ -7063,5 +7064,4 @@ int main(int argc, char **argv) {
     aeDeleteEventLoop(server.el);
     return 0;
 }
-
 /* The End */

@@ -1,0 +1,76 @@
+format:
+  _help_line_width:
+    - How wide to allow formatted cmake files
+  line_width: 120
+  _help_tab_size:
+    - How many spaces to tab for indent
+  tab_size: 4
+  _help_use_tabchars:
+    - If true, lines are indented using tab characters (utf-8
+    - 0x09) instead of <tab_size> space characters (utf-8 0x20).
+    - In cases where the layout would require a fractional tab
+    - character, the behavior of the  fractional indentation is
+    - governed by <fractional_tab_policy>
+  use_tabchars: false
+  _help_separate_ctrl_name_with_space:
+    - If true, separate flow control names from their parentheses
+    - with a space
+  separate_ctrl_name_with_space: true
+  _help_min_prefix_chars:
+    - If the statement spelling length (including space and
+    - parenthesis) is smaller than this amount, then force reject
+    - nested layouts.
+  min_prefix_chars: 4
+  _help_max_prefix_chars:
+    - If the statement spelling length (including space and
+    - parenthesis) is larger than the tab width by more than this
+    - amount, then force reject un-nested layouts.
+  max_prefix_chars: 10
+  _help_max_lines_hwrap:
+    - If a candidate layout is wrapped horizontally but it exceeds
+    - this many lines, then reject the layout.
+  max_lines_hwrap: 2
+  _help_line_ending:
+    - What style line endings to use in the output.
+  line_ending: unix
+  _help_command_case:
+    - Format command names consistently as 'lower' or 'upper' case
+  command_case: lower
+  _help_keyword_case:
+    - Format keywords consistently as 'lower' or 'upper' case
+  keyword_case: unchanged
+  _help_always_wrap:
+    - A list of command names which should always be wrapped
+  always_wrap: []
+  _help_enable_sort:
+    - If true, the argument lists which are known to be sortable
+    - will be sorted lexicographicall
+  enable_sort: true
+  _help_autosort:
+    - If true, the parsers may infer whether or not an argument
+    - list is sortable (without annotation).
+  autosort: false
+  _help_require_valid_layout:
+    - By default, if cmake-format cannot successfully fit
+    - everything into the desired linewidth it will apply the
+    - last, most agressive attempt that it made. If this flag is
+    - True, however, cmake-format will print error, exit with non-
+    - zero status code, and write-out nothing
+  require_valid_layout: false
+  _help_layout_passes:
+    - A dictionary mapping layout nodes to a list of wrap
+    - decisions. See the documentation for more information.
+  layout_passes: {}
+encode:
+  _help_emit_byteorder_mark:
+    - If true, emit the unicode byte-order mark (BOM) at the start
+    - of the file
+  emit_byteorder_mark: false
+  _help_input_encoding:
+    - Specify the encoding of the input file. Defaults to utf-8
+  input_encoding: utf-8
+  _help_output_encoding:
+    - Specify the encoding of the output file. Defaults to utf-8.
+    - Note that cmake only claims to support utf-8 so be careful
+    - when using anything else
+  output_encoding: utf-8

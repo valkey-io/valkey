@@ -4,13 +4,12 @@ This project was forked from the open source Redis project right before the tran
 
 This README is just a fast *quick start* document. More details can be found under [valkey.io](https://valkey.io/)
 
-What is Valkey?
---------------
+# What is Valkey?
+
 Valkey is a high-performance data structure server that primarily serves key/value workloads.
 It supports a wide range of native structures and an extensible plugin system for adding new data structures and access patterns.
 
-Building Valkey
---------------
+# Building Valkey using `Makefile`
 
 Valkey can be compiled and used on Linux, OSX, OpenBSD, NetBSD, FreeBSD.
 We support big endian and little endian architectures, and both 32 bit
@@ -43,7 +42,7 @@ supports RDMA as connection module mode. Run:
 
     % make BUILD_RDMA=module
 
-To build with systemd support, you'll need systemd development libraries (such 
+To build with systemd support, you'll need systemd development libraries (such
 as libsystemd-dev on Debian/Ubuntu or systemd-devel on CentOS) and run:
 
     % make USE_SYSTEMD=yes
@@ -71,8 +70,7 @@ More about running the integration tests can be found in
 [tests/README.md](tests/README.md) and for unit tests, see
 [src/unit/README.md](src/unit/README.md).
 
-Fixing build problems with dependencies or cached build options
----------
+## Fixing build problems with dependencies or cached build options
 
 Valkey has some dependencies which are included in the `deps` directory.
 `make` does not automatically rebuild dependencies even if something in
@@ -91,8 +89,7 @@ optimizations (for debugging purposes), and other similar build time options,
 those options are cached indefinitely until you issue a `make distclean`
 command.
 
-Fixing problems building 32 bit binaries
----------
+## Fixing problems building 32 bit binaries
 
 If after building Valkey with a 32 bit target you need to rebuild it
 with a 64 bit target, or the other way around, you need to perform a
@@ -105,8 +102,7 @@ the following steps:
 * Try using the following command line instead of `make 32bit`:
   `make CFLAGS="-m32 -march=native" LDFLAGS="-m32"`
 
-Allocator
----------
+## Allocator
 
 Selecting a non-default memory allocator when building Valkey is done by setting
 the `MALLOC` environment variable. Valkey is compiled and linked against libc
@@ -122,28 +118,25 @@ To compile against jemalloc on Mac OS X systems, use:
 
     % make MALLOC=jemalloc
 
-Monotonic clock
----------------
+## Monotonic clock
 
 By default, Valkey will build using the POSIX clock_gettime function as the
 monotonic clock source.  On most modern systems, the internal processor clock
-can be used to improve performance.  Cautions can be found here: 
+can be used to improve performance.  Cautions can be found here:
     http://oliveryang.net/2015/09/pitfalls-of-TSC-usage/
 
 To build with support for the processor's internal instruction clock, use:
 
     % make CFLAGS="-DUSE_PROCESSOR_CLOCK"
 
-Verbose build
--------------
+## Verbose build
 
 Valkey will build with a user-friendly colorized output by default.
 If you want to see a more verbose output, use the following:
 
     % make V=1
 
-Running Valkey
--------------
+# Running Valkey
 
 To run Valkey with the default configuration, just type:
 
@@ -165,10 +158,10 @@ as options using the command line. Examples:
 All the options in valkey.conf are also supported as options using the command
 line, with exactly the same name.
 
-Running Valkey with TLS:
-------------------
+# Running Valkey with TLS:
 
-### Running manually
+## Running manually
+
 To manually run a Valkey server with TLS mode (assuming `./gen-test-certs.sh` was invoked so sample certificates/keys are available):
 
 * TLS built-in mode:
@@ -204,8 +197,7 @@ Specifying `--tls-replication yes` makes a replica connect to the primary.
 
 Using `--tls-cluster yes` makes Valkey Cluster use TLS across nodes.
 
-Running Valkey with RDMA:
-------------------
+# Running Valkey with RDMA:
 
 Note that Valkey Over RDMA is an experimental feature.
 It may be changed or removed in any minor or major version.
@@ -236,8 +228,7 @@ Or:
     % ibv_devices
 
 
-Playing with Valkey
-------------------
+# Playing with Valkey
 
 You can use valkey-cli to play with Valkey. Start a valkey-server instance,
 then in another terminal try the following:
@@ -256,8 +247,7 @@ then in another terminal try the following:
     (integer) 2
     valkey>
 
-Installing Valkey
------------------
+# Installing Valkey
 
 In order to install Valkey binaries into /usr/local/bin, just use:
 
@@ -289,16 +279,82 @@ system reboots.
 You'll be able to stop and start Valkey using the script named
 `/etc/init.d/valkey_<portnumber>`, for instance `/etc/init.d/valkey_6379`.
 
-Code contributions
------------------
+# Building using `CMake`
+
+In addition to the traditional `Makefile` build, Valkey supports an alternative, **experimental**, build system using `CMake`.
+
+To build and install `Valkey`, in `Release` mode (an optimized build), type this into your terminal:
+
+```bash
+mkdir build-release
+cd $_
+cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/valkey
+sudo make install
+# Valkey is now installed under /opt/valkey
+```
+
+Other options supported by Valkey's `CMake` build system:
+
+## Special build flags
+
+- `-DBUILD_TLS=<on|off|module>` enable TLS build for Valkey
+- `-DBUILD_RDMA=<off|module>` enable RDMA module build (only module mode supported)
+- `-DBUILD_MALLOC=<libc|jemalloc|tcmalloc|tcmalloc_minimal>` choose the allocator to use. Default on Linux: `jemalloc`, for other OS: `libc`
+- `-DBUILD_SANITIZER=<address|thread|undefined>` build with address sanitizer enabled
+- `-DBUILD_UNIT_TESTS=[1|0]`  when set, the build will produce the executable `valkey-unit-tests`
+- `-DBUILD_TEST_MODULES=[1|0]`  when set, the build will include the modules located under the `tests/modules` folder
+- `-DBUILD_EXAMPLE_MODULES=[1|0]`  when set, the build will include the example modules located under the `src/modules` folder
+
+## Common flags
+
+- `-DCMAKE_BUILD_TYPE=<Debug|Release...>` define the build type, see CMake manual for more details
+- `-DCMAKE_INSTALL_PREFIX=/installation/path` override this value to define a custom install prefix. Default: `/usr/local`
+- `-G<Generator Name>` generate build files for "Generator Name". By default, CMake will generate `Makefile`s.
+
+## Verbose build
+
+`CMake` generates a user-friendly colorized output by default.
+If you want to see a more verbose output, use the following:
+
+```bash
+make VERBOSE=1
+```
+
+## Troubleshooting
+
+During the `CMake` stage, `CMake` caches variables in a local file named `CMakeCache.txt`. All variables generated by Valkey
+are removed from the cache once consumed (this is done by calling to `unset(VAR-NAME CACHE)`). However, some variables,
+like the compiler path, are kept in cache. To start a fresh build either remove the cache file `CMakeCache.txt` from the
+build folder, or delete the build folder completely.
+
+**It is important to re-run `CMake` when adding new source files.**
+
+## Integration with IDE
+
+During the `CMake` stage of the build, `CMake` generates a JSON file named `compile_commands.json` and places it under the
+build folder. This file is used by many IDEs and text editors for providing code completion (via `clangd`).
+
+A small caveat is that these tools will look for `compile_commands.json` under the Valkey's top folder.
+A common workaround is to create a symbolic link to it:
+
+```bash
+cd /path/to/valkey/
+# We assume here that your build folder is `build-release`
+ln -sf $(pwd)/build-release/compile_commands.json $(pwd)/compile_commands.json
+```
+
+Restart your IDE and voila
+
+# Code contributions
+
 Please see the [CONTRIBUTING.md][2]. For security bugs and vulnerabilities, please see [SECURITY.md][3].
+
+# Valkey is an open community project under LF Projects
+
+Valkey a Series of LF Projects, LLC
+2810 N Church St, PMB 57274
+Wilmington, Delaware 19802-4447
 
 [1]: https://github.com/valkey-io/valkey/blob/unstable/COPYING
 [2]: https://github.com/valkey-io/valkey/blob/unstable/CONTRIBUTING.md
 [3]: https://github.com/valkey-io/valkey/blob/unstable/SECURITY.md
-
-Valkey is an open community project under LF Projects
------------------
-Valkey a Series of LF Projects, LLC
-2810 N Church St, PMB 57274
-Wilmington, Delaware 19802-4447

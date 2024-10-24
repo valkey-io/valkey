@@ -145,6 +145,25 @@ start_server {tags {"maxmemory" "external:skip"}} {
 }
 
 start_server {tags {"maxmemory external:skip"}} {
+
+    test "maxmemory-reserved-scale" {
+        r flushdb
+	r config set maxmemory 10mb
+        set  current_dbsize 0
+
+	foreach scale_value {30 10 0} {
+	    r config set maxmemory-reserved-scale $scale_value
+	    # fill 20mb using 200 keys of 100kb
+            catch { for {set j 0} {$j < 200} {incr j} {
+                r setrange $j 100000 x
+            }} e
+	    assert_match {*OOM*} $e
+	    assert_lessthan $current_dbsize [r dbsize]
+	    set current_dbsize [r dbsize]
+	}
+	r flushdb
+    }
+
     test "Without maxmemory small integers are shared" {
         r config set maxmemory 0
         r set a 1

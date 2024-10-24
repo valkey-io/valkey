@@ -1224,7 +1224,8 @@ typedef struct ClientFlags {
                                             * knows that it does not need the cache and required a full sync. With this
                                             * flag, we won't cache the primary in freeClient. */
     uint64_t fake : 1;                     /* This is a fake client without a real connection. */
-    uint64_t reserved : 5;                 /* Reserved for future use */
+    uint64_t import_source : 1;            /* This client is importing data to server and can visit expired key. */
+    uint64_t reserved : 4;                 /* Reserved for future use */
 } ClientFlags;
 
 typedef struct client {
@@ -2077,6 +2078,8 @@ struct valkeyServer {
     char primary_replid[CONFIG_RUN_ID_SIZE + 1]; /* Primary PSYNC runid. */
     long long primary_initial_offset;            /* Primary PSYNC offset. */
     int repl_replica_lazy_flush;                 /* Lazy FLUSHALL before loading DB? */
+    /* Import Mode */
+    int import_mode; /* If true, server is in import mode and forbid expiration and eviction. */
     /* Synchronous replication. */
     list *clients_waiting_acks; /* Clients waiting in WAIT or WAITAOF. */
     int get_ack_from_replicas;  /* If true we send REPLCONF GETACK. */

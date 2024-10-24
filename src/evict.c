@@ -546,8 +546,8 @@ int performEvictions(void) {
         goto update_metrics;
     }
 
-    if (server.maxmemory_policy == MAXMEMORY_NO_EVICTION) {
-        result = EVICT_FAIL; /* We need to free memory, but policy forbids. */
+    if (server.maxmemory_policy == MAXMEMORY_NO_EVICTION || server.import_mode) {
+        result = EVICT_FAIL; /* We need to free memory, but policy forbids or we are in import mode. */
         goto update_metrics;
     }
 

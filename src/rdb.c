@@ -3076,7 +3076,12 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
              * selected data base, in order to avoid useless rehashing. */
             if ((db_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             if ((expires_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
-            should_expand_db = 1;
+            if (!server.cluster_enabled) {
+                /* Ignore RDB_OPCODE_RESIZEDB in Valkey cluster: Since Valkey 8, it uses dictionary per slot. Using resize opcode might
+                 * expand all the replica's dictionaries, including dictionaries of unowned slots. This causes memory
+                 * overhead when syncing from Valkey 7 primaries. */
+                should_expand_db = 1;
+            }
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB
@@ -3246,8 +3251,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             continue;
         }
 
-        /* If there is no slot info, it means that it's either not cluster mode or we are trying to load legacy RDB
-         * file. In this case we want to estimate number of keys per slot and resize accordingly. */
+        /* If there is no slot info, it means that it's either not cluster mode or we are trying to load a legacy RDB
+         * file. In either cases we want to resize the db accordingly. */
         if (should_expand_db) {
             dbExpand(db, db_size, 0);
             dbExpandExpires(db, expires_size, 0);

@@ -1408,7 +1408,8 @@ int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     long key_counter = 0;
     int j;
 
-    if (server.rdb_checksum) rdb->update_cksum = rioGenericUpdateChecksum;
+    if (server.rdb_checksum && !(rdbflags & RDBFLAGS_CKSUM_SKIP))
+        rdb->update_cksum = rioGenericUpdateChecksum;
     snprintf(magic, sizeof(magic), "REDIS%04d", RDB_VERSION);
     if (rdbWriteRaw(rdb, magic, 9) == -1) goto werr;
     if (rdbSaveInfoAuxFields(rdb, rdbflags, rsi) == -1) goto werr;
@@ -1452,13 +1453,16 @@ werr:
  * without doing any processing of the content. */
 int rdbSaveRioWithEOFMark(int req, rio *rdb, int *error, rdbSaveInfo *rsi) {
     char eofmark[RDB_EOF_MARK_SIZE];
-
+    int skip_cksum_repl = RDBFLAGS_REPLICATION;
     startSaving(RDBFLAGS_REPLICATION);
     getRandomHexChars(eofmark, RDB_EOF_MARK_SIZE);
     if (error) *error = 0;
     if (rioWrite(rdb, "$EOF:", 5) == 0) goto werr;
     if (rioWrite(rdb, eofmark, RDB_EOF_MARK_SIZE) == 0) goto werr;
     if (rioWrite(rdb, "\r\n", 2) == 0) goto werr;
+    if (server.repl_diskless_sync && req & REPLICA_REQ_CHKSUM_SKIP)
+        skip_cksum_repl |= RDBFLAGS_CKSUM_SKIP;
+    if (rdbSaveRio(req, rdb, error, skip_cksum_repl, rsi) == C_ERR) goto werr;
     if (rdbSaveRio(req, rdb, error, RDBFLAGS_REPLICATION, rsi) == C_ERR) goto werr;
     if (rioWrite(rdb, eofmark, RDB_EOF_MARK_SIZE) == 0) goto werr;
     stopSaving(1);

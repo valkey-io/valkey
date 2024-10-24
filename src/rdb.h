@@ -133,6 +133,7 @@
 #define RDBFLAGS_ALLOW_DUP (1 << 2)    /* Allow duplicated keys when loading.*/
 #define RDBFLAGS_FEED_REPL (1 << 3)    /* Feed replication stream when loading.*/
 #define RDBFLAGS_KEEP_CACHE (1 << 4)   /* Don't reclaim cache after rdb file is generated */
+#define RDBFLAGS_CKSUM_SKIP (1 << 5)   /* Skip checksum for diskless sync. */
 
 /* When rdbLoadObject() returns NULL, the err flag is
  * set to hold the type of error that occurred */

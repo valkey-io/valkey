@@ -438,6 +438,7 @@ typedef enum {
 #define REPLICA_REQ_RDB_EXCLUDE_DATA (1 << 0)      /* Exclude data from RDB */
 #define REPLICA_REQ_RDB_EXCLUDE_FUNCTIONS (1 << 1) /* Exclude functions from RDB */
 #define REPLICA_REQ_RDB_CHANNEL (1 << 2)           /* Use dual-channel-replication */
+#define REPLICA_REQ_CHKSUM_SKIP (1 << 3)           /* Exclude checksum from RDB */
 /* Mask of all bits in the replica requirements bitfield that represent non-standard (filtered) RDB requirements */
 #define REPLICA_REQ_RDB_MASK (REPLICA_REQ_RDB_EXCLUDE_DATA | REPLICA_REQ_RDB_EXCLUDE_FUNCTIONS)
 

@@ -1022,7 +1022,7 @@ void debugCommand(client *c) {
 }
 
 /* =========================== Crash handling  ============================== */
-/* Make serverAssert a weak symbol so it can be overriden during link time    */
+/* Make serverAssert a weak symbol so it can be overridden during link time   */
 __attribute__((noinline, weak)) void _serverAssert(const char *estr, const char *file, int line) {
     int new_report = bugReportStart();
     serverLog(LL_WARNING, "=== %sASSERTION FAILED ===", new_report ? "" : "RECURSIVE ");

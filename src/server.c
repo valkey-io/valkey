@@ -6720,7 +6720,7 @@ serverTestProc *getTestProcByName(const char *name) {
 }
 #endif
 
-/* Make main a weak symbol so it can be overriden during link time, e.g. test_main.c overides it */
+/* Make main a weak symbol so it can be overridden during link time, e.g. test_main.c overides it */
 int __attribute__((weak)) main(int argc, char **argv) {
     struct timeval tv;
     int j;

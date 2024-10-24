@@ -1029,12 +1029,13 @@ int startBgsaveForReplication(int mincapa, int req, list *slot_ranges) {
               (req & REPLICA_REQ_RDB_CHANNEL) ? "dual-channel" : "normal sync");
 
     rdbSaveInfo rsi, *rsiptr;
+    rsi.slot_ranges = slot_ranges;
     rsiptr = rdbPopulateSaveInfo(&rsi);
     // todo check the slot_ranges pointer when the client disconnected
-    rsiptr->slot_ranges = slot_ranges;
     /* Only do rdbSave* when rsiptr is not NULL,
      * otherwise replica will miss repl-stream-db. */
     if (rsiptr) {
+        rsiptr->slot_ranges = slot_ranges;
         if (socket_target)
             retval = rdbSaveToReplicasSockets(req, rsiptr);
         else {

@@ -257,16 +257,14 @@ void unmarkClientAsPubSub(client *c) {
 
 /* Subscribe a client to a channel. Returns 1 if the operation succeeded, or
  * 0 if the client was already subscribed to that channel. */
-int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
+void pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
     dictEntry *de, *existing;
     dict *clients = NULL;
-    int retval = 0;
     unsigned int slot = 0;
 
     /* Add the channel to the client -> channels hash table */
     void *position = dictFindPositionForInsert(type.clientPubSubChannels(c), channel, NULL);
     if (position) { /* Not yet subscribed to this channel */
-        retval = 1;
         /* Add the client to the channel -> list of clients hash table */
         if (server.cluster_enabled && type.shard) {
             slot = getKeySlot(channel->ptr);
@@ -287,9 +285,11 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
         serverAssert(dictInsertAtPosition(type.clientPubSubChannels(c), channel, position));
         incrRefCount(channel);
     }
-    /* Notify the client */
-    addReplyPubsubSubscribed(c, channel, type);
-    return retval;
+
+    if (!(c->capa & CLIENT_CAPA_SUBV2)) {
+        /* Notify the client */
+        addReplyPubsubSubscribed(c, channel, type);
+    }
 }
 
 /* Unsubscribe a client from a channel. Returns 1 if the operation succeeded, or
@@ -538,9 +538,29 @@ int pubsubPublishMessage(robj *channel, robj *message, int sharded) {
  * Pubsub commands implementation
  *----------------------------------------------------------------------------*/
 
+void addPubSubChannel(client *c, pubsubtype type) {
+    int j;
+    struct ClientFlags old_flags = c->flag;
+    c->flag.pushing = 1;
+    int number = (c->argc - 1) * 3;
+
+    if (c->resp == 2)
+        addReply(c, shared.mbulkhdr[number]);
+    else
+        addReplyPushLen(c, number);
+
+    for (j = 1; j < c->argc; j++) {
+        pubsubSubscribeChannel(c, c->argv[j], type);
+        addReply(c, *type.subscribeMsg);
+        addReplyBulk(c, c->argv[j]);
+        addReplyLongLong(c, type.subscriptionCount(c));
+    }
+    if (!old_flags.pushing) c->flag.pushing = 0;
+}
+
+
 /* SUBSCRIBE channel [channel ...] */
 void subscribeCommand(client *c) {
-    int j;
     if (c->flag.deny_blocking && !c->flag.multi) {
         /**
          * A client that has CLIENT_DENY_BLOCKING flag on
@@ -552,7 +572,13 @@ void subscribeCommand(client *c) {
         addReplyError(c, "SUBSCRIBE isn't allowed for a DENY BLOCKING client");
         return;
     }
-    for (j = 1; j < c->argc; j++) pubsubSubscribeChannel(c, c->argv[j], pubSubType);
+
+    if (c->capa & CLIENT_CAPA_SUBV2) {
+        addPubSubChannel(c, pubSubType);
+    } else {
+        for (int j = 1; j < c->argc; j++) pubsubSubscribeChannel(c, c->argv[j], pubSubType);
+    }
+
     markClientAsPubSub(c);
 }
 
@@ -719,8 +745,10 @@ void ssubscribeCommand(client *c) {
         return;
     }
 
-    for (int j = 1; j < c->argc; j++) {
-        pubsubSubscribeChannel(c, c->argv[j], pubSubShardType);
+    if (c->capa & CLIENT_CAPA_SUBV2) {
+        addPubSubChannel(c, pubSubShardType);
+    } else {
+        for (int j = 1; j < c->argc; j++) pubsubSubscribeChannel(c, c->argv[j], pubSubShardType);
     }
     markClientAsPubSub(c);
 }

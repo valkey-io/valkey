@@ -343,6 +343,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 
 /* Client capabilities */
 #define CLIENT_CAPA_REDIRECT (1 << 0) /* Indicate that the client can handle redirection */
+#define CLIENT_CAPA_SUBV2 (1 << 1)    /* Indicate that the client can handle pubsub v2 version */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */

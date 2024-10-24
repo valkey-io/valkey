@@ -4039,6 +4039,8 @@ void clientCommand(client *c) {
         for (int i = 2; i < c->argc; i++) {
             if (!strcasecmp(c->argv[i]->ptr, "redirect")) {
                 c->capa |= CLIENT_CAPA_REDIRECT;
+            } else if (!strcasecmp(c->argv[i]->ptr, "subv2")) {
+                c->capa |= CLIENT_CAPA_SUBV2;
             }
         }
         addReply(c, shared.ok);

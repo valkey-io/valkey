@@ -6045,6 +6045,9 @@ void removeChannelsInSlot(unsigned int slot) {
 unsigned int delKeysInSlot(unsigned int hashslot) {
     if (!kvstoreDictSize(server.db->keys, hashslot)) return 0;
 
+    /* We may lose a slot during the pause. We need to track this
+     * state so that we don't assert in propagateNow(). */
+    server.server_del_keys_in_slot = 1;
     unsigned int j = 0;
 
     kvstoreDictIterator *kvs_di = NULL;
@@ -6069,6 +6072,8 @@ unsigned int delKeysInSlot(unsigned int hashslot) {
     }
     kvstoreReleaseDictIterator(kvs_di);
 
+    server.server_del_keys_in_slot = 0;
+    serverAssert(server.execution_nesting == 0);
     return j;
 }
 

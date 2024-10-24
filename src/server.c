@@ -3240,8 +3240,28 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
     if (!shouldPropagate(target)) return;
 
     /* This needs to be unreachable since the dataset should be fixed during
-     * replica pause (otherwise data may be lost during a failover) */
-    serverAssert(!(isPausedActions(PAUSE_ACTION_REPLICA) && (!server.client_pause_in_transaction)));
+     * replica pause (otherwise data may be lost during a failover).
+     *
+     * Though, there are exceptions:
+     *
+     * 1. We allow write commands that were queued up before and after to
+     *    execute, if a CLIENT PAUSE executed during a transaction, we will
+     *    track the state, the CLIENT PAUSE takes effect only after a transaction
+     *    has finished.
+     * 2. Primary loses a slot during the pause, deletes all keys and replicates
+     *    DEL to its replicas. In this case, we will track the state, the dirty
+     *    slots will be deleted in the end without affecting the data consistency.
+     *
+     * Note that case 2 can happen in one of the following scenarios:
+     * 1) The primary waits for the replica to replicate before exiting, see
+     *    shutdown-timeout in conf for more details. In this case, primary lost
+     *    a slot during the SIGTERM waiting.
+     * 2) The primary waits for the replica to replicate during a manual failover.
+     *    In this case, primary lost a slot during the pausing.
+     * 3) The primary was paused by CLIENT PAUSE, and lost a slot during the
+     *    pausing. */
+    serverAssert(!isPausedActions(PAUSE_ACTION_REPLICA) || server.client_pause_in_transaction ||
+                 server.server_del_keys_in_slot);
 
     if (server.aof_state != AOF_OFF && target & PROPAGATE_AOF) feedAppendOnlyFile(dbid, argv, argc);
     if (target & PROPAGATE_REPL) replicationFeedReplicas(dbid, argv, argc);

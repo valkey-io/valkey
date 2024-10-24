@@ -260,6 +260,33 @@ start_server {tags {"pause network"}} {
         r client unpause
     }
 
+    test "Test eviction is skipped during client pause" {
+        r flushall
+        set evicted_keys [s 0 evicted_keys]
+
+        r multi
+        r set foo{t} bar
+        r config set maxmemory-policy allkeys-random
+        r config set maxmemory 1
+        r client PAUSE 50000 WRITE
+        r exec
+
+        # No keys should actually have been evicted.
+        assert_match $evicted_keys [s 0 evicted_keys]
+
+        # The previous config set triggers a time event, but due to the pause,
+        # no eviction has been made. After the unpause, a eviction will happen.
+        r client unpause
+        wait_for_condition 1000 10 {
+            [expr $evicted_keys + 1] eq [s 0 evicted_keys]
+        } else {
+            fail "Key is not evicted"
+        }
+
+        r config set maxmemory 0
+        r config set maxmemory-policy noeviction
+    }
+
     test "Test both active and passive expires are skipped during client pause" {
         set expired_keys [s 0 expired_keys]
         r multi

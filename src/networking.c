@@ -4555,7 +4555,7 @@ static void pauseClientsByClient(mstime_t endTime, int isPauseClientAll) {
 }
 
 /* Pause actions up to the specified unixtime (in ms) for a given type of
- * commands.
+ * purpose.
  *
  * A main use case of this function is to allow pausing replication traffic
  * so that a failover without data loss to occur. Replicas will continue to receive

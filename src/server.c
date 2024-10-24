@@ -3917,7 +3917,8 @@ int processCommand(client *c) {
     }
 
     /* Handle possible security attacks. */
-    if (!strcasecmp(c->argv[0]->ptr, "host:") || !strcasecmp(c->argv[0]->ptr, "post")) {
+    if (c->io_checked == IO_CHECKED_NOT_SECURITY ||
+        (!c->io_checked && (!strcasecmp(c->argv[0]->ptr, "host:") || !strcasecmp(c->argv[0]->ptr, "post")))) {
         securityWarningCommand(c);
         return C_ERR;
     }

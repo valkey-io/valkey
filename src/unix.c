@@ -74,6 +74,10 @@ static int connUnixListen(connListener *listener) {
     return C_OK;
 }
 
+static void connUnixCloseListener(connListener *listener) {
+    connectionTypeTcp()->closeListener(listener);
+}
+
 static connection *connCreateUnix(void) {
     connection *conn = zcalloc(sizeof(connection));
     conn->type = &CT_Unix;
@@ -174,6 +178,7 @@ static ConnectionType CT_Unix = {
     .addr = connUnixAddr,
     .is_local = connUnixIsLocal,
     .listen = connUnixListen,
+    .closeListener = connUnixCloseListener,
 
     /* create/shutdown/close connection */
     .conn_create = connCreateUnix,

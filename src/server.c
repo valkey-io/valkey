@@ -2404,19 +2404,6 @@ void checkTcpBacklogSettings(void) {
 #endif
 }
 
-void closeListener(connListener *sfd) {
-    int j;
-
-    for (j = 0; j < sfd->count; j++) {
-        if (sfd->fd[j] == -1) continue;
-
-        aeDeleteFileEvent(server.el, sfd->fd[j], AE_READABLE);
-        close(sfd->fd[j]);
-    }
-
-    sfd->count = 0;
-}
-
 /* Create an event handler for accepting new connections in TCP or TLS domain sockets.
  * This works atomically for all socket fds */
 int createSocketAcceptHandler(connListener *sfd, aeFileProc *accept_handler) {
@@ -2480,7 +2467,7 @@ int listenToPort(connListener *sfd) {
                 continue;
 
             /* Rollback successful listens before exiting */
-            closeListener(sfd);
+            connCloseListener(sfd);
             return C_ERR;
         }
         if (server.socket_mark_id > 0) anetSetSockMarkId(NULL, sfd->fd[sfd->count], server.socket_mark_id);
@@ -2819,6 +2806,17 @@ void initListeners(void) {
         listener->bindaddr_count = 1;
         listener->ct = connectionByType(CONN_TYPE_UNIX);
         listener->priv = &server.unix_ctx_config; /* Unix socket specified */
+    }
+
+    if (server.rdma_ctx_config.port != 0) {
+        conn_index = connectionIndexByType(CONN_TYPE_RDMA);
+        if (conn_index < 0) serverPanic("Failed finding connection listener of %s", CONN_TYPE_RDMA);
+        listener = &server.listeners[conn_index];
+        listener->bindaddr = server.rdma_ctx_config.bindaddr;
+        listener->bindaddr_count = server.rdma_ctx_config.bindaddr_count;
+        listener->port = server.rdma_ctx_config.port;
+        listener->ct = connectionByType(CONN_TYPE_RDMA);
+        listener->priv = &server.rdma_ctx_config;
     }
 
     /* create all the configured listener, and add handler to start to accept */
@@ -6204,7 +6202,7 @@ connListener *listenerByType(const char *typename) {
 /* Close original listener, re-create a new listener from the updated bind address & port */
 int changeListener(connListener *listener) {
     /* Close old servers */
-    closeListener(listener);
+    connCloseListener(listener);
 
     /* Just close the server if port disabled */
     if (listener->port == 0) {

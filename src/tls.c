@@ -799,6 +799,10 @@ static int connTLSListen(connListener *listener) {
     return listenToPort(listener);
 }
 
+static void connTLSCloseListener(connListener *listener) {
+    connectionTypeTcp()->closeListener(listener);
+}
+
 static void connTLSShutdown(connection *conn_) {
     tls_connection *conn = (tls_connection *)conn_;
 
@@ -1127,6 +1131,7 @@ static ConnectionType CT_TLS = {
     .addr = connTLSAddr,
     .is_local = connTLSIsLocal,
     .listen = connTLSListen,
+    .closeListener = connTLSCloseListener,
 
     /* create/shutdown/close connection */
     .conn_create = connCreateTLS,

@@ -1327,12 +1327,12 @@ if __name__ == "__main__":
         # TestSlotSync("test_case19"),
         # TestSlotSync("test_case20"),
         # TestSlotSync("test_case21"),
-        # TestSlotSync("test_case22"),
+        TestSlotSync("test_case22"),
         # TestSlotSync("test_case23"),
         # TestSlotSync("test_case24"),
         # TestSlotSync("test_case25"),
         # TestSlotSync("test_case26"),
-        TestSlotSync("test_case27"),
+        # TestSlotSync("test_case27"),
     ]
     suite.addTests(test_cases)
     unittest.TextTestRunner().run(suite)

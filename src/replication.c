@@ -862,6 +862,32 @@ int replicationSetupReplicaForFullResync(client *replica, long long offset) {
     // todo check if see var has side effect.
     replica->repl_data->psync_initial_offset = offset;
     replica->repl_data->repl_state = REPLICA_STATE_WAIT_BGSAVE_END;
+
+    /* Make sure we don't have both replica and slot sync replica in the
+     * REPLICA_STATE_WAIT_BGSAVE_END state at the same time. And make sure
+     * slot RDBs are not mixed. */
+    int normal_replica = 0;
+    int slot_sync_replica = 0;
+    list *slotsync_slots = NULL;
+    listIter li;
+    listNode *ln;
+    listRewind(server.replicas, &li);
+    while ((ln = listNext(&li))) {
+        client *tmp_replica = ln->value;
+        if (tmp_replica->repl_data->repl_state != REPLICA_STATE_WAIT_BGSAVE_END) continue;
+        if (tmp_replica->flag.slot_sync_replica) {
+            slot_sync_replica++;
+            if (slotsync_slots == NULL) {
+                slotsync_slots = tmp_replica->slotsync_slots;
+            } else {
+                serverAssert(isSlotRangeListSame(slotsync_slots, tmp_replica->slotsync_slots));
+            }
+        } else {
+            normal_replica++;
+        }
+    }
+    serverAssert(!(normal_replica && slot_sync_replica));
+
     /* We are going to accumulate the incremental changes for this
      * replica as well. Set replicas_eldb to -1 in order to force to re-emit
      * a SELECT statement in the replication stream. */

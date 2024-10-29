@@ -1060,7 +1060,7 @@ void debugCommand(client *c) {
 
 /* =========================== Crash handling  ============================== */
 
-__attribute__((noinline)) void _serverAssert(const char *estr, const char *file, int line) {
+__attribute__((noinline, weak)) void _serverAssert(const char *estr, const char *file, int line) {
     int new_report = bugReportStart();
     serverLog(LL_WARNING, "=== %sASSERTION FAILED ===", new_report ? "" : "RECURSIVE ");
     serverLog(LL_WARNING, "==> %s:%d '%s' is not true", file, line, estr);

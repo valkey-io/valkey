@@ -91,7 +91,7 @@ jobs:
         run: |
           export AR=/opt/homebrew/opt/llvm/bin/llvm-ar
           export RANLIB=/opt/homebrew/opt/llvm/bin/llvm-ranlib
-          make SERVER_CFLAGS='-Werror'
+          make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror'
 
   build-32bit:
     runs-on: ubuntu-latest

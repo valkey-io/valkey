@@ -390,7 +390,9 @@ typedef enum {
     CLUSTER_SLOTSYNC_STATE_SEND_SYNC,   /* Need to send SYNC */
     /* --- End of handshake states --- */
     CLUSTER_SLOTSYNC_STATE_RECV_RDB,    /* Receiving the filtered rdb */
+    CLUSTER_SLOTSYNC_STATE_LOADING_RDB, /* Loading the RDB in bio. */
     CLUSTER_SLOTSYNC_STATE_CONNECTED,   /* Synced with the slot owner */
+    CLUSTER_SLOTSYNC_STATE_LOADING_FAIL,/* Loading fail. */
     CLUSTER_SLOTSYNC_STATE_FAILED,      /* Meet unexpected error and retry will not work */
 } slotSyncState;
 
@@ -418,6 +420,14 @@ typedef struct clusterSlotSyncLink {
     mstime_t slot_mf_end;           /* Slot manual failover time limit (ms unixtime) */
     long long slot_mf_lag;          /* Lag bytes with the slot sync source node */
 } clusterSlotSyncLink;
+
+typedef struct rdbLoadJob {
+    int rdbflags;
+    int use_diskless_load;
+    int usemark;
+    sds eofmark;
+    clusterSlotSyncLink *link;
+} rdbLoadJob;
 
 struct clusterState {
     clusterNode *myself; /* This node */

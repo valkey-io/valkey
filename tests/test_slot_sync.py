@@ -580,7 +580,7 @@ class TestSlotSync(unittest.TestCase):
         try:
             conn.execute_command('sync 0 10 15')
         except Exception as e:
-            assert str(e) == 'wrong number of arguments'
+            assert "wrong number of arguments" in str(e)
         try:
             conn.execute_command('sync x 10')
         except Exception as e:
@@ -1234,13 +1234,14 @@ class TestSlotSync(unittest.TestCase):
         time.sleep(1)
         util.PrintSuccCaseResult("TestCase 26: OK")
 
-    def test_case27(self):
+    def my_test_case27(self, diskless=False, repl_diskless_load="", dual_channel=False):
         # =================== TestCase 27 ====================================
         # 过期键在加载 slot RDB 的过程中被过期删除，导致增量来的命令无法续上
         # ====================================================================
         # 1. 启一个三分片集群(master, slave):(9000, 9003),(9001, 9004),(9002,9005).
         # 设置 cluster_node_timeout 的原因是避免目标节点在加载阻塞期间被判死触发被动故障转移
-        redis_cluster = cluster.RedisCluster(password='', shard_size=3, cluster_node_timeout=20000)
+        redis_cluster = cluster.RedisCluster(password='', shard_size=3, cluster_node_timeout=20000, diskless=diskless,
+                                             repl_diskless_load=repl_diskless_load, dual_channel=dual_channel)
         redis_cluster.start_cluster()
 
         # 3. 加入一个新节点作为目标节点
@@ -1296,7 +1297,30 @@ class TestSlotSync(unittest.TestCase):
 
         util.StopAllRedis()
         time.sleep(1)
+
+    def test_case27(self):
+        self.my_test_case27(diskless=False, repl_diskless_load="", dual_channel=False)
         util.PrintSuccCaseResult("TestCase 27: OK")
+
+    def test_case28(self):
+        self.my_test_case27(diskless=False, repl_diskless_load="", dual_channel=True)
+        util.PrintSuccCaseResult("TestCase 28: OK")
+
+    def test_case29(self):
+        self.my_test_case27(diskless=True, repl_diskless_load="", dual_channel=False)
+        util.PrintSuccCaseResult("TestCase 29: OK")
+
+    def test_case30(self):
+        self.my_test_case27(diskless=True, repl_diskless_load="", dual_channel=True)
+        util.PrintSuccCaseResult("TestCase 30: OK")
+
+    def test_case31(self):
+        self.my_test_case27(diskless=True, repl_diskless_load="swapdb", dual_channel=False)
+        util.PrintSuccCaseResult("TestCase 31: OK")
+
+    def test_case32(self):
+        self.my_test_case27(diskless=True, repl_diskless_load="swapdb", dual_channel=True)
+        util.PrintSuccCaseResult("TestCase 32: OK")
 
     def tearDown(self):
         util.StopAllRedis()
@@ -1327,12 +1351,17 @@ if __name__ == "__main__":
         # TestSlotSync("test_case19"),
         # TestSlotSync("test_case20"),
         # TestSlotSync("test_case21"),
-        TestSlotSync("test_case22"),
+        # TestSlotSync("test_case22"),
         # TestSlotSync("test_case23"),
         # TestSlotSync("test_case24"),
         # TestSlotSync("test_case25"),
         # TestSlotSync("test_case26"),
-        # TestSlotSync("test_case27"),
+        TestSlotSync("test_case27"),
+        # TestSlotSync("test_case29"),
+        # TestSlotSync("test_case31"),
+
+        # TestSlotSync("test_case28"),
+        # TestSlotSync("test_case30"),
     ]
     suite.addTests(test_cases)
     unittest.TextTestRunner().run(suite)

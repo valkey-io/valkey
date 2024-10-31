@@ -68,6 +68,7 @@ static char *bio_worker_title[] = {
     "bio_close_file",
     "bio_aof",
     "bio_lazy_free",
+    "bio_rdb",
 };
 
 #define BIO_WORKER_NUM (sizeof(bio_worker_title) / sizeof(*bio_worker_title))
@@ -77,6 +78,7 @@ static unsigned int bio_job_to_worker[] = {
     [BIO_AOF_FSYNC] = 1,
     [BIO_CLOSE_AOF] = 1,
     [BIO_LAZY_FREE] = 2,
+    [BIO_RDB_LOAD] = 3,
 };
 
 static pthread_t bio_threads[BIO_WORKER_NUM];
@@ -108,6 +110,12 @@ typedef union bio_job {
         lazy_free_fn *free_fn; /* Function that will free the provided arguments */
         void *free_args[];     /* List of arguments to be passed to the free function */
     } free_args;
+
+    struct {
+        int type;
+        rdb_load_fn *load_fn;      /* Function that will call the provided arguments */
+        void *load_args[];     /* List of arguments to be passed to the load function */
+    } load_args;
 } bio_job;
 
 void *bioProcessBackgroundJobs(void *arg);
@@ -203,6 +211,21 @@ void bioCreateFsyncJob(int fd, long long offset, int need_reclaim_cache) {
     bioSubmitJob(BIO_AOF_FSYNC, job);
 }
 
+void bioCreateRdbLoadJob(rdb_load_fn load_fn, int arg_count, ...) {
+    va_list valist;
+    /* Allocate memory for the job structure and all required
+     * arguments */
+    bio_job *job = zmalloc(sizeof(*job) + sizeof(void *) * (arg_count));
+    job->load_args.load_fn = load_fn;
+
+    va_start(valist, arg_count);
+    for (int i = 0; i < arg_count; i++) {
+        job->load_args.load_args[i] = va_arg(valist, void *);
+    }
+    va_end(valist);
+    bioSubmitJob(BIO_RDB_LOAD, job);
+}
+
 void *bioProcessBackgroundJobs(void *arg) {
     bio_job *job;
     unsigned long worker = (unsigned long)arg;
@@ -278,6 +301,8 @@ void *bioProcessBackgroundJobs(void *arg) {
             if (job_type == BIO_CLOSE_AOF) close(job->fd_args.fd);
         } else if (job_type == BIO_LAZY_FREE) {
             job->free_args.free_fn(job->free_args.free_args);
+        } else if (job_type == BIO_RDB_LOAD) {
+            job->load_args.load_fn(job->load_args.load_args);
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }

@@ -31,6 +31,7 @@
 #define __BIO_H
 
 typedef void lazy_free_fn(void *args[]);
+typedef void rdb_load_fn(void *args[]);
 
 /* Exported API */
 void bioInit(void);
@@ -41,6 +42,7 @@ void bioCreateCloseJob(int fd, int need_fsync, int need_reclaim_cache);
 void bioCreateCloseAofJob(int fd, long long offset, int need_reclaim_cache);
 void bioCreateFsyncJob(int fd, long long offset, int need_reclaim_cache);
 void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...);
+void bioCreateRdbLoadJob(rdb_load_fn load_fn, int arg_count, ...);
 
 /* Background job opcodes */
 enum {
@@ -48,6 +50,7 @@ enum {
     BIO_AOF_FSYNC,      /* Deferred AOF fsync. */
     BIO_LAZY_FREE,      /* Deferred objects freeing. */
     BIO_CLOSE_AOF,      /* Deferred close for AOF files. */
+    BIO_RDB_LOAD,       /* Deferred RDB load. */
     BIO_NUM_OPS
 };
 

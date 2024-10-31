@@ -12,7 +12,7 @@ import shutil
 
 class RedisCluster:
     def __init__(self, password, base_port=9000, shard_size=3, have_slave=True, diskless=False, repl_diskless_load="",
-                 arbiter_size=0, slave_count=0, cluster_node_timeout=5000):
+                 arbiter_size=0, slave_count=0, cluster_node_timeout=5000, dual_channel=False):
         self.password = password
         self.base_port = base_port
         self.shard_size = shard_size
@@ -34,6 +34,7 @@ class RedisCluster:
         self.ports = []
         self.instance_arbiter_enabled = False
         self.cluster_node_timeout = cluster_node_timeout
+        self.dual_channel = dual_channel
 
     def start_cluster(self):
         self.__start_master_process()
@@ -235,7 +236,6 @@ class RedisCluster:
 
     def __get_default_conf(self, port, is_master=True):
         default_conf = {
-            "dual-channel-replication-enabled": "yes",
             "enable-debug-command": "yes",
             'dir': self.root_dir,
             'port': str(port),
@@ -258,6 +258,10 @@ class RedisCluster:
             default_conf["repl-diskless-sync"] = "no"
         if self.repl_diskless_load != "":
             default_conf["repl-diskless-load"] = self.repl_diskless_load
+        if self.dual_channel:
+            default_conf["dual-channel-replication-enabled"] = "yes"
+        else:
+            default_conf["dual-channel-replication-enabled"] = "no"
         if self.instance_arbiter_enabled:
             default_conf["cluster-instance-arbiter-enabled"] = "yes"
         return default_conf

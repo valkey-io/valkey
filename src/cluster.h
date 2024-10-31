@@ -29,7 +29,6 @@
 #define CLUSTER_REDIR_DOWN_RO_STATE 7 /* -CLUSTERDOWN, allow reads. */
 
 typedef struct _clusterNode clusterNode;
-// struct clusterSlotSyncLink;
 struct clusterState;
 
 /* Flags that a module can set in order to prevent certain Cluster

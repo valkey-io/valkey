@@ -3028,6 +3028,25 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
     }
 }
 
+/* Track loading progress in order to serve client's from time to time
+ * and if needed calculate rdb checksum  */
+void slotRdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
+    if (server.rdb_checksum) rioGenericUpdateChecksum(r, buf, len);
+    if (server.loading_process_events_interval_bytes &&
+        (r->processed_bytes + len) / server.loading_process_events_interval_bytes >
+        r->processed_bytes / server.loading_process_events_interval_bytes) {
+
+        // todo
+        loadingAbsProgress(r->processed_bytes);
+        processModuleLoadingProgressEvent(0);
+    }
+
+    // todo
+    if (server.repl_state == REPL_STATE_TRANSFER && rioCheckType(r) == RIO_TYPE_CONN) {
+        server.stat_net_repl_input_bytes += len;
+    }
+}
+
 /* Save the given functions_ctx to the rdb.
  * The err output parameter is optional and will be set with relevant error
  * message on failure, it is the caller responsibility to free the error
@@ -3108,7 +3127,11 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     int error;
     long long empty_keys_skipped = 0;
 
-    rdb->update_cksum = rdbLoadProgressCallback;
+    if (rdbflags & RDBFLAGS_SLOT_SYNC) {
+        rdb->update_cksum = slotRdbLoadProgressCallback;
+    } else {
+        rdb->update_cksum = rdbLoadProgressCallback;
+    }
     rdb->max_processing_chunk = server.loading_process_events_interval_bytes;
     if (rioRead(rdb, buf, 9) == 0) goto eoferr;
     buf[9] = '\0';
@@ -3528,6 +3551,156 @@ int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
         if (rdb_fd >= 0) bioCreateCloseJob(rdb_fd, 0, 1);
     }
     return (retval == C_OK) ? RDB_OK : RDB_FAILED;
+}
+
+#define SLOTSYNC_DEFAULT_LAG 20000000000           /* Just a value large enough */
+void bioRdbLoad(void *args[]) {
+    rdbLoadJob *job = args[0];
+    int rdbflags = job->rdbflags;
+    int use_diskless_load = job->use_diskless_load;
+    int usemark = job->usemark;
+    sds eofmark = job->eofmark;
+    clusterSlotSyncLink *link = job->link;
+    connection *conn = link->sync_conn;
+
+    char rdbpath[1024];
+    char buf[PROTO_IOBUF_LEN];
+
+    rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+
+    if (use_diskless_load) {
+        rio rdb;
+        int async = 0; /* Do not use async loading. */
+        rioInitWithConn(&rdb, conn, link->transfer_total_size);
+
+        /* Put the socket in blocking mode to simplify RDB transfer.
+         * We'll restore it when the RDB is received. */
+        connBlock(conn);
+        connRecvTimeout(conn, server.repl_timeout * 1000);
+        startLoading(link->transfer_total_size, rdbflags, async);
+
+        if (rdbLoadRio(&rdb, rdbflags, &rsi) != C_OK) {
+            /* RDB loading failed. */
+            stopLoading(0);
+            serverLog(LL_WARNING, "Failed trying to load the slot owner synchronization DB from socket");
+            rioFreeConn(&rdb, NULL);
+            goto error;
+        }
+
+        /* Verify the end mark is correct. */
+        if (usemark) {
+            if (!rioRead(&rdb, buf, RDB_EOF_MARK_SIZE) || memcmp(buf, eofmark, RDB_EOF_MARK_SIZE) != 0) {
+                stopLoading(0);
+                serverLog(LL_WARNING, "Replication stream EOF marker is broken");
+                rioFreeConn(&rdb, NULL);
+                goto error;
+            }
+        }
+
+        stopLoading(1);
+
+        /* Cleanup and restore the socket to the original state to continue
+         * with the normal replication. */
+        rioFreeConn(&rdb, NULL);
+        connNonBlock(conn);
+        connRecvTimeout(conn, 0);
+    } else {
+        /* Make sure the new file (also used for persistence) is fully synced
+         * (not covered by earlier calls to rdb_fsync_range). */
+        if (fsync(link->transfer_tmpfile_fd) == -1) {
+            serverLog(LL_WARNING,
+                      "Failed trying to sync the temp DB to disk in "
+                      "Cluster slot synchronization: %s",
+                      strerror(errno));
+            goto error;
+        }
+
+        if (testInjectError("crs-io-error-rename-rdb")) {
+            serverLog(LL_WARNING, "inject crs-io-error-rename-rdb");
+            goto error;
+        }
+
+        /* Rename slot rdb like renaming rewrite aof asynchronously. */
+        sprintf(rdbpath, "%s_slot", server.rdb_filename);
+        int old_rdb_fd = open(rdbpath, O_RDONLY | O_NONBLOCK);
+        if (rename(link->transfer_tmpfile_name, rdbpath) == -1) {
+            serverLog(LL_WARNING,
+                      "Failed trying to rename the temp slot DB into %s in "
+                      "cluster slot synchronization: %s",
+                      rdbpath, strerror(errno));
+            if (old_rdb_fd != -1) close(old_rdb_fd);
+            goto error;
+        }
+        /* Close old rdb asynchronously. */
+        if (old_rdb_fd != -1) bioCreateCloseJob(old_rdb_fd, 0, 1);
+
+        int load_result = rdbLoad((char *)rdbpath, &rsi, rdbflags);
+
+        if (load_result != RDB_OK) {
+            serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization "
+                                  "slot DB from disk, check server logs.");
+        }
+
+        if (server.rdb_del_sync_files && allPersistenceDisabled()) {
+            serverLog(LL_NOTICE, "Removing the slot RDB file obtained from "
+                                 "the slot owner. This replica has persistence "
+                                 "disabled");
+            bg_unlink(rdbpath);
+        }
+
+        if (load_result != RDB_OK) {
+            goto error;
+        }
+
+        zfree(link->transfer_tmpfile_name);
+        close(link->transfer_tmpfile_fd);
+        link->transfer_tmpfile_fd = -1;
+        link->transfer_tmpfile_name = NULL;
+    }
+
+    /* Mark the synchronization has done. */
+    link->sync_state = CLUSTER_SLOTSYNC_STATE_CONNECTED;
+
+    /* Set to a value large enough after first init. */
+    link->slot_mf_lag = SLOTSYNC_DEFAULT_LAG;
+
+    /* Create a client, here we don't mark the client as a primary for some reasons.
+     * This client is used to receive the subsequent slot replication buffer, and
+     * we set reply_off indicates that it does not need reply. */
+    client *client = createClient(link->sync_conn);
+    client->flag.authenticated = 1;
+    client->flag.reply_off = 1;
+    client->slotsync_link = link;
+    client->slotsync_slots = listDup(link->slot_ranges);
+    client->flag.slot_sync_primary = 1;
+    link->client = client;
+
+    serverLog(LL_NOTICE, "Cluster slot sync: Finished with success");
+
+    // todo fixme
+    /* After loading a new slot RDB, if we have any replicas nodes, they need to
+     * be full sync again. Otherwise, the replica will maintain the psync and lose
+     * all the data corresponding to the slot RDB.
+     *
+     * Disconnect all the replicas to force our replicas to resync with us.
+     * Free the replication backlog and not allow our chained replicas to PSYNC. */
+    disconnectReplicas();
+    freeReplicationBacklog();
+
+    // todo
+    /* Restart the AOF subsystem now that we finished the sync. This
+     * will trigger an AOF rewrite, and when done will start appending
+     * to the new file. */
+    if (server.aof_enabled) restartAOFAfterSYNC();
+
+    if (job->eofmark) sdsfree(job->eofmark);
+    zfree(job);
+    return;
+
+error:
+    if (job->eofmark) sdsfree(job->eofmark);
+    link->sync_state = CLUSTER_SLOTSYNC_STATE_LOADING_FAIL;
+    zfree(job);
 }
 
 /* A background saving child (BGSAVE) terminated its work. Handle this.

@@ -2942,6 +2942,15 @@ void startLoading(size_t size, int rdbflags, int async) {
     server.rdb_last_load_keys_loaded = 0;
     blockingOperationStarts();
 
+    // todo, check if we need to reset other vars.
+    /* When doing a slot RDB loading, we don't set loading flag so that
+     * the target node can still process the requests. */
+    if (rdbflags & RDBFLAGS_SLOT_SYNC) {
+        server.loading = 0;
+    } else {
+        server.loading = 1;
+    }
+
     /* Fire the loading modules start event. */
     int subevent;
     if (rdbflags & RDBFLAGS_AOF_PREAMBLE)

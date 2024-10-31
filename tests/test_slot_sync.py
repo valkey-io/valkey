@@ -1295,6 +1295,12 @@ class TestSlotSync(unittest.TestCase):
         assert len(conn_9007.keys()) == 2
         assert len(conn_9008.keys()) == 2
 
+        conn_9006.execute_command("set", "{b}3", "value-b3")
+        conn_9000.execute_command("config", "set", "key-load-delay", 10000000)  # 10s
+        conn_9000.cluster("slotsync 3300 3300")
+        time.sleep(5)
+        conn_9000.execute_command("get", "1a")  # Won't return loading error.
+
         util.StopAllRedis()
         time.sleep(1)
 

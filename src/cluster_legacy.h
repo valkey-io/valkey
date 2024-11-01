@@ -428,6 +428,9 @@ typedef struct rdbLoadJob {
     int usemark;
     sds eofmark;
     clusterSlotSyncLink *link;
+    int dbnum;
+    serverDb *db;
+    functionsLibCtx *functions_lib_ctx;
 } rdbLoadJob;
 
 struct clusterState {

@@ -3,6 +3,7 @@
 #include "cluster_legacy.h"
 #include "bio.h"
 #include "module.h"
+#include "functions.h"
 
 /* The following functions are declared here as they will be used in this file
  * but they are defined in other files. */
@@ -908,6 +909,9 @@ void readSlotSyncBulkPayload(connection *conn) {
     job->usemark = usemark;
     job->eofmark = sdsnew(eofmark);
     job->link = link;
+    job->dbnum = server.dbnum;
+    job->db = initTempDb();
+    job->functions_lib_ctx = functionsLibCtxCreate();
     bioCreateRdbLoadJob(bioRdbLoad, 1, job);
 
     return;

@@ -3581,8 +3581,12 @@ void bioRdbLoad(void *args[]) {
     int use_diskless_load = job->use_diskless_load;
     int usemark = job->usemark;
     sds eofmark = job->eofmark;
+    serverDb *db = job->db;
+    functionsLibCtx *functions_lib_ctx = job->functions_lib_ctx;
     clusterSlotSyncLink *link = job->link;
     connection *conn = link->sync_conn;
+
+    rdbLoadingCtx loadingCtx = {.dbarray = db, .functions_lib_ctx = functions_lib_ctx};
 
     char rdbpath[1024];
     char buf[PROTO_IOBUF_LEN];
@@ -3600,7 +3604,7 @@ void bioRdbLoad(void *args[]) {
         connRecvTimeout(conn, server.repl_timeout * 1000);
         startLoading(link->transfer_total_size, rdbflags, async);
 
-        if (rdbLoadRio(&rdb, rdbflags, &rsi) != C_OK) {
+        if (rdbLoadRioWithLoadingCtx(&rdb, rdbflags, &rsi, &loadingCtx) != C_OK) {
             /* RDB loading failed. */
             stopLoading(0);
             serverLog(LL_WARNING, "Failed trying to load the slot owner synchronization DB from socket");
@@ -3655,7 +3659,7 @@ void bioRdbLoad(void *args[]) {
         /* Close old rdb asynchronously. */
         if (old_rdb_fd != -1) bioCreateCloseJob(old_rdb_fd, 0, 1);
 
-        int load_result = rdbLoad((char *)rdbpath, &rsi, rdbflags);
+        int load_result = rdbLoadWithLoadingCtx((char *)rdbpath, &rsi, rdbflags, &loadingCtx);
 
         if (load_result != RDB_OK) {
             serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization "

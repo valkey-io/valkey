@@ -237,6 +237,7 @@ class RedisCluster:
     def __get_default_conf(self, port, is_master=True):
         default_conf = {
             "enable-debug-command": "yes",
+            "hide-user-data-from-log": "no",
             'dir': self.root_dir,
             'port': str(port),
             'bind': '127.0.0.1',

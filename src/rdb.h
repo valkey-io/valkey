@@ -154,6 +154,7 @@ int rdbLoadLenByRef(rio *rdb, int *isencoded, uint64_t *lenptr);
 int rdbSaveObjectType(rio *rdb, robj *o);
 int rdbLoadObjectType(rio *rdb);
 int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags);
+int rdbLoadWithLoadingCtx(char *filename, rdbSaveInfo *rsi, int rdbflags, rdbLoadingCtx *rdb_loading_ctx);
 void bioRdbLoad(void *args[]);
 int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags);
 int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi);

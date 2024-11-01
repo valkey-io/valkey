@@ -3516,14 +3516,26 @@ eoferr:
     return C_ERR;
 }
 
+/* See rdbLoadWithLoadingCtx for details. */
+int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
+    functionsLibCtx *functions_lib_ctx = functionsLibCtxGetCurrent();
+    rdbLoadingCtx loading_ctx = {.dbarray = server.db, .functions_lib_ctx = functions_lib_ctx};
+    int retval = rdbLoadWithLoadingCtx(filename, rsi, rdbflags, &loading_ctx);
+    return retval;
+}
+
 /* Like rdbLoadRio() but takes a filename instead of a rio stream. The
  * filename is open for reading and a rio stream object created in order
  * to do the actual loading. Moreover the ETA displayed in the INFO
  * output is initialized and finalized.
  *
  * If you pass an 'rsi' structure initialized with RDB_SAVE_INFO_INIT, the
- * loading code will fill the information fields in the structure. */
-int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
+ * loading code will fill the information fields in the structure.
+ *
+ * The rdb_loading_ctx argument holds objects to which the rdb will be loaded to,
+ * currently it only allow to set db object and functionLibCtx to which the data
+ * will be loaded (in the future it might contains more such objects). */
+int rdbLoadWithLoadingCtx(char *filename, rdbSaveInfo *rsi, int rdbflags, rdbLoadingCtx *rdb_loading_ctx) {
     FILE *fp;
     rio rdb;
     int retval;
@@ -3549,7 +3561,7 @@ int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
     startLoadingFile(sb.st_size, filename, rdbflags);
     rioInitWithFile(&rdb, fp);
 
-    retval = rdbLoadRio(&rdb, rdbflags, rsi);
+    retval = rdbLoadRioWithLoadingCtx(&rdb, rdbflags, rsi, rdb_loading_ctx);
 
     fclose(fp);
     stopLoading(retval == C_OK);

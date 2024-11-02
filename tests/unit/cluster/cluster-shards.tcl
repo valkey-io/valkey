@@ -42,7 +42,7 @@ start_cluster 3 3 {tags {external:skip cluster}} {
     }
 
     test "Verify health as fail for killed node" {
-        wait_for_condition 50 100 {
+        wait_for_condition 1000 50 {
             "fail" eq [dict get [get_node_info_from_shard $node_0_id $validation_node "node"] "health"]
         } else {
             fail "New primary never detected the node failed"

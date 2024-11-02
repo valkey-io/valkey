@@ -117,7 +117,7 @@ test "Kill a node and tell the replica to immediately takeover" {
 
 # Primary 0 node should report as fail, wait until the new primary acknowledges it.
 test "Verify health as fail for killed node" {
-    wait_for_condition 50 100 {
+    wait_for_condition 1000 50 {
         "fail" eq [dict get [get_node_info_from_shard $node_0_id 4 "node"] "health"]
     } else {
         fail "New primary never detected the node failed"

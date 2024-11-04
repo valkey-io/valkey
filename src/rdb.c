@@ -3581,8 +3581,8 @@ void bioRdbLoad(void *args[]) {
     int use_diskless_load = job->use_diskless_load;
     int usemark = job->usemark;
     sds eofmark = job->eofmark;
-    serverDb *db = job->db;
-    functionsLibCtx *functions_lib_ctx = job->functions_lib_ctx;
+    serverDb *db = job->link->db;
+    functionsLibCtx *functions_lib_ctx = job->link->functions_lib_ctx;
     clusterSlotSyncLink *link = job->link;
     connection *conn = link->sync_conn;
 
@@ -3693,14 +3693,15 @@ void bioRdbLoad(void *args[]) {
     /* Restart the AOF subsystem now that we finished the sync. This
      * will trigger an AOF rewrite, and when done will start appending
      * to the new file. */
-    if (server.aof_enabled) restartAOFAfterSYNC();
+//    if (server.aof_enabled) restartAOFAfterSYNC();
 
-    if (job->eofmark) sdsfree(job->eofmark);
+    if (job->usemark) sdsfree(job->eofmark);
+
     zfree(job);
     return;
 
 error:
-    if (job->eofmark) sdsfree(job->eofmark);
+    if (job->usemark) sdsfree(job->eofmark);
     link->sync_state = CLUSTER_SLOTSYNC_STATE_LOADING_FAIL;
     zfree(job);
 }

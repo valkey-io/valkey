@@ -271,6 +271,17 @@ void resetSlotSyncLink(clusterSlotSyncLink *link, int reconn) {
         link->transfer_tmpfile_name = NULL;
     }
 
+    if (link->db) {
+        serverLog(LL_NOTICE, "have link->db");
+        discardTempDb(link->db);
+        serverLog(LL_NOTICE, "after have link->db");
+
+    }
+
+    if (link->functions_lib_ctx) {
+        functionsLibCtxFree(link->functions_lib_ctx);
+    }
+
     if (reconn) {
         /* Set the state to TOCONNECT, so the cron will retry start next time. */
         link->sync_state = CLUSTER_SLOTSYNC_STATE_TOCONNECT;
@@ -907,11 +918,13 @@ void readSlotSyncBulkPayload(connection *conn) {
     job->rdbflags = RDBFLAGS_REPLICATION | RDBFLAGS_SLOT_SYNC;
     job->use_diskless_load = use_diskless_load;
     job->usemark = usemark;
-    job->eofmark = sdsnew(eofmark);
+    if (usemark) job->eofmark = sdsnew(eofmark);
     job->link = link;
-    job->dbnum = server.dbnum;
-    job->db = initTempDb();
-    job->functions_lib_ctx = functionsLibCtxCreate();
+
+    link->db = initTempDb();
+    link->functions_lib_ctx = functionsLibCtxCreate();
+    link->sync_state = CLUSTER_SLOTSYNC_STATE_LOADING_RDB;
+
     bioCreateRdbLoadJob(bioRdbLoad, 1, job);
 
     return;
@@ -1064,9 +1077,29 @@ void clusterSlotFailoverReplace(void) {
         listRewind(link->slot_ranges, &li2);
         while ((ln2 = listNext(&li2)) != NULL) {
             slotRange *range = ln2->value;
-            for (int i = range->start_slot; i<= range->end_slot; i++) {
-                clusterDelSlot(i);
-                clusterAddSlot(server.cluster->myself,i);
+            for (int j = 0; j < server.dbnum; j++) {
+                serverDb *src_db = link->db + j;
+                serverDb *dst_db = server.db + j;
+                if (kvstoreSize(src_db->keys) == 0) continue;
+
+                serverLog(LL_NOTICE, "clusterSlotFailoverReplace start_slot: %d, end_slot: %d", range->start_slot,
+                          range->end_slot);
+                for (int i = range->start_slot; i <= range->end_slot; i++) {
+                    if (kvstoreHashtableSize(src_db->keys, i) == 0) continue;
+
+                    serverLog(LL_NOTICE, "clusterSlotFailoverReplace before move db: %d, slot: %d, src key: %llu, "
+                                         "dst keys: %llu",
+                                         j, i, kvstoreSize(src_db->keys), kvstoreSize(dst_db->keys));
+
+                    kvstoreMoveHashtable(src_db->keys, dst_db->keys, i);
+
+                    serverLog(LL_NOTICE, "clusterSlotFailoverReplace after move db: %d, slot: %d, src key: %llu, "
+                                         "dst keys: %llu",
+                                         j, i, kvstoreSize(src_db->keys), kvstoreSize(dst_db->keys));
+
+                    clusterDelSlot(i);
+                    clusterAddSlot(server.cluster->myself, i);
+                }
             }
         }
     }
@@ -1078,6 +1111,8 @@ void clusterSlotFailoverReplace(void) {
     /* 4) Pong all the other nodes so that they can update the state accordingly
      *    and detect that we switched to master role. */
     clusterBroadcastPong(CLUSTER_BROADCAST_ALL);
+
+    serverLog(LL_NOTICE, "clusterSlotFailoverReplace ok.");
 }
 
 /* Reset the slot failover state. This works for both 'client' and 'server' side
@@ -1390,4 +1425,9 @@ char *getInjectOptionValue(const char *option) {
         zfree(options);
     }
     return res;
+}
+
+void clientSelectDb(client *c, int dbid) {
+    clusterSlotSyncLink *link = c->slotsync_link;
+    c->db = &link->db[dbid];
 }

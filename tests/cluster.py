@@ -236,6 +236,7 @@ class RedisCluster:
 
     def __get_default_conf(self, port, is_master=True):
         default_conf = {
+            "cluster-allow-replica-migration": "no",
             "enable-debug-command": "yes",
             "hide-user-data-from-log": "no",
             'dir': self.root_dir,
@@ -281,7 +282,7 @@ class RedisCluster:
 
     def __get_node_id(self,port):
         if self.password != '':
-            cmd = self.redis_cli + " -a " + self.password
+            cmd = self.redis_cli + " -a " + self.password + " --no-auth-warning"
         else:
             cmd = self.redis_cli
         cmd += " -p " + str(port) + " cluster myid"

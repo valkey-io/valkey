@@ -50,6 +50,7 @@
 #define UNUSED(V) ((void)V)
 
 static hashtable *kvstoreIteratorNextHashtable(kvstoreIterator *kvs_it);
+static void cumulativeKeyCountAdd(kvstore *kvs, int didx, long delta);
 
 struct _kvstore {
     int flags;
@@ -99,6 +100,49 @@ hashtable *kvstoreGetHashtable(kvstore *kvs, int didx) {
     return kvs->hashtables[didx];
 }
 
+/* Move the dict from src to dst. */
+void kvstoreMoveHashtable(kvstore *src, kvstore *dst, int didx) {
+    assert(kvstoreGetHashtable(src, didx) != NULL);
+    assert(kvstoreGetHashtable(dst, didx) == NULL);
+
+    hashtable *ht = kvstoreGetHashtable(src, didx);
+
+    dst->hashtables[didx] = ht;
+    dst->allocated_hashtables++;
+    cumulativeKeyCountAdd(dst, didx, (long)hashtableSize(ht));
+
+    src->hashtables[didx] = NULL;
+    src->allocated_hashtables--;
+    cumulativeKeyCountAdd(src, didx, -(long)hashtableSize(ht));
+
+    kvstoreHashtableMetadata *metadata = (kvstoreHashtableMetadata *) hashtableMetadata(ht);
+    if (metadata->rehashing_node) {
+        listDelNode(metadata->kvs->rehashing, metadata->rehashing_node);
+
+        metadata->kvs = dst;
+        listAddNodeTail(metadata->kvs->rehashing, ht);
+        metadata->rehashing_node = listLast(dst->rehashing);
+
+        size_t from, to;
+        hashtableRehashingInfo(ht, &from, &to);
+        dst->bucket_count += (from + to);
+        dst->overhead_hashtable_lut += (from + to) * HASHTABLE_BUCKET_SIZE;
+        dst->overhead_hashtable_rehashing += from;
+
+        src->bucket_count -= (from + to);
+        src->overhead_hashtable_lut -= (from + to) * HASHTABLE_BUCKET_SIZE;
+        src->overhead_hashtable_rehashing -= from;
+    } else {
+        metadata->kvs = dst;
+
+        dst->bucket_count += hashtableBuckets(ht);
+        dst->overhead_hashtable_lut += hashtableBuckets(ht) * HASHTABLE_BUCKET_SIZE;
+
+        src->bucket_count -= hashtableBuckets(ht);
+        src->overhead_hashtable_lut -= hashtableBuckets(ht) * HASHTABLE_BUCKET_SIZE;
+    }
+}
+
 static hashtable **kvstoreGetHashtableRef(kvstore *kvs, int didx) {
     return &kvs->hashtables[didx];
 }
@@ -145,7 +189,7 @@ static void cumulativeKeyCountAdd(kvstore *kvs, int didx, long delta) {
     kvs->key_count += delta;
 
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
-    size_t size = hashtableSize(ht);
+    size_t size = ht ? hashtableSize(ht) : 0; /* Hashtable could be deleted. */
     if (delta < 0 && size == 0) {
         kvs->non_empty_hashtables--; /* It became empty. */
     } else if (delta > 0 && size == (size_t)delta) {

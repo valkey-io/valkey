@@ -405,6 +405,9 @@ typedef struct clusterSlotSyncLink {
     char linkname[CLUSTER_NAMELEN]; /* Name of this link */
     char nodename[CLUSTER_NAMELEN]; /* Name of the slot sync source node */
 
+    serverDb *db;
+    functionsLibCtx *functions_lib_ctx;
+
     slotSyncState sync_state;       /* Sync state */
     list* slot_ranges;              /* List of the slot ranges we want to sync */
 
@@ -428,9 +431,6 @@ typedef struct rdbLoadJob {
     int usemark;
     sds eofmark;
     clusterSlotSyncLink *link;
-    int dbnum;
-    serverDb *db;
-    functionsLibCtx *functions_lib_ctx;
 } rdbLoadJob;
 
 struct clusterState {

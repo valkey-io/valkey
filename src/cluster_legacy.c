@@ -133,6 +133,7 @@ int isSlotInClusterSlotSyncLinkList(int slot);
 int isSlotInPendingDelete(int slot);
 clusterSlotSyncLink *createSlotSyncLink(void);
 void initSlotSyncLink(clusterSlotSyncLink *link, clusterNode *node, list *slot_ranges);
+const char *slotSyncStateToString(slotSyncState state);
 sds formatSlotSyncImportingSlots(void);
 void clusterCommandSlotLinkList(client *c);
 void clusterCommandSlotLinkKill(client *c, const char *linkname);
@@ -7316,7 +7317,8 @@ int clusterCommandSpecial(client *c) {
         while ((ln = listNext(&li)) != NULL) {
             clusterSlotSyncLink *link = ln->value;
             if (link->sync_state != CLUSTER_SLOTSYNC_STATE_CONNECTED) {
-                addReplyErrorFormat(c, "Slot sync link %.40s is not connected.", link->linkname);
+                addReplyErrorFormat(c, "Slot sync link %.40s is not connected, link status: %s", link->linkname,
+                                    slotSyncStateToString(link->sync_state));
                 return 1;
             }
         }

@@ -1268,10 +1268,11 @@ class TestSlotSync(unittest.TestCase):
         # 8. 9000 源节点使用 expire 给键续期，这部分命令会堆积到缓冲区里
         conn_9000.execute_command("expire", "{b}1", 100)
         conn_9000.execute_command("expire", "{b}2", 100)
+        conn_9000.execute_command("set", "{b}new", "value-new")
 
         # 9. 等待目标节点 online，此时增量命令都应该会消费完
         wait_slotlink_connected(conn_9006, 1, 20)
-        conn_9006.execute_command("config", "set", "key-load-delay", 0)  # 10s
+        conn_9006.execute_command("config", "set", "key-load-delay", 0)
 
         # 10. 给目标节点增加一个从节点，在 slotsync 之后
         redis_cluster.add_new_slave(9006, 9008)
@@ -1281,41 +1282,44 @@ class TestSlotSync(unittest.TestCase):
         redis_cluster.wait_for_sync(conn_9007)
         redis_cluster.wait_for_sync(conn_9008)
 
-        # 12. slotfailover 之前确保键数据都正常
-        # assert len(conn_9000.keys()) == 2
-        # assert len(conn_9006.keys()) == 2
-        # assert len(conn_9007.keys()) == 2
-        # assert len(conn_9008.keys()) == 2
+        # 12. slotfailover 之前确保键数据都正常，目标节点在 slotfailover 之前无法看到 slot RDB 数据
+        assert len(conn_9000.keys()) == 3  # ['{b}1', '{b}2', '{b}new']
+        assert len(conn_9006.keys()) == 0
+        assert len(conn_9007.keys()) == 0
+        assert len(conn_9008.keys()) == 0
 
         # 12. slotfailover 之前确保键数据都正常
         conn_9006.cluster('slotfailover')
         time.sleep(1)
-        # assert len(conn_9000.keys()) == 0
-        # assert len(conn_9006.keys()) == 2
+        assert len(conn_9000.keys()) == 0
+        assert len(conn_9006.keys()) == 3  # ['{b}1', '{b}2', '{b}new']
+        # zbb todo
         # assert len(conn_9007.keys()) == 2
         # assert len(conn_9008.keys()) == 2
+        print("==============2222")
+        print(conn_9000.keys())
+        print(conn_9006.keys())
+        print(conn_9007.keys())
+        print(conn_9008.keys())
 
         # 13. 加载 slot RDB 现在不会返回 loading 错误
-        # 从 9006 往 9000 里搬迁
-        conn_9000.execute_command("config", "set", "key-load-delay", 1000000)  # 1s
         for i in range(10):
             key = "{b}" + str(i)
             value = "value-" + key
             conn_9006.execute_command("set", key, value)
 
-        print("Before the new slot RDB")
-        print("conn 9000", conn_9000.execute_command("keys", "*"))
-        print("conn 9000", conn_9000.execute_command("dbsize"))
-        print("conn 9000", conn_9000.execute_command("cluster", "countkeysinslot", "3300"))
-
-        print("conn 9006", conn_9006.execute_command("keys", "*"))
-        print("conn 9006", conn_9006.execute_command("cluster", "countkeysinslot", "3300"))
-
+        # 从 9006 往 9000 里搬迁
+        conn_9000.execute_command("config", "set", "key-load-delay", 1000000)  # 1s
         conn_9000.cluster("slotsync 3300 3300")
 
         time.sleep(5)
         conn_9000.execute_command("get", "1a")  # Won't return loading error.
-        print("After the new slot RDB")
+        conn_9000.execute_command("config", "set", "key-load-delay", 0)
+        time.sleep(2)
+        conn_9000.cluster('slotfailover')
+        time.sleep(2)
+
+        print("After slot failover")
         print("conn 9000", conn_9000.execute_command("keys", "*"))
         print("conn 9000", conn_9000.execute_command("dbsize"))
         print("conn 9000", conn_9000.execute_command("cluster", "countkeysinslot", "3300"))

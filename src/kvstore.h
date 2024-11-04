@@ -86,5 +86,6 @@ void kvstoreHashtableTwoPhasePopDelete(kvstore *kvs, int didx, void *position);
 int kvstoreHashtablePop(kvstore *kvs, int didx, const void *key, void **popped);
 int kvstoreHashtableDelete(kvstore *kvs, int didx, const void *key);
 hashtable *kvstoreGetHashtable(kvstore *kvs, int didx);
+void kvstoreMoveHashtable(kvstore *src, kvstore *dst, int didx);
 
 #endif /* KVSTORE_H */

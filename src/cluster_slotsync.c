@@ -350,6 +350,7 @@ const char *slotSyncStateToString(slotSyncState state) {
     case CLUSTER_SLOTSYNC_STATE_SEND_SYNC: return "send_sync";
     case CLUSTER_SLOTSYNC_STATE_RECV_RDB: return "recv_rdb";
     case CLUSTER_SLOTSYNC_STATE_LOADING_RDB: return "loading_rdb";
+    case CLUSTER_SLOTSYNC_STATE_DONE_LOADING: return "done_loading";
     case CLUSTER_SLOTSYNC_STATE_CONNECTED: return "connected";
     case CLUSTER_SLOTSYNC_STATE_FAILED: return "failed";
     default: serverPanic("Unknown slot sync state.");
@@ -1176,6 +1177,24 @@ void clusterSlotSyncCron(void) {
             }
         } else if (link->sync_state == CLUSTER_SLOTSYNC_STATE_LOADING_RDB) {
             /* Check the bio loading result. */
+        } else if (link->sync_state == CLUSTER_SLOTSYNC_STATE_DONE_LOADING) {
+            /* Create a client, here we don't mark the client as a primary for some reasons.
+             * This client is used to receive the subsequent slot replication buffer, and
+             * we set reply_off indicates that it does not need reply. */
+            client *client = createClient(link->sync_conn);
+            client->flag.authenticated = 1;
+            client->flag.reply_off = 1;
+            client->slotsync_link = link;
+            client->slotsync_slots = listDup(link->slot_ranges);
+            client->flag.slot_sync_primary = 1;
+            link->client = client;
+            serverLog(LL_NOTICE, "create link->clinet");
+
+            disconnectReplicas();
+            freeReplicationBacklog();
+            serverLog(LL_NOTICE, "disconnect replicas");
+
+            link->sync_state = CLUSTER_SLOTSYNC_STATE_CONNECTED;
         } else if (link->sync_state == CLUSTER_SLOTSYNC_STATE_LOADING_FAIL) {
             /* Check the bio loading result. */
             resetSlotSyncLinkForReconnect(link);

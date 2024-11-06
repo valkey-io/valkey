@@ -3659,33 +3659,10 @@ void bioRdbLoad(void *args[]) {
     }
 
     /* Mark the synchronization has done. */
-    link->sync_state = CLUSTER_SLOTSYNC_STATE_CONNECTED;
+    link->sync_state = CLUSTER_SLOTSYNC_STATE_DONE_LOADING;
 
     /* Set to a value large enough after first init. */
     link->slot_mf_lag = SLOTSYNC_DEFAULT_LAG;
-
-    /* Create a client, here we don't mark the client as a primary for some reasons.
-     * This client is used to receive the subsequent slot replication buffer, and
-     * we set reply_off indicates that it does not need reply. */
-    client *client = createClient(link->sync_conn);
-    client->flag.authenticated = 1;
-    client->flag.reply_off = 1;
-    client->slotsync_link = link;
-    client->slotsync_slots = listDup(link->slot_ranges);
-    client->flag.slot_sync_primary = 1;
-    link->client = client;
-
-    serverLog(LL_NOTICE, "Cluster slot sync: Finished with success");
-
-    // todo fixme
-    /* After loading a new slot RDB, if we have any replicas nodes, they need to
-     * be full sync again. Otherwise, the replica will maintain the psync and lose
-     * all the data corresponding to the slot RDB.
-     *
-     * Disconnect all the replicas to force our replicas to resync with us.
-     * Free the replication backlog and not allow our chained replicas to PSYNC. */
-    disconnectReplicas();
-    freeReplicationBacklog();
 
     // todo
     /* Restart the AOF subsystem now that we finished the sync. This

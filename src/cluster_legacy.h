@@ -391,6 +391,7 @@ typedef enum {
     /* --- End of handshake states --- */
     CLUSTER_SLOTSYNC_STATE_RECV_RDB,    /* Receiving the filtered rdb */
     CLUSTER_SLOTSYNC_STATE_LOADING_RDB, /* Loading the RDB in bio. */
+    CLUSTER_SLOTSYNC_STATE_DONE_LOADING,/* Done loading the RDB in bio. */
     CLUSTER_SLOTSYNC_STATE_CONNECTED,   /* Synced with the slot owner */
     CLUSTER_SLOTSYNC_STATE_LOADING_FAIL,/* Loading fail. */
     CLUSTER_SLOTSYNC_STATE_FAILED,      /* Meet unexpected error and retry will not work */

@@ -19,7 +19,7 @@
         ],
         "reply_schema": {
             "const": "OK",
-            "description": "Force a fail over as if the primary was not reachable, and without asking for agreement to other Sentinels."
+            "description": "Force a fail over of the primary. Without options, the fail over is executed immediately as if the primary was not reachable. Using `COORDINATED`, fail over seeking agreement from other Sentinels and using coordinated fail over."
         },
         "arguments": [
             {

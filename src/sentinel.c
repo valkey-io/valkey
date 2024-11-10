@@ -144,6 +144,9 @@ static mstime_t sentinel_default_failover_timeout = 60 * 3 * 1000;
 #define SENTINEL_MONITORED_INSTANCE_NO_FAILOVER 1 /* Failover supported, no failover ongoing */
 #define SENTINEL_MONITORED_INSTANCE_FAILOVER 2    /* Failover supported, failover ongoing */
 
+/* sentinelAskPrimaryStateToOtherSentinels flags */
+#define SENTINEL_ASK_FORCED (1 << 0)
+
 /* The link to a sentinelValkeyInstance. When we have the same set of Sentinels
  * monitoring many primaries, we have different instances representing the
  * same Sentinels, one per primary, and we need to share the libvalkey connections
@@ -422,6 +425,7 @@ int sentinelSendPing(sentinelValkeyInstance *ri);
 int sentinelForceHelloUpdateForPrimary(sentinelValkeyInstance *primary);
 sentinelValkeyInstance *getSentinelValkeyInstanceByAddrAndRunID(dict *instances, char *ip, int port, char *runid);
 void sentinelSimFailureCrash(void);
+void sentinelAskPrimaryStateToOtherSentinels(sentinelValkeyInstance *primary, int flags);
 
 /* ========================= Dictionary types =============================== */
 
@@ -3892,7 +3896,7 @@ void sentinelCommand(client *c) {
             return;
         if (c->argc == 4) {
             if (!strcasecmp(c->argv[3]->ptr, "coordinated")) {
-                coordinated = SRI_COORD_FAILOVER;
+                coordinated = 1;
                 if (ri->monitored_instance_failover_state == SENTINEL_MONITORED_INSTANCE_FAILOVER_NS) {
                     addReplyError(c, "-NOGOODPRIMARY Primary does not support FAILOVER command");
                     return;
@@ -3911,8 +3915,19 @@ void sentinelCommand(client *c) {
             return;
         }
         serverLog(LL_NOTICE, "Executing user requested FAILOVER of '%s'", ri->name);
+        ri->s_down_since_time = mstime();
+        ri->flags |= SRI_S_DOWN;
         sentinelStartFailover(ri);
-        ri->flags |= SRI_FORCE_FAILOVER | coordinated;
+        if (coordinated) {
+            ri->flags |= SRI_COORD_FAILOVER;
+            /* Initiate a leader election, The SENTINEL_FAILOVER_STATE_WAIT_START
+               state will wait until we are elected. */
+            sentinelAskPrimaryStateToOtherSentinels(ri, SENTINEL_ASK_FORCED);
+        } else {
+            /* SRI_FORCE_FAILOVER will cause the SENTINEL_FAILOVER_STATE_WAIT_START
+               state to regard us as leader (without election). */
+            ri->flags |= SRI_FORCE_FAILOVER;
+        }
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "pending-scripts")) {
         /* SENTINEL PENDING-SCRIPTS */
@@ -4527,7 +4542,6 @@ void sentinelReceiveIsPrimaryDownReply(valkeyAsyncContext *c, void *reply, void 
  * SENTINEL IS-PRIMARY-DOWN-BY-ADDR requests to other sentinels
  * in order to get the replies that allow to reach the quorum
  * needed to mark the primary in ODOWN state and trigger a failover. */
-#define SENTINEL_ASK_FORCED (1 << 0)
 void sentinelAskPrimaryStateToOtherSentinels(sentinelValkeyInstance *primary, int flags) {
     dictIterator *di;
     dictEntry *de;
@@ -5083,25 +5097,28 @@ void sentinelFailoverSelectReplica(sentinelValkeyInstance *ri) {
 
 void sentinelFailoverSendFailover(sentinelValkeyInstance *ri) {
     int retval;
-
-    /* We can't send the command to the master if it is now
-     * disconnected. Retry again and again with this state until the timeout
-     * is reached, then abort the failover. */
     mstime_t time_passed = mstime() - ri->failover_state_change_time;
+
+    /* If we don't have enough time left (1 second) for the FAILOVER command
+     * timeout, then abort the failover. */
+    if (ri->failover_timeout - time_passed < 1000) {
+        sentinelEvent(LL_WARNING, "-failover-abort-master-timeout", ri, "%@");
+        sentinelAbortFailover(ri);
+        return;
+    }
+    /* We can't send the command to the master if it is now
+     * disconnected. Retry again and again with this state (until the timeout
+     * is reached and we abort the failover.) */
     if (ri->link->disconnected) {
-        if (time_passed > ri->failover_timeout) {
-            sentinelEvent(LL_WARNING, "-failover-abort-master-timeout", ri, "%@");
-            sentinelAbortFailover(ri);
-        }
         return;
     }
 
-    /* Send FAILOVER command to switch the role of the master and the
+    /* Send FAILOVER command to switch the role of the primary and the
      * promoted replica. We actually register a generic callback for this
      * command as we don't really care about the reply. We check if it worked
      * indirectly observing if INFO returns a different role (master instead of
      * slave). */
-    retval = sentinelFailoverTo(ri, ri->promoted_replica->addr, ri->down_after_period);
+    retval = sentinelFailoverTo(ri, ri->promoted_replica->addr, ri->failover_timeout - time_passed);
     if (retval != C_OK) return;
     sentinelEvent(LL_NOTICE, "+failover-state-wait-promotion",
                   ri->promoted_replica, "%@");

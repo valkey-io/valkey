@@ -23,14 +23,20 @@ proc get_client_id_by_last_cmd {r cmd} {
     return $client_id
 }
 
-# Wait until the process enters a paused state, then resume the process.
-proc wait_and_resume_process idx {
+# Wait until the process enters a paused state.
+proc wait_process_paused idx {
     set pid [srv $idx pid]
     wait_for_condition 50 1000 {
         [string match "T*" [exec ps -o state= -p $pid]]
     } else {
         fail "Process $pid didn't stop, current state is [exec ps -o state= -p $pid]"
     }
+}
+
+# Wait until the process enters a paused state, then resume the process.
+proc wait_and_resume_process idx {
+    set pid [srv $idx pid]
+    wait_process_paused $idx
     resume_process $pid
 }
 
@@ -824,6 +830,10 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             } else {
                 fail "Primary did not free repl buf block after sync failure"
             }
+            # Full sync will be triggered after the replica is reconnected, pause primary main process after fork.
+            # In this way, in the subsequent replicaof no one, we won't get the LOADING error if the replica reconnects
+            # too quickly and enters the loading state.
+            $primary debug pause-after-fork 1
             resume_process $replica_pid
             set res [wait_for_log_messages -1 {"*Unable to partial resync with replica * for lack of backlog*"} $loglines 2000 10]
             set loglines [lindex $res 1]
@@ -832,6 +842,9 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         wait_process_paused -1
         wait_for_log_messages 0 {"*Done loading RDB*"} $replica_loglines 5000 10
         $replica replicaof no one
+        # Resume the primary and make sure the sync is dropped.
+        resume_process [srv -1 pid]
+        $primary debug pause-after-fork 0
         wait_for_condition 500 1000 {
             [s -1 rdb_bgsave_in_progress] eq 0
         } else {

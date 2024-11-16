@@ -90,6 +90,8 @@ proc test_migrated_replica {type} {
 
         # Wait for the cluster to be ok.
         wait_for_condition 1000 50 {
+            [R 3 cluster slots] eq [R 4 cluster slots] &&
+            [R 4 cluster slots] eq [R 7 cluster slots] &&
             [CI 3 cluster_state] eq "ok" &&
             [CI 4 cluster_state] eq "ok" &&
             [CI 7 cluster_state] eq "ok"
@@ -189,6 +191,7 @@ proc test_nonempty_replica {type} {
 
         # Wait for the cluster to be ok.
         wait_for_condition 1000 50 {
+            [R 4 cluster slots] eq [R 7 cluster slots] &&
             [CI 4 cluster_state] eq "ok" &&
             [CI 7 cluster_state] eq "ok"
         } else {
@@ -310,6 +313,8 @@ proc test_sub_replica {type} {
 
         # Wait for the cluster to be ok.
         wait_for_condition 1000 50 {
+            [R 3 cluster slots] eq [R 4 cluster slots] &&
+            [R 4 cluster slots] eq [R 7 cluster slots] &&
             [CI 3 cluster_state] eq "ok" &&
             [CI 4 cluster_state] eq "ok" &&
             [CI 7 cluster_state] eq "ok"

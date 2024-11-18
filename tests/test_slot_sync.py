@@ -1282,25 +1282,21 @@ class TestSlotSync(unittest.TestCase):
         redis_cluster.wait_for_sync(conn_9007)
         redis_cluster.wait_for_sync(conn_9008)
 
-        # 12. slotfailover 之前确保键数据都正常，目标节点在 slotfailover 之前无法看到 slot RDB 数据
+        # 12. slotfailover 之前确保键数据都正常，目标节点在 slotfailover 之前可以看到 slot RDB 的数据
         assert len(conn_9000.keys()) == 3  # ['{b}1', '{b}2', '{b}new']
-        assert len(conn_9006.keys()) == 0
-        assert len(conn_9007.keys()) == 0
-        assert len(conn_9008.keys()) == 0
+        assert len(conn_9006.keys()) == 3  # ['{b}1', '{b}2', '{b}new']
+        assert len(conn_9007.keys()) == 3  # ['{b}1', '{b}2', '{b}new']
+        assert len(conn_9008.keys()) == 3  # ['{b}1', '{b}2', '{b}new']
 
         # 12. slotfailover 之前确保键数据都正常
         conn_9006.cluster('slotfailover')
         time.sleep(1)
+        redis_cluster.wait_for_sync(conn_9007)
+        redis_cluster.wait_for_sync(conn_9008)
         assert len(conn_9000.keys()) == 0
         assert len(conn_9006.keys()) == 3  # ['{b}1', '{b}2', '{b}new']
-        # zbb todo
-        # assert len(conn_9007.keys()) == 2
-        # assert len(conn_9008.keys()) == 2
-        print("==============2222")
-        print(conn_9000.keys())
-        print(conn_9006.keys())
-        print(conn_9007.keys())
-        print(conn_9008.keys())
+        assert len(conn_9007.keys()) == 3  # ['{b}1', '{b}2', '{b}new']
+        assert len(conn_9008.keys()) == 3  # ['{b}1', '{b}2', '{b}new']
 
         # 13. 加载 slot RDB 现在不会返回 loading 错误
         for i in range(10):
@@ -1319,13 +1315,10 @@ class TestSlotSync(unittest.TestCase):
         conn_9000.cluster('slotfailover')
         time.sleep(2)
 
-        print("After slot failover")
-        print("conn 9000", conn_9000.execute_command("keys", "*"))
-        print("conn 9000", conn_9000.execute_command("dbsize"))
-        print("conn 9000", conn_9000.execute_command("cluster", "countkeysinslot", "3300"))
-
-        print("conn 9006", conn_9006.execute_command("keys", "*"))
-        print("conn 9006", conn_9006.execute_command("cluster", "countkeysinslot", "3300"))
+        assert len(conn_9000.keys()) == 11
+        assert len(conn_9006.keys()) == 0  # ['{b}1', '{b}2', '{b}new']
+        assert len(conn_9007.keys()) == 0  # ['{b}1', '{b}2', '{b}new']
+        assert len(conn_9008.keys()) == 0  # ['{b}1', '{b}2', '{b}new']
 
         util.StopAllRedis()
         time.sleep(1)

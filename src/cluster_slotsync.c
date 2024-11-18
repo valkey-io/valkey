@@ -1056,12 +1056,6 @@ void clusterInitSlotFailover(void) {
  * Note that it's up to the caller to be sure that the node got a new
  * configuration epoch already. */
 void clusterSlotFailoverReplace(void) {
-    /* If the cluster is failed, can not do slot failover. */
-    if (server.cluster->state == CLUSTER_FAIL) {
-        serverLog(LL_WARNING, "Cluster is down, can not do slot failover.");
-        return;
-    }
-
     /* 1) Clear the importing state for all the slots. */
     clusterCloseAllSlots();
 
@@ -1077,29 +1071,9 @@ void clusterSlotFailoverReplace(void) {
         listRewind(link->slot_ranges, &li2);
         while ((ln2 = listNext(&li2)) != NULL) {
             slotRange *range = ln2->value;
-            for (int j = 0; j < server.dbnum; j++) {
-                serverDb *src_db = link->db + j;
-                serverDb *dst_db = server.db + j;
-                if (kvstoreSize(src_db->keys) == 0) continue;
-
-                serverLog(LL_NOTICE, "clusterSlotFailoverReplace start_slot: %d, end_slot: %d", range->start_slot,
-                          range->end_slot);
-                for (int i = range->start_slot; i <= range->end_slot; i++) {
-                    if (kvstoreHashtableSize(src_db->keys, i) == 0) continue;
-
-                    serverLog(LL_NOTICE, "clusterSlotFailoverReplace before move db: %d, slot: %d, src key: %llu, "
-                                         "dst keys: %llu",
-                                         j, i, kvstoreSize(src_db->keys), kvstoreSize(dst_db->keys));
-
-                    kvstoreMoveHashtable(src_db->keys, dst_db->keys, i);
-
-                    serverLog(LL_NOTICE, "clusterSlotFailoverReplace after move db: %d, slot: %d, src key: %llu, "
-                                         "dst keys: %llu",
-                                         j, i, kvstoreSize(src_db->keys), kvstoreSize(dst_db->keys));
-
-                    clusterDelSlot(i);
-                    clusterAddSlot(server.cluster->myself, i);
-                }
+            for (int i = range->start_slot; i <= range->end_slot; i++) {
+                clusterDelSlot(i);
+                clusterAddSlot(server.cluster->myself,i);
             }
         }
     }
@@ -1170,6 +1144,38 @@ int getSlotFailoverReplicaIngressCount(void) {
  * Cluster functions related to slot sync cron jobs.
  * -------------------------------------------------------------------------- */
 
+void slotSyncMergeTempResources(clusterSlotSyncLink *link) {
+    /* Merge the tmp db. */
+    listNode *ln2;
+    listIter li2;
+    listRewind(link->slot_ranges, &li2);
+    while ((ln2 = listNext(&li2)) != NULL) {
+        slotRange *range = ln2->value;
+        for (int j = 0; j < server.dbnum; j++) {
+            serverDb *src_db = link->db + j;
+            serverDb *dst_db = server.db + j;
+            if (kvstoreSize(src_db->keys) == 0) continue;
+
+            for (int i = range->start_slot; i <= range->end_slot; i++) {
+                if (kvstoreHashtableSize(src_db->keys, i) == 0) continue;
+                kvstoreMoveHashtable(src_db->keys, dst_db->keys, i);
+
+                if (kvstoreHashtableSize(src_db->expires, i) == 0) continue;
+                kvstoreMoveHashtable(src_db->expires, dst_db->expires, i);
+            }
+        }
+    }
+
+    /* Merge the function. */
+    if (functionsLibCtxFunctionsLen(link->functions_lib_ctx)) {
+        sds err = NULL;
+        if (libraryJoin(functionsLibCtxGetCurrent(), link->functions_lib_ctx, 1, &err) != C_OK) {
+            serverLog(LL_WARNING, "Discarding the merge of functions, an error occurred while merging functions"
+                                  " from the slot RDB, error: %s", err);
+        }
+    }
+}
+
 void clusterSlotSyncCron(void) {
     if (server.cluster->state == CLUSTER_FAIL) {
         return;
@@ -1220,6 +1226,7 @@ void clusterSlotSyncCron(void) {
             /* Create a client, here we don't mark the client as a primary for some reasons.
              * This client is used to receive the subsequent slot replication buffer, and
              * we set reply_off indicates that it does not need reply. */
+            serverLog(LL_NOTICE, "Slot RDB loading completed, creating the client.");
             client *client = createClient(link->sync_conn);
             client->flag.authenticated = 1;
             client->flag.reply_off = 1;
@@ -1227,11 +1234,15 @@ void clusterSlotSyncCron(void) {
             client->slotsync_slots = listDup(link->slot_ranges);
             client->flag.slot_sync_primary = 1;
             link->client = client;
-            serverLog(LL_NOTICE, "create link->clinet");
 
+            /* Merge the temp resources from link. */
+            serverLog(LL_NOTICE, "Slot RDB loading completed, merging the temp resources.");
+            slotSyncMergeTempResources(link);
+
+            /* After loading a slot RDB, drop replicas if exist. */
+            serverLog(LL_NOTICE, "Slot RDB loading completed, dropping the replicas if exist.");
             disconnectReplicas();
             freeReplicationBacklog();
-            serverLog(LL_NOTICE, "disconnect replicas");
 
             link->sync_state = CLUSTER_SLOTSYNC_STATE_CONNECTED;
         } else if (link->sync_state == CLUSTER_SLOTSYNC_STATE_LOADING_FAIL) {
@@ -1283,10 +1294,16 @@ void clusterSlotSyncCron(void) {
 
             /* Do the slot failover when all the slotsync links are ready. */
             if (mf_link_cnt && mf_link_cnt == ready_link_cnt) {
-                serverLog(LL_WARNING,"All cluster slotsync links are ready!");
-                clusterBumpConfigEpochWithoutConsensus();
-                clusterSlotFailoverReplace();
-                clusterResetSlotFailover();
+                /* If the cluster is failed, can not do slot failover. */
+                if (server.cluster->state == CLUSTER_FAIL) {
+                    serverLog(LL_NOTICE, "All cluster slotsync links are ready, but cluster is down, can not do the "
+                                         "slot failover.");
+                } else {
+                    serverLog(LL_NOTICE, "All cluster slotsync links are ready, doing the slot failover.");
+                    clusterBumpConfigEpochWithoutConsensus();
+                    clusterSlotFailoverReplace();
+                    clusterResetSlotFailover();
+                }
             } else {
                 static long long count = 0;
                 if (count++ % 10 == 0) {
@@ -1425,9 +1442,4 @@ char *getInjectOptionValue(const char *option) {
         zfree(options);
     }
     return res;
-}
-
-void clientSelectDb(client *c, int dbid) {
-    clusterSlotSyncLink *link = c->slotsync_link;
-    c->db = &link->db[dbid];
 }

@@ -693,12 +693,6 @@ void discardTempDb(serverDb *tempDb) {
 
 int selectDb(client *c, int id) {
     if (id < 0 || id >= server.dbnum) return C_ERR;
-
-    if (c->flag.slot_sync_primary) {
-        clientSelectDb(c, id);
-        return C_OK;
-    }
-
     c->db = &server.db[id];
     return C_OK;
 }

@@ -4436,12 +4436,17 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
 
     /* We did not voted for a replica about this primary for two
      * times the node timeout. This is not strictly needed for correctness
-     * of the algorithm but makes the base case more linear. */
-    if (mstime() - node->replicaof->voted_time < server.cluster_node_timeout * 2) {
+     * of the algorithm but makes the base case more linear.
+     *
+     * This limitation does not restrict manual failover. If a user initiates
+     * a manual failover, we need to allow it to vote, otherwise the manual
+     * failover may time out. */
+    if (!force_ack && mstime() - node->replicaof->voted_time < server.cluster_node_timeout * 2) {
         serverLog(LL_WARNING,
-                  "Failover auth denied to %.40s %s: "
-                  "can't vote about this primary before %lld milliseconds",
+                  "Failover auth denied to %.40s (%s): "
+                  "can't vote for any replica of %.40s (%s) within %lld milliseconds",
                   node->name, node->human_nodename,
+                  node->replicaof->name, node->replicaof->human_nodename,
                   (long long)((server.cluster_node_timeout * 2) - (mstime() - node->replicaof->voted_time)));
         return;
     }
@@ -4477,7 +4482,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
 
     /* We can vote for this replica. */
     server.cluster->lastVoteEpoch = server.cluster->currentEpoch;
-    node->replicaof->voted_time = mstime();
+    if (!force_ack) node->replicaof->voted_time = mstime();
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
     clusterSendFailoverAuth(node);
     serverLog(LL_NOTICE, "Failover auth granted to %.40s (%s) for epoch %llu", node->name, node->human_nodename,

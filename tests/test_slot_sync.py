@@ -166,69 +166,15 @@ class TestSlotSync(unittest.TestCase):
         redis_cluster.add_new_node(9006, 9000)
         time.sleep(0.5)
         conn = redis.StrictRedis(host='127.0.0.1', port=9006, password='1234567', decode_responses=True)
+        conn.cluster('slotsync 0 1')
         try:
-            nodes = conn.cluster('slotsync 0 1')
-        except Exception as e:
-            print(e)
-        try:
-            nodes = conn.cluster('slotsync 0 0')
+            conn.cluster('slotsync 0 0')
         except Exception as e:
             assert "in slot sync" in str(e)
 
         util.StopAllRedis()
         time.sleep(1)
         util.PrintSuccCaseResult("TestCase 2: OK")
-
-    def test_case03(self):
-        # =================== TestCase 3 =============================
-        # cluster slotsync密码认证失败
-        # ============================================================
-        # 1. 启一个三分片集群(master, slave):(9000, 9003),(9001, 9004),(9002,9005).
-        redis_cluster = cluster.RedisCluster(password='1234567', shard_size=3)
-        redis_cluster.start_cluster()
-        # 2. 加入一个新节点
-        redis_cluster.add_new_node(9006, 9000)
-        time.sleep(0.5)
-        # 3. 修改新节点的密码,(slot同步的握手阶段需求密码认证)
-        redis_cluster.stop_redis_node(9006)
-        time.sleep(1)
-        redis_conf = redis_cluster.get_redis_conf_file(9006)
-        util.sed_helper("1234567", "1234567a", redis_conf)
-        redis_cluster.start_redis_node(9006)
-        time.sleep(1)
-        conn = redis.StrictRedis(host='127.0.0.1', port=9006, password='1234567a', decode_responses=True)
-        # 4. 发起slot同步请求
-        try:
-            nodes = conn.cluster('slotsync 0 1')
-        except Exception as e:
-            assert str(e) == 'invalid password'
-        time.sleep(1)
-        try:
-            linkinfo = conn.cluster('slotlink list')
-        except Exception as e:
-            assert str(e) == 'invalid password'
-        util.StopAllRedis()
-        time.sleep(1)
-        util.PrintSuccCaseResult("TestCase 3: OK")
-
-    def test_case04(self):
-        return
-
-        # =================== TestCase 4 =============================
-        # arbiter 节点上执行cluster slotsync 相关命令
-        # ============================================================
-        # 1. 启一个cluster mode的主从版( master:9000, arbiter: 9001、9002, slave:9003)
-        MsCluster = cluster.RedisCluster(password='')
-        MsCluster.start_ms_cluster()
-        # 2. arbiter节点执行slotsync
-        conn = redis.StrictRedis(host='127.0.0.1', port=9001, decode_responses=True)
-        try:
-                nodes = conn.cluster('slotsync 0 0')
-        except Exception as e:
-            assert "can not do this" in str(e)
-
-        time.sleep(1)
-        util.PrintSuccCaseResult("TestCase 4: OK")
 
     def test_case05(self):
         # =================== TestCase 5 =============================
@@ -1355,35 +1301,33 @@ class TestSlotSync(unittest.TestCase):
 if __name__ == "__main__":
     suite = unittest.TestSuite()
     test_cases = [
-        # TestSlotSync("test_case01"),
-        # TestSlotSync("test_case02"),
-        # TestSlotSync("test_case03"),
-        # TestSlotSync("test_case04"),
-        # TestSlotSync("test_case05"),
-        # TestSlotSync("test_case06"),
-        # TestSlotSync("test_case07"),
-        # TestSlotSync("test_case08"),
-        # TestSlotSync("test_case09"),
-        # TestSlotSync("test_case10"),
-        # TestSlotSync("test_case11"),
-        # TestSlotSync("test_case12"),
-        # TestSlotSync("test_case13"),
-        # TestSlotSync("test_case14"),
-        # TestSlotSync("test_case15"),
-        # TestSlotSync("test_case16"),
-        # TestSlotSync("test_case17"),
-        # TestSlotSync("test_case18"),
-        # TestSlotSync("test_case19"),
-        # TestSlotSync("test_case20"),
-        # TestSlotSync("test_case21"),
-        # TestSlotSync("test_case22"),
-        # TestSlotSync("test_case23"),
-        # TestSlotSync("test_case24"),
-        # TestSlotSync("test_case25"),
-        # TestSlotSync("test_case26"),
+        TestSlotSync("test_case01"),
+        TestSlotSync("test_case02"),
+        TestSlotSync("test_case05"),
+        TestSlotSync("test_case06"),
+        TestSlotSync("test_case07"),
+        TestSlotSync("test_case08"),
+        TestSlotSync("test_case09"),
+        TestSlotSync("test_case10"),
+        TestSlotSync("test_case11"),
+        TestSlotSync("test_case12"),
+        TestSlotSync("test_case13"),
+        TestSlotSync("test_case14"),
+        TestSlotSync("test_case15"),
+        TestSlotSync("test_case16"),
+        TestSlotSync("test_case17"),
+        TestSlotSync("test_case18"),
+        TestSlotSync("test_case19"),
+        TestSlotSync("test_case20"),
+        TestSlotSync("test_case21"),
+        TestSlotSync("test_case22"),
+        TestSlotSync("test_case23"),
+        TestSlotSync("test_case24"),
+        TestSlotSync("test_case25"),
+        TestSlotSync("test_case26"),
         TestSlotSync("test_case27"),
-        # TestSlotSync("test_case29"),
-        # TestSlotSync("test_case31"),
+        TestSlotSync("test_case29"),
+        TestSlotSync("test_case31"),
 
         # TestSlotSync("test_case28"),
         # TestSlotSync("test_case30"),

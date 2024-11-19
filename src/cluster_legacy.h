@@ -339,7 +339,8 @@ struct _clusterNode {
     mstime_t pong_received;                 /* Unix time we received the pong */
     mstime_t data_received;                 /* Unix time we received any data */
     mstime_t fail_time;                     /* Unix time when FAIL flag was set */
-    mstime_t voted_time;                    /* Last time we voted for a replica of this primary */
+    mstime_t voted_time;                    /* Last time we voted for a replica of this primary in non manual
+                                             * failover scenarios. */
     mstime_t repl_offset_time;              /* Unix time we received offset for this node */
     mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
     long long repl_offset;                  /* Last known repl offset for this node. */

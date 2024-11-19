@@ -225,3 +225,91 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval
         verify_no_log_message -3 "*Manual failover timed out*" $loglines2
     }
 } ;# start_cluster
+
+start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 2000}} {
+    test "Manual failover vote is not limited by two times the node timeout - drop the auth ack" {
+        set CLUSTER_PACKET_TYPE_FAILOVER_AUTH_ACK 6
+        set CLUSTER_PACKET_TYPE_NONE -1
+
+        # Setting a large timeout to make sure we hit the voted_time limit.
+        R 0 config set cluster-node-timeout 150000
+        R 1 config set cluster-node-timeout 150000
+        R 2 config set cluster-node-timeout 150000
+
+        # Let replica drop FAILOVER_AUTH_ACK so that the election won't
+        # get the enough votes and the election will time out.
+        R 3 debug drop-cluster-packet-filter $CLUSTER_PACKET_TYPE_FAILOVER_AUTH_ACK
+
+        # The first manual failover will time out.
+        R 3 cluster failover
+        wait_for_log_messages 0 {"*Manual failover timed out*"} 0 1000 50
+        wait_for_log_messages -3 {"*Manual failover timed out*"} 0 1000 50
+
+        # Undo packet drop, so that replica can win the next election.
+        R 3 debug drop-cluster-packet-filter $CLUSTER_PACKET_TYPE_NONE
+
+        # Make sure the second manual failover will work.
+        R 3 cluster failover
+        wait_for_condition 1000 50 {
+            [s 0 role] eq {slave} &&
+            [s -3 role] eq {master}
+        } else {
+            fail "The second failover does not happen"
+        }
+        wait_for_cluster_propagation
+    }
+} ;# start_cluster
+
+start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 2000}} {
+    test "Manual failover vote is not limited by two times the node timeout - mixed failover" {
+        # Make sure the failover is triggered by us.
+        R 1 config set cluster-replica-validity-factor 0
+        R 3 config set cluster-replica-no-failover yes
+        R 3 config set cluster-replica-validity-factor 0
+
+        # Pause the primary.
+        pause_process [srv 0 pid]
+        wait_for_cluster_state fail
+
+        # Setting a large timeout to make sure we hit the voted_time limit.
+        R 1 config set cluster-node-timeout 150000
+        R 2 config set cluster-node-timeout 150000
+
+        # R 3 performs an automatic failover and it will work.
+        R 3 config set cluster-replica-no-failover no
+        wait_for_condition 1000 50 {
+            [s -3 role] eq {master}
+        } else {
+            fail "The first failover does not happen"
+        }
+
+        # Resume the primary and wait for it to become a replica.
+        resume_process [srv 0 pid]
+        wait_for_condition 1000 50 {
+            [s 0 role] eq {slave}
+        } else {
+            fail "Old primary not converted into replica"
+        }
+        wait_for_cluster_propagation
+
+        # The old primary doing a manual failover and wait for it.
+        R 0 cluster failover
+        wait_for_condition 1000 50 {
+            [s 0 role] eq {master} &&
+            [s -3 role] eq {slave}
+        } else {
+            fail "The second failover does not happen"
+        }
+        wait_for_cluster_propagation
+
+        # R 3 performs a manual failover and it will work.
+        R 3 cluster failover
+        wait_for_condition 1000 50 {
+            [s 0 role] eq {slave} &&
+            [s -3 role] eq {master}
+        } else {
+            fail "The third falover does not happen"
+        }
+        wait_for_cluster_propagation
+    }
+} ;# start_cluster

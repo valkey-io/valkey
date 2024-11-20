@@ -396,11 +396,15 @@ typedef enum {
     REPL_STATE_RECEIVE_IP_REPLY,      /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_CAPA_REPLY,    /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_VERSION_REPLY, /* Wait for REPLCONF reply */
+    REPL_STATE_WAIT_SCHED,            /* Wait for schedule to avoid concurrency bug */
     REPL_STATE_SEND_PSYNC,            /* Send PSYNC */
     REPL_STATE_RECEIVE_PSYNC_REPLY,   /* Wait for PSYNC reply */
     /* --- End of handshake states --- */
     REPL_STATE_TRANSFER,  /* Receiving .rdb from primary */
+    REPL_STATE_LOADING,   /* Loading the RDB in bio. */
     REPL_STATE_CONNECTED, /* Connected to primary */
+    REPL_STATE_LOADED,    /* Done loading the RDB in bio. */
+    REPL_STATE_LOAD_FAIL, /* Loading fail. */
 } repl_state;
 
 /* Replica rdb-channel replication state. Used in server.repl_rdb_channel_state for
@@ -1657,12 +1661,19 @@ struct valkeyServer {
     int enable_debug_assert;                  /* Enable debug asserts */
 
     /* RDB / AOF loading information */
-    volatile sig_atomic_t loading;       /* We are loading data from disk if true */
+    volatile sig_atomic_t loading;       /* We are loading data if true */
     volatile sig_atomic_t async_loading; /* We are loading data without blocking the db being served */
     off_t loading_total_bytes;
     off_t loading_rdb_used_mem;
     off_t loading_loaded_bytes;
     time_t loading_start_time;
+    /* Slot RDB loading information */
+    volatile sig_atomic_t slot_loading;            /* We are loading slot data if true */
+    off_t slot_loading_total_bytes;
+    off_t slot_loading_rdb_used_mem;
+    off_t slot_loading_loaded_bytes;
+    time_t slot_loading_start_time;
+    /* Loading information */
     off_t loading_process_events_interval_bytes;
     time_t loading_process_events_interval_ms;
     /* Fields used only for stats */
@@ -2929,6 +2940,7 @@ void changeReplicationId(void);
 void clearReplicationId2(void);
 void createReplicationBacklog(void);
 void freeReplicationBacklog(void);
+void replicationAttachToNewPrimary(void);
 void replicationCachePrimaryUsingMyself(void);
 void feedReplicationBacklog(void *ptr, size_t len);
 void incrementalTrimReplicationBacklog(size_t blocks);
@@ -2954,6 +2966,7 @@ void startLoading(size_t size, int rdbflags, int async);
 void loadingAbsProgress(off_t pos);
 void loadingIncrProgress(off_t size);
 void stopLoading(int success);
+void stopSlotLoading(int success);
 void updateLoadingFileName(char *filename);
 void startSaving(int rdbflags);
 void stopSaving(int success);

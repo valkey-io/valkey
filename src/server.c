@@ -2178,7 +2178,15 @@ void initServerConfig(void) {
     server.skip_checksum_validation = 0;
     server.loading = 0;
     server.async_loading = 0;
+    server.loading_total_bytes = 0;
     server.loading_rdb_used_mem = 0;
+    server.loading_loaded_bytes = 0;
+    server.loading_start_time = 0;
+    server.slot_loading = 0;
+    server.slot_loading_total_bytes = 0;
+    server.slot_loading_rdb_used_mem = 0;
+    server.slot_loading_loaded_bytes = 0;
+    server.slot_loading_start_time = 0;
     server.aof_state = AOF_OFF;
     server.aof_rewrite_base_size = 0;
     server.aof_rewrite_scheduled = 0;

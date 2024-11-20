@@ -2317,11 +2317,12 @@ void restartAOFAfterSYNC(void) {
     }
 }
 
-int useDisklessLoad(void) {
+int useDisklessLoad(int slot_sync) {
     /* compute boolean decision to use diskless load */
     int enabled = server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB ||
                   server.repl_diskless_load == REPL_DISKLESS_LOAD_FLUSH_BEFORE_LOAD ||
-                  (server.repl_diskless_load == REPL_DISKLESS_LOAD_WHEN_DB_EMPTY && dbTotalServerKeyCount() == 0);
+                  (server.repl_diskless_load == REPL_DISKLESS_LOAD_WHEN_DB_EMPTY &&
+                  (dbTotalServerKeyCount() == 0 || slot_sync));
 
     if (enabled) {
         /* Check all modules handle read errors, otherwise it's not safe to use diskless load. */
@@ -2379,16 +2380,22 @@ void replicationAttachToNewPrimary(void) {
     freeReplicationBacklog(); /* Don't allow our chained replicas to PSYNC. */
 }
 
-/* Asynchronously read the SYNC payload we receive from a primary */
+/* Asynchronously read the SYNC/PSYNC payload we receive from a node. */
 #define REPL_MAX_WRITTEN_BEFORE_FSYNC (1024 * 1024 * 8) /* 8 MB */
-void readSyncBulkPayload(connection *conn) {
+void readSyncBulkPayloadImpl(connection *conn, int slot_sync) {
     char buf[PROTO_IOBUF_LEN];
     ssize_t nread, readlen, nwritten;
-    int use_diskless_load = useDisklessLoad();
+    int use_diskless_load = useDisklessLoad(slot_sync);
     serverDb *diskless_load_tempDb = NULL;
     functionsLibCtx *temp_functions_lib_ctx = NULL;
     int empty_db_flags = server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
     off_t left;
+
+    clusterSlotSyncLink *link = !slot_sync ? NULL : connGetPrivateData(conn);
+    serverDb *slotsync_load_tempDb = NULL;
+    functionsLibCtx *slotsync_temp_functions_lib_ctx = NULL;
+    const char *node_primary = !slot_sync ? "PRIMARY" : "SLOT PRIMARY";
+    const char *node_replica = !slot_sync ? "REPLICA" : "SLOT REPLICA";
 
     /* Static vars used to hold the EOF mark, and the last bytes received
      * from the server: when they match, we reached the end of the transfer. */
@@ -2398,10 +2405,10 @@ void readSyncBulkPayload(connection *conn) {
 
     /* If repl_transfer_size == -1 we still have to read the bulk length
      * from the primary reply. */
-    if (server.repl_transfer_size == -1) {
+    if ((!slot_sync && server.repl_transfer_size == -1) || (slot_sync && link->repl_transfer_size == -1)) {
         nread = connSyncReadLine(conn, buf, 1024, server.repl_syncio_timeout * 1000);
         if (nread == -1) {
-            serverLog(LL_WARNING, "I/O error reading bulk count from PRIMARY: %s", connGetLastError(conn));
+            serverLog(LL_WARNING, "I/O error reading bulk count from %s: %s", node_primary, connGetLastError(conn));
             goto error;
         } else {
             /* nread here is returned by connSyncReadLine(), which calls syncReadLine() and
@@ -2410,18 +2417,23 @@ void readSyncBulkPayload(connection *conn) {
         }
 
         if (buf[0] == '-') {
-            serverLog(LL_WARNING, "PRIMARY aborted replication with an error: %s", buf + 1);
+            serverLog(LL_WARNING, "%s aborted replication with an error: %s", node_primary, buf + 1);
             goto error;
         } else if (buf[0] == '\0') {
             /* At this stage just a newline works as a PING in order to take
              * the connection live. So we refresh our last interaction
              * timestamp. */
-            server.repl_transfer_lastio = server.unixtime;
+            if (!slot_sync) {
+                server.repl_transfer_lastio = server.unixtime;
+            } else {
+                link->repl_transfer_lastio = server.unixtime;
+            }
             return;
         } else if (buf[0] != '$') {
             serverLog(LL_WARNING,
-                      "Bad protocol from PRIMARY, the first byte is not '$' (we received '%s'), are you sure the host "
+                      "Bad protocol from %s, the first byte is not '$' (we received '%s'), are you sure the host "
                       "and port are right?",
+                      node_primary,
                       buf);
             goto error;
         }
@@ -2442,14 +2454,25 @@ void readSyncBulkPayload(connection *conn) {
             memset(lastbytes, 0, RDB_EOF_MARK_SIZE);
             /* Set any repl_transfer_size to avoid entering this code path
              * at the next call. */
-            server.repl_transfer_size = 0;
-            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: receiving streamed RDB from primary with EOF %s",
+            if (!slot_sync) {
+                server.repl_transfer_size = 0;
+            } else {
+                link->repl_transfer_size = 0;
+            }
+            serverLog(LL_NOTICE, "%s <-> %s sync: receiving streamed RDB from primary with EOF %s",
+                      node_primary, node_replica,
                       use_diskless_load ? "to parser" : "to disk");
         } else {
             usemark = 0;
-            server.repl_transfer_size = strtol(buf + 1, NULL, 10);
-            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: receiving %lld bytes from primary %s",
-                      (long long)server.repl_transfer_size, use_diskless_load ? "to parser" : "to disk");
+            off_t transfer_size = strtol(buf + 1, NULL, 10);
+            if (!slot_sync) {
+                server.repl_transfer_size = transfer_size;
+            } else {
+                link->repl_transfer_size = transfer_size;
+            }
+            serverLog(LL_NOTICE, "%s <-> %s sync: receiving %lld bytes from primary %s",
+                      node_primary, node_replica,
+                      (long long)transfer_size, use_diskless_load ? "to parser" : "to disk");
         }
         return;
     }
@@ -2460,8 +2483,17 @@ void readSyncBulkPayload(connection *conn) {
         if (usemark) {
             readlen = sizeof(buf);
         } else {
-            left = server.repl_transfer_size - server.repl_transfer_read;
+            if (!slot_sync) {
+                left = server.repl_transfer_size - server.repl_transfer_read;
+            } else {
+                left = link->repl_transfer_size - link->repl_transfer_read;
+            }
             readlen = (left < (signed)sizeof(buf)) ? left : (signed)sizeof(buf);
+        }
+
+        if (testInjectError("crs-io-error-recv-rdb")) {
+            serverLog(LL_WARNING, "inject crs-io-error-recv-rdb");
+            goto error;
         }
 
         nread = connRead(conn, buf, readlen);
@@ -2470,7 +2502,8 @@ void readSyncBulkPayload(connection *conn) {
                 /* equivalent to EAGAIN */
                 return;
             }
-            serverLog(LL_WARNING, "I/O error trying to sync with PRIMARY: %s",
+            serverLog(LL_WARNING, "I/O error trying to sync with %s: %s",
+                      node_primary,
                       (nread == -1) ? connGetLastError(conn) : "connection lost");
             goto error;
         }
@@ -2493,25 +2526,54 @@ void readSyncBulkPayload(connection *conn) {
             if (memcmp(lastbytes, eofmark, RDB_EOF_MARK_SIZE) == 0) eof_reached = 1;
         }
 
+        if (testInjectError("crs-io-error-write-rdb")) {
+            serverLog(LL_WARNING, "inject crs-io-error-write-rdb");
+            goto error;
+        }
+
         /* Update the last I/O time for the replication transfer (used in
          * order to detect timeouts during replication), and write what we
          * got from the socket to the dump file on disk. */
-        server.repl_transfer_lastio = server.unixtime;
-        if ((nwritten = write(server.repl_transfer_fd, buf, nread)) != nread) {
+        int transfer_fd;
+        if (!slot_sync) {
+            transfer_fd = server.repl_transfer_fd;
+            server.repl_transfer_lastio = server.unixtime;
+        } else {
+            transfer_fd = link->repl_transfer_fd;
+            link->repl_transfer_lastio = server.unixtime;
+        }
+        if ((nwritten = (write(transfer_fd, buf, nread))) != nread) {
             serverLog(LL_WARNING,
                       "Write error or short write writing to the DB dump file "
-                      "needed for PRIMARY <-> REPLICA synchronization: %s",
+                      "needed for %s <-> %s synchronization: %s",
+                      node_primary, node_replica,
                       (nwritten == -1) ? strerror(errno) : "short write");
             goto error;
         }
-        server.repl_transfer_read += nread;
+        if (!slot_sync) {
+            server.repl_transfer_read += nread;
+        } else {
+            link->repl_transfer_read += nread;
+        }
+
+        if (testInjectError("crs-io-error-truncate-rdb")) {
+            serverLog(LL_WARNING, "inject crs-io-error-truncate-rdb");
+            goto error;
+        }
 
         /* Delete the last 40 bytes from the file if we reached EOF. */
         if (usemark && eof_reached) {
-            if (ftruncate(server.repl_transfer_fd, server.repl_transfer_read - RDB_EOF_MARK_SIZE) == -1) {
+            off_t transfer_read;
+            if (!slot_sync) {
+                transfer_read = server.repl_transfer_read;
+            } else {
+                transfer_read = link->repl_transfer_read;
+            }
+            if (ftruncate(transfer_fd, transfer_read - RDB_EOF_MARK_SIZE) == -1) {
                 serverLog(LL_WARNING,
-                          "Error truncating the RDB file received from the primary "
+                          "Error truncating the RDB file received from the %s "
                           "for SYNC: %s",
+                          node_primary,
                           strerror(errno));
                 goto error;
             }
@@ -2520,15 +2582,27 @@ void readSyncBulkPayload(connection *conn) {
         /* Sync data on disk from time to time, otherwise at the end of the
          * transfer we may suffer a big delay as the memory buffers are copied
          * into the actual disk. */
-        if (server.repl_transfer_read >= server.repl_transfer_last_fsync_off + REPL_MAX_WRITTEN_BEFORE_FSYNC) {
-            off_t sync_size = server.repl_transfer_read - server.repl_transfer_last_fsync_off;
-            rdb_fsync_range(server.repl_transfer_fd, server.repl_transfer_last_fsync_off, sync_size);
-            server.repl_transfer_last_fsync_off += sync_size;
+        if (!slot_sync) {
+            if (server.repl_transfer_read >= server.repl_transfer_last_fsync_off + REPL_MAX_WRITTEN_BEFORE_FSYNC) {
+                off_t sync_size = server.repl_transfer_read - server.repl_transfer_last_fsync_off;
+                rdb_fsync_range(server.repl_transfer_fd, server.repl_transfer_last_fsync_off, sync_size);
+                server.repl_transfer_last_fsync_off += sync_size;
+            }
+        } else {
+            if (link->repl_transfer_read >= link->repl_transfer_last_fsync_off + REPL_MAX_WRITTEN_BEFORE_FSYNC) {
+                off_t sync_size = link->repl_transfer_read - link->repl_transfer_last_fsync_off;
+                rdb_fsync_range(link->repl_transfer_fd, link->repl_transfer_last_fsync_off, sync_size);
+                link->repl_transfer_last_fsync_off += sync_size;
+            }
         }
 
         /* Check if the transfer is now complete */
         if (!usemark) {
-            if (server.repl_transfer_read == server.repl_transfer_size) eof_reached = 1;
+            if (!slot_sync) {
+                if (server.repl_transfer_read == server.repl_transfer_size) eof_reached = 1;
+            } else {
+                if (link->repl_transfer_read == link->repl_transfer_size) eof_reached = 1;
+            }
         }
 
         /* If the transfer is yet not complete, we need to read more, so
@@ -2555,21 +2629,26 @@ void readSyncBulkPayload(connection *conn) {
     if (server.child_type == CHILD_TYPE_RDB) {
         if (!use_diskless_load) {
             serverLog(LL_NOTICE,
-                      "Replica is about to load the RDB file received from the "
-                      "primary, but there is a pending RDB child running. "
+                      "%s is about to load the RDB file received from the "
+                      "%s, but there is a pending RDB child running. "
                       "Killing process %ld and removing its temp file to avoid "
                       "any race",
+                      node_replica, node_primary,
                       (long)server.child_pid);
         }
         killRDBChild();
     }
 
-    if (use_diskless_load && server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
-        /* Initialize empty tempDb dictionaries. */
+    if (!slot_sync && use_diskless_load && server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
+        /* Initialize empty tempDb and temp function ctx. */
         diskless_load_tempDb = disklessLoadInitTempDb();
         temp_functions_lib_ctx = disklessLoadFunctionsLibCtxCreate();
 
         moduleFireServerEvent(VALKEYMODULE_EVENT_REPL_ASYNC_LOAD, VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_STARTED, NULL);
+    } else if (slot_sync) {
+        /* Initialize empty tempDb and temp function ctx. */
+        slotsync_load_tempDb = initTempDb();
+        slotsync_temp_functions_lib_ctx = functionsLibCtxCreate();
     }
 
     /* Before loading the DB into memory we need to delete the readable
@@ -2577,9 +2656,8 @@ void readSyncBulkPayload(connection *conn) {
      * rdbLoad() will call the event loop to process events from time to
      * time for non blocking loading. */
     connSetReadHandler(conn, NULL);
-
     rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
-    if (use_diskless_load) {
+    if (!slot_sync && use_diskless_load) {
         rio rdb;
         serverDb *dbarray;
         functionsLibCtx *functions_lib_ctx;
@@ -2621,7 +2699,7 @@ void readSyncBulkPayload(connection *conn) {
 
         int loadingFailed = 0;
         rdbLoadingCtx loadingCtx = {.dbarray = dbarray, .functions_lib_ctx = functions_lib_ctx};
-        if (rdbLoadRioWithLoadingCtxScopedRdb(&rdb, RDBFLAGS_REPLICATION, &rsi, &loadingCtx) != C_OK) {
+        if (rdbLoadRioWithLoadingCtxScopedRdb(&rdb, RDBFLAGS_REPLICATION | RDBFLAGS_SLOT_SYNC, &rsi, &loadingCtx) != C_OK) {
             /* RDB loading failed. */
             serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization DB "
                                   "from socket, check server logs.");
@@ -2629,7 +2707,7 @@ void readSyncBulkPayload(connection *conn) {
         } else if (usemark) {
             /* Verify the end mark is correct. */
             if (!rioRead(&rdb, buf, RDB_EOF_MARK_SIZE) || memcmp(buf, eofmark, RDB_EOF_MARK_SIZE) != 0) {
-                serverLog(LL_WARNING, "Replication stream EOF marker is broken");
+                serverLog(LL_WARNING, "Replication stream EOF marker from PRIMARY is broken");
                 loadingFailed = 1;
             }
         }
@@ -2689,24 +2767,65 @@ void readSyncBulkPayload(connection *conn) {
         rioFreeConn(&rdb, NULL);
         connNonBlock(conn);
         connRecvTimeout(conn, 0);
+    } else if (slot_sync && use_diskless_load) {
+        /* Put the socket in blocking mode to simplify RDB transfer.
+         * We'll restore it when the RDB is received. */
+        connBlock(conn);
+        connRecvTimeout(conn, server.repl_timeout * 1000);
+
+        /* Before loading the DB into memory we need to delete the readable
+         * handler since we are doing a bio load. */
+        connSetReadHandler(conn, NULL);
+
+        startLoading(link->repl_transfer_size, RDBFLAGS_REPLICATION | RDBFLAGS_SLOT_SYNC, 0);
+
+        link->temp_db = slotsync_load_tempDb;
+        link->temp_func_ctx = slotsync_temp_functions_lib_ctx;
+        link->sync_state = REPL_STATE_LOADING;
+
+        /* Doing a bio RDB loading */
+        rdbLoadJob *job = zmalloc(sizeof(rdbLoadJob));
+        job->rdbflags = RDBFLAGS_REPLICATION | RDBFLAGS_SLOT_SYNC;
+        job->use_diskless_load = use_diskless_load;
+        job->usemark = usemark;
+        job->eofmark = usemark ? sdsnew(eofmark) : NULL;
+        job->link = link;
+        bioCreateRdbLoadJob(bioRdbLoad, 1, job);
     } else {
         /* Make sure the new file (also used for persistence) is fully synced
          * (not covered by earlier calls to rdb_fsync_range). */
-        if (fsync(server.repl_transfer_fd) == -1) {
+        int transfer_fd = !slot_sync ? server.repl_transfer_fd : link->repl_transfer_fd;
+        if (fsync(transfer_fd) == -1) {
             serverLog(LL_WARNING,
                       "Failed trying to sync the temp DB to disk in "
-                      "PRIMARY <-> REPLICA synchronization: %s",
+                      "%s <-> %s synchronization: %s",
+                      node_primary, node_replica,
                       strerror(errno));
             goto error;
         }
 
+        if (testInjectError("crs-io-error-rename-rdb")) {
+            serverLog(LL_WARNING, "inject crs-io-error-rename-rdb");
+            goto error;
+        }
+
         /* Rename rdb like renaming rewrite aof asynchronously. */
-        int old_rdb_fd = open(server.rdb_filename, O_RDONLY | O_NONBLOCK);
-        if (rename(server.repl_transfer_tmpfile, server.rdb_filename) == -1) {
+        int old_rdb_fd;
+        int rename_res;
+        char rdbpath[1024];
+        if (!slot_sync) {
+            old_rdb_fd = open(server.rdb_filename, O_RDONLY | O_NONBLOCK);
+            rename_res = rename(server.repl_transfer_tmpfile, server.rdb_filename);
+        } else {
+            sprintf(rdbpath, "%s_slot", server.rdb_filename);
+            old_rdb_fd = open(rdbpath, O_RDONLY | O_NONBLOCK);
+            rename_res = rename(link->repl_transfer_tmpfile, rdbpath);
+        }
+        if (rename_res == -1) {
             serverLog(LL_WARNING,
                       "Failed trying to rename the temp DB into %s in "
-                      "PRIMARY <-> REPLICA synchronization: %s",
-                      server.rdb_filename, strerror(errno));
+                      "%s <-> %s synchronization: %s",
+                      server.rdb_filename, node_primary, node_replica, strerror(errno));
             if (old_rdb_fd != -1) close(old_rdb_fd);
             goto error;
         }
@@ -2714,62 +2833,83 @@ void readSyncBulkPayload(connection *conn) {
         if (old_rdb_fd != -1) bioCreateCloseJob(old_rdb_fd, 0, 0);
 
         /* Sync the directory to ensure rename is persisted */
-        if (fsyncFileDir(server.rdb_filename) == -1) {
+        if ((!slot_sync && fsyncFileDir(server.rdb_filename) == -1) || (slot_sync && fsyncFileDir(rdbpath) == -1)) {
             serverLog(LL_WARNING,
                       "Failed trying to sync DB directory %s in "
-                      "PRIMARY <-> REPLICA synchronization: %s",
+                      "%s <-> %s synchronization: %s",
+                      node_primary, node_replica,
                       server.rdb_filename, strerror(errno));
             goto error;
         }
 
-        /* We will soon start loading the RDB from disk, the replication history is changed,
-         * we must discard the cached primary structure and force resync of sub-replicas. */
-        replicationAttachToNewPrimary();
+        if (!slot_sync) {
+            /* We will soon start loading the RDB from disk, the replication history is changed,
+             * we must discard the cached primary structure and force resync of sub-replicas. */
+            replicationAttachToNewPrimary();
 
-        /* Empty the databases only after the RDB file is ok, that is, before the RDB file
-         * is actually loaded, in case we encounter an error and drop the replication stream
-         * and leave an empty database. */
-        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
-        emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
-
-        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
-        if (rdbLoad(server.rdb_filename, &rsi, RDBFLAGS_REPLICATION) != RDB_OK) {
-            serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization "
-                                  "DB from disk, check server logs.");
-            if (server.rdb_del_sync_files && allPersistenceDisabled()) {
-                serverLog(LL_NOTICE, "Removing the RDB file obtained from "
-                                     "the primary. This replica has persistence "
-                                     "disabled");
-                bg_unlink(server.rdb_filename);
-            }
-
-            /* If disk-based RDB loading fails, remove the half-loaded dataset. */
-            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
+            /* Empty the databases only after the RDB file is ok, that is, before the RDB file
+             * is actually loaded, in case we encounter an error and drop the replication stream
+             * and leave an empty database. */
+            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
             emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
 
-            /* Note that there's no point in restarting the AOF on sync failure,
-               it'll be restarted when sync succeeds or replica promoted. */
-            goto error;
+            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
+
+            if (rdbLoad(server.rdb_filename, &rsi, RDBFLAGS_REPLICATION) != RDB_OK) {
+                serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization "
+                                      "DB from disk, check server logs.");
+                if (server.rdb_del_sync_files && allPersistenceDisabled()) {
+                    serverLog(LL_NOTICE, "Removing the RDB file obtained from "
+                                         "the primary. This replica has persistence "
+                                         "disabled");
+                    bg_unlink(server.rdb_filename);
+                }
+
+                /* If disk-based RDB loading fails, remove the half-loaded dataset. */
+                serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
+                emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+
+                /* Note that there's no point in restarting the AOF on sync failure,
+                   it'll be restarted when sync succeeds or replica promoted. */
+                goto error;
+            }
+        } else {
+            startLoading(link->repl_transfer_size, RDBFLAGS_REPLICATION | RDBFLAGS_SLOT_SYNC, 0);
+
+            link->temp_db = slotsync_load_tempDb;
+            link->temp_func_ctx = slotsync_temp_functions_lib_ctx;
+            link->sync_state = REPL_STATE_LOADING;
+
+            /* Doing a bio RDB loading */
+            rdbLoadJob *job = zmalloc(sizeof(rdbLoadJob));
+            job->rdbflags = RDBFLAGS_REPLICATION | RDBFLAGS_SLOT_SYNC;
+            job->use_diskless_load = 0;
+            job->usemark = 0;
+            job->eofmark = NULL;
+            job->link = link;
+            bioCreateRdbLoadJob(bioRdbLoad, 1, job);
         }
 
         /* Cleanup. */
-        if (server.rdb_del_sync_files && allPersistenceDisabled()) {
+        if (!slot_sync && server.rdb_del_sync_files && allPersistenceDisabled()) {
             serverLog(LL_NOTICE, "Removing the RDB file obtained from "
                                  "the primary. This replica has persistence "
                                  "disabled");
             bg_unlink(server.rdb_filename);
         }
 
-        zfree(server.repl_transfer_tmpfile);
-        close(server.repl_transfer_fd);
-        server.repl_transfer_fd = -1;
-        server.repl_transfer_tmpfile = NULL;
+        if (!slot_sync) {
+            zfree(server.repl_transfer_tmpfile);
+            close(server.repl_transfer_fd);
+            server.repl_transfer_fd = -1;
+            server.repl_transfer_tmpfile = NULL;
+        }
     }
 
     /* Final setup of the connected replica <- primary link */
     if (conn == server.repl_rdb_transfer_s) {
         dualChannelSyncHandleRdbLoadCompletion();
-    } else {
+    } else if (!slot_sync) {
         replicationCreatePrimaryClient(server.repl_transfer_s, rsi.repl_stream_db);
         server.repl_state = REPL_STATE_CONNECTED;
         server.repl_down_since = 0;
@@ -2777,33 +2917,37 @@ void readSyncBulkPayload(connection *conn) {
         replicationSendAck();
     }
 
-    /* Fire the primary link modules event. */
-    moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE, VALKEYMODULE_SUBEVENT_PRIMARY_LINK_UP, NULL);
-    if (server.repl_state == REPL_STATE_CONNECTED) {
-        /* After a full resynchronization we use the replication ID and
-         * offset of the primary. The secondary ID / offset are cleared since
-         * we are starting a new history. */
-        memcpy(server.replid, server.primary->repl_data->replid, sizeof(server.replid));
-        server.primary_repl_offset = server.primary->repl_data->reploff;
+    if (!slot_sync) {
+        server.repl_down_since = 0;
+
+        /* Fire the primary link modules event. */
+        moduleFireServerEvent(VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE, VALKEYMODULE_SUBEVENT_PRIMARY_LINK_UP, NULL);
+        if (server.repl_state == REPL_STATE_CONNECTED) {
+            /* After a full resynchronization we use the replication ID and
+             * offset of the primary. The secondary ID / offset are cleared since
+             * we are starting a new history. */
+            memcpy(server.replid, server.primary->repl_data->replid, sizeof(server.replid));
+            server.primary_repl_offset = server.primary->repl_data->reploff;
+        }
+        clearReplicationId2();
+
+        /* Let's create the replication backlog if needed. Replicas need to
+         * accumulate the backlog regardless of the fact they have sub-replicas
+         * or not, in order to behave correctly if they are promoted to
+         * primaries after a failover. */
+        if (server.repl_backlog == NULL) createReplicationBacklog();
+        serverLog(LL_NOTICE, "%s <-> %s sync: Finished with success", node_primary, node_replica);
+
+        if (server.supervised_mode == SUPERVISED_SYSTEMD) {
+            serverCommunicateSystemd("STATUS=PRIMARY <-> REPLICA sync: Finished with success. Ready to accept connections "
+                                     "in read-write mode.\n");
+        }
+
+        /* Restart the AOF subsystem now that we finished the sync. This
+         * will trigger an AOF rewrite, and when done will start appending
+         * to the new file. */
+        if (server.aof_enabled) restartAOFAfterSYNC();
     }
-    clearReplicationId2();
-
-    /* Let's create the replication backlog if needed. Replicas need to
-     * accumulate the backlog regardless of the fact they have sub-replicas
-     * or not, in order to behave correctly if they are promoted to
-     * primaries after a failover. */
-    if (server.repl_backlog == NULL) createReplicationBacklog();
-    serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Finished with success");
-
-    if (server.supervised_mode == SUPERVISED_SYSTEMD) {
-        serverCommunicateSystemd("STATUS=PRIMARY <-> REPLICA sync: Finished with success. Ready to accept connections "
-                                 "in read-write mode.\n");
-    }
-
-    /* Restart the AOF subsystem now that we finished the sync. This
-     * will trigger an AOF rewrite, and when done will start appending
-     * to the new file. */
-    if (server.aof_enabled) restartAOFAfterSYNC();
 
     /* In case of dual channel replication sync we want to close the RDB connection
      * once the connection is established */
@@ -2814,18 +2958,43 @@ void readSyncBulkPayload(connection *conn) {
     return;
 
 error:
+    if (slot_sync) goto slot_sync_error;
+
     cancelReplicationHandshake(1);
+    return;
+
+slot_sync_error:
+    if (slotsync_load_tempDb) discardTempDb(slotsync_load_tempDb);
+    if (slotsync_temp_functions_lib_ctx) freeFunctionsAsync(slotsync_temp_functions_lib_ctx);
+
+    /* Reset the link state to CONNECT, the cron will retry start next time. */
+    resetSlotSyncLinkForReconnect(link);
     return;
 }
 
-char *receiveSynchronousResponse(connection *conn) {
+/* Asynchronously read the SYNC/PSYNC payload we receive from a primary. */
+void readSyncBulkPayload(connection *conn) {
+    readSyncBulkPayloadImpl(conn, 0);
+}
+
+/* Asynchronously read the SYNC/PSYNC payload we receive from a slow owner. */
+void readSlotSyncBulkPayload(connection *conn) {
+    readSyncBulkPayloadImpl(conn, 1);
+}
+
+char *receiveSynchronousResponse(connection *conn, int slot_sync) {
     char buf[256];
     /* Read the reply from the server. */
     if (connSyncReadLine(conn, buf, sizeof(buf), server.repl_syncio_timeout * 1000) == -1) {
         serverLog(LL_WARNING, "Failed to read response from the server: %s", connGetLastError(conn));
         return NULL;
     }
-    server.repl_transfer_lastio = server.unixtime;
+    if (!slot_sync) {
+        server.repl_transfer_lastio = server.unixtime;
+    } else {
+        clusterSlotSyncLink *link = connGetPrivateData(conn);
+        link->repl_transfer_lastio = server.unixtime;
+    }
     return sdsnew(buf);
 }
 
@@ -3013,7 +3182,7 @@ static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
 }
 
 static int dualChannelReplHandleAuthReply(connection *conn, sds *err) {
-    *err = receiveSynchronousResponse(conn);
+    *err = receiveSynchronousResponse(conn, 0);
     if (*err == NULL) {
         dualChannelServerLog(LL_WARNING, "Primary did not respond to auth command during SYNC handshake");
         return C_ERR;
@@ -3027,7 +3196,7 @@ static int dualChannelReplHandleAuthReply(connection *conn, sds *err) {
 }
 
 static int dualChannelReplHandleReplconfReply(connection *conn, sds *err) {
-    *err = receiveSynchronousResponse(conn);
+    *err = receiveSynchronousResponse(conn, 0);
     if (*err == NULL) {
         dualChannelServerLog(LL_WARNING, "Primary did not respond to replconf command during SYNC handshake");
         return C_ERR;
@@ -3047,7 +3216,7 @@ static int dualChannelReplHandleReplconfReply(connection *conn, sds *err) {
 
 static int dualChannelReplHandleEndOffsetResponse(connection *conn, sds *err) {
     uint64_t rdb_client_id;
-    *err = receiveSynchronousResponse(conn);
+    *err = receiveSynchronousResponse(conn, 0);
     if (*err == NULL) {
         return C_ERR;
     }
@@ -3415,13 +3584,40 @@ void dualChannelSyncHandleRdbLoadCompletion(void) {
 #define PSYNC_NOT_SUPPORTED 4
 #define PSYNC_TRY_LATER 5
 #define PSYNC_FULLRESYNC_DUAL_CHANNEL 6
-int replicaTryPartialResynchronization(connection *conn, int read_reply) {
+#define PSYNC_FOR_SLOT_SYNC 7
+int replicaTryPartialResynchronization(connection *conn, int read_reply, int slot_sync) {
     char *psync_replid;
     char psync_offset[32];
     sds reply;
 
     /* Writing half */
     if (!read_reply) {
+        /* If this is a slot sync, in the writing half, we will send SYNC to the slow primary. */
+        if (slot_sync) {
+            /* Simulate IO error. */
+            if (testInjectError("crs-io-error-beforce-send-sync")) {
+                serverLog(LL_WARNING, "inject crs-io-error-beforce-send-sync");
+                return PSYNC_WRITE_ERROR;
+            }
+
+            clusterSlotSyncLink *link = connGetPrivateData(conn);
+            sds sync_cmd = sdscatprintf(sdsempty(), "SYNC ");
+            sds slot_ranges = reprSlotRangeListWithBlank(link->slot_ranges);
+            sync_cmd = sdscatsds(sync_cmd, slot_ranges);
+            sync_cmd = sdscatprintf(sync_cmd, "\r\n");
+            reply = sendCommandRaw(conn, sync_cmd);
+            sdsfree(slot_ranges);
+            sdsfree(sync_cmd);
+
+            if (reply != NULL) {
+                serverLog(LL_WARNING, "Unable to send SYNC to slot primary: %s", reply);
+                sdsfree(reply);
+                connSetReadHandler(conn, NULL);
+                return PSYNC_WRITE_ERROR;
+            }
+            return PSYNC_WAIT_REPLY;
+        }
+
         /* Initially set primary_initial_offset to -1 to mark the current
          * primary replid and offset as not valid. Later if we'll be able to do
          * a FULL resync using the PSYNC command we'll set the offset at the
@@ -3465,7 +3661,12 @@ int replicaTryPartialResynchronization(connection *conn, int read_reply) {
     }
 
     /* Reading half */
-    reply = receiveSynchronousResponse(conn);
+    if (slot_sync) {
+        /* If this is a slot sync, in the reading half, we just return PSYNC_FOR_SLOT_SYNC.
+         * We may need a +FULLSLOTSYNC interaction. */
+        return PSYNC_FOR_SLOT_SYNC;
+    }
+    reply = receiveSynchronousResponse(conn, slot_sync);
     /* Primary did not reply to PSYNC */
     if (reply == NULL) {
         connSetReadHandler(conn, NULL);
@@ -3610,6 +3811,7 @@ sds getTryPsyncString(int result) {
     case PSYNC_NOT_SUPPORTED: return sdsnew("PSYNC_NOT_SUPPORTED");
     case PSYNC_TRY_LATER: return sdsnew("PSYNC_TRY_LATER");
     case PSYNC_FULLRESYNC_DUAL_CHANNEL: return sdsnew("PSYNC_FULLRESYNC_DUAL_CHANNEL");
+    case PSYNC_FOR_SLOT_SYNC: return sdsnew("PSYNC_FOR_SLOT_SYNC");
     default: return sdsnew("Unknown result");
     }
 }
@@ -3623,7 +3825,7 @@ int dualChannelReplMainConnSendHandshake(connection *conn, sds *err) {
 }
 
 int dualChannelReplMainConnRecvCapaReply(connection *conn, sds *err) {
-    *err = receiveSynchronousResponse(conn);
+    *err = receiveSynchronousResponse(conn, 0);
     if (*err == NULL) return C_ERR;
     if ((*err)[0] == '-') {
         dualChannelServerLog(LL_NOTICE, "Primary does not understand REPLCONF identify: %s", *err);
@@ -3634,7 +3836,7 @@ int dualChannelReplMainConnRecvCapaReply(connection *conn, sds *err) {
 
 int dualChannelReplMainConnSendPsync(connection *conn, sds *err) {
     if (server.debug_pause_after_fork) debugPauseProcess();
-    if (replicaTryPartialResynchronization(conn, 0) == PSYNC_WRITE_ERROR) {
+    if (replicaTryPartialResynchronization(conn, 0, 0) == PSYNC_WRITE_ERROR) {
         dualChannelServerLog(LL_WARNING, "Aborting dual channel sync. Write error.");
         *err = sdsnew(connGetLastError(conn));
         return C_ERR;
@@ -3643,7 +3845,7 @@ int dualChannelReplMainConnSendPsync(connection *conn, sds *err) {
 }
 
 int dualChannelReplMainConnRecvPsyncReply(connection *conn, sds *err) {
-    int psync_result = replicaTryPartialResynchronization(conn, 1);
+    int psync_result = replicaTryPartialResynchronization(conn, 1, 0);
     if (psync_result == PSYNC_WAIT_REPLY) return C_OK; /* Try again later... */
 
     if (psync_result == PSYNC_CONTINUE) {
@@ -3778,15 +3980,20 @@ void dualChannelSetupMainConnForPsync(connection *conn) {
  *   │                                                 │
  *   └─────────────────────────────────────────────────┘
  */
-/* This handler fires when the non blocking connect was able to
- * establish a connection with the primary. */
-void syncWithPrimary(connection *conn) {
+void syncWithPrimary(connection *conn);
+void syncWithSlotSyncPrimary(connection *conn);
+
+void syncWithPrimaryStateMachine(connection *conn, int *repl_state, int slot_sync) {
     char tmpfile[256], *err = NULL;
     int psync_result;
+    clusterSlotSyncLink *link = !slot_sync ? NULL : connGetPrivateData(conn);
+    const char *node_primary = !slot_sync ? "PRIMARY" : "SLOT PRIMARY";
+    const char *node_replica = !slot_sync ? "REPLICA" : "SLOT REPLICA";
 
     /* If this event fired after the user turned the instance into a primary
      * with REPLICAOF NO ONE we must just return ASAP. */
-    if (server.repl_state == REPL_STATE_NONE) {
+    if (*repl_state == REPL_STATE_NONE) {
+        serverAssert(!slot_sync);
         connClose(conn);
         return;
     }
@@ -3799,13 +4006,17 @@ void syncWithPrimary(connection *conn) {
     }
 
     /* Send a PING to check the primary is able to reply without errors. */
-    if (server.repl_state == REPL_STATE_CONNECTING) {
+    if (*repl_state == REPL_STATE_CONNECTING) {
         serverLog(LL_NOTICE, "Non blocking connect for SYNC fired the event.");
         /* Delete the writable event so that the readable event remains
          * registered and we can wait for the PONG reply. */
-        connSetReadHandler(conn, syncWithPrimary);
+        if (!slot_sync) {
+            connSetReadHandler(conn, syncWithPrimary);
+        } else {
+            connSetReadHandler(conn, syncWithSlotSyncPrimary);
+        }
         connSetWriteHandler(conn, NULL);
-        server.repl_state = REPL_STATE_RECEIVE_PING_REPLY;
+        *repl_state = REPL_STATE_RECEIVE_PING_REPLY;
         /* Send the PING, don't check for errors at all, we have the timeout
          * that will take care about this. */
         err = sendCommand(conn, "PING", NULL);
@@ -3814,8 +4025,8 @@ void syncWithPrimary(connection *conn) {
     }
 
     /* Receive the PONG command. */
-    if (server.repl_state == REPL_STATE_RECEIVE_PING_REPLY) {
-        err = receiveSynchronousResponse(conn);
+    if (*repl_state == REPL_STATE_RECEIVE_PING_REPLY) {
+        err = receiveSynchronousResponse(conn, slot_sync);
 
         /* The primary did not reply */
         if (err == NULL) goto no_response_error;
@@ -3827,18 +4038,18 @@ void syncWithPrimary(connection *conn) {
          * both. */
         if (err[0] != '+' && strncmp(err, "-NOAUTH", 7) != 0 && strncmp(err, "-NOPERM", 7) != 0 &&
             strncmp(err, "-ERR operation not permitted", 28) != 0) {
-            serverLog(LL_WARNING, "Error reply to PING from primary: '%s'", err);
+            serverLog(LL_WARNING, "Error reply to PING from %s: '%s'", node_primary, err);
             sdsfree(err);
             goto error;
         } else {
-            serverLog(LL_NOTICE, "Primary replied to PING, replication can continue...");
+            serverLog(LL_NOTICE, "%s replied to PING, replication can continue", node_primary);
         }
         sdsfree(err);
         err = NULL;
-        server.repl_state = REPL_STATE_SEND_HANDSHAKE;
+        *repl_state = REPL_STATE_SEND_HANDSHAKE;
     }
 
-    if (server.repl_state == REPL_STATE_SEND_HANDSHAKE) {
+    if (*repl_state == REPL_STATE_SEND_HANDSHAKE) {
         /* AUTH with the primary if required. */
         if (server.primary_auth) {
             char *args[3] = {"AUTH", NULL, NULL};
@@ -3888,97 +4099,103 @@ void syncWithPrimary(connection *conn) {
         err = sendCommand(conn, "REPLCONF", "version", VALKEY_VERSION, NULL);
         if (err) goto write_error;
 
-        server.repl_state = REPL_STATE_RECEIVE_AUTH_REPLY;
+        *repl_state = REPL_STATE_RECEIVE_AUTH_REPLY;
         return;
     }
 
-    if (server.repl_state == REPL_STATE_RECEIVE_AUTH_REPLY && !server.primary_auth)
-        server.repl_state = REPL_STATE_RECEIVE_PORT_REPLY;
+    if (*repl_state == REPL_STATE_RECEIVE_AUTH_REPLY && !server.primary_auth)
+        *repl_state = REPL_STATE_RECEIVE_PORT_REPLY;
 
     /* Receive AUTH reply. */
-    if (server.repl_state == REPL_STATE_RECEIVE_AUTH_REPLY) {
-        err = receiveSynchronousResponse(conn);
+    if (*repl_state == REPL_STATE_RECEIVE_AUTH_REPLY) {
+        err = receiveSynchronousResponse(conn, slot_sync);
         if (err == NULL) goto no_response_error;
         if (err[0] == '-') {
-            serverLog(LL_WARNING, "Unable to AUTH to PRIMARY: %s", err);
+            serverLog(LL_WARNING, "Unable to AUTH to %s: %s", node_primary, err);
             sdsfree(err);
             goto error;
         }
         sdsfree(err);
         err = NULL;
-        server.repl_state = REPL_STATE_RECEIVE_PORT_REPLY;
+        *repl_state = REPL_STATE_RECEIVE_PORT_REPLY;
         return;
     }
 
     /* Receive REPLCONF listening-port reply. */
-    if (server.repl_state == REPL_STATE_RECEIVE_PORT_REPLY) {
-        err = receiveSynchronousResponse(conn);
+    if (*repl_state == REPL_STATE_RECEIVE_PORT_REPLY) {
+        err = receiveSynchronousResponse(conn, slot_sync);
         if (err == NULL) goto no_response_error;
         /* Ignore the error if any, not all the Redis OSS versions support
          * REPLCONF listening-port. */
         if (err[0] == '-') {
             serverLog(LL_NOTICE,
-                      "(Non critical) Primary does not understand "
+                      "(Non critical) %s does not understand "
                       "REPLCONF listening-port: %s",
+                      node_primary,
                       err);
         }
         sdsfree(err);
-        server.repl_state = REPL_STATE_RECEIVE_IP_REPLY;
+        err = NULL;
+        *repl_state = REPL_STATE_RECEIVE_IP_REPLY;
         return;
     }
 
-    if (server.repl_state == REPL_STATE_RECEIVE_IP_REPLY && !server.replica_announce_ip)
-        server.repl_state = REPL_STATE_RECEIVE_CAPA_REPLY;
+    if (*repl_state == REPL_STATE_RECEIVE_IP_REPLY && !server.replica_announce_ip)
+        *repl_state = REPL_STATE_RECEIVE_CAPA_REPLY;
 
     /* Receive REPLCONF ip-address reply. */
-    if (server.repl_state == REPL_STATE_RECEIVE_IP_REPLY) {
-        err = receiveSynchronousResponse(conn);
+    if (*repl_state == REPL_STATE_RECEIVE_IP_REPLY) {
+        err = receiveSynchronousResponse(conn, slot_sync);
         if (err == NULL) goto no_response_error;
         /* Ignore the error if any, not all the Redis OSS versions support
          * REPLCONF ip-address. */
         if (err[0] == '-') {
             serverLog(LL_NOTICE,
-                      "(Non critical) Primary does not understand "
+                      "(Non critical) %s does not understand "
                       "REPLCONF ip-address: %s",
+                      node_primary,
                       err);
         }
         sdsfree(err);
-        server.repl_state = REPL_STATE_RECEIVE_CAPA_REPLY;
+        err = NULL;
+        *repl_state = REPL_STATE_RECEIVE_CAPA_REPLY;
         return;
     }
 
     /* Receive CAPA reply. */
-    if (server.repl_state == REPL_STATE_RECEIVE_CAPA_REPLY) {
-        err = receiveSynchronousResponse(conn);
+    if (*repl_state == REPL_STATE_RECEIVE_CAPA_REPLY) {
+        err = receiveSynchronousResponse(conn, slot_sync);
         if (err == NULL) goto no_response_error;
         /* Ignore the error if any, not all the Redis OSS versions support
          * REPLCONF capa. */
         if (err[0] == '-') {
             serverLog(LL_NOTICE,
-                      "(Non critical) Primary does not understand "
+                      "(Non critical) %s does not understand "
                       "REPLCONF capa: %s",
+                      node_primary,
                       err);
         }
         sdsfree(err);
         err = NULL;
-        server.repl_state = REPL_STATE_RECEIVE_VERSION_REPLY;
+        *repl_state = REPL_STATE_RECEIVE_VERSION_REPLY;
         return;
     }
 
     /* Receive VERSION reply. */
-    if (server.repl_state == REPL_STATE_RECEIVE_VERSION_REPLY) {
-        err = receiveSynchronousResponse(conn);
+    if (*repl_state == REPL_STATE_RECEIVE_VERSION_REPLY) {
+        err = receiveSynchronousResponse(conn, slot_sync);
         if (err == NULL) goto no_response_error;
         /* Ignore the error if any. Valkey >= 8 supports REPLCONF VERSION. */
         if (err[0] == '-') {
             serverLog(LL_NOTICE,
-                      "(Non critical) Primary does not understand "
+                      "(Non critical) %s does not understand "
                       "REPLCONF VERSION: %s",
+                      node_primary,
                       err);
         }
         sdsfree(err);
         err = NULL;
-        server.repl_state = REPL_STATE_SEND_PSYNC;
+        *repl_state = REPL_STATE_SEND_PSYNC;
     }
 
     /* Try a partial resynchronization. If we don't have a cached primary
@@ -3986,32 +4203,32 @@ void syncWithPrimary(connection *conn) {
      * to start a full resynchronization so that we get the primary replid
      * and the global offset, to try a partial resync at the next
      * reconnection attempt. */
-    if (server.repl_state == REPL_STATE_SEND_PSYNC) {
-        if (replicaTryPartialResynchronization(conn, 0) == PSYNC_WRITE_ERROR) {
+    if (*repl_state == REPL_STATE_SEND_PSYNC) {
+        if (replicaTryPartialResynchronization(conn, 0, slot_sync) == PSYNC_WRITE_ERROR) {
             err = sdsnew("Write error sending the PSYNC command.");
             abortFailover("Write error to failover target");
             goto write_error;
         }
-        server.repl_state = REPL_STATE_RECEIVE_PSYNC_REPLY;
+        *repl_state = REPL_STATE_RECEIVE_PSYNC_REPLY;
         return;
     }
 
     /* If reached this point, we should be in REPL_STATE_RECEIVE_PSYNC_REPLY. */
-    if (server.repl_state != REPL_STATE_RECEIVE_PSYNC_REPLY) {
+    if (*repl_state != REPL_STATE_RECEIVE_PSYNC_REPLY) {
         serverLog(LL_WARNING,
-                  "syncWithPrimary(): state machine error, "
+                  "syncWithPrimaryStateMachine(): state machine error, "
                   "state should be RECEIVE_PSYNC but is %d",
-                  server.repl_state);
+                  *repl_state);
         goto error;
     }
 
-    psync_result = replicaTryPartialResynchronization(conn, 1);
+    psync_result = replicaTryPartialResynchronization(conn, 1, slot_sync);
     if (psync_result == PSYNC_WAIT_REPLY) return; /* Try again later... */
 
     /* Check the status of the planned failover. We expect PSYNC_CONTINUE,
      * but there is nothing technically wrong with a full resync which
      * could happen in edge cases. */
-    if (server.failover_state == FAILOVER_IN_PROGRESS) {
+    if (!slot_sync && server.failover_state == FAILOVER_IN_PROGRESS) {
         if (psync_result == PSYNC_CONTINUE || psync_result == PSYNC_FULLRESYNC) {
             clearFailoverState();
         } else {
@@ -4050,10 +4267,10 @@ void syncWithPrimary(connection *conn) {
     }
 
     /* Prepare a suitable temp file for bulk transfer */
-    if (!useDisklessLoad()) {
+    if (!useDisklessLoad(slot_sync)) {
         int dfd = -1, maxtries = 5;
         while (maxtries--) {
-            snprintf(tmpfile, 256, "temp-%d.%ld.rdb", (int)server.unixtime, (long int)getpid());
+            snprintf(tmpfile, 256, "temp-%d.%ld.rdb", (int)(mstime()/1000), (long int)getpid());
             dfd = open(tmpfile, O_CREAT | O_WRONLY | O_EXCL, 0644);
             if (dfd != -1) break;
             /* We save the errno of open to prevent some systems from modifying it after
@@ -4063,12 +4280,19 @@ void syncWithPrimary(connection *conn) {
             errno = saved_errno;
         }
         if (dfd == -1) {
-            serverLog(LL_WARNING, "Opening the temp file needed for PRIMARY <-> REPLICA synchronization: %s",
+            serverLog(LL_WARNING, "Opening the temp file needed for %s <-> %s synchronization: %s",
+                      node_primary, node_replica,
                       strerror(errno));
             goto error;
         }
-        server.repl_transfer_tmpfile = zstrdup(tmpfile);
-        server.repl_transfer_fd = dfd;
+        if (!slot_sync) {
+            server.repl_transfer_tmpfile = zstrdup(tmpfile);
+            server.repl_transfer_fd = dfd;
+        } else {
+            /* Store the name and fd of the rdb file to the clusterSlotSyncLink. */
+            link->repl_transfer_tmpfile = zstrdup(tmpfile);
+            link->repl_transfer_fd = dfd;
+        }
     }
 
     /* Using dual-channel-replication, the primary responded +DUALCHANNELSYNC. We need to
@@ -4092,6 +4316,23 @@ void syncWithPrimary(connection *conn) {
         server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_SEND_HANDSHAKE;
         return;
     }
+
+    if (psync_result == PSYNC_FOR_SLOT_SYNC) {
+        /* Setup the non blocking download of the bulk file. */
+        if (connSetReadHandler(link->sync_conn, readSlotSyncBulkPayload) == C_ERR) {
+            char conninfo[CONN_INFO_LEN];
+            serverLog(LL_WARNING, "Can't create readable event for slot SYNC: %s (%s)", strerror(errno),
+                      connGetInfo(link->sync_conn, conninfo, sizeof(conninfo)));
+            goto error;
+        }
+        *repl_state = REPL_STATE_TRANSFER;
+        link->repl_transfer_size = -1;
+        link->repl_transfer_read = 0;
+        link->repl_transfer_last_fsync_off = 0;
+        link->repl_transfer_lastio = server.unixtime;
+        return;
+    }
+
     /* Setup the non blocking download of the bulk file. */
     if (connSetReadHandler(conn, readSyncBulkPayload) == C_ERR) {
         char conninfo[CONN_INFO_LEN];
@@ -4100,7 +4341,7 @@ void syncWithPrimary(connection *conn) {
         goto error;
     }
 
-    server.repl_state = REPL_STATE_TRANSFER;
+    *repl_state = REPL_STATE_TRANSFER;
     server.repl_transfer_size = -1;
     server.repl_transfer_read = 0;
     server.repl_transfer_last_fsync_off = 0;
@@ -4108,10 +4349,12 @@ void syncWithPrimary(connection *conn) {
     return;
 
 no_response_error: /* Handle receiveSynchronousResponse() error when primary has no reply */
-    serverLog(LL_WARNING, "Primary did not respond to command during SYNC handshake");
+    serverLog(LL_WARNING, "%s did not respond to command during SYNC handshake", node_primary);
     /* Fall through to regular error handling */
 
 error:
+    if (slot_sync) goto slot_sync_error;
+
     connClose(conn);
     server.repl_transfer_s = NULL;
     if (server.repl_rdb_transfer_s) {
@@ -4125,10 +4368,37 @@ error:
     server.repl_state = REPL_STATE_CONNECT;
     return;
 
+slot_sync_error:
+    connClose(conn);
+    link->sync_conn = NULL;
+    if (link->repl_transfer_fd != -1) {
+        close(link->repl_transfer_fd);
+        bg_unlink(link->repl_transfer_tmpfile);
+        zfree(link->repl_transfer_tmpfile);
+        link->repl_transfer_fd = -1;
+        link->repl_transfer_tmpfile = NULL;
+    }
+    *repl_state = REPL_STATE_CONNECT;
+    return;
+
 write_error: /* Handle sendCommand() errors. */
-    serverLog(LL_WARNING, "Sending command to primary in replication handshake: %s", err);
+    serverLog(LL_WARNING, "Error sending command to server in replication handshake: %s", err);
     sdsfree(err);
     goto error;
+}
+
+/* This handler fires when the non blocking connect was able to
+ * establish a connection with the primary. */
+void syncWithPrimary(connection *conn) {
+    syncWithPrimaryStateMachine(conn, &server.repl_state, 0);
+}
+
+/* This handler fires when the non blocking connect was able to
+ * establish a connection with the slot sync primary. */
+void syncWithSlotSyncPrimary(connection *conn) {
+    clusterSlotSyncLink *link = connGetPrivateData(conn);
+
+    syncWithPrimaryStateMachine(conn, &link->sync_state, 1);
 }
 
 int connectWithPrimary(void) {
@@ -4140,7 +4410,6 @@ int connectWithPrimary(void) {
         server.repl_transfer_s = NULL;
         return C_ERR;
     }
-
 
     server.repl_transfer_lastio = server.unixtime;
     server.repl_state = REPL_STATE_CONNECTING;
@@ -4428,7 +4697,7 @@ void roleCommand(client *c) {
         }
         setDeferredArrayLen(c, mbcount, replicas);
     } else {
-        char *replica_state = NULL;
+        const char *replica_state = NULL;
 
         addReplyArrayLen(c, 5);
         addReplyBulkCBuffer(c, "slave", 5);

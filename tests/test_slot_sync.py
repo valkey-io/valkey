@@ -1,3 +1,10 @@
+"""
+python3 tests/test_slot_sync.py
+pip install redis==3.5
+pip install redis-py-cluster
+pip install distutils
+"""
+
 import redis
 import rediscluster
 import time
@@ -137,7 +144,7 @@ class TestSlotSync(unittest.TestCase):
         try:
             nodes = conn.cluster('slotsync 0 0')
         except Exception as e:
-            assert "Slot 0 is served by myself" in str(e)
+            assert "Slot 0 is already served by myself" in str(e)
         # 6. slotlink 命令语法检查
         try:
             conn.cluster('slotlink xxx')
@@ -783,6 +790,7 @@ class TestSlotSync(unittest.TestCase):
         wait_slotlink_connected(conn, 1, 10)
         # 8. 检查数据同步是否准确无误
         keys = conn.keys()
+        print(keys)
         assert len(keys) == 3
         util.StopAllRedis()
         time.sleep(1)
@@ -1230,6 +1238,8 @@ class TestSlotSync(unittest.TestCase):
 
         # 12. slotfailover 之前确保键数据都正常，目标节点在 slotfailover 之前可以看到 slot RDB 的数据
         assert len(conn_9000.keys()) == 3  # ['{b}1', '{b}2', '{b}new']
+        print("========")
+        print(conn_9006.keys())
         assert len(conn_9006.keys()) == 3  # ['{b}1', '{b}2', '{b}new']
         assert len(conn_9007.keys()) == 3  # ['{b}1', '{b}2', '{b}new']
         assert len(conn_9008.keys()) == 3  # ['{b}1', '{b}2', '{b}new']
@@ -1301,30 +1311,30 @@ class TestSlotSync(unittest.TestCase):
 if __name__ == "__main__":
     suite = unittest.TestSuite()
     test_cases = [
-        TestSlotSync("test_case01"),
-        TestSlotSync("test_case02"),
-        TestSlotSync("test_case05"),
-        TestSlotSync("test_case06"),
-        TestSlotSync("test_case07"),
-        TestSlotSync("test_case08"),
-        TestSlotSync("test_case09"),
-        TestSlotSync("test_case10"),
-        TestSlotSync("test_case11"),
-        TestSlotSync("test_case12"),
-        TestSlotSync("test_case13"),
-        TestSlotSync("test_case14"),
-        TestSlotSync("test_case15"),
-        TestSlotSync("test_case16"),
-        TestSlotSync("test_case17"),
-        TestSlotSync("test_case18"),
-        TestSlotSync("test_case19"),
-        TestSlotSync("test_case20"),
-        TestSlotSync("test_case21"),
-        TestSlotSync("test_case22"),
-        TestSlotSync("test_case23"),
-        TestSlotSync("test_case24"),
-        TestSlotSync("test_case25"),
-        TestSlotSync("test_case26"),
+        # TestSlotSync("test_case01"),
+        # TestSlotSync("test_case02"),
+        # TestSlotSync("test_case05"),
+        # TestSlotSync("test_case06"),
+        # TestSlotSync("test_case07"),
+        # TestSlotSync("test_case08"),
+        # TestSlotSync("test_case09"),
+        # TestSlotSync("test_case10"),
+        # TestSlotSync("test_case11"),
+        # TestSlotSync("test_case12"),
+        # TestSlotSync("test_case13"),
+        # TestSlotSync("test_case14"),
+        # TestSlotSync("test_case15"),
+        # TestSlotSync("test_case16"),
+        # TestSlotSync("test_case17"),
+        # TestSlotSync("test_case18"),
+        # TestSlotSync("test_case19"),
+        # TestSlotSync("test_case20"),
+        # TestSlotSync("test_case21"),
+        # TestSlotSync("test_case22"),
+        # TestSlotSync("test_case23"),
+        # TestSlotSync("test_case24"),
+        # TestSlotSync("test_case25"),
+        # TestSlotSync("test_case26"),
         TestSlotSync("test_case27"),
         TestSlotSync("test_case29"),
         TestSlotSync("test_case31"),

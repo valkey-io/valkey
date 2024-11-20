@@ -375,49 +375,28 @@ typedef struct slotRange {
     int end_slot;
 } slotRange;
 
-/* Slot sync state. Used in clusterSlotSyncLink struct sync_state for links to remember
- * what to do next. */
-typedef enum {
-    CLUSTER_SLOTSYNC_STATE_NONE = 0,
-    CLUSTER_SLOTSYNC_STATE_TOCONNECT,   /* Need to reconnect with the slot owner */
-    CLUSTER_SLOTSYNC_STATE_CONNECTING,  /* In connecting with the slot owner */
-    /* --- Handshake states, must be ordered --- */
-    CLUSTER_SLOTSYNC_STATE_SEND_AUTH,   /* Need to send AUTH */
-    CLUSTER_SLOTSYNC_STATE_RECV_AUTH,   /* Wait for AUTH reply */
-    CLUSTER_SLOTSYNC_STATE_SEND_CAPA,   /* Need to send REPLCONF capa */
-    CLUSTER_SLOTSYNC_STATE_RECV_CAPA,   /* Wait for REPLCONF reply */
-    CLUSTER_SLOTSYNC_STATE_WAIT_SCHED,  /* Wait for schedule to avod oncurrency bug */
-    CLUSTER_SLOTSYNC_STATE_SEND_SYNC,   /* Need to send SYNC */
-    /* --- End of handshake states --- */
-    CLUSTER_SLOTSYNC_STATE_RECV_RDB,    /* Receiving the filtered rdb */
-    CLUSTER_SLOTSYNC_STATE_LOADING_RDB, /* Loading the RDB in bio. */
-    CLUSTER_SLOTSYNC_STATE_DONE_LOADING,/* Done loading the RDB in bio. */
-    CLUSTER_SLOTSYNC_STATE_CONNECTED,   /* Synced with the slot owner */
-    CLUSTER_SLOTSYNC_STATE_LOADING_FAIL,/* Loading fail. */
-    CLUSTER_SLOTSYNC_STATE_FAILED,      /* Meet unexpected error and retry will not work */
-} slotSyncState;
-
 /* Encapsulate everything needed to talk with the slot sync source node. */
 typedef struct clusterSlotSyncLink {
-    mstime_t ctime;                 /* Link creation time */
-    connection *sync_conn;          /* Connection to slot sync source node */
-    client* client;
-    char linkname[CLUSTER_NAMELEN]; /* Name of this link */
-    char nodename[CLUSTER_NAMELEN]; /* Name of the slot sync source node */
+    mstime_t ctime;                 /* Link object creation time. */
+    char linkname[CLUSTER_NAMELEN]; /* Name of this link, hex string, sha1-size. */
+    char nodename[CLUSTER_NAMELEN]; /* Name of the slot sync source node, hex string, sha1-size. */
 
-    serverDb *db;
-    functionsLibCtx *functions_lib_ctx;
+    /* Temporary resources during slot synchronization. */
+    serverDb *temp_db;              /* Temp db stores the keys during the sync process. */
+    functionsLibCtx *temp_func_ctx; /* Temp function ctx stores functions during the sync process. */
 
-    slotSyncState sync_state;       /* Sync state */
-    list* slot_ranges;              /* List of the slot ranges we want to sync */
+    client *client;                 /* Client to slot sync source node. */
+    connection *sync_conn;          /* Connection to slot sync source node. */
+    int sync_state;                 /* State of the slot sync link during slot sync. */
+    list *slot_ranges;              /* List of the slot ranges we want to sync. */
 
     /* The following fields are used by slot sync RDB transfer. */
-    int transfer_tmpfile_fd;        /* Descriptor of the tmpfile to store slot sync RDB */
-    char* transfer_tmpfile_name;    /* Name of the tmpfile to store slot sync RDB */
-    int64_t transfer_total_size;    /* Total size of the slot sync RDB file */
-    int64_t transfer_read_size;     /* Amount of read from the slot sync RDB file */
-    off_t transfer_last_fsync_off;  /* Offset when we fsync-ed last time */
-    time_t transfer_lastio;         /* Unix time of the latest read, for timeout */
+    int repl_transfer_fd;        /* Descriptor of the tmpfile to store slot sync RDB */
+    char *repl_transfer_tmpfile;    /* Name of the tmpfile to store slot sync RDB */
+    int64_t repl_transfer_size;    /* Total size of the slot sync RDB file */
+    int64_t repl_transfer_read;     /* Amount of read from the slot sync RDB file */
+    off_t repl_transfer_last_fsync_off;  /* Offset when we fsync-ed last time */
+    time_t repl_transfer_lastio;         /* Unix time of the latest read, for timeout */
 
     /* The following fields are used by slot failover. */
     int slot_mf_ready;              /* If is ready to do slot manual failover */

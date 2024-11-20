@@ -155,5 +155,6 @@ void clusterSlotPendingDelete(void);
 int testInjectError(const char *error);
 char *getInjectOptionValue(const char *option);
 list *createSlotRangeList(void);
+void resetSlotSyncLinkForReconnect(void *link);
 
 #endif /* __CLUSTER_H */

@@ -70,14 +70,21 @@ int anetGetError(int fd) {
     return sockerr;
 }
 
-int anetSetBlock(char *err, int fd, int non_block) {
+static int anetGetSocketFlags(char *err, int fd) {
     int flags;
 
-    /* Set the socket blocking (if non_block is zero) or non-blocking.
-     * Note that fcntl(2) for F_GETFL and F_SETFL can't be
-     * interrupted by a signal. */
     if ((flags = fcntl(fd, F_GETFL)) == -1) {
         anetSetError(err, "fcntl(F_GETFL): %s", strerror(errno));
+        return ANET_ERR;
+    }
+
+    return flags;
+}
+
+int anetSetBlock(char *err, int fd, int non_block) {
+    int flags = anetGetSocketFlags(err, fd);
+
+    if (flags == ANET_ERR) {
         return ANET_ERR;
     }
 
@@ -103,6 +110,21 @@ int anetNonBlock(char *err, int fd) {
 
 int anetBlock(char *err, int fd) {
     return anetSetBlock(err, fd, 0);
+}
+
+int anetIsBlock(char *err, int fd) {
+    int flags = anetGetSocketFlags(err, fd);
+
+    if (flags == ANET_ERR) {
+        return ANET_ERR;
+    }
+
+    /* Check if the O_NONBLOCK flag is set */
+    if (flags & O_NONBLOCK) {
+        return 0; /* Socket is non-blocking */
+    } else {
+        return 1; /* Socket is blocking */
+    }
 }
 
 /* Enable the FD_CLOEXEC on the given fd to avoid fd leaks.

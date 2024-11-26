@@ -1899,41 +1899,44 @@ static list *getUpcomingChannelList(user *new, user *original) {
 /* Check if the client should be killed because it is subscribed to channels that were
  * permitted in the past, are not in the `upcoming` channel list. */
 static int ACLShouldKillPubsubClient(client *c, list *upcoming) {
-    robj *o;
-    int kill = 0;
-
     if (getClientType(c) == CLIENT_TYPE_PUBSUB) {
+        int kill = 0;
+
         /* Check for pattern violations. */
-        dictIterator *di = dictGetIterator(c->pubsub_data->pubsub_patterns);
-        dictEntry *de;
-        while (!kill && ((de = dictNext(di)) != NULL)) {
-            o = dictGetKey(de);
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, c->pubsub_data->pubsub_patterns, 0);
+        void *next;
+        while (!kill && hashtableNext(&iter, &next)) {
+            robj *o = next;
             int res = ACLCheckChannelAgainstList(upcoming, o->ptr, sdslen(o->ptr), 1);
             kill = (res == ACL_DENIED_CHANNEL);
         }
-        dictReleaseIterator(di);
+        hashtableResetIterator(&iter);
 
         /* Check for channel violations. */
         if (!kill) {
             /* Check for global channels violation. */
-            di = dictGetIterator(c->pubsub_data->pubsub_channels);
-
-            while (!kill && ((de = dictNext(di)) != NULL)) {
-                o = dictGetKey(de);
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, c->pubsub_data->pubsub_channels, 0);
+            void *next;
+            while (!kill && hashtableNext(&iter, &next)) {
+                robj *o = next;
                 int res = ACLCheckChannelAgainstList(upcoming, o->ptr, sdslen(o->ptr), 0);
                 kill = (res == ACL_DENIED_CHANNEL);
             }
-            dictReleaseIterator(di);
+            hashtableResetIterator(&iter);
         }
         if (!kill) {
             /* Check for shard channels violation. */
-            di = dictGetIterator(c->pubsub_data->pubsubshard_channels);
-            while (!kill && ((de = dictNext(di)) != NULL)) {
-                o = dictGetKey(de);
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, c->pubsub_data->pubsubshard_channels, 0);
+            void *next;
+            while (!kill && hashtableNext(&iter, &next)) {
+                robj *o = next;
                 int res = ACLCheckChannelAgainstList(upcoming, o->ptr, sdslen(o->ptr), 0);
                 kill = (res == ACL_DENIED_CHANNEL);
             }
-            dictReleaseIterator(di);
+            hashtableResetIterator(&iter);
         }
 
         if (kill) {

@@ -490,6 +490,11 @@ int dictEncObjKeyCompare(const void *key1, const void *key2) {
     return cmp;
 }
 
+/* Returns 0 when keys match */
+int hashtableEncObjKeyCompare(const void *key1, const void *key2) {
+    return !dictEncObjKeyCompare(key1, key2);
+}
+
 uint64_t dictEncObjHash(const void *key) {
     robj *o = (robj *)key;
 
@@ -557,6 +562,13 @@ dictType objectKeyHeapPointerValueDictType = {
     dictObjectDestructor, /* key destructor */
     dictVanillaFree,      /* val destructor */
     NULL                  /* allow to expand */
+};
+
+/* Generic hashtable type: set of robj elements */
+hashtableType objectHashtableType = {
+    .hashFunction = dictEncObjHash,
+    .keyCompare = hashtableEncObjKeyCompare,
+    .entryDestructor = dictObjectDestructor,
 };
 
 /* Set hashtable type. Items are SDS strings */

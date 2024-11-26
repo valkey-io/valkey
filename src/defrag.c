@@ -51,7 +51,6 @@
 typedef enum { DEFRAG_NOT_DONE = 0,
                DEFRAG_DONE = 1 } doneStatus;
 
-
 /*
  * Defragmentation is performed in stages.  Each stage is serviced by a stage function
  * (defragStageFn).  The stage function is passed a target (void*) to defrag.  The contents of that
@@ -135,7 +134,7 @@ typedef struct {
 static_assert(offsetof(defragKeysCtx, kvstate) == 0, "defragStageKvstoreHelper requires this");
 
 // Private data for pubsub kvstores
-typedef dict *(*getClientChannelsFn)(client *);
+typedef hashtable *(*getClientChannelsFn)(client *);
 typedef struct {
     getClientChannelsFn fn;
 } getClientChannelsFnWrapper;
@@ -789,11 +788,10 @@ static void defragPubsubScanCallback(void *privdata, void *elemref) {
     void **channel_dict_ref = (void **)elemref;
     dict *newclients, *clients = *channel_dict_ref;
     robj *newchannel, *channel = *(robj **)dictMetadata(clients);
-    size_t allocation_size;
 
     /* Try to defrag the channel name. */
     serverAssert(channel->refcount == (int)dictSize(clients) + 1);
-    newchannel = activeDefragStringObWithoutFree(channel, &allocation_size);
+    newchannel = activeDefragStringOb(channel);
     if (newchannel) {
         *(robj **)dictMetadata(clients) = newchannel;
 
@@ -804,14 +802,11 @@ static void defragPubsubScanCallback(void *privdata, void *elemref) {
         dictEntry *clientde;
         while ((clientde = dictNext(di)) != NULL) {
             client *c = dictGetKey(clientde);
-            dict *client_channels = ctx->getPubSubChannels(c);
-            dictEntry *pubsub_channel = dictFind(client_channels, newchannel);
-            serverAssert(pubsub_channel);
-            dictSetKey(ctx->getPubSubChannels(c), pubsub_channel, newchannel);
+            hashtable *client_channels = ctx->getPubSubChannels(c);
+            int replaced = hashtableReplaceReallocatedEntry(client_channels, channel, newchannel);
+            serverAssert(replaced);
         }
         dictReleaseIterator(di);
-        // Now that we're done correcting the references, we can safely free the old channel robj
-        allocatorDefragFree(channel, allocation_size);
     }
 
     /* Try to defrag the dictionary of clients that is stored as the value part. */

@@ -1102,9 +1102,10 @@ typedef struct {
  * Clients are taken in a linked list. */
 
 #define CLIENT_ID_AOF                                                                                                  \
-    (UINT64_MAX) /* Reserved ID for the AOF client. If you                                                             \
-                    need more reserved IDs use UINT64_MAX-1,                                                           \
-                    -2, ... and so forth. */
+    (UINT64_MAX)                                   /* Reserved ID for the AOF client. If you                           \
+                                                      need more reserved IDs use UINT64_MAX-1,                         \
+                                                      -2, ... and so forth. */
+#define CLIENT_ID_CACHED_RESPONSE (UINT64_MAX - 1) /* Client for cached response, see createCachedResponseClient. */
 
 /* Replication backlog is not a separate memory, it just is one consumer of
  * the global replication buffer. This structure records the reference of

@@ -685,6 +685,7 @@ void moduleReleaseTempClient(client *c) {
     c->bufpos = 0;
     c->raw_flag = 0;
     c->flag.module = 1;
+    c->flag.fake = 1;
     c->user = NULL; /* Root user */
     c->cmd = c->lastcmd = c->realcmd = c->io_parsed_cmd = NULL;
     if (c->bstate.async_rm_call_handle) {

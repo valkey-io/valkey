@@ -98,7 +98,7 @@ void moduleCallClusterReceivers(const char *sender_id,
 const char *clusterGetMessageTypeString(int type);
 void removeChannelsInSlot(unsigned int slot);
 unsigned int countChannelsInSlot(unsigned int hashslot);
-unsigned int delKeysInSlot(unsigned int hashslot);
+unsigned int delKeysInSlot(unsigned int hashslot, int lazy);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
 list *clusterLookupNodeListByShardId(const char *shard_id);
 void clusterRemoveNodeFromShard(clusterNode *node);
@@ -2861,7 +2861,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
         for (int j = 0; j < dirty_slots_count; j++) {
             serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s (%s) in shard %.40s", dirty_slots[j],
                       myself->name, myself->human_nodename, myself->shard_id);
-            delKeysInSlot(dirty_slots[j]);
+            delKeysInSlot(dirty_slots[j], server.lazyfree_lazy_server_del);
         }
     }
 }
@@ -5920,7 +5920,7 @@ int verifyClusterConfigWithData(void) {
                           server.cluster->importing_slots_from[j]->shard_id, j, server.cluster->slots[j]->name,
                           server.cluster->slots[j]->human_nodename, server.cluster->slots[j]->shard_id);
             }
-            delKeysInSlot(j);
+            delKeysInSlot(j, server.lazyfree_lazy_server_del);
         }
     }
     if (update_config) clusterSaveConfigOrDie(1);
@@ -6535,7 +6535,7 @@ void removeChannelsInSlot(unsigned int slot) {
 
 /* Remove all the keys in the specified hash slot.
  * The number of removed items is returned. */
-unsigned int delKeysInSlot(unsigned int hashslot) {
+unsigned int delKeysInSlot(unsigned int hashslot, int lazy) {
     if (!countKeysInSlot(hashslot)) return 0;
 
     /* We may lose a slot during the pause. We need to track this
@@ -6551,8 +6551,8 @@ unsigned int delKeysInSlot(unsigned int hashslot) {
         enterExecutionUnit(1, 0);
         sds sdskey = objectGetKey(valkey);
         robj *key = createStringObject(sdskey, sdslen(sdskey));
-        dbDelete(&server.db[0], key);
-        propagateDeletion(&server.db[0], key, server.lazyfree_lazy_server_del);
+        int deleted = lazy ? dbAsyncDelete(&server.db[0], key) : dbSyncDelete(&server.db[0], key);
+        propagateDeletion(&server.db[0], key, lazy);
         signalModifiedKey(NULL, &server.db[0], key);
         /* The keys are not actually logically deleted from the database, just moved to another node.
          * The modules needs to know that these keys are no longer available locally, so just send the
@@ -7369,6 +7369,23 @@ int clusterCommandSpecial(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "links") && c->argc == 2) {
         /* CLUSTER LINKS */
         addReplyClusterLinksDescription(c);
+    } else if (!strcasecmp(c->argv[1]->ptr, "flushslot") && (c->argc == 3 || c->argc == 4)) {
+        /* CLUSTER FLUSHSLOT <slot> [ASYNC|SYNC] */
+        int slot;
+        int lazy = 1;
+        if ((slot = getSlotOrReply(c, c->argv[2])) == -1) return 1;
+        if (c->argc == 4) {
+            if (!strcasecmp(c->argv[3]->ptr, "async")) {
+                lazy = 1;
+            } else if (!strcasecmp(c->argv[3]->ptr, "sync")) {
+                lazy = 0;
+            } else {
+                addReplyErrorObject(c, shared.syntaxerr);
+                return 1;
+            }
+        }
+        delKeysInSlot(slot, lazy);
+        addReply(c, shared.ok);
     } else {
         return 0;
     }

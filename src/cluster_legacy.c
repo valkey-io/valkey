@@ -127,6 +127,7 @@ int verifyClusterNodeId(const char *name, int length);
 sds clusterEncodeOpenSlotsAuxField(int rdbflags);
 int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now);
+void clusterCommandFlushslot(client *c);
 
 /* Only primaries that own slots have voting rights.
  * Returns 1 if the node has voting rights, otherwise returns 0. */
@@ -7371,21 +7372,7 @@ int clusterCommandSpecial(client *c) {
         addReplyClusterLinksDescription(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "flushslot") && (c->argc == 3 || c->argc == 4)) {
         /* CLUSTER FLUSHSLOT <slot> [ASYNC|SYNC] */
-        int slot;
-        int lazy = 1;
-        if ((slot = getSlotOrReply(c, c->argv[2])) == -1) return 1;
-        if (c->argc == 4) {
-            if (!strcasecmp(c->argv[3]->ptr, "async")) {
-                lazy = 1;
-            } else if (!strcasecmp(c->argv[3]->ptr, "sync")) {
-                lazy = 0;
-            } else {
-                addReplyErrorObject(c, shared.syntaxerr);
-                return 1;
-            }
-        }
-        delKeysInSlot(slot, lazy);
-        addReply(c, shared.ok);
+        clusterCommandFlushslot(c);
     } else {
         return 0;
     }
@@ -7580,4 +7567,22 @@ int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s) {
     }
 
     return C_OK;
+}
+
+void clusterCommandFlushslot(client *c) {
+    int slot;
+    int lazy = server.lazyfree_lazy_user_flush;
+    if ((slot = getSlotOrReply(c, c->argv[2])) == -1) return;
+    if (c->argc == 4) {
+        if (!strcasecmp(c->argv[3]->ptr, "async")) {
+            lazy = 1;
+        } else if (!strcasecmp(c->argv[3]->ptr, "sync")) {
+            lazy = 0;
+        } else {
+            addReplyErrorObject(c, shared.syntaxerr);
+            return;
+        }
+    }
+    delKeysInSlot(slot, lazy);
+    addReply(c, shared.ok);
 }

@@ -231,11 +231,6 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval
         set CLUSTER_PACKET_TYPE_FAILOVER_AUTH_ACK 6
         set CLUSTER_PACKET_TYPE_NONE -1
 
-        # Setting a large timeout to make sure we hit the voted_time limit.
-        R 0 config set cluster-node-timeout 150000
-        R 1 config set cluster-node-timeout 150000
-        R 2 config set cluster-node-timeout 150000
-
         # Let replica drop FAILOVER_AUTH_ACK so that the election won't
         # get the enough votes and the election will time out.
         R 3 debug drop-cluster-packet-filter $CLUSTER_PACKET_TYPE_FAILOVER_AUTH_ACK
@@ -270,10 +265,6 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval
         # Pause the primary.
         pause_process [srv 0 pid]
         wait_for_cluster_state fail
-
-        # Setting a large timeout to make sure we hit the voted_time limit.
-        R 1 config set cluster-node-timeout 150000
-        R 2 config set cluster-node-timeout 150000
 
         # R 3 performs an automatic failover and it will work.
         R 3 config set cluster-replica-no-failover no
@@ -311,5 +302,35 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval
             fail "The third falover does not happen"
         }
         wait_for_cluster_propagation
+    }
+} ;# start_cluster
+
+start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 2000}} {
+    test "Automatic failover vote is not limited by two times the node timeout - mixed failover" {
+        R 3 cluster failover
+        wait_for_condition 1000 50 {
+            [s 0 role] eq {slave} &&
+            [s -3 role] eq {master}
+        } else {
+            fail "The first failover does not happen"
+        }
+        wait_for_cluster_propagation
+
+        R 0 cluster failover
+        wait_for_condition 1000 50 {
+            [s 0 role] eq {master} &&
+            [s -3 role] eq {slave}
+        } else {
+            fail "The second failover does not happen"
+        }
+        wait_for_cluster_propagation
+
+        # Let R 3 trigger the automatic failover
+        pause_process [srv 0 pid]
+        wait_for_condition 1000 50 {
+            [s -3 role] eq {master}
+        } else {
+            fail "The third failover does not happen"
+        }
     }
 } ;# start_cluster

@@ -317,6 +317,27 @@ void getCommand(client *c) {
     getGenericCommand(c);
 }
 
+/* Emit the two element [value, expire] reply shared by GETPXT and MGETPXT. The
+ * expire is -1 when the key has no associated expiration time. */
+static void addReplyValueAndExpire(client *c, robj *o) {
+    addReplyArrayLen(c, 2);
+    addReplyBulk(c, o);
+    addReplyLongLong(c, objectGetExpire(o));
+}
+
+void getpxtCommand(client *c) {
+    robj *o;
+
+    if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.nullarray[c->resp])) == NULL)
+        return;
+
+    if (checkType(c, o, OBJ_STRING)) {
+        return;
+    }
+
+    addReplyValueAndExpire(c, o);
+}
+
 /*
  * GETEX <key> [PERSIST][EX seconds][PX milliseconds][EXAT seconds-timestamp][PXAT milliseconds-timestamp]
  *

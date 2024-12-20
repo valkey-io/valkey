@@ -38,7 +38,7 @@
             ],
             [
                 "8.1.0",
-                "`ID` option accepts multiple IDs."
+                "`ID` option accepts multiple IDs. Added filters NAME, MINIDLE, FLAGS, PATTERN, CHANNEL and SHARDCHANNEL."
             ]
         ],
         "command_flags": [
@@ -162,6 +162,48 @@
                                 "type": "integer",
                                 "optional": true,
                                 "since": "8.0.0"
+                            },
+                            {
+                                "token": "NAME",
+                                "name": "name",
+                                "type": "string",
+                                "optional": true,
+                                "since": "8.1.0"
+                            },
+                            {
+                                "token": "MINIDLE",
+                                "name": "minidle",
+                                "type": "integer",
+                                "optional": true,
+                                "since": "8.1.0"
+                            },
+                            {
+                                "token": "FLAGS",
+                                "name": "flags",
+                                "type": "string",
+                                "optional": true,
+                                "since": "8.1.0"
+                            },
+                            {
+                                "token": "PATTERN",
+                                "name": "pattern",
+                                "type": "string",
+                                "optional": true,
+                                "since": "8.1.0"
+                            },
+                            {
+                                "token": "CHANNEL",
+                                "name": "channel",
+                                "type": "string",
+                                "optional": true,
+                                "since": "8.1.0"
+                            },
+                            {
+                                "token": "SHARDCHANNEL",
+                                "name": "shardchannel",
+                                "type": "string",
+                                "optional": true,
+                                "since": "8.1.0"
                             }
                         ]
                     }

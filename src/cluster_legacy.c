@@ -425,8 +425,18 @@ typedef struct {
     union {
         clusterMsg msg;
         clusterMsgLight msg_light;
-    };
+    } data[];
 } clusterMsgSendBlock;
+
+/* Helper function to extract a normal message from a send block. */
+static clusterMsgLight *getLightMessageFromSendBlock(clusterMsgSendBlock *msgblock) {
+    return &msgblock->data[0].msg_light;
+}
+
+/* Helper function to extract a light message from a send block. */
+static clusterMsg *getMessageFromSendBlock(clusterMsgSendBlock *msgblock) {
+    return &msgblock->data[0].msg;
+}
 
 /* -----------------------------------------------------------------------------
  * Initialization
@@ -1288,15 +1298,15 @@ void clusterReset(int hard) {
  * CLUSTER communication link
  * -------------------------------------------------------------------------- */
 clusterMsgSendBlock *createClusterMsgSendBlock(int type, uint32_t msglen) {
-    uint32_t blocklen = msglen + offsetof(clusterMsgSendBlock, msg);
+    uint32_t blocklen = msglen + offsetof(clusterMsgSendBlock, data);
     clusterMsgSendBlock *msgblock = zcalloc(blocklen);
     msgblock->refcount = 1;
     msgblock->totlen = blocklen;
     server.stat_cluster_links_memory += blocklen;
     if (IS_LIGHT_MESSAGE(type)) {
-        clusterBuildMessageHdrLight(&msgblock->msg_light, type, msglen);
+        clusterBuildMessageHdrLight(getLightMessageFromSendBlock(msgblock), type, msglen);
     } else {
-        clusterBuildMessageHdr(&msgblock->msg, type, msglen);
+        clusterBuildMessageHdr(getMessageFromSendBlock(msgblock), type, msglen);
     }
     return msgblock;
 }
@@ -3583,7 +3593,7 @@ void clusterWriteHandler(connection *conn) {
     while (totwritten < NET_MAX_WRITES_PER_EVENT && listLength(link->send_msg_queue) > 0) {
         listNode *head = listFirst(link->send_msg_queue);
         clusterMsgSendBlock *msgblock = (clusterMsgSendBlock *)head->value;
-        clusterMsg *msg = &msgblock->msg;
+        clusterMsg *msg = getMessageFromSendBlock(msgblock);
         size_t msg_offset = link->head_msg_send_offset;
         size_t msg_len = ntohl(msg->totlen);
 
@@ -3766,7 +3776,7 @@ void clusterSendMessage(clusterLink *link, clusterMsgSendBlock *msgblock) {
     if (!link) {
         return;
     }
-    if (listLength(link->send_msg_queue) == 0 && msgblock->msg.totlen != 0)
+    if (listLength(link->send_msg_queue) == 0 && getMessageFromSendBlock(msgblock)->totlen != 0)
         connSetWriteHandlerWithBarrier(link->conn, clusterWriteHandler, 1);
 
     listAddNodeTail(link->send_msg_queue, msgblock);
@@ -3777,7 +3787,7 @@ void clusterSendMessage(clusterLink *link, clusterMsgSendBlock *msgblock) {
     server.stat_cluster_links_memory += sizeof(listNode);
 
     /* Populate sent messages stats. */
-    uint16_t type = ntohs(msgblock->msg.type) & ~CLUSTERMSG_MODIFIER_MASK;
+    uint16_t type = ntohs(getMessageFromSendBlock(msgblock)->type) & ~CLUSTERMSG_MODIFIER_MASK;
     if (type < CLUSTERMSG_TYPE_COUNT) server.cluster->stats_bus_messages_sent[type]++;
 }
 
@@ -3957,7 +3967,7 @@ void clusterSendPing(clusterLink *link, int type) {
      * sizeof(clusterMsg) or more. */
     if (estlen < (int)sizeof(clusterMsg)) estlen = sizeof(clusterMsg);
     clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(type, estlen);
-    clusterMsg *hdr = &msgblock->msg;
+    clusterMsg *hdr = getMessageFromSendBlock(msgblock);
 
     if (!link->inbound && type == CLUSTERMSG_TYPE_PING) link->node->ping_sent = mstime();
 
@@ -4102,10 +4112,10 @@ clusterMsgSendBlock *clusterCreatePublishMsgBlock(robj *channel, robj *message, 
     clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(type, msglen);
     clusterMsgDataPublish *hdr_data_msg;
     if (is_light) {
-        clusterMsgLight *hdr_light = &msgblock->msg_light;
+        clusterMsgLight *hdr_light = getLightMessageFromSendBlock(msgblock);
         hdr_data_msg = &hdr_light->data.publish.msg;
     } else {
-        clusterMsg *hdr = &msgblock->msg;
+        clusterMsg *hdr = getMessageFromSendBlock(msgblock);
         hdr_data_msg = &hdr->data.publish.msg;
     }
     hdr_data_msg->channel_len = htonl(channel_len);
@@ -4128,7 +4138,7 @@ void clusterSendFail(char *nodename) {
     uint32_t msglen = sizeof(clusterMsg) - sizeof(union clusterMsgData) + sizeof(clusterMsgDataFail);
     clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_FAIL, msglen);
 
-    clusterMsg *hdr = &msgblock->msg;
+    clusterMsg *hdr = getMessageFromSendBlock(msgblock);
     memcpy(hdr->data.fail.about.nodename, nodename, CLUSTER_NAMELEN);
 
     clusterBroadcastMessage(msgblock);
@@ -4144,7 +4154,7 @@ void clusterSendUpdate(clusterLink *link, clusterNode *node) {
     uint32_t msglen = sizeof(clusterMsg) - sizeof(union clusterMsgData) + sizeof(clusterMsgDataUpdate);
     clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_UPDATE, msglen);
 
-    clusterMsg *hdr = &msgblock->msg;
+    clusterMsg *hdr = getMessageFromSendBlock(msgblock);
     memcpy(hdr->data.update.nodecfg.nodename, node->name, CLUSTER_NAMELEN);
     hdr->data.update.nodecfg.configEpoch = htonu64(node->configEpoch);
     memcpy(hdr->data.update.nodecfg.slots, node->slots, sizeof(node->slots));
@@ -4166,7 +4176,7 @@ void clusterSendModule(clusterLink *link, uint64_t module_id, uint8_t type, cons
     msglen += sizeof(clusterMsgModule) - 3 + len;
     clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_MODULE, msglen);
 
-    clusterMsg *hdr = &msgblock->msg;
+    clusterMsg *hdr = getMessageFromSendBlock(msgblock);
     hdr->data.module.msg.module_id = module_id; /* Already endian adjusted. */
     hdr->data.module.msg.type = type;
     hdr->data.module.msg.len = htonl(len);
@@ -4255,11 +4265,10 @@ void clusterRequestFailoverAuth(void) {
     uint32_t msglen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
     clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST, msglen);
 
-    clusterMsg *hdr = &msgblock->msg;
     /* If this is a manual failover, set the CLUSTERMSG_FLAG0_FORCEACK bit
      * in the header to communicate the nodes receiving the message that
      * they should authorized the failover even if the primary is working. */
-    if (server.cluster->mf_end) hdr->mflags[0] |= CLUSTERMSG_FLAG0_FORCEACK;
+    if (server.cluster->mf_end) getMessageFromSendBlock(msgblock)->mflags[0] |= CLUSTERMSG_FLAG0_FORCEACK;
     clusterBroadcastMessage(msgblock);
     clusterMsgSendBlockDecrRefCount(msgblock);
 }

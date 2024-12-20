@@ -566,6 +566,24 @@ void mgetCommand(client *c) {
     }
 }
 
+void mgetpxtCommand(client *c) {
+    int j;
+
+    addReplyArrayLen(c, c->argc - 1);
+    for (j = 1; j < c->argc; j++) {
+        robj *o = lookupKeyRead(c->db, c->argv[j]);
+        if (o == NULL) {
+            addReplyNullArray(c);
+        } else {
+            if (o->type != OBJ_STRING) {
+                addReplyNullArray(c);
+            } else {
+                addReplyValueAndExpire(c, o);
+            }
+        }
+    }
+}
+
 void msetGenericCommand(client *c, int nx) {
     int j;
 

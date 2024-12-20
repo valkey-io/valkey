@@ -4062,6 +4062,7 @@ void rpoplpushCommand(client *c);
 void lmoveCommand(client *c);
 void infoCommand(client *c);
 void mgetCommand(client *c);
+void mgetpxtCommand(client *c);
 void monitorCommand(client *c);
 void expireCommand(client *c);
 void expireatCommand(client *c);

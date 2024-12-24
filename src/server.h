@@ -547,6 +547,13 @@ typedef enum {
 #define REPL_DISKLESS_LOAD_SWAPDB 2
 #define REPL_DISKLESS_LOAD_FLUSH_BEFORE_LOAD 3
 
+/* External storage options */
+#define EXT_STORAGE_NONE 0
+#define EXT_STORAGE_TEST 1
+
+/* External storage dump format */
+#define EXT_DUMP_FORMAT_RDB 0
+
 /* TLS Client Authentication */
 #define TLS_CLIENT_AUTH_NO 0
 #define TLS_CLIENT_AUTH_YES 1
@@ -2070,6 +2077,12 @@ struct valkeyServer {
     int key_load_delay;                   /* Delay in microseconds between keys while
                                            * loading aof or rdb. (for testings). negative
                                            * value means fractions of microseconds (on average). */
+    /* External storage options.  */
+    int ext_storage_mode;                 /* External storage mode */
+    int ext_dump_format;                  /* External storage dump format */
+    size_t ext_min_object_size_to_move;   /* Min size of k/v pair to move to external storage */
+    unsigned long long ext_max_disk_size; /* Maximum disk space allowed to be used by external storage */
+    unsigned long long ext_max_mem_size;  /* Maximum memory allowed to be used by external storage */
     /* Pipe and data structures for child -> parent info sharing. */
     int child_info_pipe[2]; /* Pipe used to write the child_info_data. */
     int child_info_nread;   /* Num of bytes of the last read from pipe */

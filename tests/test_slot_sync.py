@@ -1303,6 +1303,52 @@ class TestSlotSync(unittest.TestCase):
         self.my_test_case27(diskless=True, repl_diskless_load="swapdb", dual_channel=True)
         util.PrintSuccCaseResult("TestCase 32: OK")
 
+    def test_case33(self):
+        # =================== TestCase 33 ====================================
+        # slotsync 客户端在源节点那 output buffer 计算是正常的，不累计共享复制缓冲区
+        # ====================================================================
+        # 1. 启一个三分片集群(master, slave):(9000, 9003),(9001, 9004),(9002,9005).
+        redis_cluster = cluster.RedisCluster(password='', shard_size=3)
+        redis_cluster.start_cluster()
+
+        # 2. 加入一个新节点作为目标节点
+        redis_cluster.add_new_node(9006, 9000)
+        conn_9006 = redis.StrictRedis(host="127.0.0.1", port=9006, decode_responses=True)
+
+        # 3. 发起 slot 同步，3300 属于 9000 这个节点，对应的 hashtag 是 {b}
+        conn_9006.cluster("slotsync 3300 3300")
+
+        # 4. 等待目标节点 online，此时增量命令都应该会消费完
+        wait_slotlink_connected(conn_9006, 1, 10)
+
+        # 5. 调整源节点的输出缓冲区并且写入一些命令
+        conn_9000 = redis.StrictRedis(host="127.0.0.1", port=9000, decode_responses=True)
+        conn_9003 = redis.StrictRedis(host="127.0.0.1", port=9003, decode_responses=True)
+        conn_9000.execute_command("config", "set", "repl-backlog-size", "1mb")
+        conn_9000.execute_command("config", "set", "client-output-buffer-limit", "replica 1mb 1mb 10")
+        for _ in range(25000):
+            conn_9000.execute_command("set", "{b}1", "value-b1", "ex", 10000)
+            conn_9000.execute_command("set", "{b}2", "value-b2", "ex", 10000)
+
+        # 6. 确保正常情况下不会有 COB 问题，因为没有阻塞增量消费不应该会被堆积
+        assert int(conn_9000.info("stats")["client_output_buffer_limit_disconnections"]) == 0
+
+        # 7. 期望复制共享缓冲区占用的内存不会超过 2mb
+        assert int(conn_9000.info("memory")["mem_total_replication_buffers"]) < 2 * 1024 * 1024
+
+        # 8. slotfailover 前后确保键数据都正常
+        assert conn_9000.dbsize() == 2
+        assert conn_9003.dbsize() == 2
+        conn_9006.cluster('slotfailover')
+        time.sleep(1)
+        assert conn_9000.dbsize() == 0
+        assert conn_9003.dbsize() == 0
+        assert conn_9006.dbsize() == 2
+
+        util.StopAllRedis()
+        time.sleep(1)
+        util.PrintSuccCaseResult("TestCase 33: OK")
+
     def tearDown(self):
         util.StopAllRedis()
         time.sleep(1)
@@ -1335,9 +1381,11 @@ if __name__ == "__main__":
         # TestSlotSync("test_case24"),
         # TestSlotSync("test_case25"),
         # TestSlotSync("test_case26"),
-        TestSlotSync("test_case27"),
-        TestSlotSync("test_case29"),
-        TestSlotSync("test_case31"),
+        # TestSlotSync("test_case27"),
+        # TestSlotSync("test_case29"),
+        # TestSlotSync("test_case31"),
+
+        TestSlotSync("test_case33"),
 
         # TestSlotSync("test_case28"),
         # TestSlotSync("test_case30"),

@@ -485,6 +485,8 @@ void feedReplicationBuffer(char *s, size_t len) {
         while ((ln = listNext(&li))) {
             client *replica = ln->value;
             if (!canFeedReplicaReplBuffer(replica) && !(replica->flag.protected_rdb_channel)) continue;
+            /* Skip the replicas which are in the slot sync mode, slotsync does not use this. */
+            if (replica->slotsync_slots && listLength(replica->slotsync_slots)) continue;
             /* Update shared replication buffer start position. */
             if (replica->repl_data->ref_repl_buf_node == NULL) {
                 replica->repl_data->ref_repl_buf_node = start_node;

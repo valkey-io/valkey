@@ -673,11 +673,19 @@ void hashHashtableTypeDestructor(void *entry) {
     freeHashTypeEntry(hash_entry);
 }
 
+size_t hashHashtableTypeMetadataSize(void) {
+    return sizeof(void *);
+}
+
+extern hashtableElementAccessState hashHashtableTypeAccess(hashtable *ht, void *entry);
+
 hashtableType hashHashtableType = {
     .hashFunction = dictSdsHash,
     .entryGetKey = hashHashtableTypeGetKey,
     .keyCompare = hashtableSdsKeyCompare,
     .entryDestructor = hashHashtableTypeDestructor,
+    .getMetadataSize = hashHashtableTypeMetadataSize,
+    .accessElement = hashHashtableTypeAccess,
 };
 
 /* Hashtable type without destructor */
@@ -2116,6 +2124,7 @@ void createSharedObjects(void) {
     shared.multi = createStringObject("MULTI", 5);
     shared.exec = createStringObject("EXEC", 4);
     shared.hset = createStringObject("HSET", 4);
+    shared.hdel = createStringObject("HDEL", 4);
     shared.srem = createStringObject("SREM", 4);
     shared.xgroup = createStringObject("XGROUP", 6);
     shared.xclaim = createStringObject("XCLAIM", 6);
@@ -7213,4 +7222,21 @@ __attribute__((weak)) int main(int argc, char **argv) {
     aeDeleteEventLoop(server.el);
     return 0;
 }
+
+void setAccessContext(robj *o, serverDb *db) {
+    setAccessContextWithFlags(o, db, OBJ_ACCESS_NONE);
+}
+
+void setAccessContextWithFlags(robj *o, serverDb *db, int flags) {
+    server.access_context.key = o;
+    server.access_context.db = db;
+    server.access_context.flags = flags;
+}
+
+void resetAccessContext(void) {
+    server.access_context.key = NULL;
+    server.access_context.db = NULL;
+    server.access_context.flags = OBJ_ACCESS_NONE;
+}
+
 /* The End */

@@ -42,6 +42,13 @@ typedef uint64_t hashtableIterator[5];
 typedef uint64_t hashtablePosition[2];
 typedef uint64_t hashtableIncrementalFindState[5];
 
+typedef enum {
+    ELEMENT_NONE = 0,
+    ELEMENT_VALID,
+    ELEMENT_INVALID,
+    ELEMENT_DELETE,
+} hashtableElementAccessState;
+
 /* --- Non-opaque types --- */
 
 /* The hashtableType is a set of callbacks for a hashtable. All callbacks are
@@ -77,6 +84,9 @@ typedef struct {
     size_t (*getMetadataSize)(void);
     /* Flag to disable incremental rehashing */
     unsigned instant_rehashing : 1;
+
+    hashtableElementAccessState (*accessElement)(hashtable *ht, void *entry);
+
 } hashtableType;
 
 typedef enum {

@@ -46,13 +46,6 @@
 #define EXPIRE_FORCE_DELETE_EXPIRED 1
 #define EXPIRE_AVOID_DELETE_EXPIRED 2
 
-/* Return values for expireIfNeeded */
-typedef enum {
-    KEY_VALID = 0, /* Could be volatile and not yet expired, non-volatile, or even non-existing key. */
-    KEY_EXPIRED,   /* Logically expired but not yet deleted. */
-    KEY_DELETED    /* The key was deleted now. */
-} keyStatus;
-
 static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val, int flags, int dict_index);
 static keyStatus expireIfNeeded(serverDb *db, robj *key, robj *val, int flags);
 static int keyIsExpiredWithDictIndex(serverDb *db, robj *key, int dict_index);
@@ -1879,13 +1872,69 @@ void propagateDeletion(serverDb *db, robj *key, int lazy) {
 }
 
 /* Returns 1 if the expire value is expired, 0 otherwise. */
-static int timestampIsExpired(mstime_t when) {
+int timestampIsExpired(mstime_t when) {
     if (when < 0) return 0; /* no expire */
     mstime_t now = commandTimeSnapshot();
 
     /* The key expired if the current (virtual or real) time is greater
      * than the expire time of the key. */
     return now > when;
+}
+
+int canExpireWithFlags(int flags, int *delete_expired) {
+    if (server.lazy_expire_disabled) return 0;
+    if (server.loading) return 0;
+
+    if (delete_expired) *delete_expired = 0;
+
+    /* If we are running in the context of a replica, instead of
+     * evicting the expired key from the database, we return ASAP:
+     * the replica key expiration is controlled by the primary that will
+     * send us synthesized DEL operations for expired keys. The
+     * exception is when write operations are performed on writable
+     * replicas.
+     *
+     * Still we try to return the right information to the caller,
+     * that is, KEY_VALID if we think the key should still be valid,
+     * KEY_EXPIRED if we think the key is expired but don't want to delete it at this time.
+     *
+     * When replicating commands from the primary, keys are never considered
+     * expired. */
+    if (server.primary_host != NULL) {
+        if (server.current_client && (server.current_client->flag.primary)) return 0;
+        if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return 1;
+    } else if (server.import_mode) {
+        /* If we are running in the import mode on a primary, instead of
+         * evicting the expired key from the database, we return ASAP:
+         * the key expiration is controlled by the import source that will
+         * send us synthesized DEL operations for expired keys. The
+         * exception is when write operations are performed on this server
+         * because it's a primary.
+         *
+         * Notice: other clients, apart from the import source, should not access
+         * the data imported by import source.
+         *
+         * Still we try to return the right information to the caller,
+         * that is, KEY_VALID if we think the key should still be valid,
+         * KEY_EXPIRED if we think the key is expired but don't want to delete it at this time.
+         *
+         * When receiving commands from the import source, keys are never considered
+         * expired. */
+        if (server.current_client && (server.current_client->flag.import_source)) return 0;
+        if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return 1;
+    }
+
+    /* In some cases we're explicitly instructed to return an indication of a
+     * missing key without actually deleting it, even on primaries. */
+    if (flags & EXPIRE_AVOID_DELETE_EXPIRED) return 1;
+
+    /* If 'expire' action is paused, for whatever reason, then don't expire any key.
+     * Typically, at the end of the pause we will properly expire the key OR we
+     * will have failed over and the new primary will send us the expire. */
+    if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) return 1;
+
+    if (delete_expired) *delete_expired = 1;
+    return 1;
 }
 
 /* Use this instead of keyIsExpired if you already have the value object. */
@@ -1925,6 +1974,8 @@ int keyIsExpired(serverDb *db, robj *key) {
 
 /* val is optional. Pass NULL if val is not yet fetched from the database. */
 static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val, int flags, int dict_index) {
+    int delete_expired = 0;
+
     if (server.lazy_expire_disabled) return KEY_VALID;
     if (val != NULL) {
         if (!objectIsExpired(val)) return KEY_VALID;
@@ -1932,51 +1983,9 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
         if (!keyIsExpiredWithDictIndexImpl(db, key, dict_index)) return KEY_VALID;
     }
 
-    /* If we are running in the context of a replica, instead of
-     * evicting the expired key from the database, we return ASAP:
-     * the replica key expiration is controlled by the primary that will
-     * send us synthesized DEL operations for expired keys. The
-     * exception is when write operations are performed on writable
-     * replicas.
-     *
-     * Still we try to return the right information to the caller,
-     * that is, KEY_VALID if we think the key should still be valid,
-     * KEY_EXPIRED if we think the key is expired but don't want to delete it at this time.
-     *
-     * When replicating commands from the primary, keys are never considered
-     * expired. */
-    if (server.primary_host != NULL) {
-        if (server.current_client && (server.current_client->flag.primary)) return KEY_VALID;
-        if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return KEY_EXPIRED;
-    } else if (server.import_mode) {
-        /* If we are running in the import mode on a primary, instead of
-         * evicting the expired key from the database, we return ASAP:
-         * the key expiration is controlled by the import source that will
-         * send us synthesized DEL operations for expired keys. The
-         * exception is when write operations are performed on this server
-         * because it's a primary.
-         *
-         * Notice: other clients, apart from the import source, should not access
-         * the data imported by import source.
-         *
-         * Still we try to return the right information to the caller,
-         * that is, KEY_VALID if we think the key should still be valid,
-         * KEY_EXPIRED if we think the key is expired but don't want to delete it at this time.
-         *
-         * When receiving commands from the import source, keys are never considered
-         * expired. */
-        if (server.current_client && (server.current_client->flag.import_source)) return KEY_VALID;
-        if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return KEY_EXPIRED;
-    }
+    if (!canExpireWithFlags(flags, &delete_expired)) return KEY_VALID;
 
-    /* In some cases we're explicitly instructed to return an indication of a
-     * missing key without actually deleting it, even on primaries. */
-    if (flags & EXPIRE_AVOID_DELETE_EXPIRED) return KEY_EXPIRED;
-
-    /* If 'expire' action is paused, for whatever reason, then don't expire any key.
-     * Typically, at the end of the pause we will properly expire the key OR we
-     * will have failed over and the new primary will send us the expire. */
-    if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) return KEY_EXPIRED;
+    if (!delete_expired) return KEY_EXPIRED;
 
     /* The key needs to be converted from static to heap before deleted */
     int static_key = key->refcount == OBJ_STATIC_REFCOUNT;

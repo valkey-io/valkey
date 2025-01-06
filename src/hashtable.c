@@ -45,6 +45,7 @@
  * - The original scan algorithm was designed by Pieter Noordhuis.
  */
 #include "hashtable.h"
+#include "server.h"
 #include "serverassert.h"
 #include "zmalloc.h"
 #include "mt19937-64.h"
@@ -366,6 +367,9 @@ typedef struct {
     void **entries; /* Array of sampled entries. */
 } scan_samples;
 
+/* --- Access API --- */
+static inline hashtableElementAccessState accessElementIfNeeded(hashtable *ht, void *elem, bucket *b, int pos_in_bucket, int table_index);
+
 /* --- Internal functions --- */
 
 static bucket *findBucketForInsert(hashtable *ht, uint64_t hash, int *pos_in_bucket, int *table_index);
@@ -685,6 +689,9 @@ static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, cons
     if (compareKeys(ht, key, elem_key) == 0) {
         /* It's a match. */
         assert(pos_in_bucket != NULL);
+        if (accessElementIfNeeded(ht, entry, b, pos, table) != ELEMENT_VALID) {
+            return 0;
+        }
         *pos_in_bucket = pos;
         if (table_index) *table_index = table;
         return 1;
@@ -874,6 +881,25 @@ static void compactBucketChain(hashtable *ht, size_t bucket_index, int table_ind
         /* Bucket is full. Move forward to next bucket. */
         b = next;
     }
+}
+
+static inline hashtableElementAccessState accessElementIfNeeded(hashtable *ht, void *elem, bucket *b, int pos_in_bucket, int table_index) {
+    if (ht->type->accessElement == NULL) return ELEMENT_VALID;
+
+    hashtableElementAccessState element_status = ht->type->accessElement(ht, elem);
+    serverLog(LL_NOTICE, "hashtable access returned: %d", element_status);
+    if (element_status == ELEMENT_DELETE) {
+        b->presence &= ~(1 << pos_in_bucket);
+        ht->used[table_index]--;
+        if (b->chained && !hashtableIsRehashingPaused(ht)) {
+            /* Rehashing is paused while iterating and when a scan callback is
+             * running. In those cases, we do the compaction in the scan and
+             * iterator code instead. */
+            fillBucketHole(ht, b, pos_in_bucket, table_index);
+        }
+        hashtableShrinkIfNeeded(ht);
+    }
+    return element_status;
 }
 
 /* Find an empty position in the table for inserting an entry with the given hash. */
@@ -1765,7 +1791,7 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
             if (b->presence != 0) {
                 int pos;
                 for (pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
-                    if (isPositionFilled(b, pos)) {
+                    if (isPositionFilled(b, pos) && accessElementIfNeeded(ht, b->entries[pos], b, pos, 0) == ELEMENT_VALID) {
                         void *emit = emit_ref ? &b->entries[pos] : b->entries[pos];
                         fn(privdata, emit);
                     }
@@ -1802,7 +1828,7 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
             do {
                 if (b->presence) {
                     for (int pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
-                        if (isPositionFilled(b, pos)) {
+                        if (isPositionFilled(b, pos) && accessElementIfNeeded(ht, b->entries[pos], b, pos, 0) == ELEMENT_VALID) {
                             void *emit = emit_ref ? &b->entries[pos] : b->entries[pos];
                             fn(privdata, emit);
                         }
@@ -1832,7 +1858,7 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
                 do {
                     if (b->presence) {
                         for (int pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
-                            if (isPositionFilled(b, pos)) {
+                            if (isPositionFilled(b, pos) && accessElementIfNeeded(ht, b->entries[pos], b, pos, 0) == ELEMENT_VALID) {
                                 void *emit = emit_ref ? &b->entries[pos] : b->entries[pos];
                                 fn(privdata, emit);
                             }
@@ -2019,6 +2045,9 @@ int hashtableNext(hashtableIterator *iterator, void **elemptr) {
         }
         if (!isPositionFilled(b, iter->pos_in_bucket)) {
             /* No entry here. */
+            continue;
+        }
+        if (accessElementIfNeeded(iter->hashtable, b->entries[iter->pos_in_bucket], b, iter->pos_in_bucket, iter->table) != ELEMENT_VALID) {
             continue;
         }
         /* Return the entry at this position. */

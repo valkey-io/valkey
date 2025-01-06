@@ -82,6 +82,7 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "rax.h"        /* Radix tree */
 #include "connection.h" /* Connection abstraction */
 #include "memory_prefetch.h"
+#include "volatile_set.h"
 
 #define dismissMemory zmadvise_dontneed
 
@@ -217,6 +218,10 @@ struct hdr_histogram;
 
 extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 
+#define COMMAND_GET 0
+#define COMMAND_SET 1
+
+
 /* Command flags. Please check the definition of struct serverCommand in this file
  * for more information about the meaning of every flag. */
 #define CMD_WRITE (1ULL << 0)
@@ -312,6 +317,11 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 
 /* Key flags for when access type is unknown */
 #define CMD_KEY_FULL_ACCESS (CMD_KEY_RW | CMD_KEY_ACCESS | CMD_KEY_UPDATE)
+
+#define EXPIRE_NX (1 << 0)
+#define EXPIRE_XX (1 << 1)
+#define EXPIRE_GT (1 << 2)
+#define EXPIRE_LT (1 << 3)
 
 /* Key flags for how key is removed */
 #define DB_FLAG_KEY_NONE 0
@@ -595,6 +605,9 @@ typedef enum {
 #define PAUSE_ACTION_EVICT (1 << 3)
 #define PAUSE_ACTION_REPLICA (1 << 4) /* pause replica traffic */
 
+/* Special Expiry values */
+#define EXPIRY_NONE -1
+
 /* Sets log format */
 typedef enum { LOG_FORMAT_LEGACY = 0,
                LOG_FORMAT_LOGFMT } log_format_type;
@@ -699,6 +712,21 @@ typedef enum {
 /*-----------------------------------------------------------------------------
  * Data types
  *----------------------------------------------------------------------------*/
+
+ /* Generic set command string object set flags */
+#define OBJ_NO_FLAGS 0
+#define OBJ_SET_NX (1 << 0)   /* Set if key not exists. */
+#define OBJ_SET_XX (1 << 1)   /* Set if key exists. */
+#define OBJ_EX (1 << 2)       /* Set if time in seconds is given */
+#define OBJ_PX (1 << 3)       /* Set if time in ms in given */
+#define OBJ_KEEPTTL (1 << 4)  /* Set and keep the ttl */
+#define OBJ_SET_GET (1 << 5)  /* Set if want to get key before set */
+#define OBJ_EXAT (1 << 6)     /* Set if timestamp in second is given */
+#define OBJ_PXAT (1 << 7)     /* Set if timestamp in ms is given */
+#define OBJ_PERSIST (1 << 8)  /* Set if we need to remove the ttl */
+#define OBJ_SET_IFEQ (1 << 9) /* Set if we need compare and set */
+#define OBJ_ARGV3 (1 << 10)   /* Set if the value is at argv[3]; otherwise it's \
+                               * at argv[2]. */
 
 /* An Object, that is a type able to hold a string / list / set */
 
@@ -1320,7 +1348,7 @@ struct sharedObjectsStruct {
         *loadingerr, *slowevalerr, *slowscripterr, *slowmoduleerr, *bgsaveerr, *primarydownerr, *roreplicaerr,
         *execaborterr, *noautherr, *noreplicaserr, *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk,
         *subscribebulk, *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink, *rpop, *lpop, *lpush,
-        *rpoplpush, *lmove, *blmove, *zpopmin, *zpopmax, *emptyscan, *multi, *exec, *left, *right, *hset, *srem,
+        *rpoplpush, *lmove, *blmove, *zpopmin, *zpopmax, *emptyscan, *multi, *exec, *left, *right, *hset, *hdel, *srem,
         *xgroup, *xclaim, *script, *replconf, *eval, *persist, *set, *pexpireat, *pexpire, *time, *pxat, *absttl,
         *retrycount, *force, *justid, *entriesread, *lastid, *ping, *setid, *keepttl, *load, *createconsumer, *getack,
         *special_asterisk, *special_equals, *default_username, *redacted, *ssubscribebulk, *sunsubscribebulk,
@@ -1568,6 +1596,24 @@ typedef enum childInfoType {
     CHILD_INFO_TYPE_MODULE_COW_SIZE
 } childInfoType;
 
+#define OBJ_ACCESS_NONE 0          /* Will not actively delete expired accessed elements */
+#define OBJ_ACCESS_NORMAL (1 << 0) /* Deleting lazy expired fields. */
+#define OBJ_ACCESS_IGNORE_TTL (1 << 1) /* treat any accessed field as valid regardless of it's TTL */
+
+typedef struct keyAccessContext {
+    int flags;
+    robj *key;
+    serverDb *db;
+} keyAccessContext;
+
+
+/* Return values for expireIfNeeded */
+typedef enum {
+    KEY_VALID = 0, /* Could be volatile and not yet expired, non-volatile, or even non-existing key. */
+    KEY_EXPIRED,   /* Logically expired but not yet deleted. */
+    KEY_DELETED    /* The key was deleted now. */
+} keyStatus;
+
 struct valkeyServer {
     /* General */
     pid_t pid;                /* Main process pid. */
@@ -1642,6 +1688,8 @@ struct valkeyServer {
                                             * Value: RDB client object
                                             * This structure holds dual-channel sync replicas from the start of their
                                             * RDB transfer until their main channel establishes partial synchronization. */
+    keyAccessContext access_context;        /* The current key access context */
+    
     client *current_client;                /* The client that triggered the command execution (External or AOF). */
     client *executing_client;              /* The client executing the current command (possibly script or module). */
 
@@ -2550,17 +2598,20 @@ typedef struct {
 typedef struct {
     robj *subject;
     int encoding;
-
+    int volatile_items;
     unsigned char *fptr, *vptr;
 
     hashtableIterator iter;
+    volatileSetIterator viter;
     void *next;
+
 } hashTypeIterator;
 
 #include "stream.h" /* Stream data type header file. */
 
 #define OBJ_HASH_FIELD 1
 #define OBJ_HASH_VALUE 2
+#define OBJ_HASH_EXPIRY 
 
 /*-----------------------------------------------------------------------------
  * Extern declarations
@@ -2608,6 +2659,7 @@ int validateProcTitleTemplate(const char *template);
 int serverCommunicateSystemd(const char *sd_notify_msg);
 void serverSetCpuAffinity(const char *cpulist);
 void dictVanillaFree(void *val);
+int timestampIsExpired(mstime_t when);
 
 /* ERROR STATS constants */
 
@@ -2782,6 +2834,9 @@ void ioThreadWriteToClient(void *data);
 int canParseCommand(client *c);
 int processIOThreadsReadDone(void);
 int processIOThreadsWriteDone(void);
+int canExpireWithFlags(int flags, int *can_delete);
+int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_index);
+int parseExtendedStringArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type);
 
 /* logreqres.c - logging of requests and responses */
 void reqresReset(client *c, int free_buf);
@@ -3230,6 +3285,9 @@ void *activeDefragAlloc(void *ptr);
 robj *activeDefragStringOb(robj *ob);
 void dismissSds(sds s);
 void dismissMemoryInChild(void);
+void setAccessContext(robj *o, serverDb *db);
+void setAccessContextWithFlags(robj *o, serverDb *db, int flags);
+void resetAccessContext(void);
 
 #define RESTART_SERVER_NONE 0
 #define RESTART_SERVER_GRACEFULLY (1 << 0)     /* Do proper shutdown. */
@@ -3267,12 +3325,16 @@ robj *setTypeDup(robj *o);
 /* Hash data type */
 #define HASH_SET_TAKE_FIELD (1 << 0)
 #define HASH_SET_TAKE_VALUE (1 << 1)
+#define HASH_SET_KEEP_EXPIRY (1 << 2)
 #define HASH_SET_COPY 0
 
 typedef void hashTypeEntry;
-hashTypeEntry *hashTypeCreateEntry(sds field, sds value);
+hashTypeEntry *hashTypeCreateEntry(sds field, sds value, long long ttl, void *metadata, size_t metadata_size);
 sds hashTypeEntryGetField(const hashTypeEntry *entry);
 sds hashTypeEntryGetValue(const hashTypeEntry *entry);
+long long hashTypeEntryGetExpiry(const hashTypeEntry *entry);
+int hashTypeEntryHasExpire(const hashTypeEntry *entry);
+void hashTypeTrackEntry(robj *o, void *entry);
 size_t hashTypeEntryMemUsage(hashTypeEntry *entry);
 hashTypeEntry *hashTypeEntryDefrag(hashTypeEntry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds));
 void dismissHashTypeEntry(hashTypeEntry *entry);
@@ -3284,6 +3346,7 @@ int hashTypeExists(robj *o, sds key);
 int hashTypeDelete(robj *o, sds key);
 unsigned long hashTypeLength(const robj *o);
 void hashTypeInitIterator(robj *subject, hashTypeIterator *hi);
+void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi);
 void hashTypeResetIterator(hashTypeIterator *hi);
 int hashTypeNext(hashTypeIterator *hi);
 void hashTypeCurrentFromListpack(hashTypeIterator *hi,
@@ -3295,8 +3358,10 @@ sds hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what);
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what);
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key);
 robj *hashTypeGetValueObject(robj *o, sds field);
-int hashTypeSet(robj *o, sds field, sds value, int flags);
+int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags);
 robj *hashTypeDup(robj *o);
+int hashTypeHasVolatileElements(robj *o);
+size_t hashTypeNumVolatileElements(robj *o);
 
 /* Pub / Sub */
 int pubsubUnsubscribeAllChannels(client *c, int notify);
@@ -3778,6 +3843,19 @@ void hgetallCommand(client *c);
 void hexistsCommand(client *c);
 void hscanCommand(client *c);
 void hrandfieldCommand(client *c);
+void hexpireCommand(client *c);
+void hexpireAtCommand(client *c);
+void hpexpireCommand(client *c);
+void hpexpireAtCommand(client *c);
+void hexpireCommand(client *c);
+void hexpireAtCommand(client *c);
+void hpexpireCommand(client *c);
+void hpexpireAtCommand(client *c);
+void httlCommand(client *c);
+void hpttlCommand(client *c);
+void hexpiretimeCommand(client *c);
+void hpexpiretimeCommand(client *c);
+void hpersistCommand(client *c);
 void configSetCommand(client *c);
 void configGetCommand(client *c);
 void configResetStatCommand(client *c);

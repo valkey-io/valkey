@@ -532,23 +532,20 @@ int checkAlreadyExpired(long long when) {
     return (when <= commandTimeSnapshot() && !server.loading && !server.primary_host && !server.import_mode);
 }
 
-#define EXPIRE_NX (1 << 0)
-#define EXPIRE_XX (1 << 1)
-#define EXPIRE_GT (1 << 2)
-#define EXPIRE_LT (1 << 3)
-
-/* Parse additional flags of expire commands
+/* Parse additional flags of expire commands up to the specify max_index.
+ * In case max_index will scan all arguments.
  *
  * Supported flags:
  * - NX: set expiry only when the key has no expiry
  * - XX: set expiry only when the key has an existing expiry
  * - GT: set expiry only when the new expiry is greater than current one
  * - LT: set expiry only when the new expiry is less than current one */
-int parseExtendedExpireArgumentsOrReply(client *c, int *flags) {
+int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_index) {
     int nx = 0, xx = 0, gt = 0, lt = 0;
+    if (max_index > 0) max_index = c->argc - 1;
 
     int j = 3;
-    while (j < c->argc) {
+    while (j <= max_index) {
         char *opt = c->argv[j]->ptr;
         if (!strcasecmp(opt, "nx")) {
             *flags |= EXPIRE_NX;
@@ -602,7 +599,7 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
     int flag = 0;
 
     /* checking optional flags */
-    if (parseExtendedExpireArgumentsOrReply(c, &flag) != C_OK) {
+    if (parseExtendedExpireArgumentsOrReply(c, &flag, -1) != C_OK) {
         return;
     }
 

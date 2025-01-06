@@ -546,9 +546,8 @@ start_server {tags {"expire"}} {
         set primary_port [srv -1 port]
         # Set this inner layer server as replica
         set replica [srv 0 client]
-
+        $replica replicaof $primary_host $primary_port
         test {First server should have role slave after REPLICAOF} {
-            $replica replicaof $primary_host $primary_port
             wait_for_condition 50 100 {
                 [s 0 role] eq {slave}
             } else {
@@ -614,6 +613,40 @@ start_server {tags {"expire"}} {
                 }
                 assert_equal {} [$replica get foo]
             }
+        }
+
+        test {expired hash field is expired on the replica} {
+            $primary flushall
+            $replica config set replica-read-only yes
+            $primary hset myhash f1 v1 f2 v2
+            wait_for_condition 50 100 {
+                [$primary hlen myhash] eq {2}
+            } else {
+                fail "field not added to primary"
+            } 
+            
+            wait_for_condition 50 100 {
+                [$replica hlen myhash] eq {2}
+            } else {
+                fail "field not added to replica"
+            } 
+
+            # bp 1
+
+            $primary hpexpire myhash 1000 fields 1 f2
+
+
+            wait_for_condition 50 100 {
+                [$primary hget myhash f2] eq {}
+            } else {
+                fail "field not removed from primary"
+            } 
+            
+            wait_for_condition 50 100 {
+                [$replica hlen myhash] eq {1}
+            } else {
+                fail "field not removed from replica"
+            } 
         }
     }
 

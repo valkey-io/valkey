@@ -1949,7 +1949,7 @@ static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
  * The function returns 0 on error, 1 on success. */
 int rewriteHashObject(rio *r, robj *key, robj *o) {
     hashTypeIterator hi;
-    long long count = 0, items = hashTypeLength(o);
+    long long count = 0, volatile_items = hashTypeNumVolatileElements(o), items = hashTypeLength(o) - volatile_items;
 
     hashTypeInitIterator(o, &hi);
     while (hashTypeNext(&hi) != C_ERR) {
@@ -1963,6 +1963,9 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
             }
         }
 
+        if (volatile_items > 0 && hashTypeEntryHasExpire(hi.next))
+            continue;
+
         if (!rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_FIELD) || !rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_VALUE)) {
             hashTypeResetIterator(&hi);
             return 0;
@@ -1973,6 +1976,25 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
 
     hashTypeResetIterator(&hi);
 
+    /* Now serialize volatile items if exist */
+    if (hashTypeHasVolatileElements(o)) {
+        hashTypeInitVolatileIterator(o, &hi);
+        while (hashTypeNext(&hi) != C_ERR) {
+            long long expiry = hashTypeEntryGetExpiry(hi.next);
+            sds field = hashTypeEntryGetField(hi.next);
+            sds value = hashTypeEntryGetValue(hi.next);
+            if (rioWriteBulkCount(r, '*', 8) == 0) return 0;
+            if (rioWriteBulkString(r, "HSETEX", 6) == 0) return 0;
+            if (rioWriteBulkObject(r, key) == 0) return 0;
+            if (rioWriteBulkString(r, "PXAT", 4) == 0) return 0;
+            if (rioWriteBulkLongLong(r, expiry) == 0) return 0;
+            if (rioWriteBulkString(r, "FIELDS", 6) == 0) return 0;
+            if (rioWriteBulkLongLong(r, 1) == 0) return 0;
+            if (rioWriteBulkString(r, field, sdslen(field)) == 0) return 0;
+            if (rioWriteBulkString(r, value, sdslen(value)) == 0) return 0;
+        }
+        hashTypeResetIterator(&hi);
+    }
     return 1;
 }
 

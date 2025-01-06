@@ -34,10 +34,15 @@
 #include <string.h>
 #include <ctype.h>
 #include <limits.h>
+#include <math.h>
 #include "serverassert.h"
 #include "sds.h"
 #include "sdsalloc.h"
 #include "util.h"
+
+#ifndef min
+#define min(a, b) ((a) < (b) ? (a) : (b))
+#endif
 
 const char *SDS_NOINIT = "SDS_NOINIT";
 
@@ -125,7 +130,7 @@ sds _sdsnewlen(const void *init, size_t initlen, int trymalloc) {
 sds sdswrite(char *buf, size_t bufsize, char type, const char *init, size_t initlen) {
     assert(bufsize >= sdsReqSize(initlen, type));
     int hdrlen = sdsHdrSize(type);
-    size_t usable = bufsize - hdrlen - 1;
+    size_t usable = min(bufsize - hdrlen - 1, sdsTypeMaxSize(type));
     sds s = buf + hdrlen;
     unsigned char *fp = ((unsigned char *)s) - 1; /* flags pointer. */
 

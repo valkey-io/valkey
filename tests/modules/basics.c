@@ -666,7 +666,25 @@ int TestNotifications(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 err:
     RedisModule_Call(ctx, "FLUSHDB", "");
 
-    return RedisModule_ReplyWithSimpleString(ctx, "ERR");
+    return ValkeyModule_ReplyWithSimpleString(ctx, "ERR");
+}
+
+/* test.latency latency_ms */
+int TestLatency(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 2) {
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
+    }
+
+    long long latency_ms;
+    if (ValkeyModule_StringToLongLong(argv[1], &latency_ms) != VALKEYMODULE_OK) {
+        ValkeyModule_ReplyWithError(ctx, "Invalid integer value");
+        return VALKEYMODULE_OK;
+    }
+
+    ValkeyModule_LatencyAddSample("test", latency_ms);
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return VALKEYMODULE_OK;
 }
 
 /* TEST.CTXFLAGS -- Test GetContextFlags. */
@@ -1048,5 +1066,8 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
         TestNotifications,"write deny-oom",1,1,1) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
-    return REDISMODULE_OK;
+    if (ValkeyModule_CreateCommand(ctx, "test.latency", TestLatency, "readonly", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    return VALKEYMODULE_OK;
 }

@@ -3842,24 +3842,24 @@ static int clientMatchesFlagFilter(client *c, const char *flag_filter) {
 }
 
 static int clientSubscribedToChannel(client *client, robj *channel) {
-    if (client == NULL || client->pubsub_channels == NULL) {
+    if (client == NULL || client->pubsub_data == NULL || client->pubsub_data->pubsub_channels == NULL) {
         return 0;
     }
-    return dictFind(client->pubsub_channels, channel) != NULL;
+    return dictFind(client->pubsub_data->pubsub_channels, channel) != NULL;
 }
 
 static int clientSubscribedToShardChannel(client *client, robj *channel) {
-    if (client == NULL || client->pubsubshard_channels == NULL) {
+    if (client == NULL || client->pubsub_data == NULL || client->pubsub_data->pubsubshard_channels == NULL) {
         return 0;
     }
-    return dictFind(client->pubsubshard_channels, channel) != NULL;
+    return dictFind(client->pubsub_data->pubsubshard_channels, channel) != NULL;
 }
 
 static int clientSubscribedToPattern(client *client, robj *pattern) {
-    if (client == NULL || client->pubsub_patterns == NULL) {
+    if (client == NULL || client->pubsub_data == NULL || client->pubsub_data->pubsub_patterns == NULL) {
         return 0;
     }
-    return dictFind(client->pubsub_patterns, pattern) != NULL;
+    return dictFind(client->pubsub_data->pubsub_patterns, pattern) != NULL;
 }
 
 

@@ -38,7 +38,7 @@
             ],
             [
                 "8.1.0",
-                "Added filters USER, ADDR, LADDR, SKIPME, MAXAGE, NAME, MINIDLE, FLAGS, PATTERN, CHANNEL and SHARDCHANNEL "
+                "Added filters USER, ADDR, LADDR, SKIPME, MAXAGE, NAME, MINIDLE, FLAGS, SUBSCRIBED-PATTERN, SUBSCRIBED-CHANNEL and SUBSCRIBED-SHARD-CHANNEL."
             ]
         ],
         "command_flags": [
@@ -167,22 +167,22 @@
                 "since": "8.1.0"
             },
             {
-                "token": "PATTERN",
-                "name": "pattern",
+                "token": "SUBSCRIBED-PATTERN",
+                "name": "subscribed-pattern",
                 "type": "string",
                 "optional": true,
                 "since": "8.1.0"
             },
             {
-                "token": "CHANNEL",
-                "name": "channel",
+                "token": "SUBSCRIBED-CHANNEL",
+                "name": "subscribed-channel",
                 "type": "string",
                 "optional": true,
                 "since": "8.1.0"
             },
             {
-                "token": "SHARDCHANNEL",
-                "name": "shardchannel",
+                "token": "SUBSCRIBED-SHARD-CHANNEL",
+                "name": "subscribed-shard-channel",
                 "type": "string",
                 "optional": true,
                 "since": "8.1.0"

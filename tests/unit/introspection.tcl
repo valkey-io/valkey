@@ -169,7 +169,7 @@ start_server {tags {"introspection"}} {
         $c1 psubscribe h*llo
 
         # Fetch the client list filtered by channel
-        set cl [split [r client list pattern h*llo] "\r\n"]
+        set cl [split [r client list subscribed-pattern h*llo] "\r\n"]
 
         # Assert the client is subscribed to the channel
         foreach line $cl {
@@ -188,7 +188,7 @@ start_server {tags {"introspection"}} {
         $c1 subscribe mychannel
 
         # Fetch the client list filtered by channel
-        set cl [split [r client list channel mychannel] "\r\n"]
+        set cl [split [r client list subscribed-channel mychannel] "\r\n"]
 
         # Assert the client is subscribed to the channel
         foreach line $cl {
@@ -207,7 +207,7 @@ start_server {tags {"introspection"}} {
         $c1 ssubscribe myshardchannel
 
         # Fetch the client list filtered by channel
-        set cl [split [r client list shardchannel myshardchannel] "\r\n"]
+        set cl [split [r client list subscribed-shard-channel myshardchannel] "\r\n"]
 
         # Assert the client is subscribed to the channel
         foreach line $cl {
@@ -327,7 +327,7 @@ start_server {tags {"introspection"}} {
         $c1 psubscribe h*llo
 
         # Kill the client using the exact name pattern
-        r client kill pattern h*llo
+        r client kill subscribed-pattern h*llo
 
         # Assert the client was killed
         set err [catch {$c1 ping} error_message]
@@ -345,7 +345,7 @@ start_server {tags {"introspection"}} {
         $c1 subscribe mychannel
 
         # Kill the client using the channel filter
-        r client kill channel mychannel
+        r client kill subscribed-channel mychannel
 
         # Assert the client was killed
         set err [catch {$c1 ping} error_message]
@@ -363,7 +363,7 @@ start_server {tags {"introspection"}} {
         $c1 ssubscribe myshardchannel
 
         # Kill the client using the shard channel filter
-        r client kill shardchannel myshardchannel
+        r client kill subscribed-shard-channel myshardchannel
 
         # Assert the client was killed
         set err [catch {$c1 ping} error_message]

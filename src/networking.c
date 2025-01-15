@@ -72,12 +72,12 @@ typedef struct {
     long long min_idle;
     /* Client flags for filtering. If NULL, no filtering is applied. */
     char *flags;
-    /* Client pattern for filtering. If NULL, no filtering is applied. */
-    robj *pattern;
-    /* Client channel for filtering. If NULL, no filtering is applied. */
-    robj *channel;
-    /* Client shard channel for filtering. If NULL, no filtering is applied. */
-    robj *shard_channel;
+    /* Client subscribed pattern for filtering. If NULL, no filtering is applied. */
+    robj *subscribed_pattern;
+    /* Client subscribed channel for filtering. If NULL, no filtering is applied. */
+    robj *subscribed_channel;
+    /* Client subscribed shard channel for filtering. If NULL, no filtering is applied. */
+    robj *subscribed_shard_channel;
 } clientFilter;
 
 static void setProtocolError(const char *errstr, client *c);
@@ -3718,14 +3718,14 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
         } else if (!strcasecmp(c->argv[index]->ptr, "name") && moreargs) {
             filter->name = c->argv[index + 1]->ptr;
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "pattern") && moreargs) {
-            filter->pattern = createObject(OBJ_STRING, sdsnew(c->argv[index + 1]->ptr));
+        } else if (!strcasecmp(c->argv[index]->ptr, "subscribed-pattern") && moreargs) {
+            filter->subscribed_pattern = createObject(OBJ_STRING, sdsnew(c->argv[index + 1]->ptr));
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "channel") && moreargs) {
-            filter->channel = createObject(OBJ_STRING, sdsnew(c->argv[index + 1]->ptr));
+        } else if (!strcasecmp(c->argv[index]->ptr, "subscribed-channel") && moreargs) {
+            filter->subscribed_channel = createObject(OBJ_STRING, sdsnew(c->argv[index + 1]->ptr));
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "shardchannel") && moreargs) {
-            filter->shard_channel = createObject(OBJ_STRING, sdsnew(c->argv[index + 1]->ptr));
+        } else if (!strcasecmp(c->argv[index]->ptr, "subscribed-shard-channel") && moreargs) {
+            filter->subscribed_shard_channel = createObject(OBJ_STRING, sdsnew(c->argv[index + 1]->ptr));
             index += 2;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
@@ -3751,9 +3751,9 @@ static int clientMatchesFilter(client *client, clientFilter *client_filter) {
             return 0;
         }
     }
-    if (client_filter.pattern && !clientSubscribedToPattern(client, client_filter.pattern)) return 0;
-    if (client_filter.channel && !clientSubscribedToChannel(client, client_filter.channel)) return 0;
-    if (client_filter.shard_channel && !clientSubscribedToShardChannel(client, client_filter.shard_channel)) return 0;
+    if (client_filter.subscribed_pattern && !clientSubscribedToPattern(client, client_filter.subscribed_pattern)) return 0;
+    if (client_filter.subscribed_channel && !clientSubscribedToChannel(client, client_filter.subscribed_channel)) return 0;
+    if (client_filter.subscribed_shard_channel && !clientSubscribedToShardChannel(client, client_filter.subscribed_shard_channel)) return 0;
 
     /* If all conditions are satisfied, the client matches the filter. */
     return 1;
@@ -3901,12 +3901,12 @@ void clientHelpCommand(client *c) {
         "      Kill connections that include the specified flags.",
         "    * NAME <client-name>",
         "      Kill connections with the specified name.",
-        "    * PATTERN <pattern>",
-        "      Kill connections subscribed to a matching pattern.",
-        "    * CHANNEL <channel>",
-        "      Kill connections subscribed to a matching channel.",
-        "    * SHARD-CHANNEL <shard-channel>",
-        "      Kill connections subscribed to a matching shard channel.",
+        "    * SUBSCRIBED-PATTERN <subscribed-pattern>",
+        "      Kill connections subscribed to a matching subscribed pattern.",
+        "    * SUBSCRIBED-CHANNEL <subscribed channel>",
+        "      Kill connections subscribed to a matching subscribed channel.",
+        "    * SUBSCRIBED-SHARD-CHANNEL <subscribed-shard-channel>",
+        "      Kill connections subscribed to a matching subscribe shard channel.",
         "LIST [options ...]",
         "    Return information about client connections. Options:",
         "    * TYPE (NORMAL|PRIMARY|REPLICA|PUBSUB)",
@@ -3929,12 +3929,12 @@ void clientHelpCommand(client *c) {
         "      Return clients with the specified name.",
         "    * MIN-IDLE <min-idle>",
         "      Return clients with idle time greater than or equal to <min-idle> seconds.",
-        "    * PATTERN <pattern>",
-        "      Return clients subscribed to a matching pattern.",
-        "    * CHANNEL <channel>",
-        "      Return clients subscribed to the specified channel.",
-        "    * SHARD-CHANNEL <shard-channel>",
-        "      Return clients subscribed to the specified shard channel.",
+        "    * SUBSCRIBED-PATTERN <subscribed-pattern>",
+        "      Return clients subscribed to a matching subscribed-pattern.",
+        "    * SUBSCRIBED-CHANNEL <subscribed-channel>",
+        "      Return clients subscribed to the specified subscribed-channel.",
+        "    * SUBSCRIBED-SHARD-CHANNEL <shard-subscribed-channel>",
+        "      Return clients subscribed to the specified subscribe shard channel.",
         "UNPAUSE",
         "    Stop the current client pause, resuming traffic.",
         "PAUSE <timeout> [WRITE|ALL]",
@@ -4102,17 +4102,17 @@ client_kill_done:
 
 static void freeClientFilter(clientFilter *filter) {
     zfree(filter->ids);
-    if (filter->pattern) {
-        decrRefCount(filter->pattern);
-        filter->pattern = NULL;
+    if (filter->subscribed_pattern) {
+        decrRefCount(filter->subscribed_pattern);
+        filter->subscribed_pattern = NULL;
     }
-    if (filter->shard_channel) {
-        decrRefCount(filter->shard_channel);
-        filter->shard_channel = NULL;
+    if (filter->subscribed_shard_channel) {
+        decrRefCount(filter->subscribed_shard_channel);
+        filter->subscribed_shard_channel = NULL;
     }
-    if (filter->channel) {
-        decrRefCount(filter->channel);
-        filter->channel = NULL;
+    if (filter->subscribed_channel) {
+        decrRefCount(filter->subscribed_channel);
+        filter->subscribed_channel = NULL;
     }
 }
 

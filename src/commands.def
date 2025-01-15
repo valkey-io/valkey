@@ -1303,7 +1303,7 @@ commandHistory CLIENT_KILL_History[] = {
 {"6.2.0","`LADDR` option."},
 {"8.0.0","`MAXAGE` option."},
 {"8.0.0","Replaced `master` `TYPE` with `primary`. `master` still supported for backward compatibility."},
-{"8.1.0","`ID` option accepts multiple IDs."},
+{"8.1.0","`ID` option accepts multiple IDs. Added filters NAME, MINIDLE, FLAGS, SUBSCRIBED-PATTERN, SUBSCRIBED-CHANNEL and SUBSCRIBED-SHARD-CHANNEL"},
 };
 #endif
 
@@ -1345,9 +1345,9 @@ struct COMMAND_ARG CLIENT_KILL_filter_new_format_Subargs[] = {
 {MAKE_ARG("name",ARG_TYPE_STRING,-1,"NAME",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("minidle",ARG_TYPE_INTEGER,-1,"MINIDLE",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("flags",ARG_TYPE_STRING,-1,"FLAGS",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("pattern",ARG_TYPE_STRING,-1,"PATTERN",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("channel",ARG_TYPE_STRING,-1,"CHANNEL",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("shardchannel",ARG_TYPE_STRING,-1,"SHARDCHANNEL",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("subscribed-pattern",ARG_TYPE_STRING,-1,"SUBSCRIBED-PATTERN",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("subscribed-channel",ARG_TYPE_STRING,-1,"SUBSCRIBED-CHANNEL",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("subscribed-shard-channel",ARG_TYPE_STRING,-1,"SUBSCRIBED-SHARD-CHANNEL",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
 };
 
 /* CLIENT KILL filter argument table */
@@ -1373,7 +1373,7 @@ commandHistory CLIENT_LIST_History[] = {
 {"7.0.0","Added `resp`, `multi-mem`, `rbs` and `rbp` fields."},
 {"7.0.3","Added `ssub` field."},
 {"8.0.0","Replaced `master` `TYPE` with `primary`. `master` still supported for backward compatibility."},
-{"8.1.0","Added filters USER, ADDR, LADDR, SKIPME, and MAXAGE"},
+{"8.1.0","Added filters USER, ADDR, LADDR, SKIPME, MAXAGE, NAME, MINIDLE, FLAGS, SUBSCRIBED-PATTERN, SUBSCRIBED-CHANNEL and SUBSCRIBED-SHARD-CHANNEL."},
 };
 #endif
 
@@ -1415,9 +1415,9 @@ struct COMMAND_ARG CLIENT_LIST_Args[] = {
 {MAKE_ARG("name",ARG_TYPE_STRING,-1,"NAME",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("minidle",ARG_TYPE_INTEGER,-1,"MINIDLE",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
 {MAKE_ARG("flags",ARG_TYPE_STRING,-1,"FLAGS",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("pattern",ARG_TYPE_STRING,-1,"PATTERN",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("channel",ARG_TYPE_STRING,-1,"CHANNEL",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("shardchannel",ARG_TYPE_STRING,-1,"SHARDCHANNEL",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("subscribed-pattern",ARG_TYPE_STRING,-1,"SUBSCRIBED-PATTERN",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("subscribed-channel",ARG_TYPE_STRING,-1,"SUBSCRIBED-CHANNEL",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("subscribed-shard-channel",ARG_TYPE_STRING,-1,"SUBSCRIBED-SHARD-CHANNEL",NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
 };
 
 /********** CLIENT NO_EVICT ********************/

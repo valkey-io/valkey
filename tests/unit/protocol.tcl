@@ -125,7 +125,7 @@ start_server {tags {"protocol network"}} {
     }
 
     set c 0
-    foreach seq [list "\x00" "*\x00" "$\x00"] {
+    foreach seq [list "\x00" "*\x00" "$\x00" "*1\r\n$\x00"] {
         incr c
         test "Protocol desync regression test #$c" {
             if {$::tls} {
@@ -133,30 +133,31 @@ start_server {tags {"protocol network"}} {
             } else {
                 set s [socket [srv 0 host] [srv 0 port]]
             }
-            fconfigure $s -translation binary
+            fconfigure $s -translation binary -blocking 0
             puts -nonewline $s $seq
+            # PROTO_INLINE_MAX_SIZE is hardcoded in Valkey code to 64K. doing the same here
+            # since we would like to validate it is enforced.
+            set PROTO_INLINE_MAX_SIZE [expr 1024 * 64]
             set payload [string repeat A 1024]"\n"
-            set test_start [clock seconds]
-            set test_time_limit 30
-            while 1 {
+            set payload_size 0
+            while {$payload_size <= $PROTO_INLINE_MAX_SIZE} {
                 if {[catch {
-                    puts -nonewline $s payload
-                    flush $s
                     incr payload_size [string length $payload]
+                    puts -nonewline $s $payload
+                    flush $s
                 }]} {
-                    set retval [gets $s]
-                    close $s
+                    assert_morethan $payload_size $PROTO_INLINE_MAX_SIZE
                     break
-                } else {
-                    set elapsed [expr {[clock seconds]-$test_start}]
-                    if {$elapsed > $test_time_limit} {
-                        close $s
-                        error "assertion:Valkey did not closed connection after protocol desync"
-                    }
                 }
             }
-            set retval
-        } {*Protocol error*}
+           
+            wait_for_condition 50 100 {
+                [string match {*Protocol error*} [gets $s]]
+            } else {
+                fail "expected connection to be closed on protocol error after sending $payload_size bytes"
+            }
+            close $s
+        }
     }
     unset c
 

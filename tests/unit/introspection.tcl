@@ -1313,6 +1313,111 @@ start_server {tags {"introspection"}} {
         }
     } {} {external:skip}
 
+
+    test {CLIENT LIST can filter by LIB-NAME} {
+        r CLIENT SETINFO lib-name mylib
+        set result [r client list lib-name mylib]
+        assert_match {*lib-name=mylib*} $result
+    }
+
+    test {CLIENT LIST can filter by LIB-VER} {
+        r CLIENT SETINFO lib-ver 1.2.3
+        set result [r client list lib-ver 1.2.3]
+        assert_match {*lib-ver=1.2.3*} $result
+    }
+
+    test {CLIENT LIST can filter by DB number} {
+        r select 2
+        set result [r client list db 2]
+        assert_match {*db=2*} $result
+    }
+
+    test {CLIENT LIST can filter by TOT-NET-IN} {
+        r ping
+        set result [r client list tot-net-in 1]
+        assert_match {*tot-net-in=*} $result
+    }
+
+    test {CLIENT LIST can filter by TOT-NET-OUT} {
+        r ping
+        set result [r client list tot-net-out 1]
+        assert_match {*tot-net-out=*} $result
+    }
+
+    test {CLIENT KILL can filter by LIB-NAME} {
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+
+        $c1 client setinfo lib-name mylib
+        $c2 client kill lib-name mylib
+
+        set result [$c2 client list]
+        assert {[string match {*lib-name=mylib*} $result] == 0}
+
+        catch {$c2 close}
+    }
+
+    test {CLIENT KILL can filter by LIB-VER} {
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+
+        $c1 client setinfo lib-ver 1.2.3
+        $c2 client kill lib-ver 1.2.3
+
+        set result [$c2 client list]
+        assert {[string match {*lib-ver=1.2.3*} $result] == 0}
+
+        catch {$c2 close}
+    }
+
+    test {CLIENT KILL can filter by DB} {
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+
+        $c1 select 2
+        $c2 client kill db 2
+
+        set result [$c2 client list]
+        assert {[string match {*db=2*} $result] == 0}
+
+        catch {$c2 close}
+    }
+
+    test {CLIENT KILL can filter by TOT-NET-IN} {
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+
+        # Generate some network input by sending commands
+        for {set i 0} {$i < 20} {incr i} {
+            $c1 ping
+        }
+
+        # Kill clients with a `TOT-NET-IN` greater than 100 bytes
+        $c2 client kill tot-net-in 100
+
+        set result [$c2 client list]
+        assert {[string match "*tot-net-in=*" $result] == 1}
+
+        catch {$c2 close}
+    }
+
+    test {CLIENT KILL can filter by TOT-NET-OUT} {
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+
+        # Generate some network output by receiving replies
+        for {set i 0} {$i < 10} {incr i} {
+            $c1 ping
+        }
+
+        # Kill clients with a `TOT-NET-OUT` greater than 100 bytes
+        $c2 client kill tot-net-out 50
+
+        set result [$c2 client list]
+        assert {[string match "*tot-net-out=*" $result] == 1}
+
+    }
+
     test {valkey-server command line arguments - allow passing option name and option value in the same arg} {
         start_server {config "default.conf" args {"--maxmemory 700mb" "--maxmemory-policy volatile-lru"}} {
             assert_match [r config get maxmemory] {maxmemory 734003200}

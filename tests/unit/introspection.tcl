@@ -1330,7 +1330,7 @@ start_server {tags {"introspection"}} {
         r select 2
         set result [r client list db 2]
         assert_match {*db=2*} $result
-    }
+    } {} {external:skip}
 
     test {CLIENT LIST can filter by TOT-NET-IN} {
         r ping
@@ -1371,17 +1371,19 @@ start_server {tags {"introspection"}} {
     }
 
     test {CLIENT KILL can filter by DB} {
-        set c1 [valkey_client]
-        set c2 [valkey_client]
+        start_server {config "default.conf" args {--save --loglevel verbose}} {
+                    set c1 [valkey_client]
+                    set c2 [valkey_client]
 
-        $c1 select 2
-        $c2 client kill db 2
+                    $c1 select 2
+                    $c2 client kill db 2
 
-        set result [$c2 client list]
-        assert {[string match {*db=2*} $result] == 0}
+                    set result [$c2 client list]
+                    assert {[string match {*db=2*} $result] == 0}
 
-        catch {$c2 close}
-    }
+                    catch {$c2 close}
+                }
+    } {} {external:skip}
 
     test {CLIENT KILL can filter by TOT-NET-IN} {
         set c1 [valkey_client]

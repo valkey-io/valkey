@@ -6543,6 +6543,7 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy) {
      * state so that we don't assert in propagateNow(). */
     server.server_del_keys_in_slot = 1;
     unsigned int j = 0;
+    int before_execution_nesting = server.execution_nesting;
 
     kvstoreHashtableIterator *kvs_di = NULL;
     void *next;
@@ -6557,6 +6558,7 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy) {
         } else {
             dbSyncDelete(&server.db[0], key);
         }
+        dbDelete(&server.db[0], key);
         propagateDeletion(&server.db[0], key, lazy);
         signalModifiedKey(NULL, &server.db[0], key);
         /* The keys are not actually logically deleted from the database, just moved to another node.
@@ -6572,7 +6574,7 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy) {
     kvstoreReleaseHashtableIterator(kvs_di);
 
     server.server_del_keys_in_slot = 0;
-    serverAssert(server.execution_nesting == 0);
+    serverAssert(server.execution_nesting == before_execution_nesting);
     return j;
 }
 

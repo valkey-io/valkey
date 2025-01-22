@@ -1379,12 +1379,11 @@ if __name__ == "__main__":
         # TestSlotSync("test_case22"),
         # TestSlotSync("test_case23"),
         # TestSlotSync("test_case24"),
-        # TestSlotSync("test_case25"),
-        # TestSlotSync("test_case26"),
-        # TestSlotSync("test_case27"),
-        # TestSlotSync("test_case29"),
-        # TestSlotSync("test_case31"),
-
+        TestSlotSync("test_case25"),
+        TestSlotSync("test_case26"),
+        TestSlotSync("test_case27"),
+        TestSlotSync("test_case29"),
+        TestSlotSync("test_case31"),
         TestSlotSync("test_case33"),
 
         # TestSlotSync("test_case28"),

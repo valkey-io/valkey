@@ -817,8 +817,16 @@ static int shouldReturnTlsInfo(void) {
     }
 }
 
+unsigned int countKeysInSlotForDb(unsigned int hashslot, serverDb*db) {
+    return kvstoreHashtableSize(db->keys, hashslot);
+}
+
 unsigned int countKeysInSlot(unsigned int slot) {
-    return kvstoreHashtableSize(server.db->keys, slot);
+    unsigned int result = 0;
+    for (int i = 0; i < server.dbnum; i++) {
+        result += countKeysInSlotForDb(slot, server.db + i);
+    }
+    return result;
 }
 
 void clusterCommandHelp(client *c) {
@@ -900,7 +908,7 @@ void clusterCommand(client *c) {
             addReplyError(c, "Invalid slot");
             return;
         }
-        addReplyLongLong(c, countKeysInSlot(slot));
+        addReplyLongLong(c, countKeysInSlotForDb(slot, c->db));
     } else if (!strcasecmp(c->argv[1]->ptr, "getkeysinslot") && c->argc == 4) {
         /* CLUSTER GETKEYSINSLOT <slot> <count> */
         long long maxkeys, slot;
@@ -912,11 +920,11 @@ void clusterCommand(client *c) {
             return;
         }
 
-        unsigned int keys_in_slot = countKeysInSlot(slot);
+        unsigned int keys_in_slot = countKeysInSlotForDb(slot, c->db);
         unsigned int numkeys = maxkeys > keys_in_slot ? keys_in_slot : maxkeys;
         addReplyArrayLen(c, numkeys);
         kvstoreHashtableIterator *kvs_di = NULL;
-        kvs_di = kvstoreGetHashtableIterator(server.db->keys, slot, 0);
+        kvs_di = kvstoreGetHashtableIterator(c->db->keys, slot, 0);
         for (unsigned int i = 0; i < numkeys; i++) {
             void *next;
             serverAssert(kvstoreHashtableIteratorNext(kvs_di, &next));

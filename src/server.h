@@ -1188,12 +1188,12 @@ typedef struct client {
     multiState *mstate;               /* MULTI/EXEC state, lazily initialized when first needed */
     blockingState *bstate;            /* Blocking state, lazily initialized when first needed */
     /* Slotsync data, todo maybe need to move it into ClientReplicationData or a new struct. */
-    void *slotsync_link;                       /* Pointer to the slotsync link. */
-    list *slotsync_slots;                      /* List of slot ranges that the client interested. */
-    long long slotsync_sent_bytes;             /* todo */
-    long long slotsync_recv_bytes;             /* todo */
-    int slotsync_failed;                       /* todo */
-    mstime_t slotsync_mf_end;                  /* todo */
+    void *slotsync_link;           /* Pointer to the slotsync link. */
+    list *slotsync_slots;          /* List of slot ranges that the client interested. */
+    long long slotsync_sent_bytes; /* todo */
+    long long slotsync_recv_bytes; /* todo */
+    int slotsync_failed;           /* todo */
+    mstime_t slotsync_mf_end;      /* todo */
     /* Output buffer and reply handling */
     long duration;                       /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     char *buf;                           /* Output buffer */
@@ -1668,7 +1668,7 @@ struct valkeyServer {
     off_t loading_loaded_bytes;
     time_t loading_start_time;
     /* Slot RDB loading information */
-    volatile sig_atomic_t slot_loading;            /* We are loading slot data if true */
+    volatile sig_atomic_t slot_loading; /* We are loading slot data if true */
     off_t slot_loading_total_bytes;
     off_t slot_loading_rdb_used_mem;
     off_t slot_loading_loaded_bytes;

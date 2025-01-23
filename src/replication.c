@@ -593,7 +593,7 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
         /* Also add it to the output buffer of the slaves which are in the slots
          * sync mode if any, we should do this as these special replicas will not
          * use the global replication buffer. */
-        listRewind(server.replicas,&li);
+        listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
             client *replica = ln->value;
 
@@ -1346,7 +1346,6 @@ void syncCommand(client *c) {
              * a replica without replication buffer. What's more, we
              * can't use a replica in slot sync mode either. */
             if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END &&
-                listLength(replica->slotsync_slots) == 0 &&
                 (!(replica->flag.repl_rdbonly) || (c->flag.repl_rdbonly)) &&
                 !replica->flag.slot_sync_replica)
                 break;
@@ -1377,8 +1376,8 @@ void syncCommand(client *c) {
 
         /* CASE 3: There is no BGSAVE is in progress. */
     } else {
-        if (server.repl_diskless_sync && (c->repl_data->replica_capa & REPLICA_CAPA_EOF)
-            && server.repl_diskless_sync_delay && !c->flag.slot_sync_replica) {
+        if (server.repl_diskless_sync && (c->repl_data->replica_capa & REPLICA_CAPA_EOF) &&
+            server.repl_diskless_sync_delay && !c->flag.slot_sync_replica) {
             /* Diskless replication RDB child is created inside
              * replicationCron() since we want to delay its start a
              * few seconds to wait for more replicas to arrive. */
@@ -1420,8 +1419,6 @@ void initClientReplicationData(client *c) {
 }
 
 void freeClientReplicationData(client *c) {
-
-
     if (!c->repl_data) return;
     freeReplicaReferencedReplBuffer(c);
     /* Primary/replica cleanup Case 1:
@@ -1656,7 +1653,7 @@ void replconfCommand(client *c) {
                 return;
             }
             c->repl_data->associated_rdb_client_id = (uint64_t)client_id;
-        } else if (!strcasecmp(c->argv[j]->ptr,"slotonline")) {
+        } else if (!strcasecmp(c->argv[j]->ptr, "slotonline")) {
             /* REPLCONF SLOTONLINE is used by slave(slotsync client) to inform
              * the master(slotsync server) the amount of replication stream
              * that it processed so far in incremental propagation stage. */
@@ -1677,14 +1674,14 @@ void replconfCommand(client *c) {
                 sdsfree(slots);
             } else if (c->repl_data->repl_state == REPLICA_STATE_ONLINE) {
                 long long recv_bytes = 0;
-                if ((getLongLongFromObject(c->argv[j+1], &recv_bytes) != C_OK)) {
+                if ((getLongLongFromObject(c->argv[j + 1], &recv_bytes) != C_OK)) {
                     return;
                 }
                 /* Notify offset to the slave. */
                 replySlotOffsetToReplica(c, c->slotsync_sent_bytes - recv_bytes);
             }
             return;
-        } else if (!strcasecmp(c->argv[j]->ptr,"slotdiff")) {
+        } else if (!strcasecmp(c->argv[j]->ptr, "slotdiff")) {
             /* REPLCONF SLOTDIFF is used by master(slotsync server) to inform
              * the slave(slotsync client) the replication stream lag. */
 
@@ -1692,7 +1689,7 @@ void replconfCommand(client *c) {
             if (!server.cluster_enabled) return;
 
             long long diffbytes = 0;
-            if ((getLongLongFromObject(c->argv[j+1], &diffbytes) != C_OK)) {
+            if ((getLongLongFromObject(c->argv[j + 1], &diffbytes) != C_OK)) {
                 return;
             }
 
@@ -1705,10 +1702,10 @@ void replconfCommand(client *c) {
             }
 
             if (link->slot_mf_lag >= 0) {
-                serverLog(LL_WARNING, "Slot sync already failed, link lag is %lld, but it shoud be less than 0",
+                serverLog(LL_WARNING, "Slot sync already failed, link lag is %lld, but it should be less than 0",
                           link->slot_mf_lag);
             }
-        } else if (!strcasecmp(c->argv[j]->ptr,"slotfailover")) {
+        } else if (!strcasecmp(c->argv[j]->ptr, "slotfailover")) {
             /* REPLCONF SLOTFAILOVER is used by slave(slotsync client) to inform
              * the master(slotsync server) to pause clients for slot failover. */
 
@@ -1738,7 +1735,7 @@ void replconfCommand(client *c) {
             serverLog(LL_NOTICE, "Recv slotfailover request. slots:%s", slots);
             sdsfree(slots);
             return;
-        } else if (!strcasecmp(c->argv[j]->ptr,"slotack")) {
+        } else if (!strcasecmp(c->argv[j]->ptr, "slotack")) {
             /* REPLCONF SLOTACK is used by slave(slotsync client) to inform
              * the master(slotsync server) the amount of replication stream
              * that it processed so far in slot failover stage. */
@@ -1753,24 +1750,24 @@ void replconfCommand(client *c) {
             if (!c->slotsync_mf_end) return;
 
             long long recv_bytes = 0;
-            if ((getLongLongFromObject(c->argv[j+1], &recv_bytes) != C_OK)) {
+            if ((getLongLongFromObject(c->argv[j + 1], &recv_bytes) != C_OK)) {
                 return;
             }
 
             sds slots = reprSlotRangeListWithHyphen(c->slotsync_slots);
             if (c->slotsync_sent_bytes == recv_bytes) {
-                /* All the sent bytes have been recieved by this slotsync slave,
+                /* All the sent bytes have been received by this slotsync slave,
                  * we can notify it to takeover the slots now. */
-                serverLog(LL_WARNING,"Recv slotack success!! %llu=%llu slots:%s",
+                serverLog(LL_WARNING, "Recv slotack success!! %llu=%llu slots:%s",
                           c->slotsync_sent_bytes, recv_bytes, slots);
                 replySlotReadyToReplica(c);
             } else {
-                serverLog(LL_WARNING,"Recv slotack not equal. %llu=%llu slots:%s",
+                serverLog(LL_WARNING, "Recv slotack not equal. %llu=%llu slots:%s",
                           c->slotsync_sent_bytes, recv_bytes, slots);
             }
             sdsfree(slots);
             return;
-        } else if (!strcasecmp(c->argv[j]->ptr,"slotready")) {
+        } else if (!strcasecmp(c->argv[j]->ptr, "slotready")) {
             /* REPLCONF SLOTREADY is used by master(slotsync server) to inform
              * the slave(slotsync client) the replication stream lag is zero
              * and is ready for the slave to takeover the slots now. */
@@ -1783,7 +1780,7 @@ void replconfCommand(client *c) {
             if (link && link->slot_mf_end && (mstime() < link->slot_mf_end)) {
                 link->slot_mf_ready = 1;
                 sds slots = reprSlotRangeListWithHyphen(c->slotsync_slots);
-                serverLog(LL_WARNING,"Recv slotfailover ready! slots:%s", slots);
+                serverLog(LL_NOTICE, "Recv slotfailover ready! slots:%s", slots);
                 sdsfree(slots);
             }
             return;
@@ -2324,7 +2321,7 @@ int useDisklessLoad(int slot_sync) {
     int enabled = server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB ||
                   server.repl_diskless_load == REPL_DISKLESS_LOAD_FLUSH_BEFORE_LOAD ||
                   (server.repl_diskless_load == REPL_DISKLESS_LOAD_WHEN_DB_EMPTY &&
-                  (dbTotalServerKeyCount() == 0 || slot_sync));
+                   (dbTotalServerKeyCount() == 0 || slot_sync));
 
     if (enabled) {
         /* Check all modules handle read errors, otherwise it's not safe to use diskless load. */
@@ -2819,7 +2816,7 @@ void readSyncBulkPayloadImpl(connection *conn, int slot_sync) {
             old_rdb_fd = open(server.rdb_filename, O_RDONLY | O_NONBLOCK);
             rename_res = rename(server.repl_transfer_tmpfile, server.rdb_filename);
         } else {
-            sprintf(rdbpath, "%s_slot", server.rdb_filename);
+            snprintf(rdbpath, sizeof(rdbpath), "%s_slot", server.rdb_filename);
             old_rdb_fd = open(rdbpath, O_RDONLY | O_NONBLOCK);
             rename_res = rename(link->repl_transfer_tmpfile, rdbpath);
         }
@@ -4272,7 +4269,7 @@ void syncWithPrimaryStateMachine(connection *conn, int *repl_state, int slot_syn
     if (!useDisklessLoad(slot_sync)) {
         int dfd = -1, maxtries = 5;
         while (maxtries--) {
-            snprintf(tmpfile, 256, "temp-%d.%ld.rdb", (int)(mstime()/1000), (long int)getpid());
+            snprintf(tmpfile, 256, "temp-%d.%ld.rdb", (int)(mstime() / 1000), (long int)getpid());
             dfd = open(tmpfile, O_CREAT | O_WRONLY | O_EXCL, 0644);
             if (dfd != -1) break;
             /* We save the errno of open to prevent some systems from modifying it after

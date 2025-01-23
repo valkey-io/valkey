@@ -113,8 +113,8 @@ typedef union bio_job {
 
     struct {
         int type;
-        rdb_load_fn *load_fn;      /* Function that will call the provided arguments */
-        void *load_args[];     /* List of arguments to be passed to the load function */
+        rdb_load_fn *load_fn; /* Function that will call the provided arguments */
+        void *load_args[];    /* List of arguments to be passed to the load function */
     } load_args;
 } bio_job;
 

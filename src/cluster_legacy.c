@@ -2804,7 +2804,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
             if (!exist) {
                 i = server.cluster->pending_del_slot_count++;
                 server.cluster->pending_del_slots[i] = dirty_slots[j];
-                serverLog(LL_WARNING,"Add dirty slot %d on node %.40s (%s) in shard %.40s to pending delete queue.",
+                serverLog(LL_WARNING, "Add dirty slot %d on node %.40s (%s) in shard %.40s to pending delete queue.",
                           dirty_slots[j], myself->name, myself->human_nodename, myself->shard_id);
                 /* Todo, this is for test, some tests is match the "Deleting keys in dirty slot" text.  */
                 serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s (%s) in shard %.40s", dirty_slots[j],
@@ -6397,7 +6397,7 @@ void removeChannelsInSlot(unsigned int slot) {
 void delkeysNotOwnedByMySelf(list *slot_ranges) {
     listNode *ln;
     listIter li;
-    listRewind(slot_ranges,&li);
+    listRewind(slot_ranges, &li);
     while ((ln = listNext(&li)) != NULL) {
         slotRange *range = ln->value;
         for (int i = range->start_slot; i <= range->end_slot; i++) {

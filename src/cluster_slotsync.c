@@ -88,8 +88,8 @@ int isSlotRangeListSame(list *lx, list *ly) {
     while (len--) {
         lnx = listNext(&lix);
         lny = listNext(&liy);
-        slotRange *range_x = (slotRange*)lnx->value;
-        slotRange *range_y = (slotRange*)lny->value;
+        slotRange *range_x = (slotRange *)lnx->value;
+        slotRange *range_y = (slotRange *)lny->value;
         if (range_x->start_slot != range_y->start_slot || range_x->end_slot != range_y->end_slot) {
             return 0;
         }
@@ -124,7 +124,7 @@ int isSlotInSlotRangeList(int slot, list *slot_ranges) {
 int isKeyInSlotRanges(robj *key, list *slot_ranges) {
     // maybe this can optimize.
     /* Get the slot of this key and check if the slot in the specified range. */
-    int slot = keyHashSlot((char*)key->ptr, sdslen(key->ptr));
+    int slot = keyHashSlot((char *)key->ptr, sdslen(key->ptr));
     return isSlotInSlotRangeList(slot, slot_ranges);
 }
 
@@ -145,7 +145,7 @@ int isCommandInSlotRanges(int argc, robj **argv, list *slot_ranges) {
     robj **new_argv = NULL;
     for (int i = 0; i < argc; i++) {
         if (!sdsEncodedObject(argv[i])) {
-            new_argv = zmalloc(sizeof(robj*) * (argc));
+            new_argv = zmalloc(sizeof(robj *) * (argc));
             break;
         }
     }
@@ -175,7 +175,7 @@ int isCommandInSlotRanges(int argc, robj **argv, list *slot_ranges) {
     int slot = -1;
     for (int j = 0; j < numkeys; j++) {
         robj *thiskey = argv[keyindex[j].pos];
-        int thisslot = keyHashSlot((char*)thiskey->ptr, sdslen(thiskey->ptr));
+        int thisslot = keyHashSlot((char *)thiskey->ptr, sdslen(thiskey->ptr));
 
         if (firstkey == NULL) {
             firstkey = thiskey;
@@ -183,7 +183,7 @@ int isCommandInSlotRanges(int argc, robj **argv, list *slot_ranges) {
         } else {
             if (slot != thisslot) {
                 getKeysFreeResult(&result);
-                serverLog(LL_WARNING, "Cross slot '%s' '%s' ", (char*)(argv[0]->ptr), (char*)(argv[j]->ptr));
+                serverLog(LL_WARNING, "Cross slot '%s' '%s' ", (char *)(argv[0]->ptr), (char *)(argv[j]->ptr));
                 return 0;
             }
         }
@@ -483,7 +483,7 @@ void setSlotSyncImporting(list *slot_ranges, clusterNode *node) {
     listRewind(slot_ranges, &li);
     while ((ln = listNext(&li)) != NULL) {
         slotRange *range = ln->value;
-        for (int i = range->start_slot; i <= range->end_slot; i++){
+        for (int i = range->start_slot; i <= range->end_slot; i++) {
             server.cluster->importing_slots_from[i] = node;
         }
     }
@@ -508,7 +508,7 @@ sds formatSlotSyncImportingSlots(void) {
             if (server.cluster->importing_slots_from[j]) {
                 importing_node = server.cluster->importing_slots_from[j]->name;
                 if (strncmp(importing_node, link_node, CLUSTER_NAMELEN) == 0) {
-                    bit =1;
+                    bit = 1;
                 }
             }
 
@@ -516,13 +516,13 @@ sds formatSlotSyncImportingSlots(void) {
                 start = j;
             }
 
-            if (start != -1 && (!bit || j == CLUSTER_SLOTS-1)) {
-                if (bit && j == CLUSTER_SLOTS-1) j++;
+            if (start != -1 && (!bit || j == CLUSTER_SLOTS - 1)) {
+                if (bit && j == CLUSTER_SLOTS - 1) j++;
 
-                if (start == j-1) {
-                    ci = sdscatprintf(ci," [%d-<-%.40s]", start, server.cluster->importing_slots_from[start]->name);
+                if (start == j - 1) {
+                    ci = sdscatprintf(ci, " [%d-<-%.40s]", start, server.cluster->importing_slots_from[start]->name);
                 } else {
-                    ci = sdscatprintf(ci," [%d-%d<-%.40s]", start, j-1, server.cluster->importing_slots_from[start]->name);
+                    ci = sdscatprintf(ci, " [%d-%d<-%.40s]", start, j - 1, server.cluster->importing_slots_from[start]->name);
                 }
                 start = -1;
             }
@@ -557,7 +557,7 @@ void slotLinkSendMessage(client *c, const char *option, long long value) {
  * Replica (slotsync client) send this message to inform the primary (slotsync server)
  * the amount of replication stream that it has processed so far in incremental
  * propagation stage. */
-void slotLinkSendOnline(client* c) {
+void slotLinkSendOnline(client *c) {
     slotLinkSendMessage(c, "SLOTONLINE", c->slotsync_recv_bytes);
 }
 
@@ -565,7 +565,7 @@ void slotLinkSendOnline(client* c) {
  *
  * Replica (slotsync client) send this message to inform the primary (slotsync server)
  * to pause clients for slot failover. */
-void slotLinkSendFailover(client* c) {
+void slotLinkSendFailover(client *c) {
     slotLinkSendMessage(c, "SLOTFAILOVER", 0);
 }
 
@@ -574,25 +574,25 @@ void slotLinkSendFailover(client* c) {
  * Replica (slotsync client) send this message to inform the primary (slotsync server)
  * the amount of replication stream that it has processed so far in slot failover
  * stage. */
-void slotLinkSendAck(client* c) {
+void slotLinkSendAck(client *c) {
     slotLinkSendMessage(c, "SLOTACK", c->slotsync_recv_bytes);
 }
 
-void replyToSlotSyncReplica(client* c, sds reply) {
+void replyToSlotSyncReplica(client *c, sds reply) {
     if (!c) return;
 
     c->slotsync_sent_bytes += sdslen(reply);
-    addReplySds(c,reply);  /* The sds 'reply' will be freed in addReplySds(). */
+    addReplySds(c, reply); /* The sds 'reply' will be freed in addReplySds(). */
 }
 
 /* Primary --> Replica: REPLCONF SLOTDIFF <diff_bytes>
  *
  * Primary (slotsync server) send this message to inform the replica (slotsync client)
  * the replication stream lag. */
-void replySlotOffsetToReplica(client* c, long long offset) {
+void replySlotOffsetToReplica(client *c, long long offset) {
     sds soffset = sdscatprintf(sdsempty(), "%llu", offset);
     sds reply = sdscatprintf(sdsempty(), "*3\r\n$8\r\nREPLCONF\r\n$8\r\nSLOTDIFF\r\n$%lu\r\n%s\r\n",
-                             sdslen(soffset), soffset);
+                             (long unsigned int)sdslen(soffset), soffset);
     sdsfree(soffset);
     replyToSlotSyncReplica(c, reply);
 }
@@ -602,7 +602,7 @@ void replySlotOffsetToReplica(client* c, long long offset) {
  * Primary (slotsync server) send this message to inform the replica (slotsync client)
  * the replication stream lag became zero and is ready for the replica to takeover
  * the slots now. */
-void replySlotReadyToReplica(client* c) {
+void replySlotReadyToReplica(client *c) {
     sds reply = sdscatprintf(sdsempty(), "*3\r\n$8\r\nREPLCONF\r\n$9\r\nSLOTREADY\r\n$1\r\n0\r\n");
     replyToSlotSyncReplica(c, reply);
 }
@@ -611,7 +611,7 @@ void replySlotReadyToReplica(client* c) {
  *
  * Primary (slotsync server) send this message to inform the replica (slotsync client)
  * to close the slotsync link that bound with this client. */
-void replyCloseSlotLinkToReplica(client* c) {
+void replyCloseSlotLinkToReplica(client *c) {
     sds reply = sdscatprintf(sdsempty(), "*2\r\n$7\r\nCLUSTER\r\n$21\r\nINTERNALCLOSESLOTLINK\r\n");
     replyToSlotSyncReplica(c, reply);
 }
@@ -669,7 +669,7 @@ void clusterSlotFailoverReplace(void) {
             slotRange *range = ln2->value;
             for (int i = range->start_slot; i <= range->end_slot; i++) {
                 clusterDelSlot(i);
-                clusterAddSlot(server.cluster->myself,i);
+                clusterAddSlot(server.cluster->myself, i);
             }
         }
     }
@@ -722,7 +722,7 @@ int getSlotFailoverReplicaIngressCount(void) {
     int ret = 0;
     listNode *ln;
     listIter li;
-    listRewind(server.replicas,&li);
+    listRewind(server.replicas, &li);
     while ((ln = listNext(&li))) {
         client *replica = listNodeValue(ln);
         if (replica->slotsync_mf_end) {
@@ -766,8 +766,10 @@ void slotSyncMergeTempResources(clusterSlotSyncLink *link) {
     if (functionsLibCtxFunctionsLen(link->temp_func_ctx)) {
         sds err = NULL;
         if (libraryJoin(functionsLibCtxGetCurrent(), link->temp_func_ctx, 1, &err) != C_OK) {
-            serverLog(LL_WARNING, "Discarding the merge of functions, an error occurred while merging functions "
-                                  "from the slot RDB, error: %s", err);
+            serverLog(LL_WARNING,
+                      "Discarding the merge of functions, an error occurred while merging functions "
+                      "from the slot RDB, error: %s",
+                      err);
         }
     }
 }
@@ -794,7 +796,7 @@ void clusterSlotSyncCron(void) {
             if (!n) {
                 /* If cross node, this slot sync will never success. */
                 if (cross_node) {
-                    serverLog(LL_WARNING,"Slot sync removed: slots cross node.");
+                    serverLog(LL_WARNING, "Slot sync removed: slots cross node.");
                     clearSlotSyncImporting(link->slot_ranges);
                     listDelNode(server.cluster->slotsync_links, ln);
                 }
@@ -803,7 +805,7 @@ void clusterSlotSyncCron(void) {
 
             /* The target node should not be myself. */
             if (n == server.cluster->myself) {
-                serverLog(LL_WARNING,"Slot sync removed: slot owned by myself.");
+                serverLog(LL_WARNING, "Slot sync removed: slot owned by myself.");
                 clearSlotSyncImporting(link->slot_ranges);
                 listDelNode(server.cluster->slotsync_links, ln);
                 return;
@@ -927,7 +929,7 @@ void clusterSlotSyncCron(void) {
             } else {
                 static long long count = 0;
                 if (count++ % 10 == 0) {
-                    serverLog(LL_NOTICE,"Slot failover status: wait_links=%d, ready_links=%d",
+                    serverLog(LL_NOTICE, "Slot failover status: wait_links=%d, ready_links=%d",
                               mf_link_cnt, ready_link_cnt);
                 }
             }
@@ -953,7 +955,7 @@ clusterNode *getClusterNodeBySlotList(list *slot_ranges, int *cross_node) {
     clusterNode *n = NULL;
     listNode *ln;
     listIter li;
-    listRewind(slot_ranges,&li);
+    listRewind(slot_ranges, &li);
     while ((ln = listNext(&li)) != NULL) {
         slotRange *range = ln->value;
         for (int i = range->start_slot; i <= range->end_slot; i++) {

@@ -3047,8 +3047,7 @@ void slotRdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
     if (server.rdb_checksum) rioGenericUpdateChecksum(r, buf, len);
     if (server.loading_process_events_interval_bytes &&
         (r->processed_bytes + len) / server.loading_process_events_interval_bytes >
-        r->processed_bytes / server.loading_process_events_interval_bytes) {
-
+            r->processed_bytes / server.loading_process_events_interval_bytes) {
         // todo
         loadingAbsProgress(r->processed_bytes);
         processModuleLoadingProgressEvent(0);
@@ -3579,7 +3578,8 @@ int rdbLoadWithLoadingCtx(char *filename, rdbSaveInfo *rsi, int rdbflags, rdbLoa
     return (retval == C_OK) ? RDB_OK : RDB_FAILED;
 }
 
-#define SLOTSYNC_DEFAULT_LAG 20000000000           /* Just a value large enough */
+// todo remove it
+#define SLOTSYNC_DEFAULT_LAG 20000000000 /* Just a value large enough */
 void bioRdbLoad(void *args[]) {
     rdbLoadJob *job = args[0];
     int rdbflags = job->rdbflags;
@@ -3616,7 +3616,7 @@ void bioRdbLoad(void *args[]) {
         }
         rioFreeConn(&rdb, NULL);
     } else {
-        sprintf(rdbpath, "%s_slot", server.rdb_filename);
+        snprintf(rdbpath, sizeof(rdbpath), "%s_slot", server.rdb_filename);
         int load_result = rdbLoadWithLoadingCtx((char *)rdbpath, &rsi, rdbflags, &loadingCtx);
 
         bg_unlink(rdbpath);

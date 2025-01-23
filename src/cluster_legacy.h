@@ -385,23 +385,23 @@ typedef struct clusterSlotSyncLink {
     serverDb *temp_db;              /* Temp db stores the keys during the sync process. */
     functionsLibCtx *temp_func_ctx; /* Temp function ctx stores functions during the sync process. */
 
-    client *client;                 /* Client to slot sync source node. */
-    connection *sync_conn;          /* Connection to slot sync source node. */
-    int sync_state;                 /* State of the slot sync link during slot sync. */
-    list *slot_ranges;              /* List of the slot ranges we want to sync. */
+    client *client;        /* Client to slot sync source node. */
+    connection *sync_conn; /* Connection to slot sync source node. */
+    int sync_state;        /* State of the slot sync link during slot sync. */
+    list *slot_ranges;     /* List of the slot ranges we want to sync. */
 
     /* The following fields are used by slot sync RDB transfer. */
-    int repl_transfer_fd;        /* Descriptor of the tmpfile to store slot sync RDB */
-    char *repl_transfer_tmpfile;    /* Name of the tmpfile to store slot sync RDB */
-    int64_t repl_transfer_size;    /* Total size of the slot sync RDB file */
-    int64_t repl_transfer_read;     /* Amount of read from the slot sync RDB file */
-    off_t repl_transfer_last_fsync_off;  /* Offset when we fsync-ed last time */
-    time_t repl_transfer_lastio;         /* Unix time of the latest read, for timeout */
+    int repl_transfer_fd;               /* Descriptor of the tmpfile to store slot sync RDB */
+    char *repl_transfer_tmpfile;        /* Name of the tmpfile to store slot sync RDB */
+    int64_t repl_transfer_size;         /* Total sixze of the slot sync RDB file */
+    int64_t repl_transfer_read;         /* Amount of read from the slot sync RDB file */
+    off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time */
+    time_t repl_transfer_lastio;        /* Unix time of the latest read, for timeout */
 
     /* The following fields are used by slot failover. */
-    int slot_mf_ready;              /* If is ready to do slot manual failover */
-    mstime_t slot_mf_end;           /* Slot manual failover time limit (ms unixtime) */
-    long long slot_mf_lag;          /* Lag bytes with the slot sync source node */
+    int slot_mf_ready;     /* If is ready to do slot manual failover */
+    mstime_t slot_mf_end;  /* Slot manual failover time limit (ms unixtime) */
+    long long slot_mf_lag; /* Lag bytes with the slot sync source node */
 } clusterSlotSyncLink;
 
 typedef struct rdbLoadJob {
@@ -426,7 +426,7 @@ struct clusterState {
     clusterNode *slots[CLUSTER_SLOTS];
     int16_t pending_del_slots[CLUSTER_SLOTS];
     int16_t pending_del_slot_count;
-    list *slotsync_links;   /* The linked list stores all slot sync links. */
+    list *slotsync_links; /* The linked list stores all slot sync links. */
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;      /* Time of previous or next election. */
     int failover_auth_count;          /* Number of votes received so far. */
@@ -447,7 +447,7 @@ struct clusterState {
     int mf_can_start;            /* If non-zero signal that the manual failover
                                     can start requesting primary vote. */
     /* Slot manual failover state. */
-    mstime_t slot_mf_end;        /* Slot failover time limit (ms unixtime) */
+    mstime_t slot_mf_end; /* Slot failover time limit (ms unixtime) */
     /* The following fields are used by primaries to take state on elections. */
     uint64_t lastVoteEpoch; /* Epoch of the last vote granted. */
     int todo_before_sleep;  /* Things to do in clusterBeforeSleep(). */

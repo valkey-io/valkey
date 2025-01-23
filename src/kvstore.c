@@ -116,7 +116,7 @@ void kvstoreMoveHashtable(kvstore *src, kvstore *dst, int didx) {
     src->allocated_hashtables--;
     cumulativeKeyCountAdd(src, didx, -(long)hashtableSize(ht));
 
-    kvstoreHashtableMetadata *metadata = (kvstoreHashtableMetadata *) hashtableMetadata(ht);
+    kvstoreHashtableMetadata *metadata = (kvstoreHashtableMetadata *)hashtableMetadata(ht);
     if (metadata->rehashing_node) {
         listDelNode(metadata->kvs->rehashing, metadata->rehashing_node);
 

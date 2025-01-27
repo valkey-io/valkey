@@ -43,7 +43,7 @@ void lolwut6Command(client *c);
 /* The default target for LOLWUT if no matching version was found.
  * This is what unstable versions of the server will display. */
 void lolwutUnstableCommand(client *c) {
-    sds rendered = sdsnew("Valkey ver. ");
+    sds rendered = sdscatprintf(sdsempty(), "%s ver.", server.extended_redis_compat ? "Redis" : "Valkey");
     rendered = sdscat(rendered, VALKEY_VERSION);
     rendered = sdscatlen(rendered, "\n", 1);
     addReplyVerbatim(c, rendered, sdslen(rendered), "txt");

@@ -118,9 +118,9 @@ configEnum repl_diskless_load_enum[] = {
     {"flush-before-load", REPL_DISKLESS_LOAD_FLUSH_BEFORE_LOAD},
     {NULL, 0}};
 
-configEnum ext_storage_mode_enum[] = {
-    {"no", EXT_STORAGE_NONE},
-    {"test", EXT_STORAGE_TEST},
+configEnum ext_data_mode_enum[] = {
+    {"no", EXT_DATA_NONE},
+    {"test", EXT_DATA_TEST},
     {NULL, 0}};
 
 configEnum ext_dump_format_enum[] = {
@@ -3320,7 +3320,7 @@ standardConfig static_configs[] = {
     createEnumConfig("log-format", NULL, MODIFIABLE_CONFIG, log_format_enum, server.log_format, LOG_FORMAT_LEGACY, NULL, NULL),
     createEnumConfig("log-timestamp-format", NULL, MODIFIABLE_CONFIG, log_timestamp_format_enum, server.log_timestamp_format, LOG_TIMESTAMP_LEGACY, NULL, NULL),
     createEnumConfig("rdb-version-check", NULL, MODIFIABLE_CONFIG, rdb_version_check_enum, server.rdb_version_check, RDB_VERSION_CHECK_STRICT, NULL, NULL),
-    createEnumConfig("ext-storage", NULL, IMMUTABLE_CONFIG, ext_storage_mode_enum, server.ext_storage_mode, EXT_STORAGE_NONE, NULL, NULL),
+    createEnumConfig("ext-data-mode", NULL, IMMUTABLE_CONFIG, ext_data_mode_enum, server.ext_data_mode, EXT_DATA_NONE, NULL, NULL),
     createEnumConfig("ext-dump-format", NULL, MODIFIABLE_CONFIG, ext_dump_format_enum, server.ext_dump_format, EXT_DUMP_FORMAT_RDB, NULL, NULL),
 
     /* Integer configs */
@@ -3426,7 +3426,7 @@ standardConfig static_configs[] = {
     createSizeTConfig("hll-sparse-max-bytes", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.hll_sparse_max_bytes, 3000, MEMORY_CONFIG, NULL, NULL),
     createSizeTConfig("tracking-table-max-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.tracking_table_max_keys, 1000000, INTEGER_CONFIG, NULL, NULL),                                      /* Default: 1 million keys max. */
     createSizeTConfig("client-query-buffer-limit", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.client_max_querybuf_len, 1024 * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Default: 1GB max query buffer. */
-    createSizeTConfig("ext-min-object-size-to-move", NULL, MODIFIABLE_CONFIG, 256, LONG_MAX, server.ext_min_object_size_to_move, 0, MEMORY_CONFIG, NULL, NULL),
+    createSizeTConfig("ext-min-object-size-to-move", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.ext_min_object_size_to_move, 0, MEMORY_CONFIG, NULL, NULL),
     createSSizeTConfig("maxmemory-clients", NULL, MODIFIABLE_CONFIG, -100, SSIZE_MAX, server.maxmemory_clients, 0, MEMORY_CONFIG | PERCENT_CONFIG, NULL, applyClientMaxMemoryUsage),
     createSSizeTConfig("slot-migration-max-failover-repl-bytes", NULL, MODIFIABLE_CONFIG, -1, SSIZE_MAX, server.slot_migration_max_failover_repl_bytes, 0, MEMORY_CONFIG, NULL, NULL),
 

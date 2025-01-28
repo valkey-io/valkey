@@ -547,11 +547,11 @@ typedef enum {
 #define REPL_DISKLESS_LOAD_SWAPDB 2
 #define REPL_DISKLESS_LOAD_FLUSH_BEFORE_LOAD 3
 
-/* External storage options */
-#define EXT_STORAGE_NONE 0
-#define EXT_STORAGE_TEST 1
+/* External data options */
+#define EXT_DATA_NONE 0
+#define EXT_DATA_TEST 1
 
-/* External storage dump format */
+/* External data dump format */
 #define EXT_DUMP_FORMAT_RDB 0
 
 /* TLS Client Authentication */
@@ -1720,6 +1720,9 @@ typedef struct {
                                      disk, we need to persist it immediately. */
 } aofManifest;
 
+/* forward declaration for external data */
+typedef struct externalDataCtx externalDataCtx;
+
 /*-----------------------------------------------------------------------------
  * Global server state
  *----------------------------------------------------------------------------*/
@@ -2078,7 +2081,7 @@ struct valkeyServer {
                                            * loading aof or rdb. (for testings). negative
                                            * value means fractions of microseconds (on average). */
     /* External storage options.  */
-    int ext_storage_mode;                 /* External storage mode */
+    int ext_data_mode;                 /* External storage mode */
     int ext_dump_format;                  /* External storage dump format */
     size_t ext_min_object_size_to_move;   /* Min size of k/v pair to move to external storage */
     unsigned long long ext_max_disk_size; /* Maximum disk space allowed to be used by external storage */
@@ -4186,6 +4189,7 @@ void lcsCommand(client *c);
 void quitCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
+void externalDataLoadedCommand(client *c);
 
 /* Helper functions for getting database id args from argv, argc */
 int *selectDbIdArgs(robj **argv, int argc, int *count);
@@ -4255,6 +4259,7 @@ void debugPauseProcess(void);
 #define serverDebugMark() printf("-- MARK %s:%d --\n", __FILE__, __LINE__)
 
 int iAmPrimary(void);
+int isExtDataOn(void);
 
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)

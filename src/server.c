@@ -54,6 +54,7 @@
 #include "util.h"
 
 #include "eval.h"
+#include "external_data.h"
 
 #include "trace/trace_commands.h"
 
@@ -7361,6 +7362,10 @@ int iAmPrimary(void) {
             (server.cluster_enabled && clusterNodeIsPrimary(getMyClusterNode())));
 }
 
+int isExtDataOn() {
+    return server.ext_data_mode != EXT_DATA_NONE;
+}
+
 /* Main is marked as weak so that unit tests can use their own main function. */
 __attribute__((weak)) int main(int argc, char **argv) {
     struct timeval tv;
@@ -7683,6 +7688,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
 
     serverSetCpuAffinity(server.server_cpulist);
     setOOMScoreAdj(-1);
+    externalDataInit();
 
     aeMain(server.el);
     aeDeleteEventLoop(server.el);

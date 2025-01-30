@@ -44,7 +44,7 @@ void lolwut6Command(client *c);
  * This is what unstable versions of the server will display. */
 void lolwutUnstableCommand(client *c) {
     sds rendered = sdscatprintf(sdsempty(), "%s ver.", server.extended_redis_compat ? "Redis" : "Valkey");
-    rendered = sdscat(rendered, VALKEY_VERSION);
+    rendered = sdscat(rendered, server.extended_redis_compat ? REDIS_VERSION : VALKEY_VERSION);
     rendered = sdscatlen(rendered, "\n", 1);
     addReplyVerbatim(c, rendered, sdslen(rendered), "txt");
     sdsfree(rendered);

@@ -182,15 +182,17 @@ struct hdr_histogram;
 #define RIO_CONNSET_WRITE_MAX_CHUNK_SIZE 16384
 
 /* Instantaneous metrics tracking. */
-#define STATS_METRIC_SAMPLES 16               /* Number of samples per metric. */
-#define STATS_METRIC_COMMAND 0                /* Number of commands executed. */
-#define STATS_METRIC_NET_INPUT 1              /* Bytes read to network. */
-#define STATS_METRIC_NET_OUTPUT 2             /* Bytes written to network. */
-#define STATS_METRIC_NET_INPUT_REPLICATION 3  /* Bytes read to network during replication. */
-#define STATS_METRIC_NET_OUTPUT_REPLICATION 4 /* Bytes written to network during replication. */
-#define STATS_METRIC_EL_CYCLE 5               /* Number of eventloop cycled. */
-#define STATS_METRIC_EL_DURATION 6            /* Eventloop duration. */
-#define STATS_METRIC_COUNT 7
+#define STATS_METRIC_SAMPLES 16                /* Number of samples per metric. */
+#define STATS_METRIC_COMMAND 0                 /* Number of commands executed. */
+#define STATS_METRIC_NET_INPUT 1               /* Bytes read to network. */
+#define STATS_METRIC_NET_OUTPUT 2              /* Bytes written to network. */
+#define STATS_METRIC_NET_INPUT_REPLICATION 3   /* Bytes read to network during replication. */
+#define STATS_METRIC_NET_OUTPUT_REPLICATION 4  /* Bytes written to network during replication. */
+#define STATS_METRIC_EL_CYCLE 5                /* Number of eventloop cycled. */
+#define STATS_METRIC_EL_DURATION 6             /* Eventloop duration. */
+#define STATS_METRIC_NET_CLUSTER_SLOT_IMPORT 7 /* Bytes read from network for slot import. */
+#define STATS_METRIC_NET_CLUSTER_SLOT_EXPORT 8 /* Bytes written to network for slot export. */
+#define STATS_METRIC_COUNT 9
 
 /* Protocol and I/O related defines */
 #define PROTO_IOBUF_LEN (1024 * 16)         /* Generic I/O buffer size */
@@ -373,14 +375,16 @@ typedef enum blocking_type {
 
 /* Client classes for client limits, currently used only for
  * the max-client-output-buffer limit implementation. */
-#define CLIENT_TYPE_NORMAL 0     /* Normal req-reply clients + MONITORs */
-#define CLIENT_TYPE_REPLICA 1    /* Replicas. */
-#define CLIENT_TYPE_PUBSUB 2     /* Clients subscribed to PubSub channels. */
-#define CLIENT_TYPE_PRIMARY 3    /* Primary. */
-#define CLIENT_TYPE_COUNT 4      /* Total number of client types. */
-#define CLIENT_TYPE_OBUF_COUNT 3 /* Number of clients to expose to output \
-                                    buffer configuration. Just the first  \
-                                    three: normal, replica, pubsub. */
+#define CLIENT_TYPE_NORMAL 0      /* Normal req-reply clients + MONITORs */
+#define CLIENT_TYPE_REPLICA 1     /* Replicas. */
+#define CLIENT_TYPE_PUBSUB 2      /* Clients subscribed to PubSub channels. */
+#define CLIENT_TYPE_PRIMARY 3     /* Primary. */
+#define CLIENT_TYPE_SLOT_IMPORT 4 /* Slot import. */
+#define CLIENT_TYPE_SLOT_EXPORT 5 /* Slot export. */
+#define CLIENT_TYPE_COUNT 6       /* Total number of client types. */
+#define CLIENT_TYPE_OBUF_COUNT 3  /* Number of clients to expose to output \
+                                     buffer configuration. Just the first  \
+                                     three: normal, replica, pubsub. */
 
 /* Replica replication state. Used in server.repl_state for replicas to remember
  * what to do next. */
@@ -396,15 +400,11 @@ typedef enum {
     REPL_STATE_RECEIVE_IP_REPLY,      /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_CAPA_REPLY,    /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_VERSION_REPLY, /* Wait for REPLCONF reply */
-    REPL_STATE_WAIT_SCHED,            /* Wait for schedule to avoid concurrency bug */
     REPL_STATE_SEND_PSYNC,            /* Send PSYNC */
     REPL_STATE_RECEIVE_PSYNC_REPLY,   /* Wait for PSYNC reply */
     /* --- End of handshake states --- */
     REPL_STATE_TRANSFER,  /* Receiving .rdb from primary */
-    REPL_STATE_LOADING,   /* Loading the RDB in bio. */
     REPL_STATE_CONNECTED, /* Connected to primary */
-    REPL_STATE_LOADED,    /* Done loading the RDB in bio. */
-    REPL_STATE_LOAD_FAIL, /* Loading fail. */
 } repl_state;
 
 /* Replica rdb-channel replication state. Used in server.repl_rdb_channel_state for
@@ -599,6 +599,7 @@ typedef enum {
     PAUSE_BY_CLIENT_COMMAND = 0,
     PAUSE_DURING_SHUTDOWN,
     PAUSE_DURING_FAILOVER,
+    PAUSE_DURING_SLOT_MIGRATION,
     NUM_PAUSE_PURPOSES /* This value is the number of purposes above. */
 } pause_purpose;
 
@@ -1091,8 +1092,8 @@ typedef struct ClientFlags {
                                             * flag, we won't cache the primary in freeClient. */
     uint64_t fake : 1;                     /* This is a fake client without a real connection. */
     uint64_t import_source : 1;            /* This client is importing data to server and can visit expired key. */
-    uint64_t slot_sync_primary : 1;        /* This is a primary running in slot sync mode. */
-    uint64_t slot_sync_replica : 1;        /* This is a replica running in slot sync mode. */
+    uint64_t slot_import_source : 1;       /* This client is a link to a slot replication source. */
+    uint64_t slot_export_target : 1;       /* This client is a link to a slot replication target. */
     uint64_t reserved : 2;                 /* Reserved for future use */
 } ClientFlags;
 
@@ -1188,12 +1189,8 @@ typedef struct client {
     multiState *mstate;               /* MULTI/EXEC state, lazily initialized when first needed */
     blockingState *bstate;            /* Blocking state, lazily initialized when first needed */
     /* Slotsync data, todo maybe need to move it into ClientReplicationData or a new struct. */
-    void *slotsync_link;           /* Pointer to the slotsync link. */
-    list *slotsync_slots;          /* List of slot ranges that the client interested. */
-    long long slotsync_sent_bytes; /* todo */
-    long long slotsync_recv_bytes; /* todo */
-    int slotsync_failed;           /* todo */
-    mstime_t slotsync_mf_end;      /* todo */
+    void *slot_import_link;           /* Pointer to the slot import link, or NULL. */
+    void *slot_export_link;           /* Pointer to the slot export link, or NULL. */
     /* Output buffer and reply handling */
     long duration;                       /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     char *buf;                           /* Output buffer */
@@ -1380,6 +1377,8 @@ struct serverMemOverhead {
     size_t clients_replicas;
     size_t clients_normal;
     size_t cluster_links;
+    size_t cluster_slot_import;
+    size_t cluster_slot_export;
     size_t aof_buffer;
     size_t lua_caches;
     size_t functions_caches;
@@ -1433,10 +1432,9 @@ typedef struct rdbSaveInfo {
     int repl_id_is_set;                   /* True if repl_id field is set. */
     char repl_id[CONFIG_RUN_ID_SIZE + 1]; /* Replication ID. */
     long long repl_offset;                /* Replication offset. */
-    list *slot_ranges;                    /* todo */
 } rdbSaveInfo;
 
-#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1, NULL}
+#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1}
 
 struct malloc_stats {
     size_t zmalloc_used;
@@ -1661,19 +1659,12 @@ struct valkeyServer {
     int enable_debug_assert;                  /* Enable debug asserts */
 
     /* RDB / AOF loading information */
-    volatile sig_atomic_t loading;       /* We are loading data if true */
+    volatile sig_atomic_t loading;       /* We are loading data from disk if true */
     volatile sig_atomic_t async_loading; /* We are loading data without blocking the db being served */
     off_t loading_total_bytes;
     off_t loading_rdb_used_mem;
     off_t loading_loaded_bytes;
     time_t loading_start_time;
-    /* Slot RDB loading information */
-    volatile sig_atomic_t slot_loading; /* We are loading slot data if true */
-    off_t slot_loading_total_bytes;
-    off_t slot_loading_rdb_used_mem;
-    off_t slot_loading_loaded_bytes;
-    time_t slot_loading_start_time;
-    /* Loading information */
     off_t loading_process_events_interval_bytes;
     time_t loading_process_events_interval_ms;
     /* Fields used only for stats */
@@ -1719,6 +1710,8 @@ struct valkeyServer {
     long long stat_net_repl_input_bytes;           /* Bytes read during replication, added to stat_net_input_bytes in 'info'. */
     /* Bytes written during replication, added to stat_net_output_bytes in 'info'. */
     long long stat_net_repl_output_bytes;
+    long long stat_net_cluster_slot_import_bytes;               /* Bytes read from slot import sources. */
+    long long stat_net_cluster_slot_export_bytes;               /* Bytes written to slot export sources. */
     size_t stat_current_cow_peak;                       /* Peak size of copy on write bytes. */
     size_t stat_current_cow_bytes;                      /* Copy on write bytes while child is active. */
     monotime stat_current_cow_updated;                  /* Last update time of stat_current_cow_bytes */
@@ -2624,12 +2617,12 @@ void dictVanillaFree(void *val);
 #define READ_FLAGS_ERROR_BIG_BULK_COUNT (1 << 6)
 #define READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER (1 << 7)
 #define READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN (1 << 8)
-#define READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_PRIMARY (1 << 9)
+#define READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_REPLICATED_CLIENT (1 << 9)
 #define READ_FLAGS_ERROR_UNBALANCED_QUOTES (1 << 10)
 #define READ_FLAGS_INLINE_ZERO_QUERY_LEN (1 << 11)
 #define READ_FLAGS_PARSING_NEGATIVE_MBULK_LEN (1 << 12)
 #define READ_FLAGS_PARSING_COMPLETED (1 << 13)
-#define READ_FLAGS_PRIMARY (1 << 14)
+#define READ_FLAGS_REPLICATED (1 << 14)
 #define READ_FLAGS_DONT_PARSE (1 << 15)
 #define READ_FLAGS_AUTH_REQUIRED (1 << 16)
 
@@ -2735,6 +2728,7 @@ void pauseActions(pause_purpose purpose, mstime_t end, uint32_t actions);
 void unpauseActions(pause_purpose purpose);
 uint32_t isPausedActions(uint32_t action_bitmask);
 uint32_t isPausedActionsWithUpdate(uint32_t action_bitmask);
+uint32_t getPausedActionsWithPurpose(pause_purpose purpose);
 mstime_t getPausedActionTimeout(uint32_t action);
 void updatePausedActions(void);
 void unblockPostponedClients(void);
@@ -2746,7 +2740,6 @@ int handleClientsWithPendingWrites(void);
 void adjustThreadedIOIfNeeded(void);
 int clientHasPendingReplies(client *c);
 int updateClientMemUsageAndBucket(client *c);
-int isNormalReplicaClient(client *c);
 void removeClientFromMemUsageBucket(client *c, int allow_eviction);
 void unlinkClient(client *c);
 void removeFromServerClientList(client *c);
@@ -2940,7 +2933,6 @@ void changeReplicationId(void);
 void clearReplicationId2(void);
 void createReplicationBacklog(void);
 void freeReplicationBacklog(void);
-void replicationAttachToNewPrimary(void);
 void replicationCachePrimaryUsingMyself(void);
 void feedReplicationBacklog(void *ptr, size_t len);
 void incrementalTrimReplicationBacklog(size_t blocks);
@@ -2959,6 +2951,8 @@ int sendCurrentOffsetToReplica(client *replica);
 void addRdbReplicaToPsyncWait(client *replica);
 void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);
+char *replicationSendAuth(connection *conn);
+char *receiveSynchronousResponse(connection *conn);
 
 /* Generic persistence functions */
 void startLoadingFile(size_t size, char *filename, int rdbflags);
@@ -2966,7 +2960,6 @@ void startLoading(size_t size, int rdbflags, int async);
 void loadingAbsProgress(off_t pos);
 void loadingIncrProgress(off_t size);
 void stopLoading(int success);
-void stopSlotLoading(int success);
 void updateLoadingFileName(char *filename);
 void startSaving(int rdbflags);
 void stopSaving(int success);
@@ -2999,6 +2992,7 @@ void aofOpenIfNeededOnServerStart(void);
 void aofManifestFree(aofManifest *am);
 int aofDelHistoryFiles(void);
 int aofRewriteLimited(void);
+int rewriteAppendOnlyFileRio(rio *aof, kvstoreIteratorPredicate predicate, void *privdata);
 
 /* Child info */
 void openChildInfoPipe(void);
@@ -3182,6 +3176,7 @@ int prepareForShutdown(client *c, int flags);
 void replyToClientsBlockedOnShutdown(void);
 int abortShutdown(void);
 void afterCommand(client *c);
+int isReplicatedClient(client *c);
 int mustObeyClient(client *c);
 #ifdef __GNUC__
 void _serverLog(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
@@ -3946,7 +3941,6 @@ void debugPauseProcess(void);
 #define serverDebugMark() printf("-- MARK %s:%d --\n", __FILE__, __LINE__)
 
 int iAmPrimary(void);
-int isSlotSyncInProgress(void);
 
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)

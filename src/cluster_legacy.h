@@ -26,6 +26,7 @@
 #define CLUSTER_TODO_FSYNC_CONFIG (1 << 3)
 #define CLUSTER_TODO_HANDLE_MANUALFAILOVER (1 << 4)
 #define CLUSTER_TODO_BROADCAST_ALL (1 << 5)
+#define CLUSTER_TODO_HANDLE_SLOT_REPLICATION (1 << 6)
 
 /* clusterLink encapsulates everything needed to talk with a remote node. */
 typedef struct clusterLink {
@@ -375,42 +376,59 @@ typedef struct slotRange {
     int end_slot;
 } slotRange;
 
-/* Encapsulate everything needed to talk with the slot sync source node. */
-typedef struct clusterSlotSyncLink {
-    mstime_t ctime;                 /* Link object creation time. */
-    char linkname[CLUSTER_NAMELEN]; /* Name of this link, hex string, sha1-size. */
-    char nodename[CLUSTER_NAMELEN]; /* Name of the slot sync source node, hex string, sha1-size. */
+typedef enum slotImportLinkState {
+    /* In progress states */
+    SLOT_IMPORT_RECONNECT,
+    SLOT_IMPORT_CONNECTING,
+    SLOT_IMPORT_SEND_AUTH,
+    SLOT_IMPORT_RECEIVE_AUTH,
+    SLOT_IMPORT_START_SNAPSHOT,
+    SLOT_IMPORT_RECEIVE_SNAPSHOT,
+    SLOT_IMPORT_RECEIVE_STREAM,
+    SLOT_IMPORT_FAILOVER_WAITING_FOR_PAUSED,
+    SLOT_IMPORT_FAILOVER_REQUESTED,
+    SLOT_IMPORT_FAILOVER_GRANTED,
+    SLOT_IMPORT_FAIL,
+    SLOT_IMPORT_CANCEL,
 
-    /* Temporary resources during slot synchronization. */
-    serverDb *temp_db;              /* Temp db stores the keys during the sync process. */
-    functionsLibCtx *temp_func_ctx; /* Temp function ctx stores functions during the sync process. */
+    /* Terminal states */
+    SLOT_IMPORT_FAILOVER_COMPLETE,
+    SLOT_IMPORT_FAILED,
+    SLOT_IMPORT_CANCELED,
+} slotImportLinkState;
 
-    client *client;        /* Client to slot sync source node. */
-    connection *sync_conn; /* Connection to slot sync source node. */
-    int sync_state;        /* State of the slot sync link during slot sync. */
-    list *slot_ranges;     /* List of the slot ranges we want to sync. */
+typedef struct slotImportLink {
+    mstime_t ctime;                 /* Import link object creation time. */
+    mstime_t last_update;           /* Import link object last update time. */
+    time_t last_ack;              /* Import link object last ack time. */
+    char nodename[CLUSTER_NAMELEN]; /* Name of the slot replication source node, hex string, sha1-size. */
+    client *client;                 /* Client to slot replication source node. */
+    connection *conn;               /* Connection to slot replication source node. */
+    slotImportLinkState state;      /* State of the slot import link. */
+    sds status_msg;                 /* Human readable status message for this link. */
+    list *slot_ranges;              /* List of the slot ranges we want to import. */
+    sds slot_ranges_str;            /* Precomputed string of the slot ranges, for logging and info. */
+} slotImportLink;
 
-    /* The following fields are used by slot sync RDB transfer. */
-    int repl_transfer_fd;               /* Descriptor of the tmpfile to store slot sync RDB */
-    char *repl_transfer_tmpfile;        /* Name of the tmpfile to store slot sync RDB */
-    int64_t repl_transfer_size;         /* Total sixze of the slot sync RDB file */
-    int64_t repl_transfer_read;         /* Amount of read from the slot sync RDB file */
-    off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time */
-    time_t repl_transfer_lastio;        /* Unix time of the latest read, for timeout */
+typedef enum slotExportLinkState {
+    SLOT_EXPORT_WAITING_TO_SNAPSHOT,
+    SLOT_EXPORT_SNAPSHOTTING,
+    SLOT_EXPORT_STREAMING,
+    SLOT_EXPORT_FAILOVER_PAUSED,
+    SLOT_EXPORT_FAILOVER_GRANTED,
+    SLOT_EXPORT_FAILOVER_COMPLETE,
+    SLOT_EXPORT_FAILED,
+} slotExportLinkState;
 
-    /* The following fields are used by slot failover. */
-    int slot_mf_ready;     /* If is ready to do slot manual failover */
-    mstime_t slot_mf_end;  /* Slot manual failover time limit (ms unixtime) */
-    long long slot_mf_lag; /* Lag bytes with the slot sync source node */
-} clusterSlotSyncLink;
-
-typedef struct rdbLoadJob {
-    int rdbflags;
-    int use_diskless_load;
-    int usemark;
-    sds eofmark;
-    clusterSlotSyncLink *link;
-} rdbLoadJob;
+typedef struct slotExportLink {
+    time_t last_ack;              /* Export link object last ack time. */
+    char nodename[CLUSTER_NAMELEN]; /* Name of the slot replication target node, hex string, sha1-size. */
+    client *client;                 /* Client to slot replication target node. */
+    slotExportLinkState state;      /* State of the slot export link. */
+    list *slot_ranges;              /* List of the slot ranges we want to export. */
+    sds slot_ranges_str;            /* Precomputed string of the slot ranges, for logging. */
+    mstime_t mf_end;                /* End time for the manual failover, after this we will unpause. */
+} slotExportLink;
 
 struct clusterState {
     clusterNode *myself; /* This node */
@@ -424,9 +442,8 @@ struct clusterState {
     clusterNode *migrating_slots_to[CLUSTER_SLOTS];
     clusterNode *importing_slots_from[CLUSTER_SLOTS];
     clusterNode *slots[CLUSTER_SLOTS];
-    int16_t pending_del_slots[CLUSTER_SLOTS];
-    int16_t pending_del_slot_count;
-    list *slotsync_links; /* The linked list stores all slot sync links. */
+    list *slot_import_links; /* List storing all slot import links. */
+    list *slot_export_links; /* List storing all slot export links. */
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;      /* Time of previous or next election. */
     int failover_auth_count;          /* Number of votes received so far. */
@@ -446,8 +463,6 @@ struct clusterState {
                                    or -1 if still not received. */
     int mf_can_start;            /* If non-zero signal that the manual failover
                                     can start requesting primary vote. */
-    /* Slot manual failover state. */
-    mstime_t slot_mf_end; /* Slot failover time limit (ms unixtime) */
     /* The following fields are used by primaries to take state on elections. */
     uint64_t lastVoteEpoch; /* Epoch of the last vote granted. */
     int todo_before_sleep;  /* Things to do in clusterBeforeSleep(). */

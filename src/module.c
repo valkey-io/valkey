@@ -3947,8 +3947,8 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
     if (ctx) {
         if (ctx->client) {
             if (ctx->client->flag.deny_blocking) flags |= VALKEYMODULE_CTX_FLAGS_DENY_BLOCKING;
-            /* Module command received from PRIMARY, is replicated. */
-            if (ctx->client->flag.primary) flags |= VALKEYMODULE_CTX_FLAGS_REPLICATED;
+            /* Module command received from PRIMARY or slot import, is replicated. */
+            if (isReplicatedClient(ctx->client)) flags |= VALKEYMODULE_CTX_FLAGS_REPLICATED;
             if (ctx->client->resp == 3) {
                 flags |= VALKEYMODULE_CTX_FLAGS_RESP3;
             }

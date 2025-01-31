@@ -1,6 +1,6 @@
 {
-    "SLOTSYNC": {
-        "summary": "Trigger a slot sync task for the specified hash slots",
+    "IMPORT": {
+        "summary": "Import the provided slots from their current owners.",
         "complexity": "O(N) where N is the total number of the slots between the start slot and end slot arguments.",
         "group": "cluster",
         "since": "8.1.0",
@@ -16,6 +16,7 @@
             {
                 "name": "slot-range-block",
                 "type": "block",
+                "token": "SLOTSRANGE",
                 "multiple": true,
                 "arguments": [
                     {

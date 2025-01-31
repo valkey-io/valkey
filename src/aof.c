@@ -2190,14 +2190,17 @@ werr:
     return 0;
 }
 
-int rewriteAppendOnlyFileRio(rio *aof) {
+int rewriteAppendOnlyFileRio(rio *aof, kvstoreIteratorPredicate predicate, void *privdata) {
     int j;
     long key_count = 0;
     long long updated_time = 0;
     kvstoreIterator *kvs_it = NULL;
 
-    /* Record timestamp at the beginning of rewriting AOF. */
-    if (server.aof_timestamp_enabled) {
+    /* Record timestamp at the beginning of rewriting AOF.
+     *
+     * Note that filtered AOF rewrites (e.g. for slot migration) do not
+     * include the timestamp.*/
+    if (server.aof_timestamp_enabled && !predicate) {
         sds ts = genAofTimestampAnnotationIfNeeded(1);
         if (rioWrite(aof, ts, sdslen(ts)) == 0) {
             sdsfree(ts);
@@ -2217,7 +2220,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
         if (rioWrite(aof, selectcmd, sizeof(selectcmd) - 1) == 0) goto werr;
         if (rioWriteBulkLongLong(aof, j) == 0) goto werr;
 
-        kvs_it = kvstoreIteratorInit(db->keys);
+        kvs_it = kvstoreFilteredIteratorInit(db->keys, predicate, privdata);
         /* Iterate this DB writing every entry */
         void *next;
         while (kvstoreIteratorNext(kvs_it, &next)) {
@@ -2330,7 +2333,7 @@ int rewriteAppendOnlyFile(char *filename) {
             goto werr;
         }
     } else {
-        if (rewriteAppendOnlyFileRio(&aof) == C_ERR) goto werr;
+        if (rewriteAppendOnlyFileRio(&aof, NULL, NULL) == C_ERR) goto werr;
     }
 
     /* Make sure data will not remain on the OS's output buffers */

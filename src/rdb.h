@@ -133,8 +133,6 @@
 #define RDBFLAGS_ALLOW_DUP (1 << 2)    /* Allow duplicated keys when loading.*/
 #define RDBFLAGS_FEED_REPL (1 << 3)    /* Feed replication stream when loading.*/
 #define RDBFLAGS_KEEP_CACHE (1 << 4)   /* Don't reclaim cache after rdb file is generated */
-#define RDBFLAGS_SLOT_SYNC (1 << 5)    /* Load/save for SLOT SYNC, this is a hint that we are targeting slot rdb. \
-                                        * In this case, we can load multiple slot RDBs. */
 
 /* When rdbLoadObject() returns NULL, the err flag is
  * set to hold the type of error that occurred */
@@ -153,8 +151,6 @@ int rdbLoadLenByRef(rio *rdb, int *isencoded, uint64_t *lenptr);
 int rdbSaveObjectType(rio *rdb, robj *o);
 int rdbLoadObjectType(rio *rdb);
 int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags);
-int rdbLoadWithLoadingCtx(char *filename, rdbSaveInfo *rsi, int rdbflags, rdbLoadingCtx *rdb_loading_ctx);
-void bioRdbLoad(void *args[]);
 int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags);
 int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi);
 void rdbRemoveTempFile(pid_t childpid, int from_signal);
@@ -181,5 +177,7 @@ int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, s
 int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi);
 ssize_t rdbSaveFunctions(rio *rdb);
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi);
+typedef int (*ChildSnapshotFunc)(int req, rio *rdb, void *privdata);
+int saveSnapshotToConnectionSockets(connection **conns, int connsnum, int use_pipe, int req, ChildSnapshotFunc snapshot_func, void *privdata);
 
 #endif

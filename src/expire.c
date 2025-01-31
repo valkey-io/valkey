@@ -31,6 +31,7 @@
  */
 
 #include "server.h"
+#include "cluster.h"
 
 /*-----------------------------------------------------------------------------
  * Incremental collection of expired keys.
@@ -144,13 +145,17 @@ void expireScanCallback(void *privdata, void *entry) {
     data->sampled++;
 }
 
-static inline int isExpiryTableValidForSamplingCb(hashtable *ht) {
+static inline int isExpiryTableValidForSamplingCb(int didx, hashtable *ht) {
     long long numkeys = hashtableSize(ht);
     unsigned long buckets = hashtableBuckets(ht);
     /* When there are less than 1% filled buckets, sampling the key
      * space is expensive, so stop here waiting for better times...
      * The dictionary will be resized asap. */
     if (buckets > 0 && (numkeys * 100 / buckets < 1)) {
+        return C_ERR;
+    }
+    /* If the hashtable is currently being imported, skip it. */
+    if (server.cluster_enabled && isSlotImportingViaReplication(didx)) {
         return C_ERR;
     }
     return C_OK;
@@ -524,7 +529,7 @@ int checkAlreadyExpired(long long when) {
      *
      * If the server is a primary and in the import mode, we also add the already
      * expired key and wait for an explicit DEL from the import source. */
-    if (server.current_client && server.current_client->flag.slot_sync_primary) return 0;
+    if (server.current_client && server.current_client->flag.slot_import_source) return 0;
     return (when <= commandTimeSnapshot() && !server.loading && !server.primary_host && !server.import_mode);
 }
 

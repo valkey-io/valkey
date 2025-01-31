@@ -8,8 +8,9 @@ typedef struct _kvstore kvstore;
 typedef struct _kvstoreIterator kvstoreIterator;
 typedef struct _kvstoreHashtableIterator kvstoreHashtableIterator;
 
-typedef int(kvstoreScanShouldSkipHashtable)(hashtable *d);
+typedef int(kvstoreScanShouldSkipHashtable)(int didx, hashtable *d);
 typedef int(kvstoreExpandShouldSkipHashtableIndex)(int didx);
+typedef int(kvstoreIteratorPredicate)(int didx, void *privdata);
 
 #define KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND (1 << 0)
 #define KVSTORE_FREE_EMPTY_HASHTABLES (1 << 1)
@@ -44,6 +45,7 @@ size_t kvstoreHashtableMetadataSize(void);
 
 /* kvstore iterator specific functions */
 kvstoreIterator *kvstoreIteratorInit(kvstore *kvs);
+kvstoreIterator *kvstoreFilteredIteratorInit(kvstore *kvs, kvstoreIteratorPredicate *filter, void *privdata);
 void kvstoreIteratorRelease(kvstoreIterator *kvs_it);
 int kvstoreIteratorGetCurrentHashtableIndex(kvstoreIterator *kvs_it);
 int kvstoreIteratorNext(kvstoreIterator *kvs_it, void **next);
@@ -86,6 +88,5 @@ void kvstoreHashtableTwoPhasePopDelete(kvstore *kvs, int didx, void *position);
 int kvstoreHashtablePop(kvstore *kvs, int didx, const void *key, void **popped);
 int kvstoreHashtableDelete(kvstore *kvs, int didx, const void *key);
 hashtable *kvstoreGetHashtable(kvstore *kvs, int didx);
-void kvstoreMoveHashtable(kvstore *src, kvstore *dst, int didx);
 
 #endif /* KVSTORE_H */

@@ -599,6 +599,73 @@ struct COMMAND_ARG CLUSTER_GETKEYSINSLOT_Args[] = {
 #define CLUSTER_HELP_Keyspecs NULL
 #endif
 
+/********** CLUSTER IMPORT ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* CLUSTER IMPORT history */
+#define CLUSTER_IMPORT_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* CLUSTER IMPORT tips */
+#define CLUSTER_IMPORT_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* CLUSTER IMPORT key specs */
+#define CLUSTER_IMPORT_Keyspecs NULL
+#endif
+
+/* CLUSTER IMPORT slot_range_block argument table */
+struct COMMAND_ARG CLUSTER_IMPORT_slot_range_block_Subargs[] = {
+{MAKE_ARG("start-slot",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("end-slot",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* CLUSTER IMPORT argument table */
+struct COMMAND_ARG CLUSTER_IMPORT_Args[] = {
+{MAKE_ARG("slot-range-block",ARG_TYPE_BLOCK,-1,"SLOTSRANGE",NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=CLUSTER_IMPORT_slot_range_block_Subargs},
+};
+
+/********** CLUSTER IMPORT_CANCEL ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* CLUSTER IMPORT_CANCEL history */
+#define CLUSTER_IMPORT_CANCEL_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* CLUSTER IMPORT_CANCEL tips */
+#define CLUSTER_IMPORT_CANCEL_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* CLUSTER IMPORT_CANCEL key specs */
+#define CLUSTER_IMPORT_CANCEL_Keyspecs NULL
+#endif
+
+/* CLUSTER IMPORT_CANCEL argument table */
+struct COMMAND_ARG CLUSTER_IMPORT_CANCEL_Args[] = {
+{MAKE_ARG("all",ARG_TYPE_PURE_TOKEN,-1,"ALL",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/********** CLUSTER IMPORT_INFO ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* CLUSTER IMPORT_INFO history */
+#define CLUSTER_IMPORT_INFO_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* CLUSTER IMPORT_INFO tips */
+#define CLUSTER_IMPORT_INFO_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* CLUSTER IMPORT_INFO key specs */
+#define CLUSTER_IMPORT_INFO_Keyspecs NULL
+#endif
+
 /********** CLUSTER INFO ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -997,28 +1064,6 @@ struct COMMAND_ARG CLUSTER_SLOT_STATS_Args[] = {
 {MAKE_ARG("filter",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=CLUSTER_SLOT_STATS_filter_Subargs},
 };
 
-/********** CLUSTER SLOTFAILOVER ********************/
-
-#ifndef SKIP_CMD_HISTORY_TABLE
-/* CLUSTER SLOTFAILOVER history */
-#define CLUSTER_SLOTFAILOVER_History NULL
-#endif
-
-#ifndef SKIP_CMD_TIPS_TABLE
-/* CLUSTER SLOTFAILOVER tips */
-#define CLUSTER_SLOTFAILOVER_Tips NULL
-#endif
-
-#ifndef SKIP_CMD_KEY_SPECS_TABLE
-/* CLUSTER SLOTFAILOVER key specs */
-#define CLUSTER_SLOTFAILOVER_Keyspecs NULL
-#endif
-
-/* CLUSTER SLOTFAILOVER argument table */
-struct COMMAND_ARG CLUSTER_SLOTFAILOVER_Args[] = {
-{MAKE_ARG("takeover",ARG_TYPE_PURE_TOKEN,-1,"TAKEOVER",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
-};
-
 /********** CLUSTER SLOTLINK ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -1069,33 +1114,22 @@ const char *CLUSTER_SLOTS_Tips[] = {
 #define CLUSTER_SLOTS_Keyspecs NULL
 #endif
 
-/********** CLUSTER SLOTSYNC ********************/
+/********** CLUSTER SYNCSLOTS ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
-/* CLUSTER SLOTSYNC history */
-#define CLUSTER_SLOTSYNC_History NULL
+/* CLUSTER SYNCSLOTS history */
+#define CLUSTER_SYNCSLOTS_History NULL
 #endif
 
 #ifndef SKIP_CMD_TIPS_TABLE
-/* CLUSTER SLOTSYNC tips */
-#define CLUSTER_SLOTSYNC_Tips NULL
+/* CLUSTER SYNCSLOTS tips */
+#define CLUSTER_SYNCSLOTS_Tips NULL
 #endif
 
 #ifndef SKIP_CMD_KEY_SPECS_TABLE
-/* CLUSTER SLOTSYNC key specs */
-#define CLUSTER_SLOTSYNC_Keyspecs NULL
+/* CLUSTER SYNCSLOTS key specs */
+#define CLUSTER_SYNCSLOTS_Keyspecs NULL
 #endif
-
-/* CLUSTER SLOTSYNC slot_range_block argument table */
-struct COMMAND_ARG CLUSTER_SLOTSYNC_slot_range_block_Subargs[] = {
-{MAKE_ARG("start-slot",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("end-slot",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-};
-
-/* CLUSTER SLOTSYNC argument table */
-struct COMMAND_ARG CLUSTER_SLOTSYNC_Args[] = {
-{MAKE_ARG("slot-range-block",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=CLUSTER_SLOTSYNC_slot_range_block_Subargs},
-};
 
 /* CLUSTER command table */
 struct COMMAND_STRUCT CLUSTER_Subcommands[] = {
@@ -1111,6 +1145,9 @@ struct COMMAND_STRUCT CLUSTER_Subcommands[] = {
 {MAKE_CMD("forget","Removes a node from the nodes table.","O(1)","3.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_FORGET_History,0,CLUSTER_FORGET_Tips,0,clusterCommand,3,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_FORGET_Keyspecs,0,NULL,1),.args=CLUSTER_FORGET_Args},
 {MAKE_CMD("getkeysinslot","Returns the key names in a hash slot.","O(N) where N is the number of requested keys","3.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_GETKEYSINSLOT_History,0,CLUSTER_GETKEYSINSLOT_Tips,1,clusterCommand,4,CMD_STALE,0,CLUSTER_GETKEYSINSLOT_Keyspecs,0,NULL,2),.args=CLUSTER_GETKEYSINSLOT_Args},
 {MAKE_CMD("help","Returns helpful text about the different subcommands.","O(1)","5.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_HELP_History,0,CLUSTER_HELP_Tips,0,clusterCommand,2,CMD_LOADING|CMD_STALE,0,CLUSTER_HELP_Keyspecs,0,NULL,0)},
+{MAKE_CMD("import","Import the provided slots from their current owners.","O(N) where N is the total number of the slots between the start slot and end slot arguments.","8.1.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_IMPORT_History,0,CLUSTER_IMPORT_Tips,0,clusterCommand,-4,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_IMPORT_Keyspecs,0,NULL,1),.args=CLUSTER_IMPORT_Args},
+{MAKE_CMD("import-cancel","Cancel current ongoing import operations.","O(n), where N is the number of source nodes for the current import.","8.1.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_IMPORT_CANCEL_History,0,CLUSTER_IMPORT_CANCEL_Tips,0,clusterCommand,-2,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_IMPORT_CANCEL_Keyspecs,0,NULL,1),.args=CLUSTER_IMPORT_CANCEL_Args},
+{MAKE_CMD("import-info","Get the status of the current ongoing import.","O(n), where N is the number of source nodes for the current import.","8.1.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_IMPORT_INFO_History,0,CLUSTER_IMPORT_INFO_Tips,0,clusterCommand,-2,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_IMPORT_INFO_Keyspecs,0,NULL,0)},
 {MAKE_CMD("info","Returns information about the state of a node.","O(1)","3.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_INFO_History,0,CLUSTER_INFO_Tips,1,clusterCommand,2,CMD_LOADING|CMD_STALE,0,CLUSTER_INFO_Keyspecs,0,NULL,0)},
 {MAKE_CMD("internalcloseslotlink","Notify the node to close the slot link that bound with this client","O(1).","8.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_INTERNALCLOSESLOTLINK_History,0,CLUSTER_INTERNALCLOSESLOTLINK_Tips,0,clusterCommand,2,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_INTERNALCLOSESLOTLINK_Keyspecs,0,NULL,0)},
 {MAKE_CMD("keyslot","Returns the hash slot for a key.","O(N) where N is the number of bytes in the key","3.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_KEYSLOT_History,0,CLUSTER_KEYSLOT_Tips,0,clusterCommand,3,CMD_STALE,0,CLUSTER_KEYSLOT_Keyspecs,0,NULL,1),.args=CLUSTER_KEYSLOT_Args},
@@ -1128,10 +1165,9 @@ struct COMMAND_STRUCT CLUSTER_Subcommands[] = {
 {MAKE_CMD("shards","Returns the mapping of cluster slots to shards.","O(N) where N is the total number of cluster nodes","7.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_SHARDS_History,0,CLUSTER_SHARDS_Tips,1,clusterCommand,2,CMD_LOADING|CMD_STALE,0,CLUSTER_SHARDS_Keyspecs,0,NULL,0)},
 {MAKE_CMD("slaves","Lists the replica nodes of a primary node.","O(N) where N is the number of replicas.","3.0.0",CMD_DOC_DEPRECATED,"`CLUSTER REPLICAS`","5.0.0","cluster",COMMAND_GROUP_CLUSTER,CLUSTER_SLAVES_History,0,CLUSTER_SLAVES_Tips,1,clusterCommand,3,CMD_ADMIN|CMD_STALE,0,CLUSTER_SLAVES_Keyspecs,0,NULL,1),.args=CLUSTER_SLAVES_Args},
 {MAKE_CMD("slot-stats","Return an array of slot usage statistics for slots assigned to the current node.","O(N) where N is the total number of slots based on arguments. O(N*log(N)) with ORDERBY subcommand.","8.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_SLOT_STATS_History,0,CLUSTER_SLOT_STATS_Tips,2,clusterSlotStatsCommand,-4,CMD_STALE|CMD_LOADING,0,CLUSTER_SLOT_STATS_Keyspecs,0,NULL,1),.args=CLUSTER_SLOT_STATS_Args},
-{MAKE_CMD("slotfailover","Trigger a slot failover for the hash slots that in the slot links","O(N) where N is the total number of the slot sync links.","8.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_SLOTFAILOVER_History,0,CLUSTER_SLOTFAILOVER_Tips,0,clusterCommand,-2,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_SLOTFAILOVER_Keyspecs,0,NULL,1),.args=CLUSTER_SLOTFAILOVER_Args},
 {MAKE_CMD("slotlink","Manage the slot sync links","O(N) where N is the total number of the slot sync links.","8.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_SLOTLINK_History,0,CLUSTER_SLOTLINK_Tips,0,clusterCommand,-3,CMD_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_SLOTLINK_Keyspecs,0,NULL,1),.args=CLUSTER_SLOTLINK_Args},
 {MAKE_CMD("slots","Returns the mapping of cluster slots to nodes.","O(N) where N is the total number of Cluster nodes","3.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_SLOTS_History,2,CLUSTER_SLOTS_Tips,1,clusterCommand,2,CMD_LOADING|CMD_STALE,0,CLUSTER_SLOTS_Keyspecs,0,NULL,0)},
-{MAKE_CMD("slotsync","Trigger a slot sync task for the specified hash slots","O(N) where N is the total number of the slots between the start slot and end slot arguments.","8.1.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_SLOTSYNC_History,0,CLUSTER_SLOTSYNC_Tips,0,clusterCommand,-4,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_SLOTSYNC_Keyspecs,0,NULL,1),.args=CLUSTER_SLOTSYNC_Args},
+{MAKE_CMD("syncslots","A container for internal slot replication commands.","Depends on subcommand.","8.1.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_SYNCSLOTS_History,0,CLUSTER_SYNCSLOTS_Tips,0,clusterCommand,-2,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_SYNCSLOTS_Keyspecs,0,NULL,0)},
 {0}
 };
 

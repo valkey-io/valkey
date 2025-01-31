@@ -335,7 +335,8 @@ static void libraryLink(functionsLibCtx *lib_ctx, functionLibInfo *li) {
  * Return C_OK on success and C_ERR if aborted. If C_ERR is returned, set a relevant
  * error message on the 'err' out parameter.
  *  */
-int libraryJoin(functionsLibCtx *functions_lib_ctx_dst, functionsLibCtx *functions_lib_ctx_src, int replace, sds *err) {
+static int
+libraryJoin(functionsLibCtx *functions_lib_ctx_dst, functionsLibCtx *functions_lib_ctx_src, int replace, sds *err) {
     int ret = C_ERR;
     dictIterator *iter = NULL;
     /* Stores the libraries we need to replace in case a revert is required.
@@ -349,7 +350,7 @@ int libraryJoin(functionsLibCtx *functions_lib_ctx_dst, functionsLibCtx *functio
         if (old_li) {
             if (!replace) {
                 /* library already exists, failed the restore. */
-                if (err) *err = sdscatfmt(sdsempty(), "Library %s already exists", li->name);
+                *err = sdscatfmt(sdsempty(), "Library %s already exists", li->name);
                 goto done;
             } else {
                 if (!old_libraries_list) {
@@ -369,7 +370,7 @@ int libraryJoin(functionsLibCtx *functions_lib_ctx_dst, functionsLibCtx *functio
     while ((entry = dictNext(iter))) {
         functionInfo *fi = dictGetVal(entry);
         if (dictFetchValue(functions_lib_ctx_dst->functions, fi->name)) {
-            if (err) *err = sdscatfmt(sdsempty(), "Function %s already exists", fi->name);
+            *err = sdscatfmt(sdsempty(), "Function %s already exists", fi->name);
             goto done;
         }
     }

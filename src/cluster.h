@@ -28,6 +28,12 @@
 #define CLUSTER_REDIR_DOWN_UNBOUND 6  /* -CLUSTERDOWN, unbound slot. */
 #define CLUSTER_REDIR_DOWN_RO_STATE 7 /* -CLUSTERDOWN, allow reads. */
 
+/* Fixed timeout value for cluster operations (milliseconds) */
+#define CLUSTER_OPERATION_TIMEOUT 2000
+
+#define CLUSTER_SLOT_REPLICATION_LOG_TTL 3600000  /* One hour */
+
+
 typedef struct _clusterNode clusterNode;
 struct clusterState;
 
@@ -122,6 +128,7 @@ void deleteCachedResponseClient(client *recording_client);
 void clearCachedClusterSlotsResponse(void);
 unsigned int countKeysInSlot(unsigned int hashslot);
 int getSlotOrReply(client *c, robj *o);
+int getSlotOrError(robj *o, sds *err);
 
 /* functions with shared implementations */
 int clusterNodeIsMyself(clusterNode *n);
@@ -141,20 +148,14 @@ long long getNodeReplicationOffset(clusterNode *node);
 sds aggregateClientOutputBuffer(client *c);
 void resetClusterStats(void);
 
-/* ---------------------- API exported outside cluster_slotsync.c ----------- */
-sds reprSlotRangeListWithHyphen(list *slot_ranges);
-sds reprSlotRangeListWithBlank(list *slot_ranges);
-int isSlotRangeListSame(list *lx, list *ly);
-int isSlotInSlotRangeList(int slot, list *slot_ranges);
-int isKeyInSlotRanges(robj *key, list *slot_ranges);
-int isCommandInSlotRanges(int argc, robj **argv, list *slot_ranges);
-void onSlotSyncClientClose(void *o);
-void replySlotOffsetToReplica(client *c, long long offset);
-void replySlotReadyToReplica(client *c);
-void clusterSlotPendingDelete(void);
-int testInjectError(const char *error);
-char *getInjectOptionValue(const char *option);
-list *createSlotRangeList(void);
-void resetSlotSyncLinkForReconnect(void *link);
+/* ---------------------- API exported outside slot_replication.c ----------- */
+void handleSlotImportLinkClientClose(void *o);
+void handleSlotExportLinkClientClose(void *o);
+void handleSlotImportLinkClientOOM(void *o);
+void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc);
+int isSlotImportingViaReplication(int slot);
+int isAnySlotImportingViaReplication(void);
+int isAnySlotExportingViaReplication(void);
+int isSlotExportReadyForReplData(client *c);
 
 #endif /* __CLUSTER_H */

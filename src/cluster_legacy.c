@@ -95,7 +95,6 @@ const char *clusterGetMessageTypeString(int type);
 void removeChannelsInSlot(unsigned int slot);
 unsigned int countChannelsInSlot(unsigned int hashslot);
 unsigned int delKeysInSlot(unsigned int hashslot);
-unsigned int delKeysInSlotWithTimeLimit(unsigned int hashslot, ustime_t *limit);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
 list *clusterLookupNodeListByShardId(const char *shard_id);
 void clusterRemoveNodeFromShard(clusterNode *node);
@@ -127,20 +126,13 @@ static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now);
 
 /* The following functions are declared here as they will be used in this file
  * but they are defined in cluster_slotsync.c */
-void initClusterSlotSyncLinkList(void);
-void clearClusterSlotSyncLinkList(void);
-int isSlotInClusterSlotSyncLinkList(int slot);
-int isSlotInPendingDelete(int slot);
-clusterSlotSyncLink *createSlotSyncLink(void);
-void initSlotSyncLink(clusterSlotSyncLink *link, clusterNode *node, list *slot_ranges);
-const char *slotSyncStateToString(int repl_state);
-sds formatSlotSyncImportingSlots(void);
-void clusterCommandSlotLinkList(client *c);
-void clusterCommandSlotLinkKill(client *c, const char *linkname);
-void clusterSlotSyncCron(void);
-void clusterInitSlotFailover(void);
-void clusterSlotFailoverReplace(void);
-void clusterResetSlotFailover(void);
+void initClusterSlotImportLinkList(void);
+void initClusterSlotExportLinkList(void);
+void clusterSlotReplicationCron(void);
+void clusterCommandImport(client *c);
+void clusterCommandSyncSlots(client *c);
+void clusterCommandImportInfo(client *c);
+void clusterCommandImportCancel(client *c);
 
 /* Only primaries that own slots have voting rights.
  * Returns 1 if the node has voting rights, otherwise returns 0. */
@@ -173,9 +165,6 @@ static_assert(offsetof(clusterMsg, type) + sizeof(uint16_t) == RCVBUF_MIN_READ_L
               "Incorrect length to read to identify type");
 
 #define RCVBUF_MAX_PREALLOC (1 << 20) /* 1MB */
-
-/* Fixed timeout value for cluster operations (milliseconds) */
-#define CLUSTER_OPERATION_TIMEOUT 2000
 
 /* Cluster nodes hash table, mapping nodes addresses 1.2.3.4:6379 to
  * clusterNode structures. */
@@ -1205,10 +1194,9 @@ void clusterInit(void) {
     serverAssert(rdbRegisterAuxField("cluster-slot-states", clusterEncodeOpenSlotsAuxField,
                                      clusterDecodeOpenSlotsAuxField) == C_OK);
 
-    /* Initialize data for the slot sync. */
-    initClusterSlotSyncLinkList();
-    memset(server.cluster->pending_del_slots, 0, sizeof(server.cluster->pending_del_slots));
-    server.cluster->pending_del_slot_count = 0;
+    /* Initialize lists for slot import links. */
+    initClusterSlotImportLinkList();
+    initClusterSlotExportLinkList();
 
     /* Set myself->port/cport/pport to my listening ports, we'll just need to
      * discover the IP address via MEET messages. */
@@ -1216,7 +1204,6 @@ void clusterInit(void) {
 
     server.cluster->mf_end = 0;
     server.cluster->mf_replica = NULL;
-    server.cluster->slot_mf_end = 0;
     for (int conn_type = 0; conn_type < CACHE_CONN_TYPE_MAX; conn_type++) {
         server.cached_cluster_slot_info[conn_type] = NULL;
     }
@@ -1321,11 +1308,9 @@ void clusterReset(int hard) {
     /* Empty the nodes blacklist. */
     dictEmpty(server.cluster->nodes_black_list, NULL);
 
-    /* Clear all states about slot sync. */
-    clearClusterSlotSyncLinkList();
-    clusterResetSlotFailover();
-    memset(server.cluster->pending_del_slots, 0, sizeof(server.cluster->pending_del_slots));
-    server.cluster->pending_del_slot_count = 0;
+    /* Drop all incoming and outgoing links for slot import. */
+    listEmpty(server.cluster->slot_import_links);
+    listEmpty(server.cluster->slot_export_links);
 
     /* Hard reset only: set epochs to 0, change node ID. */
     if (hard) {
@@ -2792,24 +2777,9 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
 
     if (delete_dirty_slots) {
         for (int j = 0; j < dirty_slots_count; j++) {
-            /* The number of dirty keys may be very large here, so we replace
-             * the delKeysInSlot() by pending delete. */
-            int exist = 0, i = 0;
-            for (i = 0; i < server.cluster->pending_del_slot_count; i++) {
-                if (server.cluster->pending_del_slots[i] == dirty_slots[j]) {
-                    exist = 1;
-                    break;
-                }
-            }
-            if (!exist) {
-                i = server.cluster->pending_del_slot_count++;
-                server.cluster->pending_del_slots[i] = dirty_slots[j];
-                serverLog(LL_WARNING, "Add dirty slot %d on node %.40s (%s) in shard %.40s to pending delete queue.",
-                          dirty_slots[j], myself->name, myself->human_nodename, myself->shard_id);
-                /* Todo, this is for test, some tests is match the "Deleting keys in dirty slot" text.  */
-                serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s (%s) in shard %.40s", dirty_slots[j],
-                          myself->name, myself->human_nodename, myself->shard_id);
-            }
+            serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s (%s) in shard %.40s", dirty_slots[j],
+                      myself->name, myself->human_nodename, myself->shard_id);
+            delKeysInSlot(dirty_slots[j]);
         }
     }
 }
@@ -4253,7 +4223,12 @@ void clusterSendPing(clusterLink *link, int type) {
  *
  * The 'target' argument specifies the receiving instances using the
  * defines below:
+ *
+ * CLUSTER_BROADCAST_ALL -> All known instances.
+ * CLUSTER_BROADCAST_LOCAL_REPLICAS -> All replicas in my primary-replicas ring.
  */
+#define CLUSTER_BROADCAST_ALL 0
+#define CLUSTER_BROADCAST_LOCAL_REPLICAS 1
 void clusterBroadcastPong(int target) {
     dictIterator *di;
     dictEntry *de;
@@ -4738,6 +4713,9 @@ void clusterFailoverReplaceYourPrimary(void) {
 
     /* 5) If there was a manual failover in progress, clear the state. */
     resetManualFailover();
+
+    /* 6) Upon becoming primary, we need to ensure that data is deleted in unowned slots. */
+    verifyClusterConfigWithData();
 }
 
 /* This function is called if we are a replica node and our primary serving
@@ -5241,7 +5219,7 @@ void clusterCron(void) {
     clusterUpdateMyselfHostname();
 
     /* Do something for slot sync. */
-    clusterSlotSyncCron();
+    clusterSlotReplicationCron();
 
     /* Clear so clusterNodeCronHandleReconnect can count the number of nodes in PFAIL. */
     server.cluster->stats_pfail_nodes = 0;
@@ -5428,6 +5406,10 @@ void clusterBeforeSleep(void) {
         /* Handle failover, this is needed when it is likely that there is already
          * the quorum from primaries in order to react fast. */
         clusterHandleReplicaFailover();
+    }
+
+    if (flags & CLUSTER_TODO_HANDLE_SLOT_REPLICATION) {
+        clusterSlotReplicationCron();
     }
 
     /* Update the cluster state. */
@@ -5841,10 +5823,6 @@ static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_requ
          * progress or timed out. */
         server.cluster->failover_auth_time = 0;
     }
-
-    /* All the data on this node will be cleared when replication, we can stop
-     * all the pending delete tasks here. */
-    server.cluster->pending_del_slot_count = 0;
 }
 
 /* -----------------------------------------------------------------------------
@@ -5977,20 +5955,10 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
      * we are migrating to other instances or importing from other
      * instances. */
     if (node->flags & CLUSTER_NODE_MYSELF) {
-        int slotsync_link_count = 0;
-        if (server.cluster->slotsync_links) {
-            slotsync_link_count = listLength(server.cluster->slotsync_links);
-        }
-        if (slotsync_link_count > 0) {
-            sds importing_info = formatSlotSyncImportingSlots();
-            ci = sdscatsds(ci, importing_info);
-            sdsfree(importing_info);
-        }
-
         for (j = 0; j < CLUSTER_SLOTS; j++) {
             if (server.cluster->migrating_slots_to[j]) {
                 ci = sdscatprintf(ci, " [%d->-%.40s]", j, server.cluster->migrating_slots_to[j]->name);
-            } else if (server.cluster->importing_slots_from[j] && slotsync_link_count == 0) {
+            } else if (server.cluster->importing_slots_from[j]) {
                 ci = sdscatprintf(ci, " [%d-<-%.40s]", j, server.cluster->importing_slots_from[j]->name);
             }
         }
@@ -6164,14 +6132,25 @@ const char *clusterGetMessageTypeString(int type) {
     return "unknown";
 }
 
-/* Get the slot from robj and return it. If the slot is not valid,
- * return -1 and send an error to the client. */
-int getSlotOrReply(client *c, robj *o) {
+int getSlotOrError(robj *o, sds *err_out) {
     long long slot;
 
     if (getLongLongFromObject(o, &slot) != C_OK || slot < 0 || slot >= CLUSTER_SLOTS) {
-        addReplyError(c, "Invalid or out of range slot");
+        *err_out = sdscatfmt(sdsempty(), "Invalid or out of range slot");
         return -1;
+    }
+
+    return (int)slot;
+}
+
+/* Get the slot from robj and return it. If the slot is not valid,
+ * return -1 and send an error to the client. */
+int getSlotOrReply(client *c, robj *o) {
+    sds err = NULL;
+    int slot = getSlotOrError(o, &err);
+    if (err) {
+        addReplyErrorSds(c, err);
+        sdsfree(err);
     }
     return (int)slot;
 }
@@ -6392,9 +6371,21 @@ void removeChannelsInSlot(unsigned int slot) {
     pubsubShardUnsubscribeAllChannelsInSlot(slot);
 }
 
+void delKeysInSlotRanges(list *slot_ranges) {
+    listNode *ln;
+    listIter li;
+    listRewind(slot_ranges, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotRange *range = ln->value;
+        for (int i = range->start_slot; i <= range->end_slot; i++) {
+            delKeysInSlot(i);
+        }
+    }
+}
+
 /* Remove all the keys in the hash slots that are in the given slot range list
  * and not owned by myself now. */
-void delkeysNotOwnedByMySelf(list *slot_ranges) {
+void delKeysNotOwnedByMyself(list *slot_ranges) {
     listNode *ln;
     listIter li;
     listRewind(slot_ranges, &li);
@@ -6408,18 +6399,15 @@ void delkeysNotOwnedByMySelf(list *slot_ranges) {
     }
 }
 
-/* Remove all the keys in the specified hash slot with time limit.
+/* Remove all the keys in the specified hash slot.
  * The number of removed items is returned. */
-unsigned int delKeysInSlotWithTimeLimit(unsigned int hashslot, ustime_t *limit) {
+unsigned int delKeysInSlot(unsigned int hashslot) {
     if (!countKeysInSlot(hashslot)) return 0;
 
     /* We may lose a slot during the pause. We need to track this
      * state so that we don't assert in propagateNow(). */
     server.server_del_keys_in_slot = 1;
     unsigned int j = 0;
-
-    /* Delete while traversing the keys in the hash slot with time limit. */
-    ustime_t start = ustime(), elapsed = 0;
 
     kvstoreHashtableIterator *kvs_di = NULL;
     void *next;
@@ -6441,27 +6429,12 @@ unsigned int delKeysInSlotWithTimeLimit(unsigned int hashslot, ustime_t *limit) 
         decrRefCount(key);
         j++;
         server.dirty++;
-
-        /* Check if over time limit? */
-        if (limit && j % 64 == 0) {
-            elapsed = ustime() - start;
-            if (elapsed >= *limit) {
-                break;
-            }
-        }
     }
     kvstoreReleaseHashtableIterator(kvs_di);
 
     server.server_del_keys_in_slot = 0;
-    // clusterCommandSlotLinkKill -> delkeysNotOwnedByMySelf
-    // serverAssert(server.execution_nesting == 0);
+    serverAssert(server.execution_nesting == 0);
     return j;
-}
-
-/* Remove all the keys in the specified hash slot.
- * The number of removed items is returned. */
-unsigned int delKeysInSlot(unsigned int hashslot) {
-    return delKeysInSlotWithTimeLimit(hashslot, NULL);
 }
 
 /* Get the count of the channels for a given slot. */
@@ -6628,6 +6601,15 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
     /* Allow primaries to replicate "CLUSTER SETSLOT" */
     if (!c->flag.primary && nodeIsReplica(myself)) {
         addReplyError(c, "Please use SETSLOT only with masters.");
+        return 0;
+    }
+
+    if (isAnySlotImportingViaReplication()) {
+        addReplyError(c, "A slot is currently being imported via slot-level replication. Please cancel any ongoing import operations and try again.");
+        return 0;
+    }
+    if (isAnySlotExportingViaReplication()) {
+        addReplyError(c, "A slot is currently being exported via slot-level replication. Please cancel any ongoing import operations and try again.");
         return 0;
     }
 
@@ -7206,156 +7188,18 @@ int clusterCommandSpecial(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "links") && c->argc == 2) {
         /* CLUSTER LINKS */
         addReplyClusterLinksDescription(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "slotlink") && (c->argc == 3 || c->argc == 4)) {
-        /* CLUSTER SLOTLINK LIST */
-        /* CLUSTER SLOTLINK KILL <linkname> */
-        if (!strcasecmp(c->argv[2]->ptr, "list") && (c->argc == 3)) {
-            clusterCommandSlotLinkList(c);
-        } else if (!strcasecmp(c->argv[2]->ptr, "kill") && (c->argc == 4)) {
-            clusterCommandSlotLinkKill(c, c->argv[3]->ptr);
-        } else {
-            addReplyErrorObject(c, shared.syntaxerr);
-            return 1;
-        }
-    } else if ((!strcasecmp(c->argv[1]->ptr, "slotsync")) && (c->argc > 2 && c->argc % 2 == 0)) {
-        /* CLUSTER SLOTSYNC <start slot> <end slot> [<start slot> <end slot> ...]
-         *
-         * This command is sent to the target node, which must be a primary node, and
-         * it will try to synchronize slot data from the slot primary. */
-        if (!nodeIsPrimary(myself)) {
-            addReplyError(c, "Myself should be a primary.");
-            return 1;
-        }
-
-        clusterNode *source_node = NULL;
-
-        /* Build the slot range list by the command arguments. */
-        list *slot_ranges = createSlotRangeList();
-        int startslot, endslot;
-        for (int i = 2; i < c->argc; i += 2) {
-            /* Get the current slot range. */
-            if ((startslot = getSlotOrReply(c, c->argv[i])) == -1) {
-                listRelease(slot_ranges);
-                return 1;
-            }
-            if ((endslot = getSlotOrReply(c, c->argv[i + 1])) == -1) {
-                listRelease(slot_ranges);
-                return 1;
-            }
-            if (startslot > endslot) {
-                addReplyErrorFormat(c, "Start slot number %d is greater than end slot number %d.", startslot, endslot);
-                listRelease(slot_ranges);
-                return 1;
-            }
-            /* Check if the current slot range is ready to do the slot sync. */
-            for (int j = startslot; j <= endslot; j++) {
-                if (server.cluster->slots[j] == NULL) {
-                    addReplyErrorFormat(c, "Slot %d has no node served.", j);
-                    listRelease(slot_ranges);
-                    return 1;
-                }
-                if (!source_node) {
-                    source_node = server.cluster->slots[j];
-                } else if (source_node != server.cluster->slots[j]) {
-                    addReplyErrorFormat(c, "The slot ranges can not cross nodes, please check slot: %d.", j);
-                    listRelease(slot_ranges);
-                    return 1;
-                }
-                if (source_node == myself) {
-                    addReplyErrorFormat(c, "Slot %d is already served by myself.", j);
-                    listRelease(slot_ranges);
-                    return 1;
-                }
-                if (isSlotInPendingDelete(j)) {
-                    listRelease(slot_ranges);
-                    addReplyErrorFormat(c, "Slot %d is in pending delete list.", j);
-                    return 1;
-                }
-                if (isSlotInClusterSlotSyncLinkList(j)) {
-                    addReplyErrorFormat(c, "Slot %d is already in slot sync.", j);
-                    listRelease(slot_ranges);
-                    return 1;
-                }
-            }
-            /* Add the current slot range to the range list. */
-            slotRange *new_range = zmalloc(sizeof(slotRange));
-            new_range->start_slot = startslot;
-            new_range->end_slot = endslot;
-            listAddNodeTail(slot_ranges, new_range);
-            serverLog(LL_NOTICE, "Syncing slot range [%d-%d] from node %.40s (%s)",
-                      startslot, endslot, source_node->name, source_node->human_nodename);
-        }
-        serverAssert(source_node && source_node != myself);
-
-        /* Create and initialize the slot sync link. */
-        clusterSlotSyncLink *link = createSlotSyncLink();
-        initSlotSyncLink(link, source_node, slot_ranges);
-        listAddNodeTail(server.cluster->slotsync_links, link);
-        addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "slotfailover") && (c->argc == 2 || c->argc == 3)) {
-        /* CLUSTER SLOTFAILOVER [TAKEOVER] */
-        int takeover = 0;
-        if (c->argc == 3) {
-            if (!strcasecmp(c->argv[2]->ptr, "takeover")) {
-                takeover = 1;
-            } else {
-                addReplyErrorObject(c, shared.syntaxerr);
-                return 1;
-            }
-        }
-        if (listLength(server.cluster->slotsync_links) == 0) {
-            addReplyError(c, "There is no slot link can failover.");
-            return 1;
-        }
-        if (server.cluster->slot_mf_end) {
-            addReplyError(c, "There is a slot failover in progress.");
-            return 1;
-        }
-        /* Check if all the slot sync links are connected. */
-        listNode *ln;
-        listIter li;
-        listRewind(server.cluster->slotsync_links, &li);
-        while ((ln = listNext(&li)) != NULL) {
-            clusterSlotSyncLink *link = ln->value;
-            if (link->sync_state != REPL_STATE_CONNECTED) {
-                addReplyErrorFormat(c, "Slot sync link %.40s is not connected, link status: %s", link->linkname,
-                                    slotSyncStateToString(link->sync_state));
-                return 1;
-            }
-        }
-
-        sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
-
-        if (takeover) {
-            serverLog(LL_NOTICE, "Taking over the slots (user request from '%s').", client);
-            clusterBumpConfigEpochWithoutConsensus();
-            clusterSlotFailoverReplace();
-            clearClusterSlotSyncLinkList();
-        } else {
-            serverLog(LL_NOTICE, "Manual slot failover user request accepted (user request from '%s').", client);
-            clusterInitSlotFailover();
-        }
-
-        sdsfree(client);
-        addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "InternalCloseSlotLink")) {
-        /* CLUSTER INTERNALCLOSESLOTLINK
-         *
-         * Note: this command does not reply anything. */
-        listNode *ln = listSearchKey(server.cluster->slotsync_links, c->slotsync_link);
-        if (ln == NULL) {
-            serverLog(LL_WARNING, "InternalCloseSlotLink fail, this client is not in slotsync_links");
-            return 1;
-        }
-        clusterSlotSyncLink *link = ln->value;
-        if (link == NULL || link->client != c) {
-            serverLog(LL_WARNING, "InternalCloseSlotLink fail, invalid slotlink or client not equal c");
-            return 1;
-        }
-        /* If reached here, "link->client == c" */
-        c->slotsync_link = NULL;
-        freeClientAsync(c);
-        listDelNode(server.cluster->slotsync_links, ln);
+    } else if (!strcasecmp(c->argv[1]->ptr, "import") && c->argc > 3 && c->argc % 2 == 1) {
+        /* CLUSTER IMPORT SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] */
+        clusterCommandImport(c);
+    } else if (!strcasecmp(c->argv[1]->ptr, "import-info") && c->argc == 2) {
+        /* CLUSTER IMPORT-INFO */
+        clusterCommandImportInfo(c);
+    } else if (!strcasecmp(c->argv[1]->ptr, "import-cancel") && c->argc == 3 && !strcasecmp(c->argv[2]->ptr, "all")) {
+        /* CLUSTER IMPORT-CANCEL ALL */
+        clusterCommandImportCancel(c);
+    } else if (!strcasecmp(c->argv[1]->ptr, "syncslots") && c->argc >= 3) {
+        /* CLUSTER SYNCSLOTS (SNAPSHOT TARGET <node-id> <start-slot> <end-slot> [<start slot> <end slot>]|SNAPSHOT-EOF|PAUSE|PAUSED|REQUEST-FAILOVER|FAILOVER-GRANTED|FAILOVER-DENIED)*/
+        clusterCommandSyncSlots(c);
     } else {
         return 0;
     }
@@ -7398,6 +7242,14 @@ const char **clusterCommandExtendedHelp(void) {
         "LINKS",
         "    Return information about all network links between this node and its peers.",
         "    Output format is an array where each array element is a map containing attributes of a link",
+        "IMPORT [NOFAILOVER] SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...]",
+        "    Import the specified slot ranges from their owners.",
+        "IMPORT-CANCEL ALL",
+        "    Cancel all ongoing imports.",
+        "IMPORT-INFO",
+        "    Get information about ongoing and recently finished slot imports.",
+        "SYNCSLOTS (SNAPSHOT TARGET <node-id> <start-slot> <end-slot> [<start slot> <end slot>]|SNAPSHOT-EOF|PAUSE|PAUSED|REQUEST-FAILOVER|FAILOVER-GRANTED|FAILOVER-DENIED)",
+        "    Begin syncing a slot, or transition an existing slot sync to a new state.",
         NULL};
 
     return help;
@@ -7456,6 +7308,8 @@ int clusterAllowFailoverCmd(client *c) {
 
 void clusterPromoteSelfToPrimary(void) {
     replicationUnsetPrimary();
+    /* Upon becoming primary, we need to ensure that data is deleted in unowned slots. */
+    verifyClusterConfigWithData();
 }
 
 int detectAndUpdateCachedNodeHealth(void) {

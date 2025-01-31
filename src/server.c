@@ -901,8 +901,8 @@ int clientsCronResizeQueryBuffer(client *c) {
         if (idletime > 2) {
             /* 1) Query is idle for a long time. */
             size_t remaining = sdslen(c->querybuf) - c->qb_pos;
-            if (!c->flag.primary && !remaining) {
-                /* If the client is not a primary and no data is pending,
+            if (!isReplicatedClient(c) && !remaining) {
+                /* If the client is not replicated and no data is pending,
                  * The client can safely use the shared query buffer in the next read - free the client's querybuf. */
                 sdsfree(c->querybuf);
                 /* By setting the querybuf to NULL, the client will use the shared query buffer in the next read.
@@ -1216,7 +1216,7 @@ void clientsCron(void) {
 void databasesCron(void) {
     /* Expire keys by random sampling. Not required for replicas
      * as primary will synthesize DELs for us. */
-    if (server.active_expire_enabled && !isSlotSyncInProgress()) {
+    if (server.active_expire_enabled) {
         if (!iAmPrimary()) {
             expireReplicaKeys();
         } else if (!server.import_mode) {
@@ -1465,6 +1465,10 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
                                  factor);
         trackInstantaneousMetric(STATS_METRIC_EL_DURATION, server.duration_stats[EL_DURATION_TYPE_EL].sum,
                                  server.duration_stats[EL_DURATION_TYPE_EL].cnt, 1);
+        trackInstantaneousMetric(STATS_METRIC_NET_CLUSTER_SLOT_IMPORT, server.stat_net_cluster_slot_import_bytes, current_time,
+                                 factor);
+        trackInstantaneousMetric(STATS_METRIC_NET_CLUSTER_SLOT_EXPORT, server.stat_net_cluster_slot_export_bytes, current_time,
+                                 factor);
     }
 
     /* We have just LRU_BITS bits per object for LRU information.
@@ -1614,7 +1618,6 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     /* Run the Cluster cron. */
     if (server.cluster_enabled) {
         run_with_period(100) clusterCron();
-        clusterSlotPendingDelete();
     }
 
     /* Run the Sentinel timer if we are in sentinel mode. */
@@ -1803,8 +1806,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
-    if (server.active_expire_enabled && !server.import_mode && iAmPrimary() && !isSlotSyncInProgress())
-        activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
+    if (server.active_expire_enabled && !server.import_mode && iAmPrimary()) activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
     if (moduleCount()) {
         moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP, VALKEYMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP, NULL);
@@ -2178,15 +2180,7 @@ void initServerConfig(void) {
     server.skip_checksum_validation = 0;
     server.loading = 0;
     server.async_loading = 0;
-    server.loading_total_bytes = 0;
     server.loading_rdb_used_mem = 0;
-    server.loading_loaded_bytes = 0;
-    server.loading_start_time = 0;
-    server.slot_loading = 0;
-    server.slot_loading_total_bytes = 0;
-    server.slot_loading_rdb_used_mem = 0;
-    server.slot_loading_loaded_bytes = 0;
-    server.slot_loading_start_time = 0;
     server.aof_state = AOF_OFF;
     server.aof_rewrite_base_size = 0;
     server.aof_rewrite_scheduled = 0;
@@ -3371,9 +3365,14 @@ struct serverCommand *lookupCommandOrOriginal(robj **argv, int argc) {
     return cmd;
 }
 
+/* Determines if commands on this client are replicated from some source */
+int isReplicatedClient(client *c) {
+    return c->flag.primary || c->flag.slot_import_source;
+}
+
 /* Commands arriving from the primary client or AOF client, should never be rejected. */
 int mustObeyClient(client *c) {
-    return c->id == CLIENT_ID_AOF || c->flag.primary;
+    return c->id == CLIENT_ID_AOF || isReplicatedClient(c);
 }
 
 static int shouldPropagate(int target) {
@@ -3432,7 +3431,12 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
                  server.server_del_keys_in_slot);
 
     if (server.aof_state != AOF_OFF && target & PROPAGATE_AOF) feedAppendOnlyFile(dbid, argv, argc);
-    if (target & PROPAGATE_REPL) replicationFeedReplicas(dbid, argv, argc);
+    if (target & PROPAGATE_REPL) {
+        replicationFeedReplicas(dbid, argv, argc);
+        if (server.cluster_enabled && isAnySlotExportingViaReplication()) {
+            clusterFeedSlotExportLinks(dbid, argv, argc);
+        }
+    }
 }
 
 /* Used inside commands to schedule the propagation of additional commands
@@ -4190,17 +4194,8 @@ int processCommand(client *c) {
         if (server.current_client == NULL) return C_ERR;
 
         if (out_of_memory && is_denyoom_command) {
-            /* If slot sync is in progress, we should reset the lag bytes here
-             * as the CC(Controller Center of CRS) will decide whether to launch
-             * slot failover operation according to the lag bytes. */
-            if (c->slotsync_link != NULL) {
-                clusterSlotSyncLink *link = c->slotsync_link;
-                if (!c->slotsync_failed) {
-                    serverLog(LL_WARNING, "Cluster slot sync failed result from OOM, link lag: %lld",
-                              link->slot_mf_lag);
-                    link->slot_mf_lag = -1;
-                    c->slotsync_failed = 1;
-                }
+            if (c->slot_import_link != NULL) {
+                handleSlotImportLinkClientOOM(c->slot_import_link);
             }
 
             rejectCommand(c, shared.oomerr);
@@ -5814,6 +5809,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "mem_clients_slaves:%zu\r\n", mh->clients_replicas,
                 "mem_clients_normal:%zu\r\n", mh->clients_normal,
                 "mem_cluster_links:%zu\r\n", mh->cluster_links,
+                "mem_cluster_slot_import:%zu\r\n", mh->cluster_slot_import,
+                "mem_cluster_slot_export:%zu\r\n", mh->cluster_slot_export,
                 "mem_aof_buffer:%zu\r\n", mh->aof_buffer,
                 "mem_allocator:%s\r\n", ZMALLOC_LIB,
                 "mem_overhead_db_hashtable_rehashing:%zu\r\n", mh->overhead_db_hashtable_rehashing,
@@ -5930,8 +5927,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "total_connections_received:%lld\r\n", server.stat_numconnections,
                 "total_commands_processed:%lld\r\n", server.stat_numcommands,
                 "instantaneous_ops_per_sec:%lld\r\n", getInstantaneousMetric(STATS_METRIC_COMMAND),
-                "total_net_input_bytes:%lld\r\n", server.stat_net_input_bytes + server.stat_net_repl_input_bytes,
-                "total_net_output_bytes:%lld\r\n", server.stat_net_output_bytes + server.stat_net_repl_output_bytes,
+                "total_net_input_bytes:%lld\r\n", server.stat_net_input_bytes + server.stat_net_repl_input_bytes + server.stat_net_cluster_slot_import_bytes,
+                "total_net_output_bytes:%lld\r\n", server.stat_net_output_bytes + server.stat_net_repl_output_bytes + server.stat_net_cluster_slot_export_bytes,
                 "total_net_repl_input_bytes:%lld\r\n", server.stat_net_repl_input_bytes,
                 "total_net_repl_output_bytes:%lld\r\n", server.stat_net_repl_output_bytes,
                 "instantaneous_input_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT) / 1024,
@@ -5989,7 +5986,11 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_duration_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_EL].sum,
                 "eventloop_duration_cmd_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CMD].sum,
                 "instantaneous_eventloop_cycles_per_sec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_CYCLE),
-                "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION)));
+                "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION),
+                "total_net_cluster_slot_import_bytes:%lld\r\n", server.stat_net_cluster_slot_import_bytes,
+                "total_net_cluster_slot_export_bytes:%lld\r\n", server.stat_net_cluster_slot_export_bytes,
+                "instantaneous_cluster_slot_import_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_CLUSTER_SLOT_IMPORT) / 1024,
+                "instantaneous_cluster_slot_export_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_CLUSTER_SLOT_EXPORT) / 1024));
         info = genValkeyInfoStringACLStats(info);
     }
 
@@ -6877,10 +6878,6 @@ int serverIsSupervised(int mode) {
 int iAmPrimary(void) {
     return ((!server.cluster_enabled && server.primary_host == NULL) ||
             (server.cluster_enabled && clusterNodeIsPrimary(getMyClusterNode())));
-}
-
-int isSlotSyncInProgress(void) {
-    return server.cluster_enabled && server.cluster->slotsync_links && listLength(server.cluster->slotsync_links);
 }
 
 /* Main is marked as weak so that unit tests can use their own main function. */

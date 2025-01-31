@@ -258,16 +258,16 @@ int getKeySlot(sds key) {
      * so we must always recompute the slot for commands coming from the primary.
      */
     if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command &&
-        !server.current_client->flag.primary) {
+        !isReplicatedClient(server.current_client)) {
         debugServerAssertWithInfo(server.current_client, NULL,
                                   (int)keyHashSlot(key, (int)sdslen(key)) == server.current_client->slot);
         return server.current_client->slot;
     }
     int slot = keyHashSlot(key, (int)sdslen(key));
-    /* For the case of replicated commands from primary, getNodeByQuery() never gets called,
-     * and thus c->slot never gets populated. That said, if this command ends up accessing a key,
-     * we are able to backfill c->slot here, where the key's hash calculation is made. */
-    if (server.current_client && server.current_client->flag.primary) {
+    /* For the case of commands from clients we must obey, getNodeByQuery() never gets called,
+     * and thus c->slot never gets populated. That said, if this command ends up accessing
+     * a key, we are able to backfill c->slot here, where the key's hash calculation is made. */
+    if (server.current_client && mustObeyClient(server.current_client)) {
         server.current_client->slot = slot;
     }
     return slot;
@@ -663,12 +663,6 @@ serverDb *initTempDb(void) {
         tempDb[i].id = i;
         tempDb[i].keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
         tempDb[i].expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
-        tempDb[i].blocking_keys = dictCreate(&keylistDictType);
-        tempDb[i].blocking_keys_unblock_on_nokey = dictCreate(&objectKeyPointerValueDictType);
-        tempDb[i].ready_keys = dictCreate(&objectKeyPointerValueDictType);
-        tempDb[i].watched_keys = dictCreate(&keylistDictType);
-        tempDb[i].avg_ttl = 0;
-        tempDb[i].expires_cursor = 0;
     }
 
     return tempDb;
@@ -681,11 +675,6 @@ void discardTempDb(serverDb *tempDb) {
     for (int i = 0; i < server.dbnum; i++) {
         kvstoreRelease(tempDb[i].keys);
         kvstoreRelease(tempDb[i].expires);
-
-        dictRelease(tempDb[i].blocking_keys);
-        dictRelease(tempDb[i].blocking_keys_unblock_on_nokey);
-        dictRelease(tempDb[i].ready_keys);
-        dictRelease(tempDb[i].watched_keys);
     }
 
     zfree(tempDb);
@@ -1087,6 +1076,11 @@ char *getObjectTypeName(robj *o) {
     }
 }
 
+int shouldSkipHashTableInScan(int didx, hashtable *ht) {
+    UNUSED(ht);
+    return server.cluster && isSlotImportingViaReplication(didx);
+}
+
 /* This command implements SCAN, HSCAN and SSCAN commands.
  * If object 'o' is passed, then it must be a Hash, Set or Zset object, otherwise
  * if 'o' is NULL the command will operate on the dictionary associated with
@@ -1240,7 +1234,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             /* In cluster mode there is a separate dictionary for each slot.
              * If cursor is empty, we should try exploring next non-empty slot. */
             if (o == NULL) {
-                cursor = kvstoreScan(c->db->keys, cursor, onlydidx, keysScanCallback, NULL, &data);
+                cursor = kvstoreScan(c->db->keys, cursor, onlydidx, keysScanCallback, shouldSkipHashTableInScan, &data);
             } else {
                 cursor = hashtableScan(ht, cursor, hashtableScanCallback, &data);
             }
@@ -1970,13 +1964,10 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
      *
      * When replicating commands from the primary, keys are never considered
      * expired. */
-    if (server.primary_host != NULL || isSlotSyncInProgress()) {
+    if (server.primary_host != NULL) {
         if (server.current_client && (server.current_client->flag.primary)) return KEY_VALID;
-        /* When replicating commands from the slot sync source node,
-         * keys are never considered expired. */
-        if (server.current_client && server.current_client->flag.slot_sync_primary) return KEY_VALID;
         if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return KEY_EXPIRED;
-    } else if (server.import_mode) {
+    } else if (server.import_mode || isAnySlotImportingViaReplication()) {
         /* If we are running in the import mode on a primary, instead of
          * evicting the expired key from the database, we return ASAP:
          * the key expiration is controlled by the import source that will
@@ -2128,7 +2119,7 @@ unsigned long long dbSize(serverDb *db) {
 }
 
 unsigned long long dbScan(serverDb *db, unsigned long long cursor, hashtableScanFunction scan_cb, void *privdata) {
-    return kvstoreScan(db->keys, cursor, -1, scan_cb, NULL, privdata);
+    return kvstoreScan(db->keys, cursor, -1, scan_cb, shouldSkipHashTableInScan, privdata);
 }
 
 /* -----------------------------------------------------------------------------
@@ -2818,9 +2809,6 @@ int setGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *
     result->numkeys = 1;
 
     for (int i = 3; i < argc; i++) {
-        /* Bug: see the new_arg comment in isCommandInSlotRanges for more details. */
-        /* if (!sdsEncodedObject(argv[i])) continue; */
-
         char *arg = argv[i]->ptr;
         if ((arg[0] == 'g' || arg[0] == 'G') && (arg[1] == 'e' || arg[1] == 'E') && (arg[2] == 't' || arg[2] == 'T') &&
             arg[3] == '\0') {

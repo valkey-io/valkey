@@ -1,0 +1,23 @@
+{
+    "IMPORT-CANCEL": {
+        "summary": "Cancel current ongoing import operations.",
+        "complexity": "O(n), where N is the number of source nodes for the current import.",
+        "group": "cluster",
+        "since": "8.1.0",
+        "container": "CLUSTER",
+        "function": "clusterCommand",
+        "arity": -2,
+        "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+        ],
+        "arguments": [
+            {
+                "name": "all",
+                "type": "pure-token",
+                "token": "ALL"
+            }
+        ]
+    }
+}

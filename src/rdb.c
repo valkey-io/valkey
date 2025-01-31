@@ -38,8 +38,6 @@
 #include "bio.h"
 #include "zmalloc.h"
 #include "module.h"
-#include "cluster.h"
-#include "cluster_legacy.h"
 
 #include <math.h>
 #include <fcntl.h>
@@ -62,9 +60,6 @@
 
 /* This macro tells if we are in the context of a RESTORE command, and not loading an RDB or AOF. */
 #define isRestoreContext() ((server.current_client == NULL || server.current_client->id == CLIENT_ID_AOF) ? 0 : 1)
-
-/* This macro tells if rsi is used to store the slot RDB by checking rsi->slot_ranges. */
-#define isSlotSyncRdbSaveInfo(rsi) ((rsi) && ((rsi)->slot_ranges))
 
 char *rdbFileBeingLoaded = NULL; /* used for rdb checking on read error */
 extern int rdbCheckMode;
@@ -1328,88 +1323,15 @@ werr:
     return -1;
 }
 
-/* Get the size in kvsoter for RDB save. If it is slot sync, only the size
- * in the corresponding slot range will be obtained. */
-unsigned long long getKvstoreSizeForRdbSave(kvstore *kvs, rdbSaveInfo *rsi) {
-    /* It is not slot sync and returns kvstoreSize directly. */
-    if (!isSlotSyncRdbSaveInfo(rsi)) {
-        return kvstoreSize(kvs);
-    }
-
-    /* This is a slot sync, only the size in the corresponding slot range is
-     * obtained. */
-    unsigned long long size = 0;
-    listNode *ln;
-    listIter li;
-    listRewind(rsi->slot_ranges, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        slotRange *range = ln->value;
-        for (int curr_slot = range->start_slot; curr_slot <= range->end_slot; curr_slot++) {
-            size += kvstoreHashtableSize(kvs, curr_slot);
-        }
-    }
-    return size;
-}
-
-/* Write slot-info information to RDB as an aux field, this info is used to resize
- * the slot dict when loading RDB. */
-ssize_t rdbSaveSlotInfoAuxFields(rio *rdb, serverDb *db, int curr_slot) {
-    sds slot_info = sdscatprintf(sdsempty(), "%i,%lu,%lu", curr_slot, kvstoreHashtableSize(db->keys, curr_slot),
-                                 kvstoreHashtableSize(db->expires, curr_slot));
-    ssize_t written = rdbSaveAuxFieldStrStr(rdb, "slot-info", slot_info);
-    sdsfree(slot_info);
-    return written;
-}
-
-/* Save a key-value entry. */
-ssize_t rdbSaveKeyValueEntry(rio *rdb, int dbid, robj *o, long *key_counter, char *pname) {
-    ssize_t written = 0;
-    ssize_t res;
-    static long long info_updated_time = 0;
-
-    serverDb *db = server.db + dbid;
-
-    sds keystr = objectGetKey(o);
-    robj key;
-    long long expire;
-    size_t rdb_bytes_before_key = rdb->processed_bytes;
-
-    initStaticStringObject(key, keystr);
-    expire = getExpire(db, &key);
-    if ((res = rdbSaveKeyValuePair(rdb, &key, o, expire, dbid)) < 0) return -1;
-    written += res;
-
-    /* In fork child process, we can try to release memory back to the
-     * OS and possibly avoid or decrease COW. We give the dismiss
-     * mechanism a hint about an estimated size of the object we stored. */
-    size_t dump_size = rdb->processed_bytes - rdb_bytes_before_key;
-    if (server.in_fork_child) dismissObject(o, dump_size);
-
-    /* Update child info every 1 second (approximately).
-     * in order to avoid calling mstime() on each iteration, we will
-     * check the diff every 1024 keys */
-    if (((*key_counter)++ & 1023) == 0) {
-        long long now = mstime();
-        if (now - info_updated_time >= 1000) {
-            sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, *key_counter, pname);
-            info_updated_time = now;
-        }
-    }
-
-    return written;
-}
-
-ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter, rdbSaveInfo *rsi) {
+ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
     ssize_t written = 0;
     ssize_t res;
     kvstoreIterator *kvs_it = NULL;
-    kvstoreHashtableIterator *kvs_di = NULL;
+    static long long info_updated_time = 0;
     char *pname = (rdbflags & RDBFLAGS_AOF_PREAMBLE) ? "AOF rewrite" : "RDB";
 
     serverDb *db = server.db + dbid;
-    unsigned long long db_size = getKvstoreSizeForRdbSave(db->keys, rsi);
-    unsigned long long db_size2 = kvstoreSize(db->keys);
-    serverLog(LL_WARNING, "db_size: %lld, db_size2: %lld", db_size, db_size2);
+    unsigned long long int db_size = kvstoreSize(db->keys);
     if (db_size == 0) return 0;
 
     /* Write the SELECT DB opcode */
@@ -1419,9 +1341,7 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter, rdbSaveIn
     written += res;
 
     /* Write the RESIZE DB opcode. */
-    unsigned long long expires_size = getKvstoreSizeForRdbSave(db->expires, rsi);
-    unsigned long long expires_size2 = kvstoreSize(db->expires);
-    serverLog(LL_WARNING, "expires_size: %lld, expires_size2: %lld", expires_size, expires_size2);
+    unsigned long long expires_size = kvstoreSize(db->expires);
     if ((res = rdbSaveType(rdb, RDB_OPCODE_RESIZEDB)) < 0) goto werr;
     written += res;
     if ((res = rdbSaveLen(rdb, db_size)) < 0) goto werr;
@@ -1429,55 +1349,57 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter, rdbSaveIn
     if ((res = rdbSaveLen(rdb, expires_size)) < 0) goto werr;
     written += res;
 
-    /* Write the kvstore, that is the actually DB data. */
-    if (!isSlotSyncRdbSaveInfo(rsi)) {
-        kvs_it = kvstoreIteratorInit(db->keys);
-        int last_slot = -1;
-        /* Iterate this DB writing every entry */
-        void *next;
-        while (kvstoreIteratorNext(kvs_it, &next)) {
-            robj *o = next;
-            int curr_slot = kvstoreIteratorGetCurrentHashtableIndex(kvs_it);
-            /* Save slot info. */
-            if (server.cluster_enabled && curr_slot != last_slot) {
-                if ((res = rdbSaveSlotInfoAuxFields(rdb, db, curr_slot)) < 0) goto werr;
-                written += res;
-                last_slot = curr_slot;
+    kvs_it = kvstoreIteratorInit(db->keys);
+    int last_slot = -1;
+    /* Iterate this DB writing every entry */
+    void *next;
+    while (kvstoreIteratorNext(kvs_it, &next)) {
+        robj *o = next;
+        int curr_slot = kvstoreIteratorGetCurrentHashtableIndex(kvs_it);
+        /* Save slot info. */
+        if (server.cluster_enabled && curr_slot != last_slot) {
+            sds slot_info = sdscatprintf(sdsempty(), "%i,%lu,%lu", curr_slot, kvstoreHashtableSize(db->keys, curr_slot),
+                                         kvstoreHashtableSize(db->expires, curr_slot));
+            if ((res = rdbSaveAuxFieldStrStr(rdb, "slot-info", slot_info)) < 0) {
+                sdsfree(slot_info);
+                goto werr;
             }
-
-            if ((res = rdbSaveKeyValueEntry(rdb, dbid, o, key_counter, pname)) < 0) goto werr;
             written += res;
+            last_slot = curr_slot;
+            sdsfree(slot_info);
         }
-        kvstoreIteratorRelease(kvs_it);
-    } else {
-        listNode *ln;
-        listIter li;
-        listRewind(rsi->slot_ranges, &li);
-        while ((ln = listNext(&li)) != NULL) {
-            slotRange *range = ln->value;
-            for (int curr_slot = range->start_slot; curr_slot <= range->end_slot; curr_slot++) {
-                if (kvstoreHashtableSize(db->keys, curr_slot) == 0) continue;
-                if (server.cluster_enabled) {
-                    if ((res = rdbSaveSlotInfoAuxFields(rdb, db, curr_slot)) < 0) goto werr;
-                    written += res;
-                }
-                kvs_di = kvstoreGetHashtableIterator(db->keys, curr_slot);
-                void *next;
-                while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
-                    robj *o = next;
-                    if ((res = rdbSaveKeyValueEntry(rdb, dbid, o, key_counter, pname)) < 0) goto werr;
-                    written += res;
-                }
-                kvstoreReleaseHashtableIterator(kvs_di);
+        sds keystr = objectGetKey(o);
+        robj key;
+        long long expire;
+        size_t rdb_bytes_before_key = rdb->processed_bytes;
+
+        initStaticStringObject(key, keystr);
+        expire = getExpire(db, &key);
+        if ((res = rdbSaveKeyValuePair(rdb, &key, o, expire, dbid)) < 0) goto werr;
+        written += res;
+
+        /* In fork child process, we can try to release memory back to the
+         * OS and possibly avoid or decrease COW. We give the dismiss
+         * mechanism a hint about an estimated size of the object we stored. */
+        size_t dump_size = rdb->processed_bytes - rdb_bytes_before_key;
+        if (server.in_fork_child) dismissObject(o, dump_size);
+
+        /* Update child info every 1 second (approximately).
+         * in order to avoid calling mstime() on each iteration, we will
+         * check the diff every 1024 keys */
+        if (((*key_counter)++ & 1023) == 0) {
+            long long now = mstime();
+            if (now - info_updated_time >= 1000) {
+                sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, *key_counter, pname);
+                info_updated_time = now;
             }
         }
     }
-
+    kvstoreIteratorRelease(kvs_it);
     return written;
 
 werr:
     if (kvs_it) kvstoreIteratorRelease(kvs_it);
-    if (kvs_di) kvstoreReleaseHashtableIterator(kvs_di);
     return -1;
 }
 
@@ -1507,7 +1429,7 @@ int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     /* save all databases, skip this if we're in functions-only mode */
     if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA)) {
         for (j = 0; j < server.dbnum; j++) {
-            if (rdbSaveDb(rdb, j, rdbflags, &key_counter, rsi) == -1) goto werr;
+            if (rdbSaveDb(rdb, j, rdbflags, &key_counter) == -1) goto werr;
         }
     }
 
@@ -1698,12 +1620,6 @@ int rdbSaveBackground(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
         retval = rdbSave(req, filename, rsi, rdbflags);
         if (retval == C_OK) {
             sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
-        }
-        char *val = getInjectOptionValue("crs-bgsave-pause-time");
-        if (val) {
-            sleep(atoi(val));
-            zfree(val);
-            serverLog(LL_WARNING, "crs-bgsave-pause-time: %d", atoi(val));
         }
         exitFromChild((retval == C_OK) ? 0 : 1);
     } else {
@@ -2931,15 +2847,6 @@ emptykey:
 /* Mark that we are loading in the global state and setup the fields
  * needed to provide loading stats. */
 void startLoading(size_t size, int rdbflags, int async) {
-    if (rdbflags & RDBFLAGS_SLOT_SYNC) {
-        server.slot_loading = 1;
-        server.slot_loading_start_time = time(NULL);
-        server.slot_loading_loaded_bytes = 0;
-        server.slot_loading_total_bytes = size;
-        server.slot_loading_rdb_used_mem = 0;
-        return;
-    }
-
     /* Load the DB */
     server.loading = 1;
     if (async == 1) server.async_loading = 1;
@@ -2950,6 +2857,7 @@ void startLoading(size_t size, int rdbflags, int async) {
     server.rdb_last_load_keys_expired = 0;
     server.rdb_last_load_keys_loaded = 0;
     blockingOperationStarts();
+
     /* Fire the loading modules start event. */
     int subevent;
     if (rdbflags & RDBFLAGS_AOF_PREAMBLE)
@@ -2998,11 +2906,6 @@ void stopLoading(int success) {
                           success ? VALKEYMODULE_SUBEVENT_LOADING_ENDED : VALKEYMODULE_SUBEVENT_LOADING_FAILED, NULL);
 }
 
-void stopSlotLoading(int success) {
-    UNUSED(success);
-    server.slot_loading = 0;
-}
-
 void startSaving(int rdbflags) {
     /* Fire the persistence modules start event. */
     int subevent;
@@ -3041,24 +2944,6 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
     }
 }
 
-/* Track loading progress in order to serve client's from time to time
- * and if needed calculate rdb checksum  */
-void slotRdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
-    if (server.rdb_checksum) rioGenericUpdateChecksum(r, buf, len);
-    if (server.loading_process_events_interval_bytes &&
-        (r->processed_bytes + len) / server.loading_process_events_interval_bytes >
-            r->processed_bytes / server.loading_process_events_interval_bytes) {
-        // todo
-        loadingAbsProgress(r->processed_bytes);
-        processModuleLoadingProgressEvent(0);
-    }
-
-    // todo
-    if (server.repl_state == REPL_STATE_TRANSFER && rioCheckType(r) == RIO_TYPE_CONN) {
-        server.stat_net_repl_input_bytes += len;
-    }
-}
-
 /* Save the given functions_ctx to the rdb.
  * The err output parameter is optional and will be set with relevant error
  * message on failure, it is the caller responsibility to free the error
@@ -3078,8 +2963,8 @@ int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, s
 
     if (lib_ctx) {
         sds library_name = NULL;
-        int replace = (rdbflags & RDBFLAGS_ALLOW_DUP) || (rdbflags & RDBFLAGS_SLOT_SYNC);
-        if (!(library_name = functionsCreateWithLibraryCtx(final_payload, replace, &error, lib_ctx, 0))) {
+        if (!(library_name =
+                  functionsCreateWithLibraryCtx(final_payload, rdbflags & RDBFLAGS_ALLOW_DUP, &error, lib_ctx, 0))) {
             if (!error) {
                 error = sdsnew("Failed creating the library");
             }
@@ -3139,11 +3024,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     int error;
     long long empty_keys_skipped = 0;
 
-    if (rdbflags & RDBFLAGS_SLOT_SYNC) {
-        rdb->update_cksum = slotRdbLoadProgressCallback;
-    } else {
-        rdb->update_cksum = rdbLoadProgressCallback;
-    }
+    rdb->update_cksum = rdbLoadProgressCallback;
     rdb->max_processing_chunk = server.loading_process_events_interval_bytes;
     if (rioRead(rdb, buf, 9) == 0) goto eoferr;
     buf[9] = '\0';
@@ -3418,8 +3299,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 sdsfree(key);
                 goto eoferr;
             }
-        } else if (iAmPrimary() && !(rdbflags & RDBFLAGS_SLOT_SYNC) && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) &&
-                   expiretime != -1 && expiretime < now) {
+        } else if (iAmPrimary() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now) {
             if (rdbflags & RDBFLAGS_FEED_REPL) {
                 /* Caller should have created replication backlog,
                  * and now this path only works when rebooting,
@@ -3443,7 +3323,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             int added = dbAddRDBLoad(db, key, &val);
             server.rdb_last_load_keys_loaded++;
             if (!added) {
-                if (rdbflags & RDBFLAGS_ALLOW_DUP || rdbflags & RDBFLAGS_SLOT_SYNC) {
+                if (rdbflags & RDBFLAGS_ALLOW_DUP) {
                     /* This flag is useful for DEBUG RELOAD special modes.
                      * When it's set we allow new keys to replace the current
                      * keys with the same name. */
@@ -3520,37 +3400,19 @@ eoferr:
     return C_ERR;
 }
 
-/* See rdbLoadWithLoadingCtx for details. */
-int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
-    functionsLibCtx *functions_lib_ctx = functionsLibCtxGetCurrent();
-    rdbLoadingCtx loading_ctx = {.dbarray = server.db, .functions_lib_ctx = functions_lib_ctx};
-    int retval = rdbLoadWithLoadingCtx(filename, rsi, rdbflags, &loading_ctx);
-    return retval;
-}
-
 /* Like rdbLoadRio() but takes a filename instead of a rio stream. The
  * filename is open for reading and a rio stream object created in order
  * to do the actual loading. Moreover the ETA displayed in the INFO
  * output is initialized and finalized.
  *
  * If you pass an 'rsi' structure initialized with RDB_SAVE_INFO_INIT, the
- * loading code will fill the information fields in the structure.
- *
- * The rdb_loading_ctx argument holds objects to which the rdb will be loaded to,
- * currently it only allow to set db object and functionLibCtx to which the data
- * will be loaded (in the future it might contains more such objects). */
-int rdbLoadWithLoadingCtx(char *filename, rdbSaveInfo *rsi, int rdbflags, rdbLoadingCtx *rdb_loading_ctx) {
+ * loading code will fill the information fields in the structure. */
+int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
     FILE *fp;
     rio rdb;
     int retval;
     struct stat sb;
     int rdb_fd;
-
-    /* Simulate rdbLoad error. */
-    if (testInjectError("crs-rdbload-error")) {
-        serverLog(LL_WARNING, "inject crs-rdbload-error");
-        return RDB_FAILED;
-    }
 
     fp = fopen(filename, "r");
     if (fp == NULL) {
@@ -3565,7 +3427,7 @@ int rdbLoadWithLoadingCtx(char *filename, rdbSaveInfo *rsi, int rdbflags, rdbLoa
     startLoadingFile(sb.st_size, filename, rdbflags);
     rioInitWithFile(&rdb, fp);
 
-    retval = rdbLoadRioWithLoadingCtx(&rdb, rdbflags, rsi, rdb_loading_ctx);
+    retval = rdbLoadRio(&rdb, rdbflags, rsi);
 
     fclose(fp);
     stopLoading(retval == C_OK);
@@ -3576,77 +3438,6 @@ int rdbLoadWithLoadingCtx(char *filename, rdbSaveInfo *rsi, int rdbflags, rdbLoa
         if (rdb_fd >= 0) bioCreateCloseJob(rdb_fd, 0, 1);
     }
     return (retval == C_OK) ? RDB_OK : RDB_FAILED;
-}
-
-// todo remove it
-#define SLOTSYNC_DEFAULT_LAG 20000000000 /* Just a value large enough */
-void bioRdbLoad(void *args[]) {
-    rdbLoadJob *job = args[0];
-    int rdbflags = job->rdbflags;
-    int use_diskless_load = job->use_diskless_load;
-    int usemark = job->usemark;
-    sds eofmark = job->eofmark;
-    serverDb *db = job->link->temp_db;
-    functionsLibCtx *functions_lib_ctx = job->link->temp_func_ctx;
-    clusterSlotSyncLink *link = job->link;
-    connection *conn = link->sync_conn;
-
-    rdbLoadingCtx loadingCtx = {.dbarray = db, .functions_lib_ctx = functions_lib_ctx};
-
-    char rdbpath[1024];
-    char buf[PROTO_IOBUF_LEN];
-
-    rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
-
-    if (use_diskless_load) {
-        rio rdb;
-        rioInitWithConn(&rdb, conn, link->repl_transfer_size);
-        if (rdbLoadRioWithLoadingCtx(&rdb, rdbflags, &rsi, &loadingCtx) != C_OK) {
-            /* RDB loading failed. */
-            serverLog(LL_WARNING, "Failed trying to load the slot owner synchronization DB from socket");
-            rioFreeConn(&rdb, NULL);
-            goto load_error;
-        } else if (usemark) {
-            /* Verify the end mark is correct. */
-            if (!rioRead(&rdb, buf, RDB_EOF_MARK_SIZE) || memcmp(buf, eofmark, RDB_EOF_MARK_SIZE) != 0) {
-                serverLog(LL_WARNING, "Replication stream EOF marker is broken");
-                rioFreeConn(&rdb, NULL);
-                goto load_error;
-            }
-        }
-        rioFreeConn(&rdb, NULL);
-    } else {
-        snprintf(rdbpath, sizeof(rdbpath), "%s_slot", server.rdb_filename);
-        int load_result = rdbLoadWithLoadingCtx((char *)rdbpath, &rsi, rdbflags, &loadingCtx);
-
-        bg_unlink(rdbpath);
-
-        if (load_result != RDB_OK) {
-            serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization "
-                                  "slot DB from disk, check server logs.");
-            goto load_error;
-        }
-
-        zfree(link->repl_transfer_tmpfile);
-        close(link->repl_transfer_fd);
-        link->repl_transfer_fd = -1;
-        link->repl_transfer_tmpfile = NULL;
-    }
-
-    /* Set to a value large enough after first init. */
-    link->slot_mf_lag = SLOTSYNC_DEFAULT_LAG;
-
-    /* Mark the synchronization has done. */
-    serverLog(LL_WARNING, "CLUSTER_SLOTSYNC_STATE_DONE_LOADING");
-    if (job->usemark) sdsfree(job->eofmark);
-    link->sync_state = REPL_STATE_LOADED;
-    zfree(job);
-    return;
-
-load_error:
-    if (job->usemark) sdsfree(job->eofmark);
-    link->sync_state = REPL_STATE_LOAD_FAIL;
-    zfree(job);
 }
 
 /* A background saving child (BGSAVE) terminated its work. Handle this.
@@ -3733,16 +3524,14 @@ void killRDBChild(void) {
      * - rdbRemoveTempFile */
 }
 
-/* Spawn an RDB child that writes the RDB to the sockets of the replicas
- * that are currently in REPLICA_STATE_WAIT_BGSAVE_START state. */
-int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
-    listNode *ln;
-    listIter li;
+/* Save snapshot to the provided connections, spawning a child process and
+ * running the provided function.
+ *
+ * Connections array provided will be freed after the save is completed, and
+ * should not be freed by the caller. */
+int saveSnapshotToConnectionSockets(connection **conns, int connsnum, int use_pipe, int req, ChildSnapshotFunc snapshot_func, void *privdata) {
     pid_t childpid;
     int pipefds[2], rdb_pipe_write = 0, safe_to_exit_pipe = 0;
-    // todo currently slot sync does not support dual channel.
-    int dual_channel = (req & REPLICA_REQ_RDB_CHANNEL);
-
     if (hasActiveChildProcess()) return C_ERR;
     serverAssert(server.rdb_pipe_read == -1 && server.rdb_child_exit_pipe == -1);
 
@@ -3750,7 +3539,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
      * drained the pipe. */
     if (server.rdb_pipe_conns) return C_ERR;
 
-    if (!dual_channel) {
+    if (use_pipe) {
         /* Before to fork, create a pipe that is used to transfer the rdb bytes to
          * the parent, we can't let it write directly to the sockets, since in case
          * of TLS we must let the parent handle a continuous TLS state when the
@@ -3769,16 +3558,110 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
         safe_to_exit_pipe = pipefds[0];          /* read end */
         server.rdb_child_exit_pipe = pipefds[1]; /* write end */
     }
+    server.rdb_pipe_conns = NULL;
+    if (use_pipe) {
+        server.rdb_pipe_conns = conns;
+        server.rdb_pipe_numconns = connsnum;
+        server.rdb_pipe_numconns_writing = 0;
+    }
+    /* Create the child process. */
+    if ((childpid = serverFork(CHILD_TYPE_RDB)) == 0) {
+        /* Child */
+        int retval, dummy;
+        rio rdb;
+        if (!use_pipe) {
+            rioInitWithConnset(&rdb, conns, connsnum);
+        } else {
+            rioInitWithFd(&rdb, rdb_pipe_write);
+        }
+
+        /* Close the reading part, so that if the parent crashes, the child will
+         * get a write error and exit. */
+        if (use_pipe) close(server.rdb_pipe_read);
+        if (strstr(server.exec_argv[0], "redis-server") != NULL) {
+            serverSetProcTitle("redis-rdb-to-slaves");
+        } else {
+            serverSetProcTitle("valkey-rdb-to-replicas");
+        }
+        serverSetCpuAffinity(server.bgsave_cpulist);
+
+        retval = snapshot_func(req, &rdb, privdata);
+        if (retval == C_OK && rioFlush(&rdb) == 0) retval = C_ERR;
+
+        if (retval == C_OK) {
+            sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
+        }
+        if (!use_pipe) {
+            rioFreeConnset(&rdb);
+        } else {
+            rioFreeFd(&rdb);
+            /* wake up the reader, tell it we're done. */
+            close(rdb_pipe_write);
+            close(server.rdb_child_exit_pipe); /* close write end so that we can detect the close on the parent. */
+        }
+        zfree(conns);
+        /* hold exit until the parent tells us it's safe. we're not expecting
+         * to read anything, just get the error when the pipe is closed. */
+        if (use_pipe) dummy = read(safe_to_exit_pipe, pipefds, 1);
+        UNUSED(dummy);
+        exitFromChild((retval == C_OK) ? 0 : 1);
+    } else {
+        /* Parent */
+        if (childpid == -1) {
+            serverLog(LL_WARNING, "Can't save in background: fork: %s", strerror(errno));
+
+            if (use_pipe) {
+                close(rdb_pipe_write);
+                close(server.rdb_pipe_read);
+                close(server.rdb_child_exit_pipe);
+            }
+            zfree(conns);
+            if (!use_pipe) {
+                closeChildInfoPipe();
+            } else {
+                server.rdb_pipe_conns = NULL;
+                server.rdb_pipe_numconns = 0;
+                server.rdb_pipe_numconns_writing = 0;
+            }
+        } else {
+            serverLog(LL_NOTICE, "Background RDB transfer started by pid %ld to %s", (long)childpid,
+                      !use_pipe ? "direct socket to replica" : "pipe through parent process");
+            server.rdb_save_time_start = time(NULL);
+            server.rdb_child_type = RDB_CHILD_TYPE_SOCKET;
+            if (!use_pipe) {
+                /* For dual channel sync, the main process no longer requires these RDB connections. */
+                zfree(conns);
+            } else {
+                close(rdb_pipe_write); /* close write in parent so that it can detect the close on the child. */
+                if (aeCreateFileEvent(server.el, server.rdb_pipe_read, AE_READABLE, rdbPipeReadHandler, NULL) ==
+                    AE_ERR) {
+                    serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
+                }
+            }
+        }
+        if (use_pipe) close(safe_to_exit_pipe);
+        return (childpid == -1) ? C_ERR : C_OK;
+    }
+    return C_OK; /* Unreached. */
+}
+
+
+int childSnapshotUsingRDB(int req, rio *rdb, void *privdata) {
+    return rdbSaveRioWithEOFMark(req, rdb, NULL, (rdbSaveInfo *)privdata);
+}
+
+/* Spawn an RDB child that writes the RDB to the sockets of the replicas
+ * that are currently in REPLICA_STATE_WAIT_BGSAVE_START state. */
+int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
+    listNode *ln;
+    listIter li;
+    int dual_channel = (req & REPLICA_REQ_RDB_CHANNEL);
+
     /* Collect the connections of the replicas we want to transfer
      * the RDB to, which are i WAIT_BGSAVE_START state. */
     int connsnum = 0;
     connection **conns = zmalloc(sizeof(connection *) * listLength(server.replicas));
-    server.rdb_pipe_conns = NULL;
-    if (!dual_channel) {
-        server.rdb_pipe_conns = conns;
-        server.rdb_pipe_numconns = 0;
-        server.rdb_pipe_numconns_writing = 0;
-    }
+
     /* Filter replica connections pending full sync (ie. in WAIT_BGSAVE_START state). */
     listRewind(server.replicas, &li);
     while ((ln = listNext(&li))) {
@@ -3786,9 +3669,6 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
         if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
             /* Check replica has the exact requirements */
             if (replica->repl_data->replica_req != req) continue;
-
-            /* Check replica has the exact slot ranges. */
-            if (!isSlotRangeListSame(replica->slotsync_slots, rsi->slot_ranges)) continue;
 
             conns[connsnum++] = replica->conn;
             if (dual_channel) {
@@ -3800,102 +3680,25 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
                 addRdbReplicaToPsyncWait(replica);
                 /* Put the socket in blocking mode to simplify RDB transfer. */
                 connBlock(replica->conn);
-            } else {
-                server.rdb_pipe_numconns++;
             }
             replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset());
         }
     }
 
-    /* Create the child process. */
-    if ((childpid = serverFork(CHILD_TYPE_RDB)) == 0) {
-        /* Child */
-        int retval, dummy;
-        rio rdb;
-        if (dual_channel) {
-            rioInitWithConnset(&rdb, conns, connsnum);
-        } else {
-            rioInitWithFd(&rdb, rdb_pipe_write);
-        }
-
-        /* Close the reading part, so that if the parent crashes, the child will
-         * get a write error and exit. */
-        if (!dual_channel) close(server.rdb_pipe_read);
-        if (strstr(server.exec_argv[0], "redis-server") != NULL) {
-            serverSetProcTitle("redis-rdb-to-slaves");
-        } else {
-            serverSetProcTitle("valkey-rdb-to-replicas");
-        }
-        serverSetCpuAffinity(server.bgsave_cpulist);
-
-        retval = rdbSaveRioWithEOFMark(req, &rdb, NULL, rsi);
-        if (retval == C_OK && rioFlush(&rdb) == 0) retval = C_ERR;
-
-        if (retval == C_OK) {
-            sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
-        }
-        if (dual_channel) {
-            rioFreeConnset(&rdb);
-        } else {
-            rioFreeFd(&rdb);
-            /* wake up the reader, tell it we're done. */
-            close(rdb_pipe_write);
-            close(server.rdb_child_exit_pipe); /* close write end so that we can detect the close on the parent. */
-        }
-        zfree(conns);
-        /* hold exit until the parent tells us it's safe. we're not expecting
-         * to read anything, just get the error when the pipe is closed. */
-        if (!dual_channel) dummy = read(safe_to_exit_pipe, pipefds, 1);
-        UNUSED(dummy);
-        exitFromChild((retval == C_OK) ? 0 : 1);
-    } else {
-        /* Parent */
-        if (childpid == -1) {
-            serverLog(LL_WARNING, "Can't save in background: fork: %s", strerror(errno));
-
-            /* Undo the state change. The caller will perform cleanup on
-             * all the replicas in BGSAVE_START state, but an early call to
-             * replicationSetupReplicaForFullResync() turned it into BGSAVE_END */
-            listRewind(server.replicas, &li);
-            while ((ln = listNext(&li))) {
-                client *replica = ln->value;
-                if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) {
-                    replica->repl_data->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
-                }
-            }
-            if (!dual_channel) {
-                close(rdb_pipe_write);
-                close(server.rdb_pipe_read);
-                close(server.rdb_child_exit_pipe);
-            }
-            zfree(conns);
-            if (dual_channel) {
-                closeChildInfoPipe();
-            } else {
-                server.rdb_pipe_conns = NULL;
-                server.rdb_pipe_numconns = 0;
-                server.rdb_pipe_numconns_writing = 0;
-            }
-        } else {
-            serverLog(LL_NOTICE, "Background RDB transfer started by pid %ld to %s", (long)childpid,
-                      dual_channel ? "direct socket to replica" : "pipe through parent process");
-            server.rdb_save_time_start = time(NULL);
-            server.rdb_child_type = RDB_CHILD_TYPE_SOCKET;
-            if (dual_channel) {
-                /* For dual channel sync, the main process no longer requires these RDB connections. */
-                zfree(conns);
-            } else {
-                close(rdb_pipe_write); /* close write in parent so that it can detect the close on the child. */
-                if (aeCreateFileEvent(server.el, server.rdb_pipe_read, AE_READABLE, rdbPipeReadHandler, NULL) ==
-                    AE_ERR) {
-                    serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
-                }
+    if (saveSnapshotToConnectionSockets(conns, connsnum, !dual_channel, req, childSnapshotUsingRDB, (void *)rsi) != C_OK ) {
+        /* Undo the state change. The caller will perform cleanup on
+         * all the replicas in BGSAVE_START state, but an early call to
+         * replicationSetupReplicaForFullResync() turned it into BGSAVE_END */
+        listRewind(server.replicas, &li);
+        while ((ln = listNext(&li))) {
+            client *replica = ln->value;
+            if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) {
+                replica->repl_data->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
             }
         }
-        if (!dual_channel) close(safe_to_exit_pipe);
-        return (childpid == -1) ? C_ERR : C_OK;
+        return C_ERR;
     }
-    return C_OK; /* Unreached. */
+    return C_OK;
 }
 
 void saveCommand(client *c) {

@@ -1002,7 +1002,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
 
     /* We handle all the cases as if they were EXEC commands, so we have
      * a common code path for everything */
-    if (cmd->proc == execCommand) {
+    if (c && cmd->proc == execCommand) {
         /* If CLIENT_MULTI flag is not set EXEC is just going to return an
          * error. */
         if (!c->flag.multi) return myself;
@@ -1019,11 +1019,11 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         mc.cmd = cmd;
     }
 
-    uint64_t cmd_flags = getCommandFlags(c);
+    uint64_t cmd_flags = c ? getCommandFlags(c) : cmd->flags;
 
     /* Only valid for sharded pubsub as regular pubsub can operate on any node and bypasses this layer. */
     int pubsubshard_included =
-        (cmd_flags & CMD_PUBSUB) || (c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_PUBSUB));
+        (cmd_flags & CMD_PUBSUB) || (c && c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_PUBSUB));
 
     /* Check that all the keys are in the same hash slot, and obtain this
      * slot and the node associated. */
@@ -1068,7 +1068,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
                  * can safely serve the request, otherwise we return a TRYAGAIN
                  * error). To do so we set the importing/migrating state and
                  * increment a counter for every missing key. */
-                if (clusterNodeIsPrimary(myself) || c->flag.readonly) {
+                if (clusterNodeIsPrimary(myself) || (c && c->flag.readonly)) {
                     if (n == clusterNodeGetPrimary(myself) && getMigratingSlotDest(slot) != NULL) {
                         migrating_slot = 1;
                     } else if (getImportingSlotSource(slot) != NULL) {
@@ -1163,7 +1163,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
      * request as "ASKING", we can serve the request. However if the request
      * involves multiple keys and we don't have them all, the only option is
      * to send a TRYAGAIN error. */
-    if (importing_slot && (c->flag.asking || cmd_flags & CMD_ASKING)) {
+    if (importing_slot && (c && (c->flag.asking || cmd_flags & CMD_ASKING))) {
         if (multiple_keys && missing_keys) {
             if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
             return NULL;
@@ -1176,8 +1176,8 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
      * node is a replica and the request is about a hash slot our primary
      * is serving, we can reply without redirection. */
     int is_write_command =
-        (cmd_flags & CMD_WRITE) || (c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_WRITE));
-    if ((c->flag.readonly || pubsubshard_included) && !is_write_command && clusterNodeIsReplica(myself) &&
+        (cmd_flags & CMD_WRITE) || (c && c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_WRITE));
+    if (((c && c->flag.readonly) || pubsubshard_included) && !is_write_command && clusterNodeIsReplica(myself) &&
         clusterNodeGetPrimary(myself) == n) {
         return myself;
     }

@@ -38,6 +38,7 @@
 #include "bio.h"
 #include "zmalloc.h"
 #include "module.h"
+#include "cluster.h"
 
 #include <math.h>
 #include <fcntl.h>
@@ -3509,6 +3510,11 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
     /* Possibly there are replicas waiting for a BGSAVE in order to be served
      * (the first stage of SYNC is a bulk transfer of dump.rdb) */
     updateReplicasWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, type);
+    if (server.cluster_enabled && isAnySlotExportingViaReplication()) {
+        /* Slot export should also be notified, in case this was a export
+         * related snapshot */
+        clusterHandleSlotExportBackgroundSaveDone((!bysignal && exitcode == 0) ? C_OK : C_ERR);
+    }
 }
 
 /* Kill the RDB saving child using SIGUSR1 (so that the parent will know
@@ -3685,7 +3691,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
         }
     }
 
-    if (saveSnapshotToConnectionSockets(conns, connsnum, !dual_channel, req, childSnapshotUsingRDB, (void *)rsi) != C_OK ) {
+    if (saveSnapshotToConnectionSockets(conns, connsnum, !dual_channel, req, childSnapshotUsingRDB, (void *)rsi) != C_OK) {
         /* Undo the state change. The caller will perform cleanup on
          * all the replicas in BGSAVE_START state, but an early call to
          * replicationSetupReplicaForFullResync() turned it into BGSAVE_END */

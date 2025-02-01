@@ -31,8 +31,7 @@
 /* Fixed timeout value for cluster operations (milliseconds) */
 #define CLUSTER_OPERATION_TIMEOUT 2000
 
-#define CLUSTER_SLOT_REPLICATION_LOG_TTL 3600000  /* One hour */
-
+#define CLUSTER_SLOT_IMPORT_LOG_TTL 3600000 /* One hour */
 
 typedef struct _clusterNode clusterNode;
 struct clusterState;
@@ -148,14 +147,32 @@ long long getNodeReplicationOffset(clusterNode *node);
 sds aggregateClientOutputBuffer(client *c);
 void resetClusterStats(void);
 
-/* ---------------------- API exported outside slot_replication.c ----------- */
+void delKeysInSlotRanges(list *slot_ranges);
+void delKeysNotOwnedByMyself(list *slot_ranges);
+void clusterUpdateState(void);
+void clusterSaveConfigOrDie(int do_fsync);
+void clusterCloseAllSlots(void);
+int clusterDelSlot(int slot);
+int clusterAddSlot(clusterNode *n, int slot);
+int clusterBumpConfigEpochWithoutConsensus(void);
+void clusterDoBeforeSleep(int flags);
+
 void handleSlotImportLinkClientClose(void *o);
-void handleSlotExportLinkClientClose(void *o);
+void clusterHandleSlotExportLinkClientClose(void *o);
 void handleSlotImportLinkClientOOM(void *o);
 void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc);
 int isSlotImportingViaReplication(int slot);
 int isAnySlotImportingViaReplication(void);
 int isAnySlotExportingViaReplication(void);
-int isSlotExportReadyForReplData(client *c);
+int clusterIsSlotExportReadyForReplData(client *c);
+void initClusterSlotImportLinkList(void);
+void initClusterSlotExportLinkList(void);
+void clusterSlotMigrationCron(void);
+void clusterCommandImport(client *c);
+void clusterCommandSyncSlots(client *c);
+void clusterCommandImportInfo(client *c);
+void clusterCommandImportCancel(client *c);
+void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr);
+int clusterIsSlotExportLinkSnapshotting(void *export);
 
 #endif /* __CLUSTER_H */

@@ -272,7 +272,7 @@ void putClientInPendingWriteQueue(client *c) {
          c->repl_data->repl_state == REPL_STATE_NONE ||
          (isReplicaReadyForReplData(c) && !c->repl_data->repl_start_cmd_stream_on_ack)) &&
         (!c->flag.slot_export_target || !c->slot_export_link ||
-         isSlotExportReadyForReplData(c))) {
+         clusterIsSlotExportReadyForReplData(c))) {
         /* Here instead of installing the write handler, we just flag the
          * client and put it into a list of clients that have something
          * to write to the socket. This way before re-entering the event
@@ -1562,7 +1562,9 @@ void unlinkClient(client *c) {
 
         /* Check if this is a replica waiting for diskless replication (rdb pipe),
          * in which case it needs to be cleaned from that list */
-        if (c->repl_data && c->flag.replica && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END && server.rdb_pipe_conns) {
+        if (c->repl_data && server.rdb_pipe_conns &&
+            ((c->flag.replica && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) ||
+             (c->flag.slot_export_target && clusterIsSlotExportLinkSnapshotting(c->slot_export_link)))) {
             int i;
             int still_alive = 0;
             for (i = 0; i < server.rdb_pipe_numconns; i++) {
@@ -1726,7 +1728,7 @@ void freeClient(client *c) {
     if (c->flag.slot_import_source) {
         handleSlotImportLinkClientClose(c->slot_import_link);
     } else if (c->flag.slot_export_target) {
-        handleSlotExportLinkClientClose(c->slot_export_link);
+        clusterHandleSlotExportLinkClientClose(c->slot_export_link);
     }
 
     /* Free the query buffer */
@@ -2335,11 +2337,11 @@ void handleParseError(client *c) {
     } else if (flags & READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_REPLICATED_CLIENT) {
         if (getClientType(c) == CLIENT_TYPE_SLOT_IMPORT) {
             serverLog(LL_WARNING, "WARNING: Receiving inline protocol from slot import, import stream corruption? Closing the "
-                                "slot import connection.");
+                                  "slot import connection.");
             setProtocolError("Import using the inline protocol. Desync?", c);
         } else {
             serverLog(LL_WARNING, "WARNING: Receiving inline protocol from primary, primary stream corruption? Closing the "
-                                "primary connection and discarding the cached primary.");
+                                  "primary connection and discarding the cached primary.");
             setProtocolError("Master using the inline protocol. Desync?", c);
         }
     } else {

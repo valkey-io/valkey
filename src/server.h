@@ -1189,8 +1189,8 @@ typedef struct client {
     multiState *mstate;               /* MULTI/EXEC state, lazily initialized when first needed */
     blockingState *bstate;            /* Blocking state, lazily initialized when first needed */
     /* Slotsync data, todo maybe need to move it into ClientReplicationData or a new struct. */
-    void *slot_import_link;           /* Pointer to the slot import link, or NULL. */
-    void *slot_export_link;           /* Pointer to the slot export link, or NULL. */
+    void *slot_import_link; /* Pointer to the slot import link, or NULL. */
+    void *slot_export_link; /* Pointer to the slot export link, or NULL. */
     /* Output buffer and reply handling */
     long duration;                       /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     char *buf;                           /* Output buffer */
@@ -1710,8 +1710,8 @@ struct valkeyServer {
     long long stat_net_repl_input_bytes;           /* Bytes read during replication, added to stat_net_input_bytes in 'info'. */
     /* Bytes written during replication, added to stat_net_output_bytes in 'info'. */
     long long stat_net_repl_output_bytes;
-    long long stat_net_cluster_slot_import_bytes;               /* Bytes read from slot import sources. */
-    long long stat_net_cluster_slot_export_bytes;               /* Bytes written to slot export sources. */
+    long long stat_net_cluster_slot_import_bytes;       /* Bytes read from slot import sources. */
+    long long stat_net_cluster_slot_export_bytes;       /* Bytes written to slot export sources. */
     size_t stat_current_cow_peak;                       /* Peak size of copy on write bytes. */
     size_t stat_current_cow_bytes;                      /* Copy on write bytes while child is active. */
     monotime stat_current_cow_updated;                  /* Last update time of stat_current_cow_bytes */

@@ -124,16 +124,6 @@ sds clusterEncodeOpenSlotsAuxField(int rdbflags);
 int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now);
 
-/* The following functions are declared here as they will be used in this file
- * but they are defined in cluster_slotsync.c */
-void initClusterSlotImportLinkList(void);
-void initClusterSlotExportLinkList(void);
-void clusterSlotReplicationCron(void);
-void clusterCommandImport(client *c);
-void clusterCommandSyncSlots(client *c);
-void clusterCommandImportInfo(client *c);
-void clusterCommandImportCancel(client *c);
-
 /* Only primaries that own slots have voting rights.
  * Returns 1 if the node has voting rights, otherwise returns 0. */
 static inline int clusterNodeIsVotingPrimary(clusterNode *n) {
@@ -5218,8 +5208,8 @@ void clusterCron(void) {
 
     clusterUpdateMyselfHostname();
 
-    /* Do something for slot sync. */
-    clusterSlotReplicationCron();
+    /* Drive in progress slot import/export links. */
+    clusterSlotMigrationCron();
 
     /* Clear so clusterNodeCronHandleReconnect can count the number of nodes in PFAIL. */
     server.cluster->stats_pfail_nodes = 0;
@@ -5408,8 +5398,8 @@ void clusterBeforeSleep(void) {
         clusterHandleReplicaFailover();
     }
 
-    if (flags & CLUSTER_TODO_HANDLE_SLOT_REPLICATION) {
-        clusterSlotReplicationCron();
+    if (flags & CLUSTER_TODO_HANDLE_SLOT_MIGRATION) {
+        clusterSlotMigrationCron();
     }
 
     /* Update the cluster state. */

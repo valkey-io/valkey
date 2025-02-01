@@ -26,7 +26,7 @@
 #define CLUSTER_TODO_FSYNC_CONFIG (1 << 3)
 #define CLUSTER_TODO_HANDLE_MANUALFAILOVER (1 << 4)
 #define CLUSTER_TODO_BROADCAST_ALL (1 << 5)
-#define CLUSTER_TODO_HANDLE_SLOT_REPLICATION (1 << 6)
+#define CLUSTER_TODO_HANDLE_SLOT_MIGRATION (1 << 6)
 
 /* clusterLink encapsulates everything needed to talk with a remote node. */
 typedef struct clusterLink {
@@ -380,8 +380,7 @@ typedef enum slotImportLinkState {
     /* In progress states */
     SLOT_IMPORT_RECONNECT,
     SLOT_IMPORT_CONNECTING,
-    SLOT_IMPORT_SEND_AUTH,
-    SLOT_IMPORT_RECEIVE_AUTH,
+    SLOT_IMPORT_AUTHENTICATING,
     SLOT_IMPORT_START_SNAPSHOT,
     SLOT_IMPORT_RECEIVE_SNAPSHOT,
     SLOT_IMPORT_RECEIVE_STREAM,
@@ -400,7 +399,7 @@ typedef enum slotImportLinkState {
 typedef struct slotImportLink {
     mstime_t ctime;                 /* Import link object creation time. */
     mstime_t last_update;           /* Import link object last update time. */
-    time_t last_ack;              /* Import link object last ack time. */
+    time_t last_ack;                /* Import link object last ack time. */
     char nodename[CLUSTER_NAMELEN]; /* Name of the slot replication source node, hex string, sha1-size. */
     client *client;                 /* Client to slot replication source node. */
     connection *conn;               /* Connection to slot replication source node. */
@@ -421,7 +420,7 @@ typedef enum slotExportLinkState {
 } slotExportLinkState;
 
 typedef struct slotExportLink {
-    time_t last_ack;              /* Export link object last ack time. */
+    time_t last_ack;                /* Export link object last ack time. */
     char nodename[CLUSTER_NAMELEN]; /* Name of the slot replication target node, hex string, sha1-size. */
     client *client;                 /* Client to slot replication target node. */
     slotExportLinkState state;      /* State of the slot export link. */

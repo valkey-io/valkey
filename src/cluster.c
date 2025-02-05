@@ -817,7 +817,7 @@ static int shouldReturnTlsInfo(void) {
     }
 }
 
-unsigned int countKeysInSlotForDb(unsigned int hashslot, serverDb*db) {
+unsigned int countKeysInSlotForDb(unsigned int hashslot, serverDb *db) {
     return kvstoreHashtableSize(db->keys, hashslot);
 }
 

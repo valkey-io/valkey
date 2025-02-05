@@ -1557,7 +1557,7 @@ static int cliAuth(redisContext *ctx, char *user, char *auth) {
 }
 
 /* Send SELECT input_dbnum to the server */
-static int cliSelect(struct config* config, redisContext * ctx) {
+static int cliSelect(struct config *config, redisContext *ctx) {
     redisReply *reply;
     if (config->conn_info.input_dbnum == config->dbnum) return REDIS_OK;
 
@@ -4866,7 +4866,7 @@ cleanup:
     return migrate_reply;
 }
 
-static int getDatabases(redisContext * ctx);
+static int getDatabases(redisContext *ctx);
 
 /* Migrate all keys in the given slot from source to target.*/
 static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
@@ -8688,7 +8688,7 @@ static int getDbSize(void) {
     return size;
 }
 
-static int getDatabases(redisContext * ctx) {
+static int getDatabases(redisContext *ctx) {
     redisReply *reply;
     int dbnum;
 

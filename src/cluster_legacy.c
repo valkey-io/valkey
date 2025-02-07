@@ -7049,7 +7049,36 @@ int clusterCommandSpecial(client *c) {
         clusterDelNode(n);
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "replicate") && c->argc == 3) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "replicate") && (c->argc == 3 || c->argc == 4)) {
+        /* CLUSTER REPLICATE (<NODE ID> | NO ONE)*/
+        if (c->argc == 4) {
+            /* CLUSTER REPLICATE NO ONE */
+            if (strcasecmp(c->argv[2]->ptr, "NO") != 0 || strcasecmp(c->argv[3]->ptr, "ONE") != 0) {
+                addReplySubcommandSyntaxError(c);
+                return 1;
+            }
+            if (nodeIsPrimary(myself)) {
+                addReply(c, shared.ok);
+                return 1;
+            }
+            sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
+            serverLog(LL_NOTICE, "Stop replication and turning myself into empty primary (request from '%s').", client);
+            sdsfree(client);
+            clusterSetNodeAsPrimary(myself);
+            clusterPromoteSelfToPrimary();
+            flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
+            clusterCloseAllSlots();
+            resetManualFailover();
+
+            /* Moving new primary to its own shard. */
+            char new_shard_id[CLUSTER_NAMELEN];
+            getRandomHexChars(new_shard_id, CLUSTER_NAMELEN);
+            updateShardId(myself, new_shard_id);
+
+            clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
+            addReply(c, shared.ok);
+            return 1;
+        }
         /* CLUSTER REPLICATE <NODE ID> */
         /* Lookup the specified node in our table. */
         clusterNode *n = clusterLookupNode(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));

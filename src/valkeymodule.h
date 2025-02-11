@@ -2175,6 +2175,18 @@ VALKEYMODULE_API int (*ValkeyModule_UnregisterScriptingEngine)(ValkeyModuleCtx *
 
 VALKEYMODULE_API ValkeyModuleScriptingEngineExecutionState (*ValkeyModule_GetFunctionExecutionState)(ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx) VALKEYMODULE_ATTR;
 
+VALKEYMODULE_API int (*ValkeyModule_RegisterExternalStorage)(ValkeyModuleCtx *module_ctx,
+                                                             const char *storage_name) VALKEYMODULE_ATTR;
+   
+VALKEYMODULE_API int (*ValkeyModule_UnregisterExternalStorage)(ValkeyModuleCtx *module_ctx,
+                                                               const char *storage_name) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API int (*ValkeyModule_RegisterExternalFilter)(ValkeyModuleCtx *module_ctx,
+                                                             const char *filter_name) VALKEYMODULE_ATTR;
+      
+VALKEYMODULE_API int (*ValkeyModule_UnregisterExternalFilter)(ValkeyModuleCtx *module_ctx,
+                                                               const char *filter_name) VALKEYMODULE_ATTR;
+
 VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerLog)(ValkeyModuleString *msg,
                                                                  int truncate) VALKEYMODULE_ATTR;
 
@@ -2567,6 +2579,10 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(RegisterScriptingEngine);
     VALKEYMODULE_GET_API(UnregisterScriptingEngine);
     VALKEYMODULE_GET_API(GetFunctionExecutionState);
+    VALKEYMODULE_GET_API(RegisterExternalStorage);
+    VALKEYMODULE_GET_API(UnregisterExternalStorage);
+    VALKEYMODULE_GET_API(RegisterExternalFilter);
+    VALKEYMODULE_GET_API(UnregisterExternalFilter);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerLog);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerLogRespReplyStr);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerLogRespReply);

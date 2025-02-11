@@ -75,6 +75,7 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <string.h>
+#include "external_data.h"
 
 /* --------------------------------------------------------------------------
  * Private data structures used by the modules system. Those are data
@@ -13827,6 +13828,82 @@ ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
     return ret == SCRIPT_CONTINUE ? VMSE_STATE_EXECUTING : VMSE_STATE_KILLED;
 }
 
+/* Registers a new external storage in the server.
+ *
+ * - `module_ctx`: the module context object.
+ *
+ * - `storage_name`: the name of the external storage. This name will match
+ *   against the storage name specified in the script header using a shebang.
+ *
+ * Returns VALKEYMODULE_OK if the storage is successfully registered, and
+ * VALKEYMODULE_ERR in case some failure occurs. In case of a failure, an error
+ * message is logged.
+ */
+ int VM_RegisterExternalStorage(ValkeyModuleCtx *module_ctx,
+    const char *storage_name) {
+    serverLog(LL_DEBUG, "Registering a new external storage: %s", storage_name);
+
+    if (externalStorageRegister(storage_name,
+                module_ctx->module) != C_OK) {
+        return VALKEYMODULE_ERR;
+    }
+
+    return VALKEYMODULE_OK;
+}
+
+/* Removes the external storage from the server.
+*
+* `storage_name` is the name of the external storage.
+*
+* Returns VALKEYMODULE_OK.
+*
+*/
+int VM_UnregisterExternalStorage(ValkeyModuleCtx *ctx, const char *storage_name) {
+    UNUSED(ctx);
+    if (externalStorageUnregister(storage_name) != C_OK) {
+        return VALKEYMODULE_ERR;
+    }
+    return VALKEYMODULE_OK;
+}
+
+/* Registers a new external filter in the server.
+ *
+ * - `module_ctx`: the module context object.
+ *
+ * - `filter_name`: the name of the external filter. This name will match
+ *   against the filter name specified in the script header using a shebang.
+ *
+ * Returns VALKEYMODULE_OK if the filter is successfully registered, and
+ * VALKEYMODULE_ERR in case some failure occurs. In case of a failure, an error
+ * message is logged.
+ */
+ int VM_RegisterExternalFilter(ValkeyModuleCtx *module_ctx,
+    const char *filter_name) {
+    serverLog(LL_DEBUG, "Registering a new external filter: %s", filter_name);
+
+    if (externalFilterRegister(filter_name,
+                module_ctx->module) != C_OK) {
+        return VALKEYMODULE_ERR;
+    }
+
+    return VALKEYMODULE_OK;
+}
+
+/* Removes the external filter from the server.
+*
+* `filter_name` is the name of the external filter.
+*
+* Returns VALKEYMODULE_OK.
+*
+*/
+int VM_UnregisterExternalFilter(ValkeyModuleCtx *ctx, const char *filter_name) {
+    UNUSED(ctx);
+    if (externalFilterUnregister(filter_name) != C_OK) {
+        return VALKEYMODULE_ERR;
+    }
+    return VALKEYMODULE_OK;
+}
+
 /* Function to send string messages to the client during a debug session.
  * These messages are buffered in memory, and are only sent to the client when
  * `ValkeyModule_VM_ScriptingEngineDebuggerFlushLogs` is called.
@@ -14800,6 +14877,10 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RegisterScriptingEngine);
     REGISTER_API(UnregisterScriptingEngine);
     REGISTER_API(GetFunctionExecutionState);
+    REGISTER_API(RegisterExternalStorage);
+    REGISTER_API(UnregisterExternalStorage);
+    REGISTER_API(RegisterExternalFilter);
+    REGISTER_API(UnregisterExternalFilter);
     REGISTER_API(ScriptingEngineDebuggerLog);
     REGISTER_API(ScriptingEngineDebuggerLogRespReplyStr);
     REGISTER_API(ScriptingEngineDebuggerLogRespReply);

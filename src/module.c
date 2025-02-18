@@ -2571,20 +2571,13 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
  * VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION:
  * When set, this option allows the module to skip command validation.
  * This is useful in scenarios where the module needs to bypass
- * command validation (lookupCommandByCString) for specific operations
- * to reduce overhead or handle trusted custom command logic. */
+ * command validation for specific operations
+ * to reduce overhead or handle trusted custom command logic.
+ * ValkeyModule_Replicate and ValkeyModule_EmitAOF
+ * are affected by this option, allowing them to operate without
+ * command validation check. */
 void VM_SetModuleOptions(ValkeyModuleCtx *ctx, int options) {
     ctx->module->options = options;
-}
-
-/* Add specified options to the module's current options. */
-void VM_AddModuleOptions(ValkeyModuleCtx *ctx, int options) {
-    ctx->module->options |= options;
-}
-
-/* Remove specified options from the module's current options. */
-void VM_RemoveModuleOptions(ValkeyModuleCtx *ctx, int options) {
-    ctx->module->options &= ~options;
 }
 
 /* Signals that the key is modified from user's perspective (i.e. invalidate WATCH
@@ -13912,8 +13905,6 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ModuleTypeGetValue);
     REGISTER_API(IsIOError);
     REGISTER_API(SetModuleOptions);
-    REGISTER_API(AddModuleOptions);
-    REGISTER_API(RemoveModuleOptions);
     REGISTER_API(SignalModifiedKey);
     REGISTER_API(SaveUnsigned);
     REGISTER_API(LoadUnsigned);

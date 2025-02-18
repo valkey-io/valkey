@@ -1429,8 +1429,6 @@ VALKEYMODULE_API ValkeyModuleType *(*ValkeyModule_ModuleTypeGetType)(ValkeyModul
 VALKEYMODULE_API void *(*ValkeyModule_ModuleTypeGetValue)(ValkeyModuleKey *key)VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_IsIOError)(ValkeyModuleIO *io) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_SetModuleOptions)(ValkeyModuleCtx *ctx, int options) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*ValkeyModule_AddModuleOptions)(ValkeyModuleCtx *ctx, int options) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*ValkeyModule_RemoveModuleOptions)(ValkeyModuleCtx *ctx, int options) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_SignalModifiedKey)(ValkeyModuleCtx *ctx,
                                                        ValkeyModuleString *keyname) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_SaveUnsigned)(ValkeyModuleIO *io, uint64_t value) VALKEYMODULE_ATTR;
@@ -2041,8 +2039,6 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(ModuleTypeGetValue);
     VALKEYMODULE_GET_API(IsIOError);
     VALKEYMODULE_GET_API(SetModuleOptions);
-    VALKEYMODULE_GET_API(RemoveModuleOptions);
-    VALKEYMODULE_GET_API(AddModuleOptions);
     VALKEYMODULE_GET_API(SignalModifiedKey);
     VALKEYMODULE_GET_API(SaveUnsigned);
     VALKEYMODULE_GET_API(LoadUnsigned);

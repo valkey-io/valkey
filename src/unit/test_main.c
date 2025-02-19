@@ -5,9 +5,15 @@
  */
 
 #include <strings.h>
+#include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "test_files.h"
 #include "test_help.h"
+#include "../util.h"
+#include "../zmalloc.h"
+#include "../mt19937-64.h"
+#include "../hashtable.h"
 
 /* We override the default assertion mechanism, so that it prints out info and then dies. */
 void _serverAssert(const char *estr, const char *file, int line) {
@@ -40,6 +46,7 @@ int runTestSuite(struct unitTestSuite *test, int argc, char **argv, int flags) {
 int main(int argc, char **argv) {
     int flags = 0;
     char *file = NULL;
+    char *seed = NULL;
     for (int j = 1; j < argc; j++) {
         char *arg = argv[j];
         if (!strcasecmp(arg, "--accurate"))
@@ -51,8 +58,31 @@ int main(int argc, char **argv) {
             file = argv[j + 1];
         } else if (!strcasecmp(arg, "--valgrind")) {
             flags |= UNIT_TEST_VALGRIND;
+        } else if (!strcasecmp(arg, "--seed")) {
+            seed = argv[j + 1];
         }
     }
+
+    if (seed) {
+        /* If the seed parameter was specified, we need to explicitly set the
+         * seed in the several random numbers generator that valkey server uses
+         * so that the unit tests reproduce the random values in a
+         * deterministic way. */
+        setRandomSeedCString(seed, strlen(seed));
+        unsigned long long seed;
+        getRandomBytes((void *)&seed, sizeof(seed));
+
+        init_genrand64(seed);
+        srandom((unsigned)seed);
+
+        uint8_t hashseed[16];
+        getRandomBytes(hashseed, sizeof(hashseed));
+        hashtableSetHashFunctionSeed(hashseed);
+    }
+
+    seed = getRandomSeedCString(NULL);
+    printf("Tests will run with seed=%s\n", seed);
+    zfree(seed);
 
     int numtests = sizeof(unitTestSuite) / sizeof(struct unitTestSuite);
     int failed_num = 0, suites_executed = 0;

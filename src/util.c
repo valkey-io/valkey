@@ -51,6 +51,7 @@
 #include "sha256.h"
 #include "config.h"
 #include "zmalloc.h"
+#include "serverassert.h"
 
 #include "valkey_strtod.h"
 
@@ -905,16 +906,38 @@ int version2num(const char *version) {
     return v;
 }
 
+/* Global state. */
+static int seed_initialized = 0;
+static unsigned char seed[64]; /* 512 bit internal block size. */
+
+void setRandomSeedCString(char *seed_str, size_t len) {
+    assert(seed_initialized == 0);
+    assert(len == sizeof(seed) * 2);
+    for (size_t i = 0; i < sizeof(seed); i++) {
+        sscanf(seed_str + (i * 2), "%02hhX", &seed[i]);
+    }
+    seed_initialized = 1;
+}
+
+char *getRandomSeedCString(size_t *len) {
+    char *buff = zmalloc(sizeof(seed) * 2 + 1);
+    for (size_t i = 0; i < sizeof(seed); i++) {
+        snprintf(buff + (i * 2), 3, "%02hhX", seed[i]);
+    }
+    buff[sizeof(seed) * 2] = 0;
+    if (len) {
+        *len = sizeof(seed) * 2;
+    }
+    return buff;
+}
+
 /* Get random bytes, attempts to get an initial seed from /dev/urandom and
  * the uses a one way hash function in counter mode to generate a random
  * stream. However if /dev/urandom is not available, a weaker seed is used.
  *
  * This function is not thread safe, since the state is global. */
 void getRandomBytes(unsigned char *p, size_t len) {
-    /* Global state. */
-    static int seed_initialized = 0;
-    static unsigned char seed[64]; /* 512 bit internal block size. */
-    static uint64_t counter = 0;   /* The counter we hash with the seed. */
+    static uint64_t counter = 0; /* The counter we hash with the seed. */
 
     if (!seed_initialized) {
         /* Initialize a seed and use SHA1 in counter mode, where we hash

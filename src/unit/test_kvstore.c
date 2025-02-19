@@ -84,14 +84,14 @@ int test_kvstoreIteratorRemoveAllKeysNoDeleteEmptyHashtable(int argc, char **arg
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
-    
+
     hashtableType *type[] = {
         &KvstoreHashtableTestType,
         &KvstoreConflictHashtableTestType,
         NULL,
     };
 
-    for(int t = 0; type[t] != NULL; t++) {
+    for (int t = 0; type[t] != NULL; t++) {
         hashtableType *testType = type[t];
         TEST_PRINT_INFO("Testing %d hashtableType\n", t);
 
@@ -113,12 +113,12 @@ int test_kvstoreIteratorRemoveAllKeysNoDeleteEmptyHashtable(int argc, char **arg
             TEST_ASSERT(kvstoreHashtableDelete(kvs1, curr_slot, key));
         }
         kvstoreIteratorRelease(kvs_it);
-    
+
         hashtable *ht = kvstoreGetHashtable(kvs1, didx);
         TEST_ASSERT(ht != NULL);
         TEST_ASSERT(kvstoreHashtableSize(kvs1, didx) == 0);
         TEST_ASSERT(kvstoreSize(kvs1) == 0);
-    
+
         kvstoreRelease(kvs1);
     }
 

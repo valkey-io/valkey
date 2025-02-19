@@ -1058,7 +1058,7 @@ void hashtableEmpty(hashtable *ht, void(callback)(hashtable *)) {
                 } while (b != NULL);
             }
         }
-        
+
         zfree(ht->tables[table_index]);
         if (ht->type->trackMemUsage) {
             ht->type->trackMemUsage(ht, -sizeof(bucket) * numBuckets(ht->bucket_exp[table_index]));

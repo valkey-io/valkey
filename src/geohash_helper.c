@@ -346,3 +346,20 @@ int geohashGetDistanceIfInRectangle(double width_m,
     *distance = geohashGetDistance(x1, y1, x2, y2);
     return 1;
 }
+
+/* Check if a point is in a polygon using ray casting. */
+int geohashIsWithinPolygon(double *xy, double (*vertices)[2], int num_vertices) {
+    printf("geohashIsWithinPolygon - coordinates: %f %f\r\n", xy[0], xy[1]);
+    int i, j, nvert = num_vertices;
+    int inside = 0;
+    for (i = 0, j = nvert - 1; i < nvert; j = i++) {
+        double vert_i[2] = { vertices[i][0], vertices[i][1] };
+        double vert_j[2] = { vertices[j][0], vertices[j][1] };
+        // Check if the point (xy) is within the polygon
+        if ((vert_i[1] > xy[1]) != (vert_j[1] > xy[1]) &&
+            (xy[0] < (vert_j[0] - vert_i[0]) * (xy[1] - vert_i[1]) / (vert_j[1] - vert_i[1]) + vert_i[0])) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}

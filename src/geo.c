@@ -206,26 +206,6 @@ void addReplyDoubleDistance(client *c, double d) {
     addReplyBulkCBuffer(c, dbuf, dlen);
 }
 
-/* Check if a point is in a polygon using ray casting. */
-bool pointInPolygon(double *xy, GeoShape *shape) {
-    printf("pointInPolygon - coordinates: %f %f\r\n", xy[0], xy[1]);
-    int i, j, nvert = shape->t.polygon.num_vertices;
-    bool inside = false;
-
-    for (i = 0, j = nvert - 1; i < nvert; j = i++) {
-        double vert_i[2] = { shape->t.polygon.points[i][0], shape->t.polygon.points[i][1] };
-        double vert_j[2] = { shape->t.polygon.points[j][0], shape->t.polygon.points[j][1] };
-
-        // Check if the point (xy) is within the polygon
-        if ((vert_i[1] > xy[1]) != (vert_j[1] > xy[1]) &&
-            (xy[0] < (vert_j[0] - vert_i[0]) * (xy[1] - vert_i[1]) / (vert_j[1] - vert_i[1]) + vert_i[0])) {
-            inside = !inside;
-        }
-    }
-
-    return inside;
-}
-
 /* Helper function for geoGetPointsInRange(): given a sorted set score
  * representing a point, and a GeoShape, checks if the point is within the search area.
  *
@@ -255,9 +235,8 @@ int geoWithinShape(GeoShape *shape, double score, double *xy, double *distance) 
                                              xy[1], distance))
             return C_ERR;
     } else if (shape->type == POLYGON_TYPE) {
-        // Check if the point lies within the polygon using the adjusted pointInPolygon function
-        if (!pointInPolygon(xy, shape)) {
-            return C_ERR;  /* Point is outside the polygon. */
+        if (!geohashIsWithinPolygon(xy, shape->t.polygon.points, shape->t.polygon.num_vertices)) {
+            return C_ERR;
         }
     }
     return C_OK;

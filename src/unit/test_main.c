@@ -79,24 +79,24 @@ int main(int argc, char **argv) {
 
     printf("Tests will run with seed=%s\n", seed);
 
+    unsigned long long genrandseed;
+    getRandomBytes((void *)&genrandseed, sizeof(genrandseed));
+
+    uint8_t hashseed[16];
+    getRandomBytes(hashseed, sizeof(hashseed));
+
+
     int numtests = sizeof(unitTestSuite) / sizeof(struct unitTestSuite);
     int failed_num = 0, suites_executed = 0;
     for (int j = 0; j < numtests; j++) {
         if (file && strcasecmp(file, unitTestSuite[j].filename)) continue;
 
-        /* If the seed parameter was specified, we need to explicitly set the
-         * seed in the several random numbers generator that valkey server uses
-         * so that the unit tests reproduce the random values in a
-         * deterministic way. */
+        /* We need to explicitly set the seed in the several random numbers
+         * generator that valkey server uses so that the unit tests reproduce
+         * the random values in a deterministic way. */
         setRandomSeedCString(seed, strlen(seed));
-        unsigned long long seed;
-        getRandomBytes((void *)&seed, sizeof(seed));
-
-        init_genrand64(seed);
-        srandom((unsigned)seed);
-
-        uint8_t hashseed[16];
-        getRandomBytes(hashseed, sizeof(hashseed));
+        init_genrand64(genrandseed);
+        srandom((unsigned)genrandseed);
         hashtableSetHashFunctionSeed(hashseed);
 
         if (!runTestSuite(&unitTestSuite[j], argc, argv, flags)) {

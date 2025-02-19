@@ -914,7 +914,10 @@ static int connTLSWrite(connection *conn_, const void *data, size_t data_len) {
 
     if (conn->c.state != CONN_STATE_CONNECTED) return -1;
     ERR_clear_error();
-    serverAssert(data_len >= conn->last_failed_write_data_len);
+    if (data_len < conn->last_failed_write_data_len) {
+        conn->c.last_errno = EBUSY;
+        return -1;
+    }
     ret = SSL_write(conn->ssl, data, data_len);
     conn->last_failed_write_data_len = ret <= 0 ? data_len : 0;
     return updateStateAfterSSLIO(conn, ret, 1);
@@ -931,9 +934,14 @@ static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt)
         if (iov_bytes_len > NET_MAX_WRITES_PER_EVENT) break;
     }
 
-    /* The amount of all buffers is greater than NET_MAX_WRITES_PER_EVENT,
-     * which is not worth doing so much memory copying to reduce system calls,
-     * therefore, invoke connTLSWrite() multiple times to avoid memory copies. */
+    /* In case the amount of all buffers is greater than NET_MAX_WRITES_PER_EVENT,
+     * it might not worth doing so much memory copying to reduce system calls,
+     * therefore, invoke connTLSWrite() multiple times to avoid memory copies.
+     * However, in case when last write failed we still have to repeat sending last_failed_write_data_len
+     * bytes. Because of openssl implementation we cannot repeat sending writes with length smaller than
+     * the last failed write (https://docs.openssl.org/master/man3/SSL_write) so in case the first io buffer
+     * does not provide at least the same amount of bytes as previous failed write, we will have to fallback to
+     * memory copy to a static buffer before calling SSL_write. */
     if (iov_bytes_len > NET_MAX_WRITES_PER_EVENT && iovcnt > 0 && iov[0].iov_len >= conn->last_failed_write_data_len) {
         ssize_t tot_sent = 0;
         for (int i = 0; i < iovcnt; i++) {
@@ -948,7 +956,11 @@ static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt)
     /* The amount of all buffers is less than NET_MAX_WRITES_PER_EVENT,
      * which is worth doing more memory copies in exchange for fewer system calls,
      * so concatenate these scattered buffers into a contiguous piece of memory
-     * and send it away by one call to connTLSWrite(). */
+     * and send it away by one call to connTLSWrite().
+     * However, code can fallback here in case when last write failed and first
+     * element of io is buffer not big enough to provide required amount of bytes
+     * to retry, so iov_bytes_len may exceed NET_MAX_WRITES_PER_EVENT by the amount
+     * of remaining bytes from last taken io. */
     char buf[iov_bytes_len];
     size_t offset = 0;
     for (int i = 0; i < iovcnt && offset < iov_bytes_len; i++) {

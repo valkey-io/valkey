@@ -5,6 +5,11 @@ uint64_t hashTestCallback(const void *key) {
     return hashtableGenHashFunction((char *)key, strlen((char *)key));
 }
 
+uint64_t hashConflictTestCallback(const void *key) {
+    UNUSED(key);
+    return 0;
+}
+
 int cmpTestCallback(const void *k1, const void *k2) {
     return strcmp(k1, k2);
 }
@@ -15,6 +20,16 @@ void freeTestCallback(void *val) {
 
 hashtableType KvstoreHashtableTestType = {
     .hashFunction = hashTestCallback,
+    .keyCompare = cmpTestCallback,
+    .entryDestructor = freeTestCallback,
+    .rehashingStarted = kvstoreHashtableRehashingStarted,
+    .rehashingCompleted = kvstoreHashtableRehashingCompleted,
+    .trackMemUsage = kvstoreHashtableTrackMemUsage,
+    .getMetadataSize = kvstoreHashtableMetadataSize,
+};
+
+hashtableType KvstoreConflictHashtableTestType = {
+    .hashFunction = hashConflictTestCallback,
     .keyCompare = cmpTestCallback,
     .entryDestructor = freeTestCallback,
     .rehashingStarted = kvstoreHashtableRehashingStarted,
@@ -69,39 +84,44 @@ int test_kvstoreIteratorRemoveAllKeysNoDeleteEmptyHashtable(int argc, char **arg
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
+    
+    hashtableType *type[] = {
+        &KvstoreHashtableTestType,
+        &KvstoreConflictHashtableTestType,
+        NULL,
+    };
 
-    uint8_t seed[16];
-    int cycle = 17;
-    for (unsigned int i = 0; i < sizeof(seed); i++) {
-        seed[i] = (i + cycle) % 0xFF;
+    for(int t = 0; type[t] != NULL; t++) {
+        hashtableType *testType = type[t];
+        TEST_PRINT_INFO("Testing %d hashtableType\n", t);
+
+        int i;
+        void *key;
+        kvstoreIterator *kvs_it;
+
+        int didx = 0;
+        int curr_slot = 0;
+        kvstore *kvs1 = kvstoreCreate(testType, 0, KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND);
+
+        for (i = 0; i < 16; i++) {
+            TEST_ASSERT(kvstoreHashtableAdd(kvs1, didx, stringFromInt(i)));
+        }
+
+        kvs_it = kvstoreIteratorInit(kvs1, HASHTABLE_ITER_SAFE);
+        while (kvstoreIteratorNext(kvs_it, &key)) {
+            curr_slot = kvstoreIteratorGetCurrentHashtableIndex(kvs_it);
+            TEST_ASSERT(kvstoreHashtableDelete(kvs1, curr_slot, key));
+        }
+        kvstoreIteratorRelease(kvs_it);
+    
+        hashtable *ht = kvstoreGetHashtable(kvs1, didx);
+        TEST_ASSERT(ht != NULL);
+        TEST_ASSERT(kvstoreHashtableSize(kvs1, didx) == 0);
+        TEST_ASSERT(kvstoreSize(kvs1) == 0);
+    
+        kvstoreRelease(kvs1);
     }
-    hashtableSetHashFunctionSeed(seed);
 
-    int i;
-    void *key;
-    kvstoreIterator *kvs_it;
-
-    int didx = 0;
-    int curr_slot = 0;
-    kvstore *kvs1 = kvstoreCreate(&KvstoreHashtableTestType, 0, KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND);
-
-    for (i = 0; i < 16; i++) {
-        TEST_ASSERT(kvstoreHashtableAdd(kvs1, didx, stringFromInt(i)));
-    }
-
-    kvs_it = kvstoreIteratorInit(kvs1, HASHTABLE_ITER_SAFE);
-    while (kvstoreIteratorNext(kvs_it, &key)) {
-        curr_slot = kvstoreIteratorGetCurrentHashtableIndex(kvs_it);
-        TEST_ASSERT(kvstoreHashtableDelete(kvs1, curr_slot, key));
-    }
-    kvstoreIteratorRelease(kvs_it);
-
-    hashtable *ht = kvstoreGetHashtable(kvs1, didx);
-    TEST_ASSERT(ht != NULL);
-    TEST_ASSERT(kvstoreHashtableSize(kvs1, didx) == 0);
-    TEST_ASSERT(kvstoreSize(kvs1) == 0);
-
-    kvstoreRelease(kvs1);
     return 0;
 }
 

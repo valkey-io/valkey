@@ -8943,12 +8943,10 @@ void moduleCallClusterReceivers(const char *sender_id,
  * (so this API call is also used in order to delete the receiver).
  *
  * When a message of this type is received, the registered callback function
- * will be invoked with details, including the node ID.
+ * will be invoked with details, including the 40-byte node ID of the sender.
  *
- * Behavior Change:
- * Before Valkey 8.1: The node ID was not NULL terminated.
- * Currently: The node ID 'sender_id' in the callback receiver is now a
- * NULL terminated string for easier handling. */
+ * In Valkey 8.1 and later, the node ID is null-terminated. Prior to 8.1, it was
+ * not null-terminated */
 void VM_RegisterClusterMessageReceiver(ValkeyModuleCtx *ctx,
                                        uint8_t type,
                                        ValkeyModuleClusterMessageReceiver callback) {

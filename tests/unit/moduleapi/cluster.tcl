@@ -30,7 +30,7 @@ start_cluster 3 0 [list config_lines $modules] {
     test "Cluster module message DING/DONG acknowledgment" {
         assert_equal OK [$node1 test.pingall]
         wait_for_condition 50 100 {
-            [CI 0 cluster_stats_messages_module_received] eq 2  &&
+            [CI 0 cluster_stats_messages_module_received] eq 2 &&
             [CI 1 cluster_stats_messages_module_received] eq 1 &&
             [CI 2 cluster_stats_messages_module_received] eq 1
         } else {

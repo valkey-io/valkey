@@ -3046,7 +3046,7 @@ static void clusterProcessModulePacket(clusterMsgModule *module_data, clusterNod
     uint8_t type = module_data->type;
     unsigned char *payload = module_data->bulk_data;
 
-    sds sender_name = sdsnewlen(sender->name, 40);
+    sds sender_name = sdsnewlen(sender->name, CLUSTER_NAMELEN);
     moduleCallClusterReceivers(sender_name, module_id, type, payload, len);
     sdsfree(sender_name);
 }

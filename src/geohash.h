@@ -91,6 +91,7 @@ typedef struct {
 
 #define CIRCULAR_TYPE 1
 #define RECTANGLE_TYPE 2
+#define POLYGON_TYPE 3
 typedef struct {
     int type;          /* search type */
     double xy[2];      /* search center point, xy[0]: lon, xy[1]: lat */
@@ -105,6 +106,10 @@ typedef struct {
             double height;
             double width;
         } r;
+        struct {
+            int num_vertices;
+            double (*points)[2];
+        } polygon;
     } t;
 } GeoShape;
 

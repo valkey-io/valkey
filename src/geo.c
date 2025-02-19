@@ -206,6 +206,26 @@ void addReplyDoubleDistance(client *c, double d) {
     addReplyBulkCBuffer(c, dbuf, dlen);
 }
 
+/* Check if a point is in a polygon using ray casting. */
+bool pointInPolygon(double *xy, GeoShape *shape) {
+    printf("pointInPolygon - coordinates: %f %f\r\n", xy[0], xy[1]);
+    int i, j, nvert = shape->t.polygon.num_vertices;
+    bool inside = false;
+
+    for (i = 0, j = nvert - 1; i < nvert; j = i++) {
+        double vert_i[2] = { shape->t.polygon.points[i][0], shape->t.polygon.points[i][1] };
+        double vert_j[2] = { shape->t.polygon.points[j][0], shape->t.polygon.points[j][1] };
+
+        // Check if the point (xy) is within the polygon
+        if ((vert_i[1] > xy[1]) != (vert_j[1] > xy[1]) &&
+            (xy[0] < (vert_j[0] - vert_i[0]) * (xy[1] - vert_i[1]) / (vert_j[1] - vert_i[1]) + vert_i[0])) {
+            inside = !inside;
+        }
+    }
+
+    return inside;
+}
+
 /* Helper function for geoGetPointsInRange(): given a sorted set score
  * representing a point, and a GeoShape, checks if the point is within the search area.
  *
@@ -221,6 +241,7 @@ void addReplyDoubleDistance(client *c, double d) {
  * "*distance" is populated with the distance between the center of the shape and the point.
  */
 int geoWithinShape(GeoShape *shape, double score, double *xy, double *distance) {
+    printf("inside geoWithinShape\r\n");
     if (!decodeGeohash(score, xy)) return C_ERR; /* Can't decode. */
     /* Note that geohashGetDistanceIfInRadiusWGS84() takes arguments in
      * reverse order: longitude first, latitude later. */
@@ -233,6 +254,11 @@ int geoWithinShape(GeoShape *shape, double score, double *xy, double *distance) 
                                              shape->t.r.height * shape->conversion, shape->xy[0], shape->xy[1], xy[0],
                                              xy[1], distance))
             return C_ERR;
+    } else if (shape->type == POLYGON_TYPE) {
+        // Check if the point lies within the polygon using the adjusted pointInPolygon function
+        if (!pointInPolygon(xy, shape)) {
+            return C_ERR;  /* Point is outside the polygon. */
+        }
     }
     return C_OK;
 }
@@ -554,7 +580,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
 
     /* Discover and populate all optional parameters. */
     int withdist = 0, withhash = 0, withcoords = 0;
-    int frommember = 0, fromloc = 0, byradius = 0, bybox = 0;
+    int frommember = 0, fromloc = 0, byradius = 0, bybox = 0, bypolygon = 0;
     int sort = SORT_NONE;
     int any = 0;         /* any=1 means a limited search, stop as soon as enough results were found. */
     long long count = 0; /* Max number of results to return. 0 means unlimited. */
@@ -611,19 +637,41 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                 if (extractLongLatOrReply(c, c->argv + base_args + i + 1, shape.xy) == C_ERR) return;
                 fromloc = 1;
                 i += 2;
-            } else if (!strcasecmp(arg, "byradius") && (i + 2) < remaining && flags & GEOSEARCH && !bybox) {
+            } else if (!strcasecmp(arg, "byradius") && (i + 2) < remaining && flags & GEOSEARCH && !bybox && !bypolygon) {
                 if (extractDistanceOrReply(c, c->argv + base_args + i + 1, &shape.conversion, &shape.t.radius) != C_OK)
                     return;
                 shape.type = CIRCULAR_TYPE;
                 byradius = 1;
                 i += 2;
-            } else if (!strcasecmp(arg, "bybox") && (i + 3) < remaining && flags & GEOSEARCH && !byradius) {
+            } else if (!strcasecmp(arg, "bybox") && (i + 3) < remaining && flags & GEOSEARCH && !byradius && !bypolygon) {
                 if (extractBoxOrReply(c, c->argv + base_args + i + 1, &shape.conversion, &shape.t.r.width,
                                       &shape.t.r.height) != C_OK)
                     return;
                 shape.type = RECTANGLE_TYPE;
                 bybox = 1;
                 i += 3;
+            } else if (!strcasecmp(arg, "bypolygon") && (i + 2) < remaining && flags & GEOSEARCH && !byradius && !bybox) {
+                /* Extract polygon vertices */
+                bypolygon = 1;
+                int num_vertices = (remaining - i - 1) / 2;
+                if (num_vertices < 3) {
+                    addReplyError(c, "Polygon must have at least 3 points");
+                    return;
+                }
+                shape.type = POLYGON_TYPE;
+                shape.conversion = 1000;
+                shape.t.polygon.num_vertices = num_vertices;
+                shape.t.polygon.points = zmalloc(num_vertices * sizeof(double[2]));
+                // TODO: Handle malloc failure.
+                for (int j = 0; j < num_vertices * 2; j += 2) {
+                    if (extractLongLatOrReply(c, c->argv + base_args + i + 1 + j, shape.t.polygon.points[j / 2]) == C_ERR) {
+                        return;
+                    }
+                    printf("Geo num_vertices lon lat: %d %f, %f\r\n", num_vertices, shape.t.polygon.points[j / 2][0], shape.t.polygon.points[j / 2][1]);
+                }
+                i += num_vertices * 2;
+                // TODO: Handle other options such as limit, asc, etc.
+                break;
             } else {
                 addReplyErrorObject(c, shared.syntaxerr);
                 return;
@@ -638,14 +686,14 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         return;
     }
 
-    if ((flags & GEOSEARCH) && !(frommember || fromloc)) {
+    if ((flags & GEOSEARCH) && !(frommember || fromloc) && !bypolygon) {
         addReplyErrorFormat(c, "exactly one of FROMMEMBER or FROMLONLAT can be specified for %s",
                             (char *)c->argv[0]->ptr);
         return;
     }
 
-    if ((flags & GEOSEARCH) && !(byradius || bybox)) {
-        addReplyErrorFormat(c, "exactly one of BYRADIUS and BYBOX can be specified for %s", (char *)c->argv[0]->ptr);
+    if ((flags & GEOSEARCH) && !(byradius || bybox || bypolygon)) {
+        addReplyErrorFormat(c, "exactly one of BYRADIUS and BYBOX and BYPOLYGON can be specified for %s", (char *)c->argv[0]->ptr);
         return;
     }
 

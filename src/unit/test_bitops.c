@@ -29,7 +29,7 @@ static int test_case(const char *msg, int size) {
     int fuzzing = 1000;
     for (int y = 0; y < fuzzing; y += 1) {
         for (int z = 0; z < size; z += 1) {
-            buf[z] = rand() % 256;
+            buf[z] = random() % 256;
         }
 
         long long expect = bitcount(buf, size);
@@ -49,11 +49,15 @@ int test_popcount(int argc, char **argv, int flags) {
     UNUSED(argv);
     UNUSED(flags);
 
-    srand(time(NULL));
+    time_t seed = time(NULL);
+    srandom(seed);
+    TEST_PRINT_INFO("Verify the popcount through fuzz testing,"
+                    " the random number seed is %jd.",
+                    (intmax_t)seed);
 
-#define TEST_CASE(MSG, SIZE)    \
-    if (test_case(MSG, SIZE)) { \
-        return 1;               \
+#define TEST_CASE(MSG, SIZE)                    \
+    if (test_case("Test failed: " MSG, SIZE)) { \
+        return 1;                               \
     }
 
     /* The AVX2 version divides the array into the following 3 parts."
@@ -63,13 +67,13 @@ int test_popcount(int argc, char **argv, int flags) {
      * +-----------------+--------------+---------+
      */
     /* So we test the following cases */
-    TEST_CASE("Popcount: Part A", 8 * 32 * 2);
-    TEST_CASE("Popcount: Part B", 32 * 2);
-    TEST_CASE("Popcount: Part C", 2);
-    TEST_CASE("Popcount: Part A + Part B", 8 * 32 * 7 + 32 * 2);
-    TEST_CASE("Popcount: Part A + Part C", 8 * 32 * 11 + 7);
-    TEST_CASE("Popcount: Part A + Part B + Part C", 8 * 32 * 3 + 3 * 32 + 5);
-    TEST_CASE("Popcount: Corner case", 0);
+    TEST_CASE("Popcount(Part A)", 8 * 32 * 2);
+    TEST_CASE("Popcount(Part B)", 32 * 2);
+    TEST_CASE("Popcount(Part C)", 2);
+    TEST_CASE("Popcount(Part A + Part B)", 8 * 32 * 7 + 32 * 2);
+    TEST_CASE("Popcount(Part A + Part C)", 8 * 32 * 11 + 7);
+    TEST_CASE("Popcount(Part A + Part B + Part C)", 8 * 32 * 3 + 3 * 32 + 5);
+    TEST_CASE("Popcount(Corner case)", 0);
 #undef TEST_CASE
 
     return 0;

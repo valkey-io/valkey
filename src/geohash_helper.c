@@ -37,6 +37,7 @@
 #include "fmacros.h"
 #include "geohash_helper.h"
 #include "debugmacro.h"
+#include <float.h>
 #include <math.h>
 
 #define D_R (M_PI / 180.0)
@@ -99,48 +100,57 @@ uint8_t geohashEstimateStepsByRadius(double range_meters, double lat) {
  *         ---------          /----------------\           /---------------\
  *  Northern Hemisphere       Southern Hemisphere         Around the equator
  */
-#include <float.h>
 int geohashBoundingBox(GeoShape *shape, double *bounds) {
     if (!bounds) return 0;
     if (shape->type == POLYGON_TYPE) {
-        // // For polygon, calculate the bounding box by iterating over its points
-        // for (int i = 0; i < shape->t.polygon.num_vertices; i++) {
-        //     double lon = shape->t.polygon.points[i][0];
-        //     double lat = shape->t.polygon.points[i][1];
-        //     // Update min and max longitudes and latitudes
-        //     if (lon < bounds[0]) bounds[0] = lon;
-        //     if (lon > bounds[2]) bounds[2] = lon;
-        //     if (lat < bounds[1]) bounds[1] = lat;
-        //     if (lat > bounds[3]) bounds[3] = lat;
-        // }
-        // return 1;
+        int num_vertices = shape->t.polygon.num_vertices;
+        double x = 0.0, y = 0.0, z = 0.0;
         double min_lat = DBL_MAX;
         double max_lat = -DBL_MAX;
         double min_lon = DBL_MAX;
         double max_lon = -DBL_MAX;
-        // For polygons, calculate the bounding box based on the vertices
+        // For polygons, calculate the bounding box & centroid based on the vertices.
         for (int i = 0; i < shape->t.polygon.num_vertices; i++) {
             double longitude = shape->t.polygon.points[i][0];
             double latitude = shape->t.polygon.points[i][1];
-
             // Adjust the min/max latitudes and longitudes
             if (latitude < min_lat) min_lat = latitude;
             if (latitude > max_lat) max_lat = latitude;
             if (longitude < min_lon) min_lon = longitude;
             if (longitude > max_lon) max_lon = longitude;
+            // Code below in this loop is for calculating centroid.
+            double lat = deg_rad(shape->t.polygon.points[i][1]); // Convert latitude to radians
+            double lon = deg_rad(shape->t.polygon.points[i][0]); // Convert longitude to radians
+            // Convert to Cartesian coordinates
+            x += cos(lat) * cos(lon);
+            y += cos(lat) * sin(lon);
+            z += sin(lat);
         }
         // Apply the conversion factor to the bounding box
         double scale_factor = shape->conversion;
 
+        // Code block below is for setting the final bounding box values.
         // Adjust the bounding box using the calculated deltas
         double lat_delta = rad_deg(scale_factor / EARTH_RADIUS_IN_METERS); 
         double long_delta = rad_deg(scale_factor / EARTH_RADIUS_IN_METERS / cos(rad_deg((max_lat + min_lat) / 2)));
-
-        // Set the final bounding box values
         bounds[0] = min_lon - long_delta;
         bounds[1] = min_lat - lat_delta;
         bounds[2] = max_lon + long_delta;
         bounds[3] = max_lat + lat_delta;
+
+        // Code block below is for calculating centroid.
+        // Average the Cartesian coordinates
+        x /= num_vertices;
+        y /= num_vertices;
+        z /= num_vertices;
+        // Convert back to latitude and longitude
+        double central_lon = atan2(y, x); // Longitude in radians
+        double central_hyp = sqrt(x * x + y * y); // Hypotenuse
+        double central_lat = atan2(z, central_hyp); // Latitude in radians
+        // Convert back to degrees
+        shape->xy[0] = rad_deg(central_lon);
+        shape->xy[1] = rad_deg(central_lat);
+        printf("Geo centroid coordinates lon lat: %f, %f\r\n", shape->xy[0], shape->xy[1]);
         return 1;
     }
     double longitude = shape->xy[0];
@@ -180,57 +190,14 @@ GeoHashRadius geohashCalculateAreasByShapeWGS84(GeoShape *shape) {
     max_lat = shape->bounds[3];
     printf("Geo bounding box min_lon min_lat max_lon max_lat: %f, %f, %f, %f\r\n", min_lon, min_lat, max_lon, max_lat);
 
-    double longitude = 0.0, latitude = 0.0;
-
-    // For polygons, calculate the centroid
-    if (shape->type == POLYGON_TYPE) {
-        // double sum_lon = 0.0, sum_lat = 0.0;
-        // int num_vertices = shape->t.polygon.num_vertices;
-
-        // for (int i = 0; i < num_vertices; i++) {
-        //     sum_lon += shape->t.polygon.points[i][0];
-        //     sum_lat += shape->t.polygon.points[i][1];
-        // }
-
-        // longitude = sum_lon / num_vertices;
-        // latitude = sum_lat / num_vertices;
-
-        double x = 0.0, y = 0.0, z = 0.0;
-        int num_vertices = shape->t.polygon.num_vertices;
-
-        for (int i = 0; i < num_vertices; i++) {
-            double lat = deg_rad(shape->t.polygon.points[i][1]); // Convert latitude to radians
-            double lon = deg_rad(shape->t.polygon.points[i][0]); // Convert longitude to radians
-
-            // Convert to Cartesian coordinates
-            x += cos(lat) * cos(lon);
-            y += cos(lat) * sin(lon);
-            z += sin(lat);
-        }
-
-        // Average the Cartesian coordinates
-        x /= num_vertices;
-        y /= num_vertices;
-        z /= num_vertices;
-
-        // Convert back to latitude and longitude
-        double central_lon = atan2(y, x); // Longitude in radians
-        double central_hyp = sqrt(x * x + y * y); // Hypotenuse
-        double central_lat = atan2(z, central_hyp); // Latitude in radians
-
-        // Convert back to degrees
-        longitude = rad_deg(central_lon);
-        latitude = rad_deg(central_lat);
-        printf("Geo centroid coordinates lon lat: %f, %f\r\n", longitude, latitude);
-    } else {
-        longitude = shape->xy[0];
-        latitude = shape->xy[1];
-    }
+    double longitude = shape->xy[0];
+    double latitude = shape->xy[1];
     /* radius_meters is calculated differently in different search types:
      * 1) CIRCULAR_TYPE, just use radius.
      * 2) RECTANGLE_TYPE, we use sqrt((width/2)^2 + (height/2)^2) to
-     * calculate the distance from the center point to the corner */
-    // TODO: Add comment for polygon.
+     * calculate the distance from the center point to the corner
+     * 3) POLYGON_TYPE, use height/width from the bounding box and
+     * use the centroid (as center) to calculate the distance. */
     double radius_meters = 0.0;
     if (shape->type == CIRCULAR_TYPE) {
         // For circular shapes, use the given radius directly.
@@ -239,8 +206,9 @@ GeoHashRadius geohashCalculateAreasByShapeWGS84(GeoShape *shape) {
         // For rectangles, calculate the diagonal as the radius.
         radius_meters = sqrt((shape->t.r.width / 2) * (shape->t.r.width / 2) + (shape->t.r.height / 2) * (shape->t.r.height / 2));
     } else if (shape->type == POLYGON_TYPE) {
-        double width = shape->bounds[2] - shape->bounds[0];  // Width = max_lon - min_lon
-        double height = shape->bounds[3] - shape->bounds[1];
+        // For polygons, calculate the diagonal as the radius using the centroid and h & w from bounding box.
+        double width = max_lon - min_lon;
+        double height = max_lat - min_lat;
         radius_meters = sqrt((width / 2) * (width / 2) + (height / 2) * (height / 2));
         printf("rad: %f\r\n", radius_meters);
     }

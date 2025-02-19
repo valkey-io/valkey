@@ -1874,7 +1874,6 @@ void hashtableInitIterator(hashtableIterator *iterator, hashtable *ht, uint8_t f
  * preserving the flags from its previous initialization. */
 void hashtableReinitIterator(hashtableIterator *iterator, hashtable *ht) {
     iter *iter = iteratorFromOpaque(iterator);
-    hashtableResetIterator(iterator);
     hashtableInitIterator(iterator, ht, iter->flags);
 }
 

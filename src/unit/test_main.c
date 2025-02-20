@@ -67,17 +67,10 @@ int main(int argc, char **argv) {
         setRandomSeedCString(seed, strlen(seed));
     }
 
-    /* We need to copy the seed chars returned by getRandomSeedCString into a
-     * buffer allocated with malloc because we need to free the memory of
-     * `seed_str` to avoid assert errors in zmalloc statistics. */
-    size_t seed_len = 0;
-    char *seed_str = getRandomSeedCString(&seed_len);
-    seed = malloc(seed_len + 1);
-    strncpy(seed, seed_str, seed_len);
-    seed[seed_len] = 0;
-    zfree(seed_str);
+    char seed_cstr[129];
+    getRandomSeedCString(seed_cstr, 129);
 
-    printf("Tests will run with seed=%s\n", seed);
+    printf("Tests will run with seed=%s\n", seed_cstr);
 
     unsigned long long genrandseed;
     getRandomBytes((void *)&genrandseed, sizeof(genrandseed));
@@ -94,7 +87,7 @@ int main(int argc, char **argv) {
         /* We need to explicitly set the seed in the several random numbers
          * generator that valkey server uses so that the unit tests reproduce
          * the random values in a deterministic way. */
-        setRandomSeedCString(seed, strlen(seed));
+        setRandomSeedCString(seed_cstr, strlen(seed_cstr));
         init_genrand64(genrandseed);
         srandom((unsigned)genrandseed);
         hashtableSetHashFunctionSeed(hashseed);
@@ -106,8 +99,6 @@ int main(int argc, char **argv) {
     }
     printf("%d test suites executed, %d passed, %d failed\n", suites_executed, suites_executed - failed_num,
            failed_num);
-
-    free(seed);
 
     return failed_num == 0 ? 0 : 1;
 }

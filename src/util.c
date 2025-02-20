@@ -942,22 +942,19 @@ void setRandomSeedCString(char *seed_str, size_t len) {
     seed_initialized = 1;
 }
 
-/* This function returns a string with 64 bytes encoded as 128 hexadecimal
- * digits, that represents the 64 bytes random seed. */
-char *getRandomSeedCString(size_t *len) {
+/* This function populates a char buffer with 129 bytes with the 64 bytes
+ * random seed encoded as 128 hexadecimal digits. */
+void getRandomSeedCString(char *buff, size_t len) {
+    assert(len == (sizeof(seed) * 2 + 1));
+
     if (!seed_initialized) {
         initializeRandomSeed();
     }
 
-    char *buff = zmalloc(sizeof(seed) * 2 + 1);
     for (size_t i = 0; i < sizeof(seed); i++) {
         snprintf(buff + (i * 2), 3, "%02hhX", seed[i]);
     }
     buff[sizeof(seed) * 2] = 0;
-    if (len) {
-        *len = sizeof(seed) * 2;
-    }
-    return buff;
 }
 
 /* Get random bytes, attempts to get an initial seed from /dev/urandom and

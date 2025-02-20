@@ -7,11 +7,9 @@
 #include <strings.h>
 #include <string.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include "test_files.h"
 #include "test_help.h"
 #include "../util.h"
-#include "../zmalloc.h"
 #include "../mt19937-64.h"
 #include "../hashtable.h"
 

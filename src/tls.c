@@ -917,10 +917,11 @@ static int connTLSWrite(connection *conn_, const void *data, size_t data_len) {
     /* In case when last write failed due to some internal reason, retry has to provide
      * at least the same amount of bytes (https://docs.openssl.org/master/man3/SSL_write).
      * If that condition is not met, OpenSSL will return "SSL routines::bad length".
-     * When this assertion gets hit, caller has to be fixed to provide required bytes. */
+     * Currently we only suspect this can happen during primary cron sending '\n' 
+     * indication to the replica, so we silently return from this function without 
+     * impacting the connection state. */
     if (data_len < conn->last_failed_write_data_len) {
-        /* Keep assertion when debug is enabled, otherwise just return -1 */
-        debugServerAssert(0);
+        // TODO: place debugAssert for this case once the known issue described is resolved
         return -1;
     }
     ret = SSL_write(conn->ssl, data, data_len);

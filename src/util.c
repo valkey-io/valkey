@@ -943,7 +943,7 @@ void setRandomSeedCString(char *seed_str, size_t len) {
 }
 
 /* This function populates a char buffer with 129 bytes with the 64 bytes
- * random seed encoded as 128 hexadecimal digits. */
+ * random seed encoded as 128 hexadecimal digits and a null terminator. */
 void getRandomSeedCString(char *buff, size_t len) {
     assert(len == (sizeof(seed) * 2 + 1));
 
@@ -954,7 +954,7 @@ void getRandomSeedCString(char *buff, size_t len) {
     for (size_t i = 0; i < sizeof(seed); i++) {
         snprintf(buff + (i * 2), 3, "%02hhX", seed[i]);
     }
-    buff[sizeof(seed) * 2] = 0;
+    buff[sizeof(seed) * 2] = '\0';
 }
 
 /* Get random bytes, attempts to get an initial seed from /dev/urandom and

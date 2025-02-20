@@ -918,7 +918,11 @@ static int connTLSWrite(connection *conn_, const void *data, size_t data_len) {
      * at least the same amount of bytes (https://docs.openssl.org/master/man3/SSL_write).
      * If that condition is not met, OpenSSL will return "SSL routines::bad length".
      * When this assertion gets hit, caller has to be fixed to provide required bytes. */
-    debugServerAssert(data_len >= conn->last_failed_write_data_len);
+    if (data_len < conn->last_failed_write_data_len) {
+        /* Keep assertion when debug is enabled, otherwise just return -1 */
+        debugServerAssert(0);
+        return -1;
+    }
     ret = SSL_write(conn->ssl, data, data_len);
     conn->last_failed_write_data_len = ret <= 0 ? data_len : 0;
     return updateStateAfterSSLIO(conn, ret, 1);

@@ -914,10 +914,11 @@ static int connTLSWrite(connection *conn_, const void *data, size_t data_len) {
 
     if (conn->c.state != CONN_STATE_CONNECTED) return -1;
     ERR_clear_error();
-    if (data_len < conn->last_failed_write_data_len) {
-        conn->c.last_errno = EBUSY;
-        return -1;
-    }
+    /* In case when last write failed due to some internal reason, retry has to provide
+     * at least the same amount of bytes (https://docs.openssl.org/master/man3/SSL_write).
+     * If that condition is not met, OpenSSL will return "SSL routines::bad length".
+     * When this assertion gets hit, caller has to be fixed to provide required bytes. */
+    debugServerAssert(data_len >= conn->last_failed_write_data_len);
     ret = SSL_write(conn->ssl, data, data_len);
     conn->last_failed_write_data_len = ret <= 0 ? data_len : 0;
     return updateStateAfterSSLIO(conn, ret, 1);

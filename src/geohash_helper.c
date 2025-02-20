@@ -283,25 +283,15 @@ GeoHashRadius geohashCalculateAreasByShapeWGS84(GeoShape *shape) {
         // For rectangles, calculate the diagonal as the radius.
         radius_meters = sqrt((shape->t.r.width / 2) * (shape->t.r.width / 2) + (shape->t.r.height / 2) * (shape->t.r.height / 2));
     } else if (shape->type == POLYGON_TYPE) {
-        // For polygons, calculate the diagonal as the radius using the centroid and h & w from bounding box.
-        double width = max_lon - min_lon;
-        double height = max_lat - min_lat;
-        radius_meters = sqrt((width / 2) * (width / 2) + (height / 2) * (height / 2));
-        printf("prev rad: %f\r\n", radius_meters);
-
+        // For polygons, calculate the distance between two most extreme points in the bounding box.
         double distance1 = geohashGetDistance(min_lat, min_lon, max_lat, max_lon) / shape->conversion;
-        printf("new distance1: %f\r\n", distance1);
         double distance2 = geohashGetDistance(min_lat, min_lon, min_lat, max_lon) / shape->conversion;
-        printf("new distance2: %f\r\n", distance2);
-        if (distance1 > distance2) {
-            radius_meters = distance1 / 2;
-        } else {
-            radius_meters = distance2 / 2;
-        }
-        printf("new rad: %f\r\n", radius_meters);
+        radius_meters = (distance1 > distance2) ? distance1 / 2 : distance2 / 2;
+        // NOTE: For correctness, an alternative is to use the distance from the centroid and the furthest point as the radius.
+        // This will require looping through every vertex and calculating the distance on each one.
     }
     radius_meters *= shape->conversion;
-    printf("rad with conversion: %f\r\n", radius_meters);
+    printf("radius_meters (after conversion): %f\r\n", radius_meters);
 
     steps = geohashEstimateStepsByRadius(radius_meters, latitude);
 

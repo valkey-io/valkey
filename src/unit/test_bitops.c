@@ -49,12 +49,6 @@ int test_popcount(int argc, char **argv, int flags) {
     UNUSED(argv);
     UNUSED(flags);
 
-    time_t seed = time(NULL);
-    srandom(seed);
-    TEST_PRINT_INFO("Verify the popcount through fuzz testing,"
-                    " the random number seed is %jd.",
-                    (intmax_t)seed);
-
 #define TEST_CASE(MSG, SIZE)                    \
     if (test_case("Test failed: " MSG, SIZE)) { \
         return 1;                               \

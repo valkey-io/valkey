@@ -46,7 +46,8 @@ static const unsigned char bitsinbyte[256] = {
     6, 7, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8};
 
 #ifdef HAVE_AVX2
-/* The SIMD version of popcount enhances performance through parallel lookup tables. */
+/* The SIMD version of popcount enhances performance through parallel lookup tables which is based on the following article:
+ * https://arxiv.org/pdf/1611.07612 */
 ATTRIBUTE_TARGET_AVX2
 long long popcountAVX2(void *s, long count) {
     long i = 0;
@@ -92,7 +93,7 @@ long long popcountAVX2(void *s, long count) {
      * +-----------------+--------------+---------+
      */
 
-    /* Parrt A: loop unrolling, processing 8 * 32 bytes per iteration. */
+    /* Part A: loop unrolling, processing 8 * 32 bytes per iteration. */
     while (i + 8 * 32 <= count) {
         __m256i local = _mm256_setzero_si256();
         ITER_32_BYTES

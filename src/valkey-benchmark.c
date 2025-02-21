@@ -138,6 +138,11 @@ static struct config {
     pthread_mutex_t liveclients_mutex;
     pthread_mutex_t is_updating_slots_mutex;
     int resp3; /* use RESP3 */
+    int qps;
+    pthread_mutex_t token_bucket_mutex;
+    long long last_time;
+    long long time_per_token;
+    long long time_per_burst;
 } config;
 
 typedef struct _client {
@@ -223,6 +228,12 @@ static long long ustime(void) {
 
 static long long mstime(void) {
     return ustime() / 1000;
+}
+
+static long long nstime(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
 static uint64_t dictSdsHash(const void *key) {
@@ -445,6 +456,32 @@ static void setClusterKeyHashTag(client c) {
     }
 }
 
+static long long acquireTokenOrWait(int tokens) {
+    if (config.num_threads) pthread_mutex_lock(&(config.token_bucket_mutex));
+
+    long long last_time_ = config.last_time;
+    long long time_per_token_ = config.time_per_token;
+    long long time_per_burst_ = config.time_per_burst;
+    long long new_time = 0;
+
+    long long now_since_epoch = nstime();
+    long long min_time = now_since_epoch - time_per_burst_;
+    if (min_time > last_time_) {
+        new_time = min_time + (time_per_token_ * tokens);
+    } else {
+        new_time = last_time_ + (time_per_token_ * tokens);
+    }
+
+    long long delay_time = 0;
+    if (new_time > now_since_epoch) {
+        delay_time = new_time - now_since_epoch;
+    } else {
+        config.last_time = new_time;
+    }
+    if (config.num_threads) pthread_mutex_unlock(&(config.token_bucket_mutex));
+    return delay_time;
+}
+
 static void clientDone(client c) {
     int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
     if (requests_finished >= config.requests) {
@@ -579,6 +616,18 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(el);
     UNUSED(fd);
     UNUSED(mask);
+
+    /* Acquire a token from the token bucket. */
+    if (config.qps > 0) {
+        do {
+            long long delay = acquireTokenOrWait(config.pipeline);
+            if (delay > 1000) {
+                usleep(delay / 1000);
+            } else {
+                break;
+            }
+        } while (1);
+    }
 
     /* Initialize request when nothing was written. */
     if (c->written == 0) {
@@ -995,6 +1044,11 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
 
     if (config.num_threads) initBenchmarkThreads();
 
+    if (config.qps > 0) {
+        config.time_per_token = 1000000000 / config.qps;
+        config.time_per_burst = config.time_per_token * config.qps;
+    }
+
     int thread_id = config.num_threads > 0 ? 0 : -1;
     c = createClient(cmd, len, seqlen, NULL, thread_id);
     createMissingClients(c);
@@ -1368,6 +1422,9 @@ int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--user")) {
             if (lastarg) goto invalid;
             config.conn_info.user = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--qps")) {
+            if (lastarg) goto invalid;
+            config.qps = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "-u") && !lastarg) {
             parseUri(argv[++i], "valkey-benchmark", &config.conn_info, &config.tls);
             if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
@@ -1797,6 +1854,7 @@ int main(int argc, char **argv) {
     config.num_threads = 0;
     config.threads = NULL;
     config.cluster_mode = 0;
+    config.qps = 0;
     config.read_from_replica = FROM_PRIMARY_ONLY;
     config.cluster_node_count = 0;
     config.cluster_nodes = NULL;

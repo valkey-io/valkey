@@ -437,7 +437,22 @@ proc run_external_server_test {code overrides} {
     }
 }
 
+proc cleanup_gcda_files {} {
+    set error_message "";
+    catch {
+        set gcda_files [glob -nocomplain src/*.gcda]
+        foreach file $gcda_files {
+            file delete -force $file
+        }
+    } error_message
+    if {$error_message ne ""} {
+        puts "Warning: Failed to delete some .gcda files - $error_message"
+    }
+}
+
 proc start_server {options {code undefined}} {
+    cleanup_gcda_files
+
     # setup defaults
     set baseconfig "default.conf"
     set overrides {}

@@ -327,7 +327,6 @@ static void connSocketAcceptHandler(aeEventLoop *el, int fd, void *privdata, int
         }
         serverLog(LL_VERBOSE, "Accepted %s:%d", cip, cport);
 
-        anetEnableTcpNoDelay(NULL, cfd);
         if (server.tcpkeepalive) anetKeepAlive(NULL, cfd, server.tcpkeepalive);
         acceptCommonHandler(connCreateAcceptedSocket(cfd, NULL), flags, cip);
     }

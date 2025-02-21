@@ -357,7 +357,6 @@ migrateCachedSocket *migrateGetSocket(client *c, robj *host, robj *port, long ti
         sdsfree(name);
         return NULL;
     }
-    connEnableTcpNoDelay(conn);
 
     /* Add to the cache and return it to the caller. */
     cs = zmalloc(sizeof(*cs));

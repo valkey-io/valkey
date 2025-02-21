@@ -630,29 +630,40 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                 bybox = 1;
                 i += 3;
             } else if (!strcasecmp(arg, "bypolygon") && (i + 2) < remaining && flags & GEOSEARCH && !byradius && !bybox) {
-                /* Extract polygon vertices */
-                bypolygon = 1;
-                int num_vertices = (remaining - i - 1) / 2;
-                if (num_vertices < 3) {
-                    addReplyError(c, "Polygon must have at least 3 points");
+                // TODO: Update Key Specs for GEOSEARCH cmd.
+                int num_vertices = 0;
+                if (getIntFromObjectOrReply(c, c->argv[base_args + i + 1], &num_vertices, "invalid number of vertices") != C_OK) {
                     return;
                 }
-                shape.type = POLYGON_TYPE;
+                // Check how many args are remaining. Divide by 2 to see the possible number of vertices.
+                int possible_vertices = (remaining - i - 1 - 1) / 2;
+                if (num_vertices < 3 || possible_vertices < num_vertices) {
+                    addReplyError(c, "GEOSEARCH BYPOLYGON must have at least 3 vertices");
+                    return;
+                }
+                /* Extract polygon vertices */
                 shape.conversion = 1000;
                 shape.t.polygon.num_vertices = num_vertices;
                 shape.t.polygon.points = zmalloc(num_vertices * sizeof(double[2]));
                 // TODO: Handle malloc failure.
                 for (int j = 0; j < num_vertices * 2; j += 2) {
-                    if (extractLongLatOrReply(c, c->argv + base_args + i + 1 + j, shape.t.polygon.points[j / 2]) == C_ERR) {
+                    if (extractLongLatOrReply(c, c->argv + base_args + i + 1 + 1 + j, shape.t.polygon.points[j / 2]) == C_ERR) {
+                        zfree(shape.t.polygon.points);
                         return;
                     }
                     printf("Geo num_vertices lon lat: %d %f, %f\r\n", num_vertices, shape.t.polygon.points[j / 2][0], shape.t.polygon.points[j / 2][1]);
                 }
-                i += num_vertices * 2;
-                // TODO: Handle other options such as limit, asc, etc.
-                break;
+                shape.type = POLYGON_TYPE;
+                bypolygon = 1;
+                i += (1 + num_vertices * 2);
+                // TODO: Clean up free shape.t.polygon.points code into a common utility function.
+                // TODO: Check why asc and desc return same result even though zcore is different.
+                // NOTE: All other options work.
             } else {
                 addReplyErrorObject(c, shared.syntaxerr);
+                if (shape.t.polygon.points != NULL) {
+                    zfree(shape.t.polygon.points);
+                }
                 return;
             }
         }
@@ -662,22 +673,34 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     if (storekey && (withdist || withhash || withcoords)) {
         addReplyErrorFormat(c, "%s is not compatible with WITHDIST, WITHHASH and WITHCOORD options",
                             flags & GEOSEARCHSTORE ? "GEOSEARCHSTORE" : "STORE option in GEORADIUS");
+        if (shape.t.polygon.points != NULL) {
+            zfree(shape.t.polygon.points);
+        }
         return;
     }
 
     if ((flags & GEOSEARCH) && !(frommember || fromloc) && !bypolygon) {
         addReplyErrorFormat(c, "exactly one of FROMMEMBER or FROMLONLAT can be specified for %s",
                             (char *)c->argv[0]->ptr);
+        if (shape.t.polygon.points != NULL) {
+            zfree(shape.t.polygon.points);
+        }
         return;
     }
 
     if ((flags & GEOSEARCH) && !(byradius || bybox || bypolygon)) {
-        addReplyErrorFormat(c, "exactly one of BYRADIUS and BYBOX and BYPOLYGON can be specified for %s", (char *)c->argv[0]->ptr);
+        addReplyErrorFormat(c, "exactly one of BYRADIUS, BYBOX and BYPOLYGON can be specified for %s", (char *)c->argv[0]->ptr);
+        if (shape.t.polygon.points != NULL) {
+            zfree(shape.t.polygon.points);
+        }
         return;
     }
 
     if (any && !count) {
         addReplyError(c, "the ANY argument requires COUNT argument");
+        if (shape.t.polygon.points != NULL) {
+            zfree(shape.t.polygon.points);
+        }
         return;
     }
 
@@ -694,6 +717,9 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         } else {
             /* Otherwise we return an empty array. */
             addReply(c, shared.emptyarray);
+        }
+        if (shape.t.polygon.points != NULL) {
+            zfree(shape.t.polygon.points);
         }
         return;
     }
@@ -715,6 +741,9 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     if (ga->used == 0 && storekey == NULL) {
         addReply(c, shared.emptyarray);
         geoArrayFree(ga);
+        if (shape.t.polygon.points != NULL) {
+            zfree(shape.t.polygon.points);
+        }
         return;
     }
 
@@ -726,8 +755,10 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     if (sort != SORT_NONE) {
         int (*sort_gp_callback)(const void *a, const void *b) = NULL;
         if (sort == SORT_ASC) {
+            printf("SORT_ASC\r\n");
             sort_gp_callback = sort_gp_asc;
         } else if (sort == SORT_DESC) {
+            printf("SORT_DESC\r\n");
             sort_gp_callback = sort_gp_desc;
         }
 
@@ -819,6 +850,9 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         addReplyLongLong(c, returned_items);
     }
     geoArrayFree(ga);
+    if (shape.t.polygon.points != NULL) {
+        zfree(shape.t.polygon.points);
+    }
 }
 
 /* GEORADIUS wrapper function. */

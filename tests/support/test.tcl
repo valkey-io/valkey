@@ -125,13 +125,16 @@ proc assert_refcount_morethan {key ref} {
 # Wait for the specified condition to be true, with the specified number of
 # max retries and delay between retries. Otherwise the 'elsescript' is
 # executed.
-proc wait_for_condition {maxtries delay e _else_ elsescript} {
+proc wait_for_condition {maxtries delay e _else_ elsescript {_debug_ ""} {debugscript ""}} {
     while {[incr maxtries -1] >= 0} {
         set errcode [catch {uplevel 1 [list expr $e]} result]
         if {$errcode == 0} {
             if {$result} break
         } else {
             return -code $errcode $result
+        }
+        if {$_debug_ == "debug"} {
+            uplevel 1 $debugscript
         }
         after $delay
     }

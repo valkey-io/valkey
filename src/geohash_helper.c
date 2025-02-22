@@ -269,6 +269,7 @@ GeoHashRadius geohashCalculateAreasByShapeWGS84(GeoShape *shape) {
 
     double longitude = shape->xy[0];
     double latitude = shape->xy[1];
+    printf("Geo shape->xy's longitude, latitude: %f, %f\r\n", longitude, latitude);
     /* radius_meters is calculated differently in different search types:
      * 1) CIRCULAR_TYPE, just use radius.
      * 2) RECTANGLE_TYPE, we use sqrt((width/2)^2 + (height/2)^2) to
@@ -283,12 +284,20 @@ GeoHashRadius geohashCalculateAreasByShapeWGS84(GeoShape *shape) {
         // For rectangles, calculate the diagonal as the radius.
         radius_meters = sqrt((shape->t.r.width / 2) * (shape->t.r.width / 2) + (shape->t.r.height / 2) * (shape->t.r.height / 2));
     } else if (shape->type == POLYGON_TYPE) {
-        // For polygons, calculate the distance between two most extreme points in the bounding box.
-        double distance1 = geohashGetDistance(min_lat, min_lon, max_lat, max_lon) / shape->conversion;
-        double distance2 = geohashGetDistance(min_lat, min_lon, min_lat, max_lon) / shape->conversion;
-        radius_meters = (distance1 > distance2) ? distance1 / 2 : distance2 / 2;
-        // NOTE: For correctness, an alternative is to use the distance from the centroid and the furthest point as the radius.
-        // This will require looping through every vertex and calculating the distance on each one.
+        // For polygons, use max distance from the bounding box and the centroid.
+        double dist_top_left = geohashGetDistance(latitude, longitude, max_lat, min_lon) / shape->conversion;
+        double dist_top_right = geohashGetDistance(latitude, longitude, max_lat, max_lon) / shape->conversion;
+        double dist_bottom_left = geohashGetDistance(latitude, longitude, min_lat, min_lon) / shape->conversion;
+        double dist_bottom_right = geohashGetDistance(latitude, longitude, min_lat, max_lon) / shape->conversion;
+        printf("dist_top_left (after conversion): %f\r\n", dist_top_left);
+        printf("dist_top_right (after conversion): %f\r\n", dist_top_right);
+        printf("dist_bottom_left (after conversion): %f\r\n", dist_bottom_left);
+        printf("dist_bottom_right (after conversion): %f\r\n", dist_bottom_right);
+        // Find the maximum distance (which will be the radius that covers the whole bounding box)
+        radius_meters = dist_top_left;
+        if (dist_top_right > radius_meters) radius_meters = dist_top_right;
+        if (dist_bottom_left > radius_meters) radius_meters = dist_bottom_left;
+        if (dist_bottom_right > radius_meters) radius_meters = dist_bottom_right;
     }
     radius_meters *= shape->conversion;
     printf("radius_meters (after conversion): %f\r\n", radius_meters);

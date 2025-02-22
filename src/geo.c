@@ -242,6 +242,12 @@ int geoWithinShape(GeoShape *shape, double score, double *xy, double *distance) 
     return C_OK;
 }
 
+void geoPolygonPointsFree(GeoShape *shape) {
+    if (shape->type == POLYGON_TYPE && shape->t.polygon.points != NULL) {
+        zfree(shape->t.polygon.points);
+    }
+}
+
 /* Query a sorted set to extract all the elements between 'min' and
  * 'max', appending them into the array of geoPoint structures 'geoArray'.
  * The command returns the number of elements added to the array.
@@ -643,6 +649,9 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                     return;
                 }
                 /* Extract polygon vertices */
+                // TODO: Check if we need to do any sanitization of vertices.
+                // Example: Checking if not closed or if overlapping/crossing over eachother.
+                // TODO: Check if there should be a limit on number of vertices.
                 shape.conversion = 1000;
                 shape.t.polygon.num_vertices = num_vertices;
                 shape.t.polygon.points = zmalloc(num_vertices * sizeof(double[2]));
@@ -657,14 +666,9 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                 shape.type = POLYGON_TYPE;
                 bypolygon = 1;
                 i += (1 + num_vertices * 2);
-                // TODO: Clean up free shape.t.polygon.points code into a common utility function.
-                // TODO: Check why asc and desc return same result even though zcore is different.
-                // NOTE: All other options work.
             } else {
                 addReplyErrorObject(c, shared.syntaxerr);
-                if (shape.type == POLYGON_TYPE && shape.t.polygon.points != NULL) {
-                    zfree(shape.t.polygon.points);
-                }
+                geoPolygonPointsFree(&shape);
                 return;
             }
         }
@@ -674,34 +678,26 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     if (storekey && (withdist || withhash || withcoords)) {
         addReplyErrorFormat(c, "%s is not compatible with WITHDIST, WITHHASH and WITHCOORD options",
                             flags & GEOSEARCHSTORE ? "GEOSEARCHSTORE" : "STORE option in GEORADIUS");
-        if (shape.type == POLYGON_TYPE && shape.t.polygon.points != NULL) {
-            zfree(shape.t.polygon.points);
-        }
+        geoPolygonPointsFree(&shape);
         return;
     }
 
     if ((flags & GEOSEARCH) && !(frommember || fromloc) && !bypolygon) {
         addReplyErrorFormat(c, "exactly one of FROMMEMBER or FROMLONLAT can be specified for %s",
                             (char *)c->argv[0]->ptr);
-        if (shape.type == POLYGON_TYPE && shape.t.polygon.points != NULL) {
-            zfree(shape.t.polygon.points);
-        }
+        geoPolygonPointsFree(&shape);
         return;
     }
 
     if ((flags & GEOSEARCH) && !(byradius || bybox || bypolygon)) {
         addReplyErrorFormat(c, "exactly one of BYRADIUS, BYBOX and BYPOLYGON can be specified for %s", (char *)c->argv[0]->ptr);
-        if (shape.type == POLYGON_TYPE && shape.t.polygon.points != NULL) {
-            zfree(shape.t.polygon.points);
-        }
+        geoPolygonPointsFree(&shape);
         return;
     }
 
     if (any && !count) {
         addReplyError(c, "the ANY argument requires COUNT argument");
-        if (shape.type == POLYGON_TYPE && shape.t.polygon.points != NULL) {
-            zfree(shape.t.polygon.points);
-        }
+        geoPolygonPointsFree(&shape);
         return;
     }
 
@@ -719,9 +715,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
             /* Otherwise we return an empty array. */
             addReply(c, shared.emptyarray);
         }
-        if (shape.type == POLYGON_TYPE && shape.t.polygon.points != NULL) {
-            zfree(shape.t.polygon.points);
-        }
+        geoPolygonPointsFree(&shape);
         return;
     }
 
@@ -742,9 +736,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     if (ga->used == 0 && storekey == NULL) {
         addReply(c, shared.emptyarray);
         geoArrayFree(ga);
-        if (shape.type == POLYGON_TYPE && shape.t.polygon.points != NULL) {
-            zfree(shape.t.polygon.points);
-        }
+        geoPolygonPointsFree(&shape);
         return;
     }
 
@@ -851,9 +843,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         addReplyLongLong(c, returned_items);
     }
     geoArrayFree(ga);
-    if (shape.type == POLYGON_TYPE && shape.t.polygon.points != NULL) {
-        zfree(shape.t.polygon.points);
-    }
+    geoPolygonPointsFree(&shape);
 }
 
 /* GEORADIUS wrapper function. */

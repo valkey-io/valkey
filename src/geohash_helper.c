@@ -285,10 +285,10 @@ GeoHashRadius geohashCalculateAreasByShapeWGS84(GeoShape *shape) {
         radius_meters = sqrt((shape->t.r.width / 2) * (shape->t.r.width / 2) + (shape->t.r.height / 2) * (shape->t.r.height / 2));
     } else if (shape->type == POLYGON_TYPE) {
         // For polygons, use max distance from the bounding box and the centroid.
-        double dist_top_left = geohashGetDistance(latitude, longitude, max_lat, min_lon) / shape->conversion;
-        double dist_top_right = geohashGetDistance(latitude, longitude, max_lat, max_lon) / shape->conversion;
-        double dist_bottom_left = geohashGetDistance(latitude, longitude, min_lat, min_lon) / shape->conversion;
-        double dist_bottom_right = geohashGetDistance(latitude, longitude, min_lat, max_lon) / shape->conversion;
+        double dist_top_left = geohashGetDistance(longitude, latitude, min_lon, max_lat) / shape->conversion;
+        double dist_top_right = geohashGetDistance(longitude, latitude, max_lon, max_lat) / shape->conversion;
+        double dist_bottom_left = geohashGetDistance(longitude, latitude, min_lon, min_lat) / shape->conversion;
+        double dist_bottom_right = geohashGetDistance(latitude, latitude, max_lon, min_lat) / shape->conversion;
         printf("dist_top_left (after conversion): %f\r\n", dist_top_left);
         printf("dist_top_right (after conversion): %f\r\n", dist_top_right);
         printf("dist_bottom_left (after conversion): %f\r\n", dist_bottom_left);
@@ -435,7 +435,7 @@ int geohashGetDistanceIfInRectangle(double width_m,
 }
 
 /* Check if a point is in a polygon using ray casting. */
-int geohashIsWithinPolygon(double *xy, double (*vertices)[2], int num_vertices) {
+int geohashGetDistanceIfInPolygon(double x1, double y1, double *xy, double (*vertices)[2], int num_vertices, double *distance) {
     printf("geohashIsWithinPolygon - coordinates: %f %f\r\n", xy[0], xy[1]);
     int i, j, nvert = num_vertices;
     int inside = 0;
@@ -445,6 +445,9 @@ int geohashIsWithinPolygon(double *xy, double (*vertices)[2], int num_vertices) 
             (xy[0] < (vertices[j][0] - vertices[i][0]) * (xy[1] - vertices[i][1]) / (vertices[j][1] - vertices[i][1]) + vertices[i][0])) {
             inside = !inside;
         }
+    }
+    if (inside) {
+        *distance = geohashGetDistance(x1, y1, xy[0], xy[1]);
     }
     return inside;
 }

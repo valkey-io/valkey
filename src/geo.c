@@ -235,7 +235,7 @@ int geoWithinShape(GeoShape *shape, double score, double *xy, double *distance) 
                                              xy[1], distance))
             return C_ERR;
     } else if (shape->type == POLYGON_TYPE) {
-        if (!geohashIsWithinPolygon(xy, shape->t.polygon.points, shape->t.polygon.num_vertices)) {
+        if (!geohashGetDistanceIfInPolygon(shape->xy[0], shape->xy[1], xy, shape->t.polygon.points, shape->t.polygon.num_vertices, distance)) {
             return C_ERR;
         }
     }
@@ -525,6 +525,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     /* Find long/lat to use for radius or box search based on inquiry type */
     int base_args;
     GeoShape shape = {0};
+    shape.t.polygon.points = NULL;
     if (flags & RADIUS_COORDS) {
         /* GEORADIUS or GEORADIUS_RO */
         base_args = 6;
@@ -661,7 +662,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                 // NOTE: All other options work.
             } else {
                 addReplyErrorObject(c, shared.syntaxerr);
-                if (shape.t.polygon.points != NULL) {
+                if (shape.type == POLYGON_TYPE && shape.t.polygon.points != NULL) {
                     zfree(shape.t.polygon.points);
                 }
                 return;
@@ -673,7 +674,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     if (storekey && (withdist || withhash || withcoords)) {
         addReplyErrorFormat(c, "%s is not compatible with WITHDIST, WITHHASH and WITHCOORD options",
                             flags & GEOSEARCHSTORE ? "GEOSEARCHSTORE" : "STORE option in GEORADIUS");
-        if (shape.t.polygon.points != NULL) {
+        if (shape.type == POLYGON_TYPE && shape.t.polygon.points != NULL) {
             zfree(shape.t.polygon.points);
         }
         return;
@@ -682,7 +683,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     if ((flags & GEOSEARCH) && !(frommember || fromloc) && !bypolygon) {
         addReplyErrorFormat(c, "exactly one of FROMMEMBER or FROMLONLAT can be specified for %s",
                             (char *)c->argv[0]->ptr);
-        if (shape.t.polygon.points != NULL) {
+        if (shape.type == POLYGON_TYPE && shape.t.polygon.points != NULL) {
             zfree(shape.t.polygon.points);
         }
         return;
@@ -690,7 +691,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
 
     if ((flags & GEOSEARCH) && !(byradius || bybox || bypolygon)) {
         addReplyErrorFormat(c, "exactly one of BYRADIUS, BYBOX and BYPOLYGON can be specified for %s", (char *)c->argv[0]->ptr);
-        if (shape.t.polygon.points != NULL) {
+        if (shape.type == POLYGON_TYPE && shape.t.polygon.points != NULL) {
             zfree(shape.t.polygon.points);
         }
         return;
@@ -698,7 +699,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
 
     if (any && !count) {
         addReplyError(c, "the ANY argument requires COUNT argument");
-        if (shape.t.polygon.points != NULL) {
+        if (shape.type == POLYGON_TYPE && shape.t.polygon.points != NULL) {
             zfree(shape.t.polygon.points);
         }
         return;
@@ -718,7 +719,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
             /* Otherwise we return an empty array. */
             addReply(c, shared.emptyarray);
         }
-        if (shape.t.polygon.points != NULL) {
+        if (shape.type == POLYGON_TYPE && shape.t.polygon.points != NULL) {
             zfree(shape.t.polygon.points);
         }
         return;
@@ -741,7 +742,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     if (ga->used == 0 && storekey == NULL) {
         addReply(c, shared.emptyarray);
         geoArrayFree(ga);
-        if (shape.t.polygon.points != NULL) {
+        if (shape.type == POLYGON_TYPE && shape.t.polygon.points != NULL) {
             zfree(shape.t.polygon.points);
         }
         return;
@@ -850,7 +851,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         addReplyLongLong(c, returned_items);
     }
     geoArrayFree(ga);
-    if (shape.t.polygon.points != NULL) {
+    if (shape.type == POLYGON_TYPE && shape.t.polygon.points != NULL) {
         zfree(shape.t.polygon.points);
     }
 }

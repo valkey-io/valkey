@@ -1665,7 +1665,7 @@ static int cliConnect(int flags) {
          * in order to prevent timeouts caused by the execution of long
          * commands. At the same time this improves the detection of real
          * errors. */
-        anetKeepAlive(NULL, context->fd, CLI_KEEPALIVE_INTERVAL);
+        anetKeepAlive(NULL, context->fd, CLI_KEEPALIVE_INTERVAL, NULL);
 
         /* State of the current connection. */
         config.current_resp3 = 0;
@@ -3970,7 +3970,7 @@ static int clusterManagerNodeConnect(clusterManagerNode *node) {
      * in order to prevent timeouts caused by the execution of long
      * commands. At the same time this improves the detection of real
      * errors. */
-    anetKeepAlive(NULL, node->context->fd, CLI_KEEPALIVE_INTERVAL);
+    anetKeepAlive(NULL, node->context->fd, CLI_KEEPALIVE_INTERVAL, NULL);
     if (config.conn_info.auth) {
         redisReply *reply;
         if (config.conn_info.user == NULL)

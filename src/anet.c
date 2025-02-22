@@ -151,7 +151,7 @@ int anetCloexec(int fd) {
 
 /* Enable TCP keep-alive mechanism to detect dead peers,
  * TCP_KEEPIDLE, TCP_KEEPINTVL and TCP_KEEPCNT will be set accordingly. */
-int anetKeepAlive(char *err, int fd, int interval) {
+int anetKeepAlive(char *err, int fd, int interval, const int *probes) {
     int enabled = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &enabled, sizeof(enabled))) {
         anetSetError(err, "setsockopt SO_KEEPALIVE: %s", strerror(errno));
@@ -218,7 +218,9 @@ int anetKeepAlive(char *err, int fd, int interval) {
     }
 
     cnt = 3;
-    if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt))) {
+    if (probes != NULL) cnt = *probes;
+
+    if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &probes, sizeof(probes))) {
         anetSetError(err, "setsockopt TCP_KEEPCNT: %s\n", strerror(errno));
         return ANET_ERR;
     }
@@ -282,6 +284,8 @@ int anetKeepAlive(char *err, int fd, int interval) {
     /* Consider the socket in error state after three we send three ACK
      * probes without getting a reply. */
     cnt = 3;
+    if (probes != NULL) cnt = *probes;
+
     if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt))) {
         anetSetError(err, "setsockopt TCP_KEEPCNT: %s\n", strerror(errno));
         return ANET_ERR;

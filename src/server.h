@@ -1764,6 +1764,7 @@ struct valkeyServer {
     int hide_user_data_from_log; /* Hide or redact user data, or data that may contain user data, from the log. */
     int maxidletime;             /* Client timeout in seconds */
     int tcpkeepalive;            /* Set SO_KEEPALIVE if non-zero. */
+    int tcp_keepalive_probes;    /* Number of TCP keepalive probes. */
     int active_expire_enabled;   /* Can be disabled for testing purposes. */
     int active_expire_effort;    /* From 1 (default) to 10, active effort. */
     int lazy_expire_disabled;    /* If > 0, don't trigger lazy expire */

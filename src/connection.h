@@ -382,7 +382,7 @@ int connBlock(connection *conn);
 int connNonBlock(connection *conn);
 int connEnableTcpNoDelay(connection *conn);
 int connDisableTcpNoDelay(connection *conn);
-int connKeepAlive(connection *conn, int interval);
+int connKeepAlive(connection *conn, int interval, const int *probes);
 int connSendTimeout(connection *conn, long long ms);
 int connRecvTimeout(connection *conn, long long ms);
 

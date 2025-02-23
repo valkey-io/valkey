@@ -6889,15 +6889,6 @@ void clusterCommandSetSlot(client *c) {
     addReply(c, shared.ok);
 }
 
-int dbHasNoKeys(void) {
-    for (int i = 0; i < server.dbnum; i++) {
-        if (kvstoreSize(server.db[i].keys) != 0) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
 int clusterCommandSpecial(client *c) {
     if (!strcasecmp(c->argv[1]->ptr, "meet") && (c->argc == 4 || c->argc == 5)) {
         /* CLUSTER MEET <ip> <port> [cport] */

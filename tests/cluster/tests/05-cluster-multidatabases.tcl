@@ -221,7 +221,7 @@ test "Replication: Write to multiple databases and verify replica" {
 }
 
 
-test "Replication: Swap and Flush Databases" {
+test "SWAPDB is not supported in cluster mode" {
     set primary_id 0    
     set replica [get_my_replica [R $primary_id cluster nodes]]    
 
@@ -249,36 +249,9 @@ test "Replication: Swap and Flush Databases" {
     assert_equal [$replica get key2] "value2_db2"
     
     # Swap databases on primary
-    R $primary_id swapdb 1 2
+    set result [catch {assert_error [R $primary_id swapdb 1 2]} err]    
+    assert_match "ERR SWAPDB is not allowed in cluster mode" $err        
     
-    # Wait for replication to catch up
-    after 500
-    
-    # Verify swap is reflected in replica
-    $replica select 1
-    assert_equal [$replica get key1] "value1_db2"
-    assert_equal [$replica get key2] "value2_db2"
-    
-    $replica select 2
-    assert_equal [$replica get key1] "value1_db1"
-    assert_equal [$replica get key2] "value2_db1"
-    
-    # Flush database on primary
-    R $primary_id select 1
-    R $primary_id flushdb
-    
-    R $primary_id select 2
-    R $primary_id flushdb
-    
-    # Wait for replication to catch up
-    after 500
-    
-    # Ensure databases are empty in replica
-    $replica select 1
-    assert_equal [$replica dbsize] 0
-    
-    $replica select 2
-    assert_equal [$replica dbsize] 0
 }
 
 test "Cross-DB Expiry Handling" {

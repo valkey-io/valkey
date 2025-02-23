@@ -1714,6 +1714,12 @@ void swapMainDbWithTempDb(serverDb *tempDb) {
 void swapdbCommand(client *c) {
     int id1, id2;
 
+    /* Not allowed in cluster mode: we have just DB 0 there. */
+    if (server.cluster_enabled) {
+        addReplyError(c, "SWAPDB is not allowed in cluster mode");
+        return;
+    }
+
     /* Get the two DBs indexes. */
     if (getIntFromObjectOrReply(c, c->argv[1], &id1, "invalid first DB index") != C_OK) return;
 

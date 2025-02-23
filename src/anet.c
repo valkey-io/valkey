@@ -151,7 +151,7 @@ int anetCloexec(int fd) {
 
 /* Enable TCP keep-alive mechanism to detect dead peers,
  * TCP_KEEPIDLE, TCP_KEEPINTVL and TCP_KEEPCNT will be set accordingly. */
-int anetKeepAlive(char *err, int fd, int interval, const int *probes) {
+int anetKeepAlive(char *err, int fd, int interval, const int probes) {
     int enabled = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &enabled, sizeof(enabled))) {
         anetSetError(err, "setsockopt SO_KEEPALIVE: %s", strerror(errno));
@@ -160,7 +160,6 @@ int anetKeepAlive(char *err, int fd, int interval, const int *probes) {
 
     int idle;
     int intvl;
-    int cnt;
 
     /* There are platforms that are expected to support the full mechanism of TCP keep-alive,
      * we want the compiler to emit warnings of unused variables if the preprocessor directives
@@ -171,7 +170,7 @@ int anetKeepAlive(char *err, int fd, int interval, const int *probes) {
     UNUSED(interval);
     UNUSED(idle);
     UNUSED(intvl);
-    UNUSED(cnt);
+    UNUSED(probes);
 #endif
 
 #ifdef __sun
@@ -216,9 +215,6 @@ int anetKeepAlive(char *err, int fd, int interval, const int *probes) {
         anetSetError(err, "setsockopt TCP_KEEPINTVL: %s\n", strerror(errno));
         return ANET_ERR;
     }
-
-    cnt = 3;
-    if (probes != NULL) cnt = *probes;
 
     if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &probes, sizeof(probes))) {
         anetSetError(err, "setsockopt TCP_KEEPCNT: %s\n", strerror(errno));
@@ -283,10 +279,7 @@ int anetKeepAlive(char *err, int fd, int interval, const int *probes) {
 #ifdef TCP_KEEPCNT
     /* Consider the socket in error state after three we send three ACK
      * probes without getting a reply. */
-    cnt = 3;
-    if (probes != NULL) cnt = *probes;
-
-    if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt))) {
+    if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &probes, sizeof(probes))) {
         anetSetError(err, "setsockopt TCP_KEEPCNT: %s\n", strerror(errno));
         return ANET_ERR;
     }

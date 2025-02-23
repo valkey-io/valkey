@@ -1494,7 +1494,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         connEnableTcpNoDelay(conn);
-        connKeepAlive(conn, server.cluster_node_timeout / 1000 * 2, &server.tcp_keepalive_probes);
+        connKeepAlive(conn, server.cluster_node_timeout / 1000 * 2, server.tcp_keepalive_probes);
 
         /* Use non-blocking I/O for cluster messages. */
         serverLog(LL_VERBOSE, "Accepting cluster node connection from %s:%d", cip, cport);

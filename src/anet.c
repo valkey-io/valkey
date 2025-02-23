@@ -151,7 +151,7 @@ int anetCloexec(int fd) {
 
 /* Enable TCP keep-alive mechanism to detect dead peers,
  * TCP_KEEPIDLE, TCP_KEEPINTVL and TCP_KEEPCNT will be set accordingly. */
-int anetKeepAlive(char *err, int fd, int interval, const int probes) {
+int anetKeepAlive(char *err, int fd, int interval, int probes) {
     int enabled = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &enabled, sizeof(enabled))) {
         anetSetError(err, "setsockopt SO_KEEPALIVE: %s", strerror(errno));

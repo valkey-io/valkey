@@ -533,6 +533,4 @@ start_multiple_servers 3 [list overrides $base_conf] {
     }
 }
 
-} ;# tags
-
-set ::singledb $old_singledb
+}

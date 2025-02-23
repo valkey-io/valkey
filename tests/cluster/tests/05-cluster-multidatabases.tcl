@@ -1,11 +1,5 @@
 # Tests multi-databases in cluster mode
 
-proc pause {{message "Hit Enter to continue ==> "}} {
-    puts -nonewline $message
-    flush stdout
-    gets stdin
-}
-
 source "../tests/includes/init-tests.tcl"
 
 
@@ -45,8 +39,7 @@ test "Create a 5 nodes cluster with replicas, all slots allocated to one node" {
     cluster_allocate_slaves 5 5
 
     # Allocate all slots in one shard to allow easier testing with key-based commands
-    cluster_allocate_with_continuous_slots 1
-    # pause "\nPress any key: ";
+    cluster_allocate_with_continuous_slots 1    
 }
 
 test "Cluster is up" {

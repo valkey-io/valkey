@@ -3340,98 +3340,120 @@ int isClientConnIpV6(client *c) {
     return getClientPeerId(c)[0] == '[';
 }
 
+sds getClientInfoAttribute(client *client, const char *attr, int hide_user_data) {
+    char conninfo[CONN_INFO_LEN];
+    if (!strcasecmp(attr, "id")) return sdscatfmt(sdsempty(), "%U", (unsigned long long)client->id);
+    if (!strcasecmp(attr, "addr")) return sdscat(sdsempty(), getClientPeerId(client));
+    if (!strcasecmp(attr, "laddr")) return sdscat(sdsempty(), getClientSockname(client));
+    if (!strcasecmp(attr, "fd")) return sdscat(sdsempty(), connGetInfo(client->conn, conninfo, sizeof(conninfo)));
+    if (!strcasecmp(attr, "name")) return sdscat(sdsempty(), hide_user_data ? "*redacted*" : (client->name ? (char *)client->name->ptr : ""));
+    if (!strcasecmp(attr, "age")) return sdscatfmt(sdsempty(), "%I", (long long)(commandTimeSnapshot() / 1000 - client->ctime));
+    if (!strcasecmp(attr, "idle")) return sdscatfmt(sdsempty(), "%I", (long long)(server.unixtime - client->last_interaction));
+    if (!strcasecmp(attr, "flags")) {
+        char flags[17], *p = flags;
+        if (client->flag.replica) {
+            if (client->flag.monitor)
+                *p++ = 'O';
+            else
+                *p++ = 'S';
+        }
+        if (client->flag.primary) *p++ = 'M';
+        if (client->flag.pubsub) *p++ = 'P';
+        if (client->flag.multi) *p++ = 'x';
+        if (client->flag.blocked) *p++ = 'b';
+        if (client->flag.tracking) *p++ = 't';
+        if (client->flag.tracking_broken_redir) *p++ = 'R';
+        if (client->flag.tracking_bcast) *p++ = 'B';
+        if (client->flag.dirty_cas) *p++ = 'd';
+        if (client->flag.close_after_reply) *p++ = 'c';
+        if (client->flag.unblocked) *p++ = 'u';
+        if (client->flag.close_asap) *p++ = 'A';
+        if (client->flag.unix_socket) *p++ = 'U';
+        if (client->flag.readonly) *p++ = 'r';
+        if (client->flag.no_evict) *p++ = 'e';
+        if (client->flag.no_touch) *p++ = 'T';
+        if (client->flag.import_source) *p++ = 'I';
+        if (p == flags) *p++ = 'N';
+        *p++ = '\0';
+        return sdscat(sdsempty(), flags);
+    }
+    if (!strcasecmp(attr, "capa")) {
+        char capa[9], *p = capa;
+        if (client->capa & CLIENT_CAPA_REDIRECT) *p++ = 'r';
+        *p = '\0';
+        return sdscat(sdsempty(), capa);
+    }
+    if (!strcasecmp(attr, "db")) return sdscatfmt(sdsempty(), "%i", client->db->id);
+    if (!strcasecmp(attr, "sub")) return sdscatfmt(sdsempty(), "%i", client->pubsub_data ? (int)dictSize(client->pubsub_data->pubsub_channels) : 0);
+    if (!strcasecmp(attr, "psub")) return sdscatfmt(sdsempty(), "%i", client->pubsub_data ? (int)dictSize(client->pubsub_data->pubsub_patterns) : 0);
+    if (!strcasecmp(attr, "ssub")) return sdscatfmt(sdsempty(), "%i", client->pubsub_data ? (int)dictSize(client->pubsub_data->pubsubshard_channels) : 0);
+    if (!strcasecmp(attr, "multi")) return sdscatfmt(sdsempty(), "%i", client->mstate ? client->mstate->count : -1);
+    if (!strcasecmp(attr, "watch")) return sdscatfmt(sdsempty(), "%i", client->mstate ? (int)listLength(&client->mstate->watched_keys) : 0);
+    if (!strcasecmp(attr, "qbuf")) return sdscatfmt(sdsempty(), "%i", client->querybuf ? (unsigned long long)sdslen(client->querybuf) : 0);
+    if (!strcasecmp(attr, "qbuf-free")) return sdscatfmt(sdsempty(), "%i", client->querybuf ? (unsigned long long)sdsavail(client->querybuf) : 0);
+    if (!strcasecmp(attr, "argv-mem")) return sdscatfmt(sdsempty(), "%U", (unsigned long long)client->argv_len_sum);
+    if (!strcasecmp(attr, "multi-mem")) return sdscatfmt(sdsempty(), "%U", client->mstate ? (unsigned long long)client->mstate->argv_len_sums : 0);
+    if (!strcasecmp(attr, "rbs")) return sdscatfmt(sdsempty(), "%U", (unsigned long long)client->buf_usable_size);
+    if (!strcasecmp(attr, "rbp")) return sdscatfmt(sdsempty(), "%U", (unsigned long long)client->buf_peak);
+    if (!strcasecmp(attr, "obl")) return sdscatfmt(sdsempty(), "%U", (unsigned long long)client->bufpos);
+    if (!strcasecmp(attr, "oll")) {
+        size_t used_blocks_of_repl_buf = 0;
+        if (client->repl_data && client->repl_data->ref_repl_buf_node) {
+            replBufBlock *last = listNodeValue(listLast(server.repl_buffer_blocks));
+            replBufBlock *cur = listNodeValue(client->repl_data->ref_repl_buf_node);
+            used_blocks_of_repl_buf = last->id - cur->id + 1;
+        }
+        return sdscatfmt(sdsempty(), "%U", (unsigned long long)listLength(client->reply) + used_blocks_of_repl_buf);
+    }
+    if (!strcasecmp(attr, "omem")) {
+        /* should not include client->buf since we want to see 0 for static clients. */
+        size_t obufmem;
+        getClientMemoryUsage(client, &obufmem);
+        return sdscatfmt(sdsempty(), "%U", (unsigned long long)obufmem);
+    }
+    if (!strcasecmp(attr, "tot-mem")) {
+        size_t obufmem, total_mem = getClientMemoryUsage(client, &obufmem);
+        return sdscatfmt(sdsempty(), "%U", (unsigned long long)total_mem);
+    }
+    if (!strcasecmp(attr, "events")) {
+        char events[3], *p = events;
+        if (client->conn) {
+            if (connHasReadHandler(client->conn)) *p++ = 'r';
+            if (connHasWriteHandler(client->conn)) *p++ = 'w';
+        }
+        *p = '\0';
+        return sdscat(sdsempty(), events);
+    }
+    if (!strcasecmp(attr, "cmd")) return sdscat(sdsempty(), client->lastcmd ? client->lastcmd->fullname : "NULL");
+    if (!strcasecmp(attr, "user")) return sdscat(sdsempty(), hide_user_data ? "*redacted*" : (client->user ? client->user->name : "(superuser)"));
+    if (!strcasecmp(attr, "redir")) return sdscatfmt(sdsempty(), "%I", (client->flag.tracking) ? (long long)client->pubsub_data->client_tracking_redirection : -1);
+    if (!strcasecmp(attr, "resp")) return sdscatfmt(sdsempty(), "%i", client->resp);
+    if (!strcasecmp(attr, "lib-name")) return sdscat(sdsempty(), client->lib_name ? (char *)client->lib_name->ptr : "");
+    if (!strcasecmp(attr, "lib-ver")) return sdscat(sdsempty(), client->lib_ver ? (char *)client->lib_ver->ptr : "");
+    if (!strcasecmp(attr, "tot-net-in")) return sdscatfmt(sdsempty(), "%U", client->net_input_bytes);
+    if (!strcasecmp(attr, "tot-net-out")) return sdscatfmt(sdsempty(), "%U", client->net_output_bytes);
+    if (!strcasecmp(attr, "tot-cmds")) return sdscatfmt(sdsempty(), "%U", client->commands_processed);
+
+    return sdscat(sdsempty(), "unknown_field");
+}
+
 /* Concatenate a string representing the state of a client in a human
  * readable format, into the sds string 's'. */
 sds catClientInfoString(sds s, client *client, int hide_user_data) {
     if (!server.crashed) waitForClientIO(client);
-    char flags[17], events[3], capa[9], conninfo[CONN_INFO_LEN], *p;
-
-    p = flags;
-    if (client->flag.replica) {
-        if (client->flag.monitor)
-            *p++ = 'O';
-        else
-            *p++ = 'S';
+    const char *fields[] = {
+        "id", "addr", "laddr", "fd", "name", "age", "idle", "flags", "capa",
+        "db", "sub", "psub", "ssub", "multi", "watch", "qbuf", "qbuf-free",
+        "argv-mem", "multi-mem", "rbs", "rbp", "obl", "oll", "omem", "tot-mem",
+        "events", "cmd", "user", "redir", "resp", "lib-name", "lib-ver",
+        "tot-net-in", "tot-net-out", "tot-cmds"};
+    int num_fields = sizeof(fields) / sizeof(fields[0]);
+    for (int i = 0; i < num_fields; i++) {
+        sds attr = getClientInfoAttribute(client, fields[i], hide_user_data);
+        s = sdscatfmt(s, "%s=%s ", fields[i], attr);
+        sdsfree(attr);
     }
-
-    if (client->flag.primary) *p++ = 'M';
-    if (client->flag.pubsub) *p++ = 'P';
-    if (client->flag.multi) *p++ = 'x';
-    if (client->flag.blocked) *p++ = 'b';
-    if (client->flag.tracking) *p++ = 't';
-    if (client->flag.tracking_broken_redir) *p++ = 'R';
-    if (client->flag.tracking_bcast) *p++ = 'B';
-    if (client->flag.dirty_cas) *p++ = 'd';
-    if (client->flag.close_after_reply) *p++ = 'c';
-    if (client->flag.unblocked) *p++ = 'u';
-    if (client->flag.close_asap) *p++ = 'A';
-    if (client->flag.unix_socket) *p++ = 'U';
-    if (client->flag.readonly) *p++ = 'r';
-    if (client->flag.no_evict) *p++ = 'e';
-    if (client->flag.no_touch) *p++ = 'T';
-    if (client->flag.import_source) *p++ = 'I';
-    if (p == flags) *p++ = 'N';
-    *p++ = '\0';
-
-    p = events;
-    if (client->conn) {
-        if (connHasReadHandler(client->conn)) *p++ = 'r';
-        if (connHasWriteHandler(client->conn)) *p++ = 'w';
-    }
-    *p = '\0';
-
-    p = capa;
-    if (client->capa & CLIENT_CAPA_REDIRECT) *p++ = 'r';
-    *p = '\0';
-
-    /* Compute the total memory consumed by this client. */
-    size_t obufmem, total_mem = getClientMemoryUsage(client, &obufmem);
-
-    size_t used_blocks_of_repl_buf = 0;
-    if (client->repl_data && client->repl_data->ref_repl_buf_node) {
-        replBufBlock *last = listNodeValue(listLast(server.repl_buffer_blocks));
-        replBufBlock *cur = listNodeValue(client->repl_data->ref_repl_buf_node);
-        used_blocks_of_repl_buf = last->id - cur->id + 1;
-    }
-    sds ret = sdscatfmt(
-        s,
-        FMTARGS(
-            "id=%U", (unsigned long long)client->id,
-            " addr=%s", getClientPeerId(client),
-            " laddr=%s", getClientSockname(client),
-            " %s", connGetInfo(client->conn, conninfo, sizeof(conninfo)),
-            " name=%s", hide_user_data ? "*redacted*" : (client->name ? (char *)client->name->ptr : ""),
-            " age=%I", (long long)(commandTimeSnapshot() / 1000 - client->ctime),
-            " idle=%I", (long long)(server.unixtime - client->last_interaction),
-            " flags=%s", flags,
-            " capa=%s", capa,
-            " db=%i", client->db->id,
-            " sub=%i", client->pubsub_data ? (int)dictSize(client->pubsub_data->pubsub_channels) : 0,
-            " psub=%i", client->pubsub_data ? (int)dictSize(client->pubsub_data->pubsub_patterns) : 0,
-            " ssub=%i", client->pubsub_data ? (int)dictSize(client->pubsub_data->pubsubshard_channels) : 0,
-            " multi=%i", client->mstate ? client->mstate->count : -1,
-            " watch=%i", client->mstate ? (int)listLength(&client->mstate->watched_keys) : 0,
-            " qbuf=%U", client->querybuf ? (unsigned long long)sdslen(client->querybuf) : 0,
-            " qbuf-free=%U", client->querybuf ? (unsigned long long)sdsavail(client->querybuf) : 0,
-            " argv-mem=%U", (unsigned long long)client->argv_len_sum,
-            " multi-mem=%U", client->mstate ? (unsigned long long)client->mstate->argv_len_sums : 0,
-            " rbs=%U", (unsigned long long)client->buf_usable_size,
-            " rbp=%U", (unsigned long long)client->buf_peak,
-            " obl=%U", (unsigned long long)client->bufpos,
-            " oll=%U", (unsigned long long)listLength(client->reply) + used_blocks_of_repl_buf,
-            " omem=%U", (unsigned long long)obufmem, /* should not include client->buf since we want to see 0 for static clients. */
-            " tot-mem=%U", (unsigned long long)total_mem,
-            " events=%s", events,
-            " cmd=%s", client->lastcmd ? client->lastcmd->fullname : "NULL",
-            " user=%s", hide_user_data ? "*redacted*" : (client->user ? client->user->name : "(superuser)"),
-            " redir=%I", (client->flag.tracking) ? (long long)client->pubsub_data->client_tracking_redirection : -1,
-            " resp=%i", client->resp,
-            " lib-name=%s", client->lib_name ? (char *)client->lib_name->ptr : "",
-            " lib-ver=%s", client->lib_ver ? (char *)client->lib_ver->ptr : "",
-            " tot-net-in=%U", client->net_input_bytes,
-            " tot-net-out=%U", client->net_output_bytes,
-            " tot-cmds=%U", client->commands_processed));
-    return ret;
+    return s;
 }
 
 /* Concatenate a string representing the state of a client in a human
@@ -3441,20 +3463,15 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
  * it only added some basic fields for tracking clients. */
 sds catClientInfoShortString(sds s, client *client, int hide_user_data) {
     if (!server.crashed) waitForClientIO(client);
-    char conninfo[CONN_INFO_LEN];
-
-    sds ret = sdscatfmt(
-        s,
-        FMTARGS(
-            "id=%U", (unsigned long long)client->id,
-            " addr=%s", getClientPeerId(client),
-            " laddr=%s", getClientSockname(client),
-            " %s", connGetInfo(client->conn, conninfo, sizeof(conninfo)),
-            " name=%s", hide_user_data ? "*redacted*" : (client->name ? (char *)client->name->ptr : ""),
-            " user=%s", hide_user_data ? "*redacted*" : (client->user ? client->user->name : "(superuser)"),
-            " lib-name=%s", client->lib_name ? (char *)client->lib_name->ptr : "",
-            " lib-ver=%s", client->lib_ver ? (char *)client->lib_ver->ptr : ""));
-    return ret;
+    const char *fields[] = {
+        "id", "addr", "laddr", "fd", "name", "user", "lib-name", "lib-ver"};
+    int num_fields = sizeof(fields) / sizeof(fields[0]);
+    for (int i = 0; i < num_fields; i++) {
+        sds attr = getClientInfoAttribute(client, fields[i], hide_user_data);
+        s = sdscatfmt(s, "%s=%s ", fields[i], attr);
+        sdsfree(attr);
+    }
+    return s;
 }
 
 sds getAllClientsInfoString(int type, int hide_user_data) {
@@ -3785,8 +3802,26 @@ void clientIDCommand(client *c) {
 }
 
 void clientInfoCommand(client *c) {
-    sds info = catClientInfoString(sdsempty(), c, 0);
-    info = sdscatlen(info, "\n", 1);
+    sds info = sdsempty();
+
+    if (c->argc == 2) {
+        // get all client info
+        info = catClientInfoString(info, c, 0);
+        info = sdscatlen(info, "\n", 1);
+    } else if (c->argc == 3) {
+        // get a specific client info attribute
+        sds attr = getClientInfoAttribute(c, c->argv[2]->ptr, 0);
+        info = sdscatsds(info, attr);
+        sdsfree(attr);
+    } else {
+        // concatenate provided attributes
+        for (int i = 2; i < c->argc; i++) {
+            sds attr = getClientInfoAttribute(c, c->argv[i]->ptr, 0);
+            info = sdscatfmt(info, "%s=%S ", c->argv[i]->ptr, attr);
+            sdsfree(attr);
+        }
+        info = sdscatlen(info, "\n", 1);
+    }
     addReplyVerbatim(c, info, sdslen(info), "txt");
     sdsfree(info);
 }

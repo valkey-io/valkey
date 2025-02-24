@@ -4,9 +4,15 @@
         "complexity": "O(1)",
         "group": "connection",
         "since": "6.2.0",
-        "arity": 2,
+        "arity": -2,
         "container": "CLIENT",
         "function": "clientInfoCommand",
+        "history": [
+            [
+                "9.0.0",
+                "Added filter to retrieve specific fields or a single field value."
+            ]
+        ],
         "command_flags": [
             "NOSCRIPT",
             "LOADING",

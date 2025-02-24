@@ -19,9 +19,20 @@ start_server {tags {"introspection"}} {
         r client info
     } {id=* addr=*:* laddr=*:* fd=* name=* age=* idle=* flags=N capa= db=* sub=0 psub=0 ssub=0 multi=-1 watch=0 qbuf=0 qbuf-free=* argv-mem=* multi-mem=0 rbs=* rbp=* obl=0 oll=0 omem=0 tot-mem=* events=r cmd=client|info user=* redir=-1 resp=* lib-name=* lib-ver=* tot-net-in=* tot-net-out=* tot-cmds=*}
 
+    test {CLIENT INFO with ADDR field} {
+        r client info addr
+    } {*:*}
+
+    test {CLIENT INFO with multiple fields} {
+        r client info id addr laddr fd name age
+    } {id=* addr=*:* laddr=*:* fd=* name=* age=*}
+
+    test {CLIENT INFO with unknown field} {
+        r client info unknown
+    } {unknown_field}
+
     test {CLIENT LIST with ADDR filter} {
-        set client_info [r client info]
-        regexp {addr=([^ ]+)} $client_info match myaddr
+        set myaddr [r client info addr]
         set cl [split [r client list addr $myaddr] "\r\n"]
         regexp {addr=([^ ]+) .* cmd=([^ ]+)} [lindex $cl 0] _ actual_addr actual_cmd
         assert_equal $myaddr $actual_addr
@@ -29,8 +40,7 @@ start_server {tags {"introspection"}} {
     }
 
     test {CLIENT LIST with LADDR filter} {
-        set client_info [r client info]
-        regexp {laddr=([^ ]+)} $client_info match myladdr
+        set myladdr [r client info laddr]
         set cl [split [r client list laddr $myladdr] "\r\n"]
 
         regexp {laddr=([^ ]+)} [lindex $cl 0] _ actual_laddr
@@ -57,8 +67,7 @@ start_server {tags {"introspection"}} {
     }
 
     test {CLIENT LIST with USER filter} {
-        set client_info [r client info]
-        regexp {user=([^ ]+)} $client_info match myuser
+        set myuser [r client info user]
         set cl [split [r client list user $myuser] "\r\n"]
 
         foreach line $cl {

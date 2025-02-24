@@ -35,6 +35,7 @@ clen = "clen"
 fle = "fle"
 nd = "nd"
 ot = "ot"
+oll = "oll"
 
 [type.tcl.extend-identifiers]
 oll = "oll"

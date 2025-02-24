@@ -406,11 +406,12 @@ int trySendWriteToIOThreads(client *c) {
         if (c->io_last_reply_block) {
             clientReplyBlock *block = (clientReplyBlock *)listNodeValue(c->io_last_reply_block);
             c->io_last_bufpos = block->used;
-            /* If reply offload enabled force new header */
-            block->last_header = NULL;
+            /* If buffer is encoded force new header */
+            if (block->flag.buf_encoded) block->last_header = NULL;
         } else {
             c->io_last_bufpos = (size_t)c->bufpos;
-            c->last_header = NULL;
+            /* If buffer is encoded force new header */
+            if (c->flag.buf_encoded) c->last_header = NULL;
         }
     }
 

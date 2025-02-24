@@ -795,11 +795,8 @@ typedef struct ClientReplyBlockFlags {
  * which is actually a linked list of blocks like that, that is: client->reply. */
 typedef struct clientReplyBlock {
     size_t size, used;
-    payloadHeader *last_header;
-    union {
-        uint8_t raw_flag;
-        ClientReplyBlockFlags flag;
-    };
+    payloadHeader *last_header; /* points to a last header in an encoded buffer */
+    ClientReplyBlockFlags flag;
     char buf[];
 } clientReplyBlock;
 
@@ -1187,6 +1184,14 @@ typedef struct ClientModuleData {
                                                 * unloaded for cleanup. Opaque for the Server Core.*/
 } ClientModuleData;
 
+typedef struct LastWrittenBuf {
+    char *buf;       /* Last buffer that has been written to the client connection
+                      * Last buffer is either c->buf or c->reply list node (i.e. buf from a clientReplyBlock) */
+    size_t bufpos;   /* The buffer has been written until this position */
+    size_t data_len; /* The actual reply length written from this buffer
+                      * This length differs from bufpos in case of copy avoidance */
+} LastWrittenBuf;
+
 typedef struct client {
     /* Basic client information and connection. */
     uint64_t id; /* Client incremental unique ID. */
@@ -1222,11 +1227,7 @@ typedef struct client {
     list *reply;                         /* List of reply objects to send to the client. */
     listNode *io_last_reply_block;       /* Last client reply block when sent to IO thread */
     size_t io_last_bufpos;               /* The client's bufpos at the time it was sent to the IO thread */
-    char *io_last_written_buf;           /* Last buffer that has been written to the client connection
-                                          * Last buffer is either c->buf or c->reply list node (i.e. buf from a clientReplyBlock) */
-    size_t io_last_written_bufpos;       /* The buffer has been written until this position */
-    size_t io_last_written_data_len;     /* The actual length of the data written from this buffer
-                                            This length differs from written bufpos in case of reply offload */
+    LastWrittenBuf io_last_written;      /* Track state for last written buffer */
     unsigned long long reply_bytes;      /* Tot bytes of objects in reply list. */
     listNode clients_pending_write_node; /* list node in clients_pending_write or in clients_pending_io_write list */
     size_t bufpos;
@@ -1684,7 +1685,6 @@ struct valkeyServer {
 
     /* Reply construction copy avoidance */
     int min_io_threads_copy_avoid;           /* Minimum number of IO threads for copy avoidance in reply construction */
-    int min_io_threads_value_prefetch_off;   /* Minimum number of IO threads for disabling value prefetch */
     int min_string_size_copy_avoid_threaded; /* Minimum bulk string size for copy avoidance in reply construction when IO threads enabled */
     int min_string_size_copy_avoid;          /* Minimum bulk string size for copy avoidance in reply construction when IO threads disabled */
 

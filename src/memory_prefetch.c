@@ -120,7 +120,7 @@ static void prefetchEntry(KeyPrefetchInfo *info) {
     if (hashtableIncrementalFindStep(&info->hashtab_state) == 1) {
         /* Not done yet */
         moveToNextKey();
-    } else if (server.io_threads_num >= server.min_io_threads_value_prefetch_off) {
+    } else if (server.io_threads_num >= server.min_io_threads_copy_avoid) {
         /* Copy avoidance should be more efficient without value prefetch
          * starting certain number of I/O threads */
         markKeyAsdone(info);

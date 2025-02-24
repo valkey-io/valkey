@@ -963,15 +963,15 @@ int clientsCronResizeQueryBuffer(client *c) {
  * The buffer peak will be reset back to the buffer position every server.reply_buffer_peak_reset_time milliseconds
  * The function always returns 0 as it never terminates the client. */
 int clientsCronResizeOutputBuffer(client *c, mstime_t now_ms) {
-    if (c->io_write_state != CLIENT_IDLE) return 0;
+    /* in case the resizing is disabled return immediately */
+    if (!server.reply_buffer_resizing_enabled) return 0;
+
+    if (c->io_write_state != CLIENT_IDLE || c->flag.buf_encoded) return 0;
 
     size_t new_buffer_size = 0;
     char *oldbuf = NULL;
     const size_t buffer_target_shrink_size = c->buf_usable_size / 2;
     const size_t buffer_target_expand_size = c->buf_usable_size * 2;
-
-    /* in case the resizing is disabled return immediately */
-    if (!server.reply_buffer_resizing_enabled) return 0;
 
     if (buffer_target_shrink_size >= PROTO_REPLY_MIN_BYTES && c->buf_peak < buffer_target_shrink_size) {
         new_buffer_size = max(PROTO_REPLY_MIN_BYTES, c->buf_peak + 1);

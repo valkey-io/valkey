@@ -717,7 +717,7 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/valkey-unit-tests  --large-memory
+        run: ./src/valkey-unit-tests --large-memory
 
   test-sanitizer-undefined:
     runs-on: ubuntu-latest

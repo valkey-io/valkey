@@ -232,7 +232,7 @@ run_solo {defrag} {
         test $title {
             set n 200000
 
-            perform_defrag_test $title {
+            perform_defrag_test $title populate {
                 # add a mass of string keys
                 set rd [valkey_deferring_client]
                 for {set j 0} {$j < $n} {incr j} {

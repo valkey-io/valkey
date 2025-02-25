@@ -489,9 +489,10 @@ run_solo {defrag} {
             set chan [string repeat A 50]
 
             # https://github.com/valkey-io/valkey/issues/1774
-            # NOTE - pubsub defrag isn't working properly.  This wasn't caught before the test refactor.
-            #  This commented out code should work.  Instead, is substituted code which verifies that
-            #  defrag doesn't break the pubsub, but defrag efficacy is not verified.
+            # NOTE - pubsub defrag isn't working properly.  This wasn't caught before the
+            #  test refactor.  This commented out code should work.  Instead, is substituted
+            # code which verifies that defrag doesn't break the pubsub, but defrag efficacy
+            # is not verified.
             # perform_defrag_test $title {
             #     for {set j 0} {$j < $n} {incr j} {
             #         set channel $chan$j

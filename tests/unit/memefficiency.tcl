@@ -297,7 +297,7 @@ run_solo {defrag} {
                 log_frag "after AOF loading"
                 # make sure the defragger did enough work to keep the fragmentation low during loading.
                 # we cannot check that it went all the way down, as we don't continue to defrag after loading complete.
-                validate_frag_ratio LT 1.4
+                validate_frag_ratio < 1.4
 
                 # The AOF contains simple (fast) SET commands (and the cron during loading runs every 1024 commands).
                 # Even so, defrag can get starved for periods exceeding 100ms.  Using 200ms for test stability, and

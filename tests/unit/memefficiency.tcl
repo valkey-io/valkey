@@ -153,7 +153,7 @@ run_solo {defrag} {
         } elseif {$op == ">"} {
             assert_morethan $frag $value
         } else {
-            error "Operator value($op) must be 'LT' or 'GT'"
+            error "Operator value($op) must be '<' or '>'"
         }
     }
 

@@ -142,7 +142,7 @@ run_solo {defrag} {
             puts "Validating frag ($frag) is $op $value"
         }
         set allocated_bytes [s allocator_allocated]
-        if {$allocated_bytes < 20 * $::one_mb} {
+        if {$allocated_bytes < 20 * 1024 * 1024} {
             # If allocated bytes is too small, the ratios get wonky.  Since we use 2MB for
             # active-defrag-ignore-bytes, let's make sure that we have at least 10x that amount
             # allocated before trying to verify any fragmentation ratios.  Otherwise the tests

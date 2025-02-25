@@ -1042,7 +1042,6 @@ static void endDefragCycle(bool normal_termination) {
         // For normal termination, we expect...
         serverAssert(!defrag.current_stage);
         serverAssert(listLength(defrag.remaining_stages) == 0);
-        serverAssert(!defrag_later || listLength(defrag_later) == 0);
     } else {
         // Defrag is being terminated abnormally
         aeDeleteTimeEvent(server.el, defrag.timeproc_id);
@@ -1058,6 +1057,8 @@ static void endDefragCycle(bool normal_termination) {
     listRelease(defrag.remaining_stages);
     defrag.remaining_stages = NULL;
 
+    /* For a normal termination, this list is usually empty, but it might contain elements
+     *  if a stage was aborted due to a flushall or some other DB swap. */
     if (defrag_later) {
         listRelease(defrag_later);
         defrag_later = NULL;

@@ -464,16 +464,6 @@ int connNonBlock(connection *conn) {
     return anetNonBlock(NULL, conn->fd);
 }
 
-int connEnableTcpNoDelay(connection *conn) {
-    if (conn->fd == -1) return C_ERR;
-    return anetEnableTcpNoDelay(NULL, conn->fd);
-}
-
-int connDisableTcpNoDelay(connection *conn) {
-    if (conn->fd == -1) return C_ERR;
-    return anetDisableTcpNoDelay(NULL, conn->fd);
-}
-
 int connKeepAlive(connection *conn, int interval) {
     if (conn->fd == -1) return C_ERR;
     return anetKeepAlive(NULL, conn->fd, interval);

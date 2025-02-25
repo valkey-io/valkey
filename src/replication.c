@@ -1152,7 +1152,7 @@ void syncCommand(client *c) {
     /* Setup the replica as one waiting for BGSAVE to start. The following code
      * paths will change the state if we handle the replica differently. */
     c->repl_data->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
-    if (server.repl_disable_tcp_nodelay) connDisableTcpNoDelay(c->conn); /* Non critical if it fails. */
+    if (server.repl_disable_tcp_nodelay) anetDisableTcpNoDelay(NULL, c->conn); /* Non critical if it fails. */
     c->repl_data->repldbfd = -1;
     c->flag.replica = 1;
     listAddNodeTail(server.replicas, c);

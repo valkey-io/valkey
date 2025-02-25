@@ -4676,12 +4676,9 @@ int clusterGetFailedPrimaryRank(void) {
         if (!nodeFailed(node) || !clusterNodeIsVotingPrimary(node) || node->num_replicas == 0) continue;
 
         /* If cluster-replica-validity-factor is enabled, skip the invalid nodes. */
-        if (nodeFailed(node) && server.cluster_replica_validity_factor) {
-            if ((now - node->fail_time) > (server.cluster_node_timeout * server.cluster_replica_validity_factor)) {
-                serverLog(LL_DEBUG, "Skip failed primary rank since validity factor is enabled. node failed time: %llu",
-                          (unsigned long long)node->fail_time);
+        if (server.cluster_replica_validity_factor) {
+            if ((now - node->fail_time) > (server.cluster_node_timeout * server.cluster_replica_validity_factor))
                 continue;
-            }
         }
 
         if (memcmp(node->shard_id, myself->shard_id, CLUSTER_NAMELEN) < 0) rank++;

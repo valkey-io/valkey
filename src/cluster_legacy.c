@@ -3525,6 +3525,9 @@ int clusterProcessPacket(clusterLink *link) {
                                       sender->name, sender->human_nodename, sender->shard_id,
                                       (unsigned long long)sender_claimed_config_epoch,
                                       (unsigned long long)sender->configEpoch);
+                            /* This packet is stale so we avoid processing it anymore. Otherwise
+                             * this may cause a primary-replica chain issue. */
+                            return 1;
                         } else {
                             /* `primary` is still a `replica` in this observer node's view;
                              * update its role and configEpoch */

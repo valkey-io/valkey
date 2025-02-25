@@ -39,8 +39,8 @@
  * in the field SDS header. Field type SDS_TYPE_5 doesn't have any spare bits to
  * encode this so we use it only for the first layout type.
  *
- * ENTRY_ENC_EMB_VALUE, used when it fits in a cache line. The value is stored
- * as SDS_TYPE_8. The field can use any SDS type.
+ * Entry with embedded value, used for small sizes. The value is stored as
+ * SDS_TYPE_8. The field can use any SDS type.
  *
  *     +--------------+---------------+
  *     | field        | value         |
@@ -50,8 +50,8 @@
  *            |
  *          entry pointer = field sds
  *
- * ENTRY_ENC_PTR_VALUE, with value pointer, used for larger fields and values.
- * The field is SDS type 8 or higher.
+ * Entry with value pointer, used for larger fields and values. The field is SDS
+ * type 8 or higher.
  *
  *     +-------+--------------+
  *     | value | field        |
@@ -62,29 +62,26 @@
  *                 entry pointer = field sds
  */
 
-typedef enum {
-    ENTRY_ENC_EMB_VALUE = 0,
-    ENTRY_ENC_PTR_VALUE = 1
-} hashTypeEntryEnc;
+/* The maximum allocation size we want to use for entries with embedded
+ * values. */
+#define EMBED_VALUE_MAX_ALLOC_SIZE 128
 
-#define FIELD_SDS_AUX_BIT_ENTRY_HAS_PTR_VALUE 0
+/* SDS aux flag. If set, it indicates that the entry has an embedded value
+ * pointer located in memory before the embedded field. If unset, the entry
+ * instead has an embedded value located after the embedded field. */
+#define FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR 0
 
-/* Struct used for ENTRY_ENC_PTR_VALUE. */
-typedef struct {
-    sds value;
-    char field_data[];
-} hashTypeEntryPtrValue;
-
-static inline hashTypeEntryEnc entryGetEncoding(const hashTypeEntry *entry) {
-    return sdsGetAuxBit(entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_PTR_VALUE);
+static inline bool entryHasValuePtr(const hashTypeEntry *entry) {
+    return sdsGetAuxBit(entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR);
 }
 
-/* Returns the containing struct for an entry without embedded value. */
-static hashTypeEntryPtrValue *getEntryStruct(const hashTypeEntry *entry) {
-    serverAssert(entryGetEncoding(entry) == ENTRY_ENC_PTR_VALUE);
-    unsigned char *buf = sdsAllocPtr(entry);
-    buf -= offsetof(hashTypeEntryPtrValue, field_data);
-    return (void *)buf;
+/* Returns the location of a pointer to a separately allocated value. Only for
+ * an entry without an embedded value. */
+static sds *hashTypeEntryGetValueRef(const hashTypeEntry *entry) {
+    serverAssert(entryHasValuePtr(entry));
+    char *field_data = sdsAllocPtr(entry);
+    field_data -= sizeof(sds *);
+    return (sds *)(void *)field_data;
 }
 
 /* takes ownership of value, does not take ownership of field */
@@ -95,7 +92,7 @@ hashTypeEntry *hashTypeCreateEntry(sds field, sds value) {
     size_t value_len = sdslen(value);
     size_t value_size = sdsReqSize(value_len, SDS_TYPE_8);
     sds embedded_field_sds;
-    if (field_size + value_size <= CACHE_LINE_SIZE) {
+    if (field_size + value_size <= EMBED_VALUE_MAX_ALLOC_SIZE) {
         /* Embed field and value. Value is fixed to SDS_TYPE_8.
          *
          *     +--------------+---------------+
@@ -106,12 +103,11 @@ hashTypeEntry *hashTypeCreateEntry(sds field, sds value) {
         size_t min_size = field_size + value_size;
         size_t buf_size;
         char *buf = zmalloc_usable(min_size, &buf_size);
-        sdswrite(buf, field_size, field_sds_type, field, field_len);
+        embedded_field_sds = sdswrite(buf, field_size, field_sds_type, field, field_len);
         sdswrite(buf + field_size, buf_size - field_size, SDS_TYPE_8, value, value_len);
-        embedded_field_sds = (sds)(buf + sdsHdrSize(field_sds_type));
         /* Field sds aux bits are zero, which we use for this entry encoding. */
-        sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_ENTRY_HAS_PTR_VALUE, 0);
-        serverAssert(entryGetEncoding(embedded_field_sds) == ENTRY_ENC_EMB_VALUE);
+        sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, 0);
+        serverAssert(!entryHasValuePtr(embedded_field_sds));
         sdsfree(value);
     } else {
         /* Embed field, but not value. Field must be >= SDS_TYPE_8 to encode to
@@ -125,14 +121,13 @@ hashTypeEntry *hashTypeCreateEntry(sds field, sds value) {
         char field_sds_type = sdsReqType(field_len);
         if (field_sds_type == SDS_TYPE_5) field_sds_type = SDS_TYPE_8;
         field_size = sdsReqSize(field_len, field_sds_type);
-        size_t alloc_size = sizeof(void *) + field_size;
-        hashTypeEntryPtrValue *entry = zmalloc(alloc_size);
-        entry->value = value;
-        sdswrite(entry->field_data, field_size, field_sds_type, field, field_len);
-        embedded_field_sds = (sds)(entry->field_data + sdsHdrSize(field_sds_type));
+        size_t alloc_size = sizeof(sds *) + field_size;
+        char *buf = zmalloc(alloc_size);
+        *(sds *)buf = value;
+        embedded_field_sds = sdswrite(buf + sizeof(sds *), field_size, field_sds_type, field, field_len);
         /* Store the entry encoding type in sds aux bits. */
-        sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_ENTRY_HAS_PTR_VALUE, 1);
-        serverAssert(entryGetEncoding(embedded_field_sds) == ENTRY_ENC_PTR_VALUE);
+        sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, 1);
+        serverAssert(entryHasValuePtr(embedded_field_sds));
     }
     return (void *)embedded_field_sds;
 }
@@ -143,32 +138,23 @@ sds hashTypeEntryGetField(const hashTypeEntry *entry) {
 }
 
 sds hashTypeEntryGetValue(const hashTypeEntry *entry) {
-    switch (entryGetEncoding(entry)) {
-    case ENTRY_ENC_EMB_VALUE: {
+    if (entryHasValuePtr(entry)) {
+        return *hashTypeEntryGetValueRef(entry);
+    } else {
         /* Skip field content, field null terminator and value sds8 hdr. */
         size_t offset = sdslen(entry) + 1 + sdsHdrSize(SDS_TYPE_8);
         char *buf = (char *)entry + offset;
         return buf;
     }
-    case ENTRY_ENC_PTR_VALUE: {
-        const hashTypeEntryPtrValue *entry_struct = getEntryStruct(entry);
-        return entry_struct->value;
-    }
-    default:
-        serverPanic("Unknown type");
-    }
 }
 
 /* Returns the address of the entry allocation. */
 static void *hashTypeEntryAllocPtr(hashTypeEntry *entry) {
-    switch (entryGetEncoding(entry)) {
-    case ENTRY_ENC_EMB_VALUE:
-        return sdsAllocPtr(entry);
-    case ENTRY_ENC_PTR_VALUE:
-        return getEntryStruct(entry);
-    default:
-        serverPanic("Unknown type");
+    char *buf = sdsAllocPtr(entry);
+    if (entryHasValuePtr(entry)) {
+        buf -= sizeof(sds *);
     }
+    return buf;
 }
 
 /* Frees previous value, takes ownership of new value, returns entry (may be
@@ -178,14 +164,13 @@ static hashTypeEntry *hashTypeEntryReplaceValue(hashTypeEntry *entry, sds value)
     size_t field_size = sdsHdrSize(sdsType(field)) + sdsalloc(field) + 1;
     size_t value_len = sdslen(value);
     size_t value_size = sdsReqSize(value_len, SDS_TYPE_8);
-    switch (entryGetEncoding(entry)) {
-    case ENTRY_ENC_EMB_VALUE: {
+    if (!entryHasValuePtr(entry)) {
         /* Reuse the allocation if the new value fits and leaves no more than
          * 25% unused space after replacing the value. */
         char *alloc_ptr = sdsAllocPtr(entry);
         size_t required_size = field_size + value_size;
         size_t alloc_size;
-        if (required_size <= CACHE_LINE_SIZE &&
+        if (required_size <= EMBED_VALUE_MAX_ALLOC_SIZE &&
             required_size <= (alloc_size = zmalloc_usable_size(alloc_ptr)) &&
             required_size >= alloc_size * 3 / 4) {
             /* It fits in the allocation and leaves max 25% unused space. */
@@ -196,39 +181,30 @@ static hashTypeEntry *hashTypeEntryReplaceValue(hashTypeEntry *entry, sds value)
         hashTypeEntry *new_entry = hashTypeCreateEntry(hashTypeEntryGetField(entry), value);
         freeHashTypeEntry(entry);
         return new_entry;
-    }
-    case ENTRY_ENC_PTR_VALUE: {
-        if (field_size + value_size <= CACHE_LINE_SIZE) {
+    } else {
+        /* The value pointer is located before the embedded field. */
+        if (field_size + value_size <= EMBED_VALUE_MAX_ALLOC_SIZE) {
             /* Convert to entry with embedded value. */
             hashTypeEntry *new_entry = hashTypeCreateEntry(field, value);
             freeHashTypeEntry(entry);
             return new_entry;
         } else {
             /* Not embedded value. */
-            hashTypeEntryPtrValue *entry_struct = getEntryStruct(entry);
-            sdsfree(entry_struct->value);
-            entry_struct->value = value;
+            sds *value_ref = hashTypeEntryGetValueRef(entry);
+            *value_ref = value;
             return entry;
         }
-    }
-    default:
-        serverPanic("Unknown type");
     }
 }
 
 /* Returns memory usage of a hashTypeEntry, including all allocations owned by
  * the hashTypeEntry. */
 size_t hashTypeEntryMemUsage(hashTypeEntry *entry) {
-    switch (entryGetEncoding(entry)) {
-    case ENTRY_ENC_EMB_VALUE:
-        return zmalloc_usable_size(sdsAllocPtr(entry));
-    case ENTRY_ENC_PTR_VALUE: {
-        hashTypeEntryPtrValue *entry_struct = getEntryStruct(entry);
-        return zmalloc_usable_size(entry_struct) + sdsAllocSize(entry_struct->value);
+    size_t mem = zmalloc_usable_size(hashTypeEntryAllocPtr(entry));
+    if (entryHasValuePtr(entry)) {
+        mem += sdsAllocSize(*hashTypeEntryGetValueRef(entry));
     }
-    default:
-        serverPanic("Unknown type");
-    }
+    return mem;
 }
 
 /* Defragments a hashtable entry (field-value pair) if needed, using the
@@ -239,37 +215,28 @@ size_t hashTypeEntryMemUsage(hashTypeEntry *entry) {
  * If the location of the hashTypeEntry changed we return the new location,
  * otherwise we return NULL. */
 hashTypeEntry *hashTypeEntryDefrag(hashTypeEntry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds)) {
-    void *alloc_ptr = hashTypeEntryAllocPtr(entry);
-    switch (entryGetEncoding(entry)) {
-    case ENTRY_ENC_EMB_VALUE:
-        break;
-    case ENTRY_ENC_PTR_VALUE: {
-        hashTypeEntryPtrValue *entry_struct = alloc_ptr;
-        sds new_value = sdsdefragfn(entry_struct->value);
-        if (new_value) entry_struct->value = new_value;
-        break;
+    if (entryHasValuePtr(entry)) {
+        sds *value_ref = hashTypeEntryGetValueRef(entry);
+        sds new_value = sdsdefragfn(*value_ref);
+        if (new_value) *value_ref = new_value;
     }
-    default:
-        serverPanic("Unknown type");
-    }
-    return defragfn(alloc_ptr);
+    return defragfn(hashTypeEntryAllocPtr(entry));
 }
 
 /* Used for releasing memory to OS to avoid unnecessary CoW. Called when we've
  * forked and memory won't be used again. See zmadvise_dontneed() */
 void dismissHashTypeEntry(hashTypeEntry *entry) {
     /* Only dismiss values memory since the field size usually is small. */
-    if (entryGetEncoding(entry) == ENTRY_ENC_PTR_VALUE) {
-        dismissSds(getEntryStruct(entry)->value);
+    if (entryHasValuePtr(entry)) {
+        dismissSds(*hashTypeEntryGetValueRef(entry));
     }
 }
 
 void freeHashTypeEntry(hashTypeEntry *entry) {
-    void *alloc_ptr = hashTypeEntryAllocPtr(entry);
-    if (entryGetEncoding(entry) == ENTRY_ENC_PTR_VALUE) {
-        sdsfree(((hashTypeEntryPtrValue *)alloc_ptr)->value);
+    if (entryHasValuePtr(entry)) {
+        sdsfree(*hashTypeEntryGetValueRef(entry));
     }
-    zfree(alloc_ptr);
+    zfree(hashTypeEntryAllocPtr(entry));
 }
 
 /*-----------------------------------------------------------------------------

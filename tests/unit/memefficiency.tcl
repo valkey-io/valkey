@@ -218,7 +218,7 @@ run_solo {defrag} {
         perform_defrag $opts(while_defragging)
 
         log_frag "after defragging"
-        validate_frag_ratio LT 1.1
+        validate_frag_ratio < 1.1
         validate_latency $opts(latency)
 
         # verify the data isn't corrupted or changed

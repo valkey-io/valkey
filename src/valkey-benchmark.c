@@ -2020,14 +2020,17 @@ int main(int argc, char **argv) {
         if (test_is_selected("fcall")) {
             char *script = generateFunctionScript(1, config.num_keys_in_fcall > 0);
 
-            char *ip = config.conn_info.hostip;
-            int port = config.conn_info.hostport;
-            redisContext *conn = redisConnect(ip, port);
-            assert(conn != NULL && conn->err == 0);
-            void *reply = redisCommand(conn, "FUNCTION LOAD REPLACE %s", script);
+            redisContext *ctx = getRedisContext(config.conn_info.hostip, config.conn_info.hostport, NULL);
+            if (ctx == NULL) {
+                exit(1);
+            }
+
+            assert(ctx != NULL && ctx->err == 0);
+            void *reply = redisCommand(ctx, "FUNCTION LOAD REPLACE %s", script);
+
             assert(reply != NULL);
             freeReplyObject(reply);
-            redisFree(conn);
+            redisFree(ctx);
             zfree(script);
 
             char **cmd_argv = zmalloc(sizeof(char *) * (config.num_keys_in_fcall + 3));

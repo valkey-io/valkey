@@ -249,8 +249,8 @@ int propagateTestSimpleCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, 
     VALKEYMODULE_NOT_USED(argc);
 
     /* Replicate two commands to test MULTI/EXEC wrapping. */
-    ValkeyModule_Replicate(ctx,"INCR","c","counter-1");
-    ValkeyModule_Replicate(ctx,"INCR","c","counter-2");
+    ValkeyModule_Replicate(ctx, "INCR", "c", "counter-1");
+    ValkeyModule_Replicate(ctx, "INCR", "c", "counter-2");
     ValkeyModule_ReplyWithSimpleString(ctx,"OK");
     return VALKEYMODULE_OK;
 }
@@ -265,8 +265,8 @@ int propagateTestMixedCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, i
     reply = ValkeyModule_Call(ctx, "INCR", "c!", "using-call");
     ValkeyModule_FreeCallReply(reply);
 
-    ValkeyModule_Replicate(ctx,"INCR","c","counter-1");
-    ValkeyModule_Replicate(ctx,"INCR","c","counter-2");
+    ValkeyModule_Replicate(ctx, "INCR", "c", "counter-1");
+    ValkeyModule_Replicate(ctx, "INCR", "c", "counter-2");
 
     reply = ValkeyModule_Call(ctx, "INCR", "c!", "after-call");
     ValkeyModule_FreeCallReply(reply);
@@ -346,6 +346,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
             == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
     detached_ctx = ValkeyModule_GetDetachedThreadSafeContext(ctx);
+
+    /* This option tests skip command validation for ValkeyModule_Replicate */
+    ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION);
 
     if (ValkeyModule_SubscribeToKeyspaceEvents(ctx, VALKEYMODULE_NOTIFY_ALL, KeySpace_NotificationGeneric) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;

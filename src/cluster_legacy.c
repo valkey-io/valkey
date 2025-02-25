@@ -3103,7 +3103,10 @@ static void clusterProcessModulePacket(clusterMsgModule *module_data, clusterNod
     uint32_t len = ntohl(module_data->len);
     uint8_t type = module_data->type;
     unsigned char *payload = module_data->bulk_data;
-    moduleCallClusterReceivers(sender->name, module_id, type, payload, len);
+
+    sds sender_name = sdsnewlen(sender->name, CLUSTER_NAMELEN);
+    moduleCallClusterReceivers(sender_name, module_id, type, payload, len);
+    sdsfree(sender_name);
 }
 
 static void clusterProcessLightPacket(clusterNode *sender, clusterLink *link, uint16_t type) {
@@ -4841,6 +4844,10 @@ void clusterFailoverReplaceYourPrimary(void) {
 
     /* 5) If there was a manual failover in progress, clear the state. */
     resetManualFailover();
+
+    /* Since we have became a new primary node, we may rely on auth_time to
+     * determine whether a failover is in progress, so it is best to reset it. */
+    server.cluster->failover_auth_time = 0;
 }
 
 /* This function is called if we are a replica node and our primary serving
@@ -6296,6 +6303,10 @@ void clusterUpdateSlots(client *c, unsigned char *slots, int del) {
     }
 }
 
+/* Get the replication offset of a node.
+ *
+ * Nodes do not update their own information in the cluster state,
+ * so for self node, we cannot use `node->repl_offset` directly. */
 long long getNodeReplicationOffset(clusterNode *node) {
     if (node->flags & CLUSTER_NODE_MYSELF) {
         return nodeIsReplica(node) ? replicationGetReplicaOffset() : server.primary_repl_offset;
@@ -7349,10 +7360,6 @@ clusterNode *getNodeBySlot(int slot) {
 
 char *clusterNodeHostname(clusterNode *node) {
     return node->hostname;
-}
-
-long long clusterNodeReplOffset(clusterNode *node) {
-    return node->repl_offset;
 }
 
 const char *clusterNodePreferredEndpoint(clusterNode *n, client *c) {

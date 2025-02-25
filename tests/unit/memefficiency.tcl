@@ -405,7 +405,7 @@ run_solo {defrag} {
             # number of total fields.  sets are progressively increasing sizes.
             set n 200000
 
-            perform_defrag_test $title {
+            perform_defrag_test $title populate {
                 set rd [valkey_deferring_client]
                 set val [string repeat A 300]
                 set k 0

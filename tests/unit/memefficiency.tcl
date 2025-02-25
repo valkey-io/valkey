@@ -134,11 +134,11 @@ run_solo {defrag} {
     }
 
     # Validate expected fragmentation ratio
-    # op = "LT" (less than) or "GT" (greater than)
+    # op = "<" (less than) or ">" (greater than)
     proc validate_frag_ratio {op value} {
         set frag [s allocator_frag_ratio]
         if {$::verbose} {
-            puts "Validating frag ($frag) is $op $value"
+            puts "Validating frag ($frag) $op $value"
         }
         set allocated_bytes [s allocator_allocated]
         if {$allocated_bytes < 20 * 1024 * 1024} {
@@ -148,9 +148,9 @@ run_solo {defrag} {
             # are likely to get flaky.
             error "test error: trying to validate frag ratio with only $allocated_bytes allocated"
         }
-        if {$op == "LT"} {
+        if {$op == "<"} {
             assert_lessthan $frag $value
-        } elseif {$op == "GT"} {
+        } elseif {$op == ">"} {
             assert_morethan $frag $value
         } else {
             error "Operator value($op) must be 'LT' or 'GT'"

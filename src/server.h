@@ -151,7 +151,6 @@ struct hdr_histogram;
 #else
 #define CONFIG_ACTIVE_DEFRAG_DEFAULT 1
 #endif
-#define CLUSTER_NAMELEN 40
 
 /* Bucket sizes for client eviction pools. Each bucket stores clients with
  * memory usage of up to twice the size of the bucket below it. */
@@ -1155,7 +1154,7 @@ typedef struct ClientReplicationData {
                                            see the definition of replBufBlock. */
     size_t ref_block_pos;                /* Access position of referenced buffer block,
                                            i.e. the next offset to send. */
-    char nodeid[CLUSTER_NAMELEN];        /* Node id in cluster mode. */
+    sds replica_nodeid;                  /* Node id in cluster mode. */
 } ClientReplicationData;
 
 typedef struct ClientModuleData {

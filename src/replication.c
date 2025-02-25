@@ -1296,6 +1296,7 @@ void freeClientReplicationData(client *c) {
     }
     if (c->flag.primary) replicationHandlePrimaryDisconnection();
     sdsfree(c->repl_data->replica_addr);
+    sdsfree(c->repl_data->replica_nodeid);
     zfree(c->repl_data);
     c->repl_data = NULL;
 }
@@ -1503,12 +1504,19 @@ void replconfCommand(client *c) {
             c->repl_data->associated_rdb_client_id = (uint64_t)client_id;
         } else if (!strcasecmp(c->argv[j]->ptr, "set-cluster-node-id")) {
             /* REPLCONF SET-CLUSTER-NODE-ID <node-id> */
-            if (!server.cluster_enabled) return;
+            if (!server.cluster_enabled) {
+                addReplyError(c, "This instance has cluster support disabled");
+                return;
+            }
 
-            clusterNode *n = clusterLookupNode(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
-            if (!n) return;
+            clusterNode *n = clusterLookupNode(c->argv[2]->ptr, sdslen(c->argv[j + 1]->ptr));
+            if (!n) {
+                addReplyErrorFormat(c, "Unknown node %s", (char *)c->argv[j + 1]->ptr);
+                return;
+            }
 
-            memcpy(c->repl_data->nodeid, n->name, CLUSTER_NAMELEN);
+            if (c->repl_data->replica_nodeid) sdsfree(c->repl_data->replica_nodeid);
+            c->repl_data->replica_nodeid = sdsdup(c->argv[j + 1]->ptr);
         } else {
             addReplyErrorFormat(c, "Unrecognized REPLCONF option: %s", (char *)c->argv[j]->ptr);
             return;

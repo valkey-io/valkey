@@ -1269,7 +1269,8 @@ void clusterAutoFailoverOnShutdown(void) {
             break;
         }
         if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE &&
-            replica->repl_data->repl_ack_off == server.primary_repl_offset) {
+            replica->repl_data->repl_ack_off == server.primary_repl_offset &&
+            replica->repl_data->replica_nodeid && sdslen(replica->repl_data->replica_nodeid) == CLUSTER_NAMELEN) {
             best_replica = replica;
         }
     }
@@ -1296,12 +1297,12 @@ void clusterAutoFailoverOnShutdown(void) {
                              "$9\r\nREPLICAID\r\n"
                              "$%d\r\n%s\r\n",
                              CLUSTER_NAMELEN,
-                             best_replica->repl_data->nodeid);
+                             best_replica->repl_data->replica_nodeid);
     /* Must install write handler for all replicas first before feeding
      * replication stream. */
     prepareReplicasToWrite();
     feedReplicationBuffer(buf, buflen);
-    serverLog(LL_NOTICE, "Perform auto failover to replica %.40s on shutdown.", best_replica->repl_data->nodeid);
+    serverLog(LL_NOTICE, "Perform auto failover to replica %s on shutdown.", best_replica->repl_data->replica_nodeid);
 }
 
 /* Called when a cluster node receives SHUTDOWN. */

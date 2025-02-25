@@ -1039,6 +1039,8 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
     int pubsubshard_included =
         (cmd_flags & CMD_PUBSUB) || (c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_PUBSUB));
 
+    serverDb* currentDb = c->db;
+
     /* Check that all the keys are in the same hash slot, and obtain this
      * slot and the node associated. */
     for (i = 0; i < ms->count; i++) {
@@ -1055,6 +1057,16 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         initGetKeysResult(&result);
         numkeys = getKeysFromCommand(mcmd, margv, margc, &result);
         keyindex = result.keys;
+
+        if (mcmd->proc == selectCommand) {
+            int id;
+            if (getLongLongFromObject(margv[i], &id) != C_OK || (id < 0 || id >= server.dbnum)) {
+                if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
+                return NULL;
+            }
+            currentDb = server.db+id;
+        }
+
 
         for (j = 0; j < numkeys; j++) {
             robj *thiskey = margv[keyindex[j].pos];
@@ -1112,8 +1124,9 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
              * node until the migration completes with CLUSTER SETSLOT <slot>
              * NODE <node-id>. */
             int flags = LOOKUP_NOTOUCH | LOOKUP_NOSTATS | LOOKUP_NONOTIFY | LOOKUP_NOEXPIRE;
-            if ((migrating_slot || importing_slot) && !pubsubshard_included) {
-                if (lookupKeyReadWithFlags(c->db, thiskey, flags) == NULL)
+            if ((!c->flag.multi || c->flag.multi && cmd->proc == execCommand) && // Multi/Exec validation happens on exec
+                (migrating_slot || importing_slot) && !pubsubshard_included) {
+                if (lookupKeyReadWithFlags(currentDb, thiskey, flags) == NULL)
                     missing_keys++;
                 else
                     existing_keys++;

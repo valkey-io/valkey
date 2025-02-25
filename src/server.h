@@ -2584,8 +2584,6 @@ void populateCommandLegacyRangeSpec(struct serverCommand *c);
 long long ustime(void);
 mstime_t mstime(void);
 mstime_t commandTimeSnapshot(void);
-void getRandomHexChars(char *p, size_t len);
-void getRandomBytes(unsigned char *p, size_t len);
 uint64_t crc64(uint64_t crc, const unsigned char *s, uint64_t l);
 void exitFromChild(int retcode);
 long long serverPopcount(void *s, long count);

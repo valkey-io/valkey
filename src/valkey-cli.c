@@ -1989,6 +1989,10 @@ static sds cliFormatReplyRaw(redisReply *r) {
         break;
     default: fprintf(stderr, "Unknown reply type: %d\n", r->type); exit(1);
     }
+    /* Append newline only if the last character isn't already '\n' */
+    if (sdslen(out) > 0 && out[sdslen(out) - 1] != '\n') {
+        out = sdscatlen(out, "\n", 1);
+    }
     return out;
 }
 

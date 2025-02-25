@@ -1032,7 +1032,7 @@ void hashtableEmpty(hashtable *ht, void(callback)(hashtable *)) {
         if (ht->bucket_exp[table_index] < 0) {
             continue;
         }
-        if (ht->used[table_index] > 0) {
+        if (ht->used[table_index] > 0 || ht->child_buckets[table_index] > 0) {
             for (size_t idx = 0; idx < numBuckets(ht->bucket_exp[table_index]); idx++) {
                 if (callback && (idx & 65535) == 0) callback(ht);
                 bucket *b = &ht->tables[table_index][idx];
@@ -1058,6 +1058,7 @@ void hashtableEmpty(hashtable *ht, void(callback)(hashtable *)) {
                 } while (b != NULL);
             }
         }
+
         zfree(ht->tables[table_index]);
         if (ht->type->trackMemUsage) {
             ht->type->trackMemUsage(ht, -sizeof(bucket) * numBuckets(ht->bucket_exp[table_index]));

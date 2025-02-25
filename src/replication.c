@@ -1509,7 +1509,7 @@ void replconfCommand(client *c) {
                 return;
             }
 
-            clusterNode *n = clusterLookupNode(c->argv[2]->ptr, sdslen(c->argv[j + 1]->ptr));
+            clusterNode *n = clusterLookupNode(c->argv[j + 1]->ptr, sdslen(c->argv[j + 1]->ptr));
             if (!n) {
                 addReplyErrorFormat(c, "Unknown node %s", (char *)c->argv[j + 1]->ptr);
                 return;

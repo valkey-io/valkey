@@ -199,7 +199,7 @@ run_solo {defrag} {
             fail "Tests are required to create at least $required bytes of data before fragmentation - only $allocated bytes created"
         }
         # check that at this point, fragmentation is very low
-        validate_frag_ratio LT 1.05
+        validate_frag_ratio < 1.05
 
         # fragment the data
         uplevel 1 $opts(fragment)

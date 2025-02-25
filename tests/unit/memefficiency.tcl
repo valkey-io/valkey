@@ -189,7 +189,7 @@ run_solo {defrag} {
 
         # populate the DB with data
         set initial_allocated [s allocator_allocated]
-        uplevel 1 $pop_code
+        uplevel 1 $opts(populate)
 
         log_frag "after adding data"
         # check that enough data has been populated

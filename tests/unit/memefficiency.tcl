@@ -158,7 +158,7 @@ run_solo {defrag} {
     }
 
     # Performs a standardized defrag test.  The first code block generates data.  The second code block
-    # fragments that data (usually be deleting half).
+    # fragments that data (usually by deleting half).
     #  - caller must generate at least 40 MB of data
     #  - after fragmentation, at least 20 MB of data must remain, and fragmentation ratio must exceed 1.4
     # Positional parameters:

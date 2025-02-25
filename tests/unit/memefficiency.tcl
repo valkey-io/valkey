@@ -317,7 +317,8 @@ run_solo {defrag} {
         test $title {
             set n 50000
 
-            perform_defrag_test $title {
+            # scripts aren't defragged incrementally, expect big latency
+            perform_defrag_test $title latency 100 populate {
                 # Populate memory with interleaving script-key pattern of same size
                 set dummy_script "--[string repeat x 400]\nreturn "
                 set rd [valkey_deferring_client]

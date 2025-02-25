@@ -193,7 +193,7 @@ run_solo {defrag} {
 
         log_frag "after adding data"
         # check that enough data has been populated
-        set required [expr 40 * $::one_mb]
+        set required [expr 40 * 1024 * 1024]
         set allocated [expr [s allocator_allocated] - $initial_allocated]
         if {$allocated < $required} {
             fail "Tests are required to create at least $required bytes of data before fragmentation - only $allocated bytes created"
@@ -207,7 +207,7 @@ run_solo {defrag} {
         log_frag "after fragmenting data"
         # we want some fragmentation, but we still want a minimum allocation
         validate_frag_ratio > 1.4
-        set required [expr 20 * $::one_mb]
+        set required [expr 20 * 1024 * 1024]
         set allocated [expr [s allocator_allocated] - $initial_allocated]
         if {$allocated < $required} {
             fail "Tests are required to retain at least $required bytes of data after fragmentation - only $allocated bytes retained"

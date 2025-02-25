@@ -464,7 +464,7 @@ run_solo {defrag} {
             # shrink the node size - it's hard to create frag with 4k nodes!
             r config set stream-node-max-bytes 128
 
-            perform_defrag_test $title {
+            perform_defrag_test $title populate {
                 set rd [valkey_deferring_client]
                 set val [string repeat A 50]
                 for {set j 0} {$j < $n} {incr j} {

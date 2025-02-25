@@ -185,7 +185,7 @@ run_solo {defrag} {
 
         # at this point, we expect fragmentation BYTES to be below a threshold
         #  (percentage is wildly variable with low memory usage)
-        assert {[s allocator_frag_bytes] < 2 * $::one_mb}
+        assert {[s allocator_frag_bytes] < 2 * 1024 * 1024}
 
         # populate the DB with data
         set initial_allocated [s allocator_allocated]

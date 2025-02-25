@@ -206,7 +206,7 @@ run_solo {defrag} {
 
         log_frag "after fragmenting data"
         # we want some fragmentation, but we still want a minimum allocation
-        validate_frag_ratio GT 1.4
+        validate_frag_ratio > 1.4
         set required [expr 20 * $::one_mb]
         set allocated [expr [s allocator_allocated] - $initial_allocated]
         if {$allocated < $required} {

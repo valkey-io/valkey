@@ -335,7 +335,7 @@ run_solo {defrag} {
                 for {set j 0} {$j < $n} {incr j} { $rd del k$j }
                 for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard del replies
                 $rd close
-            } latency 100 ;# scripts aren't defragged incrementally, expect big latency
+            }
         }
     }
 

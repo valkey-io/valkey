@@ -93,7 +93,8 @@ hashTypeEntry *hashTypeCreateEntry(sds field, sds value) {
     size_t value_size = sdsReqSize(value_len, SDS_TYPE_8);
     sds embedded_field_sds;
     if (field_size + value_size <= EMBED_VALUE_MAX_ALLOC_SIZE) {
-        /* Embed field and value. Value is fixed to SDS_TYPE_8.
+        /* Embed field and value. Value is fixed to SDS_TYPE_8. Unused
+         * allocation space is recorded in the embedded value's SDS header.
          *
          *     +--------------+---------------+
          *     | field        | value         |
@@ -170,7 +171,7 @@ static hashTypeEntry *hashTypeEntryReplaceValue(hashTypeEntry *entry, sds value)
         size_t required_size = field_size + value_size;
         size_t alloc_size;
         if (required_size <= EMBED_VALUE_MAX_ALLOC_SIZE &&
-            required_size <= (alloc_size = zmalloc_usable_size(alloc_ptr)) &&
+            required_size <= (alloc_size = hashTypeEntryMemUsage(entry)) &&
             required_size >= alloc_size * 3 / 4) {
             /* It fits in the allocation and leaves max 25% unused space. */
             sdswrite(alloc_ptr + field_size, alloc_size - field_size, SDS_TYPE_8, value, value_len);
@@ -200,9 +201,18 @@ static hashTypeEntry *hashTypeEntryReplaceValue(hashTypeEntry *entry, sds value)
 /* Returns memory usage of a hashTypeEntry, including all allocations owned by
  * the hashTypeEntry. */
 size_t hashTypeEntryMemUsage(hashTypeEntry *entry) {
-    size_t mem = zmalloc_usable_size(hashTypeEntryAllocPtr(entry));
+    size_t mem = 0;
     if (entryHasValuePtr(entry)) {
+        /* Alloc size is not stored in the embedded field. */
+        mem = zmalloc_usable_size(hashTypeEntryAllocPtr(entry));
         mem += sdsAllocSize(*hashTypeEntryGetValueRef(entry));
+    } else {
+        /* Remaining alloc size is encoded in the embedded value SDS header. */
+        sds field = entry;
+        sds value = (char *)entry + sdslen(field) + 1 + sdsHdrSize(SDS_TYPE_8);
+        size_t field_size = sdsHdrSize(sdsType(field)) + sdslen(field) + 1;
+        size_t value_size = sdsHdrSize(SDS_TYPE_8) + sdsalloc(value) + 1;
+        mem = field_size + value_size;
     }
     return mem;
 }

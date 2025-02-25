@@ -1298,6 +1298,7 @@ void clusterAutoFailoverOnShutdown(void) {
                              "$%d\r\n%s\r\n",
                              CLUSTER_NAMELEN,
                              best_replica->repl_data->replica_nodeid);
+    serverAssert(buflen <= 128);
     /* Must install write handler for all replicas first before feeding
      * replication stream. */
     prepareReplicasToWrite();

@@ -38,7 +38,6 @@ start_server {tags {"memefficiency external:skip"}} {
 
 
 run_solo {defrag} {
-    set ::one_mb [expr 1024 * 1024]
 
     # make logging a bit more readable
     proc to_mb {bytes} {

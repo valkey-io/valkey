@@ -104,7 +104,8 @@ static inline int sdsGetAuxBit(const_sds s, int bit) {
 
 /* Stores a bit in an unused area in the SDS header, except for SDS_TYPE_5. The
  * bit index is 0-4. The value is 0 or 1. The aux bits are lost if the SDS is
- * auto-resized. */
+ * auto-resized. This is only for special uses like immutable SDS embedded in
+ * other structures. */
 static inline void sdsSetAuxBit(sds s, int bit, int value) {
     if (sdsType(s) == SDS_TYPE_5) return;
     unsigned char flags = s[-1];

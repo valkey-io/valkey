@@ -81,7 +81,7 @@ static sds *hashTypeEntryGetValueRef(const hashTypeEntry *entry) {
     serverAssert(entryHasValuePtr(entry));
     char *field_data = sdsAllocPtr(entry);
     field_data -= sizeof(sds *);
-    return (sds *)(void *)field_data;
+    return (sds *)field_data;
 }
 
 /* takes ownership of value, does not take ownership of field */
@@ -143,8 +143,7 @@ sds hashTypeEntryGetValue(const hashTypeEntry *entry) {
     } else {
         /* Skip field content, field null terminator and value sds8 hdr. */
         size_t offset = sdslen(entry) + 1 + sdsHdrSize(SDS_TYPE_8);
-        char *buf = (char *)entry + offset;
-        return buf;
+        return (char *)entry + offset;
     }
 }
 

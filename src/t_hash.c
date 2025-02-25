@@ -191,6 +191,7 @@ static hashTypeEntry *hashTypeEntryReplaceValue(hashTypeEntry *entry, sds value)
         } else {
             /* Not embedded value. */
             sds *value_ref = hashTypeEntryGetValueRef(entry);
+            sdsfree(*value_ref);
             *value_ref = value;
             return entry;
         }

@@ -2651,10 +2651,10 @@ int listenToPort(connListener *sfd) {
         if (optional) addr++;
         if (strchr(addr, ':')) {
             /* Bind IPv6 address. */
-            sfd->fd[sfd->count] = anetTcp6Server(server.neterr, port, addr, server.tcp_backlog);
+            sfd->fd[sfd->count] = anetTcp6Server(server.neterr, port, addr, server.tcp_backlog, server.mptcp);
         } else {
             /* Bind IPv4 address. */
-            sfd->fd[sfd->count] = anetTcpServer(server.neterr, port, addr, server.tcp_backlog);
+            sfd->fd[sfd->count] = anetTcpServer(server.neterr, port, addr, server.tcp_backlog, server.mptcp);
         }
         if (sfd->fd[sfd->count] == ANET_ERR) {
             int net_errno = errno;

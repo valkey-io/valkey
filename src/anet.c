@@ -573,7 +573,26 @@ static int anetV6Only(char *err, int s) {
     return ANET_OK;
 }
 
-static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backlog) {
+/* Until glibc 2.39, getaddrinfo with hints.ai_protocol of IPPROTO_MPTCP leads error.
+ * Use hints.ai_protocol IPPROTO_IP (0) or IPPROTO_TCP (6) to resolve address and overwrite
+ * it when MPTCP is enabled.
+ * Ref: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/testing/selftests/net/mptcp/mptcp_connect.c
+ */
+static int anetTcpSetMptcp(char *err, int ai_protocol, int mptcp) {
+    if (mptcp) {
+#ifdef IPPROTO_MPTCP
+        UNUSED(err);
+        return IPPROTO_MPTCP;
+    }
+#else
+        anetSetError(err, "MPTCP is not supported on this platform");
+        return ANET_ERR;
+    }
+#endif
+    return ai_protocol;
+}
+
+static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backlog, int mptcp) {
     int s = -1, rv;
     char _port[6]; /* strlen("65535") */
     struct addrinfo hints, *servinfo, *p;
@@ -591,7 +610,10 @@ static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backl
         return ANET_ERR;
     }
     for (p = servinfo; p != NULL; p = p->ai_next) {
-        if ((s = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) continue;
+        rv = anetTcpSetMptcp(err, p->ai_protocol, mptcp);
+        if (rv == ANET_ERR) goto error;
+
+        if ((s = socket(p->ai_family, p->ai_socktype, rv)) == -1) continue;
 
         if (af == AF_INET6 && anetV6Only(err, s) == ANET_ERR) goto error;
         if (anetSetReuseAddr(err, s) == ANET_ERR) goto error;
@@ -611,12 +633,12 @@ end:
     return s;
 }
 
-int anetTcpServer(char *err, int port, char *bindaddr, int backlog) {
-    return _anetTcpServer(err, port, bindaddr, AF_INET, backlog);
+int anetTcpServer(char *err, int port, char *bindaddr, int backlog, int mptcp) {
+    return _anetTcpServer(err, port, bindaddr, AF_INET, backlog, mptcp);
 }
 
-int anetTcp6Server(char *err, int port, char *bindaddr, int backlog) {
-    return _anetTcpServer(err, port, bindaddr, AF_INET6, backlog);
+int anetTcp6Server(char *err, int port, char *bindaddr, int backlog, int mptcp) {
+    return _anetTcpServer(err, port, bindaddr, AF_INET6, backlog, mptcp);
 }
 
 int anetUnixServer(char *err, char *path, mode_t perm, int backlog, char *group) {

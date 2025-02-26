@@ -473,7 +473,7 @@ static void json_append_string(lua_State *l, strbuf_t *json, int lindex)
         abort(); /* Overflow check */
     strbuf_ensure_empty_length(json, len + 2);
 
-    strbuf_append_char(json, '\"');
+    strbuf_append_char_unsafe(json, '\"');
     for (i = 0; i < len; i++) {
         escstr = char2escape[(unsigned char)str[i]];
         if (escstr)

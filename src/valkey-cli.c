@@ -1989,10 +1989,6 @@ static sds cliFormatReplyRaw(redisReply *r) {
         break;
     default: fprintf(stderr, "Unknown reply type: %d\n", r->type); exit(1);
     }
-    /* Append newline only if the last character isn't already '\n' */
-    if (sdslen(out) > 0 && out[sdslen(out) - 1] != '\n') {
-        out = sdscatlen(out, "\n", 1);
-    }
     return out;
 }
 
@@ -2342,21 +2338,22 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
     if (context == NULL) return REDIS_ERR;
 
     output_raw = 0;
-    if (!strcasecmp(command, "info") || !strcasecmp(command, "lolwut") ||
-        (argc >= 2 && !strcasecmp(command, "debug") && !strcasecmp(argv[1], "htstats")) ||
-        (argc >= 2 && !strcasecmp(command, "debug") && !strcasecmp(argv[1], "htstats-key")) ||
-        (argc >= 2 && !strcasecmp(command, "debug") && !strcasecmp(argv[1], "client-eviction")) ||
-        (argc >= 2 && !strcasecmp(command, "memory") &&
-         (!strcasecmp(argv[1], "malloc-stats") || !strcasecmp(argv[1], "doctor"))) ||
-        (argc == 2 && !strcasecmp(command, "cluster") &&
-         (!strcasecmp(argv[1], "nodes") || !strcasecmp(argv[1], "info"))) ||
-        (argc >= 2 && !strcasecmp(command, "client") &&
-         (!strcasecmp(argv[1], "list") || !strcasecmp(argv[1], "info"))) ||
-        (argc == 3 && !strcasecmp(command, "latency") && !strcasecmp(argv[1], "graph")) ||
-        (argc == 2 && !strcasecmp(command, "latency") && !strcasecmp(argv[1], "doctor")) ||
-        /* Format PROXY INFO command for Cluster Proxy:
-         * https://github.com/artix75/redis-cluster-proxy */
-        (argc >= 2 && !strcasecmp(command, "proxy") && !strcasecmp(argv[1], "info"))) {
+    if (!config.in_multi &&
+        (!strcasecmp(command, "info") || !strcasecmp(command, "lolwut") ||
+         (argc >= 2 && !strcasecmp(command, "debug") && !strcasecmp(argv[1], "htstats")) ||
+         (argc >= 2 && !strcasecmp(command, "debug") && !strcasecmp(argv[1], "htstats-key")) ||
+         (argc >= 2 && !strcasecmp(command, "debug") && !strcasecmp(argv[1], "client-eviction")) ||
+         (argc >= 2 && !strcasecmp(command, "memory") &&
+          (!strcasecmp(argv[1], "malloc-stats") || !strcasecmp(argv[1], "doctor"))) ||
+         (argc == 2 && !strcasecmp(command, "cluster") &&
+          (!strcasecmp(argv[1], "nodes") || !strcasecmp(argv[1], "info"))) ||
+         (argc >= 2 && !strcasecmp(command, "client") &&
+          (!strcasecmp(argv[1], "list") || !strcasecmp(argv[1], "info"))) ||
+         (argc == 3 && !strcasecmp(command, "latency") && !strcasecmp(argv[1], "graph")) ||
+         (argc == 2 && !strcasecmp(command, "latency") && !strcasecmp(argv[1], "doctor")) ||
+         /* Format PROXY INFO command for Cluster Proxy:
+          * https://github.com/artix75/redis-cluster-proxy */
+         (argc >= 2 && !strcasecmp(command, "proxy") && !strcasecmp(argv[1], "info")))) {
         output_raw = 1;
     }
 

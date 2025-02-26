@@ -1101,6 +1101,20 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
                         importing_slot = 1;
                     }
                 }
+
+                /* Block COPY and MOVE during slot migration to prevent multi-DB inconsistencies. */
+                if ((migrating_slot || importing_slot) && (mcmd->proc == copyCommand || mcmd->proc == moveCommand)) {
+                    if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
+                    getKeysFreeResult(&result);
+                    return NULL;
+                }
+
+                if (n == NULL) {
+                    getKeysFreeResult(&result);
+                    if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
+                    return NULL;
+                }
+
             } else {
                 /* If it is not the first key/channel, make sure it is exactly
                  * the same key/channel as the first we saw. */

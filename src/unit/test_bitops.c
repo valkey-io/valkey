@@ -25,7 +25,8 @@ static long long bitcount(void *s, long count) {
 }
 
 static int test_case(const char *msg, int size) {
-    uint8_t buf[size];
+    size_t bufsize = size > 0 ? size : 1;
+    uint8_t buf[bufsize];
     int fuzzing = 1000;
     for (int y = 0; y < fuzzing; y += 1) {
         for (int z = 0; z < size; z += 1) {

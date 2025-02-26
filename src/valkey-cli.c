@@ -2339,7 +2339,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
 
     output_raw = 0;
     if (config.in_multi) {
-        /* In a multi block, commands will return status instead of verbatim. */
+        /* In a multi block, commands will return status strings instead of verbatim strings. */
         output_raw = 0;
     } else if (!strcasecmp(command, "info") || !strcasecmp(command, "lolwut") ||
                (argc >= 2 && !strcasecmp(command, "debug") && !strcasecmp(argv[1], "htstats")) ||

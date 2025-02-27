@@ -439,7 +439,7 @@ run_solo {defrag} {
 
             perform_defrag_test $title populate {
                 set rd [valkey_deferring_client]
-                set val [string repeat A 200]
+                set val [string repeat A 250]
                 set k 0
                 set f 0
                 for {set j 0} {$j < $n} {incr j} {

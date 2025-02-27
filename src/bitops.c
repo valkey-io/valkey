@@ -30,6 +30,7 @@
 
 #include "server.h"
 #ifdef HAVE_AVX2
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #include <immintrin.h>
 #endif
 /* -----------------------------------------------------------------------------

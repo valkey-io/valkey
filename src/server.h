@@ -625,7 +625,8 @@ typedef enum {
 
 /* Sets log format */
 typedef enum { LOG_FORMAT_LEGACY = 0,
-               LOG_FORMAT_LOGFMT } log_format_type;
+               LOG_FORMAT_LOGFMT,
+               LOG_FORMAT_JSON } log_format_type;
 
 /* Sets log timestamp format */
 typedef enum { LOG_TIMESTAMP_LEGACY = 0,

@@ -165,7 +165,7 @@ configEnum propagation_error_behavior_enum[] = {
     {"panic-on-replicas", PROPAGATION_ERR_BEHAVIOR_PANIC_ON_REPLICAS},
     {NULL, 0}};
 
-configEnum log_format_enum[] = {{"legacy", LOG_FORMAT_LEGACY}, {"logfmt", LOG_FORMAT_LOGFMT}, {NULL, 0}};
+configEnum log_format_enum[] = {{"legacy", LOG_FORMAT_LEGACY}, {"logfmt", LOG_FORMAT_LOGFMT}, {"json", LOG_FORMAT_JSON}, {NULL, 0}};
 
 configEnum log_timestamp_format_enum[] = {{"legacy", LOG_TIMESTAMP_LEGACY},
                                           {"iso8601", LOG_TIMESTAMP_ISO8601},

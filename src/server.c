@@ -182,6 +182,8 @@ void serverLogRaw(int level, const char *msg) {
     const char *verbose_level[] = {"debug", "info", "notice", "warning"};
     const char *roles[] = {"sentinel", "RDB/AOF", "replica", "primary"};
     const char *role_chars = "XCSM";
+    const char *json_format = "{\"pid\":%d,\"role\":\"%s\",\"timestamp\":\"%s\",\"level\":\"%s\",\"message\":\"%s\"}\n";
+    const char *logfmt_format = "pid=%d role=%s timestamp=\"%s\" level=%s message=\"%s\"\n";
     FILE *fp;
     char buf[64];
     int rawmode = (level & LL_RAW);
@@ -234,13 +236,14 @@ void serverLogRaw(int level, const char *msg) {
         }
         switch (server.log_format) {
         case LOG_FORMAT_LOGFMT:
+        case LOG_FORMAT_JSON:
             if (hasInvalidLogfmtChar(msg)) {
                 char safemsg[LOG_MAX_LEN];
                 filterInvalidLogfmtChar(safemsg, LOG_MAX_LEN, msg);
-                fprintf(fp, "pid=%d role=%s timestamp=\"%s\" level=%s message=\"%s\"\n", (int)getpid(), roles[role_index],
+                fprintf(fp, server.log_format == LOG_FORMAT_LOGFMT ? logfmt_format : json_format, (int)getpid(), roles[role_index],
                         buf, verbose_level[level], safemsg);
             } else {
-                fprintf(fp, "pid=%d role=%s timestamp=\"%s\" level=%s message=\"%s\"\n", (int)getpid(), roles[role_index],
+                fprintf(fp, server.log_format == LOG_FORMAT_LOGFMT ? logfmt_format : json_format, (int)getpid(), roles[role_index],
                         buf, verbose_level[level], msg);
             }
             break;

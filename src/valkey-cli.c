@@ -2338,26 +2338,26 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
     if (context == NULL) return REDIS_ERR;
 
     output_raw = 0;
-    if (config.in_multi) {
-        /* In a multi block, commands will return status strings instead of verbatim strings. */
-        output_raw = 0;
-    } else if (!strcasecmp(command, "info") || !strcasecmp(command, "lolwut") ||
-               (argc >= 2 && !strcasecmp(command, "debug") && !strcasecmp(argv[1], "htstats")) ||
-               (argc >= 2 && !strcasecmp(command, "debug") && !strcasecmp(argv[1], "htstats-key")) ||
-               (argc >= 2 && !strcasecmp(command, "debug") && !strcasecmp(argv[1], "client-eviction")) ||
-               (argc >= 2 && !strcasecmp(command, "memory") &&
-                (!strcasecmp(argv[1], "malloc-stats") || !strcasecmp(argv[1], "doctor"))) ||
-               (argc == 2 && !strcasecmp(command, "cluster") &&
-                (!strcasecmp(argv[1], "nodes") || !strcasecmp(argv[1], "info"))) ||
-               (argc >= 2 && !strcasecmp(command, "client") &&
-                (!strcasecmp(argv[1], "list") || !strcasecmp(argv[1], "info"))) ||
-               (argc == 3 && !strcasecmp(command, "latency") && !strcasecmp(argv[1], "graph")) ||
-               (argc == 2 && !strcasecmp(command, "latency") && !strcasecmp(argv[1], "doctor")) ||
-               /* Format PROXY INFO command for Cluster Proxy:
-                * https://github.com/artix75/redis-cluster-proxy */
-               (argc >= 2 && !strcasecmp(command, "proxy") && !strcasecmp(argv[1], "info"))) {
+    if (!strcasecmp(command, "info") || !strcasecmp(command, "lolwut") ||
+        (argc >= 2 && !strcasecmp(command, "debug") && !strcasecmp(argv[1], "htstats")) ||
+        (argc >= 2 && !strcasecmp(command, "debug") && !strcasecmp(argv[1], "htstats-key")) ||
+        (argc >= 2 && !strcasecmp(command, "debug") && !strcasecmp(argv[1], "client-eviction")) ||
+        (argc >= 2 && !strcasecmp(command, "memory") &&
+         (!strcasecmp(argv[1], "malloc-stats") || !strcasecmp(argv[1], "doctor"))) ||
+        (argc == 2 && !strcasecmp(command, "cluster") &&
+         (!strcasecmp(argv[1], "nodes") || !strcasecmp(argv[1], "info"))) ||
+        (argc >= 2 && !strcasecmp(command, "client") &&
+         (!strcasecmp(argv[1], "list") || !strcasecmp(argv[1], "info"))) ||
+        (argc == 3 && !strcasecmp(command, "latency") && !strcasecmp(argv[1], "graph")) ||
+        (argc == 2 && !strcasecmp(command, "latency") && !strcasecmp(argv[1], "doctor")) ||
+        /* Format PROXY INFO command for Cluster Proxy:
+         * https://github.com/artix75/redis-cluster-proxy */
+        (argc >= 2 && !strcasecmp(command, "proxy") && !strcasecmp(argv[1], "info"))) {
         output_raw = 1;
     }
+
+    /* In a multi block, commands will return status strings instead of verbatim strings. */
+    if (config.in_multi) output_raw = 0;
 
     if (!strcasecmp(command, "shutdown")) config.shutdown = 1;
     if (!strcasecmp(command, "monitor")) config.monitor_mode = 1;

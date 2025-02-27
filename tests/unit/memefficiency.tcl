@@ -567,6 +567,7 @@ run_solo {defrag} {
     set tests {}
     lappend tests [list test_main_dictionary standalone $aof_overrides] ;# only need AOF for main dict, standalone
     lappend tests [list test_eval_scripts standalone $std_overrides]
+    # https://github.com/valkey-io/valkey/issues/1795
     # lappend tests [list test_big_hash standalone $std_overrides]
     lappend tests [list test_big_list standalone $std_overrides]
     lappend tests [list test_big_set standalone $std_overrides]
@@ -576,6 +577,7 @@ run_solo {defrag} {
 
     lappend tests [list test_main_dictionary cluster $std_overrides]
     lappend tests [list test_eval_scripts cluster $std_overrides]
+    # https://github.com/valkey-io/valkey/issues/1795
     # lappend tests [list test_big_hash cluster $std_overrides]
     lappend tests [list test_big_list cluster $std_overrides]
     lappend tests [list test_big_set cluster $std_overrides]

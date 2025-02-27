@@ -2082,7 +2082,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
 
         /* Too many entries? Use a hash table right from the start. */
         if (len > server.hash_max_listpack_entries)
-            hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+            hashTypeEnsureHashtableEncoded(o);
         else if (deep_integrity_validation) {
             /* In this mode, we need to guarantee that the server won't crash
              * later when the ziplist is converted to a hashtable.
@@ -2124,7 +2124,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             /* Convert to hash table if size threshold is exceeded */
             if (sdslen(field) > server.hash_max_listpack_value || sdslen(value) > server.hash_max_listpack_value ||
                 !lpSafeToAdd(o->ptr, sdslen(field) + sdslen(value))) {
-                hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+                hashTypeEnsureHashtableEncoded(o);
                 hashTypeEntry *entry = hashTypeCreateEntry(field, value);
                 sdsfree(field);
                 if (!hashtableAdd((hashtable *)o->ptr, entry)) {
@@ -2324,7 +2324,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
                 o->encoding = OBJ_ENCODING_LISTPACK;
 
                 if (hashTypeLength(o) > server.hash_max_listpack_entries || maxlen > server.hash_max_listpack_value) {
-                    hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+                    hashTypeEnsureHashtableEncoded(o);
                 }
             }
             break;
@@ -2452,7 +2452,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             }
 
             if (hashTypeLength(o) > server.hash_max_listpack_entries)
-                hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+                hashTypeEnsureHashtableEncoded(o);
             else
                 o->ptr = lpShrinkToFit(o->ptr);
             break;
@@ -2473,7 +2473,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
                 goto emptykey;
             }
 
-            if (hashTypeLength(o) > server.hash_max_listpack_entries) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+            if (hashTypeLength(o) > server.hash_max_listpack_entries) hashTypeEnsureHashtableEncoded(o);
             break;
         default:
             /* totally unreachable */

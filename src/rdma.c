@@ -7,6 +7,11 @@
  * the top-level directory.
  * ==========================================================================
  */
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 
 #define VALKEYMODULE_CORE_MODULE
 #include "server.h"

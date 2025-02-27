@@ -51,6 +51,7 @@
 #include "sha256.h"
 #include "config.h"
 #include "zmalloc.h"
+#include "serverassert.h"
 
 #include "valkey_strtod.h"
 
@@ -905,36 +906,67 @@ int version2num(const char *version) {
     return v;
 }
 
+/* Global state. */
+static int seed_initialized = 0;
+static unsigned char seed[64]; /* 512 bit internal block size. */
+
+static void initializeRandomSeed(void) {
+    assert(seed_initialized == 0);
+    /* Initialize a seed and use SHA1 in counter mode, where we hash
+     * the same seed with a progressive counter. For the goals of this
+     * function we just need non-colliding strings, there are no
+     * cryptographic security needs. */
+    FILE *fp = fopen("/dev/urandom", "r");
+    if (fp == NULL || fread(seed, sizeof(seed), 1, fp) != 1) {
+        /* Revert to a weaker seed, and in this case reseed again
+         * at every call.*/
+        for (unsigned int j = 0; j < sizeof(seed); j++) {
+            struct timeval tv;
+            gettimeofday(&tv, NULL);
+            pid_t pid = getpid();
+            seed[j] = tv.tv_sec ^ tv.tv_usec ^ pid ^ (long)fp;
+        }
+    } else {
+        seed_initialized = 1;
+    }
+    if (fp) fclose(fp);
+}
+
+/* This function receives a string with 64 bytes encoded as 128 hexadecimal
+ * digits, and sets the 64 byte random seed. */
+void setRandomSeedCString(char *seed_str, size_t len) {
+    assert(len == sizeof(seed) * 2);
+    for (size_t i = 0; i < sizeof(seed); i++) {
+        sscanf(seed_str + (i * 2), "%02hhX", &seed[i]);
+    }
+    seed_initialized = 1;
+}
+
+/* This function populates a char buffer with 129 bytes with the 64 bytes
+ * random seed encoded as 128 hexadecimal digits and a null terminator. */
+void getRandomSeedCString(char *buff, size_t len) {
+    assert(len == (sizeof(seed) * 2 + 1));
+
+    if (!seed_initialized) {
+        initializeRandomSeed();
+    }
+
+    for (size_t i = 0; i < sizeof(seed); i++) {
+        snprintf(buff + (i * 2), 3, "%02hhX", seed[i]);
+    }
+    buff[sizeof(seed) * 2] = '\0';
+}
+
 /* Get random bytes, attempts to get an initial seed from /dev/urandom and
  * the uses a one way hash function in counter mode to generate a random
  * stream. However if /dev/urandom is not available, a weaker seed is used.
  *
  * This function is not thread safe, since the state is global. */
 void getRandomBytes(unsigned char *p, size_t len) {
-    /* Global state. */
-    static int seed_initialized = 0;
-    static unsigned char seed[64]; /* 512 bit internal block size. */
-    static uint64_t counter = 0;   /* The counter we hash with the seed. */
+    static uint64_t counter = 0; /* The counter we hash with the seed. */
 
     if (!seed_initialized) {
-        /* Initialize a seed and use SHA1 in counter mode, where we hash
-         * the same seed with a progressive counter. For the goals of this
-         * function we just need non-colliding strings, there are no
-         * cryptographic security needs. */
-        FILE *fp = fopen("/dev/urandom", "r");
-        if (fp == NULL || fread(seed, sizeof(seed), 1, fp) != 1) {
-            /* Revert to a weaker seed, and in this case reseed again
-             * at every call.*/
-            for (unsigned int j = 0; j < sizeof(seed); j++) {
-                struct timeval tv;
-                gettimeofday(&tv, NULL);
-                pid_t pid = getpid();
-                seed[j] = tv.tv_sec ^ tv.tv_usec ^ pid ^ (long)fp;
-            }
-        } else {
-            seed_initialized = 1;
-        }
-        if (fp) fclose(fp);
+        initializeRandomSeed();
     }
 
     while (len) {

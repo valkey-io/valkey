@@ -2084,6 +2084,7 @@ struct valkeyServer {
     unsigned long cluster_blacklist_ttl;                   /* Duration in seconds that a node is denied re-entry into
                                                             * the cluster after it is forgotten with CLUSTER FORGET. */
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
+    mstime_t cluster_mf_timeout;                           /* Milliseconds to do a manual failover. */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     /* Debug config to control the random ping. When set, we will disable the random ping in clusterCron. */
@@ -2584,8 +2585,6 @@ void populateCommandLegacyRangeSpec(struct serverCommand *c);
 long long ustime(void);
 mstime_t mstime(void);
 mstime_t commandTimeSnapshot(void);
-void getRandomHexChars(char *p, size_t len);
-void getRandomBytes(unsigned char *p, size_t len);
 uint64_t crc64(uint64_t crc, const unsigned char *s, uint64_t l);
 void exitFromChild(int retcode);
 long long serverPopcount(void *s, long count);
@@ -3250,11 +3249,11 @@ robj *setTypeDup(robj *o);
 #define HASH_SET_TAKE_VALUE (1 << 1)
 #define HASH_SET_COPY 0
 
-typedef struct hashTypeEntry hashTypeEntry;
+typedef void hashTypeEntry;
 hashTypeEntry *hashTypeCreateEntry(sds field, sds value);
 sds hashTypeEntryGetField(const hashTypeEntry *entry);
 sds hashTypeEntryGetValue(const hashTypeEntry *entry);
-size_t hashTypeEntryAllocSize(hashTypeEntry *entry);
+size_t hashTypeEntryMemUsage(hashTypeEntry *entry);
 hashTypeEntry *hashTypeEntryDefrag(hashTypeEntry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds));
 void dismissHashTypeEntry(hashTypeEntry *entry);
 void freeHashTypeEntry(hashTypeEntry *entry);

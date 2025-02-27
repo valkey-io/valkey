@@ -235,7 +235,14 @@ hashTypeEntry *hashTypeEntryDefrag(hashTypeEntry *entry, void *(*defragfn)(void 
         sds new_value = sdsdefragfn(*value_ref);
         if (new_value) *value_ref = new_value;
     }
-    return defragfn(hashTypeEntryAllocPtr(entry));
+    char *allocation = hashTypeEntryAllocPtr(entry);
+    char *new_allocation = defragfn(allocation);
+    if (new_allocation != NULL) {
+        /* Return the same offset into the new allocation as the entry's offset
+         * in the old allocation. */
+        return new_allocation + ((char *)entry - allocation);
+    }
+    return NULL;
 }
 
 /* Used for releasing memory to OS to avoid unnecessary CoW. Called when we've

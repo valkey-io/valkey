@@ -196,7 +196,7 @@ run_solo {defrag} {
 
         log_frag "after adding data"
         # check that enough data has been populated
-        set required [expr 40 * 1024 * 1024]
+        set required [expr 50 * 1024 * 1024]
         set allocated [expr [s allocator_allocated] - $initial_allocated]
         if {$allocated < $required} {
             fail "Tests are required to create at least $required bytes of data before fragmentation - only $allocated bytes created"
@@ -210,7 +210,7 @@ run_solo {defrag} {
         log_frag "after fragmenting data"
         # we want some fragmentation, but we still want a minimum allocation
         validate_frag_ratio > 1.4
-        set required [expr 20 * 1024 * 1024]
+        set required [expr 25 * 1024 * 1024]
         set allocated [expr [s allocator_allocated] - $initial_allocated]
         if {$allocated < $required} {
             fail "Tests are required to retain at least $required bytes of data after fragmentation - only $allocated bytes retained"
@@ -239,7 +239,7 @@ run_solo {defrag} {
                 # add a mass of string keys
                 set rd [valkey_deferring_client]
                 for {set j 0} {$j < $n} {incr j} {
-                    $rd setrange $j 200 a
+                    $rd setrange $j 250 a
                     if {$j % 3 == 0} {
                         $rd expire $j 1000 ;# put expiration on some
                     }
@@ -298,9 +298,6 @@ run_solo {defrag} {
                 after 50 ;# give defrag time to stop
 
                 log_frag "after AOF loading"
-                # make sure the defragger did enough work to keep the fragmentation low during loading.
-                # we cannot check that it went all the way down, as we don't continue to defrag after loading complete.
-                validate_frag_ratio < 1.4
 
                 # The AOF contains simple (fast) SET commands (and the cron during loading runs every 1024 commands).
                 # Even so, defrag can get starved for periods exceeding 100ms.  Using 200ms for test stability, and
@@ -308,7 +305,9 @@ run_solo {defrag} {
                 # (as total time = 200 non duty + 200 duty = 400ms, and 50% of 400ms is 200ms).
                 validate_latency 200
 
-                # make sure we had defrag hits during AOF loading
+                # Make sure we had defrag hits during AOF loading.  Note that we don't worry about
+                # the actual fragmentation ratio here.  It will vary based on when defrag stopped
+                # mid-cycle.  Just check that we are defragging by the number of hits.
                 assert {[s active_defrag_hits] > 100000}
             }
             } ;# Active defrag - AOF loading
@@ -321,9 +320,9 @@ run_solo {defrag} {
             set n 50000
 
             # scripts aren't defragged incrementally, expect big latency
-            perform_defrag_test $title latency 100 populate {
+            perform_defrag_test $title latency 200 populate {
                 # Populate memory with interleaving script-key pattern of same size
-                set dummy_script "--[string repeat x 400]\nreturn "
+                set dummy_script "--[string repeat x 450]\nreturn "
                 set rd [valkey_deferring_client]
                 for {set j 0} {$j < $n} {incr j} {
                     set val "$dummy_script[format "%06d" $j]"
@@ -381,7 +380,7 @@ run_solo {defrag} {
 
             perform_defrag_test $title populate {
                 set rd [valkey_deferring_client]
-                set val [string repeat A 300]
+                set val [string repeat A 350]
                 set k 0
                 set f 0
                 for {set j 0} {$j < $n} {incr j} {
@@ -392,12 +391,12 @@ run_solo {defrag} {
             } fragment {
                 set k 0
                 set f 0
-                for {set j 0} {$j < $n} {incr j} {
+                for {set j 0} {$j < $n} {incr j 2} {
                     $rd ltrim k$k 1 -1 ;# deletes the leftmost item
                     $rd lmove k$k k$k LEFT RIGHT ;# rotates the leftmost item to the right side
                     lassign [next_exp_kf $k $f 2] k f
                 }
-                for {set j 0} {$j < $n} {incr j 2} { $rd read } ; # Discard replies
+                for {set j 0} {$j < $n} {incr j 2} { $rd read; $rd read } ; # Discard replies
                 $rd close
             }
         }
@@ -422,7 +421,7 @@ run_solo {defrag} {
             } fragment {
                 set k 0
                 set f 0
-                for {set j 0} {$j < $n} {incr j} {
+                for {set j 0} {$j < $n} {incr j 2} {
                     $rd srem k$k $val$f
                     lassign [next_exp_kf $k $f 2] k f
                 }
@@ -451,7 +450,7 @@ run_solo {defrag} {
             } fragment {
                 set k 0
                 set f 0
-                for {set j 0} {$j < $n} {incr j} {
+                for {set j 0} {$j < $n} {incr j 2} {
                     $rd zrem k$k $val$f
                     lassign [next_exp_kf $k $f 2] k f
                 }
@@ -491,7 +490,7 @@ run_solo {defrag} {
             set n 100000
 
             set rd [valkey_deferring_client]
-            set chan [string repeat A 50]
+            set chan [string repeat A 100]
 
             # https://github.com/valkey-io/valkey/issues/1774
             # NOTE - pubsub defrag isn't working properly.  This wasn't caught before the

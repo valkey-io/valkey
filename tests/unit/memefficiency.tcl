@@ -181,7 +181,7 @@ run_solo {defrag} {
         r config set active-defrag-threshold-lower 5
         r config set active-defrag-cycle-min 40
         r config set active-defrag-cycle-max 60
-        r config set active-defrag-ignore-bytes 2mb
+        r config set active-defrag-ignore-bytes 2500kb
         r config set maxmemory 0
 
         log_frag "test start ($name)"

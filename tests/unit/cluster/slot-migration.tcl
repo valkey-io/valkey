@@ -94,6 +94,13 @@ proc fail_server {server_id} {
     resume_process [srv [expr -1*$server_id] pid]
 }
 
+proc migrate_slot {from to slot} {
+    set from_id [R $from CLUSTER MYID]
+    set to_id [R $to CLUSTER MYID]
+    assert_equal {OK} [R $from CLUSTER SETSLOT $slot MIGRATING $to_id]
+    assert_equal {OK} [R $to CLUSTER SETSLOT $slot IMPORTING $from_id]
+}
+
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
@@ -251,7 +258,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 proc create_empty_shard {p r} {
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
     assert_equal {OK} [R $p CLUSTER RESET]
-    assert_equal {OK} [R $r CLUSTER RESET]
+    assert_equal {OK} [R $r CLUSTER RESET]0
     assert_equal {OK} [R $p CLUSTER MEET [srv 0 "host"] [srv 0 "port"]]
     assert_equal {OK} [R $r CLUSTER MEET [srv 0 "host"] [srv 0 "port"]]
     wait_for_role $p master
@@ -341,12 +348,6 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
 }
 }
 
-proc migrate_slot {from to slot} {
-    set from_id [R $from CLUSTER MYID]
-    set to_id [R $to CLUSTER MYID]
-    assert_equal {OK} [R $from CLUSTER SETSLOT $slot MIGRATING $to_id]
-    assert_equal {OK} [R $to CLUSTER SETSLOT $slot IMPORTING $from_id]
-}
 
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
@@ -511,3 +512,170 @@ start_cluster 3 6 {tags {external:skip cluster} overrides {cluster-node-timeout 
         wait_for_slot_state 2 ""
     }
 }
+
+
+
+proc get_port {instance_id} {
+    return [lindex [R $instance_id CONFIG GET port] 1]
+}
+
+
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-node-timeout 1000} } {
+
+    test "Slot Migration With Multiple Databases" {
+        set primary_id_src 0
+        set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]    
+        set primary_id_target 1
+        set primary_id_target_port [get_port $primary_id_target]
+        set primary_id_target_nodeid [R $primary_id_target CLUSTER MYID]
+
+        R $primary_id_src select 1
+        R $primary_id_src set "{3560}key1" "value1_db1"
+        assert_equal [R $primary_id_src get "{3560}key1"] "value1_db1"
+
+        R $primary_id_src select 2
+        R $primary_id_src set "{3560}key2" "value2_db2"
+        assert_equal [R $primary_id_src get "{3560}key2"] "value2_db2"
+
+        set slot [R $primary_id_src cluster keyslot "{3560}key1"]
+
+
+        R $primary_id_target cluster setslot $slot importing $primary_id_src_nodeid
+        R $primary_id_src cluster setslot $slot migrating $primary_id_target_nodeid
+
+        R $primary_id_src select 1
+        R $primary_id_src migrate 127.0.0.1 $primary_id_target_port "{3560}key1" 1 5000
+
+        # If not all keys were migrated, the slot can not be migrated
+        set result [catch {assert_error [R $primary_id_src cluster setslot $slot node $primary_id_target_nodeid]} err]
+        assert_match "ERR*" $err
+        
+        R $primary_id_src select 2
+        R $primary_id_src migrate 127.0.0.1 $primary_id_target_port "{3560}key2" 2 5000
+
+        R $primary_id_target cluster setslot $slot node $primary_id_target_nodeid
+        R $primary_id_src cluster setslot $slot node $primary_id_target_nodeid
+
+        R $primary_id_target select 1
+        assert_equal [R $primary_id_target get "{3560}key1"] "value1_db1"
+        R $primary_id_target select 2
+        assert_equal [R $primary_id_target get "{3560}key2"] "value2_db2"
+
+        R $primary_id_src flushall
+        R $primary_id_target flushall
+    }
+
+}
+
+
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-node-timeout 1000} } {
+    test "Command Validation During Slot Migration with Multiple Databases" {
+        set primary_id_src 0
+        set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]
+        set primary_id_src_port [get_port $primary_id_src]
+
+        set primary_id_target 1
+        set primary_id_target_port [get_port $primary_id_target]
+        set primary_id_target_nodeid [R $primary_id_target CLUSTER MYID]
+
+        R $primary_id_src select 1
+        R $primary_id_src set "{3560}key1" "value1_db1"
+        assert_equal [R $primary_id_src get "{3560}key1"] "value1_db1"
+
+        set slot1 [R $primary_id_src cluster keyslot "{3560}key1"]
+
+        R $primary_id_target cluster setslot $slot1 importing $primary_id_src_nodeid
+        R $primary_id_src cluster setslot $slot1 migrating $primary_id_target_nodeid
+
+        # Try GET on source before migration, should succeed
+        assert_equal [R $primary_id_src get "{3560}key1"] "value1_db1"
+        
+        # Try GET on target before migration, should fail
+        set result [catch {R $primary_id_target get "{3560}key1"} err]        
+        assert_match "MOVED $slot1 127.0.0.1:$primary_id_src_port" $err
+
+        # Migrate the key
+        R $primary_id_src migrate 127.0.0.1 $primary_id_target_port "{3560}key1" 1 5000
+
+        # Try GET on source after migration, should get error redirection
+        set result [catch {R $primary_id_src get "{3560}key1"} err]        
+        assert_match "ASK 0 127.0.0.1:$primary_id_target_port" $err
+
+        R $primary_id_target select 1
+        
+        # Try GET on target after migration, should succeed                
+        R $primary_id_target ASKING
+        assert_equal [R $primary_id_target get "{3560}key1"] "value1_db1"
+    }
+}
+
+start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-node-timeout 1000} } {
+    test "Multi/Exec Validation During Slot Migration with Multiple Databases" {
+        set primary_id_src 0
+        set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]
+        set primary_id_src_port [get_port $primary_id_src]
+        set primary_id_target 1
+        set primary_id_target_port [get_port $primary_id_target]
+        set primary_id_target_nodeid [R $primary_id_target CLUSTER MYID]
+
+        R $primary_id_src select 0
+        R $primary_id_src set "{3560}key1" "value1_db0"
+        assert_equal [R $primary_id_src get "{3560}key1"] "value1_db0"
+
+        R $primary_id_src select 1
+        R $primary_id_src set "{3560}key2" "value2_db1"
+        assert_equal [R $primary_id_src get "{3560}key2"] "value2_db1"
+
+        set slot0 [R $primary_id_src cluster keyslot "{3560}key1"]
+        
+        R $primary_id_src select 0
+        
+        R $primary_id_target cluster setslot $slot0 importing $primary_id_src_nodeid
+        R $primary_id_src cluster setslot $slot0 migrating $primary_id_target_nodeid
+
+        # Ensure correct database is selected before running MULTI/EXEC during migration
+        R $primary_id_src select 0
+        # Ensure key is still accessible before running MULTI/EXEC
+        assert_equal [R $primary_id_src get "{3560}key1"] "value1_db0"
+        R $primary_id_src multi
+        R $primary_id_src exists "{3560}key1"
+        set result [R $primary_id_src exec]
+        assert_equal $result {1}
+
+        # Multi/Exec on source before migration should pass
+        R $primary_id_src multi
+        R $primary_id_src exists "{3560}key1"
+        R $primary_id_src select 1
+        R $primary_id_src exists "{3560}key2"
+        set result [R $primary_id_src exec]
+        assert_equal $result {1 OK 1}
+
+        # Multi/Exec on target before migration should fail at EXEC
+        R $primary_id_target ASKING
+        R $primary_id_target multi
+        R $primary_id_target exists "{3560}key1"
+        R $primary_id_src select 1
+        R $primary_id_target exists "{3560}key2"
+        set result [catch {R $primary_id_target exec} err]
+        assert_match "TRYAGAIN Multiple keys request during rehashing of slot" $err
+
+        # Migrate keys        
+        R $primary_id_src select 0
+        R $primary_id_src MIGRATE 127.0.0.1 $primary_id_target_port "{3560}key1" 0 5000
+        R $primary_id_src select 1
+        R $primary_id_src MIGRATE 127.0.0.1 $primary_id_target_port "{3560}key2" 1 5000
+
+        # Multi/exec accessing both keys should pass in the target
+        R $primary_id_target select 0
+        R $primary_id_target ASKING
+        R $primary_id_target multi
+        R $primary_id_target exists "{3560}key1"
+        R $primary_id_target select 1
+        R $primary_id_target exists "{3560}key2"        
+        set result [R $primary_id_target exec]        
+        assert_equal $result {1 OK 1}        
+    }
+}
+
+
+

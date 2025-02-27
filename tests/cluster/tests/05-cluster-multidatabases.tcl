@@ -278,50 +278,6 @@ test "Cross-DB Expiry Handling" {
 }
 
 
-test "Slot Migration With Multiple Databases" {
-    set primary_id_src 0
-    set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]
-    set primary_id_target 1
-    set primary_id_target_port [RPort $primary_id_target]
-    set primary_id_target_nodeid [R $primary_id_target CLUSTER MYID]
-    
-    R $primary_id_src select 1
-    R $primary_id_src set "{x}key1" "value1_db1"
-    assert_equal [R $primary_id_src get "{x}key1"] "value1_db1"
-
-    R $primary_id_src select 2
-    R $primary_id_src set "{x}key2" "value2_db2"
-    assert_equal [R $primary_id_src get "{x}key2"] "value2_db2"
-    
-    set slot [R $primary_id_src cluster keyslot "{x}key1"]
-
-    
-    R $primary_id_target cluster setslot $slot importing $primary_id_src_nodeid
-    R $primary_id_src cluster setslot $slot migrating $primary_id_target_nodeid
-
-    R $primary_id_src select 1
-    R $primary_id_src migrate 127.0.0.1 $primary_id_target_port "{x}key1" 1 5000
-
-    # If not all keys were migrated, the slot can not be migrated    
-    set result [catch {assert_error [R $primary_id_src cluster setslot $slot node $primary_id_target_nodeid]} err]    
-    assert_match "ERR*" $err        
-
-    R $primary_id_src select 2    
-    R $primary_id_src migrate 127.0.0.1 $primary_id_target_port "{x}key2" 2 5000
-        
-    R $primary_id_target cluster setslot $slot node $primary_id_target_nodeid
-    R $primary_id_src cluster setslot $slot node $primary_id_target_nodeid
-    
-    R $primary_id_target select 1
-    assert_equal [R $primary_id_target get "{x}key1"] "value1_db1"
-    R $primary_id_target select 2
-    assert_equal [R $primary_id_target get "{x}key2"] "value2_db2"
-    
-    R $primary_id_src flushall
-    R $primary_id_target flushall
-}
-
-
 test "Persistence across restart with multiple databases" {
     set primary_id 0
     set keys_per_db 100

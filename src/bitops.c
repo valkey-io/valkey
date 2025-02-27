@@ -30,8 +30,15 @@
 
 #include "server.h"
 #ifdef HAVE_AVX2
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunknown-pragmas"
+#pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 #include <immintrin.h>
+
+#pragma clang diagnostic pop
+#pragma GCC diagnostic pop
 #endif
 /* -----------------------------------------------------------------------------
  * Helpers and low level bit functions.

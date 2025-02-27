@@ -1239,50 +1239,50 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
      * used into CASE 4 is highly inefficient. */
     if (count * HRANDFIELD_SUB_STRATEGY_MUL > size) {
         /* Hashtable encoding (generic implementation) */
-        dict *d = dictCreate(&sdsReplyDictType);
-        dictExpand(d, size);
+        hashtable *ht = hashtableCreate(&hashHashtableType);
+        hashtableExpand(ht, size);
         hashTypeIterator hi;
         hashTypeInitIterator(hash, &hi);
 
-        /* Add all the elements into the temporary dictionary. */
-        while ((hashTypeNext(&hi)) != C_ERR) {
-            int ret = DICT_ERR;
+        /* Add all the elements into the temporary hashtable. */
+        while (hashTypeNext(&hi) != C_ERR) {
+            int ret = 0;
             sds field, value = NULL;
 
             field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
             if (withvalues) value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
-            ret = dictAdd(d, field, value);
-
-            serverAssert(ret == DICT_OK);
+            hashTypeEntry *entry = hashTypeCreateEntry(field, value);
+            sdsfree(field);
+            ret = hashtableAdd(ht, entry);
+            serverAssert(ret);
         }
-        serverAssert(dictSize(d) == size);
+        serverAssert(hashtableSize(ht) == size);
         hashTypeResetIterator(&hi);
 
         /* Remove random elements to reach the right count. */
         while (size > count) {
-            dictEntry *de;
-            de = dictGetFairRandomKey(d);
-            dictUnlink(d, dictGetKey(de));
-            sdsfree(dictGetKey(de));
-            sdsfree(dictGetVal(de));
-            dictFreeUnlinkedEntry(d, de);
+            void *element;
+            hashtableFairRandomEntry(ht, &element);
+            sds field = hashTypeEntryGetField((hashTypeEntry*)element);
+            hashtableDelete(ht, field);
             size--;
         }
 
-        /* Reply with what's in the dict and release memory */
-        dictIterator *di;
-        dictEntry *de;
-        di = dictGetIterator(d);
-        while ((de = dictNext(di)) != NULL) {
-            sds field = dictGetKey(de);
-            sds value = dictGetVal(de);
+        /* Reply with what's in the temporary hashtable and release memory */
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, ht, 0);
+        void *next;
+        while (hashtableNext(&iter, &next)) {
+            hashTypeEntry* entry = (hashTypeEntry*)next;
+            sds field = hashTypeEntryGetField(entry);
+            sds value = hashTypeEntryGetValue(entry);
             if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
-            addWritePreparedReplyBulkSds(wpc, field);
-            if (withvalues) addWritePreparedReplyBulkSds(wpc, value);
+            addWritePreparedReplyBulkSds(wpc, sdsdup(field));
+            if (withvalues) addWritePreparedReplyBulkSds(wpc, sdsdup(value));
         }
-
-        dictReleaseIterator(di);
-        dictRelease(d);
+        
+        hashtableResetIterator(&iter);
+        hashtableRelease(ht);
     }
 
     /* CASE 4: We have a big hash compared to the requested number of elements.
@@ -1293,16 +1293,16 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         /* Hashtable encoding (generic implementation) */
         unsigned long added = 0;
         listpackEntry field, value;
-        dict *d = dictCreate(&hashDictType);
-        dictExpand(d, count);
+        hashtable *ht = hashtableCreate(&setHashtableType);
+        hashtableExpand(ht, count);
         while (added < count) {
             hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL);
 
-            /* Try to add the object to the dictionary. If it already exists
+            /* Try to add the object to the hashtable. If it already exists
              * free it, otherwise increment the number of objects we have
-             * in the result dictionary. */
+             * in the result hashtable. */
             sds sfield = hashSdsFromListpackEntry(&field);
-            if (dictAdd(d, sfield, NULL) != DICT_OK) {
+            if (!hashtableAdd(ht, sfield)) {
                 sdsfree(sfield);
                 continue;
             }
@@ -1315,7 +1315,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         }
 
         /* Release memory */
-        dictRelease(d);
+        hashtableRelease(ht);
     }
 }
 

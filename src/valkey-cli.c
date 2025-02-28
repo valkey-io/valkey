@@ -1635,9 +1635,9 @@ static int cliConnect(int flags) {
 
         /* Do not use hostsocket when we got redirected in cluster mode */
         if (config.hostsocket == NULL || (config.cluster_mode && config.cluster_reissue_command)) {
-            context = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout);
+            context = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0);
         } else {
-            context = redisConnectUnixWrapper(config.hostsocket, config.connect_timeout);
+            context = redisConnectUnixWrapper(config.hostsocket, config.connect_timeout, 0);
         }
 
         if (!context->err && config.tls) {
@@ -2525,7 +2525,7 @@ static redisReply *reconnectingRedisCommand(redisContext *c, const char *fmt, ..
             fflush(stdout);
 
             redisFree(c);
-            c = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout);
+            c = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0);
             if (!c->err && config.tls) {
                 const char *err = NULL;
                 if (cliSecureConnection(c, config.sslconfig, &err) == REDIS_ERR && err) {
@@ -3956,7 +3956,7 @@ cleanup:
 
 static int clusterManagerNodeConnect(clusterManagerNode *node) {
     if (node->context) redisFree(node->context);
-    node->context = redisConnectWrapper(node->ip, node->port, config.connect_timeout);
+    node->context = redisConnectWrapper(node->ip, node->port, config.connect_timeout, 0);
     if (!node->context->err && config.tls) {
         const char *err = NULL;
         if (cliSecureConnection(node->context, config.sslconfig, &err) == REDIS_ERR && err) {
@@ -7673,7 +7673,7 @@ static int clusterManagerCommandImport(int argc, char **argv) {
     char *reply_err = NULL;
     redisReply *src_reply = NULL;
     // Connect to the source node.
-    redisContext *src_ctx = redisConnectWrapper(src_ip, src_port, config.connect_timeout);
+    redisContext *src_ctx = redisConnectWrapper(src_ip, src_port, config.connect_timeout, 0);
     if (src_ctx->err) {
         success = 0;
         fprintf(stderr, "Could not connect to Valkey at %s:%d: %s.\n", src_ip, src_port, src_ctx->errstr);

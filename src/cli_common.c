@@ -428,19 +428,33 @@ sds cliVersion(void) {
 }
 
 /* This is a wrapper to call redisConnect or redisConnectWithTimeout. */
-redisContext *redisConnectWrapper(const char *ip, int port, const struct timeval tv) {
-    if (tv.tv_sec == 0 && tv.tv_usec == 0) {
-        return redisConnect(ip, port);
-    } else {
-        return redisConnectWithTimeout(ip, port, tv);
+redisContext *redisConnectWrapper(const char *ip, int port, const struct timeval tv, int nonblock) {
+    redisOptions options = {0};
+    REDIS_OPTIONS_SET_TCP(&options, ip, port);
+
+    if (tv.tv_sec || tv.tv_usec) {
+        options.connect_timeout = &tv;
     }
+
+    if (nonblock) {
+        options.options |= REDIS_OPT_NONBLOCK;
+    }
+
+    return redisConnectWithOptions(&options);
 }
 
 /* This is a wrapper to call redisConnectUnix or redisConnectUnixWithTimeout. */
-redisContext *redisConnectUnixWrapper(const char *path, const struct timeval tv) {
-    if (tv.tv_sec == 0 && tv.tv_usec == 0) {
-        return redisConnectUnix(path);
-    } else {
-        return redisConnectUnixWithTimeout(path, tv);
+redisContext *redisConnectUnixWrapper(const char *path, const struct timeval tv, int nonblock) {
+    redisOptions options = {0};
+    REDIS_OPTIONS_SET_UNIX(&options, path);
+
+    if (tv.tv_sec || tv.tv_usec) {
+        options.connect_timeout = &tv;
     }
+
+    if (nonblock) {
+        options.options |= REDIS_OPT_NONBLOCK;
+    }
+
+    return redisConnectWithOptions(&options);
 }

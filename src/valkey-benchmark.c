@@ -244,10 +244,11 @@ static dictType dtype = {
 static redisContext *getRedisContext(const char *ip, int port, const char *hostsocket) {
     redisContext *ctx = NULL;
     redisReply *reply = NULL;
+    struct timeval tv = {0};
     if (hostsocket == NULL)
-        ctx = redisConnect(ip, port);
+        ctx = redisConnectWrapper(ip, port, tv, 0);
     else
-        ctx = redisConnectUnix(hostsocket);
+        ctx = redisConnectUnixWrapper(hostsocket, tv, 0);
     if (ctx == NULL || ctx->err) {
         fprintf(stderr, "Could not connect to server at ");
         char *err = (ctx != NULL ? ctx->errstr : "");
@@ -637,6 +638,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
 
     const char *ip = NULL;
     int port = 0;
+    struct timeval tv = {0};
     c->cluster_node = NULL;
     if (config.hostsocket == NULL || is_cluster_client) {
         if (!is_cluster_client) {
@@ -654,9 +656,9 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
             port = node->port;
             c->cluster_node = node;
         }
-        c->context = redisConnectNonBlock(ip, port);
+        c->context = redisConnectWrapper(ip, port, tv, 1);
     } else {
-        c->context = redisConnectUnixNonBlock(config.hostsocket);
+        c->context = redisConnectUnixWrapper(config.hostsocket, tv, 1);
     }
     if (c->context->err) {
         fprintf(stderr, "Could not connect to server at ");

@@ -2150,7 +2150,7 @@ static int numericParseString(standardConfig *config, sds value, const char **er
     if (config->data.numeric.flags & OCTAL_CONFIG) {
         char *endptr;
         errno = 0;
-        *res = strtoull(value, &endptr, 8);
+        *res = strtoll(value, &endptr, 8);
         if (errno == 0 && *endptr == '\0') return 1; /* No overflow or invalid characters */
     }
 

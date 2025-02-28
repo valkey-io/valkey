@@ -72,7 +72,7 @@
 
 int zslLexValueGteMin(sds value, zlexrangespec *spec);
 int zslLexValueLteMax(sds value, zlexrangespec *spec);
-static void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap);
+void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap);
 static zskiplistNode *zslGetElementByRankFromNode(zskiplistNode *start_node, int start_level, unsigned long rank);
 zskiplistNode *zslGetElementByRank(zskiplist *zsl, unsigned long rank);
 
@@ -1273,7 +1273,7 @@ void zsetConvert(robj *zobj, int encoding) {
 }
 
 /* Converts a zset to the specified encoding, pre-sizing it for 'cap' elements. */
-static void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
+void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
     zset *zs;
     zskiplistNode *node, *next;
     sds ele;

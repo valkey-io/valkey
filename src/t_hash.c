@@ -279,7 +279,7 @@ void hashTypeTryConversion(robj *o, robj **argv, int start, int end) {
      * might over allocate memory if there are duplicates. */
     size_t new_fields = (end - start + 1) / 2;
     if (new_fields > server.hash_max_listpack_entries) {
-        hashTypeEnsureHashtableEncoded(o);
+        hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
         hashtableExpand(o->ptr, new_fields);
         return;
     }
@@ -288,12 +288,12 @@ void hashTypeTryConversion(robj *o, robj **argv, int start, int end) {
         if (!sdsEncodedObject(argv[i])) continue;
         size_t len = sdslen(argv[i]->ptr);
         if (len > server.hash_max_listpack_value) {
-            hashTypeEnsureHashtableEncoded(o);
+            hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
             return;
         }
         sum += len;
     }
-    if (!lpSafeToAdd(o->ptr, sum)) hashTypeEnsureHashtableEncoded(o);
+    if (!lpSafeToAdd(o->ptr, sum)) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
 }
 
 /* Get the value from a listpack encoded hash, identified by field.
@@ -427,7 +427,7 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
      * hashTypeTryConversion, so this check will be a NOP. */
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
         if (sdslen(field) > server.hash_max_listpack_value || sdslen(value) > server.hash_max_listpack_value)
-            hashTypeEnsureHashtableEncoded(o);
+            hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
     }
 
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
@@ -456,7 +456,7 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
         o->ptr = zl;
 
         /* Check if the listpack needs to be converted to a hash table */
-        if (hashTypeLength(o) > server.hash_max_listpack_entries) hashTypeEnsureHashtableEncoded(o);
+        if (hashTypeLength(o) > server.hash_max_listpack_entries) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
     } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = o->ptr;
 
@@ -666,33 +666,51 @@ robj *hashTypeLookupWriteOrCreate(client *c, robj *key) {
     return o;
 }
 
-void hashTypeEnsureHashtableEncoded(robj *o) {
-    serverAssert(o->type == OBJ_HASH);
-    if (o->encoding == OBJ_ENCODING_HASHTABLE) return;
 
-    hashtable *ht = hashtableCreate(&hashHashtableType);
+void hashTypeConvertListpack(robj *o, int enc) {
+    serverAssert(o->encoding == OBJ_ENCODING_LISTPACK);
 
-    /* Presize the hashtable to avoid rehashing */
-    hashtableExpand(ht, hashTypeLength(o));
+    if (enc == OBJ_ENCODING_LISTPACK) {
+        /* Nothing to do... */
 
-    hashTypeIterator hi;
-    hashTypeInitIterator(o, &hi);
-    while (hashTypeNext(&hi) != C_ERR) {
-        sds field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
-        sds value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
-        hashTypeEntry *entry = hashTypeCreateEntry(field, value);
-        sdsfree(field);
-        if (!hashtableAdd(ht, entry)) {
-            freeHashTypeEntry(entry);
-            hashTypeResetIterator(&hi); /* Needed for gcc ASAN */
-            serverLogHexDump(LL_WARNING, "listpack with dup elements dump", o->ptr, lpBytes(o->ptr));
-            serverPanic("Listpack corruption detected");
+    } else if (enc == OBJ_ENCODING_HASHTABLE) {
+        hashTypeIterator hi;
+
+        hashtable *ht = hashtableCreate(&hashHashtableType);
+
+        /* Presize the hashtable to avoid rehashing */
+        hashtableExpand(ht, hashTypeLength(o));
+
+        hashTypeInitIterator(o, &hi);
+        while (hashTypeNext(&hi) != C_ERR) {
+            sds field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
+            sds value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
+            hashTypeEntry *entry = hashTypeCreateEntry(field, value);
+            sdsfree(field);
+            if (!hashtableAdd(ht, entry)) {
+                freeHashTypeEntry(entry);
+                hashTypeResetIterator(&hi); /* Needed for gcc ASAN */
+                serverLogHexDump(LL_WARNING, "listpack with dup elements dump", o->ptr, lpBytes(o->ptr));
+                serverPanic("Listpack corruption detected");
+            }
         }
+        hashTypeResetIterator(&hi);
+        zfree(o->ptr);
+        o->encoding = OBJ_ENCODING_HASHTABLE;
+        o->ptr = ht;
+    } else {
+        serverPanic("Unknown hash encoding");
     }
-    hashTypeResetIterator(&hi);
-    zfree(o->ptr);
-    o->encoding = OBJ_ENCODING_HASHTABLE;
-    o->ptr = ht;
+}
+
+void hashTypeConvert(robj *o, int enc) {
+    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+        hashTypeConvertListpack(o, enc);
+    } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+        serverPanic("Not implemented");
+    } else {
+        serverPanic("Unknown hash encoding");
+    }
 }
 
 /* This is a helper function for the COPY command.

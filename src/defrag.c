@@ -43,6 +43,7 @@
 #include "eval.h"
 #include "script.h"
 #include "module.h"
+#include <stdbool.h>
 #include <stddef.h>
 
 #ifdef HAVE_DEFRAG
@@ -351,7 +352,7 @@ static void activeDefragSdsDict(dict *d, int val_type) {
     } while (cursor != 0);
 }
 
-void activeDefragSdsHashtableCallback(void *privdata, void *entry_ref) {
+static void activeDefragSdsHashtableCallback(void *privdata, void *entry_ref) {
     UNUSED(privdata);
     sds *sds_ref = (sds *)entry_ref;
     sds new_sds = activeDefragSds(*sds_ref);
@@ -403,6 +404,7 @@ static long scanLaterList(robj *ob, unsigned long *cursor, monotime endtime) {
     quicklistNode *node;
     long iterations = 0;
     int bookmark_failed = 0;
+    serverAssert(ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST);
 
     if (*cursor == 0) {
         /* if cursor is 0, we start new iteration */
@@ -445,6 +447,7 @@ static void scanLaterZsetCallback(void *privdata, void *element_ref) {
 }
 
 static void scanLaterZset(robj *ob, unsigned long *cursor) {
+    serverAssert(ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST);
     zset *zs = (zset *)ob->ptr;
     *cursor = hashtableScanDefrag(zs->ht, *cursor, scanLaterZsetCallback, zs->zsl, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
@@ -458,6 +461,7 @@ static void scanHashtableCallbackCountScanned(void *privdata, void *elemref) {
 }
 
 static void scanLaterSet(robj *ob, unsigned long *cursor) {
+    serverAssert(ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = ob->ptr;
     *cursor = hashtableScanDefrag(ht, *cursor, activeDefragSdsHashtableCallback, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
@@ -472,6 +476,7 @@ static void activeDefragHashTypeEntry(void *privdata, void *element_ref) {
 }
 
 static void scanLaterHash(robj *ob, unsigned long *cursor) {
+    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = ob->ptr;
     *cursor = hashtableScanDefrag(ht, *cursor, activeDefragHashTypeEntry, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
@@ -558,6 +563,7 @@ static int scanLaterStreamListpacks(robj *ob, unsigned long *cursor, monotime en
     static unsigned char last[sizeof(streamID)];
     raxIterator ri;
     long iterations = 0;
+    serverAssert(ob->type == OBJ_STREAM && ob->encoding == OBJ_ENCODING_STREAM);
 
     stream *s = ob->ptr;
     raxStart(&ri, s->rax);

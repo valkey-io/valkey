@@ -136,6 +136,7 @@ typedef long long ustime_t;
 #define VALKEYMODULE_HASH_CFIELDS (1 << 2)
 #define VALKEYMODULE_HASH_EXISTS (1 << 3)
 #define VALKEYMODULE_HASH_COUNT_ALL (1 << 4)
+#define VALKEYMODULE_HASH_SHAREBLE_VALUES (1 << 5)
 
 #define VALKEYMODULE_CONFIG_DEFAULT 0                /* This is the default for a module config. */
 #define VALKEYMODULE_CONFIG_IMMUTABLE (1ULL << 0)    /* Can this value only be set at startup? */
@@ -788,6 +789,10 @@ typedef enum {
 } ValkeyModuleACLLogEntryReason;
 
 /* Incomplete structures needed by both the core and modules. */
+struct sdshdr32shared;
+#define ValkeyModuleSharedSDS sdshdr32shared
+#define ValkeyModuleSharedSDSFreeCBFunc sharedSdsFreeCB
+typedef struct sdshdr32shared sdshdr32shared;
 typedef struct ValkeyModuleCtx ValkeyModuleCtx;
 typedef struct ValkeyModuleIO ValkeyModuleIO;
 typedef struct ValkeyModuleDigest ValkeyModuleDigest;
@@ -796,6 +801,7 @@ typedef struct ValkeyModuleDefragCtx ValkeyModuleDefragCtx;
 
 /* Function pointers needed by both the core and modules, these needs to be
  * exposed since you can't cast a function pointer to (void *). */
+typedef void (*sharedSdsFreeCB)(void *, size_t);
 typedef void (*ValkeyModuleInfoFunc)(ValkeyModuleInfoCtx *ctx, int for_crash_report);
 typedef void (*ValkeyModuleDefragFunc)(ValkeyModuleDefragCtx *ctx);
 typedef void (*ValkeyModuleUserChangedFunc)(uint64_t client_id, void *privdata);
@@ -1119,6 +1125,7 @@ typedef int (*ValkeyModuleAuthCallback)(ValkeyModuleCtx *ctx,
                                         ValkeyModuleString *username,
                                         ValkeyModuleString *password,
                                         ValkeyModuleString **err);
+typedef void *(*ValkeyModuleSharedSDSAllocFunc)(size_t len, size_t *alloc);
 
 typedef struct ValkeyModuleTypeMethods {
     uint64_t version;
@@ -1881,6 +1888,11 @@ VALKEYMODULE_API int (*ValkeyModule_UnregisterScriptingEngine)(ValkeyModuleCtx *
                                                                const char *engine_name) VALKEYMODULE_ATTR;
 
 VALKEYMODULE_API ValkeyModuleScriptingEngineExecutionState (*ValkeyModule_GetFunctionExecutionState)(ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleSharedSDS *(*ValkeyModule_CreateSharedSDS)(size_t len,
+                                             ValkeyModuleSharedSDSAllocFunc allocfn,
+                                             ValkeyModuleSharedSDSFreeCBFunc freecbfn) VALKEYMODULE_ATTR;
+VALKEYMODULE_API char *(*ValkeyModule_SharedSDSPtrLen)(ValkeyModuleSharedSDS *shared_sds, size_t *len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ReleaseSharedSDS)(ValkeyModuleSharedSDS *shared_sds) VALKEYMODULE_ATTR;
 
 #define ValkeyModule_IsAOFClient(id) ((id) == UINT64_MAX)
 
@@ -2253,6 +2265,9 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(RegisterScriptingEngine);
     VALKEYMODULE_GET_API(UnregisterScriptingEngine);
     VALKEYMODULE_GET_API(GetFunctionExecutionState);
+    VALKEYMODULE_GET_API(CreateSharedSDS);
+    VALKEYMODULE_GET_API(SharedSDSPtrLen);
+    VALKEYMODULE_GET_API(ReleaseSharedSDS);
 
     if (ValkeyModule_IsModuleNameBusy && ValkeyModule_IsModuleNameBusy(name)) return VALKEYMODULE_ERR;
     ValkeyModule_SetModuleAttribs(ctx, name, ver, apiver);

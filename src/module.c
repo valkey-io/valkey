@@ -122,6 +122,7 @@ struct AutoMemEntry {
 #define VALKEYMODULE_AM_FREED 3 /* Explicitly freed by user already. */
 #define VALKEYMODULE_AM_DICT 4
 #define VALKEYMODULE_AM_INFO 5
+#define VALKEYMODULE_AM_SHARED_SDS 6
 
 /* The pool allocator block. Modules can allocate memory via this special
  * allocator that will automatically release it all once the callback returns.
@@ -472,6 +473,7 @@ typedef int (*ValkeyModuleConfigSetBoolFunc)(const char *name, int val, void *pr
 typedef int (*ValkeyModuleConfigSetEnumFunc)(const char *name, int val, void *privdata, ValkeyModuleString **err);
 /* Apply signature, identical to valkeymodule.h */
 typedef int (*ValkeyModuleConfigApplyFunc)(ValkeyModuleCtx *ctx, void *privdata, ValkeyModuleString **err);
+typedef void *(*ValkeyModuleSharedSDSAllocFunc)(size_t len, size_t *alloc);
 
 /* Struct representing a module config. These are stored in a list in the module struct */
 struct ModuleConfig {
@@ -515,6 +517,7 @@ static void zsetKeyReset(ValkeyModuleKey *key);
 static void moduleInitKeyTypeSpecific(ValkeyModuleKey *key);
 void VM_FreeDict(ValkeyModuleCtx *ctx, ValkeyModuleDict *d);
 void VM_FreeServerInfo(ValkeyModuleCtx *ctx, ValkeyModuleServerInfoData *data);
+void VM_ReleaseSharedSDS(ValkeyModuleSharedSDS *shared_sds);
 
 /* Helpers for VM_SetCommandInfo. */
 static int moduleValidateCommandInfo(const ValkeyModuleCommandInfo *info);
@@ -2682,6 +2685,7 @@ void autoMemoryCollect(ValkeyModuleCtx *ctx) {
         case VALKEYMODULE_AM_KEY: VM_CloseKey(ptr); break;
         case VALKEYMODULE_AM_DICT: VM_FreeDict(NULL, ptr); break;
         case VALKEYMODULE_AM_INFO: VM_FreeServerInfo(NULL, ptr); break;
+        case VALKEYMODULE_AM_SHARED_SDS: VM_ReleaseSharedSDS(ptr); break;
         }
     }
     ctx->flags |= VALKEYMODULE_CTX_AUTO_MEMORY;
@@ -5259,6 +5263,7 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
  *                          are created.
  *     VALKEYMODULE_HASH_CFIELDS: The field names passed are null terminated C
  *                               strings instead of ValkeyModuleString objects.
+ *     VALKEYMODULE_HASH_SHAREBLE_VALUES: The passed values are ValkeyModuleSharedSDS objects.
  *     VALKEYMODULE_HASH_COUNT_ALL: Include the number of inserted fields in the
  *                                 returned number, in addition to the number of
  *                                 updated and deleted fields. (Added in Redis OSS
@@ -5298,7 +5303,7 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
 int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
     va_list ap;
     if (!key || (flags & ~(VALKEYMODULE_HASH_NX | VALKEYMODULE_HASH_XX | VALKEYMODULE_HASH_CFIELDS |
-                           VALKEYMODULE_HASH_COUNT_ALL))) {
+                           VALKEYMODULE_HASH_COUNT_ALL | VALKEYMODULE_HASH_SHAREBLE_VALUES))) {
         errno = EINVAL;
         return 0;
     } else if (key->value && key->value->type != OBJ_HASH) {
@@ -5313,7 +5318,7 @@ int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
     int count = 0;
     va_start(ap, flags);
     while (1) {
-        ValkeyModuleString *field, *value;
+        ValkeyModuleString *field, *value = NULL;
         /* Get the field and value objects. */
         if (flags & VALKEYMODULE_HASH_CFIELDS) {
             char *cfield = va_arg(ap, char *);
@@ -5347,9 +5352,21 @@ int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
          * to avoid a useless copy. */
         if (flags & VALKEYMODULE_HASH_CFIELDS) low_flags |= HASH_SET_TAKE_FIELD;
 
-        robj *argv[2] = {field, value};
-        hashTypeTryConversion(key->value, argv, 0, 1);
-        int updated = hashTypeSet(key->value, field->ptr, value->ptr, low_flags);
+        char *value_sds;
+        if (flags & VALKEYMODULE_HASH_SHAREBLE_VALUES) {
+            if (key->value->encoding == OBJ_ENCODING_LISTPACK) {
+                /* Convert to hashtable encoding, as list pack encoding performs a deep copy
+                 * of the buffer, breaking ref-counting semantics. */
+                hashTypeConvert(key->value, OBJ_ENCODING_HASHTABLE);
+            }
+            value_sds = ((ValkeyModuleSharedSDS *)value)->buf;
+        } else {
+            value_sds = value->ptr;
+            robj *argv[2] = {field, value};
+            hashTypeTryConversion(key->value, argv, 0, 1);
+        }
+
+        int updated = hashTypeSet(key->value, field->ptr, value_sds, low_flags);
         count += (flags & VALKEYMODULE_HASH_COUNT_ALL) ? 1 : updated;
 
         /* If CFIELDS is active, SDS string ownership is now of hashTypeSet(),
@@ -5383,6 +5400,8 @@ int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
  *
  * VALKEYMODULE_HASH_CFIELDS: field names as null terminated C strings.
  *
+ * VALKEYMODULE_HASH_SHAREBLE_VALUES: The passed values are ValkeyModuleSharedSDS objects.
+ *
  * VALKEYMODULE_HASH_EXISTS: instead of setting the value of the field
  * expecting a ValkeyModuleString pointer to pointer, the function just
  * reports if the field exists or not and expects an integer pointer
@@ -5412,7 +5431,7 @@ int VM_HashGet(ValkeyModuleKey *key, int flags, ...) {
 
     va_start(ap, flags);
     while (1) {
-        ValkeyModuleString *field, **valueptr;
+        ValkeyModuleString *field;
         int *existsptr;
         /* Get the field object and the value pointer to pointer. */
         if (flags & VALKEYMODULE_HASH_CFIELDS) {
@@ -5432,17 +5451,32 @@ int VM_HashGet(ValkeyModuleKey *key, int flags, ...) {
             else
                 *existsptr = 0;
         } else {
-            valueptr = va_arg(ap, ValkeyModuleString **);
-            if (key->value) {
-                *valueptr = hashTypeGetValueObject(key->value, field->ptr);
-                if (*valueptr) {
-                    robj *decoded = getDecodedObject(*valueptr);
-                    decrRefCount(*valueptr);
-                    *valueptr = decoded;
-                }
-                if (*valueptr) autoMemoryAdd(key->ctx, VALKEYMODULE_AM_STRING, *valueptr);
-            } else {
+            if (!key->value) {
+                ValkeyModuleString **valueptr = va_arg(ap, ValkeyModuleString **);
                 *valueptr = NULL;
+            } else {
+                if (flags & VALKEYMODULE_HASH_SHAREBLE_VALUES) {
+                    ValkeyModuleSharedSDS **valueptr = va_arg(ap, ValkeyModuleSharedSDS **);
+                    *valueptr = NULL;
+                    /* shared SDS is supported only with hashtable encoding  */
+                    if (key->value->encoding == OBJ_ENCODING_HASHTABLE) {
+                        sds value_sds = hashTypeGetFromHashTable(key->value, field->ptr);
+                        if (value_sds && sdsType(value_sds) == SDS_TYPE_32_SHARED) {
+                             *valueptr = (ValkeyModuleSharedSDS *)(value_sds - sdsHdrSize(sdsType(value_sds)));
+                             sdsRetain(*valueptr);
+                             autoMemoryAdd(key->ctx, VALKEYMODULE_AM_SHARED_SDS, *valueptr);
+                        }
+                    }
+                } else {
+                    ValkeyModuleString **valueptr = va_arg(ap, ValkeyModuleString **);
+                    *valueptr = hashTypeGetValueObject(key->value, field->ptr);
+                    if (*valueptr) {
+                        robj *decoded = getDecodedObject(*valueptr);
+                        decrRefCount(*valueptr);
+                        *valueptr = decoded;
+                    }
+                    if (*valueptr) autoMemoryAdd(key->ctx, VALKEYMODULE_AM_STRING, *valueptr);
+                }
             }
         }
 
@@ -13256,6 +13290,57 @@ ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
     return ret == SCRIPT_CONTINUE ? VMSE_STATE_EXECUTING : VMSE_STATE_KILLED;
 }
 
+/* --------------------------------------------------------------------------
+ * ## Shared SDS APIs
+ * -------------------------------------------------------------------------- */
+
+/* Create a new module shared SDS object. The newly created SDS object's intrusive
+ * reference count is initialized to 1.
+ * The caller is responsible for invoking `ValkeyModule_ReleaseSharedSDS` when the
+ * object is no longer needed to ensure proper cleanup.
+ *
+ * Parameters:
+ * - `len`: Specifies the size of the allocated SDS buffer.
+ * - `allocfn`: A custom memory allocation function, allowing fine-grained control
+ *   over the allocation strategy.
+ * - `freecbfn`: A callback function triggered on deallocation. Note that this does
+ *   not free the object itself but is primarily used for statistical tracking.
+ *
+ * Returns:
+ * - A pointer to the created shared SDS object.
+ */
+ValkeyModuleSharedSDS *VM_CreateSharedSDS(size_t len, ValkeyModuleSharedSDSAllocFunc allocfn, ValkeyModuleSharedSDSFreeCBFunc freecbfn) {
+    size_t alloc;
+    void *buf = allocfn(len + sizeof(ValkeyModuleSharedSDS) + 1, &alloc);
+    return sdsInitShared((char *)buf, len, alloc, freecbfn);
+}
+
+/* Retrieves the pointer to the shared SDS buffer along with its length.
+ *
+ * Parameters:
+ * - `shared_sds`: A pointer to the `ValkeyModuleSharedSDS` object.
+ * - `len`: Output parameter that stores the length of the SDS buffer.
+ *
+ * Returns:
+ * - A pointer to the SDS buffer string.
+ */
+char *VM_SharedSDSPtrLen(ValkeyModuleSharedSDS *shared_sds, size_t *len) {
+    *len = shared_sds->len;
+    return (char *)shared_sds + sizeof(ValkeyModuleSharedSDS);
+}
+
+/* Releases a shared SDS object by decrementing its intrusive reference count.
+ *
+ * Every shared SDS object created by `VM_CreateSharedSDS` must be released
+ * using `VM_ReleaseSharedSDS` to ensure proper memory management.
+ *
+ * Parameters:
+ * - `shared_sds`: A pointer to the `ValkeyModuleSharedSDS` object to be released.
+ */
+void VM_ReleaseSharedSDS(ValkeyModuleSharedSDS *shared_sds) {
+    sdsfree(shared_sds->buf);
+}
+
 /* MODULE command.
  *
  * MODULE LIST
@@ -14130,4 +14215,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RegisterScriptingEngine);
     REGISTER_API(UnregisterScriptingEngine);
     REGISTER_API(GetFunctionExecutionState);
+    REGISTER_API(CreateSharedSDS);
+    REGISTER_API(SharedSDSPtrLen);
+    REGISTER_API(ReleaseSharedSDS);
 }

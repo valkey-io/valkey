@@ -48,6 +48,7 @@ int sdsHdrSize(char type) {
     case SDS_TYPE_16: return sizeof(struct sdshdr16);
     case SDS_TYPE_32: return sizeof(struct sdshdr32);
     case SDS_TYPE_64: return sizeof(struct sdshdr64);
+    case SDS_TYPE_32_SHARED: return sizeof(struct sdshdr32shared);
     }
     return 0;
 }
@@ -71,14 +72,15 @@ static inline size_t sdsTypeMaxSize(char type) {
     if (type == SDS_TYPE_8) return (1 << 8) - 1;
     if (type == SDS_TYPE_16) return (1 << 16) - 1;
 #if (LONG_MAX == LLONG_MAX)
-    if (type == SDS_TYPE_32) return (1ll << 32) - 1;
+    if (type == SDS_TYPE_32 || type == SDS_TYPE_32_SHARED) return (1ll << 32) - 1;
 #endif
     return -1; /* this is equivalent to the max SDS_TYPE_64 or SDS_TYPE_32 */
 }
 
 static inline int adjustTypeIfNeeded(char *type, int *hdrlen, size_t bufsize) {
     size_t usable = bufsize - *hdrlen - 1;
-    if (*type != SDS_TYPE_5 && usable > sdsTypeMaxSize(*type)) {
+    if (*type != SDS_TYPE_5 && *type != SDS_TYPE_32_SHARED &&
+              usable > sdsTypeMaxSize(*type)) {
         *type = sdsReqType(usable);
         *hdrlen = sdsHdrSize(*type);
         return 1;
@@ -124,6 +126,7 @@ sds _sdsnewlen(const void *init, size_t initlen, int trymalloc) {
  * can't be greater than `sdsTypeMaxSize(type)`. */
 sds sdswrite(char *buf, size_t bufsize, char type, const char *init, size_t initlen) {
     assert(bufsize >= sdsReqSize(initlen, type));
+    assert(type != SDS_TYPE_32_SHARED);
     int hdrlen = sdsHdrSize(type);
     size_t usable = bufsize - hdrlen - 1;
     sds s = buf + hdrlen;
@@ -204,6 +207,15 @@ sds sdsdup(const_sds s) {
 /* Free an sds string. No operation is performed if 's' is NULL. */
 void sdsfree(sds s) {
     if (s == NULL) return;
+    if (sdsType(s) == SDS_TYPE_32_SHARED) {
+        SDS_HDR_VAR(32shared, s);
+        if (atomic_fetch_sub_explicit(&sh->refcount, 1, memory_order_acq_rel) > 1) {
+          return;
+        }
+        sh->freecbfn(sh, sdsAllocSize(s));
+        s_free_with_size(s + sh->len + 1 - sdsAllocSize(s), sdsAllocSize(s));
+        return;
+    }
     s_free_with_size(sdsAllocPtr(s), sdsAllocSize(s));
 }
 
@@ -266,6 +278,7 @@ sds _sdsMakeRoomFor(sds s, size_t addlen, int greedy) {
     /* Return ASAP if there is enough space left. */
     if (avail >= addlen) return s;
 
+    assert(oldtype != SDS_TYPE_32_SHARED);
     len = sdslen(s);
     sh = (char *)s - sdsHdrSize(oldtype);
     reqlen = newlen = (len + addlen);
@@ -351,6 +364,7 @@ sds sdsResize(sds s, size_t size, int would_regrow) {
 
     /* Return ASAP if the size is already good. */
     if (sdsalloc(s) == size) return s;
+    assert(oldtype != SDS_TYPE_32_SHARED);
 
     /* Truncate len if needed. */
     if (size < len) len = size;
@@ -439,6 +453,44 @@ void *sdsAllocPtr(const_sds s) {
     return (void *)(s - sdsHdrSize(sdsType(s)));
 }
 
+/* Initialize a shared sds into a buffer `buf`.
+ *
+ * Parameters:
+ * - `buf`: A pointer to the allocated buffer that is initialized a the shared sds.
+ * - `len`: The length of the sds buffer.
+ * - `alloc`: The total allocated size of the buffer, including metadata.
+ * - `freecbfn`: A callback function that is invoked when the sds object is released.
+ *
+ * Returns:
+ * - A pointer to the initialized `sdshdr32shared` structure.
+ *
+ * Notes:
+ * - The caller is responsible for ensuring that `buf` is large enough to accommodate
+ *   the SDS metadata, the string content, and the null terminator.
+ * - The `freecbfn` does not directly free memory but is used primarily for
+ *   tracking deallocation events.
+ */
+sdshdr32shared *sdsInitShared(char *buf, size_t len, size_t alloc, sharedSdsFreeCB freecbfn) {
+    buf[alloc - 1] = 0;
+    sds s = buf + alloc - len - 1;
+    SDS_HDR_VAR(32shared, s);
+    sh->freecbfn = freecbfn;
+    atomic_init(&sh->refcount, 1);
+    sh->len = len;
+    sh->alloc = alloc - sdsHdrSize(SDS_TYPE_32_SHARED) - 1;
+    sh->flags = SDS_TYPE_32_SHARED;
+    return sh;
+}
+
+/* Increases the reference count of a shared SDS object.
+ *
+ * Parameters:
+ * - `sh`: A pointer to the `sdshdr32shared` structure whose reference count
+ *   should be increased.
+ */
+void sdsRetain(sdshdr32shared *sh) {
+    atomic_fetch_add_explicit(&sh->refcount, 1, memory_order_relaxed);
+}
 /* Increment the sds length and decrements the left free space at the
  * end of the string according to 'incr'. Also set the null term
  * in the new end of the string.
@@ -495,6 +547,13 @@ void sdsIncrLen(sds s, ssize_t incr) {
     case SDS_TYPE_64: {
         SDS_HDR_VAR(64, s);
         assert((incr >= 0 && sh->alloc - sh->len >= (uint64_t)incr) || (incr < 0 && sh->len >= (uint64_t)(-incr)));
+        len = (sh->len += incr);
+        break;
+    }
+    case SDS_TYPE_32_SHARED: {
+        SDS_HDR_VAR(32shared, s);
+        assert((incr >= 0 && sh->alloc - sh->len >= (unsigned int)incr) ||
+               (incr < 0 && sh->len >= (unsigned int)(-incr)));
         len = (sh->len += incr);
         break;
     }
@@ -779,6 +838,7 @@ sds sdstrim(sds s, const char *cset) {
     char *end, *sp, *ep;
     size_t len;
 
+    assert(sdsType(s) != SDS_TYPE_32_SHARED);
     sp = s;
     ep = end = s + sdslen(s) - 1;
     while (sp <= end && strchr(cset, *sp)) sp++;

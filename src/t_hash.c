@@ -97,7 +97,7 @@ hashTypeEntry *hashTypeCreateEntry(sds field, sds value) {
     size_t value_len = sdslen(value);
     size_t value_size = sdsReqSize(value_len, SDS_TYPE_8);
     sds embedded_field_sds;
-    if (field_size + value_size <= EMBED_VALUE_MAX_ALLOC_SIZE) {
+    if (sdsType(value) != SDS_TYPE_32_SHARED && field_size + value_size <= EMBED_VALUE_MAX_ALLOC_SIZE) {
         /* Embed field and value. Value is fixed to SDS_TYPE_8. Unused
          * allocation space is recorded in the embedded value's SDS header.
          *
@@ -134,6 +134,10 @@ hashTypeEntry *hashTypeCreateEntry(sds field, sds value) {
         /* Store the entry encoding type in sds aux bits. */
         sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, 1);
         serverAssert(entryHasValuePtr(embedded_field_sds));
+        if (sdsType(value) == SDS_TYPE_32_SHARED) {
+            SDS_HDR_VAR(32shared, value);
+            sdsRetain(sh);
+        }
     }
     return (void *)embedded_field_sds;
 }
@@ -175,7 +179,7 @@ static hashTypeEntry *hashTypeEntryReplaceValue(hashTypeEntry *entry, sds value)
         char *alloc_ptr = sdsAllocPtr(entry);
         size_t required_size = field_size + value_size;
         size_t alloc_size;
-        if (required_size <= EMBED_VALUE_MAX_ALLOC_SIZE &&
+        if (sdsType(value) != SDS_TYPE_32_SHARED && required_size <= EMBED_VALUE_MAX_ALLOC_SIZE &&
             required_size <= (alloc_size = hashTypeEntryMemUsage(entry)) &&
             required_size >= alloc_size * 3 / 4) {
             /* It fits in the allocation and leaves max 25% unused space. */
@@ -188,7 +192,7 @@ static hashTypeEntry *hashTypeEntryReplaceValue(hashTypeEntry *entry, sds value)
         return new_entry;
     } else {
         /* The value pointer is located before the embedded field. */
-        if (field_size + value_size <= EMBED_VALUE_MAX_ALLOC_SIZE) {
+        if (sdsType(value) != SDS_TYPE_32_SHARED && field_size + value_size <= EMBED_VALUE_MAX_ALLOC_SIZE) {
             /* Convert to entry with embedded value. */
             hashTypeEntry *new_entry = hashTypeCreateEntry(field, value);
             freeHashTypeEntry(entry);
@@ -198,6 +202,10 @@ static hashTypeEntry *hashTypeEntryReplaceValue(hashTypeEntry *entry, sds value)
             sds *value_ref = hashTypeEntryGetValueRef(entry);
             sdsfree(*value_ref);
             *value_ref = value;
+            if (sdsType(value) == SDS_TYPE_32_SHARED) {
+                SDS_HDR_VAR(32shared, value);
+                sdsRetain(sh);
+            }
             return entry;
         }
     }
@@ -232,8 +240,10 @@ size_t hashTypeEntryMemUsage(hashTypeEntry *entry) {
 hashTypeEntry *hashTypeEntryDefrag(hashTypeEntry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds)) {
     if (entryHasValuePtr(entry)) {
         sds *value_ref = hashTypeEntryGetValueRef(entry);
-        sds new_value = sdsdefragfn(*value_ref);
-        if (new_value) *value_ref = new_value;
+        if (sdsType(*value_ref) != SDS_TYPE_32_SHARED) {
+            sds new_value = sdsdefragfn(*value_ref);
+            if (new_value) *value_ref = new_value;
+        }
     }
     char *allocation = hashTypeEntryAllocPtr(entry);
     char *new_allocation = defragfn(allocation);
@@ -461,7 +471,7 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
         hashtable *ht = o->ptr;
 
         sds v;
-        if (flags & HASH_SET_TAKE_VALUE) {
+        if (flags & HASH_SET_TAKE_VALUE || sdsType(value) == SDS_TYPE_32_SHARED) {
             v = value;
             value = NULL;
         } else {

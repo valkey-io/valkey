@@ -38,6 +38,7 @@ extern const char *SDS_NOINIT;
 #include <sys/types.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <stdatomic.h>
 
 /* Constness:
  *
@@ -47,6 +48,8 @@ extern const char *SDS_NOINIT;
 
 typedef char *sds;
 typedef const char *const_sds;
+
+typedef void (*sharedSdsFreeCB)(void *, size_t);
 
 /* Note: sdshdr5 is never used, we just access the flags byte directly.
  * However is here to document the layout of type 5 SDS strings. */
@@ -72,6 +75,14 @@ struct __attribute__((__packed__)) sdshdr32 {
     unsigned char flags; /* 3 lsb of type, 5 unused bits */
     char buf[];
 };
+typedef struct __attribute__((__packed__)) sdshdr32shared {
+    atomic_int refcount __attribute__((aligned(4)));
+    sharedSdsFreeCB freecbfn;
+    uint32_t len;        /* used */
+    uint32_t alloc;      /* excluding the header and null terminator */
+    unsigned char flags; /* 3 lsb of type, 5 unused bits */
+    char buf[];
+} sdshdr32shared;
 struct __attribute__((__packed__)) sdshdr64 {
     uint64_t len;        /* used */
     uint64_t alloc;      /* excluding the header and null terminator */
@@ -84,6 +95,7 @@ struct __attribute__((__packed__)) sdshdr64 {
 #define SDS_TYPE_16 2
 #define SDS_TYPE_32 3
 #define SDS_TYPE_64 4
+#define SDS_TYPE_32_SHARED 5
 #define SDS_TYPE_MASK 7
 #define SDS_TYPE_BITS 3
 #define SDS_HDR_VAR(T, s) struct sdshdr##T *sh = (void *)((s) - (sizeof(struct sdshdr##T)));
@@ -124,6 +136,7 @@ static inline size_t sdslen(const_sds s) {
     case SDS_TYPE_16: return SDS_HDR(16, s)->len;
     case SDS_TYPE_32: return SDS_HDR(32, s)->len;
     case SDS_TYPE_64: return SDS_HDR(64, s)->len;
+    case SDS_TYPE_32_SHARED: return SDS_HDR(32shared, s)->len;
     }
     return 0;
 }
@@ -150,6 +163,10 @@ static inline size_t sdsavail(const_sds s) {
         SDS_HDR_VAR(64, s);
         return sh->alloc - sh->len;
     }
+    case SDS_TYPE_32_SHARED: {
+        SDS_HDR_VAR(32shared, s);
+        return sh->alloc - sh->len;
+    }
     }
     return 0;
 }
@@ -165,6 +182,7 @@ static inline void sdssetlen(sds s, size_t newlen) {
     case SDS_TYPE_16: SDS_HDR(16, s)->len = newlen; break;
     case SDS_TYPE_32: SDS_HDR(32, s)->len = newlen; break;
     case SDS_TYPE_64: SDS_HDR(64, s)->len = newlen; break;
+    case SDS_TYPE_32_SHARED: SDS_HDR(32shared, s)->len = newlen; break;
     }
 }
 
@@ -180,6 +198,7 @@ static inline void sdsinclen(sds s, size_t inc) {
     case SDS_TYPE_16: SDS_HDR(16, s)->len += inc; break;
     case SDS_TYPE_32: SDS_HDR(32, s)->len += inc; break;
     case SDS_TYPE_64: SDS_HDR(64, s)->len += inc; break;
+    case SDS_TYPE_32_SHARED: SDS_HDR(32shared, s)->len += inc; break;
     }
 }
 
@@ -192,6 +211,7 @@ static inline size_t sdsalloc(const_sds s) {
     case SDS_TYPE_16: return SDS_HDR(16, s)->alloc;
     case SDS_TYPE_32: return SDS_HDR(32, s)->alloc;
     case SDS_TYPE_64: return SDS_HDR(64, s)->alloc;
+    case SDS_TYPE_32_SHARED: return SDS_HDR(32shared, s)->alloc;
     }
     return 0;
 }
@@ -206,6 +226,7 @@ static inline void sdssetalloc(sds s, size_t newlen) {
     case SDS_TYPE_16: SDS_HDR(16, s)->alloc = newlen; break;
     case SDS_TYPE_32: SDS_HDR(32, s)->alloc = newlen; break;
     case SDS_TYPE_64: SDS_HDR(64, s)->alloc = newlen; break;
+    case SDS_TYPE_32_SHARED: SDS_HDR(32shared, s)->alloc = newlen; break;
     }
 }
 
@@ -268,6 +289,8 @@ sds sdsRemoveFreeSpace(sds s, int would_regrow);
 sds sdsResize(sds s, size_t size, int would_regrow);
 size_t sdsAllocSize(const_sds s);
 void *sdsAllocPtr(const_sds s);
+sdshdr32shared *sdsInitShared(char *buf, size_t len, size_t alloc, sharedSdsFreeCB freecbfn);
+void sdsRetain(sdshdr32shared *sh);
 
 /* Returns the minimum required size to store an sds string of the given length
  * and type. */

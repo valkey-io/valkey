@@ -496,6 +496,9 @@ static int anetTcpGenericConnect(char *err, const char *addr, int port, const ch
             continue;
         }
 
+        /* Enable TCP_NODELAY by default */
+        anetEnableTcpNoDelay(NULL, s);
+
         /* If we ended an iteration of the for loop without errors, we
          * have a connected socket. Let's return to the caller. */
         goto end;
@@ -684,6 +687,10 @@ int anetTcpAccept(char *err, int serversock, char *ip, size_t ip_len, int *port)
         if (ip) inet_ntop(AF_INET6, (void *)&(s->sin6_addr), ip, ip_len);
         if (port) *port = ntohs(s->sin6_port);
     }
+
+    /* Enable TCP_NODELAY by default */
+    anetEnableTcpNoDelay(NULL, fd);
+
     return fd;
 }
 

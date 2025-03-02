@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2009-2012, Redis Ltd.
- * Copyright (c) 2024, Valkey contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,7 +26,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 const char *ascii_logo =
     "                .+^+.                                                \n"
     "            .+#########+.                                            \n"

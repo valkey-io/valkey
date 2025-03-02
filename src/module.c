@@ -26,6 +26,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 
 /* --------------------------------------------------------------------------
  * Modules API documentation information
@@ -2566,7 +2571,16 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
  * By default, the server will not fire key-space notifications that happened inside
  * a key-space notification callback. This flag allows to change this behavior
  * and fire nested key-space notifications. Notice: if enabled, the module
- * should protected itself from infinite recursion. */
+ * should protected itself from infinite recursion.
+ *
+ * VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION:
+ * When set, this option allows the module to skip command validation.
+ * This is useful in scenarios where the module needs to bypass
+ * command validation for specific operations
+ * to reduce overhead or handle trusted custom command logic.
+ * ValkeyModule_Replicate and ValkeyModule_EmitAOF
+ * are affected by this option, allowing them to operate without
+ * command validation check. */
 void VM_SetModuleOptions(ValkeyModuleCtx *ctx, int options) {
     ctx->module->options = options;
 }
@@ -3630,8 +3644,10 @@ int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...
     int argc = 0, flags = 0, j;
     va_list ap;
 
-    cmd = lookupCommandByCString((char *)cmdname);
-    if (!cmd) return VALKEYMODULE_ERR;
+    if (!ctx->module || !(ctx->module->options & VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION)) {
+        cmd = lookupCommandByCString((char *)cmdname);
+        if (!cmd) return VALKEYMODULE_ERR;
+    }
 
     /* Create the client and dispatch the command. */
     va_start(ap, fmt);
@@ -7535,15 +7551,17 @@ void VM_EmitAOF(ValkeyModuleIO *io, const char *cmdname, const char *fmt, ...) {
     int argc = 0, flags = 0, j;
     va_list ap;
 
-    cmd = lookupCommandByCString((char *)cmdname);
-    if (!cmd) {
-        serverLog(LL_WARNING,
-                  "Fatal: AOF method for module data type '%s' tried to "
-                  "emit unknown command '%s'",
-                  io->type->name, cmdname);
-        io->error = 1;
-        errno = EINVAL;
-        return;
+    if (!io->ctx || !io->ctx->module || !(io->ctx->module->options & VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION)) {
+        cmd = lookupCommandByCString((char *)cmdname);
+        if (!cmd) {
+            serverLog(LL_WARNING,
+                      "Fatal: AOF method for module data type '%s' tried to "
+                      "emit unknown command '%s'",
+                      io->type->name, cmdname);
+            io->error = 1;
+            errno = EINVAL;
+            return;
+        }
     }
 
     /* Emit the arguments into the AOF in RESP format. */
@@ -8950,7 +8968,13 @@ void moduleCallClusterReceivers(const char *sender_id,
  * was already a registered callback, this will replace the callback function
  * with the one provided, otherwise if the callback is set to NULL and there
  * is already a callback for this function, the callback is unregistered
- * (so this API call is also used in order to delete the receiver). */
+ * (so this API call is also used in order to delete the receiver).
+ *
+ * When a message of this type is received, the registered callback function
+ * will be invoked with details, including the 40-byte node ID of the sender.
+ *
+ * In Valkey 8.1 and later, the node ID is null-terminated. Prior to 8.1, it was
+ * not null-terminated */
 void VM_RegisterClusterMessageReceiver(ValkeyModuleCtx *ctx,
                                        uint8_t type,
                                        ValkeyModuleClusterMessageReceiver callback) {

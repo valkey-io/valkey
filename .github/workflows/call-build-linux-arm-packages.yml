@@ -35,7 +35,7 @@ jobs:
   build-valkey:
     # Capture source tarball and generate checksum for it
     name: Build package ${{ matrix.distro.target }} ${{ matrix.distro.arch }}
-    runs-on: "ubuntu-24.04-arm"
+    runs-on: ${{matrix.distro.target}}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(inputs.build_matrix) }}
@@ -51,13 +51,11 @@ jobs:
           aws-region: ${{ inputs.region }}
           role-to-assume: ${{ secrets.role_to_assume }}
 
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential libssl-dev libsystemd-dev
+
       - name: Make Valkey
-        uses: uraimo/run-on-arch-action@v2
-        with:
-          arch: aarch64
-          distro: ${{matrix.distro.target}}
-          install: apt-get update && apt-get install -y build-essential libssl-dev libsystemd-dev
-          run: make -C src all BUILD_TLS=yes USE_SYSTEMD=yes
+        run: make -C src all BUILD_TLS=yes USE_SYSTEMD=yes
 
       - name: Create Tarball and SHA256sums
         run: |

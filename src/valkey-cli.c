@@ -27,7 +27,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 #include "fmacros.h"
 
 #include <stdio.h>
@@ -2355,6 +2359,9 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
         (argc >= 2 && !strcasecmp(command, "proxy") && !strcasecmp(argv[1], "info"))) {
         output_raw = 1;
     }
+
+    /* In a multi block, commands will return status strings instead of verbatim strings. */
+    if (config.in_multi) output_raw = 0;
 
     if (!strcasecmp(command, "shutdown")) config.shutdown = 1;
     if (!strcasecmp(command, "monitor")) config.monitor_mode = 1;

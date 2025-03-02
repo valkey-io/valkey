@@ -122,32 +122,43 @@ int geohashBoundingBox(GeoShape *shape, double *bounds) {
     if (shape->type == POLYGON_TYPE) {
         int num_vertices = shape->t.polygon.num_vertices;
         double x = 0.0, y = 0.0, z = 0.0;
-        double min_lat = GEO_LAT_MAX;
-        double max_lat = GEO_LAT_MIN;
-        double min_lon = GEO_LONG_MAX;
-        double max_lon = GEO_LONG_MIN;
+        double min_x = EARTH_RADIUS_IN_METERS, max_x = -EARTH_RADIUS_IN_METERS;
+        double min_y = EARTH_RADIUS_IN_METERS, max_y = -EARTH_RADIUS_IN_METERS;
+        double min_z = EARTH_RADIUS_IN_METERS, max_z = -EARTH_RADIUS_IN_METERS;
         // For polygons, calculate the bounding box & centroid based on the vertices.
         for (int i = 0; i < shape->t.polygon.num_vertices; i++) {
+            double cur_x = 0, cur_y = 0, cur_z = 0;
             double longitude = shape->t.polygon.points[i][0];
             double latitude = shape->t.polygon.points[i][1];
-            if (latitude < min_lat) min_lat = latitude;
-            if (latitude > max_lat) max_lat = latitude;
-            if (longitude < min_lon) min_lon = longitude;
-            if (longitude > max_lon) max_lon = longitude;
             // Code below in this loop is for calculating centroid.
             // Convert degree to radians.
-            double lat = deg_rad(shape->t.polygon.points[i][1]);
-            double lon = deg_rad(shape->t.polygon.points[i][0]);
+            double lon_rad = deg_rad(longitude);
+            double lat_rad = deg_rad(latitude);
             // Convert to Cartesian coordinates
-            x += EARTH_RADIUS_IN_METERS * cos(lat) * cos(lon);
-            y += EARTH_RADIUS_IN_METERS * cos(lat) * sin(lon);
-            z += EARTH_RADIUS_IN_METERS * sin(lat);
+            cur_x = EARTH_RADIUS_IN_METERS * cos(lat_rad) * cos(lon_rad);
+            cur_y = EARTH_RADIUS_IN_METERS * cos(lat_rad) * sin(lon_rad);
+            cur_z = EARTH_RADIUS_IN_METERS * sin(lat_rad);
+            x += cur_x;
+            y += cur_y;
+            z += cur_z;
+            if (cur_x < min_x) min_x = cur_x;
+            if (cur_x > max_x) max_x = cur_x;
+            if (cur_y < min_y) min_y = cur_y;
+            if (cur_y > max_y) max_y = cur_y;
+            if (cur_z < min_z) min_z = cur_z;
+            if (cur_z > max_z) max_z = cur_z;
         }
         // Code block below is for setting the final bounding box values.
-        bounds[0] = min_lon;
-        bounds[1] = min_lat;
-        bounds[2] = max_lon;
-        bounds[3] = max_lat;
+        double min_lon = atan2(min_y, min_x);
+        double min_hyp = sqrt(min_x * min_x + min_y * min_y);
+        double min_lat = atan2(min_z, min_hyp);
+        double max_lon = atan2(max_y, max_x);
+        double max_hyp = sqrt(max_x * max_x + max_y * max_y);
+        double max_lat = atan2(max_z, max_hyp);
+        bounds[0] = rad_deg(min_lon);
+        bounds[1] = rad_deg(min_lat);
+        bounds[2] = rad_deg(max_lon);
+        bounds[3] = rad_deg(max_lat);
         // Code block below is for calculating centroid.
         // Average the Cartesian coordinates
         x /= num_vertices;

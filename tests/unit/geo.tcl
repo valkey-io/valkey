@@ -261,7 +261,7 @@ start_server {tags {"geo"}} {
     test {GEOSEARCH BYRADIUS and BYBOX one must exist} {
         catch {r geosearch nyc fromlonlat -73.9798091 40.7598464 asc desc withhash withdist withcoord} e
         set e
-    } {ERR *exactly one of BYRADIUS and BYBOX*}
+    } {ERR *exactly one of BYRADIUS, BYBOX and BYPOLYGON*}
 
     test {GEOSEARCH with STOREDIST option} {
         catch {r geosearch nyc fromlonlat -73.9798091 40.7598464 bybox 6 6 km asc storedist} e

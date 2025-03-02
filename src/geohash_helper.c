@@ -156,8 +156,8 @@ int geohashBoundingBox(GeoShape *shape, double *bounds) {
         y /= num_vertices;
         z /= num_vertices;
         // Convert back to latitude and longitude
-        double central_lon = atan2(y, x); // Longitude in radians
-        double central_hyp = sqrt(x * x + y * y); // Hypotenuse
+        double central_lon = atan2(y, x);           // Longitude in radians
+        double central_hyp = sqrt(x * x + y * y);   // Hypotenuse
         double central_lat = atan2(z, central_hyp); // Latitude in radians
         // Convert back to degrees
         shape->xy[0] = rad_deg(central_lon);

@@ -221,7 +221,6 @@ void addReplyDoubleDistance(client *c, double d) {
  * "*distance" is populated with the distance between the center of the shape and the point.
  */
 int geoWithinShape(GeoShape *shape, double score, double *xy, double *distance) {
-    printf("inside geoWithinShape\r\n");
     if (!decodeGeohash(score, xy)) return C_ERR; /* Can't decode. */
     /* Note that geohashGetDistanceIfInRadiusWGS84() takes arguments in
      * reverse order: longitude first, latitude later. */
@@ -655,7 +654,6 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                 shape.conversion = 1;
                 shape.t.polygon.num_vertices = num_vertices;
                 shape.t.polygon.points = zmalloc(num_vertices * sizeof(double[2]));
-                // TODO: Handle malloc failure.
                 for (int j = 0; j < num_vertices * 2; j += 2) {
                     if (extractLongLatOrReply(c, c->argv + base_args + i + 1 + 1 + j, shape.t.polygon.points[j / 2]) == C_ERR) {
                         zfree(shape.t.polygon.points);
@@ -748,10 +746,8 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     if (sort != SORT_NONE) {
         int (*sort_gp_callback)(const void *a, const void *b) = NULL;
         if (sort == SORT_ASC) {
-            printf("SORT_ASC\r\n");
             sort_gp_callback = sort_gp_asc;
         } else if (sort == SORT_DESC) {
-            printf("SORT_DESC\r\n");
             sort_gp_callback = sort_gp_desc;
         }
 

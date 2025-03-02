@@ -229,9 +229,20 @@ int geohashBoundingBox(GeoShape *shape, double *bounds) {
 //         shape->xy[0] = rad_deg(central_lon);
 //         shape->xy[1] = rad_deg(central_lat);
 //         printf("Geo centroid coordinates lon lat: %f, %f\r\n", shape->xy[0], shape->xy[1]);
-//         // Code block below is for calculating initial height and weight.
-//         height = max_lat - min_lat;
-//         width = max_lon - min_lon;
+//         // Code block below is for calculating initial height and weight
+
+//         // height = max_lat - min_lat;
+//         // width = max_lon - min_lon;
+//         // height = fabs(max_lat - min_lat) * 111.32 * 1000 / 2;
+//         // double lat1_radians = min_lat * M_PI / 180.0;
+//         // width = fabs(max_lon - min_lon) * cos(lat1_radians) * 111.32 * 1000 / 2;
+
+//         // Height: Difference in latitudes (North-South)
+//         height = fabs(max_lat - min_lat) * 111320 / 2;  // meters
+//         // Width: Difference in longitudes (East-West), adjusted by cosine of average latitude
+//         double avg_lat = (min_lat + max_lat) / 2.0;  // average latitude
+//         double avg_lat_radians = avg_lat * M_PI / 180.0;  // convert to radians
+//         width = fabs(max_lon - min_lon) * cos(avg_lat_radians) * 111320 / 2;  // meters
 //     }
 //     double longitude = shape->xy[0];
 //     double latitude = shape->xy[1];

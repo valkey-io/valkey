@@ -15,7 +15,7 @@ on:
         default: "valgrind,sanitizer,tls,freebsd,macos,alpine,32bit,iothreads,ubuntu,rpm-distros,malloc,specific,fortify,reply-schema,arm"
       skiptests:
         description: "tests to skip (delete the ones you wanna keep, do not leave empty)"
-        default: "valkey,modules,sentinel,cluster,unittest"
+        default: "valkey,modules,sentinel,cluster,unittest,large-memory"
       test_args:
         description: "extra test arguments"
         default: ""
@@ -705,10 +705,10 @@ jobs:
           sudo apt-get install tcl8.6 tclx -y
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --accurate --verbose --dump-logs --large-memory ${{github.event.inputs.test_args}}
+        run: ./runtest --accurate --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --large-memory ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
         run: ./runtest-sentinel ${{github.event.inputs.cluster_test_args}}
@@ -718,6 +718,12 @@ jobs:
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: ./src/valkey-unit-tests --large-memory
+      - name: large memory tests
+        if: true && !contains(github.event.inputs.skiptests, 'valkey') && !contains(github.event.inputs.skiptests, 'large-memory')
+        run: ./runtest --accurate --verbose --dump-logs --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+      - name: large memory module api tests
+        if: true && !contains(github.event.inputs.skiptests, 'modules') && !contains(github.event.inputs.skiptests, 'large-memory')
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --large-memory --tags large-memory ${{github.event.inputs.test_args}}
 
   test-sanitizer-undefined:
     runs-on: ubuntu-latest
@@ -755,10 +761,10 @@ jobs:
           sudo apt-get install tcl8.6 tclx -y
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
-        run: ./runtest --accurate --verbose --dump-logs --large-memory ${{github.event.inputs.test_args}}
+        run: ./runtest --accurate --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: module api test
         if: true && !contains(github.event.inputs.skiptests, 'modules')
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --large-memory ${{github.event.inputs.test_args}}
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs ${{github.event.inputs.test_args}}
       - name: sentinel tests
         if: true && !contains(github.event.inputs.skiptests, 'sentinel')
         run: ./runtest-sentinel ${{github.event.inputs.cluster_test_args}}
@@ -768,6 +774,12 @@ jobs:
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: ./src/valkey-unit-tests --accurate --large-memory
+      - name: large memory tests
+        if: true && !contains(github.event.inputs.skiptests, 'valkey') && !contains(github.event.inputs.skiptests, 'large-memory')
+        run: ./runtest --accurate --verbose --dump-logs --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+      - name: large memory module api tests
+        if: true && !contains(github.event.inputs.skiptests, 'modules') && !contains(github.event.inputs.skiptests, 'large-memory')
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --large-memory --tags large-memory ${{github.event.inputs.test_args}}
 
   test-sanitizer-force-defrag:
     runs-on: ubuntu-latest

@@ -18,7 +18,7 @@ jobs:
 
       - name: Install lcov and run test
         run: |
-          sudo apt-get install lcov
+          sudo apt-get install lcov tclx
           make lcov
 
       - name: Upload code coverage

@@ -3527,7 +3527,7 @@ int clusterProcessPacket(clusterLink *link) {
                             /* This packet is stale so we avoid processing it anymore. Otherwise
                              * this may cause a primary-replica chain issue. */
                             return 1;
-                        } else if (nodeIsReplica(sender_claimed_primary)) {
+                        } else {
                             /* `primary` is still a `replica` in this observer node's view;
                              * update its role and configEpoch */
                             clusterSetNodeAsPrimary(sender_claimed_primary);

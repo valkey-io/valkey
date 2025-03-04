@@ -517,7 +517,7 @@ static void zsetKeyReset(ValkeyModuleKey *key);
 static void moduleInitKeyTypeSpecific(ValkeyModuleKey *key);
 void VM_FreeDict(ValkeyModuleCtx *ctx, ValkeyModuleDict *d);
 void VM_FreeServerInfo(ValkeyModuleCtx *ctx, ValkeyModuleServerInfoData *data);
-void VM_ReleaseSharedSDS(ValkeyModuleSharedSDS *shared_sds);
+void VM_ReleaseSharedSDS(ValkeyModuleCtx *ctx, ValkeyModuleSharedSDS *shared_sds);
 
 /* Helpers for VM_SetCommandInfo. */
 static int moduleValidateCommandInfo(const ValkeyModuleCommandInfo *info);
@@ -2685,7 +2685,7 @@ void autoMemoryCollect(ValkeyModuleCtx *ctx) {
         case VALKEYMODULE_AM_KEY: VM_CloseKey(ptr); break;
         case VALKEYMODULE_AM_DICT: VM_FreeDict(NULL, ptr); break;
         case VALKEYMODULE_AM_INFO: VM_FreeServerInfo(NULL, ptr); break;
-        case VALKEYMODULE_AM_SHARED_SDS: VM_ReleaseSharedSDS(ptr); break;
+        case VALKEYMODULE_AM_SHARED_SDS: VM_ReleaseSharedSDS(NULL, ptr); break;
         }
     }
     ctx->flags |= VALKEYMODULE_CTX_AUTO_MEMORY;
@@ -5462,9 +5462,9 @@ int VM_HashGet(ValkeyModuleKey *key, int flags, ...) {
                     if (key->value->encoding == OBJ_ENCODING_HASHTABLE) {
                         sds value_sds = hashTypeGetFromHashTable(key->value, field->ptr);
                         if (value_sds && sdsType(value_sds) == SDS_TYPE_32_SHARED) {
-                             *valueptr = (ValkeyModuleSharedSDS *)(value_sds - sdsHdrSize(sdsType(value_sds)));
+                             *valueptr = (ValkeyModuleSharedSDS *)sdsAllocPtr(value_sds);
                              sdsRetain(*valueptr);
-                             autoMemoryAdd(key->ctx, VALKEYMODULE_AM_SHARED_SDS, *valueptr);
+                             if (key->ctx != NULL) autoMemoryAdd(key->ctx, VALKEYMODULE_AM_SHARED_SDS, *valueptr);
                         }
                     }
                 } else {
@@ -13309,10 +13309,12 @@ ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
  * Returns:
  * - A pointer to the created shared SDS object.
  */
-ValkeyModuleSharedSDS *VM_CreateSharedSDS(size_t len, ValkeyModuleSharedSDSAllocFunc allocfn, ValkeyModuleSharedSDSFreeCBFunc freecbfn) {
+ValkeyModuleSharedSDS *VM_CreateSharedSDS(ValkeyModuleCtx *ctx, size_t len, ValkeyModuleSharedSDSAllocFunc allocfn, ValkeyModuleSharedSDSFreeCBFunc freecbfn) {
     size_t alloc;
-    void *buf = allocfn(len + sizeof(ValkeyModuleSharedSDS) + 1, &alloc);
-    return sdsInitShared((char *)buf, len, alloc, freecbfn);
+    void *buf = allocfn(len + offsetof(sdshdr32shared, buf) + 1, &alloc);
+    ValkeyModuleSharedSDS *shared_sds = sdsInitShared((char *)buf, len, alloc, freecbfn);
+    if (ctx != NULL) autoMemoryAdd(ctx, VALKEYMODULE_AM_SHARED_SDS, shared_sds);
+    return shared_sds;
 }
 
 /* Retrieves the pointer to the shared SDS buffer along with its length.
@@ -13326,7 +13328,7 @@ ValkeyModuleSharedSDS *VM_CreateSharedSDS(size_t len, ValkeyModuleSharedSDSAlloc
  */
 char *VM_SharedSDSPtrLen(ValkeyModuleSharedSDS *shared_sds, size_t *len) {
     *len = shared_sds->len;
-    return (char *)shared_sds + sizeof(ValkeyModuleSharedSDS);
+    return (char *)shared_sds + offsetof(sdshdr32shared, buf);
 }
 
 /* Releases a shared SDS object by decrementing its intrusive reference count.
@@ -13337,8 +13339,9 @@ char *VM_SharedSDSPtrLen(ValkeyModuleSharedSDS *shared_sds, size_t *len) {
  * Parameters:
  * - `shared_sds`: A pointer to the `ValkeyModuleSharedSDS` object to be released.
  */
-void VM_ReleaseSharedSDS(ValkeyModuleSharedSDS *shared_sds) {
-    sdsfree(shared_sds->buf);
+void VM_ReleaseSharedSDS(ValkeyModuleCtx *ctx, ValkeyModuleSharedSDS *shared_sds) {
+    int res = sdsReleaseShared(shared_sds);
+    if (ctx != NULL && res) autoMemoryFreed(ctx, VALKEYMODULE_AM_SHARED_SDS, shared_sds);
 }
 
 /* MODULE command.

@@ -1888,11 +1888,11 @@ VALKEYMODULE_API int (*ValkeyModule_UnregisterScriptingEngine)(ValkeyModuleCtx *
                                                                const char *engine_name) VALKEYMODULE_ATTR;
 
 VALKEYMODULE_API ValkeyModuleScriptingEngineExecutionState (*ValkeyModule_GetFunctionExecutionState)(ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx) VALKEYMODULE_ATTR;
-VALKEYMODULE_API ValkeyModuleSharedSDS *(*ValkeyModule_CreateSharedSDS)(size_t len,
+VALKEYMODULE_API ValkeyModuleSharedSDS *(*ValkeyModule_CreateSharedSDS)(ValkeyModuleCtx *ctx, size_t len,
                                              ValkeyModuleSharedSDSAllocFunc allocfn,
                                              ValkeyModuleSharedSDSFreeCBFunc freecbfn) VALKEYMODULE_ATTR;
 VALKEYMODULE_API char *(*ValkeyModule_SharedSDSPtrLen)(ValkeyModuleSharedSDS *shared_sds, size_t *len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*ValkeyModule_ReleaseSharedSDS)(ValkeyModuleSharedSDS *shared_sds) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ReleaseSharedSDS)(ValkeyModuleCtx *ctx, ValkeyModuleSharedSDS *shared_sds) VALKEYMODULE_ATTR;
 
 #define ValkeyModule_IsAOFClient(id) ((id) == UINT64_MAX)
 

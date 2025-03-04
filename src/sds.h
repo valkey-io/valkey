@@ -39,6 +39,7 @@ extern const char *SDS_NOINIT;
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdatomic.h>
+#include <stddef.h>
 
 /* Constness:
  *
@@ -82,7 +83,7 @@ typedef struct __attribute__((__packed__)) sdshdr32shared {
     uint32_t alloc;      /* excluding the header and null terminator */
     unsigned char flags; /* 3 lsb of type, 5 unused bits */
     char buf[];
-} sdshdr32shared;
+} sdshdrshared;
 struct __attribute__((__packed__)) sdshdr64 {
     uint64_t len;        /* used */
     uint64_t alloc;      /* excluding the header and null terminator */
@@ -98,8 +99,8 @@ struct __attribute__((__packed__)) sdshdr64 {
 #define SDS_TYPE_32_SHARED 5
 #define SDS_TYPE_MASK 7
 #define SDS_TYPE_BITS 3
-#define SDS_HDR_VAR(T, s) struct sdshdr##T *sh = (void *)((s) - (sizeof(struct sdshdr##T)));
-#define SDS_HDR(T, s) ((struct sdshdr##T *)((s) - (sizeof(struct sdshdr##T))))
+#define SDS_HDR_VAR(T, s) struct sdshdr##T *sh = (void *)((s) - (offsetof(struct sdshdr##T, buf)));
+#define SDS_HDR(T, s) ((struct sdshdr##T *)((s) - (offsetof(struct sdshdr##T, buf))))
 #define SDS_TYPE_5_LEN(f) ((unsigned char)(f) >> SDS_TYPE_BITS)
 
 static inline unsigned char sdsType(const_sds s) {
@@ -164,8 +165,7 @@ static inline size_t sdsavail(const_sds s) {
         return sh->alloc - sh->len;
     }
     case SDS_TYPE_32_SHARED: {
-        SDS_HDR_VAR(32shared, s);
-        return sh->alloc - sh->len;
+        return 0;
     }
     }
     return 0;
@@ -289,8 +289,9 @@ sds sdsRemoveFreeSpace(sds s, int would_regrow);
 sds sdsResize(sds s, size_t size, int would_regrow);
 size_t sdsAllocSize(const_sds s);
 void *sdsAllocPtr(const_sds s);
-sdshdr32shared *sdsInitShared(char *buf, size_t len, size_t alloc, sharedSdsFreeCB freecbfn);
-void sdsRetain(sdshdr32shared *sh);
+sdshdrshared *sdsInitShared(char *buf, size_t len, size_t alloc, sharedSdsFreeCB freecbfn);
+void sdsRetain(sdshdrshared *sh);
+int sdsReleaseShared(sdshdrshared *sh);
 
 /* Returns the minimum required size to store an sds string of the given length
  * and type. */

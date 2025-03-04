@@ -2,11 +2,52 @@
 #include <strings.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <string.h>
+
+#define UNUSED(V) ((void) V)
+
+int shared_sds_cnt = 0;
+ValkeyModuleSharedSDS *shared_sds_arr[4];
+
+void *shared_sds_alloc(size_t len, size_t *alloc) {
+    *alloc = 2 * len;
+    return malloc(*alloc * sizeof(char));
+}
+
+void shared_sds_free_cb(void *ptr, size_t size) {
+    UNUSED(size);
+    UNUSED(ptr);
+}
+
+void check_hash_get_shared_sds(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int result) {
+    if (result == 0) return;
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_READ);
+    for (int i = 0; i < shared_sds_cnt; ++i) {
+        ValkeyModuleSharedSDS *get_value = NULL;
+        ValkeyModule_HashGet(key, VALKEYMODULE_HASH_SHAREBLE_VALUES,
+                                     argv[i*2 + 3], &get_value, NULL);
+        if (get_value) {
+            ValkeyModule_Assert(shared_sds_arr[i] == get_value);
+        }
+    }
+}
 
 /* If a string is ":deleted:", the special value for deleted hash fields is
  * returned; otherwise the input string is returned. */
-static ValkeyModuleString *value_or_delete(ValkeyModuleString *s) {
-    if (!strcasecmp(ValkeyModule_StringPtrLen(s, NULL), ":delete:"))
+static void *value_or_delete(ValkeyModuleCtx *ctx, ValkeyModuleString *s, int flags) {
+    size_t str_len;
+    const char *str = ValkeyModule_StringPtrLen(s, &str_len);
+    if (flags & VALKEYMODULE_HASH_SHAREBLE_VALUES) {
+        ValkeyModuleSharedSDS *shared_sds = ValkeyModule_CreateSharedSDS(ctx, str_len, shared_sds_alloc, shared_sds_free_cb);
+        size_t sds_len;
+        char *sds_str = ValkeyModule_SharedSDSPtrLen(shared_sds, &sds_len);
+        ValkeyModule_Assert(sds_len == str_len);
+        memcpy(sds_str, str, str_len);
+        shared_sds_arr[shared_sds_cnt++] = shared_sds;
+        return shared_sds;
+    }
+    shared_sds_arr[shared_sds_cnt++] = NULL;
+    if (!strcasecmp(str, ":delete:"))
         return VALKEYMODULE_HASH_DELETE;
     else
         return s;
@@ -22,6 +63,7 @@ int hash_set(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc < 5 || argc % 2 == 0 || argc > 11)
         return ValkeyModule_WrongArity(ctx);
 
+    shared_sds_cnt = 0;
     ValkeyModule_AutoMemory(ctx);
     ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_WRITE);
 
@@ -33,6 +75,7 @@ int hash_set(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
         case 'n': flags |= VALKEYMODULE_HASH_NX; break;
         case 'x': flags |= VALKEYMODULE_HASH_XX; break;
         case 'a': flags |= VALKEYMODULE_HASH_COUNT_ALL; break;
+        case 's': flags |= VALKEYMODULE_HASH_SHAREBLE_VALUES; break;
         }
     }
 
@@ -41,30 +84,29 @@ int hash_set(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     errno = 0;
     if (argc == 5) {
         result = ValkeyModule_HashSet(key, flags,
-                                     argv[3], value_or_delete(argv[4]),
+                                     argv[3], value_or_delete(ctx, argv[4], flags),
                                      NULL);
     } else if (argc == 7) {
         result = ValkeyModule_HashSet(key, flags,
-                                     argv[3], value_or_delete(argv[4]),
-                                     argv[5], value_or_delete(argv[6]),
+                                     argv[3], value_or_delete(ctx, argv[4], flags),
+                                     argv[5], value_or_delete(ctx, argv[6], flags),
                                      NULL);
     } else if (argc == 9) {
         result = ValkeyModule_HashSet(key, flags,
-                                     argv[3], value_or_delete(argv[4]),
-                                     argv[5], value_or_delete(argv[6]),
-                                     argv[7], value_or_delete(argv[8]),
+                                     argv[3], value_or_delete(ctx, argv[4], flags),
+                                     argv[5], value_or_delete(ctx, argv[6], flags),
+                                     argv[7], value_or_delete(ctx, argv[8], flags),
                                      NULL);
     } else if (argc == 11) {
         result = ValkeyModule_HashSet(key, flags,
-                                     argv[3], value_or_delete(argv[4]),
-                                     argv[5], value_or_delete(argv[6]),
-                                     argv[7], value_or_delete(argv[8]),
-                                     argv[9], value_or_delete(argv[10]),
+                                     argv[3], value_or_delete(ctx, argv[4], flags),
+                                     argv[5], value_or_delete(ctx, argv[6], flags),
+                                     argv[7], value_or_delete(ctx, argv[8], flags),
+                                     argv[9], value_or_delete(ctx, argv[10], flags),
                                      NULL);
     } else {
         return ValkeyModule_ReplyWithError(ctx, "ERR too many fields");
     }
-
     /* Check errno */
     if (result == 0) {
         if (errno == ENOTSUP)
@@ -72,7 +114,7 @@ int hash_set(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
         else
             ValkeyModule_Assert(errno == ENOENT);
     }
-
+    check_hash_get_shared_sds(ctx, argv, result);
     return ValkeyModule_ReplyWithLongLong(ctx, result);
 }
 

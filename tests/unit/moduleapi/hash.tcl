@@ -18,8 +18,14 @@ start_server {tags {"modules"}} {
         assert_equal 0 [r hash.set k "xa" new stuff not inserted]
         assert_equal 1 [r hash.set k "x" squirrel ofcourse]
         assert_equal 1 [r hash.set k "" sushi :delete: none :delete:]
+        assert_equal 1 [r hash.set k "nas" carrot orange]
+        assert_equal 0 [r hash.set k "nas" carrot pink]
+        assert_equal 1 [r hash.set k "a" apple red]
+        assert_equal 1 [r hash.set k "xs" apple green]
+        assert_equal 1 [r hash.set k "sa" tomato red]
+        assert_equal 1 [r hash.set k "" tomato :delete:]
         r hgetall k
-    } {squirrel ofcourse banana no what nothing something nice}
+    } {squirrel ofcourse banana no what nothing something nice carrot orange apple green}
 
     test "Unload the module - hash" {
         assert_equal {OK} [r module unload hash]

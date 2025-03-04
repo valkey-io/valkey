@@ -209,14 +209,21 @@ void sdsfree(sds s) {
     if (s == NULL) return;
     if (sdsType(s) == SDS_TYPE_32_SHARED) {
         SDS_HDR_VAR(32shared, s);
-        if (atomic_fetch_sub_explicit(&sh->refcount, 1, memory_order_acq_rel) > 1) {
-          return;
-        }
-        sh->freecbfn(sh, sdsAllocSize(s));
-        s_free_with_size(s + sh->len + 1 - sdsAllocSize(s), sdsAllocSize(s));
+        sdsReleaseShared(sh);
         return;
     }
     s_free_with_size(sdsAllocPtr(s), sdsAllocSize(s));
+}
+/* return 1 if the shared sds is freed otherwise 0 */
+int sdsReleaseShared(sdshdrshared *sh) {
+    if (atomic_fetch_sub_explicit(&sh->refcount, 1, memory_order_acq_rel) > 1) {
+      return 0;
+    }
+    char *ptr = sh->buf + sh->len + 1 - sdsAllocSize(sh->buf);
+    size_t alloc_size =  sdsAllocSize(sh->buf);
+    sh->freecbfn(ptr, alloc_size);
+    s_free_with_size(ptr, alloc_size);
+    return 1;
 }
 
 /* This variant of sdsfree() gets its argument as void, and is useful
@@ -450,7 +457,11 @@ size_t sdsAllocSize(const_sds s) {
 /* Return the pointer of the actual SDS allocation (normally SDS strings
  * are referenced by the start of the string buffer). */
 void *sdsAllocPtr(const_sds s) {
-    return (void *)(s - sdsHdrSize(sdsType(s)));
+    char type = sdsType(s);
+    if (type == SDS_TYPE_32_SHARED) {
+        return (void *)(s - offsetof(sdshdrshared, buf));
+    }
+    return (void *)(s - sdsHdrSize(type));
 }
 
 /* Initialize a shared sds into a buffer `buf`.
@@ -462,7 +473,7 @@ void *sdsAllocPtr(const_sds s) {
  * - `freecbfn`: A callback function that is invoked when the sds object is released.
  *
  * Returns:
- * - A pointer to the initialized `sdshdr32shared` structure.
+ * - A pointer to the initialized `sdshdrshared` structure.
  *
  * Notes:
  * - The caller is responsible for ensuring that `buf` is large enough to accommodate
@@ -470,13 +481,13 @@ void *sdsAllocPtr(const_sds s) {
  * - The `freecbfn` does not directly free memory but is used primarily for
  *   tracking deallocation events.
  */
-sdshdr32shared *sdsInitShared(char *buf, size_t len, size_t alloc, sharedSdsFreeCB freecbfn) {
+sdshdrshared *sdsInitShared(char *buf, size_t len, size_t alloc, sharedSdsFreeCB freecbfn) {
     buf[alloc - 1] = 0;
     sds s = buf + alloc - len - 1;
     SDS_HDR_VAR(32shared, s);
     sh->freecbfn = freecbfn;
     atomic_init(&sh->refcount, 1);
-    sh->len = len;
+    sh->len = (uint32_t)len;
     sh->alloc = alloc - sdsHdrSize(SDS_TYPE_32_SHARED) - 1;
     sh->flags = SDS_TYPE_32_SHARED;
     return sh;
@@ -485,10 +496,10 @@ sdshdr32shared *sdsInitShared(char *buf, size_t len, size_t alloc, sharedSdsFree
 /* Increases the reference count of a shared SDS object.
  *
  * Parameters:
- * - `sh`: A pointer to the `sdshdr32shared` structure whose reference count
+ * - `sh`: A pointer to the `sdshdrshared` structure whose reference count
  *   should be increased.
  */
-void sdsRetain(sdshdr32shared *sh) {
+void sdsRetain(sdshdrshared *sh) {
     atomic_fetch_add_explicit(&sh->refcount, 1, memory_order_relaxed);
 }
 /* Increment the sds length and decrements the left free space at the

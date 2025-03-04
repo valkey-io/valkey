@@ -545,10 +545,14 @@ static int dictBucketRehash(dict *d, uint64_t idx) {
 
 /* Add an element to the target hash table */
 int dictAdd(dict *d, void *key, void *val) {
+    printf("--------------------------------------- Hi! In dictAdd -----------------\n");   
     dictEntry *entry = dictAddRaw(d, key, NULL);
+    printf("---------------------------------- just add one more item ----------------------\n");   
 
     if (!entry) return DICT_ERR;
+    printf("---------------------------------- just before dictSetVal ----------------------\n");   
     if (!d->type->no_value) dictSetVal(d, entry, val);
+    printf("---------------------------------- just after dictSetVal ----------------------\n");   
     return DICT_OK;
 }
 

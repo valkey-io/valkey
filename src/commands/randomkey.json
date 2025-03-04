@@ -1,10 +1,10 @@
 {
     "RANDOMKEY": {
-        "summary": "Returns a random key name from the database.",
-        "complexity": "O(1)",
+        "summary": "Returns a random key name or keys names from the database.",
+        "complexity": "O(1) for count being 1 and O(N) with N being the number of keys in the database, under the assumption that the key names in the database and the given pattern have limited length.",
         "group": "generic",
         "since": "1.0.0",
-        "arity": 1,
+        "arity": -1,
         "function": "randomkeyCommand",
         "command_flags": [
             "READONLY",
@@ -21,14 +21,36 @@
         "reply_schema": {
             "oneOf": [
                 {
-                    "description": "When the database is empty.",
+                    "description": "when the database is empty or pattern not found",
                     "type": "null"
                 },
                 {
-                    "description": "Random key in db.",
-                    "type": "string"
+		    "description": "random key or keys in db",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             ]
-        }
+        },
+	"arguments": [
+            {
+                "token": "COUNT",
+                "name": "count",
+                "type": "integer",
+                "optional": true
+            },
+            {
+                "name": "Duplicated",
+                "type": "string",
+                "optional": true
+            },
+            {
+                "token": "PATTERN",
+                "name": "pattern",
+                "type": "string",
+                "optional": true
+            }
+       ]
     }
 }

@@ -7702,9 +7702,40 @@ struct COMMAND_ARG EXTERNAL_DATA_LOADED_Args[] = {
 {MAKE_ARG("type",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=EXTERNAL_DATA_LOADED_type_Subargs},
 };
 
+/********** EXTERNAL_DATA STATS ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* EXTERNAL_DATA STATS history */
+#define EXTERNAL_DATA_STATS_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* EXTERNAL_DATA STATS tips */
+const char *EXTERNAL_DATA_STATS_Tips[] = {
+"nondeterministic_output_order",
+};
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* EXTERNAL_DATA STATS key specs */
+#define EXTERNAL_DATA_STATS_Keyspecs NULL
+#endif
+
+/* EXTERNAL_DATA STATS type argument table */
+struct COMMAND_ARG EXTERNAL_DATA_STATS_type_Subargs[] = {
+{MAKE_ARG("storage",ARG_TYPE_PURE_TOKEN,-1,"STORAGE",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("filter",ARG_TYPE_PURE_TOKEN,-1,"FILTER",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* EXTERNAL_DATA STATS argument table */
+struct COMMAND_ARG EXTERNAL_DATA_STATS_Args[] = {
+{MAKE_ARG("type",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=EXTERNAL_DATA_STATS_type_Subargs},
+};
+
 /* EXTERNAL_DATA command table */
 struct COMMAND_STRUCT EXTERNAL_DATA_Subcommands[] = {
 {MAKE_CMD("loaded","Lists previously loaded external data modules.","O(1)","8.0.2",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,EXTERNAL_DATA_LOADED_History,0,EXTERNAL_DATA_LOADED_Tips,1,externalDataLoadedCommand,-3,CMD_FAST|CMD_READONLY,ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_READ,NULL,EXTERNAL_DATA_LOADED_Keyspecs,0,NULL,1),.args=EXTERNAL_DATA_LOADED_Args},
+{MAKE_CMD("stats","Returns statistics on loaded external data modules which are used for a certain database.","O(1)","8.0.2",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,EXTERNAL_DATA_STATS_History,0,EXTERNAL_DATA_STATS_Tips,1,externalDataStatsCommand,-3,CMD_FAST|CMD_READONLY,ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_READ,NULL,EXTERNAL_DATA_STATS_Keyspecs,0,NULL,1),.args=EXTERNAL_DATA_STATS_Args},
 {0}
 };
 

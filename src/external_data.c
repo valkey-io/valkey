@@ -253,6 +253,34 @@ void externalDataLoadedCommand(client *c) {
     }
 }
 
+/*
+ * EXTERNAL_DATA STATS [STORAGE | FILTER]
+ *
+ * Return general information about storage or filter loaded modules:
+ * * Module name
+ * * Databases list
+ *
+ */
+ void externalDataStatsCommand(client *c) {
+    if (!isExtDataOn()) {
+        addReplyError(c, extDataOffErrStr);
+        return;
+    }
+
+    assert(curr_external_data_ctx!=NULL);
+    int j = 2;
+    if (!strcasecmp(objectGetVal(c->argv[j]), "storage")) {
+        addReplyArrayLen(c, 0);
+        return;
+    } else if (!strcasecmp(objectGetVal(c->argv[j]), "filter")) {
+        addReplyArrayLen(c, 0);
+        return;
+    } else {
+        addReplyError(c, "Unknown module type (storage or filter expected)");
+        return;
+    }
+}
+
 /* Initialize external data structures.
  * Should be called once on server initialization */
 int externalDataInit(void) {

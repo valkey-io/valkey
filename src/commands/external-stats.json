@@ -1,0 +1,59 @@
+{
+    "STATS": {
+        "summary": "Returns statistics on loaded external data modules which are used for a certain database.",
+        "complexity": "O(1)",
+        "group": "server",
+        "since": "8.0.2",
+        "arity": -3,
+        "container": "EXTERNAL_DATA",
+        "function": "externalDataStatsCommand",
+        "command_flags": [
+            "FAST",
+            "READONLY"
+        ],
+        "acl_categories": [
+            "FAST",
+            "KEYSPACE",
+            "READ"
+        ],
+        "command_tips": [
+            "NONDETERMINISTIC_OUTPUT_ORDER"
+        ],
+        "arguments": [
+            {
+                "name": "type",
+                "type": "oneof",
+                "arguments": [
+                    {
+                        "name": "storage",
+                        "type": "pure-token",
+                        "token": "STORAGE"
+                    },
+                    {
+                        "name": "filter",
+                        "type": "pure-token",
+                        "token": "FILTER"
+                    }
+                ]
+            }
+        ],
+        "reply_schema": {
+            "anyOf": [
+                {
+                    "type": "array",
+                    "description": "In case `storage` was given, stats of loaded storages used in databases",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                {
+                    "type": "array",
+                    "description": "In case `filter` was given, a list of loaded filters used in databases",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            ]
+        }
+    }
+}

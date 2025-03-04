@@ -93,3 +93,17 @@ start_server [list overrides [list "ext-data-mode" test] tags [list "external:sk
         assert_equal [list ] [r external_data loaded storage]
     }
 }
+
+start_server [list overrides [list "ext-data-mode" test] tags [list "external:skip"]] {
+    test {Initializing storage module does affect STATS commands} {
+        # STATS ok
+        assert_equal [list ] [r external_data stats storage]
+    }
+}
+
+start_server [list overrides [list "ext-data-mode" test] tags [list "external:skip"]] {
+    test {Initializing filter module does affect STATS commands} {
+        # STATS ok
+        assert_equal [list ] [r external_data loaded filter]
+    }
+}

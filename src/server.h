@@ -4190,6 +4190,7 @@ void quitCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
 void externalDataLoadedCommand(client *c);
+void externalDataStatsCommand(client *c);
 
 /* Helper functions for getting database id args from argv, argc */
 int *selectDbIdArgs(robj **argv, int argc, int *count);

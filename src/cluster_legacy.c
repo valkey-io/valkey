@@ -1938,7 +1938,7 @@ int clusterBumpConfigEpochWithoutConsensus(void) {
     if (myself->configEpoch == 0 || myself->configEpoch != maxEpoch) {
         server.cluster->currentEpoch++;
         myself->configEpoch = server.cluster->currentEpoch;
-        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
+        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
         serverLog(LL_NOTICE, "New configEpoch set to %llu", (unsigned long long)myself->configEpoch);
         return C_OK;
     } else {
@@ -2001,7 +2001,7 @@ void clusterHandleConfigEpochCollision(clusterNode *sender) {
     /* Get the next ID available at the best of this node knowledge. */
     server.cluster->currentEpoch++;
     myself->configEpoch = server.cluster->currentEpoch;
-    clusterSaveConfigOrDie(1);
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
     serverLog(LL_NOTICE, "configEpoch collision with node %.40s (%s). configEpoch set to %llu", sender->name,
               sender->human_nodename, (unsigned long long)myself->configEpoch);
 }
@@ -4776,7 +4776,7 @@ void clusterFailoverReplaceYourPrimary(void) {
 
     /* 3) Update state and save config. */
     clusterUpdateState();
-    clusterSaveConfigOrDie(1);
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
 
     /* 4) Pong all the other nodes so that they can update the state
      *    accordingly and detect that we switched to primary role. */
@@ -4963,6 +4963,7 @@ void clusterHandleReplicaFailover(void) {
         /* Update my configEpoch to the epoch of the election. */
         if (myself->configEpoch < server.cluster->failover_auth_epoch) {
             myself->configEpoch = server.cluster->failover_auth_epoch;
+            clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
             serverLog(LL_NOTICE, "configEpoch set to %llu after successful failover",
                       (unsigned long long)myself->configEpoch);
         }

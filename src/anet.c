@@ -578,7 +578,7 @@ static int anetV6Only(char *err, int s) {
  * it when MPTCP is enabled.
  * Ref: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/testing/selftests/net/mptcp/mptcp_connect.c
  */
-static int anetTcpSetMptcp(char *err, int ai_protocol, int mptcp) {
+static int anetTcpGetProtocol(char *err, int ai_protocol, int mptcp) {
     if (mptcp) {
 #ifdef IPPROTO_MPTCP
         UNUSED(err);
@@ -610,7 +610,7 @@ static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backl
         return ANET_ERR;
     }
     for (p = servinfo; p != NULL; p = p->ai_next) {
-        rv = anetTcpSetMptcp(err, p->ai_protocol, mptcp);
+        rv = anetTcpGetProtocol(err, p->ai_protocol, mptcp);
         if (rv == ANET_ERR) goto error;
 
         if ((s = socket(p->ai_family, p->ai_socktype, rv)) == -1) continue;

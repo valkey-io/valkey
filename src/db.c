@@ -892,10 +892,12 @@ void randomWithCountCommand(client *c) {
         return;
     }
 
-    int maxtries = 100;
+    int maxtries = 100 * count;
     int allvolatile = kvstoreSize(c->db->keys) == kvstoreSize(c->db->expires);
 
     void *replylen = addReplyDeferredLen(c);
+    dict *section_dict = dictCreate(&stringSetDictType);
+    dictExpand(section_dict, 100);
     while (maxtries-- > 0 && count > 0) {
         void *entry;
         int randomDictIndex = kvstoreGetFairRandomHashtableIndex(c->db->keys);
@@ -905,6 +907,9 @@ void randomWithCountCommand(client *c) {
         }
         robj *valkey = entry;
         sds key = objectGetKey(valkey);
+        if (dictAdd(section_dict, key, NULL) != DICT_OK) {
+            continue;
+        }
         addReplyBulkCBuffer(c, key, sdslen(key));
         numkeys++;
         count--;

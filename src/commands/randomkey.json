@@ -25,7 +25,7 @@
                     "type": "null"
                 },
                 {
-		    "description": "random key or keys in db",
+                    "description": "random key or keys in db",
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -33,24 +33,13 @@
                 }
             ]
         },
-	"arguments": [
+        "arguments": [
             {
                 "token": "COUNT",
                 "name": "count",
                 "type": "integer",
                 "optional": true
-            },
-            {
-                "name": "Duplicated",
-                "type": "string",
-                "optional": true
-            },
-            {
-                "token": "PATTERN",
-                "name": "pattern",
-                "type": "string",
-                "optional": true
             }
-       ]
+        ]
     }
 }

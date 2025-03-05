@@ -676,6 +676,3 @@ start_cluster 3 3 {tags {external:skip cluster} } {
         assert_equal $result {1 OK 1}        
     }
 }
-
-
-

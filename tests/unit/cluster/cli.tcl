@@ -434,6 +434,7 @@ start_server [list overrides [list cluster-enabled yes cluster-node-timeout 1 cl
 
 } ;# foreach ip_or_localhost
 
+set base_conf [list cluster-enabled yes cluster-node-timeout 1000 cluster-enable-multi-db yes]
 start_multiple_servers 3 [list overrides $base_conf] {
 
     set node1 [srv 0 client]

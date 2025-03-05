@@ -1,4 +1,4 @@
-gstart_server {tags {"lazyfree"}} {
+start_server {tags {"lazyfree"}} {
     test "UNLINK can reclaim memory in background" {
         set orig_mem [s used_memory]
         set args {}

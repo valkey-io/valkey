@@ -3728,6 +3728,8 @@ void call(client *c, int flags) {
      * re-processing and unblock the client.*/
     c->flag.executing_command = 1;
 
+    c->flag.buffered_reply = 0;
+    c->flag.keyspace_notified = 0;
     /* Setting the CLIENT_REPROCESSING_COMMAND flag so that during the actual
      * processing of the command proc, the client is aware that it is being
      * re-processed. */
@@ -3743,6 +3745,7 @@ void call(client *c, int flags) {
 
     exitExecutionUnit();
 
+    if (c->bstate == NULL && c->deferred_reply) commitDeferredReplyBuffer(c);
     /* In case client is blocked after trying to execute the command,
      * it means the execution is not yet completed and we MIGHT reprocess the command in the future. */
     if (!c->flag.blocked) c->flag.executing_command = 0;
@@ -4067,6 +4070,7 @@ int processCommand(client *c) {
             }
         }
         c->cmd = c->lastcmd = c->realcmd = cmd;
+        c->flag.buffered_reply = 0;
         sds err;
         if (!commandCheckExistence(c, &err)) {
             rejectCommandSds(c, err);

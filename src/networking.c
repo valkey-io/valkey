@@ -149,6 +149,12 @@ static inline int isReplicaReadyForReplData(client *replica) {
            !(replica->flag.close_asap);
 }
 
+static void resetDeferredReplyBuffer(client *c) {
+    listRelease(c->deferred_reply);
+    c->deferred_reply = NULL;
+    c->deferred_reply_bytes = 0;
+}
+
 client *createClient(connection *conn) {
     client *c = zmalloc(sizeof(client));
 
@@ -203,8 +209,10 @@ client *createClient(connection *conn) {
     c->duration = 0;
     clientSetDefaultAuth(c);
     c->reply = listCreate();
+    c->deferred_reply = NULL;
     c->deferred_reply_errors = NULL;
     c->reply_bytes = 0;
+    c->deferred_reply_bytes = 0;
     c->obuf_soft_limit_reached_time = 0;
     listSetFreeMethod(c->reply, freeClientReplyValue);
     listSetDupMethod(c->reply, dupClientReplyValue);
@@ -277,7 +285,6 @@ void putClientInPendingWriteQueue(client *c) {
         listLinkNodeHead(server.clients_pending_write, &c->clients_pending_write_node);
     }
 }
-
 /* This function is called every time we are going to transmit new data
  * to the client. The behavior is the following:
  *
@@ -326,6 +333,7 @@ int prepareClientToWrite(client *c) {
      * it should already be setup to do so (it has already pending data). */
     if (!clientHasPendingReplies(c)) putClientInPendingWriteQueue(c);
 
+    if (c->deferred_reply == NULL) c->flag.buffered_reply = 1;
     /* Authorize the caller to queue in the output buffer of this client. */
     return C_OK;
 }
@@ -425,13 +433,15 @@ void _addReplyProtoToList(client *c, list *reply_list, const char *s, size_t len
          * least PROTO_REPLY_CHUNK_BYTES */
         size_t usable_size;
         size_t size = len < PROTO_REPLY_CHUNK_BYTES ? PROTO_REPLY_CHUNK_BYTES : len;
+        if (c->deferred_reply) size = len;
         tail = zmalloc_usable(size + sizeof(clientReplyBlock), &usable_size);
         /* take over the allocation's internal fragmentation */
         tail->size = usable_size - sizeof(clientReplyBlock);
         tail->used = len;
         memcpy(tail->buf, s, len);
         listAddNodeTail(reply_list, tail);
-        c->reply_bytes += tail->size;
+        unsigned long long *reply_bytes = (c->deferred_reply) ? &c->deferred_reply_bytes : &c->reply_bytes;
+        *reply_bytes += tail->size;
 
         closeClientOnOutputBufferLimitReached(c, 1);
     }
@@ -462,6 +472,11 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
 
     c->net_output_bytes_curr_cmd += len;
 
+    if (c->deferred_reply) {
+        _addReplyProtoToList(c, c->deferred_reply, s, len);
+        return;
+    }
+
     /* We call it here because this function may affect the reply
      * buffer offset (see function comment) */
     reqresSaveClientReplyOffset(c);
@@ -477,7 +492,6 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
         _addReplyProtoToList(c, server.pending_push_messages, s, len);
         return;
     }
-
     size_t reply_len = _addReplyToBuffer(c, s, len);
     if (len > reply_len) _addReplyProtoToList(c, c->reply, s + reply_len, len - reply_len);
 }
@@ -564,6 +578,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         return;
     }
 
+    commitDeferredReplyBuffer(c);
     if (!(flags & ERR_REPLY_FLAG_NO_STATS_UPDATE)) {
         /* Increment the global error counter */
         server.stat_total_error_replies++;
@@ -1283,6 +1298,32 @@ void addReplySubcommandSyntaxError(client *c) {
     sdsfree(cmd);
 }
 
+void initDeferredReplyBuffer(client *c) {
+    if (c->deferred_reply == NULL) {
+        c->deferred_reply = listCreate();
+    }
+}
+
+/* Move the client deferred reply buffer into the client reply buffer and put the client
+ * in the pending write queue. */
+void commitDeferredReplyBuffer(client *c) {
+    if (c->deferred_reply == NULL || listLength(c->deferred_reply) == 0) {
+        resetDeferredReplyBuffer(c);
+        return;
+    }
+
+    listJoin(c->reply, c->deferred_reply);
+    c->reply_bytes += c->deferred_reply_bytes;
+
+    resetDeferredReplyBuffer(c);
+    if (prepareClientToWrite(c) != C_OK) {
+        return;
+    }
+    /* We call it here because this function may affect the reply
+     * buffer offset (see function comment) */
+    reqresSaveClientReplyOffset(c);
+}
+
 /* Append 'src' client output buffers into 'dst' client output buffers.
  * This function clears the output buffers of 'src' */
 void AddReplyFromClient(client *dst, client *src) {
@@ -1299,6 +1340,7 @@ void AddReplyFromClient(client *dst, client *src) {
         return;
     }
 
+
     /* First add the static buffer (either into the static buffer or reply list) */
     addReplyProto(dst, src->buf, src->bufpos);
 
@@ -1310,6 +1352,7 @@ void AddReplyFromClient(client *dst, client *src) {
      * checks in it. */
     if (dst->flag.close_after_reply) return;
 
+    commitDeferredReplyBuffer(src);
     /* Concatenate the reply list into the dest */
     if (listLength(src->reply)) listJoin(dst->reply, src->reply);
     dst->reply_bytes += src->reply_bytes;
@@ -1737,6 +1780,7 @@ void freeClient(client *c) {
     c->reply = NULL;
     zfree_with_size(c->buf, c->buf_usable_size);
     c->buf = NULL;
+    resetDeferredReplyBuffer(c);
 
     freeClientArgv(c);
     freeClientOriginalArgv(c);
@@ -2579,6 +2623,8 @@ void resetClient(client *c) {
     c->slot = -1;
     c->flag.executing_command = 0;
     c->flag.replication_done = 0;
+    c->flag.buffered_reply = 0;
+    c->flag.keyspace_notified = 0;
     c->net_output_bytes_curr_cmd = 0;
 
     /* Make sure the duration has been recorded to some command. */
@@ -2589,6 +2635,7 @@ void resetClient(client *c) {
 
     if (c->deferred_reply_errors) listRelease(c->deferred_reply_errors);
     c->deferred_reply_errors = NULL;
+    commitDeferredReplyBuffer(c);
 
     /* We clear the ASKING flag as well if we are not inside a MULTI, and
      * if what we just executed is not the ASKING command itself. */
@@ -4478,10 +4525,10 @@ void rewriteClientCommandVector(client *c, int argc, ...) {
 
 /* Completely replace the client command vector with the provided one. */
 void replaceClientCommandVector(client *c, int argc, robj **argv) {
-    int j;
     backupAndUpdateClientArgv(c, argc, argv);
     c->argv_len_sum = 0;
-    for (j = 0; j < c->argc; j++)
+    c->flag.buffered_reply = 0;
+    for (int j = 0; j < c->argc; j++)
         if (c->argv[j]) c->argv_len_sum += getStringObjectLen(c->argv[j]);
     c->cmd = lookupCommandOrOriginal(c->argv, c->argc);
     serverAssertWithInfo(c, NULL, c->cmd != NULL);
@@ -4512,6 +4559,7 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
 
     /* If this is the command name make sure to fix c->cmd. */
     if (i == 0) {
+        c->flag.buffered_reply = 0;
         c->cmd = lookupCommandOrOriginal(c->argv, c->argc);
         serverAssertWithInfo(c, NULL, c->cmd != NULL);
     }
@@ -4535,10 +4583,15 @@ size_t getClientOutputBufferMemoryUsage(client *c) {
             repl_node_num = last->id - cur->id + 1;
         }
         return repl_buf_size + (repl_node_size * repl_node_num);
-    } else {
-        size_t list_item_size = sizeof(listNode) + sizeof(clientReplyBlock);
-        return c->reply_bytes + (list_item_size * listLength(c->reply));
     }
+
+    size_t list_item_size = sizeof(listNode) + sizeof(clientReplyBlock);
+    size_t usage = c->reply_bytes + (list_item_size * listLength(c->reply));
+    if (c->deferred_reply) {
+        usage += c->deferred_reply_bytes +
+                 (list_item_size * listLength(c->deferred_reply));
+    }
+    return usage;
 }
 
 /* Returns the total client's memory usage.

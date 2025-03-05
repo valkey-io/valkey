@@ -873,8 +873,7 @@ void selectCommand(client *c) {
 
 void randomWithCountCommand(client *c) {
     long l;
-    unsigned long count, size;
-    int uniq = 1;
+    unsigned long count;
     unsigned long numkeys = 0;
 
     if (getRangeLongFromObjectOrReply(c, c->argv[2], -LONG_MAX, LONG_MAX, &l, NULL) != C_OK) return;
@@ -883,7 +882,6 @@ void randomWithCountCommand(client *c) {
     } else {
         /* A negative count means: return the same elements multiple times */
         count = -l;
-        uniq = 0;
     }
 
     /* If count is zero, serve it ASAP to avoid special cases later. */
@@ -893,7 +891,6 @@ void randomWithCountCommand(client *c) {
     }
 
     int maxtries = 100 * count;
-    int allvolatile = kvstoreSize(c->db->keys) == kvstoreSize(c->db->expires);
 
     void *replylen = addReplyDeferredLen(c);
     dict *section_dict = dictCreate(&stringSetDictType);

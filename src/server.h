@@ -1783,7 +1783,7 @@ struct valkeyServer {
                                                     within the main dict scan */
     size_t client_max_querybuf_len;              /* Limit for client query buffer length */
     int dbnum;                                   /* Total number of configured DBs */
-    int multidb_cluster;                        /* Multi-database enabled in cluster mode */
+    int multidb_cluster;                         /* Multi-database enabled in cluster mode */
     int supervised;                              /* 1 if supervised, 0 otherwise. */
     int supervised_mode;                         /* See SUPERVISED_* */
     int daemonize;                               /* True if running as a daemon */

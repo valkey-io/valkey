@@ -871,184 +871,69 @@ void selectCommand(client *c) {
     }
 }
 
+void randomWithCountCommand(client *c) {
+    long l;
+    unsigned long count, size;
+    int uniq = 1;
+    unsigned long numkeys = 0;
+
+    if (getRangeLongFromObjectOrReply(c, c->argv[2], -LONG_MAX, LONG_MAX, &l, NULL) != C_OK) return;
+    if (l >= 0) {
+        count = (unsigned long)l;
+    } else {
+        /* A negative count means: return the same elements multiple times */
+        count = -l;
+        uniq = 0;
+    }
+
+    /* If count is zero, serve it ASAP to avoid special cases later. */
+    if (count == 0) {
+        addReply(c, shared.emptyarray);
+        return;
+    }
+
+    int maxtries = 100;
+    int allvolatile = kvstoreSize(c->db->keys) == kvstoreSize(c->db->expires);
+
+    void *replylen = addReplyDeferredLen(c);
+    while (maxtries-- > 0 && count > 0) {
+        void *entry;
+        int randomDictIndex = kvstoreGetFairRandomHashtableIndex(c->db->keys);
+        int ok = kvstoreHashtableFairRandomEntry(c->db->keys, randomDictIndex, &entry);
+        if (!ok) {
+            continue;
+        }
+        robj *valkey = entry;
+        sds key = objectGetKey(valkey);
+        addReplyBulkCBuffer(c, key, sdslen(key));
+        numkeys++;
+        count--;
+    }
+    setDeferredArrayLen(c, replylen, numkeys);
+}
+
 /************************************************************
 RANDOMKEY                     numOfArgs = 1
 RANDOMKEY [COUNT <count> ]           numOfArgs = 3
-RANDOMKEY [PATTERN <pattern>]]       numOfArgs = 3
-RANDOMKEY [COUNT <count> ] [PATTERN <pattern>]]   numOfArgs = 5
 ******************************************************************/
 void randomkeyCommand(client *c) {
-    int l;
-    int count;
-    int canDuplicated = 0;
-    unsigned long numkeys = 0;
-    sds pattern = NULL;
-    int plen = 0, allkeys = 0;
-    int numOfArgs = c->argc;
-    
-    if (kvstoreSize(c->db->keys) == 0) {
+    if (c->argc == 3) {
+        randomWithCountCommand(c);
+        return;
+    } else if (c->argc > 3) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+    robj *key;
+
+    if ((key = dbRandomKey(c->db)) == NULL) {
         addReplyNull(c);
         return;
     }
-    
-    /* Command Argument Parsing section,
-       if command has invalid option return error.
-    */
-    serverLog(LL_WARNING, "--------------------------------------------Parsing the input parameters----------------");
-    if (numOfArgs == 5 && !strcasecmp(c->argv[1]->ptr,"count") && !strcasecmp(c->argv[3]->ptr,"pattern")) {
-        if (getIntFromObjectOrReply(c, c->argv[2], &l, NULL) != C_OK) return;
-        if (l >= 0) {
-            count = l; 
-	} else {
-            count = -l;
-            canDuplicated = 1;
-        }
-	pattern = c->argv[4]->ptr;
-	plen = sdslen(pattern);
-	allkeys = (pattern[0] == '*' && plen == 1);
-    } else if(numOfArgs == 3 && (!strcasecmp(c->argv[1]->ptr,"count") || !strcasecmp(c->argv[1]->ptr,"pattern"))) {
-        if(!strcasecmp(c->argv[1]->ptr,"count")) {
-            if (getIntFromObjectOrReply(c, c->argv[2], &l, NULL) != C_OK) return;
-            if (l >= 0) {
-                count = l;
-		allkeys = 1;
-            } else {
-                count = -l;
-                canDuplicated = 1;
-		allkeys = 1;
-            }
-	} else {
-            count = 1;    
-	    pattern = c->argv[2]->ptr;
-	    plen = sdslen(pattern);
-	    allkeys = (pattern[0] == '*' && plen == 1);
-	}	
-    } else if(numOfArgs == 1) { 
-        count = 1;
-    } else { 
-        addReplyErrorObject(c,shared.syntaxerr);
-        return;
-    }
-    
-    serverLog(LL_WARNING, "---------------------------------------------Begin to try to find keys----------------");
-    if (numOfArgs == 1) {
-        robj *key;
-        if((key = dbRandomKey(c->db)) == NULL) { 
-            addReplyNull(c);
-   	    return;
-        }
-	addReplyBulk(c, key);
-	decrRefCount(key);
-	return;
-    } else if (numOfArgs == 3) {
-        if(!strcasecmp(c->argv[1]->ptr,"count")) {
-	    void *replylen = addReplyDeferredLen(c);
-            if (canDuplicated) {
-                serverLog(LL_WARNING, "------------- working on count %d with allow duplicated----------------", count);
-		int maxtries = 100 * count;
-                while(--maxtries > 0 && count > 0) {
-                    void *entry;
-                    int randomDictIndex = kvstoreGetFairRandomHashtableIndex(c->db->keys);
-                    int ok = kvstoreHashtableFairRandomEntry(c->db->keys, randomDictIndex, &entry);
-                    if (!ok) {
-	                break;
-                    }
-                    robj *valkey = entry;
-                    sds key = objectGetKey(valkey);
-                    if (allkeys || stringmatchlen(pattern,plen,key,sdslen(key),0)) {
-                        robj *keyobj = createStringObject(key, sdslen(key));
-                        addReplyBulk(c, keyobj);
-                        decrRefCount(keyobj);
-			count--;
-			numkeys++;
-                    } else {
-                        continue;
-                    }
-               }
-	       setDeferredArrayLen(c,replylen,numkeys);
-               return;
-	    } else {
-                serverLog(LL_WARNING, "------------- working on count %d without duplicated----------------", count);
-		dict *d = dictCreate(&hashDictType);
-                dictExpand(d, count);
-                int maxtries = 5 * count;
-                while(--maxtries > 0 && count > 0) {
-                    serverLog(LL_WARNING, "------------- Begin run in the while loop maxtries is %d, count is %d----------------", maxtries, count);
-                    void *entry;
-                    int randomDictIndex = kvstoreGetFairRandomHashtableIndex(c->db->keys);
-                    int ok = kvstoreHashtableFairRandomEntry(c->db->keys, randomDictIndex, &entry);
-                    if (!ok) {
-                        break;
-                    }
-                    robj *valkey = entry;
-                    sds key = objectGetKey(valkey);
-                    serverLog(LL_WARNING, "------------- find a key with %s and allkey is %d----------------", key, allkeys);
-                    if (allkeys || stringmatchlen(pattern,plen,key,sdslen(key),0)) {
-                        serverLog(LL_WARNING, "------------- 1----------------");
-			//robj *keyobj = createStringObject(key, sdslen(key));
-			if (dictAddRaw(d, key, NULL) == NULL) {
-			   sdsfree(key);
-			   continue;
-			}
-                        serverLog(LL_WARNING, "------------- 2----------------");
-			/*
-			if (ret == NULL ) {
-                            sdsfree(key);
-			    continue;
-			}
-			*/
-			/*
-			if (dictAdd(d, key, NULL) != DICT_OK) {
-                            serverLog(LL_WARNING, "-------------2 ----------------");
-                            sdsfree(key);
-                            serverLog(LL_WARNING, "-------------3 ----------------");
-                            continue;
-                        }
-			*/
-                        serverLog(LL_WARNING, "------------- 4----------------");
-                        //robj *keyobj = createStringObject(key, sdslen(key));
-                        //addReplyBulk(c, keyobj);
-                        //decrRefCount(keyobj);
-			addReplyBulkSds(c, key);
-                        count--;
-                        numkeys++;
-                    } else {
-                        continue;
-                    }
-                    serverLog(LL_WARNING, "------------- End of this while loop ----------------");
-               }
-               serverLog(LL_WARNING, "------------- Just Exit the while loop----------------");
-               //setDeferredArrayLen(c,replylen,numkeys);
-	       dictRelease(d);
-               return;
-	    }
-        } else {    // pattern and count = 1
-            serverLog(LL_WARNING, "------------- working on random pattern %s and plen is %d----------------", pattern, plen);
-            int maxtries = 100;
-	    while(--maxtries > 0) {
-		void *entry;
-                int randomDictIndex = kvstoreGetFairRandomHashtableIndex(c->db->keys);
-                int ok = kvstoreHashtableFairRandomEntry(c->db->keys, randomDictIndex, &entry);
-                if (!ok) {
-		    addReplyNull(c);
-		    return;
-		}
-	        robj *valkey = entry;
-                sds key = objectGetKey(valkey);
-	        if (stringmatchlen(pattern,plen,key,sdslen(key),0)) {
-                    robj *keyobj = createStringObject(key, sdslen(key));
-		    addReplyBulk(c, keyobj);
-		    decrRefCount(keyobj);
-		    return;
-	        } else {
-		    continue;
-		}
-           }
-	   addReplyNull(c);
-	   return;
-        } 
-    } else if (numOfArgs == 5) {
-    }
+
+    addReplyBulk(c, key);
+    decrRefCount(key);
 }
 
 void keysCommand(client *c) {

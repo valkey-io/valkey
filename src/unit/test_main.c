@@ -29,19 +29,18 @@ int runTestSuite(struct unitTestSuite *test, int argc, char **argv, int flags) {
     for (int id = 0; test->tests[id].proc != NULL; id++) {
         test_num++;
         int test_result = (test->tests[id].proc(argc, argv, flags) != 0);
-
-        /* Check if the test has cleaned up all the memory used. */
-        if (zmalloc_used_memory() > 0) {
-            printf("[" KRED "%s - %s" KRESET "] Memory leak detected of %zu bytes\n", test->tests[id].name, test->filename, zmalloc_used_memory());
-            test_result = 1;
-        }
-
         if (!test_result) {
             printf("[" KGRN "ok" KRESET "] - %s:%s\n", test->filename, test->tests[id].name);
         } else {
             printf("[" KRED "fail" KRESET "] - %s:%s\n", test->filename, test->tests[id].name);
             failed_tests++;
         }
+    }
+
+    /* Check if the test suite has cleaned up all the memory used. */
+    if (zmalloc_used_memory() > 0) {
+        printf("[" KRED "%s" KRESET "] Memory leak detected of %zu bytes\n", test->filename, zmalloc_used_memory());
+        failed_tests++;
     }
 
     printf("[" KBLUE "END" KRESET "] - %s: ", test->filename);

@@ -34,7 +34,7 @@ proc get_my_replica {cluster_nodes} {
     assert_failed "No replica found!"
 }
 
-start_cluster 1 1 {tags {external:skip cluster} overrides {cluster-enable-multi-db yes}} {
+start_cluster 1 1 {tags {external:skip cluster} } {
     config_set_all_nodes cluster-allow-replica-migration no
 
     set primary_id 0

@@ -520,7 +520,7 @@ proc get_port {instance_id} {
 }
 
 
-start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-enable-multi-db yes} } {
+start_cluster 3 3 {tags {external:skip cluster} } {
 
     test "Slot Migration With Multiple Databases" {
         set primary_id_src 0
@@ -568,7 +568,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-enable-multi-
 }
 
 
-start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-enable-multi-db yes} } {
+start_cluster 3 3 {tags {external:skip cluster} } {
     test "Command Validation During Slot Migration with Multiple Databases" {
         set primary_id_src 0
         set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]
@@ -609,7 +609,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-enable-multi-
     }
 }
 
-start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-enable-multi-db yes} } {
+start_cluster 3 3 {tags {external:skip cluster} } {
     test "Multi/Exec Validation During Slot Migration with Multiple Databases" {
         set primary_id_src 0
         set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]

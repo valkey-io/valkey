@@ -243,8 +243,7 @@ start_server {tags {"tracking network logreqres:skip"}} {
         r CLIENT TRACKING on REDIRECT $redir_id
         $rd_sg SET key1 1
         r GET key1
-        $rd_redirection QUIT
-        assert_equal OK [$rd_redirection read]
+        r CLIENT KILL ID $redir_id
         $rd_redirection close
         $rd_sg SET key1 2
 
@@ -261,7 +260,7 @@ start_server {tags {"tracking network logreqres:skip"}} {
         } else {
             fail "Failed to get redirect broken indication"
         }
-         # Consume PING reply
+        # Consume PING reply
         assert_equal PONG [r read]
     }
 
@@ -718,8 +717,7 @@ start_server {tags {"tracking network logreqres:skip"}} {
         r CLIENT TRACKING on REDIRECT $redir_id
         $rd_sg SET key1 1
         r GET key1
-        $rd_redirection QUIT
-        assert_equal OK [$rd_redirection read]
+        r CLIENT KILL ID $redir_id
         $rd_sg SET key1 2
         set res [lsearch -exact [r read] "tracking-redir-broken"]
         assert {$res >= 0}

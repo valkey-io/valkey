@@ -875,6 +875,8 @@ void randomWithCountCommand(client *c) {
     long l;
     unsigned long count;
     unsigned long numkeys = 0;
+    int canDuplicated = 0;
+    dict *section_dict;
 
     if (getRangeLongFromObjectOrReply(c, c->argv[2], -LONG_MAX, LONG_MAX, &l, NULL) != C_OK) return;
     if (l >= 0) {
@@ -882,6 +884,7 @@ void randomWithCountCommand(client *c) {
     } else {
         /* A negative count means: return the same elements multiple times */
         count = -l;
+        canDuplicated = 1;
     }
 
     /* If count is zero, serve it ASAP to avoid special cases later. */
@@ -890,11 +893,13 @@ void randomWithCountCommand(client *c) {
         return;
     }
 
-    int maxtries = 100 * count;
+    if (canDuplicated) {
+        section_dict = dictCreate(&stringSetDictType);
+        dictExpand(section_dict, count);
+    }
 
+    int maxtries = 100 * count;
     void *replylen = addReplyDeferredLen(c);
-    dict *section_dict = dictCreate(&stringSetDictType);
-    dictExpand(section_dict, 100);
     while (maxtries-- > 0 && count > 0) {
         void *entry;
         int randomDictIndex = kvstoreGetFairRandomHashtableIndex(c->db->keys);
@@ -904,14 +909,21 @@ void randomWithCountCommand(client *c) {
         }
         robj *valkey = entry;
         sds key = objectGetKey(valkey);
-        if (dictAdd(section_dict, key, NULL) != DICT_OK) {
-            continue;
+        if (canDuplicated) {
+            sds dictKey = sdsdup(key);
+            if (dictAdd(section_dict, dictKey, NULL) != DICT_OK) {
+                sdsfree(dictKey);
+                continue;
+            }
         }
         addReplyBulkCBuffer(c, key, sdslen(key));
         numkeys++;
         count--;
     }
     setDeferredArrayLen(c, replylen, numkeys);
+    if (canDuplicated) {
+        dictRelease(section_dict);
+    }
 }
 
 /************************************************************

@@ -288,12 +288,14 @@ size_t scriptingEngineCallGetFunctionMemoryOverhead(scriptingEngine *engine,
     return mem;
 }
 
-callableLazyEvalReset *scriptingEngineCallResetEvalEnvFunc(scriptingEngine *engine,
-                                                           int async) {
+callableLazyEnvReset *scriptingEngineCallResetEnvFunc(scriptingEngine *engine,
+                                                      subsystemType type,
+                                                      int async) {
     engineSetupModuleCtx(engine, NULL);
-    callableLazyEvalReset *callback = engine->impl.methods.reset_eval_env(
+    callableLazyEnvReset *callback = engine->impl.methods.reset_env(
         engine->module_ctx,
         engine->impl.ctx,
+        type,
         async);
     engineTeardownModuleCtx(engine);
     return callback;

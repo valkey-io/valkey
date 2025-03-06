@@ -90,10 +90,10 @@ dict *functionsLibGet(void);
 size_t functionsLibCtxFunctionsLen(functionsLibCtx *functions_ctx);
 functionsLibCtx *functionsLibCtxGetCurrent(void);
 functionsLibCtx *functionsLibCtxCreate(void);
-void functionsLibCtxClearCurrent(int async, void(callback)(dict *));
-void functionsLibCtxFree(functionsLibCtx *functions_lib_ctx);
+void functionsLibCtxFree(functionsLibCtx *functions_lib_ctx, void(callback)(dict *), list *engine_callbacks);
 void functionsLibCtxClear(functionsLibCtx *lib_ctx, void(callback)(dict *));
 void functionsLibCtxSwapWithCurrent(functionsLibCtx *new_lib_ctx, int async);
+void functionReset(int async, void(callback)(dict *));
 
 void functionsRemoveLibFromEngine(scriptingEngine *engine);
 

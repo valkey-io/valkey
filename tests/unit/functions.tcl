@@ -300,6 +300,41 @@ start_server {tags {"scripting"}} {
         assert_match {} [r function list]
     }
 
+    test {FUNCTION - test function flush will re-create the lua engine} {
+        for {set i 0} {$i < 60} {incr i} {
+            r function load [get_function_code lua test_$i test_$i {local a = 1 while true do a = a + 1 end}]
+        }
+        set before_flush_memory [s used_memory_vm_functions]
+        r function flush sync
+        set after_flush_memory [s used_memory_vm_functions]
+        assert_lessthan $after_flush_memory $before_flush_memory
+
+        for {set i 0} {$i < 100} {incr i} {
+            r function load [get_function_code lua test_$i test_$i {local a = 1 while true do a = a + 1 end}]
+        }
+        set before_flush_memory [s used_memory_vm_functions]
+        r function flush async
+        set after_flush_memory [s used_memory_vm_functions]
+        assert_lessthan $after_flush_memory $before_flush_memory
+    }
+
+    test {FUNCTION - test loading function during the flush async} {
+        for {set i 0} {$i < 10000} {incr i} {
+            r function load [get_function_code LUA test_$i test_$i {return 'hello'}]
+        }
+        r function flush sync
+
+        for {set i 0} {$i < 10000} {incr i} {
+            r function load [get_function_code LUA test_$i test_$i {return 'hello'}]
+        }
+        r function flush async
+
+        for {set i 0} {$i < 10000} {incr i} {
+            r function load [get_function_code LUA test_$i test_$i {return 'hello'}]
+        }
+        r function flush
+    }
+
     test {FUNCTION - test function wrong argument} {
         catch {r function flush bad_arg} e
         assert_match {*only supports SYNC|ASYNC*} $e

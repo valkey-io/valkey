@@ -846,20 +846,20 @@ typedef enum ValkeyModuleScriptingEngineExecutionState {
     VMSE_STATE_KILLED,
 } ValkeyModuleScriptingEngineExecutionState;
 
-typedef struct ValkeyModuleScriptingEngineCallableLazyEvalReset {
+typedef struct ValkeyModuleScriptingEngineCallableLazyEnvReset {
     void *context;
 
     /*
-     * Callback function used for resetting the EVAL context implemented by an
+     * Callback function used for resetting the EVAL/FUNCTION context implemented by an
      * engine. This callback will be called by a background thread when it's
      * ready for resetting the context.
      *
      * - `context`: a generic pointer to a context object, stored in the
-     * callableLazyEvalReset struct.
+     * callableLazyEnvReset struct.
      *
      */
-    void (*engineLazyEvalResetCallback)(void *context);
-} ValkeyModuleScriptingEngineCallableLazyEvalReset;
+    void (*engineLazyEnvResetCallback)(void *context);
+} ValkeyModuleScriptingEngineCallableLazyEnvReset;
 
 /* The callback function called when either `EVAL`, `SCRIPT LOAD`, or
  * `FUNCTION LOAD` command is called to compile the code.
@@ -956,19 +956,22 @@ typedef size_t (*ValkeyModuleScriptingEngineGetFunctionMemoryOverheadFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleScriptingEngineCompiledFunction *compiled_function);
 
-/* The callback function called when `SCRIPT FLUSH` command is called. The
- * engine should reset the runtime environment used for EVAL scripts.
+/* The callback function called when `SCRIPT FLUSH` or `FUNCTION FLUSH` command is called.
+ * The engine should reset the runtime environment used for EVAL scripts or FUNCTION SCRIPTS.
  *
  * - `module_ctx`: the module runtime context.
  *
  * - `engine_ctx`: the scripting engine runtime context.
  *
+ * - `type`: the subsystem type.
+ *
  * - `async`: if has value 1 then the reset is done asynchronously through
  * the callback structure returned by this function.
  */
-typedef ValkeyModuleScriptingEngineCallableLazyEvalReset *(*ValkeyModuleScriptingEngineResetEvalEnvFunc)(
+typedef ValkeyModuleScriptingEngineCallableLazyEnvReset *(*ValkeyModuleScriptingEngineResetEnvFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleScriptingEngineCtx *engine_ctx,
+    ValkeyModuleScriptingEngineSubsystemType type,
     int async);
 
 /* Return the current used memory by the engine.
@@ -1006,8 +1009,8 @@ typedef struct ValkeyModuleScriptingEngineMethods {
     ValkeyModuleScriptingEngineGetFunctionMemoryOverheadFunc get_function_memory_overhead;
 
     /* The callback function used to reset the runtime environment used
-     * by the scripting engine for EVAL scripts. */
-    ValkeyModuleScriptingEngineResetEvalEnvFunc reset_eval_env;
+     * by the scripting engine for EVAL scripts or FUNCTION scripts. */
+    ValkeyModuleScriptingEngineResetEnvFunc reset_env;
 
     /* Function callback to get the used memory by the engine. */
     ValkeyModuleScriptingEngineGetMemoryInfoFunc get_memory_info;

@@ -287,10 +287,10 @@ static void luaEngineFunctionCall(ValkeyModuleCtx *module_ctx,
     lua_pop(lua, 1); /* Remove the error handler. */
 }
 
-static void resetEvalContext(void *context) {
-    lua_State *eval_lua = context;
-    lua_gc(eval_lua, LUA_GCCOLLECT, 0);
-    lua_close(eval_lua);
+static void resetLuaContext(void *context) {
+    lua_State *lua = context;
+    lua_gc(lua, LUA_GCCOLLECT, 0);
+    lua_close(lua);
 
 #if !defined(USE_LIBC)
     /* The lua interpreter may hold a lot of memory internally, and lua is
@@ -305,27 +305,30 @@ static void resetEvalContext(void *context) {
 #endif
 }
 
-static callableLazyEvalReset *luaEngineResetEvalEnv(ValkeyModuleCtx *module_ctx,
-                                                    engineCtx *engine_ctx,
-                                                    int async) {
+static callableLazyEnvReset *luaEngineResetEvalEnv(ValkeyModuleCtx *module_ctx,
+                                                   engineCtx *engine_ctx,
+                                                   subsystemType type,
+                                                   int async) {
     /* The lua engine is implemented in the core, and not in a Valkey Module */
     serverAssert(module_ctx == NULL);
 
     luaEngineCtx *lua_engine_ctx = (luaEngineCtx *)engine_ctx;
-    serverAssert(lua_engine_ctx->eval_lua);
-    callableLazyEvalReset *callback = NULL;
+    serverAssert(type == VMSE_EVAL || type == VMSE_FUNCTION);
+    lua_State *lua = type == VMSE_EVAL ? lua_engine_ctx->eval_lua : lua_engine_ctx->function_lua;
+    serverAssert(lua);
+    callableLazyEnvReset *callback = NULL;
 
     if (async) {
         callback = zcalloc(sizeof(*callback));
-        *callback = (callableLazyEvalReset){
-            .context = lua_engine_ctx->eval_lua,
-            .engineLazyEvalResetCallback = resetEvalContext,
+        *callback = (callableLazyEnvReset){
+            .context = lua,
+            .engineLazyEnvResetCallback = resetLuaContext,
         };
     } else {
-        resetEvalContext(lua_engine_ctx->eval_lua);
+        resetLuaContext(lua);
     }
 
-    initializeLuaState(lua_engine_ctx, VMSE_EVAL);
+    initializeLuaState(lua_engine_ctx, type);
 
     return callback;
 }
@@ -347,21 +350,21 @@ static void luaEngineFreeFunction(ValkeyModuleCtx *module_ctx,
                                   compiledFunction *compiled_function) {
     /* The lua engine is implemented in the core, and not in a Valkey Module */
     serverAssert(module_ctx == NULL);
+    serverAssert(type == VMSE_EVAL || type == VMSE_FUNCTION);
 
     luaEngineCtx *lua_engine_ctx = engine_ctx;
-    if (type == VMSE_EVAL) {
-        luaFunction *script = (luaFunction *)compiled_function->function;
-        if (lua_engine_ctx->eval_lua == script->lua) {
-            /* The lua context is still the same, which means that we're not
-             * resetting the whole eval context, and therefore, we need to
-             * delete the function from the lua context.
-             */
-            lua_unref(lua_engine_ctx->eval_lua, script->function_ref);
-        }
-        zfree(script);
-    } else {
-        luaFunctionFreeFunction(lua_engine_ctx->function_lua, compiled_function->function);
+    lua_State *lua = type == VMSE_EVAL ? lua_engine_ctx->eval_lua : lua_engine_ctx->function_lua;
+    serverAssert(lua);
+
+    luaFunction *script = (luaFunction *)compiled_function->function;
+    if (lua == script->lua) {
+        /* The lua context is still the same, which means that we're not
+         * resetting the whole eval context, and therefore, we need to
+         * delete the function from the lua context.
+         */
+        lua_unref(lua, script->function_ref);
     }
+    zfree(script);
 
     if (compiled_function->name) {
         decrRefCount(compiled_function->name);
@@ -380,7 +383,7 @@ int luaEngineInitEngine(void) {
         .free_function = luaEngineFreeFunction,
         .call_function = luaEngineFunctionCall,
         .get_function_memory_overhead = luaEngineFunctionMemoryOverhead,
-        .reset_eval_env = luaEngineResetEvalEnv,
+        .reset_env = luaEngineResetEvalEnv,
         .get_memory_info = luaEngineGetMemoryInfo,
     };
 

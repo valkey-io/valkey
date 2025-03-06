@@ -243,7 +243,8 @@ start_server {tags {"tracking network logreqres:skip"}} {
         r CLIENT TRACKING on REDIRECT $redir_id
         $rd_sg SET key1 1
         r GET key1
-        r CLIENT KILL ID $redir_id
+        $rd_redirection QUIT
+        assert_equal OK [$rd_redirection read]
         $rd_redirection close
         $rd_sg SET key1 2
 
@@ -717,7 +718,8 @@ start_server {tags {"tracking network logreqres:skip"}} {
         r CLIENT TRACKING on REDIRECT $redir_id
         $rd_sg SET key1 1
         r GET key1
-        r CLIENT KILL ID $redir_id
+        $rd_redirection QUIT
+        assert_equal OK [$rd_redirection read]
         $rd_sg SET key1 2
         set res [lsearch -exact [r read] "tracking-redir-broken"]
         assert {$res >= 0}

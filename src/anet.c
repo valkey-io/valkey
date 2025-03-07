@@ -583,12 +583,11 @@ static int anetTcpGetProtocol(char *err, int ai_protocol, int mptcp) {
 #ifdef IPPROTO_MPTCP
         UNUSED(err);
         return IPPROTO_MPTCP;
-    }
 #else
         anetSetError(err, "MPTCP is not supported on this platform");
         return ANET_ERR;
-    }
 #endif
+    }
     return ai_protocol;
 }
 

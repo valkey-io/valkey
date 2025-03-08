@@ -1,0 +1,46 @@
+name: Trigger Build Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version of Valkey to build
+        required: true
+      environment:
+        description: Environment to build
+        required: false
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine version and environment
+        id: determine-vars
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            echo "Triggered by a release event."
+            VERSION=${{ github.event.release.tag_name }}
+            ENVIRONMENT="prod"
+          else
+            echo "Triggered manually (workflow_dispatch)."
+            VERSION=${{ inputs.version }}
+            ENVIRONMENT=${{ inputs.environment || 'prod' }}
+          fi
+
+          # Set the outputs for version and environment
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+
+      - name: Trigger build
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          repository: valkey-release-automation/valkey-automated-bot
+          event-type: build-release
+          client-payload: >
+            {
+              "version": "${{ steps.determine-vars.outputs.version }}",
+              "environment": "${{ steps.determine-vars.outputs.environment }}"
+            }

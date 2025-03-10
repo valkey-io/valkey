@@ -14,11 +14,6 @@
 #define LUA_ENGINE_NAME "LUA"
 #define REGISTRY_ERROR_HANDLER_NAME "__ERROR_HANDLER__"
 
-typedef struct luaFunction {
-    lua_State *lua;   /* Pointer to the lua context where this function was created. Only used in EVAL context. */
-    int function_ref; /* Special ID that allows getting the Lua function object from the Lua registry */
-} luaFunction;
-
 typedef struct luaEngineCtx {
     lua_State *eval_lua;     /* The Lua interpreter for EVAL commands. We use just one for all EVAL calls */
     lua_State *function_lua; /* The Lua interpreter for FCALL commands. We use just one for all FCALL calls */
@@ -257,17 +252,9 @@ static void luaEngineFunctionCall(ValkeyModuleCtx *module_ctx,
     serverAssert(module_ctx == NULL);
 
     luaEngineCtx *lua_engine_ctx = (luaEngineCtx *)engine_ctx;
-    lua_State *lua = NULL;
-    int lua_function_ref = -1;
-
-    if (type == VMSE_EVAL) {
-        lua = lua_engine_ctx->eval_lua;
-        luaFunction *script = compiled_function->function;
-        lua_function_ref = script->function_ref;
-    } else {
-        lua = lua_engine_ctx->function_lua;
-        lua_function_ref = luaFunctionGetLuaFunctionRef(compiled_function);
-    }
+    lua_State *lua = type == VMSE_EVAL ? lua_engine_ctx->eval_lua : lua_engine_ctx->function_lua;
+    luaFunction *script = compiled_function->function;
+    int lua_function_ref = script->function_ref;
 
     /* Push the pcall error handler function on the stack. */
     lua_pushstring(lua, REGISTRY_ERROR_HANDLER_NAME);

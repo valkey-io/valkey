@@ -4774,13 +4774,13 @@ void clusterFailoverReplaceYourPrimary(void) {
         }
     }
 
-    /* 3) Update state and save config. */
+    /* 3) Update state, note that we do not use CLUSTER_TODO_UPDATE_STATE since we want the node
+     * to update the cluster state ASAP after failover. */
     clusterUpdateState();
-    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
 
-    /* 4) Pong all the other nodes so that they can update the state
+    /* 4) Save and fsync the config, and pong all the other nodes so that they can update the state
      *    accordingly and detect that we switched to primary role. */
-    clusterDoBeforeSleep(CLUSTER_TODO_BROADCAST_ALL);
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
 
     /* 5) If there was a manual failover in progress, clear the state. */
     resetManualFailover();

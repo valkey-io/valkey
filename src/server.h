@@ -1181,6 +1181,7 @@ typedef struct client {
     /* Input buffer and command parsing fields */
     sds querybuf;        /* Buffer we use to accumulate client queries. */
     size_t qb_pos;       /* The position we have read in querybuf. */
+    int qb_full_read;    /* True if the last read returned the maximum allowed bytes */
     robj **argv;         /* Arguments of current command. */
     int argc;            /* Num of arguments of current command. */
     int argv_len;        /* Size of argv array (may be more than argc) */
@@ -2145,6 +2146,12 @@ struct valkeyServer {
     /* Local environment */
     char *locale_collate;
     char *debug_context; /* A free-form string that has no impact on server except being included in a crash report. */
+
+    /* Replication flow control */
+    int repl_flow_control_enabled;   /* Enables adaptive flow control for replication reads on the replica */
+    int repl_cur_reads_per_io_event; /* Current allowed reads from the primary file descriptor per epoll I/O event */
+    int repl_max_reads_per_io_event; /* Maximum allowed reads from the primary file descriptor per I/O event */
+    mstime_t repl_last_rate_update;  /* Timestamp of the last increase in replication reads per I/O event */
 };
 
 #define MAX_KEYS_BUFFER 256

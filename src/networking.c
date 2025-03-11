@@ -43,6 +43,7 @@
 #include <math.h>
 #include <ctype.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 
 /* This struct is used to encapsulate filtering criteria for operations on clients
  * such as identifying specific clients to kill or retrieve. Each field in the struct
@@ -3247,6 +3248,7 @@ void readToQueryBuf(client *c) {
     if (c->nread <= 0) {
         return;
     }
+    c->qb_full_read = (size_t)c->nread == readlen ? 1 : 0;
 
     sdsIncrLen(c->querybuf, c->nread);
     qblen = sdslen(c->querybuf);
@@ -3264,6 +3266,47 @@ void readToQueryBuf(client *c) {
     }
 }
 
+/**
+ * This function is designed to prioritize replication flow.
+ * Determines whether the replica should continue reading from the primary.
+ * It dynamically adjusts the read rate based on buffer utilization
+ * and ensures replication reads are not overly aggressive.
+ *
+ * @return          1 if another read should be attempted, 0 otherwise.
+ */
+int shouldRepeatRead(client *c, int iteration) {
+    // If the client is not a primary replica, is closing, or flow control is disabled, no more reads.
+    if (!(c->flag.primary) || c->flag.close_asap || !server.repl_flow_control_enabled) {
+        return 0;
+    }
+
+    bool is_last_iteration = iteration >= server.repl_cur_reads_per_io_event;
+
+    if (is_last_iteration) {
+        /* If the last read filled the buffer AND enough time has passed since the last increase:
+         * - Increase the read rate, up to a max limit.
+         * - This ensures a gradual ramp-up instead of an overly aggressive approach. */
+        if (c->qb_full_read && server.mstime - server.repl_last_rate_update > 100) {
+            server.repl_cur_reads_per_io_event = MIN(server.repl_max_reads_per_io_event,
+                                                     server.repl_cur_reads_per_io_event + 1);
+            server.repl_last_rate_update = server.mstime; // Update the last increase timestamp.
+        }
+    } else {
+        /* If the last read completely filled the buffer, continue reading. */
+        if (c->qb_full_read) {
+            return 1;
+        }
+
+        /* If the buffer was NOT fully filled, it indicates less replication pressure.
+         * Reduce the read rate to avoid excessive polling and free up resources for other clients. */
+        server.repl_cur_reads_per_io_event = MAX(1, server.repl_cur_reads_per_io_event - 1);
+    }
+
+    /* Stop reading for now (if we reached this point, conditions to continue were not met). */
+    return 0;
+}
+
+
 void readQueryFromClient(connection *conn) {
     client *c = connGetPrivateData(conn);
     /* Check if we can send the client to be handled by the IO-thread */
@@ -3271,12 +3314,18 @@ void readQueryFromClient(connection *conn) {
 
     if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) return;
 
-    readToQueryBuf(c);
+    bool shouldRepeat = false;
+    int iter = 0;
+    do {
+        readToQueryBuf(c);
 
-    if (handleReadResult(c) == C_OK) {
-        if (processInputBuffer(c) == C_ERR) return;
-    }
-    beforeNextClient(c);
+        if (handleReadResult(c) == C_OK) {
+            if (processInputBuffer(c) == C_ERR) return;
+        }
+        iter++;
+        shouldRepeat = shouldRepeatRead(c, iter);
+        beforeNextClient(c);
+    } while (shouldRepeat);
 }
 
 /* An "Address String" is a colon separated ip:port pair.

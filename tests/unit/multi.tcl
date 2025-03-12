@@ -515,6 +515,7 @@ start_server {tags {"multi"}} {
             {select *}
             {set foo bar}
         }
+        close_replication_stream $repl
         r replicaof no one
     } {OK} {needs:repl cluster:skip}
 

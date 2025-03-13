@@ -303,7 +303,7 @@ static sds percentDecode(const char *pe, size_t len) {
 /* Parse a URI and extract the server connection information.
  * URI scheme is based on the provisional specification[1] excluding support
  * for query parameters. Valid URIs are:
- *   scheme:    "valkey://", or "valkeys://", or "redis://", or "rediss://"
+ *   scheme:    "valkey://" or "valkeys://" or "redis://" or "rediss://"
  *   authority: [[<username> ":"] <password> "@"] [<hostname> [":" <port>]]
  *   path:      ["/" [<db>]]
  *

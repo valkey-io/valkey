@@ -1309,7 +1309,7 @@ tags {acl external:skip} {
 
 set server_path [tmpdir "acl"]
 exec cp -f tests/assets/user.acl $server_path
-start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags [list "repl external:skip"]] {
+start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags {"repl external:skip"}] {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]

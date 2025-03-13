@@ -2378,8 +2378,8 @@ static sds ACLLoadFromFile(const char *filename) {
         while ((ln = listNext(&li)) != NULL) {
             client *c = listNodeValue(ln);
             if (!c->user) {
-                /* Some clients, e.g. the one from the primary to a replica, don't have a user
-                 * associated with them.*/
+                /* Some clients, e.g. the one from the primary to replica, don't have a user
+                 * associated with them. */
                 continue;
             }
             user *original = c->user;

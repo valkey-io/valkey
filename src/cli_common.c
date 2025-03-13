@@ -308,7 +308,7 @@ static sds percentDecode(const char *pe, size_t len) {
  *   path:      ["/" [<db>]]
  *
  *  [1]: https://www.iana.org/assignments/uri-schemes/prov/redis */
-void parseRedisOrValkeyUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int *tls_flag) {
+void parseUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int *tls_flag) {
 #ifdef USE_OPENSSL
     UNUSED(tool_name);
 #else

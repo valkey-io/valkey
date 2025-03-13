@@ -2377,11 +2377,9 @@ static sds ACLLoadFromFile(const char *filename) {
         listRewind(server.clients, &li);
         while ((ln = listNext(&li)) != NULL) {
             client *c = listNodeValue(ln);
-            if (!c->user) {
-                /* Some clients, e.g. the one from the primary to replica, don't have a user
-                 * associated with them. */
-                continue;
-            }
+            /* Some clients, e.g. the one from the primary to replica, don't have a user
+             * associated with them. */
+            if (!c->user) continue;
             user *original = c->user;
             list *channels = NULL;
             user *new_user = ACLGetUserByName(c->user->name, sdslen(c->user->name));

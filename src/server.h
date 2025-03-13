@@ -4189,6 +4189,7 @@ void lcsCommand(client *c);
 void quitCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
+void externalDataInitCommand(client *c);
 void externalDataLoadedCommand(client *c);
 void externalDataStatsCommand(client *c);
 

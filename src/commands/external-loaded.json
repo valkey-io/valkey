@@ -4,7 +4,7 @@
         "complexity": "O(1)",
         "group": "server",
         "since": "8.0.2",
-        "arity": -3,
+        "arity": 3,
         "container": "EXTERNAL_DATA",
         "function": "externalDataLoadedCommand",
         "command_flags": [

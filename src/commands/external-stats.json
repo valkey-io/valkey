@@ -4,7 +4,7 @@
         "complexity": "O(1)",
         "group": "server",
         "since": "8.0.2",
-        "arity": -3,
+        "arity": 3,
         "container": "EXTERNAL_DATA",
         "function": "externalDataStatsCommand",
         "command_flags": [
@@ -38,22 +38,8 @@
             }
         ],
         "reply_schema": {
-            "anyOf": [
-                {
-                    "type": "array",
-                    "description": "In case `storage` was given, stats of loaded storages used in databases",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                {
-                    "type": "array",
-                    "description": "In case `filter` was given, a list of loaded filters used in databases",
-                    "items": {
-                        "type": "string"
-                    }
-                }
-            ]
+            "description": "A map where each key is a db name, and each value is storage/filter used in it.",
+            "type": "string"
         }
     }
 }

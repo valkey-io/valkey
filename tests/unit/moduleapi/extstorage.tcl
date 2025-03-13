@@ -3,10 +3,13 @@ set storagemodule1 [file normalize tests/modules/extstorage/extstorage1.so]
 set storagemodule2 [file normalize tests/modules/extstorage/extstorage2.so]
 set filtermodule1 [file normalize tests/modules/extstorage/extfilter1.so]
 set filtermodule2 [file normalize tests/modules/extstorage/extfilter2.so]
+set ext_data_off_err "ERR External data commands are unavailable with ext-data-mode off"
 
 start_server {tags {"external_data external:skip"}} {
-    test {Running EXTERNAL_DATA LOADED with switched off external data fails} {
-        assert_error {ERR External data commands are unavailable with ext-data-mode off} {r external_data loaded storage}
+    test {Running EXTERNAL_DATA commands with switched off external data fails} {
+        assert_error $ext_data_off_err {r external_data init db0 storage storagemodule1 filter filtermodule1}
+        assert_error $ext_data_off_err {r external_data loaded storage}
+        assert_error $ext_data_off_err {r external_data stats storage}
     }
 }
 
@@ -31,8 +34,8 @@ start_server [list overrides [list "ext-data-mode" test] tags [list "external:sk
         assert_equal [list hellostorage1] [r external_data loaded storage]
         assert_equal [list ] [r external_data loaded filter]
 
-        # unload non-loaded module
-        set code [catch {r module unload $storagemodule2}]
+        # unload non-loaded module fails
+        set code [catch {r module unload hellostorage2}]
         if {$code == 0} {
             puts "expected error on unloading non-loaded module, got none"
             exit 1
@@ -50,7 +53,7 @@ start_server [list overrides [list "ext-data-mode" test] tags [list "external:sk
         assert_equal [list hellostorage1 hellostorage2] [r external_data loaded storage]
         assert_equal [list ] [r external_data loaded filter]
 
-        # unload loaded modules
+        # unload loaded modules ok
         assert_equal {OK} [r module unload hellostorage1]
         assert_equal [list hellostorage2] [r external_data loaded storage]
         assert_equal {OK} [r module unload hellostorage2]
@@ -66,8 +69,8 @@ start_server [list overrides [list "ext-data-mode" test] tags [list "external:sk
         assert_equal [list hellofilter1] [r external_data loaded filter]
         assert_equal [list ] [r external_data loaded storage]
 
-        # unload non-loaded module
-        set code [catch {r module unload $filtermodule2}]
+        # unload non-loaded module fails
+        set code [catch {r module unload hellofilter2}]
         if {$code == 0} {
             puts "expected error on unloading non-loaded module, got none"
             exit 1
@@ -81,11 +84,11 @@ start_server [list overrides [list "ext-data-mode" test] tags [list "external:sk
         }
 
         # success on several filters load
-        assert_equal {OK} [r module load $filtermodule2] 
+        assert_equal {OK} [r module load $filtermodule2]
         assert_equal [list hellofilter1 hellofilter2] [r external_data loaded filter]
         assert_equal [list ] [r external_data loaded storage]
 
-        # unload loaded modules
+        # unload loaded modules ok
         assert_equal {OK} [r module unload hellofilter2]
         assert_equal [list hellofilter1] [r external_data loaded filter]
         assert_equal {OK} [r module unload hellofilter1]
@@ -95,15 +98,41 @@ start_server [list overrides [list "ext-data-mode" test] tags [list "external:sk
 }
 
 start_server [list overrides [list "ext-data-mode" test] tags [list "external:skip"]] {
-    test {Initializing storage module does affect STATS commands} {
-        # STATS ok
+    test {Initializing modules does affect STATS commands} {
+        # STATS ok with modules non-loaded
+        assert_equal [list ] [r external_data stats filter]
         assert_equal [list ] [r external_data stats storage]
-    }
-}
 
-start_server [list overrides [list "ext-data-mode" test] tags [list "external:skip"]] {
-    test {Initializing filter module does affect STATS commands} {
-        # STATS ok
-        assert_equal [list ] [r external_data loaded filter]
+        # check init input arguments
+        assert_error {ERR failed to parse db number from db, expect db0, db10, etc.} {r external_data INIT db STORAGE hellostorage1 FILTER hellofilter1}
+        assert_error {ERR db number 16 exceeds used on server 0-15} {r external_data INIT db16 STORAGE hellostorage1 FILTER hellofilter1}
+        assert_error {ERR wrong number of arguments for 'external_data|init' command} {r external_data INIT db0 STORAGE  FILTER hellofilter1}
+        assert_error {ERR wrong number of arguments for 'external_data|init' command} {r external_data INIT db0 STORAGE hellostorage1 FILTER }
+
+        # you need to load modules to init
+        assert_error {ERR storage module hellostorage1 is not loaded} {r external_data INIT db0 STORAGE hellostorage1 FILTER hellofilter1}
+        assert_equal {OK} [r module load $storagemodule1]
+        assert_error {ERR filter module hellofilter3 is not loaded} {r external_data INIT db0 FILTER hellofilter3 STORAGE hellostorage1}
+        assert_equal {OK} [r module load $filtermodule1]
+
+        # STATS ok with modules loaded
+        assert_equal [list ] [r external_data stats filter]
+        assert_equal [list ] [r external_data stats storage]
+        assert_equal {OK} [r external_data INIT db0 STORAGE hellostorage1 FILTER hellofilter1]
+
+        assert_equal [list db0:hellofilter1] [r external_data stats filter]
+        assert_equal [list db0:hellostorage1] [r external_data stats storage]
+        assert_equal {OK} [r module load $storagemodule2]
+        assert_equal {OK} [r module load $filtermodule2]
+        assert_equal {OK} [r external_data INIT db1 STORAGE hellostorage2 FILTER hellofilter2]
+        assert_equal [list db0:hellofilter1 db1:hellofilter2] [r external_data stats filter]
+        assert_equal [list db0:hellostorage1 db1:hellostorage2] [r external_data stats storage]
+
+        # you can't init the same db without dropping its currently used modules
+        assert_error {ERR db0 is already initialized} {r external_data INIT db0 STORAGE hellostorage1 FILTER hellofilter1}
+
+        # unload loaded and inited module fails
+        assert_error {ERR Error unloading module: operation not possible.} {r module unload hellostorage1}
+        assert_error {ERR Error unloading module: operation not possible.} {r module unload hellofilter1}
     }
 }

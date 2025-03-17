@@ -48,3 +48,4 @@ jobs:
               "version": "${{ steps.determine-vars.outputs.version }}",
               "environment": "${{ steps.determine-vars.outputs.environment }}"
             }
+            

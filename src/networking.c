@@ -3793,29 +3793,29 @@ static int validateClientFlagFilter(const char *flag_filter) {
     for (int i = 0; flag_filter[i] != '\0'; i++) {
         const char flag = flag_filter[i];
         switch (flag) {
-            case 'O':
-            case 'S':
-            case 'M':
-            case 'P':
-            case 'x':
-            case 'b':
-            case 't':
-            case 'R':
-            case 'B':
-            case 'd':
-            case 'c':
-            case 'u':
-            case 'A':
-            case 'U':
-            case 'r':
-            case 'e':
-            case 'T':
-            case 'I':
-            case 'N':
-                /* Valid flag, do nothing. */
-                break;
-            default:
-                return C_ERR;
+        case 'O':
+        case 'S':
+        case 'M':
+        case 'P':
+        case 'x':
+        case 'b':
+        case 't':
+        case 'R':
+        case 'B':
+        case 'd':
+        case 'c':
+        case 'u':
+        case 'A':
+        case 'U':
+        case 'r':
+        case 'e':
+        case 'T':
+        case 'I':
+        case 'N':
+            /* Valid flag, do nothing. */
+            break;
+        default:
+            return C_ERR;
         }
     }
     return C_OK;

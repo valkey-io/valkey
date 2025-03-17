@@ -136,30 +136,52 @@ start_server {tags {"introspection"}} {
     test {CLIENT LIST with FLAGS filter} {
         r client setname mytestclient
         set cl [split [r client list flags N] "\r\n"]
-        regexp {name=([^ ]+) .* flags=([^ ]+) .* cmd=([^ ]+)} [lindex $cl 0] _ actual_name actual_flags actual_cmd
-        assert_equal "mytestclient" $actual_name
-        assert_equal "N" $actual_flags
-        assert_equal "client|list" $actual_cmd
+        set line [lindex $cl 0]
+        set info [dict create]
+        foreach pair [split $line " "] {
+            lassign [split $pair "="] key val
+            dict set info $key $val
+        }
+        assert_equal "mytestclient" [dict get $info name]
+        assert_equal "N" [dict get $info flags]
+        assert_equal "client|list" [dict get $info cmd]
     }
 
     # Test CLIENT LIST with TYPE filter
     test {CLIENT LIST with TYPE filter} {
         set cl [split [r client list type normal] "\r\n"]
-        regexp {id=([^ ]+) .* flags=([^ ]+) .* cmd=([^ ]+)} [lindex $cl 0] _ actual_id actual_flags actual_cmd
-        assert {[string match *N* $actual_flags]} ;# Ensure the flags include 'N' (Normal)
-        assert_equal "client|list" $actual_cmd
+        set line [lindex $cl 0]
+        set info [dict create]
+        foreach pair [split $line " "] {
+            lassign [split $pair "="] key val
+            dict set info $key $val
+        }
+        assert {[string match *N* [dict get $info flags]]}
+        assert_equal "client|list" [dict get $info cmd]
     }
 
     # Test CLIENT LIST with multiple filters
     test {CLIENT LIST with multiple filters} {
         r client setname mytestclient
         set client_info [r client info]
-        regexp {id=([^ ]+) name=([^ ]+)} $client_info _ myid myname
+        set fields [split $client_info " "]
+        foreach pair $fields {
+            lassign [split $pair "="] key val
+            if {$key eq "id"} { set myid $val }
+            if {$key eq "name"} { set myname $val }
+        }
+
         set cl [split [r client list id $myid name $myname] "\r\n"]
-        regexp {id=([^ ]+) name=([^ ]+) .* cmd=([^ ]+)} [lindex $cl 0] _ actual_id actual_name actual_cmd
-        assert_equal $myid $actual_id
-        assert_equal $myname $actual_name
-        assert_equal "client|list" $actual_cmd
+        set line [lindex $cl 0]
+        set info [dict create]
+        foreach pair [split $line " "] {
+            lassign [split $pair "="] key val
+            dict set info $key $val
+        }
+
+        assert_equal $myid [dict get $info id]
+        assert_equal $myname [dict get $info name]
+        assert_equal "client|list" [dict get $info cmd]
     }
 
     test {CLIENT LIST with PATTERN filter} {

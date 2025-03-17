@@ -66,10 +66,10 @@ typedef struct {
     int skipme;
     /* Client name to filter. If NULL, no name filtering is applied. */
     char *name;
-    /* Minimum idle time (in seconds) of a client connection for filtering.
+    /* Idle time (in seconds) of a client connection for filtering.
      * Connections with idle time more than this value will match.
      * A value of 0 means no idle time filtering. */
-    long long min_idle;
+    long long idle;
     /* Client flags for filtering. If NULL, no filtering is applied. */
     char *flags;
     /* Client subscribed pattern for filtering. If NULL, no filtering is applied. */
@@ -3709,18 +3709,18 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
                 return C_ERR;
             }
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "minidle") && moreargs) {
+        } else if (!strcasecmp(c->argv[index]->ptr, "idle") && moreargs) {
             long long tmp;
 
             if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &tmp,
-                                             "minidle is not an integer or out of range") != C_OK)
+                                             "idle is not an integer or out of range") != C_OK)
                 return C_ERR;
             if (tmp <= 0) {
-                addReplyError(c, "minidle should be greater than 0");
+                addReplyError(c, "idle should be greater than 0");
                 return C_ERR;
             }
 
-            filter->min_idle = tmp;
+            filter->idle = tmp;
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "flags") && moreargs) {
             filter->flags = c->argv[index + 1]->ptr;
@@ -3793,21 +3793,21 @@ static int clientMatchesFilter(client *client, clientFilter *client_filter) {
     if (client_filter->user && client->user != client_filter->user) return 0;
     if (client_filter->skipme && client == server.current_client) return 0;
     if (client_filter->max_age != 0 && (long long)(commandTimeSnapshot() / 1000 - client->ctime) < client_filter->max_age) return 0;
-    if (client_filter.min_idle != 0 && (long long)(commandTimeSnapshot() / 1000 - client->last_interaction) < client_filter.min_idle) return 0;
-    if (client_filter.flags && clientMatchesFlagFilter(client, client_filter.flags) == 0) return 0;
-    if (client_filter.name) {
-        if (!client->name || !client->name->ptr || strcmp(client->name->ptr, client_filter.name) != 0) {
+    if (client_filter->idle != 0 && (long long)(commandTimeSnapshot() / 1000 - client->last_interaction) < client_filter->idle) return 0;
+    if (client_filter->flags && clientMatchesFlagFilter(client, client_filter->flags) == 0) return 0;
+    if (client_filter->name) {
+        if (!client->name || !client->name->ptr || strcmp(client->name->ptr, client_filter->name) != 0) {
             return 0;
         }
     }
-    if (client_filter.subscribed_pattern && !clientSubscribedToPattern(client, client_filter.subscribed_pattern)) return 0;
-    if (client_filter.subscribed_channel && !clientSubscribedToChannel(client, client_filter.subscribed_channel)) return 0;
-    if (client_filter.subscribed_shard_channel && !clientSubscribedToShardChannel(client, client_filter.subscribed_shard_channel)) return 0;
-    if (client_filter.lib_name && (!client->lib_name || compareStringObjects(client->lib_name, client_filter.lib_name) != 0)) return 0;
-    if (client_filter.lib_ver && (!client->lib_ver || compareStringObjects(client->lib_ver, client_filter.lib_ver) != 0)) return 0;
-    if (client_filter.db_number != -1 && client->db->id != client_filter.db_number) return 0;
-    if (client->net_input_bytes < client_filter.tot_net_in) return 0;
-    if (client->net_output_bytes < client_filter.tot_net_out) return 0;
+    if (client_filter->subscribed_pattern && !clientSubscribedToPattern(client, client_filter->subscribed_pattern)) return 0;
+    if (client_filter->subscribed_channel && !clientSubscribedToChannel(client, client_filter->subscribed_channel)) return 0;
+    if (client_filter->subscribed_shard_channel && !clientSubscribedToShardChannel(client, client_filter->subscribed_shard_channel)) return 0;
+    if (client_filter->lib_name && (!client->lib_name || compareStringObjects(client->lib_name, client_filter->lib_name) != 0)) return 0;
+    if (client_filter->lib_ver && (!client->lib_ver || compareStringObjects(client->lib_ver, client_filter->lib_ver) != 0)) return 0;
+    if (client_filter->db_number != -1 && client->db->id != client_filter->db_number) return 0;
+    if (client->net_input_bytes < client_filter->tot_net_in) return 0;
+    if (client->net_output_bytes < client_filter->tot_net_out) return 0;
 
     /* If all conditions are satisfied, the client matches the filter. */
     return 1;
@@ -3955,6 +3955,8 @@ void clientHelpCommand(client *c) {
         "      Kill connections that include the specified flags.",
         "    * NAME <client-name>",
         "      Kill connections with the specified name.",
+        "    * IDLE <idle>",
+        "      Return clients with idle time greater than or equal to <idle> seconds.",
         "    * SUBSCRIBED-PATTERN <subscribed-pattern>",
         "      Kill connections subscribed to a matching subscribed pattern.",
         "    * SUBSCRIBED-CHANNEL <subscribed channel>",
@@ -3991,8 +3993,8 @@ void clientHelpCommand(client *c) {
         "      Return clients with the specified flags.",
         "    * NAME <client-name>",
         "      Return clients with the specified name.",
-        "    * MIN-IDLE <min-idle>",
-        "      Return clients with idle time greater than or equal to <min-idle> seconds.",
+        "    * IDLE <idle>",
+        "      Return clients with idle time greater than or equal to <idle> seconds.",
         "    * SUBSCRIBED-PATTERN <subscribed-pattern>",
         "      Return clients subscribed to a matching subscribed-pattern.",
         "    * SUBSCRIBED-CHANNEL <subscribed-channel>",

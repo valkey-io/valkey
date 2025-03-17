@@ -38,7 +38,11 @@
             ],
             [
                 "8.1.0",
-                "`ID` option accepts multiple IDs. Added filters NAME, MINIDLE, FLAGS, SUBSCRIBED-PATTERN, SUBSCRIBED-CHANNEL, SUBSCRIBED-SHARD-CHANNEL, LIB-NAME, LIB-VER, DB, TOTAL-NET-IN and TOTAL-NET-OUT"
+                "`ID` option accepts multiple IDs."
+            ],
+            [
+                "9.0.0",
+                "Added filters NAME, MINIDLE, FLAGS, SUBSCRIBED-PATTERN, SUBSCRIBED-CHANNEL, SUBSCRIBED-SHARD-CHANNEL, LIB-NAME, LIB-VER, DB, TOTAL-NET-IN and TOTAL-NET-OUT."
             ]
         ],
         "command_flags": [
@@ -171,8 +175,8 @@
                                 "since": "8.1.0"
                             },
                             {
-                                "token": "MINIDLE",
-                                "name": "minidle",
+                                "token": "IDLE",
+                                "name": "idle",
                                 "type": "integer",
                                 "optional": true,
                                 "since": "8.1.0"

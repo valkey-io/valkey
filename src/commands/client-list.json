@@ -38,7 +38,11 @@
             ],
             [
                 "8.1.0",
-                "Added filters USER, ADDR, LADDR, SKIPME, MAXAGE, NAME, MINIDLE, FLAGS, SUBSCRIBED-PATTERN, SUBSCRIBED-CHANNEL, SUBSCRIBED-SHARD-CHANNEL, LIB-NAME, LIB-VER, DB, TOTAL-NET-IN and TOTAL-NET-OUT"
+                "Added filters USER, ADDR, LADDR, SKIPME, and MAXAGE."
+            ],
+            [
+                "9.0.0",
+                "Added filters NAME, MINIDLE, FLAGS, SUBSCRIBED-PATTERN, SUBSCRIBED-CHANNEL, SUBSCRIBED-SHARD-CHANNEL, LIB-NAME, LIB-VER, DB, TOTAL-NET-IN and TOTAL-NET-OUT"
             ]
         ],
         "command_flags": [
@@ -153,8 +157,8 @@
                 "since": "8.1.0"
             },
             {
-                "token": "MINIDLE",
-                "name": "minidle",
+                "token": "IDLE",
+                "name": "idle",
                 "type": "integer",
                 "optional": true,
                 "since": "8.1.0"

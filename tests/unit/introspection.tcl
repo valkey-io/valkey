@@ -385,7 +385,7 @@ start_server {tags {"introspection"}} {
         after 1000 ;# Wait 1 second
 
         # Kill the client with name and idle time filters
-        r client kill name client1 minidle 1
+        r client kill name client1 idle 1
 
         # Assert client1 was killed
         set err1 [catch {$c1 ping} error_message1]

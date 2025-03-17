@@ -96,6 +96,7 @@ int postponeClientRead(client *c);
 char *getClientSockname(client *c);
 static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter);
 static int clientMatchesFilter(client *client, clientFilter *client_filter);
+static int validateClientFlagFilter(const char *flag_filter);
 static sds getAllFilteredClientsInfoString(clientFilter *client_filter, int hide_user_data);
 static int clientMatchesFlagFilter(client *c, const char *flag_filter);
 static int clientSubscribedToChannel(client *client, robj *channel);
@@ -3724,6 +3725,10 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "flags") && moreargs) {
             filter->flags = c->argv[index + 1]->ptr;
+            if (validateClientFlagFilter(filter->flags) == C_ERR) {
+                addReplyError(c, "unknown flags found in the filter");
+                return C_ERR;
+            }
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "name") && moreargs) {
             filter->name = c->argv[index + 1]->ptr;
@@ -3783,6 +3788,39 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
     }
     return C_OK;
 }
+
+static int validateClientFlagFilter(const char *flag_filter) {
+    for (int i = 0; flag_filter[i] != '\0'; i++) {
+        const char flag = flag_filter[i];
+        switch (flag) {
+            case 'O':
+            case 'S':
+            case 'M':
+            case 'P':
+            case 'x':
+            case 'b':
+            case 't':
+            case 'R':
+            case 'B':
+            case 'd':
+            case 'c':
+            case 'u':
+            case 'A':
+            case 'U':
+            case 'r':
+            case 'e':
+            case 'T':
+            case 'I':
+            case 'N':
+                /* Valid flag, do nothing. */
+                break;
+            default:
+                return C_ERR;
+        }
+    }
+    return C_OK;
+}
+
 
 static int clientMatchesFilter(client *client, clientFilter *client_filter) {
     /* Check each filter condition and return false if the client does not match. */

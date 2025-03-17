@@ -242,6 +242,10 @@ start_server {tags {"introspection"}} {
             assert {[string match *N* $flags]}
         }
 
+        # Test error when inputting an invalid flag/s
+        assert_error "ERR unknown flags found in the filter" {r client list name client1 flags Q}
+        assert_error "ERR unknown flags found in the filter" {r client list name client1 flags NZ}
+
         # Close clients
         $c1 close
         $c2 close

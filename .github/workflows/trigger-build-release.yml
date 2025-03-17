@@ -40,7 +40,7 @@ jobs:
       - name: Trigger build
         uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # Version 3
         with:
-          token: ${{ secrets.PAT_TOKEN }}
+          token: ${{ secrets.AUTOMATION_PAT }}
           repository: ${{ github.repository_owner }}/valkey-automated-bot
           event-type: build-release
           client-payload: >

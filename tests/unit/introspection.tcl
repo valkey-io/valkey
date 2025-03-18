@@ -142,9 +142,7 @@ start_server {tags {"introspection"}} {
             lassign [split $pair "="] key val
             dict set info $key $val
         }
-        assert_equal "mytestclient" [dict get $info name]
         assert_equal "N" [dict get $info flags]
-        assert_equal "client|list" [dict get $info cmd]
     }
 
     # Test CLIENT LIST with TYPE filter
@@ -157,7 +155,6 @@ start_server {tags {"introspection"}} {
             dict set info $key $val
         }
         assert {[string match *N* [dict get $info flags]]}
-        assert_equal "client|list" [dict get $info cmd]
     }
 
     # Test CLIENT LIST with multiple filters

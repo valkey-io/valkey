@@ -2824,9 +2824,7 @@ void initServer(void) {
         exit(1);
     }
 
-    if (server.cluster_enabled && !server.multidb_cluster) {
-        server.dbnum = 1;
-    }
+    server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
     server.db = zmalloc(sizeof(serverDb) * server.dbnum);
 
     /* Create the databases, and initialize other internal state. */

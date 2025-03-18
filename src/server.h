@@ -1783,8 +1783,9 @@ struct valkeyServer {
     unsigned long active_defrag_max_scan_fields; /* maximum number of fields of set/hash/zset/list to process from
                                                     within the main dict scan */
     size_t client_max_querybuf_len;              /* Limit for client query buffer length */
-    int dbnum;                                   /* Total number of configured DBs */
-    int multidb_cluster;                         /* Multi-database enabled in cluster mode */
+    int config_databases;                        /* Total number of configured DBs in standalone */
+    int config_databases_cluster;                /* Total number of configured DBs in cluster mode */
+    int dbnum;                                   /* Total number of initialized DBs */
     int supervised;                              /* 1 if supervised, 0 otherwise. */
     int supervised_mode;                         /* See SUPERVISED_* */
     int daemonize;                               /* True if running as a daemon */

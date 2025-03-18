@@ -23,7 +23,7 @@ Performance/Efficiency Improvements - Core
 Cluster modifications
 ====================
 * Add cluster-manual-failover-timeout configuration to control the timeout for manual failover (#1690)
-* Improve error massage reporting when invalid port is provided for cluster meet command. (#1686)
+* Improve error message reporting when invalid port is provided for cluster meet command. (#1686)
 * broadcast epoch ASAP when configEpoch changed (#1813)
 
 Module Improvements
@@ -41,6 +41,7 @@ Bug Fixes
 * Fix bug where no tracking-redir-broken is issued when the redirect client is in the process of getting closed. (#1823)
 * Fix replica sometimes disconnecting when replication is using TLS. (#1737)
 * Fix rax crash when using keys larger than 512MB (#1722)
+* Fix RANDOMKEY command leading to infinite loop during when all CLIENT are PAUSED and all keys are with expiry (#1850)
 
 Build and Packaging changes
 =================================

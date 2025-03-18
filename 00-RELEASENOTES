@@ -35,7 +35,6 @@ Behavior Changes
 * Enable TCP_NODELAY by default in incoming and outgoing connections (#1763)
 * Move TCP/TLS specific options from generic client to connection type (#1706)
 * [valkey-cli] Ensure commands output ends with a newline when executed inside a multi/exec (#1782)
-* 
 
 Bug Fixes
 =========

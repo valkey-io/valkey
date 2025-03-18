@@ -3734,19 +3734,24 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             filter->name = c->argv[index + 1]->ptr;
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "subscribed-pattern") && moreargs) {
-            filter->subscribed_pattern = createObject(OBJ_STRING, sdsnew(c->argv[index + 1]->ptr));
+            filter->subscribed_pattern = c->argv[index + 1];
+            incrRefCount(filter->subscribed_pattern);
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "subscribed-channel") && moreargs) {
-            filter->subscribed_channel = createObject(OBJ_STRING, sdsnew(c->argv[index + 1]->ptr));
+            filter->subscribed_channel = c->argv[index + 1];
+            incrRefCount(filter->subscribed_channel);
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "subscribed-shard-channel") && moreargs) {
-            filter->subscribed_shard_channel = createObject(OBJ_STRING, sdsnew(c->argv[index + 1]->ptr));
+            filter->subscribed_shard_channel = c->argv[index + 1];
+            incrRefCount(filter->subscribed_shard_channel);
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "lib-name") && moreargs) {
-            filter->lib_name = createObject(OBJ_STRING, sdsnew(c->argv[index + 1]->ptr));
+            filter->lib_name = c->argv[index + 1];
+            incrRefCount(filter->lib_name);
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "lib-ver") && moreargs) {
-            filter->lib_ver = createObject(OBJ_STRING, sdsnew(c->argv[index + 1]->ptr));
+            filter->lib_ver = c->argv[index + 1];
+            incrRefCount(filter->lib_ver);
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "db") && moreargs) {
             int tmp;

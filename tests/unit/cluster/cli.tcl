@@ -37,7 +37,7 @@ start_multiple_servers 3 [list overrides $base_conf] {
 }
 
 # start three servers
-set base_conf [list cluster-enabled yes cluster-node-timeout 1000]
+set base_conf [list cluster-enabled yes cluster-node-timeout 1000 cluster-databases 16]
 start_multiple_servers 3 [list overrides $base_conf] {
 
     set node1 [srv 0 client]

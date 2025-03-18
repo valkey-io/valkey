@@ -8692,14 +8692,20 @@ static int getDatabases(redisContext *ctx) {
     redisReply *reply;
     int dbnum;
 
-    reply = redisCommand(ctx, "CONFIG GET databases");
+    char *standalone = "CONFIG GET databases";
+    char *cluster = "CONFIG GET cluster-databases";
+
+    reply = redisCommand(ctx, config.cluster_mode ? cluster : standalone);
 
     if (reply == NULL) {
         fprintf(stderr, "\nI/O error\n");
         exit(1);
-    } else if (reply->type == REDIS_REPLY_ERROR) {
-        dbnum = 16;
-        fprintf(stderr, "CONFIG GET databases fails: %s, use default value 16 instead\n", reply->str);
+    }
+
+    if (reply->type == REDIS_REPLY_ERROR) {
+        dbnum = config.cluster_mode ? 1 : 16;
+        fprintf(stderr, "%s fails: %s, use default value %d instead\n",
+                config.cluster_mode ? cluster : standalone, reply->str, dbnum);
     } else {
         assert(reply->type == (config.current_resp3 ? REDIS_REPLY_MAP : REDIS_REPLY_ARRAY));
         assert(reply->elements == 2);

@@ -34,14 +34,20 @@ Behavior Changes
 ================
 * Enable TCP_NODELAY by default in incoming and outgoing connections (#1763)
 * Move TCP/TLS specific options from generic client to connection type (#1706)
+* [valkey-cli] Ensure commands output ends with a newline when executed inside a multi/exec (#1782)
+* 
 
 Bug Fixes
 =========
 * Fix ACL LOAD crash on a connected replica node (#1842)
 * Fix bug where no tracking-redir-broken is issued when the redirect client is in the process of getting closed. (#1823)
 * Fix replica sometimes disconnecting when replication is using TLS. (#1737)
+* Fix file descriptor leak when aborting dual channel replication due to error (#1721)
 * Fix rax crash when using keys larger than 512MB (#1722)
 * Fix RANDOMKEY command leading to infinite loop during when all CLIENT are PAUSED and all keys are with expiry (#1850)
+* Removing unicode optimization in Lua cjson library to avoid OOM when very large strings are used. (#1785)
+* Fix update large-reply in COMMANDLOG when reply is deferred (#1760)
+
 
 Build and Packaging changes
 =================================

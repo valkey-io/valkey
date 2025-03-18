@@ -1108,13 +1108,6 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
                     getKeysFreeResult(&result);
                     return NULL;
                 }
-
-                if (n == NULL) {
-                    getKeysFreeResult(&result);
-                    if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
-                    return NULL;
-                }
-
             } else {
                 /* If it is not the first key/channel, make sure it is exactly
                  * the same key/channel as the first we saw. */

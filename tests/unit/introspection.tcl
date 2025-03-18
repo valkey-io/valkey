@@ -181,63 +181,6 @@ start_server {tags {"introspection"}} {
         assert_equal "client|list" [dict get $info cmd]
     }
 
-    test {CLIENT LIST with PATTERN filter} {
-        # Create a client and subscribe to a channel
-        set c1 [valkey_client]
-        $c1 client setname mytestclient
-        $c1 psubscribe h*llo
-
-        # Fetch the client list filtered by channel
-        set cl [split [r client list subscribed-pattern h*llo] "\r\n"]
-
-        # Assert the client is subscribed to the channel
-        foreach line $cl {
-            regexp {name=([^ ]+)} $line _ actual_name
-            assert_equal "mytestclient" $actual_name
-        }
-
-        # Close client
-        $c1 close
-    }
-
-    test {CLIENT LIST with CHANNEL filter} {
-        # Create a client and subscribe to a channel
-        set c1 [valkey_client]
-        $c1 client setname mytestclient
-        $c1 subscribe mychannel
-
-        # Fetch the client list filtered by channel
-        set cl [split [r client list subscribed-channel mychannel] "\r\n"]
-
-        # Assert the client is subscribed to the channel
-        foreach line $cl {
-            regexp {name=([^ ]+)} $line _ actual_name
-            assert_equal "mytestclient" $actual_name
-        }
-
-        # Close client
-        $c1 close
-    }
-
-    test {CLIENT LIST with SHARDCHANNEL filter} {
-        # Create a client and subscribe to a channel
-        set c1 [valkey_client]
-        $c1 client setname mytestclient
-        $c1 ssubscribe myshardchannel
-
-        # Fetch the client list filtered by channel
-        set cl [split [r client list subscribed-shard-channel myshardchannel] "\r\n"]
-
-        # Assert the client is subscribed to the channel
-        foreach line $cl {
-            regexp {name=([^ ]+)} $line _ actual_name
-            assert_equal "mytestclient" $actual_name
-        }
-
-        # Close client
-        $c1 close
-    }
-
     test {CLIENT LIST with multiple filters} {
         # Create multiple clients with different names and flags
         set c1 [valkey_client]
@@ -341,60 +284,6 @@ start_server {tags {"introspection"}} {
 
         # Cleanup
         catch {$c2 close}
-    }
-
-    test {CLIENT KILL with PATTERN filter} {
-        # Create a client and subscribe to a channel
-        set c1 [valkey_client]
-        $c1 client setname mytestclient
-        $c1 psubscribe h*llo
-
-        # Kill the client using the exact name pattern
-        r client kill subscribed-pattern h*llo
-
-        # Assert the client was killed
-        set err [catch {$c1 ping} error_message]
-        assert {$err == 1}
-        assert {[string match "*I/O error*" $error_message]}
-
-        # Cleanup
-        catch {$c1 close}
-    }
-
-    test {CLIENT KILL with CHANNEL filter} {
-        # Create a client and subscribe to a channel
-        set c1 [valkey_client]
-        $c1 client setname mytestclient
-        $c1 subscribe mychannel
-
-        # Kill the client using the channel filter
-        r client kill subscribed-channel mychannel
-
-        # Assert the client was killed
-        set err [catch {$c1 ping} error_message]
-        assert {$err == 1}
-        assert {[string match "*I/O error*" $error_message]}
-
-        # Cleanup
-        catch {$c1 close}
-    }
-
-    test {CLIENT KILL with SHARDCHANNEL filter} {
-        # Create a client and subscribe to a shard channel
-        set c1 [valkey_client]
-        $c1 client setname mytestclient
-        $c1 ssubscribe myshardchannel
-
-        # Kill the client using the shard channel filter
-        r client kill subscribed-shard-channel myshardchannel
-
-        # Assert the client was killed
-        set err [catch {$c1 ping} error_message]
-        assert {$err == 1}
-        assert {[string match "*I/O error*" $error_message]}
-
-        # Cleanup
-        catch {$c1 close}
     }
 
     test {CLIENT KILL with multiple filters including idle time} {

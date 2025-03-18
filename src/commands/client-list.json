@@ -42,7 +42,7 @@
             ],
             [
                 "9.0.0",
-                "Added filters NAME, MINIDLE, FLAGS, SUBSCRIBED-PATTERN, SUBSCRIBED-CHANNEL, SUBSCRIBED-SHARD-CHANNEL, LIB-NAME, LIB-VER, DB, TOTAL-NET-IN and TOTAL-NET-OUT"
+                "Added filters NAME, MINIDLE, FLAGS, LIB-NAME, LIB-VER, DB, TOTAL-NET-IN and TOTAL-NET-OUT"
             ]
         ],
         "command_flags": [
@@ -166,27 +166,6 @@
             {
                 "token": "FLAGS",
                 "name": "flags",
-                "type": "string",
-                "optional": true,
-                "since": "8.1.0"
-            },
-            {
-                "token": "SUBSCRIBED-PATTERN",
-                "name": "subscribed-pattern",
-                "type": "string",
-                "optional": true,
-                "since": "8.1.0"
-            },
-            {
-                "token": "SUBSCRIBED-CHANNEL",
-                "name": "subscribed-channel",
-                "type": "string",
-                "optional": true,
-                "since": "8.1.0"
-            },
-            {
-                "token": "SUBSCRIBED-SHARD-CHANNEL",
-                "name": "subscribed-shard-channel",
                 "type": "string",
                 "optional": true,
                 "since": "8.1.0"

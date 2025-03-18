@@ -72,12 +72,6 @@ typedef struct {
     long long idle;
     /* Client flags for filtering. If NULL, no filtering is applied. */
     char *flags;
-    /* Client subscribed pattern for filtering. If NULL, no filtering is applied. */
-    robj *subscribed_pattern;
-    /* Client subscribed channel for filtering. If NULL, no filtering is applied. */
-    robj *subscribed_channel;
-    /* Client subscribed shard channel for filtering. If NULL, no filtering is applied. */
-    robj *subscribed_shard_channel;
     /* Library name to filter. If NULL, no library name filtering is applied. */
     robj *lib_name;
     /* Library version to filter. If NULL, no library version filtering is applied. */
@@ -99,9 +93,6 @@ static int clientMatchesFilter(client *client, clientFilter *client_filter);
 static int validateClientFlagFilter(const char *flag_filter);
 static sds getAllFilteredClientsInfoString(clientFilter *client_filter, int hide_user_data);
 static int clientMatchesFlagFilter(client *c, const char *flag_filter);
-static int clientSubscribedToChannel(client *client, robj *channel);
-static int clientSubscribedToShardChannel(client *client, robj *channel);
-static int clientSubscribedToPattern(client *client, robj *pattern);
 static void freeClientFilter(clientFilter *filter);
 
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
@@ -3733,18 +3724,6 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
         } else if (!strcasecmp(c->argv[index]->ptr, "name") && moreargs) {
             filter->name = c->argv[index + 1]->ptr;
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "subscribed-pattern") && moreargs) {
-            filter->subscribed_pattern = c->argv[index + 1];
-            incrRefCount(filter->subscribed_pattern);
-            index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "subscribed-channel") && moreargs) {
-            filter->subscribed_channel = c->argv[index + 1];
-            incrRefCount(filter->subscribed_channel);
-            index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "subscribed-shard-channel") && moreargs) {
-            filter->subscribed_shard_channel = c->argv[index + 1];
-            incrRefCount(filter->subscribed_shard_channel);
-            index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "lib-name") && moreargs) {
             filter->lib_name = c->argv[index + 1];
             incrRefCount(filter->lib_name);
@@ -3843,9 +3822,6 @@ static int clientMatchesFilter(client *client, clientFilter *client_filter) {
             return 0;
         }
     }
-    if (client_filter->subscribed_pattern && !clientSubscribedToPattern(client, client_filter->subscribed_pattern)) return 0;
-    if (client_filter->subscribed_channel && !clientSubscribedToChannel(client, client_filter->subscribed_channel)) return 0;
-    if (client_filter->subscribed_shard_channel && !clientSubscribedToShardChannel(client, client_filter->subscribed_shard_channel)) return 0;
     if (client_filter->lib_name && (!client->lib_name || compareStringObjects(client->lib_name, client_filter->lib_name) != 0)) return 0;
     if (client_filter->lib_ver && (!client->lib_ver || compareStringObjects(client->lib_ver, client_filter->lib_ver) != 0)) return 0;
     if (client_filter->db_number != -1 && client->db->id != client_filter->db_number) return 0;
@@ -3936,27 +3912,6 @@ static int clientMatchesFlagFilter(client *c, const char *flag_filter) {
     }
     /* If the loop completes, the client matches the flag filter */
     return 1;
-}
-
-static int clientSubscribedToChannel(client *client, robj *channel) {
-    if (client == NULL || client->pubsub_data == NULL || client->pubsub_data->pubsub_channels == NULL) {
-        return 0;
-    }
-    return dictFind(client->pubsub_data->pubsub_channels, channel) != NULL;
-}
-
-static int clientSubscribedToShardChannel(client *client, robj *channel) {
-    if (client == NULL || client->pubsub_data == NULL || client->pubsub_data->pubsubshard_channels == NULL) {
-        return 0;
-    }
-    return dictFind(client->pubsub_data->pubsubshard_channels, channel) != NULL;
-}
-
-static int clientSubscribedToPattern(client *client, robj *pattern) {
-    if (client == NULL || client->pubsub_data == NULL || client->pubsub_data->pubsub_patterns == NULL) {
-        return 0;
-    }
-    return dictFind(client->pubsub_data->pubsub_patterns, pattern) != NULL;
 }
 
 
@@ -4222,18 +4177,6 @@ client_kill_done:
 
 static void freeClientFilter(clientFilter *filter) {
     zfree(filter->ids);
-    if (filter->subscribed_pattern) {
-        decrRefCount(filter->subscribed_pattern);
-        filter->subscribed_pattern = NULL;
-    }
-    if (filter->subscribed_shard_channel) {
-        decrRefCount(filter->subscribed_shard_channel);
-        filter->subscribed_shard_channel = NULL;
-    }
-    if (filter->subscribed_channel) {
-        decrRefCount(filter->subscribed_channel);
-        filter->subscribed_channel = NULL;
-    }
     if (filter->lib_name) {
         decrRefCount(filter->lib_name);
         filter->lib_name = NULL;

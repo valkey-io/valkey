@@ -417,11 +417,11 @@ start_server {tags {"pause network"}} {
         r flushall
 
         # then set a key with expire time
-        r set key value ex 3
+        r set key value px 3
 
         # set pause-write model and wait key expired
         r client pause 10000 write
-        after 5000
+        after 5
 
         wait_for_condition 50 100 {
             [r randomkey] == "key"
@@ -429,7 +429,7 @@ start_server {tags {"pause network"}} {
             fail "execute randomkey failed, caused by the infinite loop"
         }
 
-        after 6000
+        r client unpause
         assert_equal [r randomkey] {}
 
     }

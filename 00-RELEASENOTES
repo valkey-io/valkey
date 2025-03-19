@@ -139,7 +139,7 @@ Cluster improvements
 * Make replica `CLUSTER RESET` flush async based on `lazyfree-lazy-user-flush` (#1190)
 * Trigger the election as soon as possible when doing a forced manual failover (#1067)
 * Make manual failover reset the on-going election to promote failover (#1274)
-* Brocast a PONG to all node in cluster when role changed (#1295)
+* Broadcast a PONG to all node in cluster when role changed (#1295)
 * Manual failover vote is not limited by two times the node timeout (#1305)
 * Automatic failover vote is not limited by two times the node timeout (#1356)
 

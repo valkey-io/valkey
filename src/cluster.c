@@ -1067,6 +1067,19 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
             currentDb = server.db + (int)id;
         }
 
+        /* Block MOVE command, as the destination key is not expected to exist, and we don't know if it was migrated */
+        if ((migrating_slot || importing_slot) && mcmd->proc == moveCommand) {
+            if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
+            getKeysFreeResult(&result);
+            return NULL;
+        }
+
+        /* TODO: COPY command should only be blocked, or carefully processed if it's cross db */
+        if ((migrating_slot || importing_slot) && mcmd->proc == copyCommand) {
+            if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
+            getKeysFreeResult(&result);
+            return NULL;
+        }
 
         for (j = 0; j < numkeys; j++) {
             robj *thiskey = margv[keyindex[j].pos];
@@ -1102,12 +1115,6 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
                     }
                 }
 
-                /* Block COPY and MOVE during slot migration to prevent multi-DB inconsistencies. */
-                if ((migrating_slot || importing_slot) && (mcmd->proc == copyCommand || mcmd->proc == moveCommand)) {
-                    if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
-                    getKeysFreeResult(&result);
-                    return NULL;
-                }
             } else {
                 /* If it is not the first key/channel, make sure it is exactly
                  * the same key/channel as the first we saw. */

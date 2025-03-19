@@ -1067,20 +1067,6 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
             currentDb = server.db + (int)id;
         }
 
-        /* Block MOVE command, as the destination key is not expected to exist, and we don't know if it was migrated */
-        if ((migrating_slot || importing_slot) && mcmd->proc == moveCommand) {
-            if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
-            getKeysFreeResult(&result);
-            return NULL;
-        }
-
-        /* TODO: COPY command should only be blocked, or carefully processed if it's cross db */
-        if ((migrating_slot || importing_slot) && mcmd->proc == copyCommand) {
-            if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
-            getKeysFreeResult(&result);
-            return NULL;
-        }
-
         for (j = 0; j < numkeys; j++) {
             robj *thiskey = margv[keyindex[j].pos];
             int thisslot = keyHashSlot((char *)thiskey->ptr, sdslen(thiskey->ptr));
@@ -1130,6 +1116,28 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
                     multiple_keys = 1;
                 }
             }
+
+            /* Block MOVE command as the destination key is not expected to exist, and we don't know if it was migrated */
+            if ((migrating_slot || importing_slot) && mcmd->proc == moveCommand) {
+                if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
+                getKeysFreeResult(&result);
+                return NULL;
+            }
+
+            /* Block the COPY command if it's cross-DB to keep the code simple.
+             * Allowing cross-DB COPY is possible, but it would require looking up the second key in the target DB.
+             * The command should only be allowed if the key exists. We may revisit this decision in the future. */
+            if ((migrating_slot || importing_slot) && mcmd->proc == copyCommand) {
+                if (margc >= 4 && !strcasecmp(margv[3]->ptr, "db")) {
+                    long long value;
+                    if (getLongLongFromObject(margv[4], &value) != C_OK || value != currentDb->id) {
+                        if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
+                        getKeysFreeResult(&result);
+                        return NULL;
+                    }
+                }
+            }
+
 
             /* Migrating / Importing slot? Count keys we don't have.
              * If it is pubsubshard command, it isn't required to check

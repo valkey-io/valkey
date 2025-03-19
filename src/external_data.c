@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <strings.h>
 #include "module.h"
+#include <stdatomic.h>
 
 const char *extDataOffErrStr = "External data commands are unavailable with ext-data-mode off";
 
@@ -24,13 +25,13 @@ struct externalDataCtx {
 typedef struct externalStorage {
     sds name;                    /* Name of the storage */
     ValkeyModule *module;        /* the module that implements the external storage */
-    int used_count;
+    atomic_int used_count;
 } externalStorage;
 
 typedef struct externalFilter {
     sds name;                    /* Name of the filter */
     ValkeyModule *module;        /* the module that implements the external filter */
-    int used_count;
+    atomic_int used_count;
 } externalFilter;
 
 typedef struct externalDbData {
@@ -136,7 +137,7 @@ static void moduleStatsDispose(void *obj) {
  * - `storage_name`: name of the storage to remove
  */
  int externalStorageUnregister(const char *storage_name) {
-    dictEntry *entry = dictUnlink(curr_external_data_ctx->storages, storage_name);
+    dictEntry *entry = dictFind(curr_external_data_ctx->storages, storage_name);
     if (entry == NULL) {
         serverLog(LL_WARNING, "There's no storage registered with name %s", storage_name);
         return C_ERR;
@@ -144,14 +145,14 @@ static void moduleStatsDispose(void *obj) {
 
     externalStorage *e = dictGetVal(entry);
     if (e->used_count > 0) {
-        serverLog(LL_WARNING, "It's impossible to remove used storage %s, drop it from all dbs first", storage_name);
+        serverLog(LL_WARNING, "It's impossible to remove used storage %s, drop it from all dbs first: %d", storage_name, e->used_count);
         return C_ERR;
     }
 
     sdsfree(e->name);
     zfree(e);
 
-    dictFreeUnlinkedEntry(curr_external_data_ctx->storages, entry);
+    dictDelete(curr_external_data_ctx->storages, storage_name);
 
     return C_OK;
 }
@@ -190,7 +191,7 @@ static void moduleStatsDispose(void *obj) {
  * - `filter_name`: name of the filter to remove
  */
  int externalFilterUnregister(const char *filter_name) {
-    dictEntry *entry = dictUnlink(curr_external_data_ctx->filters, filter_name);
+    dictEntry *entry = dictFind(curr_external_data_ctx->filters, filter_name);
     if (entry == NULL) {
         serverLog(LL_WARNING, "There's no filter registered with name %s", filter_name);
         return C_ERR;
@@ -205,13 +206,12 @@ static void moduleStatsDispose(void *obj) {
     sdsfree(e->name);
     zfree(e);
 
-    dictFreeUnlinkedEntry(curr_external_data_ctx->filters, entry);
+    dictDelete(curr_external_data_ctx->filters, filter_name);
 
     return C_OK;
 }
 
 int qsortCompareNames(const void *n1, const void *n2) {
-    // return *(char **)n1 > (*(char **)n2);
     return strcmp(*(char **)n1, (*(char **)n2));
 }
 
@@ -336,6 +336,19 @@ void externalDataLoadedCommand(client *c) {
     return;
 }
 
+int checkDbNum(client *c, const sds db_name) {
+    int db_num;
+    if (sscanf(db_name,"db%d",&db_num) != 1) {
+        addReplyErrorFormat(c, "failed to parse db number from %s, expect db0, db10, etc.", db_name);
+        return -1;
+    }
+    if (db_num >= server.dbnum) {
+        addReplyErrorFormat(c, "db number %d exceeds used on server 0-%d", db_num, server.dbnum-1);
+        return -1;
+    }
+    return db_num;
+}
+
 /*
  * EXTERNAL_DATA INIT db STORAGE s FILTER f
  *
@@ -351,13 +364,7 @@ void externalDataLoadedCommand(client *c) {
 
     robj *o = c->argv[2];
     sds db_name = objectGetVal(o);
-    int db_num;
-    if (sscanf(db_name,"db%d",&db_num) != 1) {
-        addReplyErrorFormat(c, "failed to parse db number from %s, expect db0, db10, etc.", db_name);
-        return;
-    }
-    if (db_num >= server.dbnum) {
-        addReplyErrorFormat(c, "db number %d exceeds used on server 0-%d", db_num, server.dbnum-1);
+    if (checkDbNum(c, db_name) < 0) {
         return;
     }
 
@@ -384,13 +391,14 @@ void externalDataLoadedCommand(client *c) {
         addReplyErrorFormat(c, "storage module %s is not loaded", storage_name);
         return;
     }
-    storage->used_count++;
 
     externalFilter *filter = dictFetchValue(curr_external_data_ctx->filters, filter_name);
     if (!filter) {
         addReplyErrorFormat(c, "filter module %s is not loaded", filter_name);
         return;
     }
+
+    storage->used_count++;
     filter->used_count++;
 
     sds db_name_sds = sdsnew(db_name);
@@ -404,6 +412,54 @@ void externalDataLoadedCommand(client *c) {
     };
 
     dictAdd(curr_external_data_ctx->dbdata, db_name_sds, e);
+
+    addReply(c, shared.ok);
+    return;
+}
+
+void externalDataDropCommand(client *c) {
+    if (!isExtDataOn()) {
+        addReplyError(c, extDataOffErrStr);
+        return;
+    }
+    assert(curr_external_data_ctx != NULL);
+
+    robj *o = c->argv[2];
+    sds db_name = objectGetVal(o);
+    if (checkDbNum(c, db_name) < 0) {
+        return;
+    }
+
+    dictEntry *dbEntry = dictFind(curr_external_data_ctx->dbdata, db_name);
+    if (!dbEntry) {
+        addReplyErrorFormat(c, "%s is not initialized", db_name);
+        return;
+    }
+
+    if (c->argc <= 3 || strcasecmp(objectGetVal(c->argv[3]), "force")) {
+        addReplyErrorFormat(c, "Leads to persistent storage data loss for %s, use FORCE if sure", db_name);
+        return;
+    }
+
+    externalDbData *dbData = dictGetVal(dbEntry);
+
+    dictEntry *storageEntry = dictFind(curr_external_data_ctx->storages, dbData->storage_name);
+    if (!storageEntry) {
+        addReplyErrorFormat(c, "storage %s is not initialized somehow", dbData->storage_name);
+        return;
+    }
+    dictEntry *filterEntry = dictFind(curr_external_data_ctx->filters, dbData->filter_name);
+    if (!filterEntry) {
+        addReplyErrorFormat(c, "filter %s is not initialized somehow", dbData->filter_name);
+        return;
+    }
+
+    externalStorage *storage = dictGetVal(storageEntry);
+    storage->used_count--;
+    externalFilter *filter = dictGetVal(filterEntry);
+    filter->used_count--;
+
+    dictDelete(curr_external_data_ctx->dbdata, db_name);
 
     addReply(c, shared.ok);
     return;

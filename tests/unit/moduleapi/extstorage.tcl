@@ -25,6 +25,10 @@ start_server [list overrides [list "ext-data-mode" test] tags [list "external:sk
         assert_equal [list ] [r external_data loaded storage]
         assert_equal [list ] [r external_data loaded filter]
     }
+
+    test {Dropping unloaded module fails} {
+        assert_error {ERR db0 is not initialized} {r external_data drop db0}
+    }
 }
 
 start_server [list overrides [list "ext-data-mode" test] tags [list "external:skip"]] {
@@ -134,5 +138,26 @@ start_server [list overrides [list "ext-data-mode" test] tags [list "external:sk
         # unload loaded and inited module fails
         assert_error {ERR Error unloading module: operation not possible.} {r module unload hellostorage1}
         assert_error {ERR Error unloading module: operation not possible.} {r module unload hellofilter1}
+
+        # dropping succeeds
+        assert_error {ERR Leads to persistent storage data loss for db0, use FORCE if sure} {r external_data drop db0}
+        assert_equal {OK} [r external_data drop db0 FORCE]
+        assert_equal [list db1:hellofilter2] [r external_data stats filter]
+        assert_equal [list db1:hellostorage2] [r external_data stats storage]
+        assert_equal {OK} [r module unload hellostorage1]
+        assert_equal {OK} [r module unload hellofilter1]
+
+        # init again succeeds
+        assert_equal {OK} [r external_data INIT db0 STORAGE hellostorage2 FILTER hellofilter2]
+        assert_equal [list db0:hellofilter2 db1:hellofilter2] [r external_data stats filter]
+        assert_equal [list db0:hellostorage2 db1:hellostorage2] [r external_data stats storage]
+
+        # cleanup ok
+        assert_equal {OK} [r external_data drop db0 FORCE]
+        assert_equal {OK} [r external_data drop db1 FORCE]
+        assert_equal [list ] [r external_data stats filter]
+        assert_equal [list ] [r external_data stats storage]
+        assert_equal {OK} [r module unload hellostorage2]
+        assert_equal {OK} [r module unload hellofilter2]
     }
 }

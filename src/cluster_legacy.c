@@ -6221,7 +6221,7 @@ int checkSlotAssignmentsOrReply(client *c, unsigned char *slots, int del, int st
             return C_ERR;
         }
         if (slots[slot]++ == 1) {
-            addReplyErrorFormat(c, "Slot %d specified multiple times", (int)slot);
+            addReplyErrorFormat(c, "Slot %d specified multiple times", slot);
             return C_ERR;
         }
     }

@@ -72,7 +72,7 @@ int clusterNodeAddReplica(clusterNode *primary, clusterNode *replica);
 int clusterAddSlot(clusterNode *n, int slot);
 int clusterDelSlot(int slot);
 int clusterDelNodeSlots(clusterNode *node);
-int clusterNodeSetSlotBit(clusterNode *n, int slot);
+void clusterNodeSetSlotBit(clusterNode *n, int slot);
 static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
 void clusterHandleReplicaFailover(void);
 void clusterHandleReplicaMigration(int max_replicas);
@@ -5606,8 +5606,8 @@ int clusterPrimariesHaveReplicas(void) {
     return replicas != 0;
 }
 
-/* Set the slot bit and return the old value. */
-int clusterNodeSetSlotBit(clusterNode *n, int slot) {
+/* Set the slot bit */
+void clusterNodeSetSlotBit(clusterNode *n, int slot) {
     int old = bitmapTestBit(n->slots, slot);
     if (!old) {
         bitmapSetBit(n->slots, slot);
@@ -5627,7 +5627,6 @@ int clusterNodeSetSlotBit(clusterNode *n, int slot) {
          * See https://github.com/redis/redis/issues/3043 for more info. */
         if (n->numslots == 1 && clusterPrimariesHaveReplicas()) n->flags |= CLUSTER_NODE_MIGRATE_TO;
     }
-    return old;
 }
 
 /* Clear the slot bit and return the old value. */

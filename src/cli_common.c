@@ -52,7 +52,7 @@
 char *serverGitSHA1(void);
 char *serverGitDirty(void);
 
-/* Wrapper around redisSecureConnection to avoid hiredis_ssl dependencies if
+/* Wrapper around valkeyInitiateTLS to avoid libvalkey_tls dependencies if
  * not building with TLS support.
  */
 int cliSecureConnection(valkeyContext *c, cliSSLconfig config, const char **err) {
@@ -127,9 +127,9 @@ error:
 #endif
 }
 
-/* Wrapper around hiredis to allow arbitrary reads and writes.
+/* Wrapper around libvalkey to allow arbitrary reads and writes.
  *
- * We piggybacks on top of hiredis to achieve transparent TLS support,
+ * We piggybacks on top of libvalkey to achieve transparent TLS support,
  * and use its internal buffers so it can co-exist with commands
  * previously/later issued on the connection.
  *
@@ -138,7 +138,7 @@ error:
  */
 
 /* Write a raw buffer through a valkeyContext. If we already have something
- * in the buffer (leftovers from hiredis operations) it will be written
+ * in the buffer (leftovers from libvalkey operations) it will be written
  * as well.
  */
 ssize_t cliWriteConn(valkeyContext *c, const char *buf, size_t buf_len) {

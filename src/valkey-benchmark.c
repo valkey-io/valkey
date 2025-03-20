@@ -681,7 +681,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
         }
     }
     c->thread_id = thread_id;
-    /* Suppress hiredis cleanup of unused buffers for max speed. */
+    /* Suppress libvalkey cleanup of unused buffers for max speed. */
     c->context->reader->maxbuf = 0;
 
     /* Build the request buffer:

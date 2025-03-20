@@ -140,12 +140,12 @@ static mstime_t sentinel_default_failover_timeout = 60 * 3 * 1000;
 
 /* The link to a sentinelValkeyInstance. When we have the same set of Sentinels
  * monitoring many primaries, we have different instances representing the
- * same Sentinels, one per primary, and we need to share the hiredis connections
+ * same Sentinels, one per primary, and we need to share the libvalkey connections
  * among them. Otherwise if 5 Sentinels are monitoring 100 primaries we create
  * 500 outgoing connections instead of 5.
  *
  * So this structure represents a reference counted link in terms of the two
- * hiredis connections for commands and Pub/Sub, and the fields needed for
+ * libvalkey connections for commands and Pub/Sub, and the fields needed for
  * failure detection, since the ping/pong time are now local to the link: if
  * the link is available, the instance is available. This way we don't just
  * have 5 connections instead of 500, we also send 5 pings instead of 500.
@@ -156,8 +156,8 @@ typedef struct instanceLink {
     int refcount;              /* Number of sentinelValkeyInstance owners. */
     int disconnected;          /* Non-zero if we need to reconnect cc or pc. */
     int pending_commands;      /* Number of commands sent waiting for a reply. */
-    valkeyAsyncContext *cc;    /* Hiredis context for commands. */
-    valkeyAsyncContext *pc;    /* Hiredis context for Pub / Sub. */
+    valkeyAsyncContext *cc;    /* Libvalkey context for commands. */
+    valkeyAsyncContext *pc;    /* Libvalkey context for Pub / Sub. */
     mstime_t cc_conn_time;     /* cc connection time. */
     mstime_t pc_conn_time;     /* pc connection time. */
     mstime_t pc_last_activity; /* Last time we received any message. */
@@ -290,8 +290,8 @@ typedef struct sentinelScriptJob {
     pid_t pid;           /* Script execution pid. */
 } sentinelScriptJob;
 
-/* ======================= hiredis ae.c adapters =============================
- * Note: this implementation is taken from hiredis/adapters/ae.h, however
+/* ======================= libvalkey ae.c adapters =============================
+ * Note: this implementation is taken from valkey/adapters/ae.h, however
  * we have our modified copy for Sentinel in order to use our allocator
  * and to have full control over how the adapter works. */
 
@@ -1015,7 +1015,7 @@ instanceLink *createInstanceLink(void) {
     return link;
 }
 
-/* Disconnect a hiredis connection in the context of an instance link. */
+/* Disconnect a libvalkey connection in the context of an instance link. */
 void instanceLinkCloseConnection(instanceLink *link, valkeyAsyncContext *c) {
     if (c == NULL) return;
 
@@ -1034,7 +1034,7 @@ void instanceLinkCloseConnection(instanceLink *link, valkeyAsyncContext *c) {
  * to the object.
  *
  * If we are not going to free the link and ri is not NULL, we rebind all the
- * pending requests in link->cc (hiredis connection for commands) to a
+ * pending requests in link->cc (libvalkey connection for commands) to a
  * callback that will just ignore them. This is useful to avoid processing
  * replies for an instance that no longer exists. */
 instanceLink *releaseInstanceLink(instanceLink *link, sentinelValkeyInstance *ri) {
@@ -1042,10 +1042,10 @@ instanceLink *releaseInstanceLink(instanceLink *link, sentinelValkeyInstance *ri
     link->refcount--;
     if (link->refcount != 0) {
         if (ri && ri->link->cc) {
-            /* This instance may have pending callbacks in the hiredis async
+            /* This instance may have pending callbacks in the libvalkey async
              * context, having as 'privdata' the instance that we are going to
              * free. Let's rewrite the callback list, directly exploiting
-             * hiredis internal data structures, in order to bind them with
+             * libvalkey internal data structures, in order to bind them with
              * a callback that will ignore the reply at all. */
             valkeyCallback *cb;
             valkeyCallbackList *callbacks = &link->cc->replies;
@@ -1198,11 +1198,11 @@ int sentinelUpdateSentinelAddressInAllPrimaries(sentinelValkeyInstance *ri) {
     return reconfigured;
 }
 
-/* This function is called when a hiredis connection reported an error.
+/* This function is called when a libvalkey connection reported an error.
  * We set it to NULL and mark the link as disconnected so that it will be
  * reconnected again.
  *
- * Note: we don't free the hiredis context as hiredis will do it for us
+ * Note: we don't free the libvalkey context as libvalkey will do it for us
  * for async connections. */
 void instanceLinkConnectionError(const valkeyAsyncContext *c) {
     instanceLink *link = c->data;
@@ -1218,7 +1218,7 @@ void instanceLinkConnectionError(const valkeyAsyncContext *c) {
     link->disconnected = 1;
 }
 
-/* Hiredis connection established / disconnected callbacks. We need them
+/* Libvalkey connection established / disconnected callbacks. We need them
  * just to cleanup our link state. */
 void sentinelLinkEstablishedCallback(valkeyAsyncContext *c, int status) {
     if (status != C_OK) instanceLinkConnectionError(c);
@@ -1353,7 +1353,7 @@ sentinelValkeyInstance *createSentinelValkeyInstance(char *name,
     return ri;
 }
 
-/* Release this instance and all its replicas, sentinels, hiredis connections.
+/* Release this instance and all its replicas, sentinels, libvalkey connections.
  * This function does not take care of unlinking the instance from the main
  * primaries table (if it is a primary) or from its primary sentinels/replicas table
  * if it is a replica or sentinel. */
@@ -2228,7 +2228,7 @@ static void sentinelFlushConfigAndReply(client *c) {
         addReply(c, shared.ok);
 }
 
-/* ====================== hiredis connection handling ======================= */
+/* ====================== libvalkey connection handling ======================= */
 
 /* Send the AUTH command with the specified primary password if needed.
  * Note that for replicas the password set for the primary is used.

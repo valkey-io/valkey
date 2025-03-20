@@ -2415,7 +2415,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
 
         int num_expected_pubsub_push = 0;
         if (is_subscribe || is_unsubscribe) {
-            /* When a push callback is set, valkeyGetReply (hiredis) loops until
+            /* When a push callback is set, valkeyGetReply (libvalkey) loops until
              * an in-band message is received, but these commands are confirmed
              * using push replies only. There is one push reply per channel if
              * channels are specified, otherwise at least one. */
@@ -6902,7 +6902,7 @@ assign_replicas:
             clusterManagerNode *node = ln->value;
             if (first == NULL) {
                 first = node;
-                /* Although hiredis supports connecting to a hostname, CLUSTER
+                /* Although libvalkey supports connecting to a hostname, CLUSTER
                  * MEET requires an IP address, so we do a DNS lookup here. */
                 int anet_flags = ANET_NONE;
                 if (config.prefer_ipv4) anet_flags |= ANET_PREFER_IPV4;
@@ -8223,7 +8223,7 @@ static ssize_t readConn(valkeyContext *c, char *buf, size_t len) {
  * The out_full_mode parameter if 1 means this is a full sync, if 0 means this is partial mode. */
 unsigned long long sendSync(valkeyContext *c, int send_sync, char *out_eof, int *out_full_mode) {
     /* To start we need to send the SYNC command and return the payload.
-     * The hiredis client lib does not understand this part of the protocol
+     * The libvalkey client lib does not understand this part of the protocol
      * and we don't want to mess with its buffers, so everything is performed
      * using direct low-level I/O. */
     char buf[4096], *p;
@@ -8358,7 +8358,7 @@ static void replicaMode(int send_sync) {
     } else
         fprintf(stderr, "%s done. Logging commands from primary.\n", info);
 
-    /* Now we can use hiredis to read the incoming protocol. */
+    /* Now we can use libvalkey to read the incoming protocol. */
     config.output = OUTPUT_CSV;
     while (cliReadReply(0) == VALKEY_OK);
     config.output = original_output;

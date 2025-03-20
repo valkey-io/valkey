@@ -35,6 +35,9 @@
 #define __MM_MALLOC_H
 #include <immintrin.h>
 #endif
+#ifdef __ARM_NEON
+#include <arm_neon.h>
+#endif
 /* -----------------------------------------------------------------------------
  * Helpers and low level bit functions.
  * -------------------------------------------------------------------------- */
@@ -187,6 +190,26 @@ long long popcountScalar(void *s, long count) {
     return bits;
 }
 
+#ifdef __ARM_NEON
+long long popcountNEON(void *s, long count) {
+    uint8_t *ptr = (uint8_t *)s;
+    long long total = 0;
+    long i = 0;
+
+    /* Process 16 bytes at a time using NEON */
+    for (; i + 16 <= count; i += 16) {
+        uint8x16_t vec = vld1q_u8(ptr + i);  // Load 16 bytes
+        uint8x16_t popcnt = vcntq_u8(vec);   // Count bits per byte
+        total += vaddvq_u8(popcnt);          // Sum across vector
+    }
+
+    /* Process remaining bytes (scalar fallback) */
+    total += popcountScalar(ptr+i,count-i);
+
+    return total;
+}
+#endif
+
 /* Count number of bits set in the binary array pointed by 's' and long
  * 'count' bytes. The implementation of this function is required to
  * work with an input string length up to 512 MB or more (server.proto_max_bulk_len) */
@@ -198,6 +221,12 @@ long long serverPopcount(void *s, long count) {
         return popcountAVX2(s, count);
     }
 #endif
+#ifdef __ARM_NEON
+    if (count >= 16) {
+        return popcountNEON(s, count);
+    }
+#endif
+
     return popcountScalar(s, count);
 }
 

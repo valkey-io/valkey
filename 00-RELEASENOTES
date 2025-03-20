@@ -17,7 +17,7 @@ control on manual-failover timeout and expended module API to reduce module exec
 
 Performance/Efficiency Improvements - Core
 ==========================================
-* Optimize bitcount command by SIMD (#1741)
+* Optimize bitcount command by using x86 SIMD instructions (#1741)
 * Embed hash value in hash data type entries to reduce memory footprint (#1579)
 
 Cluster modifications

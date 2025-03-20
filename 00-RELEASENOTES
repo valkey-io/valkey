@@ -38,7 +38,7 @@ Behavior Changes
 
 Bug Fixes
 =========
-* Fix ACL LOAD crash on a connected replica node (#1842)
+* Fix `ACL LOAD` crash on a connected replica node (#1842)
 * Fix bug where no tracking-redir-broken is issued when the redirect client is in the process of getting closed. (#1823)
 * Fix replica sometimes disconnecting when replication is using TLS. (#1737)
 * Fix file descriptor leak when aborting dual channel replication due to error (#1721)

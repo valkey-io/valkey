@@ -156,8 +156,8 @@ typedef struct instanceLink {
     int refcount;              /* Number of sentinelValkeyInstance owners. */
     int disconnected;          /* Non-zero if we need to reconnect cc or pc. */
     int pending_commands;      /* Number of commands sent waiting for a reply. */
-    redisAsyncContext *cc;     /* Hiredis context for commands. */
-    redisAsyncContext *pc;     /* Hiredis context for Pub / Sub. */
+    valkeyAsyncContext *cc;    /* Hiredis context for commands. */
+    valkeyAsyncContext *pc;    /* Hiredis context for Pub / Sub. */
     mstime_t cc_conn_time;     /* cc connection time. */
     mstime_t pc_conn_time;     /* pc connection time. */
     mstime_t pc_last_activity; /* Last time we received any message. */
@@ -296,40 +296,40 @@ typedef struct sentinelScriptJob {
  * and to have full control over how the adapter works. */
 
 typedef struct ValkeyAeEvents {
-    redisAsyncContext *context;
+    valkeyAsyncContext *context;
     aeEventLoop *loop;
     int fd;
     int reading, writing;
 } ValkeyAeEvents;
 
-static void redisAeReadEvent(aeEventLoop *el, int fd, void *privdata, int mask) {
+static void valkeyAeReadEvent(aeEventLoop *el, int fd, void *privdata, int mask) {
     ((void)el);
     ((void)fd);
     ((void)mask);
 
     ValkeyAeEvents *e = (ValkeyAeEvents *)privdata;
-    redisAsyncHandleRead(e->context);
+    valkeyAsyncHandleRead(e->context);
 }
 
-static void redisAeWriteEvent(aeEventLoop *el, int fd, void *privdata, int mask) {
+static void valkeyAeWriteEvent(aeEventLoop *el, int fd, void *privdata, int mask) {
     ((void)el);
     ((void)fd);
     ((void)mask);
 
     ValkeyAeEvents *e = (ValkeyAeEvents *)privdata;
-    redisAsyncHandleWrite(e->context);
+    valkeyAsyncHandleWrite(e->context);
 }
 
-static void redisAeAddRead(void *privdata) {
+static void valkeyAeAddRead(void *privdata) {
     ValkeyAeEvents *e = (ValkeyAeEvents *)privdata;
     aeEventLoop *loop = e->loop;
     if (!e->reading) {
         e->reading = 1;
-        aeCreateFileEvent(loop, e->fd, AE_READABLE, redisAeReadEvent, e);
+        aeCreateFileEvent(loop, e->fd, AE_READABLE, valkeyAeReadEvent, e);
     }
 }
 
-static void redisAeDelRead(void *privdata) {
+static void valkeyAeDelRead(void *privdata) {
     ValkeyAeEvents *e = (ValkeyAeEvents *)privdata;
     aeEventLoop *loop = e->loop;
     if (e->reading) {
@@ -338,16 +338,16 @@ static void redisAeDelRead(void *privdata) {
     }
 }
 
-static void redisAeAddWrite(void *privdata) {
+static void valkeyAeAddWrite(void *privdata) {
     ValkeyAeEvents *e = (ValkeyAeEvents *)privdata;
     aeEventLoop *loop = e->loop;
     if (!e->writing) {
         e->writing = 1;
-        aeCreateFileEvent(loop, e->fd, AE_WRITABLE, redisAeWriteEvent, e);
+        aeCreateFileEvent(loop, e->fd, AE_WRITABLE, valkeyAeWriteEvent, e);
     }
 }
 
-static void redisAeDelWrite(void *privdata) {
+static void valkeyAeDelWrite(void *privdata) {
     ValkeyAeEvents *e = (ValkeyAeEvents *)privdata;
     aeEventLoop *loop = e->loop;
     if (e->writing) {
@@ -356,15 +356,15 @@ static void redisAeDelWrite(void *privdata) {
     }
 }
 
-static void redisAeCleanup(void *privdata) {
+static void valkeyAeCleanup(void *privdata) {
     ValkeyAeEvents *e = (ValkeyAeEvents *)privdata;
-    redisAeDelRead(privdata);
-    redisAeDelWrite(privdata);
+    valkeyAeDelRead(privdata);
+    valkeyAeDelWrite(privdata);
     zfree(e);
 }
 
-static int redisAeAttach(aeEventLoop *loop, redisAsyncContext *ac) {
-    redisContext *c = &(ac->c);
+static int valkeyAeAttach(aeEventLoop *loop, valkeyAsyncContext *ac) {
+    valkeyContext *c = &(ac->c);
     ValkeyAeEvents *e;
 
     /* Nothing should be attached when something is already attached */
@@ -378,11 +378,11 @@ static int redisAeAttach(aeEventLoop *loop, redisAsyncContext *ac) {
     e->reading = e->writing = 0;
 
     /* Register functions to start/stop listening for events */
-    ac->ev.addRead = redisAeAddRead;
-    ac->ev.delRead = redisAeDelRead;
-    ac->ev.addWrite = redisAeAddWrite;
-    ac->ev.delWrite = redisAeDelWrite;
-    ac->ev.cleanup = redisAeCleanup;
+    ac->ev.addRead = valkeyAeAddRead;
+    ac->ev.delRead = valkeyAeDelRead;
+    ac->ev.addWrite = valkeyAeAddWrite;
+    ac->ev.delWrite = valkeyAeDelWrite;
+    ac->ev.cleanup = valkeyAeCleanup;
     ac->ev.data = e;
 
     return C_OK;
@@ -390,20 +390,20 @@ static int redisAeAttach(aeEventLoop *loop, redisAsyncContext *ac) {
 
 /* ============================= Prototypes ================================= */
 
-void sentinelLinkEstablishedCallback(const redisAsyncContext *c, int status);
-void sentinelDisconnectCallback(const redisAsyncContext *c, int status);
-void sentinelReceiveHelloMessages(redisAsyncContext *c, void *reply, void *privdata);
+void sentinelLinkEstablishedCallback(valkeyAsyncContext *c, int status);
+void sentinelDisconnectCallback(const valkeyAsyncContext *c, int status);
+void sentinelReceiveHelloMessages(valkeyAsyncContext *c, void *reply, void *privdata);
 sentinelValkeyInstance *sentinelGetPrimaryByName(char *name);
 char *sentinelGetSubjectiveLeader(sentinelValkeyInstance *primary);
 char *sentinelGetObjectiveLeader(sentinelValkeyInstance *primary);
-void instanceLinkConnectionError(const redisAsyncContext *c);
+void instanceLinkConnectionError(const valkeyAsyncContext *c);
 const char *sentinelValkeyInstanceTypeStr(sentinelValkeyInstance *ri);
 void sentinelAbortFailover(sentinelValkeyInstance *ri);
 void sentinelEvent(int level, char *type, sentinelValkeyInstance *ri, const char *fmt, ...);
 sentinelValkeyInstance *sentinelSelectReplica(sentinelValkeyInstance *primary);
 void sentinelScheduleScriptExecution(char *path, ...);
 void sentinelStartFailover(sentinelValkeyInstance *primary);
-void sentinelDiscardReplyCallback(redisAsyncContext *c, void *reply, void *privdata);
+void sentinelDiscardReplyCallback(valkeyAsyncContext *c, void *reply, void *privdata);
 int sentinelSendReplicaOf(sentinelValkeyInstance *ri, const sentinelAddr *addr);
 char *sentinelVoteLeader(sentinelValkeyInstance *primary, uint64_t req_epoch, char *req_runid, uint64_t *leader_epoch);
 int sentinelFlushConfig(void);
@@ -1016,7 +1016,7 @@ instanceLink *createInstanceLink(void) {
 }
 
 /* Disconnect a hiredis connection in the context of an instance link. */
-void instanceLinkCloseConnection(instanceLink *link, redisAsyncContext *c) {
+void instanceLinkCloseConnection(instanceLink *link, valkeyAsyncContext *c) {
     if (c == NULL) return;
 
     if (link->cc == c) {
@@ -1026,7 +1026,7 @@ void instanceLinkCloseConnection(instanceLink *link, redisAsyncContext *c) {
     if (link->pc == c) link->pc = NULL;
     c->data = NULL;
     link->disconnected = 1;
-    redisAsyncFree(c);
+    valkeyAsyncFree(c);
 }
 
 /* Decrement the refcount of a link object, if it drops to zero, actually
@@ -1047,8 +1047,8 @@ instanceLink *releaseInstanceLink(instanceLink *link, sentinelValkeyInstance *ri
              * free. Let's rewrite the callback list, directly exploiting
              * hiredis internal data structures, in order to bind them with
              * a callback that will ignore the reply at all. */
-            redisCallback *cb;
-            redisCallbackList *callbacks = &link->cc->replies;
+            valkeyCallback *cb;
+            valkeyCallbackList *callbacks = &link->cc->replies;
 
             cb = callbacks->head;
             while (cb) {
@@ -1204,7 +1204,7 @@ int sentinelUpdateSentinelAddressInAllPrimaries(sentinelValkeyInstance *ri) {
  *
  * Note: we don't free the hiredis context as hiredis will do it for us
  * for async connections. */
-void instanceLinkConnectionError(const redisAsyncContext *c) {
+void instanceLinkConnectionError(const valkeyAsyncContext *c) {
     instanceLink *link = c->data;
     int pubsub;
 
@@ -1220,11 +1220,11 @@ void instanceLinkConnectionError(const redisAsyncContext *c) {
 
 /* Hiredis connection established / disconnected callbacks. We need them
  * just to cleanup our link state. */
-void sentinelLinkEstablishedCallback(const redisAsyncContext *c, int status) {
+void sentinelLinkEstablishedCallback(valkeyAsyncContext *c, int status) {
     if (status != C_OK) instanceLinkConnectionError(c);
 }
 
-void sentinelDisconnectCallback(const redisAsyncContext *c, int status) {
+void sentinelDisconnectCallback(const valkeyAsyncContext *c, int status) {
     UNUSED(status);
     instanceLinkConnectionError(c);
 }
@@ -2242,7 +2242,7 @@ static void sentinelFlushConfigAndReply(client *c) {
  * We don't check at all if the command was successfully transmitted
  * to the instance as if it fails Sentinel will detect the instance down,
  * will disconnect and reconnect the link and so forth. */
-void sentinelSendAuthIfNeeded(sentinelValkeyInstance *ri, redisAsyncContext *c) {
+void sentinelSendAuthIfNeeded(sentinelValkeyInstance *ri, valkeyAsyncContext *c) {
     char *auth_pass = NULL;
     char *auth_user = NULL;
 
@@ -2267,14 +2267,14 @@ void sentinelSendAuthIfNeeded(sentinelValkeyInstance *ri, redisAsyncContext *c) 
     }
 
     if (auth_pass && auth_user == NULL) {
-        if (redisAsyncCommand(c, sentinelDiscardReplyCallback, ri, "%s %s", sentinelInstanceMapCommand(ri, "AUTH"),
-                              auth_pass) == C_OK)
+        if (valkeyAsyncCommand(c, sentinelDiscardReplyCallback, ri, "%s %s", sentinelInstanceMapCommand(ri, "AUTH"),
+                               auth_pass) == C_OK)
             ri->link->pending_commands++;
     } else if (auth_pass && auth_user) {
         /* If we also have an username, use the ACL-style AUTH command
          * with two arguments, username and password. */
-        if (redisAsyncCommand(c, sentinelDiscardReplyCallback, ri, "%s %s %s", sentinelInstanceMapCommand(ri, "AUTH"),
-                              auth_user, auth_pass) == C_OK)
+        if (valkeyAsyncCommand(c, sentinelDiscardReplyCallback, ri, "%s %s %s", sentinelInstanceMapCommand(ri, "AUTH"),
+                               auth_user, auth_pass) == C_OK)
             ri->link->pending_commands++;
     }
 }
@@ -2285,23 +2285,23 @@ void sentinelSendAuthIfNeeded(sentinelValkeyInstance *ri, redisAsyncContext *c) 
  *
  * This makes it possible to list all the sentinel instances connected
  * to a server with CLIENT LIST, grepping for a specific name format. */
-void sentinelSetClientName(sentinelValkeyInstance *ri, redisAsyncContext *c, char *type) {
+void sentinelSetClientName(sentinelValkeyInstance *ri, valkeyAsyncContext *c, char *type) {
     char name[64];
 
     snprintf(name, sizeof(name), "sentinel-%.8s-%s", sentinel.myid, type);
-    if (redisAsyncCommand(c, sentinelDiscardReplyCallback, ri, "%s SETNAME %s",
-                          sentinelInstanceMapCommand(ri, "CLIENT"), name) == C_OK) {
+    if (valkeyAsyncCommand(c, sentinelDiscardReplyCallback, ri, "%s SETNAME %s",
+                           sentinelInstanceMapCommand(ri, "CLIENT"), name) == C_OK) {
         ri->link->pending_commands++;
     }
 }
 
-static int instanceLinkNegotiateTLS(redisAsyncContext *context) {
+static int instanceLinkNegotiateTLS(valkeyAsyncContext *context) {
 #if USE_OPENSSL == 1 /* BUILD_YES */
     if (!valkey_tls_ctx) return C_ERR;
     SSL *ssl = SSL_new(valkey_tls_client_ctx ? valkey_tls_client_ctx : valkey_tls_ctx);
     if (!ssl) return C_ERR;
 
-    if (redisInitiateSSL(&context->c, ssl) == REDIS_ERR) {
+    if (valkeyInitiateTLS(&context->c, ssl) == VALKEY_ERR) {
         SSL_free(ssl);
         return C_ERR;
     }
@@ -2337,7 +2337,7 @@ void sentinelReconnectInstance(sentinelValkeyInstance *ri) {
             }
         }
 
-        link->cc = redisAsyncConnectBind(ri->addr->ip, ri->addr->port, server.bind_source_addr);
+        link->cc = valkeyAsyncConnectBind(ri->addr->ip, ri->addr->port, server.bind_source_addr);
 
         if (link->cc && !link->cc->err) anetCloexec(link->cc->c.fd);
         if (!link->cc) {
@@ -2352,9 +2352,9 @@ void sentinelReconnectInstance(sentinelValkeyInstance *ri) {
             link->pending_commands = 0;
             link->cc_conn_time = mstime();
             link->cc->data = link;
-            redisAeAttach(server.el, link->cc);
-            redisAsyncSetConnectCallback(link->cc, sentinelLinkEstablishedCallback);
-            redisAsyncSetDisconnectCallback(link->cc, sentinelDisconnectCallback);
+            valkeyAeAttach(server.el, link->cc);
+            valkeyAsyncSetConnectCallback(link->cc, sentinelLinkEstablishedCallback);
+            valkeyAsyncSetDisconnectCallback(link->cc, sentinelDisconnectCallback);
             sentinelSendAuthIfNeeded(ri, link->cc);
             sentinelSetClientName(ri, link->cc, "cmd");
 
@@ -2364,7 +2364,7 @@ void sentinelReconnectInstance(sentinelValkeyInstance *ri) {
     }
     /* Pub / Sub */
     if ((ri->flags & (SRI_PRIMARY | SRI_REPLICA)) && link->pc == NULL) {
-        link->pc = redisAsyncConnectBind(ri->addr->ip, ri->addr->port, server.bind_source_addr);
+        link->pc = valkeyAsyncConnectBind(ri->addr->ip, ri->addr->port, server.bind_source_addr);
         if (link->pc && !link->pc->err) anetCloexec(link->pc->c.fd);
         if (!link->pc) {
             sentinelEvent(LL_DEBUG, "-pubsub-link-reconnection", ri, "%@ #Failed to establish connection");
@@ -2377,14 +2377,14 @@ void sentinelReconnectInstance(sentinelValkeyInstance *ri) {
             int retval;
             link->pc_conn_time = mstime();
             link->pc->data = link;
-            redisAeAttach(server.el, link->pc);
-            redisAsyncSetConnectCallback(link->pc, sentinelLinkEstablishedCallback);
-            redisAsyncSetDisconnectCallback(link->pc, sentinelDisconnectCallback);
+            valkeyAeAttach(server.el, link->pc);
+            valkeyAsyncSetConnectCallback(link->pc, sentinelLinkEstablishedCallback);
+            valkeyAsyncSetDisconnectCallback(link->pc, sentinelDisconnectCallback);
             sentinelSendAuthIfNeeded(ri, link->pc);
             sentinelSetClientName(ri, link->pc, "pubsub");
             /* Now we subscribe to the Sentinels "Hello" channel. */
-            retval = redisAsyncCommand(link->pc, sentinelReceiveHelloMessages, ri, "%s %s",
-                                       sentinelInstanceMapCommand(ri, "SUBSCRIBE"), SENTINEL_HELLO_CHANNEL);
+            retval = valkeyAsyncCommand(link->pc, sentinelReceiveHelloMessages, ri, "%s %s",
+                                        sentinelInstanceMapCommand(ri, "SUBSCRIBE"), SENTINEL_HELLO_CHANNEL);
             if (retval != C_OK) {
                 /* If we can't subscribe, the Pub/Sub connection is useless
                  * and we can simply disconnect it and try again. */
@@ -2640,10 +2640,10 @@ void sentinelRefreshInstanceInfo(sentinelValkeyInstance *ri, const char *info) {
     }
 }
 
-void sentinelInfoReplyCallback(redisAsyncContext *c, void *reply, void *privdata) {
+void sentinelInfoReplyCallback(valkeyAsyncContext *c, void *reply, void *privdata) {
     sentinelValkeyInstance *ri = privdata;
     instanceLink *link = c->data;
-    redisReply *r;
+    valkeyReply *r;
 
     if (!reply || !link) return;
     link->pending_commands--;
@@ -2651,12 +2651,12 @@ void sentinelInfoReplyCallback(redisAsyncContext *c, void *reply, void *privdata
 
     /* INFO reply type is verbatim in resp3. Normally, sentinel will not use
      * resp3 but this is required for testing (see logreqres.c). */
-    if (r->type == REDIS_REPLY_STRING || r->type == REDIS_REPLY_VERB) sentinelRefreshInstanceInfo(ri, r->str);
+    if (r->type == VALKEY_REPLY_STRING || r->type == VALKEY_REPLY_VERB) sentinelRefreshInstanceInfo(ri, r->str);
 }
 
 /* Just discard the reply. We use this when we are not monitoring the return
  * value of the command but its effects directly. */
-void sentinelDiscardReplyCallback(redisAsyncContext *c, void *reply, void *privdata) {
+void sentinelDiscardReplyCallback(valkeyAsyncContext *c, void *reply, void *privdata) {
     instanceLink *link = c->data;
     UNUSED(reply);
     UNUSED(privdata);
@@ -2664,16 +2664,16 @@ void sentinelDiscardReplyCallback(redisAsyncContext *c, void *reply, void *privd
     if (link) link->pending_commands--;
 }
 
-void sentinelPingReplyCallback(redisAsyncContext *c, void *reply, void *privdata) {
+void sentinelPingReplyCallback(valkeyAsyncContext *c, void *reply, void *privdata) {
     sentinelValkeyInstance *ri = privdata;
     instanceLink *link = c->data;
-    redisReply *r;
+    valkeyReply *r;
 
     if (!reply || !link) return;
     link->pending_commands--;
     r = reply;
 
-    if (r->type == REDIS_REPLY_STATUS || r->type == REDIS_REPLY_ERROR) {
+    if (r->type == VALKEY_REPLY_STATUS || r->type == VALKEY_REPLY_ERROR) {
         /* Update the "instance available" field only if this is an
          * acceptable reply. */
         if (strncmp(r->str, "PONG", 4) == 0 || strncmp(r->str, "LOADING", 7) == 0 ||
@@ -2687,8 +2687,8 @@ void sentinelPingReplyCallback(redisAsyncContext *c, void *reply, void *privdata
             /* Send a SCRIPT KILL command if the instance appears to be
              * down because of a busy script. */
             if (strncmp(r->str, "BUSY", 4) == 0 && (ri->flags & SRI_S_DOWN) && !(ri->flags & SRI_SCRIPT_KILL_SENT)) {
-                if (redisAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s KILL",
-                                      sentinelInstanceMapCommand(ri, "SCRIPT")) == C_OK) {
+                if (valkeyAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s KILL",
+                                       sentinelInstanceMapCommand(ri, "SCRIPT")) == C_OK) {
                     ri->link->pending_commands++;
                 }
                 ri->flags |= SRI_SCRIPT_KILL_SENT;
@@ -2700,10 +2700,10 @@ void sentinelPingReplyCallback(redisAsyncContext *c, void *reply, void *privdata
 
 /* This is called when we get the reply about the PUBLISH command we send
  * to the primary to advertise this sentinel. */
-void sentinelPublishReplyCallback(redisAsyncContext *c, void *reply, void *privdata) {
+void sentinelPublishReplyCallback(valkeyAsyncContext *c, void *reply, void *privdata) {
     sentinelValkeyInstance *ri = privdata;
     instanceLink *link = c->data;
-    redisReply *r;
+    valkeyReply *r;
 
     if (!reply || !link) return;
     link->pending_commands--;
@@ -2711,7 +2711,7 @@ void sentinelPublishReplyCallback(redisAsyncContext *c, void *reply, void *privd
 
     /* Only update pub_time if we actually published our message. Otherwise
      * we'll retry again in 100 milliseconds. */
-    if (r->type != REDIS_REPLY_ERROR) ri->last_pub_time = mstime();
+    if (r->type != VALKEY_REPLY_ERROR) ri->last_pub_time = mstime();
 }
 
 /* Process a hello message received via Pub/Sub in primary or replica instance,
@@ -2825,9 +2825,9 @@ cleanup:
 
 /* This is our Pub/Sub callback for the Hello channel. It's useful in order
  * to discover other sentinels attached at the same primary. */
-void sentinelReceiveHelloMessages(redisAsyncContext *c, void *reply, void *privdata) {
+void sentinelReceiveHelloMessages(valkeyAsyncContext *c, void *reply, void *privdata) {
     sentinelValkeyInstance *ri = privdata;
-    redisReply *r;
+    valkeyReply *r;
     UNUSED(c);
 
     if (!reply || !ri) return;
@@ -2842,9 +2842,9 @@ void sentinelReceiveHelloMessages(redisAsyncContext *c, void *reply, void *privd
      * can avoid to check for details.
      * Note: Reply type is PUSH in resp3. Normally, sentinel will not use
      * resp3 but this is required for testing (see logreqres.c). */
-    if ((r->type != REDIS_REPLY_ARRAY && r->type != REDIS_REPLY_PUSH) || r->elements != 3 ||
-        r->element[0]->type != REDIS_REPLY_STRING || r->element[1]->type != REDIS_REPLY_STRING ||
-        r->element[2]->type != REDIS_REPLY_STRING || strcmp(r->element[0]->str, "message") != 0)
+    if ((r->type != VALKEY_REPLY_ARRAY && r->type != VALKEY_REPLY_PUSH) || r->elements != 3 ||
+        r->element[0]->type != VALKEY_REPLY_STRING || r->element[1]->type != VALKEY_REPLY_STRING ||
+        r->element[2]->type != VALKEY_REPLY_STRING || strcmp(r->element[0]->str, "message") != 0)
         return;
 
     /* We are not interested in meeting ourselves */
@@ -2898,8 +2898,8 @@ int sentinelSendHello(sentinelValkeyInstance *ri) {
              /* --- */
              primary->name, announceSentinelAddr(primary_addr), primary_addr->port,
              (unsigned long long)primary->config_epoch);
-    retval = redisAsyncCommand(ri->link->cc, sentinelPublishReplyCallback, ri, "%s %s %s",
-                               sentinelInstanceMapCommand(ri, "PUBLISH"), SENTINEL_HELLO_CHANNEL, payload);
+    retval = valkeyAsyncCommand(ri->link->cc, sentinelPublishReplyCallback, ri, "%s %s %s",
+                                sentinelInstanceMapCommand(ri, "PUBLISH"), SENTINEL_HELLO_CHANNEL, payload);
     if (retval != C_OK) return C_ERR;
     ri->link->pending_commands++;
     return C_OK;
@@ -2943,7 +2943,7 @@ int sentinelForceHelloUpdateForPrimary(sentinelValkeyInstance *primary) {
  * queued in the connection. */
 int sentinelSendPing(sentinelValkeyInstance *ri) {
     int retval =
-        redisAsyncCommand(ri->link->cc, sentinelPingReplyCallback, ri, "%s", sentinelInstanceMapCommand(ri, "PING"));
+        valkeyAsyncCommand(ri->link->cc, sentinelPingReplyCallback, ri, "%s", sentinelInstanceMapCommand(ri, "PING"));
     if (retval == C_OK) {
         ri->link->pending_commands++;
         ri->link->last_ping_time = mstime();
@@ -2999,8 +2999,8 @@ void sentinelSendPeriodicCommands(sentinelValkeyInstance *ri) {
 
     /* Send INFO to primaries and replicas, not sentinels. */
     if ((ri->flags & SRI_SENTINEL) == 0 && (ri->info_refresh == 0 || (now - ri->info_refresh) > info_period)) {
-        retval = redisAsyncCommand(ri->link->cc, sentinelInfoReplyCallback, ri, "%s",
-                                   sentinelInstanceMapCommand(ri, "INFO"));
+        retval = valkeyAsyncCommand(ri->link->cc, sentinelInfoReplyCallback, ri, "%s",
+                                    sentinelInstanceMapCommand(ri, "INFO"));
         if (retval == C_OK) ri->link->pending_commands++;
     }
 
@@ -4431,10 +4431,10 @@ void sentinelCheckObjectivelyDown(sentinelValkeyInstance *primary) {
 
 /* Receive the SENTINEL is-primary-down-by-addr reply, see the
  * sentinelAskPrimariesStateToOtherSentinels() function for more information. */
-void sentinelReceiveIsPrimaryDownReply(redisAsyncContext *c, void *reply, void *privdata) {
+void sentinelReceiveIsPrimaryDownReply(valkeyAsyncContext *c, void *reply, void *privdata) {
     sentinelValkeyInstance *ri = privdata;
     instanceLink *link = c->data;
-    redisReply *r;
+    valkeyReply *r;
 
     if (!reply || !link) return;
     link->pending_commands--;
@@ -4443,8 +4443,8 @@ void sentinelReceiveIsPrimaryDownReply(redisAsyncContext *c, void *reply, void *
     /* Ignore every error or unexpected reply.
      * Note that if the command returns an error for any reason we'll
      * end clearing the SRI_PRIMARY_DOWN flag for timeout anyway. */
-    if (r->type == REDIS_REPLY_ARRAY && r->elements == 3 && r->element[0]->type == REDIS_REPLY_INTEGER &&
-        r->element[1]->type == REDIS_REPLY_STRING && r->element[2]->type == REDIS_REPLY_INTEGER) {
+    if (r->type == VALKEY_REPLY_ARRAY && r->elements == 3 && r->element[0]->type == VALKEY_REPLY_INTEGER &&
+        r->element[1]->type == VALKEY_REPLY_STRING && r->element[2]->type == VALKEY_REPLY_INTEGER) {
         ri->last_primary_down_reply_time = mstime();
         if (r->element[0]->integer == 1) {
             ri->flags |= SRI_PRIMARY_DOWN;
@@ -4499,7 +4499,7 @@ void sentinelAskPrimaryStateToOtherSentinels(sentinelValkeyInstance *primary, in
 
         /* Ask */
         ll2string(port, sizeof(port), primary->addr->port);
-        retval = redisAsyncCommand(
+        retval = valkeyAsyncCommand(
             ri->link->cc, sentinelReceiveIsPrimaryDownReply, ri, "%s is-master-down-by-addr %s %s %llu %s",
             sentinelInstanceMapCommand(ri, "SENTINEL"), announceSentinelAddr(primary->addr), port,
             sentinel.current_epoch, (primary->failover_state > SENTINEL_FAILOVER_STATE_NONE) ? sentinel.myid : "*");
@@ -4673,18 +4673,18 @@ int sentinelSendReplicaOf(sentinelValkeyInstance *ri, const sentinelAddr *addr) 
      *
      * Note that we don't check the replies returned by commands, since we
      * will observe instead the effects in the next INFO output. */
-    retval = redisAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s",
-                               sentinelInstanceMapCommand(ri, "MULTI"));
+    retval = valkeyAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s",
+                                sentinelInstanceMapCommand(ri, "MULTI"));
     if (retval == C_ERR) return retval;
     ri->link->pending_commands++;
 
-    retval = redisAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s %s %s",
-                               sentinelInstanceMapCommand(ri, "SLAVEOF"), host, portstr);
+    retval = valkeyAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s %s %s",
+                                sentinelInstanceMapCommand(ri, "SLAVEOF"), host, portstr);
     if (retval == C_ERR) return retval;
     ri->link->pending_commands++;
 
-    retval = redisAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s REWRITE",
-                               sentinelInstanceMapCommand(ri, "CONFIG"));
+    retval = valkeyAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s REWRITE",
+                                sentinelInstanceMapCommand(ri, "CONFIG"));
     if (retval == C_ERR) return retval;
     ri->link->pending_commands++;
 
@@ -4694,14 +4694,14 @@ int sentinelSendReplicaOf(sentinelValkeyInstance *ri, const sentinelAddr *addr) 
      * recognized as a syntax error, and the transaction will not fail (but
      * only the unsupported command will fail). */
     for (int type = 0; type < 2; type++) {
-        retval = redisAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s KILL TYPE %s",
-                                   sentinelInstanceMapCommand(ri, "CLIENT"), type == 0 ? "normal" : "pubsub");
+        retval = valkeyAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s KILL TYPE %s",
+                                    sentinelInstanceMapCommand(ri, "CLIENT"), type == 0 ? "normal" : "pubsub");
         if (retval == C_ERR) return retval;
         ri->link->pending_commands++;
     }
 
     retval =
-        redisAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s", sentinelInstanceMapCommand(ri, "EXEC"));
+        valkeyAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s", sentinelInstanceMapCommand(ri, "EXEC"));
     if (retval == C_ERR) return retval;
     ri->link->pending_commands++;
 

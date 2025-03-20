@@ -33,9 +33,9 @@ typedef struct cliConnInfo {
     char *user;
 } cliConnInfo;
 
-int cliSecureConnection(redisContext *c, cliSSLconfig config, const char **err);
+int cliSecureConnection(valkeyContext *c, cliSSLconfig config, const char **err);
 
-ssize_t cliWriteConn(redisContext *c, const char *buf, size_t buf_len);
+ssize_t cliWriteConn(valkeyContext *c, const char *buf, size_t buf_len);
 
 int cliSecureInit(void);
 
@@ -53,7 +53,7 @@ sds escapeJsonString(sds s, const char *p, size_t len);
 
 sds cliVersion(void);
 
-redisContext *redisConnectWrapper(const char *ip, int port, const struct timeval tv, int nonblock);
-redisContext *redisConnectUnixWrapper(const char *path, const struct timeval tv, int nonblock);
+valkeyContext *valkeyConnectWrapper(const char *ip, int port, const struct timeval tv, int nonblock);
+valkeyContext *valkeyConnectUnixWrapper(const char *path, const struct timeval tv, int nonblock);
 
 #endif /* __CLICOMMON_H */

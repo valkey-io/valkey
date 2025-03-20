@@ -55,7 +55,7 @@ char *serverGitDirty(void);
 /* Wrapper around redisSecureConnection to avoid hiredis_ssl dependencies if
  * not building with TLS support.
  */
-int cliSecureConnection(redisContext *c, cliSSLconfig config, const char **err) {
+int cliSecureConnection(valkeyContext *c, cliSSLconfig config, const char **err) {
 #ifdef USE_OPENSSL
     static SSL_CTX *ssl_ctx = NULL;
 
@@ -104,26 +104,26 @@ int cliSecureConnection(redisContext *c, cliSSLconfig config, const char **err) 
     SSL *ssl = SSL_new(ssl_ctx);
     if (!ssl) {
         *err = "Failed to create SSL object";
-        return REDIS_ERR;
+        return VALKEY_ERR;
     }
 
     if (config.sni && !SSL_set_tlsext_host_name(ssl, config.sni)) {
         *err = "Failed to configure SNI";
         SSL_free(ssl);
-        return REDIS_ERR;
+        return VALKEY_ERR;
     }
 
-    return redisInitiateSSL(c, ssl);
+    return valkeyInitiateTLS(c, ssl);
 
 error:
     SSL_CTX_free(ssl_ctx);
     ssl_ctx = NULL;
-    return REDIS_ERR;
+    return VALKEY_ERR;
 #else
     (void)config;
     (void)c;
     (void)err;
-    return REDIS_OK;
+    return VALKEY_OK;
 #endif
 }
 
@@ -137,19 +137,19 @@ error:
  * work transparently.
  */
 
-/* Write a raw buffer through a redisContext. If we already have something
+/* Write a raw buffer through a valkeyContext. If we already have something
  * in the buffer (leftovers from hiredis operations) it will be written
  * as well.
  */
-ssize_t cliWriteConn(redisContext *c, const char *buf, size_t buf_len) {
+ssize_t cliWriteConn(valkeyContext *c, const char *buf, size_t buf_len) {
     int done = 0;
 
     /* Append data to buffer which is *usually* expected to be empty
      * but we don't assume that, and write.
      */
     c->obuf = sdscatlen(c->obuf, buf, buf_len);
-    if (redisBufferWrite(c, &done) == REDIS_ERR) {
-        if (!(c->flags & REDIS_BLOCK)) errno = EAGAIN;
+    if (valkeyBufferWrite(c, &done) == VALKEY_ERR) {
+        if (!(c->flags & VALKEY_BLOCK)) errno = EAGAIN;
 
         /* On error, we assume nothing was written and we roll back the
          * buffer to its original state.
@@ -199,7 +199,7 @@ int cliSecureInit(void) {
     SSL_load_error_strings();
     SSL_library_init();
 #endif
-    return REDIS_OK;
+    return VALKEY_OK;
 }
 
 /* Create an sds from stdin */
@@ -426,34 +426,34 @@ sds cliVersion(void) {
     return version;
 }
 
-/* This is a wrapper to call redisConnect or redisConnectWithTimeout. */
-redisContext *redisConnectWrapper(const char *ip, int port, const struct timeval tv, int nonblock) {
-    redisOptions options = {0};
-    REDIS_OPTIONS_SET_TCP(&options, ip, port);
+/* This is a wrapper to call valkeyConnect or valkeyConnectWithTimeout. */
+valkeyContext *valkeyConnectWrapper(const char *ip, int port, const struct timeval tv, int nonblock) {
+    valkeyOptions options = {0};
+    VALKEY_OPTIONS_SET_TCP(&options, ip, port);
 
     if (tv.tv_sec || tv.tv_usec) {
         options.connect_timeout = &tv;
     }
 
     if (nonblock) {
-        options.options |= REDIS_OPT_NONBLOCK;
+        options.options |= VALKEY_OPT_NONBLOCK;
     }
 
-    return redisConnectWithOptions(&options);
+    return valkeyConnectWithOptions(&options);
 }
 
-/* This is a wrapper to call redisConnectUnix or redisConnectUnixWithTimeout. */
-redisContext *redisConnectUnixWrapper(const char *path, const struct timeval tv, int nonblock) {
-    redisOptions options = {0};
-    REDIS_OPTIONS_SET_UNIX(&options, path);
+/* This is a wrapper to call valkeyConnectUnix or valkeyConnectUnixWithTimeout. */
+valkeyContext *valkeyConnectUnixWrapper(const char *path, const struct timeval tv, int nonblock) {
+    valkeyOptions options = {0};
+    VALKEY_OPTIONS_SET_UNIX(&options, path);
 
     if (tv.tv_sec || tv.tv_usec) {
         options.connect_timeout = &tv;
     }
 
     if (nonblock) {
-        options.options |= REDIS_OPT_NONBLOCK;
+        options.options |= VALKEY_OPT_NONBLOCK;
     }
 
-    return redisConnectWithOptions(&options);
+    return valkeyConnectWithOptions(&options);
 }

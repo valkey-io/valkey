@@ -44,7 +44,7 @@ Bug Fixes
 * Fix RANDOMKEY command leading to infinite loop during when all CLIENT are PAUSED and all keys are with expiry (#1850)
 * Removing unicode optimization in Lua cjson library to avoid OOM when very large strings are used. (#1785)
 * Fix update large-reply in COMMANDLOG when reply is deferred (#1760)
-* Avoid setting TCP/TLS specific options for UNIX SOmain Socket connections (#1706)
+* Avoid setting TCP/TLS specific options for UNIX Domain Socket connections (#1706)
 * Fix a bug in the valkey-cli which would incorrectly render commands with text output in multi/exec (#1782)
 
 

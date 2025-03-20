@@ -43,14 +43,13 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
-#include <sdscompat.h> /* Use hiredis' sds compat header that maps sds calls to their hi_ variants */
-#include <sds.h>       /* Use hiredis sds. */
+#include "sds.h"
 #include "ae.h"
-#include <hiredis.h>
+#include <valkey/valkey.h>
 #ifdef USE_OPENSSL
 #include <openssl/ssl.h>
 #include <openssl/err.h>
-#include <hiredis_ssl.h>
+#include <valkey/tls.h>
 #endif
 #include "adlist.h"
 #include "dict.h"

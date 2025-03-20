@@ -29,12 +29,12 @@
  */
 
 #include "server.h"
-#include "hiredis.h"
+#include <valkey/valkey.h>
 #if USE_OPENSSL == 1 /* BUILD_YES */
 #include "openssl/ssl.h"
-#include "hiredis_ssl.h"
+#include <valkey/tls.h>
 #endif
-#include "async.h"
+#include <valkey/async.h>
 
 #include <ctype.h>
 #include <arpa/inet.h>

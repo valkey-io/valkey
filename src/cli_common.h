@@ -1,8 +1,8 @@
 #ifndef __CLICOMMON_H
 #define __CLICOMMON_H
 
-#include <hiredis.h>
-#include <sdscompat.h> /* Use hiredis' sds compat header that maps sds calls to their hi_ variants */
+#include <valkey/valkey.h>
+#include "sds.h"
 
 typedef struct cliSSLconfig {
     /* Requested SNI, or NULL */

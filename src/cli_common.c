@@ -36,16 +36,15 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <hiredis.h>
-#include <sdscompat.h> /* Use hiredis' sds compat header that maps sds calls to their hi_ variants */
-#include <sds.h>       /* use sds.h from hiredis, so that only one set of sds functions will be present in the binary */
+#include <valkey/valkey.h>
+#include "sds.h"
 #include <unistd.h>
 #include <string.h>
 #include <ctype.h>
 #ifdef USE_OPENSSL
 #include <openssl/ssl.h>
 #include <openssl/err.h>
-#include <hiredis_ssl.h>
+#include <valkey/tls.h>
 #endif
 
 #define UNUSED(V) ((void)V)

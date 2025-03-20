@@ -50,14 +50,13 @@
 #include <math.h>
 #include <termios.h>
 
-#include <hiredis.h>
+#include <valkey/valkey.h>
 #ifdef USE_OPENSSL
 #include <openssl/ssl.h>
 #include <openssl/err.h>
-#include <hiredis_ssl.h>
+#include <valkey/tls.h>
 #endif
-#include <sdscompat.h> /* Use hiredis' sds compat header that maps sds calls to their hi_ variants */
-#include <sds.h>       /* use sds.h from hiredis, so that only one set of sds functions will be present in the binary */
+#include "sds.h"
 #include "dict.h"
 #include "adlist.h"
 #include "zmalloc.h"

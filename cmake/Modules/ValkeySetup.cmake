@@ -83,10 +83,10 @@ macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
 
     # Place this line last to ensure that ${ld_flags} is placed last on the linker line
     target_link_libraries(${target} ${libs} ${ld_flags})
-    target_link_libraries(${target} hiredis)
+    target_link_libraries(${target} valkey::valkey)
     if (USE_TLS)
         # Add required libraries needed for TLS
-        target_link_libraries(${target} OpenSSL::SSL hiredis_ssl)
+        target_link_libraries(${target} OpenSSL::SSL valkey::valkey_tls)
     endif ()
 
     if (IS_FREEBSD)
@@ -114,7 +114,7 @@ macro (valkey_build_and_install_module target sources ld_flags libs)
     target_link_libraries(${target} ${libs} ${ld_flags})
     if (USE_TLS)
         # Add required libraries needed for TLS
-        target_link_libraries(${target} OpenSSL::SSL hiredis_ssl)
+        target_link_libraries(${target} OpenSSL::SSL valkey::valkey_tls)
     endif ()
 
     if (IS_FREEBSD)
@@ -296,7 +296,7 @@ if (BUILD_SANITIZER)
     endif ()
 endif ()
 
-include_directories("${CMAKE_SOURCE_DIR}/deps/hiredis")
+include_directories("${CMAKE_SOURCE_DIR}/deps/libvalkey/include")
 include_directories("${CMAKE_SOURCE_DIR}/deps/linenoise")
 include_directories("${CMAKE_SOURCE_DIR}/deps/lua/src")
 include_directories("${CMAKE_SOURCE_DIR}/deps/hdr_histogram")

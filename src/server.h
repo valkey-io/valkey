@@ -1485,6 +1485,12 @@ typedef struct serverTLSContextConfig {
     int session_caching;
     int session_cache_size;
     int session_cache_timeout;
+    time_t cert_file_last_modified;
+    time_t key_file_last_modified;
+    time_t client_cert_file_last_modified;
+    time_t client_key_file_last_modified;
+    time_t ca_cert_file_last_modified;
+    time_t ca_cert_dir_last_modified;
 } serverTLSContextConfig;
 
 /*-----------------------------------------------------------------------------
@@ -2119,6 +2125,7 @@ struct valkeyServer {
     int tls_cluster;
     int tls_replication;
     int tls_auth_clients;
+    int tls_rotation;
     serverTLSContextConfig tls_ctx_config;
     serverUnixContextConfig unix_ctx_config;
     serverRdmaContextConfig rdma_ctx_config;
@@ -2593,6 +2600,7 @@ int validateProcTitleTemplate(const char *template);
 int serverCommunicateSystemd(const char *sd_notify_msg);
 void serverSetCpuAffinity(const char *cpulist);
 void dictVanillaFree(void *val);
+void tlsReload(void);
 
 /* ERROR STATS constants */
 

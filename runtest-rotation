@@ -1,0 +1,31 @@
+#!/bin/sh
+TCL_VERSIONS="8.5 8.6"
+TCLSH=""
+
+export ASAN_OPTIONS=allocator_may_return_null=1  $ASAN_OPTIONS
+
+for VERSION in $TCL_VERSIONS; do
+	TCL=`which tclsh$VERSION 2>/dev/null` && TCLSH=$TCL
+done
+
+if [ -z $TCLSH ]
+then
+    echo "You need tcl 8.5 or newer in order to run the ValKey test"
+    exit 1
+fi
+if [ ! -r tests/tls ] || [ ! -r tests/tls_1 ] || [ ! -r tests/tls_2 ];
+then
+    echo "Generating neccessary certificates for TLS rotation testing."
+    rm -rf tests/tls tests/tls_1 tests/tls_2
+
+    utils/gen-test-certs.sh
+    mv tests/tls tests/tls_1
+    utils/gen-test-certs.sh
+    mv tests/tls tests/tls_2
+    utils/gen-test-certs.sh
+fi
+$TCLSH tests/test_helper.tcl \
+--single tls-rotation/tls-rotation \
+--tls \
+--config io-threads 3 \
+"${@}"

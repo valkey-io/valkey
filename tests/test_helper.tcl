@@ -249,6 +249,26 @@ proc valkey_client_by_addr {host port} {
     return $client
 }
 
+proc valkey_client_tls {args} {
+    set level 0
+    if {[llength $args] > 0 && [string is integer [lindex $args 0]]} {
+        set level [lindex $args 0]
+        set args [lrange $args 1 end]
+    }
+
+    set tlsoptions ""
+    if {[llength $args] > 0 && ![string is integer [lindex $args 0]]} {
+        set tlsoptions [lrange $args 0 end]
+    }
+
+    # create client that takes in custom tls options
+    set client [redis [srv $level "host"] [srv $level "port"] 0 $::tls $tlsoptions]
+
+    # # select the right db and read the response (OK)
+    $client select 9
+    return $client
+}
+
 # Provide easy access to INFO properties. Same semantic as "proc r".
 proc s {args} {
     set level 0

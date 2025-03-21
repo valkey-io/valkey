@@ -3213,7 +3213,8 @@ int clusterProcessPacket(clusterLink *link) {
             freeClusterLink(link);
             serverLog(
                 LL_NOTICE,
-                "Closing link for node that sent a lightweight message of type %s as its first message on the link",
+                "Closing link for node %.40s that sent a lightweight message of type %s as its first message on the link",
+                hdr->sender,
                 clusterGetMessageTypeString(type));
             return 0;
         }

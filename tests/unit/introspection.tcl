@@ -192,7 +192,7 @@ start_server {tags {"introspection"}} {
         $c3 multi
 
         # Wait 1 second to ensure idle time
-        after 1000  ;# Wait 1 second
+        after 1000  ;
 
         # Fetch the client list filtered by name and flags
         set cl [split [r client list name client1 flags N] "\r\n"]
@@ -205,8 +205,8 @@ start_server {tags {"introspection"}} {
         }
 
         # Test error when inputting an invalid flag/s
-        assert_error "ERR unknown flags found in the filter" {r client list name client1 flags Q}
-        assert_error "ERR unknown flags found in the filter" {r client list name client1 flags NZ}
+        assert_error "ERR unknown flags found in the provided filter: Q" {r client list name client1 flags Q}
+        assert_error "ERR unknown flags found in the provided filter: NZ" {r client list name client1 flags NZ}
 
         # Close clients
         $c1 close

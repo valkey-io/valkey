@@ -71,7 +71,7 @@ typedef struct {
      * A value of 0 means no idle time filtering. */
     long long idle;
     /* Client flags for filtering. If NULL, no filtering is applied. */
-    char *flags;
+    sds flags;
     /* Library name to filter. If NULL, no library name filtering is applied. */
     robj *lib_name;
     /* Library version to filter. If NULL, no library version filtering is applied. */
@@ -90,9 +90,9 @@ int postponeClientRead(client *c);
 char *getClientSockname(client *c);
 static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter);
 static int clientMatchesFilter(client *client, clientFilter *client_filter);
-static int validateClientFlagFilter(const char *flag_filter);
+static int validateClientFlagFilter(sds flag_filter);
 static sds getAllFilteredClientsInfoString(clientFilter *client_filter, int hide_user_data);
-static int clientMatchesFlagFilter(client *c, const char *flag_filter);
+static int clientMatchesFlagFilter(client *c, sds flag_filter);
 static void freeClientFilter(clientFilter *filter);
 
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
@@ -3715,9 +3715,9 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             filter->idle = tmp;
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "flags") && moreargs) {
-            filter->flags = c->argv[index + 1]->ptr;
+            filter->flags = sdsnew(c->argv[index + 1]->ptr);
             if (validateClientFlagFilter(filter->flags) == C_ERR) {
-                addReplyError(c, "unknown flags found in the filter");
+                addReplyErrorFormat(c, "unknown flags found in the provided filter: %s", filter->flags);
                 return C_ERR;
             }
             index += 2;
@@ -3773,8 +3773,8 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
     return C_OK;
 }
 
-static int validateClientFlagFilter(const char *flag_filter) {
-    for (int i = 0; flag_filter[i] != '\0'; i++) {
+static int validateClientFlagFilter(sds flag_filter) {
+    for (size_t i = 0; i < sdslen(flag_filter); i++) {
         const char flag = flag_filter[i];
         switch (flag) {
         case 'O':
@@ -3832,62 +3832,62 @@ static int clientMatchesFilter(client *client, clientFilter *client_filter) {
     return 1;
 }
 
-static int clientMatchesFlagFilter(client *c, const char *flag_filter) {
+static int clientMatchesFlagFilter(client *c, sds flag_filter) {
     /* Iterate through the provided flag filter string */
-    for (int i = 0; flag_filter[i] != '\0'; i++) {
+    for (size_t i = 0; i < sdslen(flag_filter); i++) {
         const char flag = flag_filter[i];
 
         /* Check each flag */
         switch (flag) {
-        case 'O':
+        case 'O': /* client in MONITOR mode */
             if (!(c->flag.replica && c->flag.monitor)) return 0;
             break;
-        case 'S': /* Replica flag */
+        case 'S': /* client is a replica node connection to this instance */
             if (!c->flag.replica) return 0;
             break;
-        case 'M': /* Primary flag */
+        case 'M': /* client is a primary */
             if (!c->flag.primary) return 0;
             break;
-        case 'P': /* PubSub flag */
+        case 'P': /* client is a Pub/Sub subscriber */
             if (!c->flag.pubsub) return 0;
             break;
-        case 'x': /* Multi flag */
+        case 'x': /* client is in a MULTI/EXEC context */
             if (!c->flag.multi) return 0;
             break;
-        case 'b': /* Blocked flag */
+        case 'b': /* client is waiting in a blocking operation */
             if (!c->flag.blocked) return 0;
             break;
-        case 't': /* Tracking flag */
+        case 't': /* client enabled keys tracking in order to perform client side caching */
             if (!c->flag.tracking) return 0;
             break;
-        case 'R': /* Invalid Client flag */
+        case 'R': /* Client tracking target client is invalid */
             if (!c->flag.tracking_broken_redir) return 0;
             break;
-        case 'B': /* Tracking Bcast flag */
+        case 'B': /* client enabled broadcast tracking mode */
             if (!c->flag.tracking_bcast) return 0;
             break;
-        case 'd': /* Dirty CAS flag */
+        case 'd': /* Dirty CAS */
             if (!c->flag.dirty_cas) return 0;
             break;
-        case 'c': /* Close after reply flag */
+        case 'c': /* Close after reply */
             if (!c->flag.close_after_reply) return 0;
             break;
-        case 'u': /* Unblocked flag */
+        case 'u': /* client is unblocked */
             if (!c->flag.unblocked) return 0;
             break;
-        case 'A': /* Close ASAP flag */
+        case 'A': /* Close ASAP */
             if (!c->flag.close_asap) return 0;
             break;
-        case 'U': /* Unix socket flag */
+        case 'U': /* client is connected via a Unix domain socket */
             if (!c->flag.unix_socket) return 0;
             break;
-        case 'r': /* Readonly flag */
+        case 'r': /* client is in readonly mode against a cluster node */
             if (!c->flag.readonly) return 0;
             break;
-        case 'e': /* No evict flag */
+        case 'e': /* client is excluded from the client eviction mechanism */
             if (!c->flag.no_evict) return 0;
             break;
-        case 'T': /* No touch flag */
+        case 'T': /* client will not touch the LRU/LFU of the keys it accesses */
             if (!c->flag.no_touch) return 0;
             break;
         case 'I': /* Import source flag */
@@ -4177,6 +4177,7 @@ client_kill_done:
 
 static void freeClientFilter(clientFilter *filter) {
     zfree(filter->ids);
+    sdsfree(filter->flags);
     if (filter->lib_name) {
         decrRefCount(filter->lib_name);
         filter->lib_name = NULL;

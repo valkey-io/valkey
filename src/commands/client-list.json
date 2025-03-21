@@ -154,56 +154,56 @@
                 "name": "name",
                 "type": "string",
                 "optional": true,
-                "since": "8.1.0"
+                "since": "9.0.0"
             },
             {
                 "token": "IDLE",
                 "name": "idle",
                 "type": "integer",
                 "optional": true,
-                "since": "8.1.0"
+                "since": "9.0.0"
             },
             {
                 "token": "FLAGS",
                 "name": "flags",
                 "type": "string",
                 "optional": true,
-                "since": "8.1.0"
+                "since": "9.0.0"
             },
             {
                 "token": "LIB-NAME",
                 "name": "lib-name",
                 "type": "string",
                 "optional": true,
-                "since": "8.1.0"
+                "since": "9.0.0"
             },
             {
                 "token": "LIB-VER",
                 "name": "lib-ver",
                 "type": "string",
                 "optional": true,
-                "since": "8.1.0"
+                "since": "9.0.0"
             },
             {
                 "token": "DB",
                 "name": "db",
                 "type": "integer",
                 "optional": true,
-                "since": "8.1.0"
+                "since": "9.0.0"
             },
             {
                 "token": "TOTAL-NET-IN",
                 "name": "total-net-in",
                 "type": "integer",
                 "optional": true,
-                "since": "8.1.0"
+                "since": "9.0.0"
             },
             {
                 "token": "TOTAL-NET-OUT",
                 "name": "total-net-out",
                 "type": "integer",
                 "optional": true,
-                "since": "8.1.0"
+                "since": "9.0.0"
             }
         ]
     }

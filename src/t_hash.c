@@ -1272,7 +1272,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             addWritePreparedReplyBulkSds(wpc, sdsdup(field));
             if (withvalues) addWritePreparedReplyBulkSds(wpc, sdsdup(value));
         }
-        
+
         hashtableResetIterator(&iter);
         hashtableRelease(ht);
     }

@@ -1239,7 +1239,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
      * used into CASE 4 is highly inefficient. */
     if (count * HRANDFIELD_SUB_STRATEGY_MUL > size) {
         /* Hashtable encoding (generic implementation) */
-        hashtable *ht = hashtableCreate(&hashHashtableType);
+        hashtable *ht = hashtableCreate(&sdsReplyHashtableType);
         hashtableExpand(ht, size);
         hashTypeIterator hi;
         hashTypeInitIterator(hash, &hi);
@@ -1247,13 +1247,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         /* Add all the elements into the temporary hashtable. */
         while (hashTypeNext(&hi) != C_ERR) {
             int ret = 0;
-            sds field, value = NULL;
-
-            field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
-            if (withvalues) value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
-            hashTypeEntry *entry = hashTypeCreateEntry(field, value);
-            sdsfree(field);
-            ret = hashtableAdd(ht, entry);
+            ret = hashtableAdd(ht, (&hi)->next);
             serverAssert(ret);
         }
         serverAssert(hashtableSize(ht) == size);
@@ -1263,8 +1257,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         while (size > count) {
             void *element;
             hashtableFairRandomEntry(ht, &element);
-            sds field = hashTypeEntryGetField((hashTypeEntry*)element);
-            hashtableDelete(ht, field);
+            hashtableDelete(ht, element);
             size--;
         }
 
@@ -1273,9 +1266,8 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         hashtableInitIterator(&iter, ht, 0);
         void *next;
         while (hashtableNext(&iter, &next)) {
-            hashTypeEntry* entry = (hashTypeEntry*)next;
-            sds field = hashTypeEntryGetField(entry);
-            sds value = hashTypeEntryGetValue(entry);
+            sds field = hashTypeEntryGetField(next);
+            sds value = hashTypeEntryGetValue(next);
             if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
             addWritePreparedReplyBulkSds(wpc, sdsdup(field));
             if (withvalues) addWritePreparedReplyBulkSds(wpc, sdsdup(value));

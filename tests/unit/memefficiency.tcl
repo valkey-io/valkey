@@ -14,6 +14,7 @@ proc test_memory_efficiency {range} {
     for {set j 0} {$j < 10000} {incr j} {
         $rd read ; # Discard replies
     }
+    $rd close
 
     set current_mem [s used_memory]
     set used [expr {$current_mem-$base_mem}]
@@ -308,6 +309,8 @@ start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-r
             }
             assert_equal [r dbsize] 250010
 
+            $rd close
+
             # start defrag
             after 120 ;# serverCron only updates the info once in 100ms
             set frag [s allocator_frag_ratio]
@@ -399,6 +402,8 @@ start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-r
                 $rd read ; # Discard replies
                 $rd read ; # Discard replies
             }
+
+            $rd close
 
             # create some fragmentation
             r del biglist2
@@ -519,6 +524,7 @@ start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-r
                 for {set j 0} {$j < $sent} {incr j} {
                     $rd read ; # Discard replies
                 }
+                $rd close
 
                 # create higher fragmentation in the first slab
                 for {set j 10} {$j < 32} {incr j} {
@@ -577,4 +583,63 @@ start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-r
         }
     }
 }
+
+start_cluster 1 0 {tags {"defrag external:skip"}} {
+    if {[string match {*jemalloc*} [s mem_allocator]] && [r debug mallctl arenas.page] <= 8192} {
+        test "Active defrag slot_to_keys crash when calling flush async in cluster mode" {
+            r flushdb async
+            r config set activedefrag no
+            r config set hz 100
+            r config set active-defrag-threshold-lower 1
+            r config set active-defrag-cycle-min 65
+            r config set active-defrag-cycle-max 75
+            r config set active-defrag-ignore-bytes 10b
+
+            catch {r config set activedefrag yes} e
+            if {[r config get activedefrag] eq "activedefrag yes"} {
+                set rd [redis_deferring_client]
+                set random_int [expr 1+[randomInt 10240]]
+
+                # Create keys
+                for {set j 0} {$j < 10000} {incr j} {
+                    set buf [string repeat "pl-$j" $random_int]
+                    $rd set $j $buf ex 10000
+                }
+                for {set j 0} {$j < 10000} {incr j} {
+                    $rd read ;# Discard replies
+                }
+
+                # wait for the active defrag to start
+                r flushdb async
+                wait_for_condition 50 100 {
+                    [s active_defrag_running] ne 0
+                } else {
+                    fail "defrag not started."
+                }
+
+                # Create keys
+                for {set j 0} {$j < 10000} {incr j} {
+                    set buf [string repeat "pl-$j" $random_int]
+                    $rd set $j $buf ex $random_int
+                }
+                for {set j 0} {$j < 10000} {incr j} {
+                    $rd read ; # Discard replies
+                }
+                $rd close
+
+                # wait for the active defrag to stop working
+                wait_for_condition 500 100 {
+                    [s active_defrag_running] eq 0
+                } else {
+                    after 120 ;# serverCron only updates the info once in 100ms
+                    puts [r info memory]
+                    puts [r memory malloc-stats]
+                    fail "defrag didn't stop."
+                }
+            }
+            r ping
+        }
+    }
+}
+
 } ;# run_solo

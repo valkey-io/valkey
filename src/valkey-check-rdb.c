@@ -44,13 +44,13 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len);
 void computeDatasetProfile(int dbid, robj *keyobj, robj *o);
 
 int rdbCheckMode = 0;
-int rdbCheckProfiler = 0;
+int rdbCheckStats = 0;
 
 #define LOW_TRACKE_VALUE 1
 #define MAX_ELEMENTS_TRACKE 200 * 1024
 #define MAX_ELEMENTS_SIZE_TRACKE 1024 * 1024
 
-typedef struct rdbProfiler {
+typedef struct rdbStats {
     size_t type;
     unsigned long keys;
     unsigned long expires;
@@ -67,7 +67,7 @@ typedef struct rdbProfiler {
 
     struct hdr_histogram *element_count_histogram;
     struct hdr_histogram *element_size_histogram;
-} rdbProfiler;
+} rdbStats;
 
 struct {
     rio *rio;
@@ -76,15 +76,16 @@ struct {
     unsigned long keys;            /* Number of keys processed. */
     unsigned long expires;         /* Number of keys with an expire. */
     unsigned long already_expired; /* Number of keys already expired. */
+    unsigned long functions_num;   /* Number of functions. */
     int doing;                     /* The state while reading the RDB. */
     int error_set;                 /* True if error is populated. */
     char error[1024];
     int databases;
     int format;
 
-    /* profiler */
-    rdbProfiler **profiler; /* profiler group by datatype,encoding,isexpired */
-    int profiler_num;
+    /* stats */
+    rdbStats **stats; /* stats group by datatype,encoding,isexpired */
+    int stats_num;
 } rdbstate;
 
 /* At every loading step try to remember what we were about to do, so that
@@ -102,6 +103,7 @@ struct {
 
 #define OUTPUT_FORMAT_INFO 0
 #define OUTPUT_FORMAT_FORM 1
+#define OUTPUT_FORMAT_YAML 2
 
 char *rdb_check_doing_string[] = {
     "start",
@@ -144,36 +146,36 @@ char *rdb_type_string[] = {
 char *type_name[OBJ_TYPE_MAX] = {"string", "list", "set", "zset", "hash", "module", /* module type is special */
                                  "stream"};
 
-/********************** Rdb profiler **********************/
-void profiler_record_count(size_t eleCount, rdbProfiler *profiler) {
-    if (!profiler) return;
+/********************** Rdb stats **********************/
+void stats_record_count(size_t eleCount, rdbStats *stats) {
+    if (!stats) return;
 
-    profiler->elements += eleCount;
-    if (profiler->elements_max < eleCount) {
-        profiler->elements_max = eleCount;
+    stats->elements += eleCount;
+    if (stats->elements_max < eleCount) {
+        stats->elements_max = eleCount;
     }
-    hdr_record_value(profiler->element_count_histogram, (int64_t)eleCount);
+    hdr_record_value(stats->element_count_histogram, (int64_t)eleCount);
 }
 
-void profiler_record_element_size(size_t eleSize, size_t count, rdbProfiler *profiler) {
-    if (!profiler) return;
+void stats_record_element_size(size_t eleSize, size_t count, rdbStats *stats) {
+    if (!stats) return;
 
-    profiler->all_value_size += eleSize * count;
+    stats->all_value_size += eleSize * count;
 
-    profiler->all_elements_size += eleSize * count;
-    if (profiler->elements_size_max < eleSize) {
-        profiler->elements_size_max = eleSize;
+    stats->all_elements_size += eleSize * count;
+    if (stats->elements_size_max < eleSize) {
+        stats->elements_size_max = eleSize;
     }
 
-    hdr_record_value(profiler->element_size_histogram, (int64_t)eleSize);
+    hdr_record_value(stats->element_size_histogram, (int64_t)eleSize);
 }
 
-void profiler_record_simple(size_t eleSize, size_t eleCount, rdbProfiler *profiler) {
-    profiler_record_count(eleCount, profiler);
-    profiler_record_element_size(eleSize, eleCount, profiler);
+void stats_record_simple(size_t eleSize, size_t eleCount, rdbStats *stats) {
+    stats_record_count(eleCount, stats);
+    stats_record_element_size(eleSize, eleCount, stats);
 }
 
-void profiler_record_element_size_add(rdbProfiler *to, rdbProfiler *from) {
+void stats_record_element_size_add(rdbStats *to, rdbStats *from) {
     if (!to || !from) return;
 
     to->all_value_size += from->all_value_size;
@@ -186,52 +188,52 @@ void profiler_record_element_size_add(rdbProfiler *to, rdbProfiler *from) {
     hdr_add(to->element_size_histogram, from->element_size_histogram);
 }
 
-rdbProfiler *newRdbProfiler(size_t type) {
-    rdbProfiler *profiler = zcalloc(sizeof(rdbProfiler));
-    if (!profiler) return NULL;
+rdbStats *newRdbStats(size_t type) {
+    rdbStats *stats = zcalloc(sizeof(rdbStats));
+    if (!stats) return NULL;
 
-    profiler->type = type;
-    hdr_init(LOW_TRACKE_VALUE, MAX_ELEMENTS_TRACKE, 3, &profiler->element_count_histogram);
-    hdr_init(LOW_TRACKE_VALUE, MAX_ELEMENTS_SIZE_TRACKE, 3, &profiler->element_size_histogram);
-    return profiler;
+    stats->type = type;
+    hdr_init(LOW_TRACKE_VALUE, MAX_ELEMENTS_TRACKE, 3, &stats->element_count_histogram);
+    hdr_init(LOW_TRACKE_VALUE, MAX_ELEMENTS_SIZE_TRACKE, 3, &stats->element_size_histogram);
+    return stats;
 }
 
-void deleteRdbProfiler(rdbProfiler *profiler) {
-    hdr_close(profiler->element_count_histogram);
-    hdr_close(profiler->element_size_histogram);
-    zfree(profiler);
+void deleteRdbStats(rdbStats *stats) {
+    hdr_close(stats->element_count_histogram);
+    hdr_close(stats->element_size_histogram);
+    zfree(stats);
 }
 
-rdbProfiler **initRdbProfiler(size_t num) {
-    rdbProfiler **tmp = zmalloc(sizeof(struct rdbProfiler *) * num);
+rdbStats **initRdbStats(size_t num) {
+    rdbStats **tmp = zmalloc(sizeof(struct rdbStats *) * num);
 
     for (size_t i = 0; i < num; i++) {
-        tmp[i] = newRdbProfiler(i % OBJ_TYPE_MAX);
+        tmp[i] = newRdbStats(i % OBJ_TYPE_MAX);
     }
 
     return tmp;
 }
 
-rdbProfiler **tryExpandRdbProfiler(rdbProfiler **profilers, size_t old_num, size_t num) {
+rdbStats **tryExpandRdbStats(rdbStats **statss, size_t old_num, size_t num) {
     if (old_num >= num) {
-        return profilers;
+        return statss;
     }
 
-    rdbProfiler **tmp = zrealloc(profilers, sizeof(struct rdbProfiler *) * num);
+    rdbStats **tmp = zrealloc(statss, sizeof(struct rdbStats *) * num);
     serverAssert(tmp != NULL);
     for (size_t i = old_num; i < num; i++) {
-        tmp[i] = newRdbProfiler(i % OBJ_TYPE_MAX);
+        tmp[i] = newRdbStats(i % OBJ_TYPE_MAX);
     }
 
     return tmp;
 }
 
-void freeRdbProfile(rdbProfiler **profilers, size_t num) {
+void freeRdbProfile(rdbStats **statss, size_t num) {
     for (size_t i = 0; i < num; i++) {
-        deleteRdbProfiler(profilers[i]);
+        deleteRdbStats(statss[i]);
     }
 
-    zfree(profilers);
+    zfree(statss);
 }
 
 void computeDatasetProfile(int dbid, robj *keyobj, robj *o) {
@@ -239,32 +241,32 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o) {
     UNUSED(keyobj);
     char buf[128];
 
-    rdbProfiler *profiler = rdbstate.profiler[o->type + dbid * OBJ_TYPE_MAX];
+    rdbStats *stats = rdbstate.stats[o->type + dbid * OBJ_TYPE_MAX];
 
-    profiler->all_key_size += sdslen(keyobj->ptr);
-    profiler->keys++;
+    stats->all_key_size += sdslen(keyobj->ptr);
+    stats->keys++;
     /* Save the key and associated value */
     if (o->type == OBJ_STRING) {
-        profiler_record_simple(stringObjectLen(o), 1, profiler);
+        stats_record_simple(stringObjectLen(o), 1, stats);
     } else if (o->type == OBJ_LIST) {
         listTypeIterator *li = listTypeInitIterator(o, 0, LIST_TAIL);
         listTypeEntry entry;
         while (listTypeNext(li, &entry)) {
             robj *eleobj = listTypeGet(&entry);
-            profiler_record_element_size(stringObjectLen(eleobj), 1, profiler);
+            stats_record_element_size(stringObjectLen(eleobj), 1, stats);
             decrRefCount(eleobj);
         }
         listTypeReleaseIterator(li);
-        profiler_record_count(listTypeLength(o), profiler);
+        stats_record_count(listTypeLength(o), stats);
     } else if (o->type == OBJ_SET) {
         setTypeIterator *si = setTypeInitIterator(o);
         sds sdsele;
         while ((sdsele = setTypeNextObject(si)) != NULL) {
-            profiler_record_element_size(sdslen(sdsele), 1, profiler);
+            stats_record_element_size(sdslen(sdsele), 1, stats);
             sdsfree(sdsele);
         }
         setTypeReleaseIterator(si);
-        profiler_record_count(setTypeSize(o), profiler);
+        stats_record_count(setTypeSize(o), stats);
     } else if (o->type == OBJ_ZSET) {
         if (o->encoding == OBJ_ENCODING_LISTPACK) {
             unsigned char *zl = o->ptr;
@@ -294,10 +296,10 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o) {
                 const int len = fpconv_dtoa(score, buf);
                 buf[len] = '\0';
                 eleLen += strlen(buf);
-                profiler_record_element_size(eleLen, 1, profiler);
+                stats_record_element_size(eleLen, 1, stats);
                 zzlNext(zl, &eptr, &sptr);
             }
-            profiler_record_count(lpLength(o->ptr), profiler);
+            stats_record_count(lpLength(o->ptr), stats);
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
             zset *zs = o->ptr;
             hashtableIterator iter;
@@ -311,10 +313,10 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o) {
                 const int len = fpconv_dtoa(node->score, buf);
                 buf[len] = '\0';
                 eleLen += sdslen(node->ele) + strlen(buf);
-                profiler_record_element_size(eleLen, 1, profiler);
+                stats_record_element_size(eleLen, 1, stats);
             }
             hashtableResetIterator(&iter);
-            profiler_record_count(hashtableSize(zs->ht), profiler);
+            stats_record_count(hashtableSize(zs->ht), stats);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
@@ -332,10 +334,10 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o) {
             eleLen += sdslen(sdsele);
             sdsfree(sdsele);
 
-            profiler_record_element_size(eleLen, 1, profiler);
+            stats_record_element_size(eleLen, 1, stats);
         }
         hashTypeResetIterator(&hi);
-        profiler_record_count(hashTypeLength(o), profiler);
+        stats_record_count(hashTypeLength(o), stats);
     } else if (o->type == OBJ_STREAM) {
         streamIterator si;
         streamIteratorStart(&si, o->ptr, NULL, NULL, 0);
@@ -347,19 +349,19 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o) {
                 unsigned char *field, *value;
                 int64_t field_len, value_len;
                 streamIteratorGetField(&si, &field, &value, &field_len, &value_len);
-                profiler_record_element_size(field_len + value_len, 1, profiler);
+                stats_record_element_size(field_len + value_len, 1, stats);
             }
         }
         streamIteratorStop(&si);
-        profiler_record_count(streamLength(o), profiler);
+        stats_record_count(streamLength(o), stats);
     } else if (o->type == OBJ_MODULE) {
-        profiler_record_count(1, profiler);
+        stats_record_count(1, stats);
     } else {
         serverPanic("Unknown object type");
     }
 }
 
-char *profiler_field_string[] = {
+char *stats_field_string[] = {
     "type.name",
     "keys.total",
     "expire_keys.total",
@@ -380,25 +382,44 @@ char *profiler_field_string[] = {
     "elements.size.p50",
     NULL};
 
-void rdbProfilerPrintInfo(rdbProfiler *profiler, char *field_string) {
-    if (!strcasecmp(field_string, "type.name")) printf("%-5s", type_name[profiler->type]);
-    if (!strcasecmp(field_string, "keys.total")) printf("%-5lu", profiler->keys);
-    if (!strcasecmp(field_string, "expire_keys.total")) printf("%-5lu", profiler->expires);
-    if (!strcasecmp(field_string, "already_expired.total")) printf("%-5lu", profiler->already_expired);
-    if (!strcasecmp(field_string, "keys.size")) printf("%-5lu", profiler->all_key_size);
-    if (!strcasecmp(field_string, "keys.value_size")) printf("%-5lu", profiler->all_value_size);
-    if (!strcasecmp(field_string, "elements.total")) printf("%-5lu", profiler->elements);
-    if (!strcasecmp(field_string, "elements.size")) printf("%-5lu", profiler->all_elements_size);
-    if (!strcasecmp(field_string, "elements.num.max")) printf("%-5lu", profiler->elements_max);
-    if (!strcasecmp(field_string, "elements.num.avg")) printf("%-5.2lf", (profiler->keys > 0 ? (float)profiler->elements / (float)profiler->keys : 0));
-    if (!strcasecmp(field_string, "elements.num.p99")) printf("%-5.2lf", (float)hdr_value_at_percentile(profiler->element_count_histogram, 99.0));
-    if (!strcasecmp(field_string, "elements.num.p90")) printf("%-5.2lf", (float)hdr_value_at_percentile(profiler->element_count_histogram, 90.0));
-    if (!strcasecmp(field_string, "elements.num.p50")) printf("%-5.2lf", (float)hdr_value_at_percentile(profiler->element_count_histogram, 50.0));
-    if (!strcasecmp(field_string, "elements.size.max")) printf("%-5lu", profiler->elements_size_max);
-    if (!strcasecmp(field_string, "elements.size.avg")) printf("%-5.2lf", (profiler->elements > 0 ? (float)profiler->all_elements_size / (float)profiler->elements : 0));
-    if (!strcasecmp(field_string, "elements.size.p99")) printf("%-5.2lf", (float)hdr_value_at_percentile(profiler->element_size_histogram, 99.0));
-    if (!strcasecmp(field_string, "elements.size.p90")) printf("%-5.2lf", (float)hdr_value_at_percentile(profiler->element_size_histogram, 90.0));
-    if (!strcasecmp(field_string, "elements.size.p50")) printf("%-5.2lf", (float)hdr_value_at_percentile(profiler->element_size_histogram, 50.0));
+void rdbStatsPrintInfo(rdbStats *stats, char *field_string, char *value, size_t value_len) {
+    if (!strcasecmp(field_string, "type.name")) {
+        snprintf(value, value_len, "%s", type_name[stats->type]);
+    } else if (!strcasecmp(field_string, "keys.total")) {
+        snprintf(value, value_len, "%lu", stats->keys);
+    } else if (!strcasecmp(field_string, "expire_keys.total")) {
+        snprintf(value, value_len, "%lu", stats->expires);
+    } else if (!strcasecmp(field_string, "already_expired.total")) {
+        snprintf(value, value_len, "%lu", stats->already_expired);
+    } else if (!strcasecmp(field_string, "keys.size")) {
+        snprintf(value, value_len, "%lu", stats->all_key_size);
+    } else if (!strcasecmp(field_string, "keys.value_size")) {
+        snprintf(value, value_len, "%lu", stats->all_value_size);
+    } else if (!strcasecmp(field_string, "elements.total")) {
+        snprintf(value, value_len, "%lu", stats->elements);
+    } else if (!strcasecmp(field_string, "elements.size")) {
+        snprintf(value, value_len, "%lu", stats->all_elements_size);
+    } else if (!strcasecmp(field_string, "elements.num.max")) {
+        snprintf(value, value_len, "%lu", stats->elements_max);
+    } else if (!strcasecmp(field_string, "elements.num.avg")) {
+        snprintf(value, value_len, "%.2lf", (stats->keys > 0 ? (float)stats->elements / (float)stats->keys : 0));
+    } else if (!strcasecmp(field_string, "elements.num.p99")) {
+        snprintf(value, value_len, "%.2lf", (float)hdr_value_at_percentile(stats->element_count_histogram, 99.0));
+    } else if (!strcasecmp(field_string, "elements.num.p90")) {
+        snprintf(value, value_len, "%.2lf", (float)hdr_value_at_percentile(stats->element_count_histogram, 90.0));
+    } else if (!strcasecmp(field_string, "elements.num.p50")) {
+        snprintf(value, value_len, "%.2lf", (float)hdr_value_at_percentile(stats->element_count_histogram, 50.0));
+    } else if (!strcasecmp(field_string, "elements.size.max")) {
+        snprintf(value, value_len, "%lu", stats->elements_size_max);
+    } else if (!strcasecmp(field_string, "elements.size.avg")) {
+        snprintf(value, value_len, "%.2lf", (stats->elements > 0 ? (float)stats->all_elements_size / (float)stats->elements : 0));
+    } else if (!strcasecmp(field_string, "elements.size.p99")) {
+        snprintf(value, value_len, "%.2lf", (float)hdr_value_at_percentile(stats->element_size_histogram, 99.0));
+    } else if (!strcasecmp(field_string, "elements.size.p90")) {
+        snprintf(value, value_len, "%.2lf", (float)hdr_value_at_percentile(stats->element_size_histogram, 90.0));
+    } else if (!strcasecmp(field_string, "elements.size.p50")) {
+        snprintf(value, value_len, "%.2lf", (float)hdr_value_at_percentile(stats->element_size_histogram, 50.0));
+    }
 }
 
 /* Show a few stats collected into 'rdbstate' */
@@ -406,32 +427,49 @@ void rdbShowGenericInfo(void) {
     printf("[info] %lu keys read\n", rdbstate.keys);
     printf("[info] %lu expires\n", rdbstate.expires);
     printf("[info] %lu already expired\n", rdbstate.already_expired);
+    printf("[info] %lu functions\n", rdbstate.functions_num);
 
-    if (rdbCheckProfiler) {
+    char buffer[64];
+    if (rdbCheckStats) {
         char field_string[80];
         for (int dbid = 0; dbid <= rdbstate.databases; dbid++) {
-            for (size_t i = 0; profiler_field_string[i] != NULL; i++) {
+            if (rdbstate.format == OUTPUT_FORMAT_YAML) {
+                printf("db.%d:\n", dbid);
+            }
+
+            for (size_t i = 0; stats_field_string[i] != NULL; i++) {
                 if (rdbstate.format == OUTPUT_FORMAT_FORM) {
-                    snprintf(field_string, sizeof(field_string), "db.%d.%s", dbid, profiler_field_string[i]);
+                    snprintf(field_string, sizeof(field_string), "db.%d.%s", dbid, stats_field_string[i]);
                     printf("%-30s", field_string);
+                } else if (rdbstate.format == OUTPUT_FORMAT_YAML) {
+                    sprintf(buffer, "%2s", "");
+                    printf("%s%s:\n", buffer, stats_field_string[i]);
                 }
 
                 for (size_t obj_type = 0; obj_type < OBJ_TYPE_MAX; obj_type++) {
-                    const size_t profiler_idx = obj_type + dbid * OBJ_TYPE_MAX;
-                    rdbProfiler *profiler = rdbstate.profiler[profiler_idx];
+                    const size_t stats_idx = obj_type + dbid * OBJ_TYPE_MAX;
+                    rdbStats *stats = rdbstate.stats[stats_idx];
 
                     if (rdbstate.format == OUTPUT_FORMAT_INFO) {
                         if (i == 0) continue;
-                        snprintf(field_string, sizeof(field_string), "[info] db.%d.type.%s.%s", dbid, type_name[profiler->type], profiler_field_string[i]);
+                        snprintf(field_string, sizeof(field_string), "[info] db.%d.type.%s.%s", dbid, type_name[stats->type], stats_field_string[i]);
                         printf("%s:", field_string);
-                    }
-
-                    if (rdbstate.format == OUTPUT_FORMAT_FORM) {
+                    } else if (rdbstate.format == OUTPUT_FORMAT_FORM) {
                         printf("\t");
+                    } else if (rdbstate.format == OUTPUT_FORMAT_YAML) {
+                        sprintf(buffer, "%4s", "");
+                        printf("%s%s: ", buffer, type_name[stats->type]);
                     }
 
-                    rdbProfilerPrintInfo(profiler, profiler_field_string[i]);
-                    if (rdbstate.format == OUTPUT_FORMAT_INFO) {
+                    rdbStatsPrintInfo(stats, stats_field_string[i], buffer, sizeof(buffer));
+                    if (rdbstate.format == OUTPUT_FORMAT_FORM) {
+                        printf("%-5s", buffer);
+                    } else {
+                        printf("%s", buffer);
+                    }
+
+                    if (rdbstate.format == OUTPUT_FORMAT_INFO ||
+                        rdbstate.format == OUTPUT_FORMAT_YAML) {
                         printf("\n");
                     }
                 }
@@ -650,6 +688,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
                 sdsfree(err);
                 goto err;
             }
+            rdbstate.functions_num++;
             continue;
         } else {
             if (!rdbIsObjectType(type)) {
@@ -667,11 +706,11 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         /* Read value */
         rdbstate.doing = RDB_CHECK_DOING_READ_OBJECT_VALUE;
         if ((val = rdbLoadObject(type, &rdb, key->ptr, selected_dbid, NULL)) == NULL) goto eoferr;
-        if (rdbCheckProfiler) {
-            int max_profiler_num = (rdbstate.databases + 1) * OBJ_TYPE_MAX;
-            if (max_profiler_num > rdbstate.profiler_num) {
-                rdbstate.profiler = tryExpandRdbProfiler(rdbstate.profiler, rdbstate.profiler_num, max_profiler_num);
-                rdbstate.profiler_num = max_profiler_num;
+        if (rdbCheckStats) {
+            int max_stats_num = (rdbstate.databases + 1) * OBJ_TYPE_MAX;
+            if (max_stats_num > rdbstate.stats_num) {
+                rdbstate.stats = tryExpandRdbStats(rdbstate.stats, rdbstate.stats_num, max_stats_num);
+                rdbstate.stats_num = max_stats_num;
             }
 
             computeDatasetProfile(selected_dbid, key, val);
@@ -735,13 +774,15 @@ void parseCheckRdbOptions(int argc, char **argv, FILE *fp) {
             printf("valkey-check-rdb %s\n", version);
             sdsfree(version);
             exit(0);
-        } else if (!strcmp(argv[i], "--profiler")) {
-            rdbCheckProfiler = 1;
+        } else if (!strcmp(argv[i], "--stats")) {
+            rdbCheckStats = 1;
         } else if (!strcmp(argv[i], "--format")) {
             if (lastarg) goto checkRdbUsage;
             char *format = argv[i + 1];
             if (!strcmp(format, "form")) {
                 rdbstate.format = OUTPUT_FORMAT_FORM;
+            } else if (!strcmp(format, "yaml")) {
+                rdbstate.format = OUTPUT_FORMAT_YAML;
             } else if (!strcmp(format, "info")) {
                 rdbstate.format = OUTPUT_FORMAT_INFO;
             } else {
@@ -756,7 +797,7 @@ void parseCheckRdbOptions(int argc, char **argv, FILE *fp) {
     return;
 
 checkRdbUsage:
-    fprintf(stderr, "Usage: %s <rdb-file-name> [--format form|info] [--profiler]\n", argv[0]);
+    fprintf(stderr, "Usage: %s <rdb-file-name> [--format form|info|yaml] [--stats]\n", argv[0]);
     exit(1);
 }
 
@@ -780,9 +821,10 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
     gettimeofday(&tv, NULL);
     init_genrand64(((long long)tv.tv_sec * 1000000 + tv.tv_usec) ^ getpid());
 
-    rdbstate.profiler = initRdbProfiler(OBJ_TYPE_MAX);
-    rdbstate.profiler_num = OBJ_TYPE_MAX;
+    rdbstate.stats = initRdbStats(OBJ_TYPE_MAX);
+    rdbstate.stats_num = OBJ_TYPE_MAX;
     rdbstate.databases = 1;
+    rdbstate.functions_num = 0;
 
     /* In order to call the loading functions we need to create the shared
      * integer objects, however since this function may be called from
@@ -799,6 +841,6 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
         rdbShowGenericInfo();
     }
     if (fp) return (retval == 0) ? C_OK : C_ERR;
-    freeRdbProfile(rdbstate.profiler, rdbstate.profiler_num);
+    freeRdbProfile(rdbstate.stats, rdbstate.stats_num);
     exit(retval);
 }

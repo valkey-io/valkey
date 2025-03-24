@@ -35,6 +35,7 @@
  */
 
 #include "lzfP.h"
+#include <emmintrin.h> // SSE2 intrinsics
 
 #define HSIZE (1 << (HLOG))
 
@@ -182,38 +183,63 @@ lzf_compress (const void *const in_data, size_t in_len,
           op [- lit - 1] = lit - 1; /* stop run */
           op -= !lit; /* undo run if length is zero */
 
-          for (;;)
+          // for (;;)
+          //   {
+          //     if (expect_true (maxlen > 16))
+          //       {
+          //         len++; if (ref [len] != ip [len]) break;
+          //         len++; if (ref [len] != ip [len]) break;
+          //         len++; if (ref [len] != ip [len]) break;
+          //         len++; if (ref [len] != ip [len]) break;
+
+          //         len++; if (ref [len] != ip [len]) break;
+          //         len++; if (ref [len] != ip [len]) break;
+          //         len++; if (ref [len] != ip [len]) break;
+          //         len++; if (ref [len] != ip [len]) break;
+
+          //         len++; if (ref [len] != ip [len]) break;
+          //         len++; if (ref [len] != ip [len]) break;
+          //         len++; if (ref [len] != ip [len]) break;
+          //         len++; if (ref [len] != ip [len]) break;
+
+          //         len++; if (ref [len] != ip [len]) break;
+          //         len++; if (ref [len] != ip [len]) break;
+          //         len++; if (ref [len] != ip [len]) break;
+          //         len++; if (ref [len] != ip [len]) break;
+          //       }
+
+          //     do
+          //       len++;
+          //     while (len < maxlen && ref[len] == ip[len]);
+
+          //     break;
+          //   }
+        for (;;)
+        {
+          if (expect_true(maxlen > 18))
+          {
+            while (len + 16 <= maxlen)
             {
-              if (expect_true (maxlen > 16))
-                {
-                  len++; if (ref [len] != ip [len]) break;
-                  len++; if (ref [len] != ip [len]) break;
-                  len++; if (ref [len] != ip [len]) break;
-                  len++; if (ref [len] != ip [len]) break;
+              __m128i ref_vec = _mm_loadu_si128((__m128i*)&ref[len]);
+              __m128i ip_vec = _mm_loadu_si128((__m128i*)&ip[len]);
+              __m128i cmp = _mm_cmpeq_epi8(ref_vec, ip_vec);
+              int mask = _mm_movemask_epi8(cmp);
 
-                  len++; if (ref [len] != ip [len]) break;
-                  len++; if (ref [len] != ip [len]) break;
-                  len++; if (ref [len] != ip [len]) break;
-                  len++; if (ref [len] != ip [len]) break;
+              if (mask != 0xFFFF) // Not all bytes are equal
+              {
+                len += __builtin_ctz(~mask); // Count trailing zeros to find the first mismatch
+                break;
+              }
 
-                  len++; if (ref [len] != ip [len]) break;
-                  len++; if (ref [len] != ip [len]) break;
-                  len++; if (ref [len] != ip [len]) break;
-                  len++; if (ref [len] != ip [len]) break;
-
-                  len++; if (ref [len] != ip [len]) break;
-                  len++; if (ref [len] != ip [len]) break;
-                  len++; if (ref [len] != ip [len]) break;
-                  len++; if (ref [len] != ip [len]) break;
-                }
-
-              do
-                len++;
-              while (len < maxlen && ref[len] == ip[len]);
-
-              break;
+              len += 16;
             }
+          }
 
+          while (len < maxlen && ref[len] == ip[len])
+            len++;
+
+          break;
+        }
           len -= 2; /* len is now #octets - 1 */
           ip++;
 

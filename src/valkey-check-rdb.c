@@ -442,7 +442,7 @@ void rdbShowGenericInfo(void) {
                     snprintf(field_string, sizeof(field_string), "db.%d.%s", dbid, stats_field_string[i]);
                     printf("%-30s", field_string);
                 } else if (rdbstate.format == OUTPUT_FORMAT_YAML) {
-                    sprintf(buffer, "%2s", "");
+                    snprintf(buffer, sizeof(buffer), "%2s", "");
                     printf("%s%s:\n", buffer, stats_field_string[i]);
                 }
 
@@ -457,7 +457,7 @@ void rdbShowGenericInfo(void) {
                     } else if (rdbstate.format == OUTPUT_FORMAT_FORM) {
                         printf("\t");
                     } else if (rdbstate.format == OUTPUT_FORMAT_YAML) {
-                        sprintf(buffer, "%4s", "");
+                        snprintf(buffer, sizeof(buffer), "%4s", "");
                         printf("%s%s: ", buffer, type_name[stats->type]);
                     }
 

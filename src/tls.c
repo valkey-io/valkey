@@ -47,6 +47,7 @@
 #include <sys/uio.h>
 #include <arpa/inet.h>
 #include <sys/stat.h>
+#include <stdbool.h>
 
 #define REDIS_TLS_PROTO_TLSv1 (1 << 0)
 #define REDIS_TLS_PROTO_TLSv1_1 (1 << 1)
@@ -282,7 +283,7 @@ error:
 }
 
 /* Given a path to a file, return the last time it was accessed (in seconds) */
-static time_t getLastModifiedTime(const char* path){
+static time_t getLastModifiedTime(const char* path) {
     struct stat path_stat;
     stat(path, &path_stat);
 
@@ -1170,8 +1171,7 @@ static int tlsProcessPendingData(void) {
 /* Reload TLS certificate from disk, effectively rotating it */
 void tlsReload(void) {
     /* We will only bother checking keys and certs if TLS is enabled, otherwise we would be calling 'stat' for no reason */
-    if (server.tls_rotation && (server.tls_port || server.tls_replication || server.tls_cluster)){
-
+    if (server.tls_rotation && (server.tls_port || server.tls_replication || server.tls_cluster)) {
         bool cert_file_modified = getLastModifiedTime(server.tls_ctx_config.cert_file) != server.tls_ctx_config.cert_file_last_modified;
         bool key_file_modified = getLastModifiedTime(server.tls_ctx_config.key_file) != server.tls_ctx_config.key_file_last_modified;
 
@@ -1181,7 +1181,7 @@ void tlsReload(void) {
         bool ca_cert_file_modified = server.tls_ctx_config.ca_cert_file != NULL && getLastModifiedTime(server.tls_ctx_config.ca_cert_file) != server.tls_ctx_config.ca_cert_file_last_modified;
         bool ca_cert_dir_modified = server.tls_ctx_config.ca_cert_dir != NULL && getLastModifiedTime(server.tls_ctx_config.ca_cert_dir) != server.tls_ctx_config.ca_cert_dir_last_modified;
 
-        if (cert_file_modified || key_file_modified || ca_cert_file_modified || ca_cert_dir_modified || client_cert_file_modified || client_key_file_modified){
+        if (cert_file_modified || key_file_modified || ca_cert_file_modified || ca_cert_dir_modified || client_cert_file_modified || client_key_file_modified) {
             serverLog(LL_NOTICE, "TLS certificates changed on disk, attempting to rotate.");
             if (tlsConfigure(&server.tls_ctx_config, true) == C_ERR) {
                 serverLog(LL_NOTICE, "Error trying to rotate TLS certificates, TLS credentials remain unchanged.");
@@ -1279,7 +1279,8 @@ int RedisRegisterConnectionTypeTLS(void) {
     return C_ERR;
 }
 
-void tlsReload(void) {}
+void tlsReload(void) {
+}
 
 #endif
 

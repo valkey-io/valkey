@@ -42,7 +42,7 @@ start_server {tags {"tls-rotation"} overrides {tls-rotation yes}} {
             assert_no_match {*::redis::redisHandle*} $e
         }
 
-        test {TLS: Clients with correct certifcates can cannect to server post rotation} {
+        test {TLS: Clients with correct certificates can cannect to server post rotation} {
             set r2 [valkey_client_tls -keyfile "$clientdir1/client.key" -certfile "$clientdir1/client.crt" -require 1 -cafile "$clientdir1/ca.crt"]
             $r2 incrby x 50
             assert_equal {150} [$r2 get x]
@@ -79,7 +79,7 @@ start_server {tags {"tls-rotation"} overrides {tls-rotation yes}} {
             assert_no_match {*::redis::redisHandle*} $e
         }
 
-        test {TLS: Clients with correct certifcates can cannect to server post rotation} {
+        test {TLS: Clients with correct certificates can cannect to server post rotation} {
             set r2 [valkey_client_tls -keyfile "$clientdir1/client.key" -certfile "$clientdir1/client.crt" -require 1 -cafile "$clientdir2/ca.crt"]
             $r2 incrby x 50
             assert_equal {350} [$r2 get x]

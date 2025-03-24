@@ -15,7 +15,7 @@ then
 fi
 if [ ! -r tests/tls ] || [ ! -r tests/tls_1 ] || [ ! -r tests/tls_2 ];
 then
-    echo "Generating neccessary certificates for TLS rotation testing."
+    echo "Generating necessary certificates for TLS rotation testing."
     rm -rf tests/tls tests/tls_1 tests/tls_2
 
     utils/gen-test-certs.sh

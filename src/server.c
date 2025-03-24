@@ -1670,10 +1670,10 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
         migrateCloseTimedoutSockets();
     }
 
-    /* Reload the TLS cert if neccessary. This effectively rotates the 
+    /* Reload the TLS cert if necessary. This effectively rotates the
      * cert if a change has been made on disk, but the ValKey server hasn't
      * been notified. */
-    run_with_period(1000){
+    run_with_period(1000) {
         tlsReload();
     }
 

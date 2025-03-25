@@ -103,8 +103,8 @@ struct {
 #define RDB_CHECK_DOING_READ_FUNCTIONS 9
 
 #define OUTPUT_FORMAT_INFO 0
-#define OUTPUT_FORMAT_FORM 1
-#define OUTPUT_FORMAT_YAML 2
+#define OUTPUT_FORMAT_TABLE 1
+#define OUTPUT_FORMAT_CSV 2
 
 char *rdb_check_doing_string[] = {
     "start",
@@ -437,17 +437,12 @@ void rdbShowGenericInfo(void) {
     if (rdbCheckStats) {
         char field_string[80];
         for (int dbid = 0; dbid <= rdbstate.databases; dbid++) {
-            if (rdbstate.format == OUTPUT_FORMAT_YAML) {
-                printf("db.%d:\n", dbid);
-            }
-
             for (size_t i = 0; stats_field_string[i] != NULL; i++) {
-                if (rdbstate.format == OUTPUT_FORMAT_FORM) {
+                if (rdbstate.format == OUTPUT_FORMAT_TABLE) {
                     snprintf(field_string, sizeof(field_string), "db.%d.%s", dbid, stats_field_string[i]);
                     printf("%-30s", field_string);
-                } else if (rdbstate.format == OUTPUT_FORMAT_YAML) {
-                    snprintf(buffer, sizeof(buffer), "%2s", "");
-                    printf("%s%s:\n", buffer, stats_field_string[i]);
+                } else if (rdbstate.format == OUTPUT_FORMAT_CSV) {
+                    printf("db.%d.%s", dbid, stats_field_string[i]);
                 }
 
                 for (size_t obj_type = 0; obj_type < OBJ_TYPE_MAX; obj_type++) {
@@ -458,26 +453,24 @@ void rdbShowGenericInfo(void) {
                         if (i == 0) continue;
                         snprintf(field_string, sizeof(field_string), "[info] db.%d.type.%s.%s", dbid, type_name[stats->type], stats_field_string[i]);
                         printf("%s:", field_string);
-                    } else if (rdbstate.format == OUTPUT_FORMAT_FORM) {
+                    } else if (rdbstate.format == OUTPUT_FORMAT_TABLE) {
                         printf("\t");
-                    } else if (rdbstate.format == OUTPUT_FORMAT_YAML) {
-                        snprintf(buffer, sizeof(buffer), "%4s", "");
-                        printf("%s%s: ", buffer, type_name[stats->type]);
+                    } else if (rdbstate.format == OUTPUT_FORMAT_CSV) {
+                        printf(",");
                     }
 
                     rdbStatsPrintInfo(stats, stats_field_string[i], buffer, sizeof(buffer));
-                    if (rdbstate.format == OUTPUT_FORMAT_FORM) {
+                    if (rdbstate.format == OUTPUT_FORMAT_TABLE) {
                         printf("%-5s", buffer);
                     } else {
                         printf("%s", buffer);
                     }
 
-                    if (rdbstate.format == OUTPUT_FORMAT_INFO ||
-                        rdbstate.format == OUTPUT_FORMAT_YAML) {
+                    if (rdbstate.format == OUTPUT_FORMAT_INFO) {
                         printf("\n");
                     }
                 }
-                if (rdbstate.format == OUTPUT_FORMAT_FORM)
+                if (rdbstate.format == OUTPUT_FORMAT_TABLE || rdbstate.format == OUTPUT_FORMAT_CSV)
                     printf("\n");
             }
         }
@@ -775,7 +768,7 @@ void parseCheckRdbOptions(int argc, char **argv, FILE *fp) {
         goto checkRdbUsage;
     }
 
-    rdbstate.format = OUTPUT_FORMAT_INFO;
+    rdbstate.format = OUTPUT_FORMAT_TABLE;
 
     for (i = 2; i < argc; i++) {
         lastarg = (i == (argc - 1));
@@ -789,10 +782,10 @@ void parseCheckRdbOptions(int argc, char **argv, FILE *fp) {
         } else if (!strcmp(argv[i], "--format")) {
             if (lastarg) goto checkRdbUsage;
             char *format = argv[i + 1];
-            if (!strcmp(format, "form")) {
-                rdbstate.format = OUTPUT_FORMAT_FORM;
-            } else if (!strcmp(format, "yaml")) {
-                rdbstate.format = OUTPUT_FORMAT_YAML;
+            if (!strcmp(format, "table")) {
+                rdbstate.format = OUTPUT_FORMAT_TABLE;
+            } else if (!strcmp(format, "csv")) {
+                rdbstate.format = OUTPUT_FORMAT_CSV;
             } else if (!strcmp(format, "info")) {
                 rdbstate.format = OUTPUT_FORMAT_INFO;
             } else {

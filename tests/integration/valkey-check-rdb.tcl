@@ -70,7 +70,7 @@ tags {"check-rdb network external:skip logreqres:skip"} {
             
             set dump_rdb [file join [lindex [r config get dir] 1] dump.rdb]
             catch {
-                exec src/valkey-check-rdb $dump_rdb --stats
+                exec src/valkey-check-rdb $dump_rdb --stats --format info
             } result
 
             assert_match "*db.0.type.string.keys.total:10*" $result

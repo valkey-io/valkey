@@ -9763,7 +9763,8 @@ ValkeyModuleString *VM_GetModuleUserACLString(ValkeyModuleUser *user) {
  * The returned string must be released with ValkeyModule_FreeString() or by
  * enabling automatic memory management. */
 ValkeyModuleString *VM_GetCurrentUserName(ValkeyModuleCtx *ctx) {
-    if (ctx != NULL || ctx->client != NULL || ctx->client->user != NULL) {
+    if (ctx == NULL || ctx->client == NULL || ctx->client->user == NULL) {
+        errno = ENOTSUP;
         return NULL;
     }
     return VM_CreateString(ctx, ctx->client->user->name, sdslen(ctx->client->user->name));

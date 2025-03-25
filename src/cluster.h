@@ -76,7 +76,7 @@ const char **clusterCommandExtendedHelp(void);
 
 int clusterAllowFailoverCmd(client *c);
 void clusterPromoteSelfToPrimary(void);
-int clusterManualFailoverTimeLimit(void);
+mstime_t clusterManualFailoverTimeLimit(void);
 
 void clusterCommandSlots(client *c);
 void clusterCommandMyId(client *c);

@@ -327,7 +327,6 @@ static void connSocketAcceptHandler(aeEventLoop *el, int fd, void *privdata, int
         }
         serverLog(LL_VERBOSE, "Accepted %s:%d", cip, cport);
 
-        anetEnableTcpNoDelay(NULL, cfd);
         if (server.tcpkeepalive) anetKeepAlive(NULL, cfd, server.tcpkeepalive);
         acceptCommonHandler(connCreateAcceptedSocket(cfd, NULL), flags, cip);
     }
@@ -463,16 +462,6 @@ int connBlock(connection *conn) {
 int connNonBlock(connection *conn) {
     if (conn->fd == -1) return C_ERR;
     return anetNonBlock(NULL, conn->fd);
-}
-
-int connEnableTcpNoDelay(connection *conn) {
-    if (conn->fd == -1) return C_ERR;
-    return anetEnableTcpNoDelay(NULL, conn->fd);
-}
-
-int connDisableTcpNoDelay(connection *conn) {
-    if (conn->fd == -1) return C_ERR;
-    return anetDisableTcpNoDelay(NULL, conn->fd);
 }
 
 int connKeepAlive(connection *conn, int interval) {

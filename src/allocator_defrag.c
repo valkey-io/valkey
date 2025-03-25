@@ -1,8 +1,8 @@
-/* Copyright 2024- Valkey contributors
+/*
+ * Copyright (c) Valkey Contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  */
-
 /*
  * This file implements allocator-specific defragmentation logic used
  * within the Valkey engine. Below is the relationship between various

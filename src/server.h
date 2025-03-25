@@ -2086,6 +2086,7 @@ struct valkeyServer {
                                                             * the cluster after it is forgotten with CLUSTER FORGET. */
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
     int auto_failover_on_shutdown;                         /* Trigger manual failover on shutdown to primary. */
+    mstime_t cluster_mf_timeout;                           /* Milliseconds to do a manual failover. */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     /* Debug config to control the random ping. When set, we will disable the random ping in clusterCron. */
@@ -3251,11 +3252,11 @@ robj *setTypeDup(robj *o);
 #define HASH_SET_TAKE_VALUE (1 << 1)
 #define HASH_SET_COPY 0
 
-typedef struct hashTypeEntry hashTypeEntry;
+typedef void hashTypeEntry;
 hashTypeEntry *hashTypeCreateEntry(sds field, sds value);
 sds hashTypeEntryGetField(const hashTypeEntry *entry);
 sds hashTypeEntryGetValue(const hashTypeEntry *entry);
-size_t hashTypeEntryAllocSize(hashTypeEntry *entry);
+size_t hashTypeEntryMemUsage(hashTypeEntry *entry);
 hashTypeEntry *hashTypeEntryDefrag(hashTypeEntry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds));
 void dismissHashTypeEntry(hashTypeEntry *entry);
 void freeHashTypeEntry(hashTypeEntry *entry);

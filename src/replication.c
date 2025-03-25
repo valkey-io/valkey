@@ -27,7 +27,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 
 #include "server.h"
 #include "cluster.h"
@@ -46,6 +50,8 @@
 #include <sys/stat.h>
 #include <ctype.h>
 
+void cleanupTransferResources(void);
+void replicationAbortSyncTransfer(void);
 void replicationDiscardCachedPrimary(void);
 void replicationResurrectCachedPrimary(connection *conn);
 void replicationResurrectProvisionalPrimary(void);
@@ -1152,7 +1158,7 @@ void syncCommand(client *c) {
     /* Setup the replica as one waiting for BGSAVE to start. The following code
      * paths will change the state if we handle the replica differently. */
     c->repl_data->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
-    if (server.repl_disable_tcp_nodelay) connDisableTcpNoDelay(c->conn); /* Non critical if it fails. */
+    if (server.repl_disable_tcp_nodelay) anetDisableTcpNoDelay(NULL, c->conn->fd); /* Non critical if it fails. */
     c->repl_data->repldbfd = -1;
     c->flag.replica = 1;
     listAddNodeTail(server.replicas, c);
@@ -2676,12 +2682,7 @@ void replicationAbortDualChannelSyncTransfer(void) {
         connClose(server.repl_rdb_transfer_s);
         server.repl_rdb_transfer_s = NULL;
     }
-    zfree(server.repl_transfer_tmpfile);
-    server.repl_transfer_tmpfile = NULL;
-    if (server.repl_transfer_fd != -1) {
-        close(server.repl_transfer_fd);
-        server.repl_transfer_fd = -1;
-    }
+    cleanupTransferResources();
     server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_STATE_NONE;
     server.repl_provisional_primary.read_reploff = 0;
     server.repl_provisional_primary.reploff = 0;
@@ -2890,14 +2891,8 @@ error:
         connClose(server.repl_transfer_s);
         server.repl_transfer_s = NULL;
     }
-    if (server.repl_rdb_transfer_s) {
-        connClose(server.repl_rdb_transfer_s);
-        server.repl_rdb_transfer_s = NULL;
-    }
-    if (server.repl_transfer_fd != -1) close(server.repl_transfer_fd);
-    server.repl_transfer_fd = -1;
-    server.repl_state = REPL_STATE_CONNECT;
     replicationAbortDualChannelSyncTransfer();
+    server.repl_state = REPL_STATE_CONNECT;
 }
 
 /* Replication: Replica side.
@@ -3868,7 +3863,8 @@ void syncWithPrimary(connection *conn) {
         server.repl_rdb_transfer_s = connCreate(connTypeOfReplication());
         if (connConnect(server.repl_rdb_transfer_s, server.primary_host, server.primary_port, server.bind_source_addr,
                         dualChannelFullSyncWithPrimary) == C_ERR) {
-            serverLog(LL_WARNING, "Unable to connect to Primary: %s", connGetLastError(server.repl_transfer_s));
+            dualChannelServerLog(LL_WARNING, "Unable to connect to Primary: %s",
+                                 connGetLastError(server.repl_transfer_s));
             connClose(server.repl_rdb_transfer_s);
             server.repl_rdb_transfer_s = NULL;
             goto error;
@@ -3908,10 +3904,7 @@ error:
         connClose(server.repl_rdb_transfer_s);
         server.repl_rdb_transfer_s = NULL;
     }
-    if (server.repl_transfer_fd != -1) close(server.repl_transfer_fd);
-    if (server.repl_transfer_tmpfile) zfree(server.repl_transfer_tmpfile);
-    server.repl_transfer_tmpfile = NULL;
-    server.repl_transfer_fd = -1;
+    replicationAbortSyncTransfer();
     server.repl_state = REPL_STATE_CONNECT;
     return;
 
@@ -3938,11 +3931,33 @@ int connectWithPrimary(void) {
     return C_OK;
 }
 
+/* In disk-based replication, replica will open a temp db file to store the RDB file.
+ * Before entering the REPL_STATE_TRANSFER or after entering the REPL_STATE_TRANSFER,
+ * if an error occurs, we need to clean up related resources, such as closing the tmp
+ * file fd and deleting the temp file.
+ *
+ * Noted that repl_transfer_fd and repl_transfer_tmpfile should be set/unset together. */
+void cleanupTransferResources(void) {
+    if (server.repl_transfer_fd == -1) {
+        serverAssert(server.repl_transfer_tmpfile == NULL);
+        return;
+    }
+
+    serverAssert(server.repl_transfer_tmpfile != NULL);
+    close(server.repl_transfer_fd);
+    bg_unlink(server.repl_transfer_tmpfile);
+    zfree(server.repl_transfer_tmpfile);
+    server.repl_transfer_tmpfile = NULL;
+    server.repl_transfer_fd = -1;
+}
+
 /* This function can be called when a non blocking connection is currently
  * in progress to undo it.
  * Never call this function directly, use cancelReplicationHandshake() instead.
  */
 void undoConnectWithPrimary(void) {
+    if (server.repl_transfer_s == NULL) return;
+
     connClose(server.repl_transfer_s);
     server.repl_transfer_s = NULL;
 }
@@ -3951,15 +3966,8 @@ void undoConnectWithPrimary(void) {
  * Never call this function directly, use cancelReplicationHandshake() instead.
  */
 void replicationAbortSyncTransfer(void) {
-    serverAssert(server.repl_state == REPL_STATE_TRANSFER);
     undoConnectWithPrimary();
-    if (server.repl_transfer_fd != -1) {
-        close(server.repl_transfer_fd);
-        bg_unlink(server.repl_transfer_tmpfile);
-        zfree(server.repl_transfer_tmpfile);
-        server.repl_transfer_tmpfile = NULL;
-        server.repl_transfer_fd = -1;
-    }
+    cleanupTransferResources();
 }
 
 /* This function aborts a non blocking replication attempt if there is one

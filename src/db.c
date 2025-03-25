@@ -445,7 +445,7 @@ robj *dbRandomKey(serverDb *db) {
         sds key = objectGetKey(valkey);
         robj *keyobj = createStringObject(key, sdslen(key));
         if (objectIsExpired(valkey)) {
-            if (allvolatile && (server.primary_host || server.import_mode) && --maxtries == 0) {
+            if (allvolatile && (server.primary_host || server.import_mode || isPausedActions(PAUSE_ACTION_EXPIRE)) && --maxtries == 0) {
                 /* If the DB is composed only of keys with an expire set,
                  * it could happen that all the keys are already logically
                  * expired in the replica, so the function cannot stop because

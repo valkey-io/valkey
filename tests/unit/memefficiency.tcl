@@ -36,106 +36,251 @@ start_server {tags {"memefficiency external:skip"}} {
     }
 }
 
+
 run_solo {defrag} {
-    proc test_active_defrag {type} {
-    if {[string match {*jemalloc*} [s mem_allocator]] && [r debug mallctl arenas.page] <= 8192} {
-        test "Active defrag main dictionary: $type" {
-            r config set activedefrag no
-            r config set active-defrag-threshold-lower 5
-            r config set active-defrag-cycle-min 65
-            r config set active-defrag-cycle-max 75
-            r config set active-defrag-ignore-bytes 2mb
-            r config set maxmemory 100mb
-            r config set maxmemory-policy allkeys-lru
-            r config set lazyfree-lazy-user-del no
-            r config set lazyfree-lazy-user-flush no
+    # make logging a bit more readable
+    proc to_mb {bytes} {
+        return [format "%6.2f MB" [expr $bytes / 1024.0 / 1024.0]]
+    }
 
-            populate 700000 asdf1 150
-            populate 100 asdf1 150 0 false 1000
-            populate 170000 asdf2 300
-            populate 100 asdf2 300 0 false 1000
+    # Utility function used to create a sequence where each key has an increasing
+    # number of fields/values.  For each key, the number for fields/values will
+    # increase by 2x.  Key 0 will have 2 values, key 1 will have 4, key 2 will
+    # have 8, etc.  Pass in the previous key/field pair to get the next.
+    # The sequence is: (0,0), (0,1), (1,0), (1,1), (1,2), (1,3), (2,0)...
+    # The optional 'incby' parameter allows incrementing by 2 across the sequence.
+    proc next_exp_kf {key field {incby 1}} {
+        assert {$incby == 1 || $incby == 2}
+        incr field $incby
+        if {$field == 2 ** ($key+1)} {
+            incr key
+            set field 0
+        }
+        return [list $key $field]
+    }
 
-            assert {[scan [regexp -inline {expires\=([\d]*)} [r info keyspace]] expires=%d] > 0}
-            after 120 ;# serverCron only updates the info once in 100ms
-            set frag [s allocator_frag_ratio]
-            if {$::verbose} {
-                puts "frag $frag"
+    # Logs defragging state if ::verbose is true
+    proc log_frag {title} {
+        # Note, this delay is outside of the "if" so that behavior is the same, with and
+        #  without verbose logging.  Also, this allows for assertions to follow without
+        #  adding additional delay statements
+        after 120  ;# serverCron only updates the info once in 100ms
+        if {$::verbose} {
+            puts "Frag info: $title"
+            puts "    used: [to_mb [s allocator_allocated]]"
+            puts "    frag: [to_mb [s allocator_frag_bytes]]"
+            puts "    frag ratio: [s allocator_frag_ratio]"
+            puts "    hits: [s active_defrag_hits]"
+            puts "    misses: [s active_defrag_misses]"
+        }
+    }
+
+    # Start defrag and wait for it to stop
+    # The optional code block is executed after defrag has started
+    proc perform_defrag {{code_block {}}} {
+        r config set latency-monitor-threshold 5
+        r latency reset
+
+        set old_defrag_time [s total_active_defrag_time]
+        r config set activedefrag yes
+
+        # Wait for defrag to start
+        wait_for_condition 10 50 {
+            [s total_active_defrag_time] ne $old_defrag_time
+        } else {
+            log_frag "defrag not started"
+            puts [r info memory]
+            puts [r info stats]
+            puts [r memory malloc-stats]
+            fail "defrag not started."
+        }
+
+        # Execute the passed in code block
+        uplevel 1 $code_block
+
+        # Wait for the active defrag to stop working.
+        wait_for_condition 150 200 {
+            [s active_defrag_running] eq 0
+        } else {
+            log_frag "defrag didn't stop"
+            puts [r info memory]
+            puts [r memory malloc-stats]
+            fail "defrag didn't stop."
+        } debug {
+            log_frag "defragging..."
+        }
+
+        r config set activedefrag no
+        after 120 ;# ensure memory stats are current when function exits
+    }
+
+    # Checks for any significant latency events
+    proc validate_latency {limit_ms} {
+        if {!$::no_latency} {
+            set max_latency 0
+            foreach event [r latency latest] {
+                lassign $event eventname time latency max
+                if {$eventname == "active-defrag-cycle" || $eventname == "while-blocked-cron"} {
+                    set max_latency $max
+                }
             }
-            assert {$frag >= 1.4}
-
-            r config set latency-monitor-threshold 5
-            r latency reset
-            r config set maxmemory 110mb ;# prevent further eviction (not to fail the digest test)
-            set digest [debug_digest]
-            catch {r config set activedefrag yes} e
-            if {[r config get activedefrag] eq "activedefrag yes"} {
-                # Wait for the active defrag to start working (decision once a
-                # second).
-                wait_for_condition 50 100 {
-                    [s total_active_defrag_time] ne 0
-                } else {
-                    after 120 ;# serverCron only updates the info once in 100ms
-                    puts [r info memory]
-                    puts [r info stats]
-                    puts [r memory malloc-stats]
-                    fail "defrag not started."
-                }
-
-                # This test usually runs for a while, during this interval, we test the range.
-                assert_range [s active_defrag_running] 65 75
-                r config set active-defrag-cycle-min 1
-                r config set active-defrag-cycle-max 1
-                after 120 ;# serverCron only updates the info once in 100ms
-                assert_range [s active_defrag_running] 1 1
-                r config set active-defrag-cycle-min 65
-                r config set active-defrag-cycle-max 75
-
-                after 1000 ;# Give defrag time to work (might be multiple cycles)
-
-                # Wait for the active defrag to stop working.
-                wait_for_condition 2000 100 {
-                    [s active_defrag_running] eq 0
-                } else {
-                    after 120 ;# serverCron only updates the info once in 100ms
-                    puts [r info memory]
-                    puts [r memory malloc-stats]
-                    fail "defrag didn't stop."
-                }
-
-                # Test the fragmentation is lower.
-                after 120 ;# serverCron only updates the info once in 100ms
-                set frag [s allocator_frag_ratio]
-                set max_latency 0
-                foreach event [r latency latest] {
-                    lassign $event eventname time latency max
-                    if {$eventname == "active-defrag-cycle"} {
-                        set max_latency $max
-                    }
-                }
-                if {$::verbose} {
-                    puts "frag $frag"
-                    set misses [s active_defrag_misses]
-                    set hits [s active_defrag_hits]
-                    puts "hits: $hits"
-                    puts "misses: $misses"
-                    puts "max latency $max_latency"
+            if {$::verbose} {
+                puts "Validating max latency ($max_latency) is LT $limit_ms"
+                if {$max_latency > 0} {
                     puts [r latency latest]
                     puts [r latency history active-defrag-cycle]
-                }
-                assert {$frag < 1.1}
-                # due to high fragmentation, 100hz, and active-defrag-cycle-max set to 75,
-                # we expect max latency to be not much higher than 7.5ms but due to rare slowness threshold is set higher
-                if {!$::no_latency} {
-                    assert {$max_latency <= 30}
+                    puts [r latency history while-blocked-cron]
                 }
             }
-            # verify the data isn't corrupted or changed
-            set newdigest [debug_digest]
-            assert {$digest eq $newdigest}
-            r save ;# saving an rdb iterates over all the data / pointers
+            assert {$max_latency <= $limit_ms}
+        }
+    }
 
-            # if defrag is supported, test AOF loading too
-            if {[r config get activedefrag] eq "activedefrag yes" && $type eq "standalone"} {
+    # Validate expected fragmentation ratio
+    # op = "<" (less than) or ">" (greater than)
+    proc validate_frag_ratio {op value} {
+        set frag [s allocator_frag_ratio]
+        if {$::verbose} {
+            puts "Validating frag ($frag) $op $value"
+        }
+        set allocated_bytes [s allocator_allocated]
+        if {$allocated_bytes < 20 * 1024 * 1024} {
+            # If allocated bytes is too small, the ratios get wonky.  Since we use 2MB for
+            # active-defrag-ignore-bytes, let's make sure that we have at least 10x that amount
+            # allocated before trying to verify any fragmentation ratios.  Otherwise the tests
+            # are likely to get flaky.
+            error "test error: trying to validate frag ratio with only $allocated_bytes allocated"
+        }
+        if {$op == "<"} {
+            assert_lessthan $frag $value
+        } elseif {$op == ">"} {
+            assert_morethan $frag $value
+        } else {
+            error "Operator value($op) must be '<' or '>'"
+        }
+    }
+
+    # Performs a standardized defrag test.  The "populate" block generates data.  The "fragment" block
+    # fragments that data (usually by deleting half).
+    #  - caller must generate at least 40 MB of data
+    #  - after fragmentation, at least 20 MB of data must remain, and fragmentation ratio must exceed 1.4
+    # Positional parameters:
+    #    name - name of the test
+    # Named parameters:
+    #    populate {code} - required, populates initial unfragmented data
+    #    fragment {code} - required, fragments the populated data
+    #    while_defragging {code} - optional, code executed after defrag has started
+    #    latency <ms> - optional, verifies the latency to a ms target (default 5)
+    proc perform_defrag_test {name args} {
+        set opts(latency) 5
+        set opts(while_defragging) {}
+        array set opts $args
+        assert {[info exists opts(populate)]}
+        assert {[info exists opts(fragment)]}
+
+        r config set active-defrag-threshold-lower 5
+        r config set active-defrag-cycle-min 40
+        r config set active-defrag-cycle-max 60
+        r config set active-defrag-ignore-bytes 2500kb
+        r config set maxmemory 0
+
+        log_frag "test start ($name)"
+
+        # at this point, we expect fragmentation BYTES to be below a threshold
+        #  (percentage is wildly variable with low memory usage)
+        assert {[s allocator_frag_bytes] < 2 * 1024 * 1024}
+
+        # populate the DB with data
+        set initial_allocated [s allocator_allocated]
+        uplevel 1 $opts(populate)
+
+        log_frag "after adding data"
+        # check that enough data has been populated
+        set required [expr 50 * 1024 * 1024]
+        set allocated [expr [s allocator_allocated] - $initial_allocated]
+        if {$allocated < $required} {
+            fail "Tests are required to create at least $required bytes of data before fragmentation - only $allocated bytes created"
+        }
+        # check that at this point, fragmentation is very low
+        validate_frag_ratio < 1.05
+
+        # fragment the data
+        uplevel 1 $opts(fragment)
+
+        log_frag "after fragmenting data"
+        # we want some fragmentation, but we still want a minimum allocation
+        validate_frag_ratio > 1.4
+        set required [expr 25 * 1024 * 1024]
+        set allocated [expr [s allocator_allocated] - $initial_allocated]
+        if {$allocated < $required} {
+            fail "Tests are required to retain at least $required bytes of data after fragmentation - only $allocated bytes retained"
+        }
+
+        set digest [debug_digest]
+
+        perform_defrag $opts(while_defragging)
+
+        log_frag "after defragging"
+        validate_frag_ratio < 1.1
+        validate_latency $opts(latency)
+
+        # verify the data isn't corrupted or changed
+        set newdigest [debug_digest]
+        assert {$digest eq $newdigest}
+        r save ;# saving an rdb iterates over all the data / pointers
+    }
+
+    proc test_main_dictionary {type} {
+        set title "Active Defrag main dictionary: $type"
+        test $title {
+            set n 200000
+
+            perform_defrag_test $title populate {
+                # add a mass of string keys
+                set rd [valkey_deferring_client]
+                for {set j 0} {$j < $n} {incr j} {
+                    $rd setrange $j 250 a
+                    if {$j % 3 == 0} {
+                        $rd expire $j 1000 ;# put expiration on some
+                    }
+                }
+                for {set j 0} {$j < $n} {incr j} {
+                    $rd read ; # Discard replies
+                    if {$j % 3 == 0} {
+                        $rd read
+                    }
+                }
+                assert {[scan [regexp -inline {expires\=([\d]*)} [r info keyspace]] expires=%d] > 0}
+            } fragment {
+                # delete half of the keys
+                for {set j 0} {$j < $n} {incr j 2} {
+                    $rd del $j
+                }
+                for {set j 0} {$j < $n} {incr j 2} { $rd read } ; # Discard replies
+                $rd close
+                
+                # use custom slower defrag speed to start so that while_defragging has time
+                r config set active-defrag-cycle-min 2
+                r config set active-defrag-cycle-max 3
+            } while_defragging {
+                # This test runs for a while, during this interval, we verify changing the CPU range.
+                set current_cpu [s active_defrag_running]
+                assert_range $current_cpu 2 3
+
+                # alter the CPU limits and check that they took effect
+                r config set active-defrag-cycle-min 1
+                r config set active-defrag-cycle-max 1
+                after 120
+                # it's possible that defrag has already completed
+                assert {[s active_defrag_running] == 1}
+
+                # now bump up the CPU to finish quickly
+                r config set active-defrag-cycle-min 40
+                r config set active-defrag-cycle-max 60
+            }
+
+            # in standalone mode, test AOF loading too (using the remaining data from the section above)
+            if {$type eq "standalone"} {
             test "Active defrag - AOF loading" {
                 # reset stats and load the AOF file
                 r config resetstat
@@ -145,601 +290,324 @@ run_solo {defrag} {
                 #       defrag immediately after the AOF loading is complete.  During loading,
                 #       defrag will get invoked less often, causing starvation prevention.  We
                 #       should expect longer latency measurements.
+                r config set active-defrag-cycle-min 50
+                r config set active-defrag-cycle-max 50
+                r config set activedefrag yes
                 r debug loadaof
                 r config set activedefrag no
+                after 50 ;# give defrag time to stop
 
-                # measure hits and misses right after aof loading
-                set misses [s active_defrag_misses]
-                set hits [s active_defrag_hits]
+                log_frag "after AOF loading"
 
-                set frag [s allocator_frag_ratio]
-                set max_latency 0
-                foreach event [r latency latest] {
-                    lassign $event eventname time latency max
-                    if {$eventname == "while-blocked-cron"} {
-                        set max_latency $max
-                    }
-                }
-                if {$::verbose} {
-                    puts "AOF loading:"
-                    puts "frag $frag"
-                    puts "hits: $hits"
-                    puts "misses: $misses"
-                    puts "max latency $max_latency"
-                    puts [r latency latest]
-                    puts [r latency history "while-blocked-cron"]
-                }
-                # make sure we had defrag hits during AOF loading
-                assert {$hits > 100000}
-                # make sure the defragger did enough work to keep the fragmentation low during loading.
-                # we cannot check that it went all the way down, since we don't wait for full defrag cycle to complete.
-                assert {$frag < 1.4}
                 # The AOF contains simple (fast) SET commands (and the cron during loading runs every 1024 commands).
                 # Even so, defrag can get starved for periods exceeding 100ms.  Using 200ms for test stability, and
-                # a 75% CPU requirement (as set above), we should allow up to 600ms latency
-                # (as total time = 200 non duty + 600 duty = 800ms, and 75% of 800ms is 600ms).
-                if {!$::no_latency} {
-                    assert {$max_latency <= 600}
-                }
+                # a 50% CPU requirement, we should allow up to 200ms latency
+                # (as total time = 200 non duty + 200 duty = 400ms, and 50% of 400ms is 200ms).
+                validate_latency 200
+
+                # Make sure we had defrag hits during AOF loading.  Note that we don't worry about
+                # the actual fragmentation ratio here.  It will vary based on when defrag stopped
+                # mid-cycle.  Just check that we are defragging by the number of hits.
+                assert {[s active_defrag_hits] > 100000}
             }
             } ;# Active defrag - AOF loading
         }
-        r config set appendonly no
-        r config set key-load-delay 0
+    }
 
-        test "Active defrag eval scripts: $type" {
-            r flushdb sync
-            r script flush sync
-            r config resetstat
-            r config set activedefrag no
-            r config set active-defrag-threshold-lower 5
-            r config set active-defrag-cycle-min 65
-            r config set active-defrag-cycle-max 75
-            r config set active-defrag-ignore-bytes 1500kb
-            r config set maxmemory 0
-
+    proc test_eval_scripts {type} {
+        set title "Active Defrag eval scripts: $type"
+        test $title {
             set n 50000
 
-            # Populate memory with interleaving script-key pattern of same size
-            set dummy_script "--[string repeat x 400]\nreturn "
-            set rd [valkey_deferring_client]
-            for {set j 0} {$j < $n} {incr j} {
-                set val "$dummy_script[format "%06d" $j]"
-                $rd script load $val
-                $rd set k$j $val
-            }
-            for {set j 0} {$j < $n} {incr j} {
-                $rd read ; # Discard script load replies
-                $rd read ; # Discard set replies
-            }
-            after 1000 ;# give defrag some time to work
-            if {$::verbose} {
-                puts "used [s allocator_allocated]"
-                puts "rss [s allocator_active]"
-                puts "frag [s allocator_frag_ratio]"
-                puts "frag_bytes [s allocator_frag_bytes]"
-            }
-            assert_lessthan [s allocator_frag_ratio] 1.05
-
-            # Delete all the keys to create fragmentation
-            for {set j 0} {$j < $n} {incr j} { $rd del k$j }
-            for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard del replies
-            $rd close
-            after 120 ;# serverCron only updates the info once in 100ms
-            if {$::verbose} {
-                puts "used [s allocator_allocated]"
-                puts "rss [s allocator_active]"
-                puts "frag [s allocator_frag_ratio]"
-                puts "frag_bytes [s allocator_frag_bytes]"
-            }
-            assert_morethan [s allocator_frag_ratio] 1.4
-
-            catch {r config set activedefrag yes} e
-            if {[r config get activedefrag] eq "activedefrag yes"} {
-            
-                # wait for the active defrag to start working (decision once a second)
-                wait_for_condition 50 100 {
-                    [s total_active_defrag_time] ne 0
-                } else {
-                    after 120 ;# serverCron only updates the info once in 100ms
-                    puts [r info memory]
-                    puts [r info stats]
-                    puts [r memory malloc-stats]
-                    fail "defrag not started."
-                }
-
-                after 1000 ;# Give defrag time to work (might be multiple cycles)
-
-                # wait for the active defrag to stop working
-                wait_for_condition 500 100 {
-                    [s active_defrag_running] eq 0
-                } else {
-                    after 120 ;# serverCron only updates the info once in 100ms
-                    puts [r info memory]
-                    puts [r memory malloc-stats]
-                    fail "defrag didn't stop."
-                }
-
-                # test the fragmentation is lower
-                after 120 ;# serverCron only updates the info once in 100ms
-                if {$::verbose} {
-                    puts "used [s allocator_allocated]"
-                    puts "rss [s allocator_active]"
-                    puts "frag [s allocator_frag_ratio]"
-                    puts "frag_bytes [s allocator_frag_bytes]"
-                }
-                assert_lessthan_equal [s allocator_frag_ratio] 1.05
-            }
-            # Flush all script to make sure we don't crash after defragging them
-            r script flush sync
-        } {OK}
-
-        test "Active defrag big keys: $type" {
-            r flushdb sync
-            r config resetstat
-            r config set activedefrag no
-            r config set active-defrag-max-scan-fields 1000
-            r config set active-defrag-threshold-lower 5
-            r config set active-defrag-cycle-min 65
-            r config set active-defrag-cycle-max 75
-            r config set active-defrag-ignore-bytes 2mb
-            r config set maxmemory 0
-            r config set list-max-ziplist-size 5 ;# list of 10k items will have 2000 quicklist nodes
-            r config set stream-node-max-entries 5
-            r hmset hash h1 v1 h2 v2 h3 v3
-            r lpush list a b c d
-            r zadd zset 0 a 1 b 2 c 3 d
-            r sadd set a b c d
-            r xadd stream * item 1 value a
-            r xadd stream * item 2 value b
-            r xgroup create stream mygroup 0
-            r xreadgroup GROUP mygroup Alice COUNT 1 STREAMS stream >
-
-            # create big keys with 10k items
-            set rd [valkey_deferring_client]
-            for {set j 0} {$j < 10000} {incr j} {
-                $rd hset bighash $j [concat "asdfasdfasdf" $j]
-                $rd lpush biglist [concat "asdfasdfasdf" $j]
-                $rd zadd bigzset $j [concat "asdfasdfasdf" $j]
-                $rd sadd bigset [concat "asdfasdfasdf" $j]
-                $rd xadd bigstream * item 1 value a
-            }
-            for {set j 0} {$j < 50000} {incr j} {
-                $rd read ; # Discard replies
-            }
-
-            # create some small items (effective in cluster-enabled)
-            r set "{bighash}smallitem" val
-            r set "{biglist}smallitem" val
-            r set "{bigzset}smallitem" val
-            r set "{bigset}smallitem" val
-            r set "{bigstream}smallitem" val
-
-
-            set expected_frag 1.7
-            if {$::accurate} {
-                # scale the hash to 1m fields in order to have a measurable the latency
-                for {set j 10000} {$j < 1000000} {incr j} {
-                    $rd hset bighash $j [concat "asdfasdfasdf" $j]
-                }
-                for {set j 10000} {$j < 1000000} {incr j} {
-                    $rd read ; # Discard replies
-                }
-                # creating that big hash, increased used_memory, so the relative frag goes down
-                set expected_frag 1.3
-            }
-
-            # add a mass of string keys
-            for {set j 0} {$j < 500000} {incr j} {
-                $rd setrange $j 150 a
-            }
-            for {set j 0} {$j < 500000} {incr j} {
-                $rd read ; # Discard replies
-            }
-            assert_equal [r dbsize] 500015
-
-            # create some fragmentation
-            for {set j 0} {$j < 500000} {incr j 2} {
-                $rd del $j
-            }
-            for {set j 0} {$j < 500000} {incr j 2} {
-                $rd read ; # Discard replies
-            }
-            assert_equal [r dbsize] 250015
-
-            # start defrag
-            after 120 ;# serverCron only updates the info once in 100ms
-            set frag [s allocator_frag_ratio]
-            if {$::verbose} {
-                puts "frag $frag"
-            }
-            assert {$frag >= $expected_frag}
-            r config set latency-monitor-threshold 5
-            r latency reset
-
-            set digest [debug_digest]
-            catch {r config set activedefrag yes} e
-            if {[r config get activedefrag] eq "activedefrag yes"} {
-                # wait for the active defrag to start working (decision once a second)
-                wait_for_condition 50 100 {
-                    [s total_active_defrag_time] ne 0
-                } else {
-                    after 120 ;# serverCron only updates the info once in 100ms
-                    puts [r info memory]
-                    puts [r info stats]
-                    puts [r memory malloc-stats]
-                    fail "defrag not started."
-                }
-
-                after 1000 ;# Give defrag some time to work (it may run several cycles)
-
-                # wait for the active defrag to stop working
-                wait_for_condition 500 100 {
-                    [s active_defrag_running] eq 0
-                } else {
-                    after 120 ;# serverCron only updates the info once in 100ms
-                    puts [r info memory]
-                    puts [r memory malloc-stats]
-                    fail "defrag didn't stop."
-                }
-
-                # test the fragmentation is lower
-                after 120 ;# serverCron only updates the info once in 100ms
-                set frag [s allocator_frag_ratio]
-                set max_latency 0
-                foreach event [r latency latest] {
-                    lassign $event eventname time latency max
-                    if {$eventname == "active-defrag-cycle"} {
-                        set max_latency $max
-                    }
-                }
-                if {$::verbose} {
-                    puts "frag $frag"
-                    set misses [s active_defrag_misses]
-                    set hits [s active_defrag_hits]
-                    puts "hits: $hits"
-                    puts "misses: $misses"
-                    puts "max latency $max_latency"
-                    puts [r latency latest]
-                    puts [r latency history active-defrag-cycle]
-                }
-                assert {$frag < 1.1}
-                # due to high fragmentation, 100hz, and active-defrag-cycle-max set to 75,
-                # we expect max latency to be not much higher than 7.5ms but due to rare slowness threshold is set higher
-                if {!$::no_latency} {
-                    assert {$max_latency <= 30}
-                }
-            }
-            # verify the data isn't corrupted or changed
-            set newdigest [debug_digest]
-            assert {$digest eq $newdigest}
-            r save ;# saving an rdb iterates over all the data / pointers
-        } {OK}
-
-        test "Active defrag pubsub: $type" {
-            r flushdb sync
-            r config resetstat
-            r config set activedefrag no
-            r config set active-defrag-threshold-lower 5
-            r config set active-defrag-cycle-min 65
-            r config set active-defrag-cycle-max 75
-            r config set active-defrag-ignore-bytes 1500kb
-            r config set maxmemory 0
-
-            # Populate memory with interleaving pubsub-key pattern of same size
-            set n 50000
-            set dummy_channel "[string repeat x 400]"
-            set rd [valkey_deferring_client]
-            set rd_pubsub [valkey_deferring_client]
-            for {set j 0} {$j < $n} {incr j} {
-                set channel_name "$dummy_channel[format "%06d" $j]"
-                $rd_pubsub subscribe $channel_name
-                $rd_pubsub read ; # Discard subscribe replies
-                $rd_pubsub ssubscribe $channel_name
-                $rd_pubsub read ; # Discard ssubscribe replies
-                $rd set k$j $channel_name
-                $rd read ; # Discard set replies
-            }
-
-            if {$::verbose} {
-                puts "used [s allocator_allocated]"
-                puts "rss [s allocator_active]"
-                puts "frag [s allocator_frag_ratio]"
-                puts "frag_bytes [s allocator_frag_bytes]"
-            }
-            assert_lessthan [s allocator_frag_ratio] 1.05
-
-            # Delete all the keys to create fragmentation
-            for {set j 0} {$j < $n} {incr j} { $rd del k$j }
-            for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard del replies
-            $rd close
-            after 120 ;# serverCron only updates the info once in 100ms
-            if {$::verbose} {
-                puts "used [s allocator_allocated]"
-                puts "rss [s allocator_active]"
-                puts "frag [s allocator_frag_ratio]"
-                puts "frag_bytes [s allocator_frag_bytes]"
-            }
-            assert_morethan [s allocator_frag_ratio] 1.35
-
-            catch {r config set activedefrag yes} e
-            if {[r config get activedefrag] eq "activedefrag yes"} {
-            
-                # wait for the active defrag to start working (decision once a second)
-                wait_for_condition 50 100 {
-                    [s total_active_defrag_time] ne 0
-                } else {
-                    after 120 ;# serverCron only updates the info once in 100ms
-                    puts [r info memory]
-                    puts [r info stats]
-                    puts [r memory malloc-stats]
-                    fail "defrag not started."
-                }
-
-                after 1000 ;# Give defrag some time to work (it may run several cycles)
-
-                # wait for the active defrag to stop working
-                wait_for_condition 500 100 {
-                    [s active_defrag_running] eq 0
-                } else {
-                    after 120 ;# serverCron only updates the info once in 100ms
-                    puts [r info memory]
-                    puts [r memory malloc-stats]
-                    fail "defrag didn't stop."
-                }
-                r config set activedefrag no ;# disable before we accidentally create more frag
-
-                # test the fragmentation is lower
-                after 120 ;# serverCron only updates the info once in 100ms
-                if {$::verbose} {
-                    puts "used [s allocator_allocated]"
-                    puts "rss [s allocator_active]"
-                    puts "frag [s allocator_frag_ratio]"
-                    puts "frag_bytes [s allocator_frag_bytes]"
-                }
-                assert_lessthan_equal [s allocator_frag_ratio] 1.05
-            }
-
-            # Publishes some message to all the pubsub clients to make sure that
-            # we didn't break the data structure.
-            for {set j 0} {$j < $n} {incr j} {
-                set channel "$dummy_channel[format "%06d" $j]"
-                r publish $channel "hello"
-                assert_equal "message $channel hello" [$rd_pubsub read] 
-                $rd_pubsub unsubscribe $channel
-                $rd_pubsub read
-                r spublish $channel "hello"
-                assert_equal "smessage $channel hello" [$rd_pubsub read] 
-                $rd_pubsub sunsubscribe $channel
-                $rd_pubsub read
-            }
-            $rd_pubsub close
-        } {0} {io-threads:skip} ; # skip with io-threads as the threads may allocate the command arguments in a different arena. As a result, fragmentation is not as expected.
-
-        if {$type eq "standalone"} { ;# skip in cluster mode
-        test "Active defrag big list: $type" {
-            r flushdb sync
-            r config resetstat
-            r config set activedefrag no
-            r config set active-defrag-max-scan-fields 1000
-            r config set active-defrag-threshold-lower 5
-            r config set active-defrag-cycle-min 65
-            r config set active-defrag-cycle-max 75
-            r config set active-defrag-ignore-bytes 2mb
-            r config set maxmemory 0
-            r config set list-max-ziplist-size 5 ;# list of 500k items will have 100k quicklist nodes
-
-            # create big keys with 10k items
-            set rd [valkey_deferring_client]
-
-            set expected_frag 1.7
-            # add a mass of list nodes to two lists (allocations are interlaced)
-            set val [string repeat A 100] ;# 5 items of 100 bytes puts us in the 640 bytes bin, which has 32 regs, so high potential for fragmentation
-            set elements 500000
-            for {set j 0} {$j < $elements} {incr j} {
-                $rd lpush biglist1 $val
-                $rd lpush biglist2 $val
-            }
-            for {set j 0} {$j < $elements} {incr j} {
-                $rd read ; # Discard replies
-                $rd read ; # Discard replies
-            }
-
-            # create some fragmentation
-            r del biglist2
-
-            # start defrag
-            after 120 ;# serverCron only updates the info once in 100ms
-            set frag [s allocator_frag_ratio]
-            if {$::verbose} {
-                puts "frag $frag"
-            }
-
-            assert {$frag >= $expected_frag}
-            r config set latency-monitor-threshold 5
-            r latency reset
-
-            set digest [debug_digest]
-            catch {r config set activedefrag yes} e
-            if {[r config get activedefrag] eq "activedefrag yes"} {
-                # wait for the active defrag to start working (decision once a second)
-                wait_for_condition 50 100 {
-                    [s total_active_defrag_time] ne 0
-                } else {
-                    after 120 ;# serverCron only updates the info once in 100ms
-                    puts [r info memory]
-                    puts [r info stats]
-                    puts [r memory malloc-stats]
-                    fail "defrag not started."
-                }
-
-                after 1000 ;# Give defrag some time to work (it may run several cycles)
-
-                # wait for the active defrag to stop working
-                wait_for_condition 500 100 {
-                    [s active_defrag_running] eq 0
-                } else {
-                    after 120 ;# serverCron only updates the info once in 100ms
-                    puts [r info memory]
-                    puts [r info stats]
-                    puts [r memory malloc-stats]
-                    fail "defrag didn't stop."
-                }
-
-                # test the fragmentation is lower
-                after 120 ;# serverCron only updates the info once in 100ms
-                set misses [s active_defrag_misses]
-                set hits [s active_defrag_hits]
-                set frag [s allocator_frag_ratio]
-                set max_latency 0
-                foreach event [r latency latest] {
-                    lassign $event eventname time latency max
-                    if {$eventname == "active-defrag-cycle"} {
-                        set max_latency $max
-                    }
-                }
-                if {$::verbose} {
-                    puts "frag $frag"
-                    puts "misses: $misses"
-                    puts "hits: $hits"
-                    puts "max latency $max_latency"
-                    puts [r latency latest]
-                    puts [r latency history active-defrag-cycle]
-                }
-                assert {$frag < 1.1}
-                # due to high fragmentation, 100hz, and active-defrag-cycle-max set to 75,
-                # we expect max latency to be not much higher than 7.5ms but due to rare slowness threshold is set higher
-                if {!$::no_latency} {
-                    assert {$max_latency <= 30}
-                }
-
-                # in extreme cases of stagnation, we see over 20m misses before the tests aborts with "defrag didn't stop",
-                # in normal cases we only see 100k misses out of 500k elements
-                assert {$misses < $elements}
-            }
-            # verify the data isn't corrupted or changed
-            set newdigest [debug_digest]
-            assert {$digest eq $newdigest}
-            r save ;# saving an rdb iterates over all the data / pointers
-            r del biglist1 ;# coverage for quicklistBookmarksClear
-        } {1}
-
-        test "Active defrag edge case: $type" {
-            # there was an edge case in defrag where all the slabs of a certain bin are exact the same
-            # % utilization, with the exception of the current slab from which new allocations are made
-            # if the current slab is lower in utilization the defragger would have ended up in stagnation,
-            # kept running and not move any allocation.
-            # this test is more consistent on a fresh server with no history
-            start_server {tags {"defrag"} overrides {save ""}} {
-                r flushdb sync
-                r config resetstat
-                r config set activedefrag no
-                r config set active-defrag-max-scan-fields 1000
-                r config set active-defrag-threshold-lower 5
-                r config set active-defrag-cycle-min 65
-                r config set active-defrag-cycle-max 75
-                r config set active-defrag-ignore-bytes 1mb
-                r config set maxmemory 0
-                set expected_frag 1.3
-
-                r debug mallctl-str thread.tcache.flush VOID
-                # fill the first slab containing 32 regs of 640 bytes.
-                for {set j 0} {$j < 32} {incr j} {
-                    r setrange "_$j" 600 x
-                    r debug mallctl-str thread.tcache.flush VOID
-                }
-
-                # add a mass of keys with 600 bytes values, fill the bin of 640 bytes which has 32 regs per slab.
+            # scripts aren't defragged incrementally, expect big latency
+            perform_defrag_test $title latency 200 populate {
+                # Populate memory with interleaving script-key pattern of same size
+                set dummy_script "--[string repeat x 450]\nreturn "
                 set rd [valkey_deferring_client]
-                set keys 640000
-                for {set j 0} {$j < $keys} {incr j} {
-                    $rd setrange $j 600 x
+                for {set j 0} {$j < $n} {incr j} {
+                    set val "$dummy_script[format "%06d" $j]"
+                    $rd script load $val
+                    $rd set k$j $val
                 }
-                for {set j 0} {$j < $keys} {incr j} {
-                    $rd read ; # Discard replies
+                for {set j 0} {$j < $n} {incr j} {
+                    $rd read ; # Discard script load replies
+                    $rd read ; # Discard set replies
                 }
-
-                # create some fragmentation of 50%
-                set sent 0
-                for {set j 0} {$j < $keys} {incr j 1} {
-                    $rd del $j
-                    incr sent
-                    incr j 1
-                }
-                for {set j 0} {$j < $sent} {incr j} {
-                    $rd read ; # Discard replies
-                }
-
-                # create higher fragmentation in the first slab
-                for {set j 10} {$j < 32} {incr j} {
-                    r del "_$j"
-                }
-
-                # start defrag
-                after 120 ;# serverCron only updates the info once in 100ms
-                set frag [s allocator_frag_ratio]
-                if {$::verbose} {
-                    puts "frag $frag"
-                }
-
-                assert {$frag >= $expected_frag}
-
-                set digest [debug_digest]
-                catch {r config set activedefrag yes} e
-                if {[r config get activedefrag] eq "activedefrag yes"} {
-                    # wait for the active defrag to start working (decision once a second)
-                    wait_for_condition 50 100 {
-                        [s total_active_defrag_time] ne 0
-                    } else {
-                        after 120 ;# serverCron only updates the info once in 100ms
-                        puts [r info memory]
-                        puts [r info stats]
-                        puts [r memory malloc-stats]
-                        fail "defrag not started."
-                    }
-
-                    after 1000 ;# Give defrag some time to work (it may run several cycles)
-
-                    # wait for the active defrag to stop working
-                    wait_for_condition 500 100 {
-                        [s active_defrag_running] eq 0
-                    } else {
-                        after 120 ;# serverCron only updates the info once in 100ms
-                        puts [r info memory]
-                        puts [r info stats]
-                        puts [r memory malloc-stats]
-                        fail "defrag didn't stop."
-                    }
-
-                    # test the fragmentation is lower
-                    after 120 ;# serverCron only updates the info once in 100ms
-                    set misses [s active_defrag_misses]
-                    set hits [s active_defrag_hits]
-                    set frag [s allocator_frag_ratio]
-                    if {$::verbose} {
-                        puts "frag $frag"
-                        puts "hits: $hits"
-                        puts "misses: $misses"
-                    }
-                    assert {$frag < 1.1}
-                    assert {$misses < 10000000} ;# when defrag doesn't stop, we have some 30m misses, when it does, we have 2m misses
-                }
-
-                # verify the data isn't corrupted or changed
-                set newdigest [debug_digest]
-                assert {$digest eq $newdigest}
-                r save ;# saving an rdb iterates over all the data / pointers
+            } fragment {
+                # Delete all the keys to create fragmentation
+                for {set j 0} {$j < $n} {incr j} { $rd del k$j }
+                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard del replies
+                $rd close
             }
-        } ;# standalone
         }
     }
+
+    proc test_big_hash {type} {
+        set title "Active Defrag big hash: $type"
+        test $title {
+            # number of total fields.  hashes are progressively increasing sizes.
+            set n 200000
+
+            perform_defrag_test $title populate {
+                set rd [valkey_deferring_client]
+                set val [string repeat A 250]
+                set k 0
+                set f 0
+                for {set j 0} {$j < $n} {incr j} {
+                    $rd hset k$k f$f $val
+                    lassign [next_exp_kf $k $f] k f
+                }
+                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard replies
+            } fragment {
+                set k 0
+                set f 0
+                for {set j 0} {$j < $n} {incr j 2} {
+                    $rd hdel k$k f$f
+                    lassign [next_exp_kf $k $f 2] k f
+                }
+                for {set j 0} {$j < $n} {incr j 2} { $rd read } ; # Discard replies
+                $rd close
+            }
+        }
     }
 
-    start_cluster 1 0 {tags {"defrag external:skip cluster"} overrides {appendonly yes auto-aof-rewrite-percentage 0 save "" lazyfree-lazy-user-del no}} {
-        test_active_defrag "cluster"
+    proc test_big_list {type} {
+        set title "Active Defrag big list: $type"
+        test $title {
+            r config set list-max-listpack-size 3 ;# only 3 items per listpack node to generate more frag
+            # number of total fields.  lists are progressively increasing sizes.
+            set n 200000
+
+            perform_defrag_test $title populate {
+                set rd [valkey_deferring_client]
+                set val [string repeat A 350]
+                set k 0
+                set f 0
+                for {set j 0} {$j < $n} {incr j} {
+                    $rd lpush k$k $val
+                    lassign [next_exp_kf $k $f] k f
+                }
+                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard replies
+            } fragment {
+                set k 0
+                set f 0
+                for {set j 0} {$j < $n} {incr j 2} {
+                    $rd ltrim k$k 1 -1 ;# deletes the leftmost item
+                    $rd lmove k$k k$k LEFT RIGHT ;# rotates the leftmost item to the right side
+                    lassign [next_exp_kf $k $f 2] k f
+                }
+                for {set j 0} {$j < $n} {incr j 2} { $rd read; $rd read } ; # Discard replies
+                $rd close
+            }
+        }
     }
 
-    start_server {tags {"defrag external:skip standalone"} overrides {appendonly yes auto-aof-rewrite-percentage 0 save "" lazyfree-lazy-user-del no}} {
-        test_active_defrag "standalone"
+    proc test_big_set {type} {
+        set title "Active Defrag big set: $type"
+        test $title {
+            # number of total fields.  sets are progressively increasing sizes.
+            set n 200000
+
+            perform_defrag_test $title populate {
+                set rd [valkey_deferring_client]
+                set val [string repeat A 300]
+                set k 0
+                set f 0
+                for {set j 0} {$j < $n} {incr j} {
+                    $rd sadd k$k $val$f
+                    lassign [next_exp_kf $k $f] k f
+                }
+                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard replies
+            } fragment {
+                set k 0
+                set f 0
+                for {set j 0} {$j < $n} {incr j 2} {
+                    $rd srem k$k $val$f
+                    lassign [next_exp_kf $k $f 2] k f
+                }
+                for {set j 0} {$j < $n} {incr j 2} { $rd read } ; # Discard replies
+                $rd close
+            }
+        }
+    }
+
+    proc test_big_zset {type} {
+        set title "Active Defrag big zset: $type"
+        test $title {
+            # number of total fields.  zsets are progressively increasing sizes.
+            set n 200000
+
+            perform_defrag_test $title populate {
+                set rd [valkey_deferring_client]
+                set val [string repeat A 250]
+                set k 0
+                set f 0
+                for {set j 0} {$j < $n} {incr j} {
+                    $rd zadd k$k [expr rand()] $val$f
+                    lassign [next_exp_kf $k $f] k f
+                }
+                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard replies
+            } fragment {
+                set k 0
+                set f 0
+                for {set j 0} {$j < $n} {incr j 2} {
+                    $rd zrem k$k $val$f
+                    lassign [next_exp_kf $k $f 2] k f
+                }
+                for {set j 0} {$j < $n} {incr j 2} { $rd read } ; # Discard replies
+                $rd close
+            }
+        }
+    }
+
+    proc test_stream {type} {
+        set title "Active Defrag stream: $type"
+        test $title {
+            set n 200000
+            # shrink the node size - it's hard to create frag with 4k nodes!
+            r config set stream-node-max-bytes 128
+
+            perform_defrag_test $title populate {
+                set rd [valkey_deferring_client]
+                set val [string repeat A 50]
+                for {set j 0} {$j < $n} {incr j} {
+                    $rd xadd k$j * field1 $val field2 $val
+                }
+                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard replies
+            } fragment {
+                for {set j 0} {$j < $n} {incr j 2} {
+                    $rd del k$j
+                }
+                for {set j 0} {$j < $n} {incr j 2} { $rd read } ; # Discard replies
+                $rd close
+            }
+        }
+    }
+
+    proc test_pubsub {type} {
+        set title "Active Defrag pubsub: $type"
+        test $title {
+            set n 100000
+
+            set rd [valkey_deferring_client]
+            set chan [string repeat A 100]
+
+            # https://github.com/valkey-io/valkey/issues/1774
+            # NOTE - pubsub defrag isn't working properly.  This wasn't caught before the
+            #  test refactor.  This commented out code should work.  Instead, is substituted
+            # code which verifies that defrag doesn't break the pubsub, but defrag efficacy
+            # is not verified.
+            # perform_defrag_test $title {
+            #     for {set j 0} {$j < $n} {incr j} {
+            #         set channel $chan$j
+            #         $rd subscribe $channel
+            #         $rd read ; # Discard subscribe replies
+            #         $rd ssubscribe $channel
+            #         $rd read ; # Discard ssubscribe replies
+            #     }
+            # } fragment {
+            #     for {set j 0} {$j < $n} {incr j 2} {
+            #         set channel $chan$j
+            #         $rd unsubscribe $channel
+            #         $rd read
+            #         $rd sunsubscribe $channel
+            #         $rd read
+            #     }
+            # }
+            # --- BEGIN TEMPORARY CODE ---
+            log_frag "test start (pubsub)"
+            for {set j 0} {$j < $n} {incr j} {
+                set channel $chan$j
+                $rd subscribe $channel
+                $rd read ; # Discard subscribe replies
+                $rd ssubscribe $channel
+                $rd read ; # Discard ssubscribe replies
+            }
+            log_frag "after adding data"
+            for {set j 0} {$j < $n} {incr j 2} {
+                set channel $chan$j
+                $rd unsubscribe $channel
+                $rd read
+                $rd sunsubscribe $channel
+                $rd read
+            }
+            log_frag "after fragmenting data"
+            # run defrag for a limited time without validating efficacy
+            r config set activedefrag yes
+            after 30000
+            r config set activedefrag no
+            log_frag "after 30 seconds of defrag"
+            after 120
+            # --- END TEMPORARY CODE ---
+
+            # now validate that the remaining channels still work
+            for {set j 1} {$j < $n} {incr j 2} {
+                set channel $chan$j
+                r publish $channel "hello$j"
+                assert_equal "message $channel hello$j" [$rd read] 
+                $rd unsubscribe $channel
+                $rd read
+                r spublish $channel "shello$j"
+                assert_equal "smessage $channel shello$j" [$rd read] 
+                $rd sunsubscribe $channel
+                $rd read
+            }
+
+            $rd close
+        }
+    }
+
+
+    set standalone_tags [list defrag external:skip standalone]
+    set cluster_tags [list defrag external:skip cluster]
+    set aof_overrides [list appendonly yes auto-aof-rewrite-percentage 0 save "" lazyfree-lazy-user-del no]
+    set std_overrides [list appendonly no save "" lazyfree-lazy-user-del no]
+
+    set tests {}
+    lappend tests [list test_main_dictionary standalone $aof_overrides] ;# only need AOF for main dict, standalone
+    lappend tests [list test_eval_scripts standalone $std_overrides]
+    lappend tests [list test_big_hash standalone $std_overrides]
+    lappend tests [list test_big_list standalone $std_overrides]
+    lappend tests [list test_big_set standalone $std_overrides]
+    lappend tests [list test_big_zset standalone $std_overrides]
+    lappend tests [list test_stream standalone $std_overrides]
+    lappend tests [list test_pubsub standalone $std_overrides]
+
+    lappend tests [list test_main_dictionary cluster $std_overrides]
+    lappend tests [list test_eval_scripts cluster $std_overrides]
+    lappend tests [list test_big_hash cluster $std_overrides]
+    lappend tests [list test_big_list cluster $std_overrides]
+    lappend tests [list test_big_set cluster $std_overrides]
+    lappend tests [list test_big_zset cluster $std_overrides]
+    lappend tests [list test_stream cluster $std_overrides]
+    lappend tests [list test_pubsub cluster $std_overrides]
+
+    # set ::verbose 1
+
+    set have_defrag 0
+    start_server [list tags $standalone_tags overrides $std_overrides] {
+        if {[string match {*jemalloc*} [s mem_allocator]] && [r debug mallctl arenas.page] <= 8192} {
+            set have_defrag 1
+        }
+    }
+
+    if {$have_defrag} {
+        foreach t $tests {
+            lassign $t test_proc type overrides
+            if {$type == "standalone"} {
+                start_server [list tags $standalone_tags overrides $overrides] {
+                    $test_proc $type
+                }
+            }
+            if {$type == "cluster"} {
+                start_cluster 1 0 [list tags $cluster_tags overrides $overrides] {
+                    # Note: `start_cluster` passes the code through to another level which requires us
+                    #  to do an uplevel here.  Otherwise `test_proc` isn't recognized.
+                    uplevel 1 {$test_proc $type}
+                }
+            }
+        }
+    } else {
+        puts "Jemalloc not available.  Defrag tests skipped."
     }
 } ;# run_solo

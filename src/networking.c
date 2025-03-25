@@ -840,6 +840,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         size_t len_to_copy = prev->size - prev->used;
         if (len_to_copy > length) len_to_copy = length;
         memcpy(prev->buf + prev->used, s, len_to_copy);
+        c->net_output_bytes_curr_cmd += len_to_copy;
         prev->used += len_to_copy;
         length -= len_to_copy;
         if (length == 0) {
@@ -853,6 +854,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         next->used < PROTO_REPLY_CHUNK_BYTES * 4 && c->io_write_state != CLIENT_PENDING_IO) {
         memmove(next->buf + length, next->buf, next->used);
         memcpy(next->buf, s, length);
+        c->net_output_bytes_curr_cmd += length;
         next->used += length;
         listDelNode(c->reply, ln);
     } else {
@@ -863,6 +865,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         buf->size = usable_size - sizeof(clientReplyBlock);
         buf->used = length;
         memcpy(buf->buf, s, length);
+        c->net_output_bytes_curr_cmd += length;
         listNodeValue(ln) = buf;
         c->reply_bytes += buf->size;
 
@@ -1580,7 +1583,6 @@ void unlinkClient(client *c) {
 
     /* Remove from the list of pending writes if needed. */
     if (c->flag.pending_write) {
-        serverAssert(&c->clients_pending_write_node.next != NULL || &c->clients_pending_write_node.prev != NULL);
         if (c->io_write_state == CLIENT_IDLE) {
             listUnlinkNode(server.clients_pending_write, &c->clients_pending_write_node);
         } else {
@@ -2852,30 +2854,30 @@ void processMultibulkBuffer(client *c) {
          *
          * Calculation: For multi bulk buffer, we accumulate four factors, namely;
          *
-         * 1) multibulklen_slen + 1
+         * 1) multibulklen_slen + 3
          *    Cumulative string length (and not the value of) of multibulklen,
-         *    including +1 from RESP first byte.
-         * 2) bulklen_slen + c->argc
+         *    including the first "*" byte and last "\r\n" 2 bytes from RESP.
+         * 2) bulklen_slen + 3
          *    Cumulative string length (and not the value of) of bulklen,
-         *    including +1 from RESP first byte per argument count.
+         *    including +3 from RESP first "$" byte and last "\r\n" 2 bytes per argument count.
          * 3) c->argv_len_sum
          *    Cumulative string length of all argument vectors.
-         * 4) c->argc * 4 + 2
-         *    Cumulative string length of all white-spaces, for which there exists a total of
-         *    4 bytes per argument, plus 2 bytes from the leading '\r\n' from multibulklen.
+         * 4) c->argc * 2
+         *    Cumulative string length of the arguments' white-spaces, for which there exists a total of
+         *    "\r\n" 2 bytes per argument.
          *
          * For example;
          * Command) SET key value
          * RESP) *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n
          *
-         * 1) String length of "*3" is 2, obtained from (multibulklen_slen + 1).
-         * 2) String length of "$3" "$3" "$5" is 6, obtained from (bulklen_slen + c->argc).
+         * 1) String length of "*3\r\n" is 4, obtained from (multibulklen_slen + 3).
+         * 2) String length of "$3\r\n" "$3\r\n" "$5\r\n" is 12, obtained from (bulklen_slen + 3).
          * 3) String length of "SET" "key" "value" is 11, obtained from (c->argv_len_sum).
-         * 4) String length of all white-spaces "\r\n" is 14, obtained from (c->argc * 4 + 2).
+         * 4) String length of the 3 arguments' white-spaces "\r\n" is 6, obtained from (c->argc * 2).
          *
          * The 1st component is calculated within the below line.
          * */
-        c->net_input_bytes_curr_cmd += (multibulklen_slen + 1);
+        c->net_input_bytes_curr_cmd += (multibulklen_slen + 3);
     }
 
     serverAssertWithInfo(c, NULL, c->multibulklen > 0);
@@ -2940,9 +2942,8 @@ void processMultibulkBuffer(client *c) {
                 }
             }
             c->bulklen = ll;
-            /* Per-slot network bytes-in calculation, 2nd component.
-             * c->argc portion is deferred, as it may not have been fully populated at this point. */
-            c->net_input_bytes_curr_cmd += bulklen_slen;
+            /* Per-slot network bytes-in calculation, 2nd component. */
+            c->net_input_bytes_curr_cmd += (bulklen_slen + 3);
         }
 
         /* Read bulk argument */
@@ -2980,9 +2981,8 @@ void processMultibulkBuffer(client *c) {
 
     /* We're done when c->multibulk == 0 */
     if (c->multibulklen == 0) {
-        /* Per-slot network bytes-in calculation, 3rd and 4th components.
-         * Here, the deferred c->argc from 2nd component is added, resulting in c->argc * 5 instead of * 4. */
-        c->net_input_bytes_curr_cmd += (c->argv_len_sum + (c->argc * 5 + 2));
+        /* Per-slot network bytes-in calculation, 3rd and 4th components. */
+        c->net_input_bytes_curr_cmd += (c->argv_len_sum + (c->argc * 2));
         c->read_flags |= READ_FLAGS_PARSING_COMPLETED;
     }
 }

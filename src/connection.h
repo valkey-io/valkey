@@ -380,8 +380,6 @@ static inline const char *connGetInfo(connection *conn, char *buf, size_t buf_le
 /* anet-style wrappers to conns */
 int connBlock(connection *conn);
 int connNonBlock(connection *conn);
-int connEnableTcpNoDelay(connection *conn);
-int connDisableTcpNoDelay(connection *conn);
 int connKeepAlive(connection *conn, int interval);
 int connSendTimeout(connection *conn, long long ms);
 int connRecvTimeout(connection *conn, long long ms);

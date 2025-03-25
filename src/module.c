@@ -26,6 +26,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 
 /* --------------------------------------------------------------------------
  * Modules API documentation information
@@ -4194,7 +4199,7 @@ static void moduleCloseKey(ValkeyModuleKey *key) {
     decrRefCount(key->key);
 }
 
-/* Close a key handle. */
+/* Close a key handle. The key handle is freed and should not be accessed anymore. */
 void VM_CloseKey(ValkeyModuleKey *key) {
     if (key == NULL) return;
     moduleCloseKey(key);

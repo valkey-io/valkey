@@ -31,6 +31,8 @@
 
 #include <stdlib.h>
 #include "adlist.h"
+
+#include "serverassert.h"
 #include "zmalloc.h"
 
 /* Create a new list. The created list can be freed with
@@ -187,14 +189,23 @@ void listDelNode(list *list, listNode *node) {
  * Remove the specified node from the list without freeing it.
  */
 void listUnlinkNode(list *list, listNode *node) {
-    if (node->prev)
+    assert(list->len > 0);
+
+    if (node->prev) {
+        assert(node->prev->next == node);
         node->prev->next = node->next;
-    else
+    } else {
+        assert(list->head == node);
         list->head = node->next;
-    if (node->next)
+    }
+
+    if (node->next) {
+        assert(node->next->prev == node);
         node->next->prev = node->prev;
-    else
+    } else {
+        assert(list->tail == node);
         list->tail = node->prev;
+    }
 
     node->next = NULL;
     node->prev = NULL;

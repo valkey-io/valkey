@@ -241,6 +241,7 @@ start_server {tags {"tracking network logreqres:skip"}} {
         # make sure r is working resp 3
         r HELLO 3
         r CLIENT TRACKING on REDIRECT $redir_id
+        set redir_error "tracking-redir-broken $redir_id"
         $rd_sg SET key1 1
         r GET key1
         $rd_redirection QUIT
@@ -257,11 +258,12 @@ start_server {tags {"tracking network logreqres:skip"}} {
 
         # Wait to read the tracking-redir-broken
         wait_for_condition 1000 50 {
-            [lsearch -exact [r PING] "tracking-redir-broken"]
+            [set response [r PING]] != "PONG"
         } else {
             fail "Failed to get redirect broken indication"
         }
-         # Consume PING reply
+        assert_equal $redir_error $response
+        # Consume PING reply
         assert_equal PONG [r read]
     }
 

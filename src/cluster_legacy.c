@@ -26,7 +26,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 /*
  * cluster_legacy.c contains the implementation of the cluster API that is
  * specific to the standard, cluster-bus based clustering mechanism.
@@ -1552,7 +1556,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             connClose(conn);
             return;
         }
-        connEnableTcpNoDelay(conn);
+
         connKeepAlive(conn, server.cluster_node_timeout / 1000 * 2);
 
         /* Use non-blocking I/O for cluster messages. */
@@ -1993,7 +1997,7 @@ int clusterBumpConfigEpochWithoutConsensus(void) {
     if (myself->configEpoch == 0 || myself->configEpoch != maxEpoch) {
         server.cluster->currentEpoch++;
         myself->configEpoch = server.cluster->currentEpoch;
-        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
+        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
         serverLog(LL_NOTICE, "New configEpoch set to %llu", (unsigned long long)myself->configEpoch);
         return C_OK;
     } else {
@@ -2056,7 +2060,7 @@ void clusterHandleConfigEpochCollision(clusterNode *sender) {
     /* Get the next ID available at the best of this node knowledge. */
     server.cluster->currentEpoch++;
     myself->configEpoch = server.cluster->currentEpoch;
-    clusterSaveConfigOrDie(1);
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
     serverLog(LL_NOTICE, "configEpoch collision with node %.40s (%s). configEpoch set to %llu", sender->name,
               sender->human_nodename, (unsigned long long)myself->configEpoch);
 }
@@ -2252,12 +2256,6 @@ static int clusterStartHandshake(char *ip, int port, int cport) {
     } else if (inet_pton(AF_INET6, ip, &(((struct sockaddr_in6 *)&sa)->sin6_addr))) {
         sa.ss_family = AF_INET6;
     } else {
-        errno = EINVAL;
-        return 0;
-    }
-
-    /* Port sanity check */
-    if (port <= 0 || port > 65535 || cport <= 0 || cport > 65535) {
         errno = EINVAL;
         return 0;
     }
@@ -3274,7 +3272,8 @@ int clusterProcessPacket(clusterLink *link) {
             freeClusterLink(link);
             serverLog(
                 LL_NOTICE,
-                "Closing link for node that sent a lightweight message of type %s as its first message on the link",
+                "Closing link for node %.40s that sent a lightweight message of type %s as its first message on the link",
+                hdr->sender,
                 clusterGetMessageTypeString(type));
             return 0;
         }
@@ -3778,9 +3777,9 @@ int clusterProcessPacket(clusterLink *link) {
         /* Manual failover requested from replicas. Initialize the state
          * accordingly. */
         resetManualFailover();
-        server.cluster->mf_end = now + CLUSTER_MF_TIMEOUT;
+        server.cluster->mf_end = now + server.cluster_mf_timeout;
         server.cluster->mf_replica = sender;
-        pauseActions(PAUSE_DURING_FAILOVER, now + (CLUSTER_MF_TIMEOUT * CLUSTER_MF_PAUSE_MULT),
+        pauseActions(PAUSE_DURING_FAILOVER, now + (server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT),
                      PAUSE_ACTIONS_CLIENT_WRITE_SET);
         serverLog(LL_NOTICE, "Manual failover requested by replica %.40s (%s).", sender->name, sender->human_nodename);
         /* We need to send a ping message to the replica, as it would carry
@@ -4835,13 +4834,13 @@ void clusterFailoverReplaceYourPrimary(void) {
         }
     }
 
-    /* 3) Update state and save config. */
+    /* 3) Update state, note that we do not use CLUSTER_TODO_UPDATE_STATE since we want the node
+     * to update the cluster state ASAP after failover. */
     clusterUpdateState();
-    clusterSaveConfigOrDie(1);
 
-    /* 4) Pong all the other nodes so that they can update the state
+    /* 4) Save and fsync the config, and pong all the other nodes so that they can update the state
      *    accordingly and detect that we switched to primary role. */
-    clusterDoBeforeSleep(CLUSTER_TODO_BROADCAST_ALL);
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
 
     /* 5) If there was a manual failover in progress, clear the state. */
     resetManualFailover();
@@ -5024,6 +5023,7 @@ void clusterHandleReplicaFailover(void) {
         /* Update my configEpoch to the epoch of the election. */
         if (myself->configEpoch < server.cluster->failover_auth_epoch) {
             myself->configEpoch = server.cluster->failover_auth_epoch;
+            clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
             serverLog(LL_NOTICE, "configEpoch set to %llu after successful failover",
                       (unsigned long long)myself->configEpoch);
         }
@@ -5151,7 +5151,7 @@ void clusterHandleReplicaMigration(int max_replicas) {
  *    setting mf_end to the millisecond unix time at which we'll abort the
  *    attempt.
  * 2) Replica sends a MFSTART message to the primary requesting to pause clients
- *    for two times the manual failover timeout CLUSTER_MF_TIMEOUT.
+ *    for CLUSTER_MF_PAUSE_MULT times the server.cluster_mf_timeout.
  *    When primary is paused for manual failover, it also starts to flag
  *    packets with CLUSTERMSG_FLAG0_PAUSED.
  * 3) Replica waits for primary to send its replication offset flagged as PAUSED.
@@ -6281,7 +6281,7 @@ int checkSlotAssignmentsOrReply(client *c, unsigned char *slots, int del, int st
             return C_ERR;
         }
         if (slots[slot]++ == 1) {
-            addReplyErrorFormat(c, "Slot %d specified multiple times", (int)slot);
+            addReplyErrorFormat(c, "Slot %d specified multiple times", slot);
             return C_ERR;
         }
     }
@@ -6537,7 +6537,7 @@ clusterNode *getMyClusterNode(void) {
     return server.cluster->myself;
 }
 
-int clusterManualFailoverTimeLimit(void) {
+mstime_t clusterManualFailoverTimeLimit(void) {
     return server.cluster->mf_end;
 }
 
@@ -6960,6 +6960,10 @@ int clusterCommandSpecial(client *c) {
             addReplyErrorFormat(c, "Invalid base port specified: %s", (char *)c->argv[3]->ptr);
             return 1;
         }
+        if (port <= 0 || port > 65535) {
+            addReplyErrorFormat(c, "Port number is out of range");
+            return 1;
+        }
 
         if (c->argc == 5) {
             if (getLongLongFromObject(c->argv[4], &cport) != C_OK) {
@@ -6968,6 +6972,11 @@ int clusterCommandSpecial(client *c) {
             }
         } else {
             cport = port + CLUSTER_PORT_INCR;
+        }
+
+        if (cport <= 0 || cport > 65535) {
+            addReplyErrorFormat(c, "Cluster bus port number is out of range");
+            return 1;
         }
 
         if (clusterStartHandshake(c->argv[2]->ptr, port, cport) == 0 && errno == EINVAL) {
@@ -7196,7 +7205,7 @@ int clusterCommandSpecial(client *c) {
             return 1;
         }
         resetManualFailover();
-        server.cluster->mf_end = mstime() + CLUSTER_MF_TIMEOUT;
+        server.cluster->mf_end = mstime() + server.cluster_mf_timeout;
         sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
 
         if (takeover) {

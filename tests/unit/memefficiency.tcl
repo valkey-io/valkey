@@ -586,7 +586,7 @@ start_server {tags {"defrag external:skip"} overrides {appendonly yes auto-aof-r
 
 start_cluster 1 0 {tags {"defrag external:skip"}} {
     if {[string match {*jemalloc*} [s mem_allocator]] && [r debug mallctl arenas.page] <= 8192} {
-        test "Active defrag slot_to_keys crash when calling flush async in cluster mode" {
+        test "Active defrag with flush async performed in cluster mode" {
             r flushdb async
             r config set activedefrag no
             r config set hz 100

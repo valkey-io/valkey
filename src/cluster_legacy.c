@@ -1295,7 +1295,7 @@ void clusterAutoFailoverOnShutdown(void) {
                              "$8\r\nFAILOVER\r\n"
                              "$5\r\nFORCE\r\n"
                              "$9\r\nREPLICAID\r\n"
-                             "$%d\r\n%s\r\n",
+                             "$%d\r\n%.40s\r\n",
                              CLUSTER_NAMELEN,
                              best_replica->repl_data->replica_nodeid);
     serverAssert(buflen <= 128);

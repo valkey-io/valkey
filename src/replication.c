@@ -3652,7 +3652,7 @@ void syncWithPrimary(connection *conn) {
         /* Inform the primary of our (replica) node name. */
         if (server.cluster_enabled) {
             char *argv[] = {"REPLCONF", "SET-CLUSTER-NODE-ID", server.cluster->myself->name};
-            size_t lens[] = {8, 19, CLUSTER_NAMELEN};
+            size_t lens[] = {strlen(argv[0]), strlen(argv[1]), CLUSTER_NAMELEN};
             err = sendCommandArgv(conn, 3, argv, lens);
             if (err) goto write_error;
         }

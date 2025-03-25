@@ -473,8 +473,8 @@ int test_addRepliesWithOffloadsToBuffer(int argc, char **argv, int flags) {
     TEST_ASSERT(c->bufpos == sizeof(payloadHeader) + PTRS_LEN);
 
     payloadHeader *header1 = c->last_header;
-    TEST_ASSERT(header1->type == BULK_STR_REF);
-    TEST_ASSERT(header1->len == PTRS_LEN);
+    TEST_ASSERT(header1->payload_type == BULK_STR_REF);
+    TEST_ASSERT(header1->payload_len == PTRS_LEN);
 
     robj **ptr = (robj **)(c->buf + sizeof(payloadHeader));
     TEST_ASSERT(obj == *ptr);
@@ -484,8 +484,8 @@ int test_addRepliesWithOffloadsToBuffer(int argc, char **argv, int flags) {
 
     /* 2 offloads expected in c->buf */
     TEST_ASSERT(c->bufpos == sizeof(payloadHeader) + 2 * PTRS_LEN);
-    TEST_ASSERT(header1->type == BULK_STR_REF);
-    TEST_ASSERT(header1->len == 2 * PTRS_LEN);
+    TEST_ASSERT(header1->payload_type == BULK_STR_REF);
+    TEST_ASSERT(header1->payload_len == 2 * PTRS_LEN);
 
     ptr = (robj **)(c->buf + sizeof(payloadHeader) + PTRS_LEN);
     TEST_ASSERT(obj2 == *ptr);
@@ -497,24 +497,24 @@ int test_addRepliesWithOffloadsToBuffer(int argc, char **argv, int flags) {
 
     /* 2 offloads and plain reply expected in c->buf. So 2 headers expected as well */
     TEST_ASSERT(c->bufpos == 2 * sizeof(payloadHeader) + 2 * PTRS_LEN + plain_len);
-    TEST_ASSERT(header1->type == BULK_STR_REF);
-    TEST_ASSERT(header1->len == 2 * PTRS_LEN);
+    TEST_ASSERT(header1->payload_type == BULK_STR_REF);
+    TEST_ASSERT(header1->payload_len == 2 * PTRS_LEN);
     payloadHeader *header2 = c->last_header;
-    TEST_ASSERT(header2->type == PLAIN_REPLY);
-    TEST_ASSERT(header2->len == plain_len);
+    TEST_ASSERT(header2->payload_type == PLAIN_REPLY);
+    TEST_ASSERT(header2->payload_len == plain_len);
 
     /* Add more plain replies. Check same plain reply header updated properly */
     for (int i = 0; i < 9; ++i) _addReplyToBufferOrList(c, plain, plain_len);
     TEST_ASSERT(c->bufpos == 2 * sizeof(payloadHeader) + 2 * PTRS_LEN + 10 * plain_len);
-    TEST_ASSERT(header2->type == PLAIN_REPLY);
-    TEST_ASSERT(header2->len == plain_len * 10);
+    TEST_ASSERT(header2->payload_type == PLAIN_REPLY);
+    TEST_ASSERT(header2->payload_len == plain_len * 10);
 
     /* Test 3:  Add one more bulk offload to the buffer */
     _addBulkStrRefToBufferOrList(c, obj);
     TEST_ASSERT(obj->refcount == 3);
     TEST_ASSERT(c->bufpos == 3 * sizeof(payloadHeader) + 3 * PTRS_LEN + 10 * plain_len);
     payloadHeader *header3 = c->last_header;
-    TEST_ASSERT(header3->type == BULK_STR_REF);
+    TEST_ASSERT(header3->payload_type == BULK_STR_REF);
     ptr = (robj **)((char *)c->last_header + sizeof(payloadHeader));
     TEST_ASSERT(obj == *ptr);
 
@@ -570,8 +570,8 @@ int test_addRepliesWithOffloadsToList(int argc, char **argv, int flags) {
 
     TEST_ASSERT(blk->used == sizeof(payloadHeader) + PTRS_LEN);
     payloadHeader *header1 = blk->last_header;
-    TEST_ASSERT(header1->type == BULK_STR_REF);
-    TEST_ASSERT(header1->len == PTRS_LEN);
+    TEST_ASSERT(header1->payload_type == BULK_STR_REF);
+    TEST_ASSERT(header1->payload_len == PTRS_LEN);
 
     robj **ptr = (robj **)(blk->buf + sizeof(payloadHeader));
     TEST_ASSERT(obj == *ptr);
@@ -581,8 +581,8 @@ int test_addRepliesWithOffloadsToList(int argc, char **argv, int flags) {
     TEST_ASSERT(obj->refcount == 3);
     TEST_ASSERT(listLength(c->reply) == 1);
     TEST_ASSERT(blk->used == sizeof(payloadHeader) + 2 * PTRS_LEN);
-    TEST_ASSERT(header1->type == BULK_STR_REF);
-    TEST_ASSERT(header1->len == 2 * PTRS_LEN);
+    TEST_ASSERT(header1->payload_type == BULK_STR_REF);
+    TEST_ASSERT(header1->payload_len == 2 * PTRS_LEN);
 
     /* Test 3: Add plain replies to cause reply list grow  */
     while (reply_len < blk->size - blk->used) _addReplyToBufferOrList(c, reply, reply_len);
@@ -597,8 +597,8 @@ int test_addRepliesWithOffloadsToList(int argc, char **argv, int flags) {
     clientReplyBlock *blk2 = listNodeValue(next);
     /* last header in 2nd block */
     payloadHeader *header3 = blk2->last_header;
-    TEST_ASSERT(header2->type == PLAIN_REPLY && header3->type == PLAIN_REPLY);
-    TEST_ASSERT((header2->len + header3->len) % reply_len == 0);
+    TEST_ASSERT(header2->payload_type == PLAIN_REPLY && header3->payload_type == PLAIN_REPLY);
+    TEST_ASSERT((header2->payload_len + header3->payload_len) % reply_len == 0);
 
     releaseReplyReferences(c);
     decrRefCount(obj);
@@ -647,9 +647,9 @@ int test_addBufferToReplyIOV(int argc, char **argv, int flags) {
 
     /* Test 2: Last written buf/pos/data_len after 1st invocation */
     saveLastWrittenBuf(c, metadata, 1, reply.iov_len_total, 1); /* only 1 byte has been written */
-    TEST_ASSERT(c->io_last_written_buf == c->buf);
-    TEST_ASSERT(c->io_last_written_bufpos == 0); /* incomplete write */
-    TEST_ASSERT(c->io_last_written_data_len == 1);
+    TEST_ASSERT(c->io_last_written.buf == c->buf);
+    TEST_ASSERT(c->io_last_written.bufpos == 0); /* incomplete write */
+    TEST_ASSERT(c->io_last_written.data_len == 1);
 
     /* Test 3: 2nd writevToclient invocation */
     struct iovec iov_arr2[iovmax];
@@ -664,9 +664,9 @@ int test_addBufferToReplyIOV(int argc, char **argv, int flags) {
 
     /* Test 4: Last written buf/pos/data_len after 2nd invocation */
     saveLastWrittenBuf(c, metadata2, 1, reply2.iov_len_total, 4); /* 4 more bytes has been written */
-    TEST_ASSERT(c->io_last_written_buf == c->buf);
-    TEST_ASSERT(c->io_last_written_bufpos == 0);   /* incomplete write */
-    TEST_ASSERT(c->io_last_written_data_len == 5); /* 1 + 4 */
+    TEST_ASSERT(c->io_last_written.buf == c->buf);
+    TEST_ASSERT(c->io_last_written.bufpos == 0);   /* incomplete write */
+    TEST_ASSERT(c->io_last_written.data_len == 5); /* 1 + 4 */
 
     /* Test 5: 3rd writevToclient invocation */
     struct iovec iov_arr3[iovmax];
@@ -681,9 +681,9 @@ int test_addBufferToReplyIOV(int argc, char **argv, int flags) {
 
     /* Test 6: Last written buf/pos/data_len after 3rd invocation */
     saveLastWrittenBuf(c, metadata3, 1, reply3.iov_len_total, reply3.iov_len_total); /* everything has been written */
-    TEST_ASSERT(c->io_last_written_buf == c->buf);
-    TEST_ASSERT(c->io_last_written_bufpos == c->bufpos);
-    TEST_ASSERT(c->io_last_written_data_len == (size_t)total_len);
+    TEST_ASSERT(c->io_last_written.buf == c->buf);
+    TEST_ASSERT(c->io_last_written.bufpos == c->bufpos);
+    TEST_ASSERT(c->io_last_written.data_len == (size_t)total_len);
 
     decrRefCount(obj);
     decrRefCount(obj);

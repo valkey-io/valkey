@@ -76,6 +76,7 @@ struct {
     unsigned long keys;            /* Number of keys processed. */
     unsigned long expires;         /* Number of keys with an expire. */
     unsigned long already_expired; /* Number of keys already expired. */
+    unsigned long lua_scripts;     /* Number of lua scripts. */
     unsigned long functions_num;   /* Number of functions. */
     int doing;                     /* The state while reading the RDB. */
     int error_set;                 /* True if error is populated. */
@@ -428,6 +429,9 @@ void rdbShowGenericInfo(void) {
     printf("[info] %lu expires\n", rdbstate.expires);
     printf("[info] %lu already expired\n", rdbstate.already_expired);
     printf("[info] %lu functions\n", rdbstate.functions_num);
+    if (rdbstate.lua_scripts) {
+        printf("[info] %lu lua scripts read\n", rdbstate.lua_scripts);
+    }
 
     char buffer[64];
     if (rdbCheckStats) {
@@ -653,7 +657,13 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
                 decrRefCount(auxkey);
                 goto eoferr;
             }
-
+            if (!strcasecmp(auxkey->ptr, "lua")) {
+                /* In older version before 7.0, we may save lua scripts in a replication RDB,
+                 * although it is not an actually aux field, we will still print it in here since
+                 * it's easy to filter using external grep. Use a counter so that at the end we
+                 * can print its number, if any. */
+                rdbstate.lua_scripts++;
+            }
             rdbCheckInfo("AUX FIELD %s = '%s'", (char *)auxkey->ptr, (char *)auxval->ptr);
             decrRefCount(auxkey);
             decrRefCount(auxval);
@@ -825,6 +835,7 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
     rdbstate.stats_num = OBJ_TYPE_MAX;
     rdbstate.databases = 1;
     rdbstate.functions_num = 0;
+    rdbstate.lua_scripts = 0;
 
     /* In order to call the loading functions we need to create the shared
      * integer objects, however since this function may be called from

@@ -283,7 +283,7 @@ error:
 }
 
 /* Given a path to a file, return the last time it was accessed (in seconds) */
-static time_t getLastModifiedTime(const char* path) {
+static time_t getLastModifiedTime(const char *path) {
     struct stat path_stat;
     stat(path, &path_stat);
 

@@ -1181,7 +1181,7 @@ typedef struct client {
     /* Input buffer and command parsing fields */
     sds querybuf;        /* Buffer we use to accumulate client queries. */
     size_t qb_pos;       /* The position we have read in querybuf. */
-    bool is_qb_full_read;    /* True if the last read returned the maximum allowed bytes */
+    bool is_qb_full_read;/* True if the last read returned the maximum allowed bytes */
     robj **argv;         /* Arguments of current command. */
     int argc;            /* Num of arguments of current command. */
     int argv_len;        /* Size of argv array (may be more than argc) */

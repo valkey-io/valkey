@@ -109,6 +109,27 @@ if {!$::valgrind} {
             assert_equal "PONG" [r ping]
         }
     }
+
+    # test hide-user-data-from-log
+    set server_path [tmpdir server5.log]
+    start_server [list overrides [list dir $server_path crash-memcheck-enabled no hide-user-data-from-log no]] {
+        test "Config hide-user-data-from-log is off" {
+            r write "*3\r\n\$3\r\nSET\r\n\$1\r\nx\r\n\$blabla\r\n"
+            r flush
+            catch {r debug segfault}
+            verify_no_log_message 0 "*redacted*" 0
+        }
+    }
+
+    set server_path [tmpdir server6.log]
+    start_server [list overrides [list dir $server_path crash-memcheck-enabled no hide-user-data-from-log yes]] {
+        test "Config hide-user-data-from-log is on" {
+            r write "*3\r\n\$3\r\nSET\r\n\$1\r\nx\r\n\$blabla\r\n"
+            r flush
+            catch {r debug segfault}
+            $check_cb "*Query buffer: *redacted*"
+        }
+    }
 }
 
 # test DEBUG ASSERT

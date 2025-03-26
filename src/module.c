@@ -9770,6 +9770,7 @@ ValkeyModuleString *VM_GetCurrentUserName(ValkeyModuleCtx *ctx) {
         errno = EINVAL;
         return NULL;
     }
+    errno = 0;
     return VM_CreateString(ctx, ctx->client->user->name, sdslen(ctx->client->user->name));
 }
 

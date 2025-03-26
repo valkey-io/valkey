@@ -45,7 +45,7 @@ sds *getSdsArrayFromArgv(int argc, char **argv, int quoted);
 
 sds unquoteCString(char *str);
 
-void parseRedisUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int *tls_flag);
+void parseUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int *tls_flag);
 
 void freeCliConnInfo(cliConnInfo connInfo);
 

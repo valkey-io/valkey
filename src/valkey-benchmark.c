@@ -1342,7 +1342,7 @@ int parseOptions(int argc, char **argv) {
             if (lastarg) goto invalid;
             config.conn_info.user = sdsnew(argv[++i]);
         } else if (!strcmp(argv[i], "-u") && !lastarg) {
-            parseRedisUri(argv[++i], "redis-benchmark", &config.conn_info, &config.tls);
+            parseUri(argv[++i], "valkey-benchmark", &config.conn_info, &config.tls);
             if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
                 fprintf(stderr, "Invalid server port.\n");
                 exit(1);

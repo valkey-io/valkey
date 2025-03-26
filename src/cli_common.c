@@ -303,12 +303,12 @@ static sds percentDecode(const char *pe, size_t len) {
 /* Parse a URI and extract the server connection information.
  * URI scheme is based on the provisional specification[1] excluding support
  * for query parameters. Valid URIs are:
- *   scheme:    "valkey://"
+ *   scheme:    "valkey://" or "valkeys://" or "redis://" or "rediss://"
  *   authority: [[<username> ":"] <password> "@"] [<hostname> [":" <port>]]
  *   path:      ["/" [<db>]]
  *
  *  [1]: https://www.iana.org/assignments/uri-schemes/prov/redis */
-void parseRedisUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int *tls_flag) {
+void parseUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int *tls_flag) {
 #ifdef USE_OPENSSL
     UNUSED(tool_name);
 #else

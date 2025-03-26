@@ -4799,12 +4799,12 @@ static redisReply *clusterManagerMigrateKeysInReply(clusterManagerNode *source,
     size_t i, offset = 6; // Keys Offset
     argv = zcalloc(argc * sizeof(char *));
     argv_len = zcalloc(argc * sizeof(size_t));
-    char portstr[255];
-    char timeoutstr[255];
-    char dbnum[255];
-    snprintf(portstr, 10, "%d", target->port);
-    snprintf(timeoutstr, 10, "%d", timeout);
-    snprintf(dbnum, 10, "%d", config.dbnum);
+    char portstr[10];
+    char timeoutstr[10];
+    char dbnum[10];
+    snprintf(portstr, sizeof(portstr), "%d", target->port);
+    snprintf(timeoutstr, sizeof(timeoutstr), "%d", timeout);
+    snprintf(dbnum, sizeof(dbnum), "%d", config.dbnum);
     argv[0] = "MIGRATE";
     argv_len[0] = 7;
     argv[1] = target->ip;

@@ -9761,7 +9761,10 @@ ValkeyModuleString *VM_GetModuleUserACLString(ValkeyModuleUser *user) {
  * See more information in VM_GetModuleUserFromUserName.
  *
  * The returned string must be released with ValkeyModule_FreeString() or by
- * enabling automatic memory management. */
+ * enabling automatic memory management.
+ *
+ * If the context is not associated with a client connection, NULL is returned
+ * and errno is set to EINVAL. */
 ValkeyModuleString *VM_GetCurrentUserName(ValkeyModuleCtx *ctx) {
     if (ctx == NULL || ctx->client == NULL || ctx->client->user == NULL || ctx->client->user->name == NULL) {
         errno = EINVAL;

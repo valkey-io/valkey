@@ -2496,14 +2496,6 @@ static int updateReplBacklogSize(const char **err) {
     return 1;
 }
 
-static int updateReplFlowControl(const char **err) {
-    UNUSED(err);
-    if (server.repl_flow_control_enabled == 0) {
-        server.repl_cur_reads_per_io_event = 1;
-    }
-    return 1;
-}
-
 static int updateMaxmemory(const char **err) {
     UNUSED(err);
     if (server.maxmemory) {
@@ -3201,7 +3193,7 @@ standardConfig static_configs[] = {
     createBoolConfig("cluster-slot-stats-enabled", NULL, MODIFIABLE_CONFIG, server.cluster_slot_stats_enabled, 0, NULL, NULL),
     createBoolConfig("hide-user-data-from-log", NULL, MODIFIABLE_CONFIG, server.hide_user_data_from_log, 1, NULL, NULL),
     createBoolConfig("import-mode", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.import_mode, 0, NULL, NULL),
-    createBoolConfig("repl-flow-control-enabled", NULL, MODIFIABLE_CONFIG, server.repl_flow_control_enabled, 1, NULL, updateReplFlowControl),
+    createBoolConfig("repl-flow-control-enabled", NULL, MODIFIABLE_CONFIG, server.repl_flow_control_enabled, 1, NULL, NULL),
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.acl_filename, "", NULL, NULL),

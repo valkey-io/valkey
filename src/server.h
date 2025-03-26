@@ -2149,9 +2149,8 @@ struct valkeyServer {
 
     /* Replication flow control */
     int repl_flow_control_enabled;   /* Enables adaptive flow control for replication reads on the replica */
-    int repl_cur_reads_per_io_event; /* Current allowed reads from the primary file descriptor per epoll I/O event */
     int repl_max_reads_per_io_event; /* Maximum allowed reads from the primary file descriptor per I/O event */
-    mstime_t repl_last_rate_update;  /* Timestamp of the last increase in replication reads per I/O event */
+
 };
 
 #define MAX_KEYS_BUFFER 256

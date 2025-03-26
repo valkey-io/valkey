@@ -3270,7 +3270,6 @@ void readToQueryBuf(client *c) {
  * This function is designed to prioritize replication flow.
  * Determines whether the replica should continue reading from the primary.
  * It dynamically adjusts the read rate based on buffer utilization
- * and ensures replication reads are not overly aggressive.
  *
  * @return          1 if another read should be attempted, 0 otherwise.
  */
@@ -3280,29 +3279,11 @@ int shouldRepeatRead(client *c, int iteration) {
         return 0;
     }
 
-    bool is_last_iteration = iteration >= server.repl_cur_reads_per_io_event;
-
-    if (is_last_iteration) {
-        /* If the last read filled the buffer AND enough time has passed since the last increase:
-         * - Increase the read rate, up to a max limit.
-         * - This ensures a gradual ramp-up instead of an overly aggressive approach. */
-        if (c->is_qb_full_read && server.mstime - server.repl_last_rate_update > 100) {
-            server.repl_cur_reads_per_io_event = MIN(server.repl_max_reads_per_io_event,
-                                                     server.repl_cur_reads_per_io_event + 1);
-            server.repl_last_rate_update = server.mstime; // Update the last increase timestamp.
-        }
-    } else {
-        /* If the last read completely filled the buffer, continue reading. */
-        if (c->is_qb_full_read) {
-            return 1;
-        }
-
-        /* If the buffer was NOT fully filled, it indicates less replication pressure.
-         * Reduce the read rate to avoid excessive polling and free up resources for other clients. */
-        server.repl_cur_reads_per_io_event = MAX(1, server.repl_cur_reads_per_io_event - 1);
+    if (iteration < server.repl_max_reads_per_io_event &&
+        c->is_qb_full_read) {
+        return 1;
     }
 
-    /* Stop reading for now (if we reached this point, conditions to continue were not met). */
     return 0;
 }
 

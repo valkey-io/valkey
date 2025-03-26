@@ -1179,17 +1179,17 @@ typedef struct client {
     uint64_t id; /* Client incremental unique ID. */
     connection *conn;
     /* Input buffer and command parsing fields */
-    sds querybuf;        /* Buffer we use to accumulate client queries. */
-    size_t qb_pos;       /* The position we have read in querybuf. */
-    bool is_qb_full_read;/* True if the last read returned the maximum allowed bytes */
-    robj **argv;         /* Arguments of current command. */
-    int argc;            /* Num of arguments of current command. */
-    int argv_len;        /* Size of argv array (may be more than argc) */
-    size_t argv_len_sum; /* Sum of lengths of objects in argv list. */
-    int reqtype;         /* Request protocol type: PROTO_REQ_* */
-    int multibulklen;    /* Number of multi bulk arguments left to read. */
-    long bulklen;        /* Length of bulk argument in multi bulk request. */
-    long long woff;      /* Last write global replication offset. */
+    sds querybuf;         /* Buffer we use to accumulate client queries. */
+    size_t qb_pos;        /* The position we have read in querybuf. */
+    bool is_qb_full_read; /* True if the last read returned the maximum allowed bytes */
+    robj **argv;          /* Arguments of current command. */
+    int argc;             /* Num of arguments of current command. */
+    int argv_len;         /* Size of argv array (may be more than argc) */
+    size_t argv_len_sum;  /* Sum of lengths of objects in argv list. */
+    int reqtype;          /* Request protocol type: PROTO_REQ_* */
+    int multibulklen;     /* Number of multi bulk arguments left to read. */
+    long bulklen;         /* Length of bulk argument in multi bulk request. */
+    long long woff;       /* Last write global replication offset. */
     /* Command execution state and command information */
     struct serverCommand *cmd;           /* Current command. */
     struct serverCommand *lastcmd;       /* Last command executed. */
@@ -2150,7 +2150,6 @@ struct valkeyServer {
     /* Replication flow control */
     int repl_flow_control_enabled;   /* Enables adaptive flow control for replication reads on the replica */
     int repl_max_reads_per_io_event; /* Maximum allowed reads from the primary file descriptor per I/O event */
-
 };
 
 #define MAX_KEYS_BUFFER 256

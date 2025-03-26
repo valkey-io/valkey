@@ -3248,7 +3248,7 @@ void readToQueryBuf(client *c) {
     if (c->nread <= 0) {
         return;
     }
-    c->qb_full_read = (size_t)c->nread == readlen ? 1 : 0;
+    c->is_qb_full_read = (size_t)c->nread == readlen ? 1 : 0;
 
     sdsIncrLen(c->querybuf, c->nread);
     qblen = sdslen(c->querybuf);
@@ -3286,14 +3286,14 @@ int shouldRepeatRead(client *c, int iteration) {
         /* If the last read filled the buffer AND enough time has passed since the last increase:
          * - Increase the read rate, up to a max limit.
          * - This ensures a gradual ramp-up instead of an overly aggressive approach. */
-        if (c->qb_full_read && server.mstime - server.repl_last_rate_update > 100) {
+        if (c->is_qb_full_read && server.mstime - server.repl_last_rate_update > 100) {
             server.repl_cur_reads_per_io_event = MIN(server.repl_max_reads_per_io_event,
                                                      server.repl_cur_reads_per_io_event + 1);
             server.repl_last_rate_update = server.mstime; // Update the last increase timestamp.
         }
     } else {
         /* If the last read completely filled the buffer, continue reading. */
-        if (c->qb_full_read) {
+        if (c->is_qb_full_read) {
             return 1;
         }
 

@@ -2807,6 +2807,7 @@ void initServer(void) {
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;
     server.repl_last_rate_update = 0;
+    server.repl_cur_reads_per_io_event = 0;
     resetReplicationBuffer();
 
     /* Make sure the locale is set on startup based on the config file. */

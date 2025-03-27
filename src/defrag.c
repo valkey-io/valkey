@@ -842,8 +842,7 @@ static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, in
              * callbacks. Nobody can ever have used this, i.e. accessed the key
              * name in the defrag module type callback. */
             void *sds_key_passed_as_robj = objectGetKey(ob);
-            long long endtimeWallClock = ustime() + (endtime - getMonotonicUs());
-            return moduleLateDefrag(sds_key_passed_as_robj, ob, cursor, endtimeWallClock, dbid);
+            return moduleLateDefrag(sds_key_passed_as_robj, ob, cursor, endtime, dbid);
         } else {
             *cursor = 0; /* object type/encoding may have changed since we schedule it for later */
         }

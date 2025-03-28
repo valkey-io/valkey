@@ -59,6 +59,9 @@
 #include "hdr_histogram.h"
 #include "cli_common.h"
 #include "mt19937-64.h"
+#include <lua.h>
+#include <lauxlib.h>
+#include <lualib.h>
 
 #define UNUSED(V) ((void)V)
 #define RANDPTR_INITIAL_SIZE 8
@@ -134,6 +137,9 @@ static struct config {
     pthread_mutex_t liveclients_mutex;
     pthread_mutex_t is_updating_slots_mutex;
     int resp3; /* use RESP3 */
+    char *workflow;
+    _Atomic int requests_num;
+    lua_State *lua;
 } config;
 
 typedef struct _client {
@@ -150,8 +156,8 @@ typedef struct _client {
     long long latency;  /* Request latency */
     int pending;        /* Number of pending requests (replies to consume) */
     int prefix_pending; /* If non-zero, number of pending prefix commands. Commands
-                           such as auth and select are prefixed to the pipeline of
-                           benchmark commands and discarded after the first send. */
+                        such as auth and select are prefixed to the pipeline of
+                        benchmark commands and discarded after the first send. */
     int prefixlen;      /* Size in bytes of the pending prefix commands */
     int thread_id;
     struct clusterNode *cluster_node;
@@ -294,6 +300,112 @@ cleanup:
     return NULL;
 }
 
+static void redisReplyToLua(lua_State *lua, redisReply *reply) {
+    if (!reply) {
+        lua_pushnil(lua);
+        return;
+    }
+
+    lua_newtable(lua);
+
+    lua_pushstring(lua, "type");
+    lua_pushinteger(lua, reply->type);
+    lua_settable(lua, -3);
+
+    lua_pushstring(lua, "integer");
+    lua_pushinteger(lua, reply->integer);
+    lua_settable(lua, -3);
+
+    lua_pushstring(lua, "len");
+    lua_pushinteger(lua, reply->len);
+    lua_settable(lua, -3);
+
+    if (reply->str) {
+        lua_pushstring(lua, "str");
+        lua_pushstring(lua, reply->str);
+        lua_settable(lua, -3);
+    }
+
+    lua_pushstring(lua, "elements");
+    lua_pushinteger(lua, reply->elements);
+    lua_settable(lua, -3);
+
+    if (reply->elements > 0) {
+        lua_pushstring(lua, "element");
+        lua_newtable(lua);
+        for (size_t i = 0; i < reply->elements; i++) {
+            redisReplyToLua(lua, reply->element[i]);
+            lua_rawseti(lua, -2, i + 1);
+        }
+        lua_settable(lua, -3);
+    }
+}
+
+static int initEngine(char *workflow) {
+    config.lua = luaL_newstate();
+    luaL_openlibs(config.lua);
+
+    sds lua_script = sdsempty();
+    char buf[1024];
+    size_t nread;
+    FILE *fp = fopen(workflow, "r");
+    if (!fp) {
+        fprintf(stderr, "Can't open file '%s': %s\n", workflow, strerror(errno));
+        exit(1);
+    }
+    while ((nread = fread(buf, 1, sizeof(buf), fp)) != 0) {
+        lua_script = sdscatlen(lua_script, buf, nread);
+    }
+    fclose(fp);
+
+    sds function_wrapper = sdscatprintf(sdsempty(), "local function bm(request_id,redis_reply)\n%s\nend\nreturn bm", lua_script);
+
+    if (luaL_loadstring(config.lua, function_wrapper)) {
+        fprintf(stderr, "Lua error: %s\n", lua_tostring(config.lua, -1));
+        exit(1);
+    }
+    sdsfree(lua_script);
+    sdsfree(function_wrapper);
+
+    if (lua_pcall(config.lua, 0, 1, 0)) {
+        fprintf(stderr, "Lua error: %s\n", lua_tostring(config.lua, -1));
+        exit(1);
+    }
+
+    lua_setglobal(config.lua, "bm");
+    return 0;
+}
+
+static void generateCommand(client c, int request_id, redisReply *reply) {
+    lua_State *lua = config.lua;
+
+    lua_getglobal(lua, "bm");
+    lua_pushinteger(lua, request_id);
+    redisReplyToLua(lua, reply);
+
+    if (lua_pcall(lua, 2, 1, 0)) {
+        fprintf(stderr, "Lua error: %s\n", lua_tostring(lua, -1));
+        lua_pop(lua, 1);
+        return;
+    }
+
+    if (lua_isstring(lua, -1)) {
+        char *cmd;
+        size_t cmd_len;
+
+        const char *str = lua_tostring(lua, -1);
+        size_t len = lua_strlen(lua, -1);
+        if (len > 0) {
+            cmd_len = redisFormatCommand(&cmd, str);
+            c->obuf = sdscatlen(c->obuf, cmd, cmd_len);
+            free(cmd);
+        }
+    } else {
+        fprintf(stderr, "Lua did not return a string\n");
+    }
+    lua_pop(lua, 1);
+    return;
+}
 
 static serverConfig *getServerConfig(const char *ip, int port, const char *hostsocket) {
     serverConfig *cfg = zcalloc(sizeof(*cfg));
@@ -736,10 +848,18 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
 
     c->prefixlen = sdslen(c->obuf);
     /* Append the request itself. */
-    if (from) {
-        c->obuf = sdscatlen(c->obuf, from->obuf + from->prefixlen, sdslen(from->obuf) - from->prefixlen);
+    int requests_id = 0;
+    if (config.workflow != NULL) {
+        requests_id = atomic_fetch_add_explicit(&config.requests_num, 1, memory_order_relaxed);
+        generateCommand(c, requests_id, NULL);
     } else {
-        for (j = 0; j < config.pipeline; j++) c->obuf = sdscatlen(c->obuf, cmd, len);
+        if (from) {
+            c->obuf = sdscatlen(c->obuf, from->obuf + from->prefixlen, sdslen(from->obuf) - from->prefixlen);
+        } else {
+            for (j = 0; j < config.pipeline; j++) {
+                c->obuf = sdscatlen(c->obuf, cmd, len);
+            }
+        }
     }
 
     c->written = 0;
@@ -964,6 +1084,7 @@ static void benchmark(const char *title, char *cmd, int len) {
     config.requests_issued = 0;
     config.requests_finished = 0;
     config.previous_requests_finished = 0;
+    config.requests_num = 0;
     config.last_printed_bytes = 0;
     hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE,         // Minimum value
              CONFIG_LATENCY_HISTOGRAM_MAX_VALUE,         // Maximum value
@@ -1434,6 +1555,10 @@ int parseOptions(int argc, char **argv) {
             config.num_functions = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--num-keys-in-fcall")) {
             config.num_keys_in_fcall = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--workflow")) {
+            if (lastarg) goto invalid;
+            config.workflow = strdup(argv[++i]);
+            initEngine(config.workflow);
         } else if (!strcmp(argv[i], "--help")) {
             exit_status = 0;
             goto usage;
@@ -1671,6 +1796,8 @@ char *generateFunctionScript(uint32_t num_functions, int with_keys) {
 /* Return true if the named test was selected using the -t command line
  * switch, or if all the tests are selected (no -t passed by user). */
 int test_is_selected(const char *name) {
+    if (config.workflow != NULL) return 0;
+
     char buf[256];
     int l = strlen(name);
 
@@ -2056,12 +2183,17 @@ int main(int argc, char **argv) {
             free(cmd);
         }
 
+        if (config.workflow != NULL) {
+            benchmark("WORKFLOW", NULL, 0);
+        }
+
         if (!config.csv) printf("\n");
     } while (config.loop);
 
     zfree(data);
     freeCliConnInfo(config.conn_info);
     if (config.redis_config != NULL) freeServerConfig(config.redis_config);
+    if (config.workflow != NULL) lua_close(config.lua);
 
     return 0;
 }

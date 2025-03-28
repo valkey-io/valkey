@@ -526,7 +526,7 @@ $(ENGINE_CLI_NAME): $(ENGINE_CLI_OBJ)
 
 # valkey-benchmark
 $(ENGINE_BENCHMARK_NAME): $(ENGINE_BENCHMARK_OBJ)
-	$(SERVER_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/hdr_histogram/libhdrhistogram.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS)
+	$(SERVER_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS)
 
 DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_OBJ:%.o=%.d)
 -include $(DEP)

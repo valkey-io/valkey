@@ -544,6 +544,7 @@ typedef struct ValkeyModuleEvent {
 
 struct ValkeyModuleCtx;
 struct ValkeyModuleDefragCtx;
+struct ValkeyModuleKeyOptCtx;
 typedef void (*ValkeyModuleEventCallback)(struct ValkeyModuleCtx *ctx,
                                           ValkeyModuleEvent eid,
                                           uint64_t subevent,
@@ -863,6 +864,7 @@ typedef struct ValkeyModuleIO ValkeyModuleIO;
 typedef struct ValkeyModuleDigest ValkeyModuleDigest;
 typedef struct ValkeyModuleInfoCtx ValkeyModuleInfoCtx;
 typedef struct ValkeyModuleDefragCtx ValkeyModuleDefragCtx;
+typedef struct ValkeyModuleKeyOptCtx ValkeyModuleKeyOptCtx;
 
 /* Function pointers needed by both the core and modules, these needs to be
  * exposed since you can't cast a function pointer to (void *). */
@@ -1300,6 +1302,215 @@ typedef struct ValkeyModuleScriptingEngineMethodsV4 {
 
 #define ValkeyModuleScriptingEngineMethods ValkeyModuleScriptingEngineMethodsV4
 
+/* Type definitions for implementing external storage modules. */
+typedef enum ValkeyModuleExternalStorageState {
+    VMES_STATE_READY,
+    VMES_STATE_READONLY,
+} ValkeyModuleExternalStorageState;
+typedef struct ValkeyModuleExternalStorageCtx ValkeyModuleExternalStorageCtx;
+
+/* The callback function called when `SET` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ * - `key_ctx: key context
+ *
+ * - `value`: value string passed in the `SET` command.
+ *
+ */
+typedef int (*ValkeyModuleExternalStorageSetFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx,
+    ValkeyModuleKeyOptCtx *key_ctx,
+    ValkeyModuleString *value);
+
+/* The callback function called when `GET` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ * - `key_ctx: key context
+ *
+ * - `found`: value string set in the `GET` command.
+ *
+ */
+ typedef int (*ValkeyModuleExternalStorageGetFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx,
+    ValkeyModuleKeyOptCtx *key_ctx,
+    void **value);
+
+/* The callback function called when `DEL` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ * - `key_ctx: key context
+ *
+ * - `value`: old value before deletion
+ *
+ */
+typedef int (*ValkeyModuleExternalStorageDelFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx,
+    ValkeyModuleKeyOptCtx *key_ctx,
+    ValkeyModuleString **value);
+
+/* The callback function called when `DROPRO` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ */
+ typedef void (*ValkeyModuleExternalStorageDropReadonlyFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx);
+
+/* The callback function called when `SETRO` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ */
+ typedef void (*ValkeyModuleExternalStorageSetReadonlyFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx);
+
+/* Current ABI version for external storage modules. */
+#define VALKEYMODULE_EXTERNAL_STORAGE_ABI_VERSION 1UL
+
+typedef struct ValkeyModuleExternalStorageMethods {
+    uint64_t version; /* Version of this structure for ABI compat. */
+
+    /* The callback function called when `SET` command is called in this storage. */
+    ValkeyModuleExternalStorageSetFunc set;
+
+    /* The callback function called when `GET` command is called in this storage. */
+    ValkeyModuleExternalStorageGetFunc get;
+
+    /* The callback function called when `DEL` command is called in this storage. */
+    ValkeyModuleExternalStorageDelFunc del;
+
+    /* The callback function called when `SETRO` command is called in this storage. */
+    ValkeyModuleExternalStorageSetReadonlyFunc set_readonly;
+
+    /* The callback function called when `DROPRO` command is called in this storage. */
+     ValkeyModuleExternalStorageDropReadonlyFunc drop_readonly;
+} ValkeyModuleExternalStorageMethodsV1;
+
+#define ValkeyModuleExternalStorageMethods ValkeyModuleExternalStorageMethodsV1
+
+/* Type definitions for implementing external filter modules. */
+typedef enum ValkeyModuleExternalFilterState {
+    VMEF_STATE_READY,
+    VMEF_STATE_READONLY,
+} ValkeyModuleExternalFilterState;
+typedef struct ValkeyModuleExternalFilterCtx ValkeyModuleExternalFilterCtx;
+
+/* The callback function called when `SET` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `filter_ctx`: the external filter context.
+ *
+ * - `key_ctx: key context
+ *
+ * - `value`: value string passed in the `SET` command.
+ *
+ */
+typedef int (*ValkeyModuleExternalFilterSetFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx,
+    ValkeyModuleKeyOptCtx *key_ctx,
+    ValkeyModuleString *value);
+
+/* The callback function called when `GET` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `filter_ctx`: the external filter context.
+ *
+ * - `key_ctx: key context
+ *
+ * - `found`: value string set in the `GET` command.
+ *
+ */
+ typedef int (*ValkeyModuleExternalFilterGetFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx,
+    ValkeyModuleKeyOptCtx *key_ctx,
+    void **found);
+
+/* The callback function called when `DEL` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `filter_ctx`: the external filter context.
+ *
+ * - `key_ctx: key context
+ *
+ * - `value`: old value before deletion
+ *
+ */
+typedef int (*ValkeyModuleExternalFilterDelFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx,
+    ValkeyModuleKeyOptCtx *key_ctx,
+    ValkeyModuleString **value);
+
+
+/* The callback function called when `DROPRO` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `filter_ctx`: the external filter context.
+ *
+ */
+ typedef void (*ValkeyModuleExternalFilterDropReadonlyFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx);
+
+/* The callback function called when `SETRO` command is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `filter_ctx`: the external filter context.
+ *
+ */
+ typedef void (*ValkeyModuleExternalFilterSetReadonlyFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx);
+
+/* Current ABI version for external filter modules. */
+#define VALKEYMODULE_EXTERNAL_FILTER_ABI_VERSION 1UL
+
+typedef struct ValkeyModuleExternalFilterMethods {
+    uint64_t version; /* Version of this structure for ABI compat. */
+
+    /* The callback function called when `SET` command is called in this filter. */
+    ValkeyModuleExternalFilterSetFunc set;
+
+    /* The callback function called when `GET` command is called in this filter. */
+    ValkeyModuleExternalFilterGetFunc get;
+
+    /* The callback function called when `DEL` command is called in this filter. */
+    ValkeyModuleExternalFilterDelFunc del;
+
+    /* The callback function called when `SETRO` command is called in this filter. */
+    ValkeyModuleExternalFilterSetReadonlyFunc set_readonly;
+
+    /* The callback function called when `DROPRO` command is called in this filter. */
+     ValkeyModuleExternalFilterDropReadonlyFunc drop_readonly;
+} ValkeyModuleExternalFilterMethodsV1;
+
+#define ValkeyModuleExternalFilterMethods ValkeyModuleExternalFilterMethodsV1
+
 /* ------------------------- End of common defines ------------------------ */
 
 /* ----------- The rest of the defines are only for modules ----------------- */
@@ -1344,7 +1555,6 @@ typedef struct ValkeyModuleCommandFilter ValkeyModuleCommandFilter;
 typedef struct ValkeyModuleServerInfoData ValkeyModuleServerInfoData;
 typedef struct ValkeyModuleScanCursor ValkeyModuleScanCursor;
 typedef struct ValkeyModuleUser ValkeyModuleUser;
-typedef struct ValkeyModuleKeyOptCtx ValkeyModuleKeyOptCtx;
 typedef struct ValkeyModuleRdbStream ValkeyModuleRdbStream;
 
 typedef int (*ValkeyModuleCmdFunc)(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc);
@@ -2176,16 +2386,30 @@ VALKEYMODULE_API int (*ValkeyModule_UnregisterScriptingEngine)(ValkeyModuleCtx *
 VALKEYMODULE_API ValkeyModuleScriptingEngineExecutionState (*ValkeyModule_GetFunctionExecutionState)(ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx) VALKEYMODULE_ATTR;
 
 VALKEYMODULE_API int (*ValkeyModule_RegisterExternalStorage)(ValkeyModuleCtx *module_ctx,
-                                                             const char *storage_name) VALKEYMODULE_ATTR;
+                                                             const char *storage_name,
+                                                             ValkeyModuleExternalStorageMethods *storage_methods) VALKEYMODULE_ATTR;
    
 VALKEYMODULE_API int (*ValkeyModule_UnregisterExternalStorage)(ValkeyModuleCtx *module_ctx,
                                                                const char *storage_name) VALKEYMODULE_ATTR;
 
+VALKEYMODULE_API ValkeyModuleExternalStorageState (*ValkeyModule_GetExternalStorageState)(ValkeyModuleExternalStorageCtx *storage_ctx) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API ValkeyModuleExternalStorageState (*ValkeyModule_SetExternalStorageState)(ValkeyModuleExternalStorageCtx *storage_ctx, ValkeyModuleExternalStorageState state) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API unsigned int (*ValkeyModule_GetExternalStorageTimeout)(ValkeyModuleExternalStorageCtx *storage_ctx) VALKEYMODULE_ATTR;
+
 VALKEYMODULE_API int (*ValkeyModule_RegisterExternalFilter)(ValkeyModuleCtx *module_ctx,
-                                                             const char *filter_name) VALKEYMODULE_ATTR;
+                                                            const char *filter_name,
+                                                            ValkeyModuleExternalFilterMethods *filter_methods) VALKEYMODULE_ATTR;
       
 VALKEYMODULE_API int (*ValkeyModule_UnregisterExternalFilter)(ValkeyModuleCtx *module_ctx,
-                                                               const char *filter_name) VALKEYMODULE_ATTR;
+                                                              const char *filter_name) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API ValkeyModuleExternalFilterState (*ValkeyModule_GetExternalFilterState)(ValkeyModuleExternalFilterCtx *filter_ctx) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API ValkeyModuleExternalFilterState (*ValkeyModule_SetExternalFilterState)(ValkeyModuleExternalFilterCtx *filter_ctx, ValkeyModuleExternalFilterState state) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API unsigned int (*ValkeyModule_GetExternalFilterTimeout)(ValkeyModuleExternalFilterCtx *filter_ctx) VALKEYMODULE_ATTR;
 
 VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerLog)(ValkeyModuleString *msg,
                                                                  int truncate) VALKEYMODULE_ATTR;
@@ -2581,6 +2805,9 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(GetFunctionExecutionState);
     VALKEYMODULE_GET_API(RegisterExternalStorage);
     VALKEYMODULE_GET_API(UnregisterExternalStorage);
+    VALKEYMODULE_GET_API(GetExternalStorageState);
+    VALKEYMODULE_GET_API(SetExternalStorageState);
+    VALKEYMODULE_GET_API(GetExternalStorageTimeout);
     VALKEYMODULE_GET_API(RegisterExternalFilter);
     VALKEYMODULE_GET_API(UnregisterExternalFilter);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerLog);
@@ -2589,6 +2816,9 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerFlushLogs);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerProcessCommands);
     VALKEYMODULE_GET_API(ACLCheckKeyPrefixPermissions);
+    VALKEYMODULE_GET_API(GetExternalFilterState);
+    VALKEYMODULE_GET_API(SetExternalFilterState);
+    VALKEYMODULE_GET_API(GetExternalFilterTimeout);
 
     if (ValkeyModule_IsModuleNameBusy && ValkeyModule_IsModuleNameBusy(name)) return VALKEYMODULE_ERR;
     ValkeyModule_SetModuleAttribs(ctx, name, ver, apiver);

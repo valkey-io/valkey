@@ -35,6 +35,7 @@
 #include "functions.h"
 #include "io_threads.h"
 #include "module.h"
+#include "external_data.h"
 #include "vector.h"
 #include "expire.h"
 
@@ -2212,8 +2213,16 @@ int dbExpandExpires(serverDb *db, uint64_t db_size, int try_expand) {
 
 static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index) {
     void *existing = NULL;
-    kvstoreHashtableFind(db->keys, dict_index, key, &existing);
-    return existing;
+    if (kvstoreHashtableFind(db->keys, dict_index, key, &existing) || !isExtDataOn()) {
+        return existing;
+    }
+
+    robj *rkey = createStringObject(key, sdslen(key));
+    int exists = externalDataFind(db->id, rkey, &existing);
+    decrRefCount(rkey);
+    if (exists) return existing;
+
+    return NULL;
 }
 
 robj *dbFind(serverDb *db, sds key) {

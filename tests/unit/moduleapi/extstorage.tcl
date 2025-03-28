@@ -102,7 +102,7 @@ start_server [list overrides [list "ext-data-mode" test] tags [list "external:sk
 }
 
 start_server [list overrides [list "ext-data-mode" test] tags [list "external:skip"]] {
-    test {Initializing modules does affect STATS commands} {
+    test {Initializing and dropping db affects STATS commands} {
         # STATS ok with modules non-loaded
         assert_equal [list ] [r external_data stats filter]
         assert_equal [list ] [r external_data stats storage]
@@ -159,5 +159,85 @@ start_server [list overrides [list "ext-data-mode" test] tags [list "external:sk
         assert_equal [list ] [r external_data stats storage]
         assert_equal {OK} [r module unload hellostorage2]
         assert_equal {OK} [r module unload hellofilter2]
+    }
+}
+
+start_server [list overrides [list "ext-data-mode" test "loglevel" debug] tags [list "external:skip"]] {
+    test {Reading keys from storage works} {
+        # init
+        assert_equal {OK} [r module load $storagemodule1]
+        assert_equal {OK} [r module load $filtermodule1]
+        assert_error {ERR db0 is not initialized} {r external_data debug db0 filter set k v}
+        assert_error {ERR db0 is not initialized} {r external_data debug db0 storage set k v}
+        assert_equal {OK} [r external_data INIT db0 STORAGE hellostorage1 FILTER hellofilter1]
+        assert_error {ERR unknown subcommand somecommand} {r external_data debug db0 somecommand set k v}
+        assert_equal {OK} [r external_data INIT db1 STORAGE hellostorage1 FILTER hellofilter1]
+
+        # filter RO, storage RO = nil
+        assert_equal {OK} [r external_data debug db0 storage setro]
+        assert_equal {OK} [r external_data debug db0 filter setro]
+        assert_error {ERR k set failed} {r external_data debug db0 storage set k v}
+        assert_error {ERR k set failed} {r external_data debug db0 filter set k v}
+        assert_equal {} [r get k]
+        assert_equal {OK} [r select 1]
+        assert_equal {} [r get k]
+        assert_equal {OK} [r select 0]
+
+        # filter RO, storage OK = nil
+        assert_equal {OK} [r external_data debug db0 storage dropro]
+        assert_equal {OK} [r external_data debug db0 storage set k v]
+        assert_error {ERR k set failed} {r external_data debug db0 filter set k v}
+        assert_equal {} [r get k]
+        assert_equal {OK} [r select 1]
+        assert_equal {} [r get k]
+        assert_equal {OK} [r select 0]
+
+        # filter OK, storage RO = nil
+        assert_equal v [r external_data debug db0 storage del k]
+        assert_equal {} [r external_data debug db0 storage del k]
+        assert_equal {OK} [r external_data debug db0 storage setro]
+        assert_equal {OK} [r external_data debug db0 filter dropro]
+        assert_error {ERR k set failed} {r external_data debug db0 storage set k v}
+        assert_equal {OK} [r external_data debug db0 filter set k v]
+        assert_equal {} [r get k]
+        assert_equal {OK} [r select 1]
+        assert_equal {} [r get k]
+        assert_equal {OK} [r select 0]
+
+        # filter ok, storage ok = OK
+        assert_equal {OK} [r external_data debug db0 storage dropro]
+        assert_equal {OK} [r external_data debug db0 storage set k v]
+        assert_equal {OK} [r external_data debug db0 storage set k v]
+        assert_equal {OK} [r external_data debug db0 filter set k v]
+        assert_equal v [r get k]
+        assert_equal {OK} [r select 1]
+        assert_equal {} [r get k]
+        assert_equal {OK} [r select 0]
+
+        # filter not, storage ok = nil
+        assert_equal 1 [r external_data debug db0 filter del k]
+        assert_equal 0 [r external_data debug db0 filter del k]
+        assert_equal {} [r get k]
+        assert_equal {OK} [r select 1]
+        assert_equal {} [r get k]
+        assert_equal {OK} [r select 0]
+
+        # filter OK, storage not = nil
+        assert_equal {OK} [r external_data debug db0 filter set k v]
+        assert_equal v [r external_data debug db0 storage del k]
+        assert_equal {} [r get k]
+        assert_equal {OK} [r select 1]
+        assert_equal {} [r get k]
+        assert_equal {OK} [r select 0]
+
+        # filter not, storage not = nil
+        assert_equal 1 [r external_data debug db0 filter del k]
+        assert_equal {} [r get k]
+        assert_equal {OK} [r select 1]
+        assert_equal {} [r get k]
+        assert_equal {OK} [r select 0]
+
+        # ToDo: add sharded cluster test for key read (including several nodes with MOVE scenario)
+        # ToDo: remove v from filter add (storing only k)
     }
 }

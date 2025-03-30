@@ -117,7 +117,7 @@ if {!$::valgrind} {
             r write "*3\r\n\$3\r\nSET\r\n\$1\r\nx\r\n\$blabla\r\n"
             r flush
             catch {r debug segfault}
-            verify_no_log_message 0 "*redacted*" 0
+            wait_for_log_messages 0 {"*Query buffer: *\$blabla*"} 0 10 1000
         }
     }
 
@@ -127,7 +127,7 @@ if {!$::valgrind} {
             r write "*3\r\n\$3\r\nSET\r\n\$1\r\nx\r\n\$blabla\r\n"
             r flush
             catch {r debug segfault}
-            $check_cb "*Query buffer: *redacted*"
+            wait_for_log_messages 0 {"*Query buffer: *redacted*"} 0 10 1000
         }
     }
 }

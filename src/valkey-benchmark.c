@@ -149,6 +149,7 @@ static struct config {
     pthread_mutex_t is_updating_slots_mutex;
     int resp3; /* use RESP3 */
     char *workflow;
+    _Atomic int max_requests_id;
     _Atomic int requests_num;
     lua_State *lua;
 } config;
@@ -467,7 +468,7 @@ static int generateCommand(client c, int request_id, redisReply *reply) {
             cmd_len = redisFormatCommand(&cmd, str);
             c->obuf = sdscatlen(c->obuf, cmd, cmd_len);
             free(cmd);
-            enqueue(c->circular_array, (req_id << WORKFLOW_MAX_STAGE_BIT | stage + 1));
+            enqueue(c->circular_array, (req_id << WORKFLOW_MAX_STAGE_BIT) | (stage + 1));
             lua_pop(lua, 1);
             return 1;
         }
@@ -539,7 +540,8 @@ static void freeClient(client c) {
     c->install_write_handler = 0;
     if (c->thread_id >= 0) {
         int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
-        if (requests_finished >= config.requests) {
+        int requests_num = atomic_load_explicit(&config.requests_num, memory_order_relaxed);
+        if (requests_finished >= config.requests && requests_finished >= requests_num) {
             aeStop(el);
         }
     }
@@ -575,10 +577,11 @@ static void resetClient(client c) {
     c->install_write_handler = 1;
     c->written = 0;
     c->pending = config.pipeline;
+    atomic_fetch_add_explicit(&config.requests_num, c->pending, memory_order_relaxed);
     if (config.workflow != NULL) {
         sdsclear(c->obuf);
         for (int j = 0; j < config.pipeline; j++) {
-            int requests_id = atomic_fetch_add_explicit(&config.requests_num, 1, memory_order_relaxed);
+            int requests_id = atomic_fetch_add_explicit(&config.max_requests_id, 1, memory_order_relaxed);
             assert(generateCommand(c, requests_id << WORKFLOW_MAX_STAGE_BIT, NULL) == 1);
         }
     }
@@ -627,9 +630,11 @@ static void setClusterKeyHashTag(client c) {
 
 static void clientDone(client c) {
     int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
+    int requests_num = atomic_load_explicit(&config.requests_num, memory_order_relaxed);
     if (requests_finished >= config.requests) {
         freeClient(c);
-        if (!config.num_threads && config.el) aeStop(config.el);
+        if (!config.num_threads && config.el && requests_finished >= requests_num)
+            aeStop(config.el);
         return;
     }
     if (config.keepalive) {
@@ -671,6 +676,7 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     exit(1);
                 }
                 redisReply *r = reply;
+                int apply_command = 0;
                 if (r->type == REDIS_REPLY_ERROR) {
                     /* Try to update slots configuration if reply error is
                      * MOVED/ASK/CLUSTERDOWN and the key(s) used by the command
@@ -701,14 +707,14 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                         exit(1);
                     }
                 }
-                if (c->prefix_pending == 0 && config.workflow != NULL 
+                if (c->prefix_pending == 0 && config.workflow != NULL
                     && generateCommand(c, dequeue(c->circular_array), reply) > 0) {
                     if (c->install_write_handler == 0) {
                         aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
                         aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
                         c->install_write_handler = 1;
                     }
-                    c->pending++;
+                    apply_command = 1;
                 }
                 freeReplyObject(reply);
                 /* This is an OK for prefix commands such as auth and select.*/
@@ -728,7 +734,13 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     }
                     continue;
                 }
-                int requests_finished = atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
+                int requests_finished = 0;
+                if (apply_command) {
+                    c->pending++;
+                    requests_finished = atomic_fetch_add_explicit(&config.requests_finished, 0, memory_order_relaxed);
+                } else {
+                    requests_finished = atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
+                }
                 if (requests_finished < config.requests) {
                     if (config.num_threads == 0) {
                         hdr_record_value(config.latency_histogram, // Histogram to record to
@@ -946,7 +958,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
         }
 
         for (j = 0; j < config.pipeline; j++) {
-            int requests_id = atomic_fetch_add_explicit(&config.requests_num, 1, memory_order_relaxed);
+            int requests_id = atomic_fetch_add_explicit(&config.max_requests_id, 1, memory_order_relaxed);
             assert(generateCommand(c, requests_id << WORKFLOW_MAX_STAGE_BIT, NULL) == 1);
         }
     } else {
@@ -961,6 +973,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
 
     c->written = 0;
     c->pending = config.pipeline + c->prefix_pending;
+    atomic_fetch_add_explicit(&config.requests_num, c->pending, memory_order_relaxed);
     c->randptr = NULL;
     c->randlen = 0;
     c->stagptr = NULL;
@@ -1183,7 +1196,8 @@ static void benchmark(const char *title, char *cmd, int len) {
     config.requests_issued = 0;
     config.requests_finished = 0;
     config.previous_requests_finished = 0;
-    config.requests_num = 1;
+    config.max_requests_id = 1;
+    config.requests_num = 0;
     config.last_printed_bytes = 0;
     hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE,         // Minimum value
              CONFIG_LATENCY_HISTOGRAM_MAX_VALUE,         // Maximum value

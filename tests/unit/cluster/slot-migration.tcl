@@ -656,6 +656,12 @@ start_cluster 3 3 {tags {external:skip cluster} } {
         set result [catch {R $primary_id_target exec} err]
         assert_match "TRYAGAIN Multiple keys request during rehashing of slot" $err
 
+        # Multi/Exec on source - select invalid db num
+        R $primary_id_src multi        
+        R $primary_id_src select 100                
+        set result [catch {R $primary_id_src exec} err]
+        assert_match "TRYAGAIN Multiple keys request during rehashing of slot" $err
+
         # Migrate keys        
         R $primary_id_src select 0
         R $primary_id_src MIGRATE 127.0.0.1 $primary_id_target_port "{3560}key1" 0 5000

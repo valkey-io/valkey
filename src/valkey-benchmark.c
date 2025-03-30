@@ -84,11 +84,11 @@ struct clusterNode;
 struct serverConfig;
 
 typedef struct circularArray {
-    int *data;      // 动态数组
-    int capacity;   // 数组容量
-    int front;      // 队头指针
-    int rear;       // 队尾指针
-    int size;       // 当前元素数量
+    int *data;
+    int capacity;
+    int front;
+    int rear;
+    int size;
 } circularArray;
 
 /* Read from replica options */

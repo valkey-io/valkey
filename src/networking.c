@@ -2764,24 +2764,27 @@ static void setProtocolError(const char *errstr, client *c) {
         /* Sample some protocol to given an idea about what was inside. */
         char buf[256];
         buf[0] = '\0';
-        if (c->querybuf && sdslen(c->querybuf) - c->qb_pos < PROTO_DUMP_LEN) {
-            snprintf(buf, sizeof(buf), "Query buffer during protocol error: '%s'", c->querybuf + c->qb_pos);
-        } else if (c->querybuf) {
-            snprintf(buf, sizeof(buf), "Query buffer during protocol error: '%.*s' (... more %zu bytes ...) '%.*s'",
-                     PROTO_DUMP_LEN / 2, c->querybuf + c->qb_pos, sdslen(c->querybuf) - c->qb_pos - PROTO_DUMP_LEN,
-                     PROTO_DUMP_LEN / 2, c->querybuf + sdslen(c->querybuf) - PROTO_DUMP_LEN / 2);
-        }
+        if (server.hide_user_data_from_log) {
+            snprintf(buf, sizeof(buf), "*redacted*");
+        } else {
+            if (c->querybuf && sdslen(c->querybuf) - c->qb_pos < PROTO_DUMP_LEN) {
+                snprintf(buf, sizeof(buf), "'%s'", c->querybuf + c->qb_pos);
+            } else if (c->querybuf) {
+                snprintf(buf, sizeof(buf), "'%.*s' (... more %zu bytes ...) '%.*s'",
+                         PROTO_DUMP_LEN / 2, c->querybuf + c->qb_pos, sdslen(c->querybuf) - c->qb_pos - PROTO_DUMP_LEN,
+                         PROTO_DUMP_LEN / 2, c->querybuf + sdslen(c->querybuf) - PROTO_DUMP_LEN / 2);
+            }
 
-        /* Remove non printable chars. */
-        char *p = buf;
-        while (*p != '\0') {
-            if (!isprint(*p)) *p = '.';
-            p++;
+            /* Remove non printable chars. */
+            char *p = buf;
+            while (*p != '\0') {
+                if (!isprint(*p)) *p = '.';
+                p++;
+            }
         }
-
         /* Log all the client and protocol info. */
         int loglevel = (c->flag.primary) ? LL_WARNING : LL_VERBOSE;
-        serverLog(loglevel, "Protocol error (%s) from client: %s. %s", errstr, client, buf);
+        serverLog(loglevel, "Protocol error (%s) from client: %s. Query buffer: %s", errstr, client, buf);
         sdsfree(client);
     }
     c->flag.close_after_reply = 1;

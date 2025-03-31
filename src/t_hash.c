@@ -1246,9 +1246,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
 
         /* Add all the elements into the temporary hashtable. */
         while (hashTypeNext(&hi) != C_ERR) {
-            int ret = 0;
-            ret = hashtableAdd(ht, (&hi)->next);
-            serverAssert(ret);
+            serverAssert(hashtableAdd(ht, (&hi)->next));
         }
         serverAssert(hashtableSize(ht) == size);
         hashTypeResetIterator(&hi);
@@ -1269,8 +1267,10 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             sds field = hashTypeEntryGetField(next);
             sds value = hashTypeEntryGetValue(next);
             if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
-            addWritePreparedReplyBulkSds(wpc, sdsdup(field));
-            if (withvalues) addWritePreparedReplyBulkSds(wpc, sdsdup(value));
+            addReplyBulkCBuffer(c, field, sdslen(field));
+            // addWritePreparedReplyBulkSds(wpc, sdsdup(field));
+            if (withvalues) addReplyBulkCBuffer(c, value, sdslen(value));
+            // if (withvalues) addWritePreparedReplyBulkSds(wpc, sdsdup(value));
         }
 
         hashtableResetIterator(&iter);

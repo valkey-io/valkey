@@ -10,7 +10,7 @@
  * In unstable branch the status is always "dev".
  * During release process the status will be set to rc1,rc2...rcN.
  * When the version is released the status will be "ga". */
-#define VALKEY_RELEASE_STAGE "rc2"
+#define VALKEY_RELEASE_STAGE "ga"
 
 /* Redis OSS compatibility version, should never
  * exceed 7.2.x. */

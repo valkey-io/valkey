@@ -10,6 +10,22 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
+Valkey 8.1.0 GA  -  Released Mon 31 March 2025
+================================================================================
+Upgrade urgency LOW: This is the first release of Valkey 8.1, 
+a minor version update designed to further enhance performance, reliability, observability and usability
+over Valkey 8.0 for all Valkey installations. This release is fully compatible with all previous Valkey releases 
+as well as Redis OSS 7.2.4.
+
+Behavior Changes
+================
+* Hide input buffer data from being logged on protocol error when hide-user-data-from-log is enabled (#1889)
+
+Bug fixes
+=========
+* Fix a bug in VM_GetCurrentUserName which leads to engine crash when no valid username provided (#1885)
+
+================================================================================
 Valkey 8.1.0 RC2  -  Released Thu 20 March 2025
 ================================================================================
 Upgrade urgency LOW: This is the second release candidate of Valkey 8.1, with several bug fixes, 

@@ -1268,9 +1268,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             sds value = hashTypeEntryGetValue(next);
             if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
             addReplyBulkCBuffer(c, field, sdslen(field));
-            // addWritePreparedReplyBulkSds(wpc, sdsdup(field));
             if (withvalues) addReplyBulkCBuffer(c, value, sdslen(value));
-            // if (withvalues) addWritePreparedReplyBulkSds(wpc, sdsdup(value));
         }
 
         hashtableResetIterator(&iter);

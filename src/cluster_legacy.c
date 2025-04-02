@@ -6400,7 +6400,8 @@ sds genClusterInfoString(void) {
 
     if (nodes_pfail + nodes_fail > dictSize(server.cluster->nodes)) {
         serverLog(LL_WARNING, "Aggregated count of nodes marked as PFAIL and FAIL exceeds the total count of nodes."
-                  "PFAIL nodes: %u, FAIL nodes: %u", nodes_pfail, nodes_fail);
+                              "PFAIL nodes: %u, FAIL nodes: %u",
+                  nodes_pfail, nodes_fail);
     }
 
     info = sdscatprintf(info,

@@ -6384,18 +6384,39 @@ sds genClusterInfoString(void) {
         }
     }
 
+    dictIterator *di = dictGetIterator(server.cluster->nodes);
+    dictEntry *de;
+    u_int nodes_pfail = 0, nodes_fail = 0;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (nodeTimedOut(node)) {
+            nodes_pfail++;
+        }
+        if (nodeFailed(node)) {
+            nodes_fail++;
+        }
+    }
+    dictReleaseIterator(di);
+
+    if (nodes_pfail + nodes_fail > dictSize(server.cluster->nodes)) {
+        serverLog(LL_WARNING, "Aggregated count of nodes marked as PFAIL and FAIL exceeds the total count of nodes."
+                  "PFAIL nodes: %u, FAIL nodes: %u", nodes_pfail, nodes_fail);
+    }
+
     info = sdscatprintf(info,
                         "cluster_state:%s\r\n"
                         "cluster_slots_assigned:%d\r\n"
                         "cluster_slots_ok:%d\r\n"
                         "cluster_slots_pfail:%d\r\n"
                         "cluster_slots_fail:%d\r\n"
+                        "cluster_nodes_pfail:%u\r\n"
+                        "cluster_nodes_fail:%u\r\n"
                         "cluster_known_nodes:%lu\r\n"
                         "cluster_size:%d\r\n"
                         "cluster_current_epoch:%llu\r\n"
                         "cluster_my_epoch:%llu\r\n",
                         statestr[server.cluster->state], slots_assigned, slots_ok, slots_pfail, slots_fail,
-                        dictSize(server.cluster->nodes), server.cluster->size,
+                        nodes_pfail, nodes_fail, dictSize(server.cluster->nodes), server.cluster->size,
                         (unsigned long long)server.cluster->currentEpoch, (unsigned long long)nodeEpoch(myself));
 
     /* Show stats about messages sent and received. */

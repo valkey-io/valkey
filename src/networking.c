@@ -3955,12 +3955,6 @@ void clientHelpCommand(client *c) {
         "      Kill connections with the specified name.",
         "    * IDLE <idle>",
         "      Return clients with idle time greater than or equal to <idle> seconds.",
-        "    * SUBSCRIBED-PATTERN <subscribed-pattern>",
-        "      Kill connections subscribed to a matching subscribed pattern.",
-        "    * SUBSCRIBED-CHANNEL <subscribed channel>",
-        "      Kill connections subscribed to a matching subscribed channel.",
-        "    * SUBSCRIBED-SHARD-CHANNEL <subscribed-shard-channel>",
-        "      Kill connections subscribed to a matching subscribe shard channel.",
         "    * LIB-NAME <library-name>",
         "      Kill connections with the specified library name.",
         "    * LIB-VER <library-version>",
@@ -3993,12 +3987,6 @@ void clientHelpCommand(client *c) {
         "      Return clients with the specified name.",
         "    * IDLE <idle>",
         "      Return clients with idle time greater than or equal to <idle> seconds.",
-        "    * SUBSCRIBED-PATTERN <subscribed-pattern>",
-        "      Return clients subscribed to a matching subscribed-pattern.",
-        "    * SUBSCRIBED-CHANNEL <subscribed-channel>",
-        "      Return clients subscribed to the specified subscribed-channel.",
-        "    * SUBSCRIBED-SHARD-CHANNEL <shard-subscribed-channel>",
-        "      Return clients subscribed to the specified subscribe shard channel.",
         "    * LIB-NAME <lib-name>",
         "      Return clients with the specified lib name.",
         "    * LIB-VER <lib-version>",
@@ -4176,8 +4164,10 @@ client_kill_done:
 }
 
 static void freeClientFilter(clientFilter *filter) {
-    zfree(filter->ids);
-    sdsfree(filter->flags);
+    if (filter->ids != NULL)
+        zfree(filter->ids);
+    if (filter->flags != NULL)
+        sdsfree(filter->flags);
     if (filter->lib_name) {
         decrRefCount(filter->lib_name);
         filter->lib_name = NULL;

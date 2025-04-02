@@ -42,7 +42,7 @@
             ],
             [
                 "9.0.0",
-                "Added filters NAME, MINIDLE, FLAGS, LIB-NAME, LIB-VER, DB, TOTAL-NET-IN and TOTAL-NET-OUT"
+                "Added filters NAME, MINIDLE, FLAGS, LIB-NAME, LIB-VER, DB, TOTAL-NET-IN and TOTAL-NET-OUT."
             ]
         ],
         "command_flags": [

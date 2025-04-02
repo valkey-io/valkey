@@ -1284,17 +1284,17 @@ start_server {tags {"introspection"}} {
 
     test {CLIENT KILL can filter by DB} {
         start_server {config "default.conf" args {--save --loglevel verbose}} {
-                    set c1 [valkey_client]
-                    set c2 [valkey_client]
+            set c1 [valkey_client]
+            set c2 [valkey_client]
 
-                    $c1 select 2
-                    $c2 client kill db 2
+            $c1 select 2
+            $c2 client kill db 2
 
-                    set result [$c2 client list]
-                    assert {[string match {*db=2*} $result] == 0}
+            set result [$c2 client list]
+            assert {[string match {*db=2*} $result] == 0}
 
-                    catch {$c2 close}
-                }
+            catch {$c2 close}
+        }
     } {} {external:skip}
 
     test {CLIENT KILL can filter by TOT-NET-IN} {

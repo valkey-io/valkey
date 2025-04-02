@@ -81,6 +81,7 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "rax.h"        /* Radix tree */
 #include "connection.h" /* Connection abstraction */
 #include "memory_prefetch.h"
+#include "trace/trace.h"
 
 #define dismissMemory zmadvise_dontneed
 
@@ -136,10 +137,6 @@ struct hdr_histogram;
 #define CONFIG_DEFAULT_PID_FILE "/var/run/valkey.pid"
 #define CONFIG_DEFAULT_BINDADDR_COUNT 2
 #define CONFIG_DEFAULT_BINDADDR {"*", "-::*"}
-#define NET_HOST_STR_LEN 256                          /* Longest valid hostname */
-#define NET_IP_STR_LEN 46                             /* INET6_ADDRSTRLEN is 46, but we need to be sure */
-#define NET_ADDR_STR_LEN (NET_IP_STR_LEN + 32)        /* Must be enough for ip:port */
-#define NET_HOST_PORT_STR_LEN (NET_HOST_STR_LEN + 32) /* Must be enough for hostname:port */
 #define CONFIG_BINDADDR_MAX 16
 #define CONFIG_MIN_RESERVED_FDS 32
 #define CONFIG_DEFAULT_PROC_TITLE_TEMPLATE "{title} {listen-addr} {server-mode}"
@@ -2113,6 +2110,7 @@ struct valkeyServer {
     /* Latency monitor */
     long long latency_monitor_threshold;
     dict *latency_events;
+    sds trace_events;
     /* ACLs */
     char *acl_filename;           /* ACL Users file. NULL if not configured. */
     unsigned long acllog_max_len; /* Maximum length of the ACL LOG list. */

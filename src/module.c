@@ -7711,7 +7711,8 @@ void VM__Assert(const char *estr, const char *file, int line) {
  * command. The call is skipped if the latency is smaller than the configured
  * latency-monitor-threshold. */
 void VM_LatencyAddSample(const char *event, mstime_t latency) {
-    latencyAddSampleIfNeeded(event, latency);
+    latencyAddSampleIfNeeded(event, latency * 1000);
+    latencyTraceIfNeeded(server, event, latency * 1000);
 }
 
 /* --------------------------------------------------------------------------

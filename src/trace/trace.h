@@ -1,0 +1,50 @@
+/* ==========================================================================
+ * trace.h - support generic tracing layers.
+ * --------------------------------------------------------------------------
+ * Copyright (C) 2025  zhenwei pi <pizhenwei@bytedance.com>
+ * Copyright (C) 2025  zhiqiang li <lizhiqiang.sf@bytedance.com>
+ *
+ * This work is licensed under BSD 3-Clause, License 1 of the COPYING file in
+ * the top-level directory.
+ * ==========================================================================
+ */
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+#if !defined(__VALKEY_TRACE_H__)
+#define __VALKEY_TRACE_H__
+
+#include "trace_db.h"
+#include "trace_cluster.h"
+#include "trace_sys.h"
+#include "trace_aof.h"
+#include "trace_server.h"
+#include "trace_commands.h"
+
+typedef struct valkeyTraceEvents {
+    union {
+        unsigned aof : 1;
+        unsigned server : 1;
+        unsigned cluster : 1;
+        unsigned sys : 1;
+        unsigned db : 1;
+        unsigned commands : 1;
+    };
+    unsigned enabled;
+} valkeyTraceEvents;
+
+extern struct valkeyTraceEvents trace_events;
+
+#ifdef USE_LTTNG
+#define latencyTraceIfNeeded(type, event, var) \
+    if (trace_events.type) valkey_##type##_trace(valkey_##type, latency, (event), (var));
+#else
+#define latencyTraceIfNeeded(type, event, var) \
+    do {                                       \
+    } while (0)
+#endif
+
+#endif /* __VALKEY_TRACE_H__ */

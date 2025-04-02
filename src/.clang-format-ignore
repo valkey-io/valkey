@@ -14,3 +14,4 @@ sha1.*
 sha256.*
 siphash.c
 strl.c
+trace/trace_*

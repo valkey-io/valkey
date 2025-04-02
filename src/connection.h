@@ -34,12 +34,18 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/uio.h>
 
 #include "ae.h"
 
 #define CONN_INFO_LEN 32
 #define CONN_ADDR_STR_LEN 128 /* Similar to INET6_ADDRSTRLEN, hoping to handle other protocols. */
+
+#define NET_HOST_STR_LEN 256                          /* Longest valid hostname */
+#define NET_IP_STR_LEN 46                             /* INET6_ADDRSTRLEN is 46, but we need to be sure */
+#define NET_ADDR_STR_LEN (NET_IP_STR_LEN + 32)        /* Must be enough for ip:port */
+#define NET_HOST_PORT_STR_LEN (NET_HOST_STR_LEN + 32) /* Must be enough for hostname:port */
 
 struct aeEventLoop;
 typedef struct connection connection;
@@ -138,6 +144,7 @@ struct connection {
     ConnectionCallbackFunc conn_handler;
     ConnectionCallbackFunc write_handler;
     ConnectionCallbackFunc read_handler;
+    char *fmtname;
 };
 
 #define CONFIG_BINDADDR_MAX 16
@@ -266,6 +273,10 @@ static inline void connShutdown(connection *conn) {
 }
 
 static inline void connClose(connection *conn) {
+    if (conn->fmtname) {
+        free(conn->fmtname);
+        conn->fmtname = NULL;
+    }
     conn->type->close(conn);
 }
 
@@ -331,6 +342,23 @@ static inline int connAddrPeerName(connection *conn, char *ip, size_t ip_len, in
 
 static inline int connAddrSockName(connection *conn, char *ip, size_t ip_len, int *port) {
     return connAddr(conn, ip, ip_len, port, 0);
+}
+
+/* build a generic name for a connection of schema "LADDR:LPORT-RADDR:RPORT", except Unix socket */
+static inline int connFmtName(connection *conn) {
+    char fmtname[NET_ADDR_STR_LEN + NET_ADDR_STR_LEN + 2] = {0};
+    char laddr[NET_ADDR_STR_LEN], raddr[NET_ADDR_STR_LEN];
+    int ret;
+
+    ret = connFormatAddr(conn, laddr, sizeof(laddr), 0);
+    if (ret < 0) return ret;
+
+    ret = connFormatAddr(conn, raddr, sizeof(raddr), 1);
+    if (ret < 0) return ret;
+
+    snprintf(fmtname, sizeof(fmtname), "%s-%s", laddr, raddr);
+    conn->fmtname = strdup(fmtname);
+    return 0;
 }
 
 /* Test a connection is local or loopback.

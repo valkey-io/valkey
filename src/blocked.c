@@ -148,7 +148,8 @@ void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int failed_
     commandlogPushCurrentCommand(c, c->lastcmd);
     c->duration = 0;
     /* Log the reply duration event. */
-    latencyAddSampleIfNeeded("command-unblocking", reply_us / 1000);
+    latencyAddSampleIfNeeded("command-unblocking", reply_us);
+    latencyTraceIfNeeded(server, "command-unblocking", reply_us);
 }
 
 /* This function is called in the beforeSleep() function of the event loop

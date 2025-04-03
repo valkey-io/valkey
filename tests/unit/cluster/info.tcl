@@ -66,8 +66,9 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
 }
 
 start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 1000}} {
-    test "node partially failure count" {
-        pause_process [srv 0 pid]
+    pause_process [srv 0 pid]
+
+    test "count - node partial failure" {
         wait_for_condition 500 10 {
             [CI 1 cluster_nodes_pfail] eq 1 &&
             [CI 2 cluster_nodes_pfail] eq 1 &&
@@ -80,7 +81,7 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
         }
     }
 
-    test "node complete failure count" {
+    test "count - node complete failure" {
         # After reaching quorum about failure,
         # node 0 should be marked as FAIL across all nodes in the cluster
         wait_for_condition 100 100 {

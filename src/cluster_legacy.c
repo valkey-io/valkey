@@ -6386,7 +6386,7 @@ sds genClusterInfoString(void) {
 
     dictIterator *di = dictGetIterator(server.cluster->nodes);
     dictEntry *de;
-    u_int nodes_pfail = 0, nodes_fail = 0;
+    unsigned nodes_pfail = 0, nodes_fail = 0;
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         if (nodeTimedOut(node)) {
@@ -6398,10 +6398,11 @@ sds genClusterInfoString(void) {
     }
     dictReleaseIterator(di);
 
-    if (nodes_pfail + nodes_fail > dictSize(server.cluster->nodes)) {
+    if (nodes_pfail + nodes_fail > dictSize(server.cluster->nodes) && !server.crashed) {
         serverLog(LL_WARNING, "Aggregated count of nodes marked as PFAIL and FAIL exceeds the total count of nodes."
-                              "PFAIL nodes: %u, FAIL nodes: %u",
-                  nodes_pfail, nodes_fail);
+                              "PFAIL nodes: %u, FAIL nodes: %u, total nodes: %lu",
+                  nodes_pfail, nodes_fail, dictSize(server.cluster->nodes));
+        serverAssert(0);
     }
 
     info = sdscatprintf(info,

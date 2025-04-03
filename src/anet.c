@@ -50,8 +50,7 @@
 #include "anet.h"
 #include "config.h"
 #include "util.h"
-
-#define UNUSED(x) (void)(x)
+#include "server.h"
 
 static void anetSetError(char *err, const char *fmt, ...) {
     va_list ap;
@@ -573,22 +572,19 @@ static int anetV6Only(char *err, int s) {
     return ANET_OK;
 }
 
-/* Until glibc 2.39, getaddrinfo with hints.ai_protocol of IPPROTO_MPTCP leads error.
+/* XXX: Until glibc 2.41, getaddrinfo with hints.ai_protocol of IPPROTO_MPTCP leads error.
  * Use hints.ai_protocol IPPROTO_IP (0) or IPPROTO_TCP (6) to resolve address and overwrite
  * it when MPTCP is enabled.
  * Ref: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/testing/selftests/net/mptcp/mptcp_connect.c
+ *      https://sourceware.org/git/?p=glibc.git;a=commit;h=a8e9022e0f829d44a818c642fc85b3bfbd26a514
  */
-static int anetTcpGetProtocol(char *err, int ai_protocol, int mptcp) {
-    if (mptcp) {
+static int anetTcpGetProtocol(int is_mptcp_enabled) {
 #ifdef IPPROTO_MPTCP
-        UNUSED(err);
-        return IPPROTO_MPTCP;
+    return is_mptcp_enabled ? IPPROTO_MPTCP : IPPROTO_TCP;
 #else
-        anetSetError(err, "MPTCP is not supported on this platform");
-        return ANET_ERR;
+    serverAssert(!is_mptcp_enabled);
+    return IPPROTO_TCP;
 #endif
-    }
-    return ai_protocol;
 }
 
 static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backlog, int mptcp) {
@@ -609,7 +605,7 @@ static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backl
         return ANET_ERR;
     }
     for (p = servinfo; p != NULL; p = p->ai_next) {
-        rv = anetTcpGetProtocol(err, p->ai_protocol, mptcp);
+        rv = anetTcpGetProtocol(mptcp);
         if (rv == ANET_ERR) goto error;
 
         if ((s = socket(p->ai_family, p->ai_socktype, rv)) == -1) continue;

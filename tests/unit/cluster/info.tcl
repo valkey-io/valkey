@@ -66,20 +66,22 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
 }
 
 start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 1000}} {
+    # Kill two primaries to observe partial failure on the remaining one.
     pause_process [srv 0 pid]
+    pause_process [srv -1 pid]
 
     test "count - node partial failure" {
         wait_for_condition 500 10 {
-            [CI 1 cluster_nodes_pfail] eq 1 &&
-            [CI 2 cluster_nodes_pfail] eq 1 &&
-            [CI 1 cluster_nodes_fail] eq 0 &&
+            [CI 2 cluster_nodes_pfail] eq 2 &&
             [CI 2 cluster_nodes_fail] eq 0
         } else {
-            puts [R 1 CLUSTER INFO]
             puts [R 2 CLUSTER INFO]
-            fail "Node 0 never timed out"
+            fail "Node 0/1 never timed out"
         }
     }
+
+    # Enable one more primary to reach quorum about node 0 failure
+    resume_process [srv -1 pid]
 
     test "count - node complete failure" {
         # After reaching quorum about failure,

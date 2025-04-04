@@ -50,7 +50,9 @@
 #include "anet.h"
 #include "config.h"
 #include "util.h"
-#include "server.h"
+#include "serverassert.h"
+
+#define UNUSED(x) (void)(x)
 
 static void anetSetError(char *err, const char *fmt, ...) {
     va_list ap;
@@ -582,7 +584,7 @@ static int anetTcpGetProtocol(int is_mptcp_enabled) {
 #ifdef IPPROTO_MPTCP
     return is_mptcp_enabled ? IPPROTO_MPTCP : IPPROTO_TCP;
 #else
-    serverAssert(!is_mptcp_enabled);
+    assert(!is_mptcp_enabled);
     return IPPROTO_TCP;
 #endif
 }

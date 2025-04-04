@@ -1967,7 +1967,7 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
     if (server.primary_host != NULL) {
         if (server.current_client && (server.current_client->flag.primary)) return KEY_VALID;
         if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return KEY_EXPIRED;
-    } else if (server.import_mode || isAnySlotImportingViaReplication()) {
+    } else if (server.import_mode || (server.cluster_enabled && clusterIsAnySlotImportingViaRepl())) {
         /* If we are running in the import mode on a primary, instead of
          * evicting the expired key from the database, we return ASAP:
          * the key expiration is controlled by the import source that will

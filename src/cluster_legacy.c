@@ -6594,11 +6594,11 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
         return 0;
     }
 
-    if (isAnySlotImportingViaReplication()) {
+    if (clusterIsAnySlotImportingViaRepl()) {
         addReplyError(c, "A slot is currently being imported via slot-level replication. Please cancel any ongoing import operations and try again.");
         return 0;
     }
-    if (isAnySlotExportingViaReplication()) {
+    if (clusterIsAnySlotExportingViaRepl()) {
         addReplyError(c, "A slot is currently being exported via slot-level replication. Please cancel any ongoing import operations and try again.");
         return 0;
     }

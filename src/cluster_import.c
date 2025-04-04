@@ -169,7 +169,7 @@ list *parseSlotRanges(client *c, int start_index, clusterNode **node_out, sds *e
  * from the beginning. For other errors, the import will be marked as failed and require operator
  * intervention to retry.
  *
- * An operator can view the status of imports with CLUSTER IMPORT-INFO, and cancell imports with
+ * An operator can view the status of imports with CLUSTER IMPORT-INFO, and cancel imports with
  * CLUSTER IMPORT-CANCEL.
  */
 
@@ -275,7 +275,7 @@ void clusterCommandImportCancel(client *c) {
     listNode *ln;
     listIter li;
 
-    if (!isAnySlotImportingViaReplication()) {
+    if (!clusterIsAnySlotImportingViaRepl()) {
         addReplyError(c, "No imports ongoing");
         return;
     }
@@ -297,6 +297,12 @@ void clusterCommandImportCancel(client *c) {
 /* Sent by the source to the target after dumping the snapshot in
  * AOF format. */
 void clusterCommandSyncSlotsSnapshotEof(client *c) {
+    if (c->flag.primary) {
+        /* During slot migration, our primary will send us this as it is
+         * proxying the snapshot directly to us. We can safely ignore it. */
+        serverLog(LL_NOTICE, "Received CLUSTER SYNCSLOTS SNAPSHOT-EOF from my primary. Ignoring.");
+        return;
+    }
     if (!c->flag.slot_import_source || !c->slot_import_link) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS SNAPSHOT-EOF from client %lu, but the client is not a slot import source. Closing link.", c->id);
         freeClientAsync(c);
@@ -316,6 +322,12 @@ void clusterCommandSyncSlotsSnapshotEof(client *c) {
 /* Sent by the source to the target as a marker of when the pause
  * began (therefore, target is caught up once read). */
 void clusterCommandSyncSlotsPaused(client *c) {
+    if (c->flag.primary) {
+        /* During slot migration, our primary will send us this as it is
+         * proxying the snapshot directly to us. We can safely ignore it. */
+        serverLog(LL_NOTICE, "Received CLUSTER SYNCSLOTS PAUSED from my primary. Ignoring.");
+        return;
+    }
     if (!c->flag.slot_import_source || !c->slot_import_link) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS PAUSED from client %lu, but the client is not a slot import source. Closing link.", c->id);
         freeClientAsync(c);
@@ -334,6 +346,12 @@ void clusterCommandSyncSlotsPaused(client *c) {
 /* Sent by the source to the target to grant final authorization for
  * failover. */
 void clusterCommandSyncSlotsFailoverGranted(client *c) {
+    if (c->flag.primary) {
+        /* During slot migration, our primary will send us this as it is
+         * proxying the snapshot directly to us. We can safely ignore it. */
+        serverLog(LL_NOTICE, "Received CLUSTER SYNCSLOTS FAILOVER-GRANTED from my primary. Ignoring.");
+        return;
+    }
     if (!c->flag.slot_import_source || !c->slot_import_link) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS FAILOVER-GRANTED from client %lu, but the client is not a slot import source. Closing link.", c->id);
         freeClientAsync(c);
@@ -585,7 +603,7 @@ void performSlotImportLinkFailover(slotImportLink *link) {
     clusterBroadcastPong(CLUSTER_BROADCAST_ALL);
 
     /* 5) Reflect the failover in the slot import link state */
-    serverLog(LL_NOTICE, "Succesfully took over slots %s from source node %.40s!", link->slot_ranges_str, link->nodename);
+    serverLog(LL_NOTICE, "Successfully took over slots %s from source node %.40s!", link->slot_ranges_str, link->nodename);
     resetSlotImportLink(link);
     updateSlotImportLinkState(link, SLOT_IMPORT_FAILOVER_COMPLETE);
 }
@@ -751,7 +769,7 @@ void proceedWithAllSlotImports(void) {
     }
 }
 
-int isAnySlotImportingViaReplication(void) {
+int clusterIsAnySlotImportingViaRepl(void) {
     listNode *ln;
     listIter li;
     listRewind(server.cluster->slot_import_links, &li);
@@ -776,7 +794,7 @@ int isAnySlotImportingViaReplication(void) {
  * to proceed with the failover, but leave the export alive.
  */
 
-/* Sent by the target to the source to initate the AOF formatted
+/* Sent by the target to the source to initiate the AOF formatted
  * snapshot. */
 void clusterCommandSyncSlotsSnapshot(client *c) {
     if (!nodeIsPrimary(server.cluster->myself)) {
@@ -845,6 +863,12 @@ void clusterCommandSyncSlotsPause(client *c) {
         updateSlotExportLinkState(link, SLOT_EXPORT_FAILOVER_PAUSED);
     }
     sendSyncSlotsMessageToTarget(c, "PAUSED");
+
+    /* When the slot export is not ready, it will skip adding the client to the
+     * pending write queue (creating a backlog of pending commands). If any
+     * data is pending there, we need to manually put it in the write queue to
+     * flush it. */
+    putClientInPendingWriteQueue(c);
 }
 
 /* Sent by the target to the source to request final authorization for
@@ -1017,7 +1041,7 @@ void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc) {
     /* This function may be called after the command is executed.
      * At this time, the arg in argv may be rewritten and the encoding
      * may be an INT. In this case, we need to decode it into a string
-     * object because in getKeysFromCommand, all the arg is a string. */
+     * object because in getKeysFromCommand all the args are a string. */
     robj **new_argv = NULL;
     for (int i = 0; i < argc; i++) {
         if (!sdsEncodedObject(argv[i])) {
@@ -1034,8 +1058,8 @@ void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc) {
     /* Check the slot this command belongs to. Note that it is not a guarantee
      * that the slot of the replicated command is the same as the slot of the
      * executed command, for example in the case of module VM_Replicate APIs.
-     * Because of this case, we need to recomplete the slot lookup completely
-     * at this time. */
+     * Because of this case, we need to redo the slot lookup completely at this
+     * time. */
     struct serverCommand *cmd = lookupCommand(argv, argc);
     getNodeByQuery(server.current_client, cmd, argv, argc, &slot, &error_code);
     if (error_code != CLUSTER_REDIR_NONE || slot == -1) {
@@ -1108,14 +1132,14 @@ int checkSlotExportOwnershipTransferComplete(slotExportLink *link) {
 
     if (!getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION)) {
         /* Note that we think this won't happen very commonly. The main source of
-            * latency that may trigger an unpause will occur due to the time it takes
-            * to process the incremental changes. The final REQUEST-FAILOVER handshake
-            * will validate that the source node is still paused after this initial
-            * handshake, and renew the pause for an additional amount of time. From this
-            * point, we expect the takeover of the slot and gossip to be relatively quick
-            * in steady state.
-            *
-            * Regardless, we log a warning and proceed with cleaning up the export link. */
+         * latency that may trigger an unpause will occur due to the time it takes
+         * to process the incremental changes. The final REQUEST-FAILOVER handshake
+         * will validate that the source node is still paused after this initial
+         * handshake, and renew the pause for an additional amount of time. From this
+         * point, we expect the takeover of the slot and gossip to be relatively quick
+         * in steady state.
+         *
+         * Regardless, we log a warning and proceed with cleaning up the export link. */
         serverLog(LL_WARNING, "Write loss risk! During slot export, new owner did not "
                               "broadcast ownership before we unpaused ourselves. Any "
                               "writes we have recorded since unpausing will now be lost!");
@@ -1170,7 +1194,7 @@ void proceedWithAllSlotExports(void) {
             listDelNode(server.cluster->slot_export_links, ln);
             continue;
         }
-        if (link->state != SLOT_EXPORT_SNAPSHOTTING) {
+        if (link->client && link->state != SLOT_EXPORT_SNAPSHOTTING) {
             /* Send acks only when the child process isn't writing to it. */
             run_with_period(1000) sendSyncSlotsMessageToTarget(link->client, "ACK");
         }
@@ -1188,7 +1212,7 @@ void proceedWithAllSlotExports(void) {
     }
 }
 
-int isAnySlotExportingViaReplication(void) {
+int clusterIsAnySlotExportingViaRepl(void) {
     listNode *ln;
     listIter li;
     listRewind(server.cluster->slot_export_links, &li);

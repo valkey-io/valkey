@@ -3510,7 +3510,7 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
     /* Possibly there are replicas waiting for a BGSAVE in order to be served
      * (the first stage of SYNC is a bulk transfer of dump.rdb) */
     updateReplicasWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, type);
-    if (server.cluster_enabled && isAnySlotExportingViaReplication()) {
+    if (server.cluster_enabled && clusterIsAnySlotExportingViaRepl()) {
         /* Slot export should also be notified, in case this was a export
          * related snapshot */
         clusterHandleSlotExportBackgroundSaveDone((!bysignal && exitcode == 0) ? C_OK : C_ERR);

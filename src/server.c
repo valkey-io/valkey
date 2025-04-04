@@ -3433,7 +3433,7 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
     if (server.aof_state != AOF_OFF && target & PROPAGATE_AOF) feedAppendOnlyFile(dbid, argv, argc);
     if (target & PROPAGATE_REPL) {
         replicationFeedReplicas(dbid, argv, argc);
-        if (server.cluster_enabled && isAnySlotExportingViaReplication()) {
+        if (server.cluster_enabled && clusterIsAnySlotExportingViaRepl()) {
             clusterFeedSlotExportLinks(dbid, argv, argc);
         }
     }
@@ -3455,6 +3455,10 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target) {
     int j;
 
     if (!shouldPropagate(target)) return;
+    
+    /* Don't propagate slot import links, these will be proxied in
+     * replicationFeedStreamFromPrimaryStream() */
+    if (server.current_client != NULL && server.current_client->flag.slot_import_source) return;
 
     argvcopy = zmalloc(sizeof(robj *) * argc);
     for (j = 0; j < argc; j++) {

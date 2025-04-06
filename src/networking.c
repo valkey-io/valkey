@@ -43,6 +43,7 @@
 #include <math.h>
 #include <ctype.h>
 #include <stdatomic.h>
+#include "connection.h"
 #include <stdbool.h>
 
 /* This struct is used to encapsulate filtering criteria for operations on clients
@@ -1680,6 +1681,22 @@ void clientAcceptHandler(connection *conn) {
             freeClientAsync(c);
             return;
         }
+    }
+
+    /* Auto-authenticate from cert_user field if set */
+    sds username = connGetPeerUsername(conn);
+    if (username != NULL) {
+        user *u = ACLGetUserByName(username, sdslen(username));
+        if (u) {
+            c->user = u;
+            c->flag.authenticated = true;
+            serverLog(LL_VERBOSE, "TLS: Auto-authenticated client as %s",
+                      server.hide_user_data_from_log ? "*redacted*" : u->name);
+        } else {
+            serverLog(LL_NOTICE, "TLS: Auto-authentication failed, user '%s' not found", username);
+            addACLLogEntry(c, ACL_INVALID_TLS_CERT_AUTH, 0, 0, username, sdsnew("User not found in auto TLS auth"));
+        }
+        sdsfree(username);
     }
 
     server.stat_numconnections++;

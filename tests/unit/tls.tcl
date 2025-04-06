@@ -154,5 +154,23 @@ start_server {tags {"tls"}} {
             r config set tls-key-file-pass 1234
             r config set tls-key-file $keyfile_encrypted
         }
+
+        test {TLS: Auto-authenticate using tls-auth-clients-user (CN)} {
+            # Create a user matching the CN in the client certificate (CN=Client-only)
+            r ACL SETUSER {Client-only} on >clientpass allcommands allkeys
+
+            # Enable the feature to auto-authenticate based on CN
+            r CONFIG SET tls-auth-clients-user CN
+
+            # With feature on, client should be auto-authenticated using CN=Client-only
+            set s [valkey [srv 0 host] [srv 0 port] 0 1]
+            ::tls::import [$s channel]
+
+            # Now no explicit AUTH is needed
+            assert_equal "PONG" [$s PING]
+
+            # Verify that the authenticated user is 'Client-only'
+            assert_equal "Client-only" [$s ACL WHOAMI]
+        }
     }
 }

@@ -529,6 +529,10 @@ typedef enum {
 #define TLS_CLIENT_AUTH_YES 1
 #define TLS_CLIENT_AUTH_OPTIONAL 2
 
+/* TLS Client Certfiicate Authentication */
+#define TLS_CLIENT_FIELD_OFF 0
+#define TLS_CLIENT_FIELD_CN 1
+
 /* Sanitize dump payload */
 #define SANITIZE_DUMP_NO 0
 #define SANITIZE_DUMP_YES 1
@@ -1509,6 +1513,7 @@ typedef struct serverTLSContextConfig {
     char *client_cert_file;     /* Certificate to use as a client; if none, use cert_file */
     char *client_key_file;      /* Private key filename for client_cert_file */
     char *client_key_file_pass; /* Optional password for client_key_file */
+    int client_auth_user;       /* Field to be used for automatic TLS authentication based on client TLS certificate */
     char *dh_params_file;
     char *ca_cert_file;
     char *ca_cert_dir;
@@ -3077,6 +3082,7 @@ void ACLInit(void);
 #define ACL_LOG_CTX_LUA 1
 #define ACL_LOG_CTX_MULTI 2
 #define ACL_LOG_CTX_MODULE 3
+#define ACL_INVALID_TLS_CERT_AUTH 4
 
 /* ACL key permission types */
 #define ACL_READ_PERMISSION (1 << 0)

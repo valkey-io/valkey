@@ -1241,15 +1241,17 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         /* Hashtable encoding (generic implementation) */
         hashtable *ht = hashtableCreate(&sdsReplyHashtableType);
         hashtableExpand(ht, size);
-        hashTypeIterator hi;
-        hashTypeInitIterator(hash, &hi);
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, hash->ptr, 0);
+        void *entry;
 
         /* Add all the elements into the temporary hashtable. */
-        while (hashTypeNext(&hi) != C_ERR) {
-            serverAssert(hashtableAdd(ht, (&hi)->next));
+        while (hashtableNext(&iter, &entry)) {
+            int res = hashtableAdd(ht, entry);
+            serverAssert(res);
         }
         serverAssert(hashtableSize(ht) == size);
-        hashTypeResetIterator(&hi);
+        hashtableResetIterator(&iter);
 
         /* Remove random elements to reach the right count. */
         while (size > count) {
@@ -1260,7 +1262,6 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         }
 
         /* Reply with what's in the temporary hashtable and release memory */
-        hashtableIterator iter;
         hashtableInitIterator(&iter, ht, 0);
         void *next;
         while (hashtableNext(&iter, &next)) {

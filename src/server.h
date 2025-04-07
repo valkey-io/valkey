@@ -2569,7 +2569,6 @@ extern dictType clientDictType;
 extern dictType objToDictDictType;
 extern hashtableType kvstoreChannelHashtableType;
 extern dictType modulesDictType;
-extern dictType sdsReplyDictType;
 extern hashtableType sdsReplyHashtableType;
 extern dictType keylistDictType;
 extern dict *modules;

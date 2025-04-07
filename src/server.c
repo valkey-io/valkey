@@ -678,16 +678,6 @@ dictType hashDictType = {
     NULL,              /* allow to expand */
 };
 
-/* Dict type without destructor */
-dictType sdsReplyDictType = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    NULL,              /* key destructor */
-    NULL,              /* val destructor */
-    NULL               /* allow to expand */
-};
-
 /* Hashtable type without destructor */
 hashtableType sdsReplyHashtableType = {
     .hashFunction = dictSdsCaseHash,

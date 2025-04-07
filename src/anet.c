@@ -607,10 +607,7 @@ static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backl
         return ANET_ERR;
     }
     for (p = servinfo; p != NULL; p = p->ai_next) {
-        rv = anetTcpGetProtocol(mptcp);
-        if (rv == ANET_ERR) goto error;
-
-        if ((s = socket(p->ai_family, p->ai_socktype, rv)) == -1) continue;
+        if ((s = socket(p->ai_family, p->ai_socktype, anetTcpGetProtocol(mptcp))) == -1) continue;
 
         if (af == AF_INET6 && anetV6Only(err, s) == ANET_ERR) goto error;
         if (anetSetReuseAddr(err, s) == ANET_ERR) goto error;

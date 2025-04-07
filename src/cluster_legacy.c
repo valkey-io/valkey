@@ -1266,8 +1266,8 @@ void clusterAutoFailoverOnShutdown(void) {
     while ((replicas_list_node = listNext(&replicas_iter)) != NULL) {
         client *replica = listNodeValue(replicas_list_node);
         /* This is done only when the replica offset is caught up, to avoid data loss.
-         * And 0x80100 is 8.1.0, we only support this feature in this version. */
-        if (replica->repl_data->replica_version < 0x80100) {
+         * And 0x90000 is 9.0.0, we only support this feature in this version. */
+        if (replica->repl_data->replica_version < 0x90000) {
             legacy_replica = 1;
             best_replica = NULL;
             break;
@@ -1299,7 +1299,8 @@ void clusterAutoFailoverOnShutdown(void) {
                              "$8\r\nFAILOVER\r\n"
                              "$5\r\nFORCE\r\n"
                              "$9\r\nREPLICAID\r\n"
-                             "$%d\r\n%.40s\r\n",
+                             "$%d\r\n%.*s\r\n",
+                             CLUSTER_NAMELEN,
                              CLUSTER_NAMELEN,
                              best_replica->repl_data->replica_nodeid);
     serverAssert(buflen <= 128);

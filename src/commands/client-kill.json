@@ -42,7 +42,7 @@
             ],
             [
                 "9.0.0",
-                "Added filters NAME, IDLE, FLAGS, LIB-NAME, LIB-VER, DB, TOTAL-NET-IN and TOTAL-NET-OUT."
+                "Added filters NAME, IDLE, FLAGS, LIB-NAME, LIB-VER, and DB."
             ]
         ],
         "command_flags": [
@@ -205,20 +205,6 @@
                             {
                                 "token": "DB",
                                 "name": "db",
-                                "type": "integer",
-                                "optional": true,
-                                "since": "9.0.0"
-                            },
-                            {
-                                "token": "TOTAL-NET-IN",
-                                "name": "total-net-in",
-                                "type": "integer",
-                                "optional": true,
-                                "since": "9.0.0"
-                            },
-                            {
-                                "token": "TOTAL-NET-OUT",
-                                "name": "total-net-out",
                                 "type": "integer",
                                 "optional": true,
                                 "since": "9.0.0"

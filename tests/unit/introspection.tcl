@@ -1244,18 +1244,6 @@ start_server {tags {"introspection"}} {
         assert_match {*db=2*} $result
     } {} {external:skip}
 
-    test {CLIENT LIST can filter by TOT-NET-IN} {
-        r ping
-        set result [r client list tot-net-in 1]
-        assert_match {*tot-net-in=*} $result
-    }
-
-    test {CLIENT LIST can filter by TOT-NET-OUT} {
-        r ping
-        set result [r client list tot-net-out 1]
-        assert_match {*tot-net-out=*} $result
-    }
-
     test {CLIENT KILL can filter by LIB-NAME} {
         set c1 [valkey_client]
         set c2 [valkey_client]
@@ -1296,41 +1284,6 @@ start_server {tags {"introspection"}} {
             catch {$c2 close}
         }
     } {} {external:skip}
-
-    test {CLIENT KILL can filter by TOT-NET-IN} {
-        set c1 [valkey_client]
-        set c2 [valkey_client]
-
-        # Generate some network input by sending commands
-        for {set i 0} {$i < 20} {incr i} {
-            $c1 ping
-        }
-
-        # Kill clients with a `TOT-NET-IN` greater than 100 bytes
-        $c2 client kill tot-net-in 100
-
-        set result [$c2 client list]
-        assert {[string match "*tot-net-in=*" $result] == 1}
-
-        catch {$c2 close}
-    }
-
-    test {CLIENT KILL can filter by TOT-NET-OUT} {
-        set c1 [valkey_client]
-        set c2 [valkey_client]
-
-        # Generate some network output by receiving replies
-        for {set i 0} {$i < 10} {incr i} {
-            $c1 ping
-        }
-
-        # Kill clients with a `TOT-NET-OUT` greater than 100 bytes
-        $c2 client kill tot-net-out 50
-
-        set result [$c2 client list]
-        assert {[string match "*tot-net-out=*" $result] == 1}
-
-    }
 
     test {valkey-server command line arguments - allow passing option name and option value in the same arg} {
         start_server {config "default.conf" args {"--maxmemory 700mb" "--maxmemory-policy volatile-lru"}} {

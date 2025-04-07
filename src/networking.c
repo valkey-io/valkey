@@ -78,10 +78,6 @@ typedef struct {
     robj *lib_ver;
     /* Database index to filter. If set to -1, no DB number filtering is applied. */
     int db_number;
-    /* Total network input bytes to filter. If set to -1, no filtering is applied. */
-    unsigned long long tot_net_in;
-    /* Total network output bytes to filter. If set to -1, no filtering is applied. */
-    unsigned long long tot_net_out;
 } clientFilter;
 
 static void setProtocolError(const char *errstr, client *c);
@@ -3743,28 +3739,6 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             }
             filter->db_number = tmp;
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "tot-net-in") && moreargs) {
-            long long tmp;
-            if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &tmp,
-                                             "tot-net-in is not an integer or out of range") != C_OK)
-                return C_ERR;
-            if (tmp < 0) {
-                addReplyError(c, "tot-net-in should be non-negative");
-                return C_ERR;
-            }
-            filter->tot_net_in = tmp;
-            index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "tot-net-out") && moreargs) {
-            long long tmp;
-            if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &tmp,
-                                             "tot-net-out is not an integer or out of range") != C_OK)
-                return C_ERR;
-            if (tmp < 0) {
-                addReplyError(c, "tot-net-out should be non-negative");
-                return C_ERR;
-            }
-            filter->tot_net_out = tmp;
-            index += 2;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return C_ERR;
@@ -3825,8 +3799,6 @@ static int clientMatchesFilter(client *client, clientFilter *client_filter) {
     if (client_filter->lib_name && (!client->lib_name || compareStringObjects(client->lib_name, client_filter->lib_name) != 0)) return 0;
     if (client_filter->lib_ver && (!client->lib_ver || compareStringObjects(client->lib_ver, client_filter->lib_ver) != 0)) return 0;
     if (client_filter->db_number != -1 && client->db->id != client_filter->db_number) return 0;
-    if (client->net_input_bytes < client_filter->tot_net_in) return 0;
-    if (client->net_output_bytes < client_filter->tot_net_out) return 0;
 
     /* If all conditions are satisfied, the client matches the filter. */
     return 1;
@@ -3959,10 +3931,6 @@ void clientHelpCommand(client *c) {
         "      Kill connections with the specified library name.",
         "    * LIB-VER <library-version>",
         "      Kill connections with the specified library version.",
-        "    * TOT-NET-IN <bytes>",
-        "      Kill connections with total network input greater than or equal to the specified value.",
-        "    * TOT-NET-OUT <bytes>",
-        "      Kill connections with total network output greater than or equal to the specified value.",
         "    * DB <db-id>",
         "      Kill connections currently operating on the specified database ID.",
         "LIST [options ...]",
@@ -3991,10 +3959,6 @@ void clientHelpCommand(client *c) {
         "      Return clients with the specified lib name.",
         "    * LIB-VER <lib-version>",
         "      Return clients with the specified lib version.",
-        "    * TOT-NET-IN <bytes>",
-        "      Return clients with total network input greater than or equal to the specified value.",
-        "    * TOT-NET-OUT <bytes>",
-        "      Return clients with total network output greater than or equal to the specified value.",
         "    * DB <db-id>",
         "      Return clients currently operating on the specified database ID.",
         "UNPAUSE",

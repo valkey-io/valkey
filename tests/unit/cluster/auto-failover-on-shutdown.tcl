@@ -10,7 +10,7 @@ proc shutdown_how {srv_id how} {
 # We will pause the replica 1, and then shutdown the primary 1, and making replica 2 to become
 # the new primary.
 proc test_auto_failover {how shutdown_timeout} {
-    test "auto-failover-on-shutdown will always pick a best replica and send CLUSTER FAILOVER - $how - shutdown-timeout: $shutdown_timeout" {
+    test "auto-failover-on-shutdown hands over primaryship to a fully sync'd replica - $how - shutdown-timeout: $shutdown_timeout" {
         set primary [srv 0 client]
         set replica1 [srv -3 client]
         set replica1_pid [s -3 process_id]

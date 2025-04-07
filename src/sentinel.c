@@ -4098,7 +4098,8 @@ void sentinelInfoCommand(client *c) {
                             "sentinel_scripts_queue_length:%ld\r\n"
                             "sentinel_simulate_failure_flags:%lu\r\n",
                             dictSize(sentinel.primaries), sentinel.tilt,
-                            sentinel.tilt ? (intmax_t)((mstime() - sentinel.tilt_start_time) / 1000) : -1, sentinel.total_tilt,
+                            sentinel.tilt ? (intmax_t)((mstime() - sentinel.tilt_start_time) / 1000) : -1,
+                            sentinel.total_tilt,
                             sentinel.running_scripts, listLength(sentinel.scripts_queue), sentinel.simfailure_flags);
 
         di = dictGetIterator(sentinel.primaries);

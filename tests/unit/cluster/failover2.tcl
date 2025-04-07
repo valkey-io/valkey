@@ -101,6 +101,39 @@ start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval
     }
 } ;# start_cluster
 
+start_cluster 3 3 {tags {external:skip cluster hp} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000 cluster-replica-no-failover yes}} {
+    # Killing one primary node.
+    pause_process [srv 0 pid]
+
+    test "no failover - verify replica is not promoted if failover has been disabled" {
+        # Observe no failover
+        wait_for_log_messages -3 {"*Currently unable to failover: Failover has been disabled*"} 0 2000 50
+    }
+
+    test "no failover - primary is in failed state" {
+        for {set j 0} {$j < [llength $::servers]} {incr j} {
+            if {[process_is_paused [srv -$j pid]]} continue
+            wait_for_condition 1000 50 {
+                [CI $j cluster_state] eq "fail"
+            } else {
+                fail "Cluster node $j cluster_state:[CI $j cluster_state]"
+            }
+        }
+    }
+
+    resume_process [srv 0 pid]
+
+    test "no failover - cluster is in healthy state" {
+        for {set j 0} {$j < [llength $::servers]} {incr j} {
+            wait_for_condition 1000 50 {
+                [CI $j cluster_state] eq "ok"
+            } else {
+                fail "Cluster node $j cluster_state:[CI $j cluster_state]"
+            }
+        }
+    }
+} ;# start_cluster
+
 run_solo {cluster} {
     start_cluster 32 15 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 15000}} {
         test "Multiple primary nodes are down, rank them based on the failed primary" {

@@ -2560,7 +2560,6 @@ extern hashtableType zsetHashtableType;
 extern hashtableType kvstoreKeysHashtableType;
 extern hashtableType kvstoreExpiresHashtableType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;
-extern dictType hashDictType;
 extern hashtableType hashHashtableType;
 extern dictType stringSetDictType;
 extern dictType externalStringType;

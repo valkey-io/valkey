@@ -1712,21 +1712,21 @@ static int _ziplistPairsEntryConvertAndValidate(unsigned char *p, unsigned int h
 
     struct {
         long count;
-        dict *fields;
+        hashtable *fields;
         unsigned char **lp;
     } *data = userdata;
 
     if (data->fields == NULL) {
-        data->fields = dictCreate(&hashDictType);
-        dictExpand(data->fields, head_count / 2);
+        data->fields = hashtableCreate(&setHashtableType);
+        hashtableExpand(data->fields, head_count / 2);
     }
 
     if (!ziplistGet(p, &str, &slen, &vll)) return 0;
 
-    /* Even records are field names, add to dict and check that's not a dup */
+    /* Even records are field names, add to hashtable and check that's not a dup */
     if (((data->count) & 1) == 0) {
         sds field = str ? sdsnewlen(str, slen) : sdsfromlonglong(vll);
-        if (dictAdd(data->fields, field, NULL) != DICT_OK) {
+        if (!hashtableAdd(data->fields, field)) {
             /* Duplicate, return an error */
             sdsfree(field);
             return 0;
@@ -1751,7 +1751,7 @@ int ziplistPairsConvertAndValidateIntegrity(unsigned char *zl, size_t size, unsi
     /* Keep track of the field names to locate duplicate ones */
     struct {
         long count;
-        dict *fields; /* Initialisation at the first callback. */
+        hashtable *fields; /* Initialisation at the first callback. */
         unsigned char **lp;
     } data = {0, NULL, lp};
 
@@ -1760,7 +1760,7 @@ int ziplistPairsConvertAndValidateIntegrity(unsigned char *zl, size_t size, unsi
     /* make sure we have an even number of records. */
     if (data.count & 1) ret = 0;
 
-    if (data.fields) dictRelease(data.fields);
+    if (data.fields) hashtableRelease(data.fields);
     return ret;
 }
 
@@ -1808,16 +1808,16 @@ static int _lpEntryValidation(unsigned char *p, unsigned int head_count, void *u
     struct {
         int pairs;
         long count;
-        dict *fields;
+        hashtable *fields;
     } *data = userdata;
 
     if (data->fields == NULL) {
-        data->fields = dictCreate(&hashDictType);
-        dictExpand(data->fields, data->pairs ? head_count / 2 : head_count);
+        data->fields = hashtableCreate(&setHashtableType);
+        hashtableExpand(data->fields, data->pairs ? head_count / 2 : head_count);
     }
 
     /* If we're checking pairs, then even records are field names. Otherwise
-     * we're checking all elements. Add to dict and check that's not a dup */
+     * we're checking all elements. Add to hashtable and check that's not a dup */
     if (!data->pairs || ((data->count) & 1) == 0) {
         unsigned char *str;
         int64_t slen;
@@ -1825,7 +1825,7 @@ static int _lpEntryValidation(unsigned char *p, unsigned int head_count, void *u
 
         str = lpGet(p, &slen, buf);
         sds field = sdsnewlen(str, slen);
-        if (dictAdd(data->fields, field, NULL) != DICT_OK) {
+        if (!hashtableAdd(data->fields, field)) {
             /* Duplicate, return an error */
             sdsfree(field);
             return 0;
@@ -1848,7 +1848,7 @@ int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int deep, int pai
     struct {
         int pairs;
         long count;
-        dict *fields; /* Initialisation at the first callback. */
+        hashtable *fields; /* Initialisation at the first callback. */
     } data = {pairs, 0, NULL};
 
     int ret = lpValidateIntegrity(lp, size, 1, _lpEntryValidation, &data);
@@ -1856,7 +1856,7 @@ int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int deep, int pai
     /* make sure we have an even number of records. */
     if (pairs && data.count & 1) ret = 0;
 
-    if (data.fields) dictRelease(data.fields);
+    if (data.fields) hashtableRelease(data.fields);
     return ret;
 }
 
@@ -2072,7 +2072,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
     } else if (rdbtype == RDB_TYPE_HASH) {
         uint64_t len;
         sds field, value;
-        dict *dupSearchDict = NULL;
+        hashtable *dupSearchHashtable = NULL;
 
         len = rdbLoadLen(rdb, NULL);
         if (len == RDB_LENERR) return NULL;
@@ -2086,9 +2086,9 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
         else if (deep_integrity_validation) {
             /* In this mode, we need to guarantee that the server won't crash
              * later when the ziplist is converted to a hashtable.
-             * Create a set (dict with no values) to for a dup search.
+             * Create a set (hashtable with no values) to for a dup search.
              * We can dismiss it as soon as we convert the ziplist to a hash. */
-            dupSearchDict = dictCreate(&hashDictType);
+            dupSearchHashtable = hashtableCreate(&setHashtableType);
         }
 
 
@@ -2098,21 +2098,21 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             /* Load raw strings */
             if ((field = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) {
                 decrRefCount(o);
-                if (dupSearchDict) dictRelease(dupSearchDict);
+                if (dupSearchHashtable) hashtableRelease(dupSearchHashtable);
                 return NULL;
             }
             if ((value = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) {
                 sdsfree(field);
                 decrRefCount(o);
-                if (dupSearchDict) dictRelease(dupSearchDict);
+                if (dupSearchHashtable) hashtableRelease(dupSearchHashtable);
                 return NULL;
             }
 
-            if (dupSearchDict) {
+            if (dupSearchHashtable) {
                 sds field_dup = sdsdup(field);
-                if (dictAdd(dupSearchDict, field_dup, NULL) != DICT_OK) {
+                if (!hashtableAdd(dupSearchHashtable, field_dup)) {
                     rdbReportCorruptRDB("Hash with dup elements");
-                    dictRelease(dupSearchDict);
+                    hashtableRelease(dupSearchHashtable);
                     decrRefCount(o);
                     sdsfree(field_dup);
                     sdsfree(field);
@@ -2129,7 +2129,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
                 sdsfree(field);
                 if (!hashtableAdd((hashtable *)o->ptr, entry)) {
                     rdbReportCorruptRDB("Duplicate hash fields detected");
-                    if (dupSearchDict) dictRelease(dupSearchDict);
+                    if (dupSearchHashtable) hashtableRelease(dupSearchHashtable);
                     freeHashTypeEntry(entry);
                     decrRefCount(o);
                     return NULL;
@@ -2145,11 +2145,11 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             sdsfree(value);
         }
 
-        if (dupSearchDict) {
+        if (dupSearchHashtable) {
             /* We no longer need this, from now on the entries are added
              * to a dict so the check is performed implicitly. */
-            dictRelease(dupSearchDict);
-            dupSearchDict = NULL;
+            hashtableRelease(dupSearchHashtable);
+            dupSearchHashtable = NULL;
         }
 
         if (o->encoding == OBJ_ENCODING_HASHTABLE) {
@@ -2294,7 +2294,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
                 unsigned char *fstr, *vstr;
                 unsigned int flen, vlen;
                 unsigned int maxlen = 0;
-                dict *dupSearchDict = dictCreate(&hashDictType);
+                hashtable *dupSearchHashtable = hashtableCreate(&setHashtableType);
 
                 while ((zi = zipmapNext(zi, &fstr, &flen, &vstr, &vlen)) != NULL) {
                     if (flen > maxlen) maxlen = flen;
@@ -2302,10 +2302,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
 
                     /* search for duplicate records */
                     sds field = sdstrynewlen(fstr, flen);
-                    if (!field || dictAdd(dupSearchDict, field, NULL) != DICT_OK ||
+                    if (!field || !hashtableAdd(dupSearchHashtable, field) ||
                         !lpSafeToAdd(lp, (size_t)flen + vlen)) {
                         rdbReportCorruptRDB("Hash zipmap with dup elements, or big length (%u)", flen);
-                        dictRelease(dupSearchDict);
+                        hashtableRelease(dupSearchHashtable);
                         sdsfree(field);
                         zfree(encoded);
                         o->ptr = NULL;
@@ -2317,7 +2317,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
                     lp = lpAppend(lp, vstr, vlen);
                 }
 
-                dictRelease(dupSearchDict);
+                hashtableRelease(dupSearchHashtable);
                 zfree(o->ptr);
                 o->ptr = lp;
                 o->type = OBJ_HASH;

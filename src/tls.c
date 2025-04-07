@@ -415,12 +415,6 @@ error:
     return C_ERR;
 }
 
-#ifdef TLS_DEBUGGING
-#define TLSCONN_DEBUG(fmt, ...) serverLog(LL_DEBUG, "TLSCONN: " fmt, __VA_ARGS__)
-#else
-#define TLSCONN_DEBUG(fmt, ...)
-#endif
-
 static ConnectionType CT_TLS;
 
 /* Normal socket connections have a simple events/handler correlation.
@@ -696,9 +690,6 @@ static void TLSAccept(void *_conn) {
 
 static void tlsHandleEvent(tls_connection *conn, int mask) {
     int ret, conn_error;
-
-    TLSCONN_DEBUG("tlsEventHandler(): fd=%d, state=%d, mask=%d, r=%d, w=%d, flags=%d", fd, conn->c.state, mask,
-                  conn->c.read_handler != NULL, conn->c.write_handler != NULL, conn->flags);
 
     switch (conn->c.state) {
     case CONN_STATE_CONNECTING:

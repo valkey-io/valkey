@@ -2576,7 +2576,7 @@ static int parseOptions(int argc, char **argv) {
             config.stdin_tag_name = argv[++i];
         } else if (!strcmp(argv[i], "-p") && !lastarg) {
             config.conn_info.hostport = atoi(argv[++i]);
-            if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
+            if ((config.conn_info.hostport == 0 && !(strlen(argv[i]) == 1 && argv[i][0] == '0')) || config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
                 fprintf(stderr, "Invalid server port.\n");
                 exit(1);
             }

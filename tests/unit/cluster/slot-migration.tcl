@@ -258,7 +258,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 proc create_empty_shard {p r} {
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
     assert_equal {OK} [R $p CLUSTER RESET]
-    assert_equal {OK} [R $r CLUSTER RESET]0
+    assert_equal {OK} [R $r CLUSTER RESET]
     assert_equal {OK} [R $p CLUSTER MEET [srv 0 "host"] [srv 0 "port"]]
     assert_equal {OK} [R $r CLUSTER MEET [srv 0 "host"] [srv 0 "port"]]
     wait_for_role $p master

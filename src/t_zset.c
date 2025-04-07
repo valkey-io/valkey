@@ -4193,7 +4193,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
         zset *zs = src.subject->ptr;
         hashtableIterator iter;
         hashtableInitIterator(&iter, zs->ht, 0);
-        void* entry;
+        void *entry;
         /* Add all the elements into the temporary hashtable. */
         while (hashtableNext(&iter, &entry)) {
             int res = hashtableAdd(ht, entry);
@@ -4205,7 +4205,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
         while (size > count) {
             void *element;
             hashtableFairRandomEntry(ht, &element);
-            hashtableDelete(ht, ((zskiplistNode*)element)->ele);
+            hashtableDelete(ht, ((zskiplistNode *)element)->ele);
             size--;
         }
         hashtableResetIterator(&iter);
@@ -4214,7 +4214,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
         hashtableInitIterator(&iter, ht, 0);
         void *next;
         while (hashtableNext(&iter, &next)) {
-            zskiplistNode* node = (zskiplistNode*)next;
+            zskiplistNode *node = (zskiplistNode *)next;
             sds key = node->ele;
             if (withscores && c->resp > 2) addReplyArrayLen(c, 2);
             addReplyBulkCBuffer(c, key, sdslen(key));

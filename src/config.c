@@ -2428,15 +2428,11 @@ static int isValidIpV6(char *val, const char **err) {
 }
 
 static int isValidMptcp(int val, const char **err) {
-#ifndef IPPROTO_MPTCP
-    if (val) {
+    if (val && !anetHasMptcp()) {
         *err = "MPTCP is not supported on this platform";
         return 0;
     }
-#else
-    UNUSED(val);
-    UNUSED(err);
-#endif
+
     return 1;
 }
 

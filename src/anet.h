@@ -75,4 +75,12 @@ int anetSetSockMarkId(char *err, int fd, uint32_t id);
 int anetGetError(int fd);
 int anetIsFifo(char *filepath);
 
+static inline int anetHasMptcp(void) {
+#ifdef IPPROTO_MPTCP
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 #endif

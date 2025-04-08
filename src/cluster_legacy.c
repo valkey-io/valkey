@@ -6386,14 +6386,20 @@ sds genClusterInfoString(void) {
 
     dictIterator *di = dictGetIterator(server.cluster->nodes);
     dictEntry *de;
-    unsigned nodes_pfail = 0, nodes_fail = 0;
+    unsigned nodes_pfail = 0, nodes_fail = 0, voting_nodes_pfail = 0, voting_nodes_fail = 0;
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         if (nodeTimedOut(node)) {
             nodes_pfail++;
+            if (clusterNodeIsVotingPrimary(node)) {
+                voting_nodes_pfail++;
+            }
         }
         if (nodeFailed(node)) {
             nodes_fail++;
+            if (clusterNodeIsVotingPrimary(node)) {
+                voting_nodes_fail++;
+            }
         }
     }
     dictReleaseIterator(di);
@@ -6413,12 +6419,14 @@ sds genClusterInfoString(void) {
                         "cluster_slots_fail:%d\r\n"
                         "cluster_nodes_pfail:%u\r\n"
                         "cluster_nodes_fail:%u\r\n"
+                        "cluster_voting_nodes_pfail:%u\r\n"
+                        "cluster_voting_nodes_fail:%u\r\n"
                         "cluster_known_nodes:%lu\r\n"
                         "cluster_size:%d\r\n"
                         "cluster_current_epoch:%llu\r\n"
                         "cluster_my_epoch:%llu\r\n",
                         statestr[server.cluster->state], slots_assigned, slots_ok, slots_pfail, slots_fail,
-                        nodes_pfail, nodes_fail, dictSize(server.cluster->nodes), server.cluster->size,
+                        nodes_pfail, nodes_fail, voting_nodes_pfail, voting_nodes_fail, dictSize(server.cluster->nodes), server.cluster->size,
                         (unsigned long long)server.cluster->currentEpoch, (unsigned long long)nodeEpoch(myself));
 
     /* Show stats about messages sent and received. */

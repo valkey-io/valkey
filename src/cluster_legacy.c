@@ -6404,13 +6404,6 @@ sds genClusterInfoString(void) {
     }
     dictReleaseIterator(di);
 
-    if (nodes_pfail + nodes_fail > dictSize(server.cluster->nodes) && !server.crashed) {
-        serverLog(LL_WARNING, "Aggregated count of nodes marked as PFAIL and FAIL exceeds the total count of nodes."
-                              "PFAIL nodes: %u, FAIL nodes: %u, total nodes: %lu",
-                  nodes_pfail, nodes_fail, dictSize(server.cluster->nodes));
-        serverAssert(0);
-    }
-
     info = sdscatprintf(info,
                         "cluster_state:%s\r\n"
                         "cluster_slots_assigned:%d\r\n"

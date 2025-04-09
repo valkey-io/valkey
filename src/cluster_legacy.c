@@ -5606,10 +5606,8 @@ int clusterPrimariesHaveReplicas(void) {
     return replicas != 0;
 }
 
-/* Set the slot bit */
 void clusterNodeSetSlotBit(clusterNode *n, int slot) {
-    int old = bitmapTestBit(n->slots, slot);
-    if (!old) {
+    if (!bitmapTestBit(n->slots, slot)) {
         bitmapSetBit(n->slots, slot);
         n->numslots++;
         /* When a primary gets its first slot, even if it has no replicas,

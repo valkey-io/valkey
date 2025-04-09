@@ -644,27 +644,66 @@ struct COMMAND_ARG CLUSTER_IMPORT_Args[] = {
 #define CLUSTER_IMPORT_CANCEL_Keyspecs NULL
 #endif
 
-/* CLUSTER IMPORT_CANCEL argument table */
-struct COMMAND_ARG CLUSTER_IMPORT_CANCEL_Args[] = {
+/* CLUSTER IMPORT_CANCEL subcommand argument table */
+struct COMMAND_ARG CLUSTER_IMPORT_CANCEL_subcommand_Subargs[] = {
 {MAKE_ARG("all",ARG_TYPE_PURE_TOKEN,-1,"ALL",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("link-name",ARG_TYPE_STRING,-1,"LINK",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
-/********** CLUSTER IMPORT_INFO ********************/
+/* CLUSTER IMPORT_CANCEL argument table */
+struct COMMAND_ARG CLUSTER_IMPORT_CANCEL_Args[] = {
+{MAKE_ARG("subcommand",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=CLUSTER_IMPORT_CANCEL_subcommand_Subargs},
+};
+
+/********** CLUSTER IMPORT_COMMIT ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
-/* CLUSTER IMPORT_INFO history */
-#define CLUSTER_IMPORT_INFO_History NULL
+/* CLUSTER IMPORT_COMMIT history */
+#define CLUSTER_IMPORT_COMMIT_History NULL
 #endif
 
 #ifndef SKIP_CMD_TIPS_TABLE
-/* CLUSTER IMPORT_INFO tips */
-#define CLUSTER_IMPORT_INFO_Tips NULL
+/* CLUSTER IMPORT_COMMIT tips */
+#define CLUSTER_IMPORT_COMMIT_Tips NULL
 #endif
 
 #ifndef SKIP_CMD_KEY_SPECS_TABLE
-/* CLUSTER IMPORT_INFO key specs */
-#define CLUSTER_IMPORT_INFO_Keyspecs NULL
+/* CLUSTER IMPORT_COMMIT key specs */
+#define CLUSTER_IMPORT_COMMIT_Keyspecs NULL
 #endif
+
+/* CLUSTER IMPORT_COMMIT argument table */
+struct COMMAND_ARG CLUSTER_IMPORT_COMMIT_Args[] = {
+{MAKE_ARG("link-name",ARG_TYPE_STRING,-1,"LINK",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/********** CLUSTER IMPORT_PREPARE ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* CLUSTER IMPORT_PREPARE history */
+#define CLUSTER_IMPORT_PREPARE_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* CLUSTER IMPORT_PREPARE tips */
+#define CLUSTER_IMPORT_PREPARE_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* CLUSTER IMPORT_PREPARE key specs */
+#define CLUSTER_IMPORT_PREPARE_Keyspecs NULL
+#endif
+
+/* CLUSTER IMPORT_PREPARE slot_range_block argument table */
+struct COMMAND_ARG CLUSTER_IMPORT_PREPARE_slot_range_block_Subargs[] = {
+{MAKE_ARG("start-slot",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("end-slot",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* CLUSTER IMPORT_PREPARE argument table */
+struct COMMAND_ARG CLUSTER_IMPORT_PREPARE_Args[] = {
+{MAKE_ARG("slot-range-block",ARG_TYPE_BLOCK,-1,"SLOTSRANGE",NULL,NULL,CMD_ARG_MULTIPLE,2,NULL),.subargs=CLUSTER_IMPORT_PREPARE_slot_range_block_Subargs},
+};
 
 /********** CLUSTER INFO ********************/
 
@@ -768,6 +807,23 @@ struct COMMAND_ARG CLUSTER_MEET_Args[] = {
 {MAKE_ARG("port",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("cluster-bus-port",ARG_TYPE_INTEGER,-1,NULL,NULL,"4.0.0",CMD_ARG_OPTIONAL,0,NULL)},
 };
+
+/********** CLUSTER MIGRATIONS ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* CLUSTER MIGRATIONS history */
+#define CLUSTER_MIGRATIONS_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* CLUSTER MIGRATIONS tips */
+#define CLUSTER_MIGRATIONS_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* CLUSTER MIGRATIONS key specs */
+#define CLUSTER_MIGRATIONS_Keyspecs NULL
+#endif
 
 /********** CLUSTER MYID ********************/
 
@@ -1145,14 +1201,16 @@ struct COMMAND_STRUCT CLUSTER_Subcommands[] = {
 {MAKE_CMD("forget","Removes a node from the nodes table.","O(1)","3.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_FORGET_History,0,CLUSTER_FORGET_Tips,0,clusterCommand,3,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_FORGET_Keyspecs,0,NULL,1),.args=CLUSTER_FORGET_Args},
 {MAKE_CMD("getkeysinslot","Returns the key names in a hash slot.","O(N) where N is the number of requested keys","3.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_GETKEYSINSLOT_History,0,CLUSTER_GETKEYSINSLOT_Tips,1,clusterCommand,4,CMD_STALE,0,CLUSTER_GETKEYSINSLOT_Keyspecs,0,NULL,2),.args=CLUSTER_GETKEYSINSLOT_Args},
 {MAKE_CMD("help","Returns helpful text about the different subcommands.","O(1)","5.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_HELP_History,0,CLUSTER_HELP_Tips,0,clusterCommand,2,CMD_LOADING|CMD_STALE,0,CLUSTER_HELP_Keyspecs,0,NULL,0)},
-{MAKE_CMD("import","Import the provided slots from their current owners.","O(N) where N is the total number of the slots between the start slot and end slot arguments.","8.1.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_IMPORT_History,0,CLUSTER_IMPORT_Tips,0,clusterCommand,-4,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_IMPORT_Keyspecs,0,NULL,1),.args=CLUSTER_IMPORT_Args},
-{MAKE_CMD("import-cancel","Cancel current ongoing import operations.","O(n), where N is the number of source nodes for the current import.","8.1.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_IMPORT_CANCEL_History,0,CLUSTER_IMPORT_CANCEL_Tips,0,clusterCommand,-2,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_IMPORT_CANCEL_Keyspecs,0,NULL,1),.args=CLUSTER_IMPORT_CANCEL_Args},
-{MAKE_CMD("import-info","Get the status of the current ongoing import.","O(n), where N is the number of source nodes for the current import.","8.1.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_IMPORT_INFO_History,0,CLUSTER_IMPORT_INFO_Tips,0,clusterCommand,-2,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_IMPORT_INFO_Keyspecs,0,NULL,0)},
+{MAKE_CMD("import","Import the provided slots from their current owners.","O(N) where N is the total number of the slots between the start slot and end slot arguments.","9.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_IMPORT_History,0,CLUSTER_IMPORT_Tips,0,clusterCommand,-4,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_IMPORT_Keyspecs,0,NULL,1),.args=CLUSTER_IMPORT_Args},
+{MAKE_CMD("import-cancel","Cancel some or all current ongoing import operations.","O(n), where N is the number of import operations being canceled.","9.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_IMPORT_CANCEL_History,0,CLUSTER_IMPORT_CANCEL_Tips,0,clusterCommand,-2,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_IMPORT_CANCEL_Keyspecs,0,NULL,1),.args=CLUSTER_IMPORT_CANCEL_Args},
+{MAKE_CMD("import-commit","Finalize ownership transfer for a slot import previously started.","O(N) where N is the total number of the slots associated with the previous import operation.","9.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_IMPORT_COMMIT_History,0,CLUSTER_IMPORT_COMMIT_Tips,0,clusterCommand,-4,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_IMPORT_COMMIT_Keyspecs,0,NULL,1),.args=CLUSTER_IMPORT_COMMIT_Args},
+{MAKE_CMD("import-prepare","Begin importing slots in preparation for a future ownership transfer.","O(N) where N is the total number of the slots between the start slot and end slot arguments.","9.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_IMPORT_PREPARE_History,0,CLUSTER_IMPORT_PREPARE_Tips,0,clusterCommand,-4,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_IMPORT_PREPARE_Keyspecs,0,NULL,1),.args=CLUSTER_IMPORT_PREPARE_Args},
 {MAKE_CMD("info","Returns information about the state of a node.","O(1)","3.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_INFO_History,0,CLUSTER_INFO_Tips,1,clusterCommand,2,CMD_LOADING|CMD_STALE,0,CLUSTER_INFO_Keyspecs,0,NULL,0)},
 {MAKE_CMD("internalcloseslotlink","Notify the node to close the slot link that bound with this client","O(1).","8.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_INTERNALCLOSESLOTLINK_History,0,CLUSTER_INTERNALCLOSESLOTLINK_Tips,0,clusterCommand,2,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_INTERNALCLOSESLOTLINK_Keyspecs,0,NULL,0)},
 {MAKE_CMD("keyslot","Returns the hash slot for a key.","O(N) where N is the number of bytes in the key","3.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_KEYSLOT_History,0,CLUSTER_KEYSLOT_Tips,0,clusterCommand,3,CMD_STALE,0,CLUSTER_KEYSLOT_Keyspecs,0,NULL,1),.args=CLUSTER_KEYSLOT_Args},
 {MAKE_CMD("links","Returns a list of all TCP links to and from peer nodes.","O(N) where N is the total number of Cluster nodes","7.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_LINKS_History,0,CLUSTER_LINKS_Tips,1,clusterCommand,2,CMD_STALE,0,CLUSTER_LINKS_Keyspecs,0,NULL,0)},
 {MAKE_CMD("meet","Forces a node to handshake with another node.","O(1)","3.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_MEET_History,1,CLUSTER_MEET_Tips,0,clusterCommand,-4,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_MEET_Keyspecs,0,NULL,3),.args=CLUSTER_MEET_Args},
+{MAKE_CMD("migrations","Get the status of slot import and export operations.","O(n), where N is the number of recent slot import and export jobs.","9.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_MIGRATIONS_History,0,CLUSTER_MIGRATIONS_Tips,0,clusterCommand,-2,CMD_NO_ASYNC_LOADING|CMD_ADMIN|CMD_STALE,0,CLUSTER_MIGRATIONS_Keyspecs,0,NULL,0)},
 {MAKE_CMD("myid","Returns the ID of a node.","O(1)","3.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_MYID_History,0,CLUSTER_MYID_Tips,0,clusterCommand,2,CMD_LOADING|CMD_STALE,0,CLUSTER_MYID_Keyspecs,0,NULL,0)},
 {MAKE_CMD("myshardid","Returns the shard ID of a node.","O(1)","7.2.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_MYSHARDID_History,0,CLUSTER_MYSHARDID_Tips,1,clusterCommand,2,CMD_LOADING|CMD_STALE,0,CLUSTER_MYSHARDID_Keyspecs,0,NULL,0)},
 {MAKE_CMD("nodes","Returns the cluster configuration for a node.","O(N) where N is the total number of Cluster nodes","3.0.0",CMD_DOC_NONE,NULL,NULL,"cluster",COMMAND_GROUP_CLUSTER,CLUSTER_NODES_History,0,CLUSTER_NODES_Tips,1,clusterCommand,2,CMD_LOADING|CMD_STALE,0,CLUSTER_NODES_Keyspecs,0,NULL,0)},

@@ -2521,6 +2521,9 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
     int dirty_slots_count = 0;
     int delete_dirty_slots = 0;
 
+    /* Handle exporting slots which have topology updates. */
+    int exporting_slots_count = 0;
+
     /* We should detect if sender is new primary of our shard.
      * We will know it if all our slots were migrated to sender, and sender
      * has no slots except ours */
@@ -2568,6 +2571,10 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                 if (server.cluster->slots[j] == myself && countKeysInSlot(j) && sender != myself) {
                     dirty_slots[dirty_slots_count] = j;
                     dirty_slots_count++;
+                }
+
+                if (server.cluster->slots[j] == myself && isSlotExportingViaReplication(j)) {
+                    exporting_slots_count++;
                 }
 
                 if (server.cluster->slots[j] == cur_primary) {
@@ -2771,6 +2778,11 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                       myself->name, myself->human_nodename, myself->shard_id);
             delKeysInSlot(dirty_slots[j]);
         }
+    }
+    if (exporting_slots_count) {
+        /* At least one slot we were exporting has a topology change. Check if
+         * the export is done. */
+        clusterFinishExportsIfComplete();
     }
 }
 
@@ -6126,7 +6138,7 @@ int getSlotOrError(robj *o, sds *err_out) {
     long long slot;
 
     if (getLongLongFromObject(o, &slot) != C_OK || slot < 0 || slot >= CLUSTER_SLOTS) {
-        *err_out = sdscatfmt(sdsempty(), "Invalid or out of range slot");
+        *err_out = sdsnew("Invalid or out of range slot");
         return -1;
     }
 
@@ -7180,15 +7192,21 @@ int clusterCommandSpecial(client *c) {
         addReplyClusterLinksDescription(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "import") && c->argc > 3 && c->argc % 2 == 1) {
         /* CLUSTER IMPORT SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] */
-        clusterCommandImport(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "import-info") && c->argc == 2) {
-        /* CLUSTER IMPORT-INFO */
-        clusterCommandImportInfo(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "import-cancel") && c->argc == 3 && !strcasecmp(c->argv[2]->ptr, "all")) {
-        /* CLUSTER IMPORT-CANCEL ALL */
+        clusterCommandImport(c, 0);
+    } else if (!strcasecmp(c->argv[1]->ptr, "import-prepare") && c->argc > 3 && c->argc % 2 == 1) {
+        /* CLUSTER IMPORT-PREPARE SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] */
+        clusterCommandImport(c, 1);
+    } else if (!strcasecmp(c->argv[1]->ptr, "import-commit") && c->argc == 4) {
+        /* CLUSTER IMPORT-COMMIT LINK <link-name> */
+        clusterCommandImportCommit(c);
+    } else if (!strcasecmp(c->argv[1]->ptr, "migrations") && c->argc == 2) {
+        /* CLUSTER MIGRATIONS */
+        clusterCommandMigrations(c);
+    } else if (!strcasecmp(c->argv[1]->ptr, "import-cancel") && c->argc > 2) {
+        /* CLUSTER IMPORT-CANCEL (LINK <link-name>|ALL) */
         clusterCommandImportCancel(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "syncslots") && c->argc >= 3) {
-        /* CLUSTER SYNCSLOTS (SNAPSHOT TARGET <node-id> <start-slot> <end-slot> [<start slot> <end slot>]|SNAPSHOT-EOF|PAUSE|PAUSED|REQUEST-FAILOVER|FAILOVER-GRANTED|FAILOVER-DENIED)*/
+    } else if (!strcasecmp(c->argv[1]->ptr, "syncslots") && c->argc > 2) {
+        /* CLUSTER SYNCSLOTS (SNAPSHOT TARGET <node-id> <start-slot> <end-slot> [<start slot> <end slot>]|SNAPSHOT-EOF|STREAM|PAUSE|PAUSED|REQUEST-FAILOVER|FAILOVER-GRANTED|FAILOVER-DENIED|ACK)*/
         clusterCommandSyncSlots(c);
     } else {
         return 0;
@@ -7236,8 +7254,8 @@ const char **clusterCommandExtendedHelp(void) {
         "    Import the specified slot ranges from their owners.",
         "IMPORT-CANCEL ALL",
         "    Cancel all ongoing imports.",
-        "IMPORT-INFO",
-        "    Get information about ongoing and recently finished slot imports.",
+        "MIGRATIONS",
+        "    Get information about ongoing and recently finished slot imports and exports.",
         "SYNCSLOTS (SNAPSHOT TARGET <node-id> <start-slot> <end-slot> [<start slot> <end slot>]|SNAPSHOT-EOF|PAUSE|PAUSED|REQUEST-FAILOVER|FAILOVER-GRANTED|FAILOVER-DENIED)",
         "    Begin syncing a slot, or transition an existing slot sync to a new state.",
         NULL};

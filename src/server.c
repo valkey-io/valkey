@@ -1452,10 +1452,10 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
         monotime current_time = getMonotonicUs();
         long long factor = 1000000; // us
         trackInstantaneousMetric(STATS_METRIC_COMMAND, server.stat_numcommands, current_time, factor);
-        trackInstantaneousMetric(STATS_METRIC_NET_INPUT, server.stat_net_input_bytes + server.stat_net_repl_input_bytes,
+        trackInstantaneousMetric(STATS_METRIC_NET_INPUT, server.stat_net_input_bytes + server.stat_net_repl_input_bytes + server.stat_net_cluster_slot_import_bytes,
                                  current_time, factor);
         trackInstantaneousMetric(STATS_METRIC_NET_OUTPUT,
-                                 server.stat_net_output_bytes + server.stat_net_repl_output_bytes, current_time,
+                                 server.stat_net_output_bytes + server.stat_net_repl_output_bytes + server.stat_net_cluster_slot_export_bytes, current_time,
                                  factor);
         trackInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION, server.stat_net_repl_input_bytes, current_time,
                                  factor);
@@ -2690,6 +2690,8 @@ void resetServerStats(void) {
     server.stat_net_output_bytes = 0;
     server.stat_net_repl_input_bytes = 0;
     server.stat_net_repl_output_bytes = 0;
+    server.stat_net_cluster_slot_export_bytes = 0;
+    server.stat_net_cluster_slot_import_bytes = 0;
     server.stat_unexpected_error_replies = 0;
     server.stat_total_error_replies = 0;
     server.stat_dump_payload_sanitizations = 0;
@@ -3455,7 +3457,7 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target) {
     int j;
 
     if (!shouldPropagate(target)) return;
-    
+
     /* Don't propagate slot import links, these will be proxied in
      * replicationFeedStreamFromPrimaryStream() */
     if (server.current_client != NULL && server.current_client->flag.slot_import_source) return;

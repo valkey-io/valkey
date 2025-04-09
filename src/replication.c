@@ -1699,7 +1699,11 @@ void rdbPipeWriteHandler(struct connection *conn) {
         return;
     } else {
         replica->repl_data->repldboff += nwritten;
-        server.stat_net_repl_output_bytes += nwritten;
+        if (getClientType(replica) == CLIENT_TYPE_SLOT_EXPORT) {
+            server.stat_net_cluster_slot_export_bytes += nwritten;
+        } else {
+            server.stat_net_repl_output_bytes += nwritten;
+        }
         if (replica->repl_data->repldboff < server.rdb_pipe_bufflen) {
             replica->repl_data->repl_last_partial_write = server.unixtime;
             return; /* more data to write.. */
@@ -1773,7 +1777,11 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
                 /* Note: when use diskless replication, 'repldboff' is the offset
                  * of 'rdb_pipe_buff' sent rather than the offset of entire RDB. */
                 replica->repl_data->repldboff = nwritten;
-                server.stat_net_repl_output_bytes += nwritten;
+                if (getClientType(replica) == CLIENT_TYPE_SLOT_EXPORT) {
+                    server.stat_net_cluster_slot_export_bytes += nwritten;
+                } else {
+                    server.stat_net_repl_output_bytes += nwritten;
+                }
             }
             /* If we were unable to write all the data to one of the replicas,
              * setup write handler (and disable pipe read handler, below) */

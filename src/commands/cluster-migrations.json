@@ -1,9 +1,9 @@
 {
-    "IMPORT-INFO": {
-        "summary": "Get the status of the current ongoing import.",
-        "complexity": "O(n), where N is the number of source nodes for the current import.",
+    "MIGRATIONS": {
+        "summary": "Get the status of slot import and export operations.",
+        "complexity": "O(n), where N is the number of recent slot import and export jobs.",
         "group": "cluster",
-        "since": "8.1.0",
+        "since": "9.0.0",
         "container": "CLUSTER",
         "function": "clusterCommand",
         "arity": -2,

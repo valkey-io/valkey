@@ -1,9 +1,9 @@
 {
     "IMPORT-CANCEL": {
-        "summary": "Cancel current ongoing import operations.",
-        "complexity": "O(n), where N is the number of source nodes for the current import.",
+        "summary": "Cancel some or all current ongoing import operations.",
+        "complexity": "O(n), where N is the number of import operations being canceled.",
         "group": "cluster",
-        "since": "8.1.0",
+        "since": "9.0.0",
         "container": "CLUSTER",
         "function": "clusterCommand",
         "arity": -2,
@@ -14,9 +14,20 @@
         ],
         "arguments": [
             {
-                "name": "all",
-                "type": "pure-token",
-                "token": "ALL"
+                "name": "subcommand",
+                "type": "oneof",
+                "arguments": [
+                    {
+                        "name": "all",
+                        "type": "pure-token",
+                        "token": "ALL"
+                    },
+                    {
+                        "name": "link-name",
+                        "type": "string",
+                        "token": "LINK"
+                    }
+                ]
             }
         ]
     }

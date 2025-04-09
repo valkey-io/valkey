@@ -387,13 +387,13 @@ typedef enum slotImportLinkState {
     SLOT_IMPORT_FAILOVER_WAITING_FOR_PAUSED,
     SLOT_IMPORT_FAILOVER_REQUESTED,
     SLOT_IMPORT_FAILOVER_GRANTED,
-    SLOT_IMPORT_FAIL,
-    SLOT_IMPORT_CANCEL,
+
+    /* Temporary state used to defer clean up until a safe time */
+    SLOT_IMPORT_TO_CLEANUP,
 
     /* Terminal states */
     SLOT_IMPORT_FAILOVER_COMPLETE,
-    SLOT_IMPORT_FAILED,
-    SLOT_IMPORT_CANCELED,
+    SLOT_IMPORT_ABORTED,
 } slotImportLinkState;
 
 typedef struct slotImportLink {
@@ -401,12 +401,17 @@ typedef struct slotImportLink {
     mstime_t last_update;           /* Import link object last update time. */
     time_t last_ack;                /* Import link object last ack time. */
     char nodename[CLUSTER_NAMELEN]; /* Name of the slot replication source node, hex string, sha1-size. */
+    char linkname[CLUSTER_NAMELEN]; /* Unique name for the link, hex string, sha1-size. */
     client *client;                 /* Client to slot replication source node. */
     connection *conn;               /* Connection to slot replication source node. */
     slotImportLinkState state;      /* State of the slot import link. */
     sds status_msg;                 /* Human readable status message for this link. */
     list *slot_ranges;              /* List of the slot ranges we want to import. */
     sds slot_ranges_str;            /* Precomputed string of the slot ranges, for logging and info. */
+    int one_shot;                   /* One shot execution means that we will proceed through slot
+                                     * replication and failover in sequence. If the failover does
+                                     * not succeed, the import will be failed and replication will
+                                     * terminate. */
 } slotImportLink;
 
 typedef enum slotExportLinkState {
@@ -420,13 +425,19 @@ typedef enum slotExportLinkState {
 } slotExportLinkState;
 
 typedef struct slotExportLink {
+    mstime_t ctime;                 /* Import link object creation time. */
+    mstime_t last_update;           /* Export link object last update time. */
     time_t last_ack;                /* Export link object last ack time. */
     char nodename[CLUSTER_NAMELEN]; /* Name of the slot replication target node, hex string, sha1-size. */
+    char linkname[CLUSTER_NAMELEN]; /* Unique name for the link, hex string, sha1-size. */
     client *client;                 /* Client to slot replication target node. */
     slotExportLinkState state;      /* State of the slot export link. */
     list *slot_ranges;              /* List of the slot ranges we want to export. */
     sds slot_ranges_str;            /* Precomputed string of the slot ranges, for logging. */
     mstime_t mf_end;                /* End time for the manual failover, after this we will unpause. */
+    int bgsave_active;              /* Whether there is an active BGSAVE for this link (note that
+                                     * we can be in failed state may occur but the BGSAVE could
+                                     * still be active)*/
 } slotExportLink;
 
 struct clusterState {

@@ -2146,11 +2146,12 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
     }
 
-    /* If any of the replica of a given primary can't failover, then immediately mark it as alive. */
-    int cant_failover = 1;
+    /* If none of the replica can failover or it's primary only setup,
+     * then immediately mark the node as alive. */
+    int dont_wait = 1;
     for (int j = 0; j < node->num_replicas; j++) {
         if (!clusterNodeIsNoFailover(node->replicas[j])) {
-            cant_failover = 0;
+            dont_wait = 0;
             break;
         }
     }
@@ -2160,7 +2161,7 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
      * 2) It is yet serving slots from our point of view (not failed over).
      * Apparently no one is going to fix these slots, clear the FAIL flag. */
     if (clusterNodeIsVotingPrimary(node) &&
-        ((now - node->fail_time) > (server.cluster_node_timeout * CLUSTER_FAIL_UNDO_TIME_MULT) || cant_failover)) {
+        ((now - node->fail_time) > (server.cluster_node_timeout * CLUSTER_FAIL_UNDO_TIME_MULT) || dont_wait)) {
         serverLog(
             LL_NOTICE,
             "Clear FAIL state for node %.40s (%s): is reachable again and nobody is serving its slots after some time.",

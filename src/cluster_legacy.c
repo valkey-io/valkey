@@ -4747,7 +4747,7 @@ void clusterLogCantFailover(int reason) {
     case CLUSTER_CANT_FAILOVER_WAITING_VOTES: msg = "Waiting for votes, but majority still not reached."; break;
     case CLUSTER_CANT_FAILOVER_DISABLED:
         msg = "Failover has been disabled. "
-              "Please check the 'cluster-replica-no-failover' configuration option";
+              "Please check the 'cluster-replica-no-failover' configuration option.";
         break;
     default: serverPanic("Unknown cant failover reason code.");
     }

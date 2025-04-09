@@ -238,6 +238,12 @@ static int simd_enabled = 1;
 #define HLL_USE_NEON 0
 #endif
 
+#if defined(HAVE_AVX2) || defined(__ARM_NEON)
+#define SIMD_SUPPORTED 1
+#else
+#define SIMD_SUPPORTED 0
+#endif
+
 /* =========================== Low level bit macros ========================= */
 
 /* Macros to access the dense representation.
@@ -1956,28 +1962,18 @@ void pfdebugCommand(client *c) {
         if (c->argc != 3) goto arityerr;
 
         if (!strcasecmp(c->argv[2]->ptr, "on")) {
-#ifdef HAVE_AVX2
-            simd_enabled = 1;
-#endif
-#ifdef __ARM_NEON
+#if SIMD_SUPPORTED
             simd_enabled = 1;
 #endif
         } else if (!strcasecmp(c->argv[2]->ptr, "off")) {
-#ifdef HAVE_AVX2
-            simd_enabled = 0;
-#endif
-#ifdef __ARM_NEON
+#if SIMD_SUPPORTED
             simd_enabled = 0;
 #endif
         } else {
             addReplyError(c, "Argument must be ON or OFF");
         }
 
-        if (HLL_USE_AVX2 || HLL_USE_NEON) {
-            addReplyStatus(c, "enabled");
-        } else {
-            addReplyStatus(c, "disabled");
-        }
+        addReplyStatus(c, (HLL_USE_AVX2 || HLL_USE_NEON) ? "enabled" : "disabled");
 
         return;
     }

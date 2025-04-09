@@ -1,7 +1,7 @@
 {
     "IMPORT-CANCEL": {
         "summary": "Cancel some or all current ongoing import operations.",
-        "complexity": "O(n), where N is the number of import operations being canceled.",
+        "complexity": "O(n), where N is the number of import operations being cancelled.",
         "group": "cluster",
         "since": "9.0.0",
         "container": "CLUSTER",

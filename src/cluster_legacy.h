@@ -413,7 +413,7 @@ typedef struct slotImportLink {
     client *client;                 /* Client to slot replication source node. */
     connection *conn;               /* Connection to slot replication source node. */
     slotImportLinkState state;      /* State of the slot import link. */
-    sds status_msg;                 /* Human readable status message for this link. */
+    sds status_msg;                 /* Human readable status message with more details. */
     list *slot_ranges;              /* List of the slot ranges we want to import. */
     sds slot_ranges_str;            /* Precomputed string of the slot ranges, for logging and info. */
     int one_shot;                   /* One shot execution means that we will proceed through slot
@@ -448,6 +448,24 @@ typedef struct slotExportLink {
                                      * still be active)*/
 } slotExportLink;
 
+typedef enum slotMigrationLogState {
+    SLOT_MIGRATION_LOG_FAILED,
+    SLOT_MIGRATION_LOG_CANCELLED,
+    SLOT_MIGRATION_LOG_SUCCESS,
+} slotMigrationLogState;
+
+typedef struct slotMigrationLog {
+    int is_import;
+    char nodename[CLUSTER_NAMELEN];
+    char linkname[CLUSTER_NAMELEN];
+    list *slot_ranges;
+    sds slot_ranges_str;
+    mstime_t ctime;                 /* Creation time. */
+    mstime_t completion_time;       /* Completion time. */
+    slotMigrationLogState state;
+    sds status_msg;                 /* Human readable status message with more details. */
+} slotMigrationLog;
+
 struct clusterState {
     clusterNode *myself; /* This node */
     uint64_t currentEpoch;
@@ -462,6 +480,7 @@ struct clusterState {
     clusterNode *slots[CLUSTER_SLOTS];
     list *slot_import_links; /* List storing all slot import links. */
     list *slot_export_links; /* List storing all slot export links. */
+    list *slot_migration_log; /* List storing all slot export links. Stored in order from most recent to least recent. */
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;      /* Time of previous or next election. */
     int failover_auth_count;          /* Number of votes received so far. */

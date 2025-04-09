@@ -44,6 +44,10 @@ struct clusterState;
 #define CLUSTER_BROADCAST_ALL 0            /* All known instances. */
 #define CLUSTER_BROADCAST_LOCAL_REPLICAS 1 /* All replicas in my primary-replicas ring. */
 
+/* Slot migration log configurations */
+#define CLUSTER_SLOT_MIGRATION_LOG_MAX 1000
+#define CLUSTER_SLOT_MIGRATION_LOG_TTL_MILLIS 3600000 /* 1 hour */
+
 /* ---------------------- API exported outside cluster.c -------------------- */
 /* functions requiring mechanism specific implementations */
 void clusterInit(void);
@@ -164,10 +168,12 @@ int clusterIsAnySlotExportingViaRepl(void);
 int clusterIsSlotExportReadyForReplData(client *c);
 void initClusterSlotImportLinkList(void);
 void initClusterSlotExportLinkList(void);
+void initClusterSlotMigrationLogList(void);
 void clusterSlotMigrationCron(void);
 void clusterCommandImport(client *c, int prepare_only);
 void clusterCommandSyncSlots(client *c);
 void clusterCommandMigrations(client *c);
+void clusterCommandMigrationLog(client *c);
 void clusterCommandImportCancel(client *c);
 void clusterCommandImportCommit(client *c);
 void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr);

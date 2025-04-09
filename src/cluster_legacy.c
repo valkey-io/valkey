@@ -1210,6 +1210,7 @@ void clusterInit(void) {
     /* Initialize lists for slot import links. */
     initClusterSlotImportLinkList();
     initClusterSlotExportLinkList();
+    initClusterSlotMigrationLogList();
 
     /* Set myself->port/cport/pport to my listening ports, we'll just need to
      * discover the IP address via MEET messages. */
@@ -7414,11 +7415,14 @@ int clusterCommandSpecial(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "migrations") && c->argc == 2) {
         /* CLUSTER MIGRATIONS */
         clusterCommandMigrations(c);
+    } else if (!strcasecmp(c->argv[1]->ptr, "migrationlog") && c->argc == 2) {
+        /* CLUSTER MIGRATIONS */
+        clusterCommandMigrationLog(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "import-cancel") && c->argc > 2) {
         /* CLUSTER IMPORT-CANCEL (LINK <link-name>|ALL) */
         clusterCommandImportCancel(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "syncslots") && c->argc > 2) {
-        /* CLUSTER SYNCSLOTS (SNAPSHOT TARGET <node-id> <start-slot> <end-slot> [<start slot> <end slot>]|SNAPSHOT-EOF|STREAM|PAUSE|PAUSED|REQUEST-FAILOVER|FAILOVER-GRANTED|FAILOVER-DENIED|ACK)*/
+        /* CLUSTER SYNCSLOTS (SNAPSHOT TARGET <node-id> <start-slot> <end-slot> [<start slot> <end slot>]|SNAPSHOT-EOF|STREAM|PAUSE|PAUSED|REQUEST-FAILOVER|FAILOVER-GRANTED|FAILOVER-DENIED|ACK|CANCEL)*/
         clusterCommandSyncSlots(c);
     } else {
         return 0;

@@ -49,6 +49,28 @@ proc get_migration_by_linkname {node_idx linkname} {
     return ""
 }
 
+
+proc get_migration_log_by_slot {node_idx slot} {
+    set logs [R $node_idx CLUSTER MIGRATIONLOG]
+    foreach log $logs {
+        set slot_ranges [dict get $log slot_ranges]
+        if {[slot_ranges_contains_slot $slot_ranges $slot]} {
+            return $log
+        }
+    }
+    return ""
+}
+
+proc get_migration_log_by_linkname {node_idx linkname} {
+    set logs [R $node_idx CLUSTER MIGRATIONLOG]
+    foreach log $logs {
+        if {[dict get $log link_name] eq $linkname} {
+            return $log
+        }
+    }
+    return ""
+}
+
 proc is_link_up {node_idx linkname} {
     return [expr {[get_migration_by_linkname $node_idx $linkname] ne ""}]
 }
@@ -57,7 +79,15 @@ proc wait_for_ready_to_commit {node_idx linkname} {
     wait_for_condition 100 100 {
         [dict get [get_migration_by_linkname $node_idx $linkname] state] eq "replicating"
     } else {
-        fail "Migration $linkname was not ready to commit within 10000 ms"
+        fail "Migration $linkname on node $node_idx was not ready to commit within 10000 ms"
+    }
+}
+
+proc wait_for_link_down {node_idx linkname} {
+    wait_for_condition 100 100 {
+        [get_migration_by_linkname $node_idx $linkname] eq ""
+    } else {
+        fail "Migration $linkname on node $node_idx was not terminated within 10000 ms"
     }
 }
 
@@ -149,46 +179,78 @@ test "Test CLUSTER IMPORT already importing" {
 }
 
 test "Test CLUSTER IMPORT-CANCEL ALL" {
-    # Start one, cancel all
-    assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
-    set linkname [get_link_name 0 16383]
-    assert [is_link_up 0 $linkname]
-    assert_match "OK" [R 0 CLUSTER IMPORT-CANCEL ALL]
-    assert {![is_link_up 0 $linkname]}
-
-    # Start two, cancel all
     assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16382 16382]
     assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
     set linkname1 [get_link_name 0 16382]
     set linkname2 [get_link_name 0 16383]
+    wait_for_ready_to_commit 0 $linkname1
+    wait_for_ready_to_commit 0 $linkname2
+
+    # Links are up, no migration logs yet
     assert [is_link_up 0 $linkname1]
     assert [is_link_up 0 $linkname2]
+    assert [is_link_up 2 $linkname1]
+    assert [is_link_up 2 $linkname2]
+    assert {[get_migration_log_by_linkname 0 $linkname1] eq ""}
+    assert {[get_migration_log_by_linkname 0 $linkname2] eq ""}
+    assert {[get_migration_log_by_linkname 2 $linkname1] eq ""}
+    assert {[get_migration_log_by_linkname 2 $linkname2] eq ""}
+
     assert_match "OK" [R 0 CLUSTER IMPORT-CANCEL ALL]
+
+    # Links are no longer up, migration logs say cancelled
     assert {![is_link_up 0 $linkname1]}
     assert {![is_link_up 0 $linkname2]}
+    wait_for_link_down 2 $linkname1
+    wait_for_link_down 2 $linkname2
+    assert {[dict get [get_migration_log_by_linkname 0 $linkname1] state] eq "cancelled"}
+    assert {[dict get [get_migration_log_by_linkname 0 $linkname2] state] eq "cancelled"}
+    puts [get_migration_log_by_linkname 2 $linkname1]
+    assert {[dict get [get_migration_log_by_linkname 2 $linkname1] state] eq "cancelled"}
+    assert {[dict get [get_migration_log_by_linkname 2 $linkname2] state] eq "cancelled"}
 }
 
 test "Test CLUSTER IMPORT-CANCEL LINK" {
-    # Start one, cancel by name
-    assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
-    set linkname [get_link_name 0 16383]
-    assert [is_link_up 0 $linkname]
-    assert_match "OK" [R 0 CLUSTER IMPORT-CANCEL LINK $linkname]
-    assert {![is_link_up 0 $linkname]}
-
-    # Start two, cancel by name
     assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16382 16382]
     assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
     set linkname1 [get_link_name 0 16382]
     set linkname2 [get_link_name 0 16383]
+    wait_for_ready_to_commit 0 $linkname1
+    wait_for_ready_to_commit 0 $linkname2
+
+    # Links are up, no migration logs yet
     assert [is_link_up 0 $linkname1]
     assert [is_link_up 0 $linkname2]
+    assert [is_link_up 2 $linkname1]
+    assert [is_link_up 2 $linkname2]
+    assert {[get_migration_log_by_linkname 0 $linkname1] eq ""}
+    assert {[get_migration_log_by_linkname 0 $linkname2] eq ""}
+    assert {[get_migration_log_by_linkname 2 $linkname1] eq ""}
+    assert {[get_migration_log_by_linkname 2 $linkname2] eq ""}
+
     assert_match "OK" [R 0 CLUSTER IMPORT-CANCEL LINK $linkname1]
+
+    # One link is closed, migration log says "cancelled"
     assert {![is_link_up 0 $linkname1]}
     assert [is_link_up 0 $linkname2]
+    wait_for_link_down 2 $linkname1
+    assert [is_link_up 2 $linkname2]
+    assert {[dict get [get_migration_log_by_linkname 0 $linkname1] state] eq "cancelled"}
+    assert {[dict get [get_migration_log_by_linkname 2 $linkname1] state] eq "cancelled"}
+    assert {[get_migration_log_by_linkname 0 $linkname2] eq ""}
+    assert {[get_migration_log_by_linkname 2 $linkname2] eq ""}
+
     assert_match "OK" [R 0 CLUSTER IMPORT-CANCEL LINK $linkname2]
+
+    # Now both links are closed with logs in state "cancelled"
     assert {![is_link_up 0 $linkname1]}
     assert {![is_link_up 0 $linkname2]}
+    wait_for_link_down 2 $linkname1
+    wait_for_link_down 2 $linkname2
+    assert {[dict get [get_migration_log_by_linkname 0 $linkname1] state] eq "cancelled"}
+    assert {[dict get [get_migration_log_by_linkname 0 $linkname2] state] eq "cancelled"}
+    assert {[dict get [get_migration_log_by_linkname 2 $linkname1] state] eq "cancelled"}
+    assert {[dict get [get_migration_log_by_linkname 2 $linkname2] state] eq "cancelled"}
 }
 
 set 0_slot_tag "{06S}"
@@ -217,6 +279,12 @@ test "Single source import - one shot" {
     # Also reflected in replicas
     assert_match "1000" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
     assert_match "0" [R 5 CLUSTER COUNTKEYSINSLOT 16383]
+
+    # Migration log shows success on both ends
+    puts [get_migration_log_by_slot 0 16383]
+    assert {[dict get [get_migration_log_by_slot 0 16383] state] eq "success"}
+    puts [get_migration_log_by_slot 2 16383]
+    assert {[dict get [get_migration_log_by_slot 2 16383] state] eq "success"}
 
     # Did not cause full sync from affected replicas
     assert {$prev_full_syncs_0 eq [status [Rn 0] sync_full]}
@@ -553,7 +621,47 @@ test "Partial data removed on cancel" {
     assert_match "OK" [R 2 FLUSHDB SYNC]
 }
 
+test "OOM on target aborts migration" {
+    set prev_full_syncs_0 [status [Rn 0] sync_full]
+    set prev_full_syncs_2 [status [Rn 2] sync_full]
+
+    # Load some data before the snapshot
+    write_data 2 "$16383_slot_tag:1:" 500 1000
+    assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
+    set linkname [get_link_name 0 16383]
+    wait_for_ready_to_commit 0 $linkname
+
+    # Set maxmemory to simulate OOM
+    set before_maxmemory [R 0 CONFIG GET maxmemory]
+    assert_match "OK" [R 0 CONFIG SET maxmemory 1]
+
+    # Loading more data should cause a failure
+    write_data 2 "$16383_slot_tag:3:" 500 1000
+    assert {![is_link_up 0 $linkname]}
+
+    # Verify the keys are dropped on target
+    assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+    assert_match "0" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+    assert_match "1000" [R 5 CLUSTER COUNTKEYSINSLOT 16383]
+    assert_match "0" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
+
+    # Did not cause full sync from affected replicas
+    assert {$prev_full_syncs_0 eq [status [Rn 0] sync_full]}
+    assert {$prev_full_syncs_2 eq [status [Rn 2] sync_full]}
+
+    # Cleanup for the next test
+    assert_match "OK" [R 2 FLUSHDB SYNC]
+}
+
 test "Partial data in replica removed on failover" {
+
+}
+
+test "Import with IO threads" {
+
+}
+
+test "Import on TLS connection" {
 
 }
 

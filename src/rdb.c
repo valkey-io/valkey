@@ -3551,11 +3551,9 @@ void killRDBChild(void) {
  *
  * Connections array provided will be freed after the save is completed, and
  * should not be freed by the caller. */
-int saveSnapshotToConnectionSockets(connection **conns, int connsnum, int use_pipe, int req, ChildSnapshotFunc snapshot_func, void *privdata) {
+int saveSnapshotToConnectionSockets(connection **conns, int connsnum, int use_pipe, int req, ChildSnapshotFunc snapshot_func, int skip_checksum, void *privdata) {
     pid_t childpid;
     int pipefds[2], rdb_pipe_write = -1, safe_to_exit_pipe = -1;
-    int dual_channel = (req & REPLICA_REQ_RDB_CHANNEL);
-
     if (hasActiveChildProcess()) return C_ERR;
     serverAssert(server.rdb_pipe_read == -1 && server.rdb_child_exit_pipe == -1);
 
@@ -3582,51 +3580,12 @@ int saveSnapshotToConnectionSockets(connection **conns, int connsnum, int use_pi
         safe_to_exit_pipe = pipefds[0];          /* read end */
         server.rdb_child_exit_pipe = pipefds[1]; /* write end */
     }
-    /*
-     * For replicas with repl_state == REPLICA_STATE_WAIT_BGSAVE_END and replica_req == req:
-     * Check replica capabilities, if every replica supports skipping RDB checksum, primary should also skip checksum.
-     * Otherwise, use checksum for this RDB transfer.
-     */
-    int skip_rdb_checksum = 1;
-    /* Collect the connections of the replicas we want to transfer
-     * the RDB to, which are in WAIT_BGSAVE_START state. */
-    int connsnum = 0;
-    connection **conns = zmalloc(sizeof(connection *) * listLength(server.replicas));
     server.rdb_pipe_conns = NULL;
     if (use_pipe) {
         server.rdb_pipe_conns = conns;
         server.rdb_pipe_numconns = connsnum;
         server.rdb_pipe_numconns_writing = 0;
     }
-    /* Filter replica connections pending full sync (ie. in WAIT_BGSAVE_START state). */
-    listRewind(server.replicas, &li);
-    while ((ln = listNext(&li))) {
-        client *replica = ln->value;
-        if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
-            /* Check replica has the exact requirements */
-            if (replica->repl_data->replica_req != req) continue;
-
-            conns[connsnum++] = replica->conn;
-            if (dual_channel) {
-                connSendTimeout(replica->conn, server.repl_timeout * 1000);
-                /* This replica uses diskless dual channel sync, hence we need
-                 * to inform it with the save end offset.*/
-                sendCurrentOffsetToReplica(replica);
-                /* Make sure repl traffic is appended to the replication backlog */
-                addRdbReplicaToPsyncWait(replica);
-                /* Put the socket in blocking mode to simplify RDB transfer. */
-                connBlock(replica->conn);
-            } else {
-                server.rdb_pipe_numconns++;
-            }
-            replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset());
-        }
-
-        // do not skip RDB checksum on the primary if connection doesn't have integrity check or if the replica doesn't support it
-        if (!connIsIntegrityChecked(replica->conn) || !(replica->repl_data->replica_capa & REPLICA_CAPA_SKIP_RDB_CHECKSUM))
-            skip_rdb_checksum = 0;
-    }
-
     /* Create the child process. */
     if ((childpid = serverFork(CHILD_TYPE_RDB)) == 0) {
         /* Child */
@@ -3648,7 +3607,7 @@ int saveSnapshotToConnectionSockets(connection **conns, int connsnum, int use_pi
         }
         serverSetCpuAffinity(server.bgsave_cpulist);
 
-        if (skip_rdb_checksum) rdb.flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
+        if (skip_checksum) rdb.flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
 
         retval = snapshot_func(req, &rdb, privdata);
         if (retval == C_OK && rioFlush(&rdb) == 0) retval = C_ERR;
@@ -3691,7 +3650,7 @@ int saveSnapshotToConnectionSockets(connection **conns, int connsnum, int use_pi
         } else {
             serverLog(LL_NOTICE, "Background RDB transfer started by pid %ld to %s%s", (long)childpid,
                       !use_pipe ? "direct socket to replica" : "pipe through parent process",
-                      skip_rdb_checksum ? " while skipping RDB checksum for this transfer" : "");
+                      skip_checksum ? " while skipping RDB checksum for this transfer" : "");
 
             server.rdb_save_time_start = time(NULL);
             server.rdb_child_type = RDB_CHILD_TYPE_SOCKET;
@@ -3724,6 +3683,12 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
     listIter li;
     int dual_channel = (req & REPLICA_REQ_RDB_CHANNEL);
 
+    /*
+     * For replicas with repl_state == REPLICA_STATE_WAIT_BGSAVE_END and replica_req == req:
+     * Check replica capabilities, if every replica supports skipping RDB checksum, primary should also skip checksum.
+     * Otherwise, use checksum for this RDB transfer.
+     */
+    int skip_rdb_checksum = 1;
     /* Collect the connections of the replicas we want to transfer
      * the RDB to, which are i WAIT_BGSAVE_START state. */
     int connsnum = 0;
@@ -3750,9 +3715,13 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
             }
             replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset());
         }
+
+        /* do not skip RDB checksum on the primary if connection doesn't have integrity check or if the replica doesn't support it */
+        if (!connIsIntegrityChecked(replica->conn) || !(replica->repl_data->replica_capa & REPLICA_CAPA_SKIP_RDB_CHECKSUM))
+            skip_rdb_checksum = 0;
     }
 
-    if (saveSnapshotToConnectionSockets(conns, connsnum, !dual_channel, req, childSnapshotUsingRDB, (void *)rsi) != C_OK) {
+    if (saveSnapshotToConnectionSockets(conns, connsnum, !dual_channel, req, childSnapshotUsingRDB, skip_rdb_checksum, (void *)rsi) != C_OK) {
         /* Undo the state change. The caller will perform cleanup on
          * all the replicas in BGSAVE_START state, but an early call to
          * replicationSetupReplicaForFullResync() turned it into BGSAVE_END */

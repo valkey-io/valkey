@@ -3655,17 +3655,17 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
                 index++; /* Move to the next argument */
             }
         } else if (!strcasecmp(c->argv[index]->ptr, "maxage") && moreargs) {
-            long long tmp;
+            long long maxage;
 
-            if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &tmp,
+            if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &maxage,
                                              "maxage is not an integer or out of range") != C_OK)
                 return C_ERR;
-            if (tmp <= 0) {
+            if (maxage <= 0) {
                 addReplyError(c, "maxage should be greater than 0");
                 return C_ERR;
             }
 
-            filter->max_age = tmp;
+            filter->max_age = maxage;
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "type") && moreargs) {
             filter->type = getClientTypeByName(c->argv[index + 1]->ptr);
@@ -3698,22 +3698,22 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             }
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "idle") && moreargs) {
-            long long tmp;
+            long long idle_time;
 
-            if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &tmp,
+            if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &idle_time,
                                              "idle is not an integer or out of range") != C_OK)
                 return C_ERR;
-            if (tmp <= 0) {
+            if (idle_time <= 0) {
                 addReplyError(c, "idle should be greater than 0");
                 return C_ERR;
             }
 
-            filter->idle = tmp;
+            filter->idle = idle_time;
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "flags") && moreargs) {
             filter->flags = sdsnew(c->argv[index + 1]->ptr);
             if (validateClientFlagFilter(filter->flags) == C_ERR) {
-                addReplyErrorFormat(c, "unknown flags found in the provided filter: %s", filter->flags);
+                addReplyErrorFormat(c, "Unknown flags found in the provided filter: %s", filter->flags);
                 return C_ERR;
             }
             index += 2;
@@ -3729,15 +3729,15 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             incrRefCount(filter->lib_ver);
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "db") && moreargs) {
-            int tmp;
-            if (getIntFromObjectOrReply(c, c->argv[index + 1], &tmp,
-                                        "db is not an integer or out of range") != C_OK)
+            int db_id;
+            if (getIntFromObjectOrReply(c, c->argv[index + 1], &db_id,
+                                        "DB is not an integer or out of range") != C_OK)
                 return C_ERR;
-            if (tmp < 0 || tmp >= server.dbnum) {
-                addReplyErrorFormat(c, "db number should be between 0 and %d", server.dbnum - 1);
+            if (db_id < 0 || db_id >= server.dbnum) {
+                addReplyErrorFormat(c, "DB number should be between 0 and %d", server.dbnum - 1);
                 return C_ERR;
             }
-            filter->db_number = tmp;
+            filter->db_number = db_id;
             index += 2;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);

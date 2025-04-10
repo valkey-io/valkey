@@ -214,6 +214,54 @@ start_server {tags {"introspection"}} {
         $c3 close
     }
 
+    test {CLIENT LIST with IP filter} {
+        r client setname "client-ip"
+
+        set client_info [r client info]
+        regexp {addr=([^:]+):} $client_info -> iponly
+
+        # Use the extracted IP for filtering.
+        set filtered [r client list ip $iponly]
+        assert_match *client-ip* $filtered
+    } {}
+
+    test {CLIENT LIST with CAPA filter} {
+        r client setname "client-with-r"
+        r client capa redirect
+
+        set output [r client list capa r]
+        assert_match *client-with-r* $output
+    } {}
+
+    test {CLIENT KILL with IP filter} {
+        set c1 [valkey_client]
+        $c1 client setname "killme-ip"
+        r client setname "client-normal"
+
+        set client_info [$c1 client info]
+        regexp {addr=([^:]+):} $client_info -> iponly
+
+        # Kill client by IP only
+        r client kill ip $iponly skipme yes
+
+        set err [catch {$c1 ping} error_message]
+        assert {$err == 1}
+        assert {[string match "*I/O error*" $error_message]}
+    } {}
+
+    test {CLIENT KILL with CAPA filter} {
+        set c1 [valkey_client]
+        $c1 client setname "killme-capa"
+        $c1 client capa redirect
+
+        # Kill using capa filter
+        r client kill capa r skipme yes
+
+        set err [catch {$c1 ping} error_message]
+        assert {$err == 1}
+        assert {[string match "*I/O error*" $error_message]}
+    } {}
+
     test {CLIENT KILL with NAME filter} {
         # Create a client and set its name
         set c1 [valkey_client]

@@ -42,7 +42,7 @@
             ],
             [
                 "9.0.0",
-                "Added filters NAME, IDLE, FLAGS, LIB-NAME, LIB-VER, and DB."
+                "Added filters NAME, IDLE, FLAGS, LIB-NAME, LIB-VER, DB, CAPA, and IP."
             ]
         ],
         "command_flags": [
@@ -188,6 +188,19 @@
                 "token": "DB",
                 "name": "db",
                 "type": "integer",
+                "optional": true,
+                "since": "9.0.0"
+            },                            {
+                "token": "CAPA",
+                "name": "capa",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "IP",
+                "name": "ip",
+                "type": "string",
                 "optional": true,
                 "since": "9.0.0"
             }

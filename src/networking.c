@@ -78,6 +78,10 @@ typedef struct {
     robj *lib_ver;
     /* Database index to filter. If set to -1, no DB number filtering is applied. */
     int db_number;
+    /* Client capa for filtering. If NULL, no filtering is applied. */
+    sds capa;
+    /* Client ip for filtering. If NULL, no filtering is applied. */
+    sds ip;
 } clientFilter;
 
 static void setProtocolError(const char *errstr, client *c);
@@ -87,8 +91,11 @@ char *getClientSockname(client *c);
 static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter);
 static int clientMatchesFilter(client *client, clientFilter *client_filter);
 static int validateClientFlagFilter(sds flag_filter);
+static int validateClientCapaFilter(sds capa);
 static sds getAllFilteredClientsInfoString(clientFilter *client_filter, int hide_user_data);
 static int clientMatchesFlagFilter(client *c, sds flag_filter);
+static int clientMatchesIpFilter(client *c, sds ip);
+static int clientMatchesCapaFilter(client *c, sds capa_filter);
 static void freeClientFilter(clientFilter *filter);
 
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
@@ -3739,8 +3746,32 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             }
             filter->db_number = db_id;
             index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "capa") && moreargs) {
+            filter->capa = sdsnew(c->argv[index + 1]->ptr);
+            if (validateClientCapaFilter(filter->capa) == C_ERR) {
+                addReplyErrorFormat(c, "Unknown capa found in the provided filter: %s", filter->flags);
+                return C_ERR;
+            }
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "ip") && moreargs) {
+            filter->ip = sdsnew(c->argv[index + 1]->ptr);
+            index += 2;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
+            return C_ERR;
+        }
+    }
+    return C_OK;
+}
+
+static int validateClientCapaFilter(sds capa) {
+    for (size_t i = 0; i < sdslen(capa); i++) {
+        const char capability = capa[i];
+        switch (capability) {
+        case 'r':
+            /* Valid capability, do nothing. */
+            break;
+        default:
             return C_ERR;
         }
     }
@@ -3799,10 +3830,50 @@ static int clientMatchesFilter(client *client, clientFilter *client_filter) {
     if (client_filter->lib_name && (!client->lib_name || compareStringObjects(client->lib_name, client_filter->lib_name) != 0)) return 0;
     if (client_filter->lib_ver && (!client->lib_ver || compareStringObjects(client->lib_ver, client_filter->lib_ver) != 0)) return 0;
     if (client_filter->db_number != -1 && client->db->id != client_filter->db_number) return 0;
+    if (client_filter->capa && clientMatchesCapaFilter(client, client_filter->capa) == 0) return 0;
+    if (client_filter->ip && clientMatchesIpFilter(client, client_filter->ip) == 0) return 0;
 
     /* If all conditions are satisfied, the client matches the filter. */
     return 1;
 }
+
+static int clientMatchesIpFilter(client *c, sds ip) {
+    sds peerid = getClientPeerId(c);
+    const char *colon = strrchr(peerid, ':');
+    if (colon) {
+        size_t iplen = colon - peerid;
+        sds client_ip = sdsnewlen(peerid, iplen);
+        if (sdscmp(client_ip, ip) != 0) {
+            sdsfree(client_ip);
+            return 0;
+        }
+        sdsfree(client_ip);
+    } else {
+        if (sdscmp(peerid, ip) != 0)
+            return 0;
+    }
+    return 1;
+}
+
+static int clientMatchesCapaFilter(client *c, sds capa_filter) {
+    /* Iterate through the provided capa filter string */
+    for (size_t i = 0; i < sdslen(capa_filter); i++) {
+        const char capability = capa_filter[i];
+
+        /* Check each capability */
+        switch (capability) {
+        case 'r': /* client supports redirection */
+            if (!(c->capa & CLIENT_CAPA_REDIRECT)) return 0;
+            break;
+        default:
+            /* Invalid capa, return false */
+            return 0;
+        }
+    }
+    /* If the loop completes, the client matches the capa filter */
+    return 1;
+}
+
 
 static int clientMatchesFlagFilter(client *c, sds flag_filter) {
     /* Iterate through the provided flag filter string */
@@ -4132,6 +4203,10 @@ static void freeClientFilter(clientFilter *filter) {
         zfree(filter->ids);
     if (filter->flags != NULL)
         sdsfree(filter->flags);
+    if (filter->capa != NULL)
+        sdsfree(filter->capa);
+    if (filter->ip != NULL)
+        sdsfree(filter->ip);
     if (filter->lib_name) {
         decrRefCount(filter->lib_name);
         filter->lib_name = NULL;

@@ -3749,7 +3749,7 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
         } else if (!strcasecmp(c->argv[index]->ptr, "capa") && moreargs) {
             filter->capa = sdsnew(c->argv[index + 1]->ptr);
             if (validateClientCapaFilter(filter->capa) == C_ERR) {
-                addReplyErrorFormat(c, "Unknown capa found in the provided filter: %s", filter->flags);
+                addReplyErrorFormat(c, "Unknown capa found in the provided filter: %s", filter->capa);
                 return C_ERR;
             }
             index += 2;

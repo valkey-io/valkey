@@ -1254,8 +1254,68 @@ void clusterInitLast(void) {
     }
 }
 
+void clusterAutoFailoverOnShutdown(void) {
+    if (!nodeIsPrimary(myself) || !server.auto_failover_on_shutdown) return;
+
+    /* Find the first best replica, that is, the replica with the largest offset. */
+    int legacy_replica = 0;
+    client *best_replica = NULL;
+    listIter replicas_iter;
+    listNode *replicas_list_node;
+    listRewind(server.replicas, &replicas_iter);
+    while ((replicas_list_node = listNext(&replicas_iter)) != NULL) {
+        client *replica = listNodeValue(replicas_list_node);
+        /* This is done only when the replica offset is caught up, to avoid data loss.
+         * And 0x90000 is 9.0.0, we only support this feature in this version. */
+        if (replica->repl_data->replica_version < 0x90000) {
+            legacy_replica = 1;
+            best_replica = NULL;
+            break;
+        }
+        if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE &&
+            replica->repl_data->repl_ack_off == server.primary_repl_offset &&
+            replica->repl_data->replica_nodeid && sdslen(replica->repl_data->replica_nodeid) == CLUSTER_NAMELEN) {
+            best_replica = replica;
+        }
+    }
+
+    /* We are not able to find the replica to do the auto failover. */
+    if (best_replica == NULL) {
+        if (legacy_replica) {
+            serverLog(LL_NOTICE, "Unable to perform auto failover on shutdown since there are legacy replicas.");
+        } else {
+            serverLog(LL_NOTICE, "Unable to find a replica to perform the auto failover on shutdown.");
+        }
+        return;
+    }
+
+    /* Send the CLUSTER FAILOVER FORCE REPLICAID node-id to all replicas since
+     * it is a shared replication buffer, but only the replica with the matching
+     * node-id will execute it. The caller will call flushReplicasOutputBuffers,
+     * so in here it is a best effort. */
+    char buf[128];
+    size_t buflen = snprintf(buf, sizeof(buf),
+                             "*5\r\n$7\r\nCLUSTER\r\n"
+                             "$8\r\nFAILOVER\r\n"
+                             "$5\r\nFORCE\r\n"
+                             "$9\r\nREPLICAID\r\n"
+                             "$%d\r\n%.*s\r\n",
+                             CLUSTER_NAMELEN,
+                             CLUSTER_NAMELEN,
+                             best_replica->repl_data->replica_nodeid);
+    serverAssert(buflen <= 128);
+    /* Must install write handler for all replicas first before feeding
+     * replication stream. */
+    prepareReplicasToWrite();
+    feedReplicationBuffer(buf, buflen);
+    serverLog(LL_NOTICE, "Perform auto failover to replica %s on shutdown.", best_replica->repl_data->replica_nodeid);
+}
+
 /* Called when a cluster node receives SHUTDOWN. */
 void clusterHandleServerShutdown(void) {
+    /* Check if we are able to do the auto failover on shutdown. */
+    clusterAutoFailoverOnShutdown();
+
     /* The error logs have been logged in the save function if the save fails. */
     serverLog(LL_NOTICE, "Saving the cluster configuration file before exiting.");
     clusterSaveConfig(1);
@@ -1294,7 +1354,7 @@ void clusterReset(int hard) {
     if (nodeIsReplica(myself)) {
         clusterSetNodeAsPrimary(myself);
         replicationUnsetPrimary();
-        emptyData(-1, server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS, NULL);
+        flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
     }
 
     /* Close slots, reset manual failover state. */
@@ -3213,7 +3273,8 @@ int clusterProcessPacket(clusterLink *link) {
             freeClusterLink(link);
             serverLog(
                 LL_NOTICE,
-                "Closing link for node that sent a lightweight message of type %s as its first message on the link",
+                "Closing link for node %.40s that sent a lightweight message of type %s as its first message on the link",
+                hdr->sender,
                 clusterGetMessageTypeString(type));
             return 0;
         }
@@ -3426,7 +3487,7 @@ int clusterProcessPacket(clusterLink *link) {
                 /* First thing to do is replacing the random name with the
                  * right node name if this was a handshake stage. */
                 clusterRenameNode(link->node, hdr->sender);
-                serverLog(LL_DEBUG, "Handshake with node %.40s completed.", link->node->name);
+                serverLog(LL_DEBUG, "Handshake with node %.40s (%s) completed.", link->node->name, link->node->human_nodename);
                 link->node->flags &= ~CLUSTER_NODE_HANDSHAKE;
                 link->node->flags |= flags & (CLUSTER_NODE_PRIMARY | CLUSTER_NODE_REPLICA);
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
@@ -5327,7 +5388,7 @@ void clusterCron(void) {
             }
         }
         if (min_pong_node) {
-            serverLog(LL_DEBUG, "Pinging node %.40s", min_pong_node->name);
+            serverLog(LL_DEBUG, "Pinging node %.40s (%s)", min_pong_node->name, min_pong_node->human_nodename);
             clusterSendPing(min_pong_node->link, CLUSTERMSG_TYPE_PING);
         }
     }
@@ -6221,7 +6282,7 @@ int checkSlotAssignmentsOrReply(client *c, unsigned char *slots, int del, int st
             return C_ERR;
         }
         if (slots[slot]++ == 1) {
-            addReplyErrorFormat(c, "Slot %d specified multiple times", (int)slot);
+            addReplyErrorFormat(c, "Slot %d specified multiple times", slot);
             return C_ERR;
         }
     }
@@ -7048,7 +7109,36 @@ int clusterCommandSpecial(client *c) {
         clusterDelNode(n);
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "replicate") && c->argc == 3) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "replicate") && (c->argc == 3 || c->argc == 4)) {
+        /* CLUSTER REPLICATE (<NODE ID> | NO ONE)*/
+        if (c->argc == 4) {
+            /* CLUSTER REPLICATE NO ONE */
+            if (strcasecmp(c->argv[2]->ptr, "NO") != 0 || strcasecmp(c->argv[3]->ptr, "ONE") != 0) {
+                addReplySubcommandSyntaxError(c);
+                return 1;
+            }
+            if (nodeIsPrimary(myself)) {
+                addReply(c, shared.ok);
+                return 1;
+            }
+            sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
+            serverLog(LL_NOTICE, "Stop replication and turning myself into empty primary (request from '%s').", client);
+            sdsfree(client);
+            clusterSetNodeAsPrimary(myself);
+            clusterPromoteSelfToPrimary();
+            flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
+            clusterCloseAllSlots();
+            resetManualFailover();
+
+            /* Moving new primary to its own shard. */
+            char new_shard_id[CLUSTER_NAMELEN];
+            getRandomHexChars(new_shard_id, CLUSTER_NAMELEN);
+            updateShardId(myself, new_shard_id);
+
+            clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
+            addReply(c, shared.ok);
+            return 1;
+        }
         /* CLUSTER REPLICATE <NODE ID> */
         /* Lookup the specified node in our table. */
         clusterNode *n = clusterLookupNode(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
@@ -7102,20 +7192,35 @@ int clusterCommandSpecial(client *c) {
         } else {
             addReplyLongLong(c, clusterNodeFailureReportsCount(n));
         }
-    } else if (!strcasecmp(c->argv[1]->ptr, "failover") && (c->argc == 2 || c->argc == 3)) {
-        /* CLUSTER FAILOVER [FORCE|TAKEOVER] */
+    } else if (!strcasecmp(c->argv[1]->ptr, "failover") && (c->argc >= 2)) {
+        /* CLUSTER FAILOVER [FORCE|TAKEOVER] [REPLICAID <NODE ID>]
+         * REPLICAID is currently available only for internal so we won't
+         * put it into the JSON file. */
         int force = 0, takeover = 0;
+        robj *replicaid = NULL;
 
-        if (c->argc == 3) {
-            if (!strcasecmp(c->argv[2]->ptr, "force")) {
+        for (int j = 2; j < c->argc; j++) {
+            int moreargs = (c->argc - 1) - j;
+            if (!strcasecmp(c->argv[j]->ptr, "force")) {
                 force = 1;
-            } else if (!strcasecmp(c->argv[2]->ptr, "takeover")) {
+            } else if (!strcasecmp(c->argv[j]->ptr, "takeover")) {
                 takeover = 1;
                 force = 1; /* Takeover also implies force. */
+            } else if (c == server.primary && !strcasecmp(c->argv[j]->ptr, "replicaid") && moreargs) {
+                /* This option is currently available only for primary. */
+                j++;
+                replicaid = c->argv[j];
             } else {
                 addReplyErrorObject(c, shared.syntaxerr);
                 return 1;
             }
+        }
+
+        /* Check if it should be executed by myself. */
+        if (replicaid != NULL && memcmp(replicaid->ptr, myself->name, CLUSTER_NAMELEN) != 0) {
+            /* Ignore this command, including the sanity check and the process. */
+            addReply(c, shared.ok);
+            return 1;
         }
 
         /* Check preconditions. */
@@ -7126,8 +7231,7 @@ int clusterCommandSpecial(client *c) {
             addReplyError(c, "I'm a replica but my master is unknown to me");
             return 1;
         } else if (!force && (nodeFailed(myself->replicaof) || myself->replicaof->link == NULL)) {
-            addReplyError(c, "Master is down or failed, "
-                             "please use CLUSTER FAILOVER FORCE");
+            addReplyError(c, "Master is down or failed, please use CLUSTER FAILOVER FORCE");
             return 1;
         }
         resetManualFailover();
@@ -7146,7 +7250,11 @@ int clusterCommandSpecial(client *c) {
             /* If this is a forced failover, we don't need to talk with our
              * primary to agree about the offset. We just failover taking over
              * it without coordination. */
-            serverLog(LL_NOTICE, "Forced failover user request accepted (user request from '%s').", client);
+            if (c == server.primary) {
+                serverLog(LL_NOTICE, "Forced failover primary request accepted (primary request from '%s').", client);
+            } else {
+                serverLog(LL_NOTICE, "Forced failover user request accepted (user request from '%s').", client);
+            }
             manualFailoverCanStart();
             /* We can start a manual failover as soon as possible, setting a flag
              * here so that we don't need to waiting for the cron to kick in. */

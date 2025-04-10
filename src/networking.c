@@ -3838,20 +3838,20 @@ static int clientMatchesFilter(client *client, clientFilter *client_filter) {
 }
 
 static int clientMatchesIpFilter(client *c, sds ip) {
-    sds peerid = getClientPeerId(c);
-    const char *colon = strrchr(peerid, ':');
-    if (colon) {
-        size_t iplen = colon - peerid;
-        sds client_ip = sdsnewlen(peerid, iplen);
-        if (sdscmp(client_ip, ip) != 0) {
-            sdsfree(client_ip);
-            return 0;
-        }
-        sdsfree(client_ip);
-    } else {
-        if (sdscmp(peerid, ip) != 0)
-            return 0;
-    }
+    const char *peerid = getClientPeerId(c);
+    if (!peerid) return 0;
+
+    if (peerid[0] == '[') peerid++; /* IPv6 wrapped in square brackets */
+    size_t len = sdslen(ip);
+    if (strncmp(peerid, ip, len) != 0) return 0;
+
+    peerid += len;
+    if (peerid[0] == ']') peerid++; /* Skip trailing ] for IPv6 */
+
+    if (peerid[0] != ':') return 0; /* IP:port colon check */
+    peerid++;
+
+    if (peerid[0] == '0') return 0; /* Disallow port=0 */
     return 1;
 }
 

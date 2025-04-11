@@ -4377,15 +4377,17 @@ void securityWarningCommand(client *c) {
         char ip[NET_IP_STR_LEN];
         int port;
         if (connAddrPeerName(c->conn, ip, sizeof(ip), &port) == -1) {
-            serverLog(LL_WARNING, "Possible SECURITY ATTACK detected. It looks like somebody is sending POST or Host: "
-                                  "commands to Redis. This is likely due to an attacker attempting to use Cross "
-                                  "Protocol Scripting to compromise your Redis instance. Connection aborted.");
+            serverLog(LL_WARNING,
+                      "Possible SECURITY ATTACK detected. It looks like somebody is sending POST or Host: "
+                      "commands to %s. This is likely due to an attacker attempting to use Cross "
+                      "Protocol Scripting to compromise your %s instance. Connection aborted.",
+                      SERVER_TITLE, SERVER_TITLE);
         } else {
             serverLog(LL_WARNING,
                       "Possible SECURITY ATTACK detected. It looks like somebody is sending POST or Host: commands to "
-                      "Redis. This is likely due to an attacker attempting to use Cross Protocol Scripting to "
-                      "compromise your Redis instance. Connection from %s:%d aborted.",
-                      ip, port);
+                      "%s. This is likely due to an attacker attempting to use Cross Protocol Scripting to "
+                      "compromise your %s instance. Connection from %s:%d aborted.",
+                      SERVER_TITLE, SERVER_TITLE, ip, port);
         }
         logged_time = now;
     }

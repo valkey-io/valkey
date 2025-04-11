@@ -321,6 +321,12 @@ start_server {tags {"geo"}} {
         r georadiusbymember_ro nyc "wtc one" 7 km
     } {{wtc one} {union square} {central park n/q/r} 4545 {lic market}}
     
+    test {GEORADIUSBYMEMBER member does not exist} {
+        r del Sicily
+        r geoadd Sicily 13.361389 38.115556 "Palermo" 15.087269 37.502669 "Catania"
+        assert_error "ERR member none_exist_member does not exist" {r GEORADIUSBYMEMBER Sicily none_exist_member 300 KM} 
+    } {}
+
     test {GEORADIUSBYMEMBER search areas contain satisfied points in oblique direction} {
         r del k1
         
@@ -345,7 +351,12 @@ start_server {tags {"geo"}} {
         set ret [r GEORADIUSBYMEMBER k1 n1 5009431 m]
         assert_equal $ret {n1 n2}
     }
-
+    test {GEOSEARCH FROMMEMBER member does not exist} {
+        r del Sicily
+        r geoadd Sicily 13.361389 38.115556 "Palermo" 15.087269 37.502669 "Catania"
+        assert_error "ERR member none_exist_member does not exist" {r GEOSEARCH Sicily FROMMEMBER none_exist_member BYRADIUS 300 KM} 
+    } 
+    
     test {GEOSEARCH FROMMEMBER simple (sorted)} {
         r geosearch nyc frommember "wtc one" bybox 14 14 km
     } {{wtc one} {union square} {central park n/q/r} 4545 {lic market} q4}

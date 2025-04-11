@@ -536,7 +536,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         shape.type = CIRCULAR_TYPE;
         robj *member = c->argv[2];
         if (longLatFromMember(zobj, member, shape.xy) == C_ERR) {
-            addReplyError(c, "could not decode requested zset member");
+            addReplyErrorSds(c, sdscatfmt(sdsempty(), "member %s does not exist", member->ptr));
             return;
         }
         if (extractDistanceOrReply(c, c->argv + base_args - 2, &shape.conversion, &shape.t.radius) != C_OK) return;
@@ -600,9 +600,9 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                     i++;
                     continue;
                 }
-
-                if (longLatFromMember(zobj, c->argv[base_args + i + 1], shape.xy) == C_ERR) {
-                    addReplyError(c, "could not decode requested zset member");
+                robj *member = c->argv[base_args + i + 1];
+                if (longLatFromMember(zobj, member, shape.xy) == C_ERR) {
+                    addReplyErrorSds(c, sdscatfmt(sdsempty(), "member %s does not exist", member->ptr));
                     return;
                 }
                 frommember = 1;

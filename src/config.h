@@ -387,4 +387,16 @@ void setcpuaffinity(const char *cpulist);
 #define ATTRIBUTE_TARGET_AVX2
 #endif
 
+#if defined(__x86_64__) && ((defined(__GNUC__) && __GNUC__ >= 5) || (defined(__clang__) && __clang_major__ >= 4))
+#if defined(__has_attribute) && __has_attribute(target)
+#define HAVE_AVX512
+#endif
+#endif
+
+#if defined(HAVE_AVX512)
+#define ATTRIBUTE_TARGET_AVX512 __attribute__((target("avx512f,avx512bw,avx512vl")))
+#else
+#define ATTRIBUTE_TARGET_AVX512
+#endif
+
 #endif

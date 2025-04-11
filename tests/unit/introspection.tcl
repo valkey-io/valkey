@@ -225,6 +225,21 @@ start_server {tags {"introspection"}} {
         assert_match *client-ip* $filtered
     } {}
 
+    start_server {tags {"ipv6"} overrides {bind {127.0.0.1 ::1}}} {
+        test {CLIENT LIST with IPv6 filter} {
+            set c [valkey ::1 [srv 0 port]]
+            $c client setname "client-ipv6"
+
+            set client_info [$c client info]
+
+            regexp {addr=\[([a-fA-F0-9:]+)\]:\d+} $client_info -> ipv6only
+            set filtered [$c client list ip $ipv6only]
+            assert_match *client-ipv6* $filtered
+
+            $c close
+        }
+    }
+
     test {CLIENT LIST with CAPA filter} {
         r client setname "client-with-r"
         r client capa redirect
@@ -244,10 +259,24 @@ start_server {tags {"introspection"}} {
         # Kill client by IP only
         r client kill ip $iponly skipme yes
 
-        set err [catch {$c1 ping} error_message]
-        assert {$err == 1}
-        assert {[string match "*I/O error*" $error_message]}
+        assert_error "*I/O error*" {$c1 ping}
     } {}
+
+    start_server {tags {"ipv6"} overrides {bind {127.0.0.1 ::1}}} {
+        test {CLIENT LIST with IPv6 filter} {
+            set c [valkey ::1 [srv 0 port]]
+            $c client setname "client-ipv6"
+
+            set client_info [$c client info]
+
+            regexp {addr=\[([a-fA-F0-9:]+)\]:\d+} $client_info -> ipv6only
+            set filtered [r client kill ip $ipv6only]
+
+            assert_error "*I/O error*" {$c ping}
+
+            $c close
+        }
+    }
 
     test {CLIENT KILL with CAPA filter} {
         set c1 [valkey_client]
@@ -257,9 +286,7 @@ start_server {tags {"introspection"}} {
         # Kill using capa filter
         r client kill capa r skipme yes
 
-        set err [catch {$c1 ping} error_message]
-        assert {$err == 1}
-        assert {[string match "*I/O error*" $error_message]}
+        assert_error "*I/O error*" {$c1 ping}
     } {}
 
     test {CLIENT KILL with NAME filter} {
@@ -271,9 +298,7 @@ start_server {tags {"introspection"}} {
         r client kill name mytestclient
 
         # Assert the client was killed
-        set err [catch {$c1 ping} error_message]
-        assert {$err == 1}
-        assert {[string match "*I/O error*" $error_message]}
+        assert_error "*I/O error*" {$c1 ping}
 
         # Cleanup
         catch {$c1 close}
@@ -288,9 +313,7 @@ start_server {tags {"introspection"}} {
         r client kill flags N
 
         # Assert the client was killed
-        set err [catch {$c1 ping} error_message]
-        assert {$err == 1}
-        assert {[string match "*I/O error*" $error_message]}
+        assert_error "*I/O error*" {$c1 ping}
 
         # Cleanup
         catch {$c1 close}
@@ -304,9 +327,7 @@ start_server {tags {"introspection"}} {
         r client kill type normal
 
         # Assert the client was killed
-        set err [catch {$c1 ping} error_message]
-        assert {$err == 1}
-        assert {[string match "*I/O error*" $error_message]}
+        assert_error "*I/O error*" {$c1 ping}
 
         # Cleanup
         catch {$c1 close}
@@ -1292,6 +1313,20 @@ start_server {tags {"introspection"}} {
         assert_match {*db=2*} $result
     } {} {external:skip}
 
+    test {CLIENT KILL can filter by DB} {
+        set c1 [valkey_client]
+
+        $c1 select 2
+        r select 0
+
+        r client kill db 2
+
+        set result [r client list]
+        set only_left_client [lindex [split $result "\n"] 0]
+
+        assert_match {*db=0*} $only_left_client
+    } {} {external:skip}
+
     test {CLIENT KILL can filter by LIB-NAME} {
         set c1 [valkey_client]
         set c2 [valkey_client]
@@ -1317,21 +1352,6 @@ start_server {tags {"introspection"}} {
 
         catch {$c2 close}
     }
-
-    test {CLIENT KILL can filter by DB} {
-        start_server {config "default.conf" args {--save --loglevel verbose}} {
-            set c1 [valkey_client]
-            set c2 [valkey_client]
-
-            $c1 select 2
-            $c2 client kill db 2
-
-            set result [$c2 client list]
-            assert {[string match {*db=2*} $result] == 0}
-
-            catch {$c2 close}
-        }
-    } {} {external:skip}
 
     test {valkey-server command line arguments - allow passing option name and option value in the same arg} {
         start_server {config "default.conf" args {"--maxmemory 700mb" "--maxmemory-policy volatile-lru"}} {

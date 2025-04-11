@@ -190,7 +190,8 @@
                 "type": "integer",
                 "optional": true,
                 "since": "9.0.0"
-            },                            {
+            },
+            {
                 "token": "CAPA",
                 "name": "capa",
                 "type": "string",

@@ -6316,7 +6316,7 @@ int getSlotOrReply(client *c, robj *o) {
     int slot = getSlotOrError(o, &err);
     if (err) {
         addReplyErrorSds(c, err);
-        sdsfree(err);
+        return -1;
     }
     return (int)slot;
 }
@@ -6773,11 +6773,11 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
     }
 
     if (clusterIsAnySlotImportingViaRepl()) {
-        addReplyError(c, "A slot is currently being imported via slot-level replication. Please cancel any ongoing import operations and try again.");
+        addReplyError(c, "A slot is currently being imported via CLUSTER IMPORT. Please cancel any ongoing import operations and try again.");
         return 0;
     }
     if (clusterIsAnySlotExportingViaRepl()) {
-        addReplyError(c, "A slot is currently being exported via slot-level replication. Please cancel any ongoing import operations and try again.");
+        addReplyError(c, "A slot is currently being exported via CLUSTER IMPORT. Please cancel any ongoing import operations and try again.");
         return 0;
     }
 
@@ -7210,8 +7210,8 @@ int clusterCommandSpecial(client *c) {
             serverLog(LL_NOTICE, "Stop replication and turning myself into empty primary (request from '%s').", client);
             sdsfree(client);
             clusterSetNodeAsPrimary(myself);
-            clusterPromoteSelfToPrimary();
             flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
+            clusterPromoteSelfToPrimary();
             clusterCloseAllSlots();
             resetManualFailover();
 

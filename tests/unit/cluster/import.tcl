@@ -205,6 +205,30 @@ test "Test CLUSTER IMPORT already importing" {
     R 0 CLUSTER IMPORT-CANCEL ALL
 }
 
+test "Manual and atomic slot migration are mutually exclusive" {
+    set node0_id [R 0 CLUSTER MYID]
+    set node1_id [R 1 CLUSTER MYID]
+    assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
+    set linkname [get_link_name 0 16383]
+    wait_for_ready_to_commit 0 $linkname
+
+    assert_error "*A slot is currently being imported via CLUSTER IMPORT*" {R 0 CLUSTER SETSLOT 0 MIGRATING $node1_id}
+    assert_error "*A slot is currently being imported via CLUSTER IMPORT*" {R 0 CLUSTER SETSLOT 0 IMPORTING $node1_id}
+    assert_error "*A slot is currently being exported via CLUSTER IMPORT*" {R 2 CLUSTER SETSLOT 0 MIGRATING $node1_id}
+    assert_error "*A slot is currently being exported via CLUSTER IMPORT*" {R 2 CLUSTER SETSLOT 0 IMPORTING $node1_id}
+    assert_match "OK" [R 0 CLUSTER IMPORT-CANCEL ALL]
+    wait_for_link_down 2 $linkname
+
+    R 0 CLUSTER SETSLOT 0 MIGRATING $node1_id
+    R 1 CLUSTER SETSLOT 0 IMPORTING $node0_id
+    assert_match OK [R 2 CLUSTER IMPORT-PREPARE SLOTSRANGE 0 0]
+    wait_for_link_down_by_slot 2 0
+    assert {[dict get [get_migration_log_by_slot 2 0] state] eq "failed"}
+    assert {[string match {*Source node terminated import*} [dict get [get_migration_log_by_slot 2 0] message]]}
+    R 0 CLUSTER SETSLOT 0 STABLE
+    R 1 CLUSTER SETSLOT 0 STABLE
+}
+
 test "Test CLUSTER IMPORT-CANCEL ALL" {
     assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16382 16382]
     assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
@@ -1129,6 +1153,14 @@ test "Export failed if SETSLOT is used" {
 
 test "Import backs off if source sends FAIL" {
 
+}
+
+test "Export client buffer enforcement" {
+
+}
+
+test "Slot import and export stats" {
+    
 }
 
 }

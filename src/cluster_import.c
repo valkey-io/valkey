@@ -1025,6 +1025,12 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
         return;
     }
 
+    if (isAnySlotInManualImportingState() || isAnySlotInManualMigratingState()) {
+        serverLog(LL_WARNING, "Failing slot import request due to manual slot migration in progress.");
+        sendFailAndCloseAfterReply(c);
+        return;
+    }
+
     if (c->flag.slot_import_source || c->flag.slot_export_target) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS SNAPSHOT from client %lu which is already a slot link. Failing link.", c->id);
         sendFailAndCloseAfterReply(c);

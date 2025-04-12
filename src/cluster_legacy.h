@@ -395,13 +395,8 @@ typedef enum slotImportLinkState {
     SLOT_IMPORT_FAILOVER_WAITING_FOR_PAUSED,
     SLOT_IMPORT_FAILOVER_REQUESTED,
     SLOT_IMPORT_FAILOVER_GRANTED,
-
-    /* Temporary state used to defer clean up until a safe time */
-    SLOT_IMPORT_TO_CLEANUP,
-
-    /* Terminal states */
-    SLOT_IMPORT_FAILOVER_COMPLETE,
-    SLOT_IMPORT_ABORTED,
+    SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP,
+    SLOT_IMPORT_FINISHED,
 } slotImportLinkState;
 
 typedef struct slotImportLink {
@@ -428,8 +423,8 @@ typedef enum slotExportLinkState {
     SLOT_EXPORT_STREAMING,
     SLOT_EXPORT_FAILOVER_PAUSED,
     SLOT_EXPORT_FAILOVER_GRANTED,
-    SLOT_EXPORT_FAILOVER_COMPLETE,
-    SLOT_EXPORT_FAILED,
+    SLOT_EXPORT_FINISHED_WAITING_FOR_CHILD,
+    SLOT_EXPORT_FINISHED,
 } slotExportLinkState;
 
 typedef struct slotExportLink {
@@ -460,10 +455,10 @@ typedef struct slotMigrationLog {
     char linkname[CLUSTER_NAMELEN];
     list *slot_ranges;
     sds slot_ranges_str;
-    mstime_t ctime;                 /* Creation time. */
-    mstime_t completion_time;       /* Completion time. */
+    mstime_t ctime;           /* Creation time. */
+    mstime_t completion_time; /* Completion time. */
     slotMigrationLogState state;
-    sds status_msg;                 /* Human readable status message with more details. */
+    sds status_msg; /* Human readable status message with more details. */
 } slotMigrationLog;
 
 struct clusterState {
@@ -478,8 +473,8 @@ struct clusterState {
     clusterNode *migrating_slots_to[CLUSTER_SLOTS];
     clusterNode *importing_slots_from[CLUSTER_SLOTS];
     clusterNode *slots[CLUSTER_SLOTS];
-    list *slot_import_links; /* List storing all slot import links. */
-    list *slot_export_links; /* List storing all slot export links. */
+    list *slot_import_links;  /* List storing all slot import links. */
+    list *slot_export_links;  /* List storing all slot export links. */
     list *slot_migration_log; /* List storing all slot export links. Stored in order from most recent to least recent. */
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;      /* Time of previous or next election. */

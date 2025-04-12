@@ -1383,8 +1383,8 @@ void clusterReset(int hard) {
     dictEmpty(server.cluster->nodes_black_list, NULL);
 
     /* Drop all incoming and outgoing links for slot import. */
-    listEmpty(server.cluster->slot_import_links);
-    listEmpty(server.cluster->slot_export_links);
+    clusterUpdateSlotExportsOnOwnershipChange();
+    clusterUpdateSlotImportsOnOwnershipChange();
 
     /* Hard reset only: set epochs to 0, change node ID. */
     if (hard) {
@@ -2601,8 +2601,9 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
     int dirty_slots_count = 0;
     int delete_dirty_slots = 0;
 
-    /* Handle exporting slots which have topology updates. */
+    /* Handle importing/exporting slots which have topology updates. */
     int exporting_slots_count = 0;
+    int importing_slots_count = 0;
 
     /* We should detect if sender is new primary of our shard.
      * We will know it if all our slots were migrated to sender, and sender
@@ -2655,6 +2656,10 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
 
                 if (server.cluster->slots[j] == myself && isSlotExportingViaReplication(j)) {
                     exporting_slots_count++;
+                }
+
+                if (isSlotImportingViaReplication(j)) {
+                    importing_slots_count++;
                 }
 
                 if (server.cluster->slots[j] == cur_primary) {
@@ -2860,9 +2865,12 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
         }
     }
     if (exporting_slots_count) {
-        /* At least one slot we were exporting has a topology change. Check if
-         * the export is done. */
-        clusterFinishExportsIfComplete();
+        /* At least one slot we were exporting has a topology change. */
+        clusterUpdateSlotExportsOnOwnershipChange();
+    }
+    if (importing_slots_count) {
+        /* At least one slot we were exporting has a topology change. */
+        clusterUpdateSlotImportsOnOwnershipChange();
     }
 }
 
@@ -5972,6 +5980,10 @@ static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_requ
     removeAllNotOwnedShardChannelSubscriptions();
     resetManualFailover();
 
+    /* Becoming a replica cancels all in progress imports and exports */
+    clusterUpdateSlotExportsOnOwnershipChange();
+    clusterUpdateSlotImportsOnOwnershipChange();
+
     if (server.cluster->failover_auth_time) {
         /* Since we have changed to a new primary node, the previously set
          * failover_auth_time should no longer be used, whether it is in
@@ -7405,18 +7417,18 @@ int clusterCommandSpecial(client *c) {
         addReplyClusterLinksDescription(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "import") && c->argc > 3 && c->argc % 2 == 1) {
         /* CLUSTER IMPORT SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] */
-        clusterCommandImport(c, 0);
+        clusterCommandImport(c, /*one_shot=*/1);
     } else if (!strcasecmp(c->argv[1]->ptr, "import-prepare") && c->argc > 3 && c->argc % 2 == 1) {
         /* CLUSTER IMPORT-PREPARE SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] */
-        clusterCommandImport(c, 1);
+        clusterCommandImport(c, /*one_shot=*/0);
     } else if (!strcasecmp(c->argv[1]->ptr, "import-commit") && c->argc == 4) {
         /* CLUSTER IMPORT-COMMIT LINK <link-name> */
         clusterCommandImportCommit(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "migrations") && c->argc == 2) {
         /* CLUSTER MIGRATIONS */
         clusterCommandMigrations(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "migrationlog") && c->argc == 2) {
-        /* CLUSTER MIGRATIONS */
+    } else if (!strcasecmp(c->argv[1]->ptr, "migrationlog") && c->argc > 2) {
+        /* CLUSTER MIGRATIONLOG (RESET) */
         clusterCommandMigrationLog(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "import-cancel") && c->argc > 2) {
         /* CLUSTER IMPORT-CANCEL (LINK <link-name>|ALL) */

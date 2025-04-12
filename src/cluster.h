@@ -178,6 +178,7 @@ void clusterCommandImportCancel(client *c);
 void clusterCommandImportCommit(client *c);
 void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr);
 int clusterIsSlotExportLinkSnapshotting(void *export);
-void clusterFinishExportsIfComplete(void);
+void clusterUpdateSlotExportsOnOwnershipChange(void);
+void clusterUpdateSlotImportsOnOwnershipChange(void);
 
 #endif /* __CLUSTER_H */

@@ -3310,7 +3310,7 @@ void readQueryFromClient(connection *conn) {
     readToQueryBuf(c);
 
     if (handleReadResult(c) == C_OK) {
-         if (processInputBuffer(c) == C_ERR) return;
+        if (processInputBuffer(c) == C_ERR) return;
     }
     beforeNextClient(c);
 }

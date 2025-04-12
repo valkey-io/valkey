@@ -132,4 +132,5 @@ int isNodeAvailable(clusterNode *node);
 long long getNodeReplicationOffset(clusterNode *node);
 sds aggregateClientOutputBuffer(client *c);
 void resetClusterStats(void);
+unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool is_cmd);
 #endif /* __CLUSTER_H */

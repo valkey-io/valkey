@@ -98,7 +98,6 @@ void moduleCallClusterReceivers(const char *sender_id,
 const char *clusterGetMessageTypeString(int type);
 void removeChannelsInSlot(unsigned int slot);
 unsigned int countChannelsInSlot(unsigned int hashslot);
-unsigned int delKeysInSlot(unsigned int hashslot, int lazy);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
 list *clusterLookupNodeListByShardId(const char *shard_id);
 void clusterRemoveNodeFromShard(clusterNode *node);
@@ -2862,7 +2861,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
         for (int j = 0; j < dirty_slots_count; j++) {
             serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s (%s) in shard %.40s", dirty_slots[j],
                       myself->name, myself->human_nodename, myself->shard_id);
-            delKeysInSlot(dirty_slots[j], server.lazyfree_lazy_server_del);
+            delKeysInSlot(dirty_slots[j], server.lazyfree_lazy_server_del, false);
         }
     }
 }
@@ -5921,7 +5920,7 @@ int verifyClusterConfigWithData(void) {
                           server.cluster->importing_slots_from[j]->shard_id, j, server.cluster->slots[j]->name,
                           server.cluster->slots[j]->human_nodename, server.cluster->slots[j]->shard_id);
             }
-            delKeysInSlot(j, server.lazyfree_lazy_server_del);
+            delKeysInSlot(j, server.lazyfree_lazy_server_del, false);
         }
     }
     if (update_config) clusterSaveConfigOrDie(1);
@@ -6536,7 +6535,7 @@ void removeChannelsInSlot(unsigned int slot) {
 
 /* Remove all the keys in the specified hash slot.
  * The number of removed items is returned. */
-unsigned int delKeysInSlot(unsigned int hashslot, int lazy) {
+unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool is_cmd) {
     if (!countKeysInSlot(hashslot)) return 0;
 
     /* We may lose a slot during the pause. We need to track this
@@ -6558,13 +6557,19 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy) {
         } else {
             dbSyncDelete(&server.db[0], key);
         }
-        dbDelete(&server.db[0], key);
-        propagateDeletion(&server.db[0], key, lazy);
+        // if is command, skip del propagate
+        if (!is_cmd) propagateDeletion(&server.db[0], key, lazy);
         signalModifiedKey(NULL, &server.db[0], key);
-        /* The keys are not actually logically deleted from the database, just moved to another node.
-         * The modules needs to know that these keys are no longer available locally, so just send the
-         * keyspace notification to the modules, but not to clients. */
-        moduleNotifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, server.db[0].id);
+        if (is_cmd) {
+            /* In cluster flushslot scene, the keys are actually deleted. */
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, server.db[0].id);
+        } else {
+            /* The keys are not actually logically deleted from the database, just moved to another node.
+            * The modules needs to know that these keys are no longer available locally, so just send the
+            * keyspace notification to the modules, but not to clients. */
+            /* In cluster flushslot scene, the is actually deleted, fire del event. */
+            moduleNotifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, server.db[0].id);
+        }
         exitExecutionUnit();
         postExecutionUnitOperations();
         decrRefCount(key);
@@ -7575,20 +7580,3 @@ int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s) {
     return C_OK;
 }
 
-void clusterCommandFlushslot(client *c) {
-    int slot;
-    int lazy = server.lazyfree_lazy_user_flush;
-    if ((slot = getSlotOrReply(c, c->argv[2])) == -1) return;
-    if (c->argc == 4) {
-        if (!strcasecmp(c->argv[3]->ptr, "async")) {
-            lazy = 1;
-        } else if (!strcasecmp(c->argv[3]->ptr, "sync")) {
-            lazy = 0;
-        } else {
-            addReplyErrorObject(c, shared.syntaxerr);
-            return;
-        }
-    }
-    delKeysInSlot(slot, lazy);
-    addReply(c, shared.ok);
-}

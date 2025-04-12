@@ -98,7 +98,6 @@ void moduleCallClusterReceivers(const char *sender_id,
 const char *clusterGetMessageTypeString(int type);
 void removeChannelsInSlot(unsigned int slot);
 unsigned int countChannelsInSlot(unsigned int hashslot);
-unsigned int delKeysInSlot(unsigned int hashslot);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
 list *clusterLookupNodeListByShardId(const char *shard_id);
 void clusterRemoveNodeFromShard(clusterNode *node);
@@ -6542,32 +6541,30 @@ void removeChannelsInSlot(unsigned int slot) {
     pubsubShardUnsubscribeAllChannelsInSlot(slot);
 }
 
-void delKeysInSlotRanges(list *slot_ranges) {
-    listNode *ln;
-    listIter li;
-    listRewind(slot_ranges, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        slotRange *range = ln->value;
-        for (int i = range->start_slot; i <= range->end_slot; i++) {
-            delKeysInSlot(i);
-        }
-    }
+int clusterIsSlotOwnedByMyself(int slot) {
+    return server.cluster->slots[slot] == server.cluster->myself;
 }
 
-/* Remove all the keys in the hash slots that are in the given slot range list
- * and not owned by myself now. */
-void delKeysNotOwnedByMyself(list *slot_ranges) {
-    listNode *ln;
-    listIter li;
-    listRewind(slot_ranges, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        slotRange *range = ln->value;
-        for (int i = range->start_slot; i <= range->end_slot; i++) {
-            if (server.cluster->slots[i] != myself) {
-                delKeysInSlot(i);
-            }
-        }
+/* Propagate deletion of all keys in slot (without doing the local deletion).
+ * Assumed to be executed inside an execution context. */
+unsigned int propagateSlotDeletionByKeys(unsigned int hashslot) {
+    unsigned int j = 0;
+
+    if (!countKeysInSlot(hashslot)) return 0;
+
+    kvstoreHashtableIterator *kvs_di = NULL;
+    void *next;
+    kvs_di = kvstoreGetHashtableIterator(server.db->keys, hashslot, HASHTABLE_ITER_SAFE);
+    while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
+        robj *valkey = next;
+        sds sdskey = objectGetKey(valkey);
+        robj *key = createStringObject(sdskey, sdslen(sdskey));
+        propagateDeletion(&server.db[0], key, server.lazyfree_lazy_server_del);
+        decrRefCount(key);
+        j++;
     }
+    kvstoreReleaseHashtableIterator(kvs_di);
+    return j;
 }
 
 /* Remove all the keys in the specified hash slot.
@@ -7427,7 +7424,7 @@ int clusterCommandSpecial(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "migrations") && c->argc == 2) {
         /* CLUSTER MIGRATIONS */
         clusterCommandMigrations(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "migrationlog") && c->argc > 2) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "migrationlog") && c->argc >= 2) {
         /* CLUSTER MIGRATIONLOG (RESET) */
         clusterCommandMigrationLog(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "import-cancel") && c->argc > 2) {

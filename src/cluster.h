@@ -147,8 +147,9 @@ long long getNodeReplicationOffset(clusterNode *node);
 sds aggregateClientOutputBuffer(client *c);
 void resetClusterStats(void);
 
-void delKeysInSlotRanges(list *slot_ranges);
-void delKeysNotOwnedByMyself(list *slot_ranges);
+int clusterIsSlotOwnedByMyself(int slot);
+unsigned int delKeysInSlot(unsigned int hashslot);
+unsigned int propagateSlotDeletionByKeys(unsigned int hashslot);
 void clusterUpdateState(void);
 void clusterSaveConfigOrDie(int do_fsync);
 void clusterCloseAllSlots(void);

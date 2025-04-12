@@ -123,6 +123,22 @@ int doSlotRangeListsOverlap(list *ranges1, list *ranges2) {
     return 0;
 }
 
+/* Remove all the keys in the hash slots that are in the given slot range list
+ * and not owned by myself now. */
+void delKeysNotOwnedByMyself(list *slot_ranges) {
+    listNode *ln;
+    listIter li;
+    listRewind(slot_ranges, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotRange *range = ln->value;
+        for (int i = range->start_slot; i <= range->end_slot; i++) {
+            if (server.cluster->slots[i] != server.cluster->myself) {
+                delKeysInSlot(i);
+            }
+        }
+    }
+}
+
 int isAnySlotInManualImportingState(void) {
     for (int i = 0; i < CLUSTER_SLOTS; i++) {
         if (server.cluster->importing_slots_from[i] != NULL) {
@@ -400,7 +416,8 @@ void clusterCommandSyncSlotsSnapshotEof(client *c) {
     }
     if (link->state != SLOT_IMPORT_RECEIVE_SNAPSHOT) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS SNAPSHOT-EOF from link %.40s, but not currently loading an AOF snapshot. Closing link.", link->linkname);
-        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Unexpected state machine transition") return;
+        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Unexpected state machine transition");
+        return;
     }
     serverLog(LL_NOTICE, "Slot import link %.40s successfully received slot snapshot from %.40s (owner of slots [%s]). Beginning incremental stream...", link->linkname, link->nodename, link->slot_ranges_str);
     if (link->one_shot) {
@@ -426,7 +443,8 @@ void clusterCommandSyncSlotsPaused(client *c) {
     }
     if (link->state != SLOT_IMPORT_FAILOVER_WAITING_FOR_PAUSED) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS PAUSED from link %.40s, but client is not currently in paused state locally. Closing link.", link->linkname);
-        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Unexpected state machine transition") return;
+        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Unexpected state machine transition");
+        return;
     }
     sendSyncSlotsMessageToSource(c, "REQUEST-FAILOVER");
     updateSlotImportLinkState(link, SLOT_IMPORT_FAILOVER_REQUESTED);
@@ -446,7 +464,8 @@ void clusterCommandSyncSlotsFailoverGranted(client *c) {
     }
     if (link->state != SLOT_IMPORT_FAILOVER_REQUESTED) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS FAILOVER-GRANTED from link %.40s, but we never sent a failover request. Closing link.", link->linkname);
-        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Unexpected state machine transition") return;
+        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Unexpected state machine transition");
+        return;
     }
     updateSlotImportLinkState(link, SLOT_IMPORT_FAILOVER_GRANTED);
     clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
@@ -466,7 +485,8 @@ void clusterCommandSyncSlotsFailoverDenied(client *c) {
     }
     if (link->state != SLOT_IMPORT_FAILOVER_REQUESTED) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS FAILOVER-DENIED from link %.40s, but we never sent a failover request. Closing link.", link->linkname);
-        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Unexpected state machine transition") return;
+        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Unexpected state machine transition");
+        return;
     }
     if (link->one_shot) {
         serverLog(LL_WARNING, "Slot import link %.40s had failover denied from node %.40s (owner of slots [%s]). Failing import request.", link->linkname, link->nodename, link->slot_ranges_str);
@@ -797,7 +817,6 @@ void initSlotImportLinkClient(slotImportLink *link) {
     link->client->flag.reply_off = 1;
     link->client->slot_import_link = link;
     link->client->flag.slot_import_source = 1;
-    link->client->flag.import_source = 1;
 
     /* Use dedicated querybuf and replication data to proxy
      * replication stream to replicas directly. */
@@ -1319,8 +1338,7 @@ void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr) {
             slotExportBeginStreaming(link);
         } else {
             serverLog(LL_WARNING, "Failed to snapshot slots (%s) to target %.40s", link->slot_ranges_str, link->nodename);
-            updateSlotExportLinkState(link, SLOT_EXPORT_FINISHED);
-            addSlotMigrationLogForExport(link, SLOT_MIGRATION_LOG_FAILED, "Failed to perform snapshot");
+            finishSlotExportLink(link, SLOT_MIGRATION_LOG_FAILED, "Failed to perform snapshot");
         }
     }
 }
@@ -1449,7 +1467,7 @@ void updateSlotExportIfOwnershipChanged(slotExportLink *link) {
             return;
         } else if (!memcmp(n->name, link->nodename, CLUSTER_NAMELEN)) {
             /* All slots are now claimed by the target of this link */
-            serverLog(LL_NOTICE, "Slot export link %.40s completed import successfully. Slots (%s) are now owned by %.40s", link->linkname, link->slot_ranges_str, link->nodename);
+            serverLog(LL_NOTICE, "Slot export link %.40s completed export successfully. Slots (%s) are now owned by %.40s", link->linkname, link->slot_ranges_str, link->nodename);
             finishSlotExportLink(link, SLOT_MIGRATION_LOG_SUCCESS, "");
             return;
         }
@@ -1642,7 +1660,7 @@ const char *slotMigrationLogStateToString(slotMigrationLogState state) {
 
 /* Report on all recently completed migrations. */
 void clusterCommandMigrationLog(client *c) {
-    if (c->argc == 3 && !strcasecmp("reset", c->argv[3])) {
+    if (c->argc == 3 && !strcasecmp(c->argv[3]->ptr, "reset")) {
         listRelease(server.cluster->slot_migration_log);
         addReply(c, shared.ok);
         return;

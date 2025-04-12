@@ -571,7 +571,7 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
  * The dbnum can be -1 if all the DBs should be emptied, or the specified
  * DB index if we want to empty only a single database.
  * The function returns the number of keys removed from the database(s). */
-long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(hashtable *)) {
+long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(hashtable *), emptyDataHashtableFilter filter) {
     long long removed = 0;
     int startdb, enddb;
 
@@ -585,10 +585,10 @@ long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callbac
     for (int j = startdb; j <= enddb; j++) {
         removed += kvstoreSize(dbarray[j].keys);
         if (async) {
-            emptyDbAsync(&dbarray[j]);
+            emptyDbAsync(&dbarray[j], filter);
         } else {
-            kvstoreEmpty(dbarray[j].keys, callback);
-            kvstoreEmpty(dbarray[j].expires, callback);
+            kvstoreEmpty(dbarray[j].keys, callback, filter);
+            kvstoreEmpty(dbarray[j].expires, callback, filter);
         }
         /* Because all keys of database are removed, reset average ttl. */
         dbarray[j].avg_ttl = 0;
@@ -613,7 +613,7 @@ long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callbac
  * On success the function returns the number of keys removed from the
  * database(s). Otherwise -1 is returned in the specific case the
  * DB number is out of range, and errno is set to EINVAL. */
-long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
+long long emptyData(int dbnum, int flags, void(callback)(hashtable *), emptyDataHashtableFilter filter) {
     int async = (flags & EMPTYDB_ASYNC);
     int with_functions = !(flags & EMPTYDB_NOFUNCTIONS);
     ValkeyModuleFlushInfoV1 fi = {VALKEYMODULE_FLUSHINFO_VERSION, !async, dbnum};
@@ -633,7 +633,7 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     signalFlushedDb(dbnum, async);
 
     /* Empty the database structure. */
-    removed = emptyDbStructure(server.db, dbnum, async, callback);
+    removed = emptyDbStructure(server.db, dbnum, async, callback, filter);
 
     if (dbnum == -1) flushReplicaKeysWithExpireList();
 
@@ -671,7 +671,7 @@ serverDb *initTempDb(void) {
 /* Discard tempDb, it's always async. */
 void discardTempDb(serverDb *tempDb) {
     /* Release temp DBs. */
-    emptyDbStructure(tempDb, -1, 1, NULL);
+    emptyDbStructure(tempDb, -1, 1, NULL, NULL);
     for (int i = 0; i < server.dbnum; i++) {
         kvstoreRelease(tempDb[i].keys);
         kvstoreRelease(tempDb[i].expires);
@@ -762,7 +762,7 @@ int getFlushCommandFlags(client *c, int *flags) {
 
 /* Flushes the whole server data set. */
 void flushAllDataAndResetRDB(int flags) {
-    server.dirty += emptyData(-1, flags, NULL);
+    server.dirty += emptyData(-1, flags, NULL, NULL);
     if (server.child_type == CHILD_TYPE_RDB) killRDBChild();
     if (server.saveparamslen > 0) {
         rdbSaveInfo rsi, *rsiptr;
@@ -785,12 +785,35 @@ void flushdbCommand(client *c) {
     int flags;
 
     if (getFlushCommandFlags(c, &flags) == C_ERR) return;
-    /* flushdb should not flush the functions */
-    server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL);
 
-    /* Without the forceCommandPropagation, when DB was already empty,
-     * FLUSHDB will not be replicated nor put into the AOF. */
-    forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
+    if (server.cluster_enabled && (clusterIsAnySlotImportingViaRepl() || clusterIsAnySlotExportingViaRepl())) {
+        /* Here, we handle two cases:
+         *   1. FLUSHDB should not flush importing slots. Right now, there is
+         *      no clean way to propagate this to replicas without propagating
+         *      a delete for each key in the slots we drop.
+         *   2. FLUSHDB needs to be broken into slot-level commands in order
+         *      for it to be replayed on the slot import targets.
+         * 
+         * Eventually, a single command to flush a slot would improve the
+         * replication traffic.
+         */
+        for (int i = 0; i < CLUSTER_SLOTS; i++) {
+            if (isSlotImportingViaReplication(i)) continue;
+            propagateSlotDeletionByKeys(i);
+        }
+        preventCommandPropagation(c);
+
+        /* After propagating the deletes, we can flush the DB. Note that we
+         * don't flush importing slots. */
+        server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL, isSlotImportingViaReplication);
+    } else {
+        /* flushdb should not flush the functions */
+        server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL, NULL);
+
+        /* Without the forceCommandPropagation, when DB was already empty,
+         * FLUSHDB will not be replicated nor put into the AOF. */
+        forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
+    }
 
     addReply(c, shared.ok);
 
@@ -1967,7 +1990,10 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
     if (server.primary_host != NULL) {
         if (server.current_client && (server.current_client->flag.primary)) return KEY_VALID;
         if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return KEY_EXPIRED;
-    } else if (server.import_mode || (server.cluster_enabled && clusterIsAnySlotImportingViaRepl())) {
+    } else if (server.current_client && server.current_client->flag.slot_import_source) {
+        /* Slot import source should be treated like a primary */
+        return KEY_VALID;
+    } else if (server.import_mode) {
         /* If we are running in the import mode on a primary, instead of
          * evicting the expired key from the database, we return ASAP:
          * the key expiration is controlled by the import source that will

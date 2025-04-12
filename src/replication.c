@@ -2355,7 +2355,7 @@ void readSyncBulkPayload(connection *conn) {
 
             /* Even though we are on-empty-db and the database is empty, we still call emptyData. */
             serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
-            emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+            emptyData(-1, empty_db_flags, replicationEmptyDbCallback, NULL);
 
             dbarray = server.db;
             functions_lib_ctx = functionsLibCtxGetCurrent();
@@ -2401,7 +2401,7 @@ void readSyncBulkPayload(connection *conn) {
             } else {
                 /* Remove the half-loaded data in case we started with an empty replica. */
                 serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
-                emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+                emptyData(-1, empty_db_flags, replicationEmptyDbCallback, NULL);
             }
 
             /* Note that there's no point in restarting the AOF on SYNC
@@ -2482,7 +2482,7 @@ void readSyncBulkPayload(connection *conn) {
          * is actually loaded, in case we encounter an error and drop the replication stream
          * and leave an empty database. */
         serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
-        emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+        emptyData(-1, empty_db_flags, replicationEmptyDbCallback, NULL);
 
         serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
         if (rdbLoad(server.rdb_filename, &rsi, RDBFLAGS_REPLICATION) != RDB_OK) {
@@ -2497,7 +2497,7 @@ void readSyncBulkPayload(connection *conn) {
 
             /* If disk-based RDB loading fails, remove the half-loaded dataset. */
             serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
-            emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+            emptyData(-1, empty_db_flags, replicationEmptyDbCallback, NULL);
 
             /* Note that there's no point in restarting the AOF on sync failure,
                it'll be restarted when sync succeeds or replica promoted. */

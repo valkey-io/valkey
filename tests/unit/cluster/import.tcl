@@ -1006,6 +1006,96 @@ test "CLUSTER SYNCSLOTS SNAPSHOT command interface" {
     assert_causes_syncslots_fail 0 CLUSTER SYNCSLOTS SNAPSHOT TARGET $node2_id LINKNAME invalid SLOTSRANGE 0 0
 }
 
+test "FLUSHDB on target with partially imported slot" {
+    set prev_full_syncs_0 [status [Rn 0] sync_full]
+    set prev_full_syncs_2 [status [Rn 2] sync_full]
+
+    # Load data before the snapshot
+    write_data 2 "$16383_slot_tag:1:" 333 1000
+
+    # Load data while the snapshot is ongoing
+    assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
+    set linkname [get_link_name 0 16383]
+    write_data 2 "$16383_slot_tag:2:" 333 1000
+
+    # Load data after the snapshot
+    wait_for_ready_to_commit 0 $linkname
+    write_data 2 "$16383_slot_tag:3:" 334 1000
+
+    # Keys should be on both source and destination
+    assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+    wait_for_countkeysinslot 0 16383 1000
+
+    # Also write some keys to target outside of slot range
+    write_data 0 "$0_slot_tag:1:" 1000 1000
+
+    # Now run FLUSHDB SYNC on the target
+    assert_match "OK" [R 0 FLUSHDB SYNC]
+
+    # Import should still be there on target and its replica
+    assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+    assert_match "1000" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
+
+    # Other keys should be gone
+    assert_match "0" [R 0 CLUSTER COUNTKEYSINSLOT 0]
+    wait_for_countkeysinslot 3 0 0
+    
+    # Same for FLUSHDB ASYNC
+    write_data 0 "$0_slot_tag:1:" 1000 1000
+    assert_match "OK" [R 0 FLUSHDB ASYNC]
+    assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+    assert_match "1000" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
+    wait_for_countkeysinslot 0 0 0
+    wait_for_countkeysinslot 3 0 0
+
+    # Cleanup
+    R 0 CLUSTER IMPORT-CANCEL all
+    wait_for_link_down 0 $linkname
+}
+
+test "FLUSHDB on source during export" {
+    set prev_full_syncs_0 [status [Rn 0] sync_full]
+    set prev_full_syncs_2 [status [Rn 2] sync_full]
+
+    # Load data before the snapshot
+    write_data 2 "$16383_slot_tag:1:" 333 1000
+
+    # Load data while the snapshot is ongoing
+    assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
+    set linkname [get_link_name 0 16383]
+    write_data 2 "$16383_slot_tag:2:" 333 1000
+
+    # Load data after the snapshot
+    wait_for_ready_to_commit 0 $linkname
+    write_data 2 "$16383_slot_tag:3:" 334 1000
+
+    # Keys should be on both source and destination
+    assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+    wait_for_countkeysinslot 0 16383 1000
+
+    # FLUSHDB on the source should propagate
+    assert_match "OK" [R 2 FLUSHDB SYNC]
+    assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+    wait_for_countkeysinslot 0 16383 0
+    wait_for_countkeysinslot 3 16383 0
+
+    # Same for FLUSHDB ASYNC
+    write_data 2 "$16383_slot_tag:1:" 1000 1000
+    assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+    wait_for_countkeysinslot 0 16383 1000
+    assert_match "OK" [R 2 FLUSHDB ASYNC]
+    wait_for_countkeysinslot 0 16383 0
+    wait_for_countkeysinslot 3 16383 0
+
+    # Did not cause full sync from affected replicas
+    assert {$prev_full_syncs_0 eq [status [Rn 0] sync_full]}
+    assert {$prev_full_syncs_2 eq [status [Rn 2] sync_full]}
+
+    # Cleanup
+    R 0 CLUSTER IMPORT-CANCEL all
+    wait_for_link_down 0 $linkname
+}
+
 test "Import cancelled when source hangs" {
 
 }
@@ -1039,10 +1129,6 @@ test "Export failed if SETSLOT is used" {
 
 test "Import backs off if source sends FAIL" {
 
-}
-
-test "FLUSHDB with partially imported slot" {
-    
 }
 
 }

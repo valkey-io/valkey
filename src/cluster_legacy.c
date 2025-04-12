@@ -1206,10 +1206,8 @@ void clusterInit(void) {
     serverAssert(rdbRegisterAuxField("cluster-slot-states", clusterEncodeOpenSlotsAuxField,
                                      clusterDecodeOpenSlotsAuxField) == C_OK);
 
-    /* Initialize lists for slot import links. */
-    initClusterSlotImportLinkList();
-    initClusterSlotExportLinkList();
-    initClusterSlotMigrationLogList();
+    /* Initialize list for slot migration links. */
+    initClusterSlotMigrationLinkList();
 
     /* Set myself->port/cport/pport to my listening ports, we'll just need to
      * discover the IP address via MEET messages. */
@@ -7424,9 +7422,6 @@ int clusterCommandSpecial(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "migrations") && c->argc == 2) {
         /* CLUSTER MIGRATIONS */
         clusterCommandMigrations(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "migrationlog") && c->argc >= 2) {
-        /* CLUSTER MIGRATIONLOG (RESET) */
-        clusterCommandMigrationLog(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "import-cancel") && c->argc > 2) {
         /* CLUSTER IMPORT-CANCEL (LINK <link-name>|ALL) */
         clusterCommandImportCancel(c);

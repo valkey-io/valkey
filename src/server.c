@@ -4223,8 +4223,8 @@ int processCommand(client *c) {
         if (server.current_client == NULL) return C_ERR;
 
         if (out_of_memory && is_denyoom_command) {
-            if (c->flag.slot_import_source && c->slot_import_link != NULL) {
-                handleSlotImportLinkClientOOM(c->slot_import_link);
+            if (c->flag.slot_import_source && c->slot_migration_link != NULL) {
+                handleSlotImportLinkClientOOM(c->slot_migration_link);
             }
 
             rejectCommand(c, shared.oomerr);

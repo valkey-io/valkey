@@ -11,21 +11,20 @@
 #include "module.h"
 #include "functions.h"
 
-int isSlotImportLinkInProgress(slotImportLink *link);
-int isSlotExportLinkInProgress(slotExportLink *link);
-slotImportLink *createSlotImportLink(clusterNode *source_node, list *slot_ranges, int one_shot);
-void connectSlotImportLink(slotImportLink *link, char *ip, int port);
-const char *slotImportStateToString(slotImportLinkState state);
-const char *slotExportStateToString(slotExportLinkState state);
-void updateSlotImportLinkState(slotImportLink *link, slotImportLinkState state);
-void sendSyncSlotsMessageToSource(client *c, const char *subcommand);
-void proceedWithSlotImport(slotImportLink *link);
-void finishSlotImportLink(slotImportLink *link, slotMigrationLogState state, char *message);
-slotExportLink *createSlotExportLink(client *c, char *nodename, char *linkname, list *slot_ranges);
-void updateSlotExportLinkState(slotExportLink *link, slotExportLinkState state);
-void sendSyncSlotsMessageToTarget(client *c, const char *subcommand);
-int isSlotExportPauseTimedOut(slotExportLink *link);
-const char *slotMigrationLogStateToString(slotMigrationLogState state);
+int isSlotMigrationLinkInProgress(slotMigrationLink *link);
+slotMigrationLink *createSlotImportLink(clusterNode *source_node, list *slot_ranges, int one_shot);
+void connectSlotImportLink(slotMigrationLink *link, char *ip, int port);
+const char *slotMigrationLinkStateToString(slotMigrationLinkState state);
+const char *slotExportStateToString(slotMigrationLinkState state);
+void updateSlotMigrationLinkState(slotMigrationLink *link, slotMigrationLinkState state);
+void sendSyncSlotsMessageOnClient(client *c, const char *subcommand);
+void sendSyncSlotsMessageOnLink(slotMigrationLink *link, const char *subcommand);
+void proceedWithSlotMigration(slotMigrationLink *link);
+slotMigrationLink *createSlotExportLink(client *c, char *nodename, char *linkname, list *slot_ranges);
+int isSlotExportPauseTimedOut(slotMigrationLink *link);
+void resetSlotMigrationLink(slotMigrationLink *link);
+void finishSlotMigrationLink(slotMigrationLink *link, slotMigrationLinkState state, char *message);
+void updateSlotMigrationLinkStatusMessage(slotMigrationLink *link, char *message);
 
 void freeSlotRangeValue(void *o) {
     zfree(o);
@@ -229,7 +228,7 @@ list *parseSlotRanges(client *c, int start_index, clusterNode **node_out, sds *e
  *
  * During a slot import, the target drives the main state machine and eventually performs the
  * slot takeover. Slot import is initiated when an operator sends a CLUSTER IMPORT request, after
- * which the target node will track the import in a slotImportLink.
+ * which the target node will track the import in a slotMigrationLink.
  *
  * For transient errors like connections being dropped, the target will restart the import workflow
  * from the beginning. For other errors, the import will be marked as failed and require operator
@@ -242,15 +241,12 @@ list *parseSlotRanges(client *c, int start_index, clusterNode **node_out, sds *e
 int isSlotImportingViaReplication(int slot) {
     listNode *ln;
     listIter li;
-    listRewind(server.cluster->slot_import_links, &li);
+    listRewind(server.cluster->slot_migration_links, &li);
     while ((ln = listNext(&li)) != NULL) {
-        slotImportLink *link = ln->value;
-        if (!isSlotImportLinkInProgress(link)) {
-            continue;
-        }
-        if (isSlotInSlotRanges(slot, link->slot_ranges)) {
-            return 1;
-        }
+        slotMigrationLink *link = ln->value;
+        if (link->type != SLOT_MIGRATION_IMPORT) continue;
+        if (!isSlotMigrationLinkInProgress(link)) continue;
+        if (isSlotInSlotRanges(slot, link->slot_ranges)) return 1;
     }
     return 0;
 }
@@ -304,22 +300,21 @@ void clusterCommandImport(client *c, int one_shot) {
         }
     }
 
-    slotImportLink *link = createSlotImportLink(source_node, slot_ranges, one_shot);
+    slotMigrationLink *link = createSlotImportLink(source_node, slot_ranges, one_shot);
     connectSlotImportLink(link, source_node->ip, getNodeDefaultClientPort(source_node));
-    listAddNodeTail(server.cluster->slot_import_links, link);
+    listAddNodeHead(server.cluster->slot_migration_links, link);
     addReply(c, shared.ok);
 }
 
-slotImportLink *clusterLookupImportLink(sds linkname) {
+slotMigrationLink *clusterLookupImportLink(sds linkname) {
     listNode *ln;
     listIter li;
     if (sdslen(linkname) != CLUSTER_NAMELEN) return NULL;
-    listRewind(server.cluster->slot_import_links, &li);
+    listRewind(server.cluster->slot_migration_links, &li);
     while ((ln = listNext(&li)) != NULL) {
-        slotImportLink *link = ln->value;
-        if (!memcmp(linkname, link->linkname, CLUSTER_NAMELEN)) {
-            return link;
-        }
+        slotMigrationLink *link = ln->value;
+        if (link->type != SLOT_MIGRATION_IMPORT) continue;
+        if (!memcmp(linkname, link->linkname, CLUSTER_NAMELEN)) return link;
     }
     return NULL;
 }
@@ -330,8 +325,8 @@ void clusterCommandImportCommit(client *c) {
         return;
     }
 
-    slotImportLink *link = clusterLookupImportLink(c->argv[3]->ptr);
-    if (!link || !isSlotImportLinkInProgress(link)) {
+    slotMigrationLink *link = clusterLookupImportLink(c->argv[3]->ptr);
+    if (!link || !isSlotMigrationLinkInProgress(link)) {
         addReplyErrorFormat(c, "Link name not found");
         return;
     }
@@ -340,13 +335,13 @@ void clusterCommandImportCommit(client *c) {
         return;
     }
     if (link->state != SLOT_IMPORT_RECEIVE_STREAM) {
-        addReplyErrorFormat(c, "Link is not ready to be commited");
+        addReplyErrorFormat(c, "Link is not ready to be committed");
         return;
     }
 
     /* Start the failover procedure */
-    sendSyncSlotsMessageToSource(link->client, "PAUSE");
-    updateSlotImportLinkState(link, SLOT_IMPORT_FAILOVER_WAITING_FOR_PAUSED);
+    sendSyncSlotsMessageOnLink(link, "PAUSE");
+    updateSlotMigrationLinkState(link, SLOT_IMPORT_FAILOVER_WAITING_FOR_PAUSED);
 
     /* If there was a status from a previous attempt, clear it as this is a fresh attempt. */
     if (link->status_msg) {
@@ -367,32 +362,32 @@ void clusterCommandImportCancel(client *c) {
             return;
         }
 
-        listRewind(server.cluster->slot_import_links, &li);
+        listRewind(server.cluster->slot_migration_links, &li);
         while ((ln = listNext(&li)) != NULL) {
-            slotImportLink *link = ln->value;
-            if (!isSlotImportLinkInProgress(link)) {
+            slotMigrationLink *link = ln->value;
+            if (!isSlotMigrationLinkInProgress(link)) {
                 continue;
             }
             if (link->client) {
-                sendSyncSlotsMessageToSource(link->client, "CANCEL");
+                sendSyncSlotsMessageOnLink(link, "CANCEL");
                 link->client->flag.close_after_reply = 1;
             }
-            finishSlotImportLink(link, SLOT_MIGRATION_LOG_CANCELLED, NULL);
+            finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_CANCELLED, NULL);
         }
         serverLog(LL_NOTICE, "Canceled all in progress slot imports due to operator's request.");
         addReply(c, shared.ok);
         return;
     } else if (!strcasecmp(c->argv[2]->ptr, "link") && c->argc > 3) {
-        slotImportLink *link = clusterLookupImportLink(c->argv[3]->ptr);
-        if (!link || !isSlotImportLinkInProgress(link)) {
+        slotMigrationLink *link = clusterLookupImportLink(c->argv[3]->ptr);
+        if (!link || !isSlotMigrationLinkInProgress(link)) {
             addReplyErrorFormat(c, "Link name not found.");
             return;
         }
         if (link->client) {
-            sendSyncSlotsMessageToSource(link->client, "CANCEL");
+            sendSyncSlotsMessageOnLink(link, "CANCEL");
             link->client->flag.close_after_reply = 1;
         }
-        finishSlotImportLink(link, SLOT_MIGRATION_LOG_CANCELLED, NULL);
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_CANCELLED, NULL);
         serverLog(LL_NOTICE, "Slot import link %.40s to node %.40s (owner of slots [%s]) cancelled due to operator's request.", link->linkname, link->nodename, link->slot_ranges_str);
         addReply(c, shared.ok);
         return;
@@ -405,132 +400,118 @@ void clusterCommandImportCancel(client *c) {
 /* Sent by the source to the target after dumping the snapshot in
  * AOF format. */
 void clusterCommandSyncSlotsSnapshotEof(client *c) {
-    if (!c->flag.slot_import_source || !c->slot_import_link) {
+    if (!c->flag.slot_import_source || !c->slot_migration_link) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS SNAPSHOT-EOF from client %lu, but the client is not a slot import source. Closing link.", c->id);
         freeClientAsync(c);
         return;
     }
-    slotImportLink *link = (slotImportLink *)c->slot_import_link;
-    if (!isSlotImportLinkInProgress(link)) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
     if (link->state != SLOT_IMPORT_RECEIVE_SNAPSHOT) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS SNAPSHOT-EOF from link %.40s, but not currently loading an AOF snapshot. Closing link.", link->linkname);
-        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Unexpected state machine transition");
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Unexpected state machine transition");
         return;
     }
     serverLog(LL_NOTICE, "Slot import link %.40s successfully received slot snapshot from %.40s (owner of slots [%s]). Beginning incremental stream...", link->linkname, link->nodename, link->slot_ranges_str);
     if (link->one_shot) {
-        sendSyncSlotsMessageToSource(c, "PAUSE");
-        updateSlotImportLinkState(link, SLOT_IMPORT_FAILOVER_WAITING_FOR_PAUSED);
+        sendSyncSlotsMessageOnLink(link, "PAUSE");
+        updateSlotMigrationLinkState(link, SLOT_IMPORT_FAILOVER_WAITING_FOR_PAUSED);
     } else {
-        sendSyncSlotsMessageToSource(c, "STREAM");
-        updateSlotImportLinkState(link, SLOT_IMPORT_RECEIVE_STREAM);
+        sendSyncSlotsMessageOnLink(link, "STREAM");
+        updateSlotMigrationLinkState(link, SLOT_IMPORT_RECEIVE_STREAM);
     }
 }
 
 /* Sent by the source to the target as a marker of when the pause
  * began (therefore, target is caught up once read). */
 void clusterCommandSyncSlotsPaused(client *c) {
-    if (!c->flag.slot_import_source || !c->slot_import_link) {
+    if (!c->flag.slot_import_source || !c->slot_migration_link) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS PAUSED from client %lu, but the client is not a slot import source. Closing link.", c->id);
         freeClientAsync(c);
         return;
     }
-    slotImportLink *link = (slotImportLink *)c->slot_import_link;
-    if (!isSlotImportLinkInProgress(link)) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
     if (link->state != SLOT_IMPORT_FAILOVER_WAITING_FOR_PAUSED) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS PAUSED from link %.40s, but client is not currently in paused state locally. Closing link.", link->linkname);
-        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Unexpected state machine transition");
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Unexpected state machine transition");
         return;
     }
-    sendSyncSlotsMessageToSource(c, "REQUEST-FAILOVER");
-    updateSlotImportLinkState(link, SLOT_IMPORT_FAILOVER_REQUESTED);
+    sendSyncSlotsMessageOnLink(link, "REQUEST-FAILOVER");
+    updateSlotMigrationLinkState(link, SLOT_IMPORT_FAILOVER_REQUESTED);
 }
 
 /* Sent by the source to the target to grant final authorization for
  * failover. */
 void clusterCommandSyncSlotsFailoverGranted(client *c) {
-    if (!c->flag.slot_import_source || !c->slot_import_link) {
+    if (!c->flag.slot_import_source || !c->slot_migration_link) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS FAILOVER-GRANTED from client %lu, but the client is not a slot import source. Closing link.", c->id);
         freeClientAsync(c);
         return;
     }
-    slotImportLink *link = (slotImportLink *)c->slot_import_link;
-    if (!isSlotImportLinkInProgress(link)) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
     if (link->state != SLOT_IMPORT_FAILOVER_REQUESTED) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS FAILOVER-GRANTED from link %.40s, but we never sent a failover request. Closing link.", link->linkname);
-        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Unexpected state machine transition");
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Unexpected state machine transition");
         return;
     }
-    updateSlotImportLinkState(link, SLOT_IMPORT_FAILOVER_GRANTED);
+    updateSlotMigrationLinkState(link, SLOT_IMPORT_FAILOVER_GRANTED);
     clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
 }
 
 /* Sent by the source to the target to deny final authorization for
  * failover. */
 void clusterCommandSyncSlotsFailoverDenied(client *c) {
-    if (!c->flag.slot_import_source || !c->slot_import_link) {
+    if (!c->flag.slot_import_source || !c->slot_migration_link) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS FAILOVER-DENIED from client %lu, but the client is not a slot import source. Closing link.", c->id);
         freeClientAsync(c);
         return;
     }
-    slotImportLink *link = (slotImportLink *)c->slot_import_link;
-    if (!isSlotImportLinkInProgress(link)) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
     if (link->state != SLOT_IMPORT_FAILOVER_REQUESTED) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS FAILOVER-DENIED from link %.40s, but we never sent a failover request. Closing link.", link->linkname);
-        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Unexpected state machine transition");
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Unexpected state machine transition");
         return;
     }
     if (link->one_shot) {
         serverLog(LL_WARNING, "Slot import link %.40s had failover denied from node %.40s (owner of slots [%s]). Failing import request.", link->linkname, link->nodename, link->slot_ranges_str);
-        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Failover denied");
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Failover denied");
         return;
     }
     serverLog(LL_WARNING, "Slot import link %.40s had failover denied from node %.40s (owner of slots [%s]). Going back to streaming incremental updates.", link->linkname, link->nodename, link->slot_ranges_str);
-    if (link->status_msg) {
-        sdsfree(link->status_msg);
-    }
-    link->status_msg = sdsnew("Previous failover attempt denied from source");
-    updateSlotImportLinkState(link, SLOT_IMPORT_RECEIVE_STREAM);
+    updateSlotMigrationLinkStatusMessage(link, "Previous failover attempt denied from source");
+    updateSlotMigrationLinkState(link, SLOT_IMPORT_RECEIVE_STREAM);
 }
 
 /* Sent by the source to the target to notify of some unrecoverable error. */
 void clusterCommandSyncSlotsFail(client *c) {
-    if (!c->flag.slot_import_source || !c->slot_import_link) {
+    if (!c->flag.slot_import_source || !c->slot_migration_link) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS FAIL from client %lu, but the client is not a slot import source. Closing link.", c->id);
         freeClientAsync(c);
         return;
     }
-    slotImportLink *link = (slotImportLink *)c->slot_import_link;
-    if (!isSlotImportLinkInProgress(link)) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
-    finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Source node terminated import");
+    finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Source node terminated import");
 }
 
-
-void sendSyncSlotsMessageToSource(client *c, const char *subcommand) {
-    serverAssert(c && c->flag.slot_import_source && c->slot_import_link);
-    ClientFlags old_flags = c->flag;
-    c->flag.pushing = 1;
-    addReplyArrayLen(c, 3);
-    addReplyBulkCString(c, "CLUSTER");
-    addReplyBulkCString(c, "SYNCSLOTS");
-    addReplyBulkCString(c, subcommand);
-    if (!old_flags.pushing) c->flag.pushing = 0;
-}
-
-slotImportLink *createSlotImportLink(clusterNode *source_node, list *slot_ranges, int one_shot) {
-    slotImportLink *link = zcalloc(sizeof(slotImportLink));
+slotMigrationLink *createSlotImportLink(clusterNode *source_node, list *slot_ranges, int one_shot) {
+    slotMigrationLink *link = zcalloc(sizeof(slotMigrationLink));
     link->ctime = mstime();
     link->last_update = link->ctime;
+    link->type = SLOT_MIGRATION_IMPORT;
     link->slot_ranges = slot_ranges;
     link->slot_ranges_str = representSlotRangeList(slot_ranges, '-');
     link->one_shot = one_shot;
@@ -542,11 +523,11 @@ slotImportLink *createSlotImportLink(clusterNode *source_node, list *slot_ranges
 }
 
 void slotImportConnectHandler(connection *conn) {
-    slotImportLink *link = (slotImportLink *)connGetPrivateData(conn);
-    proceedWithSlotImport(link);
+    slotMigrationLink *link = (slotMigrationLink *)connGetPrivateData(conn);
+    proceedWithSlotMigration(link);
 }
 
-void connectSlotImportLink(slotImportLink *link, char *ip, int port) {
+void connectSlotImportLink(slotMigrationLink *link, char *ip, int port) {
     sds status_msg;
     serverLog(LL_NOTICE, "Connecting slot import link %.40s to %.40s (owner of slots [%s]) at (ip: %s, port %d)", link->linkname, link->nodename, link->slot_ranges_str, ip, port);
 
@@ -555,37 +536,19 @@ void connectSlotImportLink(slotImportLink *link, char *ip, int port) {
                     server.bind_source_addr, slotImportConnectHandler) == C_ERR) {
         serverLog(LL_WARNING, "Failed to connect slot import link %.40s to %.40s: %s", link->linkname, link->nodename, connGetLastError(link->conn));
         status_msg = sdscatfmt(sdsempty(), "Unable to connect to source node: %s", connGetLastError(link->conn));
-        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, status_msg);
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, status_msg);
         sdsfree(status_msg);
         return;
     }
 
     /* Store the link in connection private data, until we have a client to store it in. */
     connSetPrivateData(link->conn, link);
-    updateSlotImportLinkState(link, SLOT_IMPORT_CONNECTING);
+    updateSlotMigrationLinkState(link, SLOT_IMPORT_CONNECTING);
 }
 
-void resetSlotImportLink(slotImportLink *link) {
-    /* Only one of client or conn should be set. */
-    serverAssert(!link->client || !link->conn);
-    if (link->client) {
-        /* Since we are trying to manually close the connection, clear slot
-         * import data so that we don't trigger
-         * handleSlotImportLinkClientClose*/
-        link->client->flag.slot_import_source = 0;
-        link->client->slot_import_link = NULL;
-        if (!link->client->flag.close_after_reply) {
-            freeClientAsync(link->client);
-        }
-        link->client = NULL;
-    } else if (link->conn) {
-        connClose(link->conn);
-        link->conn = NULL;
-    }
-}
-
-void handleSlotImportLinkClientClose(void *import) {
-    slotImportLink *link = (slotImportLink *)import;
+void clusterHandleSlotImportLinkClientClose(void *import) {
+    slotMigrationLink *link = (slotMigrationLink *)import;
+    serverAssert(link->type == SLOT_MIGRATION_IMPORT);
     link->client = NULL;
     if (link->state == SLOT_IMPORT_RECONNECT) {
         /* Already reconnecting */
@@ -594,74 +557,28 @@ void handleSlotImportLinkClientClose(void *import) {
     clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
     if (link->one_shot) {
         serverLog(LL_WARNING, "Slot import link %.40s lost connection to node %.40s (owner of slots [%s]). Failing import...", link->linkname, link->nodename, link->slot_ranges_str);
-        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Connection to source node lost");
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Connection to source node lost");
         return;
     }
     serverLog(LL_WARNING, "Slot import link %.40s lost connection to node %.40s (owner of slots [%s]). Reconnecting...", link->linkname, link->nodename, link->slot_ranges_str);
-    updateSlotImportLinkState(link, SLOT_IMPORT_RECONNECT);
+    updateSlotMigrationLinkState(link, SLOT_IMPORT_RECONNECT);
 }
 
 void handleSlotImportLinkClientOOM(void *import) {
-    slotImportLink *link = (slotImportLink *)import;
-    if (isSlotImportLinkInProgress(link)) {
+    slotMigrationLink *link = (slotMigrationLink *)import;
+    serverAssert(link->type == SLOT_MIGRATION_IMPORT);
+    if (isSlotMigrationLinkInProgress(link)) {
         serverLog(LL_WARNING, "Slot import link %.40s to node %.40s (owner of slots [%s]) failed due due to OOM", link->linkname, link->nodename, link->slot_ranges_str);
-        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Ran out of memory (OOM) during slot import");
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Ran out of memory (OOM) during slot import");
     }
-}
-
-void freeSlotImportLink(void *o) {
-    slotImportLink *link = o;
-    resetSlotImportLink(link);
-    listRelease(link->slot_ranges);
-    sdsfree(link->slot_ranges_str);
-    if (link->status_msg) {
-        sdsfree(link->status_msg);
-    }
-    zfree(o);
-}
-
-void initClusterSlotImportLinkList(void) {
-    server.cluster->slot_import_links = listCreate();
-    listSetFreeMethod(server.cluster->slot_import_links, freeSlotImportLink);
-}
-
-int isSlotImportLinkInProgress(slotImportLink *link) {
-    return link->state != SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP && link->state != SLOT_IMPORT_FINISHED;
-}
-
-int shouldCleanupSlotImportLink(slotImportLink *link) {
-    return link->state == SLOT_IMPORT_FINISHED;
-}
-
-const char *slotImportStateToString(slotImportLinkState state) {
-    switch (state) {
-    case SLOT_IMPORT_RECONNECT: return "reconnecting";
-    case SLOT_IMPORT_CONNECTING: return "connecting";
-    case SLOT_IMPORT_AUTHENTICATING: return "authenticating";
-    case SLOT_IMPORT_START_SNAPSHOT:
-    case SLOT_IMPORT_RECEIVE_SNAPSHOT: return "snapshotting";
-    case SLOT_IMPORT_RECEIVE_STREAM: return "replicating";
-    case SLOT_IMPORT_FAILOVER_WAITING_FOR_PAUSED: return "failover-syncing";
-    case SLOT_IMPORT_FAILOVER_REQUESTED: return "failover-requested";
-    case SLOT_IMPORT_FAILOVER_GRANTED: return "failover-granted";
-    case SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP: return "finished-waiting-to-cleanup";
-    case SLOT_IMPORT_FINISHED: return "finished";
-    default: return "unknown";
-    }
-}
-
-void updateSlotImportLinkState(slotImportLink *link, slotImportLinkState state) {
-    // Debug only
-    serverLog(LL_NOTICE, "SLOT IMPORT %.40s: %s -> %s", link->linkname, slotImportStateToString(link->state), slotImportStateToString(state));
-    link->last_update = mstime();
-    link->state = state;
 }
 
 /* Validate that the slot replication is still owned by the node it originally
  * was importing from. If the source node has since changed, or no longer has
  * sole ownership by the original source node, we fail the migration. Otherwise,
  * return the source node for this migration. */
-clusterNode *validateClusterNodeForImportIsUnchanged(slotImportLink *link) {
+clusterNode *validateClusterNodeForImportIsUnchanged(slotMigrationLink *link) {
+    serverAssert(link->type == SLOT_MIGRATION_IMPORT);
     int cross_node;
     clusterNode *n = getClusterNodeBySlotRanges(link->slot_ranges, &cross_node);
     if (n && !memcmp(n->name, link->nodename, CLUSTER_NAMELEN)) {
@@ -669,17 +586,18 @@ clusterNode *validateClusterNodeForImportIsUnchanged(slotImportLink *link) {
     }
     if (n == server.cluster->myself) {
         serverLog(LL_WARNING, "Slot import link %.40s to node %.40s (previous owner of slots [%s]) already owned by myself. Failing slot import...", link->linkname, link->nodename, link->slot_ranges_str);
-        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Slots were unexpectedly assigned to myself during import");
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Slots were unexpectedly assigned to myself during import");
         return NULL;
     }
     serverLog(LL_WARNING, "Slot import link %.40s to node %.40s (previous owner of slots [%s]) contains at least one slot no longer owned by the source node. Failing slot import...", link->linkname, link->nodename, link->slot_ranges_str);
-    finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Slots are no longer owned by source node");
+    finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Slots are no longer owned by source node");
     return NULL;
 }
 
-void performSlotImportLinkReconnect(slotImportLink *link) {
+void performSlotImportLinkReconnect(slotMigrationLink *link) {
+    serverAssert(link->type == SLOT_MIGRATION_IMPORT);
     /* Leaving partially imported slots would result in corruption. */
-    resetSlotImportLink(link);
+    resetSlotMigrationLink(link);
     delKeysNotOwnedByMyself(link->slot_ranges);
 
     clusterNode *n = validateClusterNodeForImportIsUnchanged(link);
@@ -690,43 +608,14 @@ void performSlotImportLinkReconnect(slotImportLink *link) {
     }
 }
 
-void addSlotMigrationLogForImport(slotImportLink *link, slotMigrationLogState state, char *message) {
-    slotMigrationLog *log = zcalloc(sizeof(slotMigrationLog));
-    log->ctime = link->ctime;
-    log->state = state;
-    log->is_import = 1;
-    log->completion_time = mstime();
-    log->slot_ranges = listDup(link->slot_ranges);
-    log->slot_ranges_str = sdsdup(link->slot_ranges_str);
-    log->status_msg = message ? sdsnew(message) : NULL;
-    memcpy(log->nodename, link->nodename, CLUSTER_NAMELEN);
-    memcpy(log->linkname, link->linkname, CLUSTER_NAMELEN);
-    serverLog(LL_NOTICE, "Slot import link %.40s terminated: final state %s, status message: %s", link->linkname, slotMigrationLogStateToString(state), message ? message : "");
-    listAddNodeHead(server.cluster->slot_migration_log, log);
-}
-
-void finishSlotImportLink(slotImportLink *link, slotMigrationLogState state, char *message) {
-    resetSlotImportLink(link);
-    if (server.execution_nesting != 0) {
-        /* Defer cancellation (which will trigger deletion of importing keys), since this needs
-         * to be done outside an execution unit. */
-        updateSlotImportLinkState(link, SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP);
-        clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
-    } else {
-        delKeysNotOwnedByMyself(link->slot_ranges);
-        resetSlotImportLink(link);
-        updateSlotImportLinkState(link, SLOT_IMPORT_FINISHED);
-    }
-    addSlotMigrationLogForImport(link, state, message);
-}
-
 /* This function implements the final part of manual slot failovers,
  * where the replica grabs all the import link's hash slots, and
  * propagates the new configuration.
  *
  * Note that it's up to the caller to be sure that the node got a new
  * configuration epoch already. */
-void performSlotImportLinkFailover(slotImportLink *link) {
+void performSlotImportLinkFailover(slotMigrationLink *link) {
+    serverAssert(link->type == SLOT_MIGRATION_IMPORT);
     /* 1) Force bump the epoch to facilitate propagation. */
     clusterBumpConfigEpochWithoutConsensus();
 
@@ -753,41 +642,42 @@ void performSlotImportLinkFailover(slotImportLink *link) {
 
     /* 5) Reflect the failover in the slot import link state */
     serverLog(LL_NOTICE, "Slot import link %.40s completed import successfully. This node is now the owner of slots (%s)", link->linkname, link->slot_ranges_str);
-    resetSlotImportLink(link);
-    finishSlotImportLink(link, SLOT_MIGRATION_LOG_SUCCESS, NULL);
+    resetSlotMigrationLink(link);
+    finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_SUCCESS, NULL);
 }
 
 /* Determine if the link is connected, and return 1 if so. Handles state transition in the case of
  * success/failure. Returns if the connection is done. */
-int proceedWithSlotImportLinkConnecting(slotImportLink *link) {
-    serverAssert(link->conn);
+int proceedWithSlotImportLinkConnecting(slotMigrationLink *link) {
+    serverAssert(link->type == SLOT_MIGRATION_IMPORT && link->conn);
     switch (connGetState(link->conn)) {
     case CONN_STATE_CONNECTED:
         serverLog(LL_NOTICE, "Slot import link %.40s connected to node %.40s (owner of slots [%s]).", link->linkname, link->nodename, link->slot_ranges_str);
-        updateSlotImportLinkState(link, SLOT_IMPORT_AUTHENTICATING);
+        updateSlotMigrationLinkState(link, SLOT_IMPORT_AUTHENTICATING);
         return 1;
     case CONN_STATE_CONNECTING:
         return 0;
     default:
         serverLog(LL_NOTICE, "Failed to connect to slot owner %.40s for import of slots (%s): %s", link->nodename, link->slot_ranges_str, connGetLastError(link->conn));
         sds status_msg = sdscatfmt(sdsempty(), "Unable to connect to source node: %s", connGetLastError(link->conn));
-        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, status_msg);
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, status_msg);
         sdsfree(status_msg);
         return 1;
     }
 }
 
-void performSlotImportLinkAuthentication(slotImportLink *link) {
+void performSlotImportLinkAuthentication(slotMigrationLink *link) {
+    serverAssert(link->type == SLOT_MIGRATION_IMPORT);
     sds status_msg;
     if (!server.primary_auth) {
-        updateSlotImportLinkState(link, SLOT_IMPORT_START_SNAPSHOT);
+        updateSlotMigrationLinkState(link, SLOT_IMPORT_START_SNAPSHOT);
         return;
     }
     char *err = replicationSendAuth(link->conn);
     if (err) {
         serverLog(LL_NOTICE, "Failed to send AUTH command to node %.40s for import of slots (%s): %s", link->nodename, link->slot_ranges_str, err);
         status_msg = sdscatfmt(sdsempty(), "Failed to send AUTH to source node: %s", err);
-        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, status_msg);
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, status_msg);
         sdsfree(err);
         sdsfree(status_msg);
         return;
@@ -795,27 +685,28 @@ void performSlotImportLinkAuthentication(slotImportLink *link) {
     err = receiveSynchronousResponse(link->conn);
     if (err == NULL) {
         serverLog(LL_WARNING, "Received no response to AUTH command from node %.40s for import of slots (%s)", link->nodename, link->slot_ranges_str);
-        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "AUTH command received no response");
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "AUTH command received no response");
         return;
     }
     if (err[0] == '-') {
         serverLog(LL_WARNING, "Failed to AUTH to node %.40s for import of slots (%s): %s", link->nodename, link->slot_ranges_str, err);
         status_msg = sdscatfmt(sdsempty(), "Failed to AUTH to source node: %s", err);
-        finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, status_msg);
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, status_msg);
         sdsfree(status_msg);
     } else {
         serverLog(LL_NOTICE, "Successfully authenticated to node %.40s for import of slots (%s)", link->nodename, link->slot_ranges_str);
-        updateSlotImportLinkState(link, SLOT_IMPORT_START_SNAPSHOT);
+        updateSlotMigrationLinkState(link, SLOT_IMPORT_START_SNAPSHOT);
     }
     sdsfree(err);
 }
 
-void initSlotImportLinkClient(slotImportLink *link) {
+void initSlotImportLinkClient(slotMigrationLink *link) {
+    serverAssert(link->type == SLOT_MIGRATION_IMPORT);
     link->client = createClient(link->conn);
     link->conn = NULL;
     link->client->flag.authenticated = 1;
     link->client->flag.reply_off = 1;
-    link->client->slot_import_link = link;
+    link->client->slot_migration_link = link;
     link->client->flag.slot_import_source = 1;
 
     /* Use dedicated querybuf and replication data to proxy
@@ -824,11 +715,11 @@ void initSlotImportLinkClient(slotImportLink *link) {
     link->client->querybuf = sdsempty();
 }
 
-void performSlotImportLinkSnapshot(slotImportLink *link) {
+void performSlotImportLinkSnapshot(slotMigrationLink *link) {
     listIter li;
     listNode *ln;
     client *c = link->client;
-    serverAssert(c);
+    serverAssert(link->type == SLOT_MIGRATION_IMPORT && c);
 
     ClientFlags old_flags = c->flag;
     c->flag.pushing = 1;
@@ -849,80 +740,17 @@ void performSlotImportLinkSnapshot(slotImportLink *link) {
     }
     if (!old_flags.pushing) c->flag.pushing = 0;
 
-    updateSlotImportLinkState(link, SLOT_IMPORT_RECEIVE_SNAPSHOT);
-}
-
-
-void proceedWithSlotImport(slotImportLink *link) {
-    /* Continue within the state machine until we have no more work. */
-    while (1) {
-        switch (link->state) {
-        case SLOT_IMPORT_RECONNECT:
-            performSlotImportLinkReconnect(link);
-            return;
-        case SLOT_IMPORT_CONNECTING:
-            if (proceedWithSlotImportLinkConnecting(link)) {
-                continue;
-            }
-            return;
-        case SLOT_IMPORT_AUTHENTICATING:
-            performSlotImportLinkAuthentication(link);
-            continue;
-        case SLOT_IMPORT_START_SNAPSHOT:
-            initSlotImportLinkClient(link);
-            performSlotImportLinkSnapshot(link);
-            return;
-        case SLOT_IMPORT_FAILOVER_GRANTED:
-            performSlotImportLinkFailover(link);
-            return;
-        case SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP:
-            delKeysNotOwnedByMyself(link->slot_ranges);
-            updateSlotImportLinkState(link, SLOT_IMPORT_FINISHED);
-            return;
-        case SLOT_IMPORT_RECEIVE_SNAPSHOT:
-        case SLOT_IMPORT_RECEIVE_STREAM:
-        case SLOT_IMPORT_FAILOVER_WAITING_FOR_PAUSED:
-        case SLOT_IMPORT_FAILOVER_REQUESTED:
-        case SLOT_IMPORT_FINISHED:
-            /* Nothing to do right now in cron */
-            return;
-        }
-    }
-}
-
-void proceedWithAllSlotImports(void) {
-    slotImportLink *link;
-    listNode *ln;
-    listIter li;
-    listRewind(server.cluster->slot_import_links, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        link = ln->value;
-        if (link->client) {
-            if (server.unixtime - link->client->last_interaction > server.repl_timeout) {
-                serverLog(LL_WARNING, "Timing out slot import from node %.40s for slots (%s) after not receiving interaction for too long", link->nodename, link->slot_ranges_str);
-                finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "Timed out after too long with no interaction");
-                continue;
-            }
-            /* Periodically send ACK as a liveness check */
-            run_with_period(1000) sendSyncSlotsMessageToSource(link->client, "ACK");
-        }
-        proceedWithSlotImport(link);
-        if (shouldCleanupSlotImportLink(link)) {
-            listDelNode(server.cluster->slot_import_links, ln);
-            continue;
-        }
-    }
+    updateSlotMigrationLinkState(link, SLOT_IMPORT_RECEIVE_SNAPSHOT);
 }
 
 int clusterIsAnySlotImportingViaRepl(void) {
     listNode *ln;
     listIter li;
-    listRewind(server.cluster->slot_import_links, &li);
+    listRewind(server.cluster->slot_migration_links, &li);
     while ((ln = listNext(&li)) != NULL) {
-        slotImportLink *link = ln->value;
-        if (isSlotImportLinkInProgress(link)) {
-            return 1;
-        }
+        slotMigrationLink *link = ln->value;
+        if (link->type != SLOT_MIGRATION_IMPORT) continue;
+        if (isSlotMigrationLinkInProgress(link)) return 1;
     }
     return 0;
 }
@@ -933,11 +761,12 @@ int clusterIsAnySlotImportingViaRepl(void) {
 void clusterUpdateSlotImportsOnOwnershipChange(void) {
     listNode *ln;
     listIter li;
-    listRewind(server.cluster->slot_import_links, &li);
+    listRewind(server.cluster->slot_migration_links, &li);
     while ((ln = listNext(&li))) {
-        slotImportLink *link = (slotImportLink *)ln->value;
+        slotMigrationLink *link = (slotMigrationLink *)ln->value;
+        if (link->type != SLOT_MIGRATION_IMPORT) continue;
         if (!nodeIsPrimary(server.cluster->myself)) {
-            finishSlotImportLink(link, SLOT_MIGRATION_LOG_FAILED, "I was demoted to a replica");
+            finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "I was demoted to a replica");
             continue;
         }
         validateClusterNodeForImportIsUnchanged(link);
@@ -947,65 +776,31 @@ void clusterUpdateSlotImportsOnOwnershipChange(void) {
 
 /* ------------------------------------------- SOURCE ------------------------------------------
  *
- * During a slot import, the source node tracks all the target nodes in slotExportLinks.
- * A slotExportLink is initially created when the target connects and sends a SYNCSLOTS command
+ * During a slot import, the source node tracks ongoing export operations as slotMigrationLinks.
+ * A slotMigrationLink is initially created when the target connects and sends a SYNCSLOTS command
  * to us. After this, we ensure that all data in the requested slots are sent to the target node.
  *
- * If at any time we detect an error, the source side will simply terminate the slot export. The
- * slot import is responsible for determining how to proceed from there. The one exception is
- * during failover, where we will explicitly send a FAILOVER-DENIED message if we do not want
- * to proceed with the failover, but leave the export alive.
+ * If at any time we detect an error, the source side can send a CLUSTER SYNCSLOTS FAIL message
+ * to fail the slot migration. If the error is retriable, the connection to the slot import can
+ * simply be dropped, and the target can choose to retry from there.
  */
 
 int isSlotExportingViaReplication(int slot) {
     listNode *ln;
     listIter li;
-    listRewind(server.cluster->slot_export_links, &li);
+    listRewind(server.cluster->slot_migration_links, &li);
     while ((ln = listNext(&li)) != NULL) {
-        slotExportLink *link = ln->value;
-        if (!isSlotExportLinkInProgress(link)) {
-            continue;
-        }
-        if (isSlotInSlotRanges(slot, link->slot_ranges)) {
-            return 1;
-        }
+        slotMigrationLink *link = ln->value;
+        if (link->type != SLOT_MIGRATION_EXPORT) continue;
+        if (!isSlotMigrationLinkInProgress(link)) continue;
+        if (isSlotInSlotRanges(slot, link->slot_ranges)) return 1;
     }
     return 0;
 }
 
-void addSlotMigrationLogForExport(slotExportLink *link, slotMigrationLogState state, char *message) {
-    slotMigrationLog *log = zcalloc(sizeof(slotMigrationLog));
-    log->ctime = link->ctime;
-    log->state = state;
-    log->is_import = 0;
-    log->completion_time = mstime();
-    log->slot_ranges = listDup(link->slot_ranges);
-    log->slot_ranges_str = sdsdup(link->slot_ranges_str);
-    log->status_msg = message ? sdsnew(message) : NULL;
-    memcpy(log->nodename, link->nodename, CLUSTER_NAMELEN);
-    memcpy(log->linkname, link->linkname, CLUSTER_NAMELEN);
-    serverLog(LL_NOTICE, "Slot export %.40s terminated: final state %s, status message: %s", link->linkname, slotMigrationLogStateToString(state), message ? message : "");
-    listAddNodeHead(server.cluster->slot_migration_log, log);
-}
-
 void sendFailAndCloseAfterReply(client *c) {
-    sendSyncSlotsMessageToTarget(c, "FAIL");
+    sendSyncSlotsMessageOnClient(c, "FAIL");
     c->flag.close_after_reply = 1;
-}
-
-void finishSlotExportLink(slotExportLink *link, slotMigrationLogState state, char *message) {
-    if (link->bgsave_active) {
-        /* We keep the slot export link around as tracking. When the connection termination
-         * happens we will close the FD to the child process and signal snapshotting to stop in
-         * unlinkClient. */
-        updateSlotExportLinkState(link, SLOT_EXPORT_FINISHED_WAITING_FOR_CHILD);
-    } else {
-        updateSlotExportLinkState(link, SLOT_EXPORT_FINISHED);
-    }
-
-    /* If we finish the export, we should not remain paused */
-    link->mf_end = 0;
-    addSlotMigrationLogForExport(link, state, message);
 }
 
 /* Sent by the target to the source to initiate the AOF formatted snapshot.
@@ -1090,8 +885,8 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
         return;
     }
 
-    slotExportLink *link = createSlotExportLink(c, target_node->name, link_name, slot_ranges);
-    listAddNodeTail(server.cluster->slot_export_links, link);
+    slotMigrationLink *link = createSlotExportLink(c, target_node->name, link_name, slot_ranges);
+    listAddNodeHead(server.cluster->slot_migration_links, link);
 
     /* No reply, we will proceed with AOF formatted dump once BGSAVE is able to
      * succeed */
@@ -1103,8 +898,9 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
  *   2. SYNCSLOTS PAUSE command
  *   3. BGSAVE child process dies
  */
-void slotExportBeginStreaming(slotExportLink *link) {
-    updateSlotExportLinkState(link, SLOT_EXPORT_STREAMING);
+void slotExportBeginStreaming(slotMigrationLink *link) {
+    serverAssert(link->type == SLOT_MIGRATION_EXPORT);
+    updateSlotMigrationLinkState(link, SLOT_EXPORT_STREAMING);
 
     /* When the slot export is not ready, it will skip adding the client to the
      * pending write queue (creating a backlog of pending commands). If any
@@ -1116,13 +912,13 @@ void slotExportBeginStreaming(slotExportLink *link) {
 /* Sent by the target to the source to begin streaming content after
  * snapshot. */
 void clusterCommandSyncSlotsStream(client *c) {
-    if (!c->flag.slot_export_target || !c->slot_export_link) {
+    if (!c->flag.slot_export_target || !c->slot_migration_link) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS PAUSE from client %lu, but the client is not a slot export target. Closing link.", c->id);
         sendFailAndCloseAfterReply(c);
         return;
     }
-    slotExportLink *link = (slotExportLink *)c->slot_export_link;
-    if (!isSlotExportLinkInProgress(link)) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
     /* The background save may have completed first, so we may already be in
@@ -1140,20 +936,20 @@ void clusterCommandSyncSlotsStream(client *c) {
 /* Sent by the target to the source to pause writes to the slot for slot
  * failover. */
 void clusterCommandSyncSlotsPause(client *c) {
-    if (!c->flag.slot_export_target || !c->slot_export_link) {
+    if (!c->flag.slot_export_target || !c->slot_migration_link) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS PAUSE from client %lu, but the client is not a slot export target. Closing link.", c->id);
         sendFailAndCloseAfterReply(c);
         return;
     }
-    slotExportLink *link = (slotExportLink *)c->slot_export_link;
-    if (!isSlotExportLinkInProgress(link)) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
     /* Child process may not have closed yet, so SNAPSHOTTING is okay here */
     if (link->state != SLOT_EXPORT_STREAMING && link->state != SLOT_EXPORT_SNAPSHOTTING) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS PAUSE on export to node %.40s, but the client was not streaming incremental updates. Closing link.", link->nodename);
         sendFailAndCloseAfterReply(link->client);
-        finishSlotExportLink(link, SLOT_MIGRATION_LOG_FAILED, "Unexpected state machine transition");
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Unexpected state machine transition");
         return;
     }
     if (link->state != SLOT_EXPORT_STREAMING) {
@@ -1163,29 +959,29 @@ void clusterCommandSyncSlotsPause(client *c) {
     serverLog(LL_NOTICE, "Pausing writes to allow slot export link %.40s to synchronize slots (%s) to node %.40s.", link->linkname, link->slot_ranges_str, link->nodename);
     link->mf_end = mstime() + server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT;
     pauseActions(PAUSE_DURING_SLOT_MIGRATION, link->mf_end, PAUSE_ACTIONS_CLIENT_WRITE_SET);
-    updateSlotExportLinkState(link, SLOT_EXPORT_FAILOVER_PAUSED);
+    updateSlotMigrationLinkState(link, SLOT_EXPORT_FAILOVER_PAUSED);
 
-    sendSyncSlotsMessageToTarget(c, "PAUSED");
+    sendSyncSlotsMessageOnLink(link, "PAUSED");
 }
 
 /* Sent by the target to the source to request final authorization for
  * failover. Authorization could be denied if the source has unpaused itself by
  * now. */
 void clusterCommandSyncSlotsRequestFailover(client *c) {
-    if (!c->flag.slot_export_target || !c->slot_export_link) {
+    if (!c->flag.slot_export_target || !c->slot_migration_link) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS REQUEST-FAILOVER from client %lu, but the client is not a slot export target. Closing link.", c->id);
         sendFailAndCloseAfterReply(c);
         return;
     }
-    slotExportLink *link = (slotExportLink *)c->slot_export_link;
-    if (!isSlotExportLinkInProgress(link)) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
 
     /* Do one last check, since we could have unpaused in the background. */
     if (isSlotExportPauseTimedOut(link) || link->state != SLOT_EXPORT_FAILOVER_PAUSED) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS REQUEST-FAILOVER on export to link %.40s (for slots %s), but we are not paused. Denying failover.", link->linkname, link->slot_ranges_str);
-        sendSyncSlotsMessageToTarget(c, "FAILOVER-DENIED");
+        sendSyncSlotsMessageOnLink(link, "FAILOVER-DENIED");
         return;
     }
 
@@ -1195,15 +991,16 @@ void clusterCommandSyncSlotsRequestFailover(client *c) {
      * export. */
     listNode *ln;
     listIter li;
-    listRewind(server.cluster->slot_export_links, &li);
+    listRewind(server.cluster->slot_migration_links, &li);
     while ((ln = listNext(&li))) {
-        slotExportLink *other_link = (slotExportLink *)ln->value;
+        slotMigrationLink *other_link = (slotMigrationLink *)ln->value;
         if (other_link == link) continue;
+        if (link->type != SLOT_MIGRATION_EXPORT) continue;
         if (other_link->state != SLOT_EXPORT_FAILOVER_GRANTED) continue;
         if (!doSlotRangeListsOverlap(link->slot_ranges, other_link->slot_ranges)) continue;
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS REQUEST-FAILOVER on link %.40s (for slots %s), but we have already granted failover of at least one of these slots to link %.40s (for slots %s). Denying failover.", link->linkname, link->slot_ranges_str, other_link->linkname, other_link->slot_ranges_str);
-        sendSyncSlotsMessageToTarget(c, "FAILOVER-DENIED");
-        updateSlotExportLinkState(link, SLOT_EXPORT_STREAMING);
+        sendSyncSlotsMessageOnLink(link, "FAILOVER-DENIED");
+        updateSlotMigrationLinkState(link, SLOT_EXPORT_STREAMING);
         link->mf_end = 0;
         return;
     }
@@ -1216,69 +1013,31 @@ void clusterCommandSyncSlotsRequestFailover(client *c) {
         pauseActions(PAUSE_DURING_SLOT_MIGRATION, prop_deadline, PAUSE_ACTIONS_CLIENT_WRITE_SET);
     }
 
-    sendSyncSlotsMessageToTarget(c, "FAILOVER-GRANTED");
-    updateSlotExportLinkState(link, SLOT_EXPORT_FAILOVER_GRANTED);
+    sendSyncSlotsMessageOnLink(link, "FAILOVER-GRANTED");
+    updateSlotMigrationLinkState(link, SLOT_EXPORT_FAILOVER_GRANTED);
 }
 
 /* Sent by the target to the source to notify of cancellation by user. */
 void clusterCommandSyncSlotsCancel(client *c) {
-    if (!c->flag.slot_export_target || !c->slot_export_link) {
+    if (!c->flag.slot_export_target || !c->slot_migration_link) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS CANCEL from client %lu, but the client is not a slot export target. Closing link.", c->id);
         freeClientAsync(c);
         return;
     }
-    slotExportLink *link = (slotExportLink *)c->slot_export_link;
-    if (!isSlotExportLinkInProgress(link)) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
-    finishSlotExportLink(link, SLOT_MIGRATION_LOG_CANCELLED, NULL);
+    finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_CANCELLED, NULL);
 }
 
-void sendSyncSlotsMessageToTarget(client *c, const char *subcommand) {
-    addReplyArrayLen(c, 3);
-    addReplyBulkCString(c, "CLUSTER");
-    addReplyBulkCString(c, "SYNCSLOTS");
-    addReplyBulkCString(c, subcommand);
-}
-
-slotExportLink *createSlotExportLink(client *c, char *nodename, char *linkname, list *slot_ranges) {
-    slotExportLink *link = zcalloc(sizeof(slotExportLink));
-
-    link->last_ack = server.unixtime;
-    memcpy(link->nodename, nodename, CLUSTER_NAMELEN);
-    memcpy(link->linkname, linkname, CLUSTER_NAMELEN);
-    link->ctime = mstime();
-    link->last_update = link->ctime;
-    link->client = c;
-    link->state = SLOT_EXPORT_WAITING_TO_SNAPSHOT;
-    link->slot_ranges = slot_ranges;
-    link->slot_ranges_str = representSlotRangeList(slot_ranges, '-');
-    link->bgsave_active = 0;
-
-    link->client->flag.slot_export_target = 1;
-    link->client->slot_export_link = link;
-    initClientReplicationData(link->client);
-
-    serverLog(LL_NOTICE, "New slot export link created: link name %.40s, target node %.40s, slot range %s", link->linkname, link->nodename, link->slot_ranges_str);
-    return link;
-}
-
-/* In progress may be different than terminated, if we still need to track some cleanup work. */
-int isSlotExportLinkInProgress(slotExportLink *link) {
-    return link->state != SLOT_EXPORT_FINISHED_WAITING_FOR_CHILD && link->state != SLOT_EXPORT_FINISHED;
-}
-
-int shouldCleanupSlotExportLink(slotExportLink *link) {
-    return link->state == SLOT_EXPORT_FINISHED;
-}
-
-int shouldRewriteDictionary(int didx, void *privdata) {
+int shouldRewriteHashtableIndex(int didx, void *privdata) {
     return isSlotInSlotRanges(didx, (list *)privdata);
 }
 
 int childSnapshotForSyncSlot(int req, rio *rdb, void *privdata) {
     UNUSED(req);
-    int retval = rewriteAppendOnlyFileRio(rdb, shouldRewriteDictionary, privdata);
+    int retval = rewriteAppendOnlyFileRio(rdb, shouldRewriteHashtableIndex, privdata);
     rioWrite(rdb, "*3\r\n", 4);
     rioWriteBulkString(rdb, "CLUSTER", 7);
     rioWriteBulkString(rdb, "SYNCSLOTS", 9);
@@ -1286,93 +1045,43 @@ int childSnapshotForSyncSlot(int req, rio *rdb, void *privdata) {
     return retval;
 }
 
-const char *slotExportStateToString(slotExportLinkState state) {
-    switch (state) {
-    case SLOT_EXPORT_WAITING_TO_SNAPSHOT: return "waiting-to-snapshot";
-    case SLOT_EXPORT_SNAPSHOTTING: return "snapshotting";
-    case SLOT_EXPORT_STREAMING: return "replicating";
-    case SLOT_EXPORT_FAILOVER_PAUSED: return "failover-paused";
-    case SLOT_EXPORT_FAILOVER_GRANTED: return "failover-granted";
-    case SLOT_EXPORT_FINISHED_WAITING_FOR_CHILD: return "finished-waiting-for-child";
-    case SLOT_EXPORT_FINISHED: return "finished";
-    }
-    return "";
-}
-
-void updateSlotExportLinkState(slotExportLink *link, slotExportLinkState state) {
-    // Debug only
-    serverLog(LL_NOTICE, "SLOT EXPORT %.40s: %s -> %s", link->linkname, slotExportStateToString(link->state), slotExportStateToString(state));
-    link->last_update = mstime();
-    link->state = state;
-}
-
-void slotExportLinkBeginSnapshot(slotExportLink *link) {
+void slotExportLinkBeginSnapshot(slotMigrationLink *link) {
     connection **conns = zmalloc(sizeof(connection *));
     *conns = link->client->conn;
     serverLog(LL_NOTICE, "Beginning snapshot of slot export link %.40s for slots (%s) to target %.40s.", link->linkname, link->slot_ranges_str, link->nodename);
     if (saveSnapshotToConnectionSockets(conns, 1, 1, 0, childSnapshotForSyncSlot, 1, link->slot_ranges) != C_OK) {
         serverLog(LL_WARNING, "Slot export link %.40s failed to start slot export for slots (%s)", link->linkname, link->slot_ranges_str);
-        finishSlotExportLink(link, SLOT_MIGRATION_LOG_FAILED, "Failed to start snapshot");
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Failed to start snapshot");
         return;
     }
-    link->bgsave_active = 1;
-    updateSlotExportLinkState(link, SLOT_EXPORT_SNAPSHOTTING);
-}
-
-int clusterIsSlotExportLinkSnapshotting(void *export) {
-    slotExportLink *link = (slotExportLink *)export;
-    return link->bgsave_active;
+    updateSlotMigrationLinkState(link, SLOT_EXPORT_SNAPSHOTTING);
 }
 
 void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr) {
     listIter li;
     listNode *ln;
-    listRewind(server.cluster->slot_export_links, &li);
+    listRewind(server.cluster->slot_migration_links, &li);
     while ((ln = listNext(&li))) {
-        slotExportLink *link = (slotExportLink *)ln->value;
-        link->bgsave_active = 0;
-        if (link->state == SLOT_EXPORT_FINISHED_WAITING_FOR_CHILD) {
-            updateSlotExportLinkState(link, SLOT_EXPORT_FINISHED);
-            continue;
-        }
+        slotMigrationLink *link = (slotMigrationLink *)ln->value;
+        if (link->type != SLOT_MIGRATION_EXPORT) continue;
         if (link->state != SLOT_EXPORT_SNAPSHOTTING) {
             continue;
         }
         if (bgsaveerr == C_OK) {
             serverLog(LL_NOTICE, "Finished snapshotting slots (%s) to target %.40s, beginning incremental stream...", link->slot_ranges_str, link->nodename);
-
             slotExportBeginStreaming(link);
         } else {
             serverLog(LL_WARNING, "Failed to snapshot slots (%s) to target %.40s", link->slot_ranges_str, link->nodename);
-            finishSlotExportLink(link, SLOT_MIGRATION_LOG_FAILED, "Failed to perform snapshot");
+            finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Failed to perform snapshot");
         }
     }
 }
 
-void freeSlotExportLink(void *o) {
-    slotExportLink *link = o;
-    if (link->client && !link->client->flag.close_after_reply) {
-        /* Reset slot export data to not trigger clusterHandleSlotExportLinkClientClose. */
-        link->client->flag.slot_export_target = 0;
-        link->client->slot_export_link = NULL;
-        freeClientAsync(link->client);
-    }
-    link->client = NULL;
-    listRelease(link->slot_ranges);
-    sdsfree(link->slot_ranges_str);
-    zfree(o);
-}
-
-void initClusterSlotExportLinkList(void) {
-    server.cluster->slot_export_links = listCreate();
-    listSetFreeMethod(server.cluster->slot_export_links, freeSlotExportLink);
-}
-
 int clusterIsSlotExportReadyForReplData(client *c) {
-    if (!c->flag.slot_export_target || !c->slot_export_link) {
+    if (!c->flag.slot_export_target || !c->slot_migration_link) {
         return 1;
     }
-    slotExportLink *link = (slotExportLink *)c->slot_export_link;
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
     return link->state != SLOT_EXPORT_SNAPSHOTTING && link->state != SLOT_EXPORT_WAITING_TO_SNAPSHOT;
 }
 
@@ -1419,16 +1128,17 @@ void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc) {
         return;
     }
 
-    listRewind(server.cluster->slot_export_links, &li);
+    listRewind(server.cluster->slot_migration_links, &li);
     while ((ln = listNext(&li))) {
-        slotExportLink *export = (slotExportLink *)ln->value;
-        if (!export->client) continue;
-        if (!isSlotExportLinkInProgress(export)) continue;
-        if (!isSlotInSlotRanges(slot, export->slot_ranges)) continue;
+        slotMigrationLink *link = (slotMigrationLink *)ln->value;
+        if (link->type != SLOT_MIGRATION_EXPORT) continue;
+        if (!link->client) continue;
+        if (!isSlotMigrationLinkInProgress(link)) continue;
+        if (!isSlotInSlotRanges(slot, link->slot_ranges)) continue;
 
-        addReplyArrayLen(export->client, argc);
+        addReplyArrayLen(link->client, argc);
         for (i = 0; i < argc; i++) {
-            addReplyBulk(export->client, argv[i]);
+            addReplyBulk(link->client, argv[i]);
         }
     }
 
@@ -1440,9 +1150,10 @@ void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc) {
 }
 
 void clusterHandleSlotExportLinkClientClose(void *export) {
-    slotExportLink *link = (slotExportLink *)export;
+    slotMigrationLink *link = (slotMigrationLink *)export;
+    serverAssert(link->type == SLOT_MIGRATION_EXPORT);
     link->client = NULL;
-    if (!isSlotExportLinkInProgress(link)) {
+    if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
     serverLog(LL_NOTICE, "Slot export connection to node %.40s (for slots [%s]) lost.", link->nodename, link->slot_ranges_str);
@@ -1453,17 +1164,18 @@ void clusterHandleSlotExportLinkClientClose(void *export) {
      *
      * Otherwise, we can mark it failed. */
     if (link->state != SLOT_EXPORT_FAILOVER_GRANTED) {
-        finishSlotExportLink(link, SLOT_MIGRATION_LOG_FAILED, "Connection lost to target");
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Connection lost to target");
     }
     clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
 }
 
-int isSlotExportPauseTimedOut(slotExportLink *link) {
+int isSlotExportPauseTimedOut(slotMigrationLink *link) {
     return link->mf_end < mstime() || !getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION);
 }
 
-void updateSlotExportIfOwnershipChanged(slotExportLink *link) {
-    if (!isSlotExportLinkInProgress(link)) {
+void updateSlotExportIfOwnershipChanged(slotMigrationLink *link) {
+    serverAssert(link->type == SLOT_MIGRATION_EXPORT);
+    if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
     int cross_node = 0;
@@ -1474,7 +1186,7 @@ void updateSlotExportIfOwnershipChanged(slotExportLink *link) {
         } else if (!memcmp(n->name, link->nodename, CLUSTER_NAMELEN)) {
             /* All slots are now claimed by the target of this link */
             serverLog(LL_NOTICE, "Slot export link %.40s completed export successfully. Slots (%s) are now owned by %.40s", link->linkname, link->slot_ranges_str, link->nodename);
-            finishSlotExportLink(link, SLOT_MIGRATION_LOG_SUCCESS, "");
+            finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_SUCCESS, "");
             return;
         }
     }
@@ -1483,7 +1195,7 @@ void updateSlotExportIfOwnershipChanged(slotExportLink *link) {
 
     /* Instigate import failure manually, in case topology update is slow to reach source. */
     sendFailAndCloseAfterReply(link->client);
-    finishSlotExportLink(link, SLOT_MIGRATION_LOG_FAILED, "Slots are no longer owned by myself");
+    finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Slots are no longer owned by myself");
     return;
 }
 
@@ -1493,94 +1205,11 @@ void clusterUpdateSlotExportsOnOwnershipChange(void) {
     listNode *ln;
     listIter li;
     int paused = 0;
-    listRewind(server.cluster->slot_export_links, &li);
+    listRewind(server.cluster->slot_migration_links, &li);
     while ((ln = listNext(&li))) {
-        slotExportLink *link = (slotExportLink *)ln->value;
+        slotMigrationLink *link = (slotMigrationLink *)ln->value;
+        if (link->type != SLOT_MIGRATION_EXPORT) continue;
         updateSlotExportIfOwnershipChanged(link);
-        if (link->mf_end) {
-            paused++;
-        }
-    }
-    if (!paused && getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION)) {
-        unpauseActions(PAUSE_DURING_SLOT_MIGRATION);
-    }
-}
-
-/* Proceed with a single slot export, until there is nothing left to do at this time. */
-void proceedWithSlotExport(slotExportLink *link) {
-    switch (link->state) {
-    case SLOT_EXPORT_WAITING_TO_SNAPSHOT:
-        /* Perform the snapshot whenever the opportunity arises. */
-        if (hasActiveChildProcess()) {
-            return;
-        }
-        slotExportLinkBeginSnapshot(link);
-        return;
-    case SLOT_EXPORT_SNAPSHOTTING:
-    case SLOT_EXPORT_STREAMING:
-        return;
-    case SLOT_EXPORT_FAILOVER_PAUSED:
-        if (isSlotExportPauseTimedOut(link)) {
-            serverLog(LL_WARNING, "Pause timed out during requested slot failover from %.40s for slot ranges (%s).", link->nodename, link->slot_ranges_str);
-            updatePausedActions();
-            link->mf_end = 0;
-            updateSlotExportLinkState(link, SLOT_EXPORT_STREAMING);
-            /* TODO - add a messsage */
-        }
-        return;
-    case SLOT_EXPORT_FAILOVER_GRANTED:
-        if (isSlotExportPauseTimedOut(link)) {
-            /* Note that we think this won't happen very commonly. The main source of
-             * latency that may trigger an unpause will occur due to the time it takes
-             * to process the incremental changes. The final REQUEST-FAILOVER handshake
-             * will validate that the source node is still paused after this initial
-             * handshake, and renew the pause for an additional amount of time. From this
-             * point, we expect the takeover of the slot and gossip to be relatively quick
-             * in steady state.
-             *
-             * Regardless, we log a warning and proceed with cleaning up the export link. */
-            serverLog(LL_WARNING, "Write loss risk! During slot export, new owner did not "
-                                  "broadcast ownership before we unpaused ourselves. Any "
-                                  "writes we have recorded since unpausing will now be lost!");
-
-            finishSlotExportLink(link, SLOT_MIGRATION_LOG_FAILED, "Unpaused before migration completed (migration may have succeeded with lost writes)");
-            return;
-        }
-        /* updateSlotExportIfOwnershipChanged will close the link if it is done. */
-        updateSlotExportIfOwnershipChanged(link);
-        return;
-    case SLOT_EXPORT_FINISHED_WAITING_FOR_CHILD:
-    case SLOT_EXPORT_FINISHED:
-        return;
-    }
-}
-
-void proceedWithAllSlotExports(void) {
-    slotExportLink *link;
-    listNode *ln;
-    listIter li;
-    listRewind(server.cluster->slot_export_links, &li);
-    int paused = 0;
-    while ((ln = listNext(&li)) != NULL) {
-        link = ln->value;
-        if (isSlotExportLinkInProgress(link)) {
-            if (link->state != SLOT_EXPORT_FAILOVER_GRANTED && server.unixtime - link->last_ack > server.repl_timeout) {
-                /* Only enforce the ACK timeout when not in failover granted
-                 * state. Instead, rely on the pause timeout in such cases. */
-                serverLog(LL_WARNING, "Timing out slot export to node %.40s for slots (%s) after not receiving ack for too long", link->nodename, link->slot_ranges_str);
-                finishSlotExportLink(link, SLOT_MIGRATION_LOG_FAILED, "Timed out after too long with no interaction");
-                continue;
-            }
-            if (link->client && link->state != SLOT_EXPORT_SNAPSHOTTING) {
-                /* Send acks only when the child process isn't writing to it. */
-                run_with_period(1000) sendSyncSlotsMessageToTarget(link->client, "ACK");
-            }
-        }
-        proceedWithSlotExport(link);
-        if (shouldCleanupSlotExportLink(link)) {
-            listDelNode(server.cluster->slot_export_links, ln);
-            continue;
-        }
         if (link->mf_end) {
             paused++;
         }
@@ -1593,161 +1222,349 @@ void proceedWithAllSlotExports(void) {
 int clusterIsAnySlotExportingViaRepl(void) {
     listNode *ln;
     listIter li;
-    listRewind(server.cluster->slot_export_links, &li);
+    listRewind(server.cluster->slot_migration_links, &li);
     while ((ln = listNext(&li)) != NULL) {
-        slotExportLink *link = ln->value;
-        if (isSlotExportLinkInProgress(link)) {
+        slotMigrationLink *link = ln->value;
+        if (link->type != SLOT_MIGRATION_EXPORT) continue;
+        if (isSlotMigrationLinkInProgress(link)) {
             return 1;
         }
     }
     return 0;
 }
 
+slotMigrationLink *createSlotExportLink(client *c, char *nodename, char *linkname, list *slot_ranges) {
+    slotMigrationLink *link = zcalloc(sizeof(slotMigrationLink));
+
+    link->last_ack = server.unixtime;
+    memcpy(link->nodename, nodename, CLUSTER_NAMELEN);
+    memcpy(link->linkname, linkname, CLUSTER_NAMELEN);
+    link->ctime = mstime();
+    link->last_update = link->ctime;
+    link->client = c;
+    link->type = SLOT_MIGRATION_EXPORT;
+    link->state = SLOT_EXPORT_WAITING_TO_SNAPSHOT;
+    link->slot_ranges = slot_ranges;
+    link->slot_ranges_str = representSlotRangeList(slot_ranges, '-');
+    link->client->flag.slot_export_target = 1;
+    link->client->slot_migration_link = link;
+    initClientReplicationData(link->client);
+
+    serverLog(LL_NOTICE, "New slot export link created: link name %.40s, target node %.40s, slot range %s", link->linkname, link->nodename, link->slot_ranges_str);
+    return link;
+}
+
 /* -------------------------------------- TARGET & SOURCE -------------------------------------- */
 
-/* Convert the link (either import or export) to a reply for reporting in CLUSTER MIGRATIONS. Combined into one function since they should have the same output keys. */
-void replyWithMigrationLinkInfo(client *c, int import, void *link) {
-    addReplyMapLen(c, 9);
-    addReplyBulkCString(c, "link_name");
-    addReplyBulkCBuffer(c, import ? ((slotImportLink *)link)->linkname : ((slotExportLink *)link)->linkname, CLUSTER_NAMELEN);
-    addReplyBulkCString(c, "operation");
-    addReplyBulkCString(c, import ? "IMPORT" : "EXPORT");
-    addReplyBulkCString(c, "slot_ranges");
-    addReplyBulkCString(c, import ? ((slotImportLink *)link)->slot_ranges_str : ((slotExportLink *)link)->slot_ranges_str);
-    addReplyBulkCString(c, "node");
-    addReplyBulkCBuffer(c, import ? ((slotImportLink *)link)->nodename : ((slotExportLink *)link)->nodename, CLUSTER_NAMELEN);
-    addReplyBulkCString(c, "create_time_ms");
-    addReplyLongLong(c, import ? ((slotImportLink *)link)->ctime : ((slotExportLink *)link)->ctime);
-    addReplyBulkCString(c, "last_update_time_ms");
-    addReplyLongLong(c, import ? ((slotImportLink *)link)->last_update : ((slotExportLink *)link)->last_update);
-    addReplyBulkCString(c, "last_ack_time_ms");
-    addReplyLongLong(c, import ? ((slotImportLink *)link)->last_ack : ((slotExportLink *)link)->last_ack);
-    addReplyBulkCString(c, "state");
-    addReplyBulkCString(c, import ? slotImportStateToString(((slotImportLink *)link)->state) : slotExportStateToString(((slotExportLink *)link)->state));
-    addReplyBulkCString(c, "message");
-    addReplyBulkCString(c, (import && ((slotImportLink *)link)->status_msg) ? ((slotImportLink *)link)->status_msg : "");
+void updateSlotMigrationLinkStatusMessage(slotMigrationLink *link, char *message) {
+    if (link->status_msg) {
+        sdsfree(link->status_msg);
+    }
+    link->status_msg = sdsnew(message);
+}
+
+void proceedWithSlotMigration(slotMigrationLink *link) {
+    /* Continue within the state machine until we have no more work. */
+    while (1) {
+        switch (link->state) {
+        /* Importing states */
+        case SLOT_IMPORT_RECONNECT:
+            performSlotImportLinkReconnect(link);
+            return;
+        case SLOT_IMPORT_CONNECTING:
+            if (proceedWithSlotImportLinkConnecting(link)) {
+                continue;
+            }
+            return;
+        case SLOT_IMPORT_AUTHENTICATING:
+            performSlotImportLinkAuthentication(link);
+            continue;
+        case SLOT_IMPORT_START_SNAPSHOT:
+            initSlotImportLinkClient(link);
+            performSlotImportLinkSnapshot(link);
+            return;
+        case SLOT_IMPORT_FAILOVER_GRANTED:
+            performSlotImportLinkFailover(link);
+            return;
+        case SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP:
+            delKeysNotOwnedByMyself(link->slot_ranges);
+            updateSlotMigrationLinkState(link, link->post_cleanup_state);
+            return;
+        case SLOT_IMPORT_RECEIVE_SNAPSHOT:
+        case SLOT_IMPORT_RECEIVE_STREAM:
+        case SLOT_IMPORT_FAILOVER_WAITING_FOR_PAUSED:
+        case SLOT_IMPORT_FAILOVER_REQUESTED:
+            return;
+
+        /* Exporting states */
+        case SLOT_EXPORT_WAITING_TO_SNAPSHOT:
+            /* Perform the snapshot whenever the opportunity arises. */
+            if (hasActiveChildProcess()) {
+                return;
+            }
+            slotExportLinkBeginSnapshot(link);
+            return;
+        case SLOT_EXPORT_SNAPSHOTTING:
+        case SLOT_EXPORT_STREAMING:
+            return;
+        case SLOT_EXPORT_FAILOVER_PAUSED:
+            if (isSlotExportPauseTimedOut(link)) {
+                serverLog(LL_WARNING, "Slot export link %.40s timed out during requested slot "
+                                      "failover from %.40s for slot ranges (%s).",
+                          link->linkname, link->nodename, link->slot_ranges_str);
+                link->mf_end = 0;
+                updatePausedActions();
+                updateSlotMigrationLinkState(link, SLOT_EXPORT_STREAMING);
+                updateSlotMigrationLinkStatusMessage(link, "Timed out before streaming completed");
+            }
+            return;
+        case SLOT_EXPORT_FAILOVER_GRANTED:
+            if (isSlotExportPauseTimedOut(link)) {
+                /* Note that we think this won't happen very commonly. The main source of
+                 * latency that may trigger an unpause will occur due to the time it takes
+                 * to process the incremental changes. The final REQUEST-FAILOVER handshake
+                 * will validate that the source node is still paused after this initial
+                 * handshake, and renew the pause for an additional amount of time. From this
+                 * point, we expect the takeover of the slot and gossip to be relatively quick
+                 * in steady state.
+                 *
+                 * Regardless, we log a warning and proceed with cleaning up the export link. */
+                serverLog(LL_WARNING, "Write loss risk! During slot export, new owner did not "
+                                      "broadcast ownership before we unpaused ourselves. Any "
+                                      "writes we have recorded since unpausing will now be lost!");
+
+                finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Unpaused before migration completed (migration may have succeeded with lost writes)");
+                return;
+            }
+            /* updateSlotExportIfOwnershipChanged will close the link if it is done. */
+            updateSlotExportIfOwnershipChanged(link);
+            return;
+
+        /* Terminal states */
+        case SLOT_MIGRATION_LINK_SUCCESS:
+        case SLOT_MIGRATION_LINK_CANCELLED:
+        case SLOT_MIGRATION_LINK_FAILED:
+            /* Nothing to do right now in cron */
+            return;
+        }
+    }
+}
+
+void resetSlotMigrationLink(slotMigrationLink *link) {
+    /* Only one of client or conn should be set. */
+    serverAssert(!link->client || !link->conn);
+    if (link->client) {
+        /* For import, avoid calling handleSlotImportLinkClientClose, which may attempt reconnect. */
+        /* murphyjacob4 - let's just use state in handleSlotImportLinkClientClose? */
+        if (link->type == SLOT_MIGRATION_IMPORT) {
+            link->client->flag.slot_import_source = 0;
+            link->client->slot_migration_link = NULL;
+        }
+        if (!link->client->flag.close_after_reply) {
+            freeClientAsync(link->client);
+        }
+        link->client = NULL;
+    } else if (link->conn) {
+        connClose(link->conn);
+        link->conn = NULL;
+    }
+}
+
+void freeSlotMigrationLink(void *o) {
+    slotMigrationLink *link = o;
+    resetSlotMigrationLink(link);
+    listRelease(link->slot_ranges);
+    sdsfree(link->slot_ranges_str);
+    if (link->status_msg) {
+        sdsfree(link->status_msg);
+    }
+    zfree(o);
+}
+
+void initClusterSlotMigrationLinkList(void) {
+    server.cluster->slot_migration_links = listCreate();
+    listSetFreeMethod(server.cluster->slot_migration_links, freeSlotMigrationLink);
+}
+
+int shouldCleanupSlotMigrationLink(slotMigrationLink *link, int idx) {
+    return (link->state == SLOT_MIGRATION_LINK_CANCELLED ||
+            link->state == SLOT_MIGRATION_LINK_FAILED ||
+            link->state == SLOT_MIGRATION_LINK_SUCCESS) &&
+           (mstime() - link->last_update > CLUSTER_SLOT_MIGRATION_LOG_TTL_MILLIS ||
+            idx >= CLUSTER_SLOT_MIGRATION_LOG_MAX);
+}
+
+const char *slotMigrationLinkStateToString(slotMigrationLinkState state) {
+    switch (state) {
+    case SLOT_IMPORT_RECONNECT: return "reconnecting";
+    case SLOT_IMPORT_CONNECTING: return "connecting";
+    case SLOT_IMPORT_AUTHENTICATING: return "authenticating";
+    case SLOT_IMPORT_START_SNAPSHOT:
+    case SLOT_IMPORT_RECEIVE_SNAPSHOT: return "snapshotting";
+    case SLOT_IMPORT_RECEIVE_STREAM: return "replicating";
+    case SLOT_IMPORT_FAILOVER_WAITING_FOR_PAUSED: return "failover-syncing";
+    case SLOT_IMPORT_FAILOVER_REQUESTED: return "failover-requested";
+    case SLOT_IMPORT_FAILOVER_GRANTED: return "failover-granted";
+    case SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP: return "cleaning-up";
+
+    case SLOT_EXPORT_WAITING_TO_SNAPSHOT: return "waiting-to-snapshot";
+    case SLOT_EXPORT_SNAPSHOTTING: return "snapshotting";
+    case SLOT_EXPORT_STREAMING: return "replicating";
+    case SLOT_EXPORT_FAILOVER_PAUSED: return "failover-paused";
+    case SLOT_EXPORT_FAILOVER_GRANTED: return "failover-granted";
+
+    case SLOT_MIGRATION_LINK_SUCCESS: return "success";
+    case SLOT_MIGRATION_LINK_CANCELLED: return "cancelled";
+    case SLOT_MIGRATION_LINK_FAILED: return "failed";
+    default: return "unknown";
+    }
+}
+
+void updateSlotMigrationLinkState(slotMigrationLink *link, slotMigrationLinkState state) {
+    // murphyjacob4@ to cleanup before PR
+    serverLog(LL_NOTICE, "SLOT %s %.40s: %s -> %s",
+              link->type == SLOT_MIGRATION_IMPORT ? "IMPORT" : "EXPORT",
+              link->linkname, slotMigrationLinkStateToString(link->state),
+              slotMigrationLinkStateToString(state));
+    link->last_update = mstime();
+    link->state = state;
+}
+
+void finishSlotMigrationLink(slotMigrationLink *link, slotMigrationLinkState state, char *message) {
+    updateSlotMigrationLinkStatusMessage(link, message);
+
+    if (link->type == SLOT_MIGRATION_EXPORT) {
+        /* If we finish the export, we should not remain paused */
+        link->mf_end = 0;
+    }
+    if (link->type == SLOT_MIGRATION_IMPORT) {
+        /* Defer cleanup until beforeSleep, since it needs to be done outside an execution unit. */
+        link->post_cleanup_state = state;
+        state = SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP;
+        clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
+    }
+    updateSlotMigrationLinkState(link, state);
+    resetSlotMigrationLink(link);
+}
+
+/* In progress may be different than terminated, if we still need to track some cleanup work. */
+int isSlotMigrationLinkInProgress(slotMigrationLink *link) {
+    return link->state != SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP &&
+           link->state != SLOT_MIGRATION_LINK_SUCCESS &&
+           link->state != SLOT_MIGRATION_LINK_CANCELLED &&
+           link->state != SLOT_MIGRATION_LINK_FAILED;
 }
 
 /* Synthesizes a view of ongoing and recently completed imports for an operator. */
 void clusterCommandMigrations(client *c) {
     listNode *ln;
     listIter li;
-    int len = 0;
-    void *deflen = addReplyDeferredLen(c);
-    listRewind(server.cluster->slot_import_links, &li);
+    addReplyArrayLen(c, listLength(server.cluster->slot_migration_links));
+    listRewind(server.cluster->slot_migration_links, &li);
     while ((ln = listNext(&li)) != NULL) {
-        slotImportLink *link = ln->value;
-        if (!isSlotImportLinkInProgress(link)) {
-            continue;
-        }
-        replyWithMigrationLinkInfo(c, 1, link);
-        len++;
-    }
-    listRewind(server.cluster->slot_export_links, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        slotExportLink *link = ln->value;
-        if (!isSlotExportLinkInProgress(link)) {
-            continue;
-        }
-        replyWithMigrationLinkInfo(c, 0, link);
-        len++;
-    }
-    setDeferredArrayLen(c, deflen, len);
-}
-
-const char *slotMigrationLogStateToString(slotMigrationLogState state) {
-    switch (state) {
-    case SLOT_MIGRATION_LOG_CANCELLED: return "cancelled";
-    case SLOT_MIGRATION_LOG_FAILED: return "failed";
-    case SLOT_MIGRATION_LOG_SUCCESS: return "success";
-    default: return "unknown";
+        slotMigrationLink *link = ln->value;
+        addReplyMapLen(c, 9);
+        addReplyBulkCString(c, "link_name");
+        addReplyBulkCBuffer(c, link->linkname, CLUSTER_NAMELEN);
+        addReplyBulkCString(c, "operation");
+        addReplyBulkCString(c, link->type == SLOT_MIGRATION_IMPORT ? "IMPORT" : "EXPORT");
+        addReplyBulkCString(c, "slot_ranges");
+        addReplyBulkCString(c, link->slot_ranges_str);
+        addReplyBulkCString(c, "node");
+        addReplyBulkCBuffer(c, link->nodename, CLUSTER_NAMELEN);
+        addReplyBulkCString(c, "create_time_ms");
+        addReplyLongLong(c, link->ctime);
+        addReplyBulkCString(c, "last_update_time_ms");
+        addReplyLongLong(c, link->last_update);
+        addReplyBulkCString(c, "last_ack_time_ms");
+        addReplyLongLong(c, link->last_ack);
+        addReplyBulkCString(c, "state");
+        addReplyBulkCString(c, slotMigrationLinkStateToString(link->state));
+        addReplyBulkCString(c, "message");
+        addReplyBulkCString(c, link->status_msg ? link->status_msg : "");
     }
 }
 
-/* Report on all recently completed migrations. */
-void clusterCommandMigrationLog(client *c) {
-    if (c->argc == 3 && !strcasecmp(c->argv[3]->ptr, "reset")) {
-        listRelease(server.cluster->slot_migration_log);
-        addReply(c, shared.ok);
-        return;
-    } else if (c->argc > 2) {
-        addReply(c, shared.syntaxerr);
+void sendSyncSlotsMessageOnClient(client *c, const char *subcommand) {
+    addReplyArrayLen(c, 3);
+    addReplyBulkCString(c, "CLUSTER");
+    addReplyBulkCString(c, "SYNCSLOTS");
+    addReplyBulkCString(c, subcommand);
+}
+
+void sendSyncSlotsMessageOnLink(slotMigrationLink *link, const char *subcommand) {
+    serverAssert(link->client);
+    if (link->type == SLOT_MIGRATION_EXPORT) {
+        sendSyncSlotsMessageOnClient(link->client, subcommand);
         return;
     }
+    ClientFlags old_flags = link->client->flag;
+    link->client->flag.pushing = 1;
+    sendSyncSlotsMessageOnClient(link->client, subcommand);
+    if (!old_flags.pushing) link->client->flag.pushing = 0;
+}
+
+void clusterSlotMigrationCron(void) {
+    slotMigrationLink *link;
     listNode *ln;
     listIter li;
-    addReplyArrayLen(c, listLength(server.cluster->slot_migration_log));
-    listRewind(server.cluster->slot_migration_log, &li);
+    int idx = 0;
+    int paused = 0;
+    listRewind(server.cluster->slot_migration_links, &li);
     while ((ln = listNext(&li)) != NULL) {
-        slotMigrationLog *log = ln->value;
-        addReplyMapLen(c, 8);
-        addReplyBulkCString(c, "link_name");
-        addReplyBulkCBuffer(c, log->linkname, CLUSTER_NAMELEN);
-        addReplyBulkCString(c, "operation");
-        addReplyBulkCString(c, log->is_import ? "IMPORT" : "EXPORT");
-        addReplyBulkCString(c, "slot_ranges");
-        addReplyBulkCString(c, log->slot_ranges_str);
-        addReplyBulkCString(c, "node");
-        addReplyBulkCBuffer(c, log->nodename, CLUSTER_NAMELEN);
-        addReplyBulkCString(c, "create_time_ms");
-        addReplyLongLong(c, log->ctime);
-        addReplyBulkCString(c, "completion_time_ms");
-        addReplyLongLong(c, log->completion_time);
-        addReplyBulkCString(c, "state");
-        addReplyBulkCString(c, slotMigrationLogStateToString(log->state));
-        addReplyBulkCString(c, "message");
-        addReplyBulkCString(c, log->status_msg ? log->status_msg : "");
-    }
-}
+        link = ln->value;
 
-void freeSlotMigrationLog(void *o) {
-    slotMigrationLog *log = o;
-    listRelease(log->slot_ranges);
-    sdsfree(log->slot_ranges_str);
-    if (log->status_msg) {
-        sdsfree(log->status_msg);
-    }
-    zfree(o);
-}
+        if (link->client) {
+            mstime_t last_interaction = link->client->last_interaction;
+            if (link->type == SLOT_MIGRATION_EXPORT) {
+                /* For migrations, we just use the last ack received time */
+                last_interaction = link->last_ack;
+            }
 
-void initClusterSlotMigrationLogList(void) {
-    server.cluster->slot_migration_log = listCreate();
-    listSetFreeMethod(server.cluster->slot_migration_log, freeSlotMigrationLog);
-}
-
-void cleanupSlotMigrationLog(void) {
-    if (listLength(server.cluster->slot_migration_log) == 0) {
-        return;
+            if (isSlotMigrationLinkInProgress(link)) {
+                /* Only enforce the ACK timeout when not in failover granted
+                 * state. Instead, rely on the pause timeout in such cases. */
+                if (link->state != SLOT_EXPORT_FAILOVER_GRANTED &&
+                    server.unixtime - last_interaction > server.repl_timeout) {
+                    serverLog(LL_WARNING, "Timing out slot export to node %.40s for slots (%s) "
+                                          "after not receiving ack for too long",
+                              link->nodename, link->slot_ranges_str);
+                    finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED,
+                                            "Timed out after too long with no interaction");
+                    continue;
+                }
+                /* Send acks only when the child process isn't writing to it. */
+                if (link->state != SLOT_EXPORT_SNAPSHOTTING) {
+                    run_with_period(1000) sendSyncSlotsMessageOnLink(link, "ACK");
+                }
+            }
+        }
+        proceedWithSlotMigration(link);
+        if (link->mf_end) {
+            paused++;
+        }
+        if (shouldCleanupSlotMigrationLink(link, idx)) {
+            listDelNode(server.cluster->slot_migration_links, ln);
+            continue;
+        }
+        idx++;
     }
-    listNode *tail = server.cluster->slot_migration_log->tail;
-    slotMigrationLog *tail_log = (slotMigrationLog *)listNodeValue(tail);
-    while (listLength(server.cluster->slot_migration_log) > CLUSTER_SLOT_MIGRATION_LOG_MAX || tail_log->completion_time < mstime() - CLUSTER_SLOT_MIGRATION_LOG_TTL_MILLIS) {
-        listDelNode(server.cluster->slot_migration_log, tail);
-        tail = server.cluster->slot_migration_log->tail;
-        tail_log = (slotMigrationLog *)listNodeValue(tail);
-    }
-}
 
-/* Entrypoint from clusterCron */
-void clusterSlotMigrationCron(void) {
-    proceedWithAllSlotImports();
-    proceedWithAllSlotExports();
-    cleanupSlotMigrationLog();
+    /* If no exports are paused, we can unpause */
+    if (!paused && getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION)) {
+        unpauseActions(PAUSE_DURING_SLOT_MIGRATION);
+    }
 }
 
 /* Sent by either the target or the source as a liveness check. */
 void clusterCommandSyncSlotsAck(client *c) {
-    if (c->flag.slot_export_target && c->slot_export_link) {
-        slotExportLink *link = (slotExportLink *)c->slot_export_link;
-        link->last_ack = mstime();
-    } else if (c->flag.slot_import_source && c->slot_import_link) {
-        slotImportLink *link = (slotImportLink *)c->slot_import_link;
-        link->last_ack = mstime();
-    } else {
+    if (!c->flag.slot_export_target && !c->flag.slot_import_source) {
         serverLog(LL_WARNING, "Received CLUSTER SYNCSLOTS ACK from client %lu, but the client is not a slot import source or export target. Closing link.", c->id);
         freeClientAsync(c);
         return;
     }
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    link->last_ack = mstime();
 }
 
 /* Sent by either the target or the source as a control message for progressing

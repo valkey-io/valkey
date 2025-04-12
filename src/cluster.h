@@ -158,7 +158,7 @@ int clusterAddSlot(clusterNode *n, int slot);
 int clusterBumpConfigEpochWithoutConsensus(void);
 void clusterDoBeforeSleep(int flags);
 
-void handleSlotImportLinkClientClose(void *o);
+void clusterHandleSlotImportLinkClientClose(void *o);
 void clusterHandleSlotExportLinkClientClose(void *o);
 void handleSlotImportLinkClientOOM(void *o);
 void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc);
@@ -167,18 +167,14 @@ int isSlotExportingViaReplication(int slot);
 int clusterIsAnySlotImportingViaRepl(void);
 int clusterIsAnySlotExportingViaRepl(void);
 int clusterIsSlotExportReadyForReplData(client *c);
-void initClusterSlotImportLinkList(void);
-void initClusterSlotExportLinkList(void);
-void initClusterSlotMigrationLogList(void);
+void initClusterSlotMigrationLinkList(void);
 void clusterSlotMigrationCron(void);
 void clusterCommandImport(client *c, int prepare_only);
 void clusterCommandSyncSlots(client *c);
 void clusterCommandMigrations(client *c);
-void clusterCommandMigrationLog(client *c);
 void clusterCommandImportCancel(client *c);
 void clusterCommandImportCommit(client *c);
 void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr);
-int clusterIsSlotExportLinkSnapshotting(void *export);
 void clusterUpdateSlotExportsOnOwnershipChange(void);
 void clusterUpdateSlotImportsOnOwnershipChange(void);
 

@@ -687,7 +687,7 @@ void kvstoreMoveHashtables(kvstore *dst, kvstore *src, kvstoreMoveShouldIncludeH
         if (metadata->rehashing_node) {
             listAddNodeTail(dst->rehashing, metadata->rehashing_node);
             listDelNode(src->rehashing, metadata->rehashing_node);
-            
+
             size_t from, to;
             hashtableRehashingInfo(ht, &from, &to);
             dst->overhead_hashtable_rehashing += from * HASHTABLE_BUCKET_SIZE;

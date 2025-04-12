@@ -1211,8 +1211,7 @@ typedef struct client {
     multiState *mstate;               /* MULTI/EXEC state, lazily initialized when first needed */
     blockingState *bstate;            /* Blocking state, lazily initialized when first needed */
     /* Slotsync data, todo maybe need to move it into ClientReplicationData or a new struct. */
-    void *slot_import_link; /* Pointer to the slot import link, or NULL. */
-    void *slot_export_link; /* Pointer to the slot export link, or NULL. */
+    void *slot_migration_link; /* Pointer to the slot migration link, or NULL. */
     /* Output buffer and reply handling */
     long duration;                       /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     char *buf;                           /* Output buffer */

@@ -793,7 +793,7 @@ void flushdbCommand(client *c) {
          *      a delete for each key in the slots we drop.
          *   2. FLUSHDB needs to be broken into slot-level commands in order
          *      for it to be replayed on the slot import targets.
-         * 
+         *
          * Eventually, a single command to flush a slot would improve the
          * replication traffic.
          */

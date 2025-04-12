@@ -202,8 +202,7 @@ client *createClient(connection *conn) {
     c->ctime = c->last_interaction = server.unixtime;
     c->duration = 0;
     clientSetDefaultAuth(c);
-    c->slot_import_link = NULL;
-    c->slot_export_link = NULL;
+    c->slot_migration_link = NULL;
     c->reply = listCreate();
     c->deferred_reply_errors = NULL;
     c->reply_bytes = 0;
@@ -269,7 +268,7 @@ void putClientInPendingWriteQueue(client *c) {
         (!c->repl_data ||
          c->repl_data->repl_state == REPL_STATE_NONE ||
          (isReplicaReadyForReplData(c) && !c->repl_data->repl_start_cmd_stream_on_ack)) &&
-        (!c->flag.slot_export_target || !c->slot_export_link ||
+        (!c->flag.slot_export_target || !c->slot_migration_link ||
          clusterIsSlotExportReadyForReplData(c))) {
         /* Here instead of installing the write handler, we just flag the
          * client and put it into a list of clients that have something
@@ -1568,7 +1567,7 @@ void unlinkClient(client *c) {
          * in which case it needs to be cleaned from that list */
         if (c->repl_data && server.rdb_pipe_conns &&
             ((c->flag.replica && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) ||
-             (c->flag.slot_export_target && clusterIsSlotExportLinkSnapshotting(c->slot_export_link)))) {
+             c->flag.slot_export_target)) {
             int i;
             int still_alive = 0;
             for (i = 0; i < server.rdb_pipe_numconns; i++) {
@@ -1729,9 +1728,9 @@ void freeClient(client *c) {
 
     /* Handle slot import connection closed. */
     if (c->flag.slot_import_source) {
-        handleSlotImportLinkClientClose(c->slot_import_link);
+        clusterHandleSlotImportLinkClientClose(c->slot_migration_link);
     } else if (c->flag.slot_export_target) {
-        clusterHandleSlotExportLinkClientClose(c->slot_export_link);
+        clusterHandleSlotExportLinkClientClose(c->slot_migration_link);
     }
 
     /* Free the query buffer */

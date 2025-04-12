@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: valkey-configmap
+  labels:
+    app.kubernetes.io/name: "{{- .Release.Name -}}"
+data:
+  valkey.conf: |-
+    bind 0.0.0.0
+
+    cluster-enabled yes
+    cluster-node-timeout 15000
+    cluster-config-file /redis-data/node.conf
+    cluster-allow-replica-migration no
+    cluster-migration-barrier 1
+    cluster-replica-validity-factor 0
+    cluster-require-full-coverage no
+
+    databases 1
+    io-threads 6
+    activedefrag yes
+    client-output-buffer-limit replica 3920802693 3920802693 0
+    cluster-allow-reads-when-down yes
+
+    dual-channel-replication-enabled yes
+    hz 40
+    save
+    maxclients 80000
+    maxmemory-eviction-tenacity 20
+    maxmemory-policy allkeys-random
+    min-replicas-to-write 0
+    prefetch-batch-max-size 16
+    repl-backlog-size 1g
+    repl-diskless-load on-empty-db
+    repl-diskless-sync yes
+    repl-timeout 650
+    replica-lazy-flush yes
+    save
+    slowlog-log-slower-than 100000
+    slowlog-max-len 1000

@@ -62,6 +62,8 @@
 SSL_CTX *valkey_tls_ctx = NULL;
 SSL_CTX *valkey_tls_client_ctx = NULL;
 
+char *getClientSockname(client *c);
+
 static int parseProtocolsConfig(const char *str) {
     int i, count = 0;
     int protocols = 0;
@@ -452,6 +454,7 @@ typedef struct tls_connection {
     SSL *ssl;
     char *ssl_error;
     listNode *pending_list_node;
+    mstime_t creation_mstime;
 } tls_connection;
 
 static connection *createTLSConnection(int client_side) {
@@ -462,6 +465,7 @@ static connection *createTLSConnection(int client_side) {
     conn->c.fd = -1;
     conn->c.iovcnt = IOV_MAX;
     conn->ssl = SSL_new(ctx);
+    conn->creation_mstime = server.mstime;
     return (connection *)conn;
 }
 
@@ -596,6 +600,9 @@ static void registerSSLEvent(tls_connection *conn) {
         if (mask & AE_READABLE) aeDeleteFileEvent(server.el, conn->c.fd, AE_READABLE);
         if (!(mask & AE_WRITABLE)) aeCreateFileEvent(server.el, conn->c.fd, AE_WRITABLE, tlsEventHandler, conn);
     } else {
+        client *c = connGetPrivateData(&conn->c);
+        serverLog(LL_WARNING, "Illegal state for flags (%x) of TLS connection (with state %d) which is %lld ms old: (addr=%s laddr=%s)",
+                  conn->flags, conn->c.state, server.mstime-conn->creation_mstime, getClientPeerId(c), getClientSockname(c));
         serverAssert(0);
     }
 }

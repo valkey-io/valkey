@@ -1,0 +1,16 @@
+# Default values for node-for-redis.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+numberOfNodes: 9
+port: 17379
+
+image: "valkey/valkey:8.1.0-alpine3.21"
+
+resources:
+  limits:
+    cpu: 7
+    memory: 58Gi
+  requests:
+    cpu: 4
+    memory: 34Gi

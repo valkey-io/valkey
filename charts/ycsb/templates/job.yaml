@@ -1,0 +1,115 @@
+{{ $podAddrs := list }}
+{{ $image := "" }}
+{{ range $pod := (lookup "v1" "Pod" .Release.Namespace "").items }}
+  {{ $label := get $pod.metadata.labels "app.kubernetes.io/name" }}
+  {{ if eq $label $.Values.clusterName }}
+    {{ if not (eq $pod.status.phase "Running") }}
+      {{ fail (printf "Pod %s is not in 'Running' phase." $pod.metadata.name) }}
+    {{ end }}
+    {{ if not $pod.status.podIP }}
+      {{ fail (printf "Pod %s doesn't have IP yet." $pod.metadata.name) }}
+    {{ end }}
+    {{ $podAddr := $pod.status.podIP }}
+    {{ range $container := $pod.spec.containers }}
+      {{ if eq $container.name "valkey" }}
+        {{ $image = $container.image }}
+      {{ end }}
+      {{ range $port := $container.ports }}
+        {{ if eq $port.name "redis" }}
+          {{ $podAddr = printf "%s:%d" $podAddr $port.hostPort}}
+        {{ end }}
+      {{ end }}
+    {{ end }}
+    {{ $podAddrs = append $podAddrs $podAddr }}
+  {{ end }}
+{{ end }}
+{{ if eq 0 (len $podAddrs) }}
+  {{ fail (printf "Can't find any pods for cluster %s." .Values.clusterName) }}
+{{ end }}
+{{ if not $image }}
+  {{ fail "Can't find image in any pod." }}
+{{ end }}
+{{$tlsParams := "--tls --cacert /certs/ca.crt --key /certs/tls.key --cert /certs/tls.crt" }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "{{- .Release.Name -}}"
+  labels:
+    app.kubernetes.io/name: "{{- .Release.Name -}}"
+spec:
+  backoffLimit: 6
+  completionMode: Indexed
+  completions: {{ len $podAddrs }}
+  manualSelector: false
+  parallelism: {{ len $podAddrs }}
+  suspend: false
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: "{{- .Release.Name -}}"
+    spec:
+      restartPolicy: Never
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: "{{- .Release.Name -}}"
+              topologyKey: kubernetes.io/hostname
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      initContainers:
+        - name: cluster-init
+          image: "{{- $image -}}"
+          command: ["sh", "-c", "--"]
+          args: [
+            "test ${JOB_COMPLETION_INDEX} -gt 0 || valkey-cli --cluster check {{$tlsParams}} --cluster-yes {{first $podAddrs}} || valkey-cli --cluster create {{range $podAddr := $podAddrs}} {{$podAddr}}{{end}} --cluster-replicas 2 {{first $podAddrs}} {{$tlsParams}} --cluster-yes; sleep 5"
+          ]
+          env:
+            - name: JOB_COMPLETION_INDEX
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.labels['batch.kubernetes.io/job-completion-index']
+          volumeMounts:
+            - name: certs
+              mountPath: /certs
+        - name: cluster-waiter
+          image: "{{- $image -}}"
+          command: ["sh", "-c", "--"]
+          args: [
+            "until valkey-cli --cluster check {{$tlsParams}} --cluster-yes {{first $podAddrs}}; do echo \"Cluster is not ready. Sleeping for 5 sec...\"; sleep 5; done; echo \"Cluster is ready.\"; sleep 5"
+          ]
+          volumeMounts:
+            - name: certs
+              mountPath: /certs
+      containers:
+{{ range list 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 }}
+        - name: "pinger-{{- . -}}"
+          image: "{{- $image -}}"
+          command: ["/bin/sh", "-c", "--"]
+          args:
+            - "while true; do valkey-cli {{$tlsParams}} -u valkey://$(eval echo \\$CLUSTER_ADDR_${JOB_COMPLETION_INDEX}) ping > /dev/null; done"
+          imagePullPolicy: Always
+          resources:
+            {{- toYaml $.Values.resources | nindent 12 }}
+          securityContext:
+            privileged: true
+          env:
+{{range $idx,$podAddr := $podAddrs}}
+            - name: "CLUSTER_ADDR_{{- $idx -}}"
+              value: "{{- $podAddr -}}"
+{{end}}
+            - name: JOB_COMPLETION_INDEX
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.labels['batch.kubernetes.io/job-completion-index']
+          volumeMounts:
+            - name: certs
+              mountPath: /certs
+{{ end }}
+      volumes:
+        - name: certs
+          secret:
+            secretName: "{{- $.Values.clusterName -}}-cert"

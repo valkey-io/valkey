@@ -1,0 +1,6 @@
+apiVersion: v2
+name: valkey-cluster-example
+type: application
+version: 0.0.0     # Overridden by release workflow
+appVersion: 0.0.0  # Overridden by release workflow
+description: Example of Valkey Cluster

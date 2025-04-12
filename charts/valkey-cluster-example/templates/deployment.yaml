@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: "{{- .Release.Name -}}"
+  labels:
+    app.kubernetes.io/name: "{{- .Release.Name -}}"
+spec:
+  replicas: {{ .Values.numberOfNodes }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: "{{- .Release.Name -}}"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: "{{- .Release.Name -}}"
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: "app.kubernetes.io/name"
+                    operator: In
+                    values:
+                      - "{{- .Release.Name -}}"
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: "{{- .Release.Name -}}"
+              topologyKey: kubernetes.io/hostname
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: valkey
+          image: "{{- .Values.image -}}"
+          command:
+            - "valkey-server"
+            - "/redis-conf/valkey.conf"
+          args: [
+            "--tls-port", "{{ .Values.port }}",
+            "--port", "0",
+            "--maxmemory", "39208026931",
+            "--dir", "/redis-data",
+            "--tls-replication", "yes",
+            "--tls-cluster", "yes",
+            "--tls-ca-cert-file", "/certs/ca.crt",
+            "--tls-cert-file", "/certs/tls.crt",
+            "--tls-key-file", "/certs/tls.key"
+          ]
+          imagePullPolicy: Always
+          readinessProbe:
+            timeoutSeconds: 5
+            periodSeconds: 15
+            successThreshold: 1
+            failureThreshold: 3
+            exec:
+              command: ["timeout", "-s", "9", "3s", "valkey-cli", "-h", "localhost", "-p", "{{- .Values.port -}}", "--tls", "--cert", "/certs/tls.crt", "--key", "/certs/tls.key", "--cacert", "/certs/ca.crt", "ping"]
+          ports:
+            - name: redis
+              containerPort: {{ .Values.port }}
+              protocol: TCP
+            - name: cluster
+              containerPort: {{ add .Values.port 10000 }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: redis-data
+              mountPath: /redis-data
+            - name: valkey-configmap
+              mountPath: /redis-conf
+            - name: certs
+              mountPath: /certs
+      volumes:
+        - name: certs
+          secret:
+            secretName: "{{- .Release.Name -}}-cert"
+        - name: valkey-configmap
+          configMap:
+            name: valkey-configmap
+        - name: redis-data
+          emptyDir: {}

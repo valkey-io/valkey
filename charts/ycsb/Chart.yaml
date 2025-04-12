@@ -1,0 +1,8 @@
+apiVersion: v2
+name: ycsb
+type: application
+version: 0.0.0     # Overridden by release workflow
+appVersion: 0.0.0  # Overridden by release workflow
+description: Tool to generate traffic for Redis clusters.
+maintainers:
+  - name: skolosov

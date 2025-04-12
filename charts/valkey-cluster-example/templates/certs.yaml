@@ -1,0 +1,17 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: "{{- .Release.Name -}}-selfsigned-issuer"
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: "{{- .Release.Name -}}-cert"
+spec:
+  commonName: "{{- .Release.Name -}}"
+  issuerRef:
+    kind: Issuer
+    name: "{{- .Release.Name -}}-selfsigned-issuer"
+  secretName: "{{- .Release.Name -}}-cert"

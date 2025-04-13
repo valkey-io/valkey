@@ -1113,8 +1113,8 @@ typedef struct ClientFlags {
                                             * flag, we won't cache the primary in freeClient. */
     uint64_t fake : 1;                     /* This is a fake client without a real connection. */
     uint64_t import_source : 1;            /* This client is importing data to server and can visit expired key. */
-    uint64_t slot_import_source : 1;       /* This client is a link to a slot replication source. */
-    uint64_t slot_export_target : 1;       /* This client is a link to a slot replication target. */
+    uint64_t slot_import_source : 1;       /* This client is a link to a slot import source. */
+    uint64_t slot_export_target : 1;       /* This client is a link to a slot export target. */
     uint64_t reserved : 2;                 /* Reserved for future use */
 } ClientFlags;
 
@@ -3010,7 +3010,7 @@ void aofOpenIfNeededOnServerStart(void);
 void aofManifestFree(aofManifest *am);
 int aofDelHistoryFiles(void);
 int aofRewriteLimited(void);
-int rewriteAppendOnlyFileRio(rio *aof, kvstoreIteratorPredicate predicate, void *privdata);
+int rewriteAppendOnlyFileRio(rio *aof, int skip_timestamp, kvstoreIteratorPredicate predicate, void *privdata);
 
 /* Child info */
 void openChildInfoPipe(void);

@@ -2651,11 +2651,11 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                     dirty_slots_count++;
                 }
 
-                if (server.cluster->slots[j] == myself && isSlotExportingViaReplication(j)) {
+                if (clusterIsSlotExporting(j)) {
                     exporting_slots_count++;
                 }
 
-                if (isSlotImportingViaReplication(j)) {
+                if (clusterIsSlotImporting(j)) {
                     importing_slots_count++;
                 }
 
@@ -6539,10 +6539,6 @@ void removeChannelsInSlot(unsigned int slot) {
     pubsubShardUnsubscribeAllChannelsInSlot(slot);
 }
 
-int clusterIsSlotOwnedByMyself(int slot) {
-    return server.cluster->slots[slot] == server.cluster->myself;
-}
-
 /* Propagate deletion of all keys in slot (without doing the local deletion).
  * Assumed to be executed inside an execution context. */
 unsigned int propagateSlotDeletionByKeys(unsigned int hashslot) {
@@ -6770,11 +6766,11 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
         return 0;
     }
 
-    if (clusterIsAnySlotImportingViaRepl()) {
+    if (clusterIsAnySlotImporting()) {
         addReplyError(c, "A slot is currently being imported via CLUSTER IMPORT. Please cancel any ongoing import operations and try again.");
         return 0;
     }
-    if (clusterIsAnySlotExportingViaRepl()) {
+    if (clusterIsAnySlotExporting()) {
         addReplyError(c, "A slot is currently being exported via CLUSTER IMPORT. Please cancel any ongoing import operations and try again.");
         return 0;
     }
@@ -7426,7 +7422,7 @@ int clusterCommandSpecial(client *c) {
         /* CLUSTER IMPORT-CANCEL (LINK <link-name>|ALL) */
         clusterCommandImportCancel(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "syncslots") && c->argc > 2) {
-        /* CLUSTER SYNCSLOTS (SNAPSHOT TARGET <node-id> <start-slot> <end-slot> [<start slot> <end slot>]|SNAPSHOT-EOF|STREAM|PAUSE|PAUSED|REQUEST-FAILOVER|FAILOVER-GRANTED|FAILOVER-DENIED|ACK|CANCEL)*/
+        /* CLUSTER SYNCSLOTS <subcommand>*/
         clusterCommandSyncSlots(c);
     } else {
         return 0;
@@ -7470,14 +7466,16 @@ const char **clusterCommandExtendedHelp(void) {
         "LINKS",
         "    Return information about all network links between this node and its peers.",
         "    Output format is an array where each array element is a map containing attributes of a link",
-        "IMPORT [NOFAILOVER] SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...]",
+        "IMPORT(-PREPARE) SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...]",
         "    Import the specified slot ranges from their owners.",
+        "IMPORT-COMMIT LINK <link-name>",
+        "    Commit a previous import started with IMPORT-PREPARE.",
         "IMPORT-CANCEL ALL",
         "    Cancel all ongoing imports.",
         "MIGRATIONS",
         "    Get information about ongoing and recently finished slot imports and exports.",
-        "SYNCSLOTS (SNAPSHOT TARGET <node-id> <start-slot> <end-slot> [<start slot> <end slot>]|SNAPSHOT-EOF|PAUSE|PAUSED|REQUEST-FAILOVER|FAILOVER-GRANTED|FAILOVER-DENIED)",
-        "    Begin syncing a slot, or transition an existing slot sync to a new state.",
+        "SYNCSLOTS <subcommand>",
+        "    Internal command used to perform state transitions in slot import and export.",
         NULL};
 
     return help;

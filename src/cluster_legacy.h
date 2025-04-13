@@ -378,7 +378,6 @@ typedef struct slotStat {
     uint64_t network_bytes_out;
 } slotStat;
 
-/* A structure used to represent a slot range. */
 typedef struct slotRange {
     int start_slot;
     int end_slot;
@@ -420,13 +419,13 @@ typedef enum slotMigrationLinkType {
  * duration of a CLUSTER IMPORT operation. */
 typedef struct slotMigrationLink {
     slotMigrationLinkType type;                /* Type of the migration link (either for import or export) */
-    mstime_t ctime;                            /* Migration link creation time. */
-    mstime_t last_update;                      /* Migration link last update time. */
+    time_t ctime;                            /* Migration link creation time. */
+    time_t last_update;                      /* Migration link last update time. */
     time_t last_ack;                           /* Migration link last ack time. */
-    char nodename[CLUSTER_NAMELEN];            /* Name of the slot replication source node, hex string, sha1-size. */
+    char nodename[CLUSTER_NAMELEN];            /* Name of the slot import source node, hex string, sha1-size. */
     char linkname[CLUSTER_NAMELEN];            /* Unique name for the link, hex string, sha1-size. */
     client *client;                            /* Client to other node. */
-    connection *conn;                          /* (Import only) Connection to slot replication source node. */
+    connection *conn;                          /* (Import only) Connection to slot import source node. */
     slotMigrationLinkState state;              /* State of the slot migration link. */
     sds status_msg;                            /* Human readable status message with more details. */
     list *slot_ranges;                         /* List of the slot ranges we want to import. */

@@ -786,7 +786,7 @@ void flushdbCommand(client *c) {
 
     if (getFlushCommandFlags(c, &flags) == C_ERR) return;
 
-    if (server.cluster_enabled && (clusterIsAnySlotImportingViaRepl() || clusterIsAnySlotExportingViaRepl())) {
+    if (server.cluster_enabled && (clusterIsAnySlotImporting() || clusterIsAnySlotExporting())) {
         /* Here, we handle two cases:
          *   1. FLUSHDB should not flush importing slots. Right now, there is
          *      no clean way to propagate this to replicas without propagating
@@ -798,14 +798,14 @@ void flushdbCommand(client *c) {
          * replication traffic.
          */
         for (int i = 0; i < CLUSTER_SLOTS; i++) {
-            if (isSlotImportingViaReplication(i)) continue;
+            if (clusterIsSlotImporting(i)) continue;
             propagateSlotDeletionByKeys(i);
         }
         preventCommandPropagation(c);
 
         /* After propagating the deletes, we can flush the DB. Note that we
          * don't flush importing slots. */
-        server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL, isSlotImportingViaReplication);
+        server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL, clusterIsSlotImporting);
     } else {
         /* flushdb should not flush the functions */
         server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL, NULL);
@@ -1101,7 +1101,7 @@ char *getObjectTypeName(robj *o) {
 
 int shouldSkipHashTableInScan(int didx, hashtable *ht) {
     UNUSED(ht);
-    return server.cluster && isSlotImportingViaReplication(didx);
+    return server.cluster && clusterIsSlotImporting(didx);
 }
 
 /* This command implements SCAN, HSCAN and SSCAN commands.

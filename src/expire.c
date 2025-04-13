@@ -160,7 +160,7 @@ static inline int isExpiryTableValidForSamplingCb(int didx, hashtable *ht) {
         return C_ERR;
     }
     /* If the hashtable is currently being imported, skip it. */
-    if (server.cluster_enabled && isSlotImportingViaReplication(didx)) {
+    if (server.cluster_enabled && clusterIsSlotImporting(didx)) {
         return C_ERR;
     }
     return C_OK;

@@ -3478,7 +3478,7 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
     if (server.aof_state != AOF_OFF && target & PROPAGATE_AOF) feedAppendOnlyFile(dbid, argv, argc);
     if (target & PROPAGATE_REPL) {
         replicationFeedReplicas(dbid, argv, argc);
-        if (server.cluster_enabled && clusterIsAnySlotExportingViaRepl()) {
+        if (server.cluster_enabled && clusterIsAnySlotExporting()) {
             clusterFeedSlotExportLinks(dbid, argv, argc);
         }
     }
@@ -4224,7 +4224,8 @@ int processCommand(client *c) {
 
         if (out_of_memory && is_denyoom_command) {
             if (c->flag.slot_import_source && c->slot_migration_link != NULL) {
-                handleSlotImportLinkClientOOM(c->slot_migration_link);
+                clusterHandleSlotImportLinkClientOOM(c->slot_migration_link);
+                return C_ERR;
             }
 
             rejectCommand(c, shared.oomerr);

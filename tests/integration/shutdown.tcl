@@ -244,3 +244,41 @@ test "Shutting down master waits for replica then aborted" {
         }
     }
 } {} {repl external:skip}
+
+test "Shutting down primary wait for replica after previous block" {
+    start_server {overrides {save "" repl-backlog-size 1MB}} {
+        start_server {overrides {save "" repl-backlog-size 1MB}} {
+            set primary [srv -1 client]
+            set primary_deferring [valkey_deferring_client -1]
+            set primary_host [srv -1 host]
+            set primary_port [srv -1 port]
+            set primary_pid [srv -1 pid]
+            set replica [srv 0 client]
+            set replica_pid [srv 0 pid]
+
+            $primary_deferring BLPOP key 0.1
+
+            # Config primary and replica.
+            $replica replicaof $primary_host $primary_port
+            wait_for_sync $replica
+
+            # Pause the replica and write a key on primary.
+            pause_process $replica_pid
+            $primary incr k
+
+            # Call shutdown.
+            $primary_deferring shutdown
+
+            set info_clients [$primary info clients]
+            assert_match "*connected_clients:2*" $info_clients
+            assert_match "*blocked_clients:1*" $info_clients
+
+            # Wake up replica, causing primary to continue shutting down.
+            resume_process $replica_pid
+            $primary_deferring close
+
+            # Check for crash.
+            assert_equal [count_log_message -1 "*BUG REPORT START*"] 0
+        }
+    }
+} {} {repl external:skip}

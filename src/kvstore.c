@@ -619,7 +619,9 @@ void kvstoreIteratorRelease(kvstoreIterator *kvs_it) {
     hashtableIterator *iter = &kvs_it->di;
     hashtableResetIterator(iter);
     /* In the safe iterator context, we may delete entries. */
-    freeHashtableIfNeeded(kvs_it->kvs, kvs_it->didx);
+    if (kvs_it->didx != -1) {
+        freeHashtableIfNeeded(kvs_it->kvs, kvs_it->didx);
+    }
     zfree(kvs_it);
 }
 

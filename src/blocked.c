@@ -251,6 +251,7 @@ void unblockClient(client *c, int queue_for_reprocessing) {
     c->bstate->btype = BLOCKED_NONE;
     c->bstate->unblock_on_nokey = 0;
     removeClientFromTimeoutTable(c);
+    c->bstate->timeout = 0; /* murphyjacob4 - this should be a dedicated PR with a test */
     if (queue_for_reprocessing) queueClientForReprocessing(c);
 }
 
@@ -276,6 +277,7 @@ void replyToBlockedClientTimedOut(client *c) {
     } else if (c->bstate->btype == BLOCKED_MODULE) {
         moduleBlockedClientTimedOut(c, 0);
     } else {
+        serverLog(LL_WARNING, "btype %d, timeout=%llu", c->bstate->btype, c->bstate->timeout);
         serverPanic("Unknown btype in replyToBlockedClientTimedOut().");
     }
 }
@@ -406,6 +408,7 @@ void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeo
     if (!c->flag.reprocessing_command) {
         /* If the client is re-processing the command, we do not set the timeout
          * because we need to retain the client's original timeout. */
+        printf("Debug log 1: adding timeout %llu", timeout);
         c->bstate->timeout = timeout;
     }
 

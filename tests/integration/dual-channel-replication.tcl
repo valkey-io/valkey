@@ -5,24 +5,6 @@ proc log_file_matches {log pattern} {
     string match $pattern $content
 }
 
-proc get_client_id_by_last_cmd {r cmd} {
-    set client_list [$r client list]
-    set client_id ""
-    set lines [split $client_list "\n"]
-    foreach line $lines {
-        if {[string match *cmd=$cmd* $line]} {
-            set parts [split $line " "]
-            foreach part $parts {
-                if {[string match id=* $part]} {
-                    set client_id [lindex [split $part "="] 1]
-                    return $client_id
-                }
-            }
-        }
-    }
-    return $client_id
-}
-
 # Wait until the process enters a paused state.
 proc wait_process_paused idx {
     set pid [srv $idx pid]

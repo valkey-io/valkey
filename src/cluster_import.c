@@ -555,11 +555,6 @@ void clusterHandleSlotImportLinkClientClose(void *import) {
         return;
     }
     clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
-    if (link->one_shot) {
-        serverLog(LL_WARNING, "Slot import link %.40s lost connection to node %.40s (owner of slots [%s]). Failing import...", link->linkname, link->nodename, link->slot_ranges_str);
-        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Connection to source node lost");
-        return;
-    }
     serverLog(LL_WARNING, "Slot import link %.40s lost connection to node %.40s (owner of slots [%s]). Reconnecting...", link->linkname, link->nodename, link->slot_ranges_str);
     updateSlotMigrationLinkState(link, SLOT_IMPORT_RECONNECT);
 }
@@ -765,6 +760,7 @@ void clusterUpdateSlotImportsOnOwnershipChange(void) {
     while ((ln = listNext(&li))) {
         slotMigrationLink *link = (slotMigrationLink *)ln->value;
         if (link->type != SLOT_MIGRATION_IMPORT) continue;
+        if (!isSlotMigrationLinkInProgress(link)) continue;
         if (!nodeIsPrimary(server.cluster->myself)) {
             finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "I was demoted to a replica");
             continue;
@@ -1055,6 +1051,7 @@ void slotExportLinkBeginSnapshot(slotMigrationLink *link) {
         return;
     }
     updateSlotMigrationLinkState(link, SLOT_EXPORT_SNAPSHOTTING);
+    if (server.debug_pause_after_fork) debugPauseProcess();
 }
 
 void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr) {
@@ -1431,6 +1428,9 @@ void updateSlotMigrationLinkState(slotMigrationLink *link, slotMigrationLinkStat
 }
 
 void finishSlotMigrationLink(slotMigrationLink *link, slotMigrationLinkState state, char *message) {
+    serverLog(LL_NOTICE, "Slot %s link %.40s (for slots [%s]) finished. State: %s, Message: %s",
+              link->type == SLOT_MIGRATION_IMPORT ? "import" : "export", link->linkname,
+              link->slot_ranges_str, slotMigrationLinkStateToString(state), message ? message : "");
     updateSlotMigrationLinkStatusMessage(link, message);
 
     if (link->type == SLOT_MIGRATION_EXPORT) {
@@ -1526,9 +1526,9 @@ void clusterSlotMigrationCron(void) {
                  * state. Instead, rely on the pause timeout in such cases. */
                 if (link->state != SLOT_EXPORT_FAILOVER_GRANTED &&
                     server.unixtime - last_interaction > server.repl_timeout) {
-                    serverLog(LL_WARNING, "Timing out slot export to node %.40s for slots (%s) "
+                    serverLog(LL_WARNING, "Timing out slot link %.40s to node %.40s for slots (%s) "
                                           "after not receiving ack for too long",
-                              link->nodename, link->slot_ranges_str);
+                              link->linkname, link->nodename, link->slot_ranges_str);
                     finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED,
                                             "Timed out after too long with no interaction");
                     continue;

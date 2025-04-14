@@ -6565,8 +6565,8 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool is_cmd) {
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, server.db[0].id);
         } else {
             /* The keys are not actually logically deleted from the database, just moved to another node.
-            * The modules needs to know that these keys are no longer available locally, so just send the
-            * keyspace notification to the modules, but not to clients. */
+             * The modules needs to know that these keys are no longer available locally, so just send the
+             * keyspace notification to the modules, but not to clients. */
             /* In cluster flushslot scene, the is actually deleted, fire del event. */
             moduleNotifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, server.db[0].id);
         }

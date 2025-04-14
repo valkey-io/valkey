@@ -64,6 +64,24 @@ typedef struct {
     int type;
     /* Boolean flag to determine if the current client (`me`) should be filtered. 1 means "skip me", 0 means otherwise. */
     int skipme;
+    /* Client name to filter. If NULL, no name filtering is applied. */
+    char *name;
+    /* Idle time (in seconds) of a client connection for filtering.
+     * Connections with idle time more than this value will match.
+     * A value of 0 means no idle time filtering. */
+    long long idle;
+    /* Client flags for filtering. If NULL, no filtering is applied. */
+    sds flags;
+    /* Library name to filter. If NULL, no library name filtering is applied. */
+    robj *lib_name;
+    /* Library version to filter. If NULL, no library version filtering is applied. */
+    robj *lib_ver;
+    /* Database index to filter. If set to -1, no DB number filtering is applied. */
+    int db_number;
+    /* Client capa for filtering. If NULL, no filtering is applied. */
+    sds capa;
+    /* Client ip for filtering. If NULL, no filtering is applied. */
+    sds ip;
 } clientFilter;
 
 static void setProtocolError(const char *errstr, client *c);
@@ -72,7 +90,13 @@ int postponeClientRead(client *c);
 char *getClientSockname(client *c);
 static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter);
 static int clientMatchesFilter(client *client, clientFilter *client_filter);
+static int validateClientFlagFilter(sds flag_filter);
+static int validateClientCapaFilter(sds capa);
 static sds getAllFilteredClientsInfoString(clientFilter *client_filter, int hide_user_data);
+static int clientMatchesFlagFilter(client *c, sds flag_filter);
+static int clientMatchesIpFilter(client *c, sds ip);
+static int clientMatchesCapaFilter(client *c, sds capa_filter);
+static void freeClientFilter(clientFilter *filter);
 
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
 __thread sds thread_shared_qb = NULL;
@@ -3638,17 +3662,17 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
                 index++; /* Move to the next argument */
             }
         } else if (!strcasecmp(c->argv[index]->ptr, "maxage") && moreargs) {
-            long long tmp;
+            long long maxage;
 
-            if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &tmp,
+            if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &maxage,
                                              "maxage is not an integer or out of range") != C_OK)
                 return C_ERR;
-            if (tmp <= 0) {
+            if (maxage <= 0) {
                 addReplyError(c, "maxage should be greater than 0");
                 return C_ERR;
             }
 
-            filter->max_age = tmp;
+            filter->max_age = maxage;
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "type") && moreargs) {
             filter->type = getClientTypeByName(c->argv[index + 1]->ptr);
@@ -3680,6 +3704,58 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
                 return C_ERR;
             }
             index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "idle") && moreargs) {
+            long long idle_time;
+
+            if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &idle_time,
+                                             "idle is not an integer or out of range") != C_OK)
+                return C_ERR;
+            if (idle_time <= 0) {
+                addReplyError(c, "idle should be greater than 0");
+                return C_ERR;
+            }
+
+            filter->idle = idle_time;
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "flags") && moreargs) {
+            filter->flags = sdsnew(c->argv[index + 1]->ptr);
+            if (validateClientFlagFilter(filter->flags) == C_ERR) {
+                addReplyErrorFormat(c, "Unknown flags found in the provided filter: %s", filter->flags);
+                return C_ERR;
+            }
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "name") && moreargs) {
+            filter->name = c->argv[index + 1]->ptr;
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "lib-name") && moreargs) {
+            filter->lib_name = c->argv[index + 1];
+            incrRefCount(filter->lib_name);
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "lib-ver") && moreargs) {
+            filter->lib_ver = c->argv[index + 1];
+            incrRefCount(filter->lib_ver);
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "db") && moreargs) {
+            int db_id;
+            if (getIntFromObjectOrReply(c, c->argv[index + 1], &db_id,
+                                        "DB is not an integer or out of range") != C_OK)
+                return C_ERR;
+            if (db_id < 0 || db_id >= server.dbnum) {
+                addReplyErrorFormat(c, "DB number should be between 0 and %d", server.dbnum - 1);
+                return C_ERR;
+            }
+            filter->db_number = db_id;
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "capa") && moreargs) {
+            filter->capa = sdsnew(c->argv[index + 1]->ptr);
+            if (validateClientCapaFilter(filter->capa) == C_ERR) {
+                addReplyErrorFormat(c, "Unknown capa found in the provided filter: %s", filter->capa);
+                return C_ERR;
+            }
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "ip") && moreargs) {
+            filter->ip = sdsnew(c->argv[index + 1]->ptr);
+            index += 2;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return C_ERR;
@@ -3687,6 +3763,53 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
     }
     return C_OK;
 }
+
+static int validateClientCapaFilter(sds capa) {
+    for (size_t i = 0; i < sdslen(capa); i++) {
+        const char capability = capa[i];
+        switch (capability) {
+        case 'r':
+            /* Valid capability, do nothing. */
+            break;
+        default:
+            return C_ERR;
+        }
+    }
+    return C_OK;
+}
+
+static int validateClientFlagFilter(sds flag_filter) {
+    for (size_t i = 0; i < sdslen(flag_filter); i++) {
+        const char flag = flag_filter[i];
+        switch (flag) {
+        case 'O':
+        case 'S':
+        case 'M':
+        case 'P':
+        case 'x':
+        case 'b':
+        case 't':
+        case 'R':
+        case 'B':
+        case 'd':
+        case 'c':
+        case 'u':
+        case 'A':
+        case 'U':
+        case 'r':
+        case 'e':
+        case 'T':
+        case 'I':
+        case 'N':
+            /* Valid flag, do nothing. */
+            break;
+        default:
+            return C_ERR;
+        }
+    }
+    return C_OK;
+}
+
 
 static int clientMatchesFilter(client *client, clientFilter *client_filter) {
     /* Check each filter condition and return false if the client does not match. */
@@ -3697,10 +3820,143 @@ static int clientMatchesFilter(client *client, clientFilter *client_filter) {
     if (client_filter->user && client->user != client_filter->user) return 0;
     if (client_filter->skipme && client == server.current_client) return 0;
     if (client_filter->max_age != 0 && (long long)(commandTimeSnapshot() / 1000 - client->ctime) < client_filter->max_age) return 0;
+    if (client_filter->idle != 0 && (long long)(commandTimeSnapshot() / 1000 - client->last_interaction) < client_filter->idle) return 0;
+    if (client_filter->flags && clientMatchesFlagFilter(client, client_filter->flags) == 0) return 0;
+    if (client_filter->name) {
+        if (!client->name || !client->name->ptr || strcmp(client->name->ptr, client_filter->name) != 0) {
+            return 0;
+        }
+    }
+    if (client_filter->lib_name && (!client->lib_name || compareStringObjects(client->lib_name, client_filter->lib_name) != 0)) return 0;
+    if (client_filter->lib_ver && (!client->lib_ver || compareStringObjects(client->lib_ver, client_filter->lib_ver) != 0)) return 0;
+    if (client_filter->db_number != -1 && client->db->id != client_filter->db_number) return 0;
+    if (client_filter->capa && clientMatchesCapaFilter(client, client_filter->capa) == 0) return 0;
+    if (client_filter->ip && clientMatchesIpFilter(client, client_filter->ip) == 0) return 0;
 
     /* If all conditions are satisfied, the client matches the filter. */
     return 1;
 }
+
+static int clientMatchesIpFilter(client *c, sds ip) {
+    const char *peerid = getClientPeerId(c);
+    if (!peerid) return 0;
+
+    if (peerid[0] == '[') peerid++; /* IPv6 wrapped in square brackets */
+    size_t len = sdslen(ip);
+    if (strncmp(peerid, ip, len) != 0) return 0;
+
+    peerid += len;
+    if (peerid[0] == ']') peerid++; /* Skip trailing ] for IPv6 */
+
+    if (peerid[0] != ':') return 0; /* IP:port colon check */
+    peerid++;
+
+    if (peerid[0] == '0') return 0; /* Disallow port=0 */
+    return 1;
+}
+
+static int clientMatchesCapaFilter(client *c, sds capa_filter) {
+    /* Iterate through the provided capa filter string */
+    for (size_t i = 0; i < sdslen(capa_filter); i++) {
+        const char capability = capa_filter[i];
+
+        /* Check each capability */
+        switch (capability) {
+        case 'r': /* client supports redirection */
+            if (!(c->capa & CLIENT_CAPA_REDIRECT)) return 0;
+            break;
+        default:
+            /* Invalid capa, return false */
+            return 0;
+        }
+    }
+    /* If the loop completes, the client matches the capa filter */
+    return 1;
+}
+
+
+static int clientMatchesFlagFilter(client *c, sds flag_filter) {
+    /* Iterate through the provided flag filter string */
+    for (size_t i = 0; i < sdslen(flag_filter); i++) {
+        const char flag = flag_filter[i];
+
+        /* Check each flag */
+        switch (flag) {
+        case 'O': /* client in MONITOR mode */
+            if (!(c->flag.replica && c->flag.monitor)) return 0;
+            break;
+        case 'S': /* client is a replica node connection to this instance */
+            if (!c->flag.replica) return 0;
+            break;
+        case 'M': /* client is a primary */
+            if (!c->flag.primary) return 0;
+            break;
+        case 'P': /* client is a Pub/Sub subscriber */
+            if (!c->flag.pubsub) return 0;
+            break;
+        case 'x': /* client is in a MULTI/EXEC context */
+            if (!c->flag.multi) return 0;
+            break;
+        case 'b': /* client is waiting in a blocking operation */
+            if (!c->flag.blocked) return 0;
+            break;
+        case 't': /* client enabled keys tracking in order to perform client side caching */
+            if (!c->flag.tracking) return 0;
+            break;
+        case 'R': /* Client tracking target client is invalid */
+            if (!c->flag.tracking_broken_redir) return 0;
+            break;
+        case 'B': /* client enabled broadcast tracking mode */
+            if (!c->flag.tracking_bcast) return 0;
+            break;
+        case 'd': /* Dirty CAS */
+            if (!c->flag.dirty_cas) return 0;
+            break;
+        case 'c': /* Close after reply */
+            if (!c->flag.close_after_reply) return 0;
+            break;
+        case 'u': /* client is unblocked */
+            if (!c->flag.unblocked) return 0;
+            break;
+        case 'A': /* Close ASAP */
+            if (!c->flag.close_asap) return 0;
+            break;
+        case 'U': /* client is connected via a Unix domain socket */
+            if (!c->flag.unix_socket) return 0;
+            break;
+        case 'r': /* client is in readonly mode against a cluster node */
+            if (!c->flag.readonly) return 0;
+            break;
+        case 'e': /* client is excluded from the client eviction mechanism */
+            if (!c->flag.no_evict) return 0;
+            break;
+        case 'T': /* client will not touch the LRU/LFU of the keys it accesses */
+            if (!c->flag.no_touch) return 0;
+            break;
+        case 'I': /* Import source flag */
+            if (!c->flag.import_source) return 0;
+            break;
+        case 'N': /* Check for no flags */
+            if (!c->flag.replica && !c->flag.primary && !c->flag.pubsub &&
+                !c->flag.multi && !c->flag.blocked && !c->flag.tracking &&
+                !c->flag.tracking_broken_redir && !c->flag.tracking_bcast &&
+                !c->flag.dirty_cas && !c->flag.close_after_reply &&
+                !c->flag.unblocked && !c->flag.close_asap &&
+                !c->flag.unix_socket && !c->flag.readonly &&
+                !c->flag.no_evict && !c->flag.no_touch &&
+                !c->flag.import_source) {
+                return 1; /* Matches 'N' */
+            }
+            break;
+        default:
+            /* Invalid flag, return false */
+            return 0;
+        }
+    }
+    /* If the loop completes, the client matches the flag filter */
+    return 1;
+}
+
 
 void clientHelpCommand(client *c) {
     const char *help[] = {
@@ -3723,9 +3979,9 @@ void clientHelpCommand(client *c) {
         "KILL <option> <value> [<option> <value> [...]]",
         "    Kill connections. Options are:",
         "    * ADDR (<ip:port>|<unixsocket>:0)",
-        "      Kill connections made from the specified address",
+        "      Kill connections made from the specified address.",
         "    * LADDR (<ip:port>|<unixsocket>:0)",
-        "      Kill connections made to specified local address",
+        "      Kill connections made to the specified local address.",
         "    * TYPE (NORMAL|PRIMARY|REPLICA|PUBSUB)",
         "      Kill connections by type.",
         "    * USER <username>",
@@ -3733,9 +3989,25 @@ void clientHelpCommand(client *c) {
         "    * SKIPME (YES|NO)",
         "      Skip killing current connection (default: yes).",
         "    * ID <client-id> [<client-id>...]",
-        "      Kill connections by client ids.",
+        "      Kill connections by client IDs.",
         "    * MAXAGE <maxage>",
         "      Kill connections older than the specified age.",
+        "    * FLAGS <flags>",
+        "      Kill connections that include the specified flags.",
+        "    * NAME <client-name>",
+        "      Kill connections with the specified name.",
+        "    * IDLE <idle>",
+        "      Kill connections with idle time greater than or equal to <idle> seconds.",
+        "    * LIB-NAME <library-name>",
+        "      Kill connections with the specified library name.",
+        "    * LIB-VER <library-version>",
+        "      Kill connections with the specified library version.",
+        "    * DB <db-id>",
+        "      Kill connections currently operating on the specified database ID.",
+        "    * CAPA <capa>",
+        "      Kill connections currently with the specified capa.",
+        "    * IP <ip>",
+        "      Kill connections made from the specified ip.",
         "LIST [options ...]",
         "    Return information about client connections. Options:",
         "    * TYPE (NORMAL|PRIMARY|REPLICA|PUBSUB)",
@@ -3752,6 +4024,22 @@ void clientHelpCommand(client *c) {
         "      Exclude the current client from the list (default: no).",
         "    * MAXAGE <maxage>",
         "      List connections older than the specified age.",
+        "    * FLAGS <flags>",
+        "      Return clients with the specified flags.",
+        "    * NAME <client-name>",
+        "      Return clients with the specified name.",
+        "    * IDLE <idle>",
+        "      Return clients with idle time greater than or equal to <idle> seconds.",
+        "    * LIB-NAME <lib-name>",
+        "      Return clients with the specified lib name.",
+        "    * LIB-VER <lib-version>",
+        "      Return clients with the specified lib version.",
+        "    * DB <db-id>",
+        "      Return clients currently operating on the specified database ID.",
+        "    * CAPA <capa>",
+        "      Return connections currently with the specified capa.",
+        "    * IP <ip>",
+        "      Return connections made from the specified ip.",
         "UNPAUSE",
         "    Stop the current client pause, resuming traffic.",
         "PAUSE <timeout> [WRITE|ALL]",
@@ -3799,15 +4087,15 @@ void clientListCommand(client *c) {
     sds response = NULL;
 
     if (c->argc > 3) {
-        clientFilter filter = {.ids = NULL, .max_age = 0, .addr = NULL, .laddr = NULL, .user = NULL, .type = -1, .skipme = 0};
+        clientFilter filter = {.ids = NULL, .max_age = 0, .idle = 0, .addr = NULL, .laddr = NULL, .user = NULL, .type = -1, .skipme = 0, .db_number = -1};
         int i = 2;
 
         if (parseClientFiltersOrReply(c, i, &filter) != C_OK) {
-            zfree(filter.ids);
+            freeClientFilter(&filter);
             return;
         }
         response = getAllFilteredClientsInfoString(&filter, 0);
-        zfree(filter.ids);
+        freeClientFilter(&filter);
     } else if (c->argc != 2) {
         addReplyErrorObject(c, shared.syntaxerr);
         return;
@@ -3859,11 +4147,13 @@ void clientKillCommand(client *c) {
 
     clientFilter client_filter = {.ids = NULL,
                                   .max_age = 0,
+                                  .idle = 0,
                                   .addr = NULL,
                                   .laddr = NULL,
                                   .user = NULL,
                                   .type = -1,
-                                  .skipme = 1};
+                                  .skipme = 1,
+                                  .db_number = -1};
 
     int killed = 0, close_this_client = 0;
 
@@ -3914,7 +4204,34 @@ void clientKillCommand(client *c) {
      * only after we queued the reply to its output buffers. */
     if (close_this_client) c->flag.close_after_reply = 1;
 client_kill_done:
-    zfree(client_filter.ids);
+    freeClientFilter(&client_filter);
+}
+
+static void freeClientFilter(clientFilter *filter) {
+    if (filter->ids != NULL) {
+        zfree(filter->ids);
+        filter->ids = NULL;
+    }
+    if (filter->flags != NULL) {
+        sdsfree(filter->flags);
+        filter->flags = NULL;
+    }
+    if (filter->capa != NULL) {
+        sdsfree(filter->capa);
+        filter->capa = NULL;
+    }
+    if (filter->ip != NULL) {
+        sdsfree(filter->ip);
+        filter->ip = NULL;
+    }
+    if (filter->lib_name) {
+        decrRefCount(filter->lib_name);
+        filter->lib_name = NULL;
+    }
+    if (filter->lib_ver) {
+        decrRefCount(filter->lib_ver);
+        filter->lib_ver = NULL;
+    }
 }
 
 

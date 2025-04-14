@@ -121,6 +121,265 @@ start_server {tags {"introspection"}} {
         $c2 close
     }
 
+
+    test {CLIENT LIST with NAME filter} {
+        r client setname mytestclient
+        set client_info [r client info]
+        regexp {name=([^ ]+)} $client_info match myname
+        set cl [split [r client list name $myname] "\r\n"]
+        regexp {name=([^ ]+) .* cmd=([^ ]+)} [lindex $cl 0] _ actual_name actual_cmd
+        assert_equal $myname $actual_name
+        assert_equal "client|list" $actual_cmd
+    }
+
+    # Test CLIENT LIST with FLAGS filter
+    test {CLIENT LIST with FLAGS filter} {
+        r client setname mytestclient
+        set cl [split [r client list flags N] "\r\n"]
+        set line [lindex $cl 0]
+        set info [dict create]
+        foreach pair [split $line " "] {
+            lassign [split $pair "="] key val
+            dict set info $key $val
+        }
+        assert_equal "N" [dict get $info flags]
+    }
+
+    # Test CLIENT LIST with TYPE filter
+    test {CLIENT LIST with TYPE filter} {
+        set cl [split [r client list type normal] "\r\n"]
+        set line [lindex $cl 0]
+        set info [dict create]
+        foreach pair [split $line " "] {
+            lassign [split $pair "="] key val
+            dict set info $key $val
+        }
+        assert {[string match *N* [dict get $info flags]]}
+    }
+
+    # Test CLIENT LIST with multiple filters
+    test {CLIENT LIST with multiple filters} {
+        r client setname mytestclient
+        set client_info [r client info]
+        set fields [split $client_info " "]
+        foreach pair $fields {
+            lassign [split $pair "="] key val
+            if {$key eq "id"} { set myid $val }
+            if {$key eq "name"} { set myname $val }
+        }
+
+        set cl [split [r client list id $myid name $myname] "\r\n"]
+        set line [lindex $cl 0]
+        set info [dict create]
+        foreach pair [split $line " "] {
+            lassign [split $pair "="] key val
+            dict set info $key $val
+        }
+
+        assert_equal $myid [dict get $info id]
+        assert_equal $myname [dict get $info name]
+        assert_equal "client|list" [dict get $info cmd]
+    }
+
+    test {CLIENT LIST with multiple filters} {
+        # Create multiple clients with different names and flags
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        set c3 [valkey_client]
+        $c1 client setname client1
+        $c2 client setname client1
+        $c3 client setname client2
+        $c3 multi
+
+        # Wait 1 second to ensure idle time
+        after 1000  ;
+
+        # Fetch the client list filtered by name and flags
+        set cl [split [r client list name client1 flags N] "\r\n"]
+
+        # Assert the clients returned match the filters
+        foreach line $cl {
+            regexp {name=([^ ]+) .* flags=([^ ]+)} $line _ actual_name flags
+            assert {[string match *client1* $actual_name] || [string match *client2* $actual_name]}
+            assert {[string match *N* $flags]}
+        }
+
+        # Test error when inputting an invalid flag/s
+        assert_error "ERR Unknown flags found in the provided filter: Q" {r client list name client1 flags Q}
+        assert_error "ERR Unknown flags found in the provided filter: NZ" {r client list name client1 flags NZ}
+
+        # Close clients
+        $c1 close
+        $c2 close
+        $c3 close
+    }
+
+    test {CLIENT LIST with IP filter} {
+        r client setname "client-ip"
+
+        set client_info [r client info]
+        regexp {addr=([^:]+):} $client_info -> iponly
+
+        # Use the extracted IP for filtering.
+        set filtered [r client list ip $iponly]
+        assert_match *client-ip* $filtered
+    } {}
+
+    start_server {tags {"ipv6"} overrides {bind {127.0.0.1 ::1}}} {
+        test {CLIENT LIST with IPv6 filter} {
+            set c [valkey ::1 [srv 0 port] 0 $::tls]
+            $c client setname "client-ipv6"
+
+            set client_info [$c client info]
+
+            regexp {addr=\[([a-fA-F0-9:]+)\]:\d+} $client_info -> ipv6only
+            set filtered [$c client list ip $ipv6only]
+            assert_match *client-ipv6* $filtered
+
+            $c close
+        }
+    }
+
+    test {CLIENT LIST with CAPA filter} {
+        r client setname "client-with-r"
+        r client capa redirect
+
+        set output [r client list capa r]
+        assert_match *client-with-r* $output
+    } {}
+
+    test {CLIENT KILL with IP filter} {
+        set c1 [valkey_client]
+        $c1 client setname "killme-ip"
+        r client setname "client-normal"
+
+        set client_info [$c1 client info]
+        regexp {addr=([^:]+):} $client_info -> iponly
+
+        # Kill client by IP only
+        r client kill ip $iponly skipme yes
+
+        assert_error "*I/O error*" {$c1 ping}
+    } {}
+
+    start_server {tags {"ipv6"} overrides {bind {127.0.0.1 ::1}}} {
+        test {CLIENT LIST with IPv6 filter} {
+            set c [valkey ::1 [srv 0 port] 0 $::tls]
+            $c client setname "client-ipv6"
+
+            set client_info [$c client info]
+
+            regexp {addr=\[([a-fA-F0-9:]+)\]:\d+} $client_info -> ipv6only
+            set filtered [r client kill ip $ipv6only]
+
+            assert_error "*I/O error*" {$c ping}
+
+            $c close
+        }
+    }
+
+    test {CLIENT KILL with CAPA filter} {
+        set c1 [valkey_client]
+        $c1 client setname "killme-capa"
+        $c1 client capa redirect
+
+        # Kill using capa filter
+        r client kill capa r skipme yes
+
+        assert_error "*I/O error*" {$c1 ping}
+    } {}
+
+    test {CLIENT KILL with NAME filter} {
+        # Create a client and set its name
+        set c1 [valkey_client]
+        $c1 client setname mytestclient
+
+        # Kill the client by name
+        r client kill name mytestclient
+
+        # Assert the client was killed
+        assert_error "*I/O error*" {$c1 ping}
+
+        # Cleanup
+        catch {$c1 close}
+    }
+
+    test {CLIENT KILL with FLAGS filter} {
+        # Create a client and set its name
+        set c1 [valkey_client]
+        $c1 client setname mytestclient
+
+        # Kill the client by flag
+        r client kill flags N
+
+        # Assert the client was killed
+        assert_error "*I/O error*" {$c1 ping}
+
+        # Cleanup
+        catch {$c1 close}
+    }
+
+    test {CLIENT KILL with TYPE filter} {
+        # Create a client
+        set c1 [valkey_client]
+
+        # Kill the client by type
+        r client kill type normal
+
+        # Assert the client was killed
+        assert_error "*I/O error*" {$c1 ping}
+
+        # Cleanup
+        catch {$c1 close}
+    }
+
+    test {CLIENT KILL with multiple filters} {
+        # Create two clients
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        $c1 client setname client1
+        $c2 client setname client2
+
+        # Kill the client with name and flag filters
+        r client kill name client1 flags N
+
+        # Assert client1 was killed
+        set err1 [catch {$c1 ping} error_message1]
+        assert {$err1 == 1}
+        assert {[string match "*I/O error*" $error_message1]}
+
+        # Assert client2 is still alive
+        assert {[catch {$c2 ping}] == 0}
+
+        # Cleanup
+        catch {$c2 close}
+    }
+
+    test {CLIENT KILL with multiple filters including idle time} {
+        # Create two clients
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        $c1 client setname client1
+        $c2 client setname client2
+
+        # Wait 1 second to ensure idle time
+        after 1000 ;# Wait 1 second
+
+        # Kill the client with name and idle time filters
+        r client kill name client1 idle 1
+
+        # Assert client1 was killed
+        set err1 [catch {$c1 ping} error_message1]
+        assert {$err1 == 1}
+        assert {[string match "*I/O error*" $error_message1]}
+
+        # Assert client2 is still alive
+        assert {[catch {$c2 ping}] == 0}
+
+        # Cleanup
+        catch {$c2 close}
+    }
+
     test {CLIENT LIST with illegal arguments} {
         assert_error "ERR syntax error" {r client list id 10 wrong_arg}
 
@@ -1034,6 +1293,62 @@ start_server {tags {"introspection"}} {
             }
         }
     } {} {external:skip}
+
+
+    test {CLIENT LIST can filter by LIB-NAME} {
+        r CLIENT SETINFO lib-name mylib
+        set result [r client list lib-name mylib]
+        assert_match {*lib-name=mylib*} $result
+    }
+
+    test {CLIENT LIST can filter by LIB-VER} {
+        r CLIENT SETINFO lib-ver 1.2.3
+        set result [r client list lib-ver 1.2.3]
+        assert_match {*lib-ver=1.2.3*} $result
+    }
+
+    test {CLIENT LIST can filter by DB number} {
+        r select 2
+        set result [r client list db 2]
+        assert_match {*db=2*} $result
+    } {} {external:skip}
+
+    test {CLIENT KILL can filter by DB} {
+        set c1 [valkey_client]
+
+        $c1 select 2
+        r select 0
+
+        r client kill db 2
+
+        assert {[string match "*db=2*" [r client list]] == 0}
+    } {} {external:skip}
+
+    test {CLIENT KILL can filter by LIB-NAME} {
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+
+        $c1 client setinfo lib-name mylib
+        $c2 client kill lib-name mylib
+
+        set result [$c2 client list]
+        assert {[string match {*lib-name=mylib*} $result] == 0}
+
+        catch {$c2 close}
+    }
+
+    test {CLIENT KILL can filter by LIB-VER} {
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+
+        $c1 client setinfo lib-ver 1.2.3
+        $c2 client kill lib-ver 1.2.3
+
+        set result [$c2 client list]
+        assert {[string match {*lib-ver=1.2.3*} $result] == 0}
+
+        catch {$c2 close}
+    }
 
     test {valkey-server command line arguments - allow passing option name and option value in the same arg} {
         start_server {config "default.conf" args {"--maxmemory 700mb" "--maxmemory-policy volatile-lru"}} {

@@ -1,3 +1,5 @@
+#include <stdbool.h>
+
 #ifndef __CLUSTER_H
 #define __CLUSTER_H
 

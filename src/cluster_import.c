@@ -711,7 +711,6 @@ void performSlotImportLinkFailover(slotMigrationLink *link) {
               "Slot import link %.40s completed import successfully. This node is now the owner of "
               "slots (%s)",
               link->linkname, link->slot_ranges_str);
-    resetSlotMigrationLink(link);
     finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_SUCCESS, NULL);
 }
 
@@ -1433,32 +1432,32 @@ void updateSlotMigrationLinkStatusMessage(slotMigrationLink *link, char *message
 
 /* proceedWithSlotMigration contains the main logic for driving the slot migration state machine.
  *
- *                                   │ CLUSTER                                                              
- *                                   │ IMPORT                                                               
- *                                   ▼                                                                      
- * ┌─────────────────────┐  ┌──────────────────────┐                                                        
- * │SLOT_IMPORT_RECONNECT├─►│SLOT_IMPORT_CONNECTING│                                                        
- * └─────────────────────┘  └────────┬─────────────┘                                                        
- *           ▲                       │ Connected                                                            
- *           │                       ▼                                                                      
- *           .          ┌──────────────────────────┐                                                        
- * Disconnect|          │SLOT_IMPORT_AUTHENTICATING│                                                        
- *           .          └────────────┬─────────────┘                                                        
- *                                   │ AUTH success                                                         
- *                                   ▼                                                                      
- *                      ┌──────────────────────────┐                    ┌───────────────────────────────┐   
- *                      │SLOT_IMPORT_START_SNAPSHOT├─────SNAPSHOT──────►│SLOT_EXPORT_WAITING_TO_SNAPSHOT│   
- *                      └────────────┬─────────────┘                    └──────────┬────────────────────┘   
- *                                   │                                             │  Child process         
- *                                   ▼                                             ▼  available             
- *                    ┌────────────────────────────┐                    ┌────────────────────────┐          
- *                    │                            │◄──<AOF snapshot>───┤                        │          
- *            ┌───────┼SLOT_IMPORT_RECEIVE_SNAPSHOT│                    │SLOT_EXPORT_SNAPSHOTTING│          
- *            │       │                            │◄───SNAPSHOT-EOF────┤                        │          
- *            │       └──────────────┬─────────────┘                    └──────────┬─────────────┘          
- *            │  On           On EOF ▼ (two phase)                       On STREAM ▼ (or child done)        
- *            │  EOF    ┌──────────────────────────┐                    ┌─────────────────────┐             
- *            │ (one    │                          ├──────STREAM───────►│                     │             
+ *                                   │ CLUSTER
+ *                                   │ IMPORT
+ *                                   ▼
+ * ┌─────────────────────┐  ┌──────────────────────┐
+ * │SLOT_IMPORT_RECONNECT├─►│SLOT_IMPORT_CONNECTING│
+ * └─────────────────────┘  └────────┬─────────────┘
+ *           ▲                       │ Connected
+ *           │                       ▼
+ *           .          ┌──────────────────────────┐
+ * Disconnect|          │SLOT_IMPORT_AUTHENTICATING│
+ *           .          └────────────┬─────────────┘
+ *                                   │ AUTH success
+ *                                   ▼
+ *                      ┌──────────────────────────┐                    ┌───────────────────────────────┐
+ *                      │SLOT_IMPORT_START_SNAPSHOT├─────SNAPSHOT──────►│SLOT_EXPORT_WAITING_TO_SNAPSHOT│
+ *                      └────────────┬─────────────┘                    └──────────┬────────────────────┘
+ *                                   │                                             │  Child process
+ *                                   ▼                                             ▼  available
+ *                    ┌────────────────────────────┐                    ┌────────────────────────┐
+ *                    │                            │◄──<AOF snapshot>───┤                        │
+ *            ┌───────┼SLOT_IMPORT_RECEIVE_SNAPSHOT│                    │SLOT_EXPORT_SNAPSHOTTING│
+ *            │       │                            │◄───SNAPSHOT-EOF────┤                        │
+ *            │       └──────────────┬─────────────┘                    └──────────┬─────────────┘
+ *            │  On           On EOF ▼ (two phase)                       On STREAM ▼ (or child done)
+ *            │  EOF    ┌──────────────────────────┐                    ┌─────────────────────┐
+ *            │ (one    │                          ├──────STREAM───────►│                     │
  *            │  shot)  │SLOT_IMPORT_RECEIVE_STREAM│                    │SLOT_EXPORT_STREAMING│◄───────────┐
  *      ┌─────┼────────►│                          │◄───<cmd stream>────│                     │       If   │
  *      │     │         └────────────┬─────────────┘                    └──────────┬──────────┘       not  │
@@ -1466,26 +1465,26 @@ void updateSlotMigrationLinkStatusMessage(slotMigrationLink *link, char *message
  *      │  ┌───────────────────────────────────────┐                    ┌───────────────────────────┐      │
  *      │  │                                       ├───────PAUSE───────►│                           │      │
  *      │  │SLOT_IMPORT_FAILOVER_WAITING_FOR_PAUSED│                    │SLOT_EXPORT_FAILOVER_PAUSED├──────┘
- *      │  │                                       │◄─────PAUSED────────┤                           │       
- *      │  └─────────────────────────┬─────────────┘                    └──────────┬────────────────┘       
- *      │                            ▼ On PAUSED                                   ▼  If still paused       
- *      │(two phase)┌──────────────────────────────┐                    ┌────────────────────────────┐      
- *      └───────────┤                              ├─REQUEST-FAILOVER──►│                            │      
- *       If denied  │SLOT_IMPORT_FAILOVER_REQUESTED│                    │SLOT_EXPORT_FAILOVER_GRANTED│      
- *      ┌───────────┤                              │◄─FAILOVER-GRANTED/─│                            │      
- *      │(one shot) └────────────────┬─────────────┘  FAILOVER-DENIED   └──────────┬─────────────────┘      
- *      │                            ▼ If granted                                  ▼  On slots transferred  
- *      │             ┌────────────────────────────┐  Cluster bus       ┌───────────────────────────┐       
- *      │             │SLOT_IMPORT_FAILOVER_GRANTED├──broadcast────────►│SLOT_MIGRATION_LINK_SUCCESS│       
- *      │             └──────────────┬─────────────┘                    └───────────────────────────┘       
- *      │                            ▼                                                                      
- *      │              ┌───────────────────────────┐                                                        
- *      │              │SLOT_MIGRATION_LINK_SUCCESS│                                                        
- *      │              └───────────────────────────┘                                                        
- *      │                                                                                                   
- *      │               ┌──────────────────────────┐                                                        
- *      └──────────────►│SLOT_MIGRATION_LINK_FAILED│                                                        
- *                      └──────────────────────────┘                                                        
+ *      │  │                                       │◄─────PAUSED────────┤                           │
+ *      │  └─────────────────────────┬─────────────┘                    └──────────┬────────────────┘
+ *      │                            ▼ On PAUSED                                   ▼  If still paused
+ *      │(two phase)┌──────────────────────────────┐                    ┌────────────────────────────┐
+ *      └───────────┤                              ├─REQUEST-FAILOVER──►│                            │
+ *       If denied  │SLOT_IMPORT_FAILOVER_REQUESTED│                    │SLOT_EXPORT_FAILOVER_GRANTED│
+ *      ┌───────────┤                              │◄─FAILOVER-GRANTED/─│                            │
+ *      │(one shot) └────────────────┬─────────────┘  FAILOVER-DENIED   └──────────┬─────────────────┘
+ *      │                            ▼ If granted                                  ▼  On slots transferred
+ *      │             ┌────────────────────────────┐  Cluster bus       ┌───────────────────────────┐
+ *      │             │SLOT_IMPORT_FAILOVER_GRANTED├──broadcast────────►│SLOT_MIGRATION_LINK_SUCCESS│
+ *      │             └──────────────┬─────────────┘                    └───────────────────────────┘
+ *      │                            ▼
+ *      │              ┌───────────────────────────┐
+ *      │              │SLOT_MIGRATION_LINK_SUCCESS│
+ *      │              └───────────────────────────┘
+ *      │
+ *      │               ┌──────────────────────────┐
+ *      └──────────────►│SLOT_MIGRATION_LINK_FAILED│
+ *                      └──────────────────────────┘
  */
 void proceedWithSlotMigration(slotMigrationLink *link) {
     /* Continue within the state machine until we have no more work. */

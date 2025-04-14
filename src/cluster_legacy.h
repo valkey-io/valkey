@@ -419,8 +419,8 @@ typedef enum slotMigrationLinkType {
  * duration of a CLUSTER IMPORT operation. */
 typedef struct slotMigrationLink {
     slotMigrationLinkType type;                /* Type of the migration link (either for import or export) */
-    time_t ctime;                            /* Migration link creation time. */
-    time_t last_update;                      /* Migration link last update time. */
+    time_t ctime;                              /* Migration link creation time. */
+    time_t last_update;                        /* Migration link last update time. */
     time_t last_ack;                           /* Migration link last ack time. */
     char nodename[CLUSTER_NAMELEN];            /* Name of the slot import source node, hex string, sha1-size. */
     char linkname[CLUSTER_NAMELEN];            /* Unique name for the link, hex string, sha1-size. */

@@ -641,7 +641,7 @@ static hashtable *kvstoreIteratorNextHashtable(kvstoreIterator *kvs_it) {
     kvs_it->didx = kvs_it->next_didx;
     do {
         kvs_it->next_didx = kvstoreGetNextNonEmptyHashtableIndex(kvs_it->kvs, kvs_it->next_didx);
-    } while (kvs_it->next_didx != -1 && kvs_it->predicate && !kvs_it->predicate(kvs_it->didx, kvs_it->predicate_privdata));
+    } while (kvs_it->next_didx != -1 && kvs_it->predicate && !kvs_it->predicate(kvs_it->next_didx, kvs_it->predicate_privdata));
     return kvs_it->kvs->hashtables[kvs_it->didx];
 }
 

@@ -282,39 +282,43 @@ test "Single source import - one shot" {
 
         # Cleanup for next test
         assert_match "OK" [R 0 FLUSHDB SYNC]
+        assert_match "OK" [R 2 CLUSTER IMPORT SLOTSRANGE 16383 16383]
+        wait_for_migration 2 16383
     }
 }
 
 test "Single source import - two phase" {
     assert_does_not_resync {
         # Load data before the snapshot
-        populate 333 "$16383_slot_tag:1:" 1000 -0
+        populate 333 "$16383_slot_tag:1:" 1000 -2
 
         # Load data while the snapshot is ongoing
-        assert_match "OK" [R 2 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
-        set linkname [get_link_name 2 16383]
-        populate 333 "$16383_slot_tag:2:" 1000 -0
+        assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
+        set linkname [get_link_name 0 16383]
+        populate 333 "$16383_slot_tag:2:" 1000 -2
 
         # Load data after the snapshot
-        wait_for_migration_field 2 $linkname state replicating
-        populate 334 "$16383_slot_tag:3:" 1000 -0
+        wait_for_migration_field 0 $linkname state replicating
+        populate 334 "$16383_slot_tag:3:" 1000 -2
 
         # Commit and verify
-        assert_match "OK" [R 2 CLUSTER IMPORT-COMMIT LINK $linkname]
-        wait_for_migration 2 16383
-        assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
-        assert_match "0" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+        assert_match "OK" [R 0 CLUSTER IMPORT-COMMIT LINK $linkname]
+        wait_for_migration 0 16383
+        assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
 
         # Also eventually reflected in replicas
-        wait_for_countkeysinslot 5 16383 1000
-        wait_for_countkeysinslot 3 16383 0
+        wait_for_countkeysinslot 3 16383 1000
+        wait_for_countkeysinslot 5 16383 0
 
         # Migration log shows success on both ends
         assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
         assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
 
         # Cleanup for the next test
-        assert_match "OK" [R 2 FLUSHDB SYNC]
+        assert_match "OK" [R 0 FLUSHDB SYNC]
+        assert_match "OK" [R 2 CLUSTER IMPORT SLOTSRANGE 16383 16383]
+        wait_for_migration 2 16383
     }
 }
 
@@ -358,53 +362,63 @@ test "Simultaneous imports" {
         assert {[dict get [get_migration_by_linkname 0 $linkname2] state] eq "success"}
         assert {[dict get [get_migration_by_linkname 2 $linkname2] state] eq "success"}
 
+        # Cleanup for next test
         assert_match "OK" [R 0 FLUSHDB SYNC]
+        assert_match "OK" [R 1 CLUSTER IMPORT SLOTSRANGE 5462 5462]
+        assert_match "OK" [R 2 CLUSTER IMPORT SLOTSRANGE 16383 16383]
+        wait_for_migration 1 5462
+        wait_for_migration 2 16383
     }
 }
 
 test "Simultaneous exports" {
     assert_does_not_resync {
         # Populate data before migration
-        populate 100 "$5462_slot_tag:1:" 1000 -0
-        populate 100 "$16383_slot_tag:1:" 1000 -0
+        populate 100 "$16382_slot_tag:1:" 1000 -2
+        populate 100 "$16383_slot_tag:1:" 1000 -2
 
         # Prepare imports
-        assert_match "OK" [R 1 CLUSTER IMPORT-PREPARE SLOTSRANGE 5462 5462]
-        assert_match "OK" [R 2 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
-        set linkname1 [get_link_name 1 5462]
-        set linkname2 [get_link_name 2 16383]
-        populate 100 "$5462_slot_tag:2:" 1000 -0
-        populate 100 "$16383_slot_tag:2:" 1000 -0
-        wait_for_migration_field 1 $linkname1 state replicating
-        wait_for_migration_field 2 $linkname2 state replicating
-        populate 100 "$5462_slot_tag:3:" 1000 -0
-        populate 100 "$16383_slot_tag:3:" 1000 -0
+        assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16382 16382]
+        assert_match "OK" [R 1 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
+        set linkname1 [get_link_name 0 16382]
+        set linkname2 [get_link_name 1 16383]
+        populate 100 "$16382_slot_tag:2:" 1000 -2
+        populate 100 "$16383_slot_tag:2:" 1000 -2
+        wait_for_migration_field 0 $linkname1 state replicating
+        wait_for_migration_field 1 $linkname2 state replicating
+        populate 100 "$16382_slot_tag:3:" 1000 -2
+        populate 100 "$16383_slot_tag:3:" 1000 -2
 
         # Do the imports
-        assert_match "OK" [R 1 CLUSTER IMPORT-COMMIT LINK $linkname1]
-        assert_match "OK" [R 2 CLUSTER IMPORT-COMMIT LINK $linkname2]
-        wait_for_migration 1 5462
-        wait_for_migration 2 16383
-        assert_match "300" [R 1 CLUSTER COUNTKEYSINSLOT 5462]
-        assert_match "300" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
-        assert_match "0" [R 0 CLUSTER COUNTKEYSINSLOT 5462]
-        assert_match "0" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+        assert_match "OK" [R 0 CLUSTER IMPORT-COMMIT LINK $linkname1]
+        wait_for_migration 0 16382
+        assert_match "300" [R 0 CLUSTER COUNTKEYSINSLOT 16382]
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16382]
+
+        assert_match "OK" [R 1 CLUSTER IMPORT-COMMIT LINK $linkname2]
+        wait_for_migration 1 16383
+        assert_match "300" [R 1 CLUSTER COUNTKEYSINSLOT 16383]
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
 
         # Also eventually reflected in replicas
-        wait_for_countkeysinslot 4 5462 300
-        wait_for_countkeysinslot 5 16383 300
-        wait_for_countkeysinslot 3 5462 0
-        wait_for_countkeysinslot 3 16383 0
+        wait_for_countkeysinslot 3 16382 300
+        wait_for_countkeysinslot 4 16383 300
+        wait_for_countkeysinslot 5 16382 0
+        wait_for_countkeysinslot 5 16383 0
 
         # Migration logs shows success on both ends
         assert {[dict get [get_migration_by_linkname 0 $linkname1] state] eq "success"}
-        assert {[dict get [get_migration_by_linkname 1 $linkname1] state] eq "success"}
-        assert {[dict get [get_migration_by_linkname 0 $linkname2] state] eq "success"}
+        assert {[dict get [get_migration_by_linkname 2 $linkname1] state] eq "success"}
+        assert {[dict get [get_migration_by_linkname 1 $linkname2] state] eq "success"}
         assert {[dict get [get_migration_by_linkname 2 $linkname2] state] eq "success"}
 
         # Cleanup for next test
+        assert_match "OK" [R 0 FLUSHDB SYNC]
         assert_match "OK" [R 1 FLUSHDB SYNC]
-        assert_match "OK" [R 2 FLUSHDB SYNC]
+        assert_match "OK" [R 2 CLUSTER IMPORT SLOTSRANGE 16382 16382]
+        assert_match "OK" [R 2 CLUSTER IMPORT SLOTSRANGE 16383 16383]
+        wait_for_migration 2 16382
+        wait_for_migration 2 16383
     }
 }
 
@@ -448,39 +462,44 @@ test "Multiple slot ranges from same source" {
         assert {[dict get [get_migration_by_linkname 0 $linkname2] state] eq "success"}
         assert {[dict get [get_migration_by_linkname 2 $linkname2] state] eq "success"}
 
+        # Cleanup for next test
         assert_match "OK" [R 0 FLUSHDB SYNC]
+        assert_match "OK" [R 2 CLUSTER IMPORT SLOTSRANGE 16382 16383]
+        wait_for_migration 2 16383
     }
 }
 
 test "Import slot range with multiple slots" {
     assert_does_not_resync {
         # Populate data before migration
-        populate 500 "$16382_slot_tag:" 1000 -0
-        populate 500 "$16383_slot_tag:" 1000 -0
+        populate 500 "$16382_slot_tag:" 1000 -2
+        populate 500 "$16383_slot_tag:" 1000 -2
 
         # Perform one-shot import
-        assert_match "OK" [R 2 CLUSTER IMPORT SLOTSRANGE 16382 16383]
+        assert_match "OK" [R 0 CLUSTER IMPORT SLOTSRANGE 16382 16383]
         set linkname [get_link_name 0 16382]
-        wait_for_migration 2 16383
+        wait_for_migration 0 16382
 
         # Keys successfully migrated
-        assert_match "500" [R 2 CLUSTER COUNTKEYSINSLOT 16382]
-        assert_match "500" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
-        assert_match "0" [R 0 CLUSTER COUNTKEYSINSLOT 16382]
-        assert_match "0" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+        assert_match "500" [R 0 CLUSTER COUNTKEYSINSLOT 16382]
+        assert_match "500" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16382]
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
 
         # Also eventually reflected in replicas
-        wait_for_countkeysinslot 5 16382 500
-        wait_for_countkeysinslot 5 16383 500
-        wait_for_countkeysinslot 3 16382 0
-        wait_for_countkeysinslot 3 16383 0
+        wait_for_countkeysinslot 3 16382 500
+        wait_for_countkeysinslot 3 16383 500
+        wait_for_countkeysinslot 5 16382 0
+        wait_for_countkeysinslot 5 16383 0
 
         # Migration logs shows success on both ends
         assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
         assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
 
         # Cleanup for next test
-        assert_match "OK" [R 2 FLUSHDB SYNC]
+        assert_match "OK" [R 0 FLUSHDB SYNC]
+        assert_match "OK" [R 2 CLUSTER IMPORT SLOTSRANGE 16382 16383]
+        wait_for_migration 2 16383
     }
 }
 
@@ -511,18 +530,48 @@ test "Import multiple slot ranges with multiple slots" {
 
         # Cleanup for next test
         assert_match "OK" [R 0 FLUSHDB SYNC]
+        assert_match "OK" [R 2 CLUSTER IMPORT SLOTSRANGE 16379 16380 16382 16383]
+        wait_for_migration 2 16383
     }
 }
 
 test "Export all slots from node" {
     assert_does_not_resync {
         # Populate data before migration
+        populate 1000 "$16383_slot_tag:" 1000 -2
+
+        # Perform one-shot import
+        assert_match "OK" [R 0 CLUSTER IMPORT SLOTSRANGE 10924 16383]
+        set linkname [get_link_name 0 10924]
+        wait_for_migration 0 10924
+
+        # Keys successfully migrated
+        assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+
+        # Also eventually reflected in replicas
+        wait_for_countkeysinslot 3 16383 1000
+        wait_for_countkeysinslot 5 16383 0
+
+        # Migration logs shows success on both ends
+        assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
+        assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
+
+        # Cleanup for next test
+        assert_match "OK" [R 0 FLUSHDB SYNC]
+        # Leave the slots in place for next test
+    }
+}
+
+test "Import slots to node with no slots" {
+    assert_does_not_resync {
+        # Populate data before migration
         populate 1000 "$16383_slot_tag:" 1000 -0
 
         # Perform one-shot import
-        assert_match "OK" [R 2 CLUSTER IMPORT SLOTSRANGE 0 5461 16379 16380 16382 16383]
-        set linkname [get_link_name 0 16383]
-        wait_for_migration 2 16383
+        assert_match "OK" [R 2 CLUSTER IMPORT SLOTSRANGE 10924 16383]
+        set linkname [get_link_name 2 10924]
+        wait_for_migration 2 10924
 
         # Keys successfully migrated
         assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
@@ -538,33 +587,6 @@ test "Export all slots from node" {
 
         # Cleanup for next test
         assert_match "OK" [R 2 FLUSHDB SYNC]
-    }
-}
-
-test "Import slots to node with no slots" {
-    assert_does_not_resync {
-        # Populate data before migration
-        populate 1000 "$0_slot_tag:" 1000 -2
-
-        # Perform one-shot import
-        assert_match "OK" [R 0 CLUSTER IMPORT SLOTSRANGE 0 5461]
-        set linkname [get_link_name 0 5461]
-        wait_for_migration 0 5461
-
-        # Keys successfully migrated
-        assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 0]
-        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 0]
-
-        # Also eventually reflected in replicas
-        wait_for_countkeysinslot 3 0 1000
-        wait_for_countkeysinslot 5 0 0
-
-        # Migration logs shows success on both ends
-        assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
-        assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
-
-        # Cleanup for next test
-        assert_match "OK" [R 0 FLUSHDB SYNC]
     }
 }
 
@@ -736,6 +758,8 @@ test "Slots split across shards during import" {
 
         # Cleanup for the next test
         assert_match "OK" [R 1 FLUSHDB SYNC]
+        assert_match "OK" [R 0 CLUSTER IMPORT SLOTSRANGE 0 0]
+        wait_for_migration 0 0
     }
 }
 
@@ -745,44 +769,48 @@ set node2_id [R 2 CLUSTER MYID]
 test "Export same slot to two nodes" {
     assert_does_not_resync {
         # Pretend to be another node in order to acquire the FAILOVER-GRANTED state
-        set client [valkey_client_by_addr [srv -1 host] [srv -1 port]]
+        set client [valkey_client_by_addr [srv -0 host] [srv -0 port]]
         $client CLUSTER SYNCSLOTS SNAPSHOT TARGET $node2_id LINKNAME $fake_linkname SLOTSRANGE 0 0
         $client CLUSTER SYNCSLOTS PAUSE
         $client CLUSTER SYNCSLOTS REQUEST-FAILOVER
 
         # Prepare another export at the same time
-        assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 0 0]
-        set linkname [get_link_name 0 0]
-        wait_for_migration_field 0 $linkname state replicating
+        assert_match "OK" [R 1 CLUSTER IMPORT-PREPARE SLOTSRANGE 0 0]
+        set linkname [get_link_name 1 0]
+        wait_for_migration_field 1 $linkname state replicating
 
         # Trigger commit
-        assert_match "OK" [R 0 CLUSTER IMPORT-COMMIT LINK $linkname]
+        assert_match "OK" [R 1 CLUSTER IMPORT-COMMIT LINK $linkname]
 
         # Link should still be up
-        wait_for_migration_field 0 $linkname state replicating
-        assert {[string match {*failover attempt denied*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
+        wait_for_migration_field 1 $linkname state replicating
+        assert {[string match {*failover attempt denied*} [dict get [get_migration_by_linkname 1 $linkname] message]]}
 
         # Now drop our fake link
         $client deferred 1
         $client CLUSTER SYNCSLOTS CANCEL
         $client flush
         $client close
-        wait_for_migration_field 1 $fake_linkname state cancelled
+        wait_for_migration_field 0 $fake_linkname state cancelled
 
         # Now, commit should succeed
-        assert_match "OK" [R 0 CLUSTER IMPORT-COMMIT LINK $linkname]
-        wait_for_migration 0 0
+        assert_match "OK" [R 1 CLUSTER IMPORT-COMMIT LINK $linkname]
+        wait_for_migration 1 0
 
         # Migration logs shows success on both ends
         assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
         assert {[dict get [get_migration_by_linkname 1 $linkname] state] eq "success"}
+
+        # Cleanup for next test
+        assert_match "OK" [R 0 CLUSTER IMPORT SLOTSRANGE 0 0]
+        wait_for_migration 0 0
     }
 }
 
 test "One shot import gives up on FAILOVER-DENIED" {
     assert_does_not_resync {
         # Pretend to be another node in order to acquire the FAILOVER-GRANTED state
-        set client [valkey_client_by_addr [srv 0 host] [srv 0 port]]
+        set client [valkey_client_by_addr [srv -0 host] [srv -0 port]]
         $client CLUSTER SYNCSLOTS SNAPSHOT TARGET $node2_id LINKNAME $fake_linkname SLOTSRANGE 0 0
         $client CLUSTER SYNCSLOTS PAUSE
         $client CLUSTER SYNCSLOTS REQUEST-FAILOVER
@@ -806,7 +834,7 @@ test "One shot import gives up on FAILOVER-DENIED" {
     }
 }
 
-test "Export unpauses itself even if failover doesn't occur" {
+test "Export unpauses itself even if slot failover doesn't occur" {
     assert_does_not_resync {
         # Lower manual failover timeout for this test
         set mf_timeout_old [lindex [R 0 CONFIG GET cluster-manual-failover-timeout] 1]
@@ -1077,6 +1105,8 @@ test "Import with AUTH on" {
 
         # Cleanup for next test
         assert_match "OK" [R 0 FLUSHDB SYNC]
+        assert_match "OK" [R 2 CLUSTER IMPORT SLOTSRANGE 16383 16383]
+        wait_for_migration 2 16383
         R 0 CONFIG SET requirepass ""
         R 2 CONFIG SET requirepass ""
         R 0 CONFIG SET primaryauth ""
@@ -1087,55 +1117,124 @@ test "Import with AUTH on" {
 test "Connection drop during import causes reconnect" {
     assert_does_not_resync {
         # Start an import
-        assert_match "OK" [R 2 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
-        set linkname [get_link_name 2 16383]
-        wait_for_migration_field 2 $linkname state replicating
-        set import_client_id [get_client_id_by_last_cmd [srv -2 client] "cluster|syncslots"]
+        assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
+        set linkname [get_link_name 0 16383]
+        wait_for_migration_field 0 $linkname state replicating
+        set import_client_id [get_client_id_by_last_cmd [srv -0 client] "cluster|syncslots"]
 
         # Use CLIENT KILL to drop the connection
-        R 2 CLIENT KILL ID $import_client_id
+        R 0 CLIENT KILL ID $import_client_id
 
         # It should reconnect
-        wait_for_migration_field 2 $linkname state replicating
         wait_for_migration_field 0 $linkname state replicating
+        wait_for_migration_field 2 $linkname state replicating
 
-        # Migration can succeed
-        R 2 CLUSTER IMPORT-CANCEL LINK $linkname
-        wait_for_migration_field 2 $linkname state cancelled
+        # Cleanup for next test
+        R 0 CLUSTER IMPORT-CANCEL LINK $linkname
+        wait_for_migration_field 0 $linkname state cancelled
     }
 }
 
 test "Export client buffer enforcement" {
     assert_does_not_resync {
-        assert_match "OK" [R 2 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
-        set linkname [get_link_name 2 16383]
-        wait_for_migration_field 2 $linkname state replicating
-        set old_cob [lindex [R 0 config get client-output-buffer-limit] 1]
-        R 0 config set client-output-buffer-limit "replica 10k 0 0"
+        assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
+        set linkname [get_link_name 0 16383]
+        wait_for_migration_field 0 $linkname state replicating
+        set old_cob [lindex [R 2 config get client-output-buffer-limit] 1]
+        R 2 config set client-output-buffer-limit "replica 10k 0 0"
 
-        set load_handle [start_one_key_write_load [srv 0 host] [srv 0 port] 60 "$16383_slot_tag:my_key"]
+        set load_handle [start_one_key_write_load [srv -2 host] [srv -2 port] 60 "$16383_slot_tag:my_key"]
 
         # Pause the target
-        set node2_pid [srv -2 pid]
-        pause_process $node2_pid
+        set node0_pid [srv -0 pid]
+        pause_process $node0_pid
 
         # Accumulate a large backlog on the source, it should eventually kill the client
-        wait_for_migration_field 0 $linkname state failed
+        wait_for_migration_field 2 $linkname state failed
 
         stop_write_load $load_handle
-        resume_process $node2_pid
+        resume_process $node0_pid
 
         # Import should be retried
-        wait_for_migration_field 2 $linkname state replicating
         wait_for_migration_field 0 $linkname state replicating
+        wait_for_migration_field 2 $linkname state replicating
 
         # Cleanup for the next test
-        R 2 CLUSTER IMPORT-CANCEL LINK $linkname
-        wait_for_migration_field 2 $linkname state cancelled
-        assert_match "OK" [R 0 FLUSHDB SYNC]
-        R 0 config set client-output-buffer-limit "$old_cob"
+        R 0 CLUSTER IMPORT-CANCEL LINK $linkname
+        wait_for_migration_field 0 $linkname state cancelled
+
+        assert_match "OK" [R 2 FLUSHDB SYNC]
+        R 2 config set client-output-buffer-limit "$old_cob"
     }
 }
+
+test "Slot importing with some non-importing data" {
+    assert_does_not_resync {
+        # Load data before the snapshot
+        set tags [list $16381_slot_tag $16382_slot_tag $16383_slot_tag]
+        foreach tag $tags {
+            populate 333 "$tag:1:" 1000 -2
+        }
+
+        # Load data while the snapshot is ongoing
+        assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16381 16381 16383 16383]
+        set linkname [get_link_name 0 16381]
+        foreach tag $tags {
+            populate 333 "$tag:2:" 1000 -2
+        }
+
+        # Load data after the snapshot
+        wait_for_migration_field 2 $linkname state replicating
+        foreach tag $tags {
+            populate 334 "$tag:3:" 1000 -2
+        }
+
+        # We should see only those keys sent
+        wait_for_countkeysinslot 0 16381 1000
+        assert_match "0" [R 0 CLUSTER COUNTKEYSINSLOT 16382]
+        wait_for_countkeysinslot 0 16383 1000
+
+        wait_for_countkeysinslot 3 16381 1000
+        assert_match "0" [R 3 CLUSTER COUNTKEYSINSLOT 16382]
+        wait_for_countkeysinslot 3 16383 1000
+
+        # Commit and verify
+        assert_match "OK" [R 0 CLUSTER IMPORT-COMMIT LINK $linkname]
+        wait_for_migration 0 16381
+        wait_for_migration 0 16383
+
+        assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 16381]
+        assert_match "0" [R 0 CLUSTER COUNTKEYSINSLOT 16382]
+        assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16381]
+        assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16382]
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+
+        # Also reflected in replicas
+        assert_match "1000" [R 3 CLUSTER COUNTKEYSINSLOT 16381]
+        assert_match "0" [R 3 CLUSTER COUNTKEYSINSLOT 16382]
+        assert_match "1000" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
+
+        assert_match "0" [R 5 CLUSTER COUNTKEYSINSLOT 16381]
+        assert_match "1000" [R 5 CLUSTER COUNTKEYSINSLOT 16382]
+        assert_match "0" [R 5 CLUSTER COUNTKEYSINSLOT 16383]
+
+        # Migration log shows success on both ends
+        assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
+        assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
+
+        # Cleanup for the next test
+        assert_match "OK" [R 0 FLUSHDB SYNC]
+        assert_match "OK" [R 2 FLUSHDB SYNC]
+        assert_match "OK" [R 2 CLUSTER IMPORT SLOTSRANGE 16381 16381 16383 16383]
+        wait_for_migration 2 16381
+    }
+}
+
+}
+
+start_cluster 3 0 {tags {external:skip cluster}} {
 
 test "Import cannot connect to source" {
     # Shutdown to prevent connection success

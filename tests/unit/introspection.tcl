@@ -1321,10 +1321,7 @@ start_server {tags {"introspection"}} {
 
         r client kill db 2
 
-        set result [r client list]
-        set only_left_client [lindex [split $result "\n"] 0]
-
-        assert_match {*db=0*} $only_left_client
+        assert {[string match "*db=2*" [r client list]] == 0}
     } {} {external:skip}
 
     test {CLIENT KILL can filter by LIB-NAME} {

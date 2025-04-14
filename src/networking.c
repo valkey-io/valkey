@@ -4208,14 +4208,22 @@ client_kill_done:
 }
 
 static void freeClientFilter(clientFilter *filter) {
-    if (filter->ids != NULL)
+    if (filter->ids != NULL) {
         zfree(filter->ids);
-    if (filter->flags != NULL)
+        filter->ids = NULL;
+    }
+    if (filter->flags != NULL) {
         sdsfree(filter->flags);
-    if (filter->capa != NULL)
+        filter->flags = NULL;
+    }
+    if (filter->capa != NULL) {
         sdsfree(filter->capa);
-    if (filter->ip != NULL)
+        filter->capa = NULL;
+    }
+    if (filter->ip != NULL) {
         sdsfree(filter->ip);
+        filter->ip = NULL;
+    }
     if (filter->lib_name) {
         decrRefCount(filter->lib_name);
         filter->lib_name = NULL;
